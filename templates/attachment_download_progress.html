@@ -1,0 +1,113 @@
+<!-- progress.html -->
+<!DOCTYPE html>
+<html lang="en">
+<head>
+    <meta charset="UTF-8">
+    <title>Download Progress</title>
+    <link href="https://stackpath.bootstrapcdn.com/bootstrap/4.5.2/css/bootstrap.min.css" rel="stylesheet">
+    <script src="https://cdn.socket.io/3.1.3/socket.io.min.js" crossorigin="anonymous"></script>
+</head>
+<body>
+    <!-- SVG Banner -->
+    <div class="form-container mb-4 p-0 overflow-hidden" 
+        style="border-radius: 0; margin-top: 0;">
+        <img src="{{ url_for('static', filename='nav_bar.svg') }}" 
+            alt="Banner" 
+            class="w-100" 
+            style="border-radius: 0; display: block; margin-top: 0;">
+    </div>
+    <div class="container mt-5">
+        <h3 class="d-flex align-items-center" data-path="{{ download_path }}">
+            Download Progress
+            <div class="spinner-border text-primary ml-3" role="status" id="loading-spinner" style="width: 1.5rem; height: 1.5rem;">
+                <span class="sr-only">Loading...</span>
+            </div>
+        </h3>
+
+        <div class="d-flex align-items-center mb-3">
+            <span class="mr-2"><strong>Download Path:</strong> {{ download_path }}</span>
+            <button class="btn btn-sm btn-outline-primary ml-2" onclick="openDownloadPath()">Open</button>
+        </div>
+
+        {% for name in files_to_download %}
+        <div class="mb-3">
+            <label>
+                <strong>{{ name }}</strong>
+                <span id="size-{{ name }}" class="text-muted" style="font-size: 0.9em;"></span>
+            </label>
+            <div class="progress">
+                <div id="bar-{{ name }}" class="progress-bar" role="progressbar" style="width: 0%;">0%</div>
+            </div>
+            <small id="eta-{{ name }}" class="text-muted">ETA: --</small> 
+        </div>
+        {% endfor %}
+    </div>
+
+    <script>
+        const socket = io('/progress');
+        const fileSizes = {};
+
+        function openDownloadPath() {
+            const path = document.querySelector('h3[data-path]').dataset.path;
+            console.log(path)
+            fetch('/open_path', {
+                method: 'POST',
+                headers: {
+                    'Content-Type': 'application/json'
+                },
+                body: JSON.stringify({ path: path })
+            })
+            .then(response => {
+                if (response.ok) {
+                    console.log('Path opened successfully');
+                } else {
+                    console.error('Failed to open path');
+                }
+            });
+        }
+
+        socket.on('file_info', function(data) {
+            const { name, size } = data;
+            fileSizes[name] = size;
+            const sizeElem = document.getElementById(`size-${name}`);
+            if (sizeElem) {
+                sizeElem.innerText = `(${(size / 1024 ).toFixed(2)} KB)`;
+            }
+        });
+
+        // Start download automatically after connection
+        socket.on('connect', function() {
+            console.log('Connected. Starting download...');
+            socket.emit('start_download');
+        });
+
+        // Update progress
+        socket.on('progress_update', function(data) {
+            const bar = document.getElementById(`bar-${data.name}`);
+            const etaElem = document.getElementById(`eta-${data.name}`);
+            console.log("etaElem:", etaElem)
+            if (bar) {
+                bar.style.width = `${data.progress}%`;
+                bar.innerText = `${data.progress.toFixed(1)}%`;
+            }
+            if (etaElem && data.eta !== null) {
+                const minutes = Math.floor(data.eta / 60);
+                const seconds = Math.floor(data.eta % 60);
+                etaElem.innerText = `ETA: ${minutes}m ${seconds}s`;
+            }
+        });
+
+        // All downloads completed
+
+        const download_result_URL = "{{ url_for('main.download_result') }}";
+        socket.on('all_attachments_download_done', function() {
+            window.location.href = download_result_URL;
+        });
+
+        const download_result_URL_BSOD = "{{ url_for('main.download_result_bsod') }}";
+        socket.on('all_attachments_download_done_bsod', function() {
+            window.location.href = download_result_URL_BSOD;
+        });
+    </script>
+</body>
+</html>

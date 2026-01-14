@@ -1,0 +1,369 @@
+<!DOCTYPE html>
+<style>
+  .fw-semibold {
+    font-weight: 600;
+  }
+  .loading-spinner {
+        display: inline-block;
+    }
+    .issue-block {
+        border: 1px solid #ccc;
+        padding: 10px;
+        margin-bottom: 10px;
+        cursor: pointer;
+        background-color: #f8f9fa;
+    }
+    .loading-container {
+        min-height: 150px;
+        display: flex;
+        justify-content: center;
+        align-items: center;
+    }
+    .error-message {
+        color: #dc3545;
+        background-color: #f8d7da;
+        border: 1px solid #f5c6cb;
+        padding: 10px;
+        border-radius: 5px;
+        margin: 10px 0;
+    }
+</style>
+<html lang="en">
+<head>
+    <meta charset="UTF-8">
+    <title>Select Download</title>
+    
+    <link href="https://stackpath.bootstrapcdn.com/bootstrap/4.5.2/css/bootstrap.min.css" rel="stylesheet">
+    
+    <script src="https://code.jquery.com/jquery-3.5.1.min.js"></script>
+    <script src="https://stackpath.bootstrapcdn.com/bootstrap/4.5.2/js/bootstrap.bundle.min.js"></script>
+</head>
+<body>
+    <div class="form-container mb-4 p-0 overflow-hidden " 
+        style="border-radius: 0; margin-top: 0; ">
+        <img src="{{ url_for('static', filename='nav_bar.svg') }}" 
+            alt="nav_bar" 
+            class="w-100" 
+            style="border-radius: 0; display: block; margin-top: 0;">
+    </div>
+    <div class="container mt-5">
+        <div class="d-flex justify-content-between align-items-center mb-2">
+            <h3 class="mb-0">{{ case_context.case_nbr }} Case Detail:</h3>
+            <div class="d-flex gap-1">
+                <a href="https://intel.lightning.force.com/lightning/r/Case/{{ case_context.id }}/view" target="_blank" class="btn btn-primary btn-sm mr-2">Open IPS Page</a>
+                <button class="btn btn-secondary btn-sm me-2" onclick="location.href='/'">Back to Home</button>
+            </div>
+        </div>
+        <h5 class="text-primary mb-3">
+            <a href="https://intel.lightning.force.com/lightning/r/Case/{{ case_context.id }}/view"  target="_blank" class="text-primary text-decoration-none">{{ case_context.subject }}</a>
+        </h5>
+        
+        <!-- AI Summary Card -->
+        <div class="card mb-3" style="border: 2px solid #005A9C; border-radius: 0.5rem;">
+            <div class="card-header text-white font-weight-bold py-2 px-3" style="background-color: #005A9C;">
+                AI Summary
+                <span id="ai-loading-indicator" class="loading-spinner">
+                    <div class="spinner-border spinner-border-sm text-light ml-2" role="status">
+                        <span class="sr-only">Loading...</span>
+                    </div>
+                </span>
+            </div>
+            <div class="card-body bg-light px-3" style="white-space: normal; line-height: 1.5; border-radius: 0.5rem;">
+                <div id="ai-analysis-content">
+                    <div class="loading-container">
+                        <div class="text-center">
+                            <div class="spinner-border text-primary" role="status" style="width: 2rem; height: 2rem;">
+                                <span class="sr-only">Loading...</span>
+                            </div>
+                            <div class="mt-2">
+                                <p class="text-muted mb-0">Analyzing Issue with gpt...</p>
+                            </div>
+                        </div>
+                    </div>
+                </div>
+            </div>
+        </div>
+        
+        <h4>Description:</h4>
+        <p>{{ case_context.description }}</p>
+
+        
+        
+        <p>
+            <a class="btn btn-link text-primary p-0" data-toggle="collapse" href="#envDetailCollapse" role="button" aria-expanded="false" aria-controls="envDetailCollapse">
+                Show Environment Details
+            </a>
+        </p>
+
+        <div class="collapse" id="envDetailCollapse">
+            <div class="card card-body bg-light mb-3">
+                <ul class="list-group list-group-flush">
+                {% for key, val in case_context.env_detail.items() %}
+                    <li class="list-group-item py-1 px-2">
+                    <strong>{{ key }}:</strong> {{ val }}
+                    </li>
+                {% endfor %}
+                </ul>
+            </div>
+        </div>
+
+        <p>
+            <a class="btn btn-link text-primary p-0" data-toggle="collapse" href="#commentCollapse" role="button" aria-expanded="false" aria-controls="commentCollapse">
+                Show Comments
+            </a>
+        </p>
+
+        <div class="collapse" id="commentCollapse">
+            <div class="card card-body bg-light mb-3">
+                {% set color_map = {
+                'Partner': 'primary',
+                'Agent': 'success'
+                } %}
+
+                {% if case_context.comments is sequence and case_context.comments is not string %}
+                    {% for date, commenter, context in case_context.comments %}
+                        <div class="mb-2">
+                            <span class="badge badge-{{ color_map.get(commenter, 'secondary') }}">
+                                {{ commenter }}
+                            </span>
+                            <span class="ml-2">{{ context }}</span>
+                            <small class="text-muted float-right">{{ date }}</small>
+                        </div>
+                        <hr class="my-1">
+                    {% endfor %}
+                {% else %}
+                    <div class="text-dark">{{ case_context.comments }}</div>
+                {% endif %}
+            </div>
+        </div>
+
+        <h3>Choose attachment:</h3>
+        <form method="post">
+            {% if case_context.attachment_list %}
+                <div class="form-check mb-3">
+                    <input type="checkbox" class="form-check-input" id="selectAll" onclick="toggleSelectAll(this)">
+                    <label class="form-check-label font-weight-bold" for="selectAll">Select All</label>
+                </div>
+                {% for sublist in case_context.attachment_list %}
+                    {% if sublist|length > 2 %}
+                        <div class="form-check mb-3">
+                            <input type="checkbox" class="form-check-input" name="selected_files" value="{{ sublist[0] }}" id="file{{ loop.index0 }}">
+                            <label class="form-check-label font-weight-bold" for="file{{ loop.index0 }}">
+                                {{ sublist[0] }}
+                                <span class="text-primary font-weight-normal">
+                                    ({{ sublist[2][0].strftime('%Y-%m-%d %H:%M') if sublist[2][0] and sublist[2][0] is not string else sublist[2][0] if sublist[2][0] else 'no datetime' }})
+                                </span>
+                            </label>
+                            <p class="ml-4 text-muted mb-0">{{ sublist[2][1] }}</p>
+                        </div>
+                    {% endif %}
+                {% endfor %}
+            {% else %}
+                <p>No attachment detected</p>
+            {% endif %}
+            
+            <button type="submit" name="action" value="normal" class="btn btn-primary mr-2 mb-5" id="downloadBtn" disabled>
+                <span class="spinner-border spinner-border-sm mr-2" role="status" style="display: none;"></span>
+                Download attachment
+            </button>
+            <button type="submit" name="action" value="bsod" class="btn btn-success mb-5 mr-2" id="bsodBtn" disabled>
+                <span class="spinner-border spinner-border-sm mr-2" role="status" style="display: none;"></span>
+                BSOD Parser
+            </button>
+            <button type="submit" name="action" value="latest_etl_llm" class="btn btn-secondary mb-5" id="etlLlmBtn" disabled>
+                <span class="spinner-border spinner-border-sm mr-2" role="status" style="display: none;"></span>
+                Run latest ETL and LLM
+            </button>
+        </form>
+    </div>
+
+    <script>
+        window.submitting = false;
+
+
+        function toggleSubmitButtons(enabled) {
+            const buttons = ['downloadBtn', 'bsodBtn', 'etlLlmBtn'];
+            buttons.forEach(btnId => {
+                const btn = document.getElementById(btnId);
+                if (btn) {
+                    btn.disabled = !enabled;
+                    
+                    if (enabled) {
+                        btn.classList.remove('btn-outline-secondary');
+                        if (btnId === 'downloadBtn') btn.className = 'btn btn-primary mr-2 mb-5';
+                        if (btnId === 'bsodBtn') btn.className = 'btn btn-success mb-5 mr-2';
+                        if (btnId === 'etlLlmBtn') btn.className = 'btn btn-secondary mb-5';
+                    } else {
+                        btn.classList.add('btn-outline-secondary');
+                    }
+                }
+            });
+        }
+        function toggleSelectAll(source) {
+            checkboxes = document.querySelectorAll('input[type="checkbox"]');
+            for (var i = 0; i < checkboxes.length; i++) {
+                if (checkboxes[i] != source) {
+                    checkboxes[i].checked = source.checked;
+                }
+            }
+        }
+
+        function renderAiAnalysis(data) {
+            console.log(`renderAiAnalysis: ${data}`)
+            if (typeof data === 'object' && data !== null) {
+                return renderDictAsHtml(data);
+            } else {
+                return `<p class="mb-0">${data}</p>`;
+            }
+        }
+
+        function cleanAngleBrackets(str) {
+            if (typeof str !== "string") return str;
+            return str.replace(/<|>/g, "");  // filter <>
+        }
+
+        function renderDictAsHtml(data, level = 0) {
+            let html = `<ul class="list-unstyled ${level === 1 ? 'ms-3' : level === 2 ? 'ms-4' : level > 2 ? 'ms-5' : ''} ${level === 0 ? 'mb-5' : 'mb-2'}">`;
+            if (level === 0 && data.Classification) {
+                html += renderClassificationSimple(data.Classification);
+            }
+            for (const [key, value] of Object.entries(data)) {
+                html += `<li class="${level === 0 ? 'mb-3' : 'mb-2'}">`;
+                
+                if (key === 'Classification' && typeof value === 'object') {
+                    // html += renderClassificationSimple(value);
+                    continue;
+                } else {
+                    html += `<span class="${level === 0 ? 'fw-bolder text-primary h4 d-block mt-2 mb-1' : level === 1 ? 'fw-bolder text-dark h6 d-block' : 'fw-normal d-block'}">${cleanAngleBrackets(key)}:</span>`;
+                    
+                    if (key.toLowerCase().includes("other information") && typeof value === 'object'){
+                        Object.entries(value).forEach(([k, v]) => {
+                            if (Array.isArray(v)) {
+                                // html += `<span class="${'fw-normal d-block'}">${cleanAngleBrackets(k)}:</span>`;
+                                // v.forEach(inner => {
+                                //     html += `<li class="text-dark" style="padding-left: 1rem;"> • ${inner}</li>`;
+                                // });
+                                const data_set = [k, v];
+                                html += renderDictAsHtml(data_set, level);
+                            }
+                            else 
+                            {
+                                const hasNot = v.toLowerCase().includes("not");
+                                html += `<li class="text-dark" style="padding-left: 1rem;">
+                                    • ${k}: <span style = "${hasNot ? "color: red;font-weight: 700;" : "font-weight: 700;"}">${v}</span>
+                                     </li>`;
+                            }
+                        })}
+
+                    else if (typeof value === 'object' && value !== null && !Array.isArray(value)) {
+                        html += renderDictAsHtml(value, level + 1);
+                    } else if (Array.isArray(value)) {
+                        html += '<ul class="list-unstyled ps-1 mb-1">';
+                        value.forEach(item => {
+                            if (Array.isArray(item)) {
+                                item.forEach(inner => {
+                                    html += `<li class="text-dark" style="padding-left: 1rem;"> • ${inner}</li>`;
+                                });
+                            } else if (typeof item === 'object' && item !== null) {
+                                Object.entries(item).forEach(([k, v]) => {
+                                    html += `<li class="text-dark" style="padding-left: 1rem;"> • ${k}: ${v}</li>`;
+                                });
+                            } else {
+                                html += `<li class="text-dark" style="padding-left: 1rem;"> • ${item}</li>`;
+                            }
+                        });
+                        html += '</ul>';
+                    }
+                    else {
+                        html += `<div class="ms-2">${value}</div>`;
+                    }
+                }
+                html += '</li>';
+            }
+            html += '</ul>';
+            return html;
+        }
+
+        function renderClassificationSimple(classification) {
+            const issueType = classification.issue_type || 'Unknown';
+            const confidence = classification.confidence || 0;
+            const keywords = classification.keywords_found || [];
+            const confidencePercent = Math.round(confidence * 100);
+
+            function getConfidenceBadgeColor(confidence) {
+                if (issueType == 'Unknown' || issueType == 'Unclassified') return 'danger';  
+                if (confidence >= 0.9) return 'success';      // green：>90%
+                if (confidence >= 0.7) return 'warning';      // yellow：70-89%
+                return 'danger';                              // red：<60%
+            }
+            const badgeColor = getConfidenceBadgeColor(confidence);
+            
+            return `
+                <div class="classification-section mb-2">
+                    <div class="d-flex align-items-center">
+                        <span class="badge badge-${badgeColor} badge-pill px-3 py-2 mr-2" style="font-size: 1rem;">${issueType}</span>
+                        
+                        <div class="small text-muted">
+                            ${keywords.length > 0 ? `<div>Keywords: <code class="font-size: 1rem">${keywords.join(', ')}</code></div>` : ''}
+                            <div>Confidence: ${confidencePercent}%</div>
+                        </div>
+                    </div>
+                </div>
+            `;
+        }
+
+        
+        // Ai Analysis
+        const AI_ANALYSIS_URL = "{{ url_for('llm.get_llm_analysis') }}";
+        function loadAiAnalysis() {
+
+            toggleSubmitButtons(false);
+            $.ajax({
+                url: AI_ANALYSIS_URL,
+                method: 'GET',
+                timeout: 120000, 
+                success: function(response) {
+                    $('#ai-loading-indicator').hide();
+                    if (response.success) {
+                        console.log(`response.ai_analysis: ${JSON.stringify(response.ai_analysis, null, 2)}`)
+                        $('#ai-analysis-content').html(renderAiAnalysis(response.ai_analysis));
+                        toggleSubmitButtons(true);
+                    } else {
+                        $('#ai-analysis-content').html(`
+                            <div class="error-message">
+                                <strong>error:</strong> ${response.error}
+                            </div>
+                        `);
+                        toggleSubmitButtons(true);
+                    }
+                },
+                error: function(xhr, status, error) {
+                    $('#ai-loading-indicator').hide();
+                    let errorMsg = status === 'timeout' ? 'timeout' : ` ${error}`;
+                    $('#ai-analysis-content').html(`
+                        <div class="error-message">
+                            <strong>error:</strong> ${errorMsg}
+                            <button class="btn btn-sm btn-outline-primary ml-2" onclick="loadAiAnalysis()">Retry</button>
+                        </div>
+                    `);
+                }
+            });
+        }
+
+        
+
+        $(document).ready(function() {
+            loadAiAnalysis();
+        });
+
+        document.addEventListener('DOMContentLoaded', function () {
+            const form = document.querySelector('form');
+            if (form) {
+                form.addEventListener('submit', function () {
+                    window.submitting = true;
+                });
+            }
+        });
+    </script>
+</body>
+</html>

@@ -1,0 +1,348 @@
+<!DOCTYPE html>
+<html lang="zh-Hant">
+<head>
+    <meta charset="UTF-8">
+    <title>Analysis Results and Progress</title>
+    <link href="https://stackpath.bootstrapcdn.com/bootstrap/4.5.2/css/bootstrap.min.css" rel="stylesheet">
+    <script src="https://code.jquery.com/jquery-3.5.1.min.js"></script>
+    <script src="https://cdn.socket.io/4.6.1/socket.io.min.js"></script>
+    <style>
+        body {
+            font-family: Arial, sans-serif;
+            padding: 20px;
+        }
+        #log {
+            white-space: pre-wrap;
+            border: 1px solid #ccc;
+            padding: 10px;
+            height: 150px;
+            overflow-y: auto;
+            background-color: #f9f9f9;
+            margin-bottom: 20px;
+        }
+        table {
+            width: 100%;
+            border-collapse: collapse;
+            margin-top: 10px;
+        }
+        th, td {
+            padding: 8px 12px;
+            border: 1px solid #ddd;
+        }
+        th {
+            background-color: #eee;
+        }
+        .button {
+            display: inline-block;
+            padding: 6px 10px;
+            background-color: #3c8dbc;
+            color: white;
+            text-decoration: none;
+            border-radius: 4px;
+            cursor: pointer;
+        }
+        .button:hover {
+            background-color: #337ab7;
+        }
+        .button.disabled {
+            background-color: gray;
+            cursor: not-allowed;
+        }
+    </style>
+</head>
+<body>
+    <div class="form-container mb-4 p-0 overflow-hidden" 
+        style="border-radius: 0; margin-top: -20px; margin-left: -20px; margin-right: -20px; ">
+        <img src="{{ url_for('static', filename='nav_bar.svg') }}" 
+            alt="nav_bar" 
+            class="w-100" 
+            style="border-radius: 0; display: block;">
+    </div>
+
+    {% if auto_analysis_etl %}
+    <div class="alert alert-info alert-dismissible fade show" role="alert">
+        <i class="fas fa-robot"></i> <strong>Auto Running: Latest ETL with LLM analysis</strong> 
+        <button type="button" class="close" data-dismiss="alert" aria-label="Close">
+            <span aria-hidden="true">&times;</span>
+        </button>
+        <input type="hidden" id="autoAnalysisEtl" value="{{ auto_analysis_etl | urlencode }}">
+    </div>
+    {% endif %}
+
+    <h2>📊 Analysis Log</h2>
+    
+    <div id="log">...</div>
+    
+    <div class="d-flex justify-content-between align-items-center mb-2">
+        <h2>🔍 Analysis WIFI Results</h2>
+        <div class="d-flex gap-1">
+            <button class="btn btn-secondary btn-sm me-2" onclick="location.href='/'">Back to Home</button>
+        </div>
+    </div>
+    <div class="d-flex align-items-center mb-3">
+                <span class="mr-2"><strong>Download Path:</strong> {{ case_path }}</span>
+                <button id="open-btn" data-path="{{ case_path|e }}" type="button" class="btn btn-sm btn-outline-primary ml-2" onclick="openDownloadPath()">Open</button>
+            </div>
+    <table>
+        <thead>
+            <tr>
+                <th>Extracted File Name</th>
+                <th>ETL Path</th>
+                <th>Analysis</th>
+            </tr>
+        </thead>
+        <tbody>
+            {% for name, etl_list in wifi_dict.items() %}
+                {% for etl_path in etl_list %}
+                    {% if not etl_path.endswith('.log') %}
+                    <tr>
+                        <td>{{ name }}</td>
+                        <td>{{ etl_path }}</td>
+                        <td class="text-center">
+                            <div class="d-flex flex-column align-items-center"></div>
+                                <button class="btn btn-primary btn-sm mb-2" onclick="startAnalysis(this, '{{ etl_path | urlencode }}')">
+                                    Analyze
+                                </button>
+                                <button class="btn btn-success btn-sm" onclick="startLogParser(this, '{{ etl_path | urlencode }}')">
+                                    Analyze with LLM
+                                </button>
+                            </div>
+                        </td>
+                    </tr>
+                    {% endif %}
+                {% endfor %}
+            {% endfor %}
+        </tbody>
+    </table>
+    
+        <h2 class="mt-4">🔍 Analysis BT Results</h2>
+    <table>
+        <thead>
+            <tr>
+                <th>Zip File</th>
+                <th>File Path</th>
+                <th>Extension</th>
+                <th>Analysis</th>
+            </tr>
+        </thead>
+        <tbody>
+            {% for name, bt_list in bt_dict.items() %}
+                {% for bt_path in bt_list %}
+                    <tr>
+                        <td>{{ name }}</td>
+                        <td>{{ bt_path }}</td>
+                        <td>{{ bt_path.split('.')[-1] }}</td>
+                        <td class="py-2">
+                            <!-- AutoFile -->
+                            <button class="btn btn-secondary ml-2" onclick="startAnalysis(this, '{{ bt_path | urlencode }}', 'AutoFile')">
+                                AutoFile
+                            </button>
+
+                            <!-- AutoFolder -->
+                            <button class="btn btn-secondary ml-2" onclick="startAnalysis(this, '{{ bt_path | urlencode }}', 'AutoFolder')">
+                                AutoFolder
+                            </button>
+
+                            <!-- Manual -->
+                            <button class="btn btn-secondary ml-2" onclick="startAnalysis(this, '{{ bt_path | urlencode }}', 'Manual')">
+                                Manual
+                            </button>
+                        </td>
+                    </tr>
+                {% endfor %}
+            {% endfor %}
+        </tbody>
+
+    </table>
+    <h2 class="mt-4">🔍 Analysis DDD Results</h2>
+    <table>
+        <thead>
+            <tr>
+                <th>Zip File</th>
+                <th>File Path</th>
+                <th>Extension</th>
+                <th>Analysis</th>
+            </tr>
+        </thead>
+        <tbody>
+            {% for name, ddd_list in ddd_dict.items() %}
+                {% for ddd_path in ddd_list %}
+                    <tr>
+                        <td>{{ name }}</td>
+                        <td>{{ ddd_path }}</td>
+                        <td>{{ ddd_path.split('.')[-1] }}</td>
+                        <td>
+                            <button class="btn btn-primary btn-sm" onclick="startAnalysis(this, '{{ ddd_path | urlencode }}')">
+                                Analyze
+                            </button>
+                        </td>
+                    </tr>
+                {% endfor %}
+            {% endfor %}
+        </tbody>
+    </table>
+
+    <h2 class="mt-4">🔍 Analysis FW Results</h2>
+    <table>
+        <thead>
+            <tr>
+                <th>Zip File</th>
+                <th>File Path</th>
+                <th>Extension</th>
+                <th>Analysis</th>
+            </tr>
+        </thead>
+        <tbody>
+            {% for name, fw_list in fw_dict.items() %}
+                {% for fw_path in fw_list %}
+                    <tr>
+                        <td>{{ name }}</td>
+                        <td>{{ fw_path }}</td>
+                        <td>{{ fw_path.split('.')[-1] }}</td>
+                        <td>
+                            <button class="btn btn-primary btn-sm" onclick="startFwAnalysis(this, '{{ fw_path | urlencode }}')">
+                                Analyze
+                            </button>
+                        </td>
+                    </tr>
+                {% endfor %}
+            {% endfor %}
+        </tbody>
+    </table>
+
+
+    <script>
+        const socket = io('/progress');
+        const logBox = document.getElementById("log");
+
+        const autoAnalysisEtlElement = document.getElementById('autoAnalysisEtl');
+
+        const ETL_ANALYSIS_URL = "{{ url_for('analysis_etl.process_etl_path') }}";
+        const LOGPARSER_URL = "{{ url_for('log_parser.log_parser') }}";
+
+        // Receive backend logs
+        socket.on("wpp_log", function(msg) {
+            console.log("wpp_log:",msg)
+            logBox.innerText += msg.data + "\n";
+            logBox.scrollTop = logBox.scrollHeight;
+        });
+
+
+        if (autoAnalysisEtlElement) {
+            const etlPathEncoded = autoAnalysisEtlElement.value;
+            const dummyButton = document.createElement('button');
+            dummyButton.classList.add('btn', 'btn-success');
+            startLogParser(dummyButton, etlPathEncoded);
+            
+        }
+        
+
+        function openDownloadPath() {
+            const path = document.querySelector('#open-btn').dataset.path;
+            console.log(path)
+            fetch('/open_path', {
+                
+                method: 'POST',
+                headers: {
+                    'Content-Type': 'application/json'
+                },
+                body: JSON.stringify({ path: path })
+            })
+            .then(response => {
+                if (response.ok) {
+                    console.log('Path opened successfully');
+                } else {
+                    console.error('Failed to open path');
+                }
+            });
+        }
+
+        
+
+        function startAnalysis(button, etlPathEncoded, mode) {
+            if (button.classList.contains('disabled')) return;
+
+            button.classList.add('disabled');
+            button.innerText = `Analyzing...`;
+
+            const decoded = decodeURIComponent(etlPathEncoded);
+            logBox.innerText += `🛠️ Analysis...\n`;
+            logBox.scrollTop = logBox.scrollHeight;
+            console.log(`${ETL_ANALYSIS_URL}?etl_path=${etlPathEncoded}&mode=${mode}`)
+            fetch(`${ETL_ANALYSIS_URL}?etl_path=${etlPathEncoded}&mode=${mode}`)
+                .then(res => res.text())
+                .then(data => {
+                    console.log(data);
+                })
+                .catch(err => {
+                    console.error(err);
+                    logBox.innerText += `❌ ${mode} Analysis Failed: ${decoded}\n`;
+                    logBox.scrollTop = logBox.scrollHeight;
+                });
+        }
+    
+    function startLogParser(button, etlPathEncoded) {
+        if (button.classList.contains('disabled')) return;
+
+        button.classList.add('disabled');
+        button.innerText = 'Processing & Analyzing...';
+
+        const decoded = decodeURIComponent(etlPathEncoded);
+        logBox.innerText += `🚀 Starting Analyze with LLM: ${decoded}\n`;
+        logBox.scrollTop = logBox.scrollHeight;
+
+        logBox.innerText += `🛠️ Step 1: Running Analysis...\n`;
+        logBox.scrollTop = logBox.scrollHeight;
+
+        const processId = Date.now(); 
+        window.pendingLogParser = {
+            processId: processId,
+            etlPathEncoded: etlPathEncoded,
+            button: button
+        };
+        console.log(`${ETL_ANALYSIS_URL}?etl_path=${etlPathEncoded}&mode=`)
+        fetch(`${ETL_ANALYSIS_URL}?etl_path=${etlPathEncoded}&mode=`)
+            .then(res => res.text())
+            .catch(err => {
+                console.error("Analysis failed:", err);
+                logBox.innerText += `❌ Analysis Failed: ${decoded}\n`;
+                logBox.scrollTop = logBox.scrollHeight;
+                
+            });
+    }
+
+    socket.on("wpp_complete", function(msg) {
+        
+        if (window.pendingLogParser) {
+            const { etlPathEncoded, button } = window.pendingLogParser;
+            if (msg.status === 'done') {
+                logBox.innerText += ` Starting LLM Analysis...\n`;
+                logBox.scrollTop = logBox.scrollHeight;
+
+                window.location.href = `${LOGPARSER_URL}?etl_path=${etlPathEncoded}`;
+
+                button.classList.remove('disabled');
+                button.innerText = 'Analyze with LLM';
+            }
+            window.pendingLogParser = null;
+        }
+    });
+
+
+    const FW_ETL_ANALYSIS_URL = "{{ url_for('analysis_etl.process_etl_path_fw') }}";
+
+    function startFwAnalysis(button, fwPathEncoded) {
+        if (button.classList.contains('disabled')) return;
+
+        button.classList.add('disabled');
+        button.innerText = 'Analyzing...';
+
+        const decoded = decodeURIComponent(fwPathEncoded);
+
+        // jump to fw_analysis.html with fw_path para
+        window.location.href = `/${FW_ETL_ANALYSIS_URL}?fw_path=${fwPathEncoded}`;
+    }
+        
+    </script>
+</body>
+</html>

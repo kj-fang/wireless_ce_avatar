@@ -1,0 +1,123 @@
+<!DOCTYPE html>
+<html lang="en">
+<head>
+  <meta charset="UTF-8">
+  <title>Running ETL Analysis</title>
+  <link href="https://stackpath.bootstrapcdn.com/bootstrap/4.5.2/css/bootstrap.min.css" rel="stylesheet">
+  <script src="https://cdn.socket.io/4.6.1/socket.io.min.js"></script>
+  <style>
+    body {
+      padding: 30px;
+      font-family: Arial, sans-serif;
+    }
+    #stage-log {
+      background: #f9f9f9;
+      padding: 15px;
+      border: 1px solid #ccc;
+      height: 250px;
+      overflow-y: auto;
+      white-space: pre-wrap;
+      margin-bottom: 20px;
+    }
+  </style>
+</head>
+<body>
+  <div class="form-container mb-4 p-0 overflow-hidden" 
+        style="border-radius: 0; margin-top: -30px; margin-left: -30px; margin-right: -30px; ">
+        <img src="{{ url_for('static', filename='nav_bar.svg') }}" 
+            alt="nav_bar" 
+            class="w-100" 
+            style="border-radius: 0; display: block;">
+    </div>
+  <h3><strong>🔄 ETL/DDD Analysis Progress</strong></h3>
+
+  <!-- Current stage status -->
+  <div id="stage-log">Initializing...</div>
+
+  <!-- File progress bar -->
+  <div class="mb-3">
+    <div><label><strong id="case-nbr">IPS Number: --</strong></label></div>
+    <div><label><strong id="file-name">Current File: --</strong></label></div>
+    <div class="progress">
+      <div id="download-bar" class="progress-bar" role="progressbar" style="width: 0%;">0%</div>
+    </div>
+    <small id="eta-text" class="text-muted">ETA: --</small>
+  </div>
+  <div id="show_home" style="display:none;" class="mt-4">
+    <button class="btn btn-secondary ml-2" onclick="location.href='/'">Back to Home</button>
+  </div>
+
+  <!-- ✅ Options to display after completion -->
+  <div id="actions" style="display:none;" class="mt-4">
+    <button class="btn btn-secondary ml-2" onclick="location.href='/'">Back to Home</button>
+  </div>
+
+  <script>
+    const log = document.getElementById('stage-log');
+    const fileLabel = document.getElementById("file-name");
+    const caseNbr = document.getElementById("case-nbr");
+    const progressBar = document.getElementById("download-bar");
+    const etaText = document.getElementById("eta-text");
+
+    const socket = io('/progress');
+
+    // Display analysis stage message
+    socket.on("stage", function(data) {
+      log.innerText += `\n${data.message}`;
+      log.scrollTop = log.scrollHeight;
+    });
+
+    socket.on("wpp_log", function(msg) {
+        console.log("wpp_log:",msg)
+        log.innerText += msg.data + "\n";
+        log.scrollTop = logBox.scrollHeight;
+    });
+
+    socket.on("case_nbr", function(data) {
+      caseNbr.innerText = "IPS Number: " + data.name;
+    });
+
+    socket.on("all_done", function(data) {
+      log.innerText += "Run latest etl done!\n";
+    });
+
+    // Show information about the file being downloaded
+    socket.on("file_info", function(data) {
+      fileLabel.innerText = "Current File: " + data.name;
+    });
+
+    // Display download progress bar
+    socket.on("progress_update", function(data) {
+      progressBar.style.width = `${data.progress.toFixed(1)}%`;
+      progressBar.innerText = `${data.progress.toFixed(1)}%`;
+
+      if (data.eta !== null) {
+        const minutes = Math.floor(data.eta / 60);
+        const seconds = Math.floor(data.eta % 60);
+        etaText.innerText = `ETA: ${minutes}m ${seconds}s`;
+      } else {
+        etaText.innerText = `ETA: --`;
+      }
+    });
+
+    // Show action button after analysis is completed, without auto-redirect
+    socket.on("all_attachments_download_done", function(data) {
+      log.innerText += "\n✅ Waiting For WiFi/BT Analysis.";
+      log.scrollTop = log.scrollHeight;
+
+      document.getElementById("actions").style.display = "block";
+    });
+
+    socket.on("show_home", function() {
+      document.getElementById("show_home").style.display = "block";
+    });
+
+    
+
+    // Manually trigger backend analysis
+    socket.emit("trigger_run_latest_etl");
+
+    
+  </script>
+</body>
+</html>

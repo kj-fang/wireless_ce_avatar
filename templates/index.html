@@ -1,0 +1,220 @@
+<!DOCTYPE html>
+<html lang="en">
+<head>
+    <meta charset="UTF-8">
+    <title>Case Number Input</title>
+    <link href="https://stackpath.bootstrapcdn.com/bootstrap/4.5.2/css/bootstrap.min.css" rel="stylesheet">
+     <script src="https://cdn.socket.io/3.1.3/socket.io.min.js" crossorigin="anonymous"></script>
+    <style>
+        body {
+            background-color: #f8f9fa;
+            font-family: 'Segoe UI', Tahoma, Geneva, Verdana, sans-serif;
+        }
+        .form-container {
+            margin-top: 50px;
+            background-color: #fff;
+            padding: 20px;
+            border-radius: 8px;
+            box-shadow: 0 0 10px rgba(0, 0, 0, 0.1);
+        }
+        #loading-box {
+            display: none;
+            margin-top: 20px;
+        }
+        .section-divider {
+            border-top: 2px dashed #ccc;
+            margin: 40px 0 20px;
+        }
+    </style>
+</head>
+
+<body>
+    <!-- SVG Banner -->
+    <div class="form-container mb-4 p-0 overflow-hidden" 
+        style="border-radius: 0; margin-top: 0; box-shadow: 0 4px 6px rgba(0, 0, 0, 0.3);">
+        <img src="{{ url_for('static', filename='banner.svg') }}" 
+            alt="Banner" 
+            class="w-100" 
+            style="border-radius: 0; display: block; margin-top: 0;">
+    </div>
+
+
+    <div class="container">
+        <!-- 🔔 appear flash successful message -->
+        {% with messages = get_flashed_messages(with_categories=true) %}
+          {% if messages %}
+            <div class="mt-3">
+              {% for category, message in messages %}
+                <div class="alert alert-{{ category }} alert-dismissible fade show" role="alert">
+                  {{ message }}
+                  <button type="button" class="close" data-dismiss="alert" aria-label="Close">
+                    <span aria-hidden="true">&times;</span>
+                  </button>
+                </div>
+              {% endfor %}
+            </div>
+          {% endif %}
+        {% endwith %}
+
+        <!-- 📁 Case Number block -->
+        <div class="form-container" id="form-box">
+            <h4>📁 Input Case Number</h4>
+            <form method="post" onsubmit="showLoading()">
+                <div class="form-group">
+                    <div style="display: flex; align-items: flex-top;">
+                        <label for="case_number" style="font-weight: bold; margin-right: 10px;">Case Number:</label>
+                        {% if clipboard_text %}
+                        <div id="clipboard_info" class="text-muted" style="font-size: 0.9em;">
+                            (Clipboard detected: {{ clipboard_text }})
+                        </div>
+                        {% else %}
+                        <div id="clipboard_info" class="text-muted" style="display: none; font-size: 0.9em;"></div>
+                        {% endif %}
+                    </div>
+                    <input type="text" class="form-control" id="case_number" name="case_number" placeholder="Enter case number here" value="{{ clipboard_text }}" required>
+                </div>
+                <button type="submit" class="btn btn-primary">Submit</button>
+                <button type="button" class="btn btn-success ml-2" onclick="runLatestETL()">Run Latest ETL Analysis</button>
+            </form>
+        </div>
+
+        <!-- 🔄 Loading indicator section -->
+        <div id="loading-box" class="text-center">
+            <div class="spinner-border text-primary" role="status">
+                <span class="sr-only">Loading...</span>
+            </div>
+            <div class="mt-3">
+                <p class="text-muted">Processing your case... Please wait.</p>
+            </div>
+            <div id="log-messages" class="text-left px-3 py-2 w-75  mx-auto"
+                style="
+                    max-height: 200px;
+                    overflow-y: auto;
+                    font-size: 0.9em;
+                    background-color: rgb(53, 53, 53);
+                    color: white;
+                    border-radius: 6px;
+                    font-family: 'Courier New', monospace;
+                    white-space: pre-wrap;
+                    box-shadow: inset 0 0 5px rgba(0,0,0,0.3);
+                ">
+            </div>
+        </div>
+
+    </div>
+
+    
+    <div class="mb-5"></div>
+
+    <!-- JS: Toggle loading indicator & prevent multiple submissions -->
+    <script>
+
+        document.addEventListener("DOMContentLoaded", async () => {
+            const text = await navigator.clipboard.readText();
+            const pattern = /^00\d{6}$/;
+            if (pattern.test(text.trim())) {
+                document.getElementById("case_number").value = text.trim();
+                const info = document.getElementById("clipboard_info");
+                info.textContent = `(Clipboard detected: ${text})`;
+                info.style.display = "block";
+                
+            } 
+        });
+        
+        const BSOD_SUBMIT_URL = "{{ url_for('bsod.bsod_submit') }}"
+        function disableBSODForm() {
+            const form = document.querySelector(`form[action="${BSOD_SUBMIT_URL}"]`);
+            const button = form.querySelector('button[type="submit"]');
+            button.disabled = true;
+            button.innerHTML = '<span class="spinner-border spinner-border-sm" role="status" aria-hidden="true"></span> Submitting...';
+        }
+    </script>
+
+    <!-- Bootstrap JS for alert dismiss -->
+    <script src="https://code.jquery.com/jquery-3.5.1.slim.min.js"></script>
+    <script src="https://cdn.jsdelivr.net/npm/bootstrap@4.5.2/dist/js/bootstrap.bundle.min.js"></script>
+
+    <script>
+        const Messages = [
+            "Validating case number...",
+            "Fetching case description...",
+            "Fetching related files...",
+            "Parsing attachment links...",
+            "Report is almost ready...",
+        ];
+
+
+        let currentIndex = 0;
+
+        function showLogMessage() {
+            const logArea = document.getElementById('log-messages');
+            if (currentIndex < Messages.length) {
+                const p = document.createElement('div');
+                p.textContent = Messages[currentIndex];
+                logArea.appendChild(p);
+                logArea.scrollTop = logArea.scrollHeight; // auto-rolling down
+                currentIndex++;
+            } else {
+                clearInterval(LogInterval);
+            }
+        }
+
+        function startLogs() {
+            currentIndex = 0;
+            const logArea = document.getElementById('log-messages');
+            logArea.innerHTML = '';
+            const Delay = Math.floor(Math.random() * 1500) + 2000;
+            LogInterval = setInterval(showLogMessage, Delay); 
+        }
+
+        function showLoading() {
+            document.getElementById('form-box').style.display = 'none';
+            document.getElementById('loading-box').style.display = 'block';
+            startLogs(); 
+        }
+
+        async function runLatestETL() {
+            const caseInput = document.getElementById('case_number');
+            const caseNumber = caseInput.value.trim();
+
+            if (!caseNumber) {
+                alert("⚠️ Please enter a Case Number first!");
+                return;
+            }
+
+            // Show loading animation and log messages
+            document.getElementById('form-box').style.display = 'none';
+            document.getElementById('loading-box').style.display = 'block';
+            startLogs();
+
+            try {
+                // ✅ Step 1: Submit case number and wait for the server to complete session setup.
+                const response = await fetch('/', {
+                    method: 'POST',
+                    headers: {
+                        'Content-Type': 'application/x-www-form-urlencoded',
+                    },
+                    body: `case_number=${encodeURIComponent(caseNumber)}`
+                });
+
+                // ✅ Step 2: If successful, redirect to the analysis page.
+                if (response.ok) {
+                    console.log("✅ Case number POST completed. Redirecting...");
+                    window.location.href = '/automation/run_latest_etl';
+                } else {
+                    throw new Error("Server returned error " + response.status);
+                }
+
+            } catch (error) {
+                alert('❌ Error occurred: ' + error);
+                // Restore the original view if needed.
+                document.getElementById('form-box').style.display = 'block';
+                document.getElementById('loading-box').style.display = 'none';
+            }
+        }
+
+    </script>
+
+
+</body>
+</html>

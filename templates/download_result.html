@@ -101,10 +101,10 @@
                         <td class="text-center">
                             <div class="d-flex flex-column align-items-center"></div>
                                 <button class="btn btn-primary btn-sm mb-2" onclick="startAnalysis(this, '{{ etl_path | urlencode }}')">
-                                    Analyze
+                                    Parse
                                 </button>
                                 <button class="btn btn-success btn-sm" onclick="startLogParser(this, '{{ etl_path | urlencode }}')">
-                                    Analyze with LLM
+                                    Parse and Analyze with LLM
                                 </button>
                             </div>
                         </td>
@@ -173,7 +173,7 @@
                         <td>{{ ddd_path.split('.')[-1] }}</td>
                         <td>
                             <button class="btn btn-primary btn-sm" onclick="startAnalysis(this, '{{ ddd_path | urlencode }}')">
-                                Analyze
+                                Parse
                             </button>
                         </td>
                     </tr>
@@ -201,7 +201,7 @@
                         <td>{{ fw_path.split('.')[-1] }}</td>
                         <td>
                             <button class="btn btn-primary btn-sm" onclick="startFwAnalysis(this, '{{ fw_path | urlencode }}')">
-                                Analyze
+                                Parse
                             </button>
                         </td>
                     </tr>

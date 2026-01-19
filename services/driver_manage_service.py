@@ -146,6 +146,79 @@ class DriverManager:
         else:
             return 'win32'
         
+    def get_available_chromedriver_version(self, target_version, os_type, proxies):
+        """Find the closest available ChromeDriver version"""
+        try:
+            # Try exact version first
+            test_url = f"https://storage.googleapis.com/chrome-for-testing-public/{target_version}/{os_type}/chromedriver-{os_type}.zip"
+            test_response = requests.head(test_url, proxies=proxies, timeout=10)
+            if test_response.status_code == 200:
+                print(f"✅ Found exact version: {target_version}")
+                return target_version
+        except:
+            pass
+        
+        print(f"⚠️ Exact version {target_version} not found, searching for compatible version...")
+        
+        try:
+            # Get list of available versions from the known-good-versions endpoint
+            known_versions_url = "https://googlechromelabs.github.io/chrome-for-testing/known-good-versions-with-downloads.json"
+            response = requests.get(known_versions_url, proxies=proxies, timeout=15)
+            response.raise_for_status()
+            data = response.json()
+            
+            # Parse target version
+            target_parts = [int(x) for x in target_version.split('.')]
+            target_major = target_parts[0]
+            
+            # Find all versions with matching major version
+            compatible_versions = []
+            for version_info in data.get('versions', []):
+                version = version_info.get('version', '')
+                if not version:
+                    continue
+                    
+                version_parts = [int(x) for x in version.split('.')]
+                if version_parts[0] == target_major:
+                    # Check if this version has chromedriver available for our OS
+                    downloads = version_info.get('downloads', {})
+                    chromedriver_downloads = downloads.get('chromedriver', [])
+                    if any(d.get('platform') == os_type for d in chromedriver_downloads):
+                        compatible_versions.append(version)
+            
+            if compatible_versions:
+                # Use the latest compatible version
+                compatible_versions.sort(key=lambda v: [int(x) for x in v.split('.')])
+                selected_version = compatible_versions[-1]
+                print(f"✅ Found compatible version: {selected_version}")
+                return selected_version
+            
+            # If no compatible version found, try the last-known-good endpoint
+            print(f"⚠️ No compatible version found in known-good list, trying last-known-good...")
+            lkg_url = f"https://googlechromelabs.github.io/chrome-for-testing/last-known-good-versions-with-downloads.json"
+            lkg_response = requests.get(lkg_url, proxies=proxies, timeout=10)
+            lkg_response.raise_for_status()
+            lkg_data = lkg_response.json()
+            
+            # Try Stable channel first
+            channels_to_try = ['Stable', 'Beta', 'Dev', 'Canary']
+            for channel in channels_to_try:
+                channel_data = lkg_data.get('channels', {}).get(channel, {})
+                version = channel_data.get('version')
+                if version:
+                    downloads = channel_data.get('downloads', {})
+                    chromedriver_downloads = downloads.get('chromedriver', [])
+                    if any(d.get('platform') == os_type for d in chromedriver_downloads):
+                        print(f"✅ Using {channel} channel version: {version}")
+                        return version
+                        
+        except Exception as e:
+            print(f"⚠️ Error finding compatible version: {e}")
+        
+        # Last resort: return the original version and let it fail
+        print(f"⚠️ Could not find compatible version, attempting original: {target_version}")
+        return target_version
+
     def chrome_driver_init(self, driver_dir):
         current_chrome_version = self.get_chrome_version()
 
@@ -167,7 +240,10 @@ class DriverManager:
             'http': "http://proxy-dmz.intel.com:911",
             'https': "http://proxy-dmz.intel.com:912"
         }
-        url = fr"https://storage.googleapis.com/chrome-for-testing-public/{current_chrome_version}/{os_type}/chromedriver-{os_type}.zip"
+        
+        # Find an available ChromeDriver version
+        available_version = self.get_available_chromedriver_version(current_chrome_version, os_type, proxies)
+        url = fr"https://storage.googleapis.com/chrome-for-testing-public/{available_version}/{os_type}/chromedriver-{os_type}.zip"
 
         filename = "chromedriver.zip"
         file_path = fr"{driver_dir}/{filename}"

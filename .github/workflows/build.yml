@@ -33,7 +33,7 @@ jobs:
     - name: Build with PyInstaller
       run: |
         pip install pyinstaller
-        pyinstaller app.py --name IntelAvatar --add-data "templates;templates" --add-data "blueprints;blueprints" --add-data "configs;configs" --add-data "models;models" --add-data "static;static" --add-data "services;services" --add-data "utils;utils" --hidden-import engineio.async_drivers.threading --hidden-import socketio.async_drivers.threading --hidden-import snowflake.connector.snow_logging --hidden-import py7zr --noconfirm --icon=icon.ico
+        pyinstaller IntelAvatar.spec
     
     - name: Upload build artifact
       uses: actions/upload-artifact@v4

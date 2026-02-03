@@ -316,8 +316,6 @@
         // Ai Analysis
         const AI_ANALYSIS_URL = "{{ url_for('llm.get_llm_analysis') }}";
         function loadAiAnalysis() {
-
-            // toggleSubmitButtons(false);
             $.ajax({
                 url: AI_ANALYSIS_URL,
                 method: 'GET',
@@ -327,14 +325,12 @@
                     if (response.success) {
                         console.log(`response.ai_analysis: ${JSON.stringify(response.ai_analysis, null, 2)}`)
                         $('#ai-analysis-content').html(renderAiAnalysis(response.ai_analysis));
-                        // toggleSubmitButtons(true);
                     } else {
                         $('#ai-analysis-content').html(`
                             <div class="error-message">
                                 <strong>error:</strong> ${response.error}
                             </div>
                         `);
-                        // toggleSubmitButtons(true);
                     }
                 },
                 error: function(xhr, status, error) {

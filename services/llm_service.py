@@ -194,10 +194,6 @@ class LLM_helper:
             print(f"Failed to make inference request: {e}")
             return {}
     
-<<<<<<< HEAD
-    def analyze_log(self, system_content, log=None):
-
-=======
     def analyze_log(self, system_content, log=None, case_description=None):
         
         # Inject case description into system prompt if provided
@@ -218,7 +214,6 @@ Use the above case description and the timestamp as context when analyzing the l
         print("="*80)
         '''
         
->>>>>>> 637a282 (ui_update_description_add)
         user_content = (
             f"""logs: {log}\n"""
         )

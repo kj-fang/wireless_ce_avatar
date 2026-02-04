@@ -109,19 +109,11 @@ class LogParserService:
     #-------------- analyze progress ------------------
 
     def start_analysis(self, filter_path: str, log_path: str, output_dir: str, 
-<<<<<<< HEAD
-                      llm_helper, custom_prompt_content: str) -> bool:
-        try:
-            thread = threading.Thread(
-                target=self.process_analysis,
-                args=(filter_path, log_path, output_dir, llm_helper, custom_prompt_content)
-=======
                       llm_helper, custom_prompt_content: str, case_description: str = None) -> bool:
         try:
             thread = threading.Thread(
                 target=self.process_analysis,
                 args=(filter_path, log_path, output_dir, llm_helper, custom_prompt_content, case_description)
->>>>>>> 637a282 (ui_update_description_add)
             )
             thread.daemon = True
             thread.start()
@@ -142,11 +134,7 @@ class LogParserService:
                     }, namespace='/progress')
         
 
-<<<<<<< HEAD
-    def process_analysis(self, filter_path, log_path, output_dir, llm_helper, prompt):
-=======
     def process_analysis(self, filter_path, log_path, output_dir, llm_helper, prompt, case_description=None):
->>>>>>> 637a282 (ui_update_description_add)
 
         try:
             self.reset_log_parser()
@@ -178,12 +166,8 @@ class LogParserService:
             self.update_progress(85, "Running LLM analysis...")
             llm_result = llm_helper.analyze_log(
                 system_content=prompt,
-<<<<<<< HEAD
-                log=str(grouped)
-=======
                 log=str(grouped),
                 case_description=case_description
->>>>>>> 637a282 (ui_update_description_add)
             )
             
             # 6: done

@@ -104,6 +104,13 @@ def handle_submit_analysis(data):
     selected_filter = data.get('filter_file')
     custom_prompt_content = data.get('prompt_content')
     
+<<<<<<< HEAD
+=======
+    # Get case description from session if available
+    case_context = session.get('case_context', {})
+    case_description = case_context.get('description', None)
+    
+>>>>>>> 637a282 (ui_update_description_add)
     is_valid, error_message = log_parser_service.validate_analysis_inputs(
         log_path, selected_filter, custom_prompt_content
     )
@@ -117,7 +124,11 @@ def handle_submit_analysis(data):
         
         success = log_parser_service.start_analysis(
             filter_path, log_path, session['logparser_output_dir'], 
+<<<<<<< HEAD
             app_config.llm_helper, custom_prompt_content
+=======
+            app_config.llm_helper, custom_prompt_content, case_description
+>>>>>>> 637a282 (ui_update_description_add)
         )
         
         if not success:

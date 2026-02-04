@@ -146,6 +146,7 @@ class DriverManager:
         else:
             return 'win32'
         
+<<<<<<< HEAD
     def get_available_chromedriver_version(self, target_version, os_type, proxies):
         """Find the closest available ChromeDriver version"""
         try:
@@ -219,6 +220,8 @@ class DriverManager:
         print(f"⚠️ Could not find compatible version, attempting original: {target_version}")
         return target_version
 
+=======
+>>>>>>> 637a282 (ui_update_description_add)
     def chrome_driver_init(self, driver_dir):
         current_chrome_version = self.get_chrome_version()
 
@@ -240,10 +243,14 @@ class DriverManager:
             'http': "http://proxy-dmz.intel.com:911",
             'https': "http://proxy-dmz.intel.com:912"
         }
+<<<<<<< HEAD
         
         # Find an available ChromeDriver version
         available_version = self.get_available_chromedriver_version(current_chrome_version, os_type, proxies)
         url = fr"https://storage.googleapis.com/chrome-for-testing-public/{available_version}/{os_type}/chromedriver-{os_type}.zip"
+=======
+        url = fr"https://storage.googleapis.com/chrome-for-testing-public/{current_chrome_version}/{os_type}/chromedriver-{os_type}.zip"
+>>>>>>> 637a282 (ui_update_description_add)
 
         filename = "chromedriver.zip"
         file_path = fr"{driver_dir}/{filename}"

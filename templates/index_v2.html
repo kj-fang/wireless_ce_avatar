@@ -1,0 +1,244 @@
+<!DOCTYPE html>
+<html lang="en">
+<head>
+    <meta charset="UTF-8">
+    <title>Case Number Input - New Design</title>
+    <link href="https://fonts.googleapis.com/css2?family=Inter:wght@400;500;600;700&display=swap" rel="stylesheet">
+    <link href="https://stackpath.bootstrapcdn.com/bootstrap/4.5.2/css/bootstrap.min.css" rel="stylesheet">
+    <link href="https://fonts.googleapis.com/css2?family=Press+Start+2P&display=swap" rel="stylesheet">
+    <script src="https://cdn.socket.io/3.1.3/socket.io.min.js" crossorigin="anonymous"></script>
+    <style>
+        * {
+            font-family: 'Inter', sans-serif !important;
+        }
+        
+        /* Keep Press Start 2P font for loading messages */
+        #log-messages,
+        #log-messages * {
+            font-family: 'Press Start 2P', cursive !important;
+        }
+        
+        /* Hide SVGator watermark */
+        #epU2ASd7C0s22,
+        #epU2ASd7C0s22 * {
+            opacity: 0 !important;
+            visibility: hidden !important;
+            display: none !important;
+        }
+        
+        body {
+            background-color: #f8f9fa;
+            font-family: 'Segoe UI', Tahoma, Geneva, Verdana, sans-serif;
+        }
+        .form-container {
+            margin-top: 50px;
+            background-color: #fff;
+            padding: 20px;
+            border-radius: 8px;
+            box-shadow: 0 0 10px rgba(0, 0, 0, 0.1);
+        }
+        #loading-box {
+            display: none;
+            margin-top: 20px;
+        }
+        .section-divider {
+            border-top: 2px dashed #ccc;
+            margin: 40px 0 20px;
+        }
+        img {
+            -webkit-backface-visibility: hidden;
+            -webkit-transform: translateZ(0) scale(1.001, 1);
+            transform: translateZ(0) scale(1.001, 1);
+            image-rendering: -webkit-optimize-contrast;
+            image-rendering: crisp-edges;
+        }
+    </style>
+</head>
+
+<body>
+    <!-- SVG Banner -->
+    <div class="form-container mb-4 p-0 overflow-hidden" 
+        style="border-radius: 0; margin-top: 0; box-shadow: 0 4px 6px rgba(0, 0, 0, 0.3);">
+        <img src="../static/banner2.svg" 
+            alt="Banner" 
+            class="w-100" 
+            style="display: block; width: 100%; height: auto; shape-rendering: crispEdges;">
+    </div>
+
+
+    <!-- Flash message placeholder -->
+    <div class="mt-3" style="display: none;">
+        <div class="alert alert-success alert-dismissible fade show" role="alert">
+            Sample success message
+            <button type="button" class="close" data-dismiss="alert" aria-label="Close">
+                <span aria-hidden="true">&times;</span>
+            </button>
+        </div>
+    </div>
+
+    <!-- 📁 Case Number block -->
+    <div id="form-box" style="max-width:35%; margin: 100px auto;">
+        <form id="mainForm" method="post" onsubmit="handleSubmit(event)">
+            <div style="display: flex; gap: 0; margin-bottom: 15px; position: relative;">
+                <select id="action_type" class="form-control" style="border-radius: 25px 0 0 25px; padding: 8px 12px 8px 20px; width: auto; min-width: 100px; border-right: none; background-color: #0068B6 ; color: rgb(255, 255, 255); font-weight: bold;">
+                    <option value="submit" style="background-color: white; color: black;">Submit</option>
+                    <option value="etl" style="background-color: white; color: black;">ETL Analysis</option>
+                </select>
+                <input type="text" class="form-control" id="case_number" name="case_number" placeholder="Enter case number here" value="" required style="border-radius: 0 25px 25px 0; padding: 12px 50px 12px 20px; flex: 1;">
+                <button type="submit" class="btn btn-primary" style="position: absolute; right: 5px; top: 50%; transform: translateY(-50%); border-radius: 20px; padding: 6px 12px; font-size: 14px; background-color: transparent; border-color: transparent;">
+                    <img src="../static/Magnifying_glass.svg" alt="Search" style="width: 20px; height: 20px;">
+                </button>
+            </div>
+        </form>
+    </div>
+
+    <!-- 🔄 Loading indicator section -->
+    <div id="loading-box" class="text-center">
+        <div style="position: relative; width: 50%; margin: 0 auto;">
+            <div id="log-messages" class="text-left px-3 py-2"
+                style="
+                    min-height: 200px;
+                    max-height: 200px;
+                    overflow-y: auto;
+                    font-size: 0.7em;
+                    background-color: rgb(53, 53, 53);
+                    color: white;
+                    border-radius: 6px;
+                    font-family: 'Press Start 2P', cursive;
+                    white-space: pre-wrap;
+                    box-shadow: inset 0 0 5px rgba(0,0,0,0.3);
+                    line-height: 1.6;
+                    padding-bottom: 60px;
+                ">
+                Validating case number...
+            </div>
+            <img src="../static/pacman.gif" alt="Loading..." style="width: 200px; height: 200px; position: absolute; bottom: 10px; left: 50%; transform: translateX(-50%);">
+        </div>
+    </div>
+
+
+    
+    <div class="mb-5"></div>
+
+    <!-- Bootstrap JS -->
+    <script src="https://code.jquery.com/jquery-3.5.1.slim.min.js"></script>
+    <script src="https://cdn.jsdelivr.net/npm/bootstrap@4.5.2/dist/js/bootstrap.bundle.min.js"></script>
+
+    <!-- Main functionality script -->
+    <script>
+        const Messages = [
+            "- Validating case number...",
+            "- Fetching case description...",
+            "- Fetching related files...",
+            "- Parsing attachment links...",
+            "- Report is almost ready...",
+        ];
+
+        let currentIndex = 0;
+        let LogInterval;
+
+        function showLogMessage() {
+            const logArea = document.getElementById('log-messages');
+            if (currentIndex < Messages.length) {
+                const p = document.createElement('div');
+                p.textContent = Messages[currentIndex];
+                logArea.appendChild(p);
+                logArea.scrollTop = logArea.scrollHeight;
+                currentIndex++;
+            } else {
+                clearInterval(LogInterval);
+            }
+        }
+
+        function startLogs() {
+            currentIndex = 0;
+            const logArea = document.getElementById('log-messages');
+            logArea.innerHTML = '';
+            const Delay = Math.floor(Math.random() * 1500) + 2000;
+            LogInterval = setInterval(showLogMessage, Delay);
+        }
+
+        function showLoading() {
+            document.getElementById('form-box').style.display = 'none';
+            document.getElementById('loading-box').style.display = 'block';
+            startLogs();
+        }
+
+        // Handle form submission based on dropdown selection
+        async function handleSubmit(event) {
+            event.preventDefault();
+            
+            const actionType = document.getElementById('action_type').value;
+            const caseNumber = document.getElementById('case_number').value.trim();
+
+            if (!caseNumber) {
+                alert("⚠️ Please enter a Case Number first!");
+                return;
+            }
+
+            if (actionType === 'submit') {
+                // Regular submit - just show loading and submit form
+                showLoading();
+                document.getElementById('mainForm').submit();
+            } else if (actionType === 'etl') {
+                // ETL Analysis
+                await runLatestETL(caseNumber);
+            }
+        }
+
+        async function runLatestETL(caseNumber) {
+            // Show loading animation and log messages
+            document.getElementById('form-box').style.display = 'none';
+            document.getElementById('loading-box').style.display = 'block';
+            startLogs();
+
+            try {
+                // Step 1: Submit case number and wait for the server to complete session setup.
+                const response = await fetch('/', {
+                    method: 'POST',
+                    headers: {
+                        'Content-Type': 'application/x-www-form-urlencoded',
+                    },
+                    body: `case_number=${encodeURIComponent(caseNumber)}`
+                });
+
+                // Step 2: If successful, redirect to the analysis page.
+                if (response.ok) {
+                    console.log("✅ Case number POST completed. Redirecting...");
+                    window.location.href = '/automation/run_latest_etl';
+                } else {
+                    throw new Error("Server returned error " + response.status);
+                }
+
+            } catch (error) {
+                alert('❌ Error occurred: ' + error);
+                // Restore the original view if needed.
+                document.getElementById('form-box').style.display = 'block';
+                document.getElementById('loading-box').style.display = 'none';
+            }
+        }
+
+        // Optional: Auto-fill from clipboard
+        document.addEventListener("DOMContentLoaded", async () => {
+            try {
+                const text = await navigator.clipboard.readText();
+                const pattern = /^00\d{6}$/;
+                if (pattern.test(text.trim())) {
+                    document.getElementById("case_number").value = text.trim();
+                }
+            } catch (err) {
+                // Clipboard access denied or not available
+                console.log("Clipboard access not available");
+            }
+        });
+    </script>
+
+    <!-- Toggle loading view (for design preview) -->
+    <script>
+        // Uncomment to see loading state
+        // document.getElementById('form-box').style.display = 'none';
+        // document.getElementById('loading-box').style.display = 'block';
+    </script>
+
+</body>
+</html>

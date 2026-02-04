@@ -43,7 +43,11 @@ def download_result_bsod():
 def render_case_form():
     clipboard_text = helpers.get_clipboard_case_number()
     
+<<<<<<< HEAD
     return render_template('index.html', 
+=======
+    return render_template('index_v2.html', 
+>>>>>>> 637a282 (ui_update_description_add)
                          clipboard_text=clipboard_text)
 
 def handle_case_submission():
@@ -80,7 +84,11 @@ def handle_case_submission():
 
 def render_select_attachments_form():
     case_context = session["case_context"]
+<<<<<<< HEAD
     return render_template('select_attachments.html',
+=======
+    return render_template('select_attachments_v2.html',
+>>>>>>> 637a282 (ui_update_description_add)
                            ai_analysis=None,     
                            case_context=case_context)
 

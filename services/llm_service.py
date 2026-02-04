@@ -194,8 +194,31 @@ class LLM_helper:
             print(f"Failed to make inference request: {e}")
             return {}
     
+<<<<<<< HEAD
     def analyze_log(self, system_content, log=None):
 
+=======
+    def analyze_log(self, system_content, log=None, case_description=None):
+        
+        # Inject case description into system prompt if provided
+        if case_description:
+            system_content = f"""{system_content}
+
+**Case Description Context:**
+{case_description}
+
+Use the above case description and the timestamp as context when analyzing the logs below."""
+        
+        #print the final prompt that includes case description
+        ''' 
+        print("="*80)
+        print("📋 FINAL PROMPT SENT TO LLM:")
+        print("="*80)
+        print(system_content)
+        print("="*80)
+        '''
+        
+>>>>>>> 637a282 (ui_update_description_add)
         user_content = (
             f"""logs: {log}\n"""
         )

@@ -6,6 +6,7 @@ from threading import Thread, Event
 from services.driver_manage_service import DriverManager
 from configs.set_up_app import set_up
 from configs.global_configs import app_config
+from configs.version import __version__, BUILD_DATE, GIT_HASH, GIT_BRANCH
 
 #from blueprints.main import main_bp
 #from blueprints.attachment import attachment_bp
@@ -43,6 +44,11 @@ def create_app():
 
 
 if __name__ == "__main__":
+    print(f"🚀 IntelAvatar v{__version__} starting...")
+    print(f"📅 Build: {BUILD_DATE}")
+    print(f"🔖 Git: {GIT_HASH} ({GIT_BRANCH})")
+    print()
+    
     app, socketio = create_app()
     set_up(socketio)
     app_config.set_driver_manager(DriverManager(app_config.avatarfiles_dir))

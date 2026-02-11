@@ -194,10 +194,16 @@ class LLM_helper:
             print(f"Failed to make inference request: {e}")
             return {}
     
-    def analyze_log(self, system_content, log=None):
+    def analyze_log(self, system_content, log=None, case_description=None):
 
         user_content = (
-            f"""logs: {log}\n"""
+            f"""**Case Description Context:**
+            {case_description}
+
+            Use the above case description and the timestamp as context when analyzing the logs below.
+
+            logs: {log}
+            """
         )
         print("client:", self.client)
         try:

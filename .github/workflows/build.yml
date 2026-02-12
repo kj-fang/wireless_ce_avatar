@@ -121,7 +121,7 @@ jobs:
       run: |
         $version = "${{ steps.version.outputs.VERSION }}"
         $gitHash = "${{ steps.version.outputs.GIT_HASH }}"
-        Move-Item -Path "dist/IntelAvatar/IntelAvatar.exe" -Destination "dist/IntelAvatar/IntelAvatar_v${version}_$gitHash.exe" -Force
+        Move-Item -Path "dist/IntelAvatar/IntelAvatar.exe" -Destination "dist/IntelAvatar/IntelAvatar_v${version}_${gitHash}.exe" -Force
     
     - name: Upload build artifact
       uses: actions/upload-artifact@v4

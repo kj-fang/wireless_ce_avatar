@@ -112,7 +112,8 @@ jobs:
       - name: Rename exe with version
         run: |
           $version = "${{ steps.version.outputs.VERSION }}"
-          Move-Item -Path "dist/IntelAvatar/IntelAvatar.exe" -Destination "dist/IntelAvatar/IntelAvatar_v$version.exe" -Force
+          $gitHash = "${{ steps.version.outputs.GIT_HASH }}"
+          Move-Item -Path "dist/IntelAvatar/IntelAvatar.exe" -Destination "dist/IntelAvatar/IntelAvatar_v${version}_${gitHash}.exe" -Force
       
       - name: Create ZIP archive
         run: |
@@ -139,7 +140,7 @@ jobs:
           GITHUB_TOKEN: ${{ secrets.GITHUB_TOKEN }}
       
       - name: Upload artifact
-        uses: actions/upload-artifact@v3
+        uses: actions/upload-artifact@v4
         with:
           name: IntelAvatar-v${{ steps.version.outputs.VERSION }}
           path: dist/IntelAvatar/

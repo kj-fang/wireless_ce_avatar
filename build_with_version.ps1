@@ -128,17 +128,17 @@ try {
     # Rename exe with version
     Write-Host "Renaming executable with version..." -ForegroundColor Yellow
     $exePath = "dist/IntelAvatar/IntelAvatar.exe"
-    $newExePath = "dist/IntelAvatar/IntelAvatar_v${version}_$gitHash.exe"
+    $newExePath = "dist/IntelAvatar/IntelAvatar_v${version}_${gitHash}.exe"
     
     if (Test-Path $exePath) {
         Move-Item -Path $exePath -Destination $newExePath -Force
-        Write-Host "Renamed to: IntelAvatar_v${version}_$gitHash.exe" -ForegroundColor Green
+        Write-Host "Renamed to: IntelAvatar_v${version}_${gitHash}.exe" -ForegroundColor Green
     }
     
     Write-Host "`n===== Build Complete! =====" -ForegroundColor Green
     Write-Host "Version: $version" -ForegroundColor Cyan
     Write-Host "Git Hash: $gitHash" -ForegroundColor Cyan
-    Write-Host "Executable: IntelAvatar_v${version}_$gitHash.exe" -ForegroundColor Cyan
+    Write-Host "Executable: IntelAvatar_v${version}_${gitHash}.exe" -ForegroundColor Cyan
     Write-Host "Output location: dist/IntelAvatar/" -ForegroundColor Cyan
     
 } catch {

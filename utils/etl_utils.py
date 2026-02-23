@@ -171,7 +171,7 @@ def filter_folders_by_time(file_dict, issue_time_or_datetime):
             folders_after = [(f, t) for f, t in folder_times if t >= issue_datetime]
             
             if folders_after:
-                closest = min(folders_after, key=lambda x: abs((x[1] - issue_datetime).total_seconds()))
+                closest = min(folders_after, key=lambda x: (x[1] - issue_datetime).total_seconds())
                 filtered_dict[zip_name] = [closest[0]]
             else:
                 # No folder after issue time - keep all folders and add warning

@@ -167,6 +167,16 @@
         <tbody>
             {% for name, bt_list in bt_dict.items() %}
                 {% for bt_path in bt_list %}
+                    {# determine if bt_path should be skipped based on exclude_keywords #}
+                    {% set ns = namespace(skip=false) %}
+                    {% if exclude_keywords %}
+                        {% for kw in exclude_keywords %}
+                            {% if kw in bt_path %}
+                                {% set ns.skip = true %}
+                            {% endif %}
+                        {% endfor %}
+                    {% endif %}
+                    {% if not ns.skip %}
                     <tr>
                         <td>{{ name }}</td>
                         <td>{{ bt_path }}</td>
@@ -188,6 +198,7 @@
                             </button>
                         </td>
                     </tr>
+                    {% endif %}
                 {% endfor %}
             {% endfor %}
         </tbody>
@@ -206,6 +217,16 @@
         <tbody>
             {% for name, ddd_list in ddd_dict.items() %}
                 {% for ddd_path in ddd_list %}
+                    {# determine if ddd_path should be skipped based on exclude_keywords #}
+                    {% set ns = namespace(skip=false) %}
+                    {% if exclude_keywords %}
+                        {% for kw in exclude_keywords %}
+                            {% if kw in ddd_path %}
+                                {% set ns.skip = true %}
+                            {% endif %}
+                        {% endfor %}
+                    {% endif %}
+                    {% if not ns.skip %}
                     <tr>
                         <td>{{ name }}</td>
                         <td>{{ ddd_path }}</td>
@@ -216,6 +237,7 @@
                             </button>
                         </td>
                     </tr>
+                    {% endif %}
                 {% endfor %}
             {% endfor %}
         </tbody>
@@ -234,6 +256,16 @@
         <tbody>
             {% for name, fw_list in fw_dict.items() %}
                 {% for fw_path in fw_list %}
+                    {# determine if fw_path should be skipped based on exclude_keywords #}
+                    {% set ns = namespace(skip=false) %}
+                    {% if exclude_keywords %}
+                        {% for kw in exclude_keywords %}
+                            {% if kw in fw_path %}
+                                {% set ns.skip = true %}
+                            {% endif %}
+                        {% endfor %}
+                    {% endif %}
+                    {% if not ns.skip %}
                     <tr>
                         <td>{{ name }}</td>
                         <td>{{ fw_path }}</td>
@@ -244,6 +276,7 @@
                             </button>
                         </td>
                     </tr>
+                    {% endif %}
                 {% endfor %}
             {% endfor %}
         </tbody>

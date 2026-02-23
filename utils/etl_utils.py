@@ -177,7 +177,7 @@ def filter_folders_by_time(file_dict, issue_time_or_datetime):
                 # No folder after issue time - keep all folders and add warning
                 filtered_dict[zip_name] = folder_list
                 warnings_dict[zip_name] = f"All folders are before issue time {issue_datetime.strftime('%Y-%m-%d %H:%M:%S')}"
-                print(f"⚠️ {zip_name}: All folders are before issue time")
+                print(f"WARNING {zip_name}: All folders are before issue time")
         
         return filtered_dict, warnings_dict
     
@@ -254,7 +254,7 @@ def filter_folders_by_time(file_dict, issue_time_or_datetime):
                     # All folders are before issue time - keep all and add warning
                     filtered_dict[zip_name] = folder_list
                     warnings_dict[zip_name] = f"All folders are before issue time {issue_time_str}"
-                    print(f"⚠️ {zip_name}: All folders are before issue time {issue_time_str}")
+                    print(f"WARNING {zip_name}: All folders are before issue time {issue_time_str}")
                 else:
                     # Find the folder with time closest to issue time (same time across different dates)
                     def time_distance(item):
@@ -300,9 +300,9 @@ def get_issue_time_from_selected_files(selected_files):
             if issue_time_or_datetime:
                 time_mapping[file_name] = issue_time_or_datetime
                 if isinstance(issue_time_or_datetime, datetime):
-                    print(f"✅ Found datetime for {file_name}: {issue_time_or_datetime}")
+                    print(f"Found datetime for {file_name}: {issue_time_or_datetime}")
                 else:
-                    print(f"✅ Found time for {file_name}: {issue_time_or_datetime}")
+                    print(f"Found time for {file_name}: {issue_time_or_datetime}")
     
     return time_mapping
 

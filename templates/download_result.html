@@ -5,6 +5,7 @@
     <title>Analysis Results and Progress</title>
     <link href="https://stackpath.bootstrapcdn.com/bootstrap/4.5.2/css/bootstrap.min.css" rel="stylesheet">
     <script src="https://code.jquery.com/jquery-3.5.1.min.js"></script>
+    <script src="https://stackpath.bootstrapcdn.com/bootstrap/4.5.2/js/bootstrap.bundle.min.js"></script>
     <script src="https://cdn.socket.io/4.6.1/socket.io.min.js"></script>
     <style>
         body {
@@ -62,10 +63,39 @@
     {% if auto_analysis_etl %}
     <div class="alert alert-info alert-dismissible fade show" role="alert">
         <i class="fas fa-robot"></i> <strong>Auto Running: Latest ETL with LLM analysis</strong> 
-        <button type="button" class="close" data-dismiss="alert" aria-label="Close">
+        <button type="button" class="close" data-dismiss="alert" aria-label="Close" onclick="this.parentElement.style.display='none';">
             <span aria-hidden="true">&times;</span>
         </button>
         <input type="hidden" id="autoAnalysisEtl" value="{{ auto_analysis_etl | urlencode }}">
+    </div>
+    {% endif %}
+
+    {% if time_filter_info %}
+    <div class="alert alert-success alert-dismissible fade show" role="alert">
+        <i class="fas fa-clock"></i> <strong>Time Filter Applied:</strong>
+        <ul class="mb-0 mt-2" style="list-style: none; padding-left: 0;">
+            {% for file_name, time_display in time_filter_info %}
+            <li>📁 <strong>{{ file_name }}</strong> → Showing folders closest to <strong>{{ time_display }}</strong></li>
+            {% endfor %}
+        </ul>
+        <button type="button" class="close" data-dismiss="alert" aria-label="Close" onclick="this.parentElement.style.display='none';">
+            <span aria-hidden="true">&times;</span>
+        </button>
+    </div>
+    {% endif %}
+
+    {% if time_filter_warnings %}
+    <div class="alert alert-warning alert-dismissible fade show" role="alert">
+        <i class="fas fa-exclamation-triangle"></i> <strong>Warning:</strong>
+        <ul class="mb-0 mt-2" style="list-style: none; padding-left: 0;">
+            {% for file_name, warning_msg in time_filter_warnings %}
+            <li>⚠️ <strong>{{ file_name }}</strong>: {{ warning_msg }}</li>
+            {% endfor %}
+        </ul>
+        <p class="mb-0 mt-2"><small>Showing all folders for these files since no logs were captured after the issue time.</small></p>
+        <button type="button" class="close" data-dismiss="alert" aria-label="Close" onclick="this.parentElement.style.display='none';">
+            <span aria-hidden="true">&times;</span>
+        </button>
     </div>
     {% endif %}
 
@@ -94,7 +124,16 @@
         <tbody>
             {% for name, etl_list in wifi_dict.items() %}
                 {% for etl_path in etl_list %}
-                    {% if not etl_path.endswith('.log') %}
+                    {# determine if etl_path should be skipped based on exclude_keywords #}
+                    {% set ns = namespace(skip=false) %}
+                    {% if exclude_keywords %}
+                        {% for kw in exclude_keywords %}
+                            {% if kw in etl_path %}
+                                {% set ns.skip = true %}
+                            {% endif %}
+                        {% endfor %}
+                    {% endif %}
+                    {% if not etl_path.endswith('.log') and not ns.skip %}
                     <tr>
                         <td>{{ name }}</td>
                         <td>{{ etl_path }}</td>

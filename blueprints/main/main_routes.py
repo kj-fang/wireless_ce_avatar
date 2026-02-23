@@ -3,7 +3,7 @@ import os
 import subprocess
 
 from utils import helpers
-from utils.etl_utils import get_auto_analysis_etl
+from utils.etl_utils import get_auto_analysis_etl, get_issue_time_from_selected_files, filter_folders_by_time
 from services.case_info_service import CaseService
 from models.models import CaseContext
 from configs.global_configs import app_config
@@ -145,12 +145,75 @@ def render_download_result_form():
             'fw_dict': result_data.get('fw', {})
         }
     
+    # Extract issue time from selected files
+    selected_files = session.get("selected_files", [])
+    time_mapping = get_issue_time_from_selected_files(selected_files)
+    
+    # Apply time-based filtering for each file if issue time is found
+    time_filter_info = []  # Store info for display: [(file_name, time_display), ...]
+    time_filter_warnings = []  # Store warnings: [(file_name, warning_message), ...]
+    
+    if time_mapping:
+        from datetime import datetime as dt
+        print(f"Applying time-based filtering for {len(time_mapping)} file(s)")
+        try:
+            # Filter each dict type with corresponding time for each file
+            for dict_type, file_dict in [('wifi', file_dicts['wifi_dict']), 
+                                         ('ddd', file_dicts['ddd_dict']), 
+                                         ('bt', file_dicts['bt_dict']), 
+                                         ('fw', file_dicts['fw_dict'])]:
+                
+                filtered_dict = {}
+                for zip_name, paths in file_dict.items():
+                    if zip_name in time_mapping:
+                        # Apply time filter for this specific file
+                        issue_time = time_mapping[zip_name]
+                        temp_dict = {zip_name: paths}
+                        filtered_temp, warnings = filter_folders_by_time(temp_dict, issue_time)
+                        filtered_dict.update(filtered_temp)
+                        
+                        # Collect warnings
+                        for warn_file, warn_msg in warnings.items():
+                            if not any(item[0] == warn_file for item in time_filter_warnings):
+                                time_filter_warnings.append((warn_file, warn_msg))
+                        
+                        # Prepare display info
+                        time_display = issue_time.strftime('%Y-%m-%d %H:%M:%S') if isinstance(issue_time, dt) else issue_time
+                        if not any(item[0] == zip_name for item in time_filter_info):
+                            time_filter_info.append((zip_name, time_display))
+                    else:
+                        # No time filter for this file, keep as is
+                        filtered_dict[zip_name] = paths
+                
+                # Update the file_dicts
+                if dict_type == 'wifi':
+                    file_dicts['wifi_dict'] = filtered_dict
+                elif dict_type == 'ddd':
+                    file_dicts['ddd_dict'] = filtered_dict
+                elif dict_type == 'bt':
+                    file_dicts['bt_dict'] = filtered_dict
+                elif dict_type == 'fw':
+                    file_dicts['fw_dict'] = filtered_dict
+            
+            print(f"Time filtering completed successfully")
+        except Exception as e:
+            print(f"Error during time filtering: {e}")
+            import traceback
+            traceback.print_exc()
+            time_filter_info = []
+            time_filter_warnings = []
+    else:
+        print(f"No issue time found in selected files, skipping time filter")
+    
     auto_analysis_etl = get_auto_analysis_etl(file_dicts['wifi_dict'], file_dicts['ddd_dict'])
     
-
+    tmp_selected_files = session["selected_files"]
     return render_template('download_result.html',
                          case_path=session['download_path'],
                          auto_analysis_etl = auto_analysis_etl,
+                         exclude_keywords=app_config.etl_exclude_keywords,
+                         time_filter_info=time_filter_info,
+                         time_filter_warnings=time_filter_warnings,
                          **file_dicts)
 
 

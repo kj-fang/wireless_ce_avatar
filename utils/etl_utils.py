@@ -236,7 +236,7 @@ def filter_folders_by_time(file_dict, issue_time_or_datetime):
                     
                     if folders_after:
                         # Get the closest folder after issue time
-                        closest = min(folders_after, key=lambda x: abs((x[1] - issue_datetime).total_seconds()))
+                        closest = min(folders_after, key=lambda x: (x[1] - issue_datetime).total_seconds())
                         best_folders.append((closest, False))  # False = no warning
                     else:
                         # If no folder after issue time on this date, mark for potential warning

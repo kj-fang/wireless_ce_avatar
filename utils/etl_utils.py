@@ -78,19 +78,28 @@ def extract_time_from_description(description):
         except ValueError as e:
             print(f"Invalid datetime values: {e}")
     
-    # Pattern 2: MM-DD-YYYY HH:MM:SS or MM/DD/YYYY HH:MM:SS
-    datetime_pattern2 = r'(\d{1,2})[-/](\d{1,2})[-/](\d{4})\s+(\d{1,2}):(\d{2}):(\d{2})'
-    match = re.search(datetime_pattern2, description)
+    # Pattern 2 & 3 Combined: Intelligent date parsing (MM-DD-YYYY or DD-MM-YYYY)
+    datetime_pattern_ambiguous = r'(\d{1,2})[-/](\d{1,2})[-/](\d{4})\s+(\d{1,2}):(\d{2}):(\d{2})'
+    match = re.search(datetime_pattern_ambiguous, description)
     if match:
-        month, day, year, hour, minute, second = match.groups()
+        first, second, year, hour, minute, second_time = match.groups()
+        first, second = int(first), int(second)
+        
+        # Rule 1: If first > 12, must be DD-MM-YYYY (European)
+        if first > 12:
+            day, month = first, second
+        # Rule 2: If second > 12, must be MM-DD-YYYY (US)
+        elif second > 12:
+            month, day = first, second
+        # Rule 3: Both <= 12, ambiguous - default to MM-DD-YYYY
+        else:
+            month, day = first, second  # Default to US format
+            print(f"Ambiguous date {first}-{second}-{year}, assuming MM-DD-YYYY (US format)")
+        
         try:
-            return datetime(int(year), int(month), int(day), 
-                          int(hour), int(minute), int(second))
+            return datetime(int(year), month, day, int(hour), int(minute), int(second_time))
         except ValueError as e:
             print(f"Invalid datetime values: {e}")
-    
-    # Pattern 3: DD-MM-YYYY HH:MM:SS or DD/MM/YYYY HH:MM:SS (European format)
-    # We'll try this but prefer MM-DD-YYYY if ambiguous
     
     # If no full datetime found, try to match time only
     time_pattern = r'(\d{1,2}):(\d{2}):(\d{2})'

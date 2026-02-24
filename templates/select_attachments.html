@@ -176,7 +176,7 @@
         
         <!-- AI Summary Card -->
         <div class="card mb-3" style="border: 2px solid #005A9C; border-radius: 0.5rem;">
-            <div class="card-header text-white font-weight-bold py-2.5 px-3" style="background-color: #005A9C;">
+            <div class="card-header text-white font-weight-bold py-3 px-3" style="background-color: #005A9C;">
             </div>
             <div class="card-body bg-light px-3" style="white-space: normal; line-height: 1.5; border-radius: 0.5rem;">
                 <div id="ai-analysis-content">
@@ -199,7 +199,7 @@
                 <!-- Description Section -->
                 <div id="description" class="content-section">
         <div class="card mb-3" style="border: 2px solid #005A9C; border-radius: 0.5rem;">
-            <div class="card-header text-white font-weight-bold py-2.5 px-3" style="background-color: #005A9C;">
+            <div class="card-header text-white font-weight-bold py-3 px-3" style="background-color: #005A9C;">
             </div>
             <div class="card-body bg-light px-3" style="white-space: normal; line-height: 1.5; border-radius: 0.5rem;">
         <span class="fw-bolder text-primary h4 d-block mt-2 mb-1">Issue Description:</span>        
@@ -262,7 +262,7 @@
                 <!-- Attachments Section -->
                 <div id="attachments" class="content-section">
         <div class="card mb-3" style="border: 2px solid #005A9C; border-radius: 0.5rem;">
-            <div class="card-header text-white font-weight-bold py-2.5 px-3" style="background-color: #005A9C;">
+            <div class="card-header text-white font-weight-bold py-3 px-3" style="background-color: #005A9C;">
             </div>
             <div class="card-body bg-light px-3" style="white-space: normal; line-height: 1.5; border-radius: 0.5rem;">
          <span class="fw-bolder text-primary h4 d-block mb-3">Attachments:</span>
@@ -298,7 +298,7 @@
                     <span class="spinner-border spinner-border-sm mr-2" role="status" style="display: none;"></span>
                     Download
                 </button>
-                <img src="{{ url_for('static', filename='download.svg') }}" alt="Download" style="position: absolute; left: 20px; top: 22%; transform: translateY(-50%); width: 24px; height: 24px; pointer-events: none;">
+                <img src="{{ url_for('static', filename='download.svg') }}" alt="" aria-hidden="true" style="position: absolute; left: 20px; top: 22%; transform: translateY(-50%); width: 24px; height: 24px; pointer-events: none;">
             </div>
 
             <div style="position: relative; display: inline-block;">
@@ -306,7 +306,7 @@
                 <span class="spinner-border spinner-border-sm mr-2" role="status" style="display: none;"></span>
                 BSOD Parser
             </button>
-            <img src="{{ url_for('static', filename='BSOD.svg') }}" alt="BSOD" style="position: absolute; left: 15px; top: 22%; transform: translateY(-50%); width: 24px; height: 24px; pointer-events: none;">
+            <img src="{{ url_for('static', filename='BSOD.svg') }}" alt="" aria-hidden="true" style="position: absolute; left: 15px; top: 22%; transform: translateY(-50%); width: 24px; height: 24px; pointer-events: none;">
 
             </div>
 
@@ -315,7 +315,7 @@
                 <span class="spinner-border spinner-border-sm mr-2" role="status" style="display: none;"></span>
                 Run Analysis
             </button>
-            <img src="{{ url_for('static', filename='analysis.svg') }}" alt="Analysis" style="position: absolute; left: 15px; top: 22%; transform: translateY(-50%); width: 24px; height: 24px; pointer-events: none;">
+            <img src="{{ url_for('static', filename='analysis.svg') }}" alt="" aria-hidden="true" style="position: absolute; left: 15px; top: 22%; transform: translateY(-50%); width: 24px; height: 24px; pointer-events: none;">
             </div>
         </form>
             </div>
@@ -521,7 +521,7 @@
         const AI_ANALYSIS_URL = "{{ url_for('llm.get_llm_analysis') }}";
         function loadAiAnalysis() {
 
-            toggleSubmitButtons(false);
+            updateSubmitButtons();
             $.ajax({
                 url: AI_ANALYSIS_URL,
                 method: 'GET',
@@ -531,14 +531,14 @@
                     if (response.success) {
                         console.log(`response.ai_analysis: ${JSON.stringify(response.ai_analysis, null, 2)}`)
                         $('#ai-analysis-content').html(renderAiAnalysis(response.ai_analysis));
-                        toggleSubmitButtons(true);
+                        updateSubmitButtons();
                     } else {
                         $('#ai-analysis-content').html(`
                             <div class="error-message">
                                 <strong>error:</strong> ${response.error}
                             </div>
                         `);
-                        toggleSubmitButtons(true);
+                        updateSubmitButtons();
                     }
                 },
                 error: function(xhr, status, error) {
@@ -550,6 +550,7 @@
                             <button class="btn btn-sm btn-outline-primary ml-2" onclick="loadAiAnalysis()">Retry</button>
                         </div>
                     `);
+                    updateSubmitButtons();
                 }
             });
         }

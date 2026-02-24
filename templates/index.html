@@ -59,7 +59,7 @@
     <!-- SVG Banner -->
     <div class="form-container mb-4 p-0 overflow-hidden" 
         style="border-radius: 0; margin-top: 0; box-shadow: 0 4px 6px rgba(0, 0, 0, 0.3);">
-        <img src="../static/banner.svg" 
+        <img src="{{ url_for('static', filename='banner.svg') }}"
             alt="Banner" 
             class="w-100" 
             style="display: block; width: 100%; height: auto; shape-rendering: crispEdges;">
@@ -83,10 +83,9 @@
                 <select id="action_type" class="form-control" style="border-radius: 25px 0 0 25px; padding: 8px 12px 8px 20px; width: auto; min-width: 100px; border-right: none; background-color: #0068B6 ; color: rgb(255, 255, 255); font-weight: bold;">
                     <option value="submit" style="background-color: white; color: black;">Submit</option>
                     <option value="etl" style="background-color: white; color: black;">ETL Analysis</option>
-                    <option value="etl_LLM" style="background-color: white; color: black;">ETL Analysis with LLM</option>
                 </select>
                 <input type="text" class="form-control" id="case_number" name="case_number" placeholder="Enter case number here" value="" required style="border-radius: 0 25px 25px 0; padding: 12px 50px 12px 20px; flex: 1;">
-                <button type="submit" class="btn btn-primary" style="position: absolute; right: 5px; top: 50%; transform: translateY(-50%); border-radius: 20px; padding: 6px 12px; font-size: 14px; background-color: transparent; border-color: transparent;">
+                <button type="submit" class="btn btn-primary" aria-label="Search" style="position: absolute; right: 5px; top: 50%; transform: translateY(-50%); border-radius: 20px; padding: 6px 12px; font-size: 14px; background-color: transparent; border-color: transparent;">
                     <img src="../static/Magnifying_glass.svg" alt="Search" style="width: 20px; height: 20px;">
                 </button>
             </div>
@@ -184,6 +183,8 @@
             } else if (actionType === 'etl') {
                 // ETL Analysis
                 await runLatestETL(caseNumber);
+            } else {
+                alert("❌ Unsupported action selected. Please choose a valid option and try again.");
             }
         }
 
@@ -220,17 +221,27 @@
         }
 
         // Optional: Auto-fill from clipboard
-        document.addEventListener("DOMContentLoaded", async () => {
-            try {
-                const text = await navigator.clipboard.readText();
-                const pattern = /^00\d{6}$/;
-                if (pattern.test(text.trim())) {
-                    document.getElementById("case_number").value = text.trim();
-                }
-            } catch (err) {
-                // Clipboard access denied or not available
-                console.log("Clipboard access not available");
+        document.addEventListener("DOMContentLoaded", () => {
+            const input = document.getElementById("case_number");
+            if (!input) {
+                return;
             }
+            const handleAutoFillFromClipboard = async () => {
+                try {
+                    const text = await navigator.clipboard.readText();
+                    const pattern = /^00\d{6}$/;
+                    const trimmed = text.trim();
+                    if (pattern.test(trimmed)) {
+                        input.value = trimmed;
+                    }
+                } catch (err) {
+                    // Clipboard access denied or not available
+                    console.log("Clipboard access not available");
+                } finally {
+                    input.removeEventListener("focus", handleAutoFillFromClipboard);
+                }
+            };
+            input.addEventListener("focus", handleAutoFillFromClipboard);
         });
     </script>
 

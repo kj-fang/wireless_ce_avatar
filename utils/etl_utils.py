@@ -66,11 +66,16 @@ def extract_time_from_description(description):
     if not description:
         return None
     
+    # Flag to track if we attempted to extract datetime, so we only try time if datetime extraction fails
+    attempted_datetime = False 
+
     # Try to match full datetime patterns first
     # Pattern 1: YYYY-MM-DD HH:MM:SS or YYYY/MM/DD HH:MM:SS
     datetime_pattern1 = r'(\d{4})[-/](\d{1,2})[-/](\d{1,2})\s+(\d{1,2}):(\d{2}):(\d{2})'
     match = re.search(datetime_pattern1, description)
     if match:
+        attempted_datetime = True
+
         year, month, day, hour, minute, second = match.groups()
         try:
             return datetime(int(year), int(month), int(day), 
@@ -82,6 +87,8 @@ def extract_time_from_description(description):
     datetime_pattern_ambiguous = r'(\d{1,2})[-/](\d{1,2})[-/](\d{4})\s+(\d{1,2}):(\d{2}):(\d{2})'
     match = re.search(datetime_pattern_ambiguous, description)
     if match:
+        attempted_datetime = True
+
         first, second, year, hour, minute, second_time = match.groups()
         first, second = int(first), int(second)
         
@@ -102,11 +109,13 @@ def extract_time_from_description(description):
             print(f"Invalid datetime values: {e}")
     
     # If no full datetime found, try to match time only
-    time_pattern = r'(\d{1,2}):(\d{2}):(\d{2})'
-    match = re.search(time_pattern, description)
-    if match:
-        hour, minute, second = match.groups()
-        return f"{hour.zfill(2)}:{minute}:{second}"
+    if not attempted_datetime:
+        print("No full datetime found, trying to extract time only...")
+        time_pattern = r'(\d{1,2}):(\d{2}):(\d{2})'
+        match = re.search(time_pattern, description)
+        if match:
+            hour, minute, second = match.groups()
+            return f"{hour.zfill(2)}:{minute}:{second}"
     
     return None
 

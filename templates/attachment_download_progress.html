@@ -15,6 +15,18 @@
             alt="Banner" 
             class="w-100" 
             style="border-radius: 0; display: block; margin-top: 0;">
+
+            <!-- clickable  logo -->  
+        <a href="{{ url_for('main.index') }}" 
+            style="position: absolute; 
+                    top: 0; 
+                    left: 0; 
+                    width: 20%; 
+                    height: 10%; 
+                    cursor: pointer; 
+                    z-index: 10;"
+            title="Return to home">
+        </a>
     </div>
     <div class="container mt-5">
         <h3 class="d-flex align-items-center" data-path="{{ download_path }}">

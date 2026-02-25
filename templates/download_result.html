@@ -57,6 +57,18 @@
             alt="nav_bar" 
             class="w-100" 
             style="border-radius: 0; display: block;">
+            
+        <!-- clickable  logo -->  
+        <a href="{{ url_for('main.index') }}" 
+            style="position: absolute; 
+                    top: 0; 
+                    left: 0; 
+                    width: 20%; 
+                    height: 10%; 
+                    cursor: pointer; 
+                    z-index: 10;"
+            title="Return to home">
+        </a>            
     </div>
 
     {% if auto_analysis_etl %}
@@ -101,10 +113,10 @@
                         <td class="text-center">
                             <div class="d-flex flex-column align-items-center"></div>
                                 <button class="btn btn-primary btn-sm mb-2" onclick="startAnalysis(this, '{{ etl_path | urlencode }}')">
-                                    Parse
+                                    Analyze
                                 </button>
                                 <button class="btn btn-success btn-sm" onclick="startLogParser(this, '{{ etl_path | urlencode }}')">
-                                    Parse and Analyze with LLM
+                                    Analyze with LLM
                                 </button>
                             </div>
                         </td>
@@ -173,7 +185,7 @@
                         <td>{{ ddd_path.split('.')[-1] }}</td>
                         <td>
                             <button class="btn btn-primary btn-sm" onclick="startAnalysis(this, '{{ ddd_path | urlencode }}')">
-                                Parse
+                                Analyze
                             </button>
                         </td>
                     </tr>
@@ -201,7 +213,7 @@
                         <td>{{ fw_path.split('.')[-1] }}</td>
                         <td>
                             <button class="btn btn-primary btn-sm" onclick="startFwAnalysis(this, '{{ fw_path | urlencode }}')">
-                                Parse
+                                Analyze
                             </button>
                         </td>
                     </tr>

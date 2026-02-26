@@ -21,7 +21,7 @@
 
 </head>
 <div class="form-container mb-4 p-0 overflow-hidden" 
-    style="border-radius: 0; margin-top: -20px; margin-left: -20px; margin-right: -20px; margin-left: -20px">
+    style="position: relative; border-radius: 0; margin-top: -20px; margin-left: -20px; margin-right: -20px; margin-left: -20px">
     <img src="{{ url_for('static', filename='nav_bar.svg') }}" 
         alt="nav_bar" 
         class="w-100" 
@@ -33,10 +33,11 @@
               top: 0; 
               left: 0; 
               width: 20%; 
-              height: 10%; 
+              height: 100%; 
               cursor: pointer; 
               z-index: 10;"
-       title="Return to home">
+       title="Return to home"
+       aria-label="Return to home">
     </a>
 </div>
 <body>

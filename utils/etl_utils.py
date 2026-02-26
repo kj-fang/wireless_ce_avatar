@@ -89,19 +89,19 @@ def extract_time_from_description(description):
     if match:
         attempted_datetime = True
 
-        first, second, year, hour, minute, second_time = match.groups()
-        first, second = int(first), int(second)
+        first_part, second_part, year, hour, minute, second_time = match.groups()
+        first_part, second_part = int(first_part), int(second_part)
         
-        # Rule 1: If first > 12, must be DD-MM-YYYY (European)
-        if first > 12:
-            day, month = first, second
-        # Rule 2: If second > 12, must be MM-DD-YYYY (US)
-        elif second > 12:
-            month, day = first, second
+        # Rule 1: If first_part > 12, must be DD-MM-YYYY (European)
+        if first_part > 12:
+            day, month = first_part, second_part
+        # Rule 2: If second_part > 12, must be MM-DD-YYYY (US)
+        elif second_part > 12:
+            month, day = first_part, second_part
         # Rule 3: Both <= 12, ambiguous - default to MM-DD-YYYY
         else:
-            month, day = first, second  # Default to US format
-            print(f"Ambiguous date {first}-{second}-{year}, assuming MM-DD-YYYY (US format)")
+            month, day = first_part, second_part  # Default to US format
+            print(f"Ambiguous date {first_part}-{second_part}-{year}, assuming MM-DD-YYYY (US format)")
         
         try:
             return datetime(int(year), month, day, int(hour), int(minute), int(second_time))

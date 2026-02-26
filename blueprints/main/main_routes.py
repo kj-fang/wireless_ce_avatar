@@ -158,10 +158,8 @@ def render_download_result_form():
         print(f"Applying time-based filtering for {len(time_mapping)} file(s)")
         try:
             # Filter each dict type with corresponding time for each file
-            for dict_type, file_dict in [('wifi', file_dicts['wifi_dict']), 
-                                         ('ddd', file_dicts['ddd_dict']), 
-                                         ('bt', file_dicts['bt_dict']), 
-                                         ('fw', file_dicts['fw_dict'])]:
+            for dict_name in ['wifi_dict', 'ddd_dict', 'bt_dict', 'fw_dict']:
+                file_dict = file_dicts[dict_name]
                 
                 filtered_dict = {}
                 for zip_name, paths in file_dict.items():
@@ -177,23 +175,17 @@ def render_download_result_form():
                             if not any(item[0] == warn_file for item in time_filter_warnings):
                                 time_filter_warnings.append((warn_file, warn_msg))
                         
-                        # Prepare display info
-                        time_display = issue_time.strftime('%Y-%m-%d %H:%M:%S') if isinstance(issue_time, dt) else issue_time
-                        if not any(item[0] == zip_name for item in time_filter_info):
-                            time_filter_info.append((zip_name, time_display))
+                        # Prepare display info - only add to success list if no warnings
+                        if zip_name not in warnings:
+                            time_display = issue_time.strftime('%Y-%m-%d %H:%M:%S') if isinstance(issue_time, dt) else issue_time
+                            if not any(item[0] == zip_name for item in time_filter_info):
+                                time_filter_info.append((zip_name, time_display))
                     else:
                         # No time filter for this file, keep as is
                         filtered_dict[zip_name] = paths
                 
-                # Update the file_dicts
-                if dict_type == 'wifi':
-                    file_dicts['wifi_dict'] = filtered_dict
-                elif dict_type == 'ddd':
-                    file_dicts['ddd_dict'] = filtered_dict
-                elif dict_type == 'bt':
-                    file_dicts['bt_dict'] = filtered_dict
-                elif dict_type == 'fw':
-                    file_dicts['fw_dict'] = filtered_dict
+                # Update the file_dicts dynamically
+                file_dicts[dict_name] = filtered_dict
             
             print(f"Time filtering completed successfully")
         except Exception as e:

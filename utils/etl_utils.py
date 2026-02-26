@@ -115,7 +115,14 @@ def extract_time_from_description(description):
         match = re.search(time_pattern, description)
         if match:
             hour, minute, second = match.groups()
-            return f"{hour.zfill(2)}:{minute}:{second}"
+            hour, minute, second = int(hour), int(minute), int(second)
+            
+            # Validate time ranges
+            if not (0 <= hour <= 23 and 0 <= minute <= 59 and 0 <= second <= 59):
+                print(f"Invalid time values: {hour}:{minute}:{second}")
+                return None
+            
+            return f"{str(hour).zfill(2)}:{str(minute).zfill(2)}:{str(second).zfill(2)}"
     
     return None
 
@@ -166,13 +173,12 @@ def filter_folders_by_time(file_dict, issue_time_or_datetime):
         issue_datetime = issue_time_or_datetime
         print(f"Using full datetime for filtering: {issue_datetime}")
         
-        filtered_dict = {}
+        filtered_dict = file_dict.copy()  # Start with all entries to ensure nothing is lost
         warnings_dict = {}
         
         for zip_name, folder_list in file_dict.items():
             if not folder_list:
-                filtered_dict[zip_name] = folder_list
-                continue
+                continue  # Keep original empty list from copy
             
             # Extract timestamps from all folders
             folder_times = []
@@ -182,8 +188,7 @@ def filter_folders_by_time(file_dict, issue_time_or_datetime):
                     folder_times.append((folder, timestamp))
             
             if not folder_times:
-                filtered_dict[zip_name] = folder_list
-                continue
+                continue  # Keep original list from copy
             
             # Find folder closest to issue datetime (prefer after)
             folders_after = [(f, t) for f, t in folder_times if t >= issue_datetime]
@@ -192,8 +197,7 @@ def filter_folders_by_time(file_dict, issue_time_or_datetime):
                 closest = min(folders_after, key=lambda x: (x[1] - issue_datetime).total_seconds())
                 filtered_dict[zip_name] = [closest[0]]
             else:
-                # No folder after issue time - keep all folders and add warning
-                filtered_dict[zip_name] = folder_list
+                # No folder after issue time - keep all folders (already in filtered_dict) and add warning
                 warnings_dict[zip_name] = f"All folders are before issue time {issue_datetime.strftime('%Y-%m-%d %H:%M:%S')}"
                 print(f"WARNING {zip_name}: All folders are before issue time")
         
@@ -211,13 +215,12 @@ def filter_folders_by_time(file_dict, issue_time_or_datetime):
             print(f"Failed to parse issue time: {issue_time_str}\n{e}")
             return file_dict, {}
         
-        filtered_dict = {}
+        filtered_dict = file_dict.copy()  # Start with all entries to ensure nothing is lost
         warnings_dict = {}
         
         for zip_name, folder_list in file_dict.items():
             if not folder_list:
-                filtered_dict[zip_name] = folder_list
-                continue
+                continue  # Keep original empty list from copy
             
             # Extract timestamps from all folders
             folder_times = []
@@ -227,8 +230,7 @@ def filter_folders_by_time(file_dict, issue_time_or_datetime):
                     folder_times.append((folder, timestamp))
             
             if not folder_times:
-                # No valid timestamps found, keep all folders
-                filtered_dict[zip_name] = folder_list
+                # No valid timestamps found, keep all folders (already in filtered_dict)
                 continue
             
             # Group folders by date
@@ -269,28 +271,29 @@ def filter_folders_by_time(file_dict, issue_time_or_datetime):
                 all_before = all(has_warning for _, has_warning in best_folders)
                 
                 if all_before:
-                    # All folders are before issue time - keep all and add warning
-                    filtered_dict[zip_name] = folder_list
+                    # All folders are before issue time - keep all (already in filtered_dict) and add warning
                     warnings_dict[zip_name] = f"All folders are before issue time {issue_time_str}"
                     print(f"WARNING {zip_name}: All folders are before issue time {issue_time_str}")
                 else:
-                    # Find the folder with time closest to issue time (same time across different dates)
-                    def time_distance(item):
-                        (folder, timestamp), has_warning = item
-                        # Create issue datetime for this folder's date
-                        issue_on_this_date = datetime.combine(timestamp.date(), 
-                                                             datetime.min.time().replace(
-                                                                 hour=issue_hour, 
-                                                                 minute=issue_min, 
-                                                                 second=issue_sec))
-                        # Return absolute time difference in seconds
-                        return abs((timestamp - issue_on_this_date).total_seconds())
+                    # Filter to only keep folders that are actually after issue time
+                    folders_after_only = [(folder_time, warn) for folder_time, warn in best_folders if not warn]
                     
-                    closest_overall, _ = min(best_folders, key=time_distance)
-                    filtered_dict[zip_name] = [closest_overall[0]]
-            else:
-                # Fallback: keep all folders if something went wrong
-                filtered_dict[zip_name] = folder_list
+                    if folders_after_only:
+                        # Find the folder with time closest to issue time (same time across different dates)
+                        def time_distance(item):
+                            (folder, timestamp), has_warning = item
+                            # Create issue datetime for this folder's date
+                            issue_on_this_date = datetime.combine(timestamp.date(), 
+                                                                 datetime.min.time().replace(
+                                                                     hour=issue_hour, 
+                                                                     minute=issue_min, 
+                                                                     second=issue_sec))
+                            # No need for abs() since we only have folders after issue time
+                            return (timestamp - issue_on_this_date).total_seconds()
+                        
+                        closest_overall, _ = min(folders_after_only, key=time_distance)
+                        filtered_dict[zip_name] = [closest_overall[0]]
+            # else: Fallback - keep all folders (already in filtered_dict) if something went wrong
         
         return filtered_dict, warnings_dict
 

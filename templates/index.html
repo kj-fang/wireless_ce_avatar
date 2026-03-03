@@ -220,28 +220,64 @@
             }
         }
 
-        // Optional: Auto-fill from clipboard
+        // Auto-fill from clipboard and zero-padding
         document.addEventListener("DOMContentLoaded", () => {
             const input = document.getElementById("case_number");
             if (!input) {
                 return;
             }
-            const handleAutoFillFromClipboard = async () => {
+
+            // Auto-fill from clipboard
+            const autoFillFromClipboard = async () => {
                 try {
                     const text = await navigator.clipboard.readText();
-                    const pattern = /^00\d{6}$/;
                     const trimmed = text.trim();
-                    if (pattern.test(trimmed)) {
-                        input.value = trimmed;
+                    // Check if it's a valid case number (1-8 digits)
+                    if (/^\d{1,8}$/.test(trimmed)) {
+                        // Auto-pad to 8 digits
+                        input.value = trimmed.padStart(8, '0');
                     }
                 } catch (err) {
-                    // Clipboard access denied or not available
-                    console.log("Clipboard access not available");
-                } finally {
-                    input.removeEventListener("focus", handleAutoFillFromClipboard);
+                    // Silently fail - clipboard access denied or not available
                 }
             };
-            input.addEventListener("focus", handleAutoFillFromClipboard);
+
+            // Try to auto-fill on page load
+            autoFillFromClipboard();
+            
+            // Also try when user focuses the input
+            input.addEventListener("focus", autoFillFromClipboard, { once: true });
+
+            // Intercept paste event for auto-padding
+            input.addEventListener("paste", (e) => {
+                e.preventDefault();
+                const pastedText = (e.clipboardData || window.clipboardData).getData('text');
+                const trimmed = pastedText.trim();
+                
+                if (/^\d{1,8}$/.test(trimmed)) {
+                    input.value = trimmed.padStart(8, '0');
+                } else {
+                    input.value = trimmed;
+                }
+            });
+
+            // Add zero-padding on blur
+            input.addEventListener("blur", () => {
+                const value = input.value.trim();
+                if (value && /^\d{1,8}$/.test(value)) {
+                    input.value = value.padStart(8, '0');
+                }
+            });
+
+            // Format on Enter key
+            input.addEventListener("keypress", (e) => {
+                if (e.key === 'Enter') {
+                    const value = input.value.trim();
+                    if (value && /^\d{1,8}$/.test(value)) {
+                        input.value = value.padStart(8, '0');
+                    }
+                }
+            });
         });
     </script>
 

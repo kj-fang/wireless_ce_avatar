@@ -4,9 +4,7 @@
     <meta charset="UTF-8">
     <title>Analysis Results and Progress</title>
     <link href="https://stackpath.bootstrapcdn.com/bootstrap/4.5.2/css/bootstrap.min.css" rel="stylesheet">
-    <link rel="stylesheet" href="https://cdnjs.cloudflare.com/ajax/libs/font-awesome/5.15.4/css/all.min.css">
     <script src="https://code.jquery.com/jquery-3.5.1.min.js"></script>
-    <script src="https://stackpath.bootstrapcdn.com/bootstrap/4.5.2/js/bootstrap.bundle.min.js"></script>
     <script src="https://cdn.socket.io/4.6.1/socket.io.min.js"></script>
     <style>
         body {
@@ -64,39 +62,10 @@
     {% if auto_analysis_etl %}
     <div class="alert alert-info alert-dismissible fade show" role="alert">
         <i class="fas fa-robot"></i> <strong>Auto Running: Latest ETL with LLM analysis</strong> 
-        <button type="button" class="close" data-dismiss="alert" aria-label="Close" onclick="this.parentElement.style.display='none';">
+        <button type="button" class="close" data-dismiss="alert" aria-label="Close">
             <span aria-hidden="true">&times;</span>
         </button>
         <input type="hidden" id="autoAnalysisEtl" value="{{ auto_analysis_etl | urlencode }}">
-    </div>
-    {% endif %}
-
-    {% if time_filter_info %}
-    <div class="alert alert-success alert-dismissible fade show" role="alert">
-        <i class="fas fa-clock"></i> <strong>Time Filter Applied:</strong>
-        <ul class="mb-0 mt-2" style="list-style: none; padding-left: 0;">
-            {% for file_name, time_display in time_filter_info %}
-            <li>📁 <strong>{{ file_name }}</strong> → Showing folders closest to <strong>{{ time_display }}</strong></li>
-            {% endfor %}
-        </ul>
-        <button type="button" class="close" data-dismiss="alert" aria-label="Close" onclick="this.parentElement.style.display='none';">
-            <span aria-hidden="true">&times;</span>
-        </button>
-    </div>
-    {% endif %}
-
-    {% if time_filter_warnings %}
-    <div class="alert alert-warning alert-dismissible fade show" role="alert">
-        <i class="fas fa-exclamation-triangle"></i> <strong>Warning:</strong>
-        <ul class="mb-0 mt-2" style="list-style: none; padding-left: 0;">
-            {% for file_name, warning_msg in time_filter_warnings %}
-            <li>⚠️ <strong>{{ file_name }}</strong>: {{ warning_msg }}</li>
-            {% endfor %}
-        </ul>
-        <p class="mb-0 mt-2"><small>Showing all folders for these files since no logs were captured after the issue time.</small></p>
-        <button type="button" class="close" data-dismiss="alert" aria-label="Close" onclick="this.parentElement.style.display='none';">
-            <span aria-hidden="true">&times;</span>
-        </button>
     </div>
     {% endif %}
 
@@ -125,16 +94,7 @@
         <tbody>
             {% for name, etl_list in wifi_dict.items() %}
                 {% for etl_path in etl_list %}
-                    {# determine if etl_path should be skipped based on exclude_keywords #}
-                    {% set ns = namespace(skip=false) %}
-                    {% if exclude_keywords %}
-                        {% for kw in exclude_keywords %}
-                            {% if kw.lower() in etl_path.lower() %}
-                                {% set ns.skip = true %}
-                            {% endif %}
-                        {% endfor %}
-                    {% endif %}
-                    {% if not etl_path.endswith('.log') and not ns.skip %}
+                    {% if not etl_path.endswith('.log') %}
                     <tr>
                         <td>{{ name }}</td>
                         <td>{{ etl_path }}</td>
@@ -168,38 +128,29 @@
         <tbody>
             {% for name, bt_list in bt_dict.items() %}
                 {% for bt_path in bt_list %}
-                    {# determine if bt_path should be skipped based on exclude_keywords #}
-                    {% set ns = namespace(skip=false) %}
-                    {% if exclude_keywords %}
-                        {% for kw in exclude_keywords %}
-                            {% if kw.lower() in bt_path.lower() %}
-                                {% set ns.skip = true %}
-                            {% endif %}
-                        {% endfor %}
-                    {% endif %}
-                    {% if not ns.skip %}
                     <tr>
                         <td>{{ name }}</td>
                         <td>{{ bt_path }}</td>
                         <td>{{ bt_path.split('.')[-1] }}</td>
-                        <td class="py-2">
-                            <!-- AutoFile -->
-                            <button class="btn btn-secondary ml-2" onclick="startAnalysis(this, '{{ bt_path | urlencode }}', 'AutoFile')">
-                                AutoFile
-                            </button>
+                        <td class="text-center">
+                            <div class="d-flex flex-column align-items-center"></div>
+                                <!-- AutoFile -->
+                                <!-- <button class="btn btn-secondary btn-sm ml-2" onclick="startAnalysis(this, '{{ bt_path | urlencode }}', 'AutoFile')">
+                                    AutoFile
+                                </button> -->
 
-                            <!-- AutoFolder -->
-                            <button class="btn btn-secondary ml-2" onclick="startAnalysis(this, '{{ bt_path | urlencode }}', 'AutoFolder')">
-                                AutoFolder
-                            </button>
+                                <!-- AutoFolder -->
+                                <button class="btn btn-primary btn-sm mb-2" onclick="startAnalysis(this, '{{ bt_path | urlencode }}', 'AutoFolder')">
+                                    AutoFolder
+                                </button>
 
-                            <!-- Manual -->
-                            <button class="btn btn-secondary ml-2" onclick="startAnalysis(this, '{{ bt_path | urlencode }}', 'Manual')">
-                                Manual
-                            </button>
+                                <!-- Manual -->
+                                <button class="btn btn-success btn-sm" data-path="{{ bt_path | urlencode }}" onclick="startAnalysis(this, '{{ bt_path | urlencode }}', 'Manual')">
+                                    Manual
+                                </button>
+                            </div>
                         </td>
                     </tr>
-                    {% endif %}
                 {% endfor %}
             {% endfor %}
         </tbody>
@@ -218,16 +169,6 @@
         <tbody>
             {% for name, ddd_list in ddd_dict.items() %}
                 {% for ddd_path in ddd_list %}
-                    {# determine if ddd_path should be skipped based on exclude_keywords #}
-                    {% set ns = namespace(skip=false) %}
-                    {% if exclude_keywords %}
-                        {% for kw in exclude_keywords %}
-                            {% if kw.lower() in ddd_path.lower() %}
-                                {% set ns.skip = true %}
-                            {% endif %}
-                        {% endfor %}
-                    {% endif %}
-                    {% if not ns.skip %}
                     <tr>
                         <td>{{ name }}</td>
                         <td>{{ ddd_path }}</td>
@@ -238,7 +179,6 @@
                             </button>
                         </td>
                     </tr>
-                    {% endif %}
                 {% endfor %}
             {% endfor %}
         </tbody>
@@ -257,16 +197,6 @@
         <tbody>
             {% for name, fw_list in fw_dict.items() %}
                 {% for fw_path in fw_list %}
-                    {# determine if fw_path should be skipped based on exclude_keywords #}
-                    {% set ns = namespace(skip=false) %}
-                    {% if exclude_keywords %}
-                        {% for kw in exclude_keywords %}
-                            {% if kw.lower() in fw_path.lower() %}
-                                {% set ns.skip = true %}
-                            {% endif %}
-                        {% endfor %}
-                    {% endif %}
-                    {% if not ns.skip %}
                     <tr>
                         <td>{{ name }}</td>
                         <td>{{ fw_path }}</td>
@@ -277,7 +207,6 @@
                             </button>
                         </td>
                     </tr>
-                    {% endif %}
                 {% endfor %}
             {% endfor %}
         </tbody>
@@ -403,6 +332,33 @@
 
 
     const FW_ETL_ANALYSIS_URL = "{{ url_for('analysis_etl.process_etl_path_fw') }}";
+
+    socket.on("manual_complete", function(msg) {
+        console.log("Manual analysis complete for:", msg.etl_path);
+        const path = msg.etl_path;
+        
+        // Find buttons matching this path
+        const buttons = document.querySelectorAll('button.disabled');
+        buttons.forEach(btn => {
+            const btnPathEnc = btn.getAttribute('data-path');
+            if (btnPathEnc) {
+                try {
+                    const btnPath = decodeURIComponent(btnPathEnc);
+                    // Compare paths (normalizing slashes for Windows)
+                    // Replace all backslashes with forward slashes for comparison
+                    if (btnPath.replace(/\\/g, '/') === path.replace(/\\/g, '/')) {
+                        btn.classList.remove('disabled');
+                        // Restore original text based on button type/onclick
+                        if (btn.innerText.includes('Analyzing')) {
+                             btn.innerText = 'Manual';
+                        }
+                    }
+                } catch (e) {
+                    console.error("Error decoding path:", e);
+                }
+            }
+        });
+    });
 
     function startFwAnalysis(button, fwPathEncoded) {
         if (button.classList.contains('disabled')) return;

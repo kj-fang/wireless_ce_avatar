@@ -375,7 +375,7 @@ def bt_analysis_manualSelect_mode(
     log_path: str,
     debug: bool = False,
     wait_hci_timeout: int = 180
-) -> None:
+) -> int:
     """
     Prepare the 'IbtSnoopgen' tab and populate the ETL path for manual follow-up.
 
@@ -388,13 +388,16 @@ def bt_analysis_manualSelect_mode(
         log_path: Absolute path to the ETL file to decode.
         debug: If True, dumps the control tree for troubleshooting.
         wait_hci_timeout: Reserved for future use.
+
+    Returns:
+        int: The process ID (PID) of the BT tool.
     """
     global active_bt_pid
 
     exe_path = os.path.abspath(os.path.join(os.path.dirname(__file__), 'ibtdrvlogparser.exe'))
     if not os.path.exists(exe_path):
         print(f"❌ Executable not found: {exe_path}")
-        return
+        return None
 
     app = None
 
@@ -472,7 +475,9 @@ def bt_analysis_manualSelect_mode(
             time.sleep(1)
     if not folder_set:
         print("❌ Failed to set ETL path after multiple retries.")
-        return
+        return active_bt_pid
+    
+    return active_bt_pid
 
 
 def bt_analysis_autoFolder_mode(

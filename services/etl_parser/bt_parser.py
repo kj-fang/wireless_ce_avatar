@@ -10,6 +10,12 @@ import subprocess, glob
 active_bt_pid = None
 
 
+def reset_active_bt_pid():
+    """Reset the cached BT tool PID (e.g. after force-killing the process)."""
+    global active_bt_pid
+    active_bt_pid = None
+
+
 def open_with_text_analysis_tool(file_path: str) -> bool:
     """
     Open a generated .hci.txt file using TextAnalysisTool.NET.

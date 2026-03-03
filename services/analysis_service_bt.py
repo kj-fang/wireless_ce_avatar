@@ -11,15 +11,39 @@ class BTAnalysisService():
 
     def __init__(self):
         self.service_name = "bt"
-    
+        self._active_manual_pid = None
+        self._active_manual_file_path = None
+        self._manual_session_id = 0  # incremented each time a new Manual is clicked
+        self._monitor_lock = threading.Lock()
+
+    def _release_previous_manual(self):
+        """Release tracking of the previous Manual session so its button restores.
+        The BT tool process is NOT killed — it will be reused by bt_parser."""
+        with self._monitor_lock:
+            old_file_path = self._active_manual_file_path
+            self._active_manual_pid = None
+            self._active_manual_file_path = None
+        # Emit outside lock to avoid potential deadlock
+        if old_file_path:
+            app_config.socketio.emit('manual_complete', {'etl_path': old_file_path}, namespace='/progress')
+
     def analyze(self, file_path: str, mode: str) -> str:
         
         if mode == 'Manual':
+            # Release previous manual session (restore old button); process is reused, not killed
+            self._release_previous_manual()
+
             pid = bt_analysis_manualSelect_mode(file_path)
             self.emit_log("BT tool - Manual launched.")
 
             if pid:
-                t = threading.Thread(target=self.monitor_bt_tool, args=(pid, file_path), name=f"ibtdrvlogparser_Monitor_{pid}")
+                with self._monitor_lock:
+                    self._manual_session_id += 1
+                    session_id = self._manual_session_id
+                    self._active_manual_pid = pid
+                    self._active_manual_file_path = file_path
+
+                t = threading.Thread(target=self.monitor_bt_tool, args=(pid, file_path, session_id), name=f"ibtdrvlogparser_Monitor_{pid}_{session_id}")
                 t.daemon = True
                 t.start()
             else:
@@ -37,7 +61,7 @@ class BTAnalysisService():
             print(f"Unknown BT tool mode: {mode}")
         return "BT analysis started successfully"
     
-    def monitor_bt_tool(self, pid, file_path):
+    def monitor_bt_tool(self, pid, file_path, session_id):
         """Monitor the BT tool process and emit an event when it closes."""
         try:
             if psutil.pid_exists(pid):
@@ -50,8 +74,14 @@ class BTAnalysisService():
         except Exception as e:
             print(f"Error monitoring BT process: {e}")
         finally:
-            # Emit the completion event to the frontend
-            app_config.socketio.emit('manual_complete', {'etl_path': file_path}, namespace='/progress')
+            with self._monitor_lock:
+                # Only emit completion if this monitor's session is still the active one.
+                # If a new Manual was clicked, _release_previous_manual already handled it
+                # and _manual_session_id has been incremented, so old threads won't match.
+                if self._manual_session_id == session_id:
+                    self._active_manual_pid = None
+                    self._active_manual_file_path = None
+                    app_config.socketio.emit('manual_complete', {'etl_path': file_path}, namespace='/progress')
 
     
     def emit_log(self, msg):

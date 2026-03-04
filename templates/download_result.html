@@ -54,11 +54,24 @@
 </head>
 <body>
     <div class="form-container mb-4 p-0 overflow-hidden" 
-        style="border-radius: 0; margin-top: -20px; margin-left: -20px; margin-right: -20px; ">
+        style="position: relative; border-radius: 0; margin-top: -20px; margin-left: -20px; margin-right: -20px; ">
         <img src="{{ url_for('static', filename='nav_bar.svg') }}" 
             alt="nav_bar" 
             class="w-100" 
             style="border-radius: 0; display: block;">
+            
+        <!-- clickable  logo -->  
+        <a href="{{ url_for('main.index') }}" 
+            style="position: absolute; 
+                    top: 0; 
+                    left: 0; 
+                    width: 20%; 
+                    height: 100%; 
+                    cursor: pointer; 
+                    z-index: 10;"
+            title="Return to home"
+            aria-label="Return to home">
+        </a>            
     </div>
 
     {% if auto_analysis_etl %}
@@ -139,12 +152,12 @@
                         <td>{{ name }}</td>
                         <td>{{ etl_path }}</td>
                         <td class="text-center">
-                            <div class="d-flex flex-column align-items-center"></div>
+                            <div class="d-flex flex-column align-items-center">
                                 <button class="btn btn-primary btn-sm mb-2" onclick="startAnalysis(this, '{{ etl_path | urlencode }}')">
-                                    Parse
+                                    Analyze
                                 </button>
                                 <button class="btn btn-success btn-sm" onclick="startLogParser(this, '{{ etl_path | urlencode }}')">
-                                    Parse and Analyze with LLM
+                                    Analyze with LLM
                                 </button>
                             </div>
                         </td>
@@ -234,7 +247,7 @@
                         <td>{{ ddd_path.split('.')[-1] }}</td>
                         <td>
                             <button class="btn btn-primary btn-sm" onclick="startAnalysis(this, '{{ ddd_path | urlencode }}')">
-                                Parse
+                                Analyze
                             </button>
                         </td>
                     </tr>
@@ -273,7 +286,7 @@
                         <td>{{ fw_path.split('.')[-1] }}</td>
                         <td>
                             <button class="btn btn-primary btn-sm" onclick="startFwAnalysis(this, '{{ fw_path | urlencode }}')">
-                                Parse
+                                Analyze
                             </button>
                         </td>
                     </tr>

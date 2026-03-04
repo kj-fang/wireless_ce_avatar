@@ -20,15 +20,28 @@
     <script src="https://stackpath.bootstrapcdn.com/bootstrap/4.5.2/js/bootstrap.bundle.min.js"></script>
 
 </head>
-<div class="form-container mb-4 p-0 overflow-hidden" 
-    style="border-radius: 0; margin-top: -20px; margin-left: -20px; margin-right: -20px; margin-left: -20px">
+<body>
+   <div class="form-container mb-4 p-0 overflow-hidden" 
+    style="position: relative; border-radius: 0; margin-top: -20px; margin-left: -20px; margin-right: -20px;">
     <img src="{{ url_for('static', filename='nav_bar.svg') }}" 
         alt="nav_bar" 
         class="w-100" 
         style="border-radius: 0; display: block;">
-</div>
-<body>
-   
+
+        <!-- Clickable overlay - scales with window -->
+    <a href="{{ url_for('main.index') }}" 
+       style="position: absolute; 
+              top: 0; 
+              left: 0; 
+              width: 20%; 
+              height: 100%; 
+              cursor: pointer; 
+              z-index: 10;"
+       title="Return to home"
+       aria-label="Return to home">
+    </a>
+    </div>
+
     <div class="container">
         <h1 class="text-center py-2 font-weight-bold">
             <span class="text-primary">WiFi / BT</span> 

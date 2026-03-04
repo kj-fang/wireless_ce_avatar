@@ -1,5 +1,7 @@
 # Build script with automatic version increment
-# This script updates version.py before building with PyInstaller
+# Release builds (on main): version = 1.0.<commit_count>
+# Dev builds (on feature branches): version = 1.0.<base_release_commit_count>-dev.<sha1>
+#   where base_release_commit_count is the commit count on main at the branch point
 
 param(
     [string]$Branch = "main"
@@ -11,30 +13,49 @@ Write-Host "===== IntelAvatar Build Script with Version Control =====" -Foregrou
 Write-Host "`nGetting version information from git..." -ForegroundColor Yellow
 
 try {
-    # Get commit count on main branch
-    $commitCount = git rev-list --count $Branch
-    $version = "1.0.$commitCount"
-    
-    # Get short commit hash
+    # Get short commit hash and current branch
     $gitHash = git rev-parse --short HEAD
-    
-    # Get current branch
     $currentBranch = git rev-parse --abbrev-ref HEAD
-    
-    # Get current date
     $buildDate = Get-Date -Format "yyyy-MM-dd HH:mm:ss"
-    
+
+    if ($currentBranch -eq $Branch) {
+        # ---- RELEASE build: on main branch ----
+        $commitCount = git rev-list --count $Branch
+        $version = "1.0.$commitCount"
+        $buildType = "RELEASE"
+    } else {
+        # ---- DEV build: on a feature/dev branch ----
+        # Find the commit where this branch diverged from main, then count commits
+        # up to that point — this gives the PATCH number of the release this branch is based on.
+        try {
+            $mergeBase = git merge-base HEAD $Branch 2>$null
+            if ($LASTEXITCODE -ne 0 -or -not $mergeBase) { throw "merge-base failed" }
+            $baseCommitCount = git rev-list --count $mergeBase
+        } catch {
+            # Fallback: merge-base unavailable (e.g. shallow clone).
+            # Use the current tip of $Branch (main) as an approximation.
+            # NOTE: this may report a PATCH number slightly ahead of the true branch point,
+            # so version alignment is approximate in this case.
+            $baseCommitCount = git rev-list --count $Branch
+            Write-Host "⚠️  Could not determine branch point — using tip of '$Branch' as fallback (version may be approximate)" -ForegroundColor Yellow
+        }
+        $version = "1.0.$baseCommitCount-dev.$gitHash"
+        $buildType = "DEV"
+    }
+
+    Write-Host "Build Type: $buildType" -ForegroundColor $(if ($buildType -eq "RELEASE") { "Green" } else { "Yellow" })
     Write-Host "Version: $version" -ForegroundColor Green
     Write-Host "Git Hash: $gitHash" -ForegroundColor Green
     Write-Host "Branch: $currentBranch" -ForegroundColor Green
     Write-Host "Build Date: $buildDate" -ForegroundColor Green
-    
+
 } catch {
     Write-Host "Error getting git information. Using defaults." -ForegroundColor Red
-    $version = "1.0.0"
+    $version = "1.0.0-dev.unknown"
     $gitHash = "unknown"
     $currentBranch = "unknown"
     $buildDate = Get-Date -Format "yyyy-MM-dd HH:mm:ss"
+    $buildType = "DEV"
 }
 
 # Update version.py
@@ -58,7 +79,9 @@ Write-Host "Version file updated successfully!" -ForegroundColor Green
 # Update version_info.txt for exe metadata
 Write-Host "`nUpdating version_info.txt for exe metadata..." -ForegroundColor Yellow
 
-$versionParts = $version -split '\.'
+# Strip the -dev.<sha1> suffix for the numeric tuple (Windows exe metadata requires numbers only)
+$numericVersion = $version -replace '-dev\..+$', ''
+$versionParts = $numericVersion -split '\.'
 $major = $versionParts[0]
 $minor = $versionParts[1]
 $patch = if ($versionParts.Length -gt 2 -and $versionParts[2]) { $versionParts[2] } else { "0" }
@@ -128,17 +151,20 @@ try {
     # Rename exe with version
     Write-Host "Renaming executable with version..." -ForegroundColor Yellow
     $exePath = "dist/IntelAvatar/IntelAvatar.exe"
-    $newExePath = "dist/IntelAvatar/IntelAvatar_v${version}_${gitHash}.exe"
+    # For dev builds, $version already contains the SHA (e.g. 1.0.14-dev.b0530f21)
+    # For release builds, append _${gitHash} to include the SHA
+    $exeName = if ($buildType -eq "RELEASE") { "IntelAvatar_v${version}_${gitHash}.exe" } else { "IntelAvatar_v${version}.exe" }
+    $newExePath = "dist/IntelAvatar/$exeName"
     
     if (Test-Path $exePath) {
         Move-Item -Path $exePath -Destination $newExePath -Force
-        Write-Host "Renamed to: IntelAvatar_v${version}_${gitHash}.exe" -ForegroundColor Green
+        Write-Host "Renamed to: $exeName" -ForegroundColor Green
     }
     
     Write-Host "`n===== Build Complete! =====" -ForegroundColor Green
     Write-Host "Version: $version" -ForegroundColor Cyan
     Write-Host "Git Hash: $gitHash" -ForegroundColor Cyan
-    Write-Host "Executable: IntelAvatar_v${version}_${gitHash}.exe" -ForegroundColor Cyan
+    Write-Host "Executable: $exeName" -ForegroundColor Cyan
     Write-Host "Output location: dist/IntelAvatar/" -ForegroundColor Cyan
     
 } catch {

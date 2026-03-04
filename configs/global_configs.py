@@ -22,6 +22,14 @@ class GlobalConfig:
         # Download results storage
         self.download_results: Dict[str, Dict[str, Any]] = {}
     
+        # ETL path exclude keywords (server-driven filter for UI)
+        self.etl_exclude_keywords = [
+            "PldrComplete",
+            "Autologger",
+            "Dump_failed",
+            "AutoDump"
+        ]
+
     # SocketIO management
     def set_socketio(self, socketio: SocketIO) -> None:
         self.socketio = socketio

@@ -1,6 +1,8 @@
 from flask import Blueprint, render_template, request, session, redirect, url_for, flash, Response, jsonify
 import json
 import os 
+import traceback
+import markdown
 from urllib.parse import unquote
 
 from utils import helpers
@@ -55,19 +57,33 @@ def edit_prompt():
 def register_socketio_handlers(socketio):
     @socketio.on('submit_analysis', namespace='/progress')
     def socketio_submit_analysis(data):
-        return handle_submit_analysis(data)
+        print("✅ Received socket event 'submit_analysis':", data)
+        return handle_submit_analysis(data, socketio)
+
+    @socketio.on('chat_message', namespace='/progress')
+    def socketio_chat_message(data):
+        print("💬 Received chat_message:", data)
+        return handle_chat_message(data, socketio)
 
 
 #------------Llog parser render -------------#
 
 def render_log_parser_form():
-    print("session['classification'] ", session['classification'])
-    classification = session['classification']
-    print("classification.keys()", classification.keys())
-
-    output_dir = log_parser_service.set_up(session['download_path'])
-    session['logparser_output_dir'] = output_dir
-
+    # 安全地获取 session 数据，如果不存在就使用默认值
+    classification = session.get('classification', {})
+    download_path = session.get('download_path', '')
+    
+    # 总是尝试设置 output_dir，即使 download_path 为空也使用默认值
+    try:
+        if download_path:
+            output_dir = log_parser_service.set_up(download_path)
+        else:
+            # 如果没有 download_path，也尝试初始化，让服务层处理
+            output_dir = log_parser_service.set_up('')
+        session['logparser_output_dir'] = output_dir
+    except Exception as e:
+        print(f"Warning: Failed to set up output_dir: {e}")
+        output_dir = None
 
     should_auto_analyze, auto_analysis_data = log_parser_service.check_auto_analysis_availability(classification)
 
@@ -78,10 +94,17 @@ def render_log_parser_form():
         etl_path_encoded = request.args.get('etl_path', '')
         etl_path_input = unquote(etl_path_encoded)
     
-    log_path = log_parser_service.prepare_log_file(etl_path_input, output_dir)
-    if log_path:
-        session['log_path'] = log_path
-
+    # 总是尝试准备 log_path，即使 output_dir 为 None
+    try:
+        log_path = log_parser_service.prepare_log_file(etl_path_input, output_dir)
+        if log_path:
+            session['log_path'] = log_path
+            print(f"✅ Log path set: {log_path}")
+        else:
+            print("⚠️ prepare_log_file returned None")
+    except Exception as e:
+        print(f"⚠️ Failed to prepare log file: {e}")
+    
     available_filters, (available_prompts, available_custom_prompts) = log_parser_service.get_available_resources()
 
     result = log_parser_service.analysis_result
@@ -97,31 +120,96 @@ def render_log_parser_form():
                           available_custom_prompts=available_custom_prompts)
 
 
-def handle_submit_analysis(data):
+def handle_submit_analysis(data, socketio=None):
     print("Received analysis submission:", data)
     
     log_path = session.get('log_path', '')
+    output_dir = session.get('logparser_output_dir', '')
     selected_filter = data.get('filter_file')
     custom_prompt_content = data.get('prompt_content')
+    
+    print(f"📋 Validation data:")
+    print(f"   - log_path: {log_path}")
+    print(f"   - output_dir: {output_dir}")
+    print(f"   - filter: {selected_filter}")
+    print(f"   - prompt length: {len(custom_prompt_content) if custom_prompt_content else 0}")
     
     is_valid, error_message = log_parser_service.validate_analysis_inputs(
         log_path, selected_filter, custom_prompt_content
     )
     
     if not is_valid:
-        app_config.socketio.emit('validation_error', {'message': error_message})
+        print(f"❌ Validation failed: {error_message}")
+        if socketio:
+            socketio.emit('validation_error', {'message': error_message}, namespace='/progress')
+        else:
+            app_config.socketio.emit('validation_error', {'message': error_message})
         return
     
     try:
         filter_path = os.path.join(LOG_PARSER_DIR, "filter", selected_filter)
+        print(f"📂 Filter path: {filter_path}")
+        print(f"📖 Starting analysis...")
         
         success = log_parser_service.start_analysis(
-            filter_path, log_path, session['logparser_output_dir'], 
+            filter_path, log_path, output_dir, 
             app_config.llm_helper, custom_prompt_content
         )
         
         if not success:
-            app_config.socketio.emit('analysis_error', {'message': 'Failed to start analysis'})
+            print("❌ Analysis failed to start")
+            if socketio:
+                socketio.emit('analysis_error', {'message': 'Failed to start analysis'}, namespace='/progress')
+            else:
+                app_config.socketio.emit('analysis_error', {'message': 'Failed to start analysis'})
         
     except Exception as e:
-        app_config.socketio.emit('analysis_error', {'message': f'Failed to start analysis: {str(e)}'})
+        print(f"❌ Exception during analysis: {str(e)}")
+        traceback.print_exc()
+        if socketio:
+            socketio.emit('analysis_error', {'message': f'Failed to start analysis: {str(e)}'}, namespace='/progress')
+        else:
+            app_config.socketio.emit('analysis_error', {'message': f'Failed to start analysis: {str(e)}'})
+
+
+def handle_chat_message(data, socketio=None):
+    """Handle a chat message from the user, forward to LLM, return reply."""
+    user_message = data.get('message', '').strip()
+    if not user_message:
+        emit_fn = socketio or app_config.socketio
+        emit_fn.emit('chat_error', {'message': 'Empty message'}, namespace='/progress')
+        return
+
+    print(f"💬 User message: {user_message}")
+
+    # Check if analysis has been run (conversation history exists)
+    if not log_parser_service.conversation_history:
+        emit_fn = socketio or app_config.socketio
+        emit_fn.emit('chat_error', {'message': 'Please run analysis first before chatting.'}, namespace='/progress')
+        return
+
+    try:
+        llm_helper = app_config.llm_helper
+        if llm_helper is None:
+            emit_fn = socketio or app_config.socketio
+            emit_fn.emit('chat_error', {'message': 'LLM helper is not available.'}, namespace='/progress')
+            return
+
+        reply = log_parser_service.handle_chat_message(user_message, llm_helper)
+        reply_html = markdown.markdown(
+            reply, extensions=["fenced_code", "tables", "nl2br", "sane_lists", "codehilite"]
+        )
+
+        print(f"💬 LLM reply length: {len(reply)}")
+
+        emit_fn = socketio or app_config.socketio
+        emit_fn.emit('chat_response', {
+            'message': reply,
+            'message_html': reply_html
+        }, namespace='/progress')
+
+    except Exception as e:
+        print(f"❌ Chat error: {str(e)}")
+        traceback.print_exc()
+        emit_fn = socketio or app_config.socketio
+        emit_fn.emit('chat_error', {'message': f'Chat failed: {str(e)}'}, namespace='/progress')

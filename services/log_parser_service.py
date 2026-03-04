@@ -1,5 +1,6 @@
 # services/log_parser_service.py
 import os
+import json
 import shutil
 import datetime
 import threading
@@ -35,6 +36,11 @@ class LogParserService:
             'llm_result_html': None,
             'log_output_path': None
         }
+
+        # Chat conversation state
+        self.conversation_history = []   # [{"role": "user"|"assistant", "content": "..."}]
+        self.chat_system_prompt = None   # system prompt used during analysis
+        self.chat_log_context = None     # preprocessed log content for context
     
     # -------------------- setup and check avalibility ------------- 
     def set_up(self, download_path: str) -> str:
@@ -169,6 +175,21 @@ class LogParserService:
                 log=str(grouped)
             )
             
+            # 5.5: Initialize chat context with analysis result
+            self.chat_system_prompt = prompt
+            self.chat_log_context = str(grouped)
+            llm_result_str = llm_result if isinstance(llm_result, str) else json.dumps(llm_result, ensure_ascii=False)
+            self.conversation_history = [
+                {
+                    "role": "user", 
+                    "content": f"Please analyze these logs:\n{str(grouped)}"
+                },
+                {
+                    "role": "assistant",
+                    "content": llm_result_str
+                }
+            ]
+            
             # 6: done
             self.update_progress(100, "Analysis completed!")
             
@@ -197,3 +218,25 @@ class LogParserService:
             'llm_result_html': None,
             'log_output_path': None
         }
+        self.conversation_history = []
+        self.chat_system_prompt = None
+        self.chat_log_context = None
+
+    # -------------------- Chat --------------------
+
+    def handle_chat_message(self, user_message: str, llm_helper) -> str:
+        """Process a user chat message and return the LLM response."""
+        self.conversation_history.append({"role": "user", "content": user_message})
+
+        try:
+            reply = llm_helper.chat(
+                messages=self.conversation_history,
+                system_content=self.chat_system_prompt
+            )
+        except Exception:
+            # Roll back the user message so conversation stays clean for retry
+            self.conversation_history.pop()
+            raise
+
+        self.conversation_history.append({"role": "assistant", "content": reply})
+        return reply

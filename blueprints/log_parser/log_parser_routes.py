@@ -65,6 +65,11 @@ def register_socketio_handlers(socketio):
         print("💬 Received chat_message:", data)
         return handle_chat_message(data, socketio)
 
+    @socketio.on('chat_message_with_filter', namespace='/progress')
+    def socketio_chat_message_with_filter(data):
+        print("💬 Received chat_message_with_filter:", data)
+        return handle_chat_message_with_filter(data, socketio)
+
 
 #------------Llog parser render -------------#
 
@@ -212,4 +217,71 @@ def handle_chat_message(data, socketio=None):
         print(f"❌ Chat error: {str(e)}")
         traceback.print_exc()
         emit_fn = socketio or app_config.socketio
+        emit_fn.emit('chat_error', {'message': f'Chat failed: {str(e)}'}, namespace='/progress')
+
+
+def handle_chat_message_with_filter(data, socketio=None):
+    """Handle a chat message with filter and prompt context, forward to LLM, return reply."""
+    user_message = data.get('message', '').strip()
+    filter_file = data.get('filter_file', '').strip()
+    prompt_content = data.get('prompt_content', '').strip()
+    
+    emit_fn = socketio or app_config.socketio
+    
+    if not user_message:
+        emit_fn.emit('chat_error', {'message': 'Empty message'}, namespace='/progress')
+        return
+    
+    if not filter_file:
+        emit_fn.emit('chat_error', {'message': 'No filter file selected'}, namespace='/progress')
+        return
+    
+    if not prompt_content:
+        emit_fn.emit('chat_error', {'message': 'No prompt content provided'}, namespace='/progress')
+        return
+
+    print(f"💬 User message with filter: {user_message}")
+    print(f"📂 Filter file: {filter_file}")
+    print(f"📝 Prompt length: {len(prompt_content)}")
+
+    try:
+        llm_helper = app_config.llm_helper
+        if llm_helper is None:
+            emit_fn.emit('chat_error', {'message': 'LLM helper is not available.'}, namespace='/progress')
+            return
+
+        # Build enhanced message with filter and prompt context
+        enhanced_message = f"""Based on the following filter and prompt configuration:
+
+[Filter File]: {filter_file}
+
+[Prompt Configuration]:
+{prompt_content}
+
+[User Question]:
+{user_message}"""
+
+        # Use existing conversation history if available, otherwise start fresh
+        if log_parser_service.conversation_history:
+            reply = log_parser_service.handle_chat_message(enhanced_message, llm_helper)
+        else:
+            # Initialize conversation with filter/prompt context as system
+            log_parser_service.chat_system_prompt = f"You are an expert log analyzer. Use the provided filter and prompt configuration to assist the user."
+            log_parser_service.conversation_history = []
+            reply = log_parser_service.handle_chat_message(enhanced_message, llm_helper)
+        
+        reply_html = markdown.markdown(
+            reply, extensions=["fenced_code", "tables", "nl2br", "sane_lists", "codehilite"]
+        )
+
+        print(f"💬 LLM reply length: {len(reply)}")
+
+        emit_fn.emit('chat_response', {
+            'message': reply,
+            'message_html': reply_html
+        }, namespace='/progress')
+
+    except Exception as e:
+        print(f"❌ Chat with filter error: {str(e)}")
+        traceback.print_exc()
         emit_fn.emit('chat_error', {'message': f'Chat failed: {str(e)}'}, namespace='/progress')

@@ -218,6 +218,7 @@
         </tbody>
 
     </table>
+<<<<<<< HEAD
     <h2 class="mt-4">🔍 Analysis DDD Results</h2>
     <table>
         <thead>
@@ -256,7 +257,10 @@
             {% endfor %}
         </tbody>
     </table>
+=======
+>>>>>>> 2fffd883 (feat: Add System Event log viewer and fix session KeyError- Add System Event Results section to download_result page- Parse and display .evt logs directly in browser with filtering (IBT/level)- Add 'Open Event' button to load events and open Event Viewer- Collect .evt files during attachment extraction- Fix KeyError by using session.get() for safe access- Show BT mode ddd_dict data properly)
 
+    <!-- FW Results Section -->
     <h2 class="mt-4">🔍 Analysis FW Results</h2>
     <table>
         <thead>
@@ -295,6 +299,59 @@
             {% endfor %}
         </tbody>
     </table>
+
+    <!-- System Event Results Section -->
+    <h2 class="mt-4">🔍 Analysis System Event Results</h2>
+    <table>
+        <thead>
+            <tr>
+                <th>Zip File</th>
+                <th>File Path</th>
+                <th>Extension</th>
+                <th>Analysis</th>
+            </tr>
+        </thead>
+        <tbody>
+            {% for name, ddd_list in ddd_dict.items() %}
+                {% for ddd_path in ddd_list %}
+                    {% if 'rawEventViewerSystemLogs.evt' in ddd_path %}
+                    <tr>
+                        <td>{{ name }}</td>
+                        <td>{{ ddd_path }}</td>
+                        <td>{{ ddd_path.split('.')[-1] }}</td>
+                        <td>
+                            <button class="btn btn-primary btn-sm" onclick="loadAndOpenEventLog('{{ ddd_path | replace('\\', '\\\\') }}')">
+                                Open Event
+                            </button>
+                        </td>
+                    </tr>
+                    {% endif %}
+                {% endfor %}
+            {% endfor %}
+        </tbody>
+    </table>
+
+    <!-- System Event Log Display Box -->
+    <div class="mt-3">
+        <div class="d-flex justify-content-between align-items-center mb-2">
+            <h5>📋 System Event Log Content</h5>
+            <div>
+                <select id="eventSourceFilter" class="form-control form-control-sm d-inline-block mr-2" style="width: auto;" onchange="filterEventLogs()">
+                    <option value="ibt" selected>IBT (ibtusb/ibtpci)</option>
+                    <option value="all">All Sources</option>
+                </select>
+                <select id="eventLevelFilter" class="form-control form-control-sm d-inline-block" style="width: auto;" onchange="filterEventLogs()">
+                    <option value="all">All Levels</option>
+                    <option value="error">Error</option>
+                    <option value="warning">Warning</option>
+                    <option value="information">Information</option>
+                </select>
+            </div>
+        </div>
+        <div id="eventLogContent" class="border rounded p-2" style="height: 300px; overflow-y: auto; background-color: #1e1e1e; color: #d4d4d4; font-family: 'Consolas', monospace; font-size: 12px;">
+            <p class="text-muted">Click "Load Events" to display event log content here.</p>
+        </div>
+    </div>
 
 
     <script>
@@ -341,6 +398,114 @@
                     console.error('Failed to open path');
                 }
             });
+        }
+
+        // Open .evt file with Event Viewer
+        function openEventLogPath(evtPath) {
+            console.log('Opening Event Log:', evtPath);
+            fetch('/open_event_viewer', {
+                method: 'POST',
+                headers: {
+                    'Content-Type': 'application/json'
+                },
+                body: JSON.stringify({ path: evtPath })
+            })
+            .then(response => {
+                if (response.ok) {
+                    console.log('Event Viewer opened successfully');
+                } else {
+                    console.error('Failed to open Event Viewer');
+                }
+            });
+        }
+
+        // Combined function: Load events to webpage and open Event Viewer
+        function loadAndOpenEventLog(evtPath) {
+            loadEventLog(evtPath);
+            openEventLogPath(evtPath);
+        }
+
+        // Store all event logs for filtering
+        let allEventLogs = [];
+
+        // Load event log content and display in the box
+        function loadEventLog(evtPath) {
+            const contentBox = document.getElementById('eventLogContent');
+            contentBox.innerHTML = '<p class="text-info">Loading event logs...</p>';
+            
+            fetch('/parse_event_log', {
+                method: 'POST',
+                headers: {
+                    'Content-Type': 'application/json'
+                },
+                body: JSON.stringify({ path: evtPath })
+            })
+            .then(response => response.json())
+            .then(data => {
+                if (data.error) {
+                    contentBox.innerHTML = `<p class="text-danger">Error: ${data.error}</p>`;
+                    return;
+                }
+                
+                allEventLogs = data.events || [];
+                // Apply default filter (ibt source) when loading
+                filterEventLogs();
+            })
+            .catch(err => {
+                contentBox.innerHTML = `<p class="text-danger">Failed to load events: ${err}</p>`;
+            });
+        }
+
+        // Render event logs to the display box
+        function renderEventLogs(events) {
+            const contentBox = document.getElementById('eventLogContent');
+            
+            if (events.length === 0) {
+                contentBox.innerHTML = '<p class="text-muted">No events found.</p>';
+                return;
+            }
+            
+            let html = '<table class="table table-sm table-dark" style="font-size: 11px;">';
+            html += '<thead><tr><th>Time</th><th>Level</th><th>Source</th><th>Event ID</th><th>Message</th></tr></thead>';
+            html += '<tbody>';
+            
+            events.forEach(event => {
+                const levelClass = event.level === 'Error' ? 'text-danger' : 
+                                   event.level === 'Warning' ? 'text-warning' : 'text-info';
+                html += `<tr>
+                    <td style="white-space: nowrap;">${event.time || ''}</td>
+                    <td class="${levelClass}">${event.level || ''}</td>
+                    <td>${event.source || ''}</td>
+                    <td>${event.event_id || ''}</td>
+                    <td style="max-width: 400px; overflow: hidden; text-overflow: ellipsis;">${event.message || ''}</td>
+                </tr>`;
+            });
+            
+            html += '</tbody></table>';
+            contentBox.innerHTML = html;
+        }
+
+        // Filter event logs by source and level
+        function filterEventLogs() {
+            const sourceFilter = document.getElementById('eventSourceFilter').value;
+            const levelFilter = document.getElementById('eventLevelFilter').value;
+            
+            let filtered = allEventLogs;
+            
+            // Filter by source (ibtusb or ibtpci)
+            if (sourceFilter === 'ibt') {
+                filtered = filtered.filter(e => {
+                    const source = (e.source || '').toLowerCase();
+                    return source.includes('ibtusb') || source.includes('ibtpci');
+                });
+            }
+            
+            // Filter by level
+            if (levelFilter !== 'all') {
+                filtered = filtered.filter(e => e.level && e.level.toLowerCase() === levelFilter);
+            }
+            
+            renderEventLogs(filtered);
         }
 
         

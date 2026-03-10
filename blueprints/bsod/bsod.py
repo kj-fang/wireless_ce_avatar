@@ -28,7 +28,9 @@ def bsod_submit():
 
     # ✅ Combine DUMPS_PATH
     #dumps_path = rf"{SHARED_FOLDER_BSOD}\{bsod_nbr}"
-    dumps_path = session['download_path']
+    dumps_path = session.get('download_path', '')
+    if not dumps_path:
+        return "Session expired. Please start again.", 400
 
     print("dumps path:", dumps_path)
 

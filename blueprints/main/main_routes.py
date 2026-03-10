@@ -1,4 +1,4 @@
-from flask import Blueprint, render_template, request, session, redirect, url_for, flash
+from flask import Blueprint, render_template, request, session, redirect, url_for, flash, jsonify
 import os
 import subprocess
 
@@ -79,14 +79,20 @@ def handle_case_submission():
 #------------SELLECT ATTACHMENT render/submission -------------#
 
 def render_select_attachments_form():
-    case_context = session["case_context"]
+    case_context = session.get("case_context")
+    if not case_context:
+        flash("Session expired. Please start again.", "warning")
+        return redirect(url_for('main.index'))
     return render_template('select_attachments.html',
                            ai_analysis=None,     
                            case_context=case_context)
 
 def handle_select_attachments_submission():
     selected_names = request.form.getlist('selected_files')
-    case_context = session["case_context"]
+    case_context = session.get("case_context")
+    if not case_context:
+        flash("Session expired. Please start again.", "warning")
+        return redirect(url_for('main.index'))
     case_context = CaseContext.from_session(case_context)
     
     selected_files = [item for item in case_context.attachment_list if item[0] in selected_names]
@@ -102,11 +108,14 @@ def handle_select_attachments_submission():
 
 def render_download_attachments_form():
     # if bsod: change download directory from local to shared folder 
-    case_context = session["case_context"]
+    case_context = session.get("case_context")
+    if not case_context:
+        flash("Session expired. Please start again.", "warning")
+        return redirect(url_for('main.index'))
     case_context = CaseContext.from_session(case_context)
     download_path = case_context.case_download_dir
 
-    if session['bsod'] == True:
+    if session.get('bsod') == True:
         
         from configs.path_configs import LOAD_PATH_prim, LOAD_PATH_bkup
         LOAD_PATH_bsod = helpers.get_load_path(LOAD_PATH_prim, LOAD_PATH_bkup)
@@ -125,7 +134,11 @@ def render_download_attachments_form():
 
 def render_download_result_form():
     
-    case_context = session["case_context"]
+    case_context = session.get("case_context")
+    download_path = session.get("download_path", "")
+    if not case_context or not download_path:
+        flash("Session expired. Please start again.", "warning")
+        return redirect(url_for('main.index'))
     case_context = CaseContext.from_session(case_context)
 
     result_data = app_config.get_download_results(case_context.case_nbr)
@@ -140,7 +153,7 @@ def render_download_result_form():
     else:
         file_dicts = {
             'wifi_dict': {},
-            'ddd_dict': {},
+            'ddd_dict': result_data.get('ddd', {}),
             'bt_dict': result_data.get('bt', {}),
             'fw_dict': result_data.get('fw', {})
         }
@@ -199,9 +212,8 @@ def render_download_result_form():
     
     auto_analysis_etl = get_auto_analysis_etl(file_dicts['wifi_dict'], file_dicts['ddd_dict'])
     
-    tmp_selected_files = session["selected_files"]
     return render_template('download_result.html',
-                         case_path=session['download_path'],
+                         case_path=download_path,
                          auto_analysis_etl = auto_analysis_etl,
                          exclude_keywords=app_config.etl_exclude_keywords,
                          time_filter_info=time_filter_info,
@@ -213,10 +225,14 @@ def render_download_result_form():
 
 def render_download_result_bsod_form():
 
-    case_context = session["case_context"]
+    case_context = session.get("case_context")
+    download_path = session.get("download_path", "")
+    if not case_context or not download_path:
+        flash("Session expired. Please start again.", "warning")
+        return redirect(url_for('main.index'))
     case_context = CaseContext.from_session(case_context)
 
-    case_path = session['download_path']
+    case_path = download_path
     email = helpers.detect_user_email()
 
     return render_template('bsod.html', 
@@ -239,3 +255,98 @@ def open_path():
         subprocess.run(['explorer', path])
         return '', 204
     return 'Invalid path', 400
+
+@main_bp.route('/open_event_viewer', methods=['POST'])
+def open_event_viewer():
+    """Open .evt file with Windows Event Viewer"""
+    path = request.json.get('path')
+    print("Opening Event Viewer for:", path)
+    if path and os.path.exists(path):
+        # Use os.startfile to open .evt file with default application (Event Viewer)
+        os.startfile(path)
+        return '', 204
+    return 'Invalid path', 400
+
+@main_bp.route('/parse_event_log', methods=['POST'])
+def parse_event_log():
+    """Parse .evt file and return events as JSON"""
+    import xml.etree.ElementTree as ET
+    import tempfile
+    
+    path = request.json.get('path')
+    print("Parsing Event Log:", path)
+    
+    if not path or not os.path.exists(path):
+        return jsonify({'error': 'Invalid path'}), 400
+    
+    try:
+        # Use wevtutil to export .evt to XML
+        with tempfile.NamedTemporaryFile(mode='w', suffix='.xml', delete=False) as tmp:
+            tmp_path = tmp.name
+        
+        # Export event log to XML format
+        result = subprocess.run(
+            ['wevtutil', 'qe', path, '/lf:true', '/f:xml'],
+            capture_output=True,
+            text=True,
+            encoding='utf-8',
+            errors='replace'
+        )
+        
+        if result.returncode != 0:
+            return jsonify({'error': f'wevtutil failed: {result.stderr}'}), 500
+        
+        xml_content = result.stdout
+        
+        # Parse XML and extract events
+        events = []
+        
+        # Wrap in root element for valid XML
+        xml_content = f'<Events>{xml_content}</Events>'
+        
+        try:
+            root = ET.fromstring(xml_content)
+            
+            ns = {'e': 'http://schemas.microsoft.com/win/2004/08/events/event'}
+            
+            for event in root.findall('.//e:Event', ns):
+                system = event.find('e:System', ns)
+                event_data = event.find('e:EventData', ns)
+                
+                if system is not None:
+                    time_created = system.find('e:TimeCreated', ns)
+                    provider = system.find('e:Provider', ns)
+                    event_id = system.find('e:EventID', ns)
+                    level = system.find('e:Level', ns)
+                    
+                    # Map level number to text
+                    level_map = {'1': 'Critical', '2': 'Error', '3': 'Warning', '4': 'Information', '5': 'Verbose'}
+                    level_text = level_map.get(level.text if level is not None else '', 'Unknown')
+                    
+                    # Get message from EventData
+                    message = ''
+                    if event_data is not None:
+                        data_items = event_data.findall('e:Data', ns)
+                        message = ' | '.join([d.text or '' for d in data_items if d.text])
+                    
+                    events.append({
+                        'time': time_created.get('SystemTime', '')[:19].replace('T', ' ') if time_created is not None else '',
+                        'level': level_text,
+                        'source': provider.get('Name', '') if provider is not None else '',
+                        'event_id': event_id.text if event_id is not None else '',
+                        'message': message[:500]  # Limit message length
+                    })
+        except ET.ParseError as e:
+            print(f"XML parse error: {e}")
+            return jsonify({'error': f'Failed to parse event log XML: {str(e)}'}), 500
+        
+        # Return latest events first
+        events = events[:500]  # Limit to 500 events
+        
+        return jsonify({'events': events})
+        
+    except Exception as e:
+        print(f"Error parsing event log: {e}")
+        import traceback
+        traceback.print_exc()
+        return jsonify({'error': str(e)}), 500

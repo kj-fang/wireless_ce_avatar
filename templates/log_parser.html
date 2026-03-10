@@ -125,7 +125,7 @@
             <div class="mb-3">
                 
                 <label class="form-label font-weight-bold">Select Filter File (.tat)</label>
-                <div class="input-group">
+                <div class="input-group mb-1">
                     <select name="filter_file" id="filterSelect" class="form-control" required>
                         <option value="">Select filter file</option>
                         {% for filter_file in available_filters %}
@@ -137,7 +137,34 @@
                     </button>
                     <input type="file" id="filterUpload" class="d-none" accept=".tat" onchange="uploadFilterFile(this)">
                 </div>
-                <small class="form-text text-muted">Select filter from project_root/filter or upload new .tat file</small>
+                <small class="form-text text-muted">Select primary filter for Run Analysis. Use the keyword panel below to fine-tune.</small>
+
+                <!-- Unified Filter Keywords Tree Panel -->
+                <div id="filterKeywordsPanel" class="mt-2">
+                    <div class="card">
+                        <div class="card-header py-2 d-flex justify-content-between align-items-center" 
+                             style="cursor: pointer; background-color: #f8f9fa;" 
+                             onclick="toggleFilterPanel()">
+                            <span class="font-weight-bold" style="font-size: 0.9rem;">
+                                <i id="filterPanelToggleIcon" class="fas fa-chevron-right mr-1"></i>
+                                Filter Keywords 
+                                <span id="filterKeywordCount" class="badge badge-secondary ml-1">0 selected</span>
+                            </span>
+                            <div>
+                                <button type="button" class="btn btn-sm btn-outline-primary py-0 px-2 mr-1" onclick="event.stopPropagation(); selectAllKeywordsGlobal()">All</button>
+                                <button type="button" class="btn btn-sm btn-outline-secondary py-0 px-2 mr-1" onclick="event.stopPropagation(); deselectAllKeywordsGlobal()">None</button>
+                                <button type="button" class="btn btn-sm btn-outline-info py-0 px-2" onclick="event.stopPropagation(); loadAllFilterDetails(true)" title="Reload all .tat files">
+                                    <i class="fas fa-sync-alt"></i>
+                                </button>
+                            </div>
+                        </div>
+                        <div id="filterPanelBody" class="card-body py-2 px-3" style="display: none; max-height: 350px; overflow-y: auto;">
+                            <div id="filterTreeContainer">
+                                <span class="text-muted"><i class="fas fa-info-circle mr-1"></i>Click to expand and load all filter files...</span>
+                            </div>
+                        </div>
+                    </div>
+                </div>
             </div>
             
             <!-- Prompt select and edit box -->
@@ -285,6 +312,9 @@
         classify_element.innerHTML = renderClassification(classificationData);
 
         document.addEventListener('DOMContentLoaded', function() {
+            // Pre-load all filter files on page entry (cached in filterTreeData)
+            loadAllFilterDetails();
+
             const autoAnalysisDataElement = document.getElementById('auto-analysis-data');
             if (autoAnalysisDataElement) {
                 const autoAnalysisData = {
@@ -310,6 +340,8 @@
             // 設置 filter 選擇
             const filterSelect = document.getElementById('filterSelect');
             filterSelect.value = analysisData.filter_file;
+            // Remember which .tat was auto-selected so the tree can pre-check only this one
+            autoAnalysisFilterFile = analysisData.filter_file;
             
             loadPromptContent("template", analysisData.prompt_file)
                 .then(() => {
@@ -766,16 +798,6 @@
             document.getElementById('resultContainer').innerHTML = '';
 
             updateProgress(0, 'Starting analysis...');
-            
-            // 60秒超时保护
-            setTimeout(function() {
-                const progressBar = document.getElementById('progressBar');
-                if (progressBar && progressBar.style.width !== '100%') {
-                    console.warn('⚠️ Analysis timeout (60s)');
-                    hideProgress();
-                    alert('Analysis timeout. Please try again.');
-                }
-            }, 60000);
         }
         function hideProgress() {
             document.getElementById('progressContainer').style.display = 'none';
@@ -952,27 +974,22 @@
             socket.emit('chat_message', { message: message });
         }
 
-        // Send chat message along with selected filter and prompt content
+        // Send chat message along with user-selected filter keywords for re-filtering
         function sendChatWithFilter() {
             if (chatIsLoading) return;
 
             const chatInput = document.getElementById('chatInput');
             const message = chatInput.value.trim();
-            const filterFile = document.getElementById('filterSelect').value;
-            const promptContent = document.getElementById('promptEditor').value.trim();
             
             if (!message) {
                 alert('Please enter a message.');
                 return;
             }
 
-            if (!filterFile) {
-                alert('Please select a filter file.');
-                return;
-            }
-
-            if (!promptContent) {
-                alert('Please enter or select a prompt.');
+            // Gather all checked keywords from the tree
+            const selectedKeywords = getAllSelectedKeywords();
+            if (selectedKeywords.length === 0) {
+                alert('No filter keywords selected. Please expand the Filter Keywords panel and check some keywords.');
                 return;
             }
 
@@ -983,16 +1000,15 @@
             
             chatInput.value = '';
             
-            // Display user message with filter info
-            const displayMsg = `[Filter: ${filterFile}] ${message}`;
+            // Display user message with keyword count info
+            const displayMsg = `[Re-filter: ${selectedKeywords.length} keywords] ${message}`;
             chatMessages.push({type: 'user', content: displayMsg});
             displayChatMessage('user', displayMsg);
 
             setChatLoading(true);
             socket.emit('chat_message_with_filter', { 
                 message: message,
-                filter_file: filterFile,
-                prompt_content: promptContent
+                keywords: selectedKeywords
             });
         }
 
@@ -1046,6 +1062,165 @@
         }
         // ===== End Chat functionality =====
 
+        // ===== Filter Keywords Tree Management =====
+        let filterPanelExpanded = false;
+        let filterTreeData = [];   // [{file: "xxx.tat", keywords: [{keyword, enabled}], expanded: false}, ...]
+        let filterTreeLoaded = false;
+        let autoAnalysisFilterFile = null;  // The .tat file auto-selected by classification
+
+        function toggleFilterPanel() {
+            filterPanelExpanded = !filterPanelExpanded;
+            document.getElementById('filterPanelBody').style.display = filterPanelExpanded ? 'block' : 'none';
+            document.getElementById('filterPanelToggleIcon').className = filterPanelExpanded 
+                ? 'fas fa-chevron-down mr-1' : 'fas fa-chevron-right mr-1';
+        }
+
+        function loadAllFilterDetails(forceReload = false) {
+            // Skip if already loaded (use Reload button or forceReload to refresh)
+            if (filterTreeLoaded && !forceReload) return;
+
+            const container = document.getElementById('filterTreeContainer');
+            container.innerHTML = '<span class="text-muted"><i class="fas fa-spinner fa-spin"></i> Loading all filter files...</span>';
+            
+            fetch('/log_parser/get_all_filter_details', {
+                method: 'POST',
+                headers: {'Content-Type': 'application/json'},
+                body: JSON.stringify({})
+            })
+            .then(r => r.json())
+            .then(data => {
+                if (!data.success) {
+                    container.innerHTML = '<span class="text-danger">' + escapeHtml(data.message) + '</span>';
+                    return;
+                }
+                filterTreeData = data.filters.map(f => ({
+                    file: f.file,
+                    keywords: f.keywords,
+                    expanded: false
+                }));
+                filterTreeLoaded = true;
+                
+                // Apply auto-analysis defaults: only the auto-detected .tat file's enabled=y keywords stay checked
+                // All other .tat files' keywords default to unchecked
+                applyAutoAnalysisDefaults();
+                renderFilterTree();
+            })
+            .catch(err => {
+                container.innerHTML = '<span class="text-danger">Failed to load: ' + escapeHtml(err.message) + '</span>';
+            });
+        }
+
+        function applyAutoAnalysisDefaults() {
+            // If auto-analysis selected a filter file, keep its enabled=y keywords checked
+            // All other .tat files → all keywords unchecked
+            filterTreeData.forEach(f => {
+                if (autoAnalysisFilterFile && f.file === autoAnalysisFilterFile) {
+                    // Keep original enabled status from .tat
+                    f.expanded = true;  // Auto-expand the active one
+                } else {
+                    // All keywords in non-active .tat files default to unchecked
+                    f.keywords.forEach(k => { k.enabled = false; });
+                }
+            });
+        }
+
+        function renderFilterTree() {
+            const container = document.getElementById('filterTreeContainer');
+            
+            if (filterTreeData.length === 0) {
+                container.innerHTML = '<span class="text-muted">No .tat filter files found.</span>';
+                updateGlobalKeywordCount();
+                return;
+            }
+            
+            let html = '';
+            filterTreeData.forEach(function(fileEntry, fIdx) {
+                const checkedInFile = fileEntry.keywords.filter(k => k.enabled).length;
+                const isExpanded = fileEntry.expanded;
+                const chevron = isExpanded ? 'fa-chevron-down' : 'fa-chevron-right';
+                const isActive = (autoAnalysisFilterFile && fileEntry.file === autoAnalysisFilterFile);
+                const activeBadge = isActive ? ' <span class="badge badge-info ml-1">active</span>' : '';
+                
+                html += '<div class="mb-1">';
+                // File header
+                html += '<div class="d-flex align-items-center py-1 px-2" style="background-color:' + (isActive ? '#e8f4fd' : '#f8f9fa') + ';border-radius:4px;cursor:pointer;" onclick="toggleFilterFile(' + fIdx + ')">';
+                html += '<i class="fas ' + chevron + ' mr-2" id="fileChevron_' + fIdx + '" style="font-size:0.75rem;width:12px;"></i>';
+                html += '<strong style="font-size:0.88rem;">' + escapeHtml(fileEntry.file) + '</strong>' + activeBadge;
+                html += '<span class="ml-auto badge ' + (checkedInFile > 0 ? 'badge-primary' : 'badge-secondary') + '" style="font-size:0.75rem;">' + checkedInFile + '/' + fileEntry.keywords.length + '</span>';
+                html += '</div>';
+                
+                // Keywords list (indented)
+                html += '<div id="fileKeywords_' + fIdx + '" style="display:' + (isExpanded ? 'block' : 'none') + ';padding-left:28px;">';
+                if (fileEntry.keywords.length === 0) {
+                    html += '<span class="text-muted" style="font-size:0.8rem;">No keywords in this file</span>';
+                } else {
+                    fileEntry.keywords.forEach(function(kw, kIdx) {
+                        const checked = kw.enabled ? 'checked' : '';
+                        const labelColor = kw.enabled ? '#333' : '#aaa';
+                        html += '<div class="form-check py-0" style="border-bottom:1px solid #f5f5f5;">';
+                        html += '<input class="form-check-input" type="checkbox" id="kw_' + fIdx + '_' + kIdx + '" ' + checked;
+                        html += ' onchange="onKeywordToggle(' + fIdx + ',' + kIdx + ',this.checked)">';
+                        html += '<label class="form-check-label" for="kw_' + fIdx + '_' + kIdx + '" style="font-size:0.82rem;color:' + labelColor + ';" id="kwLabel_' + fIdx + '_' + kIdx + '">';
+                        html += escapeHtml(kw.keyword) + '</label></div>';
+                    });
+                }
+                html += '</div></div>';
+            });
+            
+            container.innerHTML = html;
+            updateGlobalKeywordCount();
+        }
+
+        function toggleFilterFile(fIdx) {
+            filterTreeData[fIdx].expanded = !filterTreeData[fIdx].expanded;
+            const kwDiv = document.getElementById('fileKeywords_' + fIdx);
+            const chevron = document.getElementById('fileChevron_' + fIdx);
+            if (kwDiv) kwDiv.style.display = filterTreeData[fIdx].expanded ? 'block' : 'none';
+            if (chevron) chevron.className = 'fas ' + (filterTreeData[fIdx].expanded ? 'fa-chevron-down' : 'fa-chevron-right') + ' mr-2';
+        }
+
+        function onKeywordToggle(fIdx, kIdx, checked) {
+            filterTreeData[fIdx].keywords[kIdx].enabled = checked;
+            const label = document.getElementById('kwLabel_' + fIdx + '_' + kIdx);
+            if (label) label.style.color = checked ? '#333' : '#aaa';
+            updateGlobalKeywordCount();
+            // Update the per-file badge
+            renderFilterTree();
+        }
+
+        function updateGlobalKeywordCount() {
+            let total = 0, selected = 0;
+            filterTreeData.forEach(f => {
+                f.keywords.forEach(k => {
+                    total++;
+                    if (k.enabled) selected++;
+                });
+            });
+            document.getElementById('filterKeywordCount').textContent = selected + ' selected';
+        }
+
+        function selectAllKeywordsGlobal() {
+            filterTreeData.forEach(f => f.keywords.forEach(k => { k.enabled = true; }));
+            renderFilterTree();
+        }
+
+        function deselectAllKeywordsGlobal() {
+            filterTreeData.forEach(f => f.keywords.forEach(k => { k.enabled = false; }));
+            renderFilterTree();
+        }
+
+        function getAllSelectedKeywords() {
+            // Returns flat list of all checked keywords across all .tat files
+            const keywords = [];
+            filterTreeData.forEach(f => {
+                f.keywords.forEach(k => {
+                    if (k.enabled) keywords.push(k.keyword);
+                });
+            });
+            return keywords;
+        }
+        // ===== End Filter Keywords Tree Management =====
+
         document.getElementById('analysisForm').addEventListener('submit', function(e) {
             e.preventDefault();
 
@@ -1057,15 +1232,19 @@
                     return;
                 }
 
+            // If user has loaded and customized keywords, send them; otherwise let backend use .tat defaults
+            const selectedKeywords = filterTreeLoaded ? getAllSelectedKeywords() : null;
             const analysisData = {
                     filter_file: filterFile,
                     prompt_content: promptContent
                 };
+            if (selectedKeywords !== null && selectedKeywords.length > 0) {
+                analysisData.custom_keywords = selectedKeywords;
+            }
             
             console.log('📤 Sending analysis data:', analysisData);
             showProgress();
             
-            // 检查 socket 是否连接
             if (!socket.connected) {
                 console.error('❌ Socket not connected!');
                 hideProgress();

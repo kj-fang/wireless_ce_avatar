@@ -119,8 +119,6 @@ def close_error_dialog() -> None:
         print("⚠️ Failed to close error dialog:", e)
 
 
-
-
 def bt_analysis_autoFile_mode(
     log_path: str,
     debug: bool = False
@@ -490,8 +488,9 @@ def bt_analysis_autoFolder_mode(
     log_folder_path: str,
     log_path: str,
     debug: bool = False,
-    wait_hci_timeout: int = 15
-) -> None:
+    wait_hci_timeout: int = 15,
+    should_stop: callable = None
+) -> int:
     """
     Decode an entire folder via the 'BT Driver Log Parser' tab and open the target .hci.txt.
 
@@ -508,6 +507,10 @@ def bt_analysis_autoFolder_mode(
                   The function waits for '<log_path>.hci.txt'.
         debug: If True, prints control identifiers for debugging.
         wait_hci_timeout: (Currently unused) intended for adding a timeout later.
+        should_stop: Optional callable that returns True if this operation should be aborted.
+
+    Returns:
+        int: The process ID (PID) of the BT tool, or None if failed/aborted.
 
     Notes:
         - Uses the same attach-or-launch pattern as other functions.
@@ -519,7 +522,7 @@ def bt_analysis_autoFolder_mode(
     exe_path = os.path.abspath(os.path.join(os.path.dirname(__file__), 'ibtdrvlogparser.exe'))
     if not os.path.exists(exe_path):
         print(f"❌ Executable not found: {exe_path}")
-        return
+        return None
 
     app = None
 
@@ -544,7 +547,8 @@ def bt_analysis_autoFolder_mode(
         app_window = app.top_window()
     except Exception as e:
         print(f"❌ Failed to get app window: {e}")
-        return
+        active_bt_pid = None
+        return None
 
     if debug:
         print("🔎 Dumping all controls:")
@@ -582,6 +586,17 @@ def bt_analysis_autoFolder_mode(
     retry_count = 0
 
     while True:
+        # Check if this operation was superseded by another
+        if should_stop and should_stop():
+            print("⚠️ AutoFolder operation superseded, stopping wait.")
+            return None
+
+        # Check if process is still alive
+        if not psutil.pid_exists(active_bt_pid):
+            print("❌ BT tool closed during HCI wait.")
+            active_bt_pid = None
+            return None
+
         # Proactively close any modal error dialog that might appear
         close_error_dialog()
 
@@ -590,7 +605,7 @@ def bt_analysis_autoFolder_mode(
             if is_file_ready(hci_txt):
                 print(f"📂 HCI log is ready: {hci_txt}")
                 if open_with_text_analysis_tool(hci_txt):
-                    break
+                    return active_bt_pid
 
         time.sleep(1)
         retry_count += 1

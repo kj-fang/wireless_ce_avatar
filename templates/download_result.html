@@ -180,12 +180,12 @@
                                 </button> -->
 
                                 <!-- AutoFolder -->
-                                <button class="btn btn-primary btn-sm mb-2" onclick="startAnalysis(this, '{{ bt_path | urlencode }}', 'AutoFolder')">
+                                <button class="btn btn-primary btn-sm mb-2" data-path="{{ bt_path | urlencode }}" data-mode="AutoFolder" onclick="startAnalysis(this, '{{ bt_path | urlencode }}', 'AutoFolder')">
                                     AutoFolder
                                 </button>
 
                                 <!-- Manual -->
-                                <button class="btn btn-success btn-sm" data-path="{{ bt_path | urlencode }}" onclick="startAnalysis(this, '{{ bt_path | urlencode }}', 'Manual')">
+                                <button class="btn btn-success btn-sm" data-path="{{ bt_path | urlencode }}" data-mode="Manual" onclick="startAnalysis(this, '{{ bt_path | urlencode }}', 'Manual')">
                                     Manual
                                 </button>
                             </div>
@@ -375,22 +375,26 @@
 
     socket.on("manual_complete", function(msg) {
         console.log("Manual analysis complete for:", msg.etl_path);
-        const path = msg.etl_path;
-        
-        // Find buttons matching this path
+        restoreButton(msg.etl_path, 'Manual');
+    });
+
+    socket.on("autofolder_complete", function(msg) {
+        console.log("AutoFolder analysis complete for:", msg.etl_path);
+        restoreButton(msg.etl_path, 'AutoFolder');
+    });
+
+    function restoreButton(path, mode) {
         const buttons = document.querySelectorAll('button.disabled');
         buttons.forEach(btn => {
             const btnPathEnc = btn.getAttribute('data-path');
-            if (btnPathEnc) {
+            const btnMode = btn.getAttribute('data-mode');
+            if (btnPathEnc && btnMode === mode) {
                 try {
                     const btnPath = decodeURIComponent(btnPathEnc);
-                    // Compare paths (normalizing slashes for Windows)
-                    // Replace all backslashes with forward slashes for comparison
                     if (btnPath.replace(/\\/g, '/') === path.replace(/\\/g, '/')) {
                         btn.classList.remove('disabled');
-                        // Restore original text based on button type/onclick
                         if (btn.innerText.includes('Analyzing')) {
-                             btn.innerText = 'Manual';
+                            btn.innerText = mode;
                         }
                     }
                 } catch (e) {
@@ -398,7 +402,7 @@
                 }
             }
         });
-    });
+    }
 
     function startFwAnalysis(button, fwPathEncoded) {
         if (button.classList.contains('disabled')) return;

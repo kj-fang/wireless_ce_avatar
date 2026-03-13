@@ -299,17 +299,24 @@ class DriverManager:
         return rf"{version_dir}\{exe_name}"
     
     def monitor_browser(self):
+        consecutive_failures = 0
+        required_failures = 3  # must fail this many times in a row to confirm closure
         while not self.shutdown_event.is_set():
             if self.is_browser_closed():
-                print("🛑 Browser was closed by user.")
-                self.shutdown()
-                break
+                consecutive_failures += 1
+                if consecutive_failures >= required_failures:
+                    print("🛑 Browser was closed by user.")
+                    self.shutdown()
+                    break
+            else:
+                consecutive_failures = 0
             time.sleep(2)
 
     def is_browser_closed(self):
         try:
             return len(self.main_driver.window_handles) == 0
-        except Exception:
+        except Exception as e:
+            print(f"⚠️ is_browser_closed check raised an exception: {e}")
             return True
 
     def shutdown(self):

@@ -1,15 +1,35 @@
-from flask import Blueprint, render_template, request, session, redirect, url_for, flash
+from flask import Blueprint, render_template, request, session, redirect, url_for, flash, jsonify
 import os
 import subprocess
+from datetime import datetime
 
 from utils import helpers
 from utils.etl_utils import get_auto_analysis_etl, get_issue_time_from_selected_files, filter_folders_by_time
 from services.case_info_service import CaseService
 from models.models import CaseContext
+from services.llm_service import LLM_helper
 from configs.global_configs import app_config
 
 
 main_bp = Blueprint("main", __name__, url_prefix="/")
+
+#------------ pick latest zip attachment for ETL+LLM flow -------------#
+def _pick_latest_zip_attachment(attachment_list):
+    zip_attachments = [item for item in (attachment_list or []) if item and str(item[0]).lower().endswith('.zip')]
+    if not zip_attachments:
+        return None
+
+    def parse_attachment_datetime(item):
+        try:
+            metadata = item[2] if len(item) > 2 else None
+            raw_dt = metadata[0] if isinstance(metadata, (list, tuple)) and metadata else None
+            if isinstance(raw_dt, datetime):
+                return raw_dt
+        except Exception:
+            pass
+        return datetime.min
+
+    return max(zip_attachments, key=parse_attachment_datetime)
 
 #------------ALL ROUTE-------------#
 
@@ -75,6 +95,60 @@ def handle_case_submission():
         flash("An error occurred while processing the case.", "danger")
         return redirect(url_for('main.index'))
     
+#------------ETL+LLM Route-------------#
+@main_bp.route('/start_latest_etl_llm', methods=['POST'])
+def start_latest_etl_llm():
+    case_nbr = request.form.get('case_number', '').strip().replace(" ", "")
+    if not case_nbr:
+        return jsonify({'success': False, 'message': 'No case number provided.'}), 400
+
+    case_context = CaseContext(case_nbr=case_nbr)
+    try:
+        case_context = CaseService.process_case(case_context=case_context)
+        if case_context.error_message:
+            case_context.error_message = None
+            return jsonify({'success': False, 'message': 'Invalid case number or unable to retrieve data.'}), 400
+
+        selected_latest = _pick_latest_zip_attachment(case_context.attachment_list)
+        if not selected_latest:
+            return jsonify({'success': False, 'message': 'No ZIP attachment found for this case.'}), 400
+
+        session.clear()
+        session["case_context"] = case_context.to_session()
+        session['prompt_file_path'] = CaseService.load_case_summary_prompt(case_context.wifi_or_bt)
+        session['selected_files'] = [selected_latest]
+        session['bsod'] = False
+        session['latest_etl_llm'] = True
+
+        session['classification'] = {
+            "issue_type": "Unclassified",
+            "confidence": 0,
+            "keywords_found": []
+        }
+
+        llm_helper: LLM_helper = app_config.llm_helper
+        if llm_helper is not None:
+            try:
+                ai_analysis = llm_helper.analyze_desc(
+                    prompt_path=session['prompt_file_path'],
+                    case_context=session["case_context"]
+                )
+                if isinstance(ai_analysis, dict):
+                    classification = ai_analysis.get("Classification")
+                    if isinstance(classification, dict):
+                        session['classification'] = classification
+            except Exception as llm_error:
+                print(f"⚠️ Classification failed in start_latest_etl_llm: {llm_error}")
+
+        return jsonify({
+            'success': True,
+            'redirect_url': url_for('main.download_attachments')
+        })
+
+    except Exception as e:
+        print(f"❌ Error starting latest ETL+LLM flow: {e}")
+        return jsonify({'success': False, 'message': 'An error occurred while processing the case.'}), 500
+       
 
 #------------SELLECT ATTACHMENT render/submission -------------#
 

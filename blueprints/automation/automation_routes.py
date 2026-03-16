@@ -7,7 +7,7 @@ import re
 from models.models import CaseContext
 from configs.global_configs import app_config
 
-from utils.etl_utils import extract_address_digits, extract_etl_suffix_number
+from utils.etl_utils import extract_address_digits, extract_etl_suffix_number, pick_latest_zip_attachment
 from utils.attachment_download import download_file
 from utils.attachment_decompose import process_single_zip
 
@@ -67,8 +67,8 @@ def handle_run_latest_etl():
             return
 
         print("downloading zip...")
-        # 6) Download the first ZIP file from attachment list
-        zip_info = next((item for item in case_context.attachment_list if item[0].lower().endswith('.zip')), None)
+        # 6) Download the latest ZIP file from attachment list
+        zip_info = pick_latest_zip_attachment(case_context.attachment_list)
         
         print("zip_info:", zip_info)
         if not zip_info:

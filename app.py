@@ -1,4 +1,4 @@
-from flask import Flask
+from flask import Flask  # pyright: ignore[reportMissingImports]
 from flask_socketio import SocketIO, emit
 from threading import Thread, Event
 

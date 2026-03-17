@@ -1,0 +1,581 @@
+{
+  "1819": {
+    "category": "Exception",
+    "type": "Error",
+    "details": "Firmware Fatal Exception",
+    "details_list": [
+      {
+        "etw_id": "53021",
+        "details": "Firmware Fatal Exception"
+      }
+    ],
+    "etw_id": "53021",
+    "usb": "Yes",
+    "pci": "Yes",
+    "comments": ""
+  },
+  "1820": {
+    "category": "Exception",
+    "type": "Error",
+    "details": "Firmware System Exception",
+    "details_list": [
+      {
+        "etw_id": "53022",
+        "details": "Firmware System Exception"
+      }
+    ],
+    "etw_id": "53022",
+    "usb": "Yes",
+    "pci": "Yes",
+    "comments": ""
+  },
+  "NA": {
+    "category": "Exception",
+    "type": "Error",
+    "details": "Firmware Debug Exception",
+    "details_list": [
+      {
+        "etw_id": "NA",
+        "details": "Firmware Debug Exception"
+      }
+    ],
+    "etw_id": "NA",
+    "usb": "NA",
+    "pci": "NA",
+    "comments": ""
+  },
+  "1840": {
+    "category": "Transport Error",
+    "type": "Error",
+    "details": "USB Transaction error",
+    "details_list": [
+      {
+        "etw_id": "52022",
+        "details": "USB Transaction error"
+      }
+    ],
+    "etw_id": "52022",
+    "usb": "Yes",
+    "pci": "NA",
+    "comments": ""
+  },
+  "1841": {
+    "category": "Transport Error",
+    "type": "Error",
+    "details": "STATUS_NO_SUCH_DEVICE",
+    "details_list": [
+      {
+        "etw_id": "52023",
+        "details": "STATUS_NO_SUCH_DEVICE"
+      }
+    ],
+    "etw_id": "52023",
+    "usb": "Yes",
+    "pci": "NA",
+    "comments": ""
+  },
+  "1842": {
+    "category": "Transport Error",
+    "type": "Error",
+    "details": "STATUS_IO_TIMEOUT",
+    "details_list": [
+      {
+        "etw_id": "52024",
+        "details": "STATUS_IO_TIMEOUT"
+      }
+    ],
+    "etw_id": "52024",
+    "usb": "Yes",
+    "pci": "NA",
+    "comments": ""
+  },
+  "1851": {
+    "category": "FW Download",
+    "type": "Error",
+    "details": "Firmware Validation failed",
+    "details_list": [
+      {
+        "etw_id": "54021",
+        "details": "Firmware Validation failed"
+      }
+    ],
+    "etw_id": "54021",
+    "usb": "Yes",
+    "pci": "Yes",
+    "comments": ""
+  },
+  "1852": {
+    "category": "FW Download",
+    "type": "Error",
+    "details": "Firmware Download failed",
+    "details_list": [
+      {
+        "etw_id": "54022",
+        "details": "Firmware Download failed"
+      }
+    ],
+    "etw_id": "54022",
+    "usb": "Yes",
+    "pci": "Yes",
+    "comments": ""
+  },
+  "1853": {
+    "category": "FW Download",
+    "type": "Error",
+    "details": "BT Reset Failed",
+    "details_list": [
+      {
+        "etw_id": "54023",
+        "details": "BT Reset Failed"
+      }
+    ],
+    "etw_id": "54023",
+    "usb": "Yes",
+    "pci": "Yes",
+    "comments": ""
+  },
+  "1854": {
+    "category": "FW Download",
+    "type": "Error",
+    "details": "Invalid FW Meta Data",
+    "details_list": [
+      {
+        "etw_id": "54024",
+        "details": "Invalid FW Meta Data"
+      }
+    ],
+    "etw_id": "54024",
+    "usb": "Yes",
+    "pci": "Yes",
+    "comments": ""
+  },
+  "1855": {
+    "category": "FW Download",
+    "type": "Error",
+    "details": "FW FSEQ Error Info",
+    "details_list": [
+      {
+        "etw_id": "54025",
+        "details": "FW FSEQ Error Info"
+      }
+    ],
+    "etw_id": "54025",
+    "usb": "Yes",
+    "pci": "Yes",
+    "comments": ""
+  },
+  "1856": {
+    "category": "FW Download",
+    "type": "Error",
+    "details": "The driver load is blocked due to security reasons.",
+    "details_list": [
+      {
+        "etw_id": "54026",
+        "details": "The driver load is blocked due to security reasons."
+      }
+    ],
+    "etw_id": "54026",
+    "usb": "Yes",
+    "pci": "Yes",
+    "comments": "Bluetooth Device is not present in CCSV White list."
+  },
+  "1857": {
+    "category": "FW Download",
+    "type": "Error",
+    "details": "BRI Driver Config failure",
+    "details_list": [
+      {
+        "etw_id": "54027",
+        "details": "BRI Driver Config failure"
+      }
+    ],
+    "etw_id": "54027",
+    "usb": "Yes",
+    "pci": "Yes",
+    "comments": ""
+  },
+  "1863": {
+    "category": "Controller/Hardware issues",
+    "type": "",
+    "details": "Tx Completion timeout",
+    "details_list": [
+      {
+        "etw_id": "57021",
+        "details": "Tx Completion timeout"
+      }
+    ],
+    "etw_id": "57021",
+    "usb": "No",
+    "pci": "Yes",
+    "comments": ""
+  },
+  "1864": {
+    "category": "Controller/Hardware issues",
+    "type": "",
+    "details": "ROM Alive Event Fail / RAM Alive Event Fail / Rx Timeout",
+    "details_list": [
+      {
+        "etw_id": "57022",
+        "details": "ROM Alive Event Fail"
+      },
+      {
+        "etw_id": "57023",
+        "details": "RAM Alive Event Fail"
+      },
+      {
+        "etw_id": "57024",
+        "details": "Rx Timeout"
+      }
+    ],
+    "etw_id": "57022, 57023, 57024",
+    "usb": "No",
+    "pci": "Yes",
+    "comments": ""
+  },
+  "1866": {
+    "category": "Controller/Hardware issues",
+    "type": "",
+    "details": "Product Reset Request failed",
+    "details_list": [
+      {
+        "etw_id": "57026",
+        "details": "Product Reset Request failed"
+      }
+    ],
+    "etw_id": "57026",
+    "usb": "Yes",
+    "pci": "Yes",
+    "comments": "USB and PCI driver logs show: \"Product Reset through Wifi  failed\""
+  },
+  "1867": {
+    "category": "Controller/Hardware issues",
+    "type": "",
+    "details": "FIPS error is detected",
+    "details_list": [
+      {
+        "etw_id": "57027",
+        "details": "FIPS error is detected"
+      }
+    ],
+    "etw_id": "57027",
+    "usb": "Yes",
+    "pci": "Yes",
+    "comments": ""
+  },
+  "1871": {
+    "category": "Telemetry (Recovery/ Sensor)",
+    "type": "Warning",
+    "details": "BT Core Reset Triggered",
+    "details_list": [
+      {
+        "etw_id": "56021",
+        "details": "BT Core Reset Triggered"
+      }
+    ],
+    "etw_id": "56021",
+    "usb": "Yes",
+    "pci": "Yes",
+    "comments": "USB driver logs: \"Platform Level Device Reset triggered in Driver\" - Triggered by driver \"Windows OS version is RS5 and later, Windows Stack will Trigger PLDR Recovery\" -Triggered by OS PCI driver logs: \"Platform Level Device Reset performed by driver.\" -Triggered by driver \"Let BT Stack perform recovery\" -Triggered by OS"
+  },
+  "1872": {
+    "category": "Telemetry (Recovery/ Sensor)",
+    "type": "Warning",
+    "details": "Product Reset Triggered",
+    "details_list": [
+      {
+        "etw_id": "56022",
+        "details": "Product Reset Triggered"
+      }
+    ],
+    "etw_id": "56022",
+    "usb": "Yes",
+    "pci": "Yes",
+    "comments": "USB driver logs: \"HandleResetIndication\" PCI driver logs: \"Product reset Triggered indication (From Wifi to BT)\""
+  },
+  "1873": {
+    "category": "Telemetry (Recovery/ Sensor)",
+    "type": "Warning",
+    "details": "Product Reset Requested",
+    "details_list": [
+      {
+        "etw_id": "56023",
+        "details": "Product Reset Requested"
+      }
+    ],
+    "etw_id": "56023",
+    "usb": "Yes",
+    "pci": "Yes",
+    "comments": "USB driver logs: \"Product Reset through Wifi request submitted to Wifi Core\" PCI driver logs: \"Product reset requested (From BT)\""
+  },
+  "1874": {
+    "category": "Telemetry (Recovery/ Sensor)",
+    "type": "Warning",
+    "details": "Sensor Registration Failed",
+    "details_list": [
+      {
+        "etw_id": "56024",
+        "details": "Sensor Registration Failed"
+      }
+    ],
+    "etw_id": "56024",
+    "usb": "Yes",
+    "pci": "Yes",
+    "comments": "WMI Sensor Registration failure."
+  },
+  "1830": {
+    "category": "Telemetry",
+    "type": "Informational",
+    "details": "FW Version Info",
+    "details_list": [
+      {
+        "etw_id": "52021",
+        "details": "FW Version Info"
+      }
+    ],
+    "etw_id": "52021",
+    "usb": "Yes",
+    "pci": "Yes",
+    "comments": ""
+  },
+  "1821": {
+    "category": "Telemetry",
+    "type": "Informational",
+    "details": "BT Connection / Disconnection",
+    "details_list": [
+      {
+        "etw_id": "52025",
+        "details": "BT Connection / Disconnection"
+      }
+    ],
+    "etw_id": "52025",
+    "usb": "Yes",
+    "pci": "Yes",
+    "comments": ""
+  },
+  "1822": {
+    "category": "Telemetry",
+    "type": "Informational",
+    "details": "BT Performance counters",
+    "details_list": [
+      {
+        "etw_id": "52027",
+        "details": "BT Performance counters"
+      }
+    ],
+    "etw_id": "52027",
+    "usb": "Yes",
+    "pci": "Yes",
+    "comments": ""
+  },
+  "1831": {
+    "category": "Recovery/ Sensor",
+    "type": "Informational",
+    "details": "Product Reset capability Exchange",
+    "details_list": [
+      {
+        "etw_id": "55021",
+        "details": "Product Reset capability Exchange"
+      }
+    ],
+    "etw_id": "55021",
+    "usb": "Yes",
+    "pci": "",
+    "comments": ""
+  },
+  "1832": {
+    "category": "Recovery/ Sensor",
+    "type": "Informational",
+    "details": "Product Reset Capability Pause",
+    "details_list": [
+      {
+        "etw_id": "55022",
+        "details": "Product Reset Capability Pause"
+      }
+    ],
+    "etw_id": "55022",
+    "usb": "Yes",
+    "pci": "",
+    "comments": ""
+  },
+  "1833": {
+    "category": "Recovery/ Sensor",
+    "type": "Informational",
+    "details": "Product Reset Capability Restart",
+    "details_list": [
+      {
+        "etw_id": "55023",
+        "details": "Product Reset Capability Restart"
+      }
+    ],
+    "etw_id": "55023",
+    "usb": "Yes",
+    "pci": "",
+    "comments": ""
+  },
+  "1834": {
+    "category": "Recovery/ Sensor",
+    "type": "Informational",
+    "details": "Telemetry Counters",
+    "details_list": [
+      {
+        "etw_id": "55024",
+        "details": "Telemetry Counters"
+      }
+    ],
+    "etw_id": "55024",
+    "usb": "Yes",
+    "pci": "",
+    "comments": ""
+  },
+  "1835": {
+    "category": "Recovery/ Sensor",
+    "type": "Informational",
+    "details": "TOP Non-Fatal Error Counters",
+    "details_list": [
+      {
+        "etw_id": "55025",
+        "details": "TOP Non-Fatal Error Counters"
+      }
+    ],
+    "etw_id": "55025",
+    "usb": "Yes",
+    "pci": "",
+    "comments": ""
+  },
+  "1836": {
+    "category": "Recovery/ Sensor",
+    "type": "Informational",
+    "details": "Radio State information",
+    "details_list": [
+      {
+        "etw_id": "55026",
+        "details": "Radio State information"
+      }
+    ],
+    "etw_id": "55026",
+    "usb": "Yes",
+    "pci": "",
+    "comments": ""
+  },
+  "1827": {
+    "category": "Recovery/ Sensor",
+    "type": "Informational",
+    "details": "Sensor Registration Success",
+    "details_list": [
+      {
+        "etw_id": "55027",
+        "details": "Sensor Registration Success"
+      }
+    ],
+    "etw_id": "55027",
+    "usb": "Yes",
+    "pci": "",
+    "comments": ""
+  },
+  "1838": {
+    "category": "Recovery/ Sensor",
+    "type": "Informational",
+    "details": "Sensor Un-Registered",
+    "details_list": [
+      {
+        "etw_id": "55028",
+        "details": "Sensor Un-Registered"
+      }
+    ],
+    "etw_id": "55028",
+    "usb": "Yes",
+    "pci": "",
+    "comments": ""
+  },
+  "1839": {
+    "category": "Recovery/ Sensor",
+    "type": "Informational",
+    "details": "Bluetooth Tx Power Update",
+    "details_list": [
+      {
+        "etw_id": "55029",
+        "details": "Bluetooth Tx Power Update"
+      }
+    ],
+    "etw_id": "55029",
+    "usb": "Yes",
+    "pci": "",
+    "comments": "Dynamic Tx Power update ( DSAR) Completed."
+  },
+  "1901": {
+    "category": "Reset",
+    "type": "Information",
+    "details": "Shared Hardware reset Triggered",
+    "details_list": [
+      {
+        "etw_id": "55030",
+        "details": "Shared Hardware reset Triggered"
+      }
+    ],
+    "etw_id": "55030",
+    "usb": "NO",
+    "pci": "Yes",
+    "comments": ""
+  },
+  "1904": {
+    "category": "",
+    "type": "",
+    "details": "TX Timeout during device Init flow",
+    "details_list": [
+      {
+        "etw_id": "52028",
+        "details": "TX Timeout during device Init flow"
+      }
+    ],
+    "etw_id": "52028",
+    "usb": "NO",
+    "pci": "Yes",
+    "comments": "ROM Failures are informational as these are HW issues."
+  },
+  "1905": {
+    "category": "",
+    "type": "",
+    "details": "RX Timeout during device Init flow",
+    "details_list": [
+      {
+        "etw_id": "52029",
+        "details": "RX Timeout during device Init flow"
+      }
+    ],
+    "etw_id": "52029",
+    "usb": "NO",
+    "pci": "Yes",
+    "comments": "ROM Failures are informational as these are HW issues."
+  },
+  "1902": {
+    "category": "CFA",
+    "type": "Informational",
+    "details": "CFA start adv",
+    "details_list": [
+      {
+        "etw_id": "55031",
+        "details": "CFA start adv"
+      }
+    ],
+    "etw_id": "55031",
+    "usb": "Yes",
+    "pci": "Yes",
+    "comments": ""
+  },
+  "1903": {
+    "category": "CFA",
+    "type": "Informational",
+    "details": "CFA stop adv",
+    "details_list": [
+      {
+        "etw_id": "55032",
+        "details": "CFA stop adv"
+      }
+    ],
+    "etw_id": "55032",
+    "usb": "Yes",
+    "pci": "Yes",
+    "comments": ""
+  },
+  "_scraped_at": "2026-03-11T10:27:17.063200"
+}

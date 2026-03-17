@@ -41,6 +41,7 @@ class LogParserService:
         self.conversation_history = []   # [{"role": "user"|"assistant", "content": "..."}]
         self.chat_system_prompt = None   # system prompt used during analysis
         self.chat_log_context = None     # preprocessed log content for context
+        self.raw_log_lines = None        # raw log lines for re-filtering in chat
     
     # -------------------- setup and check avalibility ------------- 
     def set_up(self, download_path: str) -> str:
@@ -115,11 +116,11 @@ class LogParserService:
     #-------------- analyze progress ------------------
 
     def start_analysis(self, filter_path: str, log_path: str, output_dir: str, 
-                      llm_helper, custom_prompt_content: str) -> bool:
+                      llm_helper, custom_prompt_content: str, custom_keywords: list = None) -> bool:
         try:
             thread = threading.Thread(
                 target=self.process_analysis,
-                args=(filter_path, log_path, output_dir, llm_helper, custom_prompt_content)
+                args=(filter_path, log_path, output_dir, llm_helper, custom_prompt_content, custom_keywords)
             )
             thread.daemon = True
             thread.start()
@@ -140,7 +141,7 @@ class LogParserService:
                     }, namespace='/progress')
         
 
-    def process_analysis(self, filter_path, log_path, output_dir, llm_helper, prompt):
+    def process_analysis(self, filter_path, log_path, output_dir, llm_helper, prompt, custom_keywords=None):
 
         try:
             self.reset_log_parser()
@@ -150,10 +151,15 @@ class LogParserService:
             self.update_progress(35, "Reading log file...")
             log_file = log_path
             log_lines = helpers.read_log_file(log_file)
+            self.raw_log_lines = log_lines  # Store for later re-filtering in chat
             
-            # 2: Filter keywords(tat)
+            # 2: Filter keywords(tat) — use custom_keywords if provided by user
             self.update_progress(40, "Extracting filter keywords...")
-            filter_keywords = extract_enabled_keywords_from_filter_file(filter_path)
+            if custom_keywords is not None:
+                filter_keywords = custom_keywords
+                print(f"Using {len(filter_keywords)} user-selected keywords")
+            else:
+                filter_keywords = extract_enabled_keywords_from_filter_file(filter_path)
             
             # 3: Filter keywords
             self.update_progress(55, "Filtering log entries...")
@@ -221,6 +227,7 @@ class LogParserService:
         self.conversation_history = []
         self.chat_system_prompt = None
         self.chat_log_context = None
+        self.raw_log_lines = None
 
     # -------------------- Chat --------------------
 

@@ -277,6 +277,18 @@ class LLM_helper:
             api_messages.append({"role": "system", "content": system_content})
         api_messages.extend(messages)
 
+        # Debug: print full conversation history sent to LLM
+        print("\n" + "="*80)
+        print("[DEBUG chat] FULL API MESSAGES BEING SENT TO LLM:")
+        print("="*80)
+        for i, msg in enumerate(api_messages):
+            role = msg['role']
+            content = msg['content']
+            preview = content[:500] + f"... ({len(content)} chars total)" if len(content) > 500 else content
+            print(f"\n--- Message {i} | role: {role} | length: {len(content)} chars ---")
+            print(preview)
+        print("\n" + "="*80 + "\n")
+
         try:
             response = self.client.chat.completions.create(
                 model=self.model,

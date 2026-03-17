@@ -9,6 +9,7 @@ from utils import helpers
 from configs.global_configs import app_config
 from configs.path_configs import LOG_PARSER_DIR
 from models.models import CaseContext
+from utils.log_parser_preprocess import extract_all_keywords_from_filter_file
 
 from services.log_parser_file_manage_service import FileManagerService
 from services.log_parser_service import LogParserService
@@ -37,6 +38,47 @@ def upload():
     upload_type = request.form.get('type')
     result = file_manager_service.handle_file_upload(upload_type, request.files)
     return result
+
+
+@log_parser_bp.route("/get_filter_details", methods=["POST"])
+def get_filter_details():
+    """Return all keywords from a single .tat file with their enabled status."""
+    data = request.get_json()
+    filter_file = data.get('filter_file', '')
+    if not filter_file:
+        return jsonify({'success': False, 'message': 'No filter file specified'})
+    
+    filter_path = os.path.join(LOG_PARSER_DIR, "filter", filter_file)
+    if not os.path.exists(filter_path):
+        return jsonify({'success': False, 'message': f'Filter file not found: {filter_file}'})
+    
+    try:
+        keywords = extract_all_keywords_from_filter_file(filter_path)
+        return jsonify({'success': True, 'keywords': keywords})
+    except Exception as e:
+        return jsonify({'success': False, 'message': f'Failed to read filter: {str(e)}'})
+
+
+@log_parser_bp.route("/get_all_filter_details", methods=["POST"])
+def get_all_filter_details():
+    """Return ALL .tat files with ALL their keywords and enabled status."""
+    filter_dir = os.path.join(LOG_PARSER_DIR, "filter")
+    if not os.path.exists(filter_dir):
+        return jsonify({'success': False, 'message': 'Filter directory not found'})
+    
+    try:
+        tat_files = sorted([f for f in os.listdir(filter_dir) if f.endswith('.tat')])
+        all_filters = []
+        for tat_file in tat_files:
+            tat_path = os.path.join(filter_dir, tat_file)
+            keywords = extract_all_keywords_from_filter_file(tat_path)
+            all_filters.append({
+                'file': tat_file,
+                'keywords': keywords
+            })
+        return jsonify({'success': True, 'filters': all_filters})
+    except Exception as e:
+        return jsonify({'success': False, 'message': f'Failed to load filters: {str(e)}'})
 
 
 @log_parser_bp.route("/edit_prompt", methods=["POST"])
@@ -151,14 +193,20 @@ def handle_submit_analysis(data, socketio=None):
             app_config.socketio.emit('validation_error', {'message': error_message})
         return
     
+    # Check if user sent custom keyword selections
+    custom_keywords = data.get('custom_keywords', None)
+    
     try:
         filter_path = os.path.join(LOG_PARSER_DIR, "filter", selected_filter)
         print(f"📂 Filter path: {filter_path}")
+        if custom_keywords is not None:
+            print(f"🔧 Using {len(custom_keywords)} user-selected keywords")
         print(f"📖 Starting analysis...")
         
         success = log_parser_service.start_analysis(
             filter_path, log_path, output_dir, 
-            app_config.llm_helper, custom_prompt_content
+            app_config.llm_helper, custom_prompt_content,
+            custom_keywords=custom_keywords
         )
         
         if not success:
@@ -221,10 +269,13 @@ def handle_chat_message(data, socketio=None):
 
 
 def handle_chat_message_with_filter(data, socketio=None):
-    """Handle a chat message with filter and prompt context, forward to LLM, return reply."""
+    """Handle a chat message with user-selected filter keywords.
+    
+    Re-filters the raw log with the selected keywords, preprocesses it,
+    and sends it along with the user's instruction to the LLM as a new chat message.
+    """
     user_message = data.get('message', '').strip()
-    filter_file = data.get('filter_file', '').strip()
-    prompt_content = data.get('prompt_content', '').strip()
+    selected_keywords = data.get('keywords', [])
     
     emit_fn = socketio or app_config.socketio
     
@@ -232,17 +283,17 @@ def handle_chat_message_with_filter(data, socketio=None):
         emit_fn.emit('chat_error', {'message': 'Empty message'}, namespace='/progress')
         return
     
-    if not filter_file:
-        emit_fn.emit('chat_error', {'message': 'No filter file selected'}, namespace='/progress')
+    if not selected_keywords:
+        emit_fn.emit('chat_error', {'message': 'No filter keywords selected'}, namespace='/progress')
         return
-    
-    if not prompt_content:
-        emit_fn.emit('chat_error', {'message': 'No prompt content provided'}, namespace='/progress')
+
+    # Check that raw log lines exist (analysis must have been run)
+    if not log_parser_service.raw_log_lines:
+        emit_fn.emit('chat_error', {'message': 'Please run analysis first. No raw log available.'}, namespace='/progress')
         return
 
     print(f"💬 User message with filter: {user_message}")
-    print(f"📂 Filter file: {filter_file}")
-    print(f"📝 Prompt length: {len(prompt_content)}")
+    print(f"🔧 Selected {len(selected_keywords)} keywords for re-filtering")
 
     try:
         llm_helper = app_config.llm_helper
@@ -250,25 +301,30 @@ def handle_chat_message_with_filter(data, socketio=None):
             emit_fn.emit('chat_error', {'message': 'LLM helper is not available.'}, namespace='/progress')
             return
 
-        # Build enhanced message with filter and prompt context
-        enhanced_message = f"""Based on the following filter and prompt configuration:
+        # Re-filter and preprocess the raw log with user-selected keywords
+        from utils.log_parser_preprocess import filter_log_by_keywords, preprocess_log_for_llm, group_similar_logs
+        filtered_log = filter_log_by_keywords(log_parser_service.raw_log_lines, selected_keywords)
+        processed_lines = preprocess_log_for_llm(filtered_log)
+        grouped = group_similar_logs(processed_lines)
+        filtered_content = str(grouped)
+        
+        print(f"📋 Re-filtered: {len(log_parser_service.raw_log_lines)} raw lines → {len(filtered_log)} filtered → {len(grouped)} grouped")
 
-[Filter File]: {filter_file}
+        # Build the enhanced message with re-filtered log content
+        enhanced_message = f"""I have re-filtered the raw log with the following keywords: {', '.join(selected_keywords)}
 
-[Prompt Configuration]:
-{prompt_content}
+Here are the re-filtered and preprocessed log entries:
+{filtered_content}
 
-[User Question]:
+Based on these re-filtered logs, please respond to my instruction:
 {user_message}"""
 
-        # Use existing conversation history if available, otherwise start fresh
-        if log_parser_service.conversation_history:
-            reply = log_parser_service.handle_chat_message(enhanced_message, llm_helper)
-        else:
-            # Initialize conversation with filter/prompt context as system
-            log_parser_service.chat_system_prompt = f"You are an expert log analyzer. Use the provided filter and prompt configuration to assist the user."
+        # Must have conversation history (analysis must have been run)
+        if not log_parser_service.conversation_history:
+            log_parser_service.chat_system_prompt = "You are an expert log analyzer."
             log_parser_service.conversation_history = []
-            reply = log_parser_service.handle_chat_message(enhanced_message, llm_helper)
+
+        reply = log_parser_service.handle_chat_message(enhanced_message, llm_helper)
         
         reply_html = markdown.markdown(
             reply, extensions=["fenced_code", "tables", "nl2br", "sane_lists", "codehilite"]

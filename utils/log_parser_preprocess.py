@@ -21,6 +21,26 @@ def extract_enabled_keywords_from_filter_file(filter_file_path: str) -> List[str
     print("enabled_keyword", enabled_keywords)
     return enabled_keywords
 
+
+def extract_all_keywords_from_filter_file(filter_file_path: str) -> List[dict]:
+    """
+    Extracts ALL filter entries from a .tat file, returning keyword text and enabled status.
+    Returns a list of {"keyword": str, "enabled": bool} dicts.
+    """
+    all_keywords = []
+    pattern = re.compile(r'enabled="(y|n)".*?text="(.*?)"', re.IGNORECASE)
+
+    with open(filter_file_path, "r", encoding="utf-8") as f:
+        for line in f:
+            match = pattern.search(line)
+            if match:
+                enabled = match.group(1).lower() == 'y'
+                keyword = match.group(2).strip()
+                if keyword:
+                    all_keywords.append({"keyword": keyword, "enabled": enabled})
+    print(f"all_keywords ({len(all_keywords)} entries): {[k['keyword'] for k in all_keywords]}")
+    return all_keywords
+
 def filter_log_by_keywords(log_lines: List[str], keywords: List[str]) -> List[str]:
     """
     Filters log lines based on enabled keywords and removes the first character (e.g., line number or symbol).

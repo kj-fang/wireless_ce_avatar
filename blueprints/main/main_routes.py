@@ -37,8 +37,24 @@ def download_result():
 def download_result_bsod():
     return render_download_result_bsod_form()
 
+@main_bp.route('/open_path', methods=['POST'])
+def open_path():
+    return handle_open_path()
 
-#------------INDEX render/submission -------------#
+@main_bp.route('/dump_event_txt', methods=['POST'])
+def dump_event_txt():
+    return handle_dump_event_txt()
+
+@main_bp.route('/parse_event_log', methods=['POST'])
+def parse_event_log():
+    return handle_parse_event_log()
+
+@main_bp.route('/api/bt_event_map', methods=['GET'])
+def get_bt_event_map():
+    return handle_get_bt_event_map()
+
+
+#------------ INDEX render/submission -------------#
 
 def render_case_form():
     clipboard_text = helpers.get_clipboard_case_number()
@@ -47,7 +63,7 @@ def render_case_form():
                          clipboard_text=clipboard_text)
 
 def handle_case_submission():
-    """submit IPS number"""
+    """Submit IPS number"""
     case_nbr = request.form.get('case_number', '').strip().replace(" ", "")
     if not case_nbr:
         flash("❌ No case number provided.", "danger")
@@ -76,7 +92,7 @@ def handle_case_submission():
         return redirect(url_for('main.index'))
     
 
-#------------SELLECT ATTACHMENT render/submission -------------#
+#------------ SELECT ATTACHMENT render/submission -------------#
 
 def render_select_attachments_form():
     case_context = session.get("case_context")
@@ -104,10 +120,10 @@ def handle_select_attachments_submission():
 
     return redirect(url_for('main.download_attachments'))
 
-#------------DOWNLOAD ATTACHMENT render -------------#
+#------------ DOWNLOAD ATTACHMENT render -------------#
 
 def render_download_attachments_form():
-    # if bsod: change download directory from local to shared folder 
+    # If bsod: change download directory from local to shared folder
     case_context = session.get("case_context")
     if not case_context:
         flash("Session expired. Please start again.", "warning")
@@ -130,7 +146,7 @@ def render_download_attachments_form():
                            download_path=download_path)
 
 
-#------------DOWNLOAD RESULT render -------------#
+#------------ DOWNLOAD RESULT render -------------#
 
 def render_download_result_form():
     
@@ -221,7 +237,7 @@ def render_download_result_form():
                          **file_dicts)
 
 
-#------------[BSOD] DOWNLOAD RESULT render -------------#
+#------------ [BSOD] DOWNLOAD RESULT render -------------#
 
 def render_download_result_bsod_form():
 
@@ -241,112 +257,208 @@ def render_download_result_bsod_form():
                            case_path=case_path)
 
 
+#------------ Utility Handlers -------------#
 
-
-
-
-#------------ Other Utils -------------#
-
-@main_bp.route('/open_path', methods=['POST']) 
-def open_path():
+def handle_open_path():
+    """Open a local folder path in Windows Explorer."""
     path = request.json.get('path')
-    print("now open path:", path)
+    print("Now opening path:", path)
     if path and os.path.exists(path):
         subprocess.run(['explorer', path])
         return '', 204
     return 'Invalid path', 400
 
-@main_bp.route('/open_event_viewer', methods=['POST'])
-def open_event_viewer():
-    """Open .evt file with Windows Event Viewer"""
-    path = request.json.get('path')
-    print("Opening Event Viewer for:", path)
-    if path and os.path.exists(path):
-        # Use os.startfile to open .evt file with default application (Event Viewer)
-        os.startfile(path)
-        return '', 204
-    return 'Invalid path', 400
-
-@main_bp.route('/parse_event_log', methods=['POST'])
-def parse_event_log():
-    """Parse .evt file and return events as JSON"""
+def handle_dump_event_txt():
+    """Decode .evt files to TXT using pywin32 for ultra-fast native access."""
     import xml.etree.ElementTree as ET
-    import tempfile
+    import win32evtlog
     
     path = request.json.get('path')
-    print("Parsing Event Log:", path)
+    
+    print(f"\n[Background Task] 🚀 Starting Event Log decoding using pywin32...")
+    print(f"Source file: {path}")
+    
+    if not path or not os.path.exists(path):
+        return jsonify({'error': 'Invalid path'}), 400
+    
+    txt_path = f"{path}.txt"
+    try:
+        print(f"Writing content to: {txt_path} (Lightning fast...)")
+        
+        # Use native API to open Event Log
+        query_handle = win32evtlog.EvtQuery(path, win32evtlog.EvtQueryFilePath | win32evtlog.EvtQueryForwardDirection, None)
+        
+        with open(txt_path, 'w', encoding='utf-8') as f:
+            count = 0
+            while True:
+                # Read 100 events at a time to avoid excessive memory usage
+                events = win32evtlog.EvtNext(query_handle, 100)
+                if not events:
+                    break
+                    
+                for event in events:
+                    count += 1
+                    try:
+                        # Convert to XML and parse key fields (faster than looking up DLL strings)
+                        xml_content = win32evtlog.EvtRender(event, win32evtlog.EvtRenderEventXml)
+                        root = ET.fromstring(xml_content)
+                        ns = {'e': 'http://schemas.microsoft.com/win/2004/08/events/event'}
+                        
+                        system = root.find('e:System', ns)
+                        if system is not None:
+                            time_created = system.find('e:TimeCreated', ns)
+                            time_str = time_created.get('SystemTime', '')[:19].replace('T', ' ') if time_created is not None else 'Unknown'
+                            
+                            provider = system.find('e:Provider', ns)
+                            source_str = provider.get('Name', '') if provider is not None else 'Unknown'
+                            
+                            level = system.find('e:Level', ns)
+                            level_map = {'1': 'Critical', '2': 'Error', '3': 'Warning', '4': 'Information', '5': 'Verbose'}
+                            level_str = level_map.get(level.text if level is not None else '', 'Unknown')
+                            
+                            event_id = system.find('e:EventID', ns)
+                            id_str = event_id.text if event_id is not None else 'Unknown'
+                            
+                            event_data = root.find('e:EventData', ns)
+                            message = ''
+                            if event_data is not None:
+                                data_items = event_data.findall('e:Data', ns)
+                                message = ' | '.join([d.text or '' for d in data_items if d.text])
+                            
+                            # Write to TXT file in a clean format
+                            f.write(f"[{time_str}] [{level_str}] [{source_str}] Event ID: {id_str}\n")
+                            f.write(f"Message Data: {message}\n")
+                            f.write("-" * 80 + "\n")
+                            
+                    except Exception as parse_e:
+                        f.write(f"[Error parsing event]: {parse_e}\n")
+                        
+        print(f"[Background Task] ✅ Decoding complete! Processed {count} events. TXT file successfully generated.\n")
+        return jsonify({'success': True, 'txt_path': txt_path})
+        
+    except Exception as e:
+        import traceback
+        traceback.print_exc()
+        print(f"[Background Task] ❌ Error occurred: {e}")
+        return jsonify({'error': str(e)}), 500
+
+def handle_parse_event_log():
+    """Parse .evt file: keep ALL errors/warnings, ALL ibtusb/ibtpci, and at least 1000 normal events. Sorted oldest to newest."""
+    import xml.etree.ElementTree as ET
+    import win32evtlog
+    
+    path = request.json.get('path')
+    print(f"\n[UI View] 🔍 Scanning Event Log: {path}")
     
     if not path or not os.path.exists(path):
         return jsonify({'error': 'Invalid path'}), 400
     
     try:
-        # Use wevtutil to export .evt to XML
-        with tempfile.NamedTemporaryFile(mode='w', suffix='.xml', delete=False) as tmp:
-            tmp_path = tmp.name
-        
-        # Export event log to XML format
-        result = subprocess.run(
-            ['wevtutil', 'qe', path, '/lf:true', '/f:xml'],
-            capture_output=True,
-            text=True,
-            encoding='utf-8',
-            errors='replace'
+        # Read from newest to oldest (Reverse Direction) to ensure the 1000 normal logs captured are the most recent
+        query_handle = win32evtlog.EvtQuery(
+            path, 
+            win32evtlog.EvtQueryFilePath | win32evtlog.EvtQueryReverseDirection, 
+            None
         )
         
-        if result.returncode != 0:
-            return jsonify({'error': f'wevtutil failed: {result.stderr}'}), 500
+        events_list = []
+        special_sources = ['ibtusb', 'ibtpci']
         
-        xml_content = result.stdout
+        normal_kept = 0
+        total_scanned = 0
         
-        # Parse XML and extract events
-        events = []
-        
-        # Wrap in root element for valid XML
-        xml_content = f'<Events>{xml_content}</Events>'
-        
-        try:
-            root = ET.fromstring(xml_content)
-            
-            ns = {'e': 'http://schemas.microsoft.com/win/2004/08/events/event'}
-            
-            for event in root.findall('.//e:Event', ns):
-                system = event.find('e:System', ns)
-                event_data = event.find('e:EventData', ns)
+        while True:
+            # Read 100 events at a time
+            events = win32evtlog.EvtNext(query_handle, 100)
+            if not events:
+                break  # End of file reached
                 
-                if system is not None:
-                    time_created = system.find('e:TimeCreated', ns)
+            for event in events:
+                total_scanned += 1
+                try:
+                    xml_content = win32evtlog.EvtRender(event, win32evtlog.EvtRenderEventXml)
+                    root = ET.fromstring(xml_content)
+                    ns = {'e': 'http://schemas.microsoft.com/win/2004/08/events/event'}
+                    
+                    system = root.find('e:System', ns)
+                    if system is None:
+                        continue
+                        
+                    level_elem = system.find('e:Level', ns)
+                    level_val = level_elem.text if level_elem is not None else ''
+                    
                     provider = system.find('e:Provider', ns)
+                    source = provider.get('Name', '') if provider is not None else ''
+                    
+                    # 💡 FILTERING LOGIC 💡
+                    # Condition 1: Important levels (1=Critical, 2=Error, 3=Warning)
+                    # Condition 2: Special sources (ibtusb, ibtpci)
+                    is_important_level = level_val in ['1', '2', '3']
+                    is_special_source = any(kw in source.lower() for kw in special_sources)
+                    
+                    # If it is neither an important level nor a special source (i.e., normal Information)
+                    if not (is_important_level or is_special_source):
+                        # Keep only the latest 1000 normal logs
+                        if normal_kept >= 1000:
+                            continue  # Skip if we already have 1000 normal logs
+                        normal_kept += 1
+                        
+                    # Parse the data and add it to the list
+                    time_created = system.find('e:TimeCreated', ns)
+                    time_str = time_created.get('SystemTime', '')[:19].replace('T', ' ') if time_created is not None else 'Unknown'
+                    
                     event_id = system.find('e:EventID', ns)
-                    level = system.find('e:Level', ns)
+                    id_str = event_id.text if event_id is not None else 'Unknown'
                     
-                    # Map level number to text
                     level_map = {'1': 'Critical', '2': 'Error', '3': 'Warning', '4': 'Information', '5': 'Verbose'}
-                    level_text = level_map.get(level.text if level is not None else '', 'Unknown')
+                    level_text = level_map.get(level_val, 'Unknown')
                     
-                    # Get message from EventData
+                    event_data = root.find('e:EventData', ns)
                     message = ''
                     if event_data is not None:
                         data_items = event_data.findall('e:Data', ns)
                         message = ' | '.join([d.text or '' for d in data_items if d.text])
                     
-                    events.append({
-                        'time': time_created.get('SystemTime', '')[:19].replace('T', ' ') if time_created is not None else '',
+                    events_list.append({
+                        'time': time_str,
                         'level': level_text,
-                        'source': provider.get('Name', '') if provider is not None else '',
-                        'event_id': event_id.text if event_id is not None else '',
-                        'message': message[:500]  # Limit message length
+                        'source': source,
+                        'event_id': id_str,
+                        'message': message[:500]
                     })
-        except ET.ParseError as e:
-            print(f"XML parse error: {e}")
-            return jsonify({'error': f'Failed to parse event log XML: {str(e)}'}), 500
+                        
+                except Exception:
+                    continue
+                    
+        print(f"[UI View] ✅ Scan complete! Scanned {total_scanned} events. Kept {len(events_list)} events (including {normal_kept} normal logs).")
         
-        # Return latest events first
-        events = events[:500]  # Limit to 500 events
+        # ⭐ Crucial step: Reverse the collected logs from "New -> Old" to "Old -> New" for chronological web display
+        events_list.reverse()
         
-        return jsonify({'events': events})
+        return jsonify({'events': events_list})
         
     except Exception as e:
         print(f"Error parsing event log: {e}")
         import traceback
         traceback.print_exc()
         return jsonify({'error': str(e)}), 500
+
+def handle_get_bt_event_map():
+    """Read the local JSON file and provide the BT Event ID map to the frontend."""
+    import json
+    
+    # Locate the JSON file in the configs directory
+    base_dir = os.path.abspath(os.path.dirname(__file__))
+    json_path = os.path.join(base_dir, '..', '..', 'configs', 'bt_event_id_map.json')
+    
+    try:
+        if os.path.exists(json_path):
+            with open(json_path, 'r', encoding='utf-8') as f:
+                event_map = json.load(f)
+            return jsonify(event_map)
+        else:
+            print(f"[Warning] BT Event map JSON not found at: {json_path}")
+            return jsonify({})
+    except Exception as e:
+        print(f"[Error] Failed to read BT Event map JSON: {e}")
+        return jsonify({})

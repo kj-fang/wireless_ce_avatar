@@ -51,13 +51,13 @@ def process_etl_path_fw():
     case_context = CaseContext.from_session(case_context)
 
     fw_path = request.args.get("fw_path")
-    result = None
+    results = None
 
     subprocess.run(['explorer', '/select,', fw_path])
 
     if case_context.wifi_or_bt in ['wifi', 'bt']:
-        result = fw_service.analyze(fw_path, case_context.wifi_or_bt)
+        results = fw_service.analyze(fw_path, case_context.wifi_or_bt)
     else:
         return "❌ Unknown case subcategory", 400
     
-    return render_template("fw_analysis.html", fw_path=fw_path, result=result)
+    return render_template("fw_analysis.html", fw_path=fw_path, system_info=results['system_info'], system_text=results['system_text'], log=results['log'])

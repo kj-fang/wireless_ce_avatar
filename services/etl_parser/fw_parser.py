@@ -4,6 +4,7 @@ import psutil
 import sys, os, ctypes
 import time
 import glob
+import json
 
 DECODER_EXE = r"C:\UtilityPackage\uSnifferAutoParser\uSnifferAutoParser.exe"
 
@@ -169,58 +170,147 @@ def fw_wifi_analysis(fw_path: str, timeout: int = 30):
 
 
 
-def fw_bt_analysis(fw_path):
+def fw_bt_analysis(fw_path, use_cli=True):
     """
     Launch WRT_BT_Decoder.exe with elevation and attach UI (via window detection)
     """
     global active_fw_pid
     exe_path = r"C:\UtilityPackage\WRT_BT_Logs_Decoder\WRT_BT_Decoder.exe"
+    exe_cli_path = r"C:\UtilityPackage\WRT_BT_Logs_Decoder\bt_decoder_cli.exe"
 
-    if not os.path.exists(exe_path):
-        return f"❌ Executable not found: {exe_path}"
+    if use_cli:
+        if not os.path.exists(exe_cli_path):
+            return f"❌ CLI executable not found: {exe_cli_path}"
+    
+        try:
+            print(f"🔍 Debug: Running CLI decoder with fw_path={fw_path}")
+            arguments = ["-e", fw_path, "-autoFetchDevTrace_Headers"]
+            result = subprocess.run(
+                [exe_cli_path] + arguments,
+                capture_output=True,
+                encoding='utf-8'
+            )
+            
+            print("✅ Debug: FW bt decoder CLI is completed successfully.")
+            sysmon_text = _get_sysmon_to_text(fw_path)
+            system_info = _get_system_info(fw_path)
+            return system_info, sysmon_text, result.stdout
 
+        except subprocess.CalledProcessError as e:
+            print(f"❌ Failed to launch bt_decoder_cli.exe, (Error Code {e.returncode}):")
+            print(e.stderr)
+        except Exception as e:
+            print(f"❌ Unexpected error: {e}")
+
+    else:
+            
+        if not os.path.exists(exe_path):
+            return f"❌ Executable not found: {exe_path}"
+
+        try:
+            
+            params = f'"{fw_path}"'
+            print(f"🔍 Debug: Launching exe with params={params}")
+            rc = ctypes.windll.shell32.ShellExecuteW(
+                None, "runas", exe_path, params, os.path.dirname(exe_path), 1
+            )
+            if rc <= 32:
+                return f"❌ Failed to launch WRT_BT_Decoder.exe, code={rc}"
+
+            
+            win, handle, pid = None, None, None
+            for i in range(20):
+                try:
+                    desktop = Desktop(backend="uia")
+                    for w in desktop.windows():
+                        title = (w.window_text() or "").strip()
+                        if "WRT" in title and "Decoder" in title:
+                            win, handle, pid = w, w.handle, w.process_id()
+                            print(f"✅ Debug: Found window '{title}' (handle={handle}, pid={pid}) after {i+1}s")
+                            break
+                except Exception as e:
+                    print(f"⚠️ Debug: Window search error: {e}")
+                if win:
+                    break
+                time.sleep(1)
+
+            if not win:
+                return "❌ Could not detect WRT_BT_Decoder.exe window after waiting."
+
+            active_fw_pid = pid
+            print(f"🔍 Debug: Active PID set to {active_fw_pid}")
+
+        
+            app = Application(backend="uia").connect(handle=handle, timeout=10)
+            print(f"✅ Connected to WRT_BT_Decoder.exe via window handle (PID={pid})")
+
+            list_controls_clean(app)
+            return f"✅ FW Analysis launched for {fw_path}"
+        except Exception as e:
+            return f"❌ Unexpected error: {str(e)}"
+
+def _get_system_info(fw_path):
+    
+    fw_dir = os.path.dirname(fw_path)
+    system_info_path = os.path.join(fw_dir, "system_info.txt")
+    with open(system_info_path, 'r') as file:
+        system_info = json.load(file)
+        return {
+            "BT Driver Version": system_info['Versions']['BT Driver Version'],
+            "Wi-Fi Driver Version": system_info['Versions']['Wi-Fi Driver Version'],
+            "Device Name": system_info['Device Name'],
+            "BT FW SHA1": system_info['BT FW SHA1'],
+            "Wi-Fi Adapter": system_info['Wi-Fi Adapter'],
+            "OS Information": system_info['OS Information'],
+            "Intel® Smart Sound Technology BUS": system_info['IntelÂ® Smart Sound Technology BUS'],
+            "Intel® Smart Sound Technology OED": system_info['IntelÂ® Smart Sound Technology OED'],
+            "Intel® Smart Sound Technology for Bluetooth® Audio": system_info['IntelÂ® Smart Sound Technology for BluetoothÂ® Audio'],
+            "WRT::2G Version": system_info['Versions']['WRT::2G Version'],
+            "preset": system_info['preset'],
+            "BT FW Config": system_info['BT FW Config'],
+            "Dbgc Status Global as seen by BT": system_info['Dbgc Status Global as seen by BT'],
+            "Dbgc Status as read from Mailbox": system_info['Dbgc Status as read from Mailbox'],
+        }
+
+def _get_sysmon_to_text(fw_path):
+
+    fw_dir = os.path.dirname(fw_path)
+    eventid = _get_eventid_from_summary(fw_path)
+    if not eventid:
+        print("❌ Cannot get Event ID, aborting sysmon log extraction.")
+        return None
     try:
-        
-        params = f'"{fw_path}"'
-        print(f"🔍 Debug: Launching exe with params={params}")
-        rc = ctypes.windll.shell32.ShellExecuteW(
-            None, "runas", exe_path, params, os.path.dirname(exe_path), 1
-        )
-        if rc <= 32:
-            return f"❌ Failed to launch WRT_BT_Decoder.exe, code={rc}"
-
-        
-        win, handle, pid = None, None, None
-        for i in range(20):
-            try:
-                desktop = Desktop(backend="uia")
-                for w in desktop.windows():
-                    title = (w.window_text() or "").strip()
-                    if "WRT" in title and "Decoder" in title:
-                        win, handle, pid = w, w.handle, w.process_id()
-                        print(f"✅ Debug: Found window '{title}' (handle={handle}, pid={pid}) after {i+1}s")
-                        break
-            except Exception as e:
-                print(f"⚠️ Debug: Window search error: {e}")
-            if win:
-                break
-            time.sleep(1)
-
-        if not win:
-            return "❌ Could not detect WRT_BT_Decoder.exe window after waiting."
-
-        active_fw_pid = pid
-        print(f"🔍 Debug: Active PID set to {active_fw_pid}")
-
-       
-        app = Application(backend="uia").connect(handle=handle, timeout=10)
-        print(f"✅ Connected to WRT_BT_Decoder.exe via window handle (PID={pid})")
-
-        list_controls_clean(app)
-        return f"✅ FW Analysis launched for {fw_path}"
+        for file in os.listdir(fw_dir):
+            if os.path.isdir(os.path.join(fw_dir, file)) and file.endswith(eventid):
+                sysmon_dir = os.path.join(fw_dir, file)
+                for candidate in os.listdir(sysmon_dir):
+                    if candidate.endswith(".sysmon"):
+                        sysmon_path = os.path.join(sysmon_dir, candidate)
+                        with open("\\\\?\\"+sysmon_path, 'r') as f:
+                            return f.read()
     except Exception as e:
-        return f"❌ Unexpected error: {str(e)}"
+        print(f"❌ Error while searching for sysmon log: {e}")
+        return None
 
+def _get_eventid_from_summary(fw_path):
+    if not os.path.exists(fw_path) or not fw_path.endswith(".etl"):
+        print(f"❌ ETL file not found: {fw_path}")
+        return None
+    
+    summary_path = fw_path[:-4] + "decodeSummary.json"
+
+    if not os.path.exists(summary_path):
+        print(f"❌ Summary file not found: {summary_path}")
+        return None
+    try:
+        with open(summary_path, 'r') as f:
+            summary_data = json.load(f)
+            event_id = summary_data['dumpInfo']['dumps'][0]['dumps'][0]['eventID']
+            print(f"✅ Extracted Event ID: {event_id} from summary")
+            return str(event_id)
+    except Exception as e:
+        print(f"❌ Failed to read summary file: {e}")
+        return None
 
 def launch_decoder(fw_path):
     exe_path = r"C:\UtilityPackage\WRT_BT_Logs_Decoder\WRT_BT_Decoder.exe"

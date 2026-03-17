@@ -18,14 +18,6 @@
             font-family: 'Press Start 2P', cursive !important;
         }
         
-        /* Hide SVGator watermark */
-        #epU2ASd7C0s22,
-        #epU2ASd7C0s22 * {
-            opacity: 0 !important;
-            visibility: hidden !important;
-            display: none !important;
-        }
-        
         body {
             background-color: #f8f9fa;
             font-family: 'Segoe UI', Tahoma, Geneva, Verdana, sans-serif;
@@ -52,6 +44,104 @@
             image-rendering: -webkit-optimize-contrast;
             image-rendering: crisp-edges;
         }
+
+        /* Tab Styles */
+        .tabs-container {
+            max-width: 35%;
+            margin: 50px auto 0;
+        }
+        .tabs {
+            display: flex;
+            border-bottom: 2px solid #ddd;
+            margin-bottom: 20px;
+        }
+        .tab {
+            flex: 1;
+            padding: 12px 20px;
+            text-align: center;
+            cursor: pointer;
+            background-color: #f8f9fa;
+            border: none;
+            border-bottom: 3px solid transparent;
+            transition: all 0.3s ease;
+            border-radius: 5px;
+            font-weight: 500;
+            color: #666;
+        }
+        .tab:hover {
+            background-color: #e9ecef;
+            color: #1177c0;
+        }
+        .tab.active {
+            background-color: #1177c0;
+            color: white;
+        }
+        .tab-content {
+            display: none;
+        }
+        .tab-content.active {
+            display: block;
+        }
+        
+        /* File Upload Styles */
+        .upload-zone {
+            border: 2px dashed #0068B6;
+            border-radius: 12px;
+            padding: 10px 40px;
+            text-align: center;
+            background-color: #f8f9fa;
+            cursor: pointer;
+            transition: all 0.3s ease;
+        }
+        .upload-zone:hover {
+            background-color: #e3f2fd;
+            border-color: #0056a0;
+        }
+        .upload-zone.drag-over {
+            background-color: #bbdefb;
+            border-color: #0056a0;
+        }
+        .file-list {
+            margin-top: 20px;
+        }
+        .file-item {
+            display: flex;
+            justify-content: space-between;
+            align-items: center;
+            padding: 10px 15px;
+            background-color: #f8f9fa;
+            border-radius: 8px;
+            margin-bottom: 8px;
+        }
+        .file-item-info {
+            display: flex;
+            align-items: center;
+            gap: 10px;
+        }
+        .file-remove {
+            cursor: pointer;
+            color: #dc3545;
+            font-weight: bold;
+        }
+        .upload-submit-btn {
+            width: 100%;
+            padding: 12px;
+            margin-top: 20px;
+            background-color: #0068B6;
+            color: white;
+            border: none;
+            border-radius: 25px;
+            font-weight: 600;
+            cursor: pointer;
+            transition: all 0.3s ease;
+        }
+        .upload-submit-btn:hover {
+            background-color: #0056a0;
+        }
+        .upload-submit-btn:disabled {
+            background-color: #ccc;
+            cursor: not-allowed;
+        }        
     </style>
 </head>
 
@@ -76,8 +166,16 @@
         </div>
     </div>
 
-    <!-- 📁 Case Number block -->
-    <div id="form-box" style="max-width:35%; margin: 100px auto;">
+    <!-- Tabs Container -->
+    <div class="tabs-container" id="tabs-container">
+        <div class="tabs">
+            <button class="tab active" onclick="switchTab('case-number')" style="font-weight:bold;">Case Number Analysis</button>
+            <button class="tab" onclick="switchTab('local-upload')" style="font-weight:bold;">Local File Upload</button>
+        </div>
+
+        <!-- Tab 1: Case Number Analysis -->
+        <div id="case-number-tab" class="tab-content active">
+            <div id="form-box">
         <form id="mainForm" method="post" onsubmit="handleSubmit(event)">
             <div style="display: flex; gap: 0; margin-bottom: 15px; position: relative;">
                 <select id="action_type" class="form-control" style="border-radius: 25px 0 0 25px; padding: 8px 12px 8px 20px; width: auto; min-width: 100px; border-right: none; background-color: #0068B6 ; color: rgb(255, 255, 255); font-weight: bold;">
@@ -86,11 +184,34 @@
                     <option value="etl_llm" style="background-color: white; color: black;">ETL Analysis with LLM</option>
                 </select>
                 <input type="text" class="form-control" id="case_number" name="case_number" placeholder="Enter case number here" value="" required style="border-radius: 0 25px 25px 0; padding: 12px 50px 12px 20px; flex: 1;">
-                <button type="submit" class="btn btn-primary" aria-label="Search" style="position: absolute; right: 5px; top: 50%; transform: translateY(-50%); border-radius: 20px; padding: 6px 12px; font-size: 14px; background-color: transparent; border-color: transparent;">
+                <button type="submit" class="btn btn-primary" style="position: absolute; right: 5px; top: 50%; transform: translateY(-50%); border-radius: 20px; padding: 6px 12px; font-size: 14px; background-color: transparent; border-color: transparent;">
                     <img src="../static/Magnifying_glass.svg" alt="Search" style="width: 20px; height: 20px;">
                 </button>
             </div>
         </form>
+            </div>
+        </div>
+
+        <!-- Tab 2: Local File Upload -->
+        <div id="local-upload-tab" class="tab-content">
+                <div class="upload-zone" id="upload-zone" onclick="document.getElementById('file-input').click()">
+                    <input type="file" id="file-input" multiple accept=".log,.txt,.etl,.zip,.evtx,.dmp" style="display: none;" onchange="handleFileSelect(event)">
+                    <div>
+                        <svg xmlns="http://www.w3.org/2000/svg" width="32" height="32" fill="#0068B6" viewBox="0 0 16 16" style="margin-bottom: 10px;">
+                            <path d="M.5 9.9a.5.5 0 0 1 .5.5v2.5a1 1 0 0 0 1 1h12a1 1 0 0 0 1-1v-2.5a.5.5 0 0 1 1 0v2.5a2 2 0 0 1-2 2H2a2 2 0 0 1-2-2v-2.5a.5.5 0 0 1 .5-.5z"/>
+                            <path d="M7.646 1.146a.5.5 0 0 1 .708 0l3 3a.5.5 0 0 1-.708.708L8.5 2.707V11.5a.5.5 0 0 1-1 0V2.707L5.354 4.854a.5.5 0 1 1-.708-.708l3-3z"/>
+                        </svg>
+                        <h5 style="color: #0068B6; margin-bottom: 10px;">Drop files here or click to browse</h5>
+                        <p style="color: #666; font-size: 14px; margin: 0;">Supported: .etl</div></p>
+                    </div>
+                </div>
+
+                <div id="file-list" class="file-list"></div>
+
+                <button id="upload-submit-btn" class="upload-submit-btn" onclick="submitLocalUpload()" disabled>
+                    Start Analysis
+                </button>
+            </div>
     </div>
 
     <!-- 🔄 Loading indicator section -->
@@ -311,6 +432,148 @@
                 }
             });
         });
+        // Tab Switching
+        function switchTab(tabName) {
+            // Hide all tab contents
+            document.querySelectorAll('.tab-content').forEach(content => {
+                content.classList.remove('active');
+            });
+            
+            // Remove active class from all tabs
+            document.querySelectorAll('.tab').forEach(tab => {
+                tab.classList.remove('active');
+            });
+            
+            // Show selected tab content
+            if (tabName === 'case-number') {
+                document.getElementById('case-number-tab').classList.add('active');
+                document.querySelectorAll('.tab')[0].classList.add('active');
+            } else if (tabName === 'local-upload') {
+                document.getElementById('local-upload-tab').classList.add('active');
+                document.querySelectorAll('.tab')[1].classList.add('active');
+            }
+        }
+
+        // File Upload Handling
+        let selectedFiles = [];
+
+        function handleFileSelect(event) {
+            const files = Array.from(event.target.files);
+            files.forEach(file => {
+                if (!selectedFiles.find(f => f.name === file.name && f.size === file.size)) {
+                    selectedFiles.push(file);
+                }
+            });
+            updateFileList();
+            event.target.value = ''; // Reset input
+        }
+
+        function updateFileList() {
+            const fileList = document.getElementById('file-list');
+            const submitBtn = document.getElementById('upload-submit-btn');
+            
+            fileList.innerHTML = '';
+            
+            if (selectedFiles.length === 0) {
+                submitBtn.disabled = true;
+                return;
+            }
+            
+            submitBtn.disabled = false;
+            
+            selectedFiles.forEach((file, index) => {
+                const fileItem = document.createElement('div');
+                fileItem.className = 'file-item';
+                fileItem.innerHTML = `
+                    <div class="file-item-info">
+                        <span>📄</span>
+                        <span style="font-weight: 500;">${file.name}</span>
+                        <span style="color: #666; font-size: 12px;">(${formatFileSize(file.size)})</span>
+                    </div>
+                    <span class="file-remove" onclick="removeFile(${index})">✕</span>
+                `;
+                fileList.appendChild(fileItem);
+            });
+        }
+
+        function removeFile(index) {
+            selectedFiles.splice(index, 1);
+            updateFileList();
+        }
+
+        function formatFileSize(bytes) {
+            if (bytes < 1024) return bytes + ' B';
+            if (bytes < 1024 * 1024) return (bytes / 1024).toFixed(1) + ' KB';
+            return (bytes / (1024 * 1024)).toFixed(1) + ' MB';
+        }
+
+        // Drag and Drop
+        const uploadZone = document.getElementById('upload-zone');
+        
+        uploadZone.addEventListener('dragover', (e) => {
+            e.preventDefault();
+            uploadZone.classList.add('drag-over');
+        });
+        
+        uploadZone.addEventListener('dragleave', () => {
+            uploadZone.classList.remove('drag-over');
+        });
+        
+        uploadZone.addEventListener('drop', (e) => {
+            e.preventDefault();
+            uploadZone.classList.remove('drag-over');
+            const files = Array.from(e.dataTransfer.files);
+            files.forEach(file => {
+                if (!selectedFiles.find(f => f.name === file.name && f.size === file.size)) {
+                    selectedFiles.push(file);
+                }
+            });
+            updateFileList();
+        });
+
+        // Submit Local Upload
+        async function submitLocalUpload() {
+            if (selectedFiles.length === 0) {
+                alert('⚠️ Please select at least one file!');
+                return;
+            }
+
+            const analysisType = document.getElementById('analysis-type').value;
+            const formData = new FormData();
+            
+            selectedFiles.forEach(file => {
+                formData.append('files', file);
+            });
+            formData.append('analysis_type', analysisType);
+
+            // Show loading
+            document.getElementById('tabs-container').style.display = 'none';
+            document.getElementById('loading-box').style.display = 'block';
+            startLogs();
+
+            try {
+                const response = await fetch('/log_parser/upload_local_analysis', {
+                    method: 'POST',
+                    body: formData
+                });
+
+                if (response.ok) {
+                    const result = await response.json();
+                    if (result.redirect) {
+                        window.location.href = result.redirect;
+                    } else {
+                        alert('✅ Analysis completed successfully!');
+                        window.location.reload();
+                    }
+                } else {
+                    throw new Error('Upload failed with status: ' + response.status);
+                }
+            } catch (error) {
+                alert('❌ Error occurred: ' + error.message);
+                document.getElementById('tabs-container').style.display = 'block';
+                document.getElementById('loading-box').style.display = 'none';
+            }
+        }
     </script>
 
     <!-- Toggle loading view (for design preview) -->

@@ -3,6 +3,26 @@ import os
 from datetime import datetime
 from flask import session
 
+#-----------ZIP ATTACHMENT SELECTION--------------
+def pick_latest_zip_attachment(attachment_list):
+    """Return the ZIP attachment with the most recent datetime metadata.
+    Falls back to the first ZIP found if no datetime can be parsed."""
+    zip_attachments = [item for item in (attachment_list or []) if item and str(item[0]).lower().endswith('.zip')]
+    if not zip_attachments:
+        return None
+
+    def parse_attachment_datetime(item):
+        try:
+            metadata = item[2] if len(item) > 2 else None
+            raw_dt = metadata[0] if isinstance(metadata, (list, tuple)) and metadata else None
+            if isinstance(raw_dt, datetime):
+                return raw_dt
+        except Exception:
+            pass
+        return datetime.min
+
+    return max(zip_attachments, key=parse_attachment_datetime)
+
 #-----------LATEST ETL LLM UTILS--------------
 def get_auto_analysis_etl(wifi_dict, ddd_dict):
     if not session.get('latest_etl_llm'):

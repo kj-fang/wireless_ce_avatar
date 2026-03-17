@@ -83,6 +83,7 @@
                 <select id="action_type" class="form-control" style="border-radius: 25px 0 0 25px; padding: 8px 12px 8px 20px; width: auto; min-width: 100px; border-right: none; background-color: #0068B6 ; color: rgb(255, 255, 255); font-weight: bold;">
                     <option value="submit" style="background-color: white; color: black;">Submit</option>
                     <option value="etl" style="background-color: white; color: black;">ETL Analysis</option>
+                    <option value="etl_llm" style="background-color: white; color: black;">ETL Analysis with LLM</option>
                 </select>
                 <input type="text" class="form-control" id="case_number" name="case_number" placeholder="Enter case number here" value="" required style="border-radius: 0 25px 25px 0; padding: 12px 50px 12px 20px; flex: 1;">
                 <button type="submit" class="btn btn-primary" aria-label="Search" style="position: absolute; right: 5px; top: 50%; transform: translateY(-50%); border-radius: 20px; padding: 6px 12px; font-size: 14px; background-color: transparent; border-color: transparent;">
@@ -183,6 +184,9 @@
             } else if (actionType === 'etl') {
                 // ETL Analysis
                 await runLatestETL(caseNumber);
+            } else if (actionType === 'etl_llm') {
+                // ETL Analysis with LLM
+                await runLatestETLWithLLM(caseNumber);    
             } else {
                 alert("❌ Unsupported action selected. Please choose a valid option and try again.");
             }
@@ -215,6 +219,34 @@
             } catch (error) {
                 alert('❌ Error occurred: ' + error);
                 // Restore the original view if needed.
+                document.getElementById('form-box').style.display = 'block';
+                document.getElementById('loading-box').style.display = 'none';
+            }
+        }
+
+        // Function to trigger LLM-based ETL analysis
+        async function runLatestETLWithLLM(caseNumber) {
+            document.getElementById('form-box').style.display = 'none';
+            document.getElementById('loading-box').style.display = 'block';
+            startLogs();
+
+            try {
+                const response = await fetch('/start_latest_etl_llm', {
+                    method: 'POST',
+                    headers: {
+                        'Content-Type': 'application/x-www-form-urlencoded',
+                    },
+                    body: `case_number=${encodeURIComponent(caseNumber)}`
+                });
+
+                const data = await response.json();
+                if (!response.ok || !data.success) {
+                    throw new Error(data.message || (`Server returned error ${response.status}`));
+                }
+
+                window.location.href = data.redirect_url;
+            } catch (error) {
+                alert('❌ Error occurred: ' + error.message);
                 document.getElementById('form-box').style.display = 'block';
                 document.getElementById('loading-box').style.display = 'none';
             }

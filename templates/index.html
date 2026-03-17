@@ -47,7 +47,7 @@
 
         /* Tab Styles */
         .tabs-container {
-            max-width: 35%;
+            width: 480px;
             margin: 50px auto 0;
         }
         .tabs {
@@ -141,7 +141,15 @@
         .upload-submit-btn:disabled {
             background-color: #ccc;
             cursor: not-allowed;
-        }        
+        }
+        .action-type-select {
+            width: 160px !important;
+            min-width: 160px !important;
+            max-width: 160px !important;
+            white-space: nowrap;
+            overflow: hidden;
+            text-overflow: ellipsis;            text-align: center;
+            text-align-last: center;        }
     </style>
 </head>
 
@@ -178,7 +186,7 @@
             <div id="form-box">
         <form id="mainForm" method="post" onsubmit="handleSubmit(event)">
             <div style="display: flex; gap: 0; margin-bottom: 15px; position: relative;">
-                <select id="action_type" class="form-control" style="border-radius: 25px 0 0 25px; padding: 8px 12px 8px 20px; width: auto; min-width: 100px; border-right: none; background-color: #0068B6 ; color: rgb(255, 255, 255); font-weight: bold;">
+                <select id="action_type" class="form-control action-type-select" style="border-radius: 25px 0 0 25px; padding: 8px 15px 8px 10px; border-right: none; background-color: #0068B6 ; color: rgb(255, 255, 255); font-weight: bold;">
                     <option value="submit" style="background-color: white; color: black;">Submit</option>
                     <option value="etl" style="background-color: white; color: black;">ETL Analysis</option>
                     <option value="etl_llm" style="background-color: white; color: black;">ETL Analysis with LLM</option>
@@ -196,13 +204,13 @@
         <div id="local-upload-tab" class="tab-content">
                 <div class="upload-zone" id="upload-zone" onclick="document.getElementById('file-input').click()">
                     <input type="file" id="file-input" multiple accept=".log,.txt,.etl,.zip,.evtx,.dmp" style="display: none;" onchange="handleFileSelect(event)">
-                    <div>
+                    <div style="pointer-events: none;">
                         <svg xmlns="http://www.w3.org/2000/svg" width="32" height="32" fill="#0068B6" viewBox="0 0 16 16" style="margin-bottom: 10px;">
                             <path d="M.5 9.9a.5.5 0 0 1 .5.5v2.5a1 1 0 0 0 1 1h12a1 1 0 0 0 1-1v-2.5a.5.5 0 0 1 1 0v2.5a2 2 0 0 1-2 2H2a2 2 0 0 1-2-2v-2.5a.5.5 0 0 1 .5-.5z"/>
                             <path d="M7.646 1.146a.5.5 0 0 1 .708 0l3 3a.5.5 0 0 1-.708.708L8.5 2.707V11.5a.5.5 0 0 1-1 0V2.707L5.354 4.854a.5.5 0 1 1-.708-.708l3-3z"/>
                         </svg>
-                        <h5 style="color: #0068B6; margin-bottom: 10px;">Drop files here or click to browse</h5>
-                        <p style="color: #666; font-size: 14px; margin: 0;">Supported: .etl</div></p>
+                        <h5 style="color: #0068B6; margin-bottom: 10px;">Click to browse</h5>
+                        <p style="color: #666; font-size: 14px; margin: 0;">Supported: .etl</p>
                     </div>
                 </div>
 
@@ -507,20 +515,39 @@
             return (bytes / (1024 * 1024)).toFixed(1) + ' MB';
         }
 
+        // Prevent browser from navigating when files are dropped anywhere on the page
+        document.addEventListener('dragover', (e) => e.preventDefault());
+        document.addEventListener('drop', (e) => e.preventDefault());
+
         // Drag and Drop
         const uploadZone = document.getElementById('upload-zone');
-        
-        uploadZone.addEventListener('dragover', (e) => {
+        let dragCounter = 0;
+
+        uploadZone.addEventListener('dragenter', (e) => {
             e.preventDefault();
+            e.stopPropagation();
+            dragCounter++;
             uploadZone.classList.add('drag-over');
         });
-        
-        uploadZone.addEventListener('dragleave', () => {
-            uploadZone.classList.remove('drag-over');
+
+        uploadZone.addEventListener('dragover', (e) => {
+            e.preventDefault();
+            e.stopPropagation();
+            e.dataTransfer.dropEffect = 'copy';
         });
-        
+
+        uploadZone.addEventListener('dragleave', (e) => {
+            e.stopPropagation();
+            dragCounter--;
+            if (dragCounter === 0) {
+                uploadZone.classList.remove('drag-over');
+            }
+        });
+
         uploadZone.addEventListener('drop', (e) => {
             e.preventDefault();
+            e.stopPropagation();
+            dragCounter = 0;
             uploadZone.classList.remove('drag-over');
             const files = Array.from(e.dataTransfer.files);
             files.forEach(file => {
@@ -537,14 +564,11 @@
                 alert('⚠️ Please select at least one file!');
                 return;
             }
-
-            const analysisType = document.getElementById('analysis-type').value;
             const formData = new FormData();
             
             selectedFiles.forEach(file => {
                 formData.append('files', file);
             });
-            formData.append('analysis_type', analysisType);
 
             // Show loading
             document.getElementById('tabs-container').style.display = 'none';
@@ -557,16 +581,16 @@
                     body: formData
                 });
 
-                if (response.ok) {
-                    const result = await response.json();
-                    if (result.redirect) {
-                        window.location.href = result.redirect;
-                    } else {
-                        alert('✅ Analysis completed successfully!');
-                        window.location.reload();
-                    }
+                const result = await response.json();
+                if (!response.ok || !result.success) {
+                    throw new Error(result.message || ('Upload failed with status: ' + response.status));
+                }
+
+                if (result.redirect) {
+                    window.location.href = result.redirect;
                 } else {
-                    throw new Error('Upload failed with status: ' + response.status);
+                    alert('✅ Analysis completed successfully!');
+                    window.location.reload();
                 }
             } catch (error) {
                 alert('❌ Error occurred: ' + error.message);

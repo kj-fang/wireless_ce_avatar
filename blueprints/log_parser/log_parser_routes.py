@@ -1,7 +1,9 @@
 from flask import Blueprint, render_template, request, session, redirect, url_for, flash, Response, jsonify
 import json
 import os 
+import datetime
 from urllib.parse import unquote
+from werkzeug.utils import secure_filename
 
 from utils import helpers
 from configs.global_configs import app_config
@@ -10,6 +12,7 @@ from models.models import CaseContext
 
 from services.log_parser_file_manage_service import FileManagerService
 from services.log_parser_service import LogParserService
+from services.etl_parser.wpp_ddd_parser import wpp_ddd_parser_run
 
 log_parser_bp = Blueprint("log_parser", __name__, url_prefix="/log_parser")
 
@@ -35,6 +38,46 @@ def upload():
     upload_type = request.form.get('type')
     result = file_manager_service.handle_file_upload(upload_type, request.files)
     return result
+
+
+#------------Section for Local Analysis file uploaded -------------#
+
+@log_parser_bp.route('/upload_local_analysis', methods=['POST'])
+def upload_local_analysis():
+    files = request.files.getlist('files')
+    if not files:
+        return jsonify({'success': False, 'message': 'No file uploaded'}), 400
+
+    etl_file = files[0]
+
+    base_upload_dir = app_config.avatarfiles_dir or os.getcwd()
+    timestamp = datetime.datetime.now().strftime('%Y%m%d_%H%M%S')
+    upload_dir = os.path.join(base_upload_dir, 'local_uploads', f'run_{timestamp}')
+    os.makedirs(upload_dir, exist_ok=True)
+
+    safe_name = secure_filename(etl_file.filename)
+    if not safe_name:
+        safe_name = f'uploaded_{timestamp}.etl'
+
+    etl_path = os.path.join(upload_dir, safe_name)
+
+    try:
+        etl_file.save(etl_path)
+        session['download_path'] = upload_dir
+        session['classification'] = {
+            'issue_type': 'Unclassified',
+            'confidence': 0,
+            'keywords_found': []
+        }
+
+        wpp_ddd_parser_run(etl_path)
+    except Exception as e:
+        return jsonify({'success': False, 'message': f'Failed local analysis flow: {str(e)}'}), 500
+
+    return jsonify({
+        'success': True,
+        'redirect': url_for('log_parser.log_parser', etl_path=etl_path)
+    })
 
 
 @log_parser_bp.route("/edit_prompt", methods=["POST"])

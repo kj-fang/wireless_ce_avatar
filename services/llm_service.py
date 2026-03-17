@@ -1,3 +1,5 @@
+from logging import log
+
 import requests
 import json
 import re
@@ -5,6 +7,7 @@ import urllib3
 import openai
 import httpx
 from pathlib import Path
+from textwrap import dedent
 from utils import helpers
 
 
@@ -194,11 +197,20 @@ class LLM_helper:
             print(f"Failed to make inference request: {e}")
             return {}
     
-    def analyze_log(self, system_content, log=None):
+    def analyze_log(self, system_content, log=None, case_description=None):
 
-        user_content = (
-            f"""logs: {log}\n"""
-        )
+        if case_description:
+            user_content = dedent(f"""
+                **Case Description Context:**
+                {case_description}
+
+                Use the above case description and the timestamp as context when analyzing the logs below.
+
+                logs: {log}
+            """).strip()
+        else:
+            user_content = f"logs: {log}"
+
         print("client:", self.client)
         try:
             response = self.client.chat.completions.create( #model=classification_info.tmp_model,

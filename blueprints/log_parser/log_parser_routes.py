@@ -115,9 +115,13 @@ def handle_submit_analysis(data):
     try:
         filter_path = os.path.join(LOG_PARSER_DIR, "filter", selected_filter)
         
+        # Get case description from session
+        case_context_dict = session.get('case_context', {})
+        case_description = case_context_dict.get('description', '')
+        
         success = log_parser_service.start_analysis(
             filter_path, log_path, session['logparser_output_dir'], 
-            app_config.llm_helper, custom_prompt_content
+            app_config.llm_helper, custom_prompt_content, case_description
         )
         
         if not success:

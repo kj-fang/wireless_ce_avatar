@@ -1,4 +1,4 @@
-<!DOCTYPE html>
+﻿<!DOCTYPE html>
 <html lang="zh-Hant">
 <head>
     <meta charset="UTF-8">
@@ -48,6 +48,53 @@
             background-color: gray;
             cursor: not-allowed;
         }
+        .fw-system-info-panel {
+            border: 1px solid #d1d5db;
+            border-radius: 6px;
+            background: #ffffff;
+            box-shadow: 0 4px 12px rgba(0, 0, 0, 0.08);
+            padding: 12px;
+            margin-bottom: 20px;
+            font-family: Consolas, monospace;
+            font-size: 12px;
+            line-height: 1.45;
+            white-space: normal;
+        }
+        .fw-system-info-title {
+            font-weight: 700;
+            color: #111111;
+            margin-bottom: 6px;
+            padding-bottom: 6px;
+            border-bottom: 1px solid #e5e7eb;
+        }
+        .fw-system-info-path {
+            color: #6b7280;
+            margin-bottom: 8px;
+            white-space: pre-wrap;
+            word-break: break-all;
+        }
+        .fw-system-info-body {
+            color: #3f3f46;
+            white-space: normal;
+        }
+        .fw-system-info-row {
+            display: flex;
+            align-items: flex-start;
+            gap: 6px;
+            margin-bottom: 2px;
+        }
+        .fw-system-info-key {
+            color: #0f172a;
+            font-weight: 600;
+            white-space: nowrap;
+            flex: 0 0 auto;
+        }
+        .fw-system-info-value {
+            color: #475569;
+            white-space: pre-wrap;
+            word-break: break-word;
+            flex: 1 1 auto;
+        }
     </style>
 </head>
 <body>
@@ -72,6 +119,22 @@
     <h2>📊 Analysis Log</h2>
     
     <div id="log">...</div>
+    {% if latest_fw_system_info %}
+    <div class="fw-system-info-panel">
+        <div class="fw-system-info-title">Latest System Info</div>
+        {% if latest_fw_system_info_path %}
+        <div class="fw-system-info-path">FW Path: {{ latest_fw_system_info_path }}</div>
+        {% endif %}
+        <div class="fw-system-info-body">
+            {% for key, value in latest_fw_system_info.items() %}
+            <div class="fw-system-info-row">
+                <span class="fw-system-info-key">{{ key }}:</span>
+                <span class="fw-system-info-value">{{ value }}</span>
+            </div>
+            {% endfor %}
+        </div>
+    </div>
+    {% endif %}
     
     <div class="d-flex justify-content-between align-items-center mb-2">
         <h2>🔍 Analysis WIFI Results</h2>
@@ -163,25 +226,29 @@
         <thead>
             <tr>
                 <th>Zip File</th>
+                <th>Folder Name</th>
                 <th>File Path</th>
                 <th>Extension</th>
                 <th>Analysis</th>
             </tr>
         </thead>
         <tbody>
-            {% for name, fw_list in fw_dict.items() %}
-                {% for fw_path in fw_list %}
-                    <tr>
-                        <td>{{ name }}</td>
-                        <td>{{ fw_path }}</td>
-                        <td>{{ fw_path.split('.')[-1] }}</td>
-                        <td>
-                            <button class="btn btn-primary btn-sm" onclick="startFwAnalysis(this, '{{ fw_path | urlencode }}')">
-                                Parse
-                            </button>
-                        </td>
-                    </tr>
-                {% endfor %}
+            {% for row in fw_table_rows %}
+                <tr>
+                    {% if row.show_zip_cell %}
+                    <td rowspan="{{ row.zip_rowspan }}">{{ row.zip_name }}</td>
+                    {% endif %}
+                    {% if row.show_folder_cell %}
+                    <td rowspan="{{ row.folder_rowspan }}">{{ row.folder_name }}</td>
+                    {% endif %}
+                    <td>{{ row.fw_path }}</td>
+                    <td>{{ row.fw_path.split('.')[-1] }}</td>
+                    <td>
+                        <button class="btn btn-primary btn-sm" onclick="startFwAnalysis(this, '{{ row.fw_path | urlencode }}')">
+                            Parse
+                        </button>
+                    </td>
+                </tr>
             {% endfor %}
         </tbody>
     </table>
@@ -248,6 +315,14 @@
     <script>
         const socket = io('/progress');
         const logBox = document.getElementById("log");
+        
+        function appendLog(text, color) {
+            const span = document.createElement('span');
+            if (color) span.style.color = color;
+            span.textContent = text;
+            logBox.appendChild(span);
+            logBox.scrollTop = logBox.scrollHeight;
+        }
 
         const autoAnalysisEtlElement = document.getElementById('autoAnalysisEtl');
 
@@ -257,8 +332,7 @@
         // Receive backend logs
         socket.on("wpp_log", function(msg) {
             console.log("wpp_log:",msg)
-            logBox.innerText += msg.data + "\n";
-            logBox.scrollTop = logBox.scrollHeight;
+            appendLog(msg.data + "\n");
         });
 
 
@@ -502,8 +576,8 @@
             button.innerText = `Analyzing...`;
 
             const decoded = decodeURIComponent(etlPathEncoded);
-            logBox.innerText += `🛠️ Analysis...\n`;
-            logBox.scrollTop = logBox.scrollHeight;
+            appendLog(`🛠️ Analysis...\n`);
+            
             console.log(`${ETL_ANALYSIS_URL}?etl_path=${etlPathEncoded}&mode=${mode}`)
             fetch(`${ETL_ANALYSIS_URL}?etl_path=${etlPathEncoded}&mode=${mode}`)
                 .then(res => res.text())
@@ -512,8 +586,7 @@
                 })
                 .catch(err => {
                     console.error(err);
-                    logBox.innerText += `❌ ${mode} Analysis Failed: ${decoded}\n`;
-                    logBox.scrollTop = logBox.scrollHeight;
+                    appendLog(`❌ ${mode} Analysis Failed: ${decoded}\n`, 'red');
                 });
         }
     
@@ -525,11 +598,9 @@
         button.innerText = 'Processing & Analyzing...';
 
         const decoded = decodeURIComponent(etlPathEncoded);
-        logBox.innerText += `🚀 Starting Analyze with LLM: ${decoded}\n`;
-        logBox.scrollTop = logBox.scrollHeight;
+        appendLog(`\n\n🚀 Starting Analyze with LLM: ${decoded}\n`);
 
-        logBox.innerText += `🛠️ Step 1: Running Analysis...\n`;
-        logBox.scrollTop = logBox.scrollHeight;
+        appendLog(`🛠️ Step 1: Running Analysis...\n`);
 
         const processId = Date.now(); 
         window.pendingLogParser = {
@@ -542,8 +613,7 @@
             .then(res => res.text())
             .catch(err => {
                 console.error("Analysis failed:", err);
-                logBox.innerText += `❌ Analysis Failed: ${decoded}\n`;
-                logBox.scrollTop = logBox.scrollHeight;
+                appendLog(`❌ Analysis Failed: ${decoded}\n`, 'red');
                 
             });
     }
@@ -553,8 +623,7 @@
         if (window.pendingLogParser) {
             const { etlPathEncoded, button } = window.pendingLogParser;
             if (msg.status === 'done') {
-                logBox.innerText += ` Starting LLM Analysis...\n`;
-                logBox.scrollTop = logBox.scrollHeight;
+                appendLog(` Starting LLM Analysis...\n`);
 
                 window.location.href = `${LOGPARSER_URL}?etl_path=${etlPathEncoded}`;
 
@@ -609,6 +678,29 @@
         button.innerText = 'Parse';
     }
 
+    function normalizeClientPath(path) {
+        return String(path || '').replace(/\\/g, '/');
+    }
+
+    function findFwButtonByEncodedPath(fwPathEncoded) {
+        return document.querySelector(`button[onclick="startFwAnalysis(this, '${fwPathEncoded}')"]`);
+    }
+
+    function isMatchingFwAnalysisEvent(pending, msg) {
+        if (!pending || !msg) return false;
+        if (pending.taskId && msg.task_id) {
+            return pending.taskId === msg.task_id;
+        }
+
+        const pendingPath = decodeURIComponent(pending.fwPathEncoded || '');
+        const messagePath = msg.fw_path || '';
+        if (pendingPath && messagePath) {
+            return normalizeClientPath(pendingPath) === normalizeClientPath(messagePath);
+        }
+
+        return false;
+    }
+
     function cancelPendingFwAnalysis(silent = true) {
         const pending = window.pendingFwAnalysis;
         if (!pending || !pending.taskId) {
@@ -647,27 +739,40 @@
             button.classList.add('disabled');
             button.innerText = 'Analyzing...';
 
+            window.pendingFwAnalysis = {
+                taskId: null,
+                fwPathEncoded: fwPathEncoded,
+                button: button
+            };
+
             const decoded = decodeURIComponent(fwPathEncoded);
-            logBox.innerText += `🚀 Starting FW analysis: ${decoded}\n`;
-            logBox.scrollTop = logBox.scrollHeight;
+            appendLog(`\n\n🚀 Starting FW Analysis: ${decoded}\n`);
 
             fetch(`${FW_ETL_ANALYSIS_URL}?fw_path=${fwPathEncoded}`)
                 .then(res => res.json())
                 .then(data => {
                     if (!data.ok || !data.task_id) {
-                        throw new Error(data.error || 'FW analysis start failed');
+                        const wasPending = Boolean(
+                            window.pendingFwAnalysis
+                            && window.pendingFwAnalysis.fwPathEncoded === fwPathEncoded
+                        );
+                        window.pendingFwAnalysis = null;
+                        resetFwButton(button);
+                        if (wasPending) {
+                            const reason = data.error || 'precheck failed';
+                            appendLog(`⚠️ FW analysis rejected: ${reason}\n`, 'red');
+                        }
+                        return;
                     }
 
-                    window.pendingFwAnalysis = {
-                        taskId: data.task_id,
-                        fwPathEncoded: fwPathEncoded,
-                        button: button
-                    };
+                    if (window.pendingFwAnalysis && window.pendingFwAnalysis.fwPathEncoded === fwPathEncoded) {
+                        window.pendingFwAnalysis.taskId = data.task_id;
+                    }
                 })
                 .catch(err => {
                     console.error(err);
-                    logBox.innerText += `❌ FW analysis start failed: ${decoded}\n`;
-                    logBox.scrollTop = logBox.scrollHeight;
+                    window.pendingFwAnalysis = null;
+                    appendLog(`❌ FW analysis start failed: ${decoded}\n`, 'red');
                     resetFwButton(button);
                 });
         });
@@ -676,15 +781,14 @@
     socket.on("fw_analysis_complete", function(msg) {
         const pending = window.pendingFwAnalysis;
         if (!pending) return;
-        if (msg.task_id !== pending.taskId) return;
+        if (!isMatchingFwAnalysisEvent(pending, msg)) return;
 
         const { button, taskId, fwPathEncoded } = pending;
         window.pendingFwAnalysis = null;
         resetFwButton(button);
 
         const decoded = decodeURIComponent(fwPathEncoded);
-        logBox.innerText += `✅ FW analysis complete: ${decoded}\n`;
-        logBox.scrollTop = logBox.scrollHeight;
+        appendLog(`✅ FW analysis complete: ${decoded}\n`);
 
         window.location.href = `${FW_RESULT_URL}?task_id=${encodeURIComponent(taskId)}`;
     });
@@ -692,29 +796,49 @@
     socket.on("fw_analysis_cancelled", function(msg) {
         const pending = window.pendingFwAnalysis;
         if (!pending) return;
-        if (msg.task_id !== pending.taskId) return;
+        if (!isMatchingFwAnalysisEvent(pending, msg)) return;
 
         const { button, fwPathEncoded } = pending;
         window.pendingFwAnalysis = null;
         resetFwButton(button);
 
         const decoded = decodeURIComponent(fwPathEncoded);
-        logBox.innerText += `⏹ FW analysis canceled: ${decoded}\n`;
-        logBox.scrollTop = logBox.scrollHeight;
+        appendLog(`⏹ FW analysis canceled: ${decoded}\n`, 'red');
     });
 
     socket.on("fw_analysis_failed", function(msg) {
         const pending = window.pendingFwAnalysis;
         if (!pending) return;
-        if (msg.task_id !== pending.taskId) return;
+        if (!isMatchingFwAnalysisEvent(pending, msg)) return;
 
         const { button, fwPathEncoded } = pending;
         window.pendingFwAnalysis = null;
         resetFwButton(button);
 
         const decoded = decodeURIComponent(fwPathEncoded);
-        logBox.innerText += `❌ FW analysis failed: ${decoded} (${msg.error || 'unknown error'})\n`;
-        logBox.scrollTop = logBox.scrollHeight;
+        appendLog(`❌ FW analysis failed: ${decoded} (${msg.error || 'unknown error'})\n`, 'red');
+    });
+
+    socket.on("fw_analysis_rejected", function(msg) {
+        const pending = window.pendingFwAnalysis;
+        if (!pending) {
+            const rejectedPath = msg.fw_path || '';
+            const fallbackButton = rejectedPath
+                ? findFwButtonByEncodedPath(encodeURIComponent(rejectedPath))
+                : null;
+            resetFwButton(fallbackButton);
+            appendLog(`⚠️ FW analysis rejected: ${msg.error || 'precheck failed'}\n`, 'red');
+            return;
+        }
+
+        const { button, fwPathEncoded } = pending;
+        if (!isMatchingFwAnalysisEvent(pending, msg)) {
+            return;
+        }
+
+        window.pendingFwAnalysis = null;
+        resetFwButton(button);
+        appendLog(`⚠️ FW analysis rejected: ${msg.error || 'precheck failed'}\n`, 'red');
     });
 
     window.addEventListener('pageshow', function() {

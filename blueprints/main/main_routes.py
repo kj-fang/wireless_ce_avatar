@@ -1,9 +1,11 @@
 from flask import Blueprint, render_template, request, session, redirect, url_for, flash, jsonify
+import json
 import os
 import subprocess
+from datetime import datetime
 
 from utils import helpers
-from utils.etl_utils import get_auto_analysis_etl, get_issue_time_from_selected_files, filter_folders_by_time
+from utils.etl_utils import get_auto_analysis_etl, get_issue_time_from_selected_files, filter_folders_by_time, extract_timestamp_from_folder
 from services.case_info_service import CaseService
 from models.models import CaseContext
 from configs.global_configs import app_config
@@ -148,6 +150,101 @@ def render_download_attachments_form():
 
 #------------ DOWNLOAD RESULT render -------------#
 
+def _load_fw_system_info(fw_path):
+    if not fw_path:
+        return None
+
+    system_info_path = os.path.join(os.path.dirname(fw_path), 'system_info.txt')
+    if not os.path.exists(system_info_path):
+        return None
+
+    try:
+        with open(system_info_path, 'r', encoding='utf-8') as file:
+            system_info = json.load(file)
+    except Exception:
+        return None
+
+    versions = system_info.get('Versions', {})
+    return {
+        'BT Driver Version': versions.get('BT Driver Version', ''),
+        'Wi-Fi Driver Version': versions.get('Wi-Fi Driver Version', ''),
+        'Device Name': system_info.get('Device Name', ''),
+        'BT FW SHA1': system_info.get('BT FW SHA1', ''),
+        'Wi-Fi Adapter': system_info.get('Wi-Fi Adapter', ''),
+        'OS Information': system_info.get('OS Information', ''),
+        'Intel® Smart Sound Technology BUS': system_info.get('Intel® Smart Sound Technology BUS', ''),
+        'Intel® Smart Sound Technology OED': system_info.get('Intel® Smart Sound Technology OED', ''),
+        'Intel® Smart Sound Technology for Bluetooth® Audio': system_info.get('Intel® Smart Sound Technology for Bluetooth® Audio', ''),
+        'WRT::2G Version': versions.get('WRT::2G Version', ''),
+        'preset': system_info.get('preset', ''),
+        'BT FW Config': system_info.get('BT FW Config', ''),
+        'Dbgc Status Global as seen by BT': system_info.get('Dbgc Status Global as seen by BT', ''),
+        'Dbgc Status as read from Mailbox': system_info.get('Dbgc Status as read from Mailbox', ''),
+    }
+
+
+def _get_latest_fw_system_info(fw_dict):
+    fw_paths = [path for paths in (fw_dict or {}).values() for path in paths if path]
+    if not fw_paths:
+        return None, None
+
+    def sort_key(path):
+        timestamp = extract_timestamp_from_folder(path)
+        return (timestamp or datetime.min, path)
+
+    latest_fw_path = max(fw_paths, key=sort_key)
+    return latest_fw_path, _load_fw_system_info(latest_fw_path)
+
+
+def _extract_fw_folder_name(fw_path):
+    if not fw_path:
+        return ''
+    normalized = str(fw_path).rstrip('\\/')
+    parent = os.path.dirname(normalized)
+    return os.path.basename(parent) if parent else ''
+
+
+def _build_fw_table_rows(fw_dict):
+    rows = []
+
+    for zip_name, fw_list in (fw_dict or {}).items():
+        fw_items = [
+            {
+                'zip_name': zip_name,
+                'folder_name': _extract_fw_folder_name(fw_path),
+                'fw_path': fw_path,
+            }
+            for fw_path in (fw_list or [])
+        ]
+
+        if not fw_items:
+            continue
+
+        zip_rowspan = len(fw_items)
+
+        folder_counts = {}
+        for item in fw_items:
+            folder = item['folder_name']
+            folder_counts[folder] = folder_counts.get(folder, 0) + 1
+
+        folder_seen = {}
+        for idx, item in enumerate(fw_items):
+            folder = item['folder_name']
+            folder_seen[folder] = folder_seen.get(folder, 0) + 1
+
+            rows.append({
+                'zip_name': item['zip_name'],
+                'folder_name': folder,
+                'fw_path': item['fw_path'],
+                'zip_rowspan': zip_rowspan,
+                'folder_rowspan': folder_counts[folder],
+                'show_zip_cell': idx == 0,
+                'show_folder_cell': folder_seen[folder] == 1,
+            })
+
+    return rows
+
+
 def render_download_result_form():
     
     case_context = session.get("case_context")
@@ -227,11 +324,16 @@ def render_download_result_form():
         print(f"No issue time found in selected files, skipping time filter")
     
     auto_analysis_etl = get_auto_analysis_etl(file_dicts['wifi_dict'], file_dicts['ddd_dict'])
+    latest_fw_system_info_path, latest_fw_system_info = _get_latest_fw_system_info(file_dicts['fw_dict'])
+    fw_table_rows = _build_fw_table_rows(file_dicts['fw_dict'])
     
     return render_template('download_result.html',
                          case_path=download_path,
                          auto_analysis_etl = auto_analysis_etl,
                          exclude_keywords=app_config.etl_exclude_keywords,
+                         latest_fw_system_info=latest_fw_system_info,
+                         latest_fw_system_info_path=latest_fw_system_info_path,
+                         fw_table_rows=fw_table_rows,
                          time_filter_info=time_filter_info,
                          time_filter_warnings=time_filter_warnings,
                          **file_dicts)

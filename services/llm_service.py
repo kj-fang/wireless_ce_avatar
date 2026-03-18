@@ -166,8 +166,7 @@ class LLM_helper:
                 top_p=0.85,
                 frequency_penalty=0.1,
                 presence_penalty=0,
-                max_tokens=1500,
-                stop=None
+                max_tokens=1500
             )
 
             
@@ -190,7 +189,7 @@ class LLM_helper:
             else:
                 print("raw output:", raw_output)
                 return raw_output
-        except requests.exceptions.RequestException as e:
+        except Exception as e:
             print(f"Failed to make inference request: {e}")
             return {}
     
@@ -217,8 +216,7 @@ class LLM_helper:
                 top_p=0.9,
                 frequency_penalty=0.1,
                 presence_penalty=0,
-                max_tokens=8000,
-                stop=None
+                max_tokens=8000
             )
             #"""
 
@@ -258,7 +256,7 @@ class LLM_helper:
             else:
                 #print("raw output:", raw_output)
                 return raw_output
-        except requests.exceptions.RequestException as e:
+        except Exception as e:
             print(f"Failed to make inference request: {e}")
             return {}
 

@@ -52,15 +52,14 @@ def process_etl_path_fw():
 
     fw_path = unquote(request.args.get("fw_path", ""))
 
-    if not fw_path or not os.path.exists(fw_path):
-        return jsonify({"ok": False, "error": f"Invalid file path: {fw_path}"}), 400
-
-    subprocess.run(['explorer', '/select,', fw_path])
-
     if case_context.wifi_or_bt in ['wifi', 'bt']:
-        task_id = fw_service.start_async(fw_path, case_context.wifi_or_bt)
+        task_id, error_msg = fw_service.start_async(fw_path, case_context.wifi_or_bt)
+        if not task_id:
+            return jsonify({"ok": False, "error": error_msg}), 400
     else:
         return jsonify({"ok": False, "error": "Unknown case subcategory"}), 400
+
+    subprocess.run(['explorer', '/select,', fw_path])
 
     return jsonify({"ok": True, "task_id": task_id, "fw_path": fw_path})
 

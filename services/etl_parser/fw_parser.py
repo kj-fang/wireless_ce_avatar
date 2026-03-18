@@ -318,7 +318,7 @@ def _get_system_info(fw_path):
     
     fw_dir = os.path.dirname(fw_path)
     system_info_path = os.path.join(fw_dir, "system_info.txt")
-    with open(system_info_path, 'r') as file:
+    with open(system_info_path, 'r', encoding='utf-8') as file:
         system_info = json.load(file)
         return {
             "BT Driver Version": system_info['Versions']['BT Driver Version'],
@@ -327,9 +327,9 @@ def _get_system_info(fw_path):
             "BT FW SHA1": system_info['BT FW SHA1'],
             "Wi-Fi Adapter": system_info['Wi-Fi Adapter'],
             "OS Information": system_info['OS Information'],
-            "Intel® Smart Sound Technology BUS": system_info['IntelÂ® Smart Sound Technology BUS'],
-            "Intel® Smart Sound Technology OED": system_info['IntelÂ® Smart Sound Technology OED'],
-            "Intel® Smart Sound Technology for Bluetooth® Audio": system_info['IntelÂ® Smart Sound Technology for BluetoothÂ® Audio'],
+            "Intel® Smart Sound Technology BUS": system_info['Intel® Smart Sound Technology BUS'],
+            "Intel® Smart Sound Technology OED": system_info['Intel® Smart Sound Technology OED'],
+            "Intel® Smart Sound Technology for Bluetooth® Audio": system_info['Intel® Smart Sound Technology for Bluetooth® Audio'],
             "WRT::2G Version": system_info['Versions']['WRT::2G Version'],
             "preset": system_info['preset'],
             "BT FW Config": system_info['BT FW Config'],

@@ -30,12 +30,15 @@ class DriverManager:
         driver_dir = os.path.join(downloads_dir, "chrome_driver")
         self.chrome_driver_path = self.setup_chromedriver(driver_dir)
 
-    def run_driver(self, socketio, app):
+    def run_driver(self, socketio, app, port=None):
         try:
             signal.signal(signal.SIGINT, self.signal_handler)
             signal.signal(signal.SIGTERM, self.signal_handler)
             
-            rand_port = helpers.get_available_port(54000, 60000)
+            if port is None:
+                rand_port = helpers.get_available_port(54000, 60000)
+            else:
+                rand_port = port
             threading.Timer(1.5, self.open_browser, args=(rand_port, )).start()
             socketio.run(app,  host="0.0.0.0", debug=False, port=rand_port)
         except Exception as e:
@@ -112,7 +115,8 @@ class DriverManager:
         options.add_argument('ignore-certificate-errors')
         options.add_argument("--disable-gpu")
         options.add_argument("--log-level=3")
-        options.add_experimental_option("detach", True) 
+        # When Python/Selenium exits, the driver is quit, or the process is terminated, Chrome will close along with it.
+        options.add_experimental_option("detach", False)
         if not self.chrome_driver_path:
             print("⚠️ No pre-installed driver, downloading now...")
             self.chrome_driver_path = self.setup_chromedriver()

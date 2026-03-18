@@ -76,7 +76,7 @@
     <div class="d-flex justify-content-between align-items-center mb-2">
         <h2>🔍 Analysis WIFI Results</h2>
         <div class="d-flex gap-1">
-            <button class="btn btn-secondary btn-sm me-2" onclick="location.href='/'">Back to Home</button>
+            <button class="btn btn-secondary btn-sm me-2" onclick="cancelFwAndNavigate('/')">Back to Home</button>
         </div>
     </div>
     <div class="d-flex align-items-center mb-3">
@@ -272,6 +272,7 @@
         
 
         function openDownloadPath() {
+            cancelPendingFwAnalysis();
             const path = document.querySelector('#open-btn').dataset.path;
             console.log(path)
             fetch('/open_path', {
@@ -295,6 +296,7 @@
 
         // Call backend to parse .evt file and display on web (no popup window)
         function loadEventLog(evtPath) {
+            cancelPendingFwAnalysis();
             const contentBox = document.getElementById('eventLogContent');
             contentBox.innerHTML = '<p class="text-info">Loading event logs...</p>';
             
@@ -326,6 +328,7 @@
 
         //  Call backend to decode evt to txt file in the background AND load to UI
         function dumpEventLogTxt(evtPath, btnElement) {
+            cancelPendingFwAnalysis();
             const originalText = btnElement.innerText;
             btnElement.innerText = 'Dumping...';
             btnElement.disabled = true;
@@ -492,6 +495,7 @@
         
 
         function startAnalysis(button, etlPathEncoded, mode) {
+            cancelPendingFwAnalysis();
             if (button.classList.contains('disabled')) return;
 
             button.classList.add('disabled');
@@ -514,6 +518,7 @@
         }
     
     function startLogParser(button, etlPathEncoded) {
+        cancelPendingFwAnalysis();
         if (button.classList.contains('disabled')) return;
 
         button.classList.add('disabled');
@@ -562,6 +567,10 @@
 
 
     const FW_ETL_ANALYSIS_URL = "{{ url_for('analysis_etl.process_etl_path_fw') }}";
+    const FW_CANCEL_URL = "{{ url_for('analysis_etl.cancel_fw_analysis') }}";
+    const FW_RESULT_URL = "{{ url_for('analysis_etl.fw_analysis_result') }}";
+
+    window.pendingFwAnalysis = null;
 
     socket.on("manual_complete", function(msg) {
         console.log("Manual analysis complete for:", msg.etl_path);
@@ -594,17 +603,131 @@
         });
     }
 
+    function resetFwButton(button) {
+        if (!button) return;
+        button.classList.remove('disabled');
+        button.innerText = 'Parse';
+    }
+
+    function cancelPendingFwAnalysis(silent = true) {
+        const pending = window.pendingFwAnalysis;
+        if (!pending || !pending.taskId) {
+            return Promise.resolve(false);
+        }
+
+        const taskId = pending.taskId;
+        const button = pending.button;
+        window.pendingFwAnalysis = null;
+        resetFwButton(button);
+
+        return fetch(FW_CANCEL_URL, {
+            method: 'POST',
+            headers: { 'Content-Type': 'application/json' },
+            body: JSON.stringify({ task_id: taskId })
+        })
+            .then(() => true)
+            .catch(err => {
+                if (!silent) {
+                    console.error('FW cancel request failed:', err);
+                }
+                return false;
+            });
+    }
+
+    function cancelFwAndNavigate(targetUrl) {
+        cancelPendingFwAnalysis().finally(() => {
+            window.location.href = targetUrl;
+        });
+    }
+
     function startFwAnalysis(button, fwPathEncoded) {
         if (button.classList.contains('disabled')) return;
 
-        button.classList.add('disabled');
-        button.innerText = 'Analyzing...';
+        cancelPendingFwAnalysis().finally(() => {
+            button.classList.add('disabled');
+            button.innerText = 'Analyzing...';
+
+            const decoded = decodeURIComponent(fwPathEncoded);
+            logBox.innerText += `🚀 Starting FW analysis: ${decoded}\n`;
+            logBox.scrollTop = logBox.scrollHeight;
+
+            fetch(`${FW_ETL_ANALYSIS_URL}?fw_path=${fwPathEncoded}`)
+                .then(res => res.json())
+                .then(data => {
+                    if (!data.ok || !data.task_id) {
+                        throw new Error(data.error || 'FW analysis start failed');
+                    }
+
+                    window.pendingFwAnalysis = {
+                        taskId: data.task_id,
+                        fwPathEncoded: fwPathEncoded,
+                        button: button
+                    };
+                })
+                .catch(err => {
+                    console.error(err);
+                    logBox.innerText += `❌ FW analysis start failed: ${decoded}\n`;
+                    logBox.scrollTop = logBox.scrollHeight;
+                    resetFwButton(button);
+                });
+        });
+    }
+
+    socket.on("fw_analysis_complete", function(msg) {
+        const pending = window.pendingFwAnalysis;
+        if (!pending) return;
+        if (msg.task_id !== pending.taskId) return;
+
+        const { button, taskId, fwPathEncoded } = pending;
+        window.pendingFwAnalysis = null;
+        resetFwButton(button);
 
         const decoded = decodeURIComponent(fwPathEncoded);
+        logBox.innerText += `✅ FW analysis complete: ${decoded}\n`;
+        logBox.scrollTop = logBox.scrollHeight;
 
-        // jump to fw_analysis.html with fw_path para
-        window.location.href = `${FW_ETL_ANALYSIS_URL}?fw_path=${fwPathEncoded}`;
-    }
+        window.location.href = `${FW_RESULT_URL}?task_id=${encodeURIComponent(taskId)}`;
+    });
+
+    socket.on("fw_analysis_cancelled", function(msg) {
+        const pending = window.pendingFwAnalysis;
+        if (!pending) return;
+        if (msg.task_id !== pending.taskId) return;
+
+        const { button, fwPathEncoded } = pending;
+        window.pendingFwAnalysis = null;
+        resetFwButton(button);
+
+        const decoded = decodeURIComponent(fwPathEncoded);
+        logBox.innerText += `⏹ FW analysis canceled: ${decoded}\n`;
+        logBox.scrollTop = logBox.scrollHeight;
+    });
+
+    socket.on("fw_analysis_failed", function(msg) {
+        const pending = window.pendingFwAnalysis;
+        if (!pending) return;
+        if (msg.task_id !== pending.taskId) return;
+
+        const { button, fwPathEncoded } = pending;
+        window.pendingFwAnalysis = null;
+        resetFwButton(button);
+
+        const decoded = decodeURIComponent(fwPathEncoded);
+        logBox.innerText += `❌ FW analysis failed: ${decoded} (${msg.error || 'unknown error'})\n`;
+        logBox.scrollTop = logBox.scrollHeight;
+    });
+
+    window.addEventListener('pageshow', function() {
+        document.querySelectorAll('button.btn.btn-primary.btn-sm').forEach(btn => {
+            if ((btn.innerText || '').includes('Analyzing')) {
+                resetFwButton(btn);
+            }
+        });
+    });
+
+    window.addEventListener('beforeunload', function() {
+        cancelPendingFwAnalysis();
+    });
         
     </script>
 </body>

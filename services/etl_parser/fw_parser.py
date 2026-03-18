@@ -5,6 +5,7 @@ import sys, os, ctypes
 import time
 import glob
 import json
+from threading import Event
 
 DECODER_EXE = r"C:\UtilityPackage\uSnifferAutoParser\uSnifferAutoParser.exe"
 
@@ -13,6 +14,33 @@ DECODER_EXE = r"C:\UtilityPackage\uSnifferAutoParser\uSnifferAutoParser.exe"
 
 
 active_fw_pid = None  # global PID cache for WRT_BT_Decoder.exe
+
+
+def _terminate_process_tree(pid: int):
+    """Terminate process and all children safely."""
+    try:
+        parent = psutil.Process(pid)
+    except psutil.NoSuchProcess:
+        return
+
+    children = parent.children(recursive=True)
+    for child in children:
+        try:
+            child.terminate()
+        except Exception:
+            pass
+
+    try:
+        parent.terminate()
+    except Exception:
+        pass
+
+    _, alive = psutil.wait_procs(children + [parent], timeout=3)
+    for p in alive:
+        try:
+            p.kill()
+        except Exception:
+            pass
 
 
 # ---------------- Admin Elevation ----------------
@@ -118,7 +146,7 @@ def list_decoder_controls(verbose=True, max_depth=3):
 
 
 
-def fw_wifi_analysis(fw_path: str, timeout: int = 30):
+def fw_wifi_analysis(fw_path: str, timeout: int = 30, cancel_event: Event | None = None):
     """
     Run the decoder exe with ETL file, wait for the generated output folder 
     (base name of fw_path without extension + '_xxxx'), and open that folder.
@@ -140,11 +168,25 @@ def fw_wifi_analysis(fw_path: str, timeout: int = 30):
 
     try:
         print(f"⚙️ Running decoder: {DECODER_EXE} {fw_path}")
-        subprocess.run([DECODER_EXE, fw_path], check=True)
+        proc = subprocess.Popen([DECODER_EXE, fw_path])
+
+        while proc.poll() is None:
+            if cancel_event and cancel_event.is_set():
+                print("⚠️ FW WiFi analysis canceled. Terminating decoder process...")
+                _terminate_process_tree(proc.pid)
+                return None
+            time.sleep(0.5)
+
+        if proc.returncode != 0:
+            print(f"❌ Decoder failed with error code {proc.returncode}")
+            return False
 
         # Look for output folder matching "base_no_ext_*"
         output_folder = None
         for _ in range(timeout):
+            if cancel_event and cancel_event.is_set():
+                print("⚠️ FW WiFi analysis canceled while waiting output folder.")
+                return None
             candidates = glob.glob(os.path.join(folder, base_no_ext + "_*"))
             candidates = [c for c in candidates if os.path.isdir(c)]
             if candidates:
@@ -170,7 +212,7 @@ def fw_wifi_analysis(fw_path: str, timeout: int = 30):
 
 
 
-def fw_bt_analysis(fw_path, use_cli=True):
+def fw_bt_analysis(fw_path, use_cli=True, cancel_event: Event | None = None):
     """
     Launch WRT_BT_Decoder.exe with elevation and attach UI (via window detection)
     """
@@ -185,16 +227,39 @@ def fw_bt_analysis(fw_path, use_cli=True):
         try:
             print(f"🔍 Debug: Running CLI decoder with fw_path={fw_path}")
             arguments = ["-e", fw_path, "-autoFetchDevTrace_Headers"]
-            result = subprocess.run(
+            result_proc = subprocess.Popen(
                 [exe_cli_path] + arguments,
-                capture_output=True,
+                stdout=subprocess.PIPE,
+                stderr=subprocess.PIPE,
                 encoding='utf-8'
             )
+
+            while result_proc.poll() is None:
+                if cancel_event and cancel_event.is_set():
+                    print("⚠️ FW BT analysis canceled. Terminating bt_decoder_cli process...")
+                    _terminate_process_tree(result_proc.pid)
+                    return None, None, "FW analysis canceled"
+                time.sleep(0.5)
+
+            stdout, stderr = result_proc.communicate()
+
+            outputs_ready = _has_fw_bt_decode_outputs(fw_path)
+
+            if result_proc.returncode != 0:
+                if outputs_ready:
+                    print(f"⚠️ bt_decoder_cli exited with code {result_proc.returncode}, but decode outputs exist. Continue parsing.")
+                    if stderr:
+                        print(stderr)
+                else:
+                    print(f"❌ bt_decoder_cli exited with code {result_proc.returncode}")
+                    if stderr:
+                        print(stderr)
+                    return None, None, stdout
             
             print("✅ Debug: FW bt decoder CLI is completed successfully.")
             sysmon_text = _get_sysmon_to_text(fw_path)
             system_info = _get_system_info(fw_path)
-            return system_info, sysmon_text, result.stdout
+            return system_info, sysmon_text, stdout
 
         except subprocess.CalledProcessError as e:
             print(f"❌ Failed to launch bt_decoder_cli.exe, (Error Code {e.returncode}):")
@@ -291,6 +356,14 @@ def _get_sysmon_to_text(fw_path):
     except Exception as e:
         print(f"❌ Error while searching for sysmon log: {e}")
         return None
+
+
+def _has_fw_bt_decode_outputs(fw_path):
+    """Use generated artifacts to determine decode success when CLI exit code is non-zero."""
+    fw_dir = os.path.dirname(fw_path)
+    summary_path = fw_path[:-4] + "decodeSummary.json"
+    system_info_path = os.path.join(fw_dir, "system_info.txt")
+    return os.path.exists(summary_path) and os.path.exists(system_info_path)
 
 def _get_eventid_from_summary(fw_path):
     if not os.path.exists(fw_path) or not fw_path.endswith(".etl"):

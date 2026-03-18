@@ -2,6 +2,8 @@ from flask import Blueprint, render_template, request, session, redirect, url_fo
 import json
 import os 
 import datetime
+import threading
+import logging
 from urllib.parse import unquote
 from werkzeug.utils import secure_filename
 
@@ -48,6 +50,10 @@ def upload_local_analysis():
     if not files:
         return jsonify({'success': False, 'message': 'No file uploaded'}), 400
 
+     # Enforce a single file upload to avoid silently dropping additional files
+    if len(files) != 1:
+        return jsonify({'success': False, 'message': 'Exactly one file must be uploaded for local analysis'}), 400
+
     etl_file = files[0]
 
     base_upload_dir = app_config.avatarfiles_dir or os.getcwd()
@@ -70,7 +76,14 @@ def upload_local_analysis():
             'keywords_found': []
         }
 
-        wpp_ddd_parser_run(etl_path)
+        def _run_wpp_ddd_parser(path):
+             try:
+                 wpp_ddd_parser_run(path)
+             except Exception as e:
+                 # Log the exception; request has already returned.
+                 logging.exception("Failed to run wpp_ddd_parser_run for %s: %s", path, e)
+        thread = threading.Thread(target=_run_wpp_ddd_parser, args=(etl_path,), daemon=True)
+        thread.start()
     except Exception as e:
         return jsonify({'success': False, 'message': f'Failed local analysis flow: {str(e)}'}), 500
 

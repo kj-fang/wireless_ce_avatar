@@ -1,0 +1,837 @@
+<!DOCTYPE html>
+<html lang="en">
+<head>
+    <meta charset="UTF-8">
+    <title>Log Chatbot - Wi-Fi Analyzer</title>
+    <link href="https://fonts.googleapis.com/css2?family=Inter:wght@400;500;600;700&display=swap" rel="stylesheet">
+    <link href="https://stackpath.bootstrapcdn.com/bootstrap/4.5.2/css/bootstrap.min.css" rel="stylesheet">
+    <script src="https://cdn.jsdelivr.net/npm/marked/marked.min.js"></script>
+    <style>
+        * { font-family: 'Inter', sans-serif; box-sizing: border-box; }
+
+        body {
+            background: #f0f2f5;
+            margin: 0;
+            height: 100vh;
+            display: flex;
+            flex-direction: column;
+        }
+
+        /* ── Top bar ── */
+        .top-bar {
+            background: linear-gradient(135deg, #0071c5 0%, #00a3e0 100%);
+            color: white;
+            padding: 14px 24px;
+            display: flex;
+            align-items: center;
+            gap: 14px;
+            box-shadow: 0 2px 8px rgba(0,0,0,0.15);
+        }
+        .top-bar h1 {
+            font-size: 1.25rem;
+            font-weight: 700;
+            margin: 0;
+        }
+        .top-bar .badge-model {
+            background: rgba(255,255,255,0.2);
+            border-radius: 20px;
+            padding: 3px 12px;
+            font-size: 0.75rem;
+        }
+
+        /* ── Layout ── */
+        .main-layout {
+            display: flex;
+            flex: 1;
+            overflow: hidden;
+            gap: 0;
+        }
+
+        /* ── Left sidebar ── */
+        .sidebar {
+            width: 320px;
+            min-width: 280px;
+            background: white;
+            border-right: 1px solid #e0e0e0;
+            display: flex;
+            flex-direction: column;
+            padding: 0;
+            overflow-y: auto;
+        }
+        .sidebar-section {
+            padding: 16px;
+            border-bottom: 1px solid #f0f0f0;
+        }
+        .sidebar-section h6 {
+            font-weight: 600;
+            color: #555;
+            font-size: 0.75rem;
+            text-transform: uppercase;
+            letter-spacing: 0.05em;
+            margin-bottom: 10px;
+        }
+
+        /* Log file input */
+        .log-input-group {
+            display: flex;
+            gap: 6px;
+        }
+        .log-input-group input {
+            flex: 1;
+            font-size: 0.78rem;
+            border-radius: 6px;
+            border: 1px solid #ddd;
+            padding: 6px 10px;
+        }
+        .log-input-group input:focus {
+            outline: none;
+            border-color: #0071c5;
+            box-shadow: 0 0 0 2px rgba(0,113,197,0.15);
+        }
+        .btn-set-log {
+            background: #0071c5;
+            color: white;
+            border: none;
+            border-radius: 6px;
+            padding: 6px 12px;
+            font-size: 0.78rem;
+            font-weight: 600;
+            cursor: pointer;
+            white-space: nowrap;
+        }
+        .btn-set-log:hover { background: #005a9e; }
+
+        .btn-browse {
+            background: #f0f0f0;
+            color: #333;
+            border: 1px solid #ccc;
+            border-radius: 6px;
+            padding: 6px 10px;
+            font-size: 0.78rem;
+            font-weight: 600;
+            cursor: pointer;
+            white-space: nowrap;
+        }
+        .btn-browse:hover { background: #e0e0e0; }
+
+        .log-status {
+            margin-top: 7px;
+            font-size: 0.75rem;
+            padding: 5px 9px;
+            border-radius: 5px;
+            display: none;
+        }
+        .log-status.ok   { background: #e6f7ee; color: #1a7a3e; display: block; }
+        .log-status.warn { background: #fff8e1; color: #92600a; display: block; }
+        .log-status.err  { background: #fde8e8; color: #b91c1c; display: block; }
+
+        /* Skill cards */
+        .skill-card {
+            background: #f7f9fc;
+            border: 1px solid #e4eaf2;
+            border-radius: 8px;
+            padding: 8px 12px;
+            margin-bottom: 6px;
+            cursor: pointer;
+            transition: all 0.15s;
+        }
+        .skill-card:hover {
+            border-color: #0071c5;
+            background: #eaf4ff;
+        }
+        .skill-card .skill-name {
+            font-weight: 600;
+            font-size: 0.78rem;
+            color: #0071c5;
+        }
+        .skill-card .skill-desc {
+            font-size: 0.72rem;
+            color: #777;
+            margin-top: 2px;
+        }
+
+        /* Analyze All button */
+        .btn-analyze-all {
+            width: 100%;
+            background: linear-gradient(135deg, #0a7a3e, #1db869);
+            color: white;
+            border: none;
+            border-radius: 8px;
+            padding: 10px;
+            font-size: 0.85rem;
+            font-weight: 600;
+            cursor: pointer;
+            transition: opacity 0.2s;
+        }
+        .btn-analyze-all:hover { opacity: 0.9; }
+        .btn-analyze-all:disabled { opacity: 0.5; cursor: not-allowed; }
+
+        .btn-reset {
+            width: 100%;
+            background: #f3f4f6;
+            color: #555;
+            border: 1px solid #ddd;
+            border-radius: 8px;
+            padding: 8px;
+            font-size: 0.8rem;
+            cursor: pointer;
+            margin-top: 6px;
+        }
+        .btn-reset:hover { background: #e9eaeb; }
+
+        /* ── Chat area ── */
+        .chat-area {
+            flex: 1;
+            display: flex;
+            flex-direction: column;
+            overflow: hidden;
+        }
+
+        #chat-window {
+            flex: 1;
+            overflow-y: auto;
+            padding: 20px;
+            display: flex;
+            flex-direction: column;
+            gap: 14px;
+        }
+
+        /* Message bubbles */
+        .msg-row {
+            display: flex;
+            gap: 10px;
+            max-width: 85%;
+        }
+        .msg-row.user { margin-left: auto; flex-direction: row-reverse; }
+        .msg-row.assistant { margin-right: auto; }
+
+        .avatar-icon {
+            width: 34px;
+            height: 34px;
+            border-radius: 50%;
+            display: flex;
+            align-items: center;
+            justify-content: center;
+            font-size: 1rem;
+            flex-shrink: 0;
+        }
+        .msg-row.user .avatar-icon { background: #0071c5; color: white; }
+        .msg-row.assistant .avatar-icon { background: #e6f0fa; color: #0071c5; }
+
+        .msg-bubble {
+            border-radius: 12px;
+            padding: 10px 14px;
+            font-size: 0.85rem;
+            line-height: 1.55;
+            max-width: 100%;
+            overflow-wrap: break-word;
+        }
+        .msg-row.user .msg-bubble {
+            background: #0071c5;
+            color: white;
+            border-bottom-right-radius: 3px;
+        }
+        .msg-row.assistant .msg-bubble {
+            background: white;
+            color: #222;
+            border: 1px solid #e6eaf0;
+            border-bottom-left-radius: 3px;
+            box-shadow: 0 1px 3px rgba(0,0,0,0.06);
+        }
+
+        /* Report card */
+        .report-card {
+            background: white;
+            border: 1px solid #e4eaf2;
+            border-radius: 12px;
+            overflow: hidden;
+            box-shadow: 0 2px 8px rgba(0,0,0,0.07);
+            font-size: 0.83rem;
+        }
+        .report-header {
+            background: linear-gradient(135deg, #0071c5, #00a3e0);
+            color: white;
+            padding: 10px 16px;
+            font-weight: 700;
+            font-size: 0.85rem;
+            display: flex;
+            align-items: center;
+            gap: 8px;
+        }
+        .report-body { padding: 14px 16px; }
+        .report-row { display: flex; gap: 8px; margin-bottom: 8px; align-items: flex-start; }
+        .report-label {
+            font-weight: 600;
+            color: #555;
+            font-size: 0.75rem;
+            text-transform: uppercase;
+            min-width: 130px;
+        }
+        .confidence-bar {
+            display: inline-block;
+            height: 8px;
+            border-radius: 4px;
+            background: linear-gradient(90deg, #0071c5, #1db869);
+            margin-left: 6px;
+            vertical-align: middle;
+        }
+        .markdown-section {
+            border-top: 1px solid #eee;
+            padding-top: 10px;
+            margin-top: 10px;
+        }
+        .markdown-section h2, .markdown-section h3 { font-size: 0.95rem; font-weight: 700; }
+        .markdown-section p { margin: 4px 0; }
+        .markdown-section code {
+            background: #f3f4f6;
+            padding: 1px 5px;
+            border-radius: 3px;
+            font-size: 0.78rem;
+        }
+        .markdown-section pre code {
+            display: block;
+            padding: 10px;
+            overflow-x: auto;
+            white-space: pre;
+        }
+        .markdown-section ul { padding-left: 18px; }
+
+        .skills-badge {
+            display: inline-block;
+            background: #eaf0fa;
+            color: #0071c5;
+            border-radius: 12px;
+            padding: 2px 9px;
+            font-size: 0.72rem;
+            font-weight: 600;
+            margin: 2px;
+        }
+
+        /* Typing indicator */
+        .typing-indicator {
+            display: flex;
+            align-items: center;
+            gap: 5px;
+            padding: 10px 14px;
+            background: white;
+            border: 1px solid #e6eaf0;
+            border-radius: 12px;
+            font-size: 0.8rem;
+            color: #888;
+            width: fit-content;
+        }
+        .dot { width: 7px; height: 7px; border-radius: 50%; background: #0071c5; animation: bounce 1.2s infinite; }
+        .dot:nth-child(2) { animation-delay: 0.2s; }
+        .dot:nth-child(3) { animation-delay: 0.4s; }
+        @keyframes bounce {
+            0%, 80%, 100% { transform: translateY(0); }
+            40% { transform: translateY(-6px); }
+        }
+
+        /* Input row */
+        .input-row {
+            padding: 14px 20px;
+            background: white;
+            border-top: 1px solid #e0e0e0;
+            display: flex;
+            gap: 10px;
+            align-items: flex-end;
+        }
+        #user-input {
+            flex: 1;
+            resize: none;
+            border: 1px solid #ddd;
+            border-radius: 10px;
+            padding: 10px 14px;
+            font-size: 0.88rem;
+            font-family: 'Inter', sans-serif;
+            min-height: 44px;
+            max-height: 120px;
+            outline: none;
+            transition: border-color 0.2s;
+        }
+        #user-input:focus { border-color: #0071c5; box-shadow: 0 0 0 2px rgba(0,113,197,0.12); }
+        #send-btn {
+            background: #0071c5;
+            color: white;
+            border: none;
+            border-radius: 10px;
+            padding: 10px 18px;
+            font-size: 0.88rem;
+            font-weight: 600;
+            cursor: pointer;
+            height: 44px;
+            white-space: nowrap;
+        }
+        #send-btn:hover { background: #005a9e; }
+        #send-btn:disabled { opacity: 0.5; cursor: not-allowed; }
+
+        /* Scrollbar */
+        #chat-window::-webkit-scrollbar { width: 5px; }
+        #chat-window::-webkit-scrollbar-thumb { background: #ccc; border-radius: 3px; }
+
+        /* Welcome */
+        .welcome-msg {
+            text-align: center;
+            color: #aaa;
+            font-size: 0.85rem;
+            margin: auto;
+            padding: 40px 20px;
+        }
+        .welcome-msg .big-icon { font-size: 3rem; margin-bottom: 10px; }
+    </style>
+</head>
+<body>
+
+<!-- Top bar -->
+<div class="top-bar">
+    <span style="font-size:1.4rem;">📡</span>
+    <h1>Wi-Fi Log Chatbot</h1>
+    <span class="badge-model">Avatar · Multi-Skill Agent</span>
+    <a href="/" class="ml-auto" style="color:rgba(255,255,255,0.75);font-size:0.8rem;text-decoration:none;">← Back to Avatar</a>
+</div>
+
+<div class="main-layout">
+
+    <!-- ── Sidebar ── -->
+    <div class="sidebar">
+
+        <!-- Log file -->
+        <div class="sidebar-section">
+            <h6>📂 Log File</h6>
+            {% if suggested_log %}
+            <div style="font-size:0.75rem;background:#1a3a1a;border:1px solid #2d6a2d;border-radius:5px;padding:5px 8px;margin-bottom:6px;color:#7ec87e;">
+                ✅ Log from last analysis pre-loaded — click <strong>Load</strong> to confirm.
+            </div>
+            {% endif %}
+            <div class="log-input-group">
+                <input id="log-path-input" type="text"
+                       placeholder="Full path to .log file…"
+                       value="{{ suggested_log | default('', true) }}">
+                <button class="btn-browse" onclick="browseLog()" title="Browse for file">📁</button>
+                <button class="btn-set-log" onclick="setLog()">Load</button>
+            </div>
+            <div id="log-status" class="log-status"></div>
+        </div>
+
+        <!-- Skills -->
+        <div class="sidebar-section">
+            <h6>🛠 Available Skills</h6>
+            <div id="skills-list">
+                <div style="font-size:0.78rem;color:#aaa;">Load a log file to see skills.</div>
+            </div>
+        </div>
+
+        <!-- Actions -->
+        <div class="sidebar-section">
+            <h6>⚡ Actions</h6>
+            <button class="btn-analyze-all" id="analyze-all-btn" onclick="analyzeAll()" disabled>
+                🔍 Analyze All Skills
+            </button>
+            <button class="btn-reset" onclick="resetConversation()">🔄 Reset Conversation</button>
+        </div>
+
+        <!-- Reload skills from directory -->
+        <div class="sidebar-section">
+            <h6>🔁 Reload Skills</h6>
+            <div class="log-input-group">
+                <input id="skills-dir-input" type="text"
+                       placeholder="Skills data directory…">
+                <button class="btn-browse" onclick="browseSkillsDir()" title="Browse for directory">📁</button>
+            </div>
+            <button class="btn-set-log" style="width:100%;margin-top:6px;" onclick="reloadSkills()">↺ Reload Skills</button>
+            <div id="skills-reload-status" class="log-status"></div>
+        </div>
+
+        <!-- Quick ask shortcuts -->
+        <div class="sidebar-section">
+            <h6>💬 Quick Ask</h6>
+            <div id="quick-questions">
+                <button class="skill-card" style="width:100%;text-align:left;background:none;border:1px solid #e4eaf2;border-radius:7px;padding:7px 10px;cursor:pointer;font-size:0.78rem;color:#444;margin-bottom:5px;" onclick="sendQuick('Why did the Wi-Fi disconnect?')">Why did the Wi-Fi disconnect?</button>
+                <button class="skill-card" style="width:100%;text-align:left;background:none;border:1px solid #e4eaf2;border-radius:7px;padding:7px 10px;cursor:pointer;font-size:0.78rem;color:#444;margin-bottom:5px;" onclick="sendQuick('What is the average resume connection time?')">What is the resume connection time?</button>
+                <button class="skill-card" style="width:100%;text-align:left;background:none;border:1px solid #e4eaf2;border-radius:7px;padding:7px 10px;cursor:pointer;font-size:0.78rem;color:#444;margin-bottom:5px;" onclick="sendQuick('Was the disconnection initiated remotely by the AP?')">Was disconnection remote/AP-initiated?</button>
+                <button class="skill-card" style="width:100%;text-align:left;background:none;border:1px solid #e4eaf2;border-radius:7px;padding:7px 10px;cursor:pointer;font-size:0.78rem;color:#444;" onclick="sendQuick('Summarize all the issues found in this log.')">Summarize all issues</button>
+            </div>
+        </div>
+
+    </div>
+
+    <!-- ── Chat area ── -->
+    <div class="chat-area">
+        <div id="chat-window">
+            <div class="welcome-msg" id="welcome-msg">
+                <div class="big-icon">🤖</div>
+                <strong>Wi-Fi Log Chatbot</strong><br>
+                Load a log file on the left, then ask me anything about it.<br>
+                I will apply the relevant skill filter and analyse the logs for you.
+            </div>
+        </div>
+
+        <div class="input-row">
+            <textarea id="user-input" rows="1" placeholder="Ask a question about the log…" onkeydown="handleEnter(event)" oninput="autoResize(this)"></textarea>
+            <button id="send-btn" onclick="sendMessage()">Send ↑</button>
+        </div>
+    </div>
+
+</div>
+
+<!-- ── JavaScript ── -->
+<script>
+    let logLoaded = false;
+
+    // ── Utilities ──────────────────────────────────────────────────
+    function autoResize(el) {
+        el.style.height = 'auto';
+        el.style.height = Math.min(el.scrollHeight, 120) + 'px';
+    }
+
+    function handleEnter(e) {
+        if (e.key === 'Enter' && !e.shiftKey) {
+            e.preventDefault();
+            sendMessage();
+        }
+    }
+
+    function scrollBottom() {
+        const w = document.getElementById('chat-window');
+        w.scrollTop = w.scrollHeight;
+    }
+
+    function hideWelcome() {
+        const w = document.getElementById('welcome-msg');
+        if (w) w.remove();
+    }
+
+    // ── Append messages ────────────────────────────────────────────
+    function appendUserMsg(text) {
+        hideWelcome();
+        const row = document.createElement('div');
+        row.className = 'msg-row user';
+        row.innerHTML = `
+            <div class="avatar-icon">👤</div>
+            <div class="msg-bubble">${escapeHtml(text)}</div>
+        `;
+        document.getElementById('chat-window').appendChild(row);
+        scrollBottom();
+    }
+
+    function appendTyping() {
+        hideWelcome();
+        const row = document.createElement('div');
+        row.className = 'msg-row assistant';
+        row.id = 'typing-row';
+        row.innerHTML = `
+            <div class="avatar-icon">🤖</div>
+            <div class="typing-indicator">
+                <span class="dot"></span><span class="dot"></span><span class="dot"></span>
+                &nbsp;Analysing…
+            </div>
+        `;
+        document.getElementById('chat-window').appendChild(row);
+        scrollBottom();
+        return row;
+    }
+
+    function removeTyping() {
+        const t = document.getElementById('typing-row');
+        if (t) t.remove();
+    }
+
+    function appendAssistantText(text) {
+        removeTyping();
+        const row = document.createElement('div');
+        row.className = 'msg-row assistant';
+        row.innerHTML = `
+            <div class="avatar-icon">🤖</div>
+            <div class="msg-bubble">${marked.parse(text)}</div>
+        `;
+        document.getElementById('chat-window').appendChild(row);
+        scrollBottom();
+    }
+
+    function appendReport(data, header = '📊 Analysis Report') {
+        removeTyping();
+        hideWelcome();
+
+        const actions = (data.recommended_actions || []).map(a => `<li>${escapeHtml(a)}</li>`).join('');
+        const skills  = (data.involved_skills || data.skill_findings ? Object.keys(data.skill_findings || {}) : [])
+                         .map(s => `<span class="skills-badge">${s}</span>`).join(' ');
+        const score   = data.confidence_score || 0;
+        const barWidth = Math.max(0, Math.min(100, score));
+
+        const findings = data.skill_findings
+            ? Object.entries(data.skill_findings).map(([k, v]) =>
+                `<div style="margin-bottom:8px;"><strong style="font-size:0.78rem;color:#0071c5;">${k}</strong><div style="font-size:0.78rem;color:#444;white-space:pre-wrap;">${escapeHtml(String(v).substring(0,500))}${String(v).length>500?'…':''}</div></div>`
+              ).join('')
+            : '';
+
+        const html = `
+        <div class="report-card">
+            <div class="report-header">🔬 ${escapeHtml(header)}</div>
+            <div class="report-body">
+                ${data.root_cause_summary ? `
+                <div class="report-row">
+                    <div class="report-label">Root Cause</div>
+                    <div style="font-weight:600;color:#222;">${escapeHtml(data.root_cause_summary)}</div>
+                </div>` : ''}
+                ${score ? `
+                <div class="report-row">
+                    <div class="report-label">Confidence</div>
+                    <div>
+                        <strong>${score}%</strong>
+                        <span class="confidence-bar" style="width:${barWidth}px;"></span>
+                    </div>
+                </div>` : ''}
+                ${actions ? `
+                <div class="report-row">
+                    <div class="report-label">Recommendations</div>
+                    <ul style="margin:0;padding-left:16px;font-size:0.8rem;">${actions}</ul>
+                </div>` : ''}
+                ${skills ? `
+                <div class="report-row">
+                    <div class="report-label">Skills Used</div>
+                    <div>${skills}</div>
+                </div>` : ''}
+                ${findings ? `
+                <div class="report-row" style="flex-direction:column;">
+                    <div class="report-label" style="margin-bottom:6px;">Per-Skill Findings</div>
+                    ${findings}
+                </div>` : ''}
+                ${data.markdown_summary ? `
+                <div class="markdown-section">${marked.parse(data.markdown_summary)}</div>` : ''}
+            </div>
+        </div>`;
+
+        const wrapper = document.createElement('div');
+        wrapper.className = 'msg-row assistant';
+        wrapper.style.maxWidth = '95%';
+        wrapper.innerHTML = `<div class="avatar-icon">🤖</div><div style="flex:1;">${html}</div>`;
+        document.getElementById('chat-window').appendChild(wrapper);
+        scrollBottom();
+    }
+
+    function escapeHtml(s) {
+        return String(s)
+            .replace(/&/g, '&amp;').replace(/</g, '&lt;')
+            .replace(/>/g, '&gt;').replace(/"/g, '&quot;');
+    }
+
+    // ── Browse for log file (server-side native dialog) ────────────
+    async function browseLog() {
+        const btn = document.querySelector('.btn-browse');
+        btn.textContent = '⏳';
+        btn.disabled = true;
+        try {
+            const res = await fetch('/log_chatbot/browse');
+            const data = await res.json();
+            if (data.path) {
+                document.getElementById('log-path-input').value = data.path;
+            }
+        } catch (e) {
+            console.error('Browse failed:', e);
+        } finally {
+            btn.textContent = '📁';
+            btn.disabled = false;
+        }
+    }
+
+    // ── Browse for skills data directory ──────────────────────────
+    async function browseSkillsDir() {
+        const btn = document.querySelector('#skills-dir-input + .btn-browse');
+        btn.textContent = '⏳';
+        btn.disabled = true;
+        try {
+            const res = await fetch('/log_chatbot/browse_dir');
+            const data = await res.json();
+            if (data.path) {
+                document.getElementById('skills-dir-input').value = data.path;
+            }
+        } catch (e) {
+            console.error('Browse dir failed:', e);
+        } finally {
+            btn.textContent = '📁';
+            btn.disabled = false;
+        }
+    }
+
+    // ── Reload skills from directory ───────────────────────────────
+    async function reloadSkills() {
+        const dir = document.getElementById('skills-dir-input').value.trim();
+        const statusEl = document.getElementById('skills-reload-status');
+        statusEl.textContent = 'Reloading…';
+        statusEl.className = 'log-status';
+        statusEl.style.display = 'block';
+        try {
+            const res = await fetch('/log_chatbot/reload_skills', {
+                method: 'POST',
+                headers: {'Content-Type': 'application/json'},
+                body: JSON.stringify({data_dir: dir})
+            });
+            const data = await res.json();
+            if (data.success) {
+                if (data.warning) {
+                    showStatus(statusEl, '⚠ ' + data.warning, 'warn');
+                } else {
+                    showStatus(statusEl, '✔ ' + data.message, 'ok');
+                }
+                renderSkills(data.skills);
+            } else {
+                showStatus(statusEl, '✘ ' + data.error, 'err');
+            }
+        } catch (e) {
+            showStatus(statusEl, '✘ Network error: ' + e.message, 'err');
+        }
+    }
+
+    // ── Set log file ───────────────────────────────────────────────
+    async function 
+    
+    setLog() {
+        const path = document.getElementById('log-path-input').value.trim();
+        const statusEl = document.getElementById('log-status');
+        if (!path) { showStatus(statusEl, 'Please enter a log file path.', 'err'); return; }
+
+        statusEl.className = 'log-status'; statusEl.textContent = 'Loading…'; statusEl.style.display = 'block';
+
+        try {
+            const res = await fetch('/log_chatbot/set_log', {
+                method: 'POST',
+                headers: {'Content-Type': 'application/json'},
+                body: JSON.stringify({log_path: path})
+            });
+            const data = await res.json();
+            if (data.success) {
+                showStatus(statusEl, '✔ ' + data.message, 'ok');
+                renderSkills(data.skills);
+                logLoaded = true;
+                document.getElementById('analyze-all-btn').disabled = false;
+            } else {
+                showStatus(statusEl, '✘ ' + data.error, 'err');
+            }
+        } catch (e) {
+            showStatus(statusEl, '✘ Network error: ' + e.message, 'err');
+        }
+    }
+
+    function showStatus(el, msg, type) {
+        el.textContent = msg;
+        el.className = 'log-status ' + type;
+    }
+
+    function renderSkills(skills) {
+        const container = document.getElementById('skills-list');
+        container.innerHTML = skills.map(s => `
+            <div class="skill-card" onclick="sendQuick('Analyse using the ${s.name} skill')">
+                <div class="skill-name">${s.name}</div>
+                <div class="skill-desc">${s.description}</div>
+            </div>
+        `).join('');
+    }
+
+    // ── Send chat message ──────────────────────────────────────────
+    async function sendMessage() {
+        const input = document.getElementById('user-input');
+        const text = input.value.trim();
+        if (!text) return;
+        // if (!logLoaded) {
+        //     appendAssistantText('⚠️ Please load a log file first (sidebar → Log File).');
+        //     return;
+        // }
+
+        input.value = '';
+        input.style.height = 'auto';
+        document.getElementById('send-btn').disabled = true;
+        appendUserMsg(text);
+        const typingRow = appendTyping();
+
+        try {
+            const res = await fetch('/log_chatbot/chat', {
+                method: 'POST',
+                headers: {'Content-Type': 'application/json'},
+                body: JSON.stringify({message: text})
+            });
+            const data = await res.json();
+            removeTyping();
+
+            if (!data.success) {
+                appendAssistantText('❌ Error: ' + (data.error || 'Unknown error'));
+            } else {
+                const result = data.result;
+                if (result.type === 'report') {
+                    appendReport(result.data);
+                } else if (result.type === 'text') {
+                    appendAssistantText(result.data || '_No response._');
+                } else {
+                    appendAssistantText('⚠️ ' + (result.data || 'Unknown response.'));
+                }
+            }
+        } catch (e) {
+            removeTyping();
+            appendAssistantText('❌ Network error: ' + e.message);
+        } finally {
+            document.getElementById('send-btn').disabled = false;
+        }
+    }
+
+    function sendQuick(text) {
+        document.getElementById('user-input').value = text;
+        sendMessage();
+    }
+
+    // ── Analyze All ────────────────────────────────────────────────
+    async function analyzeAll() {
+        if (!logLoaded) { appendAssistantText('⚠️ Please load a log file first.'); return; }
+
+        const desc = prompt('Optional: describe the issue (or leave blank for full analysis):', '') ?? '';
+        appendUserMsg('🔍 Run full multi-skill analysis' + (desc ? `: "${desc}"` : ''));
+        const typingRow = appendTyping();
+        document.getElementById('analyze-all-btn').disabled = true;
+
+        try {
+            const res = await fetch('/log_chatbot/analyze_all', {
+                method: 'POST',
+                headers: {'Content-Type': 'application/json'},
+                body: JSON.stringify({issue_description: desc || 'Perform full multi-skill log analysis'})
+            });
+            const data = await res.json();
+            removeTyping();
+
+            if (!data.success) {
+                appendAssistantText('❌ ' + (data.error || 'Analysis failed.'));
+            } else {
+                const result = data.result;
+                if (result.type === 'report') {
+                    appendReport(result.data, '📊 Full Multi-Skill Analysis Report');
+                } else {
+                    appendAssistantText(result.data || '_No output._');
+                }
+            }
+        } catch (e) {
+            removeTyping();
+            appendAssistantText('❌ Network error: ' + e.message);
+        } finally {
+            document.getElementById('analyze-all-btn').disabled = false;
+        }
+    }
+
+    // ── Reset ──────────────────────────────────────────────────────
+    async function resetConversation() {
+        await fetch('/log_chatbot/reset', {method: 'POST'});
+        document.getElementById('chat-window').innerHTML = `
+            <div class="welcome-msg" id="welcome-msg">
+                <div class="big-icon">🤖</div>
+                <strong>Conversation reset.</strong><br>
+                The log file is still loaded. Ask me a new question.
+            </div>`;
+    }
+
+    // ── Auto-load skills if suggested_log is pre-filled ────────────
+    document.addEventListener('DOMContentLoaded', function () {
+        const suggestedLog = document.getElementById('log-path-input').value.trim();
+        if (suggestedLog) {
+            setLog();
+        }
+    });
+</script>
+</body>
+</html>

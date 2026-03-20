@@ -156,8 +156,11 @@
                                 <button class="btn btn-primary btn-sm mb-2" onclick="startAnalysis(this, '{{ etl_path | urlencode }}')">
                                     Analyze
                                 </button>
-                                <button class="btn btn-success btn-sm" onclick="startLogParser(this, '{{ etl_path | urlencode }}')">
+                                <button class="btn btn-success btn-sm mb-2" onclick="startLogParser(this, '{{ etl_path | urlencode }}')">
                                     Analyze with LLM
+                                </button>
+                                <button class="btn btn-info btn-sm" style="color:white;" onclick="startChatbotAnalysis(this, '{{ etl_path | urlencode }}')">
+                                    🤖 Chatbot Analysis
                                 </button>
                             </div>
                         </td>
@@ -412,6 +415,42 @@
             }
             window.pendingLogParser = null;
         }
+
+        if (window.pendingChatbot) {
+            const { etlPathEncoded, button } = window.pendingChatbot;
+            window.pendingChatbot = null;
+            if (msg.status === 'done') {
+                logBox.innerText += `✅ ETL done — preparing chatbot...\n`;
+                logBox.scrollTop = logBox.scrollHeight;
+                button.innerText = '⏳ Preparing...';
+
+                const etlPath = decodeURIComponent(etlPathEncoded);
+                fetch(CHATBOT_PREPARE_URL, {
+                    method: 'POST',
+                    headers: { 'Content-Type': 'application/json' },
+                    body: JSON.stringify({ etl_path: etlPath })
+                })
+                .then(res => res.json())
+                .then(data => {
+                    if (data.success) {
+                        logBox.innerText += `✅ Ready — opening chatbot...\n`;
+                        logBox.scrollTop = logBox.scrollHeight;
+                        window.location.href = CHATBOT_URL;
+                    } else {
+                        button.classList.remove('disabled');
+                        button.innerText = '🤖 Chatbot Analysis';
+                        logBox.innerText += `❌ Chatbot prepare failed: ${data.error}\n`;
+                        logBox.scrollTop = logBox.scrollHeight;
+                    }
+                })
+                .catch(err => {
+                    button.classList.remove('disabled');
+                    button.innerText = '🤖 Chatbot Analysis';
+                    logBox.innerText += `❌ Error: ${err}\n`;
+                    logBox.scrollTop = logBox.scrollHeight;
+                });
+            }
+        }
     });
 
 
@@ -427,6 +466,36 @@
 
         // jump to fw_analysis.html with fw_path para
         window.location.href = `/${FW_ETL_ANALYSIS_URL}?fw_path=${fwPathEncoded}`;
+    }
+
+    const CHATBOT_PREPARE_URL = "{{ url_for('log_chatbot.prepare') }}";
+    const CHATBOT_URL = "{{ url_for('log_chatbot.index') }}";
+
+    function startChatbotAnalysis(button, etlPathEncoded) {
+        if (button.classList.contains('disabled')) return;
+        button.classList.add('disabled');
+        button.innerText = '⏳ Running ETL...';
+
+        const decoded = decodeURIComponent(etlPathEncoded);
+        logBox.innerText += `🤖 Starting Chatbot Analysis for: ${decoded}\n`;
+        logBox.innerText += `🛠️ Step 1: Running ETL Analysis...\n`;
+        logBox.scrollTop = logBox.scrollHeight;
+
+        window.pendingChatbot = {
+            etlPathEncoded: etlPathEncoded,
+            button: button
+        };
+
+        fetch(`${ETL_ANALYSIS_URL}?etl_path=${etlPathEncoded}&mode=`)
+            .then(res => res.text())
+            .catch(err => {
+                console.error('ETL Analysis failed:', err);
+                logBox.innerText += `❌ ETL Analysis Failed: ${decoded}\n`;
+                logBox.scrollTop = logBox.scrollHeight;
+                button.classList.remove('disabled');
+                button.innerText = '🤖 Chatbot Analysis';
+                window.pendingChatbot = null;
+            });
     }
         
     </script>

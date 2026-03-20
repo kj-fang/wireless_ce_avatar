@@ -1,9 +1,14 @@
 from pathlib import Path
 from threading import Thread
 
-from configs.path_configs import KEY_PATH_prim, KEY_PATH_bkup, CLASSIFY_PATH
+from configs.path_configs import (
+    KEY_PATH_prim, KEY_PATH_bkup, CLASSIFY_PATH,
+    LOG_PARSER_DATA_DIR_prim, LOG_PARSER_DATA_DIR_bkup,
+    LOCAL_LOG_PARSER_DATA_DIR,
+)
 from utils import helpers
 from services.llm_service import LLM_helper
+from services.log_chatbot_service import WifiLogAgentSystem, sync_to_local
 
 from configs.global_configs import app_config
 
@@ -55,6 +60,42 @@ def set_up(socketio):
         llm_helper.set_up( key.expertgpt_token, key.expertgpt_url, key.expertgpt_model, CLASSIFY_PATH)
 
     app_config.set_llm_helper(llm_helper)
+
+    # Load diagnostic skills into LLM_helper (shared with chatbot agent)
+    # Priority: local cache → remote shared folder
+    local_data_dir  = Path(LOCAL_LOG_PARSER_DATA_DIR)
+    local_has_data  = ((local_data_dir / "prompt").exists() and
+                       (local_data_dir / "filter").exists())
+
+    data_dir = None
+    if local_has_data:
+        print(f"🗂️  Using local skill cache: {LOCAL_LOG_PARSER_DATA_DIR}")
+        data_dir = LOCAL_LOG_PARSER_DATA_DIR
+    # else:
+    #     print("🔄  Local cache missing — syncing from remote shared folder...")
+    #     remote_dir = helpers.get_load_path(LOG_PARSER_DATA_DIR_prim, LOG_PARSER_DATA_DIR_bkup)
+    #     if remote_dir:
+    #         sync_to_local(remote_dir, LOCAL_LOG_PARSER_DATA_DIR)
+    #         data_dir = LOCAL_LOG_PARSER_DATA_DIR   # use local after sync
+    #     else:
+    #         print("⚠️  Remote shared folder also unreachable — no skills will be loaded.")
+
+
+    llm_helper.load_skills(data_dir)
+
+    # Log Chatbot Agent — loaded at startup, reuses skills already in llm_helper
+    if llm_helper.client is not None:
+        model = getattr(llm_helper, 'model', 'gpt-4.1')
+        log_chatbot_agent = WifiLogAgentSystem(
+            client=llm_helper.client,
+            model=model,
+            skills=llm_helper.skills,   # reuse, no second disk read
+        )
+        print(f"🤖 Log Chatbot Agent loaded (model={model})")
+    else:
+        log_chatbot_agent = None
+        print("⚠️  Log Chatbot Agent skipped — LLM client not configured (no API key).")
+    app_config.set_log_chatbot_agent(log_chatbot_agent)
 
     # socketio
     app_config.set_socketio(socketio)

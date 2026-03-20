@@ -28,7 +28,7 @@ from configs.version import __version__, BUILD_DATE, GIT_HASH, GIT_BRANCH
 #from blueprints.main import main_bp
 #from blueprints.attachment import attachment_bp
 #from blueprints.log_analysis import log_bp
-from blueprints import automation_bp, main_bp, llm_bp, download_bp, analysis_etl_bp, bsod_bp, log_parser_bp # , attachment_bp, log_bp, 
+from blueprints import automation_bp, main_bp, llm_bp, download_bp, analysis_etl_bp, bsod_bp, log_parser_bp, log_chatbot_bp # , attachment_bp, log_bp, 
 import blueprints.download.download_routes
 
 def create_app():
@@ -46,6 +46,7 @@ def create_app():
     app.register_blueprint(automation_bp)
     app.register_blueprint(bsod_bp)
     app.register_blueprint(log_parser_bp)
+    app.register_blueprint(log_chatbot_bp)
 
     # Register socketio
     blueprints.download.download_routes.register_socketio_handlers(socketio)

@@ -5,6 +5,7 @@ from .llm import llm_bp
 from .automation import automation_bp
 from .download import download_bp
 from .log_parser import log_parser_bp
+from .log_chatbot import log_chatbot_bp
 
 __all__ = [
     "main_bp",
@@ -13,5 +14,6 @@ __all__ = [
     "llm_bp",
     "automation_bp",
     "download_bp",
-    "log_parser_bp"
+    "log_parser_bp",
+    "log_chatbot_bp",
 ]

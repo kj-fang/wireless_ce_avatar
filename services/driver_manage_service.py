@@ -316,7 +316,9 @@ class DriverManager:
         try:
             return len(self.main_driver.window_handles) == 0
         except Exception as e:
-            print(f"⚠️ is_browser_closed check raised an exception: {e}")
+            msg = str(e).lower()
+            if "invalid session id" not in msg and "session deleted" not in msg:
+                print(f"⚠️ is_browser_closed check raised an exception: {e}")
             return True
 
     def shutdown(self):

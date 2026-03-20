@@ -33,6 +33,7 @@ def get_llm_analysis():
             'ai_analysis': ai_analysis
         }
         print("session['classification'] ", session['classification'])
+        session['ai_ips_analysis'] = ai_analysis
         return Response(
             json.dumps(response_data, ensure_ascii=False, indent=2),
             mimetype='application/json'

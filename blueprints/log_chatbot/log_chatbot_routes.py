@@ -167,6 +167,10 @@ def set_log():
         agent = _get_or_create_agent()
         agent.current_log_path = log_path
         agent.reset_conversation()          # fresh conversation for a new file
+        ctx = _extract_issue_context()      # re-extract context in case session was updated after agent creation
+        if any(ctx.values()):
+            agent.prime_with_context(**ctx)
+
         session["chatbot_log_path"] = log_path
         return jsonify({
             "success": True,

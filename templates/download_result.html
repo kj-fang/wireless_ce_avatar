@@ -207,11 +207,10 @@
                         <td>{{ ddd_path.split('.')[-1] }}</td>
                         <td class="text-center">
                             <div class="d-flex flex-column align-items-center">
-                                <button class="btn btn-primary btn-sm mb-2" data-evt-path="{{ ddd_path | e }}" onclick="loadEventLog(this.dataset.evtPath)">
-                                    Event View
-                                </button>
-                                <button class="btn btn-success btn-sm" data-evt-path="{{ ddd_path | e }}" onclick="dumpEventLogTxt(this.dataset.evtPath, this)">
-                                    Dump TXT
+                                <button class="btn btn-primary btn-sm" 
+                                        data-evt-path="{{ ddd_path | e }}" 
+                                        onclick="eventAnalysis(this.dataset.evtPath, this)">
+                                    Event Analysis
                                 </button>
                             </div>
                         </td>
@@ -220,7 +219,6 @@
                 {% endfor %}
             {% endfor %}
         </tbody>
-    </table>
 
     <!-- System Event Log Display Box (hidden until Event View or Dump TXT is clicked) -->
     <div id="eventLogSection" class="mt-3" style="display: none;">
@@ -621,6 +619,54 @@
         window.location.href = `/${FW_ETL_ANALYSIS_URL}?fw_path=${fwPathEncoded}`;
     }
         
+    // Combined function: Dumps TXT file AND loads to UI
+    function eventAnalysis(evtPath, btnElement) {
+        const originalText = btnElement.innerText;
+        btnElement.innerText = 'Analyzing...';
+        btnElement.disabled = true;
+
+        // 1. Load data to UI Table immediately
+        loadEventLog(evtPath);
+
+        // 2. Trigger background Dump request
+        fetch('/dump_event_txt', {
+            method: 'POST',
+            headers: { 'Content-Type': 'application/json' },
+            body: JSON.stringify({ path: evtPath })
+        })
+        .then(response => response.json())
+        .then(data => {
+            btnElement.disabled = false;
+            if (data.success) {
+                btnElement.innerText = 'Analysis Done!';
+                btnElement.classList.replace('btn-primary', 'btn-secondary');
+               
+                alert('Success: TXT file generated at:\n' + data.txt_path);
+            } else {
+                btnElement.innerText = 'Analysis Failed';
+                console.error('Dump failed:', data.error);
+                
+                alert('Error: Dump failed - ' + data.error);
+            }
+        })
+        .catch(err => {
+            btnElement.disabled = false;
+            btnElement.innerText = originalText;
+            console.error('Error:', err);
+           
+            alert('Error: A network error occurred during analysis.');
+        });
+    }
+
+    // Auto-load logic on page initialization
+    window.addEventListener('DOMContentLoaded', (event) => {
+        // Find the first event analysis button and trigger it automatically
+        const firstEvtBtn = document.querySelector('button[data-evt-path]');
+        if (firstEvtBtn) {
+            console.log("Auto-triggering event analysis for:", firstEvtBtn.dataset.evtPath);
+            loadEventLog(firstEvtBtn.dataset.evtPath);
+        }
+    });
     </script>
 </body>
 </html>

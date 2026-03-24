@@ -222,25 +222,27 @@
         </tbody>
     </table>
 
-    <!-- System Event Log Display Box -->
-    <div class="mt-3">
+    <!-- System Event Log Display Box (hidden until Event View or Dump TXT is clicked) -->
+    <div id="eventLogSection" class="mt-3" style="display: none;">
         <div class="d-flex justify-content-between align-items-center mb-2">
             <h5>📋 System Event Log Content</h5>
             <div>
                 <select id="eventSourceFilter" class="form-control form-control-sm d-inline-block mr-2" style="width: auto;" onchange="filterEventLogs()">
-                    <option value="ibt" selected>IBT (ibtusb/ibtpci)</option>
+                    <option value="pci_bt" selected>ibtpci / bthmini</option>
+                    <option value="usb_bt">ibtusb / bthusb</option>
+                    <option value="pci_bt_wifi">ibtpci / bthmini + Netwaw / Netwtw</option>
+                    <option value="usb_bt_wifi">ibtusb / bthusb + Netwaw / Netwtw</option>
                     <option value="all">All Sources</option>
                 </select>
                 <select id="eventLevelFilter" class="form-control form-control-sm d-inline-block" style="width: auto;" onchange="filterEventLogs()">
                     <option value="all">All Levels</option>
-                    <option value="error">Error</option>
-                    <option value="warning">Warning</option>
+                    <option value="warning_error">Warning + Error</option>
                     <option value="information">Information</option>
                 </select>
             </div>
         </div>
         <div id="eventLogContent" class="border rounded p-2" style="height: 300px; overflow-y: auto; background-color: #1e1e1e; color: #d4d4d4; font-family: 'Consolas', monospace; font-size: 12px;">
-            <p class="text-muted">Click "Load Events" to display event log content here.</p>
+            <p class="text-muted">Loading...</p>
         </div>
     </div>
 
@@ -293,8 +295,11 @@
         // ------------------ Restored function ------------------
         let allEventLogs = []; // Store all event logs for filtering
 
-        // Call backend to parse .evt file and display on web (no popup window)
+        // Call backend to parse .evt file and display on web
         function loadEventLog(evtPath) {
+            // Show the event log section
+            document.getElementById('eventLogSection').style.display = 'block';
+            
             const contentBox = document.getElementById('eventLogContent');
             contentBox.innerHTML = '<p class="text-info">Loading event logs...</p>';
             
@@ -324,7 +329,7 @@
 
        
 
-        //  Call backend to decode evt to txt file in the background AND load to UI
+        // Call backend to decode evt to TXT file in the background AND load to UI
         function dumpEventLogTxt(evtPath, btnElement) {
             const originalText = btnElement.innerText;
             btnElement.innerText = 'Dumping...';
@@ -347,7 +352,7 @@
                 if (data.success) {
                     btnElement.innerText = 'Dumped!';
                     btnElement.classList.replace('btn-success', 'btn-secondary');
-                    alert('✅ TXT file successfully generated in the background folder!\n' + data.txt_path);
+                    alert('✅ TXT file successfully generated!\n' + data.txt_path);
                 } else {
                     btnElement.innerText = originalText;
                     alert('❌ Dump failed: ' + data.error);
@@ -387,41 +392,37 @@
             const info = BT_EVENT_DETAILS[String(eventId)];
             if (!info) return '';
 
+            // Type badge color (Error/Warning/Information)
             const bgColor = info.type === 'Error'       ? '#dc3545' :
                             info.type === 'Warning'     ? '#fd7e14' :
                             info.type === 'Information' || info.type === 'Informational' ? '#17a2b8'
                                                         : '#6c757d';
 
-            const usbBadge = (info.usb && info.usb.toLowerCase() === 'yes')
-                ? `<span style="font-size:9px;background:#0d6efd;color:#fff;border-radius:3px;padding:1px 4px;margin-right:2px;">USB</span>`
-                : '';
-            const pciBadge = (info.pci && info.pci.toLowerCase() === 'yes')
-                ? `<span style="font-size:9px;background:#6610f2;color:#fff;border-radius:3px;padding:1px 4px;">PCI</span>`
-                : '';
-
             const tooltipAttr = info.comments
                 ? `title="${info.comments.replace(/"/g, '&quot;')}" style="cursor:help;"`
                 : '';
 
-            // details_list: When there are multiple entries, expand them line by line (e.g., WEV 1864 corresponds to 3 ETW events).
+            // Clean detail text only, no ETW IDs
             const detailsList = info.details_list && info.details_list.length > 1
                 ? info.details_list.map(d =>
                     `<div style="border-left:2px solid #ccc;padding-left:4px;margin-top:2px;">
-                        <span style="font-weight:600;font-size:11px;">${d.details}</span>
-                        <span style="color:#888;font-size:10px;"> (ETW: ${d.etw_id})</span>
+                        <span style="font-size:11px;">${d.details}</span>
                     </div>`
                   ).join('')
-                : `<span style="font-weight:600;font-size:11px;">${info.details}</span>
-                   ${info.etw_id ? `<br><span style="color:#888;font-size:10px;">ETW: ${info.etw_id}</span>` : ''}`;
+                : `<span style="font-size:11px;">${info.details || ''}</span>`;
 
-            return `<div ${tooltipAttr}>
-                <span class="badge" style="
+            // Show type badge (Error/Warning/Information) only, not category
+            const typeBadge = info.type
+                ? `<span class="badge" style="
                     background-color: ${bgColor};
                     color: white; font-size: 10px;
                     padding: 2px 5px; border-radius: 3px;
                     display: inline-block; margin-bottom: 2px;
-                ">${info.category || info.type}</span>
-                ${usbBadge}${pciBadge}
+                ">${info.type}</span>`
+                : '';
+
+            return `<div ${tooltipAttr}>
+                ${typeBadge}
                 ${detailsList}
             </div>`;
         }
@@ -473,17 +474,31 @@
             
             let filtered = allEventLogs;
             
-            // Filter by source (ibtusb or ibtpci)
-            if (sourceFilter === 'ibt') {
+            // Source filter definitions
+            const sourceGroups = {
+                'pci_bt':      ['ibtpci', 'bthmini'],
+                'usb_bt':      ['ibtusb', 'bthusb'],
+                'pci_bt_wifi': ['ibtpci', 'bthmini', 'netwaw', 'netwtw'],
+                'usb_bt_wifi': ['ibtusb', 'bthusb', 'netwaw', 'netwtw']
+            };
+            
+            // Filter by source
+            if (sourceFilter !== 'all' && sourceGroups[sourceFilter]) {
+                const keywords = sourceGroups[sourceFilter];
                 filtered = filtered.filter(e => {
                     const source = (e.source || '').toLowerCase();
-                    return source.includes('ibtusb') || source.includes('ibtpci');
+                    return keywords.some(kw => source.includes(kw));
                 });
             }
             
             // Filter by level
-            if (levelFilter !== 'all') {
-                filtered = filtered.filter(e => e.level && e.level.toLowerCase() === levelFilter);
+            if (levelFilter === 'warning_error') {
+                filtered = filtered.filter(e => {
+                    const level = (e.level || '').toLowerCase();
+                    return level === 'warning' || level === 'error' || level === 'critical';
+                });
+            } else if (levelFilter === 'information') {
+                filtered = filtered.filter(e => e.level && e.level.toLowerCase() === 'information');
             }
             
             renderEventLogs(filtered);

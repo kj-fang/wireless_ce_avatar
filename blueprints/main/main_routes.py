@@ -325,10 +325,8 @@ def handle_dump_event_txt():
                                 data_items = event_data.findall('e:Data', ns)
                                 message = ' | '.join([d.text or '' for d in data_items if d.text])
                             
-                            # Write to TXT file in a clean format
-                            f.write(f"[{time_str}] [{level_str}] [{source_str}] Event ID: {id_str}\n")
-                            f.write(f"Message Data: {message}\n")
-                            f.write("-" * 80 + "\n")
+                            # Write each event as a single line: header + TAB + Message Data
+                            f.write(f"[{time_str}] [{level_str}] [{source_str}] Event ID: {id_str}\tMessage Data: {message}\n")
                             
                     except Exception as parse_e:
                         f.write(f"[Error parsing event]: {parse_e}\n")
@@ -343,7 +341,7 @@ def handle_dump_event_txt():
         return jsonify({'error': str(e)}), 500
 
 def handle_parse_event_log():
-    """Parse .evt file: keep ALL errors/warnings, ALL ibtusb/ibtpci, and at least 1000 normal events. Sorted oldest to newest."""
+    """Parse .evt file: keep ALL errors/warnings, ALL special sources (ibtusb/ibtpci/bthmini/bthusb/netwaw/netwtw), and up to 1000 normal events."""
     import xml.etree.ElementTree as ET
     import win32evtlog
     
@@ -354,7 +352,7 @@ def handle_parse_event_log():
         return jsonify({'error': 'Invalid path'}), 400
     
     try:
-        # Read from newest to oldest (Reverse Direction) to ensure the 1000 normal logs captured are the most recent
+        # Read from newest to oldest (Reverse Direction) for newest-first display
         query_handle = win32evtlog.EvtQuery(
             path, 
             win32evtlog.EvtQueryFilePath | win32evtlog.EvtQueryReverseDirection, 
@@ -362,7 +360,8 @@ def handle_parse_event_log():
         )
         
         events_list = []
-        special_sources = ['ibtusb', 'ibtpci']
+        # All special sources to always keep regardless of level
+        special_sources = ['ibtusb', 'ibtpci', 'bthmini', 'bthusb', 'netwaw', 'netwtw']
         
         normal_kept = 0
         total_scanned = 0
@@ -392,7 +391,7 @@ def handle_parse_event_log():
                     
                     # 💡 FILTERING LOGIC 💡
                     # Condition 1: Important levels (1=Critical, 2=Error, 3=Warning)
-                    # Condition 2: Special sources (ibtusb, ibtpci)
+                    # Condition 2: Special sources (ibtusb, ibtpci, bthmini, bthusb, netwaw, netwtw)
                     is_important_level = level_val in ['1', '2', '3']
                     is_special_source = any(kw in source.lower() for kw in special_sources)
                     
@@ -431,9 +430,6 @@ def handle_parse_event_log():
                     continue
                     
         print(f"[UI View] ✅ Scan complete! Scanned {total_scanned} events. Kept {len(events_list)} events (including {normal_kept} normal logs).")
-        
-        # ⭐ Crucial step: Reverse the collected logs from "New -> Old" to "Old -> New" for chronological web display
-        events_list.reverse()
         
         return jsonify({'events': events_list})
         

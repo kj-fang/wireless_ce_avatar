@@ -274,11 +274,10 @@
                         <td>{{ ddd_path.split('.')[-1] }}</td>
                         <td class="text-center">
                             <div class="d-flex flex-column align-items-center">
-                                <button class="btn btn-primary btn-sm mb-2" data-evt-path="{{ ddd_path | e }}" onclick="loadEventLog(this.dataset.evtPath)">
-                                    Event View
-                                </button>
-                                <button class="btn btn-success btn-sm" data-evt-path="{{ ddd_path | e }}" onclick="dumpEventLogTxt(this.dataset.evtPath, this)">
-                                    Dump TXT
+                                <button class="btn btn-primary btn-sm" 
+                                        data-evt-path="{{ ddd_path | e }}" 
+                                        onclick="eventAnalysis(this.dataset.evtPath, this)">
+                                    Event Analysis
                                 </button>
                             </div>
                         </td>
@@ -287,27 +286,28 @@
                 {% endfor %}
             {% endfor %}
         </tbody>
-    </table>
 
-    <!-- System Event Log Display Box -->
-    <div class="mt-3">
+    <!-- System Event Log Display Box (hidden until Event View or Dump TXT is clicked) -->
+    <div id="eventLogSection" class="mt-3" style="display: none;">
         <div class="d-flex justify-content-between align-items-center mb-2">
             <h5>📋 System Event Log Content</h5>
             <div>
                 <select id="eventSourceFilter" class="form-control form-control-sm d-inline-block mr-2" style="width: auto;" onchange="filterEventLogs()">
-                    <option value="ibt" selected>IBT (ibtusb/ibtpci)</option>
+                    <option value="pci_bt" selected>ibtpci / bthmini</option>
+                    <option value="usb_bt">ibtusb / bthusb</option>
+                    <option value="pci_bt_wifi">ibtpci / bthmini + Netwaw / Netwtw</option>
+                    <option value="usb_bt_wifi">ibtusb / bthusb + Netwaw / Netwtw</option>
                     <option value="all">All Sources</option>
                 </select>
                 <select id="eventLevelFilter" class="form-control form-control-sm d-inline-block" style="width: auto;" onchange="filterEventLogs()">
                     <option value="all">All Levels</option>
-                    <option value="error">Error</option>
-                    <option value="warning">Warning</option>
+                    <option value="warning_error">Warning + Error</option>
                     <option value="information">Information</option>
                 </select>
             </div>
         </div>
         <div id="eventLogContent" class="border rounded p-2" style="height: 300px; overflow-y: auto; background-color: #1e1e1e; color: #d4d4d4; font-family: 'Consolas', monospace; font-size: 12px;">
-            <p class="text-muted">Click "Load Events" to display event log content here.</p>
+            <p class="text-muted">Loading...</p>
         </div>
     </div>
 
@@ -368,9 +368,11 @@
         // ------------------ Restored function ------------------
         let allEventLogs = []; // Store all event logs for filtering
 
-        // Call backend to parse .evt file and display on web (no popup window)
+        // Call backend to parse .evt file and display on web
         function loadEventLog(evtPath) {
-            cancelPendingFwAnalysis();
+            // Show the event log section
+            document.getElementById('eventLogSection').style.display = 'block';
+            
             const contentBox = document.getElementById('eventLogContent');
             contentBox.innerHTML = '<p class="text-info">Loading event logs...</p>';
             
@@ -424,7 +426,7 @@
                 if (data.success) {
                     btnElement.innerText = 'Dumped!';
                     btnElement.classList.replace('btn-success', 'btn-secondary');
-                    alert('✅ TXT file successfully generated in the background folder!\n' + data.txt_path);
+                    alert('✅ TXT file successfully generated!\n' + data.txt_path);
                 } else {
                     btnElement.innerText = originalText;
                     alert('❌ Dump failed: ' + data.error);
@@ -464,41 +466,37 @@
             const info = BT_EVENT_DETAILS[String(eventId)];
             if (!info) return '';
 
+            // Type badge color (Error/Warning/Information)
             const bgColor = info.type === 'Error'       ? '#dc3545' :
                             info.type === 'Warning'     ? '#fd7e14' :
                             info.type === 'Information' || info.type === 'Informational' ? '#17a2b8'
                                                         : '#6c757d';
 
-            const usbBadge = (info.usb && info.usb.toLowerCase() === 'yes')
-                ? `<span style="font-size:9px;background:#0d6efd;color:#fff;border-radius:3px;padding:1px 4px;margin-right:2px;">USB</span>`
-                : '';
-            const pciBadge = (info.pci && info.pci.toLowerCase() === 'yes')
-                ? `<span style="font-size:9px;background:#6610f2;color:#fff;border-radius:3px;padding:1px 4px;">PCI</span>`
-                : '';
-
             const tooltipAttr = info.comments
                 ? `title="${info.comments.replace(/"/g, '&quot;')}" style="cursor:help;"`
                 : '';
 
-            // details_list: When there are multiple entries, expand them line by line (e.g., WEV 1864 corresponds to 3 ETW events).
+            // Clean detail text only, no ETW IDs
             const detailsList = info.details_list && info.details_list.length > 1
                 ? info.details_list.map(d =>
                     `<div style="border-left:2px solid #ccc;padding-left:4px;margin-top:2px;">
-                        <span style="font-weight:600;font-size:11px;">${d.details}</span>
-                        <span style="color:#888;font-size:10px;"> (ETW: ${d.etw_id})</span>
+                        <span style="font-size:11px;">${d.details}</span>
                     </div>`
                   ).join('')
-                : `<span style="font-weight:600;font-size:11px;">${info.details}</span>
-                   ${info.etw_id ? `<br><span style="color:#888;font-size:10px;">ETW: ${info.etw_id}</span>` : ''}`;
+                : `<span style="font-size:11px;">${info.details || ''}</span>`;
 
-            return `<div ${tooltipAttr}>
-                <span class="badge" style="
+            // Show type badge (Error/Warning/Information) only, not category
+            const typeBadge = info.type
+                ? `<span class="badge" style="
                     background-color: ${bgColor};
                     color: white; font-size: 10px;
                     padding: 2px 5px; border-radius: 3px;
                     display: inline-block; margin-bottom: 2px;
-                ">${info.category || info.type}</span>
-                ${usbBadge}${pciBadge}
+                ">${info.type}</span>`
+                : '';
+
+            return `<div ${tooltipAttr}>
+                ${typeBadge}
                 ${detailsList}
             </div>`;
         }
@@ -550,17 +548,31 @@
             
             let filtered = allEventLogs;
             
-            // Filter by source (ibtusb or ibtpci)
-            if (sourceFilter === 'ibt') {
+            // Source filter definitions
+            const sourceGroups = {
+                'pci_bt':      ['ibtpci', 'bthmini'],
+                'usb_bt':      ['ibtusb', 'bthusb'],
+                'pci_bt_wifi': ['ibtpci', 'bthmini', 'netwaw', 'netwtw'],
+                'usb_bt_wifi': ['ibtusb', 'bthusb', 'netwaw', 'netwtw']
+            };
+            
+            // Filter by source
+            if (sourceFilter !== 'all' && sourceGroups[sourceFilter]) {
+                const keywords = sourceGroups[sourceFilter];
                 filtered = filtered.filter(e => {
                     const source = (e.source || '').toLowerCase();
-                    return source.includes('ibtusb') || source.includes('ibtpci');
+                    return keywords.some(kw => source.includes(kw));
                 });
             }
             
             // Filter by level
-            if (levelFilter !== 'all') {
-                filtered = filtered.filter(e => e.level && e.level.toLowerCase() === levelFilter);
+            if (levelFilter === 'warning_error') {
+                filtered = filtered.filter(e => {
+                    const level = (e.level || '').toLowerCase();
+                    return level === 'warning' || level === 'error' || level === 'critical';
+                });
+            } else if (levelFilter === 'information') {
+                filtered = filtered.filter(e => e.level && e.level.toLowerCase() === 'information');
             }
             
             renderEventLogs(filtered);
@@ -732,6 +744,37 @@
         });
     }
 
+    socket.on("manual_complete", function(msg) {
+        console.log("Manual analysis complete for:", msg.etl_path);
+        restoreButton(msg.etl_path, 'Manual');
+    });
+
+    socket.on("autofolder_complete", function(msg) {
+        console.log("AutoFolder analysis complete for:", msg.etl_path);
+        restoreButton(msg.etl_path, 'AutoFolder');
+    });
+
+    function restoreButton(path, mode) {
+        const buttons = document.querySelectorAll('button.disabled');
+        buttons.forEach(btn => {
+            const btnPathEnc = btn.getAttribute('data-path');
+            const btnMode = btn.getAttribute('data-mode');
+            if (btnPathEnc && btnMode === mode) {
+                try {
+                    const btnPath = decodeURIComponent(btnPathEnc);
+                    if (btnPath.replace(/\\/g, '/') === path.replace(/\\/g, '/')) {
+                        btn.classList.remove('disabled');
+                        if (btn.innerText.includes('Analyzing')) {
+                            btn.innerText = mode;
+                        }
+                    }
+                } catch (e) {
+                    console.error("Error decoding path:", e);
+                }
+            }
+        });
+    }
+
     function startFwAnalysis(button, fwPathEncoded) {
         if (button.classList.contains('disabled')) return;
 
@@ -853,6 +896,54 @@
         cancelPendingFwAnalysis();
     });
         
+    // Combined function: Dumps TXT file AND loads to UI
+    function eventAnalysis(evtPath, btnElement) {
+        const originalText = btnElement.innerText;
+        btnElement.innerText = 'Analyzing...';
+        btnElement.disabled = true;
+
+        // 1. Load data to UI Table immediately
+        loadEventLog(evtPath);
+
+        // 2. Trigger background Dump request
+        fetch('/dump_event_txt', {
+            method: 'POST',
+            headers: { 'Content-Type': 'application/json' },
+            body: JSON.stringify({ path: evtPath })
+        })
+        .then(response => response.json())
+        .then(data => {
+            btnElement.disabled = false;
+            if (data.success) {
+                btnElement.innerText = 'Analysis Done!';
+                btnElement.classList.replace('btn-primary', 'btn-secondary');
+               
+                alert('Success: TXT file generated at:\n' + data.txt_path);
+            } else {
+                btnElement.innerText = 'Analysis Failed';
+                console.error('Dump failed:', data.error);
+                
+                alert('Error: Dump failed - ' + data.error);
+            }
+        })
+        .catch(err => {
+            btnElement.disabled = false;
+            btnElement.innerText = originalText;
+            console.error('Error:', err);
+           
+            alert('Error: A network error occurred during analysis.');
+        });
+    }
+
+    // Auto-load logic on page initialization
+    window.addEventListener('DOMContentLoaded', (event) => {
+        // Find the first event analysis button and trigger it automatically
+        const firstEvtBtn = document.querySelector('button[data-evt-path]');
+        if (firstEvtBtn) {
+            console.log("Auto-triggering event analysis for:", firstEvtBtn.dataset.evtPath);
+            loadEventLog(firstEvtBtn.dataset.evtPath);
+        }
+    });
     </script>
 </body>
 </html>

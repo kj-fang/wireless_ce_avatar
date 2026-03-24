@@ -260,7 +260,50 @@ class LLM_helper:
             print(f"Failed to make inference request: {e}")
             return {}
 
+    def chat(self, messages: list, system_content: str = None) -> str:
+        """
+        Multi-turn chat: accepts full conversation history and returns LLM reply.
+        
+        Args:
+            messages: list of {"role": "user"|"assistant", "content": "..."} dicts
+            system_content: optional system prompt to prepend
+        Returns:
+            The assistant's reply as a string
+        """
+        api_messages = []
+        if system_content:
+            api_messages.append({"role": "system", "content": system_content})
+        api_messages.extend(messages)
 
-#helper = LLM_helper()
-#helper.set_up("key")
-#print(helper.client)
+        # Debug: print full conversation history sent to LLM
+        print("\n" + "="*80)
+        print("[DEBUG chat] FULL API MESSAGES BEING SENT TO LLM:")
+        print("="*80)
+        for i, msg in enumerate(api_messages):
+            role = msg['role']
+            content = msg['content']
+            preview = content[:500] + f"... ({len(content)} chars total)" if len(content) > 500 else content
+            print(f"\n--- Message {i} | role: {role} | length: {len(content)} chars ---")
+            print(preview)
+        print("\n" + "="*80 + "\n")
+
+        try:
+            response = self.client.chat.completions.create(
+                model=self.model,
+                messages=api_messages,
+                temperature=0.2,
+                top_p=0.9,
+                frequency_penalty=0.1,
+                presence_penalty=0,
+                max_tokens=8000,
+                stop=None
+            )
+
+            print(f"[chat] usage: {response.usage}")
+            print(f"[chat] finish_reason: {response.choices[0].finish_reason}")
+
+            raw_output = response.choices[0].message.content
+            return raw_output
+        except Exception as e:
+            print(f"[chat] Failed: {e}")
+            raise

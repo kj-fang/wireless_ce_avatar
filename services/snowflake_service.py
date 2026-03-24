@@ -1,4 +1,4 @@
-import os 
+﻿import os 
 import snowflake.connector
 
 def snowflake_query(passwd, sql_query, schema, fetch_mode="all"):
@@ -13,7 +13,8 @@ def snowflake_query(passwd, sql_query, schema, fetch_mode="all"):
         account = "XD14286-ECDWPROD",
         warehouse="WH_SMG_CONSUMPTION", 
         database="SALES_MARKETING",
-        schema=schema
+        schema=schema,
+        insecure_mode=True  # skip OCSP certificate verification to avoid internal network issues
         )
     
     cs = conn.cursor()

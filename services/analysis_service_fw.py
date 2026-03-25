@@ -5,13 +5,13 @@ import os
 import uuid
 
 from configs.global_configs import app_config
-from services.etl_parser.fw_parser import fw_bt_analysis, fw_wifi_analysis
+from services.etl_parser.fw_parser import fw_bt_analysis, fw_wifi_analysis, open_sysmon_with_tool, close_active_text_analysis_tool
 from utils.fw_utils import load_fw_system_info
 
 class FWAnalysisService():
 
     def __init__(self):
-        self.fw_validate = True # for debug purpose, set to False to skip all the precheck and system info validation
+        self.fw_validate = False # for debug purpose, set to False to skip all the precheck and system info validation
         self.service_name = "bt"
         self._tasks = {}
         self._lock = Lock()
@@ -74,17 +74,16 @@ class FWAnalysisService():
         return True, ""
 
     def start_async(self, file_path: str, wifi_of_bt: str):
+        close_active_text_analysis_tool(on_log=self.emit_tool_closed)
         if self.fw_validate:
             is_valid, error_msg = self._validate_precheck(file_path)
             if not is_valid:
-                system_info = load_fw_system_info(file_path)
                 app_config.socketio.emit(
                     'fw_analysis_rejected',
                     {
                         'task_id': None,
                         'fw_path': file_path,
                         'error': error_msg,
-                        'system_info': system_info,
                     },
                     namespace='/progress'
                 )
@@ -102,7 +101,6 @@ class FWAnalysisService():
                 "result": {
                     "log": None,
                     "system_text": None,
-                    "system_info": None,
                 },
                 "error": None,
             }
@@ -129,7 +127,6 @@ class FWAnalysisService():
                             return
                         task["status"] = "rejected"
                         task["error"] = rejected_reason
-                        task["result"]["system_info"] = results['system_info']
 
                     app_config.socketio.emit(
                         'fw_analysis_rejected',
@@ -137,13 +134,13 @@ class FWAnalysisService():
                             'task_id': task_id,
                             'fw_path': file_path,
                             'error': rejected_reason,
-                            'system_info': results.get('system_info'),
                         },
                         namespace='/progress'
                     )
                     return
 
             results['system_text'], results['log'] = self.analyze(file_path, wifi_of_bt, cancel_event=cancel_event)
+            completed = False
             with self._lock:
                 task = self._tasks.get(task_id)
                 if not task:
@@ -162,7 +159,6 @@ class FWAnalysisService():
                             'task_id': task_id,
                             'fw_path': file_path,
                             'error': task["error"] or "precheck failed",
-                            'system_info': task.get("result", {}).get("system_info"),
                         },
                         namespace='/progress'
                     )
@@ -171,6 +167,15 @@ class FWAnalysisService():
                     app_config.socketio.emit(
                         'fw_analysis_complete',
                         {'task_id': task_id, 'fw_path': file_path},
+                        namespace='/progress'
+                    )
+                    completed = True
+            if completed and 'bt' in wifi_of_bt:
+                opened = open_sysmon_with_tool(file_path, on_log=self.emit_tool_log, on_close=self.emit_tool_closed)
+                if not opened:
+                    app_config.socketio.emit(
+                        'fw_tool_error',
+                        {'task_id': task_id, 'fw_path': file_path, 'error': 'Failed to open TextAnalysisTool.NET viewer'},
                         namespace='/progress'
                     )
         except Exception as e:
@@ -237,4 +242,10 @@ class FWAnalysisService():
     
     def emit_log(self, msg):
         app_config.socketio.emit('wpp_log', {'data': msg}, namespace='/progress')  # Ensure the correct namespace is used
+
+    def emit_tool_log(self, msg):
+        app_config.socketio.emit('fw_tool_log', {'data': msg}, namespace='/progress')
+
+    def emit_tool_closed(self, msg):
+        app_config.socketio.emit('fw_tool_closed', {'data': msg}, namespace='/progress')
 

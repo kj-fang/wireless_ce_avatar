@@ -389,6 +389,21 @@
             appendLog(msg.data + "\n");
         });
 
+        socket.on("fw_tool_log", function(msg) {
+            console.log("fw_tool_log:", msg);
+            appendLog((msg.data || 'FW viewer event') + "\n");
+        });
+
+        socket.on("fw_tool_closed", function(msg) {
+            console.log("fw_tool_closed:", msg);
+            appendLog((msg.data || 'TextAnalysisTool.NET viewer closed.') + "\n");
+        });
+
+        socket.on("fw_tool_error", function(msg) {
+            console.log("fw_tool_error:", msg);
+            appendLog(`❌ ${msg.error || 'FW viewer open failed'}\n`, 'red');
+        });
+
 
         if (autoAnalysisEtlElement) {
             const etlPathEncoded = autoAnalysisEtlElement.value;
@@ -798,14 +813,12 @@
         if (!pending) return;
         if (!isMatchingFwAnalysisEvent(pending, msg)) return;
 
-        const { button, taskId, fwPathEncoded } = pending;
+        const { button, fwPathEncoded } = pending;
         window.pendingFwAnalysis = null;
         resetFwButton(button);
 
         const decoded = decodeURIComponent(fwPathEncoded);
-        appendLog(`✅ FW analysis complete: ${decoded}\n`);
-
-        window.location.href = `${FW_RESULT_URL}?task_id=${encodeURIComponent(taskId)}`;
+        appendLog(`✅ FW parse complete, opening sysmon viewer: ${decoded}\n`);
     });
 
     socket.on("fw_analysis_cancelled", function(msg) {

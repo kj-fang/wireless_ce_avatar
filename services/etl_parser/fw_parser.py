@@ -6,6 +6,7 @@ import time
 import glob
 import json
 from threading import Event
+from threading import Lock, Thread
 
 DECODER_EXE = r"C:\UtilityPackage\uSnifferAutoParser\uSnifferAutoParser.exe"
 
@@ -14,6 +15,57 @@ DECODER_EXE = r"C:\UtilityPackage\uSnifferAutoParser\uSnifferAutoParser.exe"
 
 
 active_fw_pid = None  # global PID cache for WRT_BT_Decoder.exe
+active_tat_pid = None
+_tat_lock = Lock()
+_tat_suppressed_close_pids = set()
+
+
+def _emit_viewer_log(on_log, message: str):
+    if on_log:
+        on_log(message)
+    else:
+        print(message)
+
+
+def _watch_text_analysis_tool(pid: int, on_close=None):
+    try:
+        proc = psutil.Process(pid)
+        proc.wait()
+    except psutil.NoSuchProcess:
+        pass
+    except Exception as e:
+        _emit_viewer_log(on_close, f"⚠️ Failed while watching TextAnalysisTool.NET.exe: {e}")
+    finally:
+        should_emit_close = False
+        with _tat_lock:
+            global active_tat_pid
+            if pid in _tat_suppressed_close_pids:
+                _tat_suppressed_close_pids.discard(pid)
+            else:
+                should_emit_close = True
+            if active_tat_pid == pid:
+                active_tat_pid = None
+        if should_emit_close:
+            _emit_viewer_log(on_close, "ℹ️ TextAnalysisTool.NET viewer closed.")
+
+
+def close_active_text_analysis_tool(on_log=None) -> bool:
+    global active_tat_pid
+    with _tat_lock:
+        pid = active_tat_pid
+        if not pid or not psutil.pid_exists(pid):
+            active_tat_pid = None
+            return False
+        _tat_suppressed_close_pids.add(pid)
+        active_tat_pid = None
+
+    try:
+        _terminate_process_tree(pid)
+        _emit_viewer_log(on_log, "ℹ️ Closed previous TextAnalysisTool.NET viewer.")
+        return True
+    except Exception as e:
+        _emit_viewer_log(on_log, f"⚠️ Failed to close previous TextAnalysisTool.NET viewer: {e}")
+        return False
 
 
 def _terminate_process_tree(pid: int):
@@ -313,6 +365,104 @@ def fw_bt_analysis(fw_path, use_cli=True, cancel_event: Event | None = None):
             return f"✅ FW Analysis launched for {fw_path}"
         except Exception as e:
             return f"❌ Unexpected error: {str(e)}"
+
+def _extract_last_timestamp_from_folder_name(folder_name: str):
+    """
+    Extract the LAST MM-DD-YYYY_HH-MM-SS timestamp embedded in a folder name.
+    Example: 'wrt-fw-07-12-2025_04-21-38_483_1_07-12-2025_04-21-48_000_07-12-2025_04-21-40-431_6050'
+    Returns a datetime or None.
+    """
+    import re
+    from datetime import datetime
+    pattern = r'(\d{2})-(\d{2})-(\d{4})_(\d{2})-(\d{2})-(\d{2})'
+    matches = re.findall(pattern, folder_name)
+    if not matches:
+        return None
+    try:
+        month, day, year, hour, minute, second = matches[-1]
+        return datetime(int(year), int(month), int(day),
+                        int(hour), int(minute), int(second))
+    except Exception:
+        return None
+
+
+def _get_short_path(long_path: str) -> str:
+    """Convert a long Windows path to its 8.3 short form to bypass MAX_PATH limits."""
+    import ctypes
+    buf_size = ctypes.windll.kernel32.GetShortPathNameW(long_path, None, 0)
+    if buf_size == 0:
+        return long_path  # fallback: return as-is
+    buf = ctypes.create_unicode_buffer(buf_size)
+    ctypes.windll.kernel32.GetShortPathNameW(long_path, buf, buf_size)
+    return buf.value or long_path
+
+
+def open_sysmon_with_tool(fw_path: str, on_log=None, on_close=None):
+    """
+    Find the .sysmon file from the latest decode output folder (the folder
+    whose name ends with the event ID) and open it with TextAnalysisTool.NET.
+    'Latest' is determined by the timestamp embedded in the folder name.
+    """
+    from datetime import datetime
+    fw_dir = os.path.dirname(fw_path)
+    eventid = _get_eventid_from_summary(fw_path)
+    if not eventid:
+        _emit_viewer_log(on_log, "❌ Cannot get Event ID, aborting sysmon open.")
+        return False
+
+    # Find all dirs ending with the event ID, sort by embedded folder-name timestamp.
+    candidates = [
+        os.path.join(fw_dir, d)
+        for d in os.listdir(fw_dir)
+        if os.path.isdir(os.path.join(fw_dir, d)) and d.endswith(str(eventid))
+    ]
+    if not candidates:
+        _emit_viewer_log(on_log, f"❌ No directory ending with event ID '{eventid}' found in {fw_dir}")
+        return False
+
+    def sort_key(p):
+        ts = _extract_last_timestamp_from_folder_name(os.path.basename(p))
+        return ts if ts is not None else datetime.min
+
+    sysmon_dir = max(candidates, key=sort_key)
+
+    sysmon_path = None
+    for f in os.listdir(sysmon_dir):
+        if f.endswith(".sysmon"):
+            sysmon_path = os.path.join(sysmon_dir, f)
+            break
+
+    if not sysmon_path:
+        _emit_viewer_log(on_log, f"❌ No .sysmon file found in {sysmon_dir}")
+        return False
+
+    exe_path = os.path.abspath(os.path.join(os.path.dirname(__file__), 'TextAnalysisTool.NET.exe'))
+    if not os.path.exists(exe_path):
+        _emit_viewer_log(on_log, f"❌ TextAnalysisTool.NET.exe not found: {exe_path}")
+        return False
+
+    try:
+        # sysmon_path may exceed 260 chars. Copy to a short temp path so
+        # TextAnalysisTool.NET (which uses .NET Framework IO) can open it.
+        import shutil
+        tmp_dir = r"C:\Temp\tat_sysmon"
+        os.makedirs(tmp_dir, exist_ok=True)
+        tmp_sysmon = os.path.join(tmp_dir, os.path.basename(sysmon_path))
+        # Use \\?\ prefix on source so Python can read the long path
+        shutil.copy2("\\\\?\\" + sysmon_path, tmp_sysmon)
+        _emit_viewer_log(on_log, f"✅ Copied sysmon to: {tmp_sysmon}")
+        close_active_text_analysis_tool(on_log=on_log)
+        proc = subprocess.Popen([exe_path, tmp_sysmon])
+        with _tat_lock:
+            global active_tat_pid
+            active_tat_pid = proc.pid
+        Thread(target=_watch_text_analysis_tool, args=(proc.pid, on_close), daemon=True).start()
+        _emit_viewer_log(on_log, f"✅ Opened sysmon with TextAnalysisTool.NET: {tmp_sysmon}")
+        return True
+    except Exception as e:
+        _emit_viewer_log(on_log, f"❌ Failed to open sysmon: {e}")
+        return False
+
 
 def _get_system_info(fw_path):
     

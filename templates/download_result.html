@@ -60,12 +60,30 @@
             line-height: 1.45;
             white-space: normal;
         }
-        .fw-system-info-title {
+        .fw-system-info-toggle {
             font-weight: 700;
             color: #111111;
-            margin-bottom: 6px;
-            padding-bottom: 6px;
-            border-bottom: 1px solid #e5e7eb;
+            cursor: pointer;
+            list-style: none;
+            user-select: none;
+        }
+        .fw-system-info-toggle::-webkit-details-marker {
+            display: none;
+        }
+        .fw-system-info-toggle::before {
+            content: "▶";
+            display: inline-block;
+            margin-right: 6px;
+            color: #374151;
+            transition: transform 0.15s ease;
+        }
+        .fw-system-info-panel[open] .fw-system-info-toggle::before {
+            transform: rotate(90deg);
+        }
+        .fw-system-info-content {
+            margin-top: 8px;
+            padding-top: 6px;
+            border-top: 1px solid #e5e7eb;
         }
         .fw-system-info-path {
             color: #6b7280;
@@ -77,23 +95,30 @@
             color: #3f3f46;
             white-space: normal;
         }
-        .fw-system-info-row {
-            display: flex;
-            align-items: flex-start;
-            gap: 6px;
-            margin-bottom: 2px;
+        .fw-system-info-table {
+            width: 100%;
+            border-collapse: collapse;
+            margin-top: 2px;
         }
-        .fw-system-info-key {
+        .fw-system-info-table th,
+        .fw-system-info-table td {
+            border: 1px solid #e5e7eb;
+            padding: 6px 8px;
+            vertical-align: top;
+            font-size: 12px;
+            line-height: 1.4;
+        }
+        .fw-system-info-table th {
+            width: 32%;
             color: #0f172a;
             font-weight: 600;
             white-space: nowrap;
-            flex: 0 0 auto;
+            background: #f8fafc;
         }
-        .fw-system-info-value {
+        .fw-system-info-table td {
             color: #475569;
             white-space: pre-wrap;
             word-break: break-word;
-            flex: 1 1 auto;
         }
     </style>
 </head>
@@ -115,106 +140,149 @@
         <input type="hidden" id="autoAnalysisEtl" value="{{ auto_analysis_etl | urlencode }}">
     </div>
     {% endif %}
-
-    <h2>📊 Analysis Log</h2>
     
+    <h2>📊 Analysis Log</h2>
     <div id="log">...</div>
+    
+    <!-- Show Download Path -->
+    <div class="d-flex align-items-center mb-3">
+        <span class="mr-2"><strong>Download Path:</strong> {{ case_path }}</span>
+        <button id="open-btn" data-path="{{ case_path|e }}" type="button" class="btn btn-sm btn-outline-primary ml-2" onclick="openDownloadPath()">Open</button>
+    </div>
+
+    <!-- Show System Info -->
     {% if latest_fw_system_info %}
-    <div class="fw-system-info-panel">
-        <div class="fw-system-info-title">Latest System Info</div>
-        {% if latest_fw_system_info_path %}
-        <div class="fw-system-info-path">FW Path: {{ latest_fw_system_info_path }}</div>
-        {% endif %}
-        <div class="fw-system-info-body">
-            {% for key, value in latest_fw_system_info.items() %}
-            <div class="fw-system-info-row">
-                <span class="fw-system-info-key">{{ key }}:</span>
-                <span class="fw-system-info-value">{{ value }}</span>
+    <details class="fw-system-info-panel">
+        <summary class="fw-system-info-toggle">Latest System Info</summary>
+        <div class="fw-system-info-content">
+            {% if latest_fw_system_info_path %}
+            <div class="fw-system-info-path">FW Path: {{ latest_fw_system_info_path }}</div>
+            {% endif %}
+            <div class="fw-system-info-body">
+                <table class="fw-system-info-table">
+                    <tbody>
+                        {% for key, value in latest_fw_system_info.items() %}
+                        <tr>
+                            <th>{{ key }}</th>
+                            <td>{{ value }}</td>
+                        </tr>
+                        {% endfor %}
+                    </tbody>
+                </table>
             </div>
-            {% endfor %}
+        </div>
+    </details>
+    {% endif %}
+
+    
+    <!-- System Event Log Display Box (hidden until Event View or Dump TXT is clicked) -->
+    <div id="eventLogSection" class="mt-3 mb-4" style="display: none;">
+        <div class="d-flex justify-content-between align-items-center mb-2">
+            <h5>📋 System Event Log Content</h5>
+            <div>
+                <select id="eventSourceFilter" class="form-control form-control-sm d-inline-block mr-2" style="width: auto;" onchange="filterEventLogs()">
+                    <option value="pci_bt" selected>ibtpci / bthmini</option>
+                    <option value="usb_bt">ibtusb / bthusb</option>
+                    <option value="pci_bt_wifi">ibtpci / bthmini + Netwaw / Netwtw</option>
+                    <option value="usb_bt_wifi">ibtusb / bthusb + Netwaw / Netwtw</option>
+                    <option value="all">All Sources</option>
+                </select>
+                <select id="eventLevelFilter" class="form-control form-control-sm d-inline-block" style="width: auto;" onchange="filterEventLogs()">
+                    <option value="all">All Levels</option>
+                    <option value="warning_error">Warning + Error</option>
+                    <option value="information">Information</option>
+                </select>
+            </div>
+        </div>
+        <div id="eventLogContent" class="border rounded p-2" style="height: 300px; overflow-y: auto; background-color: #1e1e1e; color: #d4d4d4; font-family: 'Consolas', monospace; font-size: 12px;">
+            <p class="text-muted">Loading...</p>
         </div>
     </div>
-    {% endif %}
     
+
+    {% if wifi_table_rows %}
     <div class="d-flex justify-content-between align-items-center mb-2">
         <h2>🔍 Analysis WIFI Results</h2>
         <div class="d-flex gap-1">
             <button class="btn btn-secondary btn-sm me-2" onclick="cancelFwAndNavigate('/')">Back to Home</button>
         </div>
     </div>
-    <div class="d-flex align-items-center mb-3">
-                <span class="mr-2"><strong>Download Path:</strong> {{ case_path }}</span>
-                <button id="open-btn" data-path="{{ case_path|e }}" type="button" class="btn btn-sm btn-outline-primary ml-2" onclick="openDownloadPath()">Open</button>
-            </div>
     <table>
         <thead>
             <tr>
-                <th>Extracted File Name</th>
+                <th>Zip File</th>
+                <th>Folder Name</th>
                 <th>ETL Path</th>
                 <th>Analysis</th>
             </tr>
         </thead>
         <tbody>
-            {% for name, etl_list in wifi_dict.items() %}
-                {% for etl_path in etl_list %}
-                    {% if not etl_path.endswith('.log') %}
-                    <tr>
-                        <td>{{ name }}</td>
-                        <td>{{ etl_path }}</td>
-                        <td class="text-center">
-                            <div class="d-flex flex-column align-items-center">
-                                <button class="btn btn-primary btn-sm mb-2" onclick="startAnalysis(this, '{{ etl_path | urlencode }}')">
-                                    Parse
-                                </button>
-                                <button class="btn btn-success btn-sm" onclick="startLogParser(this, '{{ etl_path | urlencode }}')">
-                                    Parse and Analyze with LLM
-                                </button>
-                            </div>
-                        </td>
-                    </tr>
+            {% for row in wifi_table_rows %}
+                <tr>
+                    {% if row.show_zip_cell %}
+                    <td rowspan="{{ row.zip_rowspan }}">{{ row.zip_name }}</td>
                     {% endif %}
-                {% endfor %}
+                    {% if row.show_folder_cell %}
+                    <td rowspan="{{ row.folder_rowspan }}">{{ row.folder_name }}</td>
+                    {% endif %}
+                    <td>{{ row.etl_path }}</td>
+                    <td class="text-center">
+                        <div class="d-flex flex-column align-items-center">
+                            <button class="btn btn-primary btn-sm mb-2" onclick="startAnalysis(this, '{{ row.etl_path | urlencode }}')">
+                                Parse
+                            </button>
+                            <button class="btn btn-success btn-sm" onclick="startLogParser(this, '{{ row.etl_path | urlencode }}')">
+                                Parse and Analyze with LLM
+                            </button>
+                        </div>
+                    </td>
+                </tr>
             {% endfor %}
         </tbody>
     </table>
+    {% endif %}
     
-        <h2 class="mt-4">🔍 Analysis BT Results</h2>
+    <h2 class="mt-4">🔍 Analysis BT Results</h2>
     <table>
         <thead>
             <tr>
                 <th>Zip File</th>
+                <th>Folder Name</th>
                 <th>File Path</th>
                 <th>Extension</th>
                 <th>Analysis</th>
             </tr>
         </thead>
         <tbody>
-            {% for name, bt_list in bt_dict.items() %}
-                {% for bt_path in bt_list %}
-                    <tr>
-                        <td>{{ name }}</td>
-                        <td>{{ bt_path }}</td>
-                        <td>{{ bt_path.split('.')[-1] }}</td>
-                        <td class="text-center">
-                            <div class="d-flex flex-column align-items-center"></div>
-                                <!-- AutoFile -->
-                                <!-- <button class="btn btn-secondary btn-sm ml-2" onclick="startAnalysis(this, '{{ bt_path | urlencode }}', 'AutoFile')">
-                                    AutoFile
-                                </button> -->
+            {% for row in bt_table_rows %}
+                <tr>
+                    {% if row.show_zip_cell %}
+                    <td rowspan="{{ row.zip_rowspan }}">{{ row.zip_name }}</td>
+                    {% endif %}
+                    {% if row.show_folder_cell %}
+                    <td rowspan="{{ row.folder_rowspan }}">{{ row.folder_name }}</td>
+                    {% endif %}
+                    <td>{{ row.bt_path }}</td>
+                    <td>{{ row.bt_path.split('.')[-1] }}</td>
+                    <td class="text-center">
+                        <div class="d-flex flex-column align-items-center">
+                            <!-- AutoFile -->
+                            <!-- <button class="btn btn-secondary btn-sm ml-2" onclick="startAnalysis(this, '{{ row.bt_path | urlencode }}', 'AutoFile')">
+                                AutoFile
+                            </button> -->
 
-                                <!-- AutoFolder -->
-                                <button class="btn btn-primary btn-sm mb-2" data-path="{{ bt_path | urlencode }}" data-mode="AutoFolder" onclick="startAnalysis(this, '{{ bt_path | urlencode }}', 'AutoFolder')">
-                                    AutoFolder
-                                </button>
+                            <!-- AutoFolder -->
+                            <button class="btn btn-primary btn-sm mb-2" data-path="{{ row.bt_path | urlencode }}" data-mode="AutoFolder" onclick="startAnalysis(this, '{{ row.bt_path | urlencode }}', 'AutoFolder')">
+                                AutoFolder
+                            </button>
 
-                                <!-- Manual -->
-                                <button class="btn btn-success btn-sm" data-path="{{ bt_path | urlencode }}" data-mode="Manual" onclick="startAnalysis(this, '{{ bt_path | urlencode }}', 'Manual')">
-                                    Manual
-                                </button>
-                            </div>
-                        </td>
-                    </tr>
-                {% endfor %}
+                            <!-- Manual -->
+                            <button class="btn btn-success btn-sm" data-path="{{ row.bt_path | urlencode }}" data-mode="Manual" onclick="startAnalysis(this, '{{ row.bt_path | urlencode }}', 'Manual')">
+                                Manual
+                            </button>
+                        </div>
+                    </td>
+                </tr>
             {% endfor %}
         </tbody>
 
@@ -259,58 +327,36 @@
         <thead>
             <tr>
                 <th>Zip File</th>
+                <th>Folder Name</th>
                 <th>File Path</th>
                 <th>Extension</th>
                 <th>Analysis</th>
             </tr>
         </thead>
         <tbody>
-            {% for name, ddd_list in ddd_dict.items() %}
-                {% for ddd_path in ddd_list %}
-                    {% if 'rawEventViewerSystemLogs.evt' in ddd_path %}
-                    <tr>
-                        <td>{{ name }}</td>
-                        <td>{{ ddd_path }}</td>
-                        <td>{{ ddd_path.split('.')[-1] }}</td>
-                        <td class="text-center">
-                            <div class="d-flex flex-column align-items-center">
-                                <button class="btn btn-primary btn-sm" 
-                                        data-evt-path="{{ ddd_path | e }}" 
-                                        onclick="eventAnalysis(this.dataset.evtPath, this)">
-                                    Event Analysis
-                                </button>
-                            </div>
-                        </td>
-                    </tr>
+            {% for row in event_table_rows %}
+                <tr>
+                    {% if row.show_zip_cell %}
+                    <td rowspan="{{ row.zip_rowspan }}">{{ row.zip_name }}</td>
                     {% endif %}
-                {% endfor %}
+                    {% if row.show_folder_cell %}
+                    <td rowspan="{{ row.folder_rowspan }}">{{ row.folder_name }}</td>
+                    {% endif %}
+                    <td>{{ row.ddd_path }}</td>
+                    <td>{{ row.ddd_path.split('.')[-1] }}</td>
+                    <td class="text-center">
+                        <div class="d-flex flex-column align-items-center">
+                            <button class="btn btn-primary btn-sm" 
+                                    data-evt-path="{{ row.ddd_path | e }}" 
+                                    onclick="eventAnalysis(this.dataset.evtPath, this)">
+                                Event Analysis
+                            </button>
+                        </div>
+                    </td>
+                </tr>
             {% endfor %}
         </tbody>
-
-    <!-- System Event Log Display Box (hidden until Event View or Dump TXT is clicked) -->
-    <div id="eventLogSection" class="mt-3" style="display: none;">
-        <div class="d-flex justify-content-between align-items-center mb-2">
-            <h5>📋 System Event Log Content</h5>
-            <div>
-                <select id="eventSourceFilter" class="form-control form-control-sm d-inline-block mr-2" style="width: auto;" onchange="filterEventLogs()">
-                    <option value="pci_bt" selected>ibtpci / bthmini</option>
-                    <option value="usb_bt">ibtusb / bthusb</option>
-                    <option value="pci_bt_wifi">ibtpci / bthmini + Netwaw / Netwtw</option>
-                    <option value="usb_bt_wifi">ibtusb / bthusb + Netwaw / Netwtw</option>
-                    <option value="all">All Sources</option>
-                </select>
-                <select id="eventLevelFilter" class="form-control form-control-sm d-inline-block" style="width: auto;" onchange="filterEventLogs()">
-                    <option value="all">All Levels</option>
-                    <option value="warning_error">Warning + Error</option>
-                    <option value="information">Information</option>
-                </select>
-            </div>
-        </div>
-        <div id="eventLogContent" class="border rounded p-2" style="height: 300px; overflow-y: auto; background-color: #1e1e1e; color: #d4d4d4; font-family: 'Consolas', monospace; font-size: 12px;">
-            <p class="text-muted">Loading...</p>
-        </div>
-    </div>
-
+    </table>
 
     <script>
         const socket = io('/progress');
@@ -322,6 +368,14 @@
             span.textContent = text;
             logBox.appendChild(span);
             logBox.scrollTop = logBox.scrollHeight;
+        }
+
+        function postJson(url, payload) {
+            return fetch(url, {
+                method: 'POST',
+                headers: { 'Content-Type': 'application/json' },
+                body: JSON.stringify(payload)
+            });
         }
 
         const autoAnalysisEtlElement = document.getElementById('autoAnalysisEtl');
@@ -349,14 +403,7 @@
             cancelPendingFwAnalysis();
             const path = document.querySelector('#open-btn').dataset.path;
             console.log(path)
-            fetch('/open_path', {
-                
-                method: 'POST',
-                headers: {
-                    'Content-Type': 'application/json'
-                },
-                body: JSON.stringify({ path: path })
-            })
+            postJson('/open_path', { path: path })
             .then(response => {
                 if (response.ok) {
                     console.log('Path opened successfully');
@@ -376,13 +423,7 @@
             const contentBox = document.getElementById('eventLogContent');
             contentBox.innerHTML = '<p class="text-info">Loading event logs...</p>';
             
-            fetch('/parse_event_log', {
-                method: 'POST',
-                headers: {
-                    'Content-Type': 'application/json'
-                },
-                body: JSON.stringify({ path: evtPath })
-            })
+            postJson('/parse_event_log', { path: evtPath })
             .then(response => response.json())
             .then(data => {
                 if (data.error) {
@@ -400,44 +441,6 @@
         }
         // -------------------------------------------------------
 
-       
-
-        //  Call backend to decode evt to txt file in the background AND load to UI
-        function dumpEventLogTxt(evtPath, btnElement) {
-            cancelPendingFwAnalysis();
-            const originalText = btnElement.innerText;
-            btnElement.innerText = 'Dumping...';
-            btnElement.disabled = true;
-
-            // Trigger loading data to the web table simultaneously
-            loadEventLog(evtPath);
-
-            // Continue sending background Dump request
-            fetch('/dump_event_txt', {
-                method: 'POST',
-                headers: {
-                    'Content-Type': 'application/json'
-                },
-                body: JSON.stringify({ path: evtPath })
-            })
-            .then(response => response.json())
-            .then(data => {
-                btnElement.disabled = false;
-                if (data.success) {
-                    btnElement.innerText = 'Dumped!';
-                    btnElement.classList.replace('btn-success', 'btn-secondary');
-                    alert('✅ TXT file successfully generated!\n' + data.txt_path);
-                } else {
-                    btnElement.innerText = originalText;
-                    alert('❌ Dump failed: ' + data.error);
-                }
-            })
-            .catch(err => {
-                btnElement.disabled = false;
-                btnElement.innerText = originalText;
-                alert('❌ Error: ' + err);
-            });
-        }
         // --- BT Event ID Map ---
         // Initialized as empty object; populated from backend API on page load.
         // Fallback: if the API call fails, event details column will simply be blank.
@@ -744,37 +747,6 @@
         });
     }
 
-    socket.on("manual_complete", function(msg) {
-        console.log("Manual analysis complete for:", msg.etl_path);
-        restoreButton(msg.etl_path, 'Manual');
-    });
-
-    socket.on("autofolder_complete", function(msg) {
-        console.log("AutoFolder analysis complete for:", msg.etl_path);
-        restoreButton(msg.etl_path, 'AutoFolder');
-    });
-
-    function restoreButton(path, mode) {
-        const buttons = document.querySelectorAll('button.disabled');
-        buttons.forEach(btn => {
-            const btnPathEnc = btn.getAttribute('data-path');
-            const btnMode = btn.getAttribute('data-mode');
-            if (btnPathEnc && btnMode === mode) {
-                try {
-                    const btnPath = decodeURIComponent(btnPathEnc);
-                    if (btnPath.replace(/\\/g, '/') === path.replace(/\\/g, '/')) {
-                        btn.classList.remove('disabled');
-                        if (btn.innerText.includes('Analyzing')) {
-                            btn.innerText = mode;
-                        }
-                    }
-                } catch (e) {
-                    console.error("Error decoding path:", e);
-                }
-            }
-        });
-    }
-
     function startFwAnalysis(button, fwPathEncoded) {
         if (button.classList.contains('disabled')) return;
 
@@ -906,11 +878,7 @@
         loadEventLog(evtPath);
 
         // 2. Trigger background Dump request
-        fetch('/dump_event_txt', {
-            method: 'POST',
-            headers: { 'Content-Type': 'application/json' },
-            body: JSON.stringify({ path: evtPath })
-        })
+        postJson('/dump_event_txt', { path: evtPath })
         .then(response => response.json())
         .then(data => {
             btnElement.disabled = false;
@@ -936,7 +904,7 @@
     }
 
     // Auto-load logic on page initialization
-    window.addEventListener('DOMContentLoaded', (event) => {
+    window.addEventListener('DOMContentLoaded', () => {
         // Find the first event analysis button and trigger it automatically
         const firstEvtBtn = document.querySelector('button[data-evt-path]');
         if (firstEvtBtn) {

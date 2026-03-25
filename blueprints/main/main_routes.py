@@ -1,11 +1,12 @@
 from flask import Blueprint, render_template, request, session, redirect, url_for, flash, jsonify
-import json
 import os
 import subprocess
 from datetime import datetime
 
 from utils import helpers
+from utils import attachment_decompose # for debug existing folder
 from utils.etl_utils import get_auto_analysis_etl, get_issue_time_from_selected_files, filter_folders_by_time, extract_timestamp_from_folder
+from utils.fw_utils import load_fw_system_info
 from services.case_info_service import CaseService
 from models.models import CaseContext
 from configs.global_configs import app_config
@@ -67,6 +68,14 @@ def render_case_form():
 def handle_case_submission():
     """Submit IPS number"""
     case_nbr = request.form.get('case_number', '').strip().replace(" ", "")
+
+    # for debug existing zip
+    action_type = request.form.get('action_type', '').strip().lower()
+    debug_zip_path = request.form.get('debug_zip_path', '').strip().strip('"')
+
+    if action_type == 'debug_folder':
+        return _handle_debug_existing_zip(debug_zip_path)
+    
     if not case_nbr:
         flash("❌ No case number provided.", "danger")
         return redirect(url_for('main.index'))
@@ -86,12 +95,82 @@ def handle_case_submission():
 
         session['bsod'] = False
         session['latest_etl_llm'] = False
+        session['debug_mode'] = False
+
         return redirect(url_for('main.select_attachments'))
-            
+    # end of for debug existing zip
+
     except Exception as e:
         print(f"❌ Error processing case: {e}")
         flash("An error occurred while processing the case.", "danger")
         return redirect(url_for('main.index'))
+
+def _collect_existing_zip_results(zip_path):
+    abs_zip_path = os.path.abspath(zip_path)
+    zip_name = os.path.basename(abs_zip_path)
+    zip_parent = os.path.dirname(abs_zip_path)
+
+    extract_folder_name = os.path.splitext(zip_name)[0].replace(" ", "_")
+    extract_folder_path = os.path.join(zip_parent, extract_folder_name)
+    already_extracted = os.path.isdir(extract_folder_path) and any(os.scandir(extract_folder_path))
+
+    wifi_files, ddd_files, bt_files, fw_files = attachment_decompose.process_single_zip(
+        abs_zip_path,
+        zip_parent,
+        already_extracted
+    )
+
+    return {
+        'wifi': {zip_name: wifi_files} if wifi_files else {},
+        'ddd': {zip_name: ddd_files} if ddd_files else {},
+        'bt': {zip_name: bt_files} if bt_files else {},
+        'fw': {zip_name: fw_files} if fw_files else {},
+        'download_path': zip_parent,
+    }
+
+
+def _handle_debug_existing_zip(debug_zip_path):
+    if not debug_zip_path:
+        flash("❌ Debug zip path is required.", "danger")
+        return redirect(url_for('main.index'))
+
+    if not os.path.exists(debug_zip_path) or not os.path.isfile(debug_zip_path):
+        flash(f"❌ Invalid debug zip path: {debug_zip_path}", "danger")
+        return redirect(url_for('main.index'))
+
+    if not debug_zip_path.lower().endswith(('.zip', '.rar', '.7z')):
+        flash("❌ Debug mode only supports .zip/.rar/.7z files.", "danger")
+        return redirect(url_for('main.index'))
+
+    results = _collect_existing_zip_results(debug_zip_path)
+
+    has_any_result = any(results.get(key) for key in ('wifi', 'ddd', 'bt', 'fw'))
+    if not has_any_result:
+        flash("❌ No supported analysis files found in debug folder.", "danger")
+        return redirect(url_for('main.index'))
+
+    debug_case_nbr = f"debug_{os.path.splitext(os.path.basename(debug_zip_path))[0]}"
+    wifi_or_bt = 'wifi' if results['wifi'] else 'bt'
+    debug_case_context = CaseContext(case_nbr=debug_case_nbr, wifi_or_bt=wifi_or_bt)
+
+    session.clear()
+    session["case_context"] = debug_case_context.to_session()
+    session['prompt_file_path'] = CaseService.load_case_summary_prompt(wifi_or_bt)
+    session['bsod'] = False
+    session['latest_etl_llm'] = False
+    session['debug_mode'] = True
+    session['selected_files'] = []
+    session['download_path'] = results['download_path']
+
+    app_config.set_download_results(
+        debug_case_nbr,
+        wifi=results['wifi'],
+        ddd=results['ddd'],
+        bt=results['bt'],
+        fw=results['fw']
+    )
+
+    return redirect(url_for('main.download_result'))
     
 
 #------------ SELECT ATTACHMENT render/submission -------------#
@@ -150,39 +229,6 @@ def render_download_attachments_form():
 
 #------------ DOWNLOAD RESULT render -------------#
 
-def _load_fw_system_info(fw_path):
-    if not fw_path:
-        return None
-
-    system_info_path = os.path.join(os.path.dirname(fw_path), 'system_info.txt')
-    if not os.path.exists(system_info_path):
-        return None
-
-    try:
-        with open(system_info_path, 'r', encoding='utf-8') as file:
-            system_info = json.load(file)
-    except Exception:
-        return None
-
-    versions = system_info.get('Versions', {})
-    return {
-        'BT Driver Version': versions.get('BT Driver Version', ''),
-        'Wi-Fi Driver Version': versions.get('Wi-Fi Driver Version', ''),
-        'Device Name': system_info.get('Device Name', ''),
-        'BT FW SHA1': system_info.get('BT FW SHA1', ''),
-        'Wi-Fi Adapter': system_info.get('Wi-Fi Adapter', ''),
-        'OS Information': system_info.get('OS Information', ''),
-        'Intel® Smart Sound Technology BUS': system_info.get('Intel® Smart Sound Technology BUS', ''),
-        'Intel® Smart Sound Technology OED': system_info.get('Intel® Smart Sound Technology OED', ''),
-        'Intel® Smart Sound Technology for Bluetooth® Audio': system_info.get('Intel® Smart Sound Technology for Bluetooth® Audio', ''),
-        'WRT::2G Version': versions.get('WRT::2G Version', ''),
-        'preset': system_info.get('preset', ''),
-        'BT FW Config': system_info.get('BT FW Config', ''),
-        'Dbgc Status Global as seen by BT': system_info.get('Dbgc Status Global as seen by BT', ''),
-        'Dbgc Status as read from Mailbox': system_info.get('Dbgc Status as read from Mailbox', ''),
-    }
-
-
 def _get_latest_fw_system_info(fw_dict):
     fw_paths = [path for paths in (fw_dict or {}).values() for path in paths if path]
     if not fw_paths:
@@ -193,56 +239,113 @@ def _get_latest_fw_system_info(fw_dict):
         return (timestamp or datetime.min, path)
 
     latest_fw_path = max(fw_paths, key=sort_key)
-    return latest_fw_path, _load_fw_system_info(latest_fw_path)
+    return latest_fw_path, load_fw_system_info(latest_fw_path)
 
 
-def _extract_fw_folder_name(fw_path):
-    if not fw_path:
+def _extract_first_folder_from_zip(file_path, zip_name, download_path):
+    """Extract the first folder inside the zip extraction directory.
+    
+    Given a file path like: /downloads/test/20250101/subfolder/file.txt
+    And zip_name: test.zip
+    Returns: 20250101 (first folder under the extraction directory)
+    """
+    if not file_path or not zip_name or not download_path:
         return ''
-    normalized = str(fw_path).rstrip('\\/')
-    parent = os.path.dirname(normalized)
-    return os.path.basename(parent) if parent else ''
+    
+    # Reconstruct the extraction folder path
+    extract_folder_name = os.path.splitext(zip_name)[0].replace(" ", "_")
+    extract_folder_path = os.path.join(download_path, extract_folder_name)
+    
+    # Normalize paths for comparison
+    file_path_norm = os.path.normpath(str(file_path))
+    extract_folder_norm = os.path.normpath(extract_folder_path)
+    
+    # Ensure proper path comparison (not just string prefix)
+    try:
+        rel_path = os.path.relpath(file_path_norm, extract_folder_norm)
+        # If relative path starts with '..', file is not under extraction folder
+        if rel_path.startswith('..'):
+            return ''
+    except ValueError:
+        # Paths are on different drives (Windows)
+        return ''
+    
+    # Extract the first folder component
+    parts = rel_path.split(os.sep)
+    return parts[0] if parts else ''
 
 
-def _build_fw_table_rows(fw_dict):
+def _build_merged_table_rows(file_dict, path_key, path_filter=None, download_path=None):
     rows = []
 
-    for zip_name, fw_list in (fw_dict or {}).items():
-        fw_items = [
-            {
+    for zip_name, path_list in (file_dict or {}).items():
+        items = []
+        for item_path in (path_list or []):
+            if path_filter and not path_filter(item_path):
+                continue
+            
+            # Extract the first folder from zip
+            folder_name = _extract_first_folder_from_zip(item_path, zip_name, download_path) if download_path else ''
+            
+            items.append({
                 'zip_name': zip_name,
-                'folder_name': _extract_fw_folder_name(fw_path),
-                'fw_path': fw_path,
-            }
-            for fw_path in (fw_list or [])
-        ]
+                'folder_name': folder_name,
+                path_key: item_path,
+            })
 
-        if not fw_items:
+        if not items:
             continue
 
-        zip_rowspan = len(fw_items)
+        zip_rowspan = len(items)
 
         folder_counts = {}
-        for item in fw_items:
+        for item in items:
             folder = item['folder_name']
             folder_counts[folder] = folder_counts.get(folder, 0) + 1
 
         folder_seen = {}
-        for idx, item in enumerate(fw_items):
+        for idx, item in enumerate(items):
             folder = item['folder_name']
             folder_seen[folder] = folder_seen.get(folder, 0) + 1
 
-            rows.append({
+            row = {
                 'zip_name': item['zip_name'],
                 'folder_name': folder,
-                'fw_path': item['fw_path'],
                 'zip_rowspan': zip_rowspan,
                 'folder_rowspan': folder_counts[folder],
                 'show_zip_cell': idx == 0,
                 'show_folder_cell': folder_seen[folder] == 1,
-            })
+            }
+            row[path_key] = item[path_key]
+            rows.append(row)
 
     return rows
+
+
+def _build_fw_table_rows(fw_dict, download_path=None):
+    return _build_merged_table_rows(fw_dict, 'fw_path', download_path=download_path)
+
+
+def _build_wifi_table_rows(wifi_dict, download_path=None):
+    return _build_merged_table_rows(
+        wifi_dict,
+        'etl_path',
+        path_filter=lambda p: not str(p).lower().endswith('.log'),
+        download_path=download_path
+    )
+
+
+def _build_bt_table_rows(bt_dict, download_path=None):
+    return _build_merged_table_rows(bt_dict, 'bt_path', download_path=download_path)
+
+
+def _build_event_table_rows(ddd_dict, download_path=None):
+    return _build_merged_table_rows(
+        ddd_dict,
+        'ddd_path',
+        path_filter=lambda p: 'raweventviewersystemlogs.evt' in str(p).lower(),
+        download_path=download_path
+    )
 
 
 def render_download_result_form():
@@ -256,7 +359,14 @@ def render_download_result_form():
 
     result_data = app_config.get_download_results(case_context.case_nbr)
 
-    if case_context.wifi_or_bt == 'wifi':
+    if session.get('debug_mode'):
+        file_dicts = {
+            'wifi_dict': result_data.get('wifi', {}),
+            'ddd_dict': result_data.get('ddd', {}),
+            'bt_dict': result_data.get('bt', {}),
+            'fw_dict': result_data.get('fw', {})
+        }
+    elif case_context.wifi_or_bt == 'wifi':
         file_dicts = {
             'wifi_dict': result_data.get('wifi', {}),
             'ddd_dict': result_data.get('ddd', {}),
@@ -325,7 +435,10 @@ def render_download_result_form():
     
     auto_analysis_etl = get_auto_analysis_etl(file_dicts['wifi_dict'], file_dicts['ddd_dict'])
     latest_fw_system_info_path, latest_fw_system_info = _get_latest_fw_system_info(file_dicts['fw_dict'])
-    fw_table_rows = _build_fw_table_rows(file_dicts['fw_dict'])
+    wifi_table_rows = _build_wifi_table_rows(file_dicts['wifi_dict'], download_path=download_path)
+    bt_table_rows = _build_bt_table_rows(file_dicts['bt_dict'], download_path=download_path)
+    event_table_rows = _build_event_table_rows(file_dicts['ddd_dict'], download_path=download_path)
+    fw_table_rows = _build_fw_table_rows(file_dicts['fw_dict'], download_path=download_path)
     
     return render_template('download_result.html',
                          case_path=download_path,
@@ -333,6 +446,9 @@ def render_download_result_form():
                          exclude_keywords=app_config.etl_exclude_keywords,
                          latest_fw_system_info=latest_fw_system_info,
                          latest_fw_system_info_path=latest_fw_system_info_path,
+                         wifi_table_rows=wifi_table_rows,
+                         bt_table_rows=bt_table_rows,
+                         event_table_rows=event_table_rows,
                          fw_table_rows=fw_table_rows,
                          time_filter_info=time_filter_info,
                          time_filter_warnings=time_filter_warnings,

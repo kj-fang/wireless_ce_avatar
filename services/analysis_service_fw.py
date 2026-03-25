@@ -3,10 +3,10 @@ from threading import Thread, Event, Lock
 import traceback
 import os
 import uuid
-import json
 
 from configs.global_configs import app_config
 from services.etl_parser.fw_parser import fw_bt_analysis, fw_wifi_analysis
+from utils.fw_utils import load_fw_system_info
 
 class FWAnalysisService():
 
@@ -34,32 +34,6 @@ class FWAnalysisService():
             return False, "DBGC status is not Dram"
 
         return True, ""
-
-    def _get_system_info(self, fw_path):
-    
-        fw_dir = os.path.dirname(fw_path)
-        system_info_path = os.path.join(fw_dir, "system_info.txt")
-        try:
-            with open(system_info_path, 'r', encoding='utf-8') as file:
-                system_info = json.load(file)
-                return {
-                    "BT Driver Version": system_info['Versions']['BT Driver Version'],
-                    "Wi-Fi Driver Version": system_info['Versions']['Wi-Fi Driver Version'],
-                    "Device Name": system_info['Device Name'],
-                    "BT FW SHA1": system_info['BT FW SHA1'],
-                    "Wi-Fi Adapter": system_info['Wi-Fi Adapter'],
-                    "OS Information": system_info['OS Information'],
-                    "Intel® Smart Sound Technology BUS": system_info['Intel® Smart Sound Technology BUS'],
-                    "Intel® Smart Sound Technology OED": system_info['Intel® Smart Sound Technology OED'],
-                    "Intel® Smart Sound Technology for Bluetooth® Audio": system_info['Intel® Smart Sound Technology for Bluetooth® Audio'],
-                    "WRT::2G Version": system_info['Versions']['WRT::2G Version'],
-                    "preset": system_info['preset'],
-                    "BT FW Config": system_info['BT FW Config'],
-                    "Dbgc Status Global as seen by BT": system_info['Dbgc Status Global as seen by BT'],
-                    "Dbgc Status as read from Mailbox": system_info['Dbgc Status as read from Mailbox'],
-                }
-        except Exception as e:
-            return None
 
     def _validate_precheck(self, file_path: str):
 
@@ -103,7 +77,7 @@ class FWAnalysisService():
         if self.fw_validate:
             is_valid, error_msg = self._validate_precheck(file_path)
             if not is_valid:
-                system_info = self._get_system_info(file_path)
+                system_info = load_fw_system_info(file_path)
                 app_config.socketio.emit(
                     'fw_analysis_rejected',
                     {
@@ -143,7 +117,7 @@ class FWAnalysisService():
     def _run_task(self, task_id: str, file_path: str, wifi_of_bt: str, cancel_event: Event):
         try:
             results = {}
-            results['system_info'] = self._get_system_info(file_path)
+            results['system_info'] = load_fw_system_info(file_path)
 
             if self.fw_validate:
                 system_info_ok, rejected_reason = self._validate_system_info(results['system_info'])

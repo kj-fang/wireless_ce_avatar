@@ -170,7 +170,7 @@ class LLM_helper:
                 frequency_penalty=0.1,
                 presence_penalty=0,
                 max_tokens=1500,
-                stop=None
+                #stop=None
             )
 
             
@@ -230,7 +230,7 @@ class LLM_helper:
                 frequency_penalty=0.1,
                 presence_penalty=0,
                 max_tokens=8000,
-                stop=None
+                #stop=None
             )
             #"""
 

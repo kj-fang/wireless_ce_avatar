@@ -1,4 +1,7 @@
 import os
+import json
+import threading
+import requests as _requests
 from flask import Blueprint, render_template, request, session, redirect, url_for, flash
 from concurrent.futures import ThreadPoolExecutor
 import shutil
@@ -20,6 +23,138 @@ from utils.case_utils import parse_html_table
 
 class CaseService:
 
+    # Persistent requests session authenticated to intel--c.vf.force.com
+    _vf_session: _requests.Session = None
+    _vf_session_lock = threading.Lock()
+    _VF_COOKIE_FILENAME = "sf_session_cookies.json"
+
+    @staticmethod
+    def _cookie_file_path() -> str:
+        return os.path.join(app_config.avatarfiles_dir, CaseService._VF_COOKIE_FILENAME)
+
+    @staticmethod
+    def _save_cookies(vf_session: _requests.Session):
+        """Persist cookies to a per-user local file for reuse across app restarts."""
+        cookies_data = {
+            "saved_at": time.time(),
+            "cookies": [
+                {"name": c.name, "value": c.value, "domain": c.domain}
+                for c in vf_session.cookies
+            ],
+        }
+        try:
+            with open(CaseService._cookie_file_path(), "w") as f:
+                json.dump(cookies_data, f)
+            print(f"  [VF Session] Cookies saved to {CaseService._cookie_file_path()}")
+        except Exception as e:
+            print(f"  [VF Session] Could not save cookies: {e}")
+
+    @staticmethod
+    def _load_cookies_from_file() -> _requests.Session | None:
+        """Try to restore a session from the saved cookie file.
+        Returns a Session if cookies are still valid, else None.
+        """
+        path = CaseService._cookie_file_path()
+        if not os.path.exists(path):
+            return None
+        _SESSION_TTL = 4 * 3600  # 4 hours in seconds
+        try:
+            with open(path) as f:
+                data = json.load(f)
+
+            # Support old format (plain list) and new format (dict with saved_at + cookies)
+            if isinstance(data, list):
+                cookie_list, saved_at = data, 0.0
+            else:
+                cookie_list = data.get("cookies", [])
+                saved_at = data.get("saved_at", 0.0)
+
+            age_s = time.time() - saved_at
+            if age_s > _SESSION_TTL:
+                print(f"  [VF Session] Saved cookies are {age_s/3600:.1f}h old — will re-authenticate")
+                return None
+
+            vf_session = _requests.Session()
+            for c in cookie_list:
+                vf_session.cookies.set(c["name"], c["value"], domain=c.get("domain", ""))
+            # Explicit proxy — env vars may have been popped by create_download_driver()
+            vf_session.proxies = {
+                "http": "http://proxy-dmz.intel.com:911",
+                "https": "http://proxy-dmz.intel.com:912",
+            }
+            print(f"  [VF Session] Restored cookies from file (age {age_s/3600:.1f}h) ✅")
+            return vf_session
+        except Exception as e:
+            print(f"  [VF Session] Could not restore cookies: {e}")
+            return None
+
+    @staticmethod
+    def _get_vf_session() -> _requests.Session:
+        """Return a cached requests.Session with VF-domain cookies.
+        Order of preference:
+          1. In-memory cached session (fastest, ~0s)
+          2. Saved cookie file from previous run (fast if not expired, ~1s)
+          3. Full SSO via headless Chrome (slow, ~10-15s, only when needed)
+        """
+        # Fast path: check in-memory cache under lock
+        with CaseService._vf_session_lock:
+            if CaseService._vf_session is not None:
+                return CaseService._vf_session
+
+        # Try restoring from file — fast, no Chrome needed
+        restored = CaseService._load_cookies_from_file()
+        if restored is not None:
+            with CaseService._vf_session_lock:
+                # Another thread may have populated it while we were loading from file
+                if CaseService._vf_session is None:
+                    CaseService._vf_session = restored
+                return CaseService._vf_session
+
+        # Slow path: full SSO via Chrome — do NOT hold the lock during this
+        # (holds 13+ seconds and blocks any concurrent PDF download threads)
+        t = time.time()
+        driver_manager = app_config.driver_manager
+        driver = driver_manager.create_download_driver(
+            os.path.join(app_config.avatarfiles_dir, "_vf_auth_tmp")
+        )
+        try:
+            # Step 1: Trigger SSO — VF root always redirects to Lightning after login
+            driver.get("https://intel--c.vf.force.com")
+            # Step 2: Wait for SSO to finish on any Salesforce domain
+            WebDriverWait(driver, 90).until(
+                lambda d: "force.com" in d.current_url and "login" not in d.current_url
+            )
+            print(f"  [VF Session] SSO complete, landed: {driver.current_url}")
+
+            # Step 3: Use CDP Network.getAllCookies to get ALL cookies for ALL domains
+            all_cookies = driver.execute_cdp_cmd("Network.getAllCookies", {})["cookies"]
+            vf_cookies = [c for c in all_cookies if "force.com" in c.get("domain", "")]
+            print(f"  [VF Session] Collected {len(vf_cookies)} force.com cookies via CDP")
+
+            vf_session = _requests.Session()
+            for c in vf_cookies:
+                vf_session.cookies.set(c["name"], c["value"], domain=c.get("domain", ""))
+            vf_session.headers["User-Agent"] = driver.execute_script("return navigator.userAgent")
+            # Explicitly set corporate proxy — create_download_driver() permanently pops
+            # HTTP_PROXY/HTTPS_PROXY from os.environ, so trust_env=True finds nothing after this.
+            vf_session.proxies = {
+                "http": "http://proxy-dmz.intel.com:911",
+                "https": "http://proxy-dmz.intel.com:912",
+            }
+
+            CaseService._save_cookies(vf_session)
+            print(f"  [VF Session] Authenticated via SSO in {time.time() - t:.2f}s")
+        finally:
+            driver.quit()
+            if driver in driver_manager.all_drivers:
+                driver_manager.all_drivers.remove(driver)
+
+        # Store result under lock
+        with CaseService._vf_session_lock:
+            if CaseService._vf_session is None:
+                CaseService._vf_session = vf_session
+        return CaseService._vf_session
+
     @staticmethod
     def process_case(case_context: CaseContext) -> CaseContext:
         
@@ -32,12 +167,12 @@ class CaseService:
         print("-----download_path:-----", case_context.case_download_dir)
 
 
-        case_fields = CaseService._get_case_info_from_snowflake(case_context.case_nbr[2:], key.snowflake_passwd)
+        case_fields = CaseService._get_case_info_from_snowflake(case_context.case_nbr, key.snowflake_passwd)
 
         if  case_fields is not None:
 
             (case_context.id, 
-            case_context.subject, 
+            case_context.subject,   
             case_context.env_detail, 
             case_context.description, 
             case_context.backend_id, 
@@ -122,15 +257,65 @@ class CaseService:
         return processed_comments, att_info
     
     @staticmethod
+    def _is_valid_pdf(resp) -> bool:
+        """Return True only if the response is a real PDF (Content-Type + magic bytes)."""
+        content_type = resp.headers.get("Content-Type", "")
+        return "application/pdf" in content_type or resp.content[:4] == b"%PDF"
+
+    @staticmethod
     def _download_pdf_by_url(case_id, download_path):
+        """Download PDF via cached VF-domain requests session — no Chrome driver after first auth."""
         pdf_url = f"https://intel--c.vf.force.com/apex/Core_IPS_Case_ExportPDF_LEX?id={case_id}"
-        return CaseService._download_pdf_common(pdf_url, download_path)
+        downloaded_pdf_path = os.path.join(download_path, 'Core_IPS_Case_ExportPDF_LEX.pdf')
+
+        if os.path.exists(downloaded_pdf_path):
+            print("⚠️ Existing PDF found. Removing old one.")
+            os.remove(downloaded_pdf_path)
+
+        t = time.time()
+        print(f"  [PDF] Getting VF session...")
+        vf_session = CaseService._get_vf_session()
+        print(f"  [PDF] Session ready, sending request to: {pdf_url}")
+        resp = vf_session.get(pdf_url, timeout=60, allow_redirects=True)
+        print(f"  [PDF] Response: status={resp.status_code}, content-type={resp.headers.get('Content-Type','?')}, size={len(resp.content)}")
+
+        # Retry once if response is not a valid PDF (login redirect, error page, etc.)
+        if not CaseService._is_valid_pdf(resp):
+            print(f"  [PDF] Response is not a PDF, re-authing...")
+            CaseService._invalidate_vf_session()
+            vf_session = CaseService._get_vf_session()
+            resp = vf_session.get(pdf_url, timeout=60, allow_redirects=True)
+            print(f"  [PDF] Retry response: status={resp.status_code}, content-type={resp.headers.get('Content-Type','?')}, size={len(resp.content)}")
+
+        if not CaseService._is_valid_pdf(resp):
+            raise RuntimeError(
+                f"Failed to download PDF for case {case_id}: "
+                f"status={resp.status_code}, content-type={resp.headers.get('Content-Type','?')}"
+            )
+
+        with open(downloaded_pdf_path, 'wb') as f:
+            f.write(resp.content)
+        print(f"  [PDF] Download via requests: {time.time() - t:.2f}s  ({len(resp.content):,} bytes)")
+        return downloaded_pdf_path
     
+    @staticmethod
+    def _invalidate_vf_session():
+        """Clear in-memory session and delete the cookie file so next call does a fresh SSO."""
+        with CaseService._vf_session_lock:
+            CaseService._vf_session = None
+        cookie_path = CaseService._cookie_file_path()
+        if os.path.exists(cookie_path):
+            try:
+                os.remove(cookie_path)
+            except Exception:
+                pass
+        print("  [VF Session] Session invalidated, will re-authenticate on next request")
+
     @staticmethod
     def _download_pdf_by_simulation(case_nbr, download_path):
         driver_manager = app_config.driver_manager
         driver = driver_manager.create_download_driver(download_path)
-        
+
         try:
             case_list_url = "https://intel.lightning.force.com/lightning/o/Case/list?filterName=Core_AllCases"
             driver.get(case_list_url)
@@ -138,25 +323,25 @@ class CaseService:
                 EC.element_to_be_clickable((By.XPATH, "//button[@aria-label='Search']"))
             )
             search_button.click()
-            
+
             search_box = WebDriverWait(driver, 20).until(
                 EC.element_to_be_clickable((By.XPATH, "//input[@placeholder='Search...']"))
             )
             search_box.clear()
             search_box.send_keys(case_nbr)
             search_box.send_keys(Keys.ENTER)
-            
+
             a_tag = WebDriverWait(driver, 15).until(
                 EC.presence_of_element_located((By.XPATH, f'//a[@title="{case_nbr}"]'))
             )
             href = a_tag.get_attribute("href")
             case_id = href.split("/r/")[1].split("/")[0]
-            
+
             pdf_url = f"https://intel--c.vf.force.com/apex/Core_IPS_Case_ExportPDF_LEX?id={case_id}"
             pdf_path = CaseService._download_pdf_common(pdf_url, download_path, driver)
-            
+
             return case_id, pdf_path
-            
+
         except Exception as e:
             print(f"link of case {case_nbr} not found: {e}")
             flash(f"link of case {case_nbr} not found: {e}", "danger")

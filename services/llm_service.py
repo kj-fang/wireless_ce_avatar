@@ -172,7 +172,6 @@ class LLM_helper:
                 max_tokens=1500,
                 #stop=None
             )
-
             
             raw_output = response.choices[0].message.content
             print("raw_output:", raw_output)
@@ -213,6 +212,7 @@ class LLM_helper:
 
         print("client:", self.client)
         try:
+
             response = self.client.chat.completions.create( #model=classification_info.tmp_model,
                 model=self.model,  
                 messages=[
@@ -232,7 +232,6 @@ class LLM_helper:
                 max_tokens=8000,
                 #stop=None
             )
-            #"""
 
             """params = {
                 "model": classification_info.tmp_model,

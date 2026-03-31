@@ -145,9 +145,15 @@
     <div id="log">...</div>
     
     <!-- Show Download Path -->
-    <div class="d-flex align-items-center mb-3">
-        <span class="mr-2"><strong>Download Path:</strong> {{ case_path }}</span>
-        <button id="open-btn" data-path="{{ case_path|e }}" type="button" class="btn btn-sm btn-outline-primary ml-2" onclick="openDownloadPath()">Open</button>
+    <div class="d-flex align-items-center justify-content-between mb-3">
+        <div class="d-flex align-items-center">
+            <span class="mr-2"><strong>Download Path:</strong> {{ case_path }}</span>
+            <button id="open-btn" data-path="{{ case_path|e }}" type="button" class="btn btn-sm btn-outline-primary ml-2" onclick="openDownloadPath()">Open</button>
+        </div>
+
+        <div>
+            <button class="btn btn-secondary btn-sm" onclick="cancelFwAndNavigate('/')">Back to Home</button>
+        </div>
     </div>
 
     <!-- Show System Info -->
@@ -200,12 +206,10 @@
     </div>
     
 
+
     {% if wifi_table_rows %}
     <div class="d-flex justify-content-between align-items-center mb-2">
         <h2>🔍 Analysis WIFI Results</h2>
-        <div class="d-flex gap-1">
-            <button class="btn btn-secondary btn-sm me-2" onclick="cancelFwAndNavigate('/')">Back to Home</button>
-        </div>
     </div>
     <table>
         <thead>

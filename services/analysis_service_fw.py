@@ -227,16 +227,15 @@ class FWAnalysisService():
         
         results = {
             "log": None,
-            "system_text": None,
-            'system_info': None
-
+            "system_text": None
         }
+        
         if 'wifi' in wifi_of_bt:
             self.emit_log("Start FW WiFi analysis.")
             results['system_text'] = fw_wifi_analysis(file_path, cancel_event=cancel_event)
         else:  # BT case → run BT FW analysis
             self.emit_log("Start FW BT analysis.")
-            results['system_info'], results['system_text'], results['log'] = fw_bt_analysis(file_path, cancel_event=cancel_event)
+            results['system_text'], results['log'] = fw_bt_analysis(file_path, cancel_event=cancel_event)
         return results['system_text'], results['log']
     
     

@@ -4,7 +4,9 @@ import subprocess
 from datetime import datetime
 
 from utils import helpers
+# --- DEBUG START ---
 from utils import attachment_decompose # for debug existing folder
+# --- DEBUG END ---
 from utils.etl_utils import get_auto_analysis_etl, get_issue_time_from_selected_files, filter_folders_by_time, extract_timestamp_from_folder
 from utils.fw_utils import load_fw_system_info
 from services.case_info_service import CaseService
@@ -69,13 +71,14 @@ def handle_case_submission():
     """Submit IPS number"""
     case_nbr = request.form.get('case_number', '').strip().replace(" ", "")
 
-    # for debug existing zip
+    # --- DEBUG START ---
     action_type = request.form.get('action_type', '').strip().lower()
     debug_zip_path = request.form.get('debug_zip_path', '').strip().strip('"')
 
     if action_type == 'debug_folder':
         return _handle_debug_existing_zip(debug_zip_path)
-    
+    # --- DEBUG END ---
+
     if not case_nbr:
         flash("❌ No case number provided.", "danger")
         return redirect(url_for('main.index'))
@@ -98,13 +101,13 @@ def handle_case_submission():
         session['debug_mode'] = False
 
         return redirect(url_for('main.select_attachments'))
-    # end of for debug existing zip
 
     except Exception as e:
         print(f"❌ Error processing case: {e}")
         flash("An error occurred while processing the case.", "danger")
         return redirect(url_for('main.index'))
 
+# --- DEBUG START ---
 def _collect_existing_zip_results(zip_path):
     abs_zip_path = os.path.abspath(zip_path)
     zip_name = os.path.basename(abs_zip_path)
@@ -171,7 +174,8 @@ def _handle_debug_existing_zip(debug_zip_path):
     )
 
     return redirect(url_for('main.download_result'))
-    
+# --- DEBUG END ---
+
 
 #------------ SELECT ATTACHMENT render/submission -------------#
 
@@ -271,8 +275,20 @@ def _extract_first_folder_from_zip(file_path, zip_name, download_path):
         return ''
     
     # Extract the first folder component
+    if rel_path in ('', '.'):
+        return ''
+
     parts = rel_path.split(os.sep)
-    return parts[0] if parts else ''
+    first_folder = parts[0] if parts else ''
+    if not first_folder:
+        return ''
+
+    # Fallback: if the first component is not a directory, use file's parent folder name.
+    first_folder_path = os.path.join(extract_folder_norm, first_folder)
+    if os.path.isdir(first_folder_path):
+        return first_folder
+
+    return os.path.basename(os.path.dirname(file_path_norm))
 
 
 def _build_merged_table_rows(file_dict, path_key, path_filter=None, download_path=None):

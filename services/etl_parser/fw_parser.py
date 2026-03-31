@@ -310,8 +310,8 @@ def fw_bt_analysis(fw_path, use_cli=True, cancel_event: Event | None = None):
             
             print("✅ Debug: FW bt decoder CLI is completed successfully.")
             sysmon_text = _get_sysmon_to_text(fw_path)
-            system_info = _get_system_info(fw_path)
-            return system_info, sysmon_text, stdout
+
+            return sysmon_text, stdout
 
         except subprocess.CalledProcessError as e:
             print(f"❌ Failed to launch bt_decoder_cli.exe, (Error Code {e.returncode}):")
@@ -463,30 +463,6 @@ def open_sysmon_with_tool(fw_path: str, on_log=None, on_close=None):
         _emit_viewer_log(on_log, f"❌ Failed to open sysmon: {e}")
         return False
 
-
-def _get_system_info(fw_path):
-    
-    fw_dir = os.path.dirname(fw_path)
-    system_info_path = os.path.join(fw_dir, "system_info.txt")
-    with open(system_info_path, 'r', encoding='utf-8') as file:
-        system_info = json.load(file)
-        return {
-            "BT Driver Version": system_info['Versions']['BT Driver Version'],
-            "Wi-Fi Driver Version": system_info['Versions']['Wi-Fi Driver Version'],
-            "Device Name": system_info['Device Name'],
-            "BT FW SHA1": system_info['BT FW SHA1'],
-            "Wi-Fi Adapter": system_info['Wi-Fi Adapter'],
-            "OS Information": system_info['OS Information'],
-            "Intel® Smart Sound Technology BUS": system_info['Intel® Smart Sound Technology BUS'],
-            "Intel® Smart Sound Technology OED": system_info['Intel® Smart Sound Technology OED'],
-            "Intel® Smart Sound Technology for Bluetooth® Audio": system_info['Intel® Smart Sound Technology for Bluetooth® Audio'],
-            "WRT::2G Version": system_info['Versions']['WRT::2G Version'],
-            "preset": system_info['preset'],
-            "BT FW Config": system_info['BT FW Config'],
-            "Dbgc Status Global as seen by BT": system_info['Dbgc Status Global as seen by BT'],
-            "Dbgc Status as read from Mailbox": system_info['Dbgc Status as read from Mailbox'],
-        }
-
 def _get_sysmon_to_text(fw_path):
 
     fw_dir = os.path.dirname(fw_path)
@@ -509,11 +485,23 @@ def _get_sysmon_to_text(fw_path):
 
 
 def _has_fw_bt_decode_outputs(fw_path):
-    """Use generated artifacts to determine decode success when CLI exit code is non-zero."""
+    """Treat decode as successful when at least 4 output folders share fw_path stem prefix."""
+    if not fw_path:
+        return False
+
     fw_dir = os.path.dirname(fw_path)
-    summary_path = fw_path[:-4] + "decodeSummary.json"
-    system_info_path = os.path.join(fw_dir, "system_info.txt")
-    return os.path.exists(summary_path) and os.path.exists(system_info_path)
+    fw_stem = os.path.splitext(os.path.basename(fw_path))[0]
+    if not fw_stem or not os.path.isdir(fw_dir):
+        return False
+
+    prefix = fw_stem.lower()
+    decoded_folders = []
+    for name in os.listdir(fw_dir):
+        full_path = os.path.join(fw_dir, name)
+        if os.path.isdir(full_path) and name.lower().startswith(prefix):
+            decoded_folders.append(name)
+
+    return len(decoded_folders) >= 4
 
 def _get_eventid_from_summary(fw_path):
     if not os.path.exists(fw_path) or not fw_path.endswith(".etl"):

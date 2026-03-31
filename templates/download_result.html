@@ -180,7 +180,42 @@
     </details>
     {% endif %}
 
-    
+    <!-- System Event Results Section -->
+    <h2 class="mt-4">🔍 Analysis System Event Results</h2>
+    <table>
+        <thead>
+            <tr>
+                <th>Zip File</th>
+                <th>Folder Name</th>
+                <th>File Name</th>
+                <th>Analysis</th>
+            </tr>
+        </thead>
+        <tbody>
+            {% for row in event_table_rows %}
+                <tr>
+                    {% if row.show_zip_cell %}
+                    <td rowspan="{{ row.zip_rowspan }}">{{ row.zip_name }}</td>
+                    {% endif %}
+                    {% if row.show_folder_cell %}
+                    <td rowspan="{{ row.folder_rowspan }}">{{ row.folder_name }}</td>
+                    {% endif %}
+                    <td title="Click to copy" style="cursor: pointer;" data-path="{{ row.ddd_path }}" onclick="copyToClipboard(this.getAttribute('data-path'))">
+                        {{ row.ddd_path.split('\\')[-1] if '\\' in row.ddd_path else row.ddd_path.split('/')[-1] }}
+                    </td>
+                    <td class="text-center">
+                        <div class="d-flex flex-column align-items-center">
+                            <button class="btn btn-primary btn-sm" 
+                                    data-evt-path="{{ row.ddd_path | e }}" 
+                                    onclick="eventAnalysis(this.dataset.evtPath, this)">
+                                Event Analysis
+                            </button>
+                        </div>
+                    </td>
+                </tr>
+            {% endfor %}
+        </tbody>
+    </table>
     <!-- System Event Log Display Box (hidden until Event View or Dump TXT is clicked) -->
     <div id="eventLogSection" class="mt-3 mb-4" style="display: none;">
         <div class="d-flex justify-content-between align-items-center mb-2">
@@ -207,7 +242,7 @@
     
 
 
-    {% if wifi_table_rows %}
+    {% if wifi_or_bt == 'wifi' and wifi_table_rows %}
     <div class="d-flex justify-content-between align-items-center mb-2">
         <h2>🔍 Analysis WIFI Results</h2>
     </div>
@@ -229,7 +264,9 @@
                     {% if row.show_folder_cell %}
                     <td rowspan="{{ row.folder_rowspan }}">{{ row.folder_name }}</td>
                     {% endif %}
-                    <td>{{ row.etl_path }}</td>
+                    <td title="Click to copy" style="cursor: pointer;" data-path="{{ row.etl_path }}" onclick="copyToClipboard(this.getAttribute('data-path'))">
+                        {{ row.etl_path.split('\\')[-1] if '\\' in row.etl_path else row.etl_path.split('/')[-1] }}
+                    </td>
                     <td class="text-center">
                         <div class="d-flex flex-column align-items-center">
                             <button class="btn btn-primary btn-sm mb-2" onclick="startAnalysis(this, '{{ row.etl_path | urlencode }}')">
@@ -246,14 +283,14 @@
     </table>
     {% endif %}
     
+    {% if wifi_or_bt == 'bt' %}
     <h2 class="mt-4">🔍 Analysis BT Results</h2>
     <table>
         <thead>
             <tr>
                 <th>Zip File</th>
                 <th>Folder Name</th>
-                <th>File Path</th>
-                <th>Extension</th>
+                <th>File Name</th>
                 <th>Analysis</th>
             </tr>
         </thead>
@@ -266,8 +303,9 @@
                     {% if row.show_folder_cell %}
                     <td rowspan="{{ row.folder_rowspan }}">{{ row.folder_name }}</td>
                     {% endif %}
-                    <td>{{ row.bt_path }}</td>
-                    <td>{{ row.bt_path.split('.')[-1] }}</td>
+                    <td title="Click to copy" style="cursor: pointer;" data-path="{{ row.bt_path }}" onclick="copyToClipboard(this.getAttribute('data-path'))">
+                        {{ row.bt_path.split('\\')[-1] if '\\' in row.bt_path else row.bt_path.split('/')[-1] }}
+                    </td>
                     <td class="text-center">
                         <div class="d-flex flex-column align-items-center">
                             <!-- AutoFile -->
@@ -291,6 +329,7 @@
         </tbody>
 
     </table>
+    {% endif %}
 
     <!-- FW Results Section -->
     <h2 class="mt-4">🔍 Analysis FW Results</h2>
@@ -299,8 +338,7 @@
             <tr>
                 <th>Zip File</th>
                 <th>Folder Name</th>
-                <th>File Path</th>
-                <th>Extension</th>
+                <th>File Name</th>
                 <th>Analysis</th>
             </tr>
         </thead>
@@ -313,8 +351,9 @@
                     {% if row.show_folder_cell %}
                     <td rowspan="{{ row.folder_rowspan }}">{{ row.folder_name }}</td>
                     {% endif %}
-                    <td>{{ row.fw_path }}</td>
-                    <td>{{ row.fw_path.split('.')[-1] }}</td>
+                    <td title="Click to copy" style="cursor: pointer;" data-path="{{ row.fw_path }}" onclick="copyToClipboard(this.getAttribute('data-path'))">
+                        {{ row.fw_path.split('\\')[-1] if '\\' in row.fw_path else row.fw_path.split('/')[-1] }}
+                    </td>
                     <td>
                         <button class="btn btn-primary btn-sm" onclick="startFwAnalysis(this, '{{ row.fw_path | urlencode }}')">
                             Parse
@@ -324,45 +363,25 @@
             {% endfor %}
         </tbody>
     </table>
+    
 
-    <!-- System Event Results Section -->
-    <h2 class="mt-4">🔍 Analysis System Event Results</h2>
-    <table>
-        <thead>
-            <tr>
-                <th>Zip File</th>
-                <th>Folder Name</th>
-                <th>File Path</th>
-                <th>Extension</th>
-                <th>Analysis</th>
-            </tr>
-        </thead>
-        <tbody>
-            {% for row in event_table_rows %}
-                <tr>
-                    {% if row.show_zip_cell %}
-                    <td rowspan="{{ row.zip_rowspan }}">{{ row.zip_name }}</td>
-                    {% endif %}
-                    {% if row.show_folder_cell %}
-                    <td rowspan="{{ row.folder_rowspan }}">{{ row.folder_name }}</td>
-                    {% endif %}
-                    <td>{{ row.ddd_path }}</td>
-                    <td>{{ row.ddd_path.split('.')[-1] }}</td>
-                    <td class="text-center">
-                        <div class="d-flex flex-column align-items-center">
-                            <button class="btn btn-primary btn-sm" 
-                                    data-evt-path="{{ row.ddd_path | e }}" 
-                                    onclick="eventAnalysis(this.dataset.evtPath, this)">
-                                Event Analysis
-                            </button>
-                        </div>
-                    </td>
-                </tr>
-            {% endfor %}
-        </tbody>
-    </table>
 
     <script>
+        // Utility function to copy text to clipboard
+        function copyToClipboard(text) {
+            navigator.clipboard.writeText(text).then(() => {
+                alert('✓ Copied to clipboard');
+            }).catch(err => {
+                console.error('Failed to copy:', err);
+                alert('Failed to copy');
+            });
+        }
+
+        // Extract filename from full path (handle both / and \)
+        function getFilename(fullPath) {
+            return fullPath.split(/[\\\/]/).pop();
+        }
+
         const socket = io('/progress');
         const logBox = document.getElementById("log");
         

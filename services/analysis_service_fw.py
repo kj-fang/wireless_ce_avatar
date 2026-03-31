@@ -11,7 +11,7 @@ from utils.fw_utils import load_fw_system_info
 class FWAnalysisService():
 
     def __init__(self):
-        self.fw_validate = False # for debug purpose, set to False to skip all the precheck and system info validation
+        self.fw_validate = True # for debug purpose, set to False to skip all the precheck and system info validation
         self.service_name = "bt"
         self._tasks = {}
         self._lock = Lock()

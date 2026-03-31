@@ -16,6 +16,7 @@ class GlobalConfig:
         self.llm_helper: Optional[LLM_helper] = None
         self.log_chatbot_agent: Optional[Any] = None   # WifiLogAgentSystem
         self.key_module: Optional[Any] = None
+        self.key: Optional[Any] = None
         
         # Directory paths
         self.avatarfiles_dir: Optional[str] = None

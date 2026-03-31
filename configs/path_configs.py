@@ -18,9 +18,15 @@ LOG_PARSER_DIR = rf"\\infs089.iil.intel.com\HOME\WirelessCE\Intel_WirelessCE_Ava
 LOG_PARSER_DATA_DIR_prim = rf"\\infs089b.iil.intel.com\HOME\WirelessCE\Intel_WirelessCE_Avatar\log_parser_data"
 LOG_PARSER_DATA_DIR_bkup = rf"\\infs089.iil.intel.com\HOME\WirelessCE\Intel_WirelessCE_Avatar\log_parser_data"
 
+# Skills YAML — unified location for skill definitions
+SKILLS_CONFIG_DIR_prim = rf"\\infs089b.iil.intel.com\HOME\WirelessCE\Intel_WirelessCE_Avatar\log_parser_data\skills_config"
+SKILLS_CONFIG_DIR_bkup = rf"\\infs089.iil.intel.com\HOME\WirelessCE\Intel_WirelessCE_Avatar\log_parser_data\skills_config"
+SKILLS_YAML_FILENAME = "skills.yaml"
+
 # Local cache — prompt/ and filter/ are copied here from the remote on first run.
 # Using a path relative to this file so it works regardless of install location.
 from pathlib import Path as _Path
 LOCAL_LOG_PARSER_DATA_DIR = str(_Path(__file__).parent.parent / "data" / "log_parser_data")
+LOCAL_SKILLS_YAML = str(_Path(__file__).parent.parent / "data" / "skills.yaml")
 
 

@@ -179,6 +179,51 @@ def edit_prompt():
     return result
 
 
+@log_parser_bp.route("/estimate_tokens", methods=["POST"])
+def estimate_tokens():
+    data = request.get_json()
+    selected_filter = (data.get('filter_file') or '').strip()
+    if not selected_filter:
+        return jsonify({'success': False, 'message': 'No filter file specified'}), 400
+
+    log_path = session.get('log_path', '')
+    if not log_path or not os.path.exists(log_path):
+        return jsonify({'success': False, 'message': 'Log file not found in session'}), 400
+
+    filter_path = os.path.join(LOG_PARSER_DIR, "filter", os.path.basename(selected_filter))
+    if not os.path.exists(filter_path):
+        return jsonify({'success': False, 'message': f'Filter file not found: {selected_filter}'}), 400
+
+    try:
+        from utils.log_parser_preprocess import (
+            extract_enabled_keywords_from_filter_file,
+            filter_log_by_keywords, preprocess_log_for_llm, group_similar_logs
+        )
+        from utils import helpers as _helpers
+
+        log_lines = _helpers.read_log_file(log_path)
+        keywords = extract_enabled_keywords_from_filter_file(filter_path)
+        filtered = filter_log_by_keywords(log_lines, keywords)
+        processed = preprocess_log_for_llm(filtered)
+        grouped = group_similar_logs(processed)
+
+        TOKEN_LIMIT = 20_000
+        filtered_tokens = log_parser_service._estimate_tokens("\n".join(filtered))
+        grouped_tokens = log_parser_service._estimate_tokens("\n".join(grouped))
+
+        return jsonify({
+            'success': True,
+            'filtered_tokens': filtered_tokens,
+            'grouped_tokens': grouped_tokens,
+            'token_limit': TOKEN_LIMIT,
+            'exceeds_limit': grouped_tokens > TOKEN_LIMIT,
+            'keyword_count': len(keywords),
+            'filtered_lines': len(filtered),
+        })
+    except Exception as e:
+        return jsonify({'success': False, 'message': str(e)}), 500
+
+
 def register_socketio_handlers(socketio):
     @socketio.on('submit_analysis', namespace='/progress')
     def socketio_submit_analysis(data):

@@ -134,6 +134,11 @@ class LogParserService:
                     }, namespace='/progress')
         
 
+    @staticmethod
+    def _estimate_tokens(text: str) -> int:
+        """Rough token estimate: ~1 token per 4 characters (OpenAI rule of thumb)."""
+        return max(1, len(text) // 4)
+
     def process_analysis(self, filter_path, log_path, output_dir, llm_helper, prompt, case_description: Optional[str] = None):
 
         try:
@@ -153,6 +158,11 @@ class LogParserService:
             self.update_progress(55, "Filtering log entries...")
             filtered_log = filter_log_by_keywords(log_lines, filter_keywords)
             helpers.save_file(os.path.join(output_dir, "filtered.log"), filtered_log, ensure_newline=True)
+
+            filtered_text = "\n".join(filtered_log)
+            filtered_token_est = self._estimate_tokens(filtered_text)
+            print(f"[Token Estimate] After filter: ~{filtered_token_est:,} tokens ({len(filtered_log)} lines, {len(filtered_text):,} chars)")
+            self.update_progress(55, f"Filtering done — ~{filtered_token_est:,} tokens estimated after filter")
             
             # 4: Preprocess log
             self.update_progress(70, "Preprocessing log for LLM...")
@@ -161,7 +171,26 @@ class LogParserService:
             
             save_filtered_log_path = os.path.join(output_dir, "filtered_preprocessed.log")
             helpers.save_file(save_filtered_log_path, grouped, ensure_newline=True)
-            
+
+            grouped_text = "\n".join(grouped)
+            grouped_token_est = self._estimate_tokens(grouped_text)
+            print(f"[Token Estimate] After preprocess+group: ~{grouped_token_est:,} tokens ({len(grouped)} lines, {len(grouped_text):,} chars)")
+            self.update_progress(70, f"Preprocessing done — ~{grouped_token_est:,} tokens estimated after preprocess")
+            TOKEN_LIMIT = 20_000
+            if grouped_token_est > TOKEN_LIMIT:
+                reason = (
+                    f"Token limit exceeded: ~{grouped_token_est:,} tokens after preprocessing "
+                    f"(limit: {TOKEN_LIMIT:,} tokens). "
+                    f"Please apply a stricter filter to reduce the log size before retrying."
+                )
+                print(f"[Token Limit] {reason}")
+                self.update_progress(0, f"Error: {reason}")
+                app_config.socketio.emit('analysis_error', {
+                    'message': reason,
+                    'token_count': grouped_token_est,
+                    'token_limit': TOKEN_LIMIT
+                }, namespace='/progress')
+                return False            
             # 5: LLM analysis
             self.update_progress(85, "Running LLM analysis...")
 

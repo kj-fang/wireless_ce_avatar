@@ -5,10 +5,12 @@ from configs.path_configs import (
     KEY_PATH_prim, KEY_PATH_bkup, CLASSIFY_PATH,
     LOG_PARSER_DATA_DIR_prim, LOG_PARSER_DATA_DIR_bkup,
     LOCAL_LOG_PARSER_DATA_DIR,
+    SKILLS_CONFIG_DIR_prim, SKILLS_CONFIG_DIR_bkup, SKILLS_YAML_FILENAME,
+    LOCAL_SKILLS_YAML,
 )
 from utils import helpers
 from services.llm_service import LLM_helper
-from services.log_chatbot_service import WifiLogAgentSystem, sync_to_local
+from services.log_chatbot_service import WifiLogAgentSystem, sync_to_local, load_skills_from_yaml
 
 from configs.global_configs import app_config
 
@@ -63,26 +65,44 @@ def set_up(socketio):
     app_config.set_llm_helper(llm_helper)
 
     # Load diagnostic skills into LLM_helper (shared with chatbot agent)
-    # Priority: local cache → remote shared folder
-    local_data_dir  = Path(LOCAL_LOG_PARSER_DATA_DIR)
-    local_has_data  = ((local_data_dir / "prompt").exists() and
-                       (local_data_dir / "filter").exists())
+    # Priority: Shared YAML → Local cache (prompt/filter dirs)
+    
+    # Step 1: Try to load from shared YAML location
+    skills_yaml_shared = helpers.get_load_path(
+        str(Path(SKILLS_CONFIG_DIR_prim) / SKILLS_YAML_FILENAME),
+        str(Path(SKILLS_CONFIG_DIR_bkup) / SKILLS_YAML_FILENAME)
+    )
+    
+    skills_loaded = False
+    if skills_yaml_shared and Path(skills_yaml_shared).exists():
+        try:
+            print(f"📦 Loading skills from shared YAML: {skills_yaml_shared}")
+            llm_helper.skills = load_skills_from_yaml(skills_yaml_shared)
+            skills_loaded = True
+            print(f"✅  {len(llm_helper.skills)} skills loaded from YAML")
+        except Exception as e:
+            print(f"⚠️  Failed to load skills from YAML: {e}")
+    
+    # Step 2: Fallback to directory-based loading (prompt/filter dirs)
+    if not skills_loaded:
+        local_data_dir  = Path(LOCAL_LOG_PARSER_DATA_DIR)
+        local_has_data  = ((local_data_dir / "prompt").exists() and
+                           (local_data_dir / "filter").exists())
 
-    data_dir = None
-    if local_has_data:
-        print(f"🗂️  Using local skill cache: {LOCAL_LOG_PARSER_DATA_DIR}")
-        data_dir = LOCAL_LOG_PARSER_DATA_DIR
-    # else:
-    #     print("🔄  Local cache missing — syncing from remote shared folder...")
-    #     remote_dir = helpers.get_load_path(LOG_PARSER_DATA_DIR_prim, LOG_PARSER_DATA_DIR_bkup)
-    #     if remote_dir:
-    #         sync_to_local(remote_dir, LOCAL_LOG_PARSER_DATA_DIR)
-    #         data_dir = LOCAL_LOG_PARSER_DATA_DIR   # use local after sync
-    #     else:
-    #         print("⚠️  Remote shared folder also unreachable — no skills will be loaded.")
+        data_dir = None
+        if local_has_data:
+            print(f"🗂️  Using local skill cache: {LOCAL_LOG_PARSER_DATA_DIR}")
+            data_dir = LOCAL_LOG_PARSER_DATA_DIR
+        # else:
+        #     print("🔄  Local cache missing — syncing from remote shared folder...")
+        #     remote_dir = helpers.get_load_path(LOG_PARSER_DATA_DIR_prim, LOG_PARSER_DATA_DIR_bkup)
+        #     if remote_dir:
+        #         sync_to_local(remote_dir, LOCAL_LOG_PARSER_DATA_DIR)
+        #         data_dir = LOCAL_LOG_PARSER_DATA_DIR   # use local after sync
+        #     else:
+        #         print("⚠️  Remote shared folder also unreachable — no skills will be loaded.")
 
-
-    llm_helper.load_skills(data_dir)
+        llm_helper.load_skills(data_dir)
 
     # Log Chatbot Agent — loaded at startup, reuses skills already in llm_helper
     if llm_helper.client is not None:

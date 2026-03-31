@@ -194,6 +194,7 @@
             display: flex;
             flex-direction: column;
             gap: 14px;
+            background: #f5f5f5;
         }
 
         /* Message bubbles */
@@ -379,6 +380,67 @@
             padding: 40px 20px;
         }
         .welcome-msg .big-icon { font-size: 3rem; margin-bottom: 10px; }
+
+        /* Agent process card — single consolidated output */
+        .agent-process-card {
+            background: #eaecef;
+            border: 1px solid #d1d5db;
+            border-radius: 12px;
+            overflow: hidden;
+            box-shadow: 0 2px 8px rgba(0,0,0,0.07);
+            font-size: 0.82rem;
+            margin-bottom: 8px;
+        }
+        .agent-process-header {
+            background: linear-gradient(135deg, #1e40af, #3b82f6);
+            color: white;
+            padding: 10px 16px;
+            font-weight: 700;
+            font-size: 0.85rem;
+            display: flex;
+            align-items: center;
+            gap: 8px;
+            cursor: pointer;
+            user-select: none;
+        }
+        .agent-process-header:hover { opacity: 0.95; }
+        .agent-process-header .toggle-icon { margin-left: auto; transition: transform 0.2s; }
+        .agent-process-header.collapsed .toggle-icon { transform: rotate(-90deg); }
+        .agent-process-body { padding: 0; }
+        .agent-process-body.hidden { display: none; }
+        .report-details.hidden { display: none; }
+
+        .agent-step {
+            padding: 8px 16px;
+            border-bottom: 1px solid #d1d5db;
+            display: flex;
+            gap: 10px;
+            align-items: flex-start;
+        }
+        .agent-step:last-child { border-bottom: none; }
+        .agent-step-icon {
+            display: none;
+        }
+        .agent-step-content {
+            flex: 1;
+            font-size: 0.78rem;
+            color: #4b5563;
+            line-height: 1.5;
+        }
+        .agent-step-content pre {
+            background: #e2e5e9;
+            border: 1px solid #c9cdd3;
+            padding: 6px 8px;
+            border-radius: 4px;
+            font-size: 0.7rem;
+            max-height: 100px;
+            overflow: auto;
+            margin: 4px 0 0 0;
+            white-space: pre-wrap;
+            word-break: break-all;
+            color: #374151;
+        }
+        .agent-step-content strong { color: #1e40af; }
     </style>
 </head>
 <body>
@@ -422,25 +484,31 @@
             </div>
         </div>
 
+        <!-- Reload skills from directory -->
+        <div class="sidebar-section">
+            <h6>🛠 Reload Skills</h6>
+            <div class="log-input-group">
+                <input id="skills-dir-input" type="text" placeholder="Skills data directory…">
+                <button class="btn-browse" onclick="browseSkillsDir()" title="Browse for directory">📁</button>
+            </div>
+            <button class="btn-set-log" style="width:100%;margin-top:6px;" onclick="reloadSkills()">🔄 Reload Skills</button>
+            <div id="skills-reload-status" class="log-status"></div>
+        </div>
+
         <!-- Actions -->
         <div class="sidebar-section">
             <h6>⚡ Actions</h6>
-            <button class="btn-analyze-all" id="analyze-all-btn" onclick="analyzeAll()" disabled>
-                🔍 Analyze All Skills
-            </button>
-            <button class="btn-reset" onclick="resetConversation()">🔄 Reset Conversation</button>
-        </div>
 
-        <!-- Reload skills from directory -->
-        <div class="sidebar-section">
-            <h6>🔁 Reload Skills</h6>
-            <div class="log-input-group">
-                <input id="skills-dir-input" type="text"
-                       placeholder="Skills data directory…">
-                <button class="btn-browse" onclick="browseSkillsDir()" title="Browse for directory">📁</button>
+            <!-- AI Symptom auto-filled (hidden, used by auto-trigger on page load) -->
+            <input type="hidden" id="issue-desc-input" value="{{ ai_summary | default('', true) }}">
+
+            {% if ai_summary %}
+            <div style="margin-bottom:8px;font-size:0.72rem;color:#1a7a3e;background:#e6f7ee;border:1px solid #b6e2c9;border-radius:6px;padding:6px 10px;line-height:1.4;">
+                ✅ Issue Symptom auto-loaded: {{ ai_summary[:200] }}
             </div>
-            <button class="btn-set-log" style="width:100%;margin-top:6px;" onclick="reloadSkills()">↺ Reload Skills</button>
-            <div id="skills-reload-status" class="log-status"></div>
+            {% endif %}
+
+            <button class="btn-reset" onclick="resetConversation()">🔄 Reset Conversation</button>
         </div>
 
         <!-- Quick ask shortcuts -->
@@ -478,6 +546,13 @@
 <!-- ── JavaScript ── -->
 <script>
     let logLoaded = false;
+    let skillsLoaded = false;
+
+    // Enable the Analyze All button only when BOTH log and skills are loaded
+    function updateAnalyzeBtn() {
+        const btn = document.getElementById('analyze-all-btn');
+        if (btn) btn.disabled = !(logLoaded && skillsLoaded);
+    }
 
     // ── Utilities ──────────────────────────────────────────────────
     function autoResize(el) {
@@ -549,7 +624,23 @@
         scrollBottom();
     }
 
-    function appendReport(data, header = '📊 Analysis Report') {
+    function toggleReportDetails(toggleBtnId, detailsId) {
+        const details = document.getElementById(detailsId);
+        const btn = document.getElementById(toggleBtnId);
+        if (!details || !btn) return;
+        const isHidden = btn.dataset.state === 'hidden';
+        if (isHidden) {
+            details.classList.remove('hidden');
+            btn.dataset.state = 'shown';
+            btn.textContent = '\u25b2 Hide Details';
+        } else {
+            details.classList.add('hidden');
+            btn.dataset.state = 'hidden';
+            btn.textContent = '\u25bc Show Details';
+        }
+    }
+
+    function appendReport(data, header = '📊 Analysis Report', eventTime = null) {
         removeTyping();
         hideWelcome();
 
@@ -565,41 +656,72 @@
               ).join('')
             : '';
 
+        const ts = Date.now();
+        const reportId = 'report-' + ts;
+        const detailsId = 'report-details-' + ts;
+        const toggleId = 'toggle-' + ts;
+
+        // Main section: always visible
+        const mainHtml = `
+            ${eventTime ? `
+            <div class="report-row">
+                <div class="report-label">Event Time</div>
+                <div style="font-weight:600;color:#d97706;">${escapeHtml(eventTime)}</div>
+            </div>` : ''}
+            ${data.root_cause_summary ? `
+            <div class="report-row">
+                <div class="report-label">Root Cause</div>
+                <div style="font-weight:600;color:#222;">${escapeHtml(data.root_cause_summary)}</div>
+            </div>` : ''}
+            ${score ? `
+            <div class="report-row">
+                <div class="report-label">Confidence</div>
+                <div>
+                    <strong>${score}%</strong>
+                    <span class="confidence-bar" style="width:${barWidth}px;"></span>
+                </div>
+            </div>` : ''}
+            ${actions ? `
+            <div class="report-row">
+                <div class="report-label">Recommendations</div>
+                <ul style="margin:0;padding-left:16px;font-size:0.8rem;">${actions}</ul>
+            </div>` : ''}`;
+
+        // Details section: collapsible
+        const detailsHtml = `
+            ${skills ? `
+            <div class="report-row">
+                <div class="report-label">Skills Used</div>
+                <div>${skills}</div>
+            </div>` : ''}
+            ${findings ? `
+            <div class="report-row" style="flex-direction:column;">
+                <div class="report-label" style="margin-bottom:6px;">Per-Skill Findings</div>
+                ${findings}
+            </div>` : ''}
+            ${data.markdown_summary ? `
+            <div class="markdown-section">${marked.parse(data.markdown_summary)}</div>` : ''}`;
+
         const html = `
         <div class="report-card">
-            <div class="report-header">🔬 ${escapeHtml(header)}</div>
+            <div class="report-header">${escapeHtml(header)}</div>
             <div class="report-body">
-                ${data.root_cause_summary ? `
-                <div class="report-row">
-                    <div class="report-label">Root Cause</div>
-                    <div style="font-weight:600;color:#222;">${escapeHtml(data.root_cause_summary)}</div>
-                </div>` : ''}
-                ${score ? `
-                <div class="report-row">
-                    <div class="report-label">Confidence</div>
-                    <div>
-                        <strong>${score}%</strong>
-                        <span class="confidence-bar" style="width:${barWidth}px;"></span>
-                    </div>
-                </div>` : ''}
-                ${actions ? `
-                <div class="report-row">
-                    <div class="report-label">Recommendations</div>
-                    <ul style="margin:0;padding-left:16px;font-size:0.8rem;">${actions}</ul>
-                </div>` : ''}
-                ${skills ? `
-                <div class="report-row">
-                    <div class="report-label">Skills Used</div>
-                    <div>${skills}</div>
-                </div>` : ''}
-                ${findings ? `
-                <div class="report-row" style="flex-direction:column;">
-                    <div class="report-label" style="margin-bottom:6px;">Per-Skill Findings</div>
-                    ${findings}
-                </div>` : ''}
-                ${data.markdown_summary ? `
-                <div class="markdown-section">${marked.parse(data.markdown_summary)}</div>` : ''}
+                ${mainHtml}
             </div>
+            ${detailsHtml ? `
+            <div class="report-toggle" id="${toggleId}" data-state="shown"
+                 onclick="toggleReportDetails('${toggleId}', '${detailsId}')"
+                 style="cursor:pointer;padding:10px 16px;text-align:center;border-top:1px solid #e0e0e0;color:#0071c5;font-weight:600;font-size:0.85rem;user-select:none;"
+            >\u25b2 Hide Details</div>
+            <div id="${detailsId}" class="report-details" style="
+                padding: 16px;
+                border-top: 1px solid #f0f0f0;
+                background: #fafafa;
+            ">
+                <div class="report-body">
+                    ${detailsHtml}
+                </div>
+            </div>` : ''}
         </div>`;
 
         const wrapper = document.createElement('div');
@@ -608,6 +730,11 @@
         wrapper.innerHTML = `<div class="avatar-icon">🤖</div><div style="flex:1;">${html}</div>`;
         document.getElementById('chat-window').appendChild(wrapper);
         scrollBottom();
+
+        // Auto-hide details after full render (brief flash so user sees content exists)
+        if (detailsHtml) {
+            setTimeout(() => toggleReportDetails(toggleId, detailsId), 600);
+        }
     }
 
     function escapeHtml(s) {
@@ -632,6 +759,54 @@
         } finally {
             btn.textContent = '📁';
             btn.disabled = false;
+        }
+    }
+
+    // ── Browse for skills YAML file ────────────────────────────
+    async function browseYaml() {
+        const btn = document.querySelector('#yaml-path-input + .btn-browse');
+        btn.textContent = '⏳';
+        btn.disabled = true;
+        try {
+            const res = await fetch('/log_chatbot/browse_yaml');
+            const data = await res.json();
+            if (data.path) {
+                document.getElementById('yaml-path-input').value = data.path;
+            }
+        } catch (e) {
+            console.error('Browse YAML failed:', e);
+        } finally {
+            btn.textContent = '📁';
+            btn.disabled = false;
+        }
+    }
+
+    // ── Load skills from YAML file ──────────────────────────────
+    async function loadSkillsYaml() {
+        const yamlPath = document.getElementById('yaml-path-input').value.trim();
+        const statusEl = document.getElementById('yaml-load-status');
+        if (!yamlPath) {
+            showStatus(statusEl, 'Please enter a YAML file path.', 'err');
+            return;
+        }
+        statusEl.textContent = 'Loading…';
+        statusEl.className = 'log-status';
+        statusEl.style.display = 'block';
+        try {
+            const res = await fetch('/log_chatbot/load_skills_yaml', {
+                method: 'POST',
+                headers: {'Content-Type': 'application/json'},
+                body: JSON.stringify({yaml_path: yamlPath})
+            });
+            const data = await res.json();
+            if (data.success) {
+                showStatus(statusEl, '✔ ' + data.message, 'ok');
+                renderSkills(data.skills);
+            } else {
+                showStatus(statusEl, '✘ ' + data.error, 'err');
+            }
+        } catch (e) {
+            showStatus(statusEl, '✘ Network error: ' + e.message, 'err');
         }
     }
 
@@ -704,7 +879,7 @@
                 showStatus(statusEl, '✔ ' + data.message, 'ok');
                 renderSkills(data.skills);
                 logLoaded = true;
-                document.getElementById('analyze-all-btn').disabled = false;
+                updateAnalyzeBtn();
             } else {
                 showStatus(statusEl, '✘ ' + data.error, 'err');
             }
@@ -718,14 +893,47 @@
         el.className = 'log-status ' + type;
     }
 
+    // ── Reload skills from shared folder ────────────────────────────
+    async function reloadFromShared() {
+        const statusEl = document.getElementById('reload-shared-status');
+        statusEl.textContent = 'Reloading…';
+        statusEl.className = 'log-status';
+        statusEl.style.display = 'block';
+        try {
+            const res = await fetch('/log_chatbot/reload_from_shared', {
+                method: 'POST',
+                headers: {'Content-Type': 'application/json'},
+                body: JSON.stringify({})
+            });
+            const data = await res.json();
+            if (data.success) {
+                showStatus(statusEl, '✔ ' + data.message, 'ok');
+                renderSkills(data.skills);
+                skillsLoaded = true;
+                updateAnalyzeBtn();
+            } else {
+                showStatus(statusEl, '✘ ' + data.error, 'err');
+            }
+        } catch (e) {
+            showStatus(statusEl, '✘ Network error: ' + e.message, 'err');
+        }
+    }
+
     function renderSkills(skills) {
         const container = document.getElementById('skills-list');
-        container.innerHTML = skills.map(s => `
-            <div class="skill-card" onclick="sendQuick('Analyse using the ${s.name} skill')">
-                <div class="skill-name">${s.name}</div>
-                <div class="skill-desc">${s.description}</div>
-            </div>
-        `).join('');
+        if (!skills || skills.length === 0) {
+            container.innerHTML = '<div style="font-size:0.78rem;color:#aaa;">No skills loaded. Use <strong>📦 Load Skills YAML</strong> below.</div>';
+            skillsLoaded = false;
+        } else {
+            container.innerHTML = skills.map(s => `
+                <div class="skill-card" onclick="sendQuick('Analyse using the ${s.name} skill')">
+                    <div class="skill-name">${s.name}</div>
+                    <div class="skill-desc">${s.description}</div>
+                </div>
+            `).join('');
+            skillsLoaded = true;
+        }
+        updateAnalyzeBtn();
     }
 
     // ── Send chat message ──────────────────────────────────────────
@@ -773,44 +981,234 @@
         }
     }
 
+    function removeEmoji(text) {
+        // Remove all emoji from text
+        return text.replace(/[\p{Emoji_Presentation}\p{Extended_Pictographic}]/gu, '').trim();
+    }
+
     function sendQuick(text) {
         document.getElementById('user-input').value = text;
         sendMessage();
     }
 
-    // ── Analyze All ────────────────────────────────────────────────
+    // ── Render agent steps with dynamic loading and auto-collapse ────
+    function appendAgentProcess(steps) {
+        hideWelcome();
+        removeTyping();
+
+        const cardId = 'agent-process-' + Date.now();
+        const skillsUsed = steps
+            .filter(s => s.content && s.content.includes('Invoking skill'))
+            .map(s => { const m = s.content.match(/`([^`]+)`/); return m ? m[1] : ''; })
+            .filter(Boolean);
+
+        const summaryText = `${steps.length} steps` +
+            (skillsUsed.length ? ` · Skills: ${skillsUsed.join(', ')}` : '');
+
+        // Create the container (initially collapsed)
+        const html = `
+        <div class="agent-process-card">
+            <div class="agent-process-header" onclick="
+                this.classList.toggle('collapsed');
+                document.getElementById('${cardId}').classList.toggle('hidden');
+                const icon = this.querySelector('.toggle-icon');
+                if (this.classList.contains('collapsed')) icon.textContent = '\u25bc';
+                else icon.textContent = '\u25b2';
+            ">
+                Agent Processing Steps
+                <span style="font-weight:400;font-size:0.75rem;opacity:0.75;margin-left:8px;">${escapeHtml(summaryText)}</span>
+                <span class="toggle-icon">\u25b2</span>
+            </div>
+            <div class="agent-process-body" id="${cardId}">
+            </div>
+        </div>`;
+
+        const wrapper = document.createElement('div');
+        wrapper.className = 'msg-row assistant';
+        wrapper.style.maxWidth = '95%';
+        wrapper.innerHTML = `<div class="avatar-icon">🤖</div><div style="flex:1;">${html}</div>`;
+        document.getElementById('chat-window').appendChild(wrapper);
+        scrollBottom();
+
+        // Dynamically add steps with small delay for visual flow
+        const bodyEl = document.getElementById(cardId);
+        steps.forEach((step, idx) => {
+            setTimeout(() => {
+                const stepHtml = `
+                <div class="agent-step">
+                    <div class="agent-step-content">${marked.parse(step.content || '')}</div>
+                </div>`;
+                bodyEl.insertAdjacentHTML('beforeend', stepHtml);
+                scrollBottom();
+            }, idx * 200);  // 200ms delay between steps for visual effect
+        });
+    }
+
+    // ── Analyze All (Agentic Loop with consolidated output) ─────
     async function analyzeAll() {
         if (!logLoaded) { appendAssistantText('⚠️ Please load a log file first.'); return; }
+        if (!skillsLoaded) { appendAssistantText('⚠️ No skills loaded. Please load a skills.yaml first.'); return; }
 
-        const desc = prompt('Optional: describe the issue (or leave blank for full analysis):', '') ?? '';
+        // Read issue description from the sidebar input field (not a popup)
+        const desc = document.getElementById('issue-desc-input').value.trim();
         appendUserMsg('🔍 Run full multi-skill analysis' + (desc ? `: "${desc}"` : ''));
-        const typingRow = appendTyping();
-        document.getElementById('analyze-all-btn').disabled = true;
+        const analyzeBtn = document.getElementById('analyze-all-btn');
+        if (analyzeBtn) analyzeBtn.disabled = true;
 
         try {
-            const res = await fetch('/log_chatbot/analyze_all', {
-                method: 'POST',
-                headers: {'Content-Type': 'application/json'},
-                body: JSON.stringify({issue_description: desc || 'Perform full multi-skill log analysis'})
-            });
-            const data = await res.json();
-            removeTyping();
+            // Use XMLHttpRequest to stream SSE events
+            const xhr = new XMLHttpRequest();
+            xhr.open('POST', '/log_chatbot/analyze_all_stream', true);
+            xhr.setRequestHeader('Content-Type', 'application/json');
+            
+            let allSteps = [];
+            let cardId = null;
+            let bodyEl = null;
+            let lastParsedOffset = 0;  // Byte offset: how far we've parsed in responseText
+            
+            // Handle streaming events
+            xhr.onprogress = function() {
+                const text = xhr.responseText;
+                // Only parse NEW data since last onprogress call
+                const newData = text.substring(lastParsedOffset);
+                lastParsedOffset = text.length;
+                
+                const lines = newData.split('\n');
+                
+                for (const line of lines) {
+                    if (!line.startsWith('data: ')) continue;
+                    
+                    try {
+                        const eventData = JSON.parse(line.slice(6));
+                        
+                        if (eventData.type === 'step' && eventData.step) {
+                            const step = eventData.step;
+                            allSteps.push(step);
+                            
+            // Initialize card on first step - START EXPANDED
+                            if (!cardId) {
+                                hideWelcome();
+                                removeTyping();
+                                
+                                cardId = 'agent-process-' + Date.now();
+                                const html = `
+                                <div class="agent-process-card">
+                                    <div class="agent-process-header" onclick="
+                                        this.classList.toggle('collapsed');
+                                        document.getElementById('${cardId}').classList.toggle('hidden');
+                                    ">
+                                        Agent Processing Steps
+                                        <span style="font-weight:400;font-size:0.75rem;opacity:0.75;margin-left:8px;">
+                                            <span id="step-count">1 step</span>
+                                        </span>
+                                        <span class="toggle-icon">▲</span>
+                                    </div>
+                                    <div class="agent-process-body" id="${cardId}">
+                                    </div>
+                                </div>`;
 
-            if (!data.success) {
-                appendAssistantText('❌ ' + (data.error || 'Analysis failed.'));
-            } else {
-                const result = data.result;
-                if (result.type === 'report') {
-                    appendReport(result.data, '📊 Full Multi-Skill Analysis Report');
-                } else {
-                    appendAssistantText(result.data || '_No output._');
+                                const wrapper = document.createElement('div');
+                                wrapper.className = 'msg-row assistant';
+                                wrapper.style.maxWidth = '95%';
+                                wrapper.innerHTML = `<div class="avatar-icon">�</div><div style="flex:1;">${html}</div>`;
+                                document.getElementById('chat-window').appendChild(wrapper);
+                                
+                                bodyEl = document.getElementById(cardId);
+                            }
+                            
+                            // Add step to card with delay for visual flow
+                            if (bodyEl) {
+                                setTimeout(() => {
+                                    // Remove emoji from step content for cleaner display
+                                    const cleanContent = removeEmoji(step.content || '');
+                                    const stepHtml = `
+                                    <div class="agent-step">
+                                        <div class="agent-step-content">${marked.parse(cleanContent)}</div>
+                                    </div>`;
+                                    bodyEl.insertAdjacentHTML('beforeend', stepHtml);
+                                    
+                                    // Update step count
+                                    const stepCountEl = document.getElementById('step-count');
+                                    if (stepCountEl) {
+                                        stepCountEl.textContent = `${allSteps.length} step${allSteps.length > 1 ? 's' : ''}`;
+                                    }
+                                    scrollBottom();
+                                }, allSteps.length * 100);  // 100ms delay per step
+                            }
+                        }
+                    } catch (e) {
+                        // Silently ignore parse errors
+                    }
                 }
-            }
+            };
+
+            xhr.onload = function() {
+                // Extract final result from last data: line
+                const text = xhr.responseText;
+                const lines = text.split('\n').reverse();
+                
+                for (const line of lines) {
+                    if (!line.startsWith('data: ')) continue;
+                    
+                    try {
+                        const finalEvent = JSON.parse(line.slice(6));
+                        if (finalEvent.type === 'done' && finalEvent.result) {
+                            const result = finalEvent.result;
+                            
+                            // Use physical_disconnect_time from backend result (most reliable),
+                            // fall back to parsing steps text
+                            let eventTime = result.physical_disconnect_time || null;
+                            if (!eventTime) {
+                                for (const step of allSteps) {
+                                    const c = step.content || '';
+                                    if (c.includes('Physical Disconnect Time:')) {
+                                        const m = c.match(/Physical Disconnect Time:\*\*\s*`([^`]+)`/);
+                                        if (m) { eventTime = m[1]; break; }
+                                    }
+                                    if (!eventTime && c.includes('User-Reported Time:')) {
+                                        const m = c.match(/User-Reported Time:\*\*\s*`([^`]+)`/);
+                                        if (m) { eventTime = m[1]; }
+                                    }
+                                }
+                            }
+                            
+                            // AUTO-COLLAPSE agent processing steps now that analysis is done
+                            if (cardId) {
+                                const header = document.querySelector(`#${cardId}`).parentElement.querySelector('.agent-process-header');
+                                if (header && !header.classList.contains('collapsed')) {
+                                    header.classList.add('collapsed');
+                                    document.getElementById(cardId).classList.add('hidden');
+                                    const toggleIcon = header.querySelector('.toggle-icon');
+                                    if (toggleIcon) toggleIcon.textContent = '▼';
+                                }
+                            }
+                            
+                            // Render the final report using the standard format with event time
+                            if (result.type === 'report' && result.data) {
+                                appendReport(result.data, '📊 Analysis Report', eventTime);
+                            } else if (result.type === 'partial_report' && result.data) {
+                                appendReport(result.data, '⚠️ Partial Analysis (Step Limit)', eventTime);
+                            } else if (result.type === 'error' && result.data && result.data.error) {
+                                appendAssistantText('❌ ' + result.data.error);
+                            }
+                        }
+                        break;
+                    } catch (e) {
+                        // Continue to next line
+                    }
+                }
+            };
+
+            xhr.onerror = function() {
+                appendAssistantText('❌ Network error during streaming.');
+            };
+
+            xhr.send(JSON.stringify({issue_description: desc || 'Perform full multi-skill log analysis'}));
+
         } catch (e) {
-            removeTyping();
             appendAssistantText('❌ Network error: ' + e.message);
         } finally {
-            document.getElementById('analyze-all-btn').disabled = false;
+            setTimeout(() => updateAnalyzeBtn(), 100);
         }
     }
 
@@ -825,11 +1223,19 @@
             </div>`;
     }
 
-    // ── Auto-load skills if suggested_log is pre-filled ────────────
+    // === Auto-load log and trigger first Analyze-All on page load ===
     document.addEventListener('DOMContentLoaded', function () {
         const suggestedLog = document.getElementById('log-path-input').value.trim();
         if (suggestedLog) {
-            setLog();
+            setLog().then(() => {
+                const aiSummary = document.getElementById('issue-desc-input').value.trim();
+                if (aiSummary && skillsLoaded) {
+                    // Auto-run skill agent analysis once;
+                    // analysis results are injected into conversation history
+                    // so follow-up chat() calls have full context
+                    setTimeout(() => analyzeAll(), 800);
+                }
+            });
         }
     });
 </script>

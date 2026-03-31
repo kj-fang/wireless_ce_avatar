@@ -4,9 +4,6 @@ import subprocess
 from datetime import datetime
 
 from utils import helpers
-# --- DEBUG START ---
-from utils import attachment_decompose # for debug existing folder
-# --- DEBUG END ---
 from utils.etl_utils import get_auto_analysis_etl, get_issue_time_from_selected_files, filter_folders_by_time, extract_timestamp_from_folder
 from utils.fw_utils import load_fw_system_info
 from services.case_info_service import CaseService
@@ -71,14 +68,6 @@ def handle_case_submission():
     """Submit IPS number"""
     case_nbr = request.form.get('case_number', '').strip().replace(" ", "")
 
-    # --- DEBUG START ---
-    action_type = request.form.get('action_type', '').strip().lower()
-    debug_zip_path = request.form.get('debug_zip_path', '').strip().strip('"')
-
-    if action_type == 'debug_folder':
-        return _handle_debug_existing_zip(debug_zip_path)
-    # --- DEBUG END ---
-
     if not case_nbr:
         flash("❌ No case number provided.", "danger")
         return redirect(url_for('main.index'))
@@ -107,74 +96,6 @@ def handle_case_submission():
         flash("An error occurred while processing the case.", "danger")
         return redirect(url_for('main.index'))
 
-# --- DEBUG START ---
-def _collect_existing_zip_results(zip_path):
-    abs_zip_path = os.path.abspath(zip_path)
-    zip_name = os.path.basename(abs_zip_path)
-    zip_parent = os.path.dirname(abs_zip_path)
-
-    extract_folder_name = os.path.splitext(zip_name)[0].replace(" ", "_")
-    extract_folder_path = os.path.join(zip_parent, extract_folder_name)
-    already_extracted = os.path.isdir(extract_folder_path) and any(os.scandir(extract_folder_path))
-
-    wifi_files, ddd_files, bt_files, fw_files = attachment_decompose.process_single_zip(
-        abs_zip_path,
-        zip_parent,
-        already_extracted
-    )
-
-    return {
-        'wifi': {zip_name: wifi_files} if wifi_files else {},
-        'ddd': {zip_name: ddd_files} if ddd_files else {},
-        'bt': {zip_name: bt_files} if bt_files else {},
-        'fw': {zip_name: fw_files} if fw_files else {},
-        'download_path': zip_parent,
-    }
-
-
-def _handle_debug_existing_zip(debug_zip_path):
-    if not debug_zip_path:
-        flash("❌ Debug zip path is required.", "danger")
-        return redirect(url_for('main.index'))
-
-    if not os.path.exists(debug_zip_path) or not os.path.isfile(debug_zip_path):
-        flash(f"❌ Invalid debug zip path: {debug_zip_path}", "danger")
-        return redirect(url_for('main.index'))
-
-    if not debug_zip_path.lower().endswith(('.zip', '.rar', '.7z')):
-        flash("❌ Debug mode only supports .zip/.rar/.7z files.", "danger")
-        return redirect(url_for('main.index'))
-
-    results = _collect_existing_zip_results(debug_zip_path)
-
-    has_any_result = any(results.get(key) for key in ('wifi', 'ddd', 'bt', 'fw'))
-    if not has_any_result:
-        flash("❌ No supported analysis files found in debug folder.", "danger")
-        return redirect(url_for('main.index'))
-
-    debug_case_nbr = f"debug_{os.path.splitext(os.path.basename(debug_zip_path))[0]}"
-    wifi_or_bt = 'wifi' if results['wifi'] else 'bt'
-    debug_case_context = CaseContext(case_nbr=debug_case_nbr, wifi_or_bt=wifi_or_bt)
-
-    session.clear()
-    session["case_context"] = debug_case_context.to_session()
-    session['prompt_file_path'] = CaseService.load_case_summary_prompt(wifi_or_bt)
-    session['bsod'] = False
-    session['latest_etl_llm'] = False
-    session['debug_mode'] = True
-    session['selected_files'] = []
-    session['download_path'] = results['download_path']
-
-    app_config.set_download_results(
-        debug_case_nbr,
-        wifi=results['wifi'],
-        ddd=results['ddd'],
-        bt=results['bt'],
-        fw=results['fw']
-    )
-
-    return redirect(url_for('main.download_result'))
-# --- DEBUG END ---
 
 
 #------------ SELECT ATTACHMENT render/submission -------------#
@@ -458,6 +379,7 @@ def render_download_result_form():
     
     return render_template('download_result.html',
                          case_path=download_path,
+                         wifi_or_bt=case_context.wifi_or_bt,
                          auto_analysis_etl = auto_analysis_etl,
                          exclude_keywords=app_config.etl_exclude_keywords,
                          latest_fw_system_info=latest_fw_system_info,

@@ -48,6 +48,7 @@ class TrayManager:
     def __init__(self):
         self.base = _base_path()
         self.instance_file = os.path.join(get_user_data_dir(), 'running_avatar.json')
+        self.tool_exe_path = os.path.join(self.base, 'services', 'driver_download', 'downloadDriver_V1.0.2.exe')
 
         self.instances = []
         self.icon = None
@@ -118,6 +119,19 @@ class TrayManager:
         except Exception as error:
             self.logger.error(f'Launch failed: {error}')
 
+    def _launch_tool_exe(self):
+        exe_path = self.tool_exe_path
+        if not os.path.exists(exe_path):
+            self.logger.error(f'Tool executable not found: {exe_path}')
+            return
+
+        try:
+            launch_flags = getattr(subprocess, 'CREATE_NEW_CONSOLE', 0)
+            subprocess.Popen([exe_path], creationflags=launch_flags, cwd=os.path.dirname(exe_path) or None)
+            self.logger.info(f'Launched tool executable: {exe_path}')
+        except Exception as error:
+            self.logger.error(f'Tool launch failed: {error}')
+
     def _current_instance(self):
         return self.instances[0] if self.instances else None
 
@@ -178,6 +192,7 @@ class TrayManager:
         instance = self._current_instance()
         has_instance = instance is not None
         port = instance.get('port', '?') if has_instance else None
+        driver_download_tool = os.path.exists(self.tool_exe_path)
 
         running_label = f'Running IntelAvatar (Port {port})' if has_instance else 'No IntelAvatar running'
 
@@ -192,6 +207,11 @@ class TrayManager:
                 'Stop Current IntelAvatar',
                 lambda icon, item: self._stop_current_instance(),
                 enabled=has_instance
+            ),
+            pystray.MenuItem(
+                'Run Tool EXE',
+                lambda icon, item: self._launch_tool_exe(),
+                enabled=driver_download_tool
             ),
             pystray.Menu.SEPARATOR,
             pystray.MenuItem('Quit IntelAvatar', lambda icon, item: self._quit()),

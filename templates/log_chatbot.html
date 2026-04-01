@@ -515,7 +515,7 @@
         <div class="sidebar-section">
             <h6>💬 Quick Ask</h6>
             <div id="quick-questions">
-                <button class="skill-card" style="width:100%;text-align:left;background:none;border:1px solid #e4eaf2;border-radius:7px;padding:7px 10px;cursor:pointer;font-size:0.78rem;color:#444;margin-bottom:5px;" onclick="sendQuick('Why did the Wi-Fi disconnect?')">Why did the Wi-Fi disconnect?</button>
+                <button class="skill-card" style="width:100%;text-align:left;background:none;border:1px solid #e4eaf2;border-radius:7px;padding:7px 10px;cursor:pointer;font-size:0.78rem;color:#444;margin-bottom:5px;" onclick="sendQuick('Why could wiif not scan any AP at 6 GHz band')">Why could wiif not scan any AP at 6 GHz band?</button>
                 <button class="skill-card" style="width:100%;text-align:left;background:none;border:1px solid #e4eaf2;border-radius:7px;padding:7px 10px;cursor:pointer;font-size:0.78rem;color:#444;margin-bottom:5px;" onclick="sendQuick('What is the average resume connection time?')">What is the resume connection time?</button>
                 <button class="skill-card" style="width:100%;text-align:left;background:none;border:1px solid #e4eaf2;border-radius:7px;padding:7px 10px;cursor:pointer;font-size:0.78rem;color:#444;margin-bottom:5px;" onclick="sendQuick('Was the disconnection initiated remotely by the AP?')">Was disconnection remote/AP-initiated?</button>
                 <button class="skill-card" style="width:100%;text-align:left;background:none;border:1px solid #e4eaf2;border-radius:7px;padding:7px 10px;cursor:pointer;font-size:0.78rem;color:#444;" onclick="sendQuick('Summarize all the issues found in this log.')">Summarize all issues</button>
@@ -941,10 +941,6 @@
         const input = document.getElementById('user-input');
         const text = input.value.trim();
         if (!text) return;
-        // if (!logLoaded) {
-        //     appendAssistantText('⚠️ Please load a log file first (sidebar → Log File).');
-        //     return;
-        // }
 
         input.value = '';
         input.style.height = 'auto';
@@ -952,31 +948,102 @@
         appendUserMsg(text);
         const typingRow = appendTyping();
 
+        const steps = [];
+        let agentCardBodyEl = null;   // live step list container created on first step
+        let agentCardId = null;
+
+        function ensureAgentCard() {
+            if (agentCardBodyEl) return;
+            removeTyping();
+            hideWelcome();
+            agentCardId = 'agent-process-' + Date.now();
+            const html = `
+            <div class="agent-process-card">
+                <div class="agent-process-header" onclick="
+                    this.classList.toggle('collapsed');
+                    document.getElementById('${agentCardId}').classList.toggle('hidden');
+                    const icon = this.querySelector('.toggle-icon');
+                    icon.textContent = this.classList.contains('collapsed') ? '▼' : '▲';
+                ">
+                    Agent Processing Steps
+                    <span id="${agentCardId}-summary" style="font-weight:400;font-size:0.75rem;opacity:0.75;margin-left:8px;"></span>
+                    <span class="toggle-icon">▲</span>
+                </div>
+                <div class="agent-process-body" id="${agentCardId}"></div>
+            </div>`;
+            const wrapper = document.createElement('div');
+            wrapper.className = 'msg-row assistant';
+            wrapper.style.maxWidth = '95%';
+            wrapper.innerHTML = `<div class="avatar-icon">🤖</div><div style="flex:1;">${html}</div>`;
+            document.getElementById('chat-window').appendChild(wrapper);
+            agentCardBodyEl = document.getElementById(agentCardId);
+            scrollBottom();
+        }
+
+        function appendLiveStep(step) {
+            ensureAgentCard();
+            const stepHtml = `<div class="agent-step"><div class="agent-step-content">${marked.parse(step.content || '')}</div></div>`;
+            agentCardBodyEl.insertAdjacentHTML('beforeend', stepHtml);
+            // Update summary line
+            const skillsUsed = steps
+                .filter(s => s.content && s.content.includes('Invoking skill'))
+                .map(s => { const m = s.content.match(/`([^`]+)`/); return m ? m[1] : ''; })
+                .filter(Boolean);
+            const summaryEl = document.getElementById(agentCardId + '-summary');
+            if (summaryEl) summaryEl.textContent = `${steps.length} steps` + (skillsUsed.length ? ` · Skills: ${skillsUsed.join(', ')}` : '');
+            scrollBottom();
+        }
+
         try {
-            const res = await fetch('/log_chatbot/chat', {
+            const res = await fetch('/log_chatbot/analyze_all_stream', {
                 method: 'POST',
                 headers: {'Content-Type': 'application/json'},
                 body: JSON.stringify({message: text})
             });
-            const data = await res.json();
-            removeTyping();
 
-            if (!data.success) {
-                appendAssistantText('❌ Error: ' + (data.error || 'Unknown error'));
-            } else {
-                const result = data.result;
-                if (result.type === 'report') {
-                    appendReport(result.data);
-                } else if (result.type === 'text') {
-                    appendAssistantText(result.data || '_No response._');
-                } else {
-                    appendAssistantText('⚠️ ' + (result.data || 'Unknown response.'));
+            if (!res.ok) throw new Error(`Server error ${res.status}`);
+
+            const reader = res.body.getReader();
+            const decoder = new TextDecoder();
+            let buffer = '';
+
+            const processLine = (line) => {
+                if (!line.startsWith('data:')) return;
+                const jsonStr = line.slice(5).trim();
+                if (!jsonStr) return;
+                let evt;
+                try { evt = JSON.parse(jsonStr); } catch { return; }
+
+                if (evt.type === 'step') {
+                    steps.push(evt.step);
+                    appendLiveStep(evt.step);
+                } else if (evt.type === 'done') {
+                    removeTyping();
+                    const result = evt.result;
+                    if (result && result.type === 'report') appendReport(result.data);
+                    else if (result && result.type === 'text') appendAssistantText(result.data || '_No response._');
+                    else if (result) appendAssistantText('⚠️ ' + (result.data || 'Unknown response.'));
+                } else if (evt.type === 'error') {
+                    removeTyping();
+                    appendAssistantText('❌ Error: ' + (evt.content || 'Unknown error'));
                 }
+            };
+
+            while (true) {
+                const { done, value } = await reader.read();
+                if (done) break;
+                buffer += decoder.decode(value, { stream: true });
+                const lines = buffer.split('\n');
+                buffer = lines.pop();
+                lines.forEach(processLine);
             }
+            if (buffer) processLine(buffer);
+
         } catch (e) {
             removeTyping();
             appendAssistantText('❌ Network error: ' + e.message);
         } finally {
+            removeTyping();
             document.getElementById('send-btn').disabled = false;
         }
     }

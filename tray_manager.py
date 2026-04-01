@@ -50,7 +50,6 @@ class TrayManager:
         self.base = _base_path()
         self.instance_file = os.path.join(get_user_data_dir(), 'running_avatar.json')
         self.tool_exe_path = os.path.join('services', 'driver_download', 'downloadDriver_*.exe')
-        print(self.tool_exe_path)
 
         self.instances = []
         self.icon = None
@@ -134,8 +133,7 @@ class TrayManager:
             return
 
         try:
-            launch_flags = getattr(subprocess, 'CREATE_NEW_CONSOLE', 0)
-            subprocess.Popen([exe_path], creationflags=launch_flags, cwd=os.path.dirname(exe_path) or None)
+            os.startfile(exe_path)
             self.logger.info(f'Launched tool executable: {exe_path}')
         except Exception as error:
             self.logger.error(f'Tool launch failed: {error}')

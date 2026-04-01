@@ -7,6 +7,7 @@ Monitors running_avatar.json written by the app instance on startup.
 
 import json
 import logging
+import glob
 import os
 import subprocess
 import sys
@@ -48,11 +49,17 @@ class TrayManager:
     def __init__(self):
         self.base = _base_path()
         self.instance_file = os.path.join(get_user_data_dir(), 'running_avatar.json')
-        self.tool_exe_path = os.path.join(self.base, 'services', 'driver_download', 'downloadDriver_V1.0.2.exe')
+        self.tool_exe_path = os.path.join(self.base, 'services', 'driver_download', 'downloadDriver_*.exe')
 
         self.instances = []
         self.icon = None
         self.logger = self._init_log()
+
+    def _resolve_tool_exe_path(self) -> str:
+        matches = glob.glob(self.tool_exe_path)
+        if not matches:
+            return ''
+        return max(matches, key=os.path.getmtime)
 
     def _init_log(self) -> logging.Logger:
         log_path = os.path.join(get_user_data_dir(), 'tray.log')
@@ -120,9 +127,9 @@ class TrayManager:
             self.logger.error(f'Launch failed: {error}')
 
     def _launch_tool_exe(self):
-        exe_path = self.tool_exe_path
-        if not os.path.exists(exe_path):
-            self.logger.error(f'Tool executable not found: {exe_path}')
+        exe_path = self._resolve_tool_exe_path()
+        if not exe_path:
+            self.logger.error(f'Tool executable not found by pattern: {self.tool_exe_path}')
             return
 
         try:
@@ -192,7 +199,6 @@ class TrayManager:
         instance = self._current_instance()
         has_instance = instance is not None
         port = instance.get('port', '?') if has_instance else None
-        driver_download_tool = os.path.exists(self.tool_exe_path)
 
         running_label = f'Running IntelAvatar (Port {port})' if has_instance else 'No IntelAvatar running'
 
@@ -209,9 +215,9 @@ class TrayManager:
                 enabled=has_instance
             ),
             pystray.MenuItem(
-                'Run Tool EXE',
+                'Driver Download Tool',
                 lambda icon, item: self._launch_tool_exe(),
-                enabled=driver_download_tool
+                enabled=True
             ),
             pystray.Menu.SEPARATOR,
             pystray.MenuItem('Quit IntelAvatar', lambda icon, item: self._quit()),

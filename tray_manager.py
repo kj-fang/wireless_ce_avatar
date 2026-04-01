@@ -49,7 +49,8 @@ class TrayManager:
     def __init__(self):
         self.base = _base_path()
         self.instance_file = os.path.join(get_user_data_dir(), 'running_avatar.json')
-        self.tool_exe_path = os.path.join(self.base, 'services', 'driver_download', 'downloadDriver_*.exe')
+        self.tool_exe_path = os.path.join('services', 'driver_download', 'downloadDriver_*.exe')
+        print(self.tool_exe_path)
 
         self.instances = []
         self.icon = None

@@ -49,14 +49,34 @@ class TrayManager:
     def __init__(self):
         self.base = _base_path()
         self.instance_file = os.path.join(get_user_data_dir(), 'running_avatar.json')
-        self.tool_exe_path = os.path.join('services', 'driver_download', 'downloadDriver_*.exe')
-
         self.instances = []
         self.icon = None
         self.logger = self._init_log()
+        self.logger.info(f'TrayManager initialized | base={self.base} | cwd={os.getcwd()}')
+
+    def _tool_exe_patterns(self) -> list[str]:
+        if getattr(sys, 'frozen', False):
+            meipass = getattr(sys, '_MEIPASS', '')
+            candidates = [
+                os.path.join(meipass, 'services', 'driver_download', 'downloadDriver_*.exe'),
+                os.path.join(self.base, '_internal', 'services', 'driver_download', 'downloadDriver_*.exe'),
+
+            ]
+        else:
+            candidates = [
+                os.path.join(self.base, 'services', 'driver_download', 'downloadDriver_*.exe'),
+            ]
+
+        return [pattern for pattern in candidates if pattern]
 
     def _resolve_tool_exe_path(self) -> str:
-        matches = glob.glob(self.tool_exe_path)
+        matches = []
+        patterns = self._tool_exe_patterns()
+        self.logger.info(f'Resolving tool executable from patterns: {patterns}')
+        print(patterns)
+        for pattern in patterns:
+            matches.extend(glob.glob(pattern))
+        self.logger.info(f'Tool executable matches: {matches}')
         if not matches:
             return ''
         return max(matches, key=os.path.getmtime)
@@ -129,7 +149,7 @@ class TrayManager:
     def _launch_tool_exe(self):
         exe_path = self._resolve_tool_exe_path()
         if not exe_path:
-            self.logger.error(f'Tool executable not found by pattern: {self.tool_exe_path}')
+            self.logger.error(f'Tool executable not found. Tried patterns: {self._tool_exe_patterns()}')
             return
 
         try:

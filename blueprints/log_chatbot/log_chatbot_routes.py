@@ -1,4 +1,4 @@
-from flask import Blueprint, render_template, request, session, jsonify, Response
+from flask import Blueprint, render_template, request, session, jsonify, Response, copy_current_request_context
 import json
 import re
 import traceback
@@ -61,21 +61,11 @@ def _extract_issue_context() -> dict:
             if flat:
                 description_parts.append(f"{key}: {flat}")
 
-    # Build Issue_summary + Symptom string for chatbot auto-fill
-    issue_summary_obj = ai_analysis.get("Issue_summary", {})
-    if isinstance(issue_summary_obj, dict):
-        symptom = issue_summary_obj.get("Symptom") or issue_summary_obj.get("Symptoms", "")
-        if isinstance(symptom, list):
-            symptom = "; ".join(str(s) for s in symptom if s)
-    else:
-        symptom = str(issue_summary_obj) if issue_summary_obj else ""
-
     return {
         "case_nbr":    ctx.case_nbr or "",
         "subject":     ctx.subject or "",
         "description": "\n".join(description_parts),
         "issue_type":  issue_type,
-        "ai_summary":  symptom,
     }
 
 
@@ -105,62 +95,12 @@ def _extract_disconnect_time(*text_sources: str) -> str:
     return ""
 
 
-def _extract_symptom_keywords(ai_summary: str) -> str:
-    """
-    Extract concise technical keywords from the AI symptom summary.
-    Returns a short keyword hint string like:
-      ' [Keywords: ANT Tool, MCC, beacon loss, weak signal]'
-    These keywords guide the agent's background investigation pass.
-    """
-    if not ai_summary:
-        return ""
-    # Common noise words to filter out
-    NOISE = {
-        'the', 'a', 'an', 'is', 'was', 'were', 'are', 'been', 'be',
-        'to', 'of', 'in', 'on', 'at', 'for', 'and', 'or', 'but',
-        'with', 'from', 'by', 'not', 'no', 'this', 'that', 'it',
-        'its', 'has', 'had', 'have', 'will', 'would', 'could',
-        'should', 'may', 'might', 'can', 'do', 'does', 'did',
-        'after', 'before', 'when', 'while', 'if', 'then',
-        'also', 'which', 'than', 'other', 'such', 'some',
-        'issue', 'error', 'problem', 'failure', 'log', 'user',
-        'reported', 'observed', 'occurred', 'during', 'about',
-    }
-    # Extract multi-word technical terms first (e.g. "ANT Tool", "Weak Signal")
-    tech_terms = re.findall(
-        r'\b(?:ANT Tool|MCC|DFS|SAR|RSSI|SNR|beacon loss|missed beacon|'
-        r'weak signal|low signal|channel switch|roaming|deauth|'
-        r'power save|WoWLAN|D0i3|NLO scan|firmware crash|'
-        r'yellow bang|blue screen|BSOD|hang|freeze)\b',
-        ai_summary, re.IGNORECASE
-    )
-    # Also extract capitalized words (likely technical terms)
-    caps = re.findall(r'\b[A-Z][A-Za-z0-9_]{2,}\b', ai_summary)
-    # Combine, deduplicate, limit
-    all_kw = []
-    seen = set()
-    for kw in tech_terms + caps:
-        kw_lower = kw.lower()
-        if kw_lower not in seen and kw_lower not in NOISE:
-            seen.add(kw_lower)
-            all_kw.append(kw)
-    if not all_kw:
-        return ""
-    return f" [Keywords: {', '.join(all_kw[:8])}]"
-
-
 def _compose_concise_description() -> str:
     """
     Auto-compose the most effective issue description for analyze_all.
 
-    Engineer's ideal input: "What happened + When + Technical Keywords"
-    e.g. "6G Weak Signal browser web page disconnected at around 10/28/2025-11:25:49
-          [Keywords: ANT Tool, MCC, beacon loss]"
-
-    Sources:
-      - subject: concise problem statement (strip ALL bracket tags + F/R suffix)
-      - description / ai_summary / subject: extract precise timestamp
-      - ai_summary: symptom keywords extracted for background investigation
+        Format: "<problem statement> <timestamp>"
+        e.g. "6G Weak Signal disconnected at around 10/28/2025-11:25:49"
     """
     try:
         ctx = _extract_issue_context()
@@ -169,29 +109,19 @@ def _compose_concise_description() -> str:
 
     subject = ctx.get("subject", "")
     desc_raw = ctx.get("description", "")
-    ai_summary = ctx.get("ai_summary", "")
-
-    # Extract timestamp from ALL available text sources
-    time_hint = _extract_disconnect_time(subject, desc_raw, ai_summary)
-    # Extract symptom keywords for background investigation
-    keyword_hint = _extract_symptom_keywords(ai_summary)
+    # Extract timestamp from available text sources
+    time_hint = _extract_disconnect_time(subject, desc_raw)
 
     # Best: clean subject line — strip ALL leading [tag] groups
     if subject:
         clean = re.sub(r'^(\[.*?\]\s*)+', '', subject).strip()    # remove ALL [xxx] tags
         clean = re.sub(r'\s*\(F/R.*?\)\s*$', '', clean).strip()   # remove (F/R：1/1u,40/200C)
         if clean:
-            return f"{clean}{time_hint}{keyword_hint}"
-
-    # Fallback: AI summary first sentence + keywords
-    if ai_summary:
-        first_sentence = ai_summary.split('.')[0].strip()
-        if first_sentence:
-            return f"{first_sentence}{time_hint}{keyword_hint}"
+            return f"{clean}{time_hint}"
 
     # Last resort: first 200 chars of description
     if desc_raw:
-        return desc_raw[:200].strip() + time_hint + keyword_hint
+        return desc_raw[:200].strip() + time_hint
 
     return "Perform full multi-skill log analysis"
 
@@ -250,15 +180,12 @@ def _get_or_create_agent() -> WifiLogAgentSystem:
 def index():
     suggested_log = app_config.last_analyzed_log_path or ""
     issue_desc = ""
-    ai_summary = ""
     try:
         ctx = _extract_issue_context()
         issue_desc = ctx.get("description", "")
-        # Auto-compose concise description for the hidden input
-        ai_summary = _compose_concise_description()
     except Exception:
         pass
-    return render_template("log_chatbot.html", suggested_log=suggested_log, issue_description=issue_desc, ai_summary=ai_summary)
+    return render_template("log_chatbot.html", suggested_log=suggested_log, issue_description=issue_desc)
 
 
 # ------------------------------------------------------------------
@@ -328,6 +255,28 @@ def chat():
     if not user_message:
         return jsonify({"success": False, "error": "message is required"}), 400
 
+    mode = str(data.get("mode", "tools")).strip().lower()
+    if mode not in ("simple", "tools"):
+        mode = "tools"
+
+    try:
+        temperature = float(data.get("temperature", 0.2))
+    except Exception:
+        temperature = 0.2
+    temperature = max(0.0, min(1.0, temperature))
+
+    try:
+        max_tokens = int(data.get("max_tokens", 4000))
+    except Exception:
+        max_tokens = 4000
+    max_tokens = max(256, min(8000, max_tokens))
+
+    try:
+        max_steps = int(data.get("max_steps", 6))
+    except Exception:
+        max_steps = 6
+    max_steps = max(1, min(12, max_steps))
+
     try:
         agent = _get_or_create_agent()
         if not agent.current_log_path:
@@ -336,7 +285,13 @@ def chat():
                 "error": "No log file loaded. Please set a log file first."
             }), 400
 
-        result = agent.chat(user_message)
+        result = agent.chat(
+            user_message,
+            use_tools=(mode == "tools"),
+            max_steps=max_steps,
+            temperature=temperature,
+            max_tokens=max_tokens,
+        )
         return Response(
             json.dumps({"success": True, "result": result}, ensure_ascii=False, indent=2),
             mimetype="application/json",
@@ -397,6 +352,13 @@ def analyze_all_stream():
     if not issue_description:
         issue_description = _compose_concise_description()
 
+    # IMPORTANT: Extract session-backed context in request thread.
+    # Flask session/request proxies are not safe in background threads.
+    try:
+        full_context = _extract_issue_context()
+    except Exception:
+        full_context = {}
+
     try:
         agent = _get_or_create_agent()
         if not agent.current_log_path:
@@ -416,11 +378,14 @@ def analyze_all_stream():
         """Called by analyze_all._emit() for each new step."""
         step_queue.put(("step", step))
 
+    @copy_current_request_context
     def run_analysis():
         try:
-            result = agent.analyze_all(issue_description, step_callback=step_callback)
+            result = agent.analyze_all(issue_description, issue_context=full_context, step_callback=step_callback)
             step_queue.put(("done", result))
         except Exception as e:
+            error_traceback = traceback.format_exc()
+            print(f"❌ analyze_all_stream thread error:\n{error_traceback}")
             step_queue.put(("error", str(e)))
 
     # Start analysis in background thread

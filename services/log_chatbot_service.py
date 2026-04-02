@@ -13,14 +13,14 @@ corresponding prompt and filter files via SKILL_FILE_MAP.
 
 import re
 import json
+import hashlib
 import shutil
 import importlib.util
 import xml.etree.ElementTree as ET
 from pathlib import Path
-from collections import deque
-from datetime import datetime, timedelta
+from datetime import datetime
 from typing import Dict, List, Optional, Tuple
-from pydantic import BaseModel
+from pydantic import BaseModel, Field
 
 from utils import helpers
 from utils.log_parser_preprocess import (
@@ -125,6 +125,7 @@ class Skill(BaseModel):
     name: str
     description: str
     keywords: List[str]          # parsed from TAT for fallback use
+    exclusive: List[str] = Field(default_factory=list)  # lines containing these terms are removed post-filter
     tat_path: Optional[str]      # path to original .tat file (preferred for filtering)
     expert_rules: str
 
@@ -290,15 +291,19 @@ def load_skills_from_yaml(yaml_path: str) -> Dict[str, "Skill"]:
         name = val.get("name", key)
         description = val.get("description", f"Analyse logs related to {name}.")
         keywords = val.get("keywords", [])
+        exclusive = val.get("exclusive", [])
         expert_rules = val.get("expert_rules", "Please analyze the logs.")
 
         if not isinstance(keywords, list):
             keywords = [str(keywords)]
+        if not isinstance(exclusive, list):
+            exclusive = [str(exclusive)]
 
         skills[key] = Skill(
             name=name,
             description=description,
             keywords=keywords,
+            exclusive=[str(x) for x in exclusive if str(x).strip()],
             tat_path=None,
             expert_rules=expert_rules,
         )
@@ -325,6 +330,41 @@ class WifiLogAgentSystem:
     fall back to built-in hardcoded skills if the folder is unreachable.
     """
 
+    # Hard stop to prevent runaway per-step token spikes.
+    MAX_TOKENS_PER_STEP = 15000
+    # Keep per-tool evidence compact so multi-step prompts do not explode.
+    MAX_ASSEMBLED_LOG_CHARS_PER_TOOL_CALL = 5000
+    MAX_ASSEMBLED_LOG_LINES_PER_TOOL_CALL = 220
+    # Keep per-skill payload very compact by default.
+    MAX_SKILL_FOCUS_LINES = 60
+    MAX_SKILL_FOCUS_CHARS = 1800
+    MAX_RECENT_SKILL_HISTORY_LINES = 30
+    # Additional hard limits for multi-step prompt growth control.
+    MAX_TOOL_CONTENT_CHARS_IN_MESSAGES = 1200
+    MAX_QUERY_DETAIL_OUTPUT_CHARS = 1800
+    MAX_DETAIL_CONTEXT_SPAN = 50
+    DEFAULT_DETAIL_CONTEXT_SPAN = 20
+    MAX_DETAIL_HITS = 2
+    # Convergence controls to finish within fixed max steps.
+    MAX_TOOL_CALLS_PER_STEP = 2
+    FORCE_CONCLUDE_LAST_N_STEPS = 2
+    REPORT_MARKDOWN_TEMPLATE = (
+        "Your `markdown_summary` format (REQUIRED):\n"
+        "  # Executive Summary\n  (1-2 sentences that directly answer the user question)\n\n"
+        "  | Aspect | Finding |\n"
+        "  |--------|---------|\n"
+        "  | Signal | ... |\n"
+        "  (Markdown table with data gaps)\n\n"
+        "  ## Timeline\n"
+        "  - T-Ns: Trigger Event (if confirmed)\n"
+        "  - T+0s: Symptom/Observation\n"
+        "  - T+Ns: Latest verified state\n\n"
+        "  ## Recommendations\n"
+        "  **P0 (Urgent):** ...\n"
+        "  **P1 (Important):** ...\n"
+        "  **P2 (Nice-to-have):** ..."
+    )
+
     def __init__(self, client, model: str = "gpt-4.1",
                  data_dir: Optional[str] = None,
                  skills: Optional[Dict[str, "Skill"]] = None):
@@ -334,6 +374,17 @@ class WifiLogAgentSystem:
         self.conversation_history: List[dict] = []
         self.issue_context: dict = {}  # populated by prime_with_context()
         self.issue_time: Optional[datetime] = None  # populated by analyze_all()
+        # In-memory caches for this agent session
+        self._raw_log_cache: List[str] = []
+        self._raw_log_cache_path: str = ""
+        self._filter_cache_by_skill: Dict[str, dict] = {}
+        self._detail_cache: Dict[str, str] = {}
+        self._detail_query_seen: set = set()
+        # Cumulative assembled log store (timestamp-based, no line number persistence)
+        self._assembled_entries_by_key: Dict[str, dict] = {}
+        self._assembled_entries_no_ts: Dict[str, dict] = {}
+        self._assembled_log_text: str = ""
+        self._filter_export_counter: int = 0
 
         if skills:
             # Use pre-loaded skills passed in (e.g. from LLM_helper.skills)
@@ -357,7 +408,304 @@ class WifiLogAgentSystem:
     # ------------------------------------------------------------------
     # Step 1 – TAT keyword filter: same pipeline as log_parser_service
     # ------------------------------------------------------------------
-    def _get_filtered_log_lines(self, skill_name: str) -> str:
+    def _ensure_raw_log_cache(self) -> Optional[str]:
+        """Load raw log once per current log path and keep it in memory."""
+        if not self.current_log_path:
+            return "Error: No log file has been set. Please set a log file path first."
+
+        if self._raw_log_cache_path == self.current_log_path and self._raw_log_cache:
+            return None
+
+        try:
+            self._raw_log_cache = helpers.read_log_file(self.current_log_path)
+            self._raw_log_cache_path = self.current_log_path
+            # A different file means all derived caches are stale.
+            self._filter_cache_by_skill = {}
+            self._detail_cache = {}
+            self._detail_query_seen = set()
+            self._assembled_entries_by_key = {}
+            self._assembled_entries_no_ts = {}
+            self._assembled_log_text = ""
+            self._filter_export_counter = 0
+            return None
+        except Exception as e:
+            return f"Error reading log file: {e}"
+
+    def _export_assembled_log_file(self) -> str:
+        """
+        Save current assembled log report to the opened-log folder as
+        fliterlog1.txt, fliterlog2.txt, ... and return the saved file path.
+        """
+        if not self.current_log_path:
+            return ""
+
+        parent_dir = Path(self.current_log_path).parent
+        if not parent_dir.exists():
+            return ""
+
+        # Always export the latest assembled report in readable form.
+        export_text = self._build_assembled_log_report("merged", new_added=0, apply_limits=False)
+
+        candidate = None
+        while True:
+            self._filter_export_counter += 1
+            candidate = parent_dir / f"fliterlog{self._filter_export_counter}.txt"
+            if not candidate.exists():
+                break
+
+        try:
+            candidate.write_text(export_text, encoding="utf-8")
+            return str(candidate)
+        except Exception:
+            return ""
+
+    def _strip_line_number_prefix(self, line: str) -> str:
+        """Remove persisted line-number markers to save memory in caches."""
+        out = re.sub(r'^\s*(?:>>>|\s{3})\s*\[Line\s+\d+\]\s*', '', str(line))
+        out = re.sub(r'^\s*\[Line\s+\d+\]\s*', '', out)
+        return out.strip()
+
+    def _extract_lines_from_filtered_blob(self, filtered_blob: str) -> List[str]:
+        """Extract body lines from '[meta]\\n<body>' filtered output."""
+        lines = []
+        for idx, raw in enumerate((filtered_blob or "").splitlines()):
+            text = str(raw).strip()
+            if not text:
+                continue
+            # First line is metadata header from _get_filtered_log_lines.
+            if idx == 0 and text.startswith('[') and text.endswith(']'):
+                continue
+            lines.append(self._strip_line_number_prefix(text))
+        return [x for x in lines if x]
+
+    def _normalize_time_message(self, line: str) -> Tuple[Optional[datetime], str, str]:
+        """
+        Keep only HH:MM:SS + message from a raw filtered line.
+        Supports either full timestamps (MM/DD/YYYY-HH:MM:SS.mmm) or
+        compact markers like <TIME:HH:MM:SS>.
+        Returns (parsed_ts_or_none, hhmmss_or_na, message_only).
+        """
+        raw = self._strip_line_number_prefix(line)
+
+        # Prefer full date timestamp when present for stable chronological sorting.
+        dt_match = re.search(r'(\d{2}/\d{2}/\d{4}-(\d{2}:\d{2}:\d{2})\.\d{3})', raw)
+        if dt_match:
+            ts_full = dt_match.group(1)
+            ts_hms = dt_match.group(2)
+            ts_dt = None
+            try:
+                ts_dt = datetime.strptime(ts_full, "%m/%d/%Y-%H:%M:%S.%f")
+            except ValueError:
+                ts_dt = None
+            msg = (raw[:dt_match.start()] + raw[dt_match.end():]).strip(" -:|\t")
+        else:
+            # Fallback: handle logs like <TIME:09:54:13> or TIME:09:54:13
+            time_tag_match = re.search(r'(?:<)?TIME:(\d{2}:\d{2}:\d{2})(?:>)?', raw, flags=re.IGNORECASE)
+            ts_hms = time_tag_match.group(1) if time_tag_match else "N/A"
+            ts_dt = None
+            if time_tag_match:
+                msg = (raw[:time_tag_match.start()] + raw[time_tag_match.end():]).strip(" -:|\t")
+            else:
+                msg = raw
+
+        # Keep the payload part after function markers when present, e.g. "[func]:### ..."
+        if "###" in msg:
+            msg = msg[msg.find("###"):]
+        elif "]:" in msg:
+            msg = msg.split("]:", 1)[1]
+
+        # Remove remaining leading bracket-like channel tags.
+        msg = re.sub(r'(?:<)?TIME:\d{2}:\d{2}:\d{2}(?:>)?', '', msg, flags=re.IGNORECASE)
+        msg = re.sub(r'^(?:\[[^\]]+\]\s*)+', '', msg).strip()
+        msg = re.sub(r'\s{2,}', ' ', msg).strip()
+
+        return ts_dt, ts_hms, (msg or raw)
+
+    def _merge_lines_into_assembled_log(self, lines: List[str], skill_name: str) -> Tuple[int, int]:
+        """
+        Merge new filtered lines into cumulative assembled log by timestamp.
+        Storage never keeps line numbers, only timestamp + content + source skill.
+        Returns: (new_added_count, total_count)
+        """
+        added = 0
+        for line in lines:
+            ts, ts_display, message = self._normalize_time_message(line)
+            compact_text = f"<{ts_display}> {message}".strip()
+            content_hash = hashlib.md5(compact_text.encode('utf-8')).hexdigest()
+            if ts:
+                ts_key = ts.strftime("%m/%d/%Y-%H:%M:%S.%f")
+                key = f"{ts_key}|{content_hash}"
+                if key not in self._assembled_entries_by_key:
+                    self._assembled_entries_by_key[key] = {
+                        "ts": ts,
+                        "text": compact_text,
+                        "skills": {skill_name},
+                    }
+                    added += 1
+                else:
+                    self._assembled_entries_by_key[key]["skills"].add(skill_name)
+            else:
+                key = content_hash
+                if key not in self._assembled_entries_no_ts:
+                    self._assembled_entries_no_ts[key] = {
+                        "ts": None,
+                        "text": compact_text,
+                        "skills": {skill_name},
+                    }
+                    added += 1
+                else:
+                    self._assembled_entries_no_ts[key]["skills"].add(skill_name)
+
+        with_ts = sorted(
+            self._assembled_entries_by_key.values(),
+            key=lambda x: (x["ts"], x["text"])
+        )
+        no_ts = sorted(
+            self._assembled_entries_no_ts.values(),
+            key=lambda x: x["text"]
+        )
+        assembled_lines = [e["text"] for e in with_ts] + [e["text"] for e in no_ts]
+        self._assembled_log_text = "\n".join(assembled_lines)
+        return added, len(assembled_lines)
+
+    def _build_assembled_log_report(self, trigger_skill: str, new_added: int,
+                                    apply_limits: bool = True) -> str:
+        """Build assembled-log text for reasoning (limited) or file export (full)."""
+        ts_values = [x["ts"] for x in self._assembled_entries_by_key.values() if x.get("ts")]
+        first_ts = min(ts_values).strftime('%m/%d/%Y %H:%M:%S') if ts_values else "N/A"
+        last_ts = max(ts_values).strftime('%m/%d/%Y %H:%M:%S') if ts_values else "N/A"
+        skills_seen = sorted(self._filter_cache_by_skill.keys())
+
+        header = [
+            f"Assembled from {len(skills_seen)} skill filter(s): {', '.join(skills_seen) if skills_seen else trigger_skill}",
+            f"Trigger skill: {trigger_skill}",
+            f"New merged lines this round: {new_added}",
+            f"Total assembled lines: {len(self._assembled_log_text.splitlines()) if self._assembled_log_text else 0}",
+            f"Time range: {first_ts} → {last_ts}",
+            "Storage rule: only timestamp + message are persisted in cache.",
+        ]
+
+        body = self._assembled_log_text
+        if apply_limits:
+            all_lines = self._assembled_log_text.splitlines() if self._assembled_log_text else []
+            max_lines = self.MAX_ASSEMBLED_LOG_LINES_PER_TOOL_CALL
+            if len(all_lines) > max_lines:
+                head_n = max_lines // 2
+                tail_n = max_lines - head_n
+                kept_lines = all_lines[:head_n] + [
+                    f"... ({len(all_lines) - max_lines} lines omitted for token safety) ..."
+                ] + all_lines[-tail_n:]
+                body = "\n".join(kept_lines)
+                header.append(
+                    f"⚠ Lines windowed: showing {max_lines}/{len(all_lines)} lines for token safety."
+                )
+
+            if len(body) > self.MAX_ASSEMBLED_LOG_CHARS_PER_TOOL_CALL:
+                body = body[:self.MAX_ASSEMBLED_LOG_CHARS_PER_TOOL_CALL]
+                header.append(
+                    f"⚠ Output truncated at {self.MAX_ASSEMBLED_LOG_CHARS_PER_TOOL_CALL} chars for token safety."
+                )
+
+        return "[" + " | ".join(header) + "]\n" + body
+
+    def _build_skill_focus_payload(self, skill_name: str, new_added: int, total_count: int) -> str:
+        """
+        Build a compact, token-efficient payload for current skill analysis.
+        Includes only this skill's filtered messages + a tiny cross-skill history glimpse.
+        """
+        cached = self._filter_cache_by_skill.get(skill_name, {})
+        lines = list(cached.get("lines", []) or [])
+        line_count = len(lines)
+
+        # Keep head+tail to preserve both early and latest evidence in this skill.
+        focus_lines = lines
+        if line_count > self.MAX_SKILL_FOCUS_LINES:
+            head_n = self.MAX_SKILL_FOCUS_LINES // 2
+            tail_n = self.MAX_SKILL_FOCUS_LINES - head_n
+            focus_lines = lines[:head_n] + [
+                f"... ({line_count - self.MAX_SKILL_FOCUS_LINES} lines omitted) ..."
+            ] + lines[-tail_n:]
+
+        # Small cross-skill reminder, not full assembled body.
+        other_skills = [k for k in sorted(self._filter_cache_by_skill.keys()) if k != skill_name]
+        recent_history = []
+        for sk in other_skills[-3:]:
+            sk_lines = self._filter_cache_by_skill.get(sk, {}).get("lines", []) or []
+            if not sk_lines:
+                continue
+            sample = sk_lines[-min(5, len(sk_lines)):]
+            recent_history.append(f"--- {sk} ({len(sk_lines)} lines cached) ---")
+            recent_history.extend(sample)
+        if len(recent_history) > self.MAX_RECENT_SKILL_HISTORY_LINES:
+            recent_history = recent_history[:self.MAX_RECENT_SKILL_HISTORY_LINES]
+            recent_history.append("... (recent skill history truncated) ...")
+
+        parts = [
+            f"=== Skill Focus: {skill_name} ===",
+            f"Current skill matched lines: {line_count}",
+            f"New lines merged this round: {new_added}",
+            f"Assembled total lines (stored): {total_count}",
+            "Note: Full assembled log is stored and can be requested via get_assembled_log_snapshot().",
+            "",
+            "=== Current Skill Evidence (message-only compact view) ===",
+            "\n".join(focus_lines) if focus_lines else "(no lines)",
+        ]
+
+        if recent_history:
+            parts.extend([
+                "",
+                "=== Recent Cross-Skill Hints (compact) ===",
+                "\n".join(recent_history),
+            ])
+
+        text = "\n".join(parts)
+        if len(text) > self.MAX_SKILL_FOCUS_CHARS:
+            text = text[:self.MAX_SKILL_FOCUS_CHARS] + (
+                "\n... (skill-focused payload truncated for token safety)"
+            )
+        return text
+
+    def get_assembled_log_snapshot(self, mode: str = "summary") -> str:
+        """
+        On-demand assembled-log view for macro analysis.
+        mode=summary: metadata only; mode=compact: limited body; mode=full: full body.
+        """
+        if not (self._assembled_log_text or "").strip():
+            return "No assembled log is available yet. Call fetch_filtered_logs(skill_name) first."
+
+        mode = (mode or "summary").strip().lower()
+        if mode not in ("summary", "compact", "full"):
+            return "Error: mode must be one of: summary, compact, full"
+
+        if mode == "summary":
+            return self._build_assembled_log_report("snapshot", new_added=0, apply_limits=False).split("\n", 1)[0]
+        if mode == "compact":
+            return self._build_assembled_log_report("snapshot", new_added=0, apply_limits=True)
+        return self._build_assembled_log_report("snapshot", new_added=0, apply_limits=False)
+
+    def get_final_state_snapshot(self, tail_lines: int = 120) -> str:
+        """Return a compact view focused on latest state for end-of-analysis verification."""
+        lines = max(20, min(int(tail_lines or 120), 400))
+        return self._get_assembled_log_tail(max_lines=lines)
+
+    def _resolve_context_span(self, anchor_text: str, requested_span: int) -> int:
+        """Auto-expand detail context for scan/connect style transactions."""
+        low = (anchor_text or "").lower()
+        span = requested_span if requested_span and requested_span > 0 else self.DEFAULT_DETAIL_CONTEXT_SPAN
+        if any(tok in low for tok in ("scan", "connect", "assoc", "roam", "auth", "oid", "wdi_task")):
+            span = max(span, 50)
+        return min(span, self.MAX_DETAIL_CONTEXT_SPAN)
+
+    def _clip_for_prompt(self, text: str, limit: int = None) -> str:
+        """Trim long text before appending into LLM messages."""
+        if text is None:
+            return ""
+        lim = limit or self.MAX_TOOL_CONTENT_CHARS_IN_MESSAGES
+        if len(text) <= lim:
+            return text
+        return text[:lim] + f"\n... (truncated for token safety, kept {lim} chars)"
+
+    def _get_filtered_log_lines(self, skill_name: str, apply_output_limit: bool = True) -> str:
         """
         Apply the TAT keyword filter for `skill_name` to the current log file
         using the same pipeline as LogParserService.process_analysis:
@@ -368,13 +716,10 @@ class WifiLogAgentSystem:
         skill = self.skills.get(skill_name)
         if not skill:
             return f"Error: skill '{skill_name}' not found."
-        if not self.current_log_path:
-            return "Error: No log file has been set. Please set a log file path first."
-
-        try:
-            log_lines = helpers.read_log_file(self.current_log_path)
-        except Exception as e:
-            return f"Error reading log file: {e}"
+        load_err = self._ensure_raw_log_cache()
+        if load_err:
+            return load_err
+        log_lines = self._raw_log_cache
 
         # --- keyword extraction: prefer TAT file, fall back to in-memory list ---
         if skill.tat_path and Path(skill.tat_path).exists():
@@ -390,10 +735,68 @@ class WifiLogAgentSystem:
         processed  = preprocess_log_for_llm(filtered)
         grouped    = group_similar_logs(processed)
 
+        # Optional post-filter exclusion from skills.yaml:
+        # remove noisy lines that are not useful for diagnosis.
+        exclusive_terms = [x for x in (skill.exclusive or []) if str(x).strip()]
+        excluded_count = 0
+        if grouped and exclusive_terms:
+            excl_lower = [x.lower() for x in exclusive_terms]
+            kept = []
+            for line in grouped:
+                line_str = str(line)
+                # Match against both original grouped line and parsed message body.
+                # If either side hits, drop the entire line.
+                _, _, message_only = self._normalize_time_message(line_str)
+                raw_low = self._strip_line_number_prefix(line_str).lower()
+                msg_low = str(message_only).lower()
+                if any((term in raw_low) or (term in msg_low) for term in excl_lower):
+                    excluded_count += 1
+                    continue
+                kept.append(line)
+            grouped = kept
+
         if not grouped:
             return "No log lines matched the keywords for this skill."
 
-        return "\n".join(str(l) for l in grouped)[:15000]
+        # Build temporal metadata so the agent knows the time span covered
+        ts_re = re.compile(r'(\d{2}/\d{2}/\d{4}-\d{2}:\d{2}:\d{2}\.\d{3})')
+        first_ts = last_ts = None
+        for line in grouped:
+            m = ts_re.search(str(line))
+            if m:
+                try:
+                    t = datetime.strptime(m.group(1), "%m/%d/%Y-%H:%M:%S.%f")
+                    if first_ts is None or t < first_ts:
+                        first_ts = t
+                    if last_ts is None or t > last_ts:
+                        last_ts = t
+                except ValueError:
+                    pass
+
+        body_full = "\n".join(str(l) for l in grouped)
+        body = body_full
+
+        # Prepend time-range header so the agent sees whether it has
+        # full-timeline coverage or only a partial window
+        meta_parts = [f"Matched {len(grouped)} lines."]
+        if excluded_count > 0:
+            meta_parts.append(
+                f"Excluded {excluded_count} lines by exclusive keywords."
+            )
+        if first_ts and last_ts:
+            meta_parts.append(
+                f"Time range: {first_ts.strftime('%m/%d/%Y %H:%M:%S')} "
+                f"→ {last_ts.strftime('%m/%d/%Y %H:%M:%S')}"
+            )
+            if apply_output_limit and len(body_full) > 15000:
+                meta_parts.append(
+                    "⚠ Output truncated at 15 KB for display. "
+                    "Merged assembled storage still uses full filtered lines."
+                )
+        header = " | ".join(meta_parts)
+        if apply_output_limit and len(body) > 15000:
+            body = body[:15000]
+        return f"[{header}]\n{body}"
 
     # ------------------------------------------------------------------
     # Step 2 – Skill prompt analysis: LLM sub-call with expert_rules
@@ -415,7 +818,6 @@ class WifiLogAgentSystem:
         description = self.issue_context.get("description", "")
         subject     = self.issue_context.get("subject", "")
         case_nbr    = self.issue_context.get("case_nbr", "")
-        ai_summary   = self.issue_context.get("ai_summary", "")
         if case_nbr:
             context_lines.append(f"Case: {case_nbr}")
         if subject:
@@ -424,8 +826,6 @@ class WifiLogAgentSystem:
             context_lines.append(f"Issue type: {issue_type}")
         if description:
             context_lines.append(f"\nIssue description:\n{description}")
-        if ai_summary:
-            context_lines.append(f"\nAI summary:\n{ai_summary}")
         issue_preamble = ("=== Issue Context ===\n" + "\n".join(context_lines) + "\n\n"
                           if context_lines else "")
 
@@ -455,63 +855,294 @@ class WifiLogAgentSystem:
             return f"Skill analysis error: {e}"
 
     # ------------------------------------------------------------------
-    # Combined helper used by analyze_all (filter → analyse in one call)
+    # Tool Handler: fetch_filtered_logs (returns compact skill-focused payload)
     # ------------------------------------------------------------------
     def fetch_filtered_logs(self, skill_name: str) -> str:
-        """Filter the log then analyse with the skill's expert prompt."""
+        """
+        Fetch filtered logs for a specific skill (agentic tool).
+        
+        Returns compact skill-focused evidence while still merging full
+        filtered lines into assembled storage.
+        
+        Args:
+            skill_name: Skill identifier to apply filter
+            
+        Returns:
+            str: Compact skill-focused payload for low-token reasoning
+        """
         skill = self.skills.get(skill_name)
         if not skill:
             return f"Error: skill '{skill_name}' not found."
-        filtered = self._get_filtered_log_lines(skill_name)
-        return self._analyze_with_skill_prompt(skill, filtered)
+        
+        if skill_name in self._filter_cache_by_skill:
+            cached = self._filter_cache_by_skill[skill_name]
+            export_path = self._export_assembled_log_file()
+            total_count = len(self._assembled_log_text.splitlines()) if self._assembled_log_text else 0
+            result = self._build_skill_focus_payload(
+                skill_name=skill_name,
+                new_added=0,
+                total_count=total_count,
+            ) + (
+                "\n\n=== Cache Info ===\n"
+                f"Skill cache hit: {skill_name}\n"
+                f"Skill-filtered lines in cache: {cached.get('line_count', 0)}"
+            )
+            if export_path:
+                result += f"\nSaved merged filter log: {export_path}"
+            return result
+
+        filtered_lines = self._get_filtered_log_lines(skill_name, apply_output_limit=False)
+
+        # If filtering failed, return error as-is
+        if filtered_lines.startswith("Error:") or filtered_lines.startswith("No log lines"):
+            return filtered_lines
+
+        body_lines = self._extract_lines_from_filtered_blob(filtered_lines)
+        compact_lines = []
+        for line in body_lines:
+            _, ts_display, message = self._normalize_time_message(line)
+            compact_lines.append(f"<{ts_display}> {message}".strip())
+
+        self._filter_cache_by_skill[skill_name] = {
+            "skill_name": skill_name,
+            "line_count": len(compact_lines),
+            "lines": compact_lines,
+            "created_at": datetime.utcnow().strftime('%Y-%m-%dT%H:%M:%SZ'),
+        }
+
+        new_added, total_count = self._merge_lines_into_assembled_log(body_lines, skill_name)
+        skill_focus_report = self._build_skill_focus_payload(skill_name, new_added, total_count)
+        export_path = self._export_assembled_log_file()
+
+        result = (
+            f"=== {skill.name} Filter Applied ===\n"
+            f"Skill matched lines: {len(body_lines)}\n"
+            f"Assembled total lines after merge: {total_count}\n\n"
+            f"=== Skill-Focused Reasoning Payload ===\n"
+            f"{skill_focus_report}"
+        )
+        if export_path:
+            result += f"\n\nSaved merged filter log: {export_path}"
+        return result
 
     # ------------------------------------------------------------------
-    # Tool: query_log_detail — read specific log line + context
+    # Utility: Quick skill-based analysis (optional one-shot mode)
     # ------------------------------------------------------------------
-    def query_log_detail(self, line_number: int, context_lines: int = 25) -> str:
+    def analyze_with_skill(self, skill_name: str) -> str:
         """
-        Query the full content of a specific log line plus context lines.
-        Returns the target line + context_lines before and after.
-        Default: ±25 lines to capture full event sequences (e.g. beacon
-        loss escalation from initial threshold to extended threshold).
-        """
-        if not self.current_log_path:
-            return "Error: No log file loaded."
+        Quick one-shot skill analysis: filter logs + analyze with expert rules.
         
+        Unlike agentic chat, this directly applies skill expertise without
+        multi-step reasoning. Useful for focused, quick analysis when you want
+        the skill's expertise applied directly without agent reasoning.
+        
+        Args:
+            skill_name: Which skill's expertise to apply
+            
+        Returns:
+            str: Skill expert's analysis of the filtered logs
+            
+        Example:
+            >>> analysis = agent.analyze_with_skill("Connectivity")
+            >>> print(analysis)
+            # "Based on the filtered Connectivity logs, the issue appears to be..."
+        """
+        skill = self.skills.get(skill_name)
+        if not skill:
+            return f"Error: skill '{skill_name}' not found."
+        
+        filtered_lines = self._get_filtered_log_lines(skill_name)
+        return self._analyze_with_skill_prompt(skill, filtered_lines)
+
+    # ------------------------------------------------------------------
+    # Tool: query_log_detail — anchor-based context query on assembled log
+    # ------------------------------------------------------------------
+    def query_log_detail(self, anchor_text: str = "", anchor_timestamp: str = "",
+                         context_span: int = 20, max_hits: int = 3) -> str:
+        """
+        Query detailed assembled-log context by semantic anchors instead of line numbers.
+
+        Matching strategy:
+          - If anchor_timestamp is provided, match lines containing that timestamp
+            text (supports exact fragment match).
+          - If anchor_text is provided, match lines containing that text
+            (case-insensitive).
+          - If both are provided, both conditions must match.
+
+        Returns neighboring context around up to `max_hits` anchor matches.
+        Source is assembled log only (not raw log).
+        """
+        anchor_text = (anchor_text or "").strip()
+        anchor_timestamp = (anchor_timestamp or "").strip()
+        context_span = self._resolve_context_span(anchor_text, context_span)
+
+        if not anchor_text and not anchor_timestamp:
+            return "Error: Provide anchor_text and/or anchor_timestamp for detail query."
+
+        assembled_text = self._assembled_log_text or ""
+        if not assembled_text.strip():
+            return (
+                "No assembled log is available yet. "
+                "Call fetch_filtered_logs(skill_name) first."
+            )
+
+        assembled_sig = hashlib.md5(assembled_text.encode('utf-8')).hexdigest()[:12]
+        cache_key = (
+            f"text={anchor_text.lower()}|ts={anchor_timestamp}|"
+            f"span={context_span}|hits={max_hits}|assembled={assembled_sig}"
+        )
+        dedup_key = (
+            f"text={anchor_text.lower()}|ts={anchor_timestamp}|"
+            f"span={context_span}|hits={max_hits}|assembled={assembled_sig}"
+        )
+
+        if dedup_key in self._detail_query_seen and cache_key in self._detail_cache:
+            cached = self._detail_cache[cache_key]
+            first_line = cached.splitlines()[0] if cached else "(no detail)"
+            return (
+                "Duplicate query skipped: same anchor parameters were already queried on current assembled snapshot.\n"
+                f"Previous detail summary: {first_line}\n"
+                "Use a different anchor_text/anchor_timestamp or broader snapshot query for new evidence.\n\n"
+                "[Detail dedup cache hit]"
+            )
+
+        if cache_key in self._detail_cache:
+            return self._detail_cache[cache_key] + "\n\n[Detail cache hit]"
+
+        all_lines = assembled_text.splitlines()
+
+        matched_indices = []
+        lower_anchor = anchor_text.lower()
+        normalized_ts = anchor_timestamp.strip("<>").strip()
+        ts_token = f"<{normalized_ts}>" if normalized_ts else ""
+
+        for idx, raw in enumerate(all_lines):
+            line = str(raw)
+            line_lower = line.lower()
+            ts_ok = (
+                (not normalized_ts)
+                or (normalized_ts in line)
+                or (ts_token and ts_token in line)
+            )
+            txt_ok = (not lower_anchor) or (lower_anchor in line_lower)
+            if ts_ok and txt_ok:
+                matched_indices.append(idx)
+
+        # HEAD+TAIL sampling: always include earliest AND latest matches
+        # to prevent blindspot where only early errors are seen.
+        if len(matched_indices) > max_hits:
+            head_count = max(1, max_hits // 3)       # ~1/3 from beginning
+            tail_count = max_hits - head_count        # ~2/3 from end
+            matched_indices = (
+                matched_indices[:head_count]
+                + matched_indices[-tail_count:]
+            )
+        elif len(matched_indices) > 0:
+            pass  # use all matches as-is
+
+        if not matched_indices:
+            return (
+                "No matching anchor found in assembled log. "
+                f"anchor_text='{anchor_text}', anchor_timestamp='{anchor_timestamp}'."
+            )
+
+        sections = []
+        for hit_no, idx in enumerate(matched_indices, start=1):
+            start_idx = max(0, idx - context_span)
+            end_idx = min(len(all_lines), idx + context_span + 1)
+
+            block = []
+            for i in range(start_idx, end_idx):
+                marker = ">>>" if i == idx else "   "
+                block.append(f"{marker} {str(all_lines[i])}")
+
+            sections.append(
+                f"=== Detail Hit {hit_no}/{len(matched_indices)} ===\n" + "\n".join(block)
+            )
+
+        detail_text = "\n\n".join(sections)
+        if len(detail_text) > self.MAX_QUERY_DETAIL_OUTPUT_CHARS:
+            detail_text = (
+                detail_text[:self.MAX_QUERY_DETAIL_OUTPUT_CHARS]
+                + "\n... (detail truncated for token safety)"
+            )
+        self._detail_cache[cache_key] = detail_text
+        self._detail_query_seen.add(dedup_key)
+        return detail_text
+
+    # ------------------------------------------------------------------
+    # Chat: Flexible conversation with optional agentic tools
+    # RECOMMENDED for chatbot dialog boxes
+    # ------------------------------------------------------------------
+    def chat(self, user_message: str, use_tools: bool = False, max_steps: int = 6,
+             temperature: float = 0.2, max_tokens: int = 4000) -> dict:
+        """
+        Process user message with flexible LLM call - simple or agentic mode.
+        
+        Two modes available:
+          
+          MODE 1: Simple Conversation (use_tools=False, DEFAULT)
+            - Direct LLM call, no tools
+            - Perfect for free-form Q&A chatbot
+            - Faster, fewer tokens
+          
+          MODE 2: Agentic Reasoning (use_tools=True)
+            - LLM can call diagnostic tools
+            - Autonomous skill selection and investigation
+            - For complex root-cause analysis
+        
+        Args:
+            user_message: User's question or statement
+            use_tools: Enable agentic tool mode (default False for simple chat)
+            max_steps: Max reasoning iterations when use_tools=True (default 6)
+            temperature: Sampling temperature for response generation
+            max_tokens: Maximum tokens for direct/simple response generation
+            
+        Returns:
+            dict: {
+                "type": "text" | "report" | "error",
+                "data": str or dict depending on mode
+            }
+            
+        Examples:
+            # Simple chatbot (default, no tools)
+            >>> result = agent.chat("What errors are in the log?")
+            >>> print(result["data"])  # Direct answer
+            
+            # With tools for diagnosis
+            >>> result = agent.chat(
+            ...     "Why does device disconnect?",
+            ...     use_tools=True
+            ... )
+            >>> # Agent may call fetch_filtered_logs, query_log_detail, etc.
+        """
         try:
-            from utils.helpers import read_log_file
-            all_lines = read_log_file(self.current_log_path)
-        except Exception as e:
-            return f"Error reading log file: {e}"
-        
-        if line_number < 1 or line_number > len(all_lines):
-            return f"Error: Line {line_number} out of range (log has {len(all_lines)} lines)."
-        
-        # Convert to 0-based index
-        idx = line_number - 1
-        start_idx = max(0, idx - context_lines)
-        end_idx = min(len(all_lines), idx + context_lines + 1)
-        
-        result_lines = []
-        for i in range(start_idx, end_idx):
-            marker = ">>>" if i == idx else "   "
-            result_lines.append(f"{marker} [Line {i + 1}] {all_lines[i]}")
-        
-        return "\n".join(result_lines)
+            temperature = float(temperature)
+        except Exception:
+            temperature = 0.2
+        temperature = max(0.0, min(1.0, temperature))
 
-    # ------------------------------------------------------------------
-    # Simple chat (no tool loop — plain LLM conversation)
-    # ------------------------------------------------------------------
-    def simple_chat(self, user_message: str) -> dict:
+        try:
+            max_tokens = int(max_tokens)
+        except Exception:
+            max_tokens = 4000
+        max_tokens = max(256, min(8000, max_tokens))
+
+        # Delegate to appropriate implementation
+        if use_tools:
+            return self._chat_with_tools(user_message, max_steps, temperature=temperature)
+        else:
+            return self._chat_simple(user_message, temperature=temperature, max_tokens=max_tokens)
+
+    def _chat_simple(self, user_message: str, temperature: float = 0.2,
+                     max_tokens: int = 4000) -> dict:
         """
-        Process one user message with a straightforward LLM call.
-        Maintains conversation history for follow-ups, but does NOT
-        invoke tools / agentic reasoning.  Used by the /chat endpoint
-        so users can ask free-form questions after the initial
-        skill-agent analysis.
+        Simple chat mode: Direct conversation without tools.
+        
+        Perfect for chatbot UI where users expect immediate, conversational responses.
         """
         if not self.conversation_history:
-            # Read a snippet of the log for context (first 500 lines)
+            # Initialize system message with context on first turn
             log_snippet = ""
             if self.current_log_path:
                 try:
@@ -521,190 +1152,185 @@ class WifiLogAgentSystem:
                 except Exception:
                     log_snippet = "(unable to read log file)"
 
+            # Build comprehensive system message
             system_msg = (
-                "You are a Wi-Fi troubleshooting assistant. "
-                "Answer the user's questions about the log file concisely.\n"
+                "You are a Wi-Fi Troubleshooting Assistant.\n"
+                "Answer user questions about the log file concisely and accurately.\n"
             )
+            
+            # Add case context if available
             if self.issue_context:
-                ctx_parts = [f"{k}: {v}" for k, v in self.issue_context.items() if v]
+                ctx_parts = []
+                if self.issue_context.get("case_nbr"):
+                    ctx_parts.append(f"Case #: {self.issue_context['case_nbr']}")
+                if self.issue_context.get("issue_type"):
+                    ctx_parts.append(f"Issue Type: {self.issue_context['issue_type']}")
+                if self.issue_context.get("subject"):
+                    ctx_parts.append(f"Subject: {self.issue_context['subject']}")
+                if self.issue_context.get("description"):
+                    ctx_parts.append(f"Description: {self.issue_context['description']}")
+                
                 if ctx_parts:
-                    system_msg += "Case context:\n" + "\n".join(ctx_parts) + "\n"
+                    system_msg += "\n=== CASE CONTEXT ===\n" + "\n".join(ctx_parts) + "\n\n"
+            
+            # Add log file reference
+            if self.current_log_path:
+                system_msg += f"Log file: {self.current_log_path}\n"
+            
+            # Add log snippet for reference
             if log_snippet:
-                system_msg += f"\n--- Log excerpt (first 500 lines) ---\n{log_snippet}\n"
+                system_msg += f"\n=== Log Excerpt (first 500 lines) ===\n{log_snippet}\n"
 
             self.conversation_history.append({
                 "role": "system",
                 "content": system_msg,
             })
 
+        # Add user message to history
         self.conversation_history.append({"role": "user", "content": user_message})
 
         try:
+            # Simple LLM call (no tools)
             response = self.client.chat.completions.create(
                 model=self.model,
                 messages=self.conversation_history,
-                temperature=0.2,
-                max_tokens=4000,
+                temperature=temperature,
+                max_tokens=max_tokens,
             )
             content = response.choices[0].message.content or ""
+            
+            # Add assistant response to history
             self.conversation_history.append({"role": "assistant", "content": content})
+            
             return {"type": "text", "data": content}
         except Exception as e:
-            return {"type": "text", "data": f"LLM error: {e}"}
+            error_msg = f"Chat error: {str(e)}"
+            print(f"[ERROR] {error_msg}")
+            return {"type": "text", "data": error_msg}
 
-    # ------------------------------------------------------------------
-    # Single-question chat (maintains conversation history)
-    # ------------------------------------------------------------------
-    def chat(self, user_message: str, max_steps: int = 6) -> dict:
-        """Process one user message using the agent loop."""
+    def _chat_with_tools(self, user_message: str, max_steps: int = 6,
+                         temperature: float = 0.1) -> dict:
+        """
+        Agentic chat mode: LLM can use diagnostic tools.
+        
+        For complex analysis where agent needs to investigate multiple skills,
+        inspect specific log sections, and provide structured diagnoses.
+        """
         if not self.conversation_history:
+            # Reuse analyze_all reasoning brain so chat and auto-analysis stay aligned.
+            context_section = ""
+            if self.issue_context:
+                context_parts = []
+                if self.issue_context.get("case_nbr"):
+                    context_parts.append(f"**Case Number:** {self.issue_context.get('case_nbr')}")
+                if self.issue_context.get("issue_type"):
+                    context_parts.append(f"**Issue Type:** {self.issue_context.get('issue_type')}")
+                if self.issue_context.get("subject"):
+                    context_parts.append(f"**Subject:** {self.issue_context.get('subject')}")
+                if context_parts:
+                    context_section = "\n=== BACKGROUND CONTEXT ===\n" + "\n".join(context_parts) + "\n\n"
+
+            system_content = self._build_analyze_system_prompt(context_section)
+            outcome_inject = self._build_outcome_injection()
+
             self.conversation_history.append({
                 "role": "system",
-                "content": (
-                    "You are a Wi-Fi troubleshooting assistant with logical reasoning.\n"
-                    f"Available skills: {', '.join(self.skills.keys())}.\n"
-                    "Use fetch_filtered_logs with the most relevant skill to gather "
-                    "evidence, then call submit_final_report.\n"
-                    "Use conversation history for follow-up questions."
-                )
+                "content": system_content,
             })
+
+            if outcome_inject:
+                self.conversation_history.append({
+                    "role": "user",
+                    "content": outcome_inject,
+                })
 
         self.conversation_history.append({"role": "user", "content": user_message})
 
         tools = self._build_tools()
         final_report = None
 
-        for _ in range(max_steps):
-            response = self.client.chat.completions.create(
-                model=self.model,
-                messages=self.conversation_history,
-                tools=tools,
-                tool_choice="auto",
-                temperature=0.1,
-            )
+        for step_idx in range(max_steps):
+            try:
+                # Call LLM with tools available
+                response = self.client.chat.completions.create(
+                    model=self.model,
+                    messages=self.conversation_history,
+                    tools=tools,
+                    tool_choice="auto",
+                    temperature=temperature,
+                )
+            except Exception as e:
+                # LLM call failed
+                error_msg = f"LLM API error at reasoning step {step_idx}: {str(e)}"
+                print(f"[ERROR] {error_msg}")
+                return {"type": "error", "data": error_msg}
+            
             message = response.choices[0].message
             self.conversation_history.append(message)
 
+            # Log token usage for chat step
+            usage = getattr(response, 'usage', None)
+            if usage:
+                print(
+                    f"[TOKEN] Chat step {step_idx + 1}: "
+                    f"prompt={usage.prompt_tokens} "
+                    f"completion={usage.completion_tokens} "
+                    f"total={usage.total_tokens}"
+                )
+                if usage.total_tokens > self.MAX_TOKENS_PER_STEP:
+                    return {
+                        "type": "error",
+                        "data": (
+                            "Stopped: token budget exceeded at reasoning step "
+                            f"{step_idx + 1}. total_tokens={usage.total_tokens}, "
+                            f"limit={self.MAX_TOKENS_PER_STEP}."
+                        ),
+                    }
+
             if message.tool_calls:
-                # Process ALL tool calls and append their responses BEFORE
-                # returning, so every tool_call_id is answered in history.
+                # Agent decided to use tools
                 final_report = None
                 for tool_call in message.tool_calls:
-                    args = json.loads(tool_call.function.arguments)
+                    try:
+                        args = json.loads(tool_call.function.arguments)
+                    except json.JSONDecodeError as e:
+                        print(f"[ERROR] Failed to parse tool arguments: {e}")
+                        continue
+                    
                     if tool_call.function.name == "submit_final_report":
+                        # Agent is done—collect the report
                         final_report = args
-                        # Provide a required tool response for this call_id
                         self.conversation_history.append({
                             "role": "tool",
                             "tool_call_id": tool_call.id,
                             "name": "submit_final_report",
-                            "content": "Report submitted.",
+                            "content": "Final report received and processed successfully.",
                         })
-                    elif tool_call.function.name == "fetch_filtered_logs":
-                        skill_name = args.get("skill_name")
-                        skill = self.skills.get(skill_name)
-                        # Step 1: apply TAT keyword filter
-                        filtered_lines = self._get_filtered_log_lines(skill_name)
-                        # Step 2: analyse filtered lines with the skill's expert prompt
-                        tool_result = (
-                            self._analyze_with_skill_prompt(skill, filtered_lines)
-                            if skill else filtered_lines
-                        )
+                    else:
+                        tool_result = self._invoke_tool(tool_call.function.name, args)
                         self.conversation_history.append({
                             "role": "tool",
                             "tool_call_id": tool_call.id,
-                            "name": "fetch_filtered_logs",
-                            "content": tool_result,
-                        })
-                    elif tool_call.function.name == "query_log_detail":
-                        line_number = args.get("line_number")
-                        context_lines = args.get("context_lines", 5)
-                        tool_result = self.query_log_detail(line_number, context_lines)
-                        self.conversation_history.append({
-                            "role": "tool",
-                            "tool_call_id": tool_call.id,
-                            "name": "query_log_detail",
+                            "name": tool_call.function.name,
                             "content": tool_result,
                         })
 
+                # If final_report was submitted, return it immediately
                 if final_report is not None:
                     return {"type": "report", "data": final_report}
             else:
-                # Plain text answer (no tool call)
+                # Agent provided a text answer without using tools
                 content = message.content or ""
                 return {"type": "text", "data": content}
 
+        # Exhausted all reasoning steps without reaching a conclusion
         return {
             "type": "error",
-            "data": "Reached maximum reasoning steps without a conclusion."
+            "data": f"Reached maximum reasoning steps ({max_steps}) without a definitive conclusion. "
+                    "Try breaking down the question or asking more specific queries."
         }
 
-    # ------------------------------------------------------------------
-    # Time-aware log filtering (ported from AI_analysis_log_CFE.py)
-    # ------------------------------------------------------------------
-    def _parse_log_timestamp(self, log_line: str) -> Optional[datetime]:
-        """Extract timestamp matching format: MM/DD/YYYY-HH:MM:SS.mmm"""
-        time_pattern = re.compile(r'(\d{2}/\d{2}/\d{4}-\d{2}:\d{2}:\d{2}\.\d{3})')
-        match = time_pattern.search(log_line)
-        if match:
-            try:
-                return datetime.strptime(match.group(1), "%m/%d/%Y-%H:%M:%S.%f")
-            except ValueError:
-                return None
-        return None
-
-    def _detect_physical_disconnect_time(
-        self, reference_time: Optional[datetime], window_minutes: int = 5
-    ) -> Optional[datetime]:
-        """
-        Scan the raw log file for the first physical disconnect event
-        near `reference_time`.  Returns the timestamp of that event,
-        which may differ from the user-reported time (e.g. beacon loss
-        at 11:25:49 vs. browser noticing at 11:26:25).
-
-        Searches for:
-          DISCONNECT, DEAUTH, TASK_DISCONNECT, TERMINATION
-        """
-        if not self.current_log_path:
-            return None
-
-        DISCONNECT_RE = re.compile(
-            r'DISCONNECT|DEAUTH|TASK_DISCONNECT|TERMINATION',
-            re.IGNORECASE,
-        )
-        ts_re = re.compile(r'(\d{2}/\d{2}/\d{4}-\d{2}:\d{2}:\d{2}\.\d{3})')
-
-        if reference_time:
-            window_start = reference_time - timedelta(minutes=window_minutes)
-            window_end   = reference_time + timedelta(minutes=1)
-        else:
-            window_start = window_end = None
-
-        try:
-            with open(self.current_log_path, 'r', encoding='utf-8', errors='ignore') as f:
-                for line in f:
-                    clean = line.strip()
-                    if not clean:
-                        continue
-                    m_ts = ts_re.search(clean)
-                    if not m_ts:
-                        continue
-                    try:
-                        line_time = datetime.strptime(m_ts.group(1), "%m/%d/%Y-%H:%M:%S.%f")
-                    except ValueError:
-                        continue
-                    # Skip lines outside the time window
-                    if window_start and (line_time < window_start or line_time > window_end):
-                        continue
-                    # Check for disconnect keyword
-                    if DISCONNECT_RE.search(clean):
-                        return line_time
-        except Exception as e:
-            print(f"[!] Physical disconnect scan failed: {e}")
-        return None
-
     def _extract_issue_time(self, issue_description: str) -> Optional[datetime]:
-        """Use LLM to extract the exact issue time from the user's description."""
         prompt = (
             "Extract the exact date and time mentioned in the following user issue description.\n"
             "If a time is found, output ONLY the timestamp in 'MM/DD/YYYY-HH:MM:SS' format "
@@ -725,395 +1351,460 @@ class WifiLogAgentSystem:
             print(f"[!] Time extraction failed: {e}")
         return None
 
-    # ------------------------------------------------------------------
-    # Tool 1: scan_overview — quick keyword statistics (no log content)
-    # ------------------------------------------------------------------
-    def scan_overview(self, skill_name: str) -> str:
+    def _precheck_report_quality(self, issue_description: str, report: dict, evidence_tail: str) -> Optional[dict]:
+        """Lightweight deterministic guardrails before LLM quality review."""
+        issue_text = (issue_description or "").lower()
+        report_text = (
+            f"{report.get('root_cause_summary', '')}\n{report.get('markdown_summary', '')}"
+        ).lower()
+        tail_text = (evidence_tail or "").lower()
+
+        asks_direct_question = ("?" in (issue_description or "")) or any(
+            t in issue_text for t in ("why", "what", "how", "can", "could", "cannot", "can't")
+        )
+        answer_markers = (
+            "because", "due to", "caused by", "no evidence", "not observed",
+            "normal background", "maintenance", "works as expected", "healthy", "stable",
+        )
+        if asks_direct_question and not any(m in report_text for m in answer_markers):
+            return {
+                "approved": False,
+                "reason": "Final conclusion does not directly answer the user's question.",
+                "required_actions": [
+                    "Start root_cause_summary with a direct answer to the user question.",
+                    "Then provide evidence-based rationale.",
+                ],
+            }
+
+        severe_claim_markers = (
+            "fatal", "critical", "persistent failure", "cannot scan", "can't scan",
+            "failed to scan", "crash", "assert", "bsod",
+        )
+        healthy_tail_markers = (
+            "scan is allowed", "connected", "assoc_rsp", "probe_rx", "probe_tx",
+            "beacon", "rssi", "allowed (true)",
+        )
+        hard_fail_tail_markers = (
+            "deauth", "task_disconnect", "termination", "bsod", "assert", "fw crash",
+        )
+
+        severe_claim = any(m in report_text for m in severe_claim_markers)
+        healthy_tail_hits = sum(1 for m in healthy_tail_markers if m in tail_text)
+        hard_fail_tail = any(m in tail_text for m in hard_fail_tail_markers)
+
+        if severe_claim and healthy_tail_hits >= 2 and not hard_fail_tail:
+            return {
+                "approved": False,
+                "reason": "Report likely overstates severity: tail evidence suggests normal background maintenance or healthy final state.",
+                "required_actions": [
+                    "Re-check latest log tail before concluding persistent failure.",
+                    "Separate transient/background maintenance from fatal root cause.",
+                ],
+            }
+
+        return None
+
+    def _review_report_quality(self, issue_description: str, report: dict) -> dict:
         """
-        Scan the log with ALL skill keywords in the ±5min window,
-        return ONLY a statistical summary — no actual log lines.
-        This lets the LLM see the keyword distribution and decide
-        which keywords to focus on in fetch_focused_logs.
+        Generic quality gate for final report, avoiding case-specific hardcoding.
+        Checks temporal consistency and contradiction risk against compact assembled evidence.
         """
-        print(f"   [Scan Overview] Scanning keyword stats for skill: '{skill_name}'...")
+        try:
+            evidence = self.get_assembled_log_snapshot(mode="compact")
+            evidence_tail = self._get_assembled_log_tail(max_lines=120)
+            deterministic = self._precheck_report_quality(issue_description, report, evidence_tail)
+            if deterministic:
+                return deterministic
+            report_text = json.dumps(report, ensure_ascii=False)
+            prompt = (
+                "You are a diagnostic quality auditor. Evaluate whether the proposed final report "
+                "is sufficiently supported by evidence and temporally consistent.\n"
+                "Do NOT require domain-specific keywords. Apply generic checks only:\n"
+                "1) Claims must be tied to explicit evidence.\n"
+                "2) Early failures must be checked against later state to avoid stale conclusions.\n"
+                "3) Detect state transitions (e.g., unavailable -> available, fail -> success). "
+                "If transition exists, avoid absolute failure conclusions.\n"
+                "4) If contradictions or evidence gaps exist, require uncertainty wording.\n"
+                "5) Prefer latest confirmed state over earlier transient state.\n"
+                "6) Before approving any persistent failure claim, verify latest log tail for success "
+                "signals of the same target (for example probe/connected-like evidence).\n"
+                "7) Treat explicit gate-status lines like '<feature> is ALLOWED/DISALLOWED/ENABLED/DISABLED' "
+                "as high-priority state indicators; prefer the latest state bit.\n"
+                "8) Apply hierarchy-of-truth conflict resolution: capability state > physical events > task intent > warning/error.\n"
+                "If a lower layer conflicts with a higher layer, reject absolute lower-layer conclusions.\n"
+                "9) Confirm that skill rules were used as investigative clues and validated/refuted by logs; "
+                "rules are not ground truth by themselves.\n"
+                "10) The report MUST directly answer the user's question in the first sentence.\n"
+                "11) Distinguish transient/background maintenance behavior from persistent fatal failures.\n"
+                "Return strict JSON only with this schema:\n"
+                "{\"approved\": true|false, \"reason\": \"...\", \"required_actions\": [\"...\"]}\n\n"
+                f"Issue:\n{issue_description}\n\n"
+                f"Evidence (compact assembled snapshot):\n{evidence}\n\n"
+                f"Latest evidence tail (high priority for final-state checks):\n{evidence_tail}\n\n"
+                f"Proposed report JSON:\n{report_text}"
+            )
+
+            response = self.client.chat.completions.create(
+                model=self.model,
+                messages=[{"role": "user", "content": prompt}],
+                temperature=0,
+                max_tokens=400,
+            )
+            raw = (response.choices[0].message.content or "").strip()
+            parsed = None
+            try:
+                parsed = json.loads(raw)
+            except Exception:
+                m = re.search(r'\{[\s\S]*\}', raw)
+                if m:
+                    parsed = json.loads(m.group(0))
+            if isinstance(parsed, dict) and "approved" in parsed:
+                parsed.setdefault("reason", "")
+                parsed.setdefault("required_actions", [])
+                if not isinstance(parsed.get("required_actions"), list):
+                    parsed["required_actions"] = [str(parsed.get("required_actions"))]
+                return parsed
+        except Exception as e:
+            print(f"[WARN] Report quality review skipped: {e}")
+
+        return {"approved": True, "reason": "quality gate fallback", "required_actions": []}
+
+    def _get_assembled_log_tail(self, max_lines: int = 120) -> str:
+        """Return the latest assembled-log lines for final-state verification."""
+        text = (self._assembled_log_text or "").strip()
+        if not text:
+            return "(no assembled log yet)"
+        lines = text.splitlines()
+        if len(lines) <= max_lines:
+            return "\n".join(lines)
+        return "\n".join(lines[-max_lines:])
+
+    # Generic outcome-signal keywords (not case-specific; covers common WiFi states).
+    _OUTCOME_SIGNAL_KEYWORDS = [
+        "PROBE_RX", "PROBE_TX", "CONNECTED", "ASSOC_RSP", "AUTH_RSP",
+        "RSSI", "RssiAdjustment", "scan is ALLOWED", "scan is DISALLOWED",
+        "ALLOWED", "DISALLOWED", "ENABLED", "DISABLED",
+        "Update regulatory", "NIC State",
+    ]
+
+    def _build_outcome_injection(self, tail_count: int = 2000, max_signals: int = 15) -> str:
+        """
+        Scan the raw log tail for outcome-level signals and return a compact
+        auto-injected summary so the model has end-state awareness from step 0.
+        Returns empty string if no raw log or no signals found.
+        """
+        if not self._raw_log_cache:
+            err = self._ensure_raw_log_cache()
+            if err or not self._raw_log_cache:
+                return ""
+
+        tail_lines = self._raw_log_cache[-tail_count:]
+        signals = []
+        for line in tail_lines:
+            line_str = str(line)
+            if any(kw in line_str for kw in self._OUTCOME_SIGNAL_KEYWORDS):
+                signals.append(line_str.strip())
+
+        if not signals:
+            return ""
+
+        # Keep latest N signals to avoid token bloat.
+        signals = signals[-max_signals:]
+        compact = []
+        for s in signals:
+            _, ts_display, msg = self._normalize_time_message(s)
+            compact.append(f"<{ts_display}> {msg}")
+
+        return (
+            "[AUTO-INJECTED: Final Physical State Evidence from log tail]\n"
+            "These are outcome-level signals from the end of the log. "
+            "Use them to verify whether features eventually succeeded before concluding persistent failure.\n"
+            + "\n".join(compact)
+        )
+
+    def _build_analyze_system_prompt(self, context_section: str) -> str:
+        """Build a concise, reusable system prompt for analyze_all."""
+        return (
+            f"{context_section}"
+                        "You are an Elite Wi-Fi Diagnostic Detective. Your mission is to reconcile the USER'S COMPLAINT with the LOG EVIDENCE.\n\n"
+                        "=== THE INVESTIGATIVE MINDSET (MANDATORY) ===\n"
+                        "1. RECONCILE THE GAP: If the user complains a feature (like 6GHz) is 'missing' or 'not scanning', but you see it CONNECTED at the end of the log, DO NOT just say 'it is normal'.\n"
+                        "   - You MUST explain the transition: Why was it missing initially? (e.g., Check 11d discovery, Country Code changes, or DSM/BIOS blocks at boot time).\n"
+                        "2. HIERARCHY OF TRUTH:\n"
+                        "   - [A] Physical Evidence (CONNECTED/RSSI) proves functional capacity.\n"
+                        "   - [B] Regulatory Evidence (MCC/DSM) explains initial visibility/scanning restrictions.\n"
+                        "3. IGNORE MAINTENANCE NOISE: If the link is stable, ignore RSSI adjustments (DCR-2260) and roaming decisions. They are NOT root causes.\n\n"
+                        "=== WORKFLOW ===\n"
+                        "Step 1: Inspect the INITIALIZATION phase (09:54:13 area) using `driver_dsm_analysis` and `connectivity_analysis` to find why the band was hidden.\n"
+                        "Step 2: Compare this with the FINAL phase (17:47:55 area) where it is connected.\n"
+                        "Step 3: Tell the STORY of how it went from 'Hidden' to 'Connected'.\n\n"
+                        "Your `markdown_summary` format (REQUIRED):\n"
+                        "  # Executive Summary\n"
+                        "  (Answer 'Why' it was missing initially, then state that it eventually connected successfully.)\n\n"
+                        "  | Aspect | Finding |\n"
+                        "  |--------|---------|\n"
+                        "  | Initial State | (Explain why it was not on scan list) |\n"
+                        "  | Final State | (Connected to 6GHz) |\n\n"
+                        "  ## Timeline\n"
+                        "  - T-Initial: Boot/Init phase (Explain regulatory state)\n"
+                        "  - T-Mid: 11d Discovery / MCC Update\n"
+                        "  - T-Final: Successful 6GHz Connection\n\n"
+                        "  ## Conclusion\n"
+                        "  (Confirm if this is a transient normal behavior or a real bug)"
+                    
+        )
+
+    def _invoke_tool(self, tool_name: str, args: dict) -> str:
+        """Centralized tool dispatch used by both chat and analyze flows."""
+        if tool_name == "fetch_filtered_logs":
+            return self.fetch_filtered_logs(args.get("skill_name", ""))
+
+        if tool_name == "query_log_detail":
+            anchor_text = args.get("anchor_text", "")
+            anchor_timestamp = args.get("anchor_timestamp", "")
+            context_span = self._resolve_context_span(
+                anchor_text,
+                args.get("context_span", self.DEFAULT_DETAIL_CONTEXT_SPAN),
+            )
+            max_hits = min(args.get("max_hits", 3), self.MAX_DETAIL_HITS)
+            return self.query_log_detail(
+                anchor_text=anchor_text,
+                anchor_timestamp=anchor_timestamp,
+                context_span=context_span,
+                max_hits=max_hits,
+            )
+
+        if tool_name == "get_assembled_log_snapshot":
+            mode = args.get("mode", "summary")
+            if mode == "full":
+                mode = "compact"
+            return self.get_assembled_log_snapshot(mode=mode)
+
+        if tool_name == "get_final_state_snapshot":
+            return self.get_final_state_snapshot(tail_lines=args.get("tail_lines", 120))
+
+        return f"Unknown tool: {tool_name}"
+
+    def _append_tool_message(self, messages: list, tool_call, content: str) -> None:
+        """Append a tool result message in the required protocol format."""
+        messages.append({
+            "role": "tool",
+            "tool_call_id": tool_call.id,
+            "name": tool_call.function.name,
+            "content": content,
+        })
+
+    def _handle_submit_tool_call(self, tool_call, args: dict, issue_description: str,
+                                 step_num: int, max_steps: int, messages: list,
+                                 pending_user_nudges: list, steps: list, emit_cb) -> Optional[dict]:
+        """Handle submit_final_report and return final response dict when accepted."""
+        review = self._review_report_quality(issue_description, args)
+        if not review.get("approved", True) and step_num < max_steps - 1:
+            required_actions = review.get("required_actions", []) or []
+            self._append_tool_message(
+                messages,
+                tool_call,
+                (
+                    "Rejected by quality gate. "
+                    f"Reason: {review.get('reason', 'insufficient support')}."
+                ),
+            )
+            emit_cb({
+                "role": "agent",
+                "content": (
+                    "🧪 **Quality gate:** report needs refinement before final submit.\n"
+                    f"Reason: {review.get('reason', 'insufficient support')}"
+                ),
+            })
+            pending_user_nudges.append({
+                "role": "user",
+                "content": (
+                    "Refine your diagnosis before submit_final_report. "
+                    f"Reason: {review.get('reason', '')}. "
+                    f"Required actions: {', '.join(str(x) for x in required_actions) if required_actions else 'perform temporal/contradiction validation with existing evidence.'}"
+                ),
+            })
+            return None
+
+        self._append_tool_message(messages, tool_call, "Final report accepted.")
+        emit_cb({"role": "agent", "content": "✅ **Conclusion Reached!** Generating report."})
+        self._inject_analysis_into_history(issue_description, steps, args)
+        return {
+            "type": "report",
+            "data": args,
+            "steps": steps,
+            "issue_time": (
+                self.issue_time.strftime('%m/%d/%Y %H:%M:%S')
+                if self.issue_time else None
+            ),
+        }
+
+    def _handle_fetch_tool_call(self, tool_call, args: dict, messages: list,
+                                pending_user_nudges: list, expert_rules_injected_skills: set,
+                                skill_call_counts: dict, no_progress_rounds: int, emit_cb) -> int:
+        """Handle fetch_filtered_logs tool call and return updated no_progress_rounds."""
+        skill_name = args.get("skill_name")
+        skill_call_counts[skill_name] = skill_call_counts.get(skill_name, 0) + 1
+        emit_cb({"role": "agent", "content": f"🔍 **Fetching Filtered Logs** for `{skill_name}`..."})
+
+        tool_result = self._invoke_tool("fetch_filtered_logs", {"skill_name": skill_name})
         skill = self.skills.get(skill_name)
-        if not skill:
-            return f"Error: Skill '{skill_name}' not found."
-        if not self.current_log_path:
-            return "Error: No log file loaded."
+        expert_rules = getattr(skill, 'expert_rules', '') if skill else ''
 
-        keywords = skill.keywords
-        if getattr(skill, 'tat_path', None) and Path(skill.tat_path).exists():
-            from utils.log_parser_preprocess import extract_enabled_keywords_from_filter_file
-            keywords = extract_enabled_keywords_from_filter_file(skill.tat_path)
+        line_count = tool_result.count('\n')
+        preview = tool_result[:500].replace('\n', ' ') + "..."
+        emit_cb({
+            "role": "tool",
+            "content": f"📄 **Logs Loaded** (`{skill_name}`, ~{line_count} lines):\n```\n{preview}\n```"
+        })
 
-        if not keywords:
-            return "No keywords available for this skill."
-
-        time_re = re.compile(r'(\d{2}/\d{2}/\d{4}-\d{2}:\d{2}:\d{2}\.\d{3})')
-        kw_counts_disconnect = {kw: 0 for kw in keywords}  # ±5 min around disconnect
-        kw_counts_init       = {kw: 0 for kw in keywords}  # boot → first 30 min of log
-        first_ts = last_ts = None
-        log_start_time: Optional[datetime] = None
-
-        # Window 1: ±5 min around the physical disconnect
-        if self.issue_time:
-            w1_start = self.issue_time - timedelta(minutes=5)
-            w1_end   = self.issue_time + timedelta(minutes=1)
+        if skill_name not in expert_rules_injected_skills:
+            unified_content = (
+                f"=== Expert Rules for {skill_name} ===\n{expert_rules}\n\n"
+                "=== Rule Usage Instruction ===\n"
+                "Use these expert rules as investigative clues.\n"
+                "For each important claim, map rule clue to concrete log evidence\n"
+                "and decide: supported, refuted, or uncertain.\n\n"
+                f"=== Skill-Focused Evidence ===\n{tool_result}"
+            )
+            expert_rules_injected_skills.add(skill_name)
         else:
-            w1_start = w1_end = None
+            unified_content = (
+                f"=== Expert Rules for {skill_name} ===\n"
+                "(already provided in earlier step; omitted to save tokens)\n\n"
+                "=== Rule Usage Instruction ===\n"
+                "Use previously provided rules as clues and validate with evidence.\n\n"
+                f"=== Skill-Focused Evidence ===\n{tool_result}"
+            )
 
-        try:
-            with open(self.current_log_path, 'r', encoding='utf-8', errors='ignore') as f:
-                for line in f:
-                    clean = line.strip()
-                    if not clean:
-                        continue
-                    m = time_re.search(clean)
-                    line_time: Optional[datetime] = None
-                    if m:
-                        if first_ts is None:
-                            first_ts = m.group(1)
-                            try:
-                                log_start_time = datetime.strptime(m.group(1), "%m/%d/%Y-%H:%M:%S.%f")
-                            except ValueError:
-                                pass
-                        last_ts = m.group(1)
-                        try:
-                            line_time = datetime.strptime(m.group(1), "%m/%d/%Y-%H:%M:%S.%f")
-                        except ValueError:
-                            pass
-
-                    # Window 2: boot → log_start + 30 min (connection init period)
-                    in_init = (
-                        log_start_time is not None and line_time is not None and
-                        line_time <= log_start_time + timedelta(minutes=30)
-                    )
-                    # Window 1: ±5 min around disconnect
-                    in_disconnect = (
-                        w1_start is not None and line_time is not None and
-                        w1_start <= line_time <= w1_end
-                    )
-
-                    for kw in keywords:
-                        if re.search(re.escape(kw), clean, re.IGNORECASE):
-                            if in_disconnect:
-                                kw_counts_disconnect[kw] += 1
-                            if in_init:
-                                kw_counts_init[kw] += 1
-                            break  # count each line once per window check
-        except FileNotFoundError:
-            return f"Error: Log file not found at {self.current_log_path}"
-
-        total_disconnect = sum(kw_counts_disconnect.values())
-        total_init       = sum(kw_counts_init.values())
-
-        # Build summary — two sections so LLM understands where events live
-        w1_label = (
-            f"{w1_start.strftime('%H:%M:%S')} ~ {w1_end.strftime('%H:%M:%S')}"
-            if w1_start else "full log"
-        )
-        init_end_label = (
-            f"{(log_start_time + timedelta(minutes=30)).strftime('%H:%M:%S')}"
-            if log_start_time else "N/A"
-        )
-        summary_lines = [
-            f"=== Skill: {skill_name} — Keyword Scan Overview ===",
-            f"Log span: {first_ts or 'N/A'} → {last_ts or 'N/A'}",
-            f"",
-            f"── Window A: Near-Disconnect ({w1_label}) ── {total_disconnect} matched lines",
-        ]
-        for kw, cnt in sorted(kw_counts_disconnect.items(), key=lambda x: -x[1]):
-            if cnt:
-                bar = "█" * min(cnt // 5, 30)
-                summary_lines.append(f"  {kw:30s} → {cnt:5d}  {bar}")
-        summary_lines.append(f"")
-        summary_lines.append(
-            f"── Window B: Connection-Init (boot ~ {init_end_label}) ── {total_init} matched lines"
-        )
-        for kw, cnt in sorted(kw_counts_init.items(), key=lambda x: -x[1]):
-            if cnt:
-                bar = "█" * min(cnt // 5, 30)
-                summary_lines.append(f"  {kw:30s} → {cnt:5d}  {bar}")
-
-        summary_lines.append(f"\n=== Expert Rules ===")
-        summary_lines.append(skill.expert_rules)
-        summary_lines.append(f"\n=== Instruction ===")
-        summary_lines.append(
-            "Use Window A keywords to diagnose the disconnect event. "
-            "Use Window B keywords (if any appear there but NOT in Window A) as clues "
-            "for root causes set during connection init — call fetch_focused_logs with "
-            "those keywords and seconds_before=7200 to retrieve the full init context."
+        self._append_tool_message(
+            messages,
+            tool_call,
+            self._clip_for_prompt(unified_content, limit=900),
         )
 
-        return "\n".join(summary_lines)
+        if "New lines merged this round: 0" in tool_result or "Skill cache hit:" in tool_result:
+            no_progress_rounds += 1
+        else:
+            no_progress_rounds = 0
 
-    # ------------------------------------------------------------------
-    # Tool 2: fetch_focused_logs — LLM specifies which keywords & time range
-    # ------------------------------------------------------------------
-    def fetch_focused_logs(self, skill_name: str, focus_keywords: List[str],
-                           seconds_before: int = 60, seconds_after: int = 10) -> str:
-        """
-        Fetch actual log lines using ONLY the keywords the LLM chose,
-        within a narrow time window the LLM specified.
-        This mimics how an engineer works: find the anchor, look back for cause.
-        """
-        print(f"   [Focused Fetch] skill='{skill_name}', keywords={focus_keywords}, "
-              f"window=-{seconds_before}s/+{seconds_after}s")
-        skill = self.skills.get(skill_name)
-        if not skill:
-            return f"Error: Skill '{skill_name}' not found."
-        if not self.current_log_path:
-            return "Error: No log file loaded."
-        if not focus_keywords:
-            return "Error: No focus_keywords provided. Specify which keywords to search for."
+        if skill_call_counts.get(skill_name, 0) >= 3:
+            pending_user_nudges.append({
+                "role": "user",
+                "content": (
+                    "Avoid repeatedly querying the same evidence view unless it adds new information. "
+                    "Cross-check with another perspective or synthesize current findings."
+                ),
+            })
+        if no_progress_rounds >= 2:
+            pending_user_nudges.append({
+                "role": "user",
+                "content": (
+                    "Recent tool calls did not add new evidence. "
+                    "Prioritize contradiction checks, timeline reconciliation, and final synthesis."
+                ),
+            })
+        return no_progress_rounds
 
-        pattern = re.compile("|".join(map(re.escape, focus_keywords)), re.IGNORECASE)
-        filtered_lines = []
-        buffer = deque(maxlen=2)
-        after_counter = 0
-
-        time_filter = self.issue_time is not None
-        if time_filter:
-            start_time = self.issue_time - timedelta(seconds=seconds_before)
-            end_time = self.issue_time + timedelta(seconds=seconds_after)
-            print(f"   [Time Filter] {start_time.strftime('%H:%M:%S')} to {end_time.strftime('%H:%M:%S')}")
-
-        try:
-            with open(self.current_log_path, 'r', encoding='utf-8', errors='ignore') as f:
-                for line_num, line in enumerate(f, 1):
-                    clean = line.strip()
-                    if not clean:
-                        continue
-                    if time_filter:
-                        line_time = self._parse_log_timestamp(clean)
-                        if line_time:
-                            if line_time < start_time:
-                                continue
-                            if line_time > end_time:
-                                break
-                    if pattern.search(clean):
-                        while buffer:
-                            filtered_lines.append(buffer.popleft())
-                        filtered_lines.append(f"[Line {line_num}] {clean}")
-                        after_counter = 2
-                    else:
-                        if after_counter > 0:
-                            filtered_lines.append(f"[Line {line_num}] {clean}")
-                            after_counter -= 1
-                        else:
-                            buffer.append(f"[Line {line_num}] {clean}")
-        except FileNotFoundError:
-            return f"Error: Log file not found at {self.current_log_path}"
-
-        unique = list(dict.fromkeys(filtered_lines))
-
-        if not unique:
-            return (f"=== Expert Rules ===\n{skill.expert_rules}\n\n"
-                    f"=== Focused Logs ({', '.join(focus_keywords)}) ===\n"
-                    f"No matching logs found in the specified time window.")
-
-        # Compress and apply budget
-        compressed = self._compress_repetitive_lines(unique)
-        TOTAL_BUDGET = 25000
-        expert_str = f"=== Expert Rules ===\n{skill.expert_rules}\n\n"
-        logs_budget = TOTAL_BUDGET - len(expert_str) - 200
-        logs_str = "\n".join(compressed)
-        if len(logs_str) > logs_budget:
-            logs_str = logs_str[:logs_budget] + "\n... (truncated)"
-
-        return (f"{expert_str}"
-                f"=== Focused Logs ({', '.join(focus_keywords)}, "
-                f"-{seconds_before}s/+{seconds_after}s) ===\n"
-                f"{len(unique)} lines matched\n\n{logs_str}")
-
-    @staticmethod
-    def _compress_simple(lines: List[str], similarity_threshold: int = 5) -> List[str]:
-        """
-        Simple compression: Collapse consecutive lines with same pattern.
-        Does NOT lose any critical logs — just compresses repetitive noise.
-        """
-        if not lines or len(lines) < similarity_threshold:
-            return lines
-
-        # Pattern to extract the meaningful part (strip line number and timestamp)
-        PREFIX_PATTERN = re.compile(r'^\[Line \d+\]\s*\d{2}/\d{2}/\d{4}-\d{2}:\d{2}:\d{2}\.\d{3}\s*')
-        
-        def get_core(line: str) -> str:
-            """Extract core message by removing line number and timestamp"""
-            return PREFIX_PATTERN.sub('', line)
-        
-        result = []
-        i = 0
-        while i < len(lines):
-            current_core = re.sub(r'-?\d+', '#', get_core(lines[i]))[:80]  # Normalize numbers
-            
-            # Count consecutive lines with same pattern
-            j = i + 1
-            while j < len(lines):
-                next_core = re.sub(r'-?\d+', '#', get_core(lines[j]))[:80]
-                if next_core != current_core:
-                    break
-                j += 1
-            
-            run_length = j - i
-            if run_length >= similarity_threshold:
-                # Collapse: show first, middle hint, last
-                result.append(lines[i])
-                result.append(f"    ... [×{run_length-2} similar] ...")
-                result.append(lines[j-1])
-                i = j
-            else:
-                # Keep all if not many repeats
-                result.extend(lines[i:j])
-                i = j
-        
-        return result
-
-    def _scan_log(self, pattern: re.Pattern, start_time: Optional[datetime],
-                  end_time: Optional[datetime]) -> list:
-        """Scan the log file for keyword matches within a time window."""
-        filtered_lines = []
-        buffer = deque(maxlen=2)
-        after_counter = 0
-
-        try:
-            with open(self.current_log_path, 'r', encoding='utf-8', errors='ignore') as f:
-                for line_num, line in enumerate(f, 1):
-                    clean_line = line.strip()
-                    if not clean_line:
-                        continue
-
-                    if start_time or end_time:
-                        line_time = self._parse_log_timestamp(clean_line)
-                        if line_time:
-                            if start_time and line_time < start_time:
-                                continue
-                            if end_time and line_time > end_time:
-                                break
-
-                    if pattern.search(clean_line):
-                        while buffer:
-                            filtered_lines.append(buffer.popleft())
-                        filtered_lines.append(f"[Line {line_num}] {clean_line}")
-                        after_counter = 2
-                    else:
-                        if after_counter > 0:
-                            filtered_lines.append(f"[Line {line_num}] {clean_line}")
-                            after_counter -= 1
-                        else:
-                            buffer.append(f"[Line {line_num}] {clean_line}")
-        except FileNotFoundError:
-            return [f"Error: Log file not found at {self.current_log_path}"]
-
-        return list(dict.fromkeys(filtered_lines))
-
-    @staticmethod
-    def _compress_repetitive_lines(lines: List[str], similarity_threshold: int = 3) -> List[str]:
-        """
-        Detect consecutive lines that share the same 'signature' and collapse
-        them into a summary line.  This prevents verbose roaming/scan loops
-        from eating the entire token budget.
-
-        CRITICAL: Lines containing state-change keywords (e.g., 'crossed',
-        'threshold', 'DISCONNECT', 'DEAUTH') are NEVER compressed — they
-        represent key diagnostic events that must be visible to the LLM.
-        """
-        if not lines:
-            return lines
-
-        # Keywords that mark a line as diagnostically critical — never compress
-        CRITICAL_KEYWORDS = re.compile(
-            r'crossed the|DISCONNECT|DEAUTH|DEAUTH_REQ|TERMINATION|'
-            r'CONNECTED - to|TASK_DISCONNECT|RESUME FLOW|for the first time',
-            re.IGNORECASE
+    def _handle_snapshot_tool_call(self, tool_call, args: dict, messages: list, emit_cb) -> None:
+        """Handle get_assembled_log_snapshot tool call."""
+        mode = args.get("mode", "summary")
+        if mode == "full":
+            mode = "compact"
+        emit_cb({"role": "agent", "content": f"🗂️ **Requesting assembled snapshot** (mode={mode})"})
+        tool_result = self._invoke_tool("get_assembled_log_snapshot", {"mode": mode})
+        emit_cb({
+            "role": "tool",
+            "content": f"📄 **Assembled Snapshot Loaded**:\n```\n{tool_result[:500]}\n```"
+        })
+        self._append_tool_message(
+            messages,
+            tool_call,
+            self._clip_for_prompt(tool_result, limit=900),
         )
 
-        SIG_RE = re.compile(
-            r'^\[Line \d+\]\s*'
-            r'\d{2}/\d{2}/\d{4}-'
-            r'\d{2}:\d{2}:\d{2}\.\d{3}\s*'
+    def _handle_final_state_tool_call(self, tool_call, args: dict, messages: list, emit_cb) -> None:
+        """Handle get_final_state_snapshot tool call."""
+        tail_lines = args.get("tail_lines", 120)
+        emit_cb({
+            "role": "agent",
+            "content": f"🧭 **Requesting final-state snapshot** (tail_lines={tail_lines})"
+        })
+        tool_result = self._invoke_tool("get_final_state_snapshot", {"tail_lines": tail_lines})
+        emit_cb({
+            "role": "tool",
+            "content": f"📄 **Final-State Snapshot Loaded**:\n```\n{tool_result[:500]}\n```"
+        })
+        self._append_tool_message(
+            messages,
+            tool_call,
+            self._clip_for_prompt(tool_result, limit=900),
         )
-        TS_RE = re.compile(r'(\d{2}/\d{2}/\d{4}-\d{2}:\d{2}:\d{2})')
 
-        def get_sig(line: str) -> str:
-            """
-            Return a normalized signature for compression comparison.
-            Strips timestamp/line-number prefix and replaces variable numbers
-            with '#' so lines like 'rssi changed to -53' and 'rssi changed to -54'
-            are treated as the same pattern.
-            """
-            stripped = SIG_RE.sub('', line).strip()
-            # Normalize numbers (including negative) to '#' for comparison
-            normalized = re.sub(r'-?\d+', '#', stripped)
-            return normalized[:100]
+    def _handle_detail_tool_call(self, tool_call, args: dict, messages: list,
+                                 pending_user_nudges: list, no_match_anchor_counts: dict,
+                                 detail_call_counts: dict, emit_cb) -> None:
+        """Handle query_log_detail tool call and anti-loop nudges."""
+        anchor_text = args.get("anchor_text", "")
+        anchor_timestamp = args.get("anchor_timestamp", "")
+        detail_sig = f"{anchor_text.lower()}|{anchor_timestamp}"
+        detail_call_counts[detail_sig] = detail_call_counts.get(detail_sig, 0) + 1
+        context_span = self._resolve_context_span(anchor_text, args.get("context_span", self.DEFAULT_DETAIL_CONTEXT_SPAN))
+        max_hits = min(args.get("max_hits", 3), self.MAX_DETAIL_HITS)
+        emit_cb({
+            "role": "agent",
+            "content": (
+                "🔎 **Querying anchor context** "
+                f"(text='{anchor_text}', ts='{anchor_timestamp}')"
+            )
+        })
 
-        def get_ts(line: str) -> str:
-            m = TS_RE.search(line)
-            return m.group(1) if m else ""
+        tool_result = self._invoke_tool(
+            "query_log_detail",
+            {
+                "anchor_text": anchor_text,
+                "anchor_timestamp": anchor_timestamp,
+                "context_span": context_span,
+                "max_hits": max_hits,
+            },
+        )
 
-        def is_critical(line: str) -> bool:
-            """True if this line contains a state-change keyword that must not be compressed."""
-            return bool(CRITICAL_KEYWORDS.search(line))
+        query_sig = f"{anchor_text.lower()}|{anchor_timestamp}"
+        if "No matching anchor found" in tool_result:
+            no_match_anchor_counts[query_sig] = no_match_anchor_counts.get(query_sig, 0) + 1
+            if no_match_anchor_counts[query_sig] >= 2:
+                pending_user_nudges.append({
+                    "role": "user",
+                    "content": (
+                        "You repeated an anchor query with no matches. "
+                        "Switch to a different anchor or synthesize conclusions from existing evidence; "
+                        "do not loop on the same missing anchor."
+                    ),
+                })
+        if detail_call_counts.get(detail_sig, 0) >= 3:
+            pending_user_nudges.append({
+                "role": "user",
+                "content": (
+                    "Detail queries are repeating similar anchors. "
+                    "Move from retrieval to judgment: reconcile timeline and contradictions, then conclude."
+                ),
+            })
 
-        result = []
-        i = 0
-        while i < len(lines):
-            # Never compress a critical line
-            if is_critical(lines[i]):
-                result.append(lines[i])
-                i += 1
-                continue
-
-            sig = get_sig(lines[i])
-            if len(sig) < 10:
-                result.append(lines[i])
-                i += 1
-                continue
-
-            # Count consecutive non-critical lines that share this signature
-            j = i + 1
-            while j < len(lines) and not is_critical(lines[j]) and get_sig(lines[j]) == sig:
-                j += 1
-
-            run_length = j - i
-            if run_length >= similarity_threshold:
-                first_ts = get_ts(lines[i])
-                last_ts = get_ts(lines[j - 1])
-                label = sig[:60].rstrip()
-                result.append(lines[i])
-                result.append(
-                    f"    ... [×{run_length - 2} similar entries: "
-                    f"`{label}`, {first_ts} → {last_ts}] ..."
-                )
-                result.append(lines[j - 1])
-            else:
-                result.extend(lines[i:j])
-            i = j
-
-        return result
+        emit_cb({
+            "role": "tool",
+            "content": f"📄 **Detail Loaded**:\n```\n{tool_result}\n```"
+        })
+        self._append_tool_message(
+            messages,
+            tool_call,
+            self._clip_for_prompt(tool_result, limit=900),
+        )
 
     # ------------------------------------------------------------------
     # Analyze ALL skills — Agentic Reasoning Loop
     # ------------------------------------------------------------------
     def analyze_all(self, issue_description: str = "Perform full log analysis",
                      step_callback=None, issue_context: dict = None) -> dict:
-        """
-        Agentic loop: LLM autonomously decides which skills to invoke,
-        gathers evidence step by step, then produces a structured report.
-        
-        Args:
-            issue_description: concise problem statement (used for time extraction + skill selection)
-            step_callback: optional callable(step_dict) — called immediately
-                           each time a new step is produced, enabling real-time
-                           streaming to the frontend via SSE.
-            issue_context: optional dict with complete background context
-                          (case_nbr, subject, description, issue_type, ai_summary)
-                          injected into system prompt for LLM to use when writing reports
-        
-        Returns dict with 'type', 'data' (report), and 'steps' (decision trail).
-        """
-        # Store context for potential use by submit_final_report
         self.issue_context = issue_context or {}
         steps = []
 
@@ -1121,181 +1812,68 @@ class WifiLogAgentSystem:
             steps.append(step)
             if step_callback:
                 step_callback(step)
+                
         _emit({
             "role": "system",
-            "content": f"🎯 **Starting Full Multi-Skill Agent Analysis**\n"
+            "content": f"🎯 **Starting Autonomous Skill Agent Analysis**\n"
                        f"**Issue:** {issue_description}\n"
                        f"**Log:** `{self.current_log_path}`"
         })
 
-        # Step 1: Extract issue time using LLM (user-reported time)
-        user_reported_time = self._extract_issue_time(issue_description)
+        # Step 1: Extract issue time from description (if present)
+        self.issue_time = self._extract_issue_time(issue_description)
 
-        # Step 1b: Detect the PHYSICAL disconnect time from the log file
-        # (e.g. beacon loss at 11:25:49 vs browser disconnect at 11:26:25)
-        physical_time = self._detect_physical_disconnect_time(user_reported_time)
-
-        # Use physical time for filtering if found; fall back to user time
-        issue_time = physical_time or user_reported_time
-        self.issue_time = issue_time
-        # Store physical_disconnect_time for report display
-        self.physical_disconnect_time = physical_time
-
-        if physical_time and user_reported_time:
+        if self.issue_time:
             _emit({
                 "role": "agent",
-                "content": (
-                    f"🕒 **Physical Disconnect Time:** `{physical_time.strftime('%m/%d/%Y %H:%M:%S')}`\n"
-                    f"(User-reported: `{user_reported_time.strftime('%m/%d/%Y %H:%M:%S')}`, "
-                    f"delta: {abs((user_reported_time - physical_time).total_seconds()):.0f}s)\n"
-                    f"Log filtering will focus ±5 minutes around the physical event."
-                )
-            })
-        elif physical_time:
-            _emit({
-                "role": "agent",
-                "content": f"🕒 **Physical Disconnect Time:** `{physical_time.strftime('%m/%d/%Y %H:%M:%S')}`\n"
-                           f"Log filtering will focus ±5 minutes around this time."
-            })
-        elif user_reported_time:
-            _emit({
-                "role": "agent",
-                "content": f"🕒 **User-Reported Time:** `{user_reported_time.strftime('%m/%d/%Y %H:%M:%S')}`\n"
-                           f"(No physical disconnect event found in log near this time.)\n"
-                           f"Log filtering will focus ±5 minutes around this time."
-            })
-        else:
-            _emit({
-                "role": "agent",
-                "content": "⚠️ Could not extract a specific time from the description. "
-                           "Will scan the entire log file."
+                "content": f"🕒 **Issue Time Extracted:** `{self.issue_time.strftime('%m/%d/%Y %H:%M:%S')}`\n"
+                           f"Agent will look for events around this timestamp in filtered logs."
             })
 
-        # Step 2: Build tools and system prompt
         tools = self._build_tools()
-        
-        # Inject complete context as background data for LLM's report writing
+
+        # Auto-inject final outcome evidence so the model sees end-state before reasoning
+        outcome_inject = self._build_outcome_injection()
+
+        # Inject complete context
         context_section = ""
         if issue_context:
-            case_nbr = issue_context.get("case_nbr", "")
-            subject = issue_context.get("subject", "")
-            raw_desc = issue_context.get("description", "")
-            issue_type = issue_context.get("issue_type", "")
-            ai_summary = issue_context.get("ai_summary", "")
-            
             context_parts = []
-            if case_nbr:
-                context_parts.append(f"**Case Number:** {case_nbr}")
-            if issue_type:
-                context_parts.append(f"**Issue Type:** {issue_type}")
-            if subject:
-                context_parts.append(f"**Subject:** {subject}")
-            if ai_summary:
-                context_parts.append(f"**Quick Summary:** {ai_summary}")
-            if raw_desc and raw_desc != (subject or ""):
-                # Only include if different from subject
-                desc_preview = raw_desc[:300] + ("..." if len(raw_desc) > 300 else "")
-                context_parts.append(f"**Full Description:** {desc_preview}")
-            
+            if issue_context.get("case_nbr"): context_parts.append(f"**Case Number:** {issue_context.get('case_nbr')}")
+            if issue_context.get("issue_type"): context_parts.append(f"**Issue Type:** {issue_context.get('issue_type')}")
+            if issue_context.get("subject"): context_parts.append(f"**Subject:** {issue_context.get('subject')}")
             if context_parts:
-                context_section = "\n=== BACKGROUND CONTEXT (for report writing) ===\n" + "\n".join(context_parts) + "\n\n"
+                context_section = "\n=== BACKGROUND CONTEXT ===\n" + "\n".join(context_parts) + "\n\n"
 
-        # Build Step 4 instruction from Issue_summary.Symptom (via issue_context["ai_summary"])
-        # directly — no roundtrip through description string.
-        symptom_text = (issue_context or {}).get("ai_summary", "").strip()
-        if symptom_text:
-            step4_instruction = (
-                f"  Step 4 — 🕵️ HYPOTHESIS TESTING (Context-Driven 2nd Pass):\n"
-                f"           Symptom context: \"{symptom_text[:300]}\"\n"
-                "           Review the BACKGROUND CONTEXT above. If it mentions specific anomalies,\n"
-                "           tools, or configuration changes, those are your PRIMARY SUSPECTS.\n"
-                "           You MUST call `fetch_focused_logs` a SECOND TIME with these rules:\n"
-                "           a) Use the EXACT anomaly/tool names from context as `focus_keywords`.\n"
-                "              DO NOT reuse symptom keywords (MISSED BEACONS, DEAUTH, etc.).\n"
-                "           b) Set `seconds_before=7200` (2 hours) to catch setup-stage events.\n"
-                "           If context has NO specific tools/anomalies, SKIP to Step 5.\n"
-            )
-        else:
-            step4_instruction = "  Step 4 — No symptom context found. SKIP directly to Step 5.\n"
-
+        # Flexible guidelines for autonomous reasoning with evidence verification
         messages = [
             {
                 "role": "system",
-                "content": (
-                    f"{context_section}"
-                    "You are an Elite Wi-Fi Diagnostic Detective. Your GOAL: Find the REAL Root Cause based on evidence.\n"
-                    f"Available skills: {', '.join(self.skills.keys())}.\n\n"
-                    "OPTIMIZED WORKFLOW (STRICT TWO-PHASE INVESTIGATION):\n"
-                    "1. Call `scan_overview` on ONLY the 1 most relevant skill.\n"
-                    "2. PHASE 1 (SYMPTOM LOCALIZATION): \n"
-                    "   - Identify the exact timestamp when the reported failure occurred in the logs.\n"
-                    "   - Call `fetch_focused_logs` using keywords derived from the immediate physical symptoms.\n"
-                    "3. PHASE 2 (SOURCE RETROSPECTIVE - MANDATORY):\n"
-                    "   - Analyze the 'User Issue' below. Identify any specific software tools, configuration parameters, or anomaly names mentioned as context.\n"
-                    "   - You MUST execute a SECOND `fetch_focused_logs` specifically to find the 'Trigger Event'.\n"
-                    "   - 🛑 KEYWORD RULE: Use the unique terms extracted from the 'User Issue' as your keywords. DO NOT reuse physical symptom keywords from Phase 1.\n"
-                    "   - 🛑 TIME JUMP: Always set `seconds_before=7200` (2 hours) for this fetch to capture connection-stage or setup events that occurred long before the failure.\n"
-                    "4. Call `query_log_detail` on the transition point between the Trigger Event and the Physical Failure.\n"
-                    "5. 🧠 CAUSAL SYNTHESIS:\n"
-                    "   - You MUST explain the chain of causality: How did the [Trigger Event] lead to the [Physical Failure]?\n"
-                    "   - State the root cause in your own words based on raw evidence, not just the provided expert rules.\n"
-                    "6. ⚠️ DOMAIN ACCURACY: Ensure your analysis adheres to the physical characteristics of the frequency band (2.4GHz/5GHz/6GHz) currently in use.\n"
-                    "7. Call `submit_final_report` to conclude.\n\n"
-                    "CRITICAL CONSTRAINTS:\n"
-                    "- Max step 8.\n"
-                    "- 🛑 NO REPETITION: Do not fetch the same data twice. If Phase 1 keywords are found in Phase 2, ignore them.\n"
-                    "- 🛑 DO NOT SCROLL: You may call `query_log_detail` strictly ONLY ONCE. Set `context_lines=30` to see the full escalation chain in one shot.\n"
-                    "- 🛑 IMMEDIATELY call `submit_final_report` after your detail query. Do not over-analyze.\n\n"
-                    "Your `markdown_summary` format (REQUIRED):\n"
-                    "  # Executive Summary\n  (1-2 sentences about the true root cause found in Phase 2)\n\n"
-                    "  | Aspect | Finding |\n"
-                    "  |--------|---------|\n"
-                    "  | Signal | ... |\n"
-                    "  (Markdown table with data gaps)\n\n"
-                    "  ## Timeline\n"
-                    "  - T-Ns: Trigger Event (The Source)\n"
-                    "  - T+0s: Physical Failure begins\n"
-                    "  - T+Ns: Final Termination\n\n"
-                    "  ## Recommendations\n"
-                    "  **P0 (Urgent):** ...\n"
-                    "  **P1 (Important):** ...\n"
-                    "  **P2 (Nice-to-have):** ..."
-                )
+                "content": self._build_analyze_system_prompt(context_section)
             },
-            {"role": "user", "content": f"User Issue: {issue_description}"}
+            {"role": "user", "content": f"User Issue: {issue_description}"},
         ]
-        max_steps = 8
-        # Global accumulated log: merge all focused fetches, dedup by line number
-        global_log_lines = []  # list of "[Line XXXXX] ..." strings
-        global_log_seen = set()  # track line numbers already added
 
-        def _merge_into_global(tool_output: str) -> str:
-            """
-            Extract log lines from tool output, merge new ones into global_log,
-            return the updated global log as a single string for LLM context.
-            """
-            new_count = 0
-            for line in tool_output.split('\n'):
-                # Only merge actual log lines (start with [Line)
-                if line.startswith('[Line '):
-                    # Extract line number for dedup
-                    m = re.match(r'\[Line (\d+)\]', line)
-                    if m:
-                        ln = m.group(1)
-                        if ln not in global_log_seen:
-                            global_log_seen.add(ln)
-                            global_log_lines.append(line)
-                            new_count += 1
-            # Sort by line number for chronological order
-            global_log_lines.sort(key=lambda l: int(re.match(r'\[Line (\d+)\]', l).group(1)) if re.match(r'\[Line (\d+)\]', l) else 0)
-            return f"[Global Log: {len(global_log_lines)} unique lines, {new_count} new from this fetch]"
+        # Inject auto-extracted outcome evidence so the model has end-state awareness from the start.
+        if outcome_inject:
+            messages.append({
+                "role": "user",
+                "content": outcome_inject,
+            })
+        
+        max_steps = 10
+        expert_rules_injected_skills = set()
+        no_match_anchor_counts = {}
+        skill_call_counts = {}
+        detail_call_counts = {}
+        no_progress_rounds = 0
 
         # Step 3: Agentic reasoning loop
         for step_num in range(max_steps):
+            pending_user_nudges = []
             _emit({
                 "role": "agent",
-                "content": f"💭 **Reasoning Step {step_num + 1}/{max_steps}** — "
-                           f"Sending context to LLM..."
+                "content": f"💭 **Reasoning Step {step_num + 1}/{max_steps}** — Thinking..."
             })
 
             try:
@@ -1308,196 +1886,229 @@ class WifiLogAgentSystem:
                 )
             except Exception as e:
                 _emit({"role": "error", "content": f"❌ LLM API Error: {e}"})
-                return {
-                    "type": "error",
-                    "data": {"error": str(e)},
-                    "steps": steps,
-                }
+                return {"type": "error", "data": {"error": str(e)}, "steps": steps}
 
             message = response.choices[0].message
             messages.append(message)
 
-            # If LLM returned plain text (thinking aloud), record it FULLY (no truncation)
-            if message.content:
-                _emit({
-                    "role": "agent",
-                    "content": f"🧠 **LLM Reasoning:**\n{message.content[:500]}"
+            # Near the end, aggressively steer the model to conclude.
+            if step_num >= max_steps - self.FORCE_CONCLUDE_LAST_N_STEPS:
+                pending_user_nudges.append({
+                    "role": "user",
+                    "content": (
+                        "You are in final steps. Stop gathering broad new evidence and call "
+                        "submit_final_report now using current evidence. If uncertain, state "
+                        "uncertainties explicitly in the report."
+                    ),
                 })
+
+            # Display token usage for this step
+            usage = getattr(response, 'usage', None)
+            if usage:
+                _emit({
+                    "role": "token_usage",
+                    "content": (
+                        f"📊 **Token Usage (Step {step_num + 1}):** "
+                        f"Prompt: {usage.prompt_tokens} | "
+                        f"Completion: {usage.completion_tokens} | "
+                        f"Total: {usage.total_tokens}"
+                    )
+                })
+                if usage.total_tokens > self.MAX_TOKENS_PER_STEP:
+                    _emit({
+                        "role": "error",
+                        "content": (
+                            "🛑 **Stopped:** per-step token limit exceeded. "
+                            f"Step {step_num + 1} used {usage.total_tokens} tokens "
+                            f"(limit: {self.MAX_TOKENS_PER_STEP})."
+                        ),
+                    })
+                    return {
+                        "type": "partial_report",
+                        "data": {
+                            "root_cause_summary": "Analysis stopped due to per-step token limit.",
+                            "confidence_score": 20,
+                            "recommended_actions": [
+                                "Narrow the issue description scope",
+                                "Reduce context or split analysis into smaller queries",
+                            ],
+                            "involved_skills": [],
+                            "markdown_summary": (
+                                "## Partial Diagnosis\n"
+                                "Analysis stopped because a single reasoning step exceeded "
+                                "the token limit."
+                            ),
+                        },
+                        "steps": steps,
+                        "issue_time": (
+                            self.issue_time.strftime('%m/%d/%Y %H:%M:%S')
+                            if self.issue_time else None
+                        ),
+                    }
+                elif usage.total_tokens > int(self.MAX_TOKENS_PER_STEP * 0.85):
+                    # Nudge the model to converge before hitting hard token stop.
+                    pending_user_nudges.append({
+                        "role": "user",
+                        "content": (
+                            "Token budget is getting tight. "
+                            "Avoid broad new searches; use current evidence and submit_final_report soon."
+                        ),
+                    })
+
+            if message.content:
+                _emit({"role": "agent", "content": f"🧠 **Reasoning:**\n{message.content[:500]}"})
 
             if message.tool_calls:
-                for tool_call in message.tool_calls:
-                    args = json.loads(tool_call.function.arguments)
+                original_tool_calls = list(message.tool_calls)
+                tool_calls = list(original_tool_calls)
+
+                # Limit tool fan-out so a single step does not bloat prompt history.
+                max_calls_this_step = self.MAX_TOOL_CALLS_PER_STEP
+                if step_num >= max_steps - self.FORCE_CONCLUDE_LAST_N_STEPS:
+                    max_calls_this_step = 1
+                if len(tool_calls) > max_calls_this_step:
+                    _emit({
+                        "role": "agent",
+                        "content": (
+                            f"🧭 **Tool cap applied:** executing {max_calls_this_step}/"
+                            f"{len(tool_calls)} tool calls this step to preserve token budget."
+                        ),
+                    })
+                    tool_calls = tool_calls[:max_calls_this_step]
+                skipped_tool_calls = original_tool_calls[len(tool_calls):]
+
+                # In final steps, only allow direct conclusion submission.
+                if step_num >= max_steps - self.FORCE_CONCLUDE_LAST_N_STEPS:
+                    has_submit = any(tc.function.name == "submit_final_report" for tc in tool_calls)
+                    if not has_submit:
+                        # Return explicit tool results for all announced tool calls,
+                        # then nudge the model in the next user turn.
+                        for skipped_call in original_tool_calls:
+                            self._append_tool_message(
+                                messages,
+                                skipped_call,
+                                (
+                                    "Skipped in final-step budget mode. "
+                                    "Call submit_final_report immediately using existing evidence."
+                                ),
+                            )
+                        pending_user_nudges.append({
+                            "role": "user",
+                            "content": (
+                                "Final-step budget mode: do not call more diagnostic tools. "
+                                "Call submit_final_report immediately using existing evidence."
+                            ),
+                        })
+                        messages.extend(pending_user_nudges)
+                        continue
+
+                # Return explicit tool results for capped/skipped tool calls.
+                for skipped_call in skipped_tool_calls:
+                    self._append_tool_message(
+                        messages,
+                        skipped_call,
+                        "Skipped due to per-step tool-call cap; refine and retry if needed.",
+                    )
+
+                for tool_call in tool_calls:
+                    try:
+                        args = json.loads(tool_call.function.arguments)
+                    except Exception as e:
+                        self._append_tool_message(
+                            messages,
+                            tool_call,
+                            f"Invalid tool arguments: {e}",
+                        )
+                        continue
 
                     if tool_call.function.name == "submit_final_report":
-                        _emit({
-                            "role": "agent",
-                            "content": "✅ **Conclusion Reached!** Generating final structured report."
-                        })
-                        # Inject analysis results into conversation_history
-                        # so subsequent chat() calls have full context
-                        self._inject_analysis_into_history(
-                            issue_description, steps, args
+                        final_result = self._handle_submit_tool_call(
+                            tool_call=tool_call,
+                            args=args,
+                            issue_description=issue_description,
+                            step_num=step_num,
+                            max_steps=max_steps,
+                            messages=messages,
+                            pending_user_nudges=pending_user_nudges,
+                            steps=steps,
+                            emit_cb=_emit,
                         )
-                        return {
-                            "type": "report",
-                            "data": args,
-                            "steps": steps,
-                            "physical_disconnect_time": (
-                                self.physical_disconnect_time.strftime('%m/%d/%Y %H:%M:%S')
-                                if getattr(self, 'physical_disconnect_time', None)
-                                else None
-                            ),
-                        }
+                        if final_result is not None:
+                            return final_result
+                        continue
 
-                    elif tool_call.function.name == "scan_overview":
-                        skill_name = args.get("skill_name")
-                        _emit({
-                            "role": "agent",
-                            "content": f"📊 **Scanning** keyword statistics for `{skill_name}`..."
-                        })
-
-                        tool_result = self.scan_overview(skill_name)
-
-                        line_count = tool_result.count('\n')
-                        preview = tool_result[:500].replace('\n', ' ') + "..."
-                        _emit({
-                            "role": "tool",
-                            "content": f"📄 **Scan Overview** (`{skill_name}`, {line_count} lines):\n"
-                                       f"```\n{preview}\n```"
-                        })
-
-                        messages.append({
-                            "role": "tool",
-                            "tool_call_id": tool_call.id,
-                            "name": tool_call.function.name,
-                            "content": tool_result,
-                        })
-
-                    elif tool_call.function.name == "fetch_focused_logs":
-                        skill_name = args.get("skill_name")
-                        focus_kw = args.get("focus_keywords", [])
-                        sec_before = args.get("seconds_before", 60)
-                        sec_after = args.get("seconds_after", 10)
-                        _emit({
-                            "role": "agent",
-                            "content": f"🔍 **Focused Fetch** `{skill_name}` — "
-                                       f"keywords: {focus_kw}, window: -{sec_before}s/+{sec_after}s"
-                        })
-
-                        tool_result = self.fetch_focused_logs(
-                            skill_name, focus_kw, sec_before, sec_after
+                    elif tool_call.function.name == "fetch_filtered_logs":
+                        no_progress_rounds = self._handle_fetch_tool_call(
+                            tool_call=tool_call,
+                            args=args,
+                            messages=messages,
+                            pending_user_nudges=pending_user_nudges,
+                            expert_rules_injected_skills=expert_rules_injected_skills,
+                            skill_call_counts=skill_call_counts,
+                            no_progress_rounds=no_progress_rounds,
+                            emit_cb=_emit,
                         )
 
-                        # Merge new log lines into global_log (dedup by line number)
-                        merge_summary = _merge_into_global(tool_result)
-
-                        line_count = tool_result.count('\n')
-                        preview = tool_result[:500].replace('\n', ' ') + "..."
-                        _emit({
-                            "role": "tool",
-                            "content": f"📄 **Focused Logs** (`{skill_name}`, {line_count} lines):\n"
-                                       f"```\n{preview}\n```\n{merge_summary}"
-                        })
-
-                        # Build unified context: Expert Rules + merged global log
-                        skill = self.skills.get(skill_name)
-                        expert_rules = getattr(skill, 'expert_rules', '') if skill else ''
-                        global_log_text = "\n".join(global_log_lines)
-
-                        # Budget: keep global log within 25K chars
-                        if len(global_log_text) > 25000:
-                            global_log_text = global_log_text[:25000] + "\n... (truncated)"
-
-                        unified_content = (
-                            f"=== Expert Rules ===\n{expert_rules}\n\n"
-                            f"=== Merged Log (all fetches combined, {len(global_log_lines)} unique lines) ===\n"
-                            f"{global_log_text}"
+                    elif tool_call.function.name == "get_assembled_log_snapshot":
+                        self._handle_snapshot_tool_call(
+                            tool_call=tool_call,
+                            args=args,
+                            messages=messages,
+                            emit_cb=_emit,
                         )
 
-                        messages.append({
-                            "role": "tool",
-                            "tool_call_id": tool_call.id,
-                            "name": tool_call.function.name,
-                            "content": unified_content,
-                        })
+                    elif tool_call.function.name == "get_final_state_snapshot":
+                        self._handle_final_state_tool_call(
+                            tool_call=tool_call,
+                            args=args,
+                            messages=messages,
+                            emit_cb=_emit,
+                        )
 
                     elif tool_call.function.name == "query_log_detail":
-                        line_number = args.get("line_number")
-                        context_lines = args.get("context_lines", 5)
-                        _emit({
-                            "role": "agent",
-                            "content": f"🔎 **Querying log detail** — "
-                                       f"Line {line_number} (±{context_lines} lines context)"
+                        self._handle_detail_tool_call(
+                            tool_call=tool_call,
+                            args=args,
+                            messages=messages,
+                            pending_user_nudges=pending_user_nudges,
+                            no_match_anchor_counts=no_match_anchor_counts,
+                            detail_call_counts=detail_call_counts,
+                            emit_cb=_emit,
+                        )
+
+                    else:
+                        # Unknown tool - ask agent to conclude
+                        self._append_tool_message(messages, tool_call, "Unknown tool; no action taken.")
+                        pending_user_nudges.append({
+                            "role": "user",
+                            "content": "Please call `submit_final_report` when you have concluded."
                         })
 
-                        tool_result = self.query_log_detail(line_number, context_lines)
-
-                        _emit({
-                            "role": "tool",
-                            "content": f"📄 **Log Detail** (Line {line_number}):\n"
-                                       f"```\n{tool_result[:500]}...\n```"
-                        })
-
-                        messages.append({
-                            "role": "tool",
-                            "tool_call_id": tool_call.id,
-                            "name": tool_call.function.name,
-                            "content": tool_result,
-                        })
+                if pending_user_nudges:
+                    messages.extend(pending_user_nudges)
             else:
-                # No tool call — nudge LLM to conclude
-                messages.append({
-                    "role": "user",
-                    "content": "Please call `submit_final_report` to output the final results."
-                })
+                if pending_user_nudges:
+                    messages.extend(pending_user_nudges)
+                # No tool calls - agent provided direct text answer
+                content = message.content or ""
+                _emit({"role": "agent", "content": f"✅ Analysis complete: {content[:200]}"})
+                return {"type": "text", "data": content, "steps": steps}
 
-        # Exhausted all steps without conclusion
-        _emit({
-            "role": "error",
-            "content": f"⚠️ Reached maximum reasoning steps ({max_steps}) without explicit conclusion. "
-                       f"Generating partial report from {len(global_log_lines)} log lines collected."
-        })
-        
-        # Generate partial report from collected evidence
-        partial_report = {
-            "root_cause_summary": {
-                                "type": "string",
-                                "description": (
-                                    "A crisp, definitive engineering verdict . "
-                                    "DO NOT use storytelling language (e.g., 'A leading to B'). "
-                                    "You MUST explicitly state the FINAL OUTCOME and include HARD METRICS "
-                                    
-                                )
-                            },
-            "confidence_score": 30,
-            "recommended_actions": [
-                "Review the collected log evidence in detail",
-                "Consider enabling verbose driver logging for deeper analysis",
-                "Contact WiFi team with this diagnostic bundle"
-            ],
-            "involved_skills": list(self.skills.keys()),
-            "markdown_summary": (
-                f"## Partial Diagnosis (Step Limit Reached)\n\n"
-                f"**Evidence Collected:** {len(global_log_lines)} log lines from {len(self.skills)} skills\n\n"
-                f"### Collected Logs:\n"
-                f"```\n"
-                f"{chr(10).join(global_log_lines[-50:])}  # Last 50 lines\n"
-                f"```\n\n"
-                f"**Note:** Agent exhausted reasoning steps before reaching final conclusion. "
-                f"Increase analysis scope or manually review the logs above."
-            )
-        }
+        # Loop completed without conclusion - max steps reached
+        _emit({"role": "error", "content": f"⚠️ Max steps reached. Generating partial report."})
         
         return {
             "type": "partial_report",
-            "data": partial_report,
-            "steps": steps,
-            "physical_disconnect_time": (
-                self.physical_disconnect_time.strftime('%m/%d/%Y %H:%M:%S')
-                if getattr(self, 'physical_disconnect_time', None)
-                else None
-            ),
+            "data": {
+                "root_cause_summary": "Analysis reached maximum step limit before conclusion.",
+                "confidence_score": 30,
+                "recommended_actions": ["Review logs manually"],
+                "involved_skills": [],
+                "markdown_summary": "## Partial Diagnosis\nAgent exhausted reasoning steps."
+            },
+            "steps": steps
         }
+
 
     # ------------------------------------------------------------------
     # Inject analyze_all results into conversation_history for chat()
@@ -1575,21 +2186,32 @@ class WifiLogAgentSystem:
     # ------------------------------------------------------------------
     def reset_conversation(self):
         self.conversation_history = []
+        self._detail_cache = {}
+        self._detail_query_seen = set()
+        self._filter_cache_by_skill = {}
+        self._assembled_entries_by_key = {}
+        self._assembled_entries_no_ts = {}
+        self._assembled_log_text = ""
 
     def prime_with_context(self, case_nbr: str = "", subject: str = "",
-                            description: str = "", issue_type: str = "", ai_summary: str = "") -> None:
+                            description: str = "", issue_type: str = "") -> None:
         """
         Reset conversation and inject the case context as the opening system
         message so the LLM knows what issue it is analysing before the user
         asks the first question.
         """
         self.conversation_history = []
+        self._detail_cache = {}
+        self._detail_query_seen = set()
+        self._filter_cache_by_skill = {}
+        self._assembled_entries_by_key = {}
+        self._assembled_entries_no_ts = {}
+        self._assembled_log_text = ""
         self.issue_context = {
             "case_nbr":   case_nbr,
             "subject":    subject,
             "description": description,
             "issue_type": issue_type,
-            "ai_summary": ai_summary
         }
         context_parts = []
         if case_nbr:
@@ -1600,8 +2222,6 @@ class WifiLogAgentSystem:
             context_parts.append(f"Classified issue type: {issue_type}")
         if description:
             context_parts.append(f"\nIssue description:\n{description}")
-        if ai_summary:
-            context_parts.append(f"\nAI summary:\n{ai_summary}")
 
         if context_parts:
             self.conversation_history.append({
@@ -1624,12 +2244,11 @@ class WifiLogAgentSystem:
             {
                 "type": "function",
                 "function": {
-                    "name": "scan_overview",
+                    "name": "fetch_filtered_logs",
                     "description": (
-                        "Quick scan: returns keyword match STATISTICS (counts per keyword) "
-                        "and Expert Rules for a skill — NO actual log lines. "
-                        "Use this FIRST to understand the data distribution, then call "
-                        "fetch_focused_logs with the most relevant keywords."
+                        "Filter from the original full log using the specified skill, then merge results "
+                        "into a cumulative timestamp-assembled log (line numbers are not persisted). "
+                        "Returns a compact skill-focused evidence payload to save tokens."
                     ),
                     "parameters": {
                         "type": "object",
@@ -1637,7 +2256,7 @@ class WifiLogAgentSystem:
                             "skill_name": {
                                 "type": "string",
                                 "enum": list(self.skills.keys()),
-                                "description": "Which skill to scan"
+                                "description": "Which skill's filter to apply (e.g., 'Connectivity', 'Roaming')"
                             }
                         },
                         "required": ["skill_name"]
@@ -1647,42 +2266,44 @@ class WifiLogAgentSystem:
             {
                 "type": "function",
                 "function": {
-                    "name": "fetch_focused_logs",
+                    "name": "get_assembled_log_snapshot",
                     "description": (
-                        "Fetch actual log lines using ONLY the keywords you specify, "
-                        "within a narrow time window you choose. "
-                        "Use this AFTER scan_overview to zoom into the most relevant evidence. "
-                        "Pick diagnostic keywords (e.g., MISSED BEACONS, DEAUTH) over "
-                        "high-volume noise keywords (e.g., OSC with 700+ lines)."
+                        "Retrieve assembled-log macro view on demand. "
+                        "Use mode='summary' for metadata only, 'compact' for limited body, "
+                        "or 'full' for complete assembled content."
                     ),
                     "parameters": {
                         "type": "object",
                         "properties": {
-                            "skill_name": {
+                            "mode": {
                                 "type": "string",
-                                "enum": list(self.skills.keys()),
-                                "description": "Which skill's Expert Rules to include"
-                            },
-                            "focus_keywords": {
-                                "type": "array",
-                                "items": {"type": "string"},
-                                "description": (
-                                    "Specific keywords to search for. Choose based on "
-                                    "scan_overview results — prefer low-count diagnostic "
-                                    "keywords over high-count noise keywords."
-                                )
-                            },
-                            "seconds_before": {
-                                "type": "integer",
-                                "description": "How many seconds before the issue time to scan (default: 60). CRITICAL: Increase to 7200 to look 2 hours back if instructed by Phase 2.",
-                                "default": 60
-                            },
-                            "seconds_after": {
-                                "type": "integer",
-                                "description": "How many seconds after the issue time to scan (default: 10)"
+                                "enum": ["summary", "compact", "full"],
+                                "description": "How much assembled content to return.",
+                                "default": "summary"
                             }
                         },
-                        "required": ["skill_name", "focus_keywords"]
+                        "required": []
+                    }
+                }
+            },
+            {
+                "type": "function",
+                "function": {
+                    "name": "get_final_state_snapshot",
+                    "description": (
+                        "Retrieve the latest assembled-log tail for end-of-analysis verification. "
+                        "Use this before declaring a persistent failure to check whether later logs show recovery/success."
+                    ),
+                    "parameters": {
+                        "type": "object",
+                        "properties": {
+                            "tail_lines": {
+                                "type": "integer",
+                                "description": "Number of latest lines to inspect. Default 120, range 20-400.",
+                                "default": 120
+                            }
+                        },
+                        "required": []
                     }
                 }
             },
@@ -1732,27 +2353,33 @@ class WifiLogAgentSystem:
                 "function": {
                     "name": "query_log_detail",
                     "description": (
-                        "Query a specific log line PLUS surrounding context lines. "
-                        "CRITICAL: Wi-Fi events escalate across 20-50 lines (e.g. missed beacons: "
-                        "initial threshold → extended threshold → disconnect). "
-                        "Always use context_lines=30 to see the FULL event sequence. "
-                        "NEVER use less than 15."
+                        "Query context around semantic anchors in the assembled log without relying on line numbers. "
+                        "Provide anchor_text and/or anchor_timestamp, then inspect nearby context."
                     ),
                     "parameters": {
                         "type": "object",
                         "properties": {
-                            "line_number": {
-                                "type": "integer",
-                                "description": "The line number to query (e.g., 1520)"
+                            "anchor_text": {
+                                "type": "string",
+                                "description": "Optional text anchor to search for (case-insensitive), e.g. 'deauth', 'roam complete'"
                             },
-                            "context_lines": {
+                            "anchor_timestamp": {
+                                "type": "string",
+                                "description": "Optional timestamp fragment anchor, e.g. '10/28/2025-11:25:49'"
+                            },
+                            "context_span": {
                                 "type": "integer",
-                                "description": "How many lines before/after to show. Default 25. Use 30+ for disconnect events to see full escalation chain.",
-                                "default": 25
+                                "description": "How many neighboring log rows to include around each match. Default 20; auto-escalates to 50 for scan/connect-style anchors.",
+                                "default": 20
+                            },
+                            "max_hits": {
+                                "type": "integer",
+                                "description": "Maximum matched anchor events to expand. Default 3.",
+                                "default": 3
                             }
                         },
-                        "required": ["line_number"]
+                        "required": []
                     }
                 }
-            }
+            },
         ]

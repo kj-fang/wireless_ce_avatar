@@ -349,13 +349,22 @@ def analyze_all_stream():
     """
     data = request.get_json(silent=True) or {}
     issue_description = data.get("issue_description", "").strip()
-    if not issue_description:
-        issue_description = _compose_concise_description()
+
+    # if message:
+    #     issue_description = f"{message}\n\n{issue_description}"
+    # if not issue_description:
+    #     issue_description = _compose_concise_description()
 
     # IMPORTANT: Extract session-backed context in request thread.
     # Flask session/request proxies are not safe in background threads.
     try:
         full_context = _extract_issue_context()
+        if not full_context.get("description"):
+            message = data.get("message", "").strip()  # optional free-form user message to prepend to description
+            if message:
+                full_context["description"] = f"{message}\n\n{full_context['description']}"
+                issue_description = full_context["description"]
+
     except Exception:
         full_context = {}
 

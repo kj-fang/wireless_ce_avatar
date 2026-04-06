@@ -45,7 +45,9 @@ def preprocess_log_for_llm(log_lines, preserve_timestamps=True):
             
         # 1. timestamp
         if preserve_timestamps:
-            line = re.sub(r'(\d{2}/\d{2}/\d{4})-(\d{2}:\d{2}:\d{2})\.\d{3}', r'<TIME:\2>', line)
+            # Keep full timestamp (MM/DD/YYYY-HH:MM:SS.mmm) for downstream parsing
+            # line = re.sub(r'(\d{2}/\d{2}/\d{4})-(\d{2}:\d{2}:\d{2})\.\d{3}', r'<TIME:\2>', line)
+            pass
         else:
             line = re.sub(r'\d{2}/\d{2}/\d{4}-\d{2}:\d{2}:\d{2}\.\d{3}', '<TIMESTAMP>', line)
         

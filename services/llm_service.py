@@ -11,6 +11,7 @@ from textwrap import dedent
 from utils import helpers
 from anthropic import Anthropic
 from services.log_chatbot_service import load_skills_from_data_dir, get_builtin_skills
+from anthropic import Anthropic
 
 # ---------------------------------------------------------------------------
 # Adapter: wraps an Anthropic client with an OpenAI-compatible interface so

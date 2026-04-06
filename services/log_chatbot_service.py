@@ -331,23 +331,34 @@ class WifiLogAgentSystem:
     """
 
     # Hard stop to prevent runaway per-step token spikes.
-    MAX_TOKENS_PER_STEP = 15000
+    # ~500K daily budget guidance (1 token ≈ 4 chars, MAX_TOOL_CALLS_PER_STEP=3):
+    #   High volume (10x/day): max_steps=4,  MAX_TOOL_RESULT=3000,  MAX_TOKENS_PER_STEP=15000 → ~50K/analysis
+    #   Balanced   (5-7x/day): max_steps=5,  MAX_TOOL_RESULT=6000,  MAX_TOKENS_PER_STEP=25000 → ~70-90K/analysis
+    #   Quality    (3-5x/day): max_steps=5,  MAX_TOOL_RESULT=16000, MAX_TOKENS_PER_STEP=40000 → ~100K/analysis
+    MAX_TOKENS_PER_STEP = 40000          # 3 tools × 16K evidence = ~12K tokens/step; headroom for rules + prompt history
     # Keep per-tool evidence compact so multi-step prompts do not explode.
-    MAX_ASSEMBLED_LOG_CHARS_PER_TOOL_CALL = 5000
-    MAX_ASSEMBLED_LOG_LINES_PER_TOOL_CALL = 220
-    # Keep per-skill payload very compact by default.
-    MAX_SKILL_FOCUS_LINES = 60
-    MAX_SKILL_FOCUS_CHARS = 1800
-    MAX_RECENT_SKILL_HISTORY_LINES = 30
+    # These are sized to match MAX_TOOL_RESULT_CHARS_IN_MESSAGES (16000):
+    #   ~50 chars/line → 16000 ÷ 50 = 320 lines before char limit fires anyway.
+    #   MAX_SKILL_FOCUS_CHARS slightly above 16000 to absorb header overhead.
+    #   MAX_RECENT_SKILL_HISTORY_LINES = 100: cross-skill hints share the same
+    #   16000-char budget leaving ~4000 chars (≈80 lines) for history context.
+    MAX_ASSEMBLED_LOG_CHARS_PER_TOOL_CALL = 16000
+    MAX_ASSEMBLED_LOG_LINES_PER_TOOL_CALL = 320
+    # Keep per-skill payload aligned with the evidence clip limit.
+    MAX_SKILL_FOCUS_LINES = 320
+    MAX_SKILL_FOCUS_CHARS = 16500  # slightly above clip limit to absorb header text
+    MAX_RECENT_SKILL_HISTORY_LINES = 100
     # Additional hard limits for multi-step prompt growth control.
     MAX_TOOL_CONTENT_CHARS_IN_MESSAGES = 1200
+    MAX_TOOL_RESULT_CHARS_IN_MESSAGES = 16000  # ~quality: 4000 tokens of evidence per tool call
     MAX_QUERY_DETAIL_OUTPUT_CHARS = 1800
     MAX_DETAIL_CONTEXT_SPAN = 50
     DEFAULT_DETAIL_CONTEXT_SPAN = 20
     MAX_DETAIL_HITS = 2
     # Convergence controls to finish within fixed max steps.
-    MAX_TOOL_CALLS_PER_STEP = 2
-    FORCE_CONCLUDE_LAST_N_STEPS = 2
+    MAX_TOOL_CALLS_PER_STEP = 3
+    FORCE_CONCLUDE_LAST_N_STEPS = 2  # last 2 steps forces conclusion (5-step loop is tighter)
+    MAX_SKILL_FETCHES = 4             # max distinct skills the agent may fetch per analysis
     REPORT_MARKDOWN_TEMPLATE = (
         "Your `markdown_summary` format (REQUIRED):\n"
         "  # Executive Summary\n  (1-2 sentences that directly answer the user question)\n\n"
@@ -488,7 +499,8 @@ class WifiLogAgentSystem:
         raw = self._strip_line_number_prefix(line)
 
         # Prefer full date timestamp when present for stable chronological sorting.
-        dt_match = re.search(r'(\d{2}/\d{2}/\d{4}-(\d{2}:\d{2}:\d{2})\.\d{3})', raw)
+        # dt_match = re.search(r'(\d{2}/\d{2}/\d{4}-(\d{2}:\d{2}:\d{2})\.\d{3})', raw)
+        dt_match = re.search(r'(\d{2}/\d{2}/\d{4}-(\d{2}:\d{2}:\d{2}\.\d{3}))', raw)
         if dt_match:
             ts_full = dt_match.group(1)
             ts_hms = dt_match.group(2)
@@ -512,11 +524,19 @@ class WifiLogAgentSystem:
         if "###" in msg:
             msg = msg[msg.find("###"):]
         elif "]:" in msg:
-            msg = msg.split("]:", 1)[1]
+            # Keep the last [tag] before ]: and prepend it to the payload.
+            idx = msg.rfind("]:")
+            bstart = msg.rfind("[", 0, idx)
+            if bstart >= 0:
+                last_tag = msg[bstart:idx + 1]
+                payload = msg[idx + 2:].strip(" -:|\t")
+                msg = (last_tag + " " + payload).strip()
+            else:
+                msg = msg[idx + 2:].strip(" -:|\t")
 
-        # Remove remaining leading bracket-like channel tags.
+        # Remove leading bracket-like channel tags, keeping the last one with the message.
         msg = re.sub(r'(?:<)?TIME:\d{2}:\d{2}:\d{2}(?:>)?', '', msg, flags=re.IGNORECASE)
-        msg = re.sub(r'^(?:\[[^\]]+\]\s*)+', '', msg).strip()
+        msg = re.sub(r'^(?:\[[^\]]+\]\s*)+(?=\[)', '', msg).strip()
         msg = re.sub(r'\s{2,}', ' ', msg).strip()
 
         return ts_dt, ts_hms, (msg or raw)
@@ -1526,32 +1546,63 @@ class WifiLogAgentSystem:
         """Build a concise, reusable system prompt for analyze_all."""
         return (
             f"{context_section}"
-                        "You are an Elite Wi-Fi Diagnostic Detective. Your mission is to reconcile the USER'S COMPLAINT with the LOG EVIDENCE.\n\n"
-                        "=== THE INVESTIGATIVE MINDSET (MANDATORY) ===\n"
-                        "1. RECONCILE THE GAP: If the user complains a feature (like 6GHz) is 'missing' or 'not scanning', but you see it CONNECTED at the end of the log, DO NOT just say 'it is normal'.\n"
-                        "   - You MUST explain the transition: Why was it missing initially? (e.g., Check 11d discovery, Country Code changes, or DSM/BIOS blocks at boot time).\n"
-                        "2. HIERARCHY OF TRUTH:\n"
-                        "   - [A] Physical Evidence (CONNECTED/RSSI) proves functional capacity.\n"
-                        "   - [B] Regulatory Evidence (MCC/DSM) explains initial visibility/scanning restrictions.\n"
-                        "3. IGNORE MAINTENANCE NOISE: If the link is stable, ignore RSSI adjustments (DCR-2260) and roaming decisions. They are NOT root causes.\n\n"
-                        "=== WORKFLOW ===\n"
-                        "Step 1: Inspect the INITIALIZATION phase (09:54:13 area) using `driver_dsm_analysis` and `connectivity_analysis` to find why the band was hidden.\n"
-                        "Step 2: Compare this with the FINAL phase (17:47:55 area) where it is connected.\n"
-                        "Step 3: Tell the STORY of how it went from 'Hidden' to 'Connected'.\n\n"
+                        # "You are an Elite Wi-Fi Diagnostic Detective. Your mission is to reconcile the USER'S COMPLAINT with the LOG EVIDENCE.\n\n"
+                        # "=== THE INVESTIGATIVE MINDSET (MANDATORY) ===\n"
+                        # "1. RECONCILE THE GAP: If the user complains a feature (like 6GHz) is 'missing' or 'not scanning', but you see it CONNECTED at the end of the log, DO NOT just say 'it is normal'.\n"
+                        # "   - You MUST explain the transition: Why was it missing initially? (e.g., Check 11d discovery, Country Code changes, or DSM/BIOS blocks at boot time).\n"
+                        # "2. HIERARCHY OF TRUTH:\n"
+                        # "   - [A] Physical Evidence (CONNECTED/RSSI) proves functional capacity.\n"
+                        # "   - [B] Regulatory Evidence (MCC/DSM) explains initial visibility/scanning restrictions.\n"
+                        # "3. IGNORE MAINTENANCE NOISE: If the link is stable, ignore RSSI adjustments (DCR-2260) and roaming decisions. They are NOT root causes.\n\n"
+                        # "=== WORKFLOW ===\n"
+                        # "Step 1: Inspect the INITIALIZATION phase (09:54:13 area) using `driver_dsm_analysis` and `connectivity_analysis` to find why the band was hidden.\n"
+                        # "Step 2: Compare this with the FINAL phase (17:47:55 area) where it is connected.\n"
+                        # "Step 3: Tell the STORY of how it went from 'Hidden' to 'Connected'.\n\n"
+                        # "Your `markdown_summary` format (REQUIRED):\n"
+                        # "  # Executive Summary\n"
+                        # "  (Answer 'Why' it was missing initially, then state that it eventually connected successfully.)\n\n"
+                        # "  | Aspect | Finding |\n"
+                        # "  |--------|---------|\n"
+                        # "  | Initial State | (Explain why it was not on scan list) |\n"
+                        # "  | Final State | (Connected to 6GHz) |\n\n"
+                        # "  ## Timeline\n"
+                        # "  - T-Initial: Boot/Init phase (Explain regulatory state)\n"
+                        # "  - T-Mid: 11d Discovery / MCC Update\n"
+                        # "  - T-Final: Successful 6GHz Connection\n\n"
+                        # "  ## Conclusion\n"
+                        # "  (Confirm if this is a transient normal behavior or a real bug)"
+                        "You are an Elite Wi-Fi Diagnostic Detective. Your GOAL: Find the REAL Root Cause based on evidence.\n"
+                        + "Available skills:\n"
+                        + "".join(
+                            f"  - {s['name']}: {s['description']}\n"
+                            for s in self.get_skill_descriptions()
+                            if s.get('description')
+                        )
+                        + "\n"
+                        "PHASE 1 (SYMPTOM LOCALIZATION): \n"
+                        # "   - Identify the exact timestamp when the reported failure occurred in the logs.\n"
+                        "   - Use the most relevant skill to analyze the logs by calling`fetch_focused_logs`.\n"
+                        "PHASE 2 (SOURCE RETROSPECTIVE - optional):\n"
+                        "   - if needed, based on the analysis from PHASE1, use additional skill to get more detail from the logs.\n"
+                        "PHASE 3. Call `submit_final_report` to conclude.\n\n"
+                        "CRITICAL CONSTRAINTS:\n"
+                        "- Max step is 6, and use at most 2 skills per step.\n"
+                        "- 🛑 NO REPETITION: Do not fetch the same data twice. If Phase 1 keywords are found in Phase 2, ignore them.\n"
+                        "- 🛑 IMMEDIATELY call `submit_final_report` after your detail query. Do not over-analyze.\n\n"
                         "Your `markdown_summary` format (REQUIRED):\n"
-                        "  # Executive Summary\n"
-                        "  (Answer 'Why' it was missing initially, then state that it eventually connected successfully.)\n\n"
+                        "  # Executive Summary\n  (1-2 sentences about the true root cause found in Phase 2)\n\n"
                         "  | Aspect | Finding |\n"
                         "  |--------|---------|\n"
-                        "  | Initial State | (Explain why it was not on scan list) |\n"
-                        "  | Final State | (Connected to 6GHz) |\n\n"
+                        "  | Signal | ... |\n"
+                        "  (Markdown table with data gaps)\n\n"
                         "  ## Timeline\n"
-                        "  - T-Initial: Boot/Init phase (Explain regulatory state)\n"
-                        "  - T-Mid: 11d Discovery / MCC Update\n"
-                        "  - T-Final: Successful 6GHz Connection\n\n"
-                        "  ## Conclusion\n"
-                        "  (Confirm if this is a transient normal behavior or a real bug)"
-                    
+                        "  - T-Ns: Trigger Event (The Source)\n"
+                        "  - T+0s: Physical Failure begins\n"
+                        "  - T+Ns: Final Termination\n\n"
+                        "  ## Recommendations\n"
+                        "  **P0 (Urgent):** ...\n"
+                        "  **P1 (Important):** ...\n"
+                        "  **P2 (Nice-to-have):** ..."                
         )
 
     def _invoke_tool(self, tool_name: str, args: dict) -> str:
@@ -1645,6 +1696,18 @@ class WifiLogAgentSystem:
         """Handle fetch_filtered_logs tool call and return updated no_progress_rounds."""
         skill_name = args.get("skill_name")
         skill_call_counts[skill_name] = skill_call_counts.get(skill_name, 0) + 1
+
+        # Enforce max distinct skill fetches to control token budget.
+        distinct_skills_fetched = len([k for k, v in skill_call_counts.items() if v >= 1])
+        if distinct_skills_fetched > self.MAX_SKILL_FETCHES:
+            msg = (
+                f"Skill fetch limit reached ({self.MAX_SKILL_FETCHES} skills). "
+                "Synthesize findings from already-fetched skills and call submit_final_report."
+            )
+            emit_cb({"role": "agent", "content": f"⚠️ **Skill cap hit** — {msg}"})
+            self._append_tool_message(messages, tool_call, msg)
+            return no_progress_rounds
+
         emit_cb({"role": "agent", "content": f"🔍 **Fetching Filtered Logs** for `{skill_name}`..."})
 
         tool_result = self._invoke_tool("fetch_filtered_logs", {"skill_name": skill_name})
@@ -1658,30 +1721,42 @@ class WifiLogAgentSystem:
             "content": f"📄 **Logs Loaded** (`{skill_name}`, ~{line_count} lines):\n```\n{preview}\n```"
         })
 
-        if skill_name not in expert_rules_injected_skills:
-            unified_content = (
+        # Expert rules are prepended in full (never clipped); only the evidence
+        # section is clipped so the tool_result immediately follows tool_use.
+        if skill_name not in expert_rules_injected_skills and expert_rules:
+            rules_section = (
                 f"=== Expert Rules for {skill_name} ===\n{expert_rules}\n\n"
                 "=== Rule Usage Instruction ===\n"
                 "Use these expert rules as investigative clues.\n"
-                "For each important claim, map rule clue to concrete log evidence\n"
+                "For each important claim, map each rule clue to concrete log evidence\n"
                 "and decide: supported, refuted, or uncertain.\n\n"
-                f"=== Skill-Focused Evidence ===\n{tool_result}"
             )
             expert_rules_injected_skills.add(skill_name)
         else:
-            unified_content = (
+            rules_section = (
                 f"=== Expert Rules for {skill_name} ===\n"
-                "(already provided in earlier step; omitted to save tokens)\n\n"
-                "=== Rule Usage Instruction ===\n"
-                "Use previously provided rules as clues and validate with evidence.\n\n"
-                f"=== Skill-Focused Evidence ===\n{tool_result}"
+                "(already provided; omitted to save tokens)\n\n"
             )
 
+        evidence_content = self._clip_for_prompt(
+            f"=== Skill-Focused Evidence ({skill_name}) ===\n{tool_result}",
+            limit=self.MAX_TOOL_RESULT_CHARS_IN_MESSAGES,
+        )
         self._append_tool_message(
             messages,
             tool_call,
-            self._clip_for_prompt(unified_content, limit=900),
+            rules_section + evidence_content,
         )
+        emit_cb({
+            "role": "debug",
+            "content": (
+                f"📏 **Token Budget ({skill_name}):** "
+                f"rules={len(rules_section)} chars | "
+                f"evidence={len(evidence_content)} chars | "
+                f"total={len(rules_section) + len(evidence_content)} chars "
+                f"(evidence limit={self.MAX_TOOL_RESULT_CHARS_IN_MESSAGES})"
+            ),
+        })
 
         if "New lines merged this round: 0" in tool_result or "Skill cache hit:" in tool_result:
             no_progress_rounds += 1
@@ -1720,7 +1795,7 @@ class WifiLogAgentSystem:
         self._append_tool_message(
             messages,
             tool_call,
-            self._clip_for_prompt(tool_result, limit=900),
+            self._clip_for_prompt(tool_result, limit=self.MAX_TOOL_RESULT_CHARS_IN_MESSAGES),
         )
 
     def _handle_final_state_tool_call(self, tool_call, args: dict, messages: list, emit_cb) -> None:
@@ -1738,7 +1813,7 @@ class WifiLogAgentSystem:
         self._append_tool_message(
             messages,
             tool_call,
-            self._clip_for_prompt(tool_result, limit=900),
+            self._clip_for_prompt(tool_result, limit=self.MAX_TOOL_RESULT_CHARS_IN_MESSAGES),
         )
 
     def _handle_detail_tool_call(self, tool_call, args: dict, messages: list,
@@ -1797,7 +1872,7 @@ class WifiLogAgentSystem:
         self._append_tool_message(
             messages,
             tool_call,
-            self._clip_for_prompt(tool_result, limit=900),
+            self._clip_for_prompt(tool_result, limit=self.MAX_TOOL_RESULT_CHARS_IN_MESSAGES),
         )
 
     # ------------------------------------------------------------------
@@ -1833,7 +1908,7 @@ class WifiLogAgentSystem:
         tools = self._build_tools()
 
         # Auto-inject final outcome evidence so the model sees end-state before reasoning
-        outcome_inject = self._build_outcome_injection()
+        # outcome_inject = self._build_outcome_injection()
 
         # Inject complete context
         context_section = ""
@@ -1855,18 +1930,38 @@ class WifiLogAgentSystem:
         ]
 
         # Inject auto-extracted outcome evidence so the model has end-state awareness from the start.
-        if outcome_inject:
-            messages.append({
-                "role": "user",
-                "content": outcome_inject,
-            })
+        # if outcome_inject:
+        #     messages.append({
+        #         "role": "user",
+        #         "content": outcome_inject,
+        #     })
         
-        max_steps = 10
+        max_steps = 6  # 3 skills(1 step) + 1 detail + 1 submit + 1 force-conclude buffer; ~75K tokens/analysis → ~6/day from 500K budget
         expert_rules_injected_skills = set()
         no_match_anchor_counts = {}
         skill_call_counts = {}
         detail_call_counts = {}
         no_progress_rounds = 0
+        step_token_usages = []  # [{step, prompt, completion, total}, ...]
+
+        def _emit_token_report():
+            """Emit a markdown table summarising per-step and total token usage."""
+            if not step_token_usages:
+                return
+            rows = [
+                "📊 **Token Usage Report**\n",
+                "| Step | Prompt | Completion | Total |",
+                "|------|--------|------------|-------|"]
+            total_p = total_c = total_t = 0
+            for s in step_token_usages:
+                rows.append(
+                    f"| {s['step']} | {s['prompt']:,} | {s['completion']:,} | {s['total']:,} |")
+                total_p += s['prompt']
+                total_c += s['completion']
+                total_t += s['total']
+            rows.append(
+                f"| **Total** | **{total_p:,}** | **{total_c:,}** | **{total_t:,}** |")
+            _emit({"role": "token_usage", "content": "\n".join(rows)})
 
         # Step 3: Agentic reasoning loop
         for step_num in range(max_steps):
@@ -1883,6 +1978,7 @@ class WifiLogAgentSystem:
                     tools=tools,
                     tool_choice="auto",
                     temperature=0.1,
+                    max_tokens=4096,  # steps 3+6 were hitting 1024 default, cutting off analysis
                 )
             except Exception as e:
                 _emit({"role": "error", "content": f"❌ LLM API Error: {e}"})
@@ -1914,6 +2010,12 @@ class WifiLogAgentSystem:
                         f"Total: {usage.total_tokens}"
                     )
                 })
+                step_token_usages.append({
+                    "step": step_num + 1,
+                    "prompt": usage.prompt_tokens,
+                    "completion": usage.completion_tokens,
+                    "total": usage.total_tokens,
+                })
                 if usage.total_tokens > self.MAX_TOKENS_PER_STEP:
                     _emit({
                         "role": "error",
@@ -1923,6 +2025,7 @@ class WifiLogAgentSystem:
                             f"(limit: {self.MAX_TOKENS_PER_STEP})."
                         ),
                     })
+                    _emit_token_report()
                     return {
                         "type": "partial_report",
                         "data": {
@@ -1975,8 +2078,14 @@ class WifiLogAgentSystem:
                         ),
                     })
                     tool_calls = tool_calls[:max_calls_this_step]
+                else:
+                    _emit({
+                        "role": "agent",
+                        "content": f"🧭 **Tool calls:** {len(tool_calls)} this step."
+                    })
+                
                 skipped_tool_calls = original_tool_calls[len(tool_calls):]
-
+                
                 # In final steps, only allow direct conclusion submission.
                 if step_num >= max_steps - self.FORCE_CONCLUDE_LAST_N_STEPS:
                     has_submit = any(tc.function.name == "submit_final_report" for tc in tool_calls)
@@ -2034,6 +2143,7 @@ class WifiLogAgentSystem:
                             emit_cb=_emit,
                         )
                         if final_result is not None:
+                            _emit_token_report()
                             return final_result
                         continue
 
@@ -2096,7 +2206,8 @@ class WifiLogAgentSystem:
 
         # Loop completed without conclusion - max steps reached
         _emit({"role": "error", "content": f"⚠️ Max steps reached. Generating partial report."})
-        
+        _emit_token_report()
+
         return {
             "type": "partial_report",
             "data": {
@@ -2348,38 +2459,38 @@ class WifiLogAgentSystem:
                     }
                 }
             },
-            {
-                "type": "function",
-                "function": {
-                    "name": "query_log_detail",
-                    "description": (
-                        "Query context around semantic anchors in the assembled log without relying on line numbers. "
-                        "Provide anchor_text and/or anchor_timestamp, then inspect nearby context."
-                    ),
-                    "parameters": {
-                        "type": "object",
-                        "properties": {
-                            "anchor_text": {
-                                "type": "string",
-                                "description": "Optional text anchor to search for (case-insensitive), e.g. 'deauth', 'roam complete'"
-                            },
-                            "anchor_timestamp": {
-                                "type": "string",
-                                "description": "Optional timestamp fragment anchor, e.g. '10/28/2025-11:25:49'"
-                            },
-                            "context_span": {
-                                "type": "integer",
-                                "description": "How many neighboring log rows to include around each match. Default 20; auto-escalates to 50 for scan/connect-style anchors.",
-                                "default": 20
-                            },
-                            "max_hits": {
-                                "type": "integer",
-                                "description": "Maximum matched anchor events to expand. Default 3.",
-                                "default": 3
-                            }
-                        },
-                        "required": []
-                    }
-                }
-            },
+            # {
+            #     "type": "function",
+            #     "function": {
+            #         "name": "query_log_detail",
+            #         "description": (
+            #             "Query context around semantic anchors in the assembled log without relying on line numbers. "
+            #             "Provide anchor_text and/or anchor_timestamp, then inspect nearby context."
+            #         ),
+            #         "parameters": {
+            #             "type": "object",
+            #             "properties": {
+            #                 "anchor_text": {
+            #                     "type": "string",
+            #                     "description": "Optional text anchor to search for (case-insensitive), e.g. 'deauth', 'roam complete'"
+            #                 },
+            #                 "anchor_timestamp": {
+            #                     "type": "string",
+            #                     "description": "Optional timestamp fragment anchor, e.g. '10/28/2025-11:25:49'"
+            #                 },
+            #                 "context_span": {
+            #                     "type": "integer",
+            #                     "description": "How many neighboring log rows to include around each match. Default 20; auto-escalates to 50 for scan/connect-style anchors.",
+            #                     "default": 20
+            #                 },
+            #                 "max_hits": {
+            #                     "type": "integer",
+            #                     "description": "Maximum matched anchor events to expand. Default 3.",
+            #                     "default": 3
+            #                 }
+            #             },
+            #             "required": []
+            #         }
+            #     }
+            # },
         ]

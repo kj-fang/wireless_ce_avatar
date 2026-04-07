@@ -2,6 +2,8 @@ from flask import Blueprint, render_template, request, session, redirect, url_fo
 import os
 import subprocess
 from datetime import datetime
+from dateutil import tz
+import json
 
 from utils import helpers
 from utils.etl_utils import get_auto_analysis_etl, get_issue_time_from_selected_files, filter_folders_by_time, extract_timestamp_from_folder
@@ -12,6 +14,63 @@ from configs.global_configs import app_config
 
 
 main_bp = Blueprint("main", __name__, url_prefix="/")
+
+
+def _get_system_timezone_from_event_path(event_path):
+    if not event_path:
+        return ""
+
+    search_dirs = []
+    current_dir = os.path.dirname(event_path)
+    for _ in range(4):
+        if not current_dir or current_dir in search_dirs:
+            break
+        search_dirs.append(current_dir)
+        current_dir = os.path.dirname(current_dir)
+
+    for base_dir in search_dirs:
+        direct_system_info = os.path.join(base_dir, 'system_info.txt')
+        if os.path.exists(direct_system_info):
+            try:
+                with open(direct_system_info, 'r', encoding='utf-8') as file:
+                    system_info = json.load(file)
+                return system_info.get('System Time Zone', '') or ''
+            except Exception:
+                pass
+
+        try:
+            for child_name in os.listdir(base_dir):
+                child_dir = os.path.join(base_dir, child_name)
+                child_system_info = os.path.join(child_dir, 'system_info.txt')
+                if not os.path.isdir(child_dir) or not os.path.exists(child_system_info):
+                    continue
+
+                try:
+                    with open(child_system_info, 'r', encoding='utf-8') as file:
+                        system_info = json.load(file)
+                    timezone_name = system_info.get('System Time Zone', '') or ''
+                    if timezone_name:
+                        return timezone_name
+                except Exception:
+                    continue
+        except Exception:
+            continue
+
+    return ""
+
+
+def _convert_event_time_to_system_timezone(time_str, timezone_name):
+    if not time_str or time_str == 'Unknown' or not timezone_name:
+        return time_str
+
+    try:
+        event_time_utc = datetime.strptime(time_str, '%Y-%m-%d %H:%M:%S').replace(tzinfo=tz.UTC)
+        target_timezone = tz.gettz(timezone_name)
+        if target_timezone is None:
+            return time_str
+        return event_time_utc.astimezone(target_timezone).strftime('%Y-%m-%d %H:%M:%S')
+    except Exception:
+        return time_str
 
 #------------ALL ROUTE-------------#
 
@@ -280,7 +339,7 @@ def _build_event_table_rows(ddd_dict, download_path=None):
     return _build_merged_table_rows(
         ddd_dict,
         'ddd_path',
-        path_filter=lambda p: 'raweventviewersystemlogs.evt' in str(p).lower(),
+        path_filter=lambda p: 'raweventviewersystemlogs.evt' in str(p).lower() or 'system.evtx' in str(p).lower(),
         download_path=download_path
     )
 
@@ -376,7 +435,16 @@ def render_download_result_form():
     bt_table_rows = _build_bt_table_rows(file_dicts['bt_dict'], download_path=download_path)
     event_table_rows = _build_event_table_rows(file_dicts['ddd_dict'], download_path=download_path)
     fw_table_rows = _build_fw_table_rows(file_dicts['fw_dict'], download_path=download_path)
-    
+
+    # Find the evt path with the latest timestamp for auto-load
+    latest_evt_path = None
+    latest_evt_time = None
+    for row in event_table_rows:
+        ts = extract_timestamp_from_folder(row['ddd_path'])
+        if ts and (latest_evt_time is None or ts > latest_evt_time):
+            latest_evt_time = ts
+            latest_evt_path = row['ddd_path']
+
     return render_template('download_result.html',
                          case_path=download_path,
                          wifi_or_bt=case_context.wifi_or_bt,
@@ -388,6 +456,7 @@ def render_download_result_form():
                          bt_table_rows=bt_table_rows,
                          event_table_rows=event_table_rows,
                          fw_table_rows=fw_table_rows,
+                         latest_evt_path=latest_evt_path,
                          time_filter_info=time_filter_info,
                          time_filter_warnings=time_filter_warnings,
                          **file_dicts)
@@ -506,6 +575,10 @@ def handle_parse_event_log():
     
     if not path or not os.path.exists(path):
         return jsonify({'error': 'Invalid path'}), 400
+
+    system_timezone = _get_system_timezone_from_event_path(path)
+    if system_timezone:
+        print(f"[UI View] Using system timezone: {system_timezone}")
     
     try:
         # Read from newest to oldest (Reverse Direction) for newest-first display
@@ -561,6 +634,7 @@ def handle_parse_event_log():
                     # Parse the data and add it to the list
                     time_created = system.find('e:TimeCreated', ns)
                     time_str = time_created.get('SystemTime', '')[:19].replace('T', ' ') if time_created is not None else 'Unknown'
+                    time_str = _convert_event_time_to_system_timezone(time_str, system_timezone)
                     
                     event_id = system.find('e:EventID', ns)
                     id_str = event_id.text if event_id is not None else 'Unknown'

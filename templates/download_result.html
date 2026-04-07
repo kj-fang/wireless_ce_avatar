@@ -122,7 +122,7 @@
         }
     </style>
 </head>
-<body>
+<body data-latest-evt-path="{{ latest_evt_path | e if latest_evt_path else '' }}">
     <div class="form-container mb-4 p-0 overflow-hidden" 
         style="border-radius: 0; margin-top: -20px; margin-left: -20px; margin-right: -20px; ">
         <img src="{{ url_for('static', filename='nav_bar.svg') }}" 
@@ -181,6 +181,7 @@
     {% endif %}
 
     <!-- System Event Results Section -->
+    {% if event_table_rows %}
     <h2 class="mt-4">🔍 Analysis System Event Results</h2>
     <table>
         <thead>
@@ -239,6 +240,7 @@
             <p class="text-muted">Loading...</p>
         </div>
     </div>
+    {% endif %}
     
 
 
@@ -507,12 +509,6 @@
             const info = BT_EVENT_DETAILS[String(eventId)];
             if (!info) return '';
 
-            // Type badge color (Error/Warning/Information)
-            const bgColor = info.type === 'Error'       ? '#dc3545' :
-                            info.type === 'Warning'     ? '#fd7e14' :
-                            info.type === 'Information' || info.type === 'Informational' ? '#17a2b8'
-                                                        : '#6c757d';
-
             const tooltipAttr = info.comments
                 ? `title="${info.comments.replace(/"/g, '&quot;')}" style="cursor:help;"`
                 : '';
@@ -526,18 +522,7 @@
                   ).join('')
                 : `<span style="font-size:11px;">${info.details || ''}</span>`;
 
-            // Show type badge (Error/Warning/Information) only, not category
-            const typeBadge = info.type
-                ? `<span class="badge" style="
-                    background-color: ${bgColor};
-                    color: white; font-size: 10px;
-                    padding: 2px 5px; border-radius: 3px;
-                    display: inline-block; margin-bottom: 2px;
-                ">${info.type}</span>`
-                : '';
-
             return `<div ${tooltipAttr}>
-                ${typeBadge}
                 ${detailsList}
             </div>`;
         }
@@ -573,7 +558,7 @@
                     <td class="${levelClass}">${event.level || ''}</td>
                     <td>${event.source || ''}</td>
                     <td>${event.event_id || ''}</td>
-                    <td style="min-width: 160px;">${detailsHtml}</td>
+                    <td style="min-width: 160px;" class="${levelClass}">${detailsHtml}</td>
                     <td style="max-width: 400px; overflow: hidden; text-overflow: ellipsis;">${event.message || ''}</td>
                 </tr>`;
             });
@@ -921,11 +906,15 @@
             if (data.success) {
                 btnElement.innerText = 'Analysis Done!';
                 btnElement.classList.replace('btn-primary', 'btn-secondary');
+                appendLog(`✅ Event TXT dump success\n`);
+                appendLog(`📂 TXT path: ${data.txt_path || '(empty path)'}\n`);
                
-                alert('Success: TXT file generated at:\n' + data.txt_path);
             } else {
                 btnElement.innerText = 'Analysis Failed';
                 console.error('Dump failed:', data.error);
+                appendLog(`❌ Event TXT dump failed\n`, 'red');
+                appendLog(`📂 Source EVT path: ${decodedEvtPath}\n`, 'red');
+                appendLog(`🧾 Reason: ${data.error || 'unknown error'}\n`, 'red');
                 
                 alert('Error: Dump failed - ' + data.error);
             }
@@ -934,6 +923,9 @@
             btnElement.disabled = false;
             btnElement.innerText = originalText;
             console.error('Error:', err);
+            appendLog(`❌ Event TXT dump request error\n`, 'red');
+            appendLog(`📂 Source EVT path: ${decodedEvtPath}\n`, 'red');
+            appendLog(`🧾 Reason: ${err}\n`, 'red');
            
             alert('Error: A network error occurred during analysis.');
         });
@@ -941,7 +933,14 @@
 
     // Auto-load logic on page initialization
     window.addEventListener('DOMContentLoaded', () => {
-        // Find the first event analysis button and trigger it automatically
+        // Use backend-computed latest evt path (by folder timestamp MM-DD-YYYY_HH-MM-SS)
+        const latestEvtPath = document.body.dataset.latestEvtPath;
+        if (latestEvtPath) {
+            console.log("Auto-triggering event analysis for latest:", latestEvtPath);
+            loadEventLog(latestEvtPath);
+            return;
+        }
+
         const firstEvtBtn = document.querySelector('button[data-evt-path]');
         if (firstEvtBtn) {
             console.log("Auto-triggering event analysis for:", firstEvtBtn.dataset.evtPath);

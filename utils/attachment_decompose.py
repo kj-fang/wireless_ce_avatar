@@ -26,7 +26,7 @@ def filter_files(type, etl_files):
 
     elif type == "bt":
         for file in etl_files:
-            if os.path.basename(file).lower().startswith(('ibtusb-', 'ibtpci-')):
+            if os.path.basename(file).lower().startswith(('ibtusb-', 'ibtpci-')) and os.path.basename(file).lower().endswith('.etl'):
                 filtered_tiles.append(file)
 
     elif type == "fw":
@@ -135,7 +135,8 @@ def process_single_zip(zip_path, download_path_tmp, already_downloaded):
             for fname in files:
                 # Include files with 'ddd' in name or .evt files (System Event logs)
                 is_ddd_file = 'ddd' in fname.lower() and not fname.lower().endswith(compressed_exts)
-                is_evt_file = fname.lower().endswith('.evt')
+                is_evt_file = fname.lower().endswith(('.evt', 'system.evtx'))
+                # print(f"[DEBUG] File: {fname} (DDD: {is_ddd_file}, EVT: {is_evt_file})")
                 if is_ddd_file or is_evt_file:
                     ddd_files.append(os.path.abspath(os.path.join(root, fname)))
         

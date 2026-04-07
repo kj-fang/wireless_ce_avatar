@@ -16,7 +16,7 @@ def reset_active_bt_pid():
     active_bt_pid = None
 
 
-def open_with_text_analysis_tool(file_path: str) -> bool:
+def open_with_text_analysis_tool(file_path: str, filter_path: str = None) -> bool:
     """
     Open a generated .hci.txt file using TextAnalysisTool.NET.
 
@@ -48,9 +48,13 @@ def open_with_text_analysis_tool(file_path: str) -> bool:
         print(f"❌ File not found: {file_path}")
         return False
 
-    # Launch the viewer with the file path as an argument.
+    # Launch the viewer with file path and optional precomputed filter path.
+    cmd = [exe_path, file_path]
+    if filter_path and os.path.exists(filter_path):
+        cmd.append(f"/Filters:{filter_path}")
+
     try:
-        subprocess.Popen([exe_path, file_path])
+        subprocess.Popen(cmd)
         print(f"✅ Opened with TextAnalysisTool.NET: {file_path}")
         return True
     except Exception as e:
@@ -121,7 +125,8 @@ def close_error_dialog() -> None:
 
 def bt_analysis_autoFile_mode(
     log_path: str,
-    debug: bool = False
+    debug: bool = False,
+    filter_path: str = None
     
 ) -> None:
     """
@@ -365,7 +370,7 @@ def bt_analysis_autoFile_mode(
             found_file = files[0]
             if is_file_ready(found_file):
                 print(f"📂 HCI log is ready: {found_file}")
-                if open_with_text_analysis_tool(found_file):
+                if open_with_text_analysis_tool(found_file, filter_path=filter_path):
                     break  # Stop once opened
             else:
                 print(f"⚠️ File exists but still being written: {found_file}")
@@ -489,7 +494,8 @@ def bt_analysis_autoFolder_mode(
     log_path: str,
     debug: bool = False,
     wait_hci_timeout: int = 15,
-    should_stop: callable = None
+    should_stop: callable = None,
+    filter_path: str = None
 ) -> int:
     """
     Decode an entire folder via the 'BT Driver Log Parser' tab and open the target .hci.txt.
@@ -604,9 +610,13 @@ def bt_analysis_autoFolder_mode(
         if os.path.exists(hci_txt):
             if is_file_ready(hci_txt):
                 print(f"📂 HCI log is ready: {hci_txt}")
-                if open_with_text_analysis_tool(hci_txt):
+                if open_with_text_analysis_tool(hci_txt, filter_path=filter_path):
                     return active_bt_pid
 
         time.sleep(1)
         retry_count += 1
         # Optionally: enforce a timeout using wait_hci_timeout
+
+        if retry_count >= wait_hci_timeout:
+            print(f"⚠️ Waited {wait_hci_timeout} seconds for HCI log, giving up.")
+            return active_bt_pid

@@ -38,7 +38,14 @@ def process_etl_path():
     if 'wifi' in case_context.wifi_or_bt:
         wifi_service.analyze(etl_path)
     elif 'bt' in case_context.wifi_or_bt:
-        bt_service.analyze(etl_path, mode=mode)
+        classification = session.get("classification", {})
+        issue_type = (classification or {}).get("issue_type")
+        bt_service.analyze(
+            etl_path,
+            mode=mode,
+            issue_type=issue_type,
+            wifi_or_bt=case_context.wifi_or_bt,
+        )
     else:
         return "❌ Unknown case subcategory", 400
     

@@ -4,6 +4,7 @@ import threading
 # import time
 
 from configs.global_configs import app_config
+from configs.path_configs import LOG_PARSER_DIR
 from services.etl_parser.bt_parser import bt_analysis_manualSelect_mode, bt_analysis_autoFile_mode, bt_analysis_autoFolder_mode
 
 
@@ -31,7 +32,20 @@ class BTAnalysisService():
             event_name = 'manual_complete' if old_mode == 'Manual' else 'autofolder_complete'
             app_config.socketio.emit(event_name, {'etl_path': old_file_path}, namespace='/progress')
 
-    def analyze(self, file_path: str, mode: str) -> str:
+    def _resolve_bt_filter_path(self, issue_type: str = None, wifi_or_bt: str = None):
+        issue = (issue_type or '').lower()
+        if not issue:
+            return None
+
+        filter_name = issue
+        if 'yellow bang' in issue:
+            filter_name = 'BT_YB_LOST' if str(wifi_or_bt).lower() == 'bt' else 'yellow_bang'
+
+        candidate = os.path.join(LOG_PARSER_DIR, 'filter', f"{filter_name}.tat")
+        return candidate if os.path.exists(candidate) else None
+
+    def analyze(self, file_path: str, mode: str, issue_type: str = None, wifi_or_bt: str = None) -> str:
+        filter_path = self._resolve_bt_filter_path(issue_type, wifi_or_bt)
         
         if mode == 'Manual':
             self._release_previous()
@@ -46,7 +60,11 @@ class BTAnalysisService():
             with self._monitor_lock:
                 self._active_file_path = file_path
                 self._active_mode = 'AutoFolder'
-            t = threading.Thread(target=self._run_autofolder_analysis, args=(file_path,), daemon=True)
+            t = threading.Thread(
+                target=self._run_autofolder_analysis,
+                args=(file_path, filter_path),
+                daemon=True
+            )
             t.start()
 
         else:
@@ -59,16 +77,24 @@ class BTAnalysisService():
         self.emit_log("BT tool - Manual launched.")
         self._finish_analysis(file_path, pid, 'Manual')
 
-    def _run_autofolder_analysis(self, file_path: str):
+    def _run_autofolder_analysis(self, file_path: str, filter_path: str = None):
         """背景執行 AutoFolder 模式的 BT 分析"""
         etl_folder = os.path.dirname(file_path)
+        # Debug
+        print(f"Starting AutoFolder analysis for: {etl_folder}")
+        # Debug
         
         # should_stop callable: returns True if this operation was superseded
         def should_stop():
             with self._monitor_lock:
                 return self._active_file_path != file_path
         
-        pid = bt_analysis_autoFolder_mode(etl_folder, file_path, should_stop=should_stop)
+        pid = bt_analysis_autoFolder_mode(
+            etl_folder,
+            file_path,
+            should_stop=should_stop,
+            filter_path=filter_path,
+        )
         self.emit_log("BT tool - AutoFolder launched.")
         self._finish_analysis(file_path, pid, 'AutoFolder')
 

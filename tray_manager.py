@@ -54,7 +54,7 @@ class TrayManager:
         self.logger = self._init_log()
         self.logger.info(f'TrayManager initialized | base={self.base} | cwd={os.getcwd()}')
 
-    '''tool path to the driver download tool exe'''
+    #tool path to the driver download tool exe
     def _tool_exe_patterns(self) -> list[str]:
         if getattr(sys, 'frozen', False):
             meipass = getattr(sys, '_MEIPASS', '')
@@ -75,7 +75,7 @@ class TrayManager:
 
         return [pattern for pattern in candidates if pattern]
 
-    '''resolve the most recently modified tool exe matching the patterns'''
+    #resolve the most recently modified tool exe matching the patterns
     def _resolve_tool_exe_path(self) -> str:
         matches = []
         patterns = self._tool_exe_patterns()
@@ -152,7 +152,7 @@ class TrayManager:
         except Exception as error:
             self.logger.error(f'Launch failed: {error}')
 
-    '''launch the driver download tool exe if it exists'''
+    # launch the driver download tool exe if it exists
     def _launch_tool_exe(self):
         exe_path = self._resolve_tool_exe_path()
         if not exe_path:

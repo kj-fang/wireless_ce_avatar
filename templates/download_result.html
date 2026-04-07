@@ -452,31 +452,85 @@
                 }
             });
         }
-        // ------------------ Restored function ------------------
-        let allEventLogs = []; // Store all event logs for filtering
+        // ------------------ Event Log Virtual Scroll (Pagination) ------------------
+        const EVT_ROW_H = 26;
+        const EVT_BUFFER = 30;
+        const INITIAL_PAGE_SIZE = 30; // Initial page size
 
-        // Call backend to parse .evt file and display on web
+        let allEventLogs = [];
+        let currentEvtPath = '';
+        let eventPagingState = {
+            totalCount: 0,
+            loadedCount: 0,
+            hasMore: false,
+            isLoading: false
+        };
+
+        // Fetch initial page: offset=0, limit=INITIAL_PAGE_SIZE
         function loadEventLog(evtPath) {
-            // Show the event log section
+            currentEvtPath = evtPath;
             document.getElementById('eventLogSection').style.display = 'block';
-            
+
             const contentBox = document.getElementById('eventLogContent');
             contentBox.innerHTML = '<p class="text-info">Loading event logs...</p>';
-            
-            postJson('/parse_event_log', { path: evtPath })
+
+            if (contentBox._evtScrollHandler) {
+                contentBox.removeEventListener('scroll', contentBox._evtScrollHandler);
+                contentBox._evtScrollHandler = null;
+            }
+
+            // Reset paging state
+            allEventLogs = [];
+            eventPagingState = {
+                totalCount: 0,
+                loadedCount: 0,
+                hasMore: false,
+                isLoading: false
+            };
+
+            // Fetch first page
+            fetchEventPage(evtPath, 0, INITIAL_PAGE_SIZE);
+        }
+
+        // Fetch a page of events from backend
+        function fetchEventPage(evtPath, offset, limit) {
+            if (eventPagingState.isLoading) return;
+            eventPagingState.isLoading = true;
+
+            const contentBox = document.getElementById('eventLogContent');
+
+            postJson('/parse_event_log', {
+                path: evtPath,
+                offset: offset,
+                limit: limit,
+                source_filter: document.getElementById('eventSourceFilter').value,
+                level_filter: document.getElementById('eventLevelFilter').value,
+            })
             .then(response => response.json())
             .then(data => {
                 if (data.error) {
-                    contentBox.innerHTML = `<p class="text-danger">Error: ${data.error}</p>`;
+                    if (offset === 0) {
+                        contentBox.innerHTML = `<p class="text-danger">Error: ${data.error}</p>`;
+                    }
+                    eventPagingState.isLoading = false;
                     return;
                 }
-                
-                allEventLogs = data.events || [];
-                // Apply default filter and render table after loading
-                filterEventLogs();
+
+                // Update state
+                allEventLogs = allEventLogs.concat(data.events || []);
+                eventPagingState.totalCount = data.total || 0;
+                eventPagingState.loadedCount = allEventLogs.length;
+                eventPagingState.hasMore = data.has_more || false;
+                eventPagingState.isLoading = false;
+
+                // Render all loaded events (virtual scroll will handle visibility)
+                renderEventLogs(allEventLogs, eventPagingState);
             })
             .catch(err => {
-                contentBox.innerHTML = `<p class="text-danger">Failed to load events: ${err}</p>`;
+                if (offset === 0) {
+                    contentBox.innerHTML = `<p class="text-danger">Failed to load events: ${err}</p>`;
+                }
+                eventPagingState.isLoading = false;
             });
         }
         // -------------------------------------------------------
@@ -495,9 +549,9 @@
                 if (data && Object.keys(data).length > 0) {
                     BT_EVENT_DETAILS = data;
                     console.log(`[Success] BT Event Map loaded: ${Object.keys(data).length} entries`);
-                    // Re-render the event log table if data is already displayed
-                    if (typeof allEventLogs !== 'undefined' && allEventLogs.length > 0) {
-                        filterEventLogs();
+                    // Re-render table if events are already displayed
+                    if (allEventLogs.length > 0) {
+                        renderEventLogs(allEventLogs);
                     }
                 }
             })
@@ -527,81 +581,120 @@
             </div>`;
         }
 
-        // Render event logs to the display box
-        function renderEventLogs(events) {
+        // Render event logs with virtual scrolling — only visible rows are in the DOM.
+        // Spacer rows at top/bottom maintain correct scrollbar height.
+        // Also triggers lazy-load of next page when scrolling near bottom.
+        function renderEventLogs(events, pagingState) {
             const contentBox = document.getElementById('eventLogContent');
-            
+
+            if (contentBox._evtScrollHandler) {
+                contentBox.removeEventListener('scroll', contentBox._evtScrollHandler);
+                contentBox._evtScrollHandler = null;
+            }
+
             if (events.length === 0) {
                 contentBox.innerHTML = '<p class="text-muted">No events found.</p>';
                 return;
             }
-            
-            // Use table-bordered to ensure white background, and use inline CSS to force blue header
-            let html = '<table class="table table-sm table-bordered" style="font-size: 11px; background-color: #ffffff; color: #333333;">';
-            html += '<thead><tr>' +
-                    '<th style="background-color: #005A9C !important; color: #ffffff !important;">Time</th>' +
-                    '<th style="background-color: #005A9C !important; color: #ffffff !important;">Level</th>' +
-                    '<th style="background-color: #005A9C !important; color: #ffffff !important;">Source</th>' +
-                    '<th style="background-color: #005A9C !important; color: #ffffff !important;">Event ID</th>' +
-                    '<th style="background-color: #005A9C !important; color: #ffffff !important;">Details</th>' +
-                    '<th style="background-color: #005A9C !important; color: #ffffff !important;">Message</th>' +
-                    '</tr></thead>';
-            html += '<tbody>';
-            
-            events.forEach(event => {
-                const levelClass = event.level === 'Error' ? 'text-danger' : 
-                                   event.level === 'Warning' ? 'text-warning' : 'text-info';
-                const detailsHtml = getBtEventDetails(event.event_id);
-                const rowHighlight = detailsHtml ? 'background-color: #fff8f0;' : '';
-                html += `<tr style="${rowHighlight}">
-                    <td style="white-space: nowrap;">${event.time || ''}</td>
-                    <td class="${levelClass}">${event.level || ''}</td>
-                    <td>${event.source || ''}</td>
-                    <td>${event.event_id || ''}</td>
-                    <td style="min-width: 160px;" class="${levelClass}">${detailsHtml}</td>
-                    <td style="max-width: 400px; overflow: hidden; text-overflow: ellipsis;">${event.message || ''}</td>
-                </tr>`;
-            });
-            
-            html += '</tbody></table>';
-            contentBox.innerHTML = html;
+
+            const COL_STYLE = `
+                <colgroup>
+                  <col style="width:135px;"><col style="width:72px;"><col style="width:175px;">
+                  <col style="width:65px;"><col style="width:155px;"><col>
+                </colgroup>`;
+            const TH_STYLE = 'background-color:#005A9C !important; color:#ffffff !important;';
+            const TABLE_STYLE = 'font-size:11px; background-color:#ffffff; color:#333333; table-layout:fixed; width:100%;';
+
+            // Build table structure once — thead is sticky inside the scrollable box
+            contentBox.innerHTML = `
+                <table class="table table-sm table-bordered mb-0" style="${TABLE_STYLE}">
+                  ${COL_STYLE}
+                  <thead style="position:sticky; top:0; z-index:1;">
+                    <tr>
+                      <th style="${TH_STYLE}">Time</th>
+                      <th style="${TH_STYLE}">Level</th>
+                      <th style="${TH_STYLE}">Source</th>
+                      <th style="${TH_STYLE}">Event ID</th>
+                      <th style="${TH_STYLE}">Details</th>
+                      <th style="${TH_STYLE}">Message</th>
+                    </tr>
+                  </thead>
+                  <tbody id="evtTbody"></tbody>
+                </table>`;
+
+            const tbody = document.getElementById('evtTbody');
+
+            function renderRows() {
+                const scrollTop = contentBox.scrollTop;
+                const visibleH = contentBox.clientHeight;
+                const start = Math.max(0, Math.floor(scrollTop / EVT_ROW_H) - EVT_BUFFER);
+                const end   = Math.min(events.length, Math.ceil((scrollTop + visibleH) / EVT_ROW_H) + EVT_BUFFER);
+
+                let html = '';
+                if (start > 0)
+                    html += `<tr><td colspan="6" style="height:${start * EVT_ROW_H}px; padding:0; border:none;"></td></tr>`;
+
+                for (let i = start; i < end; i++) {
+                    const ev  = events[i];
+                    const lc  = ev.level === 'Error' ? 'text-danger' : ev.level === 'Warning' ? 'text-warning' : 'text-info';
+                    const det = getBtEventDetails(ev.event_id);
+                    const bg  = det ? 'background-color:#fff8f0;' : '';
+                    html += `<tr style="${bg}">
+                        <td style="white-space:nowrap;">${ev.time || ''}</td>
+                        <td class="${lc}">${ev.level || ''}</td>
+                        <td>${ev.source || ''}</td>
+                        <td>${ev.event_id || ''}</td>
+                        <td class="${lc}">${det}</td>
+                        <td style="overflow:hidden; text-overflow:ellipsis;">${ev.message || ''}</td>
+                    </tr>`;
+                }
+
+                // Show "loading more..." indicator at bottom if has more pages
+                if (pagingState && pagingState.hasMore && end === events.length) {
+                    html += `<tr><td colspan="6" style="text-align:center; padding:8px; color:#999;">
+                        Loading more...
+                    </td></tr>`;
+                }
+
+                // Bottom spacer: based ONLY on already-loaded data (events.length)
+                // This keeps scrollbar size STABLE as user scrolls
+                const bottomSpacerH = (events.length - end) * EVT_ROW_H;
+                if (bottomSpacerH > 0)
+                    html += `<tr><td colspan="6" style="height:${bottomSpacerH}px; padding:0; border:none;"></td></tr>`;
+
+                tbody.innerHTML = html;
+
+                // Auto-load next page if scrolling near bottom and has more data
+                if (pagingState && pagingState.hasMore && !pagingState.isLoading) {
+                    // Trigger load when user scrolls to near the end of currently loaded data
+                    const scrolledPercentage = (scrollTop + visibleH) / (events.length * EVT_ROW_H);
+                    if (scrolledPercentage > 0.7) {
+                        // Near bottom of loaded data — trigger next page load
+                        fetchEventPage(currentEvtPath, eventPagingState.loadedCount, INITIAL_PAGE_SIZE);
+                    }
+                }
+            }
+
+            contentBox._evtScrollHandler = renderRows;
+            contentBox.addEventListener('scroll', renderRows);
+            renderRows();
         }
 
-        // Filter event logs by source and level
+        // Re-apply filter: reset paging and re-fetch first page
         function filterEventLogs() {
-            const sourceFilter = document.getElementById('eventSourceFilter').value;
-            const levelFilter = document.getElementById('eventLevelFilter').value;
+            if (!currentEvtPath) return;
             
-            let filtered = allEventLogs;
-            
-            // Source filter definitions
-            const sourceGroups = {
-                'pci_bt':      ['ibtpci', 'bthmini'],
-                'usb_bt':      ['ibtusb', 'bthusb'],
-                'pci_bt_wifi': ['ibtpci', 'bthmini', 'netwaw', 'netwtw'],
-                'usb_bt_wifi': ['ibtusb', 'bthusb', 'netwaw', 'netwtw']
+            // Reset paging state for new filter
+            eventPagingState = {
+                totalCount: 0,
+                loadedCount: 0,
+                hasMore: false,
+                isLoading: false
             };
+            allEventLogs = [];
             
-            // Filter by source
-            if (sourceFilter !== 'all' && sourceGroups[sourceFilter]) {
-                const keywords = sourceGroups[sourceFilter];
-                filtered = filtered.filter(e => {
-                    const source = (e.source || '').toLowerCase();
-                    return keywords.some(kw => source.includes(kw));
-                });
-            }
-            
-            // Filter by level
-            if (levelFilter === 'warning_error') {
-                filtered = filtered.filter(e => {
-                    const level = (e.level || '').toLowerCase();
-                    return level === 'warning' || level === 'error' || level === 'critical';
-                });
-            } else if (levelFilter === 'information') {
-                filtered = filtered.filter(e => e.level && e.level.toLowerCase() === 'information');
-            }
-            
-            renderEventLogs(filtered);
+            // Re-fetch with new filter from offset 0
+            fetchEventPage(currentEvtPath, 0, INITIAL_PAGE_SIZE);
         }
 
         
@@ -931,20 +1024,14 @@
         });
     }
 
-    // Auto-load logic on page initialization
-    window.addEventListener('DOMContentLoaded', () => {
-        // Use backend-computed latest evt path (by folder timestamp MM-DD-YYYY_HH-MM-SS)
-        const latestEvtPath = document.body.dataset.latestEvtPath;
-        if (latestEvtPath) {
-            console.log("Auto-triggering event analysis for latest:", latestEvtPath);
+    // Auto-load event table for the latest evt file when page loads
+    document.addEventListener('DOMContentLoaded', function() {
+        const body = document.body;
+        const latestEvtPath = body.getAttribute('data-latest-evt-path');
+        
+        if (latestEvtPath && latestEvtPath.trim()) {
+            console.log(`[Auto-Init] Loading latest evt file: ${latestEvtPath}`);
             loadEventLog(latestEvtPath);
-            return;
-        }
-
-        const firstEvtBtn = document.querySelector('button[data-evt-path]');
-        if (firstEvtBtn) {
-            console.log("Auto-triggering event analysis for:", firstEvtBtn.dataset.evtPath);
-            loadEventLog(firstEvtBtn.dataset.evtPath);
         }
     });
     </script>

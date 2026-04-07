@@ -2,75 +2,17 @@ from flask import Blueprint, render_template, request, session, redirect, url_fo
 import os
 import subprocess
 from datetime import datetime
-from dateutil import tz
-import json
 
 from utils import helpers
 from utils.etl_utils import get_auto_analysis_etl, get_issue_time_from_selected_files, filter_folders_by_time, extract_timestamp_from_folder
 from utils.fw_utils import load_fw_system_info
 from services.case_info_service import CaseService
+from services import event_log_service
 from models.models import CaseContext
 from configs.global_configs import app_config
 
 
 main_bp = Blueprint("main", __name__, url_prefix="/")
-
-
-def _get_system_timezone_from_event_path(event_path):
-    if not event_path:
-        return ""
-
-    search_dirs = []
-    current_dir = os.path.dirname(event_path)
-    for _ in range(4):
-        if not current_dir or current_dir in search_dirs:
-            break
-        search_dirs.append(current_dir)
-        current_dir = os.path.dirname(current_dir)
-
-    for base_dir in search_dirs:
-        direct_system_info = os.path.join(base_dir, 'system_info.txt')
-        if os.path.exists(direct_system_info):
-            try:
-                with open(direct_system_info, 'r', encoding='utf-8') as file:
-                    system_info = json.load(file)
-                return system_info.get('System Time Zone', '') or ''
-            except Exception:
-                pass
-
-        try:
-            for child_name in os.listdir(base_dir):
-                child_dir = os.path.join(base_dir, child_name)
-                child_system_info = os.path.join(child_dir, 'system_info.txt')
-                if not os.path.isdir(child_dir) or not os.path.exists(child_system_info):
-                    continue
-
-                try:
-                    with open(child_system_info, 'r', encoding='utf-8') as file:
-                        system_info = json.load(file)
-                    timezone_name = system_info.get('System Time Zone', '') or ''
-                    if timezone_name:
-                        return timezone_name
-                except Exception:
-                    continue
-        except Exception:
-            continue
-
-    return ""
-
-
-def _convert_event_time_to_system_timezone(time_str, timezone_name):
-    if not time_str or time_str == 'Unknown' or not timezone_name:
-        return time_str
-
-    try:
-        event_time_utc = datetime.strptime(time_str, '%Y-%m-%d %H:%M:%S').replace(tzinfo=tz.UTC)
-        target_timezone = tz.gettz(timezone_name)
-        if target_timezone is None:
-            return time_str
-        return event_time_utc.astimezone(target_timezone).strftime('%Y-%m-%d %H:%M:%S')
-    except Exception:
-        return time_str
 
 #------------ALL ROUTE-------------#
 
@@ -494,177 +436,31 @@ def handle_open_path():
     return 'Invalid path', 400
 
 def handle_dump_event_txt():
-    """Decode .evt files to TXT using pywin32 for ultra-fast native access."""
-    import xml.etree.ElementTree as ET
-    import win32evtlog
-    
     path = request.json.get('path')
-    
-    print(f"\n[Background Task] 🚀 Starting Event Log decoding using pywin32...")
-    print(f"Source file: {path}")
-    
     if not path or not os.path.exists(path):
         return jsonify({'error': 'Invalid path'}), 400
-    
-    txt_path = f"{path}.txt"
     try:
-        print(f"Writing content to: {txt_path} (Lightning fast...)")
-        
-        # Use native API to open Event Log
-        query_handle = win32evtlog.EvtQuery(path, win32evtlog.EvtQueryFilePath | win32evtlog.EvtQueryForwardDirection, None)
-        
-        with open(txt_path, 'w', encoding='utf-8') as f:
-            count = 0
-            while True:
-                # Read 100 events at a time to avoid excessive memory usage
-                events = win32evtlog.EvtNext(query_handle, 100)
-                if not events:
-                    break
-                    
-                for event in events:
-                    count += 1
-                    try:
-                        # Convert to XML and parse key fields (faster than looking up DLL strings)
-                        xml_content = win32evtlog.EvtRender(event, win32evtlog.EvtRenderEventXml)
-                        root = ET.fromstring(xml_content)
-                        ns = {'e': 'http://schemas.microsoft.com/win/2004/08/events/event'}
-                        
-                        system = root.find('e:System', ns)
-                        if system is not None:
-                            time_created = system.find('e:TimeCreated', ns)
-                            time_str = time_created.get('SystemTime', '')[:19].replace('T', ' ') if time_created is not None else 'Unknown'
-                            
-                            provider = system.find('e:Provider', ns)
-                            source_str = provider.get('Name', '') if provider is not None else 'Unknown'
-                            
-                            level = system.find('e:Level', ns)
-                            level_map = {'1': 'Critical', '2': 'Error', '3': 'Warning', '4': 'Information', '5': 'Verbose'}
-                            level_str = level_map.get(level.text if level is not None else '', 'Unknown')
-                            
-                            event_id = system.find('e:EventID', ns)
-                            id_str = event_id.text if event_id is not None else 'Unknown'
-                            
-                            event_data = root.find('e:EventData', ns)
-                            message = ''
-                            if event_data is not None:
-                                data_items = event_data.findall('e:Data', ns)
-                                message = ' | '.join([d.text or '' for d in data_items if d.text])
-                            
-                            # Write each event as a single line: header + TAB + Message Data
-                            f.write(f"[{time_str}] [{level_str}] [{source_str}] Event ID: {id_str}\tMessage Data: {message}\n")
-                            
-                    except Exception as parse_e:
-                        f.write(f"[Error parsing event]: {parse_e}\n")
-                        
-        print(f"[Background Task] ✅ Decoding complete! Processed {count} events. TXT file successfully generated.\n")
+        txt_path, count = event_log_service.dump_event_to_txt(path)
+        print(f"[Background Task] ✅ Processed {count} events → {txt_path}")
         return jsonify({'success': True, 'txt_path': txt_path})
-        
     except Exception as e:
         import traceback
         traceback.print_exc()
-        print(f"[Background Task] ❌ Error occurred: {e}")
         return jsonify({'error': str(e)}), 500
 
 def handle_parse_event_log():
-    """Parse .evt file: keep ALL errors/warnings, ALL special sources (ibtusb/ibtpci/bthmini/bthusb/netwaw/netwtw), and up to 1000 normal events."""
-    import xml.etree.ElementTree as ET
-    import win32evtlog
-    
     path = request.json.get('path')
     print(f"\n[UI View] 🔍 Scanning Event Log: {path}")
-    
     if not path or not os.path.exists(path):
         return jsonify({'error': 'Invalid path'}), 400
-
-    system_timezone = _get_system_timezone_from_event_path(path)
-    if system_timezone:
-        print(f"[UI View] Using system timezone: {system_timezone}")
-    
     try:
-        # Read from newest to oldest (Reverse Direction) for newest-first display
-        query_handle = win32evtlog.EvtQuery(
-            path, 
-            win32evtlog.EvtQueryFilePath | win32evtlog.EvtQueryReverseDirection, 
-            None
-        )
-        
-        events_list = []
-        # All special sources to always keep regardless of level
-        special_sources = ['ibtusb', 'ibtpci', 'bthmini', 'bthusb', 'netwaw', 'netwtw']
-        
-        normal_kept = 0
-        total_scanned = 0
-        
-        while True:
-            # Read 100 events at a time
-            events = win32evtlog.EvtNext(query_handle, 100)
-            if not events:
-                break  # End of file reached
-                
-            for event in events:
-                total_scanned += 1
-                try:
-                    xml_content = win32evtlog.EvtRender(event, win32evtlog.EvtRenderEventXml)
-                    root = ET.fromstring(xml_content)
-                    ns = {'e': 'http://schemas.microsoft.com/win/2004/08/events/event'}
-                    
-                    system = root.find('e:System', ns)
-                    if system is None:
-                        continue
-                        
-                    level_elem = system.find('e:Level', ns)
-                    level_val = level_elem.text if level_elem is not None else ''
-                    
-                    provider = system.find('e:Provider', ns)
-                    source = provider.get('Name', '') if provider is not None else ''
-                    
-                    # 💡 FILTERING LOGIC 💡
-                    # Condition 1: Important levels (1=Critical, 2=Error, 3=Warning)
-                    # Condition 2: Special sources (ibtusb, ibtpci, bthmini, bthusb, netwaw, netwtw)
-                    is_important_level = level_val in ['1', '2', '3']
-                    is_special_source = any(kw in source.lower() for kw in special_sources)
-                    
-                    # If it is neither an important level nor a special source (i.e., normal Information)
-                    if not (is_important_level or is_special_source):
-                        # Keep only the latest 1000 normal logs
-                        if normal_kept >= 1000:
-                            continue  # Skip if we already have 1000 normal logs
-                        normal_kept += 1
-                        
-                    # Parse the data and add it to the list
-                    time_created = system.find('e:TimeCreated', ns)
-                    time_str = time_created.get('SystemTime', '')[:19].replace('T', ' ') if time_created is not None else 'Unknown'
-                    time_str = _convert_event_time_to_system_timezone(time_str, system_timezone)
-                    
-                    event_id = system.find('e:EventID', ns)
-                    id_str = event_id.text if event_id is not None else 'Unknown'
-                    
-                    level_map = {'1': 'Critical', '2': 'Error', '3': 'Warning', '4': 'Information', '5': 'Verbose'}
-                    level_text = level_map.get(level_val, 'Unknown')
-                    
-                    event_data = root.find('e:EventData', ns)
-                    message = ''
-                    if event_data is not None:
-                        data_items = event_data.findall('e:Data', ns)
-                        message = ' | '.join([d.text or '' for d in data_items if d.text])
-                    
-                    events_list.append({
-                        'time': time_str,
-                        'level': level_text,
-                        'source': source,
-                        'event_id': id_str,
-                        'message': message[:500]
-                    })
-                        
-                except Exception:
-                    continue
-                    
-        print(f"[UI View] ✅ Scan complete! Scanned {total_scanned} events. Kept {len(events_list)} events (including {normal_kept} normal logs).")
-        
-        return jsonify({'events': events_list})
-        
+        offset = max(0, int(request.json.get('offset', 0) or 0))
+        limit = int(request.json.get('limit', 0) or 0)
+        source_filter = request.json.get('source_filter', 'all')
+        level_filter = request.json.get('level_filter', 'all')
+        result = event_log_service.get_paged_events(path, offset, limit, source_filter, level_filter)
+        return jsonify(result)
     except Exception as e:
-        print(f"Error parsing event log: {e}")
         import traceback
         traceback.print_exc()
         return jsonify({'error': str(e)}), 500

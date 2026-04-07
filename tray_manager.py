@@ -58,9 +58,16 @@ class TrayManager:
     def _tool_exe_patterns(self) -> list[str]:
         if getattr(sys, 'frozen', False):
             meipass = getattr(sys, '_MEIPASS', '')
-            candidates = [
-                os.path.join(meipass, 'services', 'driver_download', 'downloadDriver_*.exe'),
-            ]
+            candidates = []
+            if meipass:
+                candidates.append(
+                    os.path.join(meipass, 'services', 'driver_download', 'downloadDriver_*.exe')
+                )
+            # In onedir builds, bundled files may be located next to the executable.
+            candidates.extend([
+                os.path.join(self.base, 'services', 'driver_download', 'downloadDriver_*.exe'),
+                os.path.join(self.base, '_internal', 'services', 'driver_download', 'downloadDriver_*.exe'),
+            ])
         else:
             candidates = [
                 os.path.join(self.base, 'services', 'driver_download', 'downloadDriver_*.exe'),

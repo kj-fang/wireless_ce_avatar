@@ -59,8 +59,7 @@ class TrayManager:
             meipass = getattr(sys, '_MEIPASS', '')
             candidates = [
                 os.path.join(meipass, 'services', 'driver_download', 'downloadDriver_*.exe'),
-                os.path.join(self.base, '_internal', 'services', 'driver_download', 'downloadDriver_*.exe'),
-
+                #os.path.join(self.base, '_internal', 'services', 'driver_download', 'downloadDriver_*.exe'),
             ]
         else:
             candidates = [

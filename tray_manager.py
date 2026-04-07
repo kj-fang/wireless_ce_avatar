@@ -59,7 +59,6 @@ class TrayManager:
             meipass = getattr(sys, '_MEIPASS', '')
             candidates = [
                 os.path.join(meipass, 'services', 'driver_download', 'downloadDriver_*.exe'),
-                #os.path.join(self.base, '_internal', 'services', 'driver_download', 'downloadDriver_*.exe'),
             ]
         else:
             candidates = [
@@ -152,7 +151,7 @@ class TrayManager:
             return
 
         try:
-            os.startfile(exe_path)
+            subprocess.run(["explorer", exe_path], check=False)
             self.logger.info(f'Launched tool executable: {exe_path}')
         except Exception as error:
             self.logger.error(f'Tool launch failed: {error}')

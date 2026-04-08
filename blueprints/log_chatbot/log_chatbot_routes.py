@@ -350,23 +350,34 @@ def analyze_all_stream():
     data = request.get_json(silent=True) or {}
     issue_description = data.get("issue_description", "").strip()
 
-    # if message:
-    #     issue_description = f"{message}\n\n{issue_description}"
-    # if not issue_description:
-    #     issue_description = _compose_concise_description()
-
     # IMPORTANT: Extract session-backed context in request thread.
     # Flask session/request proxies are not safe in background threads.
     try:
         full_context = _extract_issue_context()
-        if not full_context.get("description"):
-            message = data.get("message", "").strip()  # optional free-form user message to prepend to description
-            if message:
-                full_context["description"] = f"{message}\n\n{full_context['description']}"
-                issue_description = full_context["description"]
+        message = data.get("message", "").strip()
+
+        if message:
+            # Chat-entered question → use directly as issue_description (drives skill selection).
+            issue_description = message
+            if not full_context.get("description"):
+                full_context["description"] = message
+        elif not issue_description:
+            # "Analyze" button with no text → compose from session context.
+            issue_description = _compose_concise_description()
+
+        # Append timestamp hint from session so _extract_issue_time() can find it.
+        time_hint = _extract_disconnect_time(
+            issue_description,
+            full_context.get("subject", ""),
+            full_context.get("description", ""),
+        )
+        if time_hint and time_hint not in issue_description:
+            issue_description = f"{issue_description}{time_hint}"
 
     except Exception:
         full_context = {}
+        if not issue_description:
+            issue_description = "Perform full multi-skill log analysis"
 
     try:
         agent = _get_or_create_agent()
@@ -707,11 +718,13 @@ def agent_analyze():
         print(f"❌ Agent analysis error:\n{error_traceback}")
         return jsonify({"success": False, "error": str(e)}), 500
 
+
+
 @log_chatbot_bp.route("/get_issue_context", methods=["GET"])
 def get_issue_context():
-    """Provide the original Issue Description for frontend script to compare log file timestamps."""
-    ctx = _extract_issue_context()
-    return jsonify({"description": ctx.get("description", "No description found.")})
+    # Use _compose_concise_description() instead to get a cleaned and concise title/description.
+    concise_desc = _compose_concise_description()
+    return jsonify({"description": concise_desc})
 
 
 # ------------------------------------------------------------------

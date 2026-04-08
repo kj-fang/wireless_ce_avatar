@@ -506,7 +506,7 @@
         <div class="sidebar-section">
             <h6>💬 Quick Ask</h6>
             <div id="quick-questions">
-                <button class="skill-card" style="width:100%;text-align:left;background:none;border:1px solid #e4eaf2;border-radius:7px;padding:7px 10px;cursor:pointer;font-size:0.78rem;color:#444;margin-bottom:5px;" onclick="sendQuick('Why user could not find any APs at 6GHz?')">Why user could not find any APs at 6GHz?</button>
+                <button class="skill-card" style="width:100%;text-align:left;background:none;border:1px solid #e4eaf2;border-radius:7px;padding:7px 10px;cursor:pointer;font-size:0.78rem;color:#444;margin-bottom:5px;" onclick="sendQuick('Why user could not find any APs at 6GHz? at around 04/02/2026-14:50:51.910')">Why user could not find any APs at 6GHz? at around 04/02/2026-14:50:51.910</button>
                 <button class="skill-card" style="width:100%;text-align:left;background:none;border:1px solid #e4eaf2;border-radius:7px;padding:7px 10px;cursor:pointer;font-size:0.78rem;color:#444;margin-bottom:5px;" onclick="sendQuick('What is the average resume connection time?')">What is the resume connection time?</button>
                 <button class="skill-card" style="width:100%;text-align:left;background:none;border:1px solid #e4eaf2;border-radius:7px;padding:7px 10px;cursor:pointer;font-size:0.78rem;color:#444;margin-bottom:5px;" onclick="sendQuick('Was the disconnection initiated remotely by the AP?')">Was disconnection remote/AP-initiated?</button>
                 <button class="skill-card" style="width:100%;text-align:left;background:none;border:1px solid #e4eaf2;border-radius:7px;padding:7px 10px;cursor:pointer;font-size:0.78rem;color:#444;" onclick="sendQuick('Summarize all the issues found in this log.')">Summarize all issues</button>
@@ -1038,22 +1038,6 @@
         }
     }
 
-    function removeEmoji(text) {
-        // Best-effort emoji cleanup with fallback for engines not supporting Unicode property escapes.
-        const src = String(text || '');
-        try {
-            return src.replace(/[\p{Emoji_Presentation}\p{Extended_Pictographic}]/gu, '').trim();
-        } catch (e) {
-            return src.replace(/[\u2600-\u27BF]|[\uD83C-\uDBFF][\uDC00-\uDFFF]/g, '').trim();
-        }
-    }
-
-    function cleanStepContent(text) {
-        // Strip leading icon-like markers and keep message text readable.
-        let out = removeEmoji(text || '');
-        out = out.replace(/^\s*[\-:|>*\u25B2\u25BC\u2714\u2716\u26A0\u2705\u274C\u1F4C4\u1F4CA\u1F9E0\u1F50D\u1F9ED\u1F3AF\u1F552]+\s*/g, '');
-        return out.trim();
-    }
 
     function collapseAgentProcessCard(cardId) {
         const body = document.getElementById(cardId);
@@ -1156,7 +1140,7 @@
         // Append steps immediately for smoother UX
         const bodyEl = document.getElementById(cardId);
         steps.forEach((step, idx) => {
-            bodyEl.appendChild(createLazyStepNode(cleanStepContent(step.content || '')));
+            bodyEl.appendChild(createLazyStepNode(step.content || ''));
             if (idx === steps.length - 1) {
                 scrollBottom();
             }
@@ -1169,8 +1153,11 @@
         if (!forceRun && !logLoaded) { appendAssistantText('⚠️ Please load a log file first.'); return; }
         if (!forceRun && !skillsLoaded) { appendAssistantText('⚠️ No skills loaded. Please load a skills.yaml first.'); return; }
 
-        const desc = '';
-        appendUserMsg('🔍 Run full multi-skill analysis');
+        // use passed-in description, or fallback to default
+        const displayMsg = options.description || '🔍 Run full multi-skill analysis';
+        // display the concise system issue in the chat bubble
+        appendUserMsg(displayMsg);
+
         const analyzeBtn = document.getElementById('analyze-all-btn');
         if (analyzeBtn) analyzeBtn.disabled = true;
 
@@ -1271,7 +1258,7 @@
                             
                             // Queue step render to next animation frame for smoother updates
                             if (bodyEl) {
-                                renderQueue.push(cleanStepContent(step.content || ''));
+                                renderQueue.push(step.content || '');
                                 scheduleStepRender();
                             }
                         } else if (eventData.type === 'error' && eventData.content) {
@@ -1341,8 +1328,8 @@
             xhr.onloadend = function() {
                 if (cardId) collapseAgentProcessCard(cardId);
             };
-
-            xhr.send(JSON.stringify({issue_description: desc}));
+            // Send issue_description only; backend will infer timestamps from description/session.
+            xhr.send(JSON.stringify({issue_description: displayMsg}));
 
         } catch (e) {
             appendAssistantText('❌ Network error: ' + e.message);
@@ -1363,6 +1350,7 @@
     }
 
     // === Auto-load log and trigger first Analyze-All on page load ===
+
     async function tryAutoAnalyzeOnLoad() {
         if (autoAnalyzeTriggered) return;
 
@@ -1370,30 +1358,31 @@
         const autoRun = new URLSearchParams(window.location.search).get('auto_run');
         const shouldAutoRun = (autoRun === 'analyze_all') || !!suggestedLog;
 
-        if (!shouldAutoRun) {
-            return;
-        }
-
-        if (!suggestedLog) {
-            console.warn('[Auto-Analysis] Requested but no suggested log path is available.');
-            return;
-        }
+        if (!shouldAutoRun || !suggestedLog) return;
 
         autoAnalyzeTriggered = true;
-        console.log('[Auto-Analysis] Initializing auto-run flow...');
 
         try {
-            await setLog();
+            await setLog(); // load log file first
 
-            // Some environments need a short settling period for UI state updates.
+            // Wait for state synchronization
             let retries = 0;
             while ((!logLoaded || !skillsLoaded) && retries < 5) {
                 await new Promise(resolve => setTimeout(resolve, 250));
                 retries += 1;
             }
 
-            console.log('[Auto-Analysis] Triggering analyzeAll (force mode).');
-            setTimeout(() => analyzeAll({ forceRun: true }), 400);
+            // ---  fetch the concise issue description from the backend ---
+            const contextRes = await fetch('/log_chatbot/get_issue_context');
+            const contextData = await contextRes.json();
+            const question = contextData.description;
+
+            // Execute analysis with the concise issue description, so the chat window shows "Why is 6GHz not in the scan list" instead of a hardcoded message
+            setTimeout(() => analyzeAll({ 
+                forceRun: true, 
+                description: question 
+            }), 400);
+
         } catch (err) {
             autoAnalyzeTriggered = false;
             console.error('[Auto-Analysis] Failed:', err);

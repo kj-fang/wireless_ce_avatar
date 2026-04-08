@@ -15,10 +15,11 @@ import re
 import json
 import hashlib
 import shutil
+from bisect import bisect_left, bisect_right
 import importlib.util
 import xml.etree.ElementTree as ET
 from pathlib import Path
-from datetime import datetime
+from datetime import datetime, timedelta
 from typing import Dict, List, Optional, Tuple
 from pydantic import BaseModel, Field
 
@@ -396,6 +397,11 @@ class WifiLogAgentSystem:
         self._assembled_entries_no_ts: Dict[str, dict] = {}
         self._assembled_log_text: str = ""
         self._filter_export_counter: int = 0
+        # Pre-analysis scan results (populated before skill filtering)
+        self._driver_init_count: int = 0
+        self._driver_init_lines: List[str] = []
+        self._issue_time_window_lines: List[str] = []
+        self._scoped_log_lines: List[str] = []  # merged segments for skill filtering
 
         if skills:
             # Use pre-loaded skills passed in (e.g. from LLM_helper.skills)
@@ -438,15 +444,199 @@ class WifiLogAgentSystem:
             self._assembled_entries_no_ts = {}
             self._assembled_log_text = ""
             self._filter_export_counter = 0
+            self._driver_init_count = 0
+            self._driver_init_lines = []
+            self._issue_time_window_lines = []
+            self._scoped_log_lines = []
             return None
         except Exception as e:
             return f"Error reading log file: {e}"
 
-    def _export_assembled_log_file(self) -> str:
+    def _preprocess_raw_log_context(self) -> None:
         """
-        Save current assembled log report to the opened-log folder as
-        fliterlog1.txt, fliterlog2.txt, ... and return the saved file path.
+        Pre-analysis scan executed on self._raw_log_cache BEFORE any skill
+        filtering runs.  Produces two segments that are merged into
+        self._scoped_log_lines — ALL subsequent skill filtering operates
+        ONLY on these scoped lines, not the full raw cache.
+
+        Segment 1 – Driver init settings
+          First "OS issued Driver Device Add"
+          → first "Got Command (M1 Message) TASK_DOT11_RESET" AFTER it (inclusive).
+
+        Segment 2 – Event investigation window (one of):
+          A) issue_time ±5 min  (if issue_time is available)
+          B) last TASK_DOT11_RESET (after first Driver Add) → EOF  (fallback)
         """
+        DRIVER_ADD_MARKER = "os issued driver device add"
+        RESET_MARKER      = "got command (m1 message) task_dot11_reset"
+        TS_RE = re.compile(r'(\d{2}/\d{2}/\d{4}-\d{2}:\d{2}:\d{2}\.\d{3})')
+
+        total_lines = len(self._raw_log_cache)
+
+        # ------------------------------------------------------------------
+        # Pass 1: single scan — find first ADD, count ADDs, collect all RESETs
+        # ------------------------------------------------------------------
+        driver_add_indices = []
+        reset_indices = []
+        for i, line in enumerate(self._raw_log_cache):
+            line_lower = line.lower()
+            if DRIVER_ADD_MARKER in line_lower:
+                driver_add_indices.append(i)
+                print(f"[PreScan] 🚩 'os issued driver device add' found at line {i+1}")
+            if RESET_MARKER in line_lower:
+                reset_indices.append(i)
+
+        self._driver_init_count = len(driver_add_indices)
+
+        def _line_ts(idx: int) -> Optional[datetime]:
+            m = TS_RE.search(self._raw_log_cache[idx])
+            if not m:
+                return None
+            try:
+                return datetime.strptime(m.group(1), "%m/%d/%Y-%H:%M:%S.%f")
+            except ValueError:
+                return None
+
+        # ------------------------------------------------------------------
+        # Segment 1: choose ONE block nearest to issue_time
+        # (fallback: first valid block when issue_time is unavailable)
+        # ------------------------------------------------------------------
+        first_add_idx = None
+        seg1_end = None
+        self._driver_init_lines = []
+
+        seg1_candidates = []
+        for idx, add_idx in enumerate(driver_add_indices):
+            next_add_idx = driver_add_indices[idx + 1] if idx + 1 < len(driver_add_indices) else total_lines
+            first_reset_idx = next((r for r in reset_indices if add_idx < r < next_add_idx), None)
+            if first_reset_idx is not None:
+                seg1_candidates.append({
+                    "start_idx": add_idx,
+                    "end_idx": first_reset_idx + 1,
+                    "anchor_ts": _line_ts(first_reset_idx) or _line_ts(add_idx),
+                })
+            else:
+                print(f"[PreScan] ⚠️  No RESET found after ADD at line {add_idx+1} before next ADD.")
+
+        if seg1_candidates:
+            chosen = None
+            if self.issue_time:
+                with_ts = [c for c in seg1_candidates if c.get("anchor_ts") is not None]
+                if with_ts:
+                    chosen = min(with_ts, key=lambda c: abs((c["anchor_ts"] - self.issue_time).total_seconds()))
+            if chosen is None:
+                chosen = seg1_candidates[0]
+
+            first_add_idx = chosen["start_idx"]
+            seg1_end = chosen["end_idx"]
+            self._driver_init_lines = self._raw_log_cache[first_add_idx:seg1_end]
+            print(
+                f"[PreScan] ✅ Segment1 — Driver init block: "
+                f"line {first_add_idx + 1} → line {seg1_end} "
+                f"({len(self._driver_init_lines)} lines) | "
+                f"driver load occurrences in full log: {self._driver_init_count}"
+            )
+            if self.issue_time and chosen.get("anchor_ts") is not None:
+                print(
+                    f"[PreScan]  Segment1 selected by nearest issue_time: "
+                    f"{chosen['anchor_ts'].strftime('%m/%d/%Y %H:%M:%S.%f')[:-3]}"
+                )
+
+        if first_add_idx is None or seg1_end is None:
+            print("[PreScan] ⚠️  No valid Segment1 block found.")
+
+        # ------------------------------------------------------------------
+        # Segment 2: event investigation window
+        # ------------------------------------------------------------------
+        seg2_lines: List[str] = []
+        seg2_start_idx: int = -1
+        seg2_end_idx:   int = -1
+
+        if self.issue_time:
+            # --- 2A: issue_time ±5 min (timestamp indices + contiguous slice) ---
+            window_start = self.issue_time - timedelta(minutes=5)
+            window_end   = self.issue_time + timedelta(minutes=5)
+
+            ts_points: List[Tuple[datetime, int]] = []
+            for i, line in enumerate(self._raw_log_cache):
+                m = TS_RE.search(line)
+                if m:
+                    try:
+                        t = datetime.strptime(m.group(1), "%m/%d/%Y-%H:%M:%S.%f")
+                        ts_points.append((t, i))
+                    except ValueError:
+                        pass
+
+            if ts_points:
+                ts_values = [x[0] for x in ts_points]
+                left = bisect_left(ts_values, window_start)
+                right = bisect_right(ts_values, window_end) - 1
+                if left <= right:
+                    seg2_start_idx = ts_points[left][1]
+                    seg2_end_idx = ts_points[right][1]
+                    seg2_lines = self._raw_log_cache[seg2_start_idx:seg2_end_idx + 1]
+
+            if seg2_lines and seg2_start_idx >= 0 and seg2_end_idx >= 0:
+                print(
+                    f"[PreScan] ✅ Segment2 — Issue-time window: "
+                    f"line {seg2_start_idx + 1} → line {seg2_end_idx + 1} "
+                    f"({len(seg2_lines)} lines, contiguous index slice) | "
+                    f"±5 min of {self.issue_time.strftime('%m/%d/%Y %H:%M:%S')}"
+                )
+            else:
+                print(
+                    f"[PreScan] ⚠️  No timestamped anchors within ±5 min of "
+                    f"{self.issue_time.strftime('%m/%d/%Y %H:%M:%S')} — "
+                    f"falling back to last-RESET → EOF."
+                )
+                # fall through to 2B below
+
+        if not seg2_lines:
+            # --- 2B fallback: Segment1 end → EOF ---
+            if seg1_end is not None:
+                seg2_start = seg1_end  # pick up right where Segment1 left off
+                seg2_lines     = self._raw_log_cache[seg2_start:]
+                seg2_start_idx = seg2_start
+                seg2_end_idx   = total_lines - 1
+                print(
+                    f"[PreScan] ✅ Segment2 — Segment1 end → EOF: "
+                    f"line {seg2_start + 1} → line {total_lines} "
+                    f"({len(seg2_lines)} lines)"
+                )
+            else:
+                print("[PreScan] ⚠️  No driver markers found — Segment2 empty.")
+
+        self._issue_time_window_lines = seg2_lines
+
+        # ------------------------------------------------------------------
+        # Merge Segment1 + Segment2 → _scoped_log_lines (de-duplicated)
+        # ------------------------------------------------------------------
+        # Use an OrderedDict-style approach: keep insertion order, skip dupes.
+        seen_ids: set = set()
+        merged: List[str] = []
+        for line in self._driver_init_lines + seg2_lines:
+            lid = id(line)           # same object from _raw_log_cache → same id
+            if lid not in seen_ids:
+                seen_ids.add(lid)
+                merged.append(line)
+        self._scoped_log_lines = merged
+
+        overlap = len(self._driver_init_lines) + len(seg2_lines) - len(merged)
+        print(
+            f"[PreScan] 📦 Scoped segments merged: {len(merged)} lines "
+            f"(Seg1: {len(self._driver_init_lines)} + Seg2: {len(seg2_lines)} — overlap: {overlap})"
+        )
+        if self.issue_time:
+            print(f"[PreScan]  Skill filter will use: scoped {len(merged)} lines")
+        else:
+            print(f"[PreScan]  Skill filter will use: full raw log (no issue_time — scoping skipped)")
+
+        scoped_path = self._export_scoped_log_file()
+        if scoped_path:
+            print(f"[PreScan] 💾 Scoped lines saved to: {scoped_path}")
+
+    def _export_scoped_log_file(self) -> str:
+        """Overwrite scoped.txt in current log folder with latest scoped lines."""
         if not self.current_log_path:
             return ""
 
@@ -454,20 +644,37 @@ class WifiLogAgentSystem:
         if not parent_dir.exists():
             return ""
 
-        # Always export the latest assembled report in readable form.
+        scoped_text = "\n".join(str(line).rstrip("\n") for line in (self._scoped_log_lines or []))
+        scoped_file = parent_dir / "scoped.txt"
+        try:
+            scoped_file.write_text(scoped_text, encoding="utf-8")
+            return str(scoped_file)
+        except Exception as e:
+            print(f"  ⚠️  Scoped export failed: {e}")
+            return ""
+
+    def _export_assembled_log_file(self) -> str:
+        """
+        Increment export index on each call (fliterlog1, fliterlog2, ...)
+        and overwrite the existing file with the same index.
+        """
+        if not self.current_log_path:
+            return ""
+
+        parent_dir = Path(self.current_log_path).parent
+        if not parent_dir.exists():
+            return ""
         export_text = self._build_assembled_log_report("merged", new_added=0, apply_limits=False)
 
-        candidate = None
-        while True:
-            self._filter_export_counter += 1
-            candidate = parent_dir / f"fliterlog{self._filter_export_counter}.txt"
-            if not candidate.exists():
-                break
+        # Always advance index; write_text will overwrite same-name files.
+        self._filter_export_counter += 1
+        candidate = parent_dir / f"fliterlog{self._filter_export_counter}.txt"
 
         try:
             candidate.write_text(export_text, encoding="utf-8")
             return str(candidate)
-        except Exception:
+        except Exception as e:
+            print(f"  ⚠️  Export failed: {e}")
             return ""
 
     def _strip_line_number_prefix(self, line: str) -> str:
@@ -739,7 +946,9 @@ class WifiLogAgentSystem:
         load_err = self._ensure_raw_log_cache()
         if load_err:
             return load_err
-        log_lines = self._raw_log_cache
+
+        #  scoped lines（Segment1+Segment2）
+        log_lines = self._scoped_log_lines
 
         # --- keyword extraction: prefer TAT file, fall back to in-memory list ---
         if skill.tat_path and Path(skill.tat_path).exists():
@@ -1351,6 +1560,46 @@ class WifiLogAgentSystem:
         }
 
     def _extract_issue_time(self, issue_description: str) -> Optional[datetime]:
+        # Fast path: deterministic regex parsing from issue_description text.
+        text = (issue_description or "").strip()
+        strict_match = re.search(
+            r"(\d{1,2}/\d{1,2}/\d{4})[\s-](\d{1,2}):(\d{2}):(\d{2})(?:\.(\d{1,3}))?",
+            text,
+        )
+        if strict_match:
+            mmddyyyy = strict_match.group(1)
+            hh = strict_match.group(2).zfill(2)
+            minute = strict_match.group(3)
+            second = strict_match.group(4)
+            milli = (strict_match.group(5) or "000").ljust(3, "0")[:3]
+            try:
+                return datetime.strptime(
+                    f"{mmddyyyy}-{hh}:{minute}:{second}.{milli}",
+                    "%m/%d/%Y-%H:%M:%S.%f",
+                )
+            except ValueError:
+                pass
+
+        malformed_match = re.search(
+            r"(\d{1,2}/\d{1,2}/\d{4})[\s-](\d{1,2}):(\d{2}):(\d{3})",
+            text,
+        )
+        if malformed_match:
+            mmddyyyy = malformed_match.group(1)
+            hh = malformed_match.group(2).zfill(2)
+            minute = malformed_match.group(3)
+            sec_triplet = malformed_match.group(4)
+            second = sec_triplet[:2]
+            milli = (sec_triplet[2:] + "00")[:3]
+            try:
+                return datetime.strptime(
+                    f"{mmddyyyy}-{hh}:{minute}:{second}.{milli}",
+                    "%m/%d/%Y-%H:%M:%S.%f",
+                )
+            except ValueError:
+                pass
+
+        # Fallback: let the LLM extract timestamp from free-form issue text.
         prompt = (
             "Extract the exact date and time mentioned in the following user issue description.\n"
             "If a time is found, output ONLY the timestamp in 'MM/DD/YYYY-HH:MM:SS' format "
@@ -1663,7 +1912,7 @@ class WifiLogAgentSystem:
             emit_cb({
                 "role": "agent",
                 "content": (
-                    "🧪 **Quality gate:** report needs refinement before final submit.\n"
+                    " **Quality gate:** report needs refinement before final submit.\n"
                     f"Reason: {review.get('reason', 'insufficient support')}"
                 ),
             })
@@ -1678,7 +1927,7 @@ class WifiLogAgentSystem:
             return None
 
         self._append_tool_message(messages, tool_call, "Final report accepted.")
-        emit_cb({"role": "agent", "content": "✅ **Conclusion Reached!** Generating report."})
+        emit_cb({"role": "agent", "content": " **Conclusion Reached!** Generating report."})
         self._inject_analysis_into_history(issue_description, steps, args)
         return {
             "type": "report",
@@ -1708,7 +1957,7 @@ class WifiLogAgentSystem:
             self._append_tool_message(messages, tool_call, msg)
             return no_progress_rounds
 
-        emit_cb({"role": "agent", "content": f"🔍 **Fetching Filtered Logs** for `{skill_name}`..."})
+        emit_cb({"role": "agent", "content": f" **Fetching Filtered Logs** for `{skill_name}`..."})
 
         tool_result = self._invoke_tool("fetch_filtered_logs", {"skill_name": skill_name})
         skill = self.skills.get(skill_name)
@@ -1718,7 +1967,7 @@ class WifiLogAgentSystem:
         preview = tool_result[:500].replace('\n', ' ') + "..."
         emit_cb({
             "role": "tool",
-            "content": f"📄 **Logs Loaded** (`{skill_name}`, ~{line_count} lines):\n```\n{preview}\n```"
+            "content": f" **Logs Loaded** (`{skill_name}`, ~{line_count} lines):\n```\n{preview}\n```"
         })
 
         # Expert rules are prepended in full (never clipped); only the evidence
@@ -1750,7 +1999,7 @@ class WifiLogAgentSystem:
         emit_cb({
             "role": "debug",
             "content": (
-                f"📏 **Token Budget ({skill_name}):** "
+                f"**Token Budget ({skill_name}):** "
                 f"rules={len(rules_section)} chars | "
                 f"evidence={len(evidence_content)} chars | "
                 f"total={len(rules_section) + len(evidence_content)} chars "
@@ -1786,11 +2035,11 @@ class WifiLogAgentSystem:
         mode = args.get("mode", "summary")
         if mode == "full":
             mode = "compact"
-        emit_cb({"role": "agent", "content": f"🗂️ **Requesting assembled snapshot** (mode={mode})"})
+        emit_cb({"role": "agent", "content": f" **Requesting assembled snapshot** (mode={mode})"})
         tool_result = self._invoke_tool("get_assembled_log_snapshot", {"mode": mode})
         emit_cb({
             "role": "tool",
-            "content": f"📄 **Assembled Snapshot Loaded**:\n```\n{tool_result[:500]}\n```"
+            "content": f" **Assembled Snapshot Loaded**:\n```\n{tool_result[:500]}\n```"
         })
         self._append_tool_message(
             messages,
@@ -1803,12 +2052,12 @@ class WifiLogAgentSystem:
         tail_lines = args.get("tail_lines", 120)
         emit_cb({
             "role": "agent",
-            "content": f"🧭 **Requesting final-state snapshot** (tail_lines={tail_lines})"
+            "content": f" **Requesting final-state snapshot** (tail_lines={tail_lines})"
         })
         tool_result = self._invoke_tool("get_final_state_snapshot", {"tail_lines": tail_lines})
         emit_cb({
             "role": "tool",
-            "content": f"📄 **Final-State Snapshot Loaded**:\n```\n{tool_result[:500]}\n```"
+            "content": f" **Final-State Snapshot Loaded**:\n```\n{tool_result[:500]}\n```"
         })
         self._append_tool_message(
             messages,
@@ -1829,7 +2078,7 @@ class WifiLogAgentSystem:
         emit_cb({
             "role": "agent",
             "content": (
-                "🔎 **Querying anchor context** "
+                " **Querying anchor context** "
                 f"(text='{anchor_text}', ts='{anchor_timestamp}')"
             )
         })
@@ -1881,6 +2130,8 @@ class WifiLogAgentSystem:
     def analyze_all(self, issue_description: str = "Perform full log analysis",
                      step_callback=None, issue_context: dict = None) -> dict:
         self.issue_context = issue_context or {}
+        # Reset export numbering for each Analyze All run.
+        self._filter_export_counter = 0
         steps = []
 
         def _emit(step):
@@ -1890,19 +2141,64 @@ class WifiLogAgentSystem:
                 
         _emit({
             "role": "system",
-            "content": f"🎯 **Starting Autonomous Skill Agent Analysis**\n"
+            "content": f" **Starting Autonomous Skill Agent Analysis**\n"
                        f"**Issue:** {issue_description}\n"
                        f"**Log:** `{self.current_log_path}`"
         })
 
         # Step 1: Extract issue time from description (if present)
+        # Try issue_description first; fall back to session-stored description.
         self.issue_time = self._extract_issue_time(issue_description)
+        time_source = "issue_description"
+
+        if not self.issue_time and self.issue_context.get("description"):
+            self.issue_time = self._extract_issue_time(
+                self.issue_context["description"]
+            )
+            time_source = "session issue_context.description"
+
+        if not self.issue_time and self.issue_context.get("subject"):
+            self.issue_time = self._extract_issue_time(
+                self.issue_context["subject"]
+            )
+            time_source = "session issue_context.subject"
 
         if self.issue_time:
+            print(
+                f"[PreScan] ✅ Issue time extracted: "
+                f"{self.issue_time.strftime('%m/%d/%Y %H:%M:%S')} "
+                f"(source: {time_source})"
+            )
             _emit({
                 "role": "agent",
-                "content": f"🕒 **Issue Time Extracted:** `{self.issue_time.strftime('%m/%d/%Y %H:%M:%S')}`\n"
+                "content": f" **Issue Time Extracted:** `{self.issue_time.strftime('%m/%d/%Y %H:%M:%S')}`\n"
+                           f"(source: {time_source})\n"
                            f"Agent will look for events around this timestamp in filtered logs."
+            })
+        else:
+            print("[PreScan] ⚠️  Issue time not found in any source.")
+
+        # Step 2: Pre-analysis scan of raw log (driver init window + issue-time window)
+        # Must run BEFORE any skill filtering so the agent has full structural context.
+        load_err = self._ensure_raw_log_cache()
+        if load_err:
+            _emit({"role": "error", "content": f"❌ Raw log load failed: {load_err}"})
+        else:
+            self._preprocess_raw_log_context()
+            filter_scope = (
+                f"{len(self._scoped_log_lines)} lines (scoped: Segment1 + issue-time window)"
+                if (self._scoped_log_lines and self.issue_time)
+                else f"{len(self._raw_log_cache)} lines (full raw log — no issue time)"
+            )
+            pre_msg_parts = [
+                f"- **Segment1 — Driver init block:** {len(self._driver_init_lines)} lines "
+                f"(driver load occurrences: {self._driver_init_count})",
+                f"- **Segment2 — Event window:** {len(self._issue_time_window_lines)} lines",
+                f"- **Skill filter input:** {filter_scope}",
+            ]
+            _emit({
+                "role": "agent",
+                "content": " **Pre-Analysis Scan Complete**\n" + "\n".join(pre_msg_parts)
             })
 
         tools = self._build_tools()
@@ -1929,6 +2225,26 @@ class WifiLogAgentSystem:
             {"role": "user", "content": f"User Issue: {issue_description}"},
         ]
 
+        # Inject brief pre-scan metadata (no raw lines — those come through
+        # skill filter tools as before).  Keeps token count unchanged.
+        if self._scoped_log_lines:
+            seg2_scope = (
+                f"±5 min of issue time {self.issue_time.strftime('%m/%d/%Y %H:%M:%S')}"
+                if self.issue_time
+                else "Segment1 end → EOF"
+            )
+            messages.append({
+                "role": "user",
+                "content": (
+                    "[PRE-SCAN INFO]\n"
+                    f"Skill filtering scope has been narrowed to {len(self._scoped_log_lines)} lines "
+                    f"(full raw log: {len(self._raw_log_cache)} lines).\n"
+                    f"Segment1 (driver init): {len(self._driver_init_lines)} lines | "
+                    f"driver load occurrences: {self._driver_init_count}\n"
+                    f"Segment2 ({seg2_scope}): {len(self._issue_time_window_lines)} lines"
+                ),
+            })
+
         # Inject auto-extracted outcome evidence so the model has end-state awareness from the start.
         # if outcome_inject:
         #     messages.append({
@@ -1949,7 +2265,7 @@ class WifiLogAgentSystem:
             if not step_token_usages:
                 return
             rows = [
-                "📊 **Token Usage Report**\n",
+                "**Token Usage Report**\n",
                 "| Step | Prompt | Completion | Total |",
                 "|------|--------|------------|-------|"]
             total_p = total_c = total_t = 0
@@ -1968,7 +2284,7 @@ class WifiLogAgentSystem:
             pending_user_nudges = []
             _emit({
                 "role": "agent",
-                "content": f"💭 **Reasoning Step {step_num + 1}/{max_steps}** — Thinking..."
+                "content": f" **Reasoning Step {step_num + 1}/{max_steps}** — Thinking..."
             })
 
             try:
@@ -2004,7 +2320,7 @@ class WifiLogAgentSystem:
                 _emit({
                     "role": "token_usage",
                     "content": (
-                        f"📊 **Token Usage (Step {step_num + 1}):** "
+                        f" **Token Usage (Step {step_num + 1}):** "
                         f"Prompt: {usage.prompt_tokens} | "
                         f"Completion: {usage.completion_tokens} | "
                         f"Total: {usage.total_tokens}"
@@ -2059,7 +2375,7 @@ class WifiLogAgentSystem:
                     })
 
             if message.content:
-                _emit({"role": "agent", "content": f"🧠 **Reasoning:**\n{message.content[:500]}"})
+                _emit({"role": "agent", "content": f" **Reasoning:**\n{message.content[:500]}"})
 
             if message.tool_calls:
                 original_tool_calls = list(message.tool_calls)
@@ -2073,7 +2389,7 @@ class WifiLogAgentSystem:
                     _emit({
                         "role": "agent",
                         "content": (
-                            f"🧭 **Tool cap applied:** executing {max_calls_this_step}/"
+                            f" **Tool cap applied:** executing {max_calls_this_step}/"
                             f"{len(tool_calls)} tool calls this step to preserve token budget."
                         ),
                     })
@@ -2081,7 +2397,7 @@ class WifiLogAgentSystem:
                 else:
                     _emit({
                         "role": "agent",
-                        "content": f"🧭 **Tool calls:** {len(tool_calls)} this step."
+                        "content": f" **Tool calls:** {len(tool_calls)} this step."
                     })
                 
                 skipped_tool_calls = original_tool_calls[len(tool_calls):]
@@ -2201,7 +2517,7 @@ class WifiLogAgentSystem:
                     messages.extend(pending_user_nudges)
                 # No tool calls - agent provided direct text answer
                 content = message.content or ""
-                _emit({"role": "agent", "content": f"✅ Analysis complete: {content[:200]}"})
+                _emit({"role": "agent", "content": f" Analysis complete: {content[:200]}"})
                 return {"type": "text", "data": content, "steps": steps}
 
         # Loop completed without conclusion - max steps reached
@@ -2265,9 +2581,9 @@ class WifiLogAgentSystem:
         # Build CLEAN conversation history: ONLY system/user/assistant roles
         # (NO tool_use, tool_result, or any tool-related fields)
         assistant_summary = (
-            f"## ✅ Analysis Complete\n\n"
-            f"### 🧠 Agent Reasoning Process\n{thinking_recap}\n\n"
-            f"### 📊 Report\n{report_text}"
+            f"##  Analysis Complete\n\n"
+            f"###  Agent Reasoning Process\n{thinking_recap}\n\n"
+            f"###  Report\n{report_text}"
         )
 
         # CRITICAL: Reset to completely clean history

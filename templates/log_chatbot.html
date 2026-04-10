@@ -499,6 +499,15 @@
         <div class="sidebar-section">
             <h6>⚡ Actions</h6>
 
+            <div style="display:flex;align-items:center;gap:8px;margin-bottom:8px;">
+                <span style="font-size:0.78rem;color:#555;font-weight:600;">AI Mode:</span>
+                <label id="mode-toggle-label" style="display:flex;align-items:center;gap:6px;cursor:pointer;font-size:0.78rem;color:#0071c5;font-weight:600;">
+                    <input type="checkbox" id="agentic-mode-toggle" onchange="onModeToggle(this)" style="width:16px;height:16px;accent-color:#0071c5;cursor:pointer;">
+                    <span id="mode-label-text">Simple</span>
+                </label>
+            </div>
+            <div id="mode-desc" style="font-size:0.72rem;color:#888;margin-bottom:8px;">Direct LLM answer, fast.</div>
+
             <button class="btn-reset" onclick="resetConversation()">🔄 Reset Conversation</button>
         </div>
 
@@ -539,6 +548,15 @@
     let logLoaded = false;
     let skillsLoaded = false;
     let autoAnalyzeTriggered = false;
+    let agenticMode = true;
+
+    function onModeToggle(cb) {
+        agenticMode = cb.checked;
+        document.getElementById('mode-label-text').textContent = agenticMode ? 'Agentic' : 'Simple';
+        document.getElementById('mode-desc').textContent = agenticMode
+            ? 'Agent can call skills & tools as needed.'
+            : 'Direct LLM answer, fast.';
+    }
 
     // Enable the Analyze All button only when BOTH log and skills are loaded
     function updateAnalyzeBtn() {
@@ -985,10 +1003,10 @@
         }
 
         try {
-            const res = await fetch('/log_chatbot/analyze_all_stream', {
+            const res = await fetch('/log_chatbot/chat', {
                 method: 'POST',
                 headers: {'Content-Type': 'application/json'},
-                body: JSON.stringify({message: text})
+                body: JSON.stringify({message: text, use_tools: agenticMode})
             });
 
             if (!res.ok) throw new Error(`Server error ${res.status}`);
@@ -1096,6 +1114,8 @@
     function sendQuick(text) {
         document.getElementById('user-input').value = text;
         sendMessage();
+        //analyzeAll({forceRun: true, description: `🔍 ${text}`});
+
     }
 
     // ── Render agent steps with dynamic loading and auto-collapse ────
@@ -1153,7 +1173,11 @@
         if (!forceRun && !logLoaded) { appendAssistantText('⚠️ Please load a log file first.'); return; }
         if (!forceRun && !skillsLoaded) { appendAssistantText('⚠️ No skills loaded. Please load a skills.yaml first.'); return; }
 
-        // use passed-in description, or fallback to default
+        const input = document.getElementById('user-input');
+        const desc = (input.value || '').trim();
+        input.style.height = 'auto';
+        appendUserMsg('🔍 Run full multi-skill analysis');
+                // use passed-in description, or fallback to default
         const displayMsg = options.description || '🔍 Run full multi-skill analysis';
         // display the concise system issue in the chat bubble
         appendUserMsg(displayMsg);

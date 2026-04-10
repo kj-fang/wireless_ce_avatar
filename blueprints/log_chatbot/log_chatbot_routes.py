@@ -280,26 +280,82 @@ def chat():
     try:
         agent = _get_or_create_agent()
         if not agent.current_log_path:
-            return jsonify({
-                "success": False,
-                "error": "No log file loaded. Please set a log file first."
-            }), 400
+            def _no_log():
+                yield f"data: {json.dumps({'type': 'error', 'content': 'No log file loaded. Please set a log file first.'})}\n\n"
+            return Response(_no_log(), mimetype="text/event-stream")
 
-        result = agent.chat(
-            user_message,
-            use_tools=(mode == "tools"),
-            max_steps=max_steps,
-            temperature=temperature,
-            max_tokens=max_tokens,
-        )
-        return Response(
-            json.dumps({"success": True, "result": result}, ensure_ascii=False, indent=2),
-            mimetype="application/json",
-        )
+        # Use the mode flag sent by the frontend toggle.
+        use_tools = bool(data.get("use_tools", False))
+
+        if use_tools:
+            import queue as _queue
+            step_queue = _queue.Queue()
+
+            def step_cb(step):
+                step_queue.put(("step", step))
+
+            @copy_current_request_context
+            def run_chat_with_tools():
+                try:
+                    result = agent.chat(
+                        user_message,
+                        use_tools=True,
+                        max_steps=max_steps,
+                        temperature=temperature,
+                        max_tokens=max_tokens,
+                        step_callback=step_cb,
+                    )
+                    step_queue.put(("done", result))
+                except Exception as exc:
+                    error_tb = traceback.format_exc()
+                    print(f"❌ Chat-with-tools thread error:\n{error_tb}")
+                    step_queue.put(("error", str(exc)))
+
+            t = threading.Thread(target=run_chat_with_tools, daemon=True)
+            t.start()
+
+            def event_stream():
+                while True:
+                    try:
+                        msg_type, payload = step_queue.get(timeout=120)
+                    except _queue.Empty:
+                        yield f"data: {json.dumps({'type': 'error', 'content': 'Chat timed out.'})}\n\n"
+                        break
+                    if msg_type == "step":
+                        yield f"data: {json.dumps({'type': 'step', 'step': payload}, ensure_ascii=False)}\n\n"
+                    elif msg_type == "done":
+                        yield f"data: {json.dumps({'type': 'done', 'result': payload}, ensure_ascii=False)}\n\n"
+                        break
+                    elif msg_type == "error":
+                        yield f"data: {json.dumps({'type': 'error', 'content': payload})}\n\n"
+                        break
+
+            return Response(
+                event_stream(),
+                mimetype="text/event-stream",
+                headers={"Cache-Control": "no-cache", "X-Accel-Buffering": "no"},
+            )
+        else:
+            # No prior analysis — simple direct chat, wrapped in SSE
+            result = agent.chat(
+                user_message,
+                use_tools=False,
+                temperature=temperature,
+                max_tokens=max_tokens,
+            )
+
+            def generate():
+                yield f"data: {json.dumps({'type': 'done', 'result': result}, ensure_ascii=False)}\n\n"
+
+            return Response(generate(), mimetype="text/event-stream")
     except Exception as e:
         error_traceback = traceback.format_exc()
         print(f"❌ Chatbot error:\n{error_traceback}")
-        return jsonify({"success": False, "error": str(e)}), 500
+
+        def generate_error():
+            yield f"data: {json.dumps({'type': 'error', 'content': str(e)}, ensure_ascii=False)}\n\n"
+
+        return Response(generate_error(), mimetype="text/event-stream")
 
 
 # ------------------------------------------------------------------

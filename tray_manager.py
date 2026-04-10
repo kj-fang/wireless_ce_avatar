@@ -7,6 +7,7 @@ Monitors running_avatar.json written by the app instance on startup.
 
 import json
 import logging
+import glob
 import os
 import subprocess
 import sys
@@ -48,10 +49,43 @@ class TrayManager:
     def __init__(self):
         self.base = _base_path()
         self.instance_file = os.path.join(get_user_data_dir(), 'running_avatar.json')
-
         self.instances = []
         self.icon = None
         self.logger = self._init_log()
+        self.logger.info(f'TrayManager initialized | base={self.base} | cwd={os.getcwd()}')
+
+    #tool path to the driver download tool exe
+    def _tool_exe_patterns(self) -> list[str]:
+        if getattr(sys, 'frozen', False):
+            meipass = getattr(sys, '_MEIPASS', '')
+            candidates = []
+            if meipass:
+                candidates.append(
+                    os.path.join(meipass, 'services', 'driver_download', 'downloadDriver_*.exe')
+                )
+            # In onedir builds, bundled files may be located next to the executable.
+            candidates.extend([
+                os.path.join(self.base, 'services', 'driver_download', 'downloadDriver_*.exe'),
+                os.path.join(self.base, '_internal', 'services', 'driver_download', 'downloadDriver_*.exe'),
+            ])
+        else:
+            candidates = [
+                os.path.join(self.base, 'services', 'driver_download', 'downloadDriver_*.exe'),
+            ]
+
+        return [pattern for pattern in candidates if pattern]
+
+    #resolve the most recently modified tool exe matching the patterns
+    def _resolve_tool_exe_path(self) -> str:
+        matches = []
+        patterns = self._tool_exe_patterns()
+        self.logger.info(f'Resolving tool executable from patterns: {patterns}')
+        for pattern in patterns:
+            matches.extend(glob.glob(pattern))
+        self.logger.info(f'Tool executable matches: {matches}')
+        if not matches:
+            return ''
+        return max(matches, key=os.path.getmtime)
 
     def _init_log(self) -> logging.Logger:
         log_path = os.path.join(get_user_data_dir(), 'tray.log')
@@ -117,6 +151,19 @@ class TrayManager:
             self.logger.info('Launched new instance')
         except Exception as error:
             self.logger.error(f'Launch failed: {error}')
+
+    # launch the driver download tool exe if it exists
+    def _launch_tool_exe(self):
+        exe_path = self._resolve_tool_exe_path()
+        if not exe_path:
+            self.logger.error(f'Tool executable not found. Tried patterns: {self._tool_exe_patterns()}')
+            return
+
+        try:
+            subprocess.run(["explorer", exe_path], check=False)
+            self.logger.info(f'Launched tool executable: {exe_path}')
+        except Exception as error:
+            self.logger.error(f'Tool launch failed: {error}')
 
     def _current_instance(self):
         return self.instances[0] if self.instances else None
@@ -192,6 +239,11 @@ class TrayManager:
                 'Stop Current IntelAvatar',
                 lambda icon, item: self._stop_current_instance(),
                 enabled=has_instance
+            ),
+            pystray.MenuItem(
+                'Driver Download Tool',
+                lambda icon, item: self._launch_tool_exe(),
+                enabled=True
             ),
             pystray.Menu.SEPARATOR,
             pystray.MenuItem('Quit IntelAvatar', lambda icon, item: self._quit()),

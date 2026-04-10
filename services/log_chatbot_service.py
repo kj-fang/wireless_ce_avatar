@@ -392,6 +392,7 @@ class WifiLogAgentSystem:
         self._filter_cache_by_skill: Dict[str, dict] = {}
         self._detail_cache: Dict[str, str] = {}
         self._detail_query_seen: set = set()
+        self._chat_rules_injected_skills: set = set()
         # Cumulative assembled log store (timestamp-based, no line number persistence)
         self._assembled_entries_by_key: Dict[str, dict] = {}
         self._assembled_entries_no_ts: Dict[str, dict] = {}
@@ -440,6 +441,7 @@ class WifiLogAgentSystem:
             self._filter_cache_by_skill = {}
             self._detail_cache = {}
             self._detail_query_seen = set()
+            self._chat_rules_injected_skills = set()
             self._assembled_entries_by_key = {}
             self._assembled_entries_no_ts = {}
             self._assembled_log_text = ""
@@ -1304,7 +1306,7 @@ class WifiLogAgentSystem:
     # RECOMMENDED for chatbot dialog boxes
     # ------------------------------------------------------------------
     def chat(self, user_message: str, use_tools: bool = False, max_steps: int = 6,
-             temperature: float = 0.2, max_tokens: int = 4000) -> dict:
+             temperature: float = 0.2, max_tokens: int = 4000, step_callback=None) -> dict:
         """
         Process user message with flexible LLM call - simple or agentic mode.
         
@@ -1359,7 +1361,7 @@ class WifiLogAgentSystem:
 
         # Delegate to appropriate implementation
         if use_tools:
-            return self._chat_with_tools(user_message, max_steps, temperature=temperature)
+            return self._chat_with_tools(user_message, max_steps, temperature=temperature, step_callback=step_callback)
         else:
             return self._chat_simple(user_message, temperature=temperature, max_tokens=max_tokens)
 
@@ -1438,15 +1440,27 @@ class WifiLogAgentSystem:
             return {"type": "text", "data": error_msg}
 
     def _chat_with_tools(self, user_message: str, max_steps: int = 6,
-                         temperature: float = 0.1) -> dict:
+                         temperature: float = 0.1, step_callback=None) -> dict:
         """
         Agentic chat mode: LLM can use diagnostic tools.
         
         For complex analysis where agent needs to investigate multiple skills,
         inspect specific log sections, and provide structured diagnoses.
+
+        When called after analyze_all(), conversation_history is already
+        populated by _inject_analysis_into_history(). This method detects
+        that case and simply appends the new user message so the LLM can
+        continue investigating with full awareness of the prior analysis.
         """
+        def _emit(step):
+            if step_callback:
+                step_callback(step)
+
+        tools = self._build_tools()
+        final_report = None
+
         if not self.conversation_history:
-            # Reuse analyze_all reasoning brain so chat and auto-analysis stay aligned.
+            # Fresh start — initialise system prompt and inject outcome signals.
             context_section = ""
             if self.issue_context:
                 context_parts = []
@@ -1460,44 +1474,143 @@ class WifiLogAgentSystem:
                     context_section = "\n=== BACKGROUND CONTEXT ===\n" + "\n".join(context_parts) + "\n\n"
 
             system_content = self._build_analyze_system_prompt(context_section)
-            outcome_inject = self._build_outcome_injection()
+            #outcome_inject = self._build_outcome_injection()
 
             self.conversation_history.append({
                 "role": "system",
                 "content": system_content,
             })
 
-            if outcome_inject:
-                self.conversation_history.append({
-                    "role": "user",
-                    "content": outcome_inject,
+            # if outcome_inject:
+            #     self.conversation_history.append({
+            #         "role": "user",
+            #         "content": outcome_inject,
+            #     })
+
+            self.conversation_history.append({"role": "user", "content": user_message})
+
+            # --- Issue time extraction (mirrors analyze_all fallback chain) ---
+            self.issue_time = self._extract_issue_time(user_message)
+            time_source = "user_message"
+
+            if not self.issue_time and self.issue_context.get("description"):
+                self.issue_time = self._extract_issue_time(self.issue_context["description"])
+                time_source = "issue_context.description"
+
+            if not self.issue_time and self.issue_context.get("subject"):
+                self.issue_time = self._extract_issue_time(self.issue_context["subject"])
+                time_source = "issue_context.subject"
+
+            if self.issue_time:
+                _emit({
+                    "role": "agent",
+                    "content": (
+                        f"🕒 **Issue Time Extracted:** `{self.issue_time.strftime('%m/%d/%Y %H:%M:%S')}`\n"
+                        f"(source: {time_source})\n"
+                        "Agent will look for events around this timestamp in filtered logs."
+                    ),
                 })
 
-        self.conversation_history.append({"role": "user", "content": user_message})
+            # --- Raw log preprocessing (mirrors analyze_all scope-narrowing) ---
+            load_err = self._ensure_raw_log_cache()
+            if load_err:
+                _emit({"role": "error", "content": f"❌ Raw log load failed: {load_err}"})
+            else:
+                self._preprocess_raw_log_context()
+                pre_msg_parts = [
+                    f"- **Segment1 — Driver init block:** {len(self._driver_init_lines)} lines "
+                    f"(driver load occurrences: {self._driver_init_count})",
+                    f"- **Segment2 — Event window:** {len(self._issue_time_window_lines)} lines",
+                ]
+                if self._scoped_log_lines:
+                    filter_scope = (
+                        f"{len(self._scoped_log_lines)} lines (scoped: Segment1 + issue-time window)"
+                        if self.issue_time
+                        else f"{len(self._raw_log_cache)} lines (full raw log — no issue time)"
+                    )
+                    pre_msg_parts.append(f"- **Skill filter input:** {filter_scope}")
+                _emit({
+                    "role": "agent",
+                    "content": "🔍 **Pre-Analysis Scan Complete**\n" + "\n".join(pre_msg_parts),
+                })
 
-        tools = self._build_tools()
-        final_report = None
+                if self._scoped_log_lines:
+                    seg2_scope = (
+                        f"±5 min of issue time {self.issue_time.strftime('%m/%d/%Y %H:%M:%S')}"
+                        if self.issue_time
+                        else "Segment1 end → EOF"
+                    )
+                    self.conversation_history.append({
+                        "role": "user",
+                        "content": (
+                            "[PRE-SCAN INFO]\n"
+                            f"Skill filtering scope has been narrowed to {len(self._scoped_log_lines)} lines "
+                            f"(full raw log: {len(self._raw_log_cache)} lines).\n"
+                            f"Segment1 (driver init): {len(self._driver_init_lines)} lines | "
+                            f"driver load occurrences: {self._driver_init_count}\n"
+                            f"Segment2 ({seg2_scope}): {len(self._issue_time_window_lines)} lines"
+                        ),
+                    })
+        else:
+            # Continuing after analyze_all() — history already has the report summary.
+            # Assembled-log caches are still warm so all tools work as normal.
+            self.conversation_history.append({"role": "user", "content": user_message})
+
+        # Per-call tracking (mirrors analyze_all local state)
+        skill_call_counts: dict = {}
+        no_match_anchor_counts: dict = {}
+        detail_call_counts: dict = {}
+        no_progress_rounds: int = 0
+        step_token_usages: list = []
+
+        def _emit_token_report():
+            if not step_token_usages:
+                return
+            rows = [
+                "📊 **Token Usage Report**\n",
+                "| Step | Prompt | Completion | Total |",
+                "|------|--------|------------|-------|",
+            ]
+            total_p = total_c = total_t = 0
+            for s in step_token_usages:
+                rows.append(f"| {s['step']} | {s['prompt']:,} | {s['completion']:,} | {s['total']:,} |")
+                total_p += s["prompt"]; total_c += s["completion"]; total_t += s["total"]
+            rows.append(f"| **Total** | **{total_p:,}** | **{total_c:,}** | **{total_t:,}** |")
+            _emit({"role": "token_usage", "content": "\n".join(rows)})
 
         for step_idx in range(max_steps):
+            pending_user_nudges: list = []
+            _emit({"role": "agent", "content": f"💭 **Reasoning Step {step_idx + 1}/{max_steps}** — Thinking..."})
+
+            # Force-conclude pressure in final steps
+            if step_idx >= max_steps - self.FORCE_CONCLUDE_LAST_N_STEPS:
+                pending_user_nudges.append({
+                    "role": "user",
+                    "content": (
+                        "You are in the final steps. Stop gathering new evidence and call "
+                        "submit_final_report now using current evidence. If uncertain, state "
+                        "uncertainties explicitly in the report."
+                    ),
+                })
+
             try:
-                # Call LLM with tools available
                 response = self.client.chat.completions.create(
                     model=self.model,
                     messages=self.conversation_history,
                     tools=tools,
                     tool_choice="auto",
                     temperature=temperature,
+                    max_tokens=4096,
                 )
             except Exception as e:
-                # LLM call failed
                 error_msg = f"LLM API error at reasoning step {step_idx}: {str(e)}"
                 print(f"[ERROR] {error_msg}")
                 return {"type": "error", "data": error_msg}
-            
+
             message = response.choices[0].message
             self.conversation_history.append(message)
 
-            # Log token usage for chat step
+            # Token usage accounting
             usage = getattr(response, 'usage', None)
             if usage:
                 print(
@@ -1506,57 +1619,283 @@ class WifiLogAgentSystem:
                     f"completion={usage.completion_tokens} "
                     f"total={usage.total_tokens}"
                 )
+                _emit({
+                    "role": "token_usage",
+                    "content": (
+                        f"📊 **Token Usage (Step {step_idx + 1}):** "
+                        f"Prompt: {usage.prompt_tokens} | "
+                        f"Completion: {usage.completion_tokens} | "
+                        f"Total: {usage.total_tokens}"
+                    ),
+                })
+                step_token_usages.append({
+                    "step": step_idx + 1,
+                    "prompt": usage.prompt_tokens,
+                    "completion": usage.completion_tokens,
+                    "total": usage.total_tokens,
+                })
                 if usage.total_tokens > self.MAX_TOKENS_PER_STEP:
-                    return {
-                        "type": "error",
-                        "data": (
-                            "Stopped: token budget exceeded at reasoning step "
-                            f"{step_idx + 1}. total_tokens={usage.total_tokens}, "
-                            f"limit={self.MAX_TOKENS_PER_STEP}."
+                    _emit({
+                        "role": "error",
+                        "content": (
+                            f"🛑 **Stopped:** per-step token limit exceeded at step {step_idx + 1}. "
+                            f"total_tokens={usage.total_tokens}, limit={self.MAX_TOKENS_PER_STEP}."
                         ),
+                    })
+                    _emit_token_report()
+                    return {
+                        "type": "partial_report",
+                        "issue_time": (
+                            self.issue_time.strftime('%m/%d/%Y %H:%M:%S')
+                            if self.issue_time else None
+                        ),
+                        "data": {
+                            "root_cause_summary": "Analysis stopped due to per-step token limit.",
+                            "confidence_score": 20,
+                            "recommended_actions": [
+                                "Narrow the question scope",
+                                "Use simple mode for broad questions",
+                            ],
+                            "involved_skills": [],
+                            "markdown_summary": (
+                                "## Partial Result\n"
+                                "Analysis stopped because a single reasoning step exceeded the token limit."
+                            ),
+                        },
                     }
+                elif usage.total_tokens > int(self.MAX_TOKENS_PER_STEP * 0.85):
+                    pending_user_nudges.append({
+                        "role": "user",
+                        "content": (
+                            "Token budget is getting tight. "
+                            "Avoid broad new searches; use current evidence and submit_final_report soon."
+                        ),
+                    })
+
+            if message.content:
+                _emit({"role": "agent", "content": f"🧠 **Thinking:**\n{message.content[:500]}"})
 
             if message.tool_calls:
-                # Agent decided to use tools
                 final_report = None
-                for tool_call in message.tool_calls:
+                original_tool_calls = list(message.tool_calls)
+
+                # Tool fan-out cap (tighter in final steps)
+                max_calls_this_step = self.MAX_TOOL_CALLS_PER_STEP
+                if step_idx >= max_steps - self.FORCE_CONCLUDE_LAST_N_STEPS:
+                    max_calls_this_step = 1
+                if len(original_tool_calls) > max_calls_this_step:
+                    _emit({
+                        "role": "agent",
+                        "content": (
+                            f"🧭 **Tool cap applied:** executing {max_calls_this_step}/"
+                            f"{len(original_tool_calls)} tool calls this step."
+                        ),
+                    })
+                else:
+                    _emit({"role": "agent", "content": f"🧭 **Tool calls:** {len(original_tool_calls)} this step."})
+
+                tool_calls = original_tool_calls[:max_calls_this_step]
+                skipped_tool_calls = original_tool_calls[max_calls_this_step:]
+
+                # In final steps only allow submit_final_report; skip everything else
+                if step_idx >= max_steps - self.FORCE_CONCLUDE_LAST_N_STEPS:
+                    has_submit = any(tc.function.name == "submit_final_report" for tc in tool_calls)
+                    if not has_submit:
+                        for skipped_call in original_tool_calls:
+                            self.conversation_history.append({
+                                "role": "tool",
+                                "tool_call_id": skipped_call.id,
+                                "name": skipped_call.function.name,
+                                "content": (
+                                    "Skipped in final-step mode. "
+                                    "Call submit_final_report immediately using existing evidence."
+                                ),
+                            })
+                        pending_user_nudges.append({
+                            "role": "user",
+                            "content": "Call submit_final_report NOW with your current findings.",
+                        })
+                        self.conversation_history.extend(pending_user_nudges)
+                        continue
+
+                # Acknowledge skipped calls so the API sees a tool result for each
+                for skipped_call in skipped_tool_calls:
+                    self.conversation_history.append({
+                        "role": "tool",
+                        "tool_call_id": skipped_call.id,
+                        "name": skipped_call.function.name,
+                        "content": "Skipped (tool cap). Will be retried in a later step if still needed.",
+                    })
+
+                for tool_call in tool_calls:
                     try:
                         args = json.loads(tool_call.function.arguments)
                     except json.JSONDecodeError as e:
                         print(f"[ERROR] Failed to parse tool arguments: {e}")
                         continue
-                    
+
                     if tool_call.function.name == "submit_final_report":
-                        # Agent is done—collect the report
                         final_report = args
+                        _emit({"role": "agent", "content": "✅ **Conclusion reached!** Generating report."})
                         self.conversation_history.append({
                             "role": "tool",
                             "tool_call_id": tool_call.id,
                             "name": "submit_final_report",
                             "content": "Final report received and processed successfully.",
                         })
-                    else:
-                        tool_result = self._invoke_tool(tool_call.function.name, args)
+
+                    elif tool_call.function.name == "fetch_filtered_logs":
+                        skill_label = args.get("skill_name", "")
+
+                        # Skill fetch cap
+                        skill_call_counts[skill_label] = skill_call_counts.get(skill_label, 0) + 1
+                        distinct = len([k for k, v in skill_call_counts.items() if v >= 1])
+                        if distinct > self.MAX_SKILL_FETCHES:
+                            msg = (
+                                f"Skill fetch limit reached ({self.MAX_SKILL_FETCHES} distinct skills). "
+                                "Synthesize findings from already-fetched skills and call submit_final_report."
+                            )
+                            _emit({"role": "agent", "content": f"⚠️ **Skill cap hit** — {msg}"})
+                            self.conversation_history.append({
+                                "role": "tool",
+                                "tool_call_id": tool_call.id,
+                                "name": tool_call.function.name,
+                                "content": msg,
+                            })
+                            continue
+
+                        _emit({"role": "agent", "content": f"🔍 **Fetching filtered logs** for `{skill_label}`..."})
+                        tool_result = self._invoke_tool("fetch_filtered_logs", {"skill_name": skill_label})
+                        preview = tool_result[:400].replace('\n', ' ') + "..."
+                        _emit({"role": "tool", "content": f"📄 **Logs loaded** (`{skill_label}`):\n```\n{preview}\n```"})
+
+                        # No-progress detection
+                        if "New lines merged this round: 0" in tool_result or "Skill cache hit:" in tool_result:
+                            no_progress_rounds += 1
+                        else:
+                            no_progress_rounds = 0
+
+                        if skill_call_counts.get(skill_label, 0) >= 3:
+                            pending_user_nudges.append({
+                                "role": "user",
+                                "content": (
+                                    "Avoid repeatedly querying the same skill unless it adds new information. "
+                                    "Cross-check with another perspective or synthesize current findings."
+                                ),
+                            })
+                        if no_progress_rounds >= 2:
+                            pending_user_nudges.append({
+                                "role": "user",
+                                "content": (
+                                    "Recent tool calls did not add new evidence. "
+                                    "Prioritize contradiction checks, timeline reconciliation, and final synthesis."
+                                ),
+                            })
+
+                        # Expert rules injection
+                        skill_obj = self.skills.get(skill_label)
+                        expert_rules = getattr(skill_obj, 'expert_rules', '') if skill_obj else ''
+                        if expert_rules:
+                            if skill_label not in self._chat_rules_injected_skills:
+                                rules_section = (
+                                    f"=== Expert Rules for {skill_label} ===\n{expert_rules}\n\n"
+                                    "=== Rule Usage Instruction ===\n"
+                                    "Use these expert rules as investigative clues.\n"
+                                    "For each important claim, map each rule clue to concrete log evidence\n"
+                                    "and decide: supported, refuted, or uncertain.\n\n"
+                                )
+                                self._chat_rules_injected_skills.add(skill_label)
+                            else:
+                                rules_section = (
+                                    f"=== Expert Rules for {skill_label} ===\n"
+                                    "(already provided; omitted to save tokens)\n\n"
+                                )
+                            content = rules_section + self._clip_for_prompt(
+                                f"=== Skill-Focused Evidence ({skill_label}) ===\n{tool_result}",
+                                limit=self.MAX_TOOL_RESULT_CHARS_IN_MESSAGES,
+                            )
+                        else:
+                            content = self._clip_for_prompt(tool_result, limit=self.MAX_TOOL_RESULT_CHARS_IN_MESSAGES)
+
                         self.conversation_history.append({
                             "role": "tool",
                             "tool_call_id": tool_call.id,
                             "name": tool_call.function.name,
-                            "content": tool_result,
+                            "content": content,
                         })
 
-                # If final_report was submitted, return it immediately
+                    else:
+                        # Other tools: query_log_detail, get_assembled_log_snapshot, etc.
+                        skill_label = args.get("skill_name") or tool_call.function.name
+
+                        # Anti-loop for query_log_detail
+                        if tool_call.function.name == "query_log_detail":
+                            anchor_text = args.get("anchor_text", "")
+                            anchor_ts = args.get("anchor_timestamp", "")
+                            detail_sig = f"{anchor_text.lower()}|{anchor_ts}"
+                            detail_call_counts[detail_sig] = detail_call_counts.get(detail_sig, 0) + 1
+
+                        _emit({"role": "agent", "content": f"🔍 **Invoking** `{skill_label}`..."})
+                        tool_result = self._invoke_tool(tool_call.function.name, args)
+
+                        if tool_call.function.name == "query_log_detail":
+                            if "No matching anchor found" in tool_result:
+                                no_match_anchor_counts[detail_sig] = no_match_anchor_counts.get(detail_sig, 0) + 1
+                                if no_match_anchor_counts[detail_sig] >= 2:
+                                    pending_user_nudges.append({
+                                        "role": "user",
+                                        "content": (
+                                            "You repeated an anchor query with no matches. "
+                                            "Switch to a different anchor or synthesize from existing evidence."
+                                        ),
+                                    })
+                            if detail_call_counts.get(detail_sig, 0) >= 3:
+                                pending_user_nudges.append({
+                                    "role": "user",
+                                    "content": (
+                                        "Detail queries are repeating similar anchors. "
+                                        "Move from retrieval to judgment: reconcile timeline and conclude."
+                                    ),
+                                })
+
+                        preview = tool_result[:400].replace('\n', ' ') + "..."
+                        _emit({"role": "tool", "content": f"📄 **Result** (`{skill_label}`):\n```\n{preview}\n```"})
+                        self.conversation_history.append({
+                            "role": "tool",
+                            "tool_call_id": tool_call.id,
+                            "name": tool_call.function.name,
+                            "content": self._clip_for_prompt(tool_result, limit=self.MAX_TOOL_RESULT_CHARS_IN_MESSAGES),
+                        })
+
                 if final_report is not None:
-                    return {"type": "report", "data": final_report}
+                    _emit_token_report()
+                    return {
+                        "type": "report",
+                        "data": final_report,
+                        "issue_time": (
+                            self.issue_time.strftime('%m/%d/%Y %H:%M:%S')
+                            if self.issue_time else None
+                        ),
+                    }
+
             else:
-                # Agent provided a text answer without using tools
+                # Agent gave a text answer with no tool calls
                 content = message.content or ""
+                _emit_token_report()
                 return {"type": "text", "data": content}
 
-        # Exhausted all reasoning steps without reaching a conclusion
+            # Flush nudges into history so they take effect next step
+            self.conversation_history.extend(pending_user_nudges)
+
+        _emit_token_report()
         return {
             "type": "error",
             "data": f"Reached maximum reasoning steps ({max_steps}) without a definitive conclusion. "
-                    "Try breaking down the question or asking more specific queries."
+                    "Try breaking down the question or asking more specific queries.",
+            "issue_time": (
+                self.issue_time.strftime('%m/%d/%Y %H:%M:%S')
+                if self.issue_time else None
+            ),
         }
 
     def _extract_issue_time(self, issue_description: str) -> Optional[datetime]:
@@ -2615,6 +2954,7 @@ class WifiLogAgentSystem:
         self.conversation_history = []
         self._detail_cache = {}
         self._detail_query_seen = set()
+        self._chat_rules_injected_skills = set()
         self._filter_cache_by_skill = {}
         self._assembled_entries_by_key = {}
         self._assembled_entries_no_ts = {}
@@ -2630,6 +2970,7 @@ class WifiLogAgentSystem:
         self.conversation_history = []
         self._detail_cache = {}
         self._detail_query_seen = set()
+        self._chat_rules_injected_skills = set()
         self._filter_cache_by_skill = {}
         self._assembled_entries_by_key = {}
         self._assembled_entries_no_ts = {}

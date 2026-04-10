@@ -99,8 +99,20 @@ def upload_local_analysis():
 
     base_upload_dir = app_config.avatarfiles_dir or os.getcwd()
     timestamp = datetime.datetime.now().strftime('%Y%m%d_%H%M%S')
-    upload_dir = os.path.join(base_upload_dir, 'local_uploads', safe_folder_name)
-    os.makedirs(upload_dir, exist_ok=True)
+    upload_root_dir = os.path.join(base_upload_dir, 'local_uploads')
+    os.makedirs(upload_root_dir, exist_ok=True)
+
+    # Keep user intent in the folder name, but guarantee per-run isolation.
+    upload_dir = os.path.join(upload_root_dir, safe_folder_name)
+    if os.path.exists(upload_dir):
+        candidate_name = f'{safe_folder_name}_{timestamp}'
+        upload_dir = os.path.join(upload_root_dir, candidate_name)
+        counter = 1
+        while os.path.exists(upload_dir):
+            upload_dir = os.path.join(upload_root_dir, f'{candidate_name}_{counter}')
+            counter += 1
+
+    os.makedirs(upload_dir, exist_ok=False)
 
     safe_name = secure_filename(etl_file.filename)
     if not safe_name:

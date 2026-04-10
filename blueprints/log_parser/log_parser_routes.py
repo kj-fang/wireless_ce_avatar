@@ -28,6 +28,8 @@ def _is_allowed_local_analysis_filename(filename: str) -> bool:
     lower_name = clean_name.lower()
     return (
         lower_name.endswith('.zip')
+        or lower_name.endswith('.7z')
+        or lower_name.endswith('.rar')
         or lower_name.endswith('.log')
         or bool(re.search(r'\.etl\.\d+$', clean_name, re.IGNORECASE))
     )
@@ -77,12 +79,27 @@ def upload_local_analysis():
     if not _is_allowed_local_analysis_filename(original_name):
         return jsonify({
             'success': False,
-            'message': f'Invalid file type: {original_name}. Only .zip, .etl, or .log are allowed.'
+            'message': f'Invalid file type: {original_name}. Only .zip, .7z, .rar, .etl, or .log are allowed.'
+        }), 400
+
+    # folder name is based on the user input
+    folder_name = (request.form.get('folder_name') or '').strip()
+    if not folder_name:
+        return jsonify({
+            'success': False,
+            'message': 'Folder name is required.'
+        }), 400
+
+    safe_folder_name = secure_filename(folder_name)
+    if not safe_folder_name:
+        return jsonify({
+            'success': False,
+            'message': 'Invalid folder name. Please use letters, numbers, spaces, hyphen, or underscore.'
         }), 400
 
     base_upload_dir = app_config.avatarfiles_dir or os.getcwd()
     timestamp = datetime.datetime.now().strftime('%Y%m%d_%H%M%S')
-    upload_dir = os.path.join(base_upload_dir, 'local_uploads', f'run_{timestamp}')
+    upload_dir = os.path.join(base_upload_dir, 'local_uploads', safe_folder_name)
     os.makedirs(upload_dir, exist_ok=True)
 
     safe_name = secure_filename(etl_file.filename)
@@ -100,9 +117,9 @@ def upload_local_analysis():
             'keywords_found': []
         }
 
-        # Handle .zip files: extract and auto-pick an .etl file
-        if file_path.lower().endswith('.zip'):
-            print(f"📦 Extracting ZIP: {file_path}")
+        # Handle .zip, .7z, and .rar files: extract and auto-pick an .etl file
+        if file_path.lower().endswith('.zip') or file_path.lower().endswith('.7z') or file_path.lower().endswith('.rar'):
+            print(f"📦 Extracting file: {file_path}")
             wifi_files, ddd_files, bt_files, fw_files = attachment_decompose.process_single_zip(
                 file_path, upload_dir, already_downloaded=False
             )
@@ -112,7 +129,7 @@ def upload_local_analysis():
             if not extracted_files:
                 return jsonify({
                     'success': False,
-                    'message': 'No supported analysis files found in the uploaded ZIP'
+                    'message': 'No supported analysis files found in the uploaded file.'
                 }), 400
 
             local_case_nbr = f'local_upload_{timestamp}'

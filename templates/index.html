@@ -212,11 +212,25 @@
                             <path d="M7.646 1.146a.5.5 0 0 1 .708 0l3 3a.5.5 0 0 1-.708.708L8.5 2.707V11.5a.5.5 0 0 1-1 0V2.707L5.354 4.854a.5.5 0 1 1-.708-.708l3-3z"/>
                         </svg>
                         <h5 style="color: #0068B6; margin-bottom: 10px;">Click to browse</h5>
-                        <p style="color: #666; font-size: 14px; margin: 0;">Supported: .zip, .etl or .log files</p>
+                        <p style="color: #666; font-size: 14px; margin: 0;">Supported: .zip, .7z, .rar, .etl or .log files</p>
                     </div>
                 </div>
 
                 <div id="file-list" class="file-list"></div>
+
+                <div style="margin-top: 12px; margin-bottom: 12px;">
+                    <label for="local-folder-name" style="display: block; font-weight: 600; color: #0f172a; margin-bottom: 6px;">
+                        Folder name (required)
+                    </label>
+                    <input
+                        type="text"
+                        id="local-folder-name"
+                        class="form-control"
+                        placeholder="e.g. 'Case123_ETL_Logs'"
+                        style="border-radius: 10px;"
+                    >
+                    <small style="color: #64748b;">This folder will be created under Downloads\IntelAvatar_files\local_uploads</small>
+                </div>
 
                 <button id="upload-submit-btn" class="upload-submit-btn" onclick="submitLocalUpload()" disabled>
                     Start Analysis
@@ -539,7 +553,7 @@
         // Validate file type based on name
         function isAllowedLocalAnalysisFile(fileName) {
             const lowerName = (fileName || '').toLowerCase();
-            return lowerName.endsWith('.zip') || /\.etl\.\d+$/i.test(fileName || '') || lowerName.endsWith('.log');
+            return lowerName.endsWith('.zip') || lowerName.endsWith('.7z') || lowerName.endsWith('.rar') || /\.etl\.\d+$/i.test(fileName || '') || lowerName.endsWith('.log');
         }
 
         function collectInvalidFiles(files) {
@@ -552,7 +566,7 @@
             const invalidFiles = collectInvalidFiles(files);
             if (invalidFiles.length > 0) {
                 alert(
-                    'Only .zip, .etl or .log files are allowed.\n\nInvalid file(s):\n' +
+                    'Only .zip, .7z, .rar, .etl or .log files are allowed.\n\nInvalid file(s):\n' +
                     invalidFiles.map(file => `- ${file.name}`).join('\n')
                 );
             }
@@ -650,7 +664,7 @@
             const invalidFiles = collectInvalidFiles(files);
             if (invalidFiles.length > 0) {
                 alert(
-                    'Only .zip, .etl or .log files are allowed.\n\nInvalid file(s):\n' +
+                    'Only .zip, .7z, .rar, .etl or .log files are allowed.\n\nInvalid file(s):\n' +
                     invalidFiles.map(file => `- ${file.name}`).join('\n')
                 );
             }
@@ -669,11 +683,20 @@
                 alert('⚠️ Please select at least one file!');
                 return;
             }
+
+            const folderNameInput = document.getElementById('local-folder-name');
+            const folderName = folderNameInput ? folderNameInput.value.trim() : '';
+            if (!folderName) {
+                alert('⚠️ Please enter a folder name before starting analysis.');
+                return;
+            }
+
             const formData = new FormData();
             
             selectedFiles.forEach(file => {
                 formData.append('files', file);
             });
+            formData.append('folder_name', folderName);
 
             // Show local-upload specific loading and connect socket for real-time logs
             showLocalUploadLoading();

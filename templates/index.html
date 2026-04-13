@@ -204,8 +204,7 @@
 
         <!-- Tab 2: Local File Upload -->
         <div id="local-upload-tab" class="tab-content">
-                <div class="upload-zone" id="upload-zone" onclick="document.getElementById('file-input').click()">
-                    <input type="file" id="file-input" style="display: none;" onchange="handleFileSelect(event)">
+                <div class="upload-zone" id="upload-zone" onclick="openLocalFileChooser()">
                     <div style="pointer-events: none;">
                         <svg xmlns="http://www.w3.org/2000/svg" width="32" height="32" fill="#0068B6" viewBox="0 0 16 16" style="margin-bottom: 10px;">
                             <path d="M.5 9.9a.5.5 0 0 1 .5.5v2.5a1 1 0 0 0 1 1h12a1 1 0 0 0 1-1v-2.5a.5.5 0 0 1 1 0v2.5a2 2 0 0 1-2 2H2a2 2 0 0 1-2-2v-2.5a.5.5 0 0 1 .5-.5z"/>
@@ -217,20 +216,6 @@
                 </div>
 
                 <div id="file-list" class="file-list"></div>
-
-                <div style="margin-top: 12px; margin-bottom: 12px;">
-                    <label for="local-folder-name" style="display: block; font-weight: 600; color: #0f172a; margin-bottom: 6px;">
-                        Folder name (required)
-                    </label>
-                    <input
-                        type="text"
-                        id="local-folder-name"
-                        class="form-control"
-                        placeholder="e.g. 'Case123_ETL_Logs'"
-                        style="border-radius: 10px;"
-                    >
-                    <small style="color: #64748b;">This folder will be created under Downloads\IntelAvatar_files\local_uploads</small>
-                </div>
 
                 <button id="upload-submit-btn" class="upload-submit-btn" onclick="submitLocalUpload()" disabled>
                     Start Analysis
@@ -550,34 +535,31 @@
         // File Upload Handling
         let selectedFiles = [];
 
-        // Validate file type based on name
-        function isAllowedLocalAnalysisFile(fileName) {
-            const lowerName = (fileName || '').toLowerCase();
-            return lowerName.endsWith('.zip') || lowerName.endsWith('.7z') || lowerName.endsWith('.rar') || /\.etl\.\d+$/i.test(fileName || '') || lowerName.endsWith('.log');
+        function fileNameFromPath(pathValue) {
+            const normalized = String(pathValue || '').replace(/\\/g, '/');
+            const parts = normalized.split('/');
+            return parts[parts.length - 1] || '';
         }
 
-        function collectInvalidFiles(files) {
-            return files.filter(file => !isAllowedLocalAnalysisFile(file.name));
-        }
-
-        function handleFileSelect(event) {
-            const files = Array.from(event.target.files);
-            
-            const invalidFiles = collectInvalidFiles(files);
-            if (invalidFiles.length > 0) {
-                alert(
-                    'Only .zip, .7z, .rar, .etl or .log files are allowed.\n\nInvalid file(s):\n' +
-                    invalidFiles.map(file => `- ${file.name}`).join('\n')
-                );
-            }
-
-            files.forEach(file => {
-                if (isAllowedLocalAnalysisFile(file.name) && !selectedFiles.find(f => f.name === file.name && f.size === file.size)) {
-                    selectedFiles.push(file);
+        async function openLocalFileChooser() {
+            try {
+                const response = await fetch('/log_parser/pick_local_analysis_file', {
+                    method: 'POST'
+                });
+                const result = await response.json();
+                if (!response.ok || !result.success || !result.source_path) {
+                    throw new Error(result.message || 'Native picker was cancelled or unavailable.');
                 }
-            });
-            updateFileList();
-            event.target.value = ''; // Reset input
+
+                const pickedName = result.filename || fileNameFromPath(result.source_path);
+                selectedFiles = [{
+                    file: { name: pickedName, size: 0 },
+                    sourcePath: result.source_path,
+                }];
+                updateFileList();
+            } catch (error) {
+                alert('❌ Native file picker unavailable: ' + error.message);
+            }
         }
 
         function updateFileList() {
@@ -593,14 +575,16 @@
             
             submitBtn.disabled = false;
             
-            selectedFiles.forEach((file, index) => {
+            selectedFiles.forEach((item, index) => {
+                const file = item.file;
+                const sizeLabel = item.sourcePath ? 'native path' : formatFileSize(file.size);
                 const fileItem = document.createElement('div');
                 fileItem.className = 'file-item';
                 fileItem.innerHTML = `
                     <div class="file-item-info">
                         <span>📄</span>
                         <span style="font-weight: 500;">${escapeHtml(file.name)}</span>
-                        <span style="color: #666; font-size: 12px;">(${formatFileSize(file.size)})</span>
+                        <span style="color: #666; font-size: 12px;">(${escapeHtml(sizeLabel)})</span>
                     </div>
                     <span class="file-remove" onclick="removeFile(${index})">✕</span>
                 `;
@@ -659,22 +643,7 @@
             e.stopPropagation();
             dragCounter = 0;
             uploadZone.classList.remove('drag-over');
-            const files = Array.from(e.dataTransfer.files);
-
-            const invalidFiles = collectInvalidFiles(files);
-            if (invalidFiles.length > 0) {
-                alert(
-                    'Only .zip, .7z, .rar, .etl or .log files are allowed.\n\nInvalid file(s):\n' +
-                    invalidFiles.map(file => `- ${file.name}`).join('\n')
-                );
-            }
-
-            files.forEach(file => {
-                if (isAllowedLocalAnalysisFile(file.name) && !selectedFiles.find(f => f.name === file.name && f.size === file.size)) {
-                    selectedFiles.push(file);
-                }
-            });
-            updateFileList();
+            alert('⚠️ Drag and drop is disabled in native-path mode. Please click to open the native file picker.');
         });
 
         // Submit Local Upload
@@ -684,19 +653,15 @@
                 return;
             }
 
-            const folderNameInput = document.getElementById('local-folder-name');
-            const folderName = folderNameInput ? folderNameInput.value.trim() : '';
-            if (!folderName) {
-                alert('⚠️ Please enter a folder name before starting analysis.');
+            const formData = new FormData();
+
+            const selectedItem = selectedFiles[0];
+            if (!selectedItem || !selectedItem.sourcePath) {
+                alert('⚠️ Please use the native picker and select a local file path.');
                 return;
             }
 
-            const formData = new FormData();
-            
-            selectedFiles.forEach(file => {
-                formData.append('files', file);
-            });
-            formData.append('folder_name', folderName);
+            formData.append('source_path', selectedItem.sourcePath);
 
             // Show local-upload specific loading and connect socket for real-time logs
             showLocalUploadLoading();

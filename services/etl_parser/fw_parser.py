@@ -307,9 +307,10 @@ def fw_bt_analysis(fw_path, use_cli=True, cancel_event: Event | None = None):
                         print(stderr)
                 else:
                     print(f"❌ bt_decoder_cli exited with code {result_proc.returncode}")
+                    
                     if stderr:
                         print(stderr)
-                    return None, stdout
+                    return None, f"❌ bt_decoder_cli exited with code {result_proc.returncode}"
             
             print("✅ Debug: FW bt decoder CLI is completed successfully.")
             sysmon_text = _get_sysmon_to_text(fw_path)

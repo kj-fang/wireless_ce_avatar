@@ -226,6 +226,10 @@ class FWAnalysisService():
         else:  # BT case → run BT FW analysis
             self.emit_log("Start FW BT analysis.")
             results['system_text'], results['log'] = fw_bt_analysis(file_path, cancel_event=cancel_event)
+
+            if results['system_text'] is None and not (cancel_event and cancel_event.is_set()):
+                self.emit_tool_error(results['log'] or "FW BT analysis was canceled.")
+
         return results['system_text'], results['log']
     
     
@@ -238,3 +242,5 @@ class FWAnalysisService():
     def emit_tool_closed(self, msg):
         app_config.socketio.emit('fw_tool_closed', {'data': msg}, namespace='/progress')
 
+    def emit_tool_error(self, msg):
+        app_config.socketio.emit('fw_tool_error', {'data': msg}, namespace='/progress')

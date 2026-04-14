@@ -274,7 +274,7 @@ def fw_bt_analysis(fw_path, use_cli=True, cancel_event: Event | None = None):
 
     if use_cli:
         if not os.path.exists(exe_cli_path):
-            return f"❌ CLI executable not found: {exe_cli_path}"
+            return None, f"❌ CLI executable not found: {exe_cli_path}"
     
         try:
             print(f"🔍 Debug: Running CLI decoder with fw_path={fw_path}")
@@ -287,10 +287,13 @@ def fw_bt_analysis(fw_path, use_cli=True, cancel_event: Event | None = None):
             )
 
             while result_proc.poll() is None:
+                # Just for avoiding Buffer Blocking
+                line = result_proc.stdout.readline() 
+
                 if cancel_event and cancel_event.is_set():
                     print("⚠️ FW BT analysis canceled. Terminating bt_decoder_cli process...")
                     _terminate_process_tree(result_proc.pid)
-                    return None, None, "FW analysis canceled"
+                    return None, "FW analysis canceled"
                 time.sleep(0.5)
 
             stdout, stderr = result_proc.communicate()
@@ -306,7 +309,7 @@ def fw_bt_analysis(fw_path, use_cli=True, cancel_event: Event | None = None):
                     print(f"❌ bt_decoder_cli exited with code {result_proc.returncode}")
                     if stderr:
                         print(stderr)
-                    return None, None, stdout
+                    return None, stdout
             
             print("✅ Debug: FW bt decoder CLI is completed successfully.")
             sysmon_text = _get_sysmon_to_text(fw_path)
@@ -322,7 +325,7 @@ def fw_bt_analysis(fw_path, use_cli=True, cancel_event: Event | None = None):
     else:
             
         if not os.path.exists(exe_path):
-            return f"❌ Executable not found: {exe_path}"
+            return None, f"❌ Executable not found: {exe_path}"
 
         try:
             

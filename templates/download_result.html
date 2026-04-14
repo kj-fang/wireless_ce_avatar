@@ -459,6 +459,7 @@
 
         let allEventLogs = [];
         let currentEvtPath = '';
+        let currentTimeHeader = 'Time';
         let eventPagingState = {
             totalCount: 0,
             loadedCount: 0,
@@ -481,6 +482,7 @@
 
             // Reset paging state
             allEventLogs = [];
+            currentTimeHeader = 'Time';
             eventPagingState = {
                 totalCount: 0,
                 loadedCount: 0,
@@ -522,9 +524,10 @@
                 eventPagingState.loadedCount = allEventLogs.length;
                 eventPagingState.hasMore = data.has_more || false;
                 eventPagingState.isLoading = false;
+                currentTimeHeader = data.time_header || currentTimeHeader;
 
                 // Render all loaded events (virtual scroll will handle visibility)
-                renderEventLogs(allEventLogs, eventPagingState);
+                renderEventLogs(allEventLogs, eventPagingState, currentTimeHeader);
             })
             .catch(err => {
                 if (offset === 0) {
@@ -551,7 +554,7 @@
                     console.log(`[Success] BT Event Map loaded: ${Object.keys(data).length} entries`);
                     // Re-render table if events are already displayed
                     if (allEventLogs.length > 0) {
-                        renderEventLogs(allEventLogs);
+                        renderEventLogs(allEventLogs, eventPagingState, currentTimeHeader);
                     }
                 }
             })
@@ -584,7 +587,7 @@
         // Render event logs with virtual scrolling — only visible rows are in the DOM.
         // Spacer rows at top/bottom maintain correct scrollbar height.
         // Also triggers lazy-load of next page when scrolling near bottom.
-        function renderEventLogs(events, pagingState) {
+        function renderEventLogs(events, pagingState, timeHeader) {
             const contentBox = document.getElementById('eventLogContent');
 
             if (contentBox._evtScrollHandler) {
@@ -611,7 +614,7 @@
                   ${COL_STYLE}
                   <thead style="position:sticky; top:0; z-index:1;">
                     <tr>
-                      <th style="${TH_STYLE}">Time</th>
+                      <th style="${TH_STYLE}">${timeHeader || 'Time'}</th>
                       <th style="${TH_STYLE}">Level</th>
                       <th style="${TH_STYLE}">Source</th>
                       <th style="${TH_STYLE}">Event ID</th>
@@ -948,7 +951,7 @@
         appendLog(`❌ FW analysis failed: ${decoded} (${msg.error || 'unknown error'})\n`, 'red');
     });
 
-    socket.on("fw_analysis_rejected", function(msg) {
+    socket.on("fw_analysis_warning", function(msg) {
         const pending = window.pendingFwAnalysis;
         if (!pending) {
             const rejectedPath = msg.fw_path || '';
@@ -956,7 +959,7 @@
                 ? findFwButtonByEncodedPath(encodeURIComponent(rejectedPath))
                 : null;
             resetFwButton(fallbackButton);
-            appendLog(`⚠️ FW analysis rejected: ${msg.error || 'precheck failed'}\n`, 'red');
+            appendLog(`⚠️ FW analysis warning: ${msg.error || 'precheck failed'}\n`, 'red');
             return;
         }
 
@@ -967,7 +970,7 @@
 
         window.pendingFwAnalysis = null;
         resetFwButton(button);
-        appendLog(`⚠️ FW analysis rejected: ${msg.error || 'precheck failed'}\n`, 'red');
+        appendLog(`⚠️ FW analysis warning: ${msg.error || 'precheck failed'}\n`, 'red');
     });
 
     window.addEventListener('pageshow', function() {

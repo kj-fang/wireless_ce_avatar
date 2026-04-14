@@ -75,6 +75,30 @@ def convert_time(time_str, timezone_name):
         return time_str
 
 
+def build_time_header(timezone_name):
+    if not timezone_name:
+        return 'Time'
+    try:
+        tz_name_clean = timezone_name.split(' (')[0].strip()
+        target_timezone = tz.gettz(tz_name_clean)
+        if target_timezone is None:
+            return 'Time'
+
+        utc_offset = datetime.now(target_timezone).utcoffset()
+        if utc_offset is None:
+            return 'Time'
+
+        total_minutes = int(utc_offset.total_seconds() // 60)
+        sign = '+' if total_minutes >= 0 else '-'
+        total_minutes = abs(total_minutes)
+        hours = total_minutes // 60
+        minutes = total_minutes % 60
+
+        return f"Time (UTC{sign}{hours:02d}:{minutes:02d})"
+    except Exception:
+        return 'Time'
+
+
 def _source_matches(source, source_filter):
     source_filter = (source_filter or 'all').lower()
     if source_filter == 'all':
@@ -203,6 +227,7 @@ def get_paged_events(path, offset=0, limit=0, source_filter='all', level_filter=
         'offset': offset,
         'limit': limit,
         'has_more': offset + len(events_out) < total,
+        'time_header': build_time_header(system_timezone),
     }
 
 

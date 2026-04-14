@@ -11,7 +11,6 @@ from utils.fw_utils import load_fw_system_info
 class FWAnalysisService():
 
     def __init__(self):
-        self.fw_validate = True # for debug purpose, set to False to skip all the precheck and system info validation
         self.service_name = "bt"
         self._tasks = {}
         self._lock = Lock()
@@ -75,19 +74,19 @@ class FWAnalysisService():
 
     def start_async(self, file_path: str, wifi_of_bt: str):
         close_active_text_analysis_tool(on_log=self.emit_tool_closed)
-        if self.fw_validate:
-            is_valid, error_msg = self._validate_precheck(file_path)
-            if not is_valid:
-                app_config.socketio.emit(
-                    'fw_analysis_rejected',
-                    {
-                        'task_id': None,
-                        'fw_path': file_path,
-                        'error': error_msg,
-                    },
-                    namespace='/progress'
-                )
-                return None, error_msg
+
+        # fw validation precheck
+        is_valid, error_msg = self._validate_precheck(file_path)
+        if not is_valid:
+            app_config.socketio.emit(
+                'fw_analysis_warning',
+                {
+                    'task_id': None,
+                    'fw_path': file_path,
+                    'error': error_msg,
+                },
+                namespace='/progress'
+            )
 
         task_id = str(uuid.uuid4())
         cancel_event = Event()
@@ -117,27 +116,18 @@ class FWAnalysisService():
             results = {}
             results['system_info'] = load_fw_system_info(file_path)
 
-            if self.fw_validate:
-                system_info_ok, rejected_reason = self._validate_system_info(results['system_info'])
+            system_info_ok, rejected_reason = self._validate_system_info(results['system_info'])
 
-                if not system_info_ok:
-                    with self._lock:
-                        task = self._tasks.get(task_id)
-                        if not task:
-                            return
-                        task["status"] = "rejected"
-                        task["error"] = rejected_reason
-
-                    app_config.socketio.emit(
-                        'fw_analysis_rejected',
-                        {
-                            'task_id': task_id,
-                            'fw_path': file_path,
-                            'error': rejected_reason,
-                        },
-                        namespace='/progress'
-                    )
-                    return
+            if not system_info_ok:
+                app_config.socketio.emit(
+                    'fw_analysis_warning',
+                    {
+                        'task_id': task_id,
+                        'fw_path': file_path,
+                        'error': rejected_reason,
+                    },
+                    namespace='/progress'
+                )
 
             results['system_text'], results['log'] = self.analyze(file_path, wifi_of_bt, cancel_event=cancel_event)
             completed = False

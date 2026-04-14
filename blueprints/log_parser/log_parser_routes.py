@@ -16,9 +16,6 @@ from services.log_parser_file_manage_service import FileManagerService
 from services.log_parser_service import LogParserService
 from services.etl_parser.wpp_ddd_parser import wpp_ddd_parser_run
 
-import tkinter as tk
-from tkinter import filedialog
-
 log_parser_bp = Blueprint("log_parser", __name__, url_prefix="/log_parser")
 
 log_parser_service = LogParserService()
@@ -58,6 +55,8 @@ def load_prompt():
 
 @log_parser_bp.route("/upload", methods=["POST"])
 def upload():
+    # Reset local_in_place when using regular file upload (not local analysis)
+    session['local_in_place'] = False
     upload_type = request.form.get('type')
     result = file_manager_service.handle_file_upload(upload_type, request.files)
     return result
@@ -65,7 +64,14 @@ def upload():
 
 @log_parser_bp.route('/pick_local_analysis_file', methods=['POST'])
 def pick_local_analysis_file():
+    root = None
     try:
+        try:
+            import tkinter as tk
+            from tkinter import filedialog
+        except ImportError as e:
+            logging.exception('Tkinter is unavailable in this environment: %s', e)
+            return jsonify({'success': False, 'message': 'Native file picker is unavailable in this environment.'}), 503
 
         root = tk.Tk()
         root.withdraw()
@@ -89,14 +95,23 @@ def pick_local_analysis_file():
                 'message': f'Invalid file type: {selected_name}. Only .zip, .7z, .rar, .etl, or .log are allowed.'
             }), 400
 
+        normalized_selected_path = os.path.normpath(os.path.abspath(selected_path))
+        session['picked_local_analysis_path'] = normalized_selected_path
+
         return jsonify({
             'success': True,
-            'source_path': selected_path,
+            'source_path': normalized_selected_path,
             'filename': selected_name,
         })
     except Exception as e:
         logging.exception('Failed to open native file dialog: %s', e)
         return jsonify({'success': False, 'message': f'Native file dialog unavailable: {str(e)}'}), 500
+    finally:
+        if root is not None:
+            try:
+                root.destroy()
+            except Exception:
+                logging.debug('Failed to destroy Tk root window cleanly', exc_info=True)
 
 
 #------------Section for Local Analysis file uploaded -------------#
@@ -104,9 +119,20 @@ def pick_local_analysis_file():
 @log_parser_bp.route('/upload_local_analysis', methods=['POST'])
 def upload_local_analysis():
     source_path = (request.form.get('source_path') or '').strip()
+    picked_source_path = (session.get('picked_local_analysis_path') or '').strip()
 
     if not source_path:
         return jsonify({'success': False, 'message': 'Please use native picker to select a local file path.'}), 400
+
+    if not picked_source_path:
+        return jsonify({'success': False, 'message': 'No path is bound to this session. Please re-pick the file using native picker.'}), 400
+
+    normalized_source_path = os.path.normpath(os.path.abspath(source_path))
+    normalized_picked_source_path = os.path.normpath(os.path.abspath(picked_source_path))
+    if os.path.normcase(normalized_source_path) != os.path.normcase(normalized_picked_source_path):
+        return jsonify({'success': False, 'message': 'Invalid source path for this session. Please re-pick the file using native picker.'}), 400
+
+    source_path = normalized_picked_source_path
 
     if not os.path.exists(source_path):
         return jsonify({'success': False, 'message': f'Source file not found: {source_path}'}), 400
@@ -226,6 +252,11 @@ def register_socketio_handlers(socketio):
 #------------Llog parser render -------------#
 
 def render_log_parser_form():
+    # Validate local_in_place context: only honor this flag if we have an active uploaded_source_path
+    # from a local analysis flow. This prevents stale session flags from affecting new/other flows.
+    if session.get('local_in_place') and not session.get('uploaded_source_path'):
+        session['local_in_place'] = False
+    
     classification = session.get('classification', {
         'issue_type': 'Unclassified',
         'confidence': 0,

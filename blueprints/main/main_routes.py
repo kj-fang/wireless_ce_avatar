@@ -381,11 +381,15 @@ def render_download_result_form():
     # Find the evt path with the latest timestamp for auto-load
     latest_evt_path = None
     latest_evt_time = None
+
     for row in event_table_rows:
         ts = extract_timestamp_from_folder(row['ddd_path'])
         if ts and (latest_evt_time is None or ts > latest_evt_time):
             latest_evt_time = ts
             latest_evt_path = row['ddd_path']
+    
+    if not latest_evt_path and event_table_rows:
+        latest_evt_path = event_table_rows[-1]['ddd_path'] 
 
     return render_template('download_result.html',
                          case_path=download_path,

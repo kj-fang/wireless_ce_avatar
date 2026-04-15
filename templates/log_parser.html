@@ -80,6 +80,19 @@
                                 role="progressbar" style="width: 0%"></div>
                         </div>
                         <small id="progressText" class="text-muted">Initializing...</small>
+
+                        <!-- Token estimate display -->
+                        <div id="tokenEstimateContainer" class="mt-3" style="display: none;">
+                            <div class="d-flex flex-wrap gap-2">
+                                <div id="tokenAfterFilter" class="badge badge-info px-3 py-2 mr-2" style="font-size: 0.85rem; display: none;">
+                                    <i class="fas fa-filter"></i> After filter: <strong id="tokenAfterFilterVal">—</strong> tokens
+                                </div>
+                                <div id="tokenAfterPreprocess" class="badge badge-primary px-3 py-2" style="font-size: 0.85rem; display: none;">
+                                    <i class="fas fa-cogs"></i> After preprocess: <strong id="tokenAfterPreprocessVal">—</strong> tokens
+                                </div>
+                            </div>
+                            <small class="text-muted d-block mt-1">Estimated (~1 token per 4 chars)</small>
+                        </div>
                     </div>
                 </div>
             </div>
@@ -138,8 +151,8 @@
             <div class="mb-3">
                 
                 <label class="form-label font-weight-bold">Select Filter File (.tat)</label>
-                <div class="input-group mb-1">
-                    <select name="filter_file" id="filterSelect" class="form-control" required>
+                <div class="input-group">
+                    <select name="filter_file" id="filterSelect" class="form-control" required onchange="onFilterChange(this.value)">
                         <option value="">Select filter file</option>
                         {% for filter_file in available_filters %}
                             <option value="{{ filter_file }}">{{ filter_file }}</option>
@@ -150,34 +163,9 @@
                     </button>
                     <input type="file" id="filterUpload" class="d-none" accept=".tat" onchange="uploadFilterFile(this)">
                 </div>
-                <small class="form-text text-muted">Select primary filter for Run Analysis. Use the keyword panel below to fine-tune.</small>
-
-                <!-- Unified Filter Keywords Tree Panel -->
-                <div id="filterKeywordsPanel" class="mt-2">
-                    <div class="card">
-                        <div class="card-header py-2 d-flex justify-content-between align-items-center" 
-                             style="cursor: pointer; background-color: #f8f9fa;" 
-                             onclick="toggleFilterPanel()">
-                            <span class="font-weight-bold" style="font-size: 0.9rem;">
-                                <i id="filterPanelToggleIcon" class="fas fa-chevron-right mr-1"></i>
-                                Filter Keywords 
-                                <span id="filterKeywordCount" class="badge badge-secondary ml-1">0 selected</span>
-                            </span>
-                            <div>
-                                <button type="button" class="btn btn-sm btn-outline-primary py-0 px-2 mr-1" onclick="event.stopPropagation(); selectAllKeywordsGlobal()">All</button>
-                                <button type="button" class="btn btn-sm btn-outline-secondary py-0 px-2 mr-1" onclick="event.stopPropagation(); deselectAllKeywordsGlobal()">None</button>
-                                <button type="button" class="btn btn-sm btn-outline-info py-0 px-2" onclick="event.stopPropagation(); loadAllFilterDetails(true)" title="Reload all .tat files">
-                                    <i class="fas fa-sync-alt"></i>
-                                </button>
-                            </div>
-                        </div>
-                        <div id="filterPanelBody" class="card-body py-2 px-3" style="display: none; max-height: 350px; overflow-y: auto;">
-                            <div id="filterTreeContainer">
-                                <span class="text-muted"><i class="fas fa-info-circle mr-1"></i>Click to expand and load all filter files...</span>
-                            </div>
-                        </div>
-                    </div>
-                </div>
+                <small class="form-text text-muted">Select filter from project_root/filter or upload new .tat file</small>
+                <!-- Filter token estimate -->
+                <div id="filterTokenEstimate" class="mt-2" style="display:none;"></div>
             </div>
             
             <!-- Prompt select and edit box -->
@@ -267,6 +255,7 @@
         const LOAD_PROMPT_URL = "{{ url_for('log_parser.load_prompt') }}"
         const EDIT_PROMPT_URL = "{{ url_for('log_parser.edit_prompt') }}"
         const UPLOAD_URL = "{{ url_for('log_parser.upload') }}"
+        const ESTIMATE_TOKENS_URL = "{{ url_for('log_parser.estimate_tokens') }}"
 
         const socket = io('/progress');
         
@@ -419,6 +408,56 @@
                 fileDisplay.value = 'No file selected';
                 fileDisplay.className = 'form-control';
             }
+        }
+
+        function onFilterChange(filterFile) {
+            const estimateDiv = document.getElementById('filterTokenEstimate');
+            if (!filterFile) {
+                estimateDiv.style.display = 'none';
+                estimateDiv.innerHTML = '';
+                return;
+            }
+            estimateDiv.style.display = 'block';
+            estimateDiv.innerHTML = '<span class="text-muted"><i class="fas fa-spinner fa-spin"></i> Estimating token size...</span>';
+
+            fetch(ESTIMATE_TOKENS_URL, {
+                method: 'POST',
+                headers: { 'Content-Type': 'application/json' },
+                body: JSON.stringify({ filter_file: filterFile })
+            })
+            .then(r => r.json())
+            .then(data => {
+                if (!data.success) {
+                    estimateDiv.innerHTML = `<span class="text-warning"><i class="fas fa-exclamation-circle"></i> ${data.message}</span>`;
+                    return;
+                }
+                const limit = data.token_limit;
+                const tokens = data.grouped_tokens;
+                const pct = Math.round((tokens / limit) * 100);
+                const barColor = data.exceeds_limit ? 'bg-danger' : (pct >= 70 ? 'bg-warning' : 'bg-success');
+                const badge = data.exceeds_limit
+                    ? `<span class="badge badge-danger ml-2">Exceeds ${limit.toLocaleString()} token limit</span>`
+                    : `<span class="badge badge-success ml-2">Within limit</span>`;
+                estimateDiv.innerHTML = `
+                    <div class="d-flex align-items-center flex-wrap" style="gap:10px;">
+                        <span class="text-muted" style="font-size:0.85rem;">
+                            <i class="fas fa-calculator"></i>
+                            Estimated: <strong>~${tokens.toLocaleString()}</strong> tokens after preprocess
+                            &nbsp;/&nbsp; <strong>~${data.filtered_tokens.toLocaleString()}</strong> after filter
+                            &nbsp;&middot;&nbsp; ${data.filtered_lines.toLocaleString()} lines
+                            &nbsp;&middot;&nbsp; ${data.keyword_count} keywords
+                        </span>
+                        ${badge}
+                    </div>
+                    <div class="progress mt-1" style="height:6px; max-width:400px;">
+                        <div class="progress-bar ${barColor}" style="width:${Math.min(pct,100)}%"></div>
+                    </div>
+                    <small class="text-muted">${pct}% of ${limit.toLocaleString()} token limit</small>
+                `;
+            })
+            .catch(err => {
+                estimateDiv.innerHTML = '<span class="text-danger">Failed to estimate token size</span>';
+            });
         }
 
         function autoLoadPrompt(type) {
@@ -810,6 +849,11 @@
 
             document.getElementById('resultContainer').innerHTML = '';
 
+            // Reset token estimates
+            document.getElementById('tokenEstimateContainer').style.display = 'none';
+            document.getElementById('tokenAfterFilter').style.display = 'none';
+            document.getElementById('tokenAfterPreprocess').style.display = 'none';
+
             updateProgress(0, 'Starting analysis...');
         }
         function hideProgress() {
@@ -827,12 +871,35 @@
         socket.on('Progress', function(data) {
             console.log('Progress update:', data.percentage + '% - ' + data.message);
             updateProgress(data.percentage, data.message);
+            tryRenderTokenEstimate(data.message);
         });
+
+        function tryRenderTokenEstimate(message) {
+            // Match messages like: "Filtering done — ~12,345 tokens estimated after filter"
+            // or: "Preprocessing done — ~8,210 tokens estimated after preprocess"
+            const filterMatch = message.match(/~([\.\d,]+)\s+tokens\s+estimated\s+after\s+filter/i);
+            const preprocessMatch = message.match(/~([\.\d,]+)\s+tokens\s+estimated\s+after\s+preprocess/i);
+
+            if (filterMatch) {
+                document.getElementById('tokenAfterFilterVal').textContent = filterMatch[1];
+                document.getElementById('tokenAfterFilter').style.display = 'inline-block';
+                document.getElementById('tokenEstimateContainer').style.display = 'block';
+            }
+            if (preprocessMatch) {
+                document.getElementById('tokenAfterPreprocessVal').textContent = preprocessMatch[1];
+                document.getElementById('tokenAfterPreprocess').style.display = 'inline-block';
+                document.getElementById('tokenEstimateContainer').style.display = 'block';
+            }
+        }
 
         socket.on('analysis_error', function(data) {
             console.log('Analysis error:', data.message);
             hideProgress();
-            showError(data.message);
+            if (data.token_count && data.token_limit) {
+                showTokenLimitError(data.message, data.token_count, data.token_limit);
+            } else {
+                showError(data.message);
+            }
         });
         
         socket.on('validation_error', function(data) {
@@ -854,6 +921,40 @@
             setChatLoading(false);
             displayChatMessage('error', data.message);
         });
+
+        function showTokenLimitError(message, tokenCount, tokenLimit) {
+            const resultContainer = document.getElementById('resultContainer');
+            const overRatio = ((tokenCount / tokenLimit) * 100).toFixed(0);
+            resultContainer.innerHTML = `
+                <div class="card shadow-sm border-warning">
+                    <div class="card-body">
+                        <h5 class="card-title font-weight-bold text-warning">
+                            <i class="fas fa-exclamation-triangle"></i> Token Limit Exceeded
+                        </h5>
+                        <hr>
+                        <div class="d-flex flex-wrap mb-3">
+                            <div class="mr-4 text-center">
+                                <div style="font-size:1.8rem; font-weight:bold; color:#e67e22;">${tokenCount.toLocaleString()}</div>
+                                <small class="text-muted">Estimated tokens</small>
+                            </div>
+                            <div class="mr-4 text-center">
+                                <div style="font-size:1.8rem; font-weight:bold; color:#27ae60;">${tokenLimit.toLocaleString()}</div>
+                                <small class="text-muted">Token limit</small>
+                            </div>
+                            <div class="text-center">
+                                <div style="font-size:1.8rem; font-weight:bold; color:#e74c3c;">${overRatio}%</div>
+                                <small class="text-muted">of limit used</small>
+                            </div>
+                        </div>
+                        <div class="alert alert-warning mb-0">
+                            <strong>Action required:</strong> The filtered log is too large to analyze.
+                            Please select a stricter <strong>filter file (.tat)</strong> with fewer enabled keywords and run the analysis again.
+                        </div>
+                    </div>
+                </div>
+            `;
+            resultContainer.style.display = 'block';
+        }
 
 
         socket.on('analysis_completed', function(data) {

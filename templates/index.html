@@ -12,18 +12,12 @@
             font-family: 'Inter', sans-serif !important;
         }
         
-        /* Keep Press Start 2P font for loading messages */
-        #log-messages,
-        #log-messages * {
-            font-family: 'Press Start 2P', cursive !important;
-        }
-        
-        /* Hide SVGator watermark */
-        #epU2ASd7C0s22,
-        #epU2ASd7C0s22 * {
-            opacity: 0 !important;
-            visibility: hidden !important;
-            display: none !important;
+        /* Keep Inter font for loading messages */
+        #case-log-messages,
+        #case-log-messages *,
+        #upload-log-messages,
+        #upload-log-messages * {
+            font-family: 'Inter', sans-serif !important;
         }
         
         body {
@@ -37,7 +31,7 @@
             border-radius: 8px;
             box-shadow: 0 0 10px rgba(0, 0, 0, 0.1);
         }
-        #loading-box {
+        .loading-box {
             display: none;
             margin-top: 20px;
         }
@@ -52,6 +46,112 @@
             image-rendering: -webkit-optimize-contrast;
             image-rendering: crisp-edges;
         }
+
+        /* Tab Styles */
+        .tabs-container {
+            width: 480px;
+            margin: 50px auto 0;
+        }
+        .tabs {
+            display: flex;
+            border-bottom: 2px solid #ddd;
+            margin-bottom: 20px;
+        }
+        .tab {
+            flex: 1;
+            padding: 12px 20px;
+            text-align: center;
+            cursor: pointer;
+            background-color: #f8f9fa;
+            border: none;
+            border-bottom: 3px solid transparent;
+            transition: all 0.3s ease;
+            border-radius: 5px;
+            font-weight: 500;
+            color: #666;
+        }
+        .tab:hover {
+            background-color: #e9ecef;
+            color: #1177c0;
+        }
+        .tab.active {
+            background-color: #1177c0;
+            color: white;
+        }
+        .tab-content {
+            display: none;
+        }
+        .tab-content.active {
+            display: block;
+        }
+        
+        /* File Upload Styles */
+        .upload-zone {
+            border: 2px dashed #0068B6;
+            border-radius: 12px;
+            padding: 10px 40px;
+            text-align: center;
+            background-color: #f8f9fa;
+            cursor: pointer;
+            transition: all 0.3s ease;
+        }
+        .upload-zone:hover {
+            background-color: #e3f2fd;
+            border-color: #0056a0;
+        }
+        .upload-zone.drag-over {
+            background-color: #bbdefb;
+            border-color: #0056a0;
+        }
+        .file-list {
+            margin-top: 20px;
+        }
+        .file-item {
+            display: flex;
+            justify-content: space-between;
+            align-items: center;
+            padding: 10px 15px;
+            background-color: #f8f9fa;
+            border-radius: 8px;
+            margin-bottom: 8px;
+        }
+        .file-item-info {
+            display: flex;
+            align-items: center;
+            gap: 10px;
+        }
+        .file-remove {
+            cursor: pointer;
+            color: #dc3545;
+            font-weight: bold;
+        }
+        .upload-submit-btn {
+            width: 100%;
+            padding: 12px;
+            margin-top: 20px;
+            background-color: #0068B6;
+            color: white;
+            border: none;
+            border-radius: 25px;
+            font-weight: 600;
+            cursor: pointer;
+            transition: all 0.3s ease;
+        }
+        .upload-submit-btn:hover {
+            background-color: #0056a0;
+        }
+        .upload-submit-btn:disabled {
+            background-color: #ccc;
+            cursor: not-allowed;
+        }
+        .action-type-select {
+            width: 160px !important;
+            min-width: 160px !important;
+            max-width: 160px !important;
+            white-space: nowrap;
+            overflow: hidden;
+            text-overflow: ellipsis;            text-align: center;
+            text-align-last: center;        }
     </style>
 </head>
 
@@ -76,13 +176,22 @@
         </div>
     </div>
 
-    <!-- 📁 Case Number block -->
-    <div id="form-box" style="max-width:35%; margin: 100px auto;">
+    <!-- Tabs Container -->
+    <div class="tabs-container" id="tabs-container">
+        <div class="tabs">
+            <button class="tab active" onclick="switchTab('case-number')" style="font-weight:bold;">Case Number Analysis</button>
+            <button class="tab" onclick="switchTab('local-upload')" style="font-weight:bold;">Local File Upload</button>
+        </div>
+
+        <!-- Tab 1: Case Number Analysis -->
+        <div id="case-number-tab" class="tab-content active">
+            <div id="form-box">
         <form id="mainForm" method="post" onsubmit="handleSubmit(event)">
             <div style="display: flex; gap: 0; margin-bottom: 15px; position: relative;">
-                <select id="action_type" class="form-control" style="border-radius: 25px 0 0 25px; padding: 8px 12px 8px 20px; width: auto; min-width: 100px; border-right: none; background-color: #0068B6 ; color: rgb(255, 255, 255); font-weight: bold;">
+                <select id="action_type" class="form-control action-type-select" style="border-radius: 25px 0 0 25px; padding: 8px 15px 8px 10px; border-right: none; background-color: #0068B6 ; color: rgb(255, 255, 255); font-weight: bold;">
                     <option value="submit" style="background-color: white; color: black;">Submit</option>
                     <option value="etl" style="background-color: white; color: black;">ETL Analysis</option>
+                    <option value="etl_llm" style="background-color: white; color: black;">ETL Analysis with LLM</option>
                 </select>
                 <input type="text" class="form-control" id="case_number" name="case_number" placeholder="Enter case number here" value="" required style="border-radius: 0 25px 25px 0; padding: 12px 50px 12px 20px; flex: 1;">
                 <button type="submit" class="btn btn-primary" aria-label="Search" style="position: absolute; right: 5px; top: 50%; transform: translateY(-50%); border-radius: 20px; padding: 6px 12px; font-size: 14px; background-color: transparent; border-color: transparent;">
@@ -90,21 +199,44 @@
                 </button>
             </div>
         </form>
+            </div>
+        </div>
+
+        <!-- Tab 2: Local File Upload -->
+        <div id="local-upload-tab" class="tab-content">
+                <div class="upload-zone" id="upload-zone" onclick="document.getElementById('file-input').click()">
+                    <input type="file" id="file-input" style="display: none;" onchange="handleFileSelect(event)">
+                    <div style="pointer-events: none;">
+                        <svg xmlns="http://www.w3.org/2000/svg" width="32" height="32" fill="#0068B6" viewBox="0 0 16 16" style="margin-bottom: 10px;">
+                            <path d="M.5 9.9a.5.5 0 0 1 .5.5v2.5a1 1 0 0 0 1 1h12a1 1 0 0 0 1-1v-2.5a.5.5 0 0 1 1 0v2.5a2 2 0 0 1-2 2H2a2 2 0 0 1-2-2v-2.5a.5.5 0 0 1 .5-.5z"/>
+                            <path d="M7.646 1.146a.5.5 0 0 1 .708 0l3 3a.5.5 0 0 1-.708.708L8.5 2.707V11.5a.5.5 0 0 1-1 0V2.707L5.354 4.854a.5.5 0 1 1-.708-.708l3-3z"/>
+                        </svg>
+                        <h5 style="color: #0068B6; margin-bottom: 10px;">Click to browse</h5>
+                        <p style="color: #666; font-size: 14px; margin: 0;">Supported: .zip, .etl or .log files</p>
+                    </div>
+                </div>
+
+                <div id="file-list" class="file-list"></div>
+
+                <button id="upload-submit-btn" class="upload-submit-btn" onclick="submitLocalUpload()" disabled>
+                    Start Analysis
+                </button>
+            </div>
     </div>
 
-    <!-- 🔄 Loading indicator section -->
-    <div id="loading-box" class="text-center">
+    <!-- Case number loading indicator -->
+    <div id="case-loading-box" class="text-center loading-box">
         <div style="position: relative; width: 50%; margin: 0 auto;">
-            <div id="log-messages" class="text-left px-3 py-2"
+            <div id="case-log-messages" class="text-left px-3 py-2"
                 style="
                     min-height: 200px;
                     max-height: 200px;
                     overflow-y: auto;
-                    font-size: 0.7em;
+                    font-size: 0.9em;
                     background-color: rgb(53, 53, 53);
                     color: white;
                     border-radius: 6px;
-                    font-family: 'Press Start 2P', cursive;
+                    font-family: 'Inter', sans-serif;
                     white-space: pre-wrap;
                     box-shadow: inset 0 0 5px rgba(0,0,0,0.3);
                     line-height: 1.6;
@@ -113,6 +245,28 @@
                 Validating case number...
             </div>
             <img src="../static/pacman.gif" alt="Loading..." style="width: 200px; height: 200px; position: absolute; bottom: 10px; left: 50%; transform: translateX(-50%);">
+        </div>
+    </div>
+
+    <!-- Local upload loading indicator -->
+    <div id="upload-loading-box" class="text-center loading-box">
+        <div style="width: 50%; margin: 0 auto;">
+            <div id="upload-log-messages" class="text-left px-3 py-2"
+                style="
+                    min-height: 200px;
+                    max-height: 200px;
+                    overflow-y: auto;
+                    font-size: 0.9em;
+                    background-color: rgb(53, 53, 53);
+                    color: white;
+                    border-radius: 6px;
+                    font-family: 'Inter', sans-serif;
+                    white-space: pre-wrap;
+                    box-shadow: inset 0 0 5px rgba(0,0,0,0.3);
+                    line-height: 1.6;
+                ">
+                Preparing local file upload...
+            </div>
         </div>
     </div>
 
@@ -126,7 +280,7 @@
 
     <!-- Main functionality script -->
     <script>
-        const Messages = [
+        const CASE_MESSAGES = [
             "- Validating case number...",
             "- Fetching case description...",
             "- Fetching related files...",
@@ -136,12 +290,24 @@
 
         let currentIndex = 0;
         let LogInterval;
+        let activeMessages = CASE_MESSAGES;
+        let activeLogAreaId = 'case-log-messages';
+        let uploadSocket = null;
+
+        function hideAllLoadingBoxes() {
+            document.getElementById('case-loading-box').style.display = 'none';
+            document.getElementById('upload-loading-box').style.display = 'none';
+        }
 
         function showLogMessage() {
-            const logArea = document.getElementById('log-messages');
-            if (currentIndex < Messages.length) {
+            const logArea = document.getElementById(activeLogAreaId);
+            if (!logArea) {
+                return;
+            }
+
+            if (currentIndex < activeMessages.length) {
                 const p = document.createElement('div');
-                p.textContent = Messages[currentIndex];
+                p.textContent = activeMessages[currentIndex];
                 logArea.appendChild(p);
                 logArea.scrollTop = logArea.scrollHeight;
                 currentIndex++;
@@ -150,18 +316,57 @@
             }
         }
 
-        function startLogs() {
+        function startLogs(logAreaId, messages) {
+            clearInterval(LogInterval);
             currentIndex = 0;
-            const logArea = document.getElementById('log-messages');
+            activeLogAreaId = logAreaId;
+            activeMessages = messages;
+            const logArea = document.getElementById(activeLogAreaId);
+            if (!logArea) {
+                return;
+            }
             logArea.innerHTML = '';
             const Delay = Math.floor(Math.random() * 1500) + 2000;
             LogInterval = setInterval(showLogMessage, Delay);
+            showLogMessage();
         }
 
-        function showLoading() {
+        function showCaseLoading() {
             document.getElementById('form-box').style.display = 'none';
-            document.getElementById('loading-box').style.display = 'block';
-            startLogs();
+            hideAllLoadingBoxes();
+            document.getElementById('case-loading-box').style.display = 'block';
+            startLogs('case-log-messages', CASE_MESSAGES);
+        }
+
+        function showLocalUploadLoading() {
+            document.getElementById('tabs-container').style.display = 'none';
+            hideAllLoadingBoxes();
+            document.getElementById('upload-loading-box').style.display = 'block';
+            const logArea = document.getElementById('upload-log-messages');
+            if (logArea) logArea.innerHTML = '';
+        }
+
+        function connectUploadProgressSocket() {
+            if (uploadSocket) {
+                uploadSocket.disconnect();
+                uploadSocket = null;
+            }
+            uploadSocket = io('/progress');
+            uploadSocket.on('wpp_log', function(data) {
+                const logArea = document.getElementById('upload-log-messages');
+                if (!logArea) return;
+                const p = document.createElement('div');
+                p.textContent = '- ' + (data.data || '');
+                logArea.appendChild(p);
+                logArea.scrollTop = logArea.scrollHeight;
+            });
+        }
+
+        function disconnectUploadSocket() {
+            if (uploadSocket) {
+                uploadSocket.disconnect();
+                uploadSocket = null;
+            }
         }
 
         // Handle form submission based on dropdown selection
@@ -178,11 +383,14 @@
 
             if (actionType === 'submit') {
                 // Regular submit - just show loading and submit form
-                showLoading();
+                showCaseLoading();
                 document.getElementById('mainForm').submit();
             } else if (actionType === 'etl') {
                 // ETL Analysis
                 await runLatestETL(caseNumber);
+            } else if (actionType === 'etl_llm') {
+                // ETL Analysis with LLM
+                await runLatestETLWithLLM(caseNumber);    
             } else {
                 alert("❌ Unsupported action selected. Please choose a valid option and try again.");
             }
@@ -190,9 +398,7 @@
 
         async function runLatestETL(caseNumber) {
             // Show loading animation and log messages
-            document.getElementById('form-box').style.display = 'none';
-            document.getElementById('loading-box').style.display = 'block';
-            startLogs();
+            showCaseLoading();
 
             try {
                 // Step 1: Submit case number and wait for the server to complete session setup.
@@ -216,7 +422,33 @@
                 alert('❌ Error occurred: ' + error);
                 // Restore the original view if needed.
                 document.getElementById('form-box').style.display = 'block';
-                document.getElementById('loading-box').style.display = 'none';
+                hideAllLoadingBoxes();
+            }
+        }
+
+        // Function to trigger LLM-based ETL analysis
+        async function runLatestETLWithLLM(caseNumber) {
+            showCaseLoading();
+
+            try {
+                const response = await fetch('/start_latest_etl_llm', {
+                    method: 'POST',
+                    headers: {
+                        'Content-Type': 'application/x-www-form-urlencoded',
+                    },
+                    body: `case_number=${encodeURIComponent(caseNumber)}`
+                });
+
+                const data = await response.json();
+                if (!response.ok || !data.success) {
+                    throw new Error(data.message || (`Server returned error ${response.status}`));
+                }
+
+                window.location.href = data.redirect_url;
+            } catch (error) {
+                alert('❌ Error occurred: ' + error.message);
+                document.getElementById('form-box').style.display = 'block';
+                hideAllLoadingBoxes();
             }
         }
 
@@ -279,6 +511,199 @@
                 }
             });
         });
+        // Tab Switching
+        function switchTab(tabName) {
+            // Hide all tab contents
+            document.querySelectorAll('.tab-content').forEach(content => {
+                content.classList.remove('active');
+            });
+            
+            // Remove active class from all tabs
+            document.querySelectorAll('.tab').forEach(tab => {
+                tab.classList.remove('active');
+            });
+            
+            // Show selected tab content
+            if (tabName === 'case-number') {
+                document.getElementById('case-number-tab').classList.add('active');
+                document.querySelectorAll('.tab')[0].classList.add('active');
+            } else if (tabName === 'local-upload') {
+                document.getElementById('local-upload-tab').classList.add('active');
+                document.querySelectorAll('.tab')[1].classList.add('active');
+            }
+        }
+
+        // File Upload Handling
+        let selectedFiles = [];
+
+        // Validate file type based on name
+        function isAllowedLocalAnalysisFile(fileName) {
+            const lowerName = (fileName || '').toLowerCase();
+            return lowerName.endsWith('.zip') || /\.etl\.\d+$/i.test(fileName || '') || lowerName.endsWith('.log');
+        }
+
+        function collectInvalidFiles(files) {
+            return files.filter(file => !isAllowedLocalAnalysisFile(file.name));
+        }
+
+        function handleFileSelect(event) {
+            const files = Array.from(event.target.files);
+            
+            const invalidFiles = collectInvalidFiles(files);
+            if (invalidFiles.length > 0) {
+                alert(
+                    'Only .zip, .etl or .log files are allowed.\n\nInvalid file(s):\n' +
+                    invalidFiles.map(file => `- ${file.name}`).join('\n')
+                );
+            }
+
+            files.forEach(file => {
+                if (isAllowedLocalAnalysisFile(file.name) && !selectedFiles.find(f => f.name === file.name && f.size === file.size)) {
+                    selectedFiles.push(file);
+                }
+            });
+            updateFileList();
+            event.target.value = ''; // Reset input
+        }
+
+        function updateFileList() {
+            const fileList = document.getElementById('file-list');
+            const submitBtn = document.getElementById('upload-submit-btn');
+            
+            fileList.innerHTML = '';
+            
+            if (selectedFiles.length === 0) {
+                submitBtn.disabled = true;
+                return;
+            }
+            
+            submitBtn.disabled = false;
+            
+            selectedFiles.forEach((file, index) => {
+                const fileItem = document.createElement('div');
+                fileItem.className = 'file-item';
+                fileItem.innerHTML = `
+                    <div class="file-item-info">
+                        <span>📄</span>
+                        <span style="font-weight: 500;">${escapeHtml(file.name)}</span>
+                        <span style="color: #666; font-size: 12px;">(${formatFileSize(file.size)})</span>
+                    </div>
+                    <span class="file-remove" onclick="removeFile(${index})">✕</span>
+                `;
+                fileList.appendChild(fileItem);
+            });
+        }
+
+        function removeFile(index) {
+            selectedFiles.splice(index, 1);
+            updateFileList();
+        }
+
+        function formatFileSize(bytes) {
+            if (bytes < 1024) return bytes + ' B';
+            if (bytes < 1024 * 1024) return (bytes / 1024).toFixed(1) + ' KB';
+            return (bytes / (1024 * 1024)).toFixed(1) + ' MB';
+        }
+
+        function escapeHtml(text) {
+            const div = document.createElement('div');
+            div.textContent = text;
+            return div.innerHTML;
+        }
+
+        // Prevent browser from navigating when files are dropped anywhere on the page
+        document.addEventListener('dragover', (e) => e.preventDefault());
+        document.addEventListener('drop', (e) => e.preventDefault());
+
+        // Drag and Drop
+        const uploadZone = document.getElementById('upload-zone');
+        let dragCounter = 0;
+
+        uploadZone.addEventListener('dragenter', (e) => {
+            e.preventDefault();
+            e.stopPropagation();
+            dragCounter++;
+            uploadZone.classList.add('drag-over');
+        });
+
+        uploadZone.addEventListener('dragover', (e) => {
+            e.preventDefault();
+            e.stopPropagation();
+            e.dataTransfer.dropEffect = 'copy';
+        });
+
+        uploadZone.addEventListener('dragleave', (e) => {
+            e.stopPropagation();
+            dragCounter--;
+            if (dragCounter === 0) {
+                uploadZone.classList.remove('drag-over');
+            }
+        });
+
+        uploadZone.addEventListener('drop', (e) => {
+            e.preventDefault();
+            e.stopPropagation();
+            dragCounter = 0;
+            uploadZone.classList.remove('drag-over');
+            const files = Array.from(e.dataTransfer.files);
+
+            const invalidFiles = collectInvalidFiles(files);
+            if (invalidFiles.length > 0) {
+                alert(
+                    'Only .zip, .etl or .log files are allowed.\n\nInvalid file(s):\n' +
+                    invalidFiles.map(file => `- ${file.name}`).join('\n')
+                );
+            }
+
+            files.forEach(file => {
+                if (isAllowedLocalAnalysisFile(file.name) && !selectedFiles.find(f => f.name === file.name && f.size === file.size)) {
+                    selectedFiles.push(file);
+                }
+            });
+            updateFileList();
+        });
+
+        // Submit Local Upload
+        async function submitLocalUpload() {
+            if (selectedFiles.length === 0) {
+                alert('⚠️ Please select at least one file!');
+                return;
+            }
+            const formData = new FormData();
+            
+            selectedFiles.forEach(file => {
+                formData.append('files', file);
+            });
+
+            // Show local-upload specific loading and connect socket for real-time logs
+            showLocalUploadLoading();
+            connectUploadProgressSocket();
+
+            try {
+                const response = await fetch('/log_parser/upload_local_analysis', {
+                    method: 'POST',
+                    body: formData
+                });
+
+                const result = await response.json();
+                if (!response.ok || !result.success) {
+                    throw new Error(result.message || ('Upload failed with status: ' + response.status));
+                }
+
+                disconnectUploadSocket();
+                if (result.redirect) {
+                    window.location.href = result.redirect;
+                } else {
+                    alert('✅ Analysis completed successfully!');
+                    window.location.reload();
+                }
+            } catch (error) {
+                disconnectUploadSocket();
+                alert('❌ Error occurred: ' + error.message);
+                document.getElementById('tabs-container').style.display = 'block';
+                hideAllLoadingBoxes();
+            }
+        }
     </script>
 
     <!-- Toggle loading view (for design preview) -->

@@ -1,3 +1,5 @@
+from logging import log
+
 import requests
 import json
 import re
@@ -5,8 +7,194 @@ import urllib3
 import openai
 import httpx
 from pathlib import Path
+from textwrap import dedent
 from utils import helpers
+from anthropic import Anthropic
 
+# ---------------------------------------------------------------------------
+# Adapter: wraps an Anthropic client with an OpenAI-compatible interface so
+# all existing  client.chat.completions.create(...)  call-sites work unchanged.
+# Handles: tool use, multi-turn history with tool results, temperature/top_p
+# constraints, and the OpenAI ↔ Anthropic message format differences.
+# ---------------------------------------------------------------------------
+
+class _AnthropicFunctionAdapter:
+    def __init__(self, tool_use_block):
+        self.name = tool_use_block.name
+        self.arguments = json.dumps(tool_use_block.input)
+
+
+class _AnthropicToolCallAdapter:
+    def __init__(self, tool_use_block):
+        self.id = tool_use_block.id                          # needed by _append_tool_message
+        self.function = _AnthropicFunctionAdapter(tool_use_block)
+        self._raw_block = tool_use_block                     # retained for history reconstruction
+
+
+class _AnthropicMessageAdapter:
+    def __init__(self, response):
+        self.content = next(
+            (block.text for block in response.content if hasattr(block, "text")),
+            None,
+        )
+        tool_blocks = [b for b in response.content if b.type == "tool_use"]
+        self.tool_calls = [_AnthropicToolCallAdapter(b) for b in tool_blocks] or None
+        self._raw_content = response.content                 # retained for history reconstruction
+
+
+class _AnthropicUsageAdapter:
+    def __init__(self, usage):
+        self.prompt_tokens = usage.input_tokens
+        self.completion_tokens = usage.output_tokens
+        self.total_tokens = usage.input_tokens + usage.output_tokens
+
+
+class _AnthropicChoiceAdapter:
+    _STOP_REASON_MAP = {"end_turn": "stop", "tool_use": "tool_calls", "max_tokens": "length"}
+
+    def __init__(self, response):
+        self.finish_reason = self._STOP_REASON_MAP.get(response.stop_reason, response.stop_reason)
+        self.message = _AnthropicMessageAdapter(response)
+
+
+class _AnthropicResponseAdapter:
+    def __init__(self, response):
+        self.choices = [_AnthropicChoiceAdapter(response)]
+        self.usage = _AnthropicUsageAdapter(response.usage)
+
+
+def _to_anthropic_tool_choice(tool_choice):
+    """Convert OpenAI tool_choice value to Anthropic format."""
+    if tool_choice is None or tool_choice == "none":
+        return None
+    if tool_choice == "auto":
+        return {"type": "auto"}
+    if tool_choice == "required":
+        return {"type": "any"}
+    if isinstance(tool_choice, dict) and tool_choice.get("type") == "function":
+        return {"type": "tool", "name": tool_choice["function"]["name"]}
+    return {"type": "auto"}
+
+
+def _convert_messages_to_anthropic(messages):
+    """
+    Convert an OpenAI-style message list to Anthropic (system, messages).
+
+    Handles three special cases that arise in agentic loops:
+    1. _AnthropicMessageAdapter objects appended after a previous call —
+       reconstructed as assistant content blocks (text + tool_use).
+    2. {"role": "tool", "tool_call_id": ...} results — converted to Anthropic
+       tool_result blocks inside a "user" message.  Consecutive results are
+       merged into a single user message as required by Anthropic's API.
+    3. {"role": "system"} — extracted to the top-level system parameter.
+    """
+    system = None
+    converted = []
+
+    for msg in messages:
+        # ── Previously returned assistant messages (Anthropic adapter objects) ──
+        if isinstance(msg, _AnthropicMessageAdapter):
+            content_blocks = []
+            if msg.content:
+                content_blocks.append({"type": "text", "text": msg.content})
+            if msg.tool_calls:
+                for tc in msg.tool_calls:
+                    content_blocks.append({
+                        "type": "tool_use",
+                        "id": tc.id,
+                        "name": tc.function.name,
+                        "input": json.loads(tc.function.arguments),
+                    })
+            if not content_blocks:
+                content_blocks = [{"type": "text", "text": ""}]
+            converted.append({"role": "assistant", "content": content_blocks})
+            continue
+
+        # ── Standard dict messages ──
+        role = msg.get("role", "")
+        content = msg.get("content", "")
+
+        if role == "system":
+            system = content
+            continue
+
+        if role == "tool":
+            # OpenAI tool result → Anthropic tool_result block inside a user message.
+            # Consecutive tool results MUST be merged into one user message.
+            result_block = {
+                "type": "tool_result",
+                "tool_use_id": msg["tool_call_id"],
+                "content": str(content),
+            }
+            if (converted
+                    and converted[-1]["role"] == "user"
+                    and isinstance(converted[-1]["content"], list)):
+                converted[-1]["content"].append(result_block)
+            else:
+                converted.append({"role": "user", "content": [result_block]})
+            continue
+
+        # Regular user / assistant text message
+        converted.append({"role": role, "content": content})
+
+    return system, converted
+
+
+class _AnthropicCompletions:
+    def __init__(self, client):
+        self._client = client
+
+    def create(self, model, messages, temperature=1.0, top_p=1.0,
+               max_tokens=1024, frequency_penalty=None, presence_penalty=None,
+               tools=None, tool_choice=None, **kwargs):
+
+        system, filtered = _convert_messages_to_anthropic(messages)
+
+        anthropic_tools = None
+        if tools:
+            anthropic_tools = []
+            for t in tools:
+                if t.get("type") == "function":
+                    fn = t["function"]
+                    anthropic_tools.append({
+                        "name": fn["name"],
+                        "description": fn.get("description", ""),
+                        "input_schema": fn["parameters"],
+                    })
+
+        # Anthropic rejects requests that specify both temperature and top_p.
+        # Prefer temperature when it differs from the default; otherwise use top_p.
+        params = dict(model=model, messages=filtered, max_tokens=max_tokens)
+        if top_p != 1.0:
+            params["top_p"] = top_p
+        else:
+            params["temperature"] = temperature
+        if system:
+            params["system"] = system
+        if anthropic_tools:
+            params["tools"] = anthropic_tools
+        if tool_choice is not None:
+            tc = _to_anthropic_tool_choice(tool_choice)
+            if tc is not None:
+                params["tool_choice"] = tc
+
+        return _AnthropicResponseAdapter(self._client.messages.create(**params))
+
+
+class _AnthropicChatAdapter:
+    def __init__(self, client):
+        self.completions = _AnthropicCompletions(client)
+
+
+class AnthropicOpenAIAdapter:
+    """Wraps an ``Anthropic`` instance with an OpenAI-compatible interface."""
+
+    def __init__(self, anthropic_client):
+        self._client = anthropic_client
+        self.chat = _AnthropicChatAdapter(anthropic_client)
+
+
+# ---------------------------------------------------------------------------
 
 access_token = None
 urllib3.disable_warnings(urllib3.exceptions.InsecureRequestWarning)
@@ -22,13 +210,19 @@ class LLM_helper:
                                 "MLO", "Assert", "WRDS/WGDS/EWRD/SGOM", "TAS", "Roaming", 
                                 "P2P", "DSM", "VLP/UHB/AFC", "UATS", "Unclassified"]
 
-    def set_up(self, expertgpt_token, expertgpt_url, model="gpt-4.1",classifitation_path=None):
-        openai.api_key = expertgpt_token
-        self.client = openai.OpenAI(
-            api_key=expertgpt_token,
-            http_client=httpx.Client(proxy=None, verify=False, trust_env=False),
-            base_url=expertgpt_url
-        )
+    def set_up(self, gpt_token, gpt_url, model="gpt-4.1", classifitation_path=None):
+        if model.startswith("claude"):
+            self.client = AnthropicOpenAIAdapter(Anthropic(
+                base_url=gpt_url,
+                auth_token=gpt_token,
+                http_client=httpx.Client(proxy=None, verify=False, trust_env=False),
+            ))
+        else:
+            self.client = openai.OpenAI(
+                api_key=gpt_token,
+                http_client=httpx.Client(proxy=None, verify=False, trust_env=False),
+                base_url=gpt_url
+            )
         self.model = model
         self.classifitation_path  = None
         if Path(classifitation_path).exists():
@@ -166,9 +360,9 @@ class LLM_helper:
                 top_p=0.85,
                 frequency_penalty=0.1,
                 presence_penalty=0,
-                max_tokens=1500
+                max_tokens=1500,
+                #stop=None
             )
-
             
             raw_output = response.choices[0].message.content
             print("raw_output:", raw_output)
@@ -193,13 +387,23 @@ class LLM_helper:
             print(f"Failed to make inference request: {e}")
             return {}
     
-    def analyze_log(self, system_content, log=None):
+    def analyze_log(self, system_content, log=None, case_description=None):
 
-        user_content = (
-            f"""logs: {log}\n"""
-        )
+        if case_description:
+            user_content = dedent(f"""
+                **Case Description Context:**
+                {case_description}
+
+                Use the above case description and the timestamp as context when analyzing the logs below.
+
+                logs: {log}
+            """).strip()
+        else:
+            user_content = f"logs: {log}"
+
         print("client:", self.client)
         try:
+
             response = self.client.chat.completions.create( #model=classification_info.tmp_model,
                 model=self.model,  
                 messages=[
@@ -216,9 +420,9 @@ class LLM_helper:
                 top_p=0.9,
                 frequency_penalty=0.1,
                 presence_penalty=0,
-                max_tokens=8000
+                max_tokens=8000,
+                #stop=None
             )
-            #"""
 
             """params = {
                 "model": classification_info.tmp_model,

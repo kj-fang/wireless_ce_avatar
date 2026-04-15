@@ -116,11 +116,11 @@ class LogParserService:
     #-------------- analyze progress ------------------
 
     def start_analysis(self, filter_path: str, log_path: str, output_dir: str, 
-                      llm_helper, custom_prompt_content: str, custom_keywords: list = None) -> bool:
+                      llm_helper, custom_prompt_content: str, case_description: Optional[str] = None) -> bool:
         try:
             thread = threading.Thread(
                 target=self.process_analysis,
-                args=(filter_path, log_path, output_dir, llm_helper, custom_prompt_content, custom_keywords)
+                args=(filter_path, log_path, output_dir, llm_helper, custom_prompt_content, case_description)
             )
             thread.daemon = True
             thread.start()
@@ -141,7 +141,12 @@ class LogParserService:
                     }, namespace='/progress')
         
 
-    def process_analysis(self, filter_path, log_path, output_dir, llm_helper, prompt, custom_keywords=None):
+    @staticmethod
+    def _estimate_tokens(text: str) -> int:
+        """Rough token estimate: ~1 token per 4 characters (OpenAI rule of thumb)."""
+        return max(1, len(text) // 4)
+
+    def process_analysis(self, filter_path, log_path, output_dir, llm_helper, prompt, case_description: Optional[str] = None):
 
         try:
             self.reset_log_parser()
@@ -151,20 +156,20 @@ class LogParserService:
             self.update_progress(35, "Reading log file...")
             log_file = log_path
             log_lines = helpers.read_log_file(log_file)
-            self.raw_log_lines = log_lines  # Store for later re-filtering in chat
             
             # 2: Filter keywords(tat) — use custom_keywords if provided by user
             self.update_progress(40, "Extracting filter keywords...")
-            if custom_keywords is not None:
-                filter_keywords = custom_keywords
-                print(f"Using {len(filter_keywords)} user-selected keywords")
-            else:
-                filter_keywords = extract_enabled_keywords_from_filter_file(filter_path)
+            filter_keywords = extract_enabled_keywords_from_filter_file(filter_path)
             
             # 3: Filter keywords
             self.update_progress(55, "Filtering log entries...")
             filtered_log = filter_log_by_keywords(log_lines, filter_keywords)
             helpers.save_file(os.path.join(output_dir, "filtered.log"), filtered_log, ensure_newline=True)
+
+            filtered_text = "\n".join(filtered_log)
+            filtered_token_est = self._estimate_tokens(filtered_text)
+            print(f"[Token Estimate] After filter: ~{filtered_token_est:,} tokens ({len(filtered_log)} lines, {len(filtered_text):,} chars)")
+            self.update_progress(55, f"Filtering done — ~{filtered_token_est:,} tokens estimated after filter")
             
             # 4: Preprocess log
             self.update_progress(70, "Preprocessing log for LLM...")
@@ -173,28 +178,34 @@ class LogParserService:
             
             save_filtered_log_path = os.path.join(output_dir, "filtered_preprocessed.log")
             helpers.save_file(save_filtered_log_path, grouped, ensure_newline=True)
-            
+
+            grouped_text = "\n".join(grouped)
+            grouped_token_est = self._estimate_tokens(grouped_text)
+            print(f"[Token Estimate] After preprocess+group: ~{grouped_token_est:,} tokens ({len(grouped)} lines, {len(grouped_text):,} chars)")
+            self.update_progress(70, f"Preprocessing done — ~{grouped_token_est:,} tokens estimated after preprocess")
+            TOKEN_LIMIT = 20_000
+            if grouped_token_est > TOKEN_LIMIT:
+                reason = (
+                    f"Token limit exceeded: ~{grouped_token_est:,} tokens after preprocessing "
+                    f"(limit: {TOKEN_LIMIT:,} tokens). "
+                    f"Please apply a stricter filter to reduce the log size before retrying."
+                )
+                print(f"[Token Limit] {reason}")
+                self.update_progress(0, f"Error: {reason}")
+                app_config.socketio.emit('analysis_error', {
+                    'message': reason,
+                    'token_count': grouped_token_est,
+                    'token_limit': TOKEN_LIMIT
+                }, namespace='/progress')
+                return False            
             # 5: LLM analysis
             self.update_progress(85, "Running LLM analysis...")
+
             llm_result = llm_helper.analyze_log(
                 system_content=prompt,
-                log=str(grouped)
+                log=str(grouped),
+                case_description=case_description
             )
-            
-            # 5.5: Initialize chat context with analysis result
-            self.chat_system_prompt = prompt
-            self.chat_log_context = str(grouped)
-            llm_result_str = llm_result if isinstance(llm_result, str) else json.dumps(llm_result, ensure_ascii=False)
-            self.conversation_history = [
-                {
-                    "role": "user", 
-                    "content": f"Please analyze these logs:\n{str(grouped)}"
-                },
-                {
-                    "role": "assistant",
-                    "content": llm_result_str
-                }
-            ]
             
             # 6: done
             self.update_progress(100, "Analysis completed!")

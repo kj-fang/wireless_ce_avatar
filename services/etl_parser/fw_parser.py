@@ -293,7 +293,7 @@ def fw_bt_analysis(fw_path, use_cli=True, cancel_event: Event | None = None):
                 if cancel_event and cancel_event.is_set():
                     print("⚠️ FW BT analysis canceled. Terminating bt_decoder_cli process...")
                     _terminate_process_tree(result_proc.pid)
-                    return None, "FW analysis canceled"
+                    return None
                 time.sleep(0.5)
 
             stdout, stderr = result_proc.communicate()
@@ -310,12 +310,12 @@ def fw_bt_analysis(fw_path, use_cli=True, cancel_event: Event | None = None):
                     
                     if stderr:
                         print(stderr)
-                    return None, f"❌ bt_decoder_cli exited with code {result_proc.returncode}"
+                    return False, f"❌ bt_decoder_cli exited with code {result_proc.returncode}"
             
+            # Todo: add completed msg to frontend log block
             print("✅ Debug: FW bt decoder CLI is completed successfully.")
-            sysmon_text = _get_sysmon_to_text(fw_path)
 
-            return sysmon_text, stdout
+            return True, None
 
         except subprocess.CalledProcessError as e:
             print(f"❌ Failed to launch bt_decoder_cli.exe, (Error Code {e.returncode}):")
@@ -418,7 +418,7 @@ def open_sysmon_with_tool(fw_path: str, on_log=None, on_close=None):
     candidates = [
         os.path.join(fw_dir, d)
         for d in os.listdir(fw_dir)
-        if os.path.isdir(os.path.join(fw_dir, d)) and d.endswith(str(eventid))
+        if os.path.isdir(os.path.join(fw_dir, d)) and (str(eventid) in d)
     ]
     if not candidates:
         _emit_viewer_log(on_log, f"❌ No directory ending with event ID '{eventid}' found in {fw_dir}")

@@ -129,13 +129,12 @@ class FWAnalysisService():
                     namespace='/progress'
                 )
 
-            results['system_text'], results['log'] = self.analyze(file_path, wifi_of_bt, cancel_event=cancel_event)
-            completed = False
+            decode_complete, log = self.analyze(file_path, wifi_of_bt, cancel_event=cancel_event)
             with self._lock:
                 task = self._tasks.get(task_id)
                 if not task:
                     return
-                task["result"] = results
+                
                 if task["status"] == "canceled":
                     app_config.socketio.emit(
                         'fw_analysis_cancelled',
@@ -152,22 +151,30 @@ class FWAnalysisService():
                         },
                         namespace='/progress'
                     )
-                else:
+                elif decode_complete:
                     task["status"] = "completed"
                     app_config.socketio.emit(
                         'fw_analysis_complete',
                         {'task_id': task_id, 'fw_path': file_path},
                         namespace='/progress'
                     )
-                    completed = True
-            if completed and 'bt' in wifi_of_bt:
-                opened = open_sysmon_with_tool(file_path, on_log=self.emit_tool_log, on_close=self.emit_tool_closed)
-                if not opened:
+
+                    if 'bt' in wifi_of_bt:
+                        opened = open_sysmon_with_tool(file_path, on_log=self.emit_tool_log, on_close=self.emit_tool_closed)
+                        if not opened:
+                            app_config.socketio.emit(
+                                'fw_tool_error',
+                                {'task_id': task_id, 'fw_path': file_path, 'error': 'Failed to open TextAnalysisTool.NET viewer'},
+                                namespace='/progress'
+                            )
+                else:
+                    task["status"] = "failed"
                     app_config.socketio.emit(
-                        'fw_tool_error',
-                        {'task_id': task_id, 'fw_path': file_path, 'error': 'Failed to open TextAnalysisTool.NET viewer'},
+                        'fw_analysis_failed',
+                        {'task_id': task_id, 'fw_path': file_path, 'error': log or 'FW analysis failed without specific error message'},
                         namespace='/progress'
                     )
+
         except Exception as e:
             with self._lock:
                 task = self._tasks.get(task_id)
@@ -214,23 +221,17 @@ class FWAnalysisService():
             }
     
     def analyze(self, file_path: str, wifi_of_bt: str, cancel_event: Event | None = None):
-        
-        results = {
-            "log": None,
-            "system_text": None
-        }
-        
+        # for _run_task to call
+        # returns complete success or not
+
         if 'wifi' in wifi_of_bt:
-            self.emit_log("Start FW WiFi analysis.")
-            results['system_text'] = fw_wifi_analysis(file_path, cancel_event=cancel_event)
+            self.emit_log("Start FW WiFi analysis...")
+            completed = fw_wifi_analysis(file_path, cancel_event=cancel_event)
+            return completed, None
         else:  # BT case → run BT FW analysis
-            self.emit_log("Start FW BT analysis.")
-            results['system_text'], results['log'] = fw_bt_analysis(file_path, cancel_event=cancel_event)
-
-            if results['system_text'] is None and not (cancel_event and cancel_event.is_set()):
-                self.emit_tool_error(results['log'] or "FW BT analysis was canceled.")
-
-        return results['system_text'], results['log']
+            self.emit_log("Start FW BT analysis...")
+            completed, log = fw_bt_analysis(file_path, cancel_event=cancel_event)
+            return completed, log
     
     
     def emit_log(self, msg):

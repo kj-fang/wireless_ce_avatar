@@ -426,7 +426,7 @@
 
         socket.on("fw_tool_error", function(msg) {
             console.log("fw_tool_error:", msg);
-            appendLog(`❌ ${msg.error || 'FW viewer open failed'}\n`, 'red');
+            appendLog(`❌ ${msg.data || 'FW viewer open failed'}\n`, 'red');
         });
 
 
@@ -953,23 +953,9 @@
 
     socket.on("fw_analysis_warning", function(msg) {
         const pending = window.pendingFwAnalysis;
-        if (!pending) {
-            const rejectedPath = msg.fw_path || '';
-            const fallbackButton = rejectedPath
-                ? findFwButtonByEncodedPath(encodeURIComponent(rejectedPath))
-                : null;
-            resetFwButton(fallbackButton);
-            appendLog(`⚠️ FW analysis warning: ${msg.error || 'precheck failed'}\n`, 'red');
-            return;
-        }
+        if (!pending) return;
+        if (!isMatchingFwAnalysisEvent(pending, msg)) return;
 
-        const { button, fwPathEncoded } = pending;
-        if (!isMatchingFwAnalysisEvent(pending, msg)) {
-            return;
-        }
-
-        window.pendingFwAnalysis = null;
-        resetFwButton(button);
         appendLog(`⚠️ FW analysis warning: ${msg.error || 'precheck failed'}\n`, 'red');
     });
 

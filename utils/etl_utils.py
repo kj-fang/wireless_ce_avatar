@@ -1,6 +1,6 @@
 import re
 import os
-from datetime import datetime
+from datetime import datetime, timedelta
 from flask import session
 
 #-----------ZIP ATTACHMENT SELECTION--------------
@@ -78,72 +78,67 @@ def extract_time_from_description(description):
     - 'Issue happened at 02/09/2025 14:15:18.'
     - 'Issue happened at 02-09-2025 14:15:18.'
     
-    Returns:
-        - datetime object if full date+time is found
-        - time string in 'HH:MM:SS' format if only time is found
-        - None if nothing is found
+        Returns:
+                - datetime object if full date+time is found
+                - time string in 'HH:MM:SS' format if only time is found
+                    (accepts both HH:MM and HH:MM:SS in source text)
+                - None if nothing is found
     """
     if not description:
         return None
     
-    # Flag to track if we attempted to extract datetime, so we only try time if datetime extraction fails
-    attempted_datetime = False 
+    # Normalize non-breaking spaces in Salesforce rich text outputs.
+    text = str(description).replace('\xa0', ' ')
 
-    # Try to match full datetime patterns first
-    # Pattern 1: YYYY-MM-DD HH:MM:SS or YYYY/MM/DD HH:MM:SS
-    datetime_pattern1 = r'(\d{4})[-/](\d{1,2})[-/](\d{1,2})\s+(\d{1,2}):(\d{2}):(\d{2})'
-    match = re.search(datetime_pattern1, description)
+    # Pattern 1: YYYY-MM-DD HH:MM:SS(.sss) or YYYY/MM/DD HH:MM:SS(.sss)
+    # Also supports separator between date/time as either space or '-'.
+    match = re.search(
+        r'(\d{4})[-/](\d{1,2})[-/](\d{1,2})[\sT-]+(\d{1,2}):(\d{2}):(\d{2})(?:\.(\d{1,6}))?',
+        text,
+    )
     if match:
-        attempted_datetime = True
-
-        year, month, day, hour, minute, second = match.groups()
+        year, month, day, hour, minute, second, micro = match.groups()
         try:
-            return datetime(int(year), int(month), int(day), 
-                          int(hour), int(minute), int(second))
+            microsecond = int((micro or '0').ljust(6, '0')[:6])
+            return datetime(
+                int(year), int(month), int(day), int(hour), int(minute), int(second), microsecond
+            )
         except ValueError as e:
             print(f"Invalid datetime values: {e}")
-    
-    # Pattern 2 & 3 Combined: Intelligent date parsing (MM-DD-YYYY or DD-MM-YYYY)
-    datetime_pattern_ambiguous = r'(\d{1,2})[-/](\d{1,2})[-/](\d{4})\s+(\d{1,2}):(\d{2}):(\d{2})'
-    match = re.search(datetime_pattern_ambiguous, description)
-    if match:
-        attempted_datetime = True
 
-        first_part, second_part, year, hour, minute, second_time = match.groups()
+    # Pattern 2: MM/DD/YYYY-HH:MM:SS(.sss) or DD/MM/YYYY-HH:MM:SS(.sss)
+    match = re.search(
+        r'(\d{1,2})[-/](\d{1,2})[-/](\d{4})[\sT-]+(\d{1,2}):(\d{2}):(\d{2})(?:\.(\d{1,6}))?',
+        text,
+    )
+    if match:
+        first_part, second_part, year, hour, minute, second_time, micro = match.groups()
         first_part, second_part = int(first_part), int(second_part)
-        
-        # Rule 1: If first_part > 12, must be DD-MM-YYYY (European)
+
+        # Disambiguation rule for dates like 04/02/2026:
+        # when ambiguous, default to MM/DD/YYYY to match attachment description convention.
         if first_part > 12:
             day, month = first_part, second_part
-        # Rule 2: If second_part > 12, must be MM-DD-YYYY (US)
-        elif second_part > 12:
-            month, day = first_part, second_part
-        # Rule 3: Both <= 12, ambiguous - default to MM-DD-YYYY
         else:
-            month, day = first_part, second_part  # Default to US format
-            print(f"Ambiguous date {first_part}-{second_part}-{year}, assuming MM-DD-YYYY (US format)")
-        
+            month, day = first_part, second_part
+
         try:
-            return datetime(int(year), month, day, int(hour), int(minute), int(second_time))
+            microsecond = int((micro or '0').ljust(6, '0')[:6])
+            return datetime(int(year), month, day, int(hour), int(minute), int(second_time), microsecond)
         except ValueError as e:
             print(f"Invalid datetime values: {e}")
-    
-    # If no full datetime found, try to match time only
-    if not attempted_datetime:
-        print("No full datetime found, trying to extract time only...")
-        time_pattern = r'(\d{1,2}):(\d{2}):(\d{2})'
-        match = re.search(time_pattern, description)
-        if match:
-            hour, minute, second = match.groups()
-            hour, minute, second = int(hour), int(minute), int(second)
-            
-            # Validate time ranges
-            if not (0 <= hour <= 23 and 0 <= minute <= 59 and 0 <= second <= 59):
-                print(f"Invalid time values: {hour}:{minute}:{second}")
-                return None
-            
-            return f"{str(hour).zfill(2)}:{str(minute).zfill(2)}:{str(second).zfill(2)}"
-    
+
+    # Pattern 3: time only HH:MM[:SS] for legacy descriptions without date.
+    match = re.search(r'(?<!\d)(\d{1,2}):(\d{2})(?::(\d{2}))?(?!\d)', text)
+    if match:
+        hour = int(match.group(1))
+        minute = int(match.group(2))
+        second = int(match.group(3) or 0)
+        if not (0 <= hour <= 23 and 0 <= minute <= 59 and 0 <= second <= 59):
+            print(f"Invalid time values: {hour}:{minute}:{second}")
+            return None
+        return f"{str(hour).zfill(2)}:{str(minute).zfill(2)}:{str(second).zfill(2)}"
+
     return None
 
 
@@ -191,7 +186,9 @@ def filter_folders_by_time(file_dict, issue_time_or_datetime):
     if is_full_datetime:
         # We have full datetime - simpler logic
         issue_datetime = issue_time_or_datetime
-        print(f"Using full datetime for filtering: {issue_datetime}")
+        window_start = issue_datetime - timedelta(minutes=5)
+        window_end = issue_datetime + timedelta(minutes=5)
+        print(f"Using full datetime for filtering: {issue_datetime} (segment2 window: {window_start} ~ {window_end})")
         
         filtered_dict = file_dict.copy()  # Start with all entries to ensure nothing is lost
         warnings_dict = {}
@@ -210,12 +207,21 @@ def filter_folders_by_time(file_dict, issue_time_or_datetime):
             if not folder_times:
                 continue  # Keep original list from copy
             
-            # Find folder closest to issue datetime (prefer after)
+            # Segment2 baseline: prefer folders within issue_time ±5 minutes.
+            folders_in_window = [(f, t) for f, t in folder_times if window_start <= t <= window_end]
+            if folders_in_window:
+                closest = min(folders_in_window, key=lambda x: abs((x[1] - issue_datetime).total_seconds()))
+                filtered_dict[zip_name] = [closest[0]]
+                continue
+
+            # Fallback: no match in ±5 minutes, keep previous behavior (closest after issue time).
             folders_after = [(f, t) for f, t in folder_times if t >= issue_datetime]
-            
             if folders_after:
                 closest = min(folders_after, key=lambda x: (x[1] - issue_datetime).total_seconds())
                 filtered_dict[zip_name] = [closest[0]]
+                warnings_dict[zip_name] = (
+                    f"No folder in segment2 window (+/-5 min) around {issue_datetime.strftime('%Y-%m-%d %H:%M:%S')}"
+                )
             else:
                 # No folder after issue time - keep all folders (already in filtered_dict) and add warning
                 warnings_dict[zip_name] = f"All folders are before issue time {issue_datetime.strftime('%Y-%m-%d %H:%M:%S')}"
@@ -226,7 +232,7 @@ def filter_folders_by_time(file_dict, issue_time_or_datetime):
     else:
         # We only have time string - use date grouping logic
         issue_time_str = issue_time_or_datetime
-        print(f"Using time-only for filtering: {issue_time_str}")
+        print(f"Using time-only for filtering: {issue_time_str} (segment2 baseline +/-5 min on each date)")
         
         try:
             # Parse issue time (hour, minute, second)
@@ -262,7 +268,10 @@ def filter_folders_by_time(file_dict, issue_time_or_datetime):
                 date_groups[date_key].append((folder, timestamp))
             
             # For each date, create issue datetime and find closest folder
-            best_folders = []
+            window_candidates = []
+            after_candidates = []
+            all_before_by_date = True
+
             for date_key, folders_on_date in date_groups.items():
                 try:
                     issue_datetime = datetime.combine(date_key, 
@@ -270,50 +279,32 @@ def filter_folders_by_time(file_dict, issue_time_or_datetime):
                                                          hour=issue_hour, 
                                                          minute=issue_min, 
                                                          second=issue_sec))
-                    
-                    # Find folders after issue time on this date
-                    folders_after = [(f, t) for f, t in folders_on_date if t >= issue_datetime]
-                    
+                    window_start = issue_datetime - timedelta(minutes=5)
+                    window_end = issue_datetime + timedelta(minutes=5)
+
+                    in_window = [(f, t, issue_datetime) for f, t in folders_on_date if window_start <= t <= window_end]
+                    if in_window:
+                        window_candidates.extend(in_window)
+
+                    folders_after = [(f, t, issue_datetime) for f, t in folders_on_date if t >= issue_datetime]
                     if folders_after:
-                        # Get the closest folder after issue time
-                        closest = min(folders_after, key=lambda x: (x[1] - issue_datetime).total_seconds())
-                        best_folders.append((closest, False))  # False = no warning
-                    else:
-                        # If no folder after issue time on this date, mark for potential warning
-                        latest = max(folders_on_date, key=lambda x: x[1])
-                        best_folders.append((latest, True))  # True = all before issue time
+                        all_before_by_date = False
+                        after_candidates.extend(folders_after)
                 except Exception as e:
                     print(f"Error processing date {date_key}: {e}")
                     continue
             
-            if best_folders:
-                # Check if all candidates are before issue time
-                all_before = all(has_warning for _, has_warning in best_folders)
-                
-                if all_before:
-                    # All folders are before issue time - keep all (already in filtered_dict) and add warning
-                    warnings_dict[zip_name] = f"All folders are before issue time {issue_time_str}"
-                    print(f"WARNING {zip_name}: All folders are before issue time {issue_time_str}")
-                else:
-                    # Filter to only keep folders that are actually after issue time
-                    folders_after_only = [(folder_time, warn) for folder_time, warn in best_folders if not warn]
-                    
-                    if folders_after_only:
-                        # Find the folder with time closest to issue time (same time across different dates)
-                        def time_distance(item):
-                            (folder, timestamp), has_warning = item
-                            # Create issue datetime for this folder's date
-                            issue_on_this_date = datetime.combine(timestamp.date(), 
-                                                                 datetime.min.time().replace(
-                                                                     hour=issue_hour, 
-                                                                     minute=issue_min, 
-                                                                     second=issue_sec))
-                            # No need for abs() since we only have folders after issue time
-                            return (timestamp - issue_on_this_date).total_seconds()
-                        
-                        closest_overall, _ = min(folders_after_only, key=time_distance)
-                        filtered_dict[zip_name] = [closest_overall[0]]
-            # else: Fallback - keep all folders (already in filtered_dict) if something went wrong
+            if window_candidates:
+                closest = min(window_candidates, key=lambda x: abs((x[1] - x[2]).total_seconds()))
+                filtered_dict[zip_name] = [closest[0]]
+            elif after_candidates:
+                closest = min(after_candidates, key=lambda x: (x[1] - x[2]).total_seconds())
+                filtered_dict[zip_name] = [closest[0]]
+                warnings_dict[zip_name] = f"No folder in segment2 window (+/-5 min) around {issue_time_str}"
+            elif all_before_by_date:
+                warnings_dict[zip_name] = f"All folders are before issue time {issue_time_str}"
+                print(f"WARNING {zip_name}: All folders are before issue time {issue_time_str}")
+            # else: keep original list from filtered_dict copy
         
         return filtered_dict, warnings_dict
 
@@ -321,6 +312,8 @@ def filter_folders_by_time(file_dict, issue_time_or_datetime):
 def get_issue_time_from_selected_files(selected_files):
     """
     Extract issue time/datetime from selected_files in session.
+    Source of truth: attachment description text shown as the gray subtitle
+    under Choose Attachment in select_attachments.
     Format: [["name", "link", [timestamp, description]], ...]
     
     Returns: 
@@ -336,7 +329,7 @@ def get_issue_time_from_selected_files(selected_files):
     for file_info in selected_files:
         if len(file_info) >= 3 and len(file_info[2]) >= 2:
             file_name = file_info[0]  # Get file name
-            description = file_info[2][1]  # Get description
+            description = file_info[2][1]  # Gray subtitle text in Choose Attachment
             issue_time_or_datetime = extract_time_from_description(description)
             if issue_time_or_datetime:
                 time_mapping[file_name] = issue_time_or_datetime

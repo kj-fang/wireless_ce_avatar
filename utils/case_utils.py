@@ -14,6 +14,7 @@ def parse_pdf_for_attachments(downloaded_pdf_path, att_name_desc):
     for page_num in range(len(doc)):
         page = doc[page_num]
         links = page.get_links()
+
         for link in links:
             uri = link.get('uri', '')
             if "https://esft.intel.com/sftservices/download" in uri:
@@ -31,9 +32,11 @@ def parse_pdf_for_attachments(downloaded_pdf_path, att_name_desc):
                 
                 desc = att_name_desc.get(filename)      
                 print("📦 uri filename:", numbered_filename)
+
                 if desc is None:
-                    print(f"⚠️ File name in the PDF has no matching description: '{filename}'")
-                    desc = [None, "(No description)"]
+                    fallback_name = os.path.splitext(filename)[0]
+                    print(f"ℹ️ No description found for '{filename}', using filename: '{fallback_name}'")
+                    desc = [None, fallback_name]
 
                 att_links.append([numbered_filename, uri, desc])
 
@@ -105,8 +108,16 @@ def parse_pdf_for_all_info(ips_pdf_path, case_context: CaseContext):
                 if "Download link" in block["text"]:
                     att_desc = lines[-1].split(" ")[-1] 
                     for line in lines:
-                        match = re.search(r'\b[\w\-]+?\.[\w\-]+\b', line)
-                        if match:
+                        # Prefer extracting filename from the FileName= query parameter in the download URL
+                        url_match = re.search(r'FileName=([^&\s"\'<>]+)', line)
+                        if url_match:
+                            fn = unquote(url_match.group(1))
+                            if fn:
+                                att_desc_dict[fn] = att_desc
+                            break
+                        # Fallback: generic filename pattern for lines without a URL
+                        match = re.search(r'\b[\w\-]+\.[\w\-]+\b', line)
+                        if match and '.' in match.group():
                             att_desc_dict[match.group()] = att_desc
 
     case_context.backend_id = ""

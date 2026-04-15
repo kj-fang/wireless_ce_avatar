@@ -385,7 +385,8 @@ class WifiLogAgentSystem:
         self.current_log_path: str = ""
         self.conversation_history: List[dict] = []
         self.issue_context: dict = {}  # populated by prime_with_context()
-        self.issue_time: Optional[datetime] = None  # populated by analyze_all()
+        self.issue_time: Optional[datetime] = None  # populated by prime_with_context() or _chat_with_tools()
+        self._issue_time_time_only: bool = False
         # In-memory caches for this agent session
         self._raw_log_cache: List[str] = []
         self._raw_log_cache_path: str = ""
@@ -569,14 +570,49 @@ class WifiLogAgentSystem:
                     except ValueError:
                         pass
 
+            # --- Sanity check: verify attachment issue_time falls within log's actual time range ---
             if ts_points:
-                ts_values = [x[0] for x in ts_points]
-                left = bisect_left(ts_values, window_start)
-                right = bisect_right(ts_values, window_end) - 1
-                if left <= right:
-                    seg2_start_idx = ts_points[left][1]
-                    seg2_end_idx = ts_points[right][1]
-                    seg2_lines = self._raw_log_cache[seg2_start_idx:seg2_end_idx + 1]
+                log_first_ts = ts_points[0][0]
+                log_last_ts  = ts_points[-1][0]
+                # Allow a 24-hour grace margin (attachment time vs. log may have slight mismatch)
+                reasonable = (
+                    (log_first_ts - timedelta(hours=24)) <= self.issue_time <= (log_last_ts + timedelta(hours=24))
+                )
+
+                # If issue_time came from time-only (HH:MM[:SS]) and date is mismatched,
+                # align it to the log date so Segment2 can still use +/-5 minutes.
+                if not reasonable and self._issue_time_time_only:
+                    aligned = datetime.combine(log_last_ts.date(), self.issue_time.time())
+                    print(
+                        f"[PreScan] ℹ️  issue_time is time-only; aligning date to log: "
+                        f"{self.issue_time.strftime('%m/%d/%Y %H:%M:%S')} -> "
+                        f"{aligned.strftime('%m/%d/%Y %H:%M:%S')}"
+                    )
+                    self.issue_time = aligned
+                    window_start = self.issue_time - timedelta(minutes=5)
+                    window_end = self.issue_time + timedelta(minutes=5)
+                    reasonable = (
+                        (log_first_ts - timedelta(hours=24)) <= self.issue_time <= (log_last_ts + timedelta(hours=24))
+                    )
+
+                if not reasonable:
+                    print(
+                        f"[PreScan] ⚠️  WARNING: Attachment issue_time "
+                        f"{self.issue_time.strftime('%m/%d/%Y %H:%M:%S')} is outside the log time range "
+                        f"[{log_first_ts.strftime('%m/%d/%Y %H:%M:%S')} ~ "
+                        f"{log_last_ts.strftime('%m/%d/%Y %H:%M:%S')}] — "
+                        f"attachment time attached is unreasonable, falling back to Segment1 end → EOF."
+                    )
+                    # Clear issue_time so Segment2 falls through to 2B fallback
+                    self.issue_time = None
+                else:
+                    ts_values = [x[0] for x in ts_points]
+                    left = bisect_left(ts_values, window_start)
+                    right = bisect_right(ts_values, window_end) - 1
+                    if left <= right:
+                        seg2_start_idx = ts_points[left][1]
+                        seg2_end_idx = ts_points[right][1]
+                        seg2_lines = self._raw_log_cache[seg2_start_idx:seg2_end_idx + 1]
 
             if seg2_lines and seg2_start_idx >= 0 and seg2_end_idx >= 0:
                 print(
@@ -585,11 +621,11 @@ class WifiLogAgentSystem:
                     f"({len(seg2_lines)} lines, contiguous index slice) | "
                     f"±5 min of {self.issue_time.strftime('%m/%d/%Y %H:%M:%S')}"
                 )
-            else:
+            elif self.issue_time is not None:
                 print(
                     f"[PreScan] ⚠️  No timestamped anchors within ±5 min of "
                     f"{self.issue_time.strftime('%m/%d/%Y %H:%M:%S')} — "
-                    f"falling back to last-RESET → EOF."
+                    f"falling back to Segment1 end → EOF."
                 )
                 # fall through to 2B below
 
@@ -1447,10 +1483,9 @@ class WifiLogAgentSystem:
         For complex analysis where agent needs to investigate multiple skills,
         inspect specific log sections, and provide structured diagnoses.
 
-        When called after analyze_all(), conversation_history is already
-        populated by _inject_analysis_into_history(). This method detects
-        that case and simply appends the new user message so the LLM can
-        continue investigating with full awareness of the prior analysis.
+        This method detects follow-up turns (conversation_history already has
+        messages) and appends the new user message so the LLM can continue
+        investigating with full context of prior analysis.
         """
         def _emit(step):
             if step_callback:
@@ -1459,8 +1494,20 @@ class WifiLogAgentSystem:
         tools = self._build_tools()
         final_report = None
 
-        if not self.conversation_history:
-            # Fresh start — initialise system prompt and inject outcome signals.
+        # Detect first user turn: prime_with_context may have added a system
+        # message but no user message yet — treat that as first turn so full
+        # initialization (system prompt rebuild, issue-time extraction, log
+        # preprocessing) still runs.
+        _first_user_turn = not any(
+            (isinstance(m, dict) and m.get("role") == "user")
+            for m in self.conversation_history
+        )
+
+        if _first_user_turn:
+            # First user turn — rebuild system prompt for agentic mode
+            # (replaces any simpler prompt from prime_with_context).
+            self.conversation_history = []
+
             context_section = ""
             if self.issue_context:
                 context_parts = []
@@ -1474,24 +1521,22 @@ class WifiLogAgentSystem:
                     context_section = "\n=== BACKGROUND CONTEXT ===\n" + "\n".join(context_parts) + "\n\n"
 
             system_content = self._build_analyze_system_prompt(context_section)
-            #outcome_inject = self._build_outcome_injection()
 
             self.conversation_history.append({
                 "role": "system",
                 "content": system_content,
             })
 
-            # if outcome_inject:
-            #     self.conversation_history.append({
-            #         "role": "user",
-            #         "content": outcome_inject,
-            #     })
-
             self.conversation_history.append({"role": "user", "content": user_message})
 
-            # --- Issue time extraction (mirrors analyze_all fallback chain) ---
-            self.issue_time = self._extract_issue_time(user_message)
-            time_source = "user_message"
+            # --- Issue time extraction ---
+            # Prefer pre-set issue_time (e.g. from attachment_time via
+            # prime_with_context), then try user message, then description.
+            if self.issue_time:
+                time_source = "attachment_time"
+            else:
+                self.issue_time = self._extract_issue_time(user_message)
+                time_source = "user_message"
 
             if not self.issue_time and self.issue_context.get("description"):
                 self.issue_time = self._extract_issue_time(self.issue_context["description"])
@@ -1511,7 +1556,7 @@ class WifiLogAgentSystem:
                     ),
                 })
 
-            # --- Raw log preprocessing (mirrors analyze_all scope-narrowing) ---
+            # --- Raw log preprocessing (scope-narrowing) ---
             load_err = self._ensure_raw_log_cache()
             if load_err:
                 _emit({"role": "error", "content": f"❌ Raw log load failed: {load_err}"})
@@ -1552,11 +1597,11 @@ class WifiLogAgentSystem:
                         ),
                     })
         else:
-            # Continuing after analyze_all() — history already has the report summary.
+            # Follow-up turn — history already has prior analysis context.
             # Assembled-log caches are still warm so all tools work as normal.
             self.conversation_history.append({"role": "user", "content": user_message})
 
-        # Per-call tracking (mirrors analyze_all local state)
+        # Per-call tracking
         skill_call_counts: dict = {}
         no_match_anchor_counts: dict = {}
         detail_call_counts: dict = {}
@@ -2131,7 +2176,7 @@ class WifiLogAgentSystem:
         )
 
     def _build_analyze_system_prompt(self, context_section: str) -> str:
-        """Build a concise, reusable system prompt for analyze_all."""
+        """Build the agentic analysis system prompt used by _chat_with_tools."""
         return (
             f"{context_section}"
                         # "You are an Elite Wi-Fi Diagnostic Detective. Your mission is to reconcile the USER'S COMPLAINT with the LOG EVIDENCE.\n\n"
@@ -2464,428 +2509,15 @@ class WifiLogAgentSystem:
         )
 
     # ------------------------------------------------------------------
-    # Analyze ALL skills — Agentic Reasoning Loop
-    # ------------------------------------------------------------------
-    def analyze_all(self, issue_description: str = "Perform full log analysis",
-                     step_callback=None, issue_context: dict = None) -> dict:
-        self.issue_context = issue_context or {}
-        # Reset export numbering for each Analyze All run.
-        self._filter_export_counter = 0
-        steps = []
-
-        def _emit(step):
-            steps.append(step)
-            if step_callback:
-                step_callback(step)
-                
-        _emit({
-            "role": "system",
-            "content": f" **Starting Autonomous Skill Agent Analysis**\n"
-                       f"**Issue:** {issue_description}\n"
-                       f"**Log:** `{self.current_log_path}`"
-        })
-
-        # Step 1: Extract issue time from description (if present)
-        # Try issue_description first; fall back to session-stored description.
-        self.issue_time = self._extract_issue_time(issue_description)
-        time_source = "issue_description"
-
-        if not self.issue_time and self.issue_context.get("description"):
-            self.issue_time = self._extract_issue_time(
-                self.issue_context["description"]
-            )
-            time_source = "session issue_context.description"
-
-        if not self.issue_time and self.issue_context.get("subject"):
-            self.issue_time = self._extract_issue_time(
-                self.issue_context["subject"]
-            )
-            time_source = "session issue_context.subject"
-
-        if self.issue_time:
-            print(
-                f"[PreScan] ✅ Issue time extracted: "
-                f"{self.issue_time.strftime('%m/%d/%Y %H:%M:%S')} "
-                f"(source: {time_source})"
-            )
-            _emit({
-                "role": "agent",
-                "content": f" **Issue Time Extracted:** `{self.issue_time.strftime('%m/%d/%Y %H:%M:%S')}`\n"
-                           f"(source: {time_source})\n"
-                           f"Agent will look for events around this timestamp in filtered logs."
-            })
-        else:
-            print("[PreScan] ⚠️  Issue time not found in any source.")
-
-        # Step 2: Pre-analysis scan of raw log (driver init window + issue-time window)
-        # Must run BEFORE any skill filtering so the agent has full structural context.
-        load_err = self._ensure_raw_log_cache()
-        if load_err:
-            _emit({"role": "error", "content": f"❌ Raw log load failed: {load_err}"})
-        else:
-            self._preprocess_raw_log_context()
-            filter_scope = (
-                f"{len(self._scoped_log_lines)} lines (scoped: Segment1 + issue-time window)"
-                if (self._scoped_log_lines and self.issue_time)
-                else f"{len(self._raw_log_cache)} lines (full raw log — no issue time)"
-            )
-            pre_msg_parts = [
-                f"- **Segment1 — Driver init block:** {len(self._driver_init_lines)} lines "
-                f"(driver load occurrences: {self._driver_init_count})",
-                f"- **Segment2 — Event window:** {len(self._issue_time_window_lines)} lines",
-                f"- **Skill filter input:** {filter_scope}",
-            ]
-            _emit({
-                "role": "agent",
-                "content": " **Pre-Analysis Scan Complete**\n" + "\n".join(pre_msg_parts)
-            })
-
-        tools = self._build_tools()
-
-        # Auto-inject final outcome evidence so the model sees end-state before reasoning
-        # outcome_inject = self._build_outcome_injection()
-
-        # Inject complete context
-        context_section = ""
-        if issue_context:
-            context_parts = []
-            if issue_context.get("case_nbr"): context_parts.append(f"**Case Number:** {issue_context.get('case_nbr')}")
-            if issue_context.get("issue_type"): context_parts.append(f"**Issue Type:** {issue_context.get('issue_type')}")
-            if issue_context.get("subject"): context_parts.append(f"**Subject:** {issue_context.get('subject')}")
-            if context_parts:
-                context_section = "\n=== BACKGROUND CONTEXT ===\n" + "\n".join(context_parts) + "\n\n"
-
-        # Flexible guidelines for autonomous reasoning with evidence verification
-        messages = [
-            {
-                "role": "system",
-                "content": self._build_analyze_system_prompt(context_section)
-            },
-            {"role": "user", "content": f"User Issue: {issue_description}"},
-        ]
-
-        # Inject brief pre-scan metadata (no raw lines — those come through
-        # skill filter tools as before).  Keeps token count unchanged.
-        if self._scoped_log_lines:
-            seg2_scope = (
-                f"±5 min of issue time {self.issue_time.strftime('%m/%d/%Y %H:%M:%S')}"
-                if self.issue_time
-                else "Segment1 end → EOF"
-            )
-            messages.append({
-                "role": "user",
-                "content": (
-                    "[PRE-SCAN INFO]\n"
-                    f"Skill filtering scope has been narrowed to {len(self._scoped_log_lines)} lines "
-                    f"(full raw log: {len(self._raw_log_cache)} lines).\n"
-                    f"Segment1 (driver init): {len(self._driver_init_lines)} lines | "
-                    f"driver load occurrences: {self._driver_init_count}\n"
-                    f"Segment2 ({seg2_scope}): {len(self._issue_time_window_lines)} lines"
-                ),
-            })
-
-        # Inject auto-extracted outcome evidence so the model has end-state awareness from the start.
-        # if outcome_inject:
-        #     messages.append({
-        #         "role": "user",
-        #         "content": outcome_inject,
-        #     })
-        
-        max_steps = 6  # 3 skills(1 step) + 1 detail + 1 submit + 1 force-conclude buffer; ~75K tokens/analysis → ~6/day from 500K budget
-        expert_rules_injected_skills = set()
-        no_match_anchor_counts = {}
-        skill_call_counts = {}
-        detail_call_counts = {}
-        no_progress_rounds = 0
-        step_token_usages = []  # [{step, prompt, completion, total}, ...]
-
-        def _emit_token_report():
-            """Emit a markdown table summarising per-step and total token usage."""
-            if not step_token_usages:
-                return
-            rows = [
-                "**Token Usage Report**\n",
-                "| Step | Prompt | Completion | Total |",
-                "|------|--------|------------|-------|"]
-            total_p = total_c = total_t = 0
-            for s in step_token_usages:
-                rows.append(
-                    f"| {s['step']} | {s['prompt']:,} | {s['completion']:,} | {s['total']:,} |")
-                total_p += s['prompt']
-                total_c += s['completion']
-                total_t += s['total']
-            rows.append(
-                f"| **Total** | **{total_p:,}** | **{total_c:,}** | **{total_t:,}** |")
-            _emit({"role": "token_usage", "content": "\n".join(rows)})
-
-        # Step 3: Agentic reasoning loop
-        for step_num in range(max_steps):
-            pending_user_nudges = []
-            _emit({
-                "role": "agent",
-                "content": f" **Reasoning Step {step_num + 1}/{max_steps}** — Thinking..."
-            })
-
-            try:
-                response = self.client.chat.completions.create(
-                    model=self.model,
-                    messages=messages,
-                    tools=tools,
-                    tool_choice="auto",
-                    temperature=0.1,
-                    max_tokens=4096,  # steps 3+6 were hitting 1024 default, cutting off analysis
-                )
-            except Exception as e:
-                _emit({"role": "error", "content": f"❌ LLM API Error: {e}"})
-                return {"type": "error", "data": {"error": str(e)}, "steps": steps}
-
-            message = response.choices[0].message
-            messages.append(message)
-
-            # Near the end, aggressively steer the model to conclude.
-            if step_num >= max_steps - self.FORCE_CONCLUDE_LAST_N_STEPS:
-                pending_user_nudges.append({
-                    "role": "user",
-                    "content": (
-                        "You are in final steps. Stop gathering broad new evidence and call "
-                        "submit_final_report now using current evidence. If uncertain, state "
-                        "uncertainties explicitly in the report."
-                    ),
-                })
-
-            # Display token usage for this step
-            usage = getattr(response, 'usage', None)
-            if usage:
-                _emit({
-                    "role": "token_usage",
-                    "content": (
-                        f" **Token Usage (Step {step_num + 1}):** "
-                        f"Prompt: {usage.prompt_tokens} | "
-                        f"Completion: {usage.completion_tokens} | "
-                        f"Total: {usage.total_tokens}"
-                    )
-                })
-                step_token_usages.append({
-                    "step": step_num + 1,
-                    "prompt": usage.prompt_tokens,
-                    "completion": usage.completion_tokens,
-                    "total": usage.total_tokens,
-                })
-                if usage.total_tokens > self.MAX_TOKENS_PER_STEP:
-                    _emit({
-                        "role": "error",
-                        "content": (
-                            "🛑 **Stopped:** per-step token limit exceeded. "
-                            f"Step {step_num + 1} used {usage.total_tokens} tokens "
-                            f"(limit: {self.MAX_TOKENS_PER_STEP})."
-                        ),
-                    })
-                    _emit_token_report()
-                    return {
-                        "type": "partial_report",
-                        "data": {
-                            "root_cause_summary": "Analysis stopped due to per-step token limit.",
-                            "confidence_score": 20,
-                            "recommended_actions": [
-                                "Narrow the issue description scope",
-                                "Reduce context or split analysis into smaller queries",
-                            ],
-                            "involved_skills": [],
-                            "markdown_summary": (
-                                "## Partial Diagnosis\n"
-                                "Analysis stopped because a single reasoning step exceeded "
-                                "the token limit."
-                            ),
-                        },
-                        "steps": steps,
-                        "issue_time": (
-                            self.issue_time.strftime('%m/%d/%Y %H:%M:%S')
-                            if self.issue_time else None
-                        ),
-                    }
-                elif usage.total_tokens > int(self.MAX_TOKENS_PER_STEP * 0.85):
-                    # Nudge the model to converge before hitting hard token stop.
-                    pending_user_nudges.append({
-                        "role": "user",
-                        "content": (
-                            "Token budget is getting tight. "
-                            "Avoid broad new searches; use current evidence and submit_final_report soon."
-                        ),
-                    })
-
-            if message.content:
-                _emit({"role": "agent", "content": f" **Reasoning:**\n{message.content[:500]}"})
-
-            if message.tool_calls:
-                original_tool_calls = list(message.tool_calls)
-                tool_calls = list(original_tool_calls)
-
-                # Limit tool fan-out so a single step does not bloat prompt history.
-                max_calls_this_step = self.MAX_TOOL_CALLS_PER_STEP
-                if step_num >= max_steps - self.FORCE_CONCLUDE_LAST_N_STEPS:
-                    max_calls_this_step = 1
-                if len(tool_calls) > max_calls_this_step:
-                    _emit({
-                        "role": "agent",
-                        "content": (
-                            f" **Tool cap applied:** executing {max_calls_this_step}/"
-                            f"{len(tool_calls)} tool calls this step to preserve token budget."
-                        ),
-                    })
-                    tool_calls = tool_calls[:max_calls_this_step]
-                else:
-                    _emit({
-                        "role": "agent",
-                        "content": f" **Tool calls:** {len(tool_calls)} this step."
-                    })
-                
-                skipped_tool_calls = original_tool_calls[len(tool_calls):]
-                
-                # In final steps, only allow direct conclusion submission.
-                if step_num >= max_steps - self.FORCE_CONCLUDE_LAST_N_STEPS:
-                    has_submit = any(tc.function.name == "submit_final_report" for tc in tool_calls)
-                    if not has_submit:
-                        # Return explicit tool results for all announced tool calls,
-                        # then nudge the model in the next user turn.
-                        for skipped_call in original_tool_calls:
-                            self._append_tool_message(
-                                messages,
-                                skipped_call,
-                                (
-                                    "Skipped in final-step budget mode. "
-                                    "Call submit_final_report immediately using existing evidence."
-                                ),
-                            )
-                        pending_user_nudges.append({
-                            "role": "user",
-                            "content": (
-                                "Final-step budget mode: do not call more diagnostic tools. "
-                                "Call submit_final_report immediately using existing evidence."
-                            ),
-                        })
-                        messages.extend(pending_user_nudges)
-                        continue
-
-                # Return explicit tool results for capped/skipped tool calls.
-                for skipped_call in skipped_tool_calls:
-                    self._append_tool_message(
-                        messages,
-                        skipped_call,
-                        "Skipped due to per-step tool-call cap; refine and retry if needed.",
-                    )
-
-                for tool_call in tool_calls:
-                    try:
-                        args = json.loads(tool_call.function.arguments)
-                    except Exception as e:
-                        self._append_tool_message(
-                            messages,
-                            tool_call,
-                            f"Invalid tool arguments: {e}",
-                        )
-                        continue
-
-                    if tool_call.function.name == "submit_final_report":
-                        final_result = self._handle_submit_tool_call(
-                            tool_call=tool_call,
-                            args=args,
-                            issue_description=issue_description,
-                            step_num=step_num,
-                            max_steps=max_steps,
-                            messages=messages,
-                            pending_user_nudges=pending_user_nudges,
-                            steps=steps,
-                            emit_cb=_emit,
-                        )
-                        if final_result is not None:
-                            _emit_token_report()
-                            return final_result
-                        continue
-
-                    elif tool_call.function.name == "fetch_filtered_logs":
-                        no_progress_rounds = self._handle_fetch_tool_call(
-                            tool_call=tool_call,
-                            args=args,
-                            messages=messages,
-                            pending_user_nudges=pending_user_nudges,
-                            expert_rules_injected_skills=expert_rules_injected_skills,
-                            skill_call_counts=skill_call_counts,
-                            no_progress_rounds=no_progress_rounds,
-                            emit_cb=_emit,
-                        )
-
-                    elif tool_call.function.name == "get_assembled_log_snapshot":
-                        self._handle_snapshot_tool_call(
-                            tool_call=tool_call,
-                            args=args,
-                            messages=messages,
-                            emit_cb=_emit,
-                        )
-
-                    elif tool_call.function.name == "get_final_state_snapshot":
-                        self._handle_final_state_tool_call(
-                            tool_call=tool_call,
-                            args=args,
-                            messages=messages,
-                            emit_cb=_emit,
-                        )
-
-                    elif tool_call.function.name == "query_log_detail":
-                        self._handle_detail_tool_call(
-                            tool_call=tool_call,
-                            args=args,
-                            messages=messages,
-                            pending_user_nudges=pending_user_nudges,
-                            no_match_anchor_counts=no_match_anchor_counts,
-                            detail_call_counts=detail_call_counts,
-                            emit_cb=_emit,
-                        )
-
-                    else:
-                        # Unknown tool - ask agent to conclude
-                        self._append_tool_message(messages, tool_call, "Unknown tool; no action taken.")
-                        pending_user_nudges.append({
-                            "role": "user",
-                            "content": "Please call `submit_final_report` when you have concluded."
-                        })
-
-                if pending_user_nudges:
-                    messages.extend(pending_user_nudges)
-            else:
-                if pending_user_nudges:
-                    messages.extend(pending_user_nudges)
-                # No tool calls - agent provided direct text answer
-                content = message.content or ""
-                _emit({"role": "agent", "content": f" Analysis complete: {content[:200]}"})
-                return {"type": "text", "data": content, "steps": steps}
-
-        # Loop completed without conclusion - max steps reached
-        _emit({"role": "error", "content": f"⚠️ Max steps reached. Generating partial report."})
-        _emit_token_report()
-
-        return {
-            "type": "partial_report",
-            "data": {
-                "root_cause_summary": "Analysis reached maximum step limit before conclusion.",
-                "confidence_score": 30,
-                "recommended_actions": ["Review logs manually"],
-                "involved_skills": [],
-                "markdown_summary": "## Partial Diagnosis\nAgent exhausted reasoning steps."
-            },
-            "steps": steps
-        }
-
-
-    # ------------------------------------------------------------------
-    # Inject analyze_all results into conversation_history for chat()
+    # Inject analysis results into conversation_history for follow-up chat
     # ------------------------------------------------------------------
     def _inject_analysis_into_history(self, issue_description: str,
                                        steps: list, report: dict) -> None:
         """
-        After analyze_all() finishes, inject a clean summary into
-        self.conversation_history so subsequent chat() calls have full
+        After a chat analysis finishes, inject a clean summary into
+        self.conversation_history so follow-up chat() calls have full
         context of the prior analysis.
-        
+
         IMPORTANT: Only plain text/assistant messages, NO tool_use/tool_result.
         """
         # Build a condensed recap of the agent's thinking process
@@ -2961,7 +2593,8 @@ class WifiLogAgentSystem:
         self._assembled_log_text = ""
 
     def prime_with_context(self, case_nbr: str = "", subject: str = "",
-                            description: str = "", issue_type: str = "") -> None:
+                            description: str = "", issue_type: str = "",
+                            attachment_time: str = "") -> None:
         """
         Reset conversation and inject the case context as the opening system
         message so the LLM knows what issue it is analysing before the user
@@ -2981,6 +2614,40 @@ class WifiLogAgentSystem:
             "description": description,
             "issue_type": issue_type,
         }
+        # Pre-parse attachment_time so _chat_with_tools can use it directly
+        # support multiple date formats (session deserialization may result in different formats)
+        
+        if attachment_time:
+            self.issue_time = None
+            self._issue_time_time_only = False
+            _formats = [
+                ("%m/%d/%Y-%H:%M:%S", False),
+                ("%m/%d/%Y %H:%M:%S", False),
+                ("%Y-%m-%dT%H:%M:%S", False),
+                ("%Y-%m-%d %H:%M:%S", False),
+                ("%Y-%m-%d %H:%M",    False),
+                ("%m/%d/%Y-%H:%M:%S.%f", False),
+                ("%H:%M:%S", True),
+                ("%H:%M", True),
+            ]
+            for fmt, is_time_only in _formats:
+                try:
+                    parsed = datetime.strptime(attachment_time, fmt)
+                    if is_time_only:
+                        # Keep clock time now; pre-scan will align date to log range.
+                        self.issue_time = datetime.combine(datetime.now().date(), parsed.time())
+                        self._issue_time_time_only = True
+                    else:
+                        self.issue_time = parsed
+                        self._issue_time_time_only = False
+                    print(f"[DEBUG] prime_with_context parsed issue_time={self.issue_time} from '{attachment_time}' fmt={fmt}")
+                    break
+                except ValueError:
+                    continue
+            if self.issue_time is None:
+                print(f"[DEBUG] prime_with_context: could not parse attachment_time='{attachment_time}'")
+        else:
+            self._issue_time_time_only = False
         context_parts = []
         if case_nbr:
             context_parts.append(f"Case: {case_nbr}")

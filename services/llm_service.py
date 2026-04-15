@@ -208,7 +208,7 @@ class LLM_helper:
         self.client = None
         self.issue_categories = ["BSOD", "Yellow Bang (YB)", "Connectivity", "PPAG", 
                                 "MLO", "Assert", "WRDS/WGDS/EWRD/SGOM", "TAS", "Roaming", 
-                                "P2P", "DSM", "VLP/UHB/AFC", "UATS", "Unclassified"]
+                                "P2P", "DSM", "VLP/UHB/AFC", "UATS","Performance", "Unclassified"]
 
     def set_up(self, gpt_token, gpt_url, model="gpt-4.1", classifitation_path=None):
         if model.startswith("claude"):
@@ -245,6 +245,7 @@ class LLM_helper:
             - "BSOD": Blue Screen of Death, system crashes, dump files
             - "Yellow Bang (YB)": YB, Yellow Bang, Device lost, Device drop, hardware detection issues
             - "Connectivity": Connection issues, disconnect problems, network connectivity, DMA remapping
+            - "Performance": Performance issues, slow response, high latency, resource utilization
             - "PPAG": PPAG related issues
             - "MLO": MLO, Multi-Link Operation related issues
             - "Assert": Assert, assertion failures, software assertions

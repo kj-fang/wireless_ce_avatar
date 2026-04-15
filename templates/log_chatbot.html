@@ -1028,8 +1028,13 @@
                 } else if (evt.type === 'done') {
                     removeTyping();
                     const result = evt.result;
-                    if (result && result.type === 'report') appendReport(result.data);
-                    else if (result && result.type === 'text') appendAssistantText(result.data || '_No response._');
+                    if (result && result.type === 'report') {
+                        if (agentCardId) collapseAgentProcessCard(agentCardId);
+                        appendReport(result.data, '📊 Analysis Report', result.issue_time || null);
+                    } else if (result && result.type === 'partial_report' && result.data) {
+                        if (agentCardId) collapseAgentProcessCard(agentCardId);
+                        appendReport(result.data, '⚠️ Partial Analysis (Step Limit)', result.issue_time || null);
+                    } else if (result && result.type === 'text') appendAssistantText(result.data || '_No response._');
                     else if (result) appendAssistantText('⚠️ ' + (result.data || 'Unknown response.'));
                 } else if (evt.type === 'error') {
                     removeTyping();
@@ -1114,8 +1119,6 @@
     function sendQuick(text) {
         document.getElementById('user-input').value = text;
         sendMessage();
-        //analyzeAll({forceRun: true, description: `🔍 ${text}`});
-
     }
 
     // ── Render agent steps with dynamic loading and auto-collapse ────
@@ -1167,201 +1170,6 @@
         });
     }
 
-    // ── Analyze All (Agentic Loop with consolidated output) ─────
-    async function analyzeAll(options = {}) {
-        const forceRun = !!options.forceRun;
-        if (!forceRun && !logLoaded) { appendAssistantText('⚠️ Please load a log file first.'); return; }
-        if (!forceRun && !skillsLoaded) { appendAssistantText('⚠️ No skills loaded. Please load a skills.yaml first.'); return; }
-
-        const input = document.getElementById('user-input');
-        const desc = (input.value || '').trim();
-        input.style.height = 'auto';
-        appendUserMsg('🔍 Run full multi-skill analysis');
-                // use passed-in description, or fallback to default
-        const displayMsg = options.description || '🔍 Run full multi-skill analysis';
-        // display the concise system issue in the chat bubble
-        appendUserMsg(displayMsg);
-
-        const analyzeBtn = document.getElementById('analyze-all-btn');
-        if (analyzeBtn) analyzeBtn.disabled = true;
-
-        try {
-            // Use XMLHttpRequest to stream SSE events
-            const xhr = new XMLHttpRequest();
-            xhr.open('POST', '/log_chatbot/analyze_all_stream', true);
-            xhr.setRequestHeader('Content-Type', 'application/json');
-            
-            let allSteps = [];
-            let cardId = null;
-            let bodyEl = null;
-            let stepCountId = null;
-            let lastParsedOffset = 0;  // Byte offset: how far we've parsed in responseText
-            let sseBuffer = '';        // Carry over partial SSE lines across chunks
-            let renderQueue = [];
-            let renderScheduled = false;
-
-            function flushStepRender() {
-                renderScheduled = false;
-                if (!bodyEl || renderQueue.length === 0) return;
-
-                const frag = document.createDocumentFragment();
-                while (renderQueue.length > 0) {
-                    const content = renderQueue.shift();
-                    frag.appendChild(createLazyStepNode(content));
-                }
-                bodyEl.appendChild(frag);
-
-                const stepCountEl = stepCountId ? document.getElementById(stepCountId) : null;
-                if (stepCountEl) {
-                    stepCountEl.textContent = `${allSteps.length} step${allSteps.length > 1 ? 's' : ''}`;
-                }
-                scrollBottom();
-            }
-
-            function scheduleStepRender() {
-                if (renderScheduled) return;
-                renderScheduled = true;
-                window.requestAnimationFrame(flushStepRender);
-            }
-            
-            // Handle streaming events
-            xhr.onprogress = function() {
-                const text = xhr.responseText;
-                // Only parse NEW data since last onprogress call
-                const newData = text.substring(lastParsedOffset);
-                lastParsedOffset = text.length;
-
-                // Accumulate partial chunks so JSON isn't parsed mid-line.
-                sseBuffer += newData;
-                const lines = sseBuffer.split('\n');
-                sseBuffer = lines.pop() || '';
-                
-                for (const line of lines) {
-                    if (!line.startsWith('data: ')) continue;
-                    
-                    try {
-                        const eventData = JSON.parse(line.slice(6));
-                        
-                        if (eventData.type === 'step' && eventData.step) {
-                            const step = eventData.step;
-                            allSteps.push(step);
-                            
-            // Initialize card on first step - START EXPANDED
-                            if (!cardId) {
-                                hideWelcome();
-                                removeTyping();
-                                
-                                cardId = 'agent-process-' + Date.now();
-                                stepCountId = `step-count-${cardId}`;
-                                const html = `
-                                <div class="agent-process-card">
-                                    <div class="agent-process-header" onclick="
-                                        this.classList.toggle('collapsed');
-                                        document.getElementById('${cardId}').classList.toggle('hidden');
-                                        const icon = this.querySelector('.toggle-icon');
-                                        if (icon) icon.textContent = this.classList.contains('collapsed') ? '▼' : '▲';
-                                    ">
-                                        Agent Processing Steps
-                                        <span style="font-weight:400;font-size:0.75rem;opacity:0.75;margin-left:8px;">
-                                            <span id="${stepCountId}">1 step</span>
-                                        </span>
-                                        <span class="toggle-icon">▲</span>
-                                    </div>
-                                    <div class="agent-process-body" id="${cardId}">
-                                    </div>
-                                </div>`;
-
-                                const wrapper = document.createElement('div');
-                                wrapper.className = 'msg-row assistant';
-                                wrapper.style.maxWidth = '95%';
-                                wrapper.innerHTML = `<div class="avatar-icon">🤖</div><div style="flex:1;">${html}</div>`;
-                                document.getElementById('chat-window').appendChild(wrapper);
-                                
-                                bodyEl = document.getElementById(cardId);
-                            }
-                            
-                            // Queue step render to next animation frame for smoother updates
-                            if (bodyEl) {
-                                renderQueue.push(step.content || '');
-                                scheduleStepRender();
-                            }
-                        } else if (eventData.type === 'error' && eventData.content) {
-                            appendAssistantText('❌ ' + eventData.content);
-                            if (cardId) collapseAgentProcessCard(cardId);
-                        }
-                    } catch (e) {
-                        // Silently ignore parse errors
-                    }
-                }
-            };
-
-            xhr.onload = function() {
-                // Extract final result from last data: line
-                const text = xhr.responseText;
-                const lines = text.split('\n').reverse();
-                
-                for (const line of lines) {
-                    if (!line.startsWith('data: ')) continue;
-                    
-                    try {
-                        const finalEvent = JSON.parse(line.slice(6));
-                        if (finalEvent.type === 'done' && finalEvent.result) {
-                            const result = finalEvent.result;
-                            
-                            // Use issue_time from backend result,
-                            // fall back to parsing steps text
-                            let eventTime = result.issue_time || null;
-                            if (!eventTime) {
-                                for (const step of allSteps) {
-                                    const c = step.content || '';
-                                    if (c.includes('Issue Time Extracted:')) {
-                                        const m = c.match(/Issue Time Extracted:\*\*\s*`([^`]+)`/);
-                                        if (m) { eventTime = m[1]; break; }
-                                    }
-                                }
-                            }
-                            
-                            // AUTO-COLLAPSE agent processing steps now that analysis is done
-                            if (cardId) {
-                                collapseAgentProcessCard(cardId);
-                            }
-                            
-                            // Render the final report using the standard format with event time
-                            if (result.type === 'report' && result.data) {
-                                appendReport(result.data, '📊 Analysis Report', eventTime);
-                            } else if (result.type === 'partial_report' && result.data) {
-                                appendReport(result.data, '⚠️ Partial Analysis (Step Limit)', eventTime);
-                            } else if (result.type === 'error' && result.data && result.data.error) {
-                                appendAssistantText('❌ ' + result.data.error);
-                            }
-                        } else if (finalEvent.type === 'error' && finalEvent.content) {
-                            appendAssistantText('❌ ' + finalEvent.content);
-                        }
-                        break;
-                    } catch (e) {
-                        // Continue to next line
-                    }
-                }
-            };
-
-            xhr.onerror = function() {
-                appendAssistantText('❌ Network error during streaming.');
-                if (cardId) collapseAgentProcessCard(cardId);
-            };
-
-            xhr.onloadend = function() {
-                if (cardId) collapseAgentProcessCard(cardId);
-            };
-            // Send issue_description only; backend will infer timestamps from description/session.
-            xhr.send(JSON.stringify({issue_description: displayMsg}));
-
-        } catch (e) {
-            appendAssistantText('❌ Network error: ' + e.message);
-        } finally {
-            setTimeout(() => updateAnalyzeBtn(), 100);
-        }
-    }
-
     // ── Reset ──────────────────────────────────────────────────────
     async function resetConversation() {
         await fetch('/log_chatbot/reset', {method: 'POST'});
@@ -1401,11 +1209,20 @@
             const contextData = await contextRes.json();
             const question = contextData.description;
 
-            // Execute analysis with the concise issue description, so the chat window shows "Why is 6GHz not in the scan list" instead of a hardcoded message
-            setTimeout(() => analyzeAll({ 
-                forceRun: true, 
-                description: question 
-            }), 400);
+            // Enable agentic mode for auto-analysis
+            agenticMode = true;
+            const toggle = document.getElementById('agentic-mode-toggle');
+            if (toggle) {
+                toggle.checked = true;
+                onModeToggle(toggle);
+            }
+
+            // Pre-fill input and use sendMessage() so history is preserved
+            setTimeout(() => {
+                const input = document.getElementById('user-input');
+                if (input) input.value = question || '🔍 Run full multi-skill analysis';
+                sendMessage();
+            }, 400);
 
         } catch (err) {
             autoAnalyzeTriggered = false;

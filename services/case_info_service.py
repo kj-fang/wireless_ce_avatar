@@ -27,6 +27,7 @@ class CaseService:
     _vf_session: _requests.Session = None
     _vf_session_lock = threading.Lock()
     _VF_COOKIE_FILENAME = "sf_session_cookies.json"
+    _SF_API_BASE_URL = "https://intel.my.salesforce.com"
 
     @staticmethod
     def _cookie_file_path() -> str:
@@ -82,7 +83,7 @@ class CaseService:
                 "http": "http://proxy-dmz.intel.com:911",
                 "https": "http://proxy-dmz.intel.com:912",
             }
-            print(f"  [VF Session] Restored cookies from file (age {age_s/3600:.1f}h) ✅")
+            print(f"  [VF Session] Restored cookies from file (age {age_s/3600:.1f}h)")
             return vf_session
         except Exception as e:
             print(f"  [VF Session] Could not restore cookies: {e}")
@@ -157,46 +158,52 @@ class CaseService:
 
     @staticmethod
     def process_case(case_context: CaseContext) -> CaseContext:
-        
         key = app_config.key
         if not case_context.case_nbr:
-            return case_context  
-        ## create download folder for ips case
-        case_context.case_download_dir = os.path.join(f"{app_config.avatarfiles_dir}\{case_context.case_nbr}")
+            return case_context
+
+        CaseService._prepare_case_download_dir(case_context)
+        case_fields = CaseService._get_case_info_from_snowflake(case_context.case_nbr, key.snowflake_passwd)
+
+        if case_fields is not None:
+            case_context = CaseService._process_snowflake_data(case_context, case_fields, key)
+        else:
+            case_context.id, case_context.ips_pdf_path = CaseService._download_pdf_by_simulation(
+                case_context.case_nbr,
+                case_context.case_download_dir,
+            )
+            if case_context.id is None:
+                session.clear()
+                case_context.error_message = "Error downloading PDF"
+                return case_context
+            case_context = case_utils.parse_pdf_for_all_info(case_context.ips_pdf_path, case_context)
+
+        CaseService._finalize_case_context(case_context)
+        case_context.attachment_list = case_utils.parse_pdf_for_attachments(case_context.ips_pdf_path, case_context.attachment_info)
+        return case_context
+
+    @staticmethod
+    def _prepare_case_download_dir(case_context: CaseContext) -> None:
+        case_context.case_download_dir = os.path.join(app_config.avatarfiles_dir, case_context.case_nbr)
         os.makedirs(case_context.case_download_dir, exist_ok=True)
         print("-----download_path:-----", case_context.case_download_dir)
 
-
-        case_fields = CaseService._get_case_info_from_snowflake(case_context.case_nbr, key.snowflake_passwd)
-
-        if  case_fields is not None:
-
-            (case_context.id, 
-            case_context.subject,   
-            case_context.env_detail, 
-            case_context.description, 
-            case_context.backend_id, 
-            case_context.subcategory) = case_fields
-
-            with ThreadPoolExecutor(max_workers=2) as executor:
-                comment_future = executor.submit(CaseService._get_case_comments_from_snowflake,  case_context.id, key.snowflake_passwd)
-                pdf_future = executor.submit(CaseService._download_pdf_by_url,  case_context.id, case_context.case_download_dir)
-                case_context.comments, case_context.attachment_info = comment_future.result(timeout=100)
-                case_context.ips_pdf_path = pdf_future.result(timeout=100)
-
-        else: # snowflake failed, try parse from pdf
-            case_context.id, case_context.ips_pdf_path  = CaseService._download_pdf_by_simulation(case_context.case_nbr, case_context.case_download_dir)
-            if case_context.id == None:
-                session.clear()
-                case_context.error_message = f"Error downloading PDF"
-                return case_context
-            case_context = case_utils.parse_pdf_for_all_info(case_context.ips_pdf_path , case_context)
-
-        case_context.wifi_or_bt = "wifi" if "wifi" in case_context.subcategory.lower()  else "bt"
-        
-        case_context.attachment_list = case_utils.parse_pdf_for_attachments(case_context.ips_pdf_path, case_context.attachment_info)
-
+    @staticmethod
+    def _apply_case_fields(case_context: CaseContext, case_fields) -> CaseContext:
+        (
+            case_context.id,
+            case_context.subject,
+            case_context.env_detail,
+            case_context.description,
+            case_context.backend_id,
+            case_context.subcategory,
+        ) = case_fields
         return case_context
+
+    @staticmethod
+    def _finalize_case_context(case_context: CaseContext) -> None:
+        subcategory = case_context.subcategory or ""
+        case_context.wifi_or_bt = "wifi" if "wifi" in subcategory.lower() else "bt"
     
 
     @staticmethod
@@ -261,6 +268,54 @@ class CaseService:
         """Return True only if the response is a real PDF (Content-Type + magic bytes)."""
         content_type = resp.headers.get("Content-Type", "")
         return "application/pdf" in content_type or resp.content[:4] == b"%PDF"
+
+    @staticmethod
+    def _supplement_attachment_info_from_api(case_id, att_info):
+        """Query Salesforce REST API for case comments and supplement att_info
+        with entries not found in Snowflake (handles replication lag)."""
+        try:
+            vf_session = CaseService._get_vf_session()
+            print(f"  [SF API] Supplementing attachment info for case {case_id}...")
+
+            auth_headers = CaseService._build_salesforce_api_headers(vf_session)
+            api_ver = CaseService._get_salesforce_api_version(vf_session, auth_headers)
+
+            t = time.time()
+            resp = CaseService._query_salesforce_case_comments(case_id, vf_session, api_ver, auth_headers)
+
+            # Re-auth once if the sid backing the bearer token has expired.
+            if resp.status_code == 401:
+                print("  [SF API] Session invalid for REST API, re-authenticating...")
+                CaseService._invalidate_vf_session()
+                vf_session = CaseService._get_vf_session()
+                auth_headers = CaseService._build_salesforce_api_headers(vf_session)
+                api_ver = CaseService._get_salesforce_api_version(vf_session, auth_headers)
+                resp = CaseService._query_salesforce_case_comments(case_id, vf_session, api_ver, auth_headers)
+
+            resp.raise_for_status()
+            records = resp.json().get("records", [])
+            print(f"  [SF API] Got {len(records)} comment record(s) in {time.time() - t:.2f}s")
+
+            for rec in records:
+                rich_text = rec.get("Core_IPS_Rich_Comment__c") or ""
+                created_date = rec.get("CreatedDate")
+
+                urls = CaseService._extract_attachment_urls_from_rich_text(rich_text)
+                if not urls:
+                    continue
+
+                for url in urls:
+                    filename = CaseService._extract_filename_from_attachment_url(url)
+                    if not filename or filename in att_info:
+                        continue
+
+                    desc = CaseService._extract_attachment_desc_from_rich_text(rich_text, filename)
+
+                    att_info[filename] = [created_date, desc]
+                    print(f"  [SF API] Supplemented '{filename}': '{desc}'")
+
+        except Exception as e:
+            print(f"  [SF API] Could not supplement attachment info: {e}")
 
     @staticmethod
     def _download_pdf_by_url(case_id, download_path):
@@ -391,8 +446,7 @@ class CaseService:
     
     @staticmethod
     def _process_snowflake_data(case_context, case_fields, key):
-        (case_context.id, case_context.subject, case_context.env_detail, 
-         case_context.description, case_context.backend_id, case_context.subcategory) = case_fields
+        case_context = CaseService._apply_case_fields(case_context, case_fields)
         
         with ThreadPoolExecutor(max_workers=2) as executor:
             comment_future = executor.submit(CaseService._get_case_comments_from_snowflake, case_context.id, key.snowflake_passwd)
@@ -400,8 +454,95 @@ class CaseService:
             
             case_context.comments, case_context.attachment_info = comment_future.result(timeout=100)
             case_context.ips_pdf_path = pdf_future.result(timeout=100)
+
+        CaseService._supplement_attachment_info_from_api(case_context.id, case_context.attachment_info)
             
         return case_context
+
+    @staticmethod
+    def _build_salesforce_api_headers(vf_session: _requests.Session) -> dict:
+        sid_cookie = next(
+            (
+                cookie.value
+                for cookie in vf_session.cookies
+                if cookie.name == "sid" and cookie.domain == "intel.my.salesforce.com"
+            ),
+            None,
+        )
+        if not sid_cookie:
+            raise RuntimeError("No Salesforce sid cookie found for intel.my.salesforce.com")
+        return {"Authorization": f"Bearer {sid_cookie}"}
+
+    @staticmethod
+    def _get_salesforce_api_version(vf_session: _requests.Session, auth_headers: dict) -> str:
+        resp = _requests.get(
+            f"{CaseService._SF_API_BASE_URL}/services/data/",
+            headers=auth_headers,
+            timeout=15,
+            proxies=vf_session.proxies,
+        )
+        resp.raise_for_status()
+        return resp.json()[-1]["version"]
+
+    @staticmethod
+    def _query_salesforce_case_comments(case_id, vf_session: _requests.Session, api_ver: str, auth_headers: dict):
+        soql = (
+            f"SELECT CreatedDate, Core_IPS_Rich_Comment__c "
+            f"FROM Core_IPS_Case_Comments__c "
+            f"WHERE Core_IPS_Case__c='{case_id}'"
+        )
+        return _requests.get(
+            f"{CaseService._SF_API_BASE_URL}/services/data/v{api_ver}/query",
+            headers=auth_headers,
+            params={"q": soql},
+            timeout=15,
+            proxies=vf_session.proxies,
+        )
+
+    @staticmethod
+    def _extract_attachment_urls_from_rich_text(rich_text: str):
+        import re
+        from bs4 import BeautifulSoup
+
+        soup = BeautifulSoup(rich_text, "html.parser")
+        urls = [
+            anchor["href"]
+            for anchor in soup.find_all("a", href=True)
+            if "https://esft.intel.com/sftservices/download" in anchor["href"]
+        ]
+        if urls:
+            return urls
+        return re.findall(r'https://esft\.intel\.com/sftservices/download/[^"\'<>\s]+', rich_text)
+
+    @staticmethod
+    def _extract_filename_from_attachment_url(url: str) -> str:
+        from urllib.parse import urlparse, parse_qs, unquote
+
+        qs = parse_qs(urlparse(url).query)
+        return unquote(qs.get("FileName", [""])[0])
+
+    @staticmethod
+    def _extract_attachment_desc_from_rich_text(rich_text: str, filename: str) -> str:
+        import re
+        from bs4 import BeautifulSoup
+
+        soup = BeautifulSoup(rich_text, "html.parser")
+        text_lines = [line.strip() for line in soup.get_text(separator='\n').split('\n') if line.strip()]
+
+        for idx, line in enumerate(text_lines):
+            if filename not in line:
+                continue
+            if line.startswith(filename):
+                parts = [part.strip() for part in re.split(r'(?:\s*\xa0\s*){2,}|\s{4,}', line) if part.strip()]
+                for part in reversed(parts):
+                    if part != filename:
+                        return part
+            if line != filename:
+                return line
+            if idx + 1 < len(text_lines):
+                return text_lines[idx + 1]
+
+        return os.path.splitext(filename)[0]
     
  
     

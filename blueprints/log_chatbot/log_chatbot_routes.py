@@ -12,6 +12,7 @@ from tkinter import filedialog
 from configs.global_configs import app_config
 from models.models import CaseContext
 from services.log_chatbot_service import WifiLogAgentSystem, load_skills_from_data_dir, get_builtin_skills, build_skill_file_map, load_skills_from_yaml
+from utils.etl_utils import extract_time_from_description
 
 log_chatbot_bp = Blueprint("log_chatbot", __name__, url_prefix="/log_chatbot")
 
@@ -61,11 +62,65 @@ def _extract_issue_context() -> dict:
             if flat:
                 description_parts.append(f"{key}: {flat}")
 
+    attachment_time = ""
+
+    def _desc_time_to_str(desc: str) -> str:
+        """Parse issue time from attachment gray subtitle text and normalize to MM/DD/YYYY-HH:MM:SS."""
+        parsed = extract_time_from_description(desc)
+        if hasattr(parsed, 'strftime'):
+            return parsed.strftime('%m/%d/%Y-%H:%M:%S')
+        if isinstance(parsed, str) and parsed.strip():
+            # time-only case: keep as HH:MM:SS so agent can still apply segment2 on log date.
+            return parsed.strip()
+        return ""
+
+    # Step 1: Get the list of selected file names
+    selected_files = session.get("selected_files", [])
+    selected_names = set()
+    for sf in selected_files:
+        if isinstance(sf, (list, tuple)) and len(sf) >= 1:
+            selected_names.add(sf[0])
+
+    # Step 2: Read from case_context.attachment_list (same data source as the template)
+    raw_ctx_dict = session.get("case_context", {})
+    att_list = raw_ctx_dict.get("attachment_list", []) if isinstance(raw_ctx_dict, dict) else []
+
+    # Step 3: Prefer user-selected attachments; if selected_names is empty, take the first one
+    candidates = [item for item in att_list
+                  if isinstance(item, (list, tuple)) and len(item) >= 3
+                  and (not selected_names or item[0] in selected_names)]
+    if not candidates:
+        candidates = [item for item in att_list if isinstance(item, (list, tuple)) and len(item) >= 3]
+
+    # Step 4 (PRIMARY): parse from gray subtitle description (item[2][1])
+    for item in candidates:
+        desc_raw = item[2][1] if isinstance(item[2], (list, tuple)) and len(item[2]) >= 2 else None
+        result = _desc_time_to_str(desc_raw)
+        if result:
+            attachment_time = result
+            print(f"[DEBUG] attachment_time from attachment description['{item[0]}']: {attachment_time}")
+            break
+
+    # Step 5: Fallback — try directly from selected_files
+    if not attachment_time:
+        for file_info in selected_files:
+            if isinstance(file_info, (list, tuple)) and len(file_info) >= 3:
+                desc_raw = file_info[2][1] if isinstance(file_info[2], (list, tuple)) and len(file_info[2]) >= 2 else None
+                result = _desc_time_to_str(desc_raw)
+                if result:
+                    attachment_time = result
+                    print(f"[DEBUG] attachment_time from selected_files description['{file_info[0]}']: {attachment_time}")
+                    break
+
+    if not attachment_time:
+        print(f"[DEBUG] attachment_time: NOT FOUND. selected_names={selected_names}, att_list len={len(att_list)}")
+
     return {
         "case_nbr":    ctx.case_nbr or "",
         "subject":     ctx.subject or "",
         "description": "\n".join(description_parts),
         "issue_type":  issue_type,
+        "attachment_time": attachment_time,
     }
 
 
@@ -97,7 +152,7 @@ def _extract_disconnect_time(*text_sources: str) -> str:
 
 def _compose_concise_description() -> str:
     """
-    Auto-compose the most effective issue description for analyze_all.
+    Auto-compose the most effective issue description for auto-analysis via chat.
 
         Format: "<problem statement> <timestamp>"
         e.g. "6G Weak Signal disconnected at around 10/28/2025-11:25:49"
@@ -109,8 +164,12 @@ def _compose_concise_description() -> str:
 
     subject = ctx.get("subject", "")
     desc_raw = ctx.get("description", "")
-    # Extract timestamp from available text sources
-    time_hint = _extract_disconnect_time(subject, desc_raw)
+    attachment_time = ctx.get("attachment_time", "")
+    # Prefer attachment time from selected file; fall back to text extraction
+    if attachment_time:
+        time_hint = f" at around {attachment_time}"
+    else:
+        time_hint = _extract_disconnect_time(subject, desc_raw)
 
     # Best: clean subject line — strip ALL leading [tag] groups
     if subject:
@@ -356,140 +415,6 @@ def chat():
             yield f"data: {json.dumps({'type': 'error', 'content': str(e)}, ensure_ascii=False)}\n\n"
 
         return Response(generate_error(), mimetype="text/event-stream")
-
-
-# ------------------------------------------------------------------
-# API: analyze all skills
-# ------------------------------------------------------------------
-@log_chatbot_bp.route("/analyze_all", methods=["POST"])
-def analyze_all():
-    data = request.get_json(silent=True) or {}
-    issue_description = data.get("issue_description", "").strip()
-    if not issue_description:
-        issue_description = _compose_concise_description()
-    
-    # Extract COMPLETE context for LLM background
-    try:
-        full_context = _extract_issue_context()
-    except Exception:
-        full_context = {}
-
-    try:
-        agent = _get_or_create_agent()
-        if not agent.current_log_path:
-            return jsonify({
-                "success": False,
-                "error": "No log file loaded. Please set a log file first."
-            }), 400
-
-        result = agent.analyze_all(issue_description, issue_context=full_context)
-        return Response(
-            json.dumps({"success": True, "result": result}, ensure_ascii=False, indent=2),
-            mimetype="application/json",
-        )
-    except Exception as e:
-        error_traceback = traceback.format_exc()
-        print(f"❌ Analyze all error:\n{error_traceback}")
-        return jsonify({"success": False, "error": str(e)}), 500
-
-
-# ------------------------------------------------------------------
-# API: analyze all skills (SSE streaming — real-time step output)
-# ------------------------------------------------------------------
-@log_chatbot_bp.route("/analyze_all_stream", methods=["POST"])
-def analyze_all_stream():
-    """
-    Same as /analyze_all but streams each reasoning step via Server-Sent Events.
-    Frontend uses EventSource to render steps in real-time as they happen,
-    then receives the final report at the end.
-    """
-    data = request.get_json(silent=True) or {}
-    issue_description = data.get("issue_description", "").strip()
-
-    # IMPORTANT: Extract session-backed context in request thread.
-    # Flask session/request proxies are not safe in background threads.
-    try:
-        full_context = _extract_issue_context()
-        message = data.get("message", "").strip()
-
-        if message:
-            # Chat-entered question → use directly as issue_description (drives skill selection).
-            issue_description = message
-            if not full_context.get("description"):
-                full_context["description"] = message
-        elif not issue_description:
-            # "Analyze" button with no text → compose from session context.
-            issue_description = _compose_concise_description()
-
-        # Append timestamp hint from session so _extract_issue_time() can find it.
-        time_hint = _extract_disconnect_time(
-            issue_description,
-            full_context.get("subject", ""),
-            full_context.get("description", ""),
-        )
-        if time_hint and time_hint not in issue_description:
-            issue_description = f"{issue_description}{time_hint}"
-
-    except Exception:
-        full_context = {}
-        if not issue_description:
-            issue_description = "Perform full multi-skill log analysis"
-
-    try:
-        agent = _get_or_create_agent()
-        if not agent.current_log_path:
-            def err_gen():
-                yield f"data: {json.dumps({'type': 'error', 'content': 'No log file loaded.'})}\n\n"
-            return Response(err_gen(), mimetype='text/event-stream')
-    except Exception as e:
-        def err_gen():
-            yield f"data: {json.dumps({'type': 'error', 'content': str(e)})}\n\n"
-        return Response(err_gen(), mimetype='text/event-stream')
-
-    # Use a thread + queue to bridge the synchronous analyze_all with SSE
-    import queue
-    step_queue = queue.Queue()
-
-    def step_callback(step):
-        """Called by analyze_all._emit() for each new step."""
-        step_queue.put(("step", step))
-
-    @copy_current_request_context
-    def run_analysis():
-        try:
-            result = agent.analyze_all(issue_description, issue_context=full_context, step_callback=step_callback)
-            step_queue.put(("done", result))
-        except Exception as e:
-            error_traceback = traceback.format_exc()
-            print(f"❌ analyze_all_stream thread error:\n{error_traceback}")
-            step_queue.put(("error", str(e)))
-
-    # Start analysis in background thread
-    thread = threading.Thread(target=run_analysis, daemon=True)
-    thread.start()
-
-    def event_stream():
-        while True:
-            try:
-                msg_type, payload = step_queue.get(timeout=120)
-            except queue.Empty:
-                yield f"data: {json.dumps({'type': 'error', 'content': 'Analysis timed out.'})}\n\n"
-                break
-
-            if msg_type == "step":
-                yield f"data: {json.dumps({'type': 'step', 'step': payload}, ensure_ascii=False)}\n\n"
-            elif msg_type == "done":
-                yield f"data: {json.dumps({'type': 'done', 'result': payload}, ensure_ascii=False)}\n\n"
-                break
-            elif msg_type == "error":
-                yield f"data: {json.dumps({'type': 'error', 'content': payload})}\n\n"
-                break
-
-    return Response(
-        event_stream(),
-        mimetype='text/event-stream',
-        headers={'Cache-Control': 'no-cache', 'X-Accel-Buffering': 'no'}
-    )
 
 
 # ------------------------------------------------------------------
@@ -743,44 +668,17 @@ def get_skills():
     except Exception as e:
         return jsonify({"success": False, "error": str(e)}), 500
 
-# ------------------------------------------------------------------
-# API: Skills Agent Analyze (Time-Agentic Loop)
-# ------------------------------------------------------------------
-@log_chatbot_bp.route("/agent_analyze", methods=["POST"])
-def agent_analyze():
-    """Trigger the multi-step agentic reasoning process (full analysis with LLM)."""
-    try:
-        # Retrieve the existing Chatbot Agent
-        agent = _get_or_create_agent()
-        if not agent.current_log_path:
-            return jsonify({"success": False, "error": "No log file loaded."}), 400
-
-        # Retrieve the previously stored Issue Description from the Session
-        ctx = _extract_issue_context()
-        issue_description = ctx.get("description", "")
-        if not issue_description:
-            issue_description = "Perform full log analysis"
-
-        # Execute the WifiLogAgentSystem's analyze_all (agentic loop with LLM)
-        result = agent.analyze_all(issue_description)
-
-        return Response(
-            json.dumps(result, ensure_ascii=False, indent=2),
-            mimetype="application/json",
-        )
-    except Exception as e:
-        import traceback
-        error_traceback = traceback.format_exc()
-        print(f"❌ Agent analysis error:\n{error_traceback}")
-        return jsonify({"success": False, "error": str(e)}), 500
-
-
 
 @log_chatbot_bp.route("/get_issue_context", methods=["GET"])
 def get_issue_context():
     # Use _compose_concise_description() instead to get a cleaned and concise title/description.
     concise_desc = _compose_concise_description()
-    return jsonify({"description": concise_desc})
+    try:
+        ctx = _extract_issue_context()
+        attachment_time = ctx.get("attachment_time", "")
+    except Exception:
+        attachment_time = ""
+    return jsonify({"description": concise_desc, "attachment_time": attachment_time})
 
 
 # ------------------------------------------------------------------

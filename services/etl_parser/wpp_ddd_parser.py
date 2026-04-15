@@ -776,6 +776,10 @@ def wpp_ddd_parser_run(binary_path: str, is_use_custom_filter=False, is_add_trac
                     # when same ETL file with .log extension might exist in the folder
                     # (due to former execution of this script)
                     # make sure to ignore it
+                    parsed_log_path = Path(binary_file).parent / (Path(binary_file).name + ".log")
+                    if parsed_log_path.exists():
+                        emit_and_log(f"skipping {binary_file} - parsed log already exists: {parsed_log_path}")
+                        break
                     if ".log" not in Path(binary_file).suffixes:
                         parser = handler(binary_file, is_use_custom_filter, is_add_tracefmt_format)
                         # handler class is found - run the parser

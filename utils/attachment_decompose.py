@@ -84,17 +84,20 @@ def unzip_file(file_path, extract_to, already_downloaded):
     """Extract compressed file to destination."""
     if already_downloaded:
         return extract_to
+    
+    lower_path = file_path.lower()
         
     try:
-        if file_path.endswith('.zip'):
+        if lower_path.endswith('.zip'):
             with zipfile.ZipFile(file_path, 'r') as archive:
                 return extract_archive(archive, extract_to)
-        elif file_path.endswith('.rar'):
+        elif lower_path.endswith('.rar'):
             with rarfile.RarFile(file_path, 'r') as archive:
                 return extract_archive(archive, extract_to)
-        elif file_path.endswith('.7z'):
+        elif lower_path.endswith('.7z'):
             with py7zr.SevenZipFile(file_path, mode='r') as archive:
-                return extract_archive(archive, extract_to)
+                archive.extractall(path=extract_to)
+                return extract_to
     except Exception as e:
         print(f"Extraction failed for {file_path}: {e}")
         

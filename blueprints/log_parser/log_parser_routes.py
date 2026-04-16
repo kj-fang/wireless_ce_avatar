@@ -6,7 +6,6 @@ import logging
 import re
 import shutil
 from urllib.parse import unquote
-from werkzeug.utils import secure_filename
 
 from utils import helpers, attachment_decompose
 from configs.global_configs import app_config
@@ -28,6 +27,8 @@ def _is_allowed_local_analysis_filename(filename: str) -> bool:
     lower_name = clean_name.lower()
     return (
         lower_name.endswith('.zip')
+        or lower_name.endswith('.7z')
+        or lower_name.endswith('.rar')
         or lower_name.endswith('.log')
         or bool(re.search(r'\.etl\.\d+$', clean_name, re.IGNORECASE))
     )
@@ -54,57 +55,117 @@ def load_prompt():
 
 @log_parser_bp.route("/upload", methods=["POST"])
 def upload():
+    # Reset local_in_place when using regular file upload (not local analysis)
+    session['local_in_place'] = False
     upload_type = request.form.get('type')
     result = file_manager_service.handle_file_upload(upload_type, request.files)
     return result
+
+
+@log_parser_bp.route('/pick_local_analysis_file', methods=['POST'])
+def pick_local_analysis_file():
+    root = None
+    try:
+        try:
+            import tkinter as tk
+            from tkinter import filedialog
+        except ImportError as e:
+            logging.exception('Tkinter is unavailable in this environment: %s', e)
+            return jsonify({'success': False, 'message': 'Native file picker is unavailable in this environment.'}), 503
+
+        root = tk.Tk()
+        root.withdraw()
+        root.attributes('-topmost', True)
+        selected_path = filedialog.askopenfilename(
+            title='Select local analysis file',
+            filetypes=[
+                ('Supported files', '*.zip *.7z *.rar *.log *.etl.*'),
+                ('All files', '*.*'),
+            ],
+        )
+        root.destroy()
+
+        if not selected_path:
+            return jsonify({'success': False, 'message': 'No file selected'}), 400
+
+        selected_name = os.path.basename(selected_path)
+        if not _is_allowed_local_analysis_filename(selected_name):
+            return jsonify({
+                'success': False,
+                'message': f'Invalid file type: {selected_name}. Only .zip, .7z, .rar, .etl, or .log are allowed.'
+            }), 400
+
+        normalized_selected_path = os.path.normpath(os.path.abspath(selected_path))
+        session['picked_local_analysis_path'] = normalized_selected_path
+
+        return jsonify({
+            'success': True,
+            'source_path': normalized_selected_path,
+            'filename': selected_name,
+        })
+    except Exception as e:
+        logging.exception('Failed to open native file dialog: %s', e)
+        return jsonify({'success': False, 'message': f'Native file dialog unavailable: {str(e)}'}), 500
+    finally:
+        if root is not None:
+            try:
+                root.destroy()
+            except Exception:
+                logging.debug('Failed to destroy Tk root window cleanly', exc_info=True)
 
 
 #------------Section for Local Analysis file uploaded -------------#
 
 @log_parser_bp.route('/upload_local_analysis', methods=['POST'])
 def upload_local_analysis():
-    files = request.files.getlist('files')
-    if not files:
-        return jsonify({'success': False, 'message': 'No file uploaded'}), 400
+    source_path = (request.form.get('source_path') or '').strip()
+    picked_source_path = (session.get('picked_local_analysis_path') or '').strip()
 
-     # Enforce a single file upload to avoid silently dropping additional files
-    if len(files) != 1:
-        return jsonify({'success': False, 'message': 'Exactly one file must be uploaded for local analysis'}), 400
+    if not source_path:
+        return jsonify({'success': False, 'message': 'Please use native picker to select a local file path.'}), 400
 
-    etl_file = files[0]
+    if not picked_source_path:
+        return jsonify({'success': False, 'message': 'No path is bound to this session. Please re-pick the file using native picker.'}), 400
 
-    original_name = etl_file.filename or ''
+    normalized_source_path = os.path.normpath(os.path.abspath(source_path))
+    normalized_picked_source_path = os.path.normpath(os.path.abspath(picked_source_path))
+    if os.path.normcase(normalized_source_path) != os.path.normcase(normalized_picked_source_path):
+        return jsonify({'success': False, 'message': 'Invalid source path for this session. Please re-pick the file using native picker.'}), 400
+
+    source_path = normalized_picked_source_path
+
+    if not os.path.exists(source_path):
+        return jsonify({'success': False, 'message': f'Source file not found: {source_path}'}), 400
+
+    original_name = os.path.basename(source_path)
+    print(f"[upload_local_analysis] source_path: {source_path}")
+    logging.info("[upload_local_analysis] source_path: %s", source_path)
+
     if not _is_allowed_local_analysis_filename(original_name):
         return jsonify({
             'success': False,
-            'message': f'Invalid file type: {original_name}. Only .zip, .etl, or .log are allowed.'
+            'message': f'Invalid file type: {original_name}. Only .zip, .7z, .rar, .etl, or .log are allowed.'
         }), 400
 
-    base_upload_dir = app_config.avatarfiles_dir or os.getcwd()
     timestamp = datetime.datetime.now().strftime('%Y%m%d_%H%M%S')
-    upload_dir = os.path.join(base_upload_dir, 'local_uploads', f'run_{timestamp}')
-    os.makedirs(upload_dir, exist_ok=True)
-
-    safe_name = secure_filename(etl_file.filename)
-    if not safe_name:
-        safe_name = f'uploaded_{timestamp}.etl'
-
-    file_path = os.path.join(upload_dir, safe_name)
+    source_dir = os.path.dirname(source_path) or os.getcwd()
+    file_path = source_path
 
     try:
-        etl_file.save(file_path)
-        session['download_path'] = upload_dir
+        session['download_path'] = source_dir
+        session['uploaded_source_path'] = source_path
+        session['local_in_place'] = True
         session['classification'] = {
             'issue_type': 'Unclassified',
             'confidence': 0,
             'keywords_found': []
         }
 
-        # Handle .zip files: extract and auto-pick an .etl file
-        if file_path.lower().endswith('.zip'):
-            print(f"📦 Extracting ZIP: {file_path}")
+        # Handle .zip, .7z, and .rar files: extract and auto-pick an .etl file
+        if file_path.lower().endswith('.zip') or file_path.lower().endswith('.7z') or file_path.lower().endswith('.rar'):
+            print(f"📦 Extracting file: {file_path}")
             wifi_files, ddd_files, bt_files, fw_files = attachment_decompose.process_single_zip(
-                file_path, upload_dir, already_downloaded=False
+                file_path, source_dir, already_downloaded=False
             )
 
             extracted_files = wifi_files + ddd_files + bt_files + fw_files
@@ -112,7 +173,7 @@ def upload_local_analysis():
             if not extracted_files:
                 return jsonify({
                     'success': False,
-                    'message': 'No supported analysis files found in the uploaded ZIP'
+                    'message': 'No supported analysis files found in the uploaded file.'
                 }), 400
 
             local_case_nbr = f'local_upload_{timestamp}'
@@ -121,7 +182,7 @@ def upload_local_analysis():
             session['case_context'] = CaseContext(
                 case_nbr=local_case_nbr,
                 wifi_or_bt=local_case_type,
-                case_download_dir=upload_dir
+                case_download_dir=source_dir
             ).to_session()
             session['selected_files'] = []
             session['bsod'] = False
@@ -137,6 +198,7 @@ def upload_local_analysis():
             
             return jsonify({
                 'success': True,
+                'uploaded_source_path': source_path,
                 'redirect': url_for('main.download_result')
             })
         
@@ -144,6 +206,7 @@ def upload_local_analysis():
             session['latest_etl_path'] = None
             return jsonify({
                 'success': True,
+                'uploaded_source_path': source_path,
                 'redirect': url_for('log_parser.log_parser', etl_path=file_path)
             })
         else:
@@ -160,6 +223,7 @@ def upload_local_analysis():
 
     return jsonify({
         'success': True,
+        'uploaded_source_path': source_path,
         'redirect': url_for('log_parser.log_parser', etl_path=etl_path)
     })
 
@@ -233,6 +297,11 @@ def register_socketio_handlers(socketio):
 #------------Llog parser render -------------#
 
 def render_log_parser_form():
+    # Validate local_in_place context: only honor this flag if we have an active uploaded_source_path
+    # from a local analysis flow. This prevents stale session flags from affecting new/other flows.
+    if session.get('local_in_place') and not session.get('uploaded_source_path'):
+        session['local_in_place'] = False
+    
     classification = session.get('classification', {
         'issue_type': 'Unclassified',
         'confidence': 0,
@@ -242,7 +311,10 @@ def render_log_parser_form():
     print("classification.keys()", classification.keys())
 
     download_path = session.get('download_path', app_config.avatarfiles_dir or os.getcwd())
-    output_dir = log_parser_service.set_up(download_path)
+    if session.get('local_in_place'):
+        output_dir = download_path
+    else:
+        output_dir = log_parser_service.set_up(download_path)
     session['logparser_output_dir'] = output_dir
 
 
@@ -255,7 +327,11 @@ def render_log_parser_form():
         etl_path_encoded = request.args.get('etl_path', '')
         etl_path_input = unquote(etl_path_encoded)
 
-    if etl_path_input and etl_path_input.lower().endswith('.log') and os.path.exists(etl_path_input):
+    if session.get('local_in_place') and etl_path_input:
+        # In-place mode: output is already in source dir, no copy needed.
+        candidate = etl_path_input if etl_path_input.lower().endswith('.log') else etl_path_input + '.log'
+        log_path = candidate if os.path.exists(candidate) else None
+    elif etl_path_input and etl_path_input.lower().endswith('.log') and os.path.exists(etl_path_input):
         log_path = os.path.join(output_dir, os.path.basename(etl_path_input))
         shutil.copy2(etl_path_input, log_path)
     else:

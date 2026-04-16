@@ -204,15 +204,14 @@
 
         <!-- Tab 2: Local File Upload -->
         <div id="local-upload-tab" class="tab-content">
-                <div class="upload-zone" id="upload-zone" onclick="document.getElementById('file-input').click()">
-                    <input type="file" id="file-input" style="display: none;" onchange="handleFileSelect(event)">
+                <div class="upload-zone" id="upload-zone" onclick="openLocalFileChooser()">
                     <div style="pointer-events: none;">
                         <svg xmlns="http://www.w3.org/2000/svg" width="32" height="32" fill="#0068B6" viewBox="0 0 16 16" style="margin-bottom: 10px;">
                             <path d="M.5 9.9a.5.5 0 0 1 .5.5v2.5a1 1 0 0 0 1 1h12a1 1 0 0 0 1-1v-2.5a.5.5 0 0 1 1 0v2.5a2 2 0 0 1-2 2H2a2 2 0 0 1-2-2v-2.5a.5.5 0 0 1 .5-.5z"/>
                             <path d="M7.646 1.146a.5.5 0 0 1 .708 0l3 3a.5.5 0 0 1-.708.708L8.5 2.707V11.5a.5.5 0 0 1-1 0V2.707L5.354 4.854a.5.5 0 1 1-.708-.708l3-3z"/>
                         </svg>
                         <h5 style="color: #0068B6; margin-bottom: 10px;">Click to browse</h5>
-                        <p style="color: #666; font-size: 14px; margin: 0;">Supported: .zip, .etl or .log files</p>
+                        <p style="color: #666; font-size: 14px; margin: 0;">Supported: .zip, .7z, .rar, .etl or .log files</p>
                     </div>
                 </div>
 
@@ -536,34 +535,31 @@
         // File Upload Handling
         let selectedFiles = [];
 
-        // Validate file type based on name
-        function isAllowedLocalAnalysisFile(fileName) {
-            const lowerName = (fileName || '').toLowerCase();
-            return lowerName.endsWith('.zip') || /\.etl\.\d+$/i.test(fileName || '') || lowerName.endsWith('.log');
+        function fileNameFromPath(pathValue) {
+            const normalized = String(pathValue || '').replace(/\\/g, '/');
+            const parts = normalized.split('/');
+            return parts[parts.length - 1] || '';
         }
 
-        function collectInvalidFiles(files) {
-            return files.filter(file => !isAllowedLocalAnalysisFile(file.name));
-        }
-
-        function handleFileSelect(event) {
-            const files = Array.from(event.target.files);
-            
-            const invalidFiles = collectInvalidFiles(files);
-            if (invalidFiles.length > 0) {
-                alert(
-                    'Only .zip, .etl or .log files are allowed.\n\nInvalid file(s):\n' +
-                    invalidFiles.map(file => `- ${file.name}`).join('\n')
-                );
-            }
-
-            files.forEach(file => {
-                if (isAllowedLocalAnalysisFile(file.name) && !selectedFiles.find(f => f.name === file.name && f.size === file.size)) {
-                    selectedFiles.push(file);
+        async function openLocalFileChooser() {
+            try {
+                const response = await fetch('/log_parser/pick_local_analysis_file', {
+                    method: 'POST'
+                });
+                const result = await response.json();
+                if (!response.ok || !result.success || !result.source_path) {
+                    throw new Error(result.message || 'Native picker was cancelled or unavailable.');
                 }
-            });
-            updateFileList();
-            event.target.value = ''; // Reset input
+
+                const pickedName = result.filename || fileNameFromPath(result.source_path);
+                selectedFiles = [{
+                    file: { name: pickedName, size: 0 },
+                    sourcePath: result.source_path,
+                }];
+                updateFileList();
+            } catch (error) {
+                alert('❌ Native file picker unavailable: ' + error.message);
+            }
         }
 
         function updateFileList() {
@@ -579,14 +575,16 @@
             
             submitBtn.disabled = false;
             
-            selectedFiles.forEach((file, index) => {
+            selectedFiles.forEach((item, index) => {
+                const file = item.file;
+                const sizeLabel = item.sourcePath ? 'native path' : formatFileSize(file.size);
                 const fileItem = document.createElement('div');
                 fileItem.className = 'file-item';
                 fileItem.innerHTML = `
                     <div class="file-item-info">
                         <span>📄</span>
                         <span style="font-weight: 500;">${escapeHtml(file.name)}</span>
-                        <span style="color: #666; font-size: 12px;">(${formatFileSize(file.size)})</span>
+                        <span style="color: #666; font-size: 12px;">(${escapeHtml(sizeLabel)})</span>
                     </div>
                     <span class="file-remove" onclick="removeFile(${index})">✕</span>
                 `;
@@ -645,22 +643,7 @@
             e.stopPropagation();
             dragCounter = 0;
             uploadZone.classList.remove('drag-over');
-            const files = Array.from(e.dataTransfer.files);
-
-            const invalidFiles = collectInvalidFiles(files);
-            if (invalidFiles.length > 0) {
-                alert(
-                    'Only .zip, .etl or .log files are allowed.\n\nInvalid file(s):\n' +
-                    invalidFiles.map(file => `- ${file.name}`).join('\n')
-                );
-            }
-
-            files.forEach(file => {
-                if (isAllowedLocalAnalysisFile(file.name) && !selectedFiles.find(f => f.name === file.name && f.size === file.size)) {
-                    selectedFiles.push(file);
-                }
-            });
-            updateFileList();
+            alert('⚠️ Drag and drop is disabled in native-path mode. Please click to open the native file picker.');
         });
 
         // Submit Local Upload
@@ -669,11 +652,16 @@
                 alert('⚠️ Please select at least one file!');
                 return;
             }
+
             const formData = new FormData();
-            
-            selectedFiles.forEach(file => {
-                formData.append('files', file);
-            });
+
+            const selectedItem = selectedFiles[0];
+            if (!selectedItem || !selectedItem.sourcePath) {
+                alert('⚠️ Please use the native picker and select a local file path.');
+                return;
+            }
+
+            formData.append('source_path', selectedItem.sourcePath);
 
             // Show local-upload specific loading and connect socket for real-time logs
             showLocalUploadLoading();

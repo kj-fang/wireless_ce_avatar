@@ -1,4 +1,5 @@
 from typing import Optional, Dict, Any
+import secrets
 from services.driver_manage_service import DriverManager
 from services.llm_service import LLM_helper
 from flask_socketio import SocketIO
@@ -13,6 +14,9 @@ class GlobalConfig:
         self.driver_manager: Optional[DriverManager] = None
         self.llm_helper: Optional[LLM_helper] = None
         self.key_module: Optional[Any] = None
+        
+        # SendTo security token (regenerated each startup)
+        self.sendto_token: str = secrets.token_urlsafe(32)
         
         # Directory paths
         self.avatarfiles_dir: Optional[str] = None

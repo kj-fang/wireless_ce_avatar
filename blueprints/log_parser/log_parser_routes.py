@@ -2,10 +2,12 @@ from flask import Blueprint, render_template, request, session, redirect, url_fo
 import json
 import os 
 import datetime
+import hmac
 import logging
 import re
 import shutil
 from urllib.parse import unquote
+from werkzeug.utils import secure_filename
 
 from utils import helpers, attachment_decompose
 from configs.global_configs import app_config
@@ -30,6 +32,7 @@ def _is_allowed_local_analysis_filename(filename: str) -> bool:
         or lower_name.endswith('.7z')
         or lower_name.endswith('.rar')
         or lower_name.endswith('.log')
+        or lower_name.endswith('.etl')
         or bool(re.search(r'\.etl\.\d+$', clean_name, re.IGNORECASE))
     )
 
@@ -38,6 +41,65 @@ def _infer_local_upload_case_type(wifi_files, ddd_files, bt_files) -> str:
     if bt_files and not (wifi_files or ddd_files):
         return 'bt'
     return 'wifi'
+
+
+def _process_local_analysis(source_path: str, source_dir: str, file_path: str,
+                            original_name: str, timestamp: str) -> str:
+    """Shared core logic for local analysis (used by both upload and SendTo flows).
+
+    Sets up session state, extracts archives / parses ETL / handles .log files.
+    Returns the redirect URL on success.
+    Raises ValueError for validation failures (e.g. no supported files found).
+    """
+    session['download_path'] = source_dir
+    session['uploaded_source_path'] = source_path
+    session['local_in_place'] = True
+    session['classification'] = {
+        'issue_type': 'Unclassified',
+        'confidence': 0,
+        'keywords_found': []
+    }
+
+    if file_path.lower().endswith('.zip') or file_path.lower().endswith('.7z') or file_path.lower().endswith('.rar'):
+        print(f"📦 Extracting file: {file_path}")
+        wifi_files, ddd_files, bt_files, fw_files = attachment_decompose.process_single_zip(
+            file_path, source_dir, already_downloaded=False
+        )
+
+        extracted_files = wifi_files + ddd_files + bt_files + fw_files
+        if not extracted_files:
+            raise ValueError('No supported analysis files found in the uploaded file.')
+
+        local_case_nbr = f'local_upload_{timestamp}'
+        local_case_type = _infer_local_upload_case_type(wifi_files, ddd_files, bt_files)
+
+        session['case_context'] = CaseContext(
+            case_nbr=local_case_nbr,
+            wifi_or_bt=local_case_type,
+            case_download_dir=source_dir
+        ).to_session()
+        session['selected_files'] = []
+        session['bsod'] = False
+        session['latest_etl_llm'] = False
+
+        app_config.set_download_results(
+            local_case_nbr,
+            wifi={original_name: wifi_files},
+            ddd={original_name: ddd_files},
+            bt={original_name: bt_files},
+            fw={original_name: fw_files}
+        )
+
+        return url_for('main.download_result')
+
+    elif file_path.lower().endswith('.log'):
+        session['latest_etl_path'] = None
+        return url_for('log_parser.log_parser', etl_path=file_path)
+
+    else:
+        wpp_ddd_parser_run(file_path)
+        session['latest_etl_path'] = file_path
+        return url_for('log_parser.log_parser', etl_path=file_path)
 
 
 @log_parser_bp.route('/log_parser', methods=['POST', 'GET'])
@@ -79,7 +141,7 @@ def pick_local_analysis_file():
         selected_path = filedialog.askopenfilename(
             title='Select local analysis file',
             filetypes=[
-                ('Supported files', '*.zip *.7z *.rar *.log *.etl.*'),
+                ('Supported files', '*.zip *.7z *.rar *.log *.etl *.etl.*'),
                 ('All files', '*.*'),
             ],
         )
@@ -114,7 +176,7 @@ def pick_local_analysis_file():
                 logging.debug('Failed to destroy Tk root window cleanly', exc_info=True)
 
 
-#------------Section for Local Analysis file uploaded -------------#
+#------------ Section for Local Analysis file uploaded -------------#
 
 @log_parser_bp.route('/upload_local_analysis', methods=['POST'])
 def upload_local_analysis():
@@ -152,71 +214,9 @@ def upload_local_analysis():
     file_path = source_path
 
     try:
-        session['download_path'] = source_dir
-        session['uploaded_source_path'] = source_path
-        session['local_in_place'] = True
-        session['classification'] = {
-            'issue_type': 'Unclassified',
-            'confidence': 0,
-            'keywords_found': []
-        }
-
-        # Handle .zip, .7z, and .rar files: extract and auto-pick an .etl file
-        if file_path.lower().endswith('.zip') or file_path.lower().endswith('.7z') or file_path.lower().endswith('.rar'):
-            print(f"📦 Extracting file: {file_path}")
-            wifi_files, ddd_files, bt_files, fw_files = attachment_decompose.process_single_zip(
-                file_path, source_dir, already_downloaded=False
-            )
-
-            extracted_files = wifi_files + ddd_files + bt_files + fw_files
-
-            if not extracted_files:
-                return jsonify({
-                    'success': False,
-                    'message': 'No supported analysis files found in the uploaded file.'
-                }), 400
-
-            local_case_nbr = f'local_upload_{timestamp}'
-            local_case_type = _infer_local_upload_case_type(wifi_files, ddd_files, bt_files)
-
-            session['case_context'] = CaseContext(
-                case_nbr=local_case_nbr,
-                wifi_or_bt=local_case_type,
-                case_download_dir=source_dir
-            ).to_session()
-            session['selected_files'] = []
-            session['bsod'] = False
-            session['latest_etl_llm'] = False
-
-            app_config.set_download_results(
-                local_case_nbr,
-                wifi={original_name: wifi_files},
-                ddd={original_name: ddd_files},
-                bt={original_name: bt_files},
-                fw={original_name: fw_files}
-            )
-            
-            return jsonify({
-                'success': True,
-                'uploaded_source_path': source_path,
-                'redirect': url_for('main.download_result')
-            })
-        
-        elif file_path.lower().endswith('.log'):
-            session['latest_etl_path'] = None
-            return jsonify({
-                'success': True,
-                'uploaded_source_path': source_path,
-                'redirect': url_for('log_parser.log_parser', etl_path=file_path)
-            })
-        else:
-            # Direct .etl file (no need to extract)
-            etl_path = file_path
-
-        # Run parser synchronously so redirect only happens after .etl.log is ready
-        wpp_ddd_parser_run(etl_path)
-        session['latest_etl_path'] = etl_path
-
+        redirect_url = _process_local_analysis(source_path, source_dir, file_path, original_name, timestamp)
+    except ValueError as e:
+        return jsonify({'success': False, 'message': str(e)}), 400
     except Exception as e:
         logging.exception("Failed local analysis flow for %s: %s", file_path, e)
         return jsonify({'success': False, 'message': f'Failed local analysis flow: {str(e)}'}), 500
@@ -224,7 +224,103 @@ def upload_local_analysis():
     return jsonify({
         'success': True,
         'uploaded_source_path': source_path,
-        'redirect': url_for('log_parser.log_parser', etl_path=etl_path)
+        'redirect': redirect_url
+    })
+
+#------------ Section for SendTo file -------------#
+
+@log_parser_bp.route('/open_local_analysis', methods=['GET'])
+def open_local_analysis():
+    # Restrict to localhost only
+    if request.remote_addr not in ('127.0.0.1', '::1'):
+        flash('Access denied: this endpoint is only available from localhost.', 'danger')
+        return redirect(url_for('main.index'))
+
+    # Validate SendTo token
+    provided_token = (request.args.get('token') or '').strip()
+    expected_token = app_config.sendto_token
+    if not provided_token or not hmac.compare_digest(provided_token, expected_token):
+        flash('Invalid or expired SendTo token. Please restart the application.', 'danger')
+        return redirect(url_for('main.index'))
+
+    source_path = (request.args.get('path') or '').strip()
+    if not source_path:
+        flash('No local analysis file path was provided.', 'danger')
+        return redirect(url_for('main.index'))
+
+    source_path = os.path.abspath(source_path)
+    original_name = os.path.basename(source_path)
+
+    if not os.path.exists(source_path):
+        flash(f'Local analysis file not found: {source_path}', 'danger')
+        return redirect(url_for('main.index'))
+
+    if not _is_allowed_local_analysis_filename(original_name):
+        flash(f'Invalid file type: {original_name}. Only .zip, .7z, .rar, .etl, or .log are allowed.', 'danger')
+        return redirect(url_for('main.index'))
+
+    timestamp = datetime.datetime.now().strftime('%Y%m%d_%H%M%S')
+    source_dir = os.path.dirname(source_path) or os.getcwd()
+    file_path = source_path
+
+    try:
+        redirect_url = _process_local_analysis(source_path, source_dir, file_path, original_name, timestamp)
+    except ValueError as e:
+        flash(str(e), 'danger')
+        return redirect(url_for('main.index'))
+    except Exception as error:
+        logging.exception("Failed SendTo local analysis flow for %s: %s", source_path, error)
+        flash(f'Failed local analysis flow: {error}', 'danger')
+        return redirect(url_for('main.index'))
+
+    return redirect(redirect_url)
+
+
+@log_parser_bp.route('/navigate_existing_browser', methods=['POST'])
+def navigate_existing_browser():
+    if request.remote_addr not in ('127.0.0.1', '::1'):
+        return jsonify({'success': False, 'message': 'Access denied: localhost only'}), 403
+
+    data = request.get_json(silent=True) or {}
+    startup_path = data.get('startup_path', '/')
+
+    # Validate startup_path is a safe in-app relative path
+    if not isinstance(startup_path, str) or not startup_path.startswith('/') \
+            or startup_path.startswith('//') or '://' in startup_path:
+        return jsonify({'success': False, 'message': 'Invalid startup path'}), 400
+
+    driver_manager = app_config.driver_manager
+    if driver_manager is None:
+        return jsonify({'success': False, 'message': 'Driver manager is not available'}), 409
+
+    # Use a fixed localhost origin instead of request.host_url to prevent Host header manipulation
+    port = request.environ.get('SERVER_PORT', '5000')
+    base_url = f'http://127.0.0.1:{port}/'
+
+    try:
+        driver_manager.navigate_main_browser(base_url, startup_path)
+    except Exception as error:
+        logging.exception('Failed to navigate existing browser: %s', error)
+        return jsonify({'success': False, 'message': str(error)}), 409
+
+    return jsonify({'success': True})
+
+
+@log_parser_bp.route('/verify_sendto_token', methods=['GET'])
+def verify_sendto_token():
+    """Test endpoint to verify whether a given SendTo token matches the current app token."""
+    if request.remote_addr not in ('127.0.0.1', '::1'):
+        return jsonify({'success': False, 'message': 'Access denied: localhost only'}), 403
+
+    provided_token = (request.args.get('token') or '').strip()
+    expected_token = app_config.sendto_token
+    is_match = bool(provided_token) and hmac.compare_digest(provided_token, expected_token)
+
+    return jsonify({
+        'success': True,
+        'token_match': is_match,
+        'provided_token_preview': provided_token[:8] + '...' if len(provided_token) > 8 else provided_token,
+        'expected_token_preview': expected_token[:8] + '...',
     })
 
 

@@ -132,28 +132,29 @@ def ensure_tray_manager():
         print("ℹ️ Tray manager is already running")
 
 
-def ensure_startup_shortcut():
-    """Create or refresh the IntelAvatar shortcut in the Windows Startup folder.
-    Only runs when frozen (packaged exe); skipped in dev mode.
+def _create_windows_shortcut(appdata_subdir, label, extra_ps_props=''):
+    """Shared helper to create/refresh an IntelAvatar .lnk shortcut.
+
+    Args:
+        appdata_subdir: Relative path under %APPDATA% (e.g. r'Microsoft\\Windows\\SendTo').
+        label: Human-readable label for log messages (e.g. 'Startup', 'SendTo').
+        extra_ps_props: Additional PowerShell property assignments inserted before $s.Save().
     """
     if not getattr(sys, 'frozen', False) or os.name != 'nt':
         return
     appdata = os.environ.get('APPDATA')
     if not appdata:
-        print("⚠️  ensure_startup_shortcut: APPDATA environment variable is missing — skipping shortcut creation.")
+        print(f"⚠️  ensure_{label.lower()}_shortcut: APPDATA environment variable is missing — skipping shortcut creation.")
         return
     try:
-        startup_dir = os.path.join(
-            appdata,
-            r'Microsoft\Windows\Start Menu\Programs\Startup'
-        )
-        if not os.path.isdir(startup_dir):
-            print(f"⚠️  ensure_startup_shortcut: Startup folder not found ({startup_dir}) — skipping shortcut creation.")
+        target_dir = os.path.join(appdata, appdata_subdir)
+        if not os.path.isdir(target_dir):
+            print(f"⚠️  ensure_{label.lower()}_shortcut: {label} folder not found ({target_dir}) — skipping shortcut creation.")
             return
-        shortcut_path = os.path.join(startup_dir, 'IntelAvatar.lnk')
+        shortcut_path = os.path.join(target_dir, 'IntelAvatar.lnk')
         exe_path = sys.executable
-        exe_dir  = os.path.dirname(exe_path)
-        icon_path = os.path.join(exe_dir, 'icon.ico')
+        exe_dir = os.path.dirname(exe_path)
+        icon_location = f'{exe_path},0'
 
         # Remove existing shortcut so the target is always up-to-date
         if os.path.exists(shortcut_path):
@@ -169,8 +170,8 @@ def ensure_startup_shortcut():
             f'$s = (New-Object -COM WScript.Shell).CreateShortcut("{_ps_str(shortcut_path)}"); '
             f'$s.TargetPath = "{_ps_str(exe_path)}"; '
             f'$s.WorkingDirectory = "{_ps_str(exe_dir)}"; '
-            f'$s.IconLocation = "{_ps_str(icon_path)}"; '
-            f'$s.WindowStyle = 7; '   # 7 = start minimised
+            f'$s.IconLocation = "{_ps_str(icon_location)}"; '
+            f'{extra_ps_props}'
             f'$s.Save()'
         )
         encoded_cmd = base64.b64encode(ps_script.encode('utf-16-le')).decode('ascii')
@@ -180,8 +181,33 @@ def ensure_startup_shortcut():
             timeout=10
         )
         if result.returncode == 0:
-            print(f"✅ Startup shortcut created: {shortcut_path}")
+            print(f"✅ {label} shortcut created: {shortcut_path}")
         else:
-            print(f"⚠️  Startup shortcut creation failed (exit {result.returncode})")
+            print(f"⚠️  {label} shortcut creation failed (exit {result.returncode})")
     except Exception as e:
-        print(f"⚠️  Failed to create startup shortcut: {e}")
+        print(f"⚠️  Failed to create {label} shortcut: {e}")
+
+
+def ensure_startup_shortcut():
+    """Create or refresh the IntelAvatar shortcut in the Windows Startup folder.
+    Only runs when frozen (packaged exe); skipped in dev mode.
+    """
+    _create_windows_shortcut(
+        r'Microsoft\Windows\Start Menu\Programs\Startup',
+        'Startup',
+        extra_ps_props='$s.WindowStyle = 7; ',  # 7 = start minimised
+    )
+
+
+def ensure_sendto_shortcut(sendto_token=None):
+    """Create or refresh the IntelAvatar shortcut in the Windows SendTo folder.
+    Only runs when frozen (packaged exe); skipped in dev mode.
+    
+    Args:
+        sendto_token: If provided, appended as --sendto-token argument in the shortcut.
+    """
+    extra = ''
+    if sendto_token:
+        safe_token = sendto_token.replace('"', '`"')
+        extra = f'$s.Arguments = "--sendto-token={safe_token}"; '
+    _create_windows_shortcut(r'Microsoft\Windows\SendTo', 'SendTo', extra_ps_props=extra)

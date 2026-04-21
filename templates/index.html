@@ -296,6 +296,14 @@
         let activeLogAreaId = 'case-log-messages';
         let uploadSocket = null;
         let uploadProgressLine = null;
+        let uploadPreparingTimeoutId = null;
+
+        function clearUploadPreparingTimeout() {
+            if (uploadPreparingTimeoutId !== null) {
+                clearTimeout(uploadPreparingTimeoutId);
+                uploadPreparingTimeoutId = null;
+            }
+        }
 
         function hideAllLoadingBoxes() {
             document.getElementById('case-loading-box').style.display = 'none';
@@ -349,7 +357,9 @@
             if (logArea) {
                 logArea.innerHTML = '- Validating the files....';
                 uploadProgressLine = null;
-                setTimeout(() => {
+                clearUploadPreparingTimeout();
+                uploadPreparingTimeoutId = setTimeout(() => {
+                    uploadPreparingTimeoutId = null;
                     if (logArea) {
                         const p = document.createElement('div');
                         p.textContent = '- Preparing the uploads';
@@ -377,6 +387,8 @@
                     return;
                 }
 
+                clearUploadPreparingTimeout();
+
                 if (message.startsWith('Uploading ')) {
                     if (!uploadProgressLine || !uploadProgressLine.isConnected) {
                         uploadProgressLine = document.createElement('div');
@@ -403,6 +415,7 @@
                 uploadSocket.disconnect();
                 uploadSocket = null;
             }
+            clearUploadPreparingTimeout();
         }
 
         // Handle form submission based on dropdown selection

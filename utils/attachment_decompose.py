@@ -124,7 +124,7 @@ def _extract_rar_with_7zip(file_path, extract_to):
 
 def unzip_file(file_path, extract_to, already_downloaded):
     """Extract compressed file to destination."""
-    if already_downloaded:
+    if already_downloaded and len(os.listdir(extract_to)) > 0:
         return extract_to
     
     lower_path = file_path.lower()

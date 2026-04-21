@@ -150,20 +150,30 @@ def handle_select_attachments_submission():
 
     return redirect(url_for('main.download_attachments'))
 
+
+def _resolve_download_path(case_context: CaseContext, is_bsod: bool) -> str:
+    if not case_context:
+        return ''
+
+    if not is_bsod:
+        return case_context.case_download_dir or ''
+
+    from configs.path_configs import LOAD_PATH_prim, LOAD_PATH_bkup
+
+    load_path_bsod = helpers.get_load_path(LOAD_PATH_prim, LOAD_PATH_bkup)
+    if not load_path_bsod:
+        return ''
+
+    case_folder = case_context.backend_id if "-" in str(case_context.backend_id) else case_context.case_nbr
+    return rf"{load_path_bsod}\{case_context.wifi_or_bt.upper()}\{case_folder}"
+
 #------------DOWNLOAD ATTACHMENT render -------------#
 
 def render_download_attachments_form():
     # if bsod: change download directory from local to shared folder 
     case_context = session["case_context"]
     case_context = CaseContext.from_session(case_context)
-    download_path = case_context.case_download_dir
-
-    if session['bsod'] == True:
-        
-        from configs.path_configs import LOAD_PATH_prim, LOAD_PATH_bkup
-        LOAD_PATH_bsod = helpers.get_load_path(LOAD_PATH_prim, LOAD_PATH_bkup)
-        case_folder = case_context.backend_id if "-" in str(case_context.backend_id) else case_context.case_nbr
-        download_path = rf"{LOAD_PATH_bsod}\{case_context.wifi_or_bt.upper()}\{case_folder}"
+    download_path = _resolve_download_path(case_context, session.get('bsod') == True)
         
     files_to_download = {name: 0 for name, _, _ in session.get('selected_files', [])}
     session["download_path"] = download_path

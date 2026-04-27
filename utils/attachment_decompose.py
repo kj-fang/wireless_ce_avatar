@@ -86,7 +86,11 @@ def unzip_file(file_path, extract_to, already_downloaded):
         return extract_to
     
     lower_path = file_path.lower()
-    rarfile.UNRAR_TOOL = r"services\UnRAR\UnRAR.exe"
+    unrar_tool = os.path.abspath(
+        os.path.join(os.path.dirname(__file__), '..', 'services', 'UnRAR', 'UnRAR.exe')
+    )
+    if os.path.isfile(unrar_tool):
+        rarfile.UNRAR_TOOL = unrar_tool
 
     try:
         if lower_path.endswith('.zip'):

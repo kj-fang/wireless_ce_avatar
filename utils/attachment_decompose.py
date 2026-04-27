@@ -86,7 +86,8 @@ def unzip_file(file_path, extract_to, already_downloaded):
         return extract_to
     
     lower_path = file_path.lower()
-        
+    rarfile.UNRAR_TOOL = r"services\UnRAR\UnRAR.exe"
+
     try:
         if lower_path.endswith('.zip'):
             with zipfile.ZipFile(file_path, 'r') as archive:
@@ -98,6 +99,7 @@ def unzip_file(file_path, extract_to, already_downloaded):
             with py7zr.SevenZipFile(file_path, mode='r') as archive:
                 archive.extractall(path=extract_to)
                 return extract_to
+
     except Exception as e:
         print(f"Extraction failed for {file_path}: {e}")
         

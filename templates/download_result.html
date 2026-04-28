@@ -91,7 +91,7 @@
     <div class="d-flex justify-content-between align-items-center mb-2">
         <h2>🔍 Analysis WIFI Results</h2>
         <div class="d-flex align-items-center">
-            <button id="global-skills-agent-btn" class="btn btn-primary btn-sm mr-2" style="color:white; font-weight:bold; box-shadow: 0 2px 4px rgba(0,0,0,0.2);" onclick="startGlobalSkillsAgentAnalysis()">
+            <button id="global-skills-agent-btn" class="btn btn-info btn-sm" style="color:white; font-weight:bold; box-shadow: 0 2px 4px rgba(0,0,0,0.2);" onclick="startGlobalSkillsAgentAnalysis()">
                 ⏱️ Skills-Agent Analysis
             </button>
             <button class="btn btn-secondary btn-sm" onclick="location.href='/'">Back to Home</button>
@@ -128,14 +128,17 @@
                         <td class="text-center">
                             <div class="d-flex flex-column align-items-center">
                                 <button class="btn btn-primary btn-sm mb-2" onclick="startAnalysis(this, '{{ etl_path | urlencode }}')">
-                                    Analyze
+                                    Parse & Analyze
                                 </button>
                                 <button class="btn btn-success btn-sm mb-2" onclick="startLogParser(this, '{{ etl_path | urlencode }}')">
-                                    Analyze with LLM
+                                    Parse & Analyze with LLM
                                 </button>
-                                <button class="btn btn-info btn-sm" style="color:white;" onclick="startChatbotAnalysis(this, '{{ etl_path | urlencode }}')">
+                                <!-- <button class="btn btn-info btn-sm" style="color:white;" onclick="startChatbotAnalysis(this, '{{ etl_path | urlencode }}')">
                                     🤖 Chatbot Analysis
-                                </button>
+                                </button> -->
+                                <button id="global-skills-agent-btn" class="btn btn-info btn-sm" style="color:white; font-weight:bold; box-shadow: 0 2px 4px rgba(0,0,0,0.2);" onclick="startGlobalSkillsAgentAnalysis(this, '{{ etl_path | urlencode }}')">
+                                    ⏱️ Skills-Agent Analysis
+                                </button>                                
                             </div>
                         </td>
                     </tr>
@@ -488,8 +491,8 @@
         btn.classList.add('disabled');
         btn.innerText = '⏳ Matching Log...';
 
-        // Collect all ETL paths from the Chatbot Analysis buttons in the table
-        const buttons = document.querySelectorAll('button[onclick^="startChatbotAnalysis"]');
+        // Collect all ETL paths from the Parse & Analyze with LLM buttons in the WIFI table
+        const buttons = document.querySelectorAll('button[onclick^="startGlobalSkillsAgentAnalysis"]');
         if (buttons.length === 0) {
             alert("⚠️ No available WIFI Logs found in the table for analysis.");
             btn.classList.remove('disabled');
@@ -515,13 +518,17 @@
             .then(ctxData => {
                 const description = ctxData.description || "";
 
-                // Extract a time string from the description (e.g. "10/28/2025-11:25:49")
-                const timeMatch = description.match(
-                    /(\d{2}\/\d{2}\/\d{4}[\s-]\d{2}:\d{2}:\d{2})/
-                );
-                const issueTimeStr = timeMatch ? timeMatch[1] : "";
+                // Prefer attachment_time returned by backend (already handles DD-MM-YYYY,
+                // time-only, MM/DD/YYYY, etc. via extract_time_from_description).
+                // Fall back to regex on description for legacy cases without attachment metadata.
+                const issueTimeStr = ctxData.attachment_time || (() => {
+                    const m = description.match(
+                        /(\d{1,2}[\/\-]\d{1,2}[\/\-]\d{4}[\s\-]+\d{2}:\d{2}:\d{2})/
+                    );
+                    return m ? m[1] : "";
+                })();
 
-                logBox.innerText += `\n🔍 [Auto-Match] Scanning ${etlPaths.length} log file(s) for issue time: ${issueTimeStr || '(not found)'}...\n`;
+                logBox.innerText += `\n🔍 [Auto-Match] Scanning ${etlPaths.length} log file(s) for issue time: ${issueTimeStr || '(not found)'} ${description} AND ${etlPaths}...\n`;
                 logBox.scrollTop = logBox.scrollHeight;
 
                 // Step 2: Ask backend to read actual log timestamps and find the best match

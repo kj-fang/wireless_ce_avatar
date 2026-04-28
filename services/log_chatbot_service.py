@@ -1664,15 +1664,15 @@ class WifiLogAgentSystem:
                     f"completion={usage.completion_tokens} "
                     f"total={usage.total_tokens}"
                 )
-                _emit({
-                    "role": "token_usage",
-                    "content": (
-                        f"📊 **Token Usage (Step {step_idx + 1}):** "
-                        f"Prompt: {usage.prompt_tokens} | "
-                        f"Completion: {usage.completion_tokens} | "
-                        f"Total: {usage.total_tokens}"
-                    ),
-                })
+                # _emit({
+                #     "role": "token_usage",
+                #     "content": (
+                #         f"📊 **Token Usage (Step {step_idx + 1}):** "
+                #         f"Prompt: {usage.prompt_tokens} | "
+                #         f"Completion: {usage.completion_tokens} | "
+                #         f"Total: {usage.total_tokens}"
+                #     ),
+                # })
                 step_token_usages.append({
                     "step": step_idx + 1,
                     "prompt": usage.prompt_tokens,
@@ -1812,7 +1812,7 @@ class WifiLogAgentSystem:
                         _emit({"role": "agent", "content": f"🔍 **Fetching filtered logs** for `{skill_label}`..."})
                         tool_result = self._invoke_tool("fetch_filtered_logs", {"skill_name": skill_label})
                         preview = tool_result[:400].replace('\n', ' ') + "..."
-                        _emit({"role": "tool", "content": f"📄 **Logs loaded** (`{skill_label}`):\n```\n{preview}\n```"})
+                        # _emit({"role": "tool", "content": f"📄 **Logs loaded** (`{skill_label}`):\n```\n{preview}\n```"})
 
                         # No-progress detection
                         if "New lines merged this round: 0" in tool_result or "Skill cache hit:" in tool_result:
@@ -2214,12 +2214,13 @@ class WifiLogAgentSystem:
                         + "\n"
                         "PHASE 1 (SYMPTOM LOCALIZATION): \n"
                         # "   - Identify the exact timestamp when the reported failure occurred in the logs.\n"
-                        "   - Use the most relevant skill to analyze the logs by calling`fetch_focused_logs`.\n"
+                        "   - Use the most relevant one skill to analyze the logs by calling`fetch_focused_logs`.\n"
+                        # "   - Use at most 1 skill in Phase 1.\n"                        
                         "PHASE 2 (SOURCE RETROSPECTIVE - optional):\n"
-                        "   - if needed, based on the analysis from PHASE1, use additional skill to get more detail from the logs.\n"
+                        "   - if needed, based on the analysis from PHASE1, use additional skills to get more detail from the logs.\n"
                         "PHASE 3. Call `submit_final_report` to conclude.\n\n"
                         "CRITICAL CONSTRAINTS:\n"
-                        "- Max step is 6, and use at most 2 skills per step.\n"
+                        "- Max step is 8\n"
                         "- 🛑 NO REPETITION: Do not fetch the same data twice. If Phase 1 keywords are found in Phase 2, ignore them.\n"
                         "- 🛑 IMMEDIATELY call `submit_final_report` after your detail query. Do not over-analyze.\n\n"
                         "Your `markdown_summary` format (REQUIRED):\n"
@@ -2349,10 +2350,10 @@ class WifiLogAgentSystem:
 
         line_count = tool_result.count('\n')
         preview = tool_result[:500].replace('\n', ' ') + "..."
-        emit_cb({
-            "role": "tool",
-            "content": f" **Logs Loaded** (`{skill_name}`, ~{line_count} lines):\n```\n{preview}\n```"
-        })
+        # emit_cb({
+        #     "role": "tool",
+        #     "content": f" **Logs Loaded** (`{skill_name}`, ~{line_count} lines):\n```\n{preview}\n```"
+        # })
 
         # Expert rules are prepended in full (never clipped); only the evidence
         # section is clipped so the tool_result immediately follows tool_use.

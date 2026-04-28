@@ -154,7 +154,7 @@ def extract_timestamp_from_folder(folder_path):
         match = re.search(pattern, folder_path)
         
         if match:
-            month, day, year, hour, minute, second = match.groups()
+            day, month, year, hour, minute, second = match.groups()
             return datetime(int(year), int(month), int(day), 
                           int(hour), int(minute), int(second))
     except Exception as e:

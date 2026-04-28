@@ -410,21 +410,143 @@
         .agent-process-body.hidden { display: none; }
         .report-details.hidden { display: none; }
 
-        .agent-step {
-            padding: 8px 16px;
-            border-bottom: 1px solid #d1d5db;
+        /* ── Step separator ── */
+        .agent-step-divider {
             display: flex;
-            gap: 10px;
+            align-items: center;
+            gap: 8px;
+            padding: 6px 12px 2px;
+            font-size: 0.7rem;
+            font-weight: 600;
+            color: #6b7280;
+            letter-spacing: 0.05em;
+            text-transform: uppercase;
+            border-top: 1px solid #e5e7eb;
+            margin-top: 4px;
+        }
+        .agent-step-divider:first-child { border-top: none; margin-top: 0; }
+        .agent-step-divider .step-num {
+            background: #0071c5;
+            color: white;
+            border-radius: 50%;
+            width: 18px;
+            height: 18px;
+            display: inline-flex;
+            align-items: center;
+            justify-content: center;
+            font-size: 0.65rem;
+            flex-shrink: 0;
+        }
+
+        /* ── Individual step entry ── */
+        .agent-step {
+            padding: 5px 14px 5px 32px;
+            display: flex;
+            gap: 8px;
             align-items: flex-start;
+            border-left: 3px solid transparent;
         }
         .agent-step:last-child { border-bottom: none; }
-        .agent-step-icon {
-            display: none;
+
+        /* ── Thinking block ── */
+        .agent-step.step-thinking {
+            background: #fffbeb;
+            border-left-color: #f59e0b;
         }
+        .agent-step.step-thinking .step-label {
+            color: #b45309;
+            font-weight: 600;
+            font-size: 0.7rem;
+            text-transform: uppercase;
+            white-space: nowrap;
+            margin-top: 1px;
+        }
+
+        /* ── Tool / Skill call ── */
+        .agent-step.step-tool {
+            background: #eff6ff;
+            border-left-color: #3b82f6;
+        }
+        .agent-step.step-tool .step-label {
+            color: #1d4ed8;
+            font-weight: 600;
+            font-size: 0.7rem;
+            text-transform: uppercase;
+            white-space: nowrap;
+            margin-top: 1px;
+        }
+
+        /* ── Skill invocation ── */
+        .agent-step.step-skill {
+            background: #f0fdf4;
+            border-left-color: #22c55e;
+        }
+        .agent-step.step-skill .step-label {
+            color: #15803d;
+            font-weight: 600;
+            font-size: 0.7rem;
+            text-transform: uppercase;
+            white-space: nowrap;
+            margin-top: 1px;
+        }
+
+        /* ── Conclusion / done ── */
+        .agent-step.step-done {
+            background: #f0fdf4;
+            border-left-color: #16a34a;
+        }
+        .agent-step.step-done .step-label {
+            color: #15803d;
+            font-weight: 700;
+            font-size: 0.7rem;
+            text-transform: uppercase;
+            white-space: nowrap;
+            margin-top: 1px;
+        }
+
+        /* ── Error ── */
+        .agent-step.step-error {
+            background: #fff1f2;
+            border-left-color: #ef4444;
+        }
+        .agent-step.step-error .step-label {
+            color: #b91c1c;
+            font-weight: 600;
+            font-size: 0.7rem;
+            text-transform: uppercase;
+            white-space: nowrap;
+            margin-top: 1px;
+        }
+
+        /* ── Token usage ── */
+        .agent-step.step-token {
+            background: #f8fafc;
+            border-left-color: #94a3b8;
+        }
+        .agent-step.step-token .step-label {
+            color: #64748b;
+            font-weight: 600;
+            font-size: 0.7rem;
+            white-space: nowrap;
+            margin-top: 1px;
+        }
+
+        /* ── Default / info ── */
+        .agent-step.step-info {
+            background: transparent;
+            border-left-color: #d1d5db;
+        }
+        .agent-step.step-info .step-label {
+            color: #9ca3af;
+            font-size: 0.7rem;
+            white-space: nowrap;
+            margin-top: 1px;
+        }
+
         .agent-step-content {
             flex: 1;
             font-size: 0.78rem;
-            color: #4b5563;
+            color: #374151;
             line-height: 1.5;
         }
         .agent-step-content pre {
@@ -433,7 +555,7 @@
             padding: 6px 8px;
             border-radius: 4px;
             font-size: 0.7rem;
-            max-height: 100px;
+            max-height: 120px;
             overflow: auto;
             margin: 4px 0 0 0;
             white-space: pre-wrap;
@@ -517,7 +639,7 @@
             <div id="quick-questions">
                 <button class="skill-card" style="width:100%;text-align:left;background:none;border:1px solid #e4eaf2;border-radius:7px;padding:7px 10px;cursor:pointer;font-size:0.78rem;color:#444;margin-bottom:5px;" onclick="sendQuick('Why user could not find any APs at 6GHz? at around 04/02/2026-14:50:51.910')">Why user could not find any APs at 6GHz? at around 04/02/2026-14:50:51.910</button>
                 <button class="skill-card" style="width:100%;text-align:left;background:none;border:1px solid #e4eaf2;border-radius:7px;padding:7px 10px;cursor:pointer;font-size:0.78rem;color:#444;margin-bottom:5px;" onclick="sendQuick('What is the average resume connection time?')">What is the resume connection time?</button>
-                <button class="skill-card" style="width:100%;text-align:left;background:none;border:1px solid #e4eaf2;border-radius:7px;padding:7px 10px;cursor:pointer;font-size:0.78rem;color:#444;margin-bottom:5px;" onclick="sendQuick('Was the disconnection initiated remotely by the AP?')">Was disconnection remote/AP-initiated?</button>
+                <button class="skill-card" style="width:100%;text-align:left;background:none;border:1px solid #e4eaf2;border-radius:7px;padding:7px 10px;cursor:pointer;font-size:0.78rem;color:#444;margin-bottom:5px;" onclick="sendQuick('could not connect to ap at 04/14/2026 01:26:00?')">could not connect to ap at 04/14/2026 01:26:00? </button>
                 <button class="skill-card" style="width:100%;text-align:left;background:none;border:1px solid #e4eaf2;border-radius:7px;padding:7px 10px;cursor:pointer;font-size:0.78rem;color:#444;" onclick="sendQuick('Summarize all the issues found in this log.')">Summarize all issues</button>
             </div>
         </div>
@@ -763,6 +885,7 @@
             const data = await res.json();
             if (data.path) {
                 document.getElementById('log-path-input').value = data.path;
+                await setLog();
             }
         } catch (e) {
             console.error('Browse failed:', e);
@@ -990,8 +1113,55 @@
 
         function appendLiveStep(step) {
             ensureAgentCard();
-            const stepHtml = `<div class="agent-step"><div class="agent-step-content">${marked.parse(step.content || '')}</div></div>`;
-            agentCardBodyEl.insertAdjacentHTML('beforeend', stepHtml);
+            const content = step.content || '';
+            const role = step.role || 'agent';
+
+            // Classify step type by role + content keywords
+            let stepClass = 'step-info';
+            let label = '';
+            let isStepDivider = false;
+            let stepNum = null;
+
+            if (role === 'token_usage') {
+                stepClass = 'step-token';
+                label = '📊 Tokens';
+            } else if (role === 'error') {
+                stepClass = 'step-error';
+                label = '⛔ Error';
+            } else if (/Reasoning Step (\d+)/.test(content)) {
+                // Extract step number and render as a visual divider
+                const m = content.match(/Reasoning Step (\d+)/);
+                stepNum = m ? m[1] : steps.length;
+                isStepDivider = true;
+            } else if (/🧠.*Thinking/i.test(content)) {
+                stepClass = 'step-thinking';
+                label = '🧠 Thinking';
+            } else if (/Invoking skill|fetch_filtered_logs/i.test(content)) {
+                stepClass = 'step-skill';
+                label = '🔬 Skill';
+            } else if (/Tool call|Tool cap|🧭/i.test(content)) {
+                stepClass = 'step-tool';
+                label = '🧭 Tools';
+            } else if (/Conclusion reached|submit_final_report|✅/i.test(content)) {
+                stepClass = 'step-done';
+                label = '✅ Done';
+            } else {
+                stepClass = 'step-info';
+                label = 'ℹ️';
+            }
+
+            let html;
+            if (isStepDivider) {
+                html = `<div class="agent-step-divider"><span class="step-num">${stepNum}</span>Reasoning Step ${stepNum}</div>`;
+            } else {
+                html = `<div class="agent-step ${stepClass}">
+                    <span class="step-label">${label}</span>
+                    <div class="agent-step-content">${marked.parse(content)}</div>
+                </div>`;
+            }
+
+            agentCardBodyEl.insertAdjacentHTML('beforeend', html);
+
             // Update summary line
             const skillsUsed = steps
                 .filter(s => s.content && s.content.includes('Invoking skill'))

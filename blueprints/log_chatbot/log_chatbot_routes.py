@@ -705,7 +705,9 @@ def find_best_log():
         return jsonify({"best_path": None, "reason": "No ETL paths provided."})
 
     # --- Parse issue time from the provided string ---
-    issue_time = _parse_issue_time(issue_time_str)
+    _parsed = extract_time_from_description(issue_time_str)
+    issue_time = _parsed if isinstance(_parsed, datetime) else None
+    issue_time_only_str = _parsed if isinstance(_parsed, str) else None  # e.g. '14:50:51'
 
     # --- Scan each log file for its time range ---
     TIME_PATTERN = re.compile(r'(\d{2}/\d{2}/\d{4}-\d{2}:\d{2}:\d{2}\.\d{3})')
@@ -753,6 +755,19 @@ def find_best_log():
     if not candidates:
         return jsonify({"best_path": etl_paths[0] if etl_paths else None,
                         "reason": "No readable log files found; defaulting to first."})
+
+    # --- Resolve time-only issue_time_str using log file dates ---
+    # e.g. '14:50:51' -> combine with the date from the log's first/last timestamp
+    if not issue_time and issue_time_only_str and candidates:
+        try:
+            ih, im, is_ = map(int, issue_time_only_str.split(':'))
+            for c in candidates:
+                ref_ts = c["first_ts"] or c["last_ts"]
+                if ref_ts:
+                    issue_time = ref_ts.replace(hour=ih, minute=im, second=is_, microsecond=0)
+                    break
+        except Exception:
+            pass
 
     # --- If we have an issue time, pick the log whose range covers it ---
     if issue_time:

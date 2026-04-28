@@ -157,10 +157,10 @@ class LogParserService:
             log_file = log_path
             log_lines = helpers.read_log_file(log_file)
             
-            # 2: Filter keywords(tat) — use custom_keywords if provided by user
+            # 2: Filter keywords(tat)
             self.update_progress(40, "Extracting filter keywords...")
             filter_keywords = extract_enabled_keywords_from_filter_file(filter_path)
-            
+
             # 3: Filter keywords
             self.update_progress(55, "Filtering log entries...")
             filtered_log = filter_log_by_keywords(log_lines, filter_keywords)
@@ -170,12 +170,12 @@ class LogParserService:
             filtered_token_est = self._estimate_tokens(filtered_text)
             print(f"[Token Estimate] After filter: ~{filtered_token_est:,} tokens ({len(filtered_log)} lines, {len(filtered_text):,} chars)")
             self.update_progress(55, f"Filtering done — ~{filtered_token_est:,} tokens estimated after filter")
-            
+
             # 4: Preprocess log
             self.update_progress(70, "Preprocessing log for LLM...")
             processed_lines = preprocess_log_for_llm(filtered_log)
             grouped = group_similar_logs(processed_lines)
-            
+
             save_filtered_log_path = os.path.join(output_dir, "filtered_preprocessed.log")
             helpers.save_file(save_filtered_log_path, grouped, ensure_newline=True)
 
@@ -197,7 +197,8 @@ class LogParserService:
                     'token_count': grouped_token_est,
                     'token_limit': TOKEN_LIMIT
                 }, namespace='/progress')
-                return False            
+                return False
+
             # 5: LLM analysis
             self.update_progress(85, "Running LLM analysis...")
 

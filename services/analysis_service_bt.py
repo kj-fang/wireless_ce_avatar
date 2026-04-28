@@ -5,7 +5,7 @@ import threading
 
 from configs.global_configs import app_config
 from configs.path_configs import LOG_PARSER_DIR
-from services.etl_parser.bt_parser import bt_analysis_manualSelect_mode, bt_analysis_autoFile_mode, bt_analysis_autoFolder_mode
+from services.etl_parser.bt_parser import bt_analysis_manualSelect_mode, bt_analysis_autoFile_mode, bt_analysis_autoFolder_mode, bt_decode_hci_via_folder
 
 
 class BTAnalysisService():
@@ -67,9 +67,37 @@ class BTAnalysisService():
             )
             t.start()
 
+        elif mode == 'LLM':
+            t = threading.Thread(
+                target=self._run_llm_decode,
+                args=(file_path,),
+                daemon=True
+            )
+            t.start()
+
         else:
             print(f"Unknown BT tool mode: {mode}")
         return "BT analysis started successfully"
+
+    def _run_llm_decode(self, file_path: str):
+        """背景執行 LLM 模式：用 AutoFolder tab decode HCI 後 emit bt_hci_ready 讓前端跳轉 log_parser"""
+        self.emit_log(f"🔍 HCI decoding for LLM analysis (AutoFolder): {os.path.basename(file_path)}")
+        etl_folder = os.path.dirname(file_path)
+        hci_path = bt_decode_hci_via_folder(etl_folder, file_path)
+        if hci_path:
+            self.emit_log(f"✅ HCI decode complete: {hci_path}")
+            app_config.socketio.emit(
+                'bt_hci_ready',
+                {'hci_path': hci_path, 'etl_path': file_path},
+                namespace='/progress'
+            )
+        else:
+            self.emit_log("❌ HCI decode failed or timed out.")
+            app_config.socketio.emit(
+                'bt_hci_failed',
+                {'etl_path': file_path},
+                namespace='/progress'
+            )
 
     def _run_manual_analysis(self, file_path: str):
         """背景執行 Manual 模式的 BT 分析"""

@@ -892,6 +892,26 @@
             }
         }
 
+        socket.on('analysis_warning', function(data) {
+            console.warn('⚠️ Analysis warning:', data.message);
+            // Show a non-blocking banner above the progress bar
+            const existingBanner = document.getElementById('filterFallbackBanner');
+            if (existingBanner) existingBanner.remove();
+            const banner = document.createElement('div');
+            banner.id = 'filterFallbackBanner';
+            banner.className = 'alert alert-warning alert-dismissible fade show mt-2 mb-0';
+            banner.setAttribute('role', 'alert');
+            banner.innerHTML = `
+                <strong>⚠️ Filter fallback:</strong> ${data.message}
+                <button type="button" class="close" data-dismiss="alert" aria-label="Close">
+                    <span aria-hidden="true">&times;</span>
+                </button>`;
+            const progressContainer = document.getElementById('progressContainer');
+            if (progressContainer && progressContainer.parentNode) {
+                progressContainer.parentNode.insertBefore(banner, progressContainer);
+            }
+        });
+
         socket.on('analysis_error', function(data) {
             console.log('Analysis error:', data.message);
             hideProgress();

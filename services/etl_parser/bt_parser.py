@@ -123,6 +123,100 @@ def close_error_dialog() -> None:
         print("⚠️ Failed to close error dialog:", e)
 
 
+def bt_decode_hci_via_folder(log_folder_path: str, log_path: str, timeout: int = 120) -> str:
+    """
+    Decode an ETL folder via the 'BT Driver Log Parser' tab (same as AutoFolder mode)
+    but WITHOUT opening TextAnalysisTool.NET.
+
+    Used by the LLM analysis flow: decodes the folder, waits for the specific
+    <log_path>.hci.txt to appear, then returns its path so the caller can pass
+    it directly to the log_parser / LLM pipeline.
+
+    Args:
+        log_folder_path: Directory that contains the ETL file(s) to decode.
+        log_path:        Full path of the target ETL file (without .hci.txt suffix).
+                         The function waits for '<log_path>.hci.txt'.
+        timeout:         Max seconds to wait for the output file.
+
+    Returns:
+        str path to the generated .hci.txt, or None on failure / timeout.
+    """
+    global active_bt_pid
+
+    exe_path = os.path.abspath(os.path.join(os.path.dirname(__file__), 'ibtdrvlogparser.exe'))
+    if not os.path.exists(exe_path):
+        print(f"❌ Executable not found: {exe_path}")
+        return None
+
+    app = None
+
+    # Reuse existing tool if possible
+    if active_bt_pid and psutil.pid_exists(active_bt_pid):
+        try:
+            app = Application(backend='uia').connect(process=active_bt_pid)
+            print(f"🔁 Reusing BT tool instance (PID: {active_bt_pid})")
+        except Exception as e:
+            print(f"⚠️ Reconnect failed: {e}")
+            active_bt_pid = None
+
+    if not app:
+        app = Application(backend="uia").start(exe_path)
+        active_bt_pid = app.process
+        print(f"🚀 Launched BT tool: {exe_path} (PID: {active_bt_pid})")
+        time.sleep(0.5)
+
+    try:
+        app_window = app.top_window()
+    except Exception as e:
+        print(f"❌ Failed to get app window: {e}")
+        return None
+
+    # Switch to 'BT Driver Log Parser' tab (same as AutoFolder mode)
+    try:
+        bt_tab = app_window.child_window(
+            title="BT Driver Log Parser", control_type="TabItem"
+        ).wrapper_object()
+        bt_tab.select()
+        print("✅ Selected 'BT Driver Log Parser' tab.")
+        time.sleep(1)
+    except Exception as e:
+        print(f"❌ Failed to select 'BT Driver Log Parser' tab: {e}")
+
+    # Set folder path
+    try:
+        folder_input = app_window.child_window(auto_id="txt_parse_folder", control_type="Edit")
+        folder_input.set_edit_text(log_folder_path)
+        print(f"✅ Folder path set: {log_folder_path}")
+    except Exception as e:
+        print(f"❌ Failed to set folder path: {e}")
+
+    # Click 'Decode Folder'
+    try:
+        decode_btn = app_window.child_window(auto_id="btn_parse_decode", control_type="Button")
+        decode_btn.invoke()
+        print("✅ Decode Folder triggered.")
+    except Exception as e:
+        print(f"❌ Failed to trigger Decode Folder: {e}")
+
+    # Poll for <log_path>.hci.txt with timeout (same logic as bt_analysis_autoFolder_mode)
+    hci_txt = log_path + ".hci.txt"
+    print(f"⏳ Waiting for HCI output (timeout={timeout}s): {hci_txt}")
+
+    for _ in range(timeout):
+        if not psutil.pid_exists(active_bt_pid):
+            print("❌ BT tool closed unexpectedly during HCI wait.")
+            active_bt_pid = None
+            return None
+        close_error_dialog()
+        if os.path.exists(hci_txt) and is_file_ready(hci_txt):
+            print(f"✅ HCI log ready: {hci_txt}")
+            return hci_txt
+        time.sleep(1)
+
+    print(f"⚠️ Timed out ({timeout}s) waiting for HCI log: {hci_txt}")
+    return None
+
+
 def bt_analysis_autoFile_mode(
     log_path: str,
     debug: bool = False,

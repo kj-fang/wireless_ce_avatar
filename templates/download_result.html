@@ -321,8 +321,13 @@
                             </button>
 
                             <!-- Manual -->
-                            <button class="btn btn-success btn-sm" data-path="{{ row.bt_path | urlencode }}" data-mode="Manual" onclick="startAnalysis(this, '{{ row.bt_path | urlencode }}', 'Manual')">
+                            <button class="btn btn-success btn-sm mb-2" data-path="{{ row.bt_path | urlencode }}" data-mode="Manual" onclick="startAnalysis(this, '{{ row.bt_path | urlencode }}', 'Manual')">
                                 Manual
+                            </button>
+
+                            <!-- Analyze with LLM -->
+                            <button class="btn btn-warning btn-sm" data-path="{{ row.bt_path | urlencode }}" data-mode="LLM" onclick="startBtLogParser(this, '{{ row.bt_path | urlencode }}')">
+                                Analyze with LLM
                             </button>
                         </div>
                     </td>
@@ -753,7 +758,7 @@
     }
 
     socket.on("wpp_complete", function(msg) {
-        
+
         if (window.pendingLogParser) {
             const { etlPathEncoded, button } = window.pendingLogParser;
             if (msg.status === 'done') {
@@ -766,6 +771,62 @@
             }
             window.pendingLogParser = null;
         }
+    });
+
+    // -------------------- BT LLM Analysis --------------------
+
+    function startBtLogParser(button, btPathEncoded) {
+        cancelPendingFwAnalysis();
+        if (button.classList.contains('disabled')) return;
+
+        button.classList.add('disabled');
+        button.innerText = 'Decoding HCI...';
+
+        const decoded = decodeURIComponent(btPathEncoded);
+        appendLog(`\n\n🚀 Starting BT Analyze with LLM: ${decoded}\n`);
+        appendLog(`🔍 Step 1: Decoding HCI log (this may take ~1-2 min)...\n`);
+
+        window.pendingBtLogParser = {
+            btPathEncoded: btPathEncoded,
+            button: button
+        };
+
+        fetch(`${ETL_ANALYSIS_URL}?etl_path=${btPathEncoded}&mode=LLM`)
+            .then(res => res.text())
+            .catch(err => {
+                console.error("BT HCI decode request failed:", err);
+                appendLog(`❌ HCI decode request failed: ${decoded}\n`, 'red');
+                if (window.pendingBtLogParser && window.pendingBtLogParser.button === button) {
+                    button.classList.remove('disabled');
+                    button.innerText = 'Analyze with LLM';
+                    window.pendingBtLogParser = null;
+                }
+            });
+    }
+
+    socket.on("bt_hci_ready", function(msg) {
+        if (!window.pendingBtLogParser) return;
+        const { button } = window.pendingBtLogParser;
+
+        appendLog(`✅ HCI decode done! Redirecting to LLM analysis...\n`);
+
+        button.classList.remove('disabled');
+        button.innerText = 'Analyze with LLM';
+        window.pendingBtLogParser = null;
+
+        const hciPathEncoded = encodeURIComponent(msg.hci_path);
+        window.location.href = `${LOGPARSER_URL}?etl_path=${hciPathEncoded}&preselect_filter=BT_YB_LOST.tat&preselect_prompt=BT_YB_Lost.py`;
+    });
+
+    socket.on("bt_hci_failed", function(msg) {
+        if (!window.pendingBtLogParser) return;
+        const { button } = window.pendingBtLogParser;
+
+        appendLog(`❌ BT HCI decode failed or timed out.\n`, 'red');
+
+        button.classList.remove('disabled');
+        button.innerText = 'Analyze with LLM';
+        window.pendingBtLogParser = null;
     });
 
 

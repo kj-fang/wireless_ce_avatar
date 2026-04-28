@@ -251,6 +251,17 @@ def render_log_parser_form():
 
     should_auto_analyze, auto_analysis_data = log_parser_service.check_auto_analysis_availability(classification)
 
+    # BT LLM flow: caller may supply explicit filter/prompt to override auto-detection
+    preselect_filter = request.args.get('preselect_filter', '').strip()
+    preselect_prompt = request.args.get('preselect_prompt', '').strip()
+    if preselect_filter and preselect_prompt:
+        should_auto_analyze = True
+        auto_analysis_data = {
+            'filter_file': preselect_filter,
+            'prompt_file': preselect_prompt,
+            'issue_type': 'bt_hci',
+        }
+
     latest_etl_path = request.args.get('latest_etl_path', None) or session.get('latest_etl_path', None)
     if latest_etl_path:
         etl_path_input = latest_etl_path
@@ -258,7 +269,13 @@ def render_log_parser_form():
         etl_path_encoded = request.args.get('etl_path', '')
         etl_path_input = unquote(etl_path_encoded)
 
-    if etl_path_input and etl_path_input.lower().endswith('.log') and os.path.exists(etl_path_input):
+    # Accept .log and .txt (incl. .hci.txt from BT HCI decode) as direct log files
+    _is_direct_log = (
+        etl_path_input
+        and os.path.exists(etl_path_input)
+        and (etl_path_input.lower().endswith('.log') or etl_path_input.lower().endswith('.txt'))
+    )
+    if _is_direct_log:
         log_path = os.path.join(output_dir, os.path.basename(etl_path_input))
         shutil.copy2(etl_path_input, log_path)
     else:

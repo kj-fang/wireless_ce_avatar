@@ -211,12 +211,15 @@
                             <path d="M7.646 1.146a.5.5 0 0 1 .708 0l3 3a.5.5 0 0 1-.708.708L8.5 2.707V11.5a.5.5 0 0 1-1 0V2.707L5.354 4.854a.5.5 0 1 1-.708-.708l3-3z"/>
                         </svg>
                         <h5 style="color: #0068B6; margin-bottom: 10px;">Click to browse</h5>
-                        <p style="color: #666; font-size: 14px; margin: 0;">Supported: .zip, .7z, .rar, .etl or .log files</p>
+                        <p style="color: #666; font-size: 14px; margin: 0;">Supported: .zip, .7z, .rar, .etl, .log or .dmp files</p>
                     </div>
                 </div>
 
                 <div id="file-list" class="file-list"></div>
-
+                <label id="bsod-checkbox" style="margin-top: 5px;">
+                    <input type="checkbox" id="bsod-checkbox-input">
+                    <span style="color: #666; font-size: 14px;">This is a BSOD dump</span>
+                </label>
                 <button id="upload-submit-btn" class="upload-submit-btn" onclick="submitLocalUpload()" disabled>
                     Start Analysis
                 </button>
@@ -292,6 +295,15 @@
         let activeMessages = CASE_MESSAGES;
         let activeLogAreaId = 'case-log-messages';
         let uploadSocket = null;
+        let uploadProgressLine = null;
+        let uploadPreparingTimeoutId = null;
+
+        function clearUploadPreparingTimeout() {
+            if (uploadPreparingTimeoutId !== null) {
+                clearTimeout(uploadPreparingTimeoutId);
+                uploadPreparingTimeoutId = null;
+            }
+        }
 
         function hideAllLoadingBoxes() {
             document.getElementById('case-loading-box').style.display = 'none';
@@ -342,7 +354,20 @@
             hideAllLoadingBoxes();
             document.getElementById('upload-loading-box').style.display = 'block';
             const logArea = document.getElementById('upload-log-messages');
-            if (logArea) logArea.innerHTML = '';
+            if (logArea) {
+                logArea.innerHTML = '- Validating the files....';
+                uploadProgressLine = null;
+                clearUploadPreparingTimeout();
+                uploadPreparingTimeoutId = setTimeout(() => {
+                    uploadPreparingTimeoutId = null;
+                    if (logArea) {
+                        const p = document.createElement('div');
+                        p.textContent = '- Preparing the uploads';
+                        logArea.appendChild(p);
+                        logArea.scrollTop = logArea.scrollHeight;
+                    }
+                }, 3000);
+            }
         }
 
         function connectUploadProgressSocket() {
@@ -353,10 +378,34 @@
             uploadSocket = io('/progress');
             uploadSocket.on('wpp_log', function(data) {
                 const logArea = document.getElementById('upload-log-messages');
-                if (!logArea) return;
-                const p = document.createElement('div');
-                p.textContent = '- ' + (data.data || '');
-                logArea.appendChild(p);
+                if (!logArea) {
+                    return;
+                }
+
+                const message = String(data.data || '').trim();
+                if (!message) {
+                    return;
+                }
+
+                clearUploadPreparingTimeout();
+
+                if (message.startsWith('Uploading ')) {
+                    if (!uploadProgressLine || !uploadProgressLine.isConnected) {
+                        uploadProgressLine = document.createElement('div');
+                        uploadProgressLine.style.whiteSpace = 'pre';
+                        logArea.appendChild(uploadProgressLine);
+                    }
+                    uploadProgressLine.textContent = '- ' + message;
+                } else {
+                    const p = document.createElement('div');
+                    p.textContent = '- ' + message;
+                    logArea.appendChild(p);
+
+                    if (message.startsWith('Upload complete')) {
+                        uploadProgressLine = null;
+                    }
+                }
+
                 logArea.scrollTop = logArea.scrollHeight;
             });
         }
@@ -366,6 +415,7 @@
                 uploadSocket.disconnect();
                 uploadSocket = null;
             }
+            clearUploadPreparingTimeout();
         }
 
         // Handle form submission based on dropdown selection
@@ -666,6 +716,10 @@
             // Show local-upload specific loading and connect socket for real-time logs
             showLocalUploadLoading();
             connectUploadProgressSocket();
+            
+            if (document.getElementById('bsod-checkbox-input').checked) {
+                formData.append('is_bsod', 'true');
+            }
 
             try {
                 const response = await fetch('/log_parser/upload_local_analysis', {

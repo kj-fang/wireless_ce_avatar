@@ -52,7 +52,7 @@ def _build_startup_path(input_paths, sendto_token=None):
             continue
 
         lower_name = os.path.basename(normalized_path).lower()
-        if lower_name.endswith('.zip') or lower_name.endswith('.7z') or lower_name.endswith('.rar') or lower_name.endswith('.log') or lower_name.endswith('.etl') or '.etl.' in lower_name:
+        if lower_name.endswith('.zip') or lower_name.endswith('.7z') or lower_name.endswith('.rar') or lower_name.endswith('.log') or lower_name.endswith('.etl') or lower_name.endswith('.dmp') or '.etl.' in lower_name:
             supported_paths.append(normalized_path)
         else:
             print(f"⚠️ Ignoring unsupported SendTo path: {normalized_path}")

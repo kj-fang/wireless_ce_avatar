@@ -11,7 +11,7 @@ from werkzeug.utils import secure_filename
 
 from utils import helpers, attachment_decompose
 from configs.global_configs import app_config
-from configs.path_configs import LOG_PARSER_DIR
+from configs.path_configs import LOG_PARSER_DIR, LOAD_PATH_prim, LOAD_PATH_bkup
 from models.models import CaseContext
 
 from services.log_parser_file_manage_service import FileManagerService
@@ -23,6 +23,66 @@ log_parser_bp = Blueprint("log_parser", __name__, url_prefix="/log_parser")
 log_parser_service = LogParserService()
 file_manager_service = FileManagerService()
 
+#------------Section for Local dmp file upload bar -------------#
+def _copy_file_with_console_progress(src_path: str, dst_path: str, chunk_size: int = 4 * 1024 * 1024) -> None:
+    total_size = os.path.getsize(src_path)
+
+    # Keep behavior predictable for empty files while still showing a completed upload line.
+    if total_size == 0:
+        open(dst_path, 'wb').close()
+        shutil.copystat(src_path, dst_path)
+        msg = f"Upload complete: {os.path.basename(src_path)} (0 B)"
+        print(msg)
+        app_config.socketio.emit('wpp_log', {'data': msg}, namespace='/progress')
+        return
+
+    copied = 0
+    bar_width = 30
+    percentage_per_block = 100 / bar_width
+    upload_name = os.path.basename(src_path)
+    last_emit_percent = -1
+
+    with open(src_path, 'rb') as source, open(dst_path, 'wb') as destination:
+        while True:
+            chunk = source.read(chunk_size)
+            if not chunk:
+                break
+            destination.write(chunk)
+            copied += len(chunk)
+            ratio = min(copied / total_size, 1.0)
+            display_percent = round(ratio * 100, 2)
+            filled = min(bar_width, int(display_percent / percentage_per_block))
+            bar = '█' * filled + '░' * (bar_width - filled)
+            
+            current_percent = int(display_percent)
+            console_msg = (
+                f"\rUploading {upload_name} [{bar}] {display_percent:6.2f}% "
+                f"({copied}/{total_size} bytes)"
+            )
+            print(console_msg, end='', flush=True)
+            
+            # Emit socket.io update every 1% to provide more frequent feedback
+            if current_percent >= last_emit_percent + 1 or ratio >= 1.0:
+                formatted_size = _format_bytes(total_size)
+                formatted_copied = _format_bytes(copied)
+                socket_msg = f"Uploading {upload_name} [{bar}] {display_percent:6.2f}% ({formatted_copied}/{formatted_size})"
+                app_config.socketio.emit('wpp_log', {'data': socket_msg}, namespace='/progress')
+                last_emit_percent = current_percent
+
+    print()
+    completion_msg = f"Upload complete: {upload_name}"
+    app_config.socketio.emit('wpp_log', {'data': completion_msg}, namespace='/progress')
+    shutil.copystat(src_path, dst_path)
+
+
+def _format_bytes(bytes_val: int) -> str:
+    """Format bytes to human-readable format."""
+    for unit in ['B', 'KB', 'MB', 'GB']:
+        if bytes_val < 1024:
+            return f"{bytes_val:.1f}{unit}"
+        bytes_val /= 1024
+    return f"{bytes_val:.1f}TB"
+
 
 def _is_allowed_local_analysis_filename(filename: str) -> bool:
     clean_name = os.path.basename((filename or '').strip())
@@ -33,6 +93,7 @@ def _is_allowed_local_analysis_filename(filename: str) -> bool:
         or lower_name.endswith('.rar')
         or lower_name.endswith('.log')
         or lower_name.endswith('.etl')
+        or lower_name.endswith('.dmp')
         or bool(re.search(r'\.etl\.\d+$', clean_name, re.IGNORECASE))
     )
 
@@ -44,10 +105,11 @@ def _infer_local_upload_case_type(wifi_files, ddd_files, bt_files) -> str:
 
 
 def _process_local_analysis(source_path: str, source_dir: str, file_path: str,
-                            original_name: str, timestamp: str) -> str:
+                            original_name: str, timestamp: str,
+                            is_bsod: bool = False) -> str:
     """Shared core logic for local analysis (used by both upload and SendTo flows).
 
-    Sets up session state, extracts archives / parses ETL / handles .log files.
+    Sets up session state, extracts archives / parses ETL / handles .log/.dmp files.
     Returns the redirect URL on success.
     Raises ValueError for validation failures (e.g. no supported files found).
     """
@@ -60,7 +122,37 @@ def _process_local_analysis(source_path: str, source_dir: str, file_path: str,
         'keywords_found': []
     }
 
-    if file_path.lower().endswith('.zip') or file_path.lower().endswith('.7z') or file_path.lower().endswith('.rar'):
+    if file_path.lower().endswith('.dmp') or is_bsod:
+        local_case_nbr = f'local_bsod_{timestamp}'
+
+        # For local BSOD uploads, copy the dump to shared storage first,
+        # then submit analysis using that shared folder path.
+        load_path_bsod = helpers.get_load_path(LOAD_PATH_prim, LOAD_PATH_bkup)
+        if not load_path_bsod:
+            raise ValueError('BSOD shared folder is unavailable. Please try again later.')
+
+        shared_case_dir = os.path.join(load_path_bsod, local_case_nbr)
+        os.makedirs(shared_case_dir, exist_ok=True)
+        shared_dmp_path = os.path.join(shared_case_dir, original_name)
+        _copy_file_with_console_progress(file_path, shared_dmp_path)
+
+        # Ensure downstream BSOD page/API submission uses shared folder path.
+        session['download_path'] = shared_case_dir
+        
+        # Build a minimal case context so BSOD submission page can render in local-upload mode.
+        session['case_context'] = CaseContext(
+            case_nbr=local_case_nbr,
+            backend_id=local_case_nbr,
+            wifi_or_bt='wifi',
+            case_download_dir=shared_case_dir,
+        ).to_session()
+        session['selected_files'] = [(original_name, original_name, None)]
+        session['bsod'] = True
+        session['latest_etl_llm'] = False
+        session['latest_etl_path'] = None
+        return url_for('main.download_result_bsod')
+
+    elif file_path.lower().endswith('.zip') or file_path.lower().endswith('.7z') or file_path.lower().endswith('.rar'):
         print(f"📦 Extracting file: {file_path}")
         wifi_files, ddd_files, bt_files, fw_files = attachment_decompose.process_single_zip(
             file_path, source_dir, already_downloaded=False
@@ -141,7 +233,7 @@ def pick_local_analysis_file():
         selected_path = filedialog.askopenfilename(
             title='Select local analysis file',
             filetypes=[
-                ('Supported files', '*.zip *.7z *.rar *.log *.etl *.etl.*'),
+                ('Supported files', '*.zip *.7z *.rar *.log *.etl *.etl.* *.dmp'),
                 ('All files', '*.*'),
             ],
         )
@@ -154,10 +246,11 @@ def pick_local_analysis_file():
         if not _is_allowed_local_analysis_filename(selected_name):
             return jsonify({
                 'success': False,
-                'message': f'Invalid file type: {selected_name}. Only .zip, .7z, .rar, .etl, or .log are allowed.'
+                'message': f'Invalid file type: {selected_name}. Only .zip, .7z, .rar, .etl, .log, or .dmp are allowed.'
             }), 400
 
         normalized_selected_path = os.path.normpath(os.path.abspath(selected_path))
+        session.clear()
         session['picked_local_analysis_path'] = normalized_selected_path
 
         return jsonify({
@@ -206,7 +299,7 @@ def upload_local_analysis():
     if not _is_allowed_local_analysis_filename(original_name):
         return jsonify({
             'success': False,
-            'message': f'Invalid file type: {original_name}. Only .zip, .7z, .rar, .etl, or .log are allowed.'
+            'message': f'Invalid file type: {original_name}. Only .zip, .7z, .rar, .etl, .log, or .dmp are allowed.'
         }), 400
 
     timestamp = datetime.datetime.now().strftime('%Y%m%d_%H%M%S')
@@ -214,7 +307,10 @@ def upload_local_analysis():
     file_path = source_path
 
     try:
-        redirect_url = _process_local_analysis(source_path, source_dir, file_path, original_name, timestamp)
+        redirect_url = _process_local_analysis(
+            source_path, source_dir, file_path, original_name, timestamp,
+            is_bsod=request.form.get('is_bsod') == 'true'
+        )
     except ValueError as e:
         return jsonify({'success': False, 'message': str(e)}), 400
     except Exception as e:
@@ -256,7 +352,7 @@ def open_local_analysis():
         return redirect(url_for('main.index'))
 
     if not _is_allowed_local_analysis_filename(original_name):
-        flash(f'Invalid file type: {original_name}. Only .zip, .7z, .rar, .etl, or .log are allowed.', 'danger')
+        flash(f'Invalid file type: {original_name}. Only .zip, .7z, .rar, .etl, .log, or .dmp are allowed.', 'danger')
         return redirect(url_for('main.index'))
 
     timestamp = datetime.datetime.now().strftime('%Y%m%d_%H%M%S')

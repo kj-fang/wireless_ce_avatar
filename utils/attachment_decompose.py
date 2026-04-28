@@ -103,12 +103,14 @@ def _extract_rar_with_7zip(file_path, extract_to):
     try:
         result = subprocess.run(
             [seven_zip, 'x', file_path, f'-o{extract_to}', '-y'],
-            capture_output=True, text=True
+            capture_output=True, text=True, timeout=180
         )
         if result.returncode == 0:
             print(f'7-Zip extracted RAR successfully: {file_path}')
             return True
         print(f'7-Zip exited with code {result.returncode}: {result.stderr.strip()}')
+    except subprocess.TimeoutExpired as e:
+        print(f'7-Zip timed out after {e.timeout} s while extracting: {file_path}')
     except Exception as e:
         print(f'7-Zip subprocess failed: {e}')
     return False
@@ -120,7 +122,12 @@ def unzip_file(file_path, extract_to, already_downloaded):
         return extract_to
     
     lower_path = file_path.lower()
-        
+    unrar_tool = os.path.abspath(
+        os.path.join(os.path.dirname(__file__), '..', 'services', 'UnRAR', 'UnRAR.exe')
+    )
+    if os.path.isfile(unrar_tool):
+        rarfile.UNRAR_TOOL = unrar_tool
+
     try:
         if lower_path.endswith('.zip'):
             with zipfile.ZipFile(file_path, 'r') as archive:
@@ -140,6 +147,7 @@ def unzip_file(file_path, extract_to, already_downloaded):
             with py7zr.SevenZipFile(file_path, mode='r') as archive:
                 archive.extractall(path=extract_to)
                 return extract_to
+
     except Exception as e:
         print(f"Extraction failed for {file_path}: {e}")
         

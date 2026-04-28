@@ -1,0 +1,51 @@
+Metadata-Version: 2.4
+Name: snowflake._legacy
+Version: 1.0.1
+Summary: You should switch to the snowflake-uuid package
+Author-email: "Snowflake, Inc." <snowflake-python-libraries-dl@snowflake.com>
+License: Apache-2.0
+Keywords: Snowflake,analytics,cloud,database,db,warehouse
+Classifier: Development Status :: 3 - Alpha
+Classifier: Environment :: Console
+Classifier: Environment :: Other Environment
+Classifier: Intended Audience :: Developers
+Classifier: Intended Audience :: Education
+Classifier: Intended Audience :: Information Technology
+Classifier: Intended Audience :: System Administrators
+Classifier: License :: OSI Approved :: Apache Software License
+Classifier: Operating System :: OS Independent
+Classifier: Programming Language :: Python :: 3
+Classifier: Programming Language :: SQL
+Classifier: Topic :: Database
+Classifier: Topic :: Scientific/Engineering :: Information Analysis
+Classifier: Topic :: Software Development
+Classifier: Topic :: Software Development :: Libraries
+Classifier: Topic :: Software Development :: Libraries :: Application Frameworks
+Classifier: Topic :: Software Development :: Libraries :: Python Modules
+Requires-Python: <3.13,>=3.9
+Description-Content-Type: text/markdown
+
+# The snowflake._legacy package
+
+Historically, the `snowflake` package on PyPI was an unrelated package owned
+by an independent developer not affiliated with
+[Snowflake](https://www.snowflake.com/).  After friendly discussion in
+2023, it was agreed to transfer the PyPI `snowflake` package name to
+Snowflake.
+
+In order to provide a more manageable transition, Snowflake has agreed to
+maintain some backward compatibility with the old `snowflake` package, now
+renamed to [snowflake-uuid](https://pypi.org/project/snowflake-uuid/).  For a
+period of one year, existing users of the old package will be able to:
+
+* `import snowflake` and call `snowflake.snowflake()` to return the contents
+  of `/etc/snowflake` as a string, if it exists.  No validation of the value
+  is performed.  If `/etc/snowflake` doesn't exist, a `FileNotFoundError` will
+  be raised.  `snowflake.snowflake()` takes a single string argument which
+  names an alternative path to read from, and this is supported in the legacy
+  API.
+* `snowflake.make_snowflake()` will always raise a `NotImplementedError` and
+  point users to the new `snowflake-uuid` package.
+
+It is highly recommended that all consumers of the old `snowflake` package
+change their dependency to `snowflake-uuid` as soon as possible.

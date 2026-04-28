@@ -1,0 +1,7 @@
+# Install the legacy API into the namespace package.  This is to support the friendly transfer of the PyPI
+# `snowflake` name.  This seems to incur the least overhead, but note that it *does* impose an overall Python
+# startup overhead of approximately 3-6ms in testing, depending on the Python version.
+#
+# This shim only needs to be supported for one year from the date of transfer (which is still TBD, but likely
+# will occur in Q4CY24).
+import snowflake._legacy, snowflake; snowflake.snowflake=snowflake._legacy.snowflake; snowflake.make_snowflake=snowflake._legacy.make_snowflake

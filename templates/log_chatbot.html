@@ -654,9 +654,19 @@
         removeTyping();
         hideWelcome();
 
-        const actions = (data.recommended_actions || []).map(a => `<li>${escapeHtml(a)}</li>`).join('');
-        const skills  = (data.involved_skills || data.skill_findings ? Object.keys(data.skill_findings || {}) : [])
-                         .map(s => `<span class="skills-badge">${s}</span>`).join(' ');
+        const toArr = (v) => {
+            if (Array.isArray(v)) return v;
+            if (v == null) return [];
+            if (typeof v === 'string') {
+                return v.split(/\r?\n|;/).map(s => s.replace(/^[-*•\s]+/, '').trim()).filter(Boolean);
+            }
+            if (typeof v === 'object') return Object.values(v).map(String);
+            return [String(v)];
+        };
+        const actions = toArr(data.recommended_actions).map(a => `<li>${escapeHtml(a)}</li>`).join('');
+        const skillsArr = Array.isArray(data.involved_skills) ? data.involved_skills
+                         : (data.skill_findings ? Object.keys(data.skill_findings) : toArr(data.involved_skills));
+        const skills  = skillsArr.map(s => `<span class="skills-badge">${escapeHtml(String(s))}</span>`).join(' ');
         const score   = data.confidence_score || 0;
         const barWidth = Math.max(0, Math.min(100, score));
 

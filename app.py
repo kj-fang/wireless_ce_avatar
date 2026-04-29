@@ -1,7 +1,12 @@
 from flask import Flask
 from flask_socketio import SocketIO
 import argparse
+import json
+import os
 import sys
+import webbrowser
+from urllib.parse import quote
+from urllib.request import Request, urlopen
 
 from utils.port_utils import (
     is_port_in_use,
@@ -18,6 +23,7 @@ from utils.instance_utils import (
     register_instance,
     ensure_tray_manager,
     ensure_startup_shortcut,
+    ensure_sendto_shortcut,
 )
 
 from services.driver_manage_service import DriverManager
@@ -30,6 +36,50 @@ from configs.version import __version__, BUILD_DATE, GIT_HASH, GIT_BRANCH
 #from blueprints.log_analysis import log_bp
 from blueprints import automation_bp, main_bp, llm_bp, download_bp, analysis_etl_bp, bsod_bp, log_parser_bp # , attachment_bp, log_bp, 
 import blueprints.download.download_routes
+
+
+def _build_startup_path(input_paths, sendto_token=None):
+    if not input_paths:
+        return '/'
+
+    supported_paths = []
+    for input_path in input_paths:
+        if not input_path:
+            continue
+        normalized_path = os.path.abspath(input_path)
+        if not os.path.exists(normalized_path):
+            print(f"⚠️ Ignoring missing SendTo path: {normalized_path}")
+            continue
+
+        lower_name = os.path.basename(normalized_path).lower()
+        if lower_name.endswith('.zip') or lower_name.endswith('.7z') or lower_name.endswith('.rar') or lower_name.endswith('.log') or lower_name.endswith('.etl') or lower_name.endswith('.dmp') or '.etl.' in lower_name:
+            supported_paths.append(normalized_path)
+        else:
+            print(f"⚠️ Ignoring unsupported SendTo path: {normalized_path}")
+
+    if not supported_paths:
+        return '/'
+
+    if len(supported_paths) > 1:
+        print(f"⚠️ Multiple SendTo files were provided; only the first one will be used: {supported_paths[0]}")
+
+    quoted_path = quote(supported_paths[0], safe='')
+    # Use CLI token from shortcut (for existing instance) or current app token (for fresh start)
+    token = quote(sendto_token or app_config.sendto_token, safe='')
+    return f'/log_parser/open_local_analysis?token={token}&path={quoted_path}'
+
+
+def _navigate_existing_browser(instance_url, startup_path):
+    endpoint = f"{instance_url}/log_parser/navigate_existing_browser"
+    payload = json.dumps({'startup_path': startup_path}).encode('utf-8')
+    request = Request(endpoint, data=payload, headers={'Content-Type': 'application/json'}, method='POST')
+
+    try:
+        with urlopen(request, timeout=5) as response:
+            return 200 <= response.status < 300
+    except Exception as error:
+        print(f"⚠️ Failed to reuse existing browser: {error}")
+        return False
 
 def create_app():
     app = Flask(__name__)
@@ -65,7 +115,10 @@ if __name__ == "__main__":
     parser.add_argument('--port', type=int, default=None, help='Override the port for this run only (not persisted). Defaults to the machine-local persisted port (initially 48596).')
     parser.add_argument('--no-tray', action='store_true', help='Disable tray manager')
     parser.add_argument('--tray-mode', action='store_true', help='Run as tray manager')
+    parser.add_argument('--sendto-token', type=str, default=None, help='SendTo security token (auto-set by shortcut, not for manual use).')
+    parser.add_argument('input_paths', nargs='*', help='Optional local analysis file paths passed from Windows SendTo.')
     args = parser.parse_args()
+    startup_path = _build_startup_path(args.input_paths, sendto_token=args.sendto_token)
     
     # Check whether to run in tray mode
     if args.tray_mode:
@@ -73,21 +126,26 @@ if __name__ == "__main__":
         manager = TrayManager()
         manager.run()
         sys.exit(0)
+
+    # Single-instance enforcement (must happen BEFORE shortcut/tray setup so that
+    # short-lived SendTo instances don't overwrite the .lnk with a new token)
+    existing = check_already_running()
+    if existing:
+        print(f"✅ Avatar is already running at {existing.get('url')} — opening in browser.")
+        if not _navigate_existing_browser(existing['url'], startup_path):
+            webbrowser.open(f"{existing['url']}{startup_path}")
+        sys.exit(0)
     
     # Create / refresh the Windows Startup shortcut so the app auto-starts on login
     ensure_startup_shortcut()
 
+    # Create / refresh the Windows SendTo shortcut for right-click Send To support
+    ensure_sendto_shortcut(sendto_token=app_config.sendto_token)
+    print(f"🔑 SendTo token: {app_config.sendto_token[:8]}...")
+
     # Ensure the tray manager is running (unless explicitly disabled)
     if not args.no_tray:
         ensure_tray_manager()
-
-    # Single-instance enforcement
-    existing = check_already_running()
-    if existing:
-        print(f"✅ Avatar is already running at {existing.get('url')} — opening in browser.")
-        import webbrowser
-        webbrowser.open(existing['url'])
-        sys.exit(0)
 
     # Port decision policy:
     # 1) no one uses preferred port -> use it
@@ -104,8 +162,9 @@ if __name__ == "__main__":
         listener_pid = get_listening_pid_on_port(preferred_port)
         if listener_pid and is_intelavatar_process(listener_pid):
             print(f"✅ IntelAvatar is already running on port {preferred_port} (PID={listener_pid}).")
-            import webbrowser
-            webbrowser.open(f'http://127.0.0.1:{preferred_port}')
+            existing_url = f'http://127.0.0.1:{preferred_port}'
+            if not _navigate_existing_browser(existing_url, startup_path):
+                webbrowser.open(f'{existing_url}{startup_path}')
             sys.exit(0)
         else:
             # Either another process owns the port, or we couldn't determine the owner.
@@ -136,5 +195,5 @@ if __name__ == "__main__":
     set_up(socketio)
     app_config.set_driver_manager(DriverManager(app_config.avatarfiles_dir))
     
-    app_config.driver_manager.run_driver(socketio, app, port=port)
+    app_config.driver_manager.run_driver(socketio, app, port=port, startup_path=startup_path)
     

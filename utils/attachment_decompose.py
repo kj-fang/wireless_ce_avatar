@@ -3,6 +3,7 @@ import os
 import rarfile
 import py7zr
 import shutil
+import subprocess
 import tempfile
 import traceback
 
@@ -80,6 +81,41 @@ def extract_archive(archive, extract_to):
     
     return extract_to
 
+def _find_7zip_executable():
+    """Locate the 7-Zip CLI executable."""
+    candidates = [
+        r'C:\Program Files\7-Zip\7z.exe',
+        r'C:\Program Files (x86)\7-Zip\7z.exe',
+        '7z',
+    ]
+    for candidate in candidates:
+        if shutil.which(candidate) or os.path.isfile(candidate):
+            return candidate
+    return None
+
+
+def _extract_rar_with_7zip(file_path, extract_to):
+    """Extract a RAR archive using the 7-Zip CLI. Returns True on success."""
+    seven_zip = _find_7zip_executable()
+    if not seven_zip:
+        print('7-Zip not found; cannot extract RAR without unrar or 7-Zip.')
+        return False
+    try:
+        result = subprocess.run(
+            [seven_zip, 'x', file_path, f'-o{extract_to}', '-y'],
+            capture_output=True, text=True, timeout=180
+        )
+        if result.returncode == 0:
+            print(f'7-Zip extracted RAR successfully: {file_path}')
+            return True
+        print(f'7-Zip exited with code {result.returncode}: {result.stderr.strip()}')
+    except subprocess.TimeoutExpired as e:
+        print(f'7-Zip timed out after {e.timeout} s while extracting: {file_path}')
+    except Exception as e:
+        print(f'7-Zip subprocess failed: {e}')
+    return False
+
+
 def unzip_file(file_path, extract_to, already_downloaded):
     """Extract compressed file to destination."""
     if already_downloaded:
@@ -97,8 +133,16 @@ def unzip_file(file_path, extract_to, already_downloaded):
             with zipfile.ZipFile(file_path, 'r') as archive:
                 return extract_archive(archive, extract_to)
         elif lower_path.endswith('.rar'):
-            with rarfile.RarFile(file_path, 'r') as archive:
-                return extract_archive(archive, extract_to)
+            # Prefer 7-Zip CLI for RAR (rarfile requires unrar binary which is often absent).
+            if _extract_rar_with_7zip(file_path, extract_to):
+                return extract_to
+            # Fall back to rarfile if 7-Zip is not installed.
+            print('7-Zip unavailable, trying rarfile (requires unrar).')
+            try:
+                with rarfile.RarFile(file_path, 'r') as archive:
+                    return extract_archive(archive, extract_to)
+            except Exception as rar_err:
+                print(f'rarfile also failed: {rar_err}')
         elif lower_path.endswith('.7z'):
             with py7zr.SevenZipFile(file_path, mode='r') as archive:
                 archive.extractall(path=extract_to)

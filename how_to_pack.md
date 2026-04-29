@@ -45,9 +45,9 @@ pyinstaller app.py --name IntelAvatar  --add-data "templates;templates" --add-da
 
 ```
 
-For adding system tray:
+For adding system tray, SendTo:
 ```bash
-pyinstaller app.py --name IntelAvatar --add-data "templates;templates" --add-data "blueprints;blueprints" --add-data "configs;configs" --add-data "models;models" --add-data "static;static" --add-data "services;services" --add-data "utils;utils" --add-data "tray_manager.py;." --add-data "icon.ico;." --hidden-import engineio.async_drivers.threading --hidden-import socketio.async_drivers.threading --hidden-import snowflake.connector.snow_logging --hidden-import py7zr --hidden-import psutil --hidden-import pystray --hidden-import PIL --hidden-import PIL.Image --noconfirm --icon=icon.ico
+pyinstaller app.py --name IntelAvatar --add-data "templates;templates" --add-data "blueprints;blueprints" --add-data "configs;configs" --add-data "models;models" --add-data "static;static" --add-data "services;services" --add-data "utils;utils" --add-data "tray_manager.py;." --add-data "icon.ico;." --hidden-import engineio.async_drivers.threading --hidden-import socketio.async_drivers.threading --hidden-import snowflake.connector.snow_logging --hidden-import py7zr --hidden-import psutil --hidden-import pystray --hidden-import PIL --hidden-import PIL.Image --hidden-import anthropic --noconfirm --icon=icon.ico
 ```
 
 The final executable file will be placed in the newly created **dist folder** within your project directory: 

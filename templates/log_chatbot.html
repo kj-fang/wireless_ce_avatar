@@ -101,6 +101,164 @@
         }
         .btn-set-log:hover { background: #005a9e; }
 
+        /* ── Issue Time picker ── */
+        .it-row {
+            display: flex;
+            align-items: flex-end;
+            gap: 4px;
+            margin-bottom: 8px;
+        }
+        .it-field {
+            display: flex;
+            flex-direction: column;
+            flex: 1 1 0;
+            min-width: 0;
+        }
+        .it-field-wide { flex: 1.6 1 0; }
+        .it-field-ms   { flex: 1.2 1 0; }
+        .it-label {
+            font-size: 0.62rem;
+            font-weight: 700;
+            color: #6b7280;
+            text-transform: uppercase;
+            letter-spacing: 0.05em;
+            margin-bottom: 2px;
+            text-align: center;
+        }
+        .it-input {
+            width: 100%;
+            font-size: 0.85rem;
+            text-align: center;
+            border: 1px solid #d1d5db;
+            border-radius: 6px;
+            padding: 5px 4px;
+            background: #fff;
+            font-family: 'SFMono-Regular', Consolas, monospace;
+            transition: border-color 0.15s, box-shadow 0.15s;
+            -moz-appearance: textfield;
+            appearance: textfield;
+        }
+        .it-input::-webkit-outer-spin-button,
+        .it-input::-webkit-inner-spin-button {
+            -webkit-appearance: none;
+            margin: 0;
+        }
+        .it-input:focus {
+            outline: none;
+            border-color: #0071c5;
+            box-shadow: 0 0 0 2px rgba(0,113,197,0.18);
+        }
+        .it-input.it-invalid {
+            border-color: #e53935;
+            background: #fff5f5;
+        }
+        .it-sep {
+            color: #9ca3af;
+            font-weight: 700;
+            padding-bottom: 5px;
+            font-size: 0.95rem;
+            user-select: none;
+        }
+        .it-quick-btn {
+            flex: 1;
+            background: #f3f7fb;
+            color: #0071c5;
+            border: 1px solid #cfe2f3;
+            border-radius: 6px;
+            padding: 5px 8px;
+            font-size: 0.72rem;
+            font-weight: 600;
+            cursor: pointer;
+            transition: background 0.15s, border-color 0.15s;
+        }
+        .it-quick-btn:hover {
+            background: #e3eef9;
+            border-color: #0071c5;
+        }
+        .it-quick-btn-clear {
+            color: #888;
+            border-color: #e0e0e0;
+            background: #fafafa;
+        }
+        .it-quick-btn-clear:hover {
+            background: #f0f0f0;
+            border-color: #888;
+        }
+
+        /* ── Confirm modal ── */
+        .cm-overlay {
+            position: fixed;
+            inset: 0;
+            background: rgba(15, 23, 42, 0.55);
+            z-index: 9999;
+            display: flex;
+            align-items: center;
+            justify-content: center;
+            animation: cmFadeIn 0.15s ease-out;
+        }
+        @keyframes cmFadeIn { from { opacity: 0; } to { opacity: 1; } }
+        .cm-dialog {
+            background: #fff;
+            border-radius: 12px;
+            box-shadow: 0 20px 60px rgba(0,0,0,0.35);
+            width: min(440px, 92vw);
+            overflow: hidden;
+            animation: cmSlideUp 0.18s ease-out;
+        }
+        @keyframes cmSlideUp { from { transform: translateY(12px); opacity: 0; } to { transform: translateY(0); opacity: 1; } }
+        .cm-header {
+            display: flex;
+            align-items: center;
+            gap: 12px;
+            padding: 18px 22px 10px;
+        }
+        .cm-icon {
+            font-size: 1.6rem;
+            color: #d97706;
+        }
+        .cm-header h3 {
+            margin: 0;
+            font-size: 1.05rem;
+            font-weight: 700;
+            color: #1f2937;
+        }
+        .cm-body {
+            padding: 4px 22px 16px;
+            font-size: 0.85rem;
+            color: #374151;
+            line-height: 1.5;
+        }
+        .cm-body p { margin: 0 0 8px; }
+        .cm-body p:last-child { margin-bottom: 0; }
+        .cm-actions {
+            display: flex;
+            justify-content: flex-end;
+            gap: 8px;
+            padding: 12px 22px 18px;
+            border-top: 1px solid #f1f5f9;
+            background: #fafbfc;
+        }
+        .cm-btn {
+            border: none;
+            border-radius: 8px;
+            padding: 8px 16px;
+            font-size: 0.83rem;
+            font-weight: 600;
+            cursor: pointer;
+            transition: background 0.15s, box-shadow 0.15s;
+        }
+        .cm-btn-secondary {
+            background: #e5e7eb;
+            color: #374151;
+        }
+        .cm-btn-secondary:hover { background: #d1d5db; }
+        .cm-btn-primary {
+            background: #0071c5;
+            color: #fff;
+        }
+        .cm-btn-primary:hover { background: #005a9e; }
+        .cm-btn:focus { outline: none; box-shadow: 0 0 0 3px rgba(0,113,197,0.25); }
+
         .btn-browse {
             background: #f0f0f0;
             color: #333;
@@ -437,6 +595,28 @@
             font-size: 0.65rem;
             flex-shrink: 0;
         }
+        .agent-step-divider .step-time {
+            margin-left: auto;
+            font-size: 0.68rem;
+            color: #6b7280;
+            font-family: 'SFMono-Regular', Consolas, monospace;
+            font-weight: 500;
+        }
+
+        /* Per-step timing badge (since stream start · delta from previous step) */
+        .step-time {
+            font-size: 0.66rem;
+            color: #94a3b8;
+            font-family: 'SFMono-Regular', Consolas, monospace;
+            margin-left: auto;
+            padding-left: 8px;
+            white-space: nowrap;
+            flex-shrink: 0;
+        }
+        .step-time .step-time-delta {
+            color: #cbd5e1;
+            margin-left: 4px;
+        }
 
         /* ── Individual step entry ── */
         .agent-step {
@@ -572,7 +752,7 @@
     <span style="font-size:1.4rem;">📡</span>
     <h1>Wi-Fi Log Chatbot</h1>
     <span class="badge-model">Avatar · Multi-Skill Agent</span>
-    <a href="/" class="ml-auto" style="color:rgba(255,255,255,0.75);font-size:0.8rem;text-decoration:none;">← Back to Avatar</a>
+    <a href="/log_chatbot/back_to_avatar" class="ml-auto" style="color:rgba(255,255,255,0.75);font-size:0.8rem;text-decoration:none;">← Back to Avatar</a>
 </div>
 
 <div class="main-layout">
@@ -596,6 +776,93 @@
                 <button class="btn-set-log" onclick="setLog()">Load</button>
             </div>
             <div id="log-status" class="log-status"></div>
+        </div>
+
+        <!-- Issue Time -->
+        <div class="sidebar-section">
+            <h6>⏰ Issue Time</h6>
+            <div style="font-size:0.72rem;color:#666;margin-bottom:8px;line-height:1.4;">
+                When did the issue happen? Required for the first question.<br>
+                <span style="color:#0071c5;font-weight:600;">Format: MM / DD / YYYY &nbsp; HH : MM : SS . mmm</span>
+            </div>
+
+            <!-- Quick actions -->
+            <div style="display:flex;gap:6px;margin-bottom:10px;align-items:center;">
+                <div id="it-unknown-warn" style="display:none;flex:1;font-size:0.7rem;color:#92400e;background:#fff7ed;border:1px solid #fdba74;border-radius:6px;padding:5px 8px;line-height:1.3;">
+                    ⚠️ <strong>Unknown time.</strong> Couldn't auto-detect the issue time — please fill it in below.
+                </div>
+                <button class="it-quick-btn it-quick-btn-clear" onclick="clearIssueTime()" title="Clear all fields">
+                    🗑️ Clear
+                </button>
+            </div>
+
+            <!-- Hidden native datetime-local for the calendar popup -->
+            <input id="issue-time-picker" type="datetime-local" step="1"
+                   style="position:absolute;opacity:0;width:0;height:0;pointer-events:none;"
+                   onchange="onCalendarPicked()">
+
+            <!-- Date row: Month / Day / Year -->
+            <div class="it-row">
+                <div class="it-field">
+                    <label class="it-label">Month</label>
+                    <input id="it-month" class="it-input" type="number" min="1" max="12"
+                           inputmode="numeric" placeholder="MM"
+                           oninput="onPartChange('it-month', 12, 'it-day')">
+                </div>
+                <span class="it-sep">/</span>
+                <div class="it-field">
+                    <label class="it-label">Day</label>
+                    <input id="it-day" class="it-input" type="number" min="1" max="31"
+                           inputmode="numeric" placeholder="DD"
+                           oninput="onPartChange('it-day', 31, 'it-year')">
+                </div>
+                <span class="it-sep">/</span>
+                <div class="it-field it-field-wide">
+                    <label class="it-label">Year</label>
+                    <input id="it-year" class="it-input" type="number" min="1970" max="2999"
+                           inputmode="numeric" placeholder="YYYY"
+                           oninput="onPartChange('it-year', null, 'it-hour')">
+                </div>
+            </div>
+
+            <!-- Time row: Hour : Minute : Second . Millisecond -->
+            <div class="it-row">
+                <div class="it-field">
+                    <label class="it-label">Hour</label>
+                    <input id="it-hour" class="it-input" type="number" min="0" max="23"
+                           inputmode="numeric" placeholder="HH"
+                           oninput="onPartChange('it-hour', 23, 'it-min')">
+                </div>
+                <span class="it-sep">:</span>
+                <div class="it-field">
+                    <label class="it-label">Minute</label>
+                    <input id="it-min" class="it-input" type="number" min="0" max="59"
+                           inputmode="numeric" placeholder="MM"
+                           oninput="onPartChange('it-min', 59, 'it-sec')">
+                </div>
+                <span class="it-sep">:</span>
+                <div class="it-field">
+                    <label class="it-label">Second</label>
+                    <input id="it-sec" class="it-input" type="number" min="0" max="59"
+                           inputmode="numeric" placeholder="SS"
+                           oninput="onPartChange('it-sec', 59, 'it-ms')">
+                </div>
+                <span class="it-sep">.</span>
+                <div class="it-field it-field-ms">
+                    <label class="it-label">ms</label>
+                    <input id="it-ms" class="it-input" type="number" min="0" max="999"
+                           inputmode="numeric" placeholder="mmm"
+                           oninput="onPartChange('it-ms', 999, null)">
+                </div>
+            </div>
+
+            <!-- Hidden legacy field kept so other code referencing it doesn't break -->
+            <input id="issue-time-ms" type="hidden">
+
+            <div id="issue-time-display"
+                 style="font-size:0.78rem;color:#0071c5;margin-top:8px;font-weight:600;font-family:'SFMono-Regular',Consolas,monospace;min-height:1.1em;"></div>
+            <div id="issue-time-error"
+                 style="display:none;font-size:0.7rem;color:#c62828;margin-top:4px;"></div>
         </div>
 
         <!-- Skills -->
@@ -657,12 +924,55 @@
             </div>
         </div>
 
+        <div id="no-log-hint" style="display:none; padding: 8px 20px; background:#ede7f6; border-top:1px solid #b39ddb; color:#311b92; font-size:0.8rem;">
+            <strong>📁 Please load a log file first.</strong>
+            Enter the log path on the left sidebar and click <strong>Load</strong> before sending the first question.
+        </div>
+        <div id="no-desc-hint" style="display:none; padding: 8px 20px; background:#fce8e8; border-top:1px solid #f5c0c0; color:#7a0000; font-size:0.8rem;">
+            <strong>✏️ Please describe the issue.</strong>
+            Type a brief problem description (e.g. <em>"6G Weak Signal disconnected"</em>) before sending.
+        </div>
+        <div id="no-time-hint" style="display:none; padding: 8px 20px; background:#fff3e0; border-top:1px solid #ffcc80; color:#7a4700; font-size:0.8rem;">
+            <strong>⏰ Issue Time is missing or incomplete.</strong>
+            For best results, fill in every field on the left (Month / Day / Year / Hour / Minute / Second). You can still send without a time — you'll be asked to confirm.
+        </div>
+        <div id="time-hint" style="display:none; padding: 8px 20px; background:#fff8e1; border-top:1px solid #ffe082; color:#8a6d00; font-size:0.8rem;">
+            <strong>⚠ Invalid time format.</strong>
+            Please use one of:
+            <code>MM/DD/YYYY-HH:MM:SS</code>,
+            <code>MM/DD/YYYY HH:MM:SS</code>,
+            <code>YYYY-MM-DD HH:MM:SS</code>, or
+            <code>YYYY/MM/DD HH:MM:SS</code>
+            (optional <code>.mmm</code> milliseconds).
+        </div>
+        <div id="prefill-hint" style="display:none; padding: 8px 20px; background:#e8f4fd; border-top:1px solid #b6dcf6; color:#0b4a78; font-size:0.8rem;">
+            ✏️ Auto-extracted issue context is pre-filled below. Review or edit the time/text, then click <strong>Send ↑</strong> to start the analysis.
+        </div>
         <div class="input-row">
-            <textarea id="user-input" rows="1" placeholder="Ask a question about the log…" onkeydown="handleEnter(event)" oninput="autoResize(this)"></textarea>
+            <textarea id="user-input" rows="1" placeholder="Describe the issue (e.g. '6G Weak Signal disconnected'). Pick the issue time on the left." onkeydown="handleEnter(event)" oninput="onUserInputChange(this)"></textarea>
             <button id="send-btn" onclick="sendMessage()">Send ↑</button>
         </div>
     </div>
 
+</div>
+
+<!-- ── Modal: confirm sending without an Issue Time ── -->
+<div id="confirm-modal" class="cm-overlay" style="display:none;" onclick="onConfirmModalBackdrop(event)">
+    <div class="cm-dialog" role="dialog" aria-modal="true" aria-labelledby="cm-title">
+        <div class="cm-header">
+            <span class="cm-icon">⚠</span>
+            <h3 id="cm-title">Send without Issue Time?</h3>
+        </div>
+        <div class="cm-body">
+            <p>You haven't picked an <strong>Issue Time</strong> in the sidebar.</p>
+            <p>Without a timestamp, the agent will analyse the entire log instead of focusing on the moment the issue occurred. This may take longer and produce less precise results.</p>
+            <p>Do you want to continue anyway?</p>
+        </div>
+        <div class="cm-actions">
+            <button class="cm-btn cm-btn-secondary" onclick="closeConfirmModal(false)">Cancel</button>
+            <button class="cm-btn cm-btn-primary" id="cm-confirm-btn" onclick="closeConfirmModal(true)">Yes, analyse without time</button>
+        </div>
+    </div>
 </div>
 
 <!-- ── JavaScript ── -->
@@ -671,6 +981,8 @@
     let skillsLoaded = false;
     let autoAnalyzeTriggered = false;
     let agenticMode = true;
+    let isAutoFillMode = false;  // true after auto_run prefill; requires a timestamp before sending
+    let firstRoundSent = false;  // true after the user successfully sends the first question
 
     function onModeToggle(cb) {
         agenticMode = cb.checked;
@@ -697,6 +1009,517 @@
             e.preventDefault();
             sendMessage();
         }
+    }
+
+    // Accepted time formats (must match backend _extract_disconnect_time):
+    //   MM/DD/YYYY-HH:MM:SS(.mmm)
+    //   MM/DD/YYYY HH:MM:SS(.mmm)
+    //   YYYY-MM-DD HH:MM:SS
+    //   YYYY/MM/DD HH:MM:SS
+    const VALID_TIME_REGEXES = [
+        /\b\d{1,2}\/\d{1,2}\/\d{4}[\s-]\d{1,2}:\d{2}:\d{2}(?:\.\d{1,3})?\b/,
+        /\b\d{4}[-/]\d{1,2}[-/]\d{1,2}[\sT]\d{1,2}:\d{2}:\d{2}\b/
+    ];
+
+    function inputHasValidTime(text) {
+        return VALID_TIME_REGEXES.some(r => r.test(text));
+    }
+
+    /** Pad number to 2 digits */
+    function pad2(n) { return String(n).padStart(2, '0'); }
+    function pad3(n) { return String(n).padStart(3, '0'); }
+
+    // Field id -> [min, max] valid range
+    const IT_RANGES = {
+        'it-month': [1, 12],
+        'it-day':   [1, 31],
+        'it-year':  [1970, 2999],
+        'it-hour':  [0, 23],
+        'it-min':   [0, 59],
+        'it-sec':   [0, 59],
+        'it-ms':    [0, 999],
+    };
+    const IT_REQUIRED = ['it-month', 'it-day', 'it-year', 'it-hour', 'it-min', 'it-sec'];
+
+    function getPart(id) {
+        const el = document.getElementById(id);
+        if (!el || el.value === '') return null;
+        const n = parseInt(el.value, 10);
+        return isNaN(n) ? null : n;
+    }
+    function partInRange(id, val) {
+        if (val === null) return false;
+        const [lo, hi] = IT_RANGES[id];
+        return val >= lo && val <= hi;
+    }
+    function markFieldValid(id, ok) {
+        const el = document.getElementById(id);
+        if (!el) return;
+        if (ok) el.classList.remove('it-invalid');
+        else    el.classList.add('it-invalid');
+    }
+
+    /** Auto-advance focus when a field reaches its expected length / max. */
+    function onPartChange(id, max, nextId) {
+        const el = document.getElementById(id);
+        if (!el) return;
+        let v = el.value;
+        // Strip non-digits
+        if (v && /\D/.test(v)) {
+            v = v.replace(/\D/g, '');
+            el.value = v;
+        }
+        // Clamp to max if user typed something larger
+        if (v !== '' && max !== null) {
+            const n = parseInt(v, 10);
+            if (!isNaN(n) && n > max) {
+                el.value = String(max);
+                v = el.value;
+            }
+        }
+        // Smart clamps that depend on other fields:
+        //   - Year   → no later than the current calendar year
+        //   - Day    → no more than the actual days in the chosen month
+        clampIssueTimeFields(id);
+        v = el.value;
+
+        // Auto-advance
+        const expectedLen = (id === 'it-year') ? 4 : (id === 'it-ms' ? 3 : 2);
+        if (nextId && v.length >= expectedLen) {
+            const nextEl = document.getElementById(nextId);
+            if (nextEl && document.activeElement === el) nextEl.focus();
+        }
+        updateIssueTimeDisplay();
+        validateUserInput();
+    }
+
+    /**
+     * Apply context-aware clamping to the Issue Time fields. Called after
+     * the user finishes typing into a field. Currently:
+     *   - Year is capped at the current calendar year (issues can't be in
+     *     the future).
+     *   - Day is capped at the real number of days in the chosen
+     *     month/year (e.g. 2/31 → 2/28 or 2/29 on leap years; 4/31 → 4/30).
+     */
+    function clampIssueTimeFields(changedId) {
+        const yearEl = document.getElementById('it-year');
+        const monthEl = document.getElementById('it-month');
+        const dayEl = document.getElementById('it-day');
+
+        // Year: not in the future
+        if (yearEl && yearEl.value !== '') {
+            const yr = parseInt(yearEl.value, 10);
+            const nowYr = new Date().getFullYear();
+            if (!isNaN(yr) && yr > nowYr) {
+                yearEl.value = String(nowYr);
+            }
+        }
+
+        // Day: not greater than days-in-month for the entered month/year
+        if (monthEl && monthEl.value !== '' && yearEl && yearEl.value !== '' &&
+            dayEl && dayEl.value !== '') {
+            const mo = parseInt(monthEl.value, 10);
+            const yr = parseInt(yearEl.value, 10);
+            const dy = parseInt(dayEl.value, 10);
+            if (!isNaN(mo) && !isNaN(yr) && !isNaN(dy) && mo >= 1 && mo <= 12) {
+                const maxDay = daysInMonth(yr, mo);
+                if (dy > maxDay) dayEl.value = String(maxDay);
+            }
+        }
+    }
+
+    /** Days in a given month (1-12), accounting for leap years. */
+    function daysInMonth(year, month) {
+        if (month < 1 || month > 12) return 31;
+        if (month === 2) {
+            const leap = (year % 4 === 0 && year % 100 !== 0) || (year % 400 === 0);
+            return leap ? 29 : 28;
+        }
+        return [1,3,5,7,8,10,12].includes(month) ? 31 : 30;
+    }
+
+    const IT_PART_LABELS = {
+        'it-month': 'Month', 'it-day': 'Day', 'it-year': 'Year',
+        'it-hour': 'Hour',   'it-min': 'Minute', 'it-sec': 'Second',
+        'it-ms':   'Millisecond',
+    };
+
+    /**
+     * Run all semantic checks on the Issue Time fields. Returns:
+     *   { complete, valid, message, invalidIds:Set, anyFilled }
+     * `valid` requires complete + consistent (real calendar day,
+     * not in the future).
+     */
+    function checkIssueTime() {
+        const ids = ['it-month','it-day','it-year','it-hour','it-min','it-sec','it-ms'];
+        const filled = {};
+        let anyFilled = false;
+        let anyMissing = false;
+        const invalidIds = new Set();
+
+        ids.forEach(id => {
+            const el = document.getElementById(id);
+            if (!el || el.value === '') {
+                if (IT_REQUIRED.includes(id)) anyMissing = true;
+                return;
+            }
+            anyFilled = true;
+            const n = parseInt(el.value, 10);
+            filled[id] = isNaN(n) ? null : n;
+        });
+
+        // 1) Per-field range checks (e.g. month 1-12, hour 0-23)
+        for (const id of ids) {
+            if (!(id in filled)) continue;
+            if (!partInRange(id, filled[id])) {
+                invalidIds.add(id);
+                const [lo, hi] = IT_RANGES[id];
+                return {
+                    complete: false, valid: false, anyFilled, invalidIds,
+                    message: `${IT_PART_LABELS[id]} must be ${lo}\u2013${hi}.`,
+                };
+            }
+        }
+
+        // 2) Calendar-day sanity (April 31, Feb 30, leap year, etc.) —
+        // run AS SOON AS Month / Day / Year are present, even if the
+        // time fields are still empty, so the user gets immediate feedback.
+        if ('it-month' in filled && 'it-day' in filled && 'it-year' in filled) {
+            const yr = filled['it-year'], mo = filled['it-month'], dy = filled['it-day'];
+            const maxDay = daysInMonth(yr, mo);
+            if (dy > maxDay) {
+                invalidIds.add('it-day');
+                const monthName = ['January','February','March','April','May','June',
+                                   'July','August','September','October','November','December'][mo - 1];
+                const leapNote = (mo === 2 && dy === 29) ? ` (${yr} is not a leap year)` : '';
+                return {
+                    complete: false, valid: false, anyFilled, invalidIds,
+                    message: `${monthName} ${yr} only has ${maxDay} days${leapNote}. Day cannot be ${dy}.`,
+                };
+            }
+        }
+
+        // 3) Missing required parts
+        if (anyMissing) {
+            return {
+                complete: false, valid: false, anyFilled, invalidIds,
+                message: anyFilled
+                    ? 'Issue Time is incomplete \u2014 please fill in every field (Month, Day, Year, Hour, Minute, Second).'
+                    : '',
+            };
+        }
+
+        // 4) Future-time check
+        const yr = filled['it-year'], mo = filled['it-month'], dy = filled['it-day'];
+        const ms = ('it-ms' in filled) ? filled['it-ms'] : 0;
+        const candidate = new Date(yr, mo - 1, dy,
+                                   filled['it-hour'], filled['it-min'],
+                                   filled['it-sec'], ms);
+        if (candidate.getTime() > Date.now()) {
+            ['it-year','it-month','it-day','it-hour','it-min','it-sec']
+                .forEach(id => invalidIds.add(id));
+            return {
+                complete: true, valid: false, anyFilled, invalidIds,
+                message: 'Issue Time cannot be in the future.',
+            };
+        }
+
+        return { complete: true, valid: true, anyFilled, invalidIds, message: '' };
+    }
+
+    /**
+     * Read all sidebar Issue Time fields and return a canonical
+     * "MM/DD/YYYY-HH:MM:SS(.mmm)" string. Returns '' if the fields are
+     * incomplete OR fail any semantic check (calendar day, future time).
+     */
+    function getIssueTimeString() {
+        const r = checkIssueTime();
+        if (!r.valid) return '';
+
+        const mm = pad2(getPart('it-month'));
+        const dd = pad2(getPart('it-day'));
+        const yyyy = String(getPart('it-year'));
+        const hh = pad2(getPart('it-hour'));
+        const mi = pad2(getPart('it-min'));
+        const ss = pad2(getPart('it-sec'));
+        const ms = getPart('it-ms');
+        let result = `${mm}/${dd}/${yyyy}-${hh}:${mi}:${ss}`;
+        if (ms !== null) result += '.' + pad3(ms);
+        return result;
+    }
+
+    /**
+     * Parse a "MM/DD/YYYY-HH:MM:SS(.mmm)" or "YYYY-MM-DD HH:MM:SS"
+     * style string and populate the sidebar fields.
+     */
+    function setIssueTimeFromString(timeStr) {
+        if (!timeStr) return false;
+        const m1 = timeStr.match(/(\d{1,2})\/(\d{1,2})\/(\d{4})[\s-](\d{1,2}):(\d{2}):(\d{2})(?:\.(\d{1,3}))?/);
+        const m2 = timeStr.match(/(\d{4})[-/](\d{1,2})[-/](\d{1,2})[\sT](\d{1,2}):(\d{2}):(\d{2})(?:\.(\d{1,3}))?/);
+        let yyyy, mm, dd, hh, mi, ss, ms;
+        if (m1) {
+            [, mm, dd, yyyy, hh, mi, ss, ms] = m1;
+        } else if (m2) {
+            [, yyyy, mm, dd, hh, mi, ss, ms] = m2;
+        } else {
+            return false;
+        }
+        const setVal = (id, v) => { const el = document.getElementById(id); if (el) el.value = v; };
+        setVal('it-month', String(parseInt(mm, 10)));
+        setVal('it-day',   String(parseInt(dd, 10)));
+        setVal('it-year',  String(parseInt(yyyy, 10)));
+        setVal('it-hour',  String(parseInt(hh, 10)));
+        setVal('it-min',   String(parseInt(mi, 10)));
+        setVal('it-sec',   String(parseInt(ss, 10)));
+        setVal('it-ms',    ms ? String(parseInt(ms.padEnd(3, '0').slice(0, 3), 10)) : '');
+        updateIssueTimeDisplay();
+        validateUserInput();
+        return true;
+    }
+
+    function clearIssueTime() {
+        ['it-month','it-day','it-year','it-hour','it-min','it-sec','it-ms'].forEach(id => {
+            const el = document.getElementById(id);
+            if (el) { el.value = ''; el.classList.remove('it-invalid'); }
+        });
+        // Also clear the hidden native picker so it can't leak a stale value.
+        const picker = document.getElementById('issue-time-picker');
+        if (picker) picker.value = '';
+        // Once the user explicitly clears, hide the unknown-time warning.
+        const warn = document.getElementById('it-unknown-warn');
+        if (warn) warn.style.display = 'none';
+        updateIssueTimeDisplay();
+        validateUserInput();
+    }
+
+    function setIssueTimeNow() {
+        const d = new Date();
+        const setVal = (id, v) => { const el = document.getElementById(id); if (el) el.value = v; };
+        setVal('it-month', String(d.getMonth() + 1));
+        setVal('it-day',   String(d.getDate()));
+        setVal('it-year',  String(d.getFullYear()));
+        setVal('it-hour',  String(d.getHours()));
+        setVal('it-min',   String(d.getMinutes()));
+        setVal('it-sec',   String(d.getSeconds()));
+        setVal('it-ms',    String(d.getMilliseconds()));
+        updateIssueTimeDisplay();
+        validateUserInput();
+    }
+
+    /** Open the hidden native datetime-local picker (calendar popup). */
+    function openCalendarPicker() {
+        const picker = document.getElementById('issue-time-picker');
+        if (!picker) return;
+        // Pre-fill the picker from current fields if all required parts exist
+        const yyyy = getPart('it-year'), mm = getPart('it-month'), dd = getPart('it-day');
+        const hh = getPart('it-hour'), mi = getPart('it-min'), ss = getPart('it-sec');
+        if (yyyy && mm && dd && hh !== null && mi !== null && ss !== null) {
+            picker.value = `${yyyy}-${pad2(mm)}-${pad2(dd)}T${pad2(hh)}:${pad2(mi)}:${pad2(ss)}`;
+        }
+        // Make the picker briefly focusable so showPicker / click works
+        picker.style.pointerEvents = 'auto';
+        try {
+            if (typeof picker.showPicker === 'function') {
+                picker.showPicker();
+            } else {
+                picker.focus();
+                picker.click();
+            }
+        } catch (e) {
+            picker.focus();
+            picker.click();
+        }
+        setTimeout(() => { picker.style.pointerEvents = 'none'; }, 100);
+    }
+
+    /** Called when the user picks a date/time from the native calendar. */
+    function onCalendarPicked() {
+        const picker = document.getElementById('issue-time-picker');
+        if (!picker || !picker.value) return;
+        // picker.value: "YYYY-MM-DDTHH:MM" or "YYYY-MM-DDTHH:MM:SS"
+        const [datePart, timePart] = picker.value.split('T');
+        const [yyyy, mm, dd] = datePart.split('-');
+        const tp = (timePart || '').split(':');
+        const hh = tp[0] || '00', mi = tp[1] || '00', ss = tp[2] || '00';
+        const setVal = (id, v) => { const el = document.getElementById(id); if (el) el.value = v; };
+        setVal('it-month', String(parseInt(mm, 10)));
+        setVal('it-day',   String(parseInt(dd, 10)));
+        setVal('it-year',  String(parseInt(yyyy, 10)));
+        setVal('it-hour',  String(parseInt(hh, 10)));
+        setVal('it-min',   String(parseInt(mi, 10)));
+        setVal('it-sec',   String(parseInt(ss, 10)));
+        // Keep ms as-is (the native picker doesn't capture milliseconds)
+        updateIssueTimeDisplay();
+        validateUserInput();
+    }
+
+    function updateIssueTimeDisplay() {
+        const display = document.getElementById('issue-time-display');
+        const errEl   = document.getElementById('issue-time-error');
+
+        // Validate each filled field; mark invalid ones in red
+        let anyFilled = false;
+        let firstError = '';
+        ['it-month','it-day','it-year','it-hour','it-min','it-sec','it-ms'].forEach(id => {
+            const el = document.getElementById(id);
+            if (!el) return;
+            if (el.value === '') {
+                el.classList.remove('it-invalid');
+                return;
+            }
+            anyFilled = true;
+            const v = parseInt(el.value, 10);
+            const ok = partInRange(id, v);
+            markFieldValid(id, ok);
+            if (!ok && !firstError) {
+                const [lo, hi] = IT_RANGES[id];
+                firstError = `${id.replace('it-','').toUpperCase()} must be ${lo}\u2013${hi}.`;
+            }
+        });
+
+        const composed = getIssueTimeString();
+        if (display) {
+            if (composed) {
+                display.style.color = '#0071c5';
+                display.textContent = `\u2192 ${composed}`;
+            } else if (anyFilled) {
+                display.style.color = '#888';
+                display.textContent = '\u2192 (incomplete)';
+            } else {
+                display.textContent = '';
+            }
+        }
+        if (errEl) {
+            if (firstError) {
+                errEl.textContent = '\u26a0 ' + firstError;
+                errEl.style.display = 'block';
+            } else {
+                errEl.style.display = 'none';
+            }
+        }
+    }
+
+    /**
+     * Strip any timestamp fragments from the description so the sidebar
+     * Issue Time field is the single source of truth for the time.
+     */
+    function stripTimestampsFromDesc(text) {
+        let out = text;
+        VALID_TIME_REGEXES.forEach(r => {
+            out = out.replace(new RegExp(r.source, 'g'), ' ');
+        });
+        // Also remove obvious bare time fragments (e.g. "14:50:51.910").
+        out = out.replace(/\b\d{1,2}:\d{2}:\d{2}(?:\.\d{1,3})?\b/g, ' ');
+        return out.replace(/\s+/g, ' ').trim();
+    }
+
+    /**
+     * Strip a leading "at around" / "at" / "around" / "on" connector
+     * (and surrounding whitespace/punctuation) from the description so
+     * that auto-prefilled text doesn't leave a trailing "at around".
+     */
+    function trimTrailingTimeConnector(text) {
+        return text.replace(/[\s,;:.\-]*\b(at\s+around|at|around|on)\b[\s,;:.\-]*$/i, '').trim();
+    }
+
+    /**
+     * Validate the inputs.  Returns true if the message can be sent.
+     * Time validation now lives entirely in the sidebar Issue Time
+     * picker.  The chat textarea only carries the problem description.
+     *
+     * @param {boolean} submitting - true when called from an explicit
+     *   send/submit attempt. Only then do we surface the red
+     *   "Please describe the issue" banner; otherwise the empty-desc
+     *   state silently keeps the Send button disabled without nagging
+     *   the user while they are still composing or just clicked into
+     *   the page.
+     */
+    function validateUserInput(submitting = false) {
+        const text = document.getElementById('user-input').value || '';
+        const noLogHint = document.getElementById('no-log-hint');
+        const noDescHint = document.getElementById('no-desc-hint');
+        const noTimeHint = document.getElementById('no-time-hint');
+        const sendBtn = document.getElementById('send-btn');
+
+        // Hide the (now legacy) "invalid time format" banner; we no longer
+        // accept free-form time in the textarea.
+        const timeHint = document.getElementById('time-hint');
+        if (timeHint) timeHint.style.display = 'none';
+
+        // Hard blockers (Send button stays disabled until resolved):
+        //   - first round without a loaded log
+        //   - empty description
+        // Soft warning (Send still enabled, but a confirmation modal is
+        // shown on click): first round with no Issue Time selected.
+        let valid = true;
+        let showNoLogHint = false;
+        let showNoDescHint = false;
+        let showNoTimeHint = false;
+
+        const firstRound = !firstRoundSent;
+        const hasIssueTime = !!getIssueTimeString();
+
+        if (firstRound && !logLoaded) {
+            valid = false;
+            // Log-not-loaded is a structural blocker -> always surface.
+            showNoLogHint = true;
+        } else if (!text.trim()) {
+            valid = false;
+            // Empty description: only nag on explicit submit, not while
+            // the user is still typing or has just landed on the page.
+            if (submitting) showNoDescHint = true;
+        }
+
+        // Soft hint: missing time on first round (does not block send)
+        if (valid && (firstRound || isAutoFillMode) && !hasIssueTime) {
+            showNoTimeHint = true;
+        }
+
+        if (noLogHint) noLogHint.style.display = showNoLogHint ? 'block' : 'none';
+        if (noDescHint) noDescHint.style.display = showNoDescHint ? 'block' : 'none';
+        if (noTimeHint) noTimeHint.style.display = showNoTimeHint ? 'block' : 'none';
+        if (sendBtn) sendBtn.disabled = !valid;
+        return valid;
+    }
+
+    function onUserInputChange(el) {
+        autoResize(el);
+        validateUserInput();
+    }
+
+    // ── Confirm modal (used when sending without Issue Time) ──────
+    let _confirmModalResolver = null;
+
+    function confirmNoIssueTime() {
+        return new Promise(resolve => {
+            _confirmModalResolver = resolve;
+            const overlay = document.getElementById('confirm-modal');
+            if (!overlay) { resolve(true); return; }
+            overlay.style.display = 'flex';
+            const btn = document.getElementById('cm-confirm-btn');
+            if (btn) setTimeout(() => btn.focus(), 30);
+            document.addEventListener('keydown', _confirmModalKeyHandler);
+        });
+    }
+
+    function closeConfirmModal(result) {
+        const overlay = document.getElementById('confirm-modal');
+        if (overlay) overlay.style.display = 'none';
+        document.removeEventListener('keydown', _confirmModalKeyHandler);
+        if (_confirmModalResolver) {
+            const r = _confirmModalResolver;
+            _confirmModalResolver = null;
+            r(!!result);
+        }
+    }
+
+    function onConfirmModalBackdrop(e) {
+        if (e.target && e.target.id === 'confirm-modal') closeConfirmModal(false);
+    }
+
+    function _confirmModalKeyHandler(e) {
+        if (e.key === 'Escape') closeConfirmModal(false);
+        else if (e.key === 'Enter') closeConfirmModal(true);
     }
 
     function scrollBottom() {
@@ -1011,6 +1834,7 @@
                 renderSkills(data.skills);
                 logLoaded = true;
                 updateAnalyzeBtn();
+                validateUserInput();
             } else {
                 showStatus(statusEl, '✘ ' + data.error, 'err');
             }
@@ -1070,11 +1894,59 @@
     // ── Send chat message ──────────────────────────────────────────
     async function sendMessage() {
         const input = document.getElementById('user-input');
-        const text = input.value.trim();
-        if (!text) return;
+        let desc = input.value.trim();
+        if (!desc) return;
+
+        // Hard blockers (log not loaded, empty description) keep Send disabled
+        if (!validateUserInput(true)) {
+            input.focus();
+            return;
+        }
+
+        // Soft gate: first round without an Issue Time. Ask for explicit
+        // confirmation via a modal dialog before proceeding.
+        const firstRound = !firstRoundSent;
+        const issueTime = getIssueTimeString();
+        if (firstRound && !issueTime) {
+            const confirmed = await confirmNoIssueTime();
+            if (!confirmed) {
+                input.focus();
+                return;
+            }
+        }
+
+        // Compose final message: description + (optional) issue time hint.
+        // The sidebar Issue Time field is the SINGLE source of truth for the
+        // timestamp; any timestamp the user typed inside the description is
+        // stripped so it can't leak into the sent message.
+        const cleanDesc = trimTrailingTimeConnector(
+            stripTimestampsFromDesc(desc)
+        );
+        const text = issueTime
+            ? `${cleanDesc} at around ${issueTime}`
+            : cleanDesc;
 
         input.value = '';
         input.style.height = 'auto';
+        // Hide the prefill / time hints once the message is actually sent.
+        const prefillHint = document.getElementById('prefill-hint');
+        if (prefillHint) prefillHint.style.display = 'none';
+        const timeHint = document.getElementById('time-hint');
+        if (timeHint) timeHint.style.display = 'none';
+        const noTimeHint = document.getElementById('no-time-hint');
+        if (noTimeHint) noTimeHint.style.display = 'none';
+        const noDescHint = document.getElementById('no-desc-hint');
+        if (noDescHint) noDescHint.style.display = 'none';
+        const noLogHint = document.getElementById('no-log-hint');
+        if (noLogHint) noLogHint.style.display = 'none';
+        isAutoFillMode = false;  // auto-fill obligation fulfilled
+        firstRoundSent = true;   // subsequent rounds skip the strict gate
+        // Auto-clear the sidebar Issue Time after the message has been
+        // composed & captured. Each follow-up question must therefore have
+        // its time explicitly re-entered by the user; otherwise no time is
+        // attached. This prevents an old timestamp from silently leaking
+        // into a new, unrelated question.
+        clearIssueTime();
         document.getElementById('send-btn').disabled = true;
         appendUserMsg(text);
         const typingRow = appendTyping();
@@ -1082,6 +1954,25 @@
         const steps = [];
         let agentCardBodyEl = null;   // live step list container created on first step
         let agentCardId = null;
+        const streamStartTs = Date.now();
+        let lastStepTs = streamStartTs;
+
+        /** Format an elapsed milliseconds value as a human-friendly badge. */
+        function fmtElapsed(ms) {
+            if (ms < 1000) return `${ms}ms`;
+            if (ms < 60000) return `${(ms / 1000).toFixed(1)}s`;
+            const m = Math.floor(ms / 60000);
+            const s = Math.floor((ms % 60000) / 1000);
+            return `${m}m${String(s).padStart(2, '0')}s`;
+        }
+
+        function buildTimeBadge(elapsedMs, deltaMs) {
+            const elapsed = fmtElapsed(elapsedMs);
+            const delta = (deltaMs >= 50)
+                ? `<span class="step-time-delta">Δ${fmtElapsed(deltaMs)}</span>`
+                : '';
+            return `<span class="step-time" title="Elapsed since start · delta from previous step">+${elapsed}${delta}</span>`;
+        }
 
         function ensureAgentCard() {
             if (agentCardBodyEl) return;
@@ -1151,24 +2042,35 @@
             }
 
             let html;
+            const now = Date.now();
+            const elapsedMs = now - streamStartTs;
+            const deltaMs = now - lastStepTs;
+            lastStepTs = now;
+            const timeBadge = buildTimeBadge(elapsedMs, deltaMs);
+
             if (isStepDivider) {
-                html = `<div class="agent-step-divider"><span class="step-num">${stepNum}</span>Reasoning Step ${stepNum}</div>`;
+                html = `<div class="agent-step-divider"><span class="step-num">${stepNum}</span>Reasoning Step ${stepNum}${timeBadge}</div>`;
             } else {
                 html = `<div class="agent-step ${stepClass}">
                     <span class="step-label">${label}</span>
                     <div class="agent-step-content">${marked.parse(content)}</div>
+                    ${timeBadge}
                 </div>`;
             }
 
             agentCardBodyEl.insertAdjacentHTML('beforeend', html);
 
-            // Update summary line
+            // Update summary line (also surface total elapsed so far)
             const skillsUsed = steps
                 .filter(s => s.content && s.content.includes('Invoking skill'))
                 .map(s => { const m = s.content.match(/`([^`]+)`/); return m ? m[1] : ''; })
                 .filter(Boolean);
             const summaryEl = document.getElementById(agentCardId + '-summary');
-            if (summaryEl) summaryEl.textContent = `${steps.length} steps` + (skillsUsed.length ? ` · Skills: ${skillsUsed.join(', ')}` : '');
+            if (summaryEl) {
+                summaryEl.textContent =
+                    `${steps.length} steps · ${fmtElapsed(elapsedMs)}` +
+                    (skillsUsed.length ? ` · Skills: ${skillsUsed.join(', ')}` : '');
+            }
             scrollBottom();
         }
 
@@ -1176,7 +2078,14 @@
             const res = await fetch('/log_chatbot/chat', {
                 method: 'POST',
                 headers: {'Content-Type': 'application/json'},
-                body: JSON.stringify({message: text, use_tools: agenticMode})
+                body: JSON.stringify({
+                    message: text,
+                    use_tools: agenticMode,
+                    // Sidebar Issue Time is the SINGLE source of truth.
+                    // Always send the field explicitly so the backend can
+                    // override / clear any pre-primed attachment_time.
+                    issue_time: issueTime || "",
+                })
             });
 
             if (!res.ok) throw new Error(`Server error ${res.status}`);
@@ -1387,11 +2296,44 @@
                 onModeToggle(toggle);
             }
 
-            // Pre-fill input and use sendMessage() so history is preserved
+            // Pre-fill input but DO NOT auto-send.  The user reviews / edits
+            // the issue context (especially the timestamp) and clicks Send.
             setTimeout(() => {
                 const input = document.getElementById('user-input');
-                if (input) input.value = question || '🔍 Run full multi-skill analysis';
-                sendMessage();
+                const rawQuestion = question || '🔍 Run full multi-skill analysis';
+
+                // Try to pull a timestamp out of the auto-extracted question
+                // and route it to the sidebar picker.  The remaining text
+                // becomes the description in the chat textarea.
+                let descPart = rawQuestion;
+                let foundTime = '';
+                for (const re of VALID_TIME_REGEXES) {
+                    const m = rawQuestion.match(re);
+                    if (m) { foundTime = m[0]; break; }
+                }
+                if (foundTime) {
+                    setIssueTimeFromString(foundTime);
+                    descPart = rawQuestion.replace(foundTime, ' ');
+                } else {
+                    // Auto-extraction couldn't find a time — surface a small
+                    // warning next to the Issue Time fields so the user knows
+                    // they need to fill it in manually.
+                    const warn = document.getElementById('it-unknown-warn');
+                    if (warn) warn.style.display = 'block';
+                }
+                descPart = trimTrailingTimeConnector(descPart.replace(/\s+/g, ' ').trim());
+
+                if (input) {
+                    input.value = descPart;
+                    autoResize(input);
+                    input.focus();
+                    const len = input.value.length;
+                    input.setSelectionRange(len, len);
+                }
+                isAutoFillMode = true;
+                const prefillHint = document.getElementById('prefill-hint');
+                if (prefillHint) prefillHint.style.display = 'block';
+                validateUserInput();
             }, 400);
 
         } catch (err) {
@@ -1401,6 +2343,8 @@
     }
 
     document.addEventListener('DOMContentLoaded', function () {
+        // Show first-round gates (e.g. "load a log file") immediately.
+        validateUserInput();
         tryAutoAnalyzeOnLoad();
     });
 </script>

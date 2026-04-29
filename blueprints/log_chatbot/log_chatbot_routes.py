@@ -1,4 +1,4 @@
-from flask import Blueprint, render_template, request, session, jsonify, Response, copy_current_request_context
+from flask import Blueprint, render_template, request, session, jsonify, Response, copy_current_request_context, redirect, url_for
 import json
 import re
 import traceback
@@ -343,6 +343,45 @@ def chat():
                 yield f"data: {json.dumps({'type': 'error', 'content': 'No log file loaded. Please set a log file first.'})}\n\n"
             return Response(_no_log(), mimetype="text/event-stream")
 
+        # ------------------------------------------------------------------
+        # Issue Time: the sidebar field is the SINGLE source of truth.
+        # When the frontend includes the `issue_time` key, override whatever
+        # was pre-populated by prime_with_context (e.g. attachment_time).
+        # An empty string means "user explicitly chose no time" — clear the
+        # agent's issue_time AND any backup sources so the fallback chain in
+        # _chat_with_tools cannot resurrect an attachment-derived time.
+        # ------------------------------------------------------------------
+        if "issue_time" in data:
+            raw_it = (data.get("issue_time") or "").strip()
+            agent.issue_time = None
+            if isinstance(agent.issue_context, dict):
+                agent.issue_context.pop("attachment_time", None)
+            if raw_it:
+                # Try the canonical formats produced by the frontend picker.
+                for fmt in ("%m/%d/%Y-%H:%M:%S.%f",
+                            "%m/%d/%Y-%H:%M:%S",
+                            "%m/%d/%Y %H:%M:%S.%f",
+                            "%m/%d/%Y %H:%M:%S",
+                            "%Y-%m-%d %H:%M:%S",
+                            "%Y/%m/%d %H:%M:%S"):
+                    try:
+                        agent.issue_time = datetime.strptime(raw_it, fmt)
+                        break
+                    except ValueError:
+                        continue
+            else:
+                # Explicit "no time": neutralise description/subject so the
+                # agent's _chat_with_tools fallback doesn't re-extract one.
+                if isinstance(agent.issue_context, dict):
+                    for k in ("description", "subject"):
+                        v = agent.issue_context.get(k)
+                        if isinstance(v, str) and v:
+                            # Strip recognisable timestamp fragments.
+                            v = re.sub(r'\d{1,2}/\d{1,2}/\d{4}[\s-]\d{1,2}:\d{2}:\d{2}(?:\.\d{1,3})?', '', v)
+                            v = re.sub(r'\d{4}[-/]\d{1,2}[-/]\d{1,2}[\sT]\d{1,2}:\d{2}:\d{2}', '', v)
+                            v = re.sub(r'\b\d{1,2}:\d{2}:\d{2}(?:\.\d{1,3})?\b', '', v)
+                            agent.issue_context[k] = re.sub(r'\s+', ' ', v).strip()
+
         # Use the mode flag sent by the frontend toggle.
         use_tools = bool(data.get("use_tools", False))
 
@@ -428,6 +467,46 @@ def reset():
         return jsonify({"success": True, "message": "Conversation reset."})
     except Exception as e:
         return jsonify({"success": False, "error": str(e)}), 500
+
+
+# ------------------------------------------------------------------
+# Back to Avatar: drop the chatbot session entirely so the next visit
+# to /log_chatbot/ starts with a fresh conversation (no prior analysis).
+# ------------------------------------------------------------------
+@log_chatbot_bp.route("/back_to_avatar", methods=["GET"])
+def back_to_avatar():
+    # 1) Discard the per-session WifiLogAgentSystem instance (chat history,
+    #    skill cache, primed context, issue_time, etc.).
+    sid = session.pop("chatbot_session_id", None)
+    if sid and sid in _chatbot_instances:
+        try:
+            _chatbot_instances.pop(sid, None)
+        except Exception:
+            pass
+
+    # 2) Drop every Flask-session key that would otherwise re-seed a new
+    #    agent via prime_with_context() the next time /log_chatbot/ is
+    #    visited (case context, AI analysis, classification, selected
+    #    attachments, cached log path, etc.).
+    for key in (
+        "chatbot_log_path",
+        "case_context",
+        "ai_ips_analysis",
+        "classification",
+        "selected_files",
+        "attachment_list",
+        "issue_time",
+    ):
+        session.pop(key, None)
+
+    # 3) Clear the global "last analyzed log" hint so the chatbot page
+    #    doesn't pre-fill the previous run's log path.
+    try:
+        app_config.last_analyzed_log_path = ""
+    except Exception:
+        pass
+
+    return redirect(url_for("main.index"))
 
 
 # ------------------------------------------------------------------

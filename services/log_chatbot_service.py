@@ -2635,8 +2635,9 @@ class WifiLogAgentSystem:
                 try:
                     parsed = datetime.strptime(attachment_time, fmt)
                     if is_time_only:
-                        # Keep clock time now; pre-scan will align date to log range.
-                        self.issue_time = datetime.combine(datetime.now().date(), parsed.time())
+                        # Use a sentinel date (date.min) so it is obviously wrong;
+                        # pre-scan will always align the date to the log's time range.
+                        self.issue_time = datetime.combine(datetime.min.date(), parsed.time())
                         self._issue_time_time_only = True
                     else:
                         self.issue_time = parsed

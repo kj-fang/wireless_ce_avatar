@@ -395,7 +395,7 @@
 
         // Handle pending Chatbot redirect (supports both manual and auto-match flows)
         if (window.pendingChatbot) {
-            const { etlPathEncoded, button, isAnalyzeAll } = window.pendingChatbot;
+            const { etlPathEncoded, button, isAnalyzeAll, resolvedIssueTime } = window.pendingChatbot;
             window.pendingChatbot = null;
 
             if (msg.status === 'done') {
@@ -418,7 +418,7 @@
                         // If triggered by Skills-Agent auto-match, append auto_run=analyze_all
                         // so the chatbot page automatically clicks the green "Analyze All" button
                         const targetUrl = isAnalyzeAll
-                            ? `${CHATBOT_URL}?auto_run=analyze_all`
+                            ? `${CHATBOT_URL}?auto_run=analyze_all${resolvedIssueTime ? '&issue_time=' + encodeURIComponent(resolvedIssueTime) : ''}`
                             : CHATBOT_URL;
                         window.location.href = targetUrl;
                     } else {
@@ -545,6 +545,7 @@
             .then(result => {
                 const bestPath = result.best_path;
                 const reason = result.reason || "";
+                const resolvedIssueTime = result.resolved_issue_time || "";
 
                 if (!bestPath) {
                     alert("⚠️ Could not determine the best log file.");
@@ -554,11 +555,14 @@
                 }
 
                 logBox.innerText += `✅ [Auto-Match] ${reason}\n`;
+                if (resolvedIssueTime) {
+                    logBox.innerText += `🕐 Resolved issue time: ${resolvedIssueTime}\n`;
+                }
                 logBox.scrollTop = logBox.scrollHeight;
 
                 // Use the encoded version for the ETL call
                 const encodedPath = pathToEncoded[bestPath] || encodeURIComponent(bestPath);
-                executeAutoETL(btn, encodedPath);
+                executeAutoETL(btn, encodedPath, resolvedIssueTime);
             })
             .catch(err => {
                 console.error("Auto-match failed", err);
@@ -568,7 +572,7 @@
     }
 
     // === 2. Execute ETL and mark it as triggered by the green button (analyze_all) ===
-    function executeAutoETL(button, etlPathEncoded) {
+    function executeAutoETL(button, etlPathEncoded, resolvedIssueTime) {
         button.innerText = '⏳ Running ETL...';
         const decoded = decodeURIComponent(etlPathEncoded);
         logBox.innerText += `👉 Selected: ${decoded}\n`;
@@ -577,7 +581,8 @@
         window.pendingChatbot = {
             etlPathEncoded: etlPathEncoded,
             button: button,
-            isAnalyzeAll: true // Key flag: trigger green button on redirect
+            isAnalyzeAll: true, // Key flag: trigger green button on redirect
+            resolvedIssueTime: resolvedIssueTime || "",
         };
 
         fetch(`${ETL_ANALYSIS_URL}?etl_path=${etlPathEncoded}&mode=`)

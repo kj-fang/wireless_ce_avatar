@@ -833,7 +833,8 @@ def find_best_log():
 
     if not candidates:
         return jsonify({"best_path": etl_paths[0] if etl_paths else None,
-                        "reason": "No readable log files found; defaulting to first."})
+                        "reason": "No readable log files found; defaulting to first.",
+                        "resolved_issue_time": ""})
 
     # --- Resolve time-only issue_time_str using log file dates ---
     # e.g. '14:50:51' -> combine with the date from the log's first/last timestamp
@@ -841,12 +842,15 @@ def find_best_log():
         try:
             ih, im, is_ = map(int, issue_time_only_str.split(':'))
             for c in candidates:
-                ref_ts = c["first_ts"] or c["last_ts"]
+                ref_ts = c["last_ts"] or c["first_ts"]
                 if ref_ts:
                     issue_time = ref_ts.replace(hour=ih, minute=im, second=is_, microsecond=0)
                     break
         except Exception:
             pass
+
+    # Serialize the resolved issue_time so the frontend can use the full datetime
+    resolved_issue_time_str = issue_time.strftime("%m/%d/%Y-%H:%M:%S") if issue_time else ""
 
     # --- If we have an issue time, pick the log whose range covers it ---
     if issue_time:
@@ -858,6 +862,7 @@ def find_best_log():
                         "best_path": c["etl_path"],
                         "reason": f"Log covers issue time {issue_time_str} "
                                   f"(range: {c['first_ts']} ~ {c['last_ts']})",
+                        "resolved_issue_time": resolved_issue_time_str,
                     })
 
         # Priority 2: log file whose last_ts is closest to (but before) issue_time
@@ -875,6 +880,7 @@ def find_best_log():
                 "reason": f"Closest log to issue time {issue_time_str} "
                           f"(range: {best['first_ts']} ~ {best['last_ts']}, "
                           f"delta: {best_delta:.0f}s)",
+                "resolved_issue_time": resolved_issue_time_str,
             })
 
     # --- Fallback: pick the log with the latest last_ts ---
@@ -885,12 +891,14 @@ def find_best_log():
             "best_path": latest["etl_path"],
             "reason": f"No issue time provided; picked latest log "
                       f"(range: {latest['first_ts']} ~ {latest['last_ts']})",
+            "resolved_issue_time": resolved_issue_time_str,
         })
 
     # --- Ultimate fallback ---
     return jsonify({
         "best_path": candidates[0]["etl_path"],
         "reason": "Could not determine timestamps; defaulting to first.",
+        "resolved_issue_time": "",
     })
 
 

@@ -18,6 +18,7 @@ import re
 import shutil
 import subprocess
 import sys
+import time
 
 # Set a handler for the root-logger to inhibit 'basicConfig()' (called in PyInstaller.log) is setting up a stream
 # handler writing to stderr. This avoids log messages to be written (and captured) twice: once on stderr and
@@ -57,13 +58,15 @@ def pytest_runtest_setup(item):
     Markers to skip tests based on the current platform.
     https://pytest.org/en/stable/example/markers.html#marking-platform-specific-tests-with-pytest
 
-    Available markers: see setup.cfg [tool:pytest] markers
+    Available markers: see pytest.ini markers
         - @pytest.mark.darwin (macOS)
         - @pytest.mark.linux (GNU/Linux)
         - @pytest.mark.win32 (Windows)
     """
     supported_platforms = SUPPORTED_OSES.intersection(mark.name for mark in item.iter_markers())
     plat = sys.platform
+    if plat == 'android':
+        plat = 'linux'
     if supported_platforms and plat not in supported_platforms:
         pytest.skip(f"does not run on {plat}")
 
@@ -355,6 +358,7 @@ class AppBuilder:
 
         # Run the executable
         self._display_message('RUN-EXE', f'Running {exe_path!r}, args: {args!r}')
+        start_time = time.time()
         process = popen_implementation(args, executable=exe_path, env=prog_env, cwd=prog_cwd)
 
         # Wait for the process to finish. If no run-time (= timeout) is specified, we expect the process to exit on
@@ -365,8 +369,11 @@ class AppBuilder:
         try:
             timeout = runtime if runtime else _EXE_TIMEOUT
             stdout, stderr = process.communicate(timeout=timeout)
+            elapsed = time.time() - start_time
             retcode = process.returncode
-            self._display_message('RUN-EXE', f'Process exited on its own with return code {retcode}.')
+            self._display_message(
+                'RUN-EXE', f'Process exited on its own after {elapsed:.1f} seconds with return code {retcode}.'
+            )
         except (subprocess.TimeoutExpired) if psutil is None else (psutil.TimeoutExpired, subprocess.TimeoutExpired):
             if runtime:
                 # When 'runtime' is set, the expired timeout is a good sign that the executable was running successfully

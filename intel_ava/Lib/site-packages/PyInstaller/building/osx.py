@@ -132,6 +132,9 @@ class BUNDLE(Target):
         # Normalize TOC
         self.toc = normalize_toc(self.toc)
 
+        # Alphabetically sort the TOC to ensure that order of processing is predictable and reproducible.
+        self.toc.sort()
+
         self.__postinit__()
 
     _GUTS = (
@@ -330,6 +333,8 @@ class BUNDLE(Target):
         _BINARY_DIR_TYPE = 'BINARY-DIR'
         _FRAMEWORK_DIR_TYPE = 'FRAMEWORK-DIR'
 
+        _UNKNOWN_DIR_TYPE = 'UNKNOWN-DIR'  # used only in this step
+
         _TOP_LEVEL_DIR = pathlib.PurePath('.')
 
         for dest_name, src_name, typecode in toc:
@@ -348,22 +353,43 @@ class BUNDLE(Target):
                 if typecode == 'EXTENSION':
                     typecode = 'BINARY'
 
+            # Directory type as per this entry's typecode. Symbolic links are "neutral". On the off chance that a
+            # directory contains only symbolic link(s), we will override the type of "unknown" directories after this
+            # loop finishes.
+            if typecode == 'SYMLINK':
+                entry_type = _UNKNOWN_DIR_TYPE
+            elif typecode == 'BINARY':
+                entry_type = _BINARY_DIR_TYPE
+            else:
+                entry_type = _DATA_DIR_TYPE
+
             # (Re)classify parent directories
             for parent_dir in parent_dirs:
                 # Skip the top-level `.` dir. This is also the only directory that can contain EXECUTABLE and PKG
-                # entries, so we do not have to worry about.
+                # entries, so we do not have to worry about them.
                 if parent_dir == _TOP_LEVEL_DIR:
                     continue
 
-                directory_type = _BINARY_DIR_TYPE if typecode == 'BINARY' else _DATA_DIR_TYPE  # default
-                directory_type = directory_types.get(parent_dir, directory_type)
+                directory_type = directory_types.get(parent_dir, entry_type)
 
-                if directory_type == _DATA_DIR_TYPE and typecode == 'BINARY':
+                # If directory was previously marked as unknown, overwrite its type with the new one.
+                if directory_type == _UNKNOWN_DIR_TYPE:
+                    directory_type = entry_type
+
+                # Update type into mixed-content, if necessary.
+                if directory_type == _DATA_DIR_TYPE and entry_type == _BINARY_DIR_TYPE:
                     directory_type = _MIXED_DIR_TYPE
-                if directory_type == _BINARY_DIR_TYPE and typecode == 'DATA':
+                if directory_type == _BINARY_DIR_TYPE and entry_type == _DATA_DIR_TYPE:
                     directory_type = _MIXED_DIR_TYPE
 
                 directory_types[parent_dir] = directory_type
+
+        # Reclassify all "unknown" directories into "data-only"; these are directories that contain only one or more
+        # symbolic links.
+        directory_types = {
+            directory: directory_type if directory_type != _UNKNOWN_DIR_TYPE else _DATA_DIR_TYPE
+            for directory, directory_type in directory_types.items()
+        }
 
         logger.debug("Directory classification: %r", directory_types)
 
@@ -473,6 +499,27 @@ class BUNDLE(Target):
                 # mechanism.
                 file_base_dir = 'Contents/Frameworks'
                 crosslink_base_dir = None
+            elif typecode == 'SYMLINK':
+                # Symbolic links
+                parent_dir = orig_dest_path.parent
+                if parent_dir == _TOP_LEVEL_DIR or directory_types.get(parent_dir) == _MIXED_DIR_TYPE:
+                    # Symbolic links that need to be cross-linked (because they are located in top-level directory or
+                    # in a mixed-content directory) are instead created in both locations, and point to the (relative)
+                    # resource in the same directory; so one of the targets will likely be a file, and the other will
+                    # be a symlink due to cross-linking.
+                    bundle_toc.append((os.path.join('Contents/Frameworks', orig_dest_name), src_name, typecode))
+                    bundle_toc.append((os.path.join('Contents/Resources', orig_dest_name), src_name, typecode))
+                    continue
+                elif directory_types.get(parent_dir) == _DATA_DIR_TYPE:
+                    # Symbolic link in a data-only directory; relocate to 'Contents/Resources' and do NOT cross-link
+                    # (since the whole directory will be cross-linked).
+                    file_base_dir = 'Contents/Resources'
+                    crosslink_base_dir = None
+                else:
+                    # Symbolic link in a binary-only directory; similar to data-only directory, except we relocate to
+                    # 'Contents/Frameworks'.
+                    file_base_dir = 'Contents/Frameworks'
+                    crosslink_base_dir = None
             elif typecode == 'DATA':
                 # Data file; relocate to `Contents/Resources` and cross-link it back into `Contents/Frameworks`.
                 file_base_dir = 'Contents/Resources'
@@ -488,14 +535,6 @@ class BUNDLE(Target):
             if crosslink_base_dir is not None:
                 parent_dir = orig_dest_path.parent
                 requires_crosslink = parent_dir == _TOP_LEVEL_DIR or directory_types.get(parent_dir) == _MIXED_DIR_TYPE
-
-            # Special handling for SYMLINK entries in original TOC; if we need to cross-link a symlink entry, we create
-            # it in both locations, and have each point to the (relative) resource in the same directory (so one of the
-            # targets will likely be a file, and the other will be a symlink due to cross-linking).
-            if typecode == 'SYMLINK' and requires_crosslink:
-                bundle_toc.append((os.path.join(file_base_dir, orig_dest_name), src_name, typecode))
-                bundle_toc.append((os.path.join(crosslink_base_dir, orig_dest_name), src_name, typecode))
-                continue
 
             # The file itself.
             file_dest = os.path.join(file_base_dir, orig_dest_name)

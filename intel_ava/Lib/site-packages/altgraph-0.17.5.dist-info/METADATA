@@ -1,6 +1,6 @@
 Metadata-Version: 2.1
 Name: altgraph
-Version: 0.17.4
+Version: 0.17.5
 Summary: Python graph (network) package
 Home-page: https://altgraph.readthedocs.io
 Download-URL: http://pypi.python.org/pypi/altgraph
@@ -26,6 +26,8 @@ Classifier: Programming Language :: Python :: 3.9
 Classifier: Programming Language :: Python :: 3.10
 Classifier: Programming Language :: Python :: 3.11
 Classifier: Programming Language :: Python :: 3.12
+Classifier: Programming Language :: Python :: 3.13
+Classifier: Programming Language :: Python :: 3.14
 Classifier: Topic :: Software Development :: Libraries :: Python Modules
 Classifier: Topic :: Scientific/Engineering :: Mathematics
 Classifier: Topic :: Scientific/Engineering :: Visualization
@@ -54,6 +56,18 @@ Project links
 
 Release history
 ===============
+
+0.17.5
+------
+
+* Update classifiers for Python 3.13 and 3.14
+
+* Drop dependency on "pkg_resources"
+
+0.17.4
+------
+
+* Update classifiers for Python 3.12
 
 0.17.3
 ------

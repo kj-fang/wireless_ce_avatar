@@ -48,12 +48,17 @@ def _get_tcl_tk_info():
     tcl_data_dir = tcl.eval("info library")
 
     # Check if Tcl/Tk is built with multi-threaded support (built with --enable-threads), as indicated by the presence
-    # of optional `threaded` member in `tcl_platform` array.
-    try:
-        tcl.getvar("tcl_platform(threaded)")  # Ignore the actual value.
+    # of optional `threaded` member in `tcl_platform` array. Tcl 9.0 removed the --enable-threads flag, and is always
+    # built with multi-threaded support (and thus the `threaded` array member has been removed).
+    TCL_MAJOR = int(_tkinter.TCL_VERSION.split(".")[0])
+    if TCL_MAJOR >= 9:
         tcl_threaded = True
-    except tkinter.TclError:
-        tcl_threaded = False
+    else:
+        try:
+            tcl.getvar("tcl_platform(threaded)")  # Ignore the actual value.
+            tcl_threaded = True
+        except tkinter.TclError:
+            tcl_threaded = False
 
     return {
         "available": True,
@@ -169,10 +174,13 @@ class TclTkInfo:
         # in the isolated subprocess as part of `_get_tcl_tk_info`. However, that is impractical, as it shows the empty
         # window, and on some platforms (e.g., linux) requires display server. Therefore, try to guess the location,
         # based on the following heuristic:
+        #  - if TK_LIBRARY is defined use it.
         #  - if Tk is built as macOS framework bundle, look for Scripts sub-directory in Resources directory next to
         #    the shared library.
         #  - otherwise, look for: $tcl_root/../tkX.Y, where X and Y are Tk major and minor version.
-        if compat.is_darwin and self.tk_shared_library and (
+        if "TK_LIBRARY" in os.environ:
+            self.tk_data_dir = os.environ["TK_LIBRARY"]
+        elif compat.is_darwin and self.tk_shared_library and (
             # is_framework_bundle_lib handles only fully-versioned framework library paths...
             (osxutils.is_framework_bundle_lib(self.tk_shared_library)) or
             # ... so manually handle top-level-symlinked variant for now.
@@ -192,7 +200,9 @@ class TclTkInfo:
             )
 
         # Infer location of Tcl module directory. The modules directory is separate from the library/data one, and
-        # is located at $tcl_root/../tclX, where X is the major Tcl version.
+        # is located at $tcl_root/../tclX, where X is the major Tcl version. In some Tcl distributions (for example,
+        # Debian-packaged Tcl), this directory is located under library/data directory ($tcl_root); in such cases,
+        # we do not need to worry about it.
         self.tcl_module_dir = os.path.join(
             os.path.dirname(self.tcl_data_dir),
             f"tcl{self.tcl_version[0]}",
@@ -222,14 +232,12 @@ class TclTkInfo:
             else:
                 logger.warning("%s: Tk library/data directory %r does not exist!", self, self.tk_data_dir)
 
-            # Collect Tcl modules from modules directory
+            # Collect Tcl modules from optional modules directory
             if os.path.isdir(self.tcl_module_dir):
                 self.data_files += self._collect_files_from_directory(
                     self.tcl_module_dir,
                     prefix=os.path.basename(self.tcl_module_dir),
                 )
-            else:
-                logger.warning("%s: Tcl module directory %r does not exist!", self, self.tcl_module_dir)
 
     @staticmethod
     def _collect_files_from_directory(root, prefix=None, excludes=None):
@@ -277,10 +285,13 @@ class TclTkInfo:
             lib_name = os.path.basename(lib_path)
             lib_name_lower = lib_name.lower()  # lower-case for comparisons
 
-            if 'tcl' in lib_name_lower:
-                tcl_lib = lib_path
-            elif 'tk' in lib_name_lower:
+            # First check for Tk library, because it is unlikely that 'tk' will appear in the name of the Tcl shared
+            # library, while 'tcl' could appear in the name of the Tk shared library. For example, Fedora 43 ships
+            # both Tcl/Tk 8.6 and 9.0, and in the latter, the libraries are named `libtcl9.0.so` and `libtcl9tk9.0.so`.
+            if 'tk' in lib_name_lower:
                 tk_lib = lib_path
+            elif 'tcl' in lib_name_lower:
+                tcl_lib = lib_path
 
         return tcl_lib, tk_lib
 

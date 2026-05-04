@@ -80,6 +80,17 @@ class Session:
     enter_reason: str = ""
     exit_reason: str = ""
     offenders: List[Offender] = field(default_factory=list)
+    # Wi-Fi deep-dive (populated only when Wi-Fi is in the top offenders):
+    activators: List["ActivatorInfo"] = field(default_factory=list)
+    wifi_app_usage: List["WifiAppUsage"] = field(default_factory=list)
+    # Per-app SRUM network power consumption (mW), used to attribute Wi-Fi
+    # battery drain to specific apps.
+    network_app_power: List["NetworkAppPower"] = field(default_factory=list)
+    # Wi-Fi FX-device child reasons (name, active_time_s).  These explain why
+    # the Wi-Fi adapter stayed active (e.g. OS Wi-Fi data-path wakes, AP
+    # protocol offload events).  Used as a fallback root-cause source when
+    # the SleepStudy report's Activators group is empty.
+    wifi_fx_reasons: List[tuple] = field(default_factory=list)
 
     def top_offenders(self, n: int) -> List[Offender]:
         return sorted(self.offenders, key=lambda o: o.score(), reverse=True)[:n]
@@ -93,6 +104,62 @@ class Session:
     def low_drips(self, threshold_pct: float) -> bool:
         """True when SW DRIPS or HW DRIPS is below `threshold_pct` (0-100)."""
         return self.sw_drips_pct < threshold_pct or self.hw_drips_pct < threshold_pct
+
+
+# Wi-Fi-related activator names (case-insensitive substring match).
+# These are the Windows components that can keep a network adapter awake.
+_WIFI_ACTIVATOR_HINTS = [
+    "ncsi", "wlansvc", "wlanext", "netprofm", "nlasvc",
+    "wcmsvc", "wfdsconmgr", "wifisense",
+    "wu", "wuauserv", "usosvc",          # Windows Update
+    "dosvc",                                # Delivery Optimization
+    "wpnservice", "wpnuserservice",        # Push Notifications
+    "timebrokersvc", "systemeventsbroker",  # Background brokers
+    "bits", "backgroundtransferhost",
+    "dnscache", "dhcp",
+    "mdcoresvc", "securityupdateservice",   # Defender / security
+]
+
+
+def _is_wifi_related_activator(name: str) -> bool:
+    n = (name or "").lower()
+    return any(h in n for h in _WIFI_ACTIVATOR_HINTS)
+
+
+@dataclass
+class ActivatorInfo:
+    name: str
+    active_pct: float = 0.0
+    time_s: float = 0.0
+    level: int = 0
+    leaf_reasons: List[str] = field(default_factory=list)  # e.g. ['ActiveInternetProbe.Http']
+
+    def is_wifi_related(self) -> bool:
+        return _is_wifi_related_activator(self.name) or any(
+            _is_wifi_related_activator(r) for r in self.leaf_reasons
+        )
+
+
+@dataclass
+class WifiAppUsage:
+    app: str            # cleaned app id / process name
+    bytes_sent: int = 0
+    bytes_recv: int = 0
+    wake_count: int = 0
+
+    @property
+    def total_bytes(self) -> int:
+        return self.bytes_sent + self.bytes_recv
+
+
+@dataclass
+class NetworkAppPower:
+    """Per-app network power consumption from SRUM PowerEstimationData.
+    Values are in milliwatts (mW) as reported by the SleepStudy report."""
+    app: str
+    network_mw: float = 0.0     # NetworkPowerConsumption (mW)
+    total_mw: float = 0.0       # TotalPowerConsumption    (mW)
+    user: str = ""
 
 
 @dataclass
@@ -250,6 +317,113 @@ def _flatten_blocker_names(blockers: list) -> List[dict]:
     return out
 
 
+def _collect_leaf_reasons(blocker: dict, max_items: int = 6) -> List[str]:
+    """Walk an activator's `Children` tree and collect names of leaf nodes
+    that were actually active (ActiveTime > 0).  Leaves describe *why* the
+    activator engaged (e.g. NCSI -> ActiveInternetProbe.Http)."""
+    out: List[str] = []
+    stack = list(blocker.get("Children") or [])
+    while stack and len(out) < max_items:
+        node = stack.pop(0)
+        if not isinstance(node, dict):
+            continue
+        children = node.get("Children") or []
+        if not children:
+            if float(node.get("ActiveTime", 0) or 0) > 0:
+                nm = node.get("Name", "")
+                if nm and nm not in out:
+                    out.append(nm)
+        else:
+            stack.extend(children)
+    return out
+
+
+_NDIS_HEADER_KEY = "[AppId]"
+_PROCESS_PATH_RE = re.compile(r"\\([^\\]+\.exe)$", re.IGNORECASE)
+
+
+def _clean_app_name(raw: str) -> str:
+    """Trim Windows device-path prefixes; keep just the EXE or service name."""
+    raw = (raw or "").strip()
+    if not raw:
+        return raw
+    m = _PROCESS_PATH_RE.search(raw)
+    if m:
+        return m.group(1)
+    return raw  # short service names (Dnscache, DoSvc, ...) stay as-is
+
+
+def _harvest_wifi_ndis(wifi_blocker: dict, sink: List["WifiAppUsage"]) -> None:
+    """Walk a Wi-Fi FX-Device blocker's Children, find every `NDIS` node and
+    aggregate per-app `[Bytes Sent, Bytes Received, Outgoing Wake Count]`
+    entries from its Detailed Blocker Information into `sink`."""
+    bucket: dict = {}  # app -> [sent, recv, wakes]
+    stack = [wifi_blocker]
+    while stack:
+        node = stack.pop()
+        if not isinstance(node, dict):
+            continue
+        # Recurse first so order is irrelevant.
+        stack.extend(node.get("Children") or [])
+        if (node.get("Name") or "").upper() != "NDIS":
+            continue
+        meta = (node.get("Metadata") or {}).get("Values") or []
+        for entry in meta:
+            if not isinstance(entry, dict):
+                continue
+            key = entry.get("Key", "")
+            val = entry.get("Value", "")
+            if not key or key == _NDIS_HEADER_KEY or not isinstance(val, str):
+                continue
+            parts = [p.strip() for p in val.split(",")]
+            if len(parts) < 3:
+                continue
+            try:
+                sent  = int(float(parts[0]))
+                recv  = int(float(parts[1]))
+                wakes = int(float(parts[2]))
+            except ValueError:
+                continue
+            app = _clean_app_name(key)
+            agg = bucket.setdefault(app, [0, 0, 0])
+            agg[0] += sent
+            agg[1] += recv
+            agg[2] += wakes
+    for app, (sent, recv, wakes) in bucket.items():
+        sink.append(WifiAppUsage(app=app, bytes_sent=sent, bytes_recv=recv, wake_count=wakes))
+
+
+def _harvest_wifi_fx_reasons(wifi_blocker: dict, sink: List[tuple],
+                             max_items: int = 6) -> None:
+    """Walk a Wi-Fi FX-Device blocker's Children and collect the most
+    significant child nodes (those with the longest ActiveTime) as
+    (name, active_time_s) tuples.  These are surfaced in the SW-DRIPS
+    explanation when the Activators group is empty.
+
+    Skips NDIS nodes (handled separately by _harvest_wifi_ndis) and the
+    bare hardware/component placeholder nodes that lack useful names.
+    """
+    rows: List[tuple] = []
+    stack: List[dict] = list(wifi_blocker.get("Children") or [])
+    while stack:
+        node = stack.pop()
+        if not isinstance(node, dict):
+            continue
+        name = (node.get("Name") or "").strip()
+        active_us = float(node.get("ActiveTime", 0) or 0)
+        upper = name.upper()
+        if name and active_us > 0 and upper != "NDIS":
+            rows.append((name, active_us / 1_000_000.0))
+        # Continue walking children to surface deeper reasons (e.g. NCSI leaves).
+        stack.extend(node.get("Children") or [])
+    # De-dupe by name (sum times) and keep top N by time.
+    agg: dict = {}
+    for n, t in rows:
+        agg[n] = agg.get(n, 0.0) + t
+    top = sorted(agg.items(), key=lambda kv: kv[1], reverse=True)[:max_items]
+    sink.extend(top)
+
+
 def _build_session_from_scenario(scen: dict, idx: int) -> Session:
     s = Session(index=idx)
     s.session_id     = int(scen.get("SessionId", idx))
@@ -342,9 +516,44 @@ def _build_session_from_scenario(scen: dict, idx: int) -> Session:
                 kind=kind,
             ))
 
+            # Activator deep-dive: capture leaf reasons (e.g. NCSI ->
+            # ActiveInternetProbe.Http) so we can correlate them with Wi-Fi.
+            if kind == "activator":
+                ai = ActivatorInfo(
+                    name=b.get("Name", ""),
+                    active_pct=float(b.get("ActiveTimePercent", 0) or 0),
+                    time_s=active_us / 1_000_000.0,
+                    level=int(b.get("ActivityLevel", 0) or 0),
+                )
+                ai.leaf_reasons = _collect_leaf_reasons(b)
+                s.activators.append(ai)
+
+            # Wi-Fi deep-dive: harvest per-app NDIS metadata under each Intel
+            # Wi-Fi blocker so we can attribute wake/byte traffic to processes.
+            if kind == "fx_device" and _is_wifi(b.get("Name", "")):
+                _harvest_wifi_ndis(b, s.wifi_app_usage)
+                _harvest_wifi_fx_reasons(b, s.wifi_fx_reasons)
+
     # Software/SRUM activators (per-app energy estimates).
     srum = scen.get("SrumData") or {}
     pwr  = srum.get("PowerEstimationData") or {}
+    # Modern reports expose per-app power under `Values`; older builds used
+    # `AppPowerRecords` with an `EnergyConsumption` field.  Handle both.
+    for rec in (pwr.get("Values") or []):
+        if not isinstance(rec, dict):
+            continue
+        name = rec.get("AppId") or rec.get("AppName") or ""
+        if not name:
+            continue
+        net_mw   = float(rec.get("NetworkPowerConsumption", 0) or 0)
+        total_mw = float(rec.get("TotalPowerConsumption",   0) or 0)
+        if net_mw > 0 or total_mw > 0:
+            s.network_app_power.append(NetworkAppPower(
+                app=_clean_app_name(name),
+                network_mw=net_mw,
+                total_mw=total_mw,
+                user=str(rec.get("UserId", "") or ""),
+            ))
     for rec in (pwr.get("AppPowerRecords") or []):
         name = rec.get("AppId") or rec.get("AppName") or ""
         if not name:
@@ -434,6 +643,230 @@ def parse_sleepstudy(report_path: str) -> Report:
         return _parse_html(p)
 
 
+def _render_wifi_deep_dive(s: Session, indent: str = "  ") -> List[str]:
+    """Render activators + per-app NDIS usage + heuristic conclusions for a
+    session whose top offenders contain Wi-Fi.  Returns [] when there is no
+    deep-dive evidence."""
+    if not s.activators and not s.wifi_app_usage and not s.network_app_power:
+        return []
+
+    lines: List[str] = []
+    conclusions: List[str] = []
+    merged: List[WifiAppUsage] = []
+
+    # ---- Activators (filtered to Wi-Fi-related) ----
+    wifi_activators = [a for a in s.activators if a.is_wifi_related() and a.time_s > 0]
+    wifi_activators.sort(key=lambda a: (a.active_pct, a.time_s), reverse=True)
+    if wifi_activators:
+        lines.append(f"{indent}Wi-Fi-related Activators (network-keep-alive sources):")
+        for a in wifi_activators[:6]:
+            reasons = (", ".join(a.leaf_reasons[:4])) if a.leaf_reasons else "-"
+            lines.append(
+                f"{indent}  - {a.name:<24s} active={a.active_pct:>5.1f}%  "
+                f"time={a.time_s:>6.1f}s  reasons=[{reasons}]"
+            )
+
+    # ---- Per-app NDIS usage on Wi-Fi adapter ----
+    if s.wifi_app_usage:
+        # Aggregate duplicates (same app may appear from multiple NDIS nodes).
+        agg: dict = {}
+        for u in s.wifi_app_usage:
+            cur = agg.setdefault(u.app, [0, 0, 0])
+            cur[0] += u.bytes_sent
+            cur[1] += u.bytes_recv
+            cur[2] += u.wake_count
+        merged = [WifiAppUsage(app=k, bytes_sent=v[0], bytes_recv=v[1], wake_count=v[2])
+                  for k, v in agg.items()]
+        # Rank by wake count first (sleep-killer signal), then total bytes.
+        merged.sort(key=lambda u: (u.wake_count, u.total_bytes), reverse=True)
+
+        lines.append(
+            f"{indent}Wi-Fi NDIS per-process traffic during this session "
+            f"(processes that used the Wi-Fi connection):"
+        )
+        lines.append(
+            f"{indent}  {'App / Service':<46s}  {'Wakes':>6s}  {'BytesTx':>9s}  {'BytesRx':>9s}"
+        )
+        shown = [u for u in merged if u.wake_count > 0 or u.total_bytes > 0][:10]
+        for u in shown:
+            lines.append(
+                f"{indent}  {u.app[:46]:<46s}  {u.wake_count:>6d}  "
+                f"{u.bytes_sent:>9d}  {u.bytes_recv:>9d}"
+            )
+
+        # Wake-driver: any single app accounting for a large share of wakes.
+        total_wakes = sum(u.wake_count for u in merged) or 1
+        for u in merged[:3]:
+            if u.wake_count >= 10 and u.wake_count / total_wakes >= 0.20:
+                conclusions.append(
+                    f"`{u.app}` drove {u.wake_count} outgoing wake(s) "
+                    f"({u.wake_count*100//total_wakes}% of total) — likely keeping the "
+                    "radio active."
+                )
+
+    # ---- SRUM per-app NETWORK power consumption (mW) ----
+    # Surfaces which apps the OS attributes battery drain on the network
+    # subsystem to.  Useful even when NDIS per-process traffic is unavailable.
+    net_apps = [a for a in s.network_app_power if a.network_mw > 0]
+    net_apps.sort(key=lambda a: a.network_mw, reverse=True)
+    if net_apps:
+        lines.append(
+            f"{indent}SRUM per-app NETWORK power consumption "
+            f"(top contributors to Wi-Fi drain):"
+        )
+        lines.append(
+            f"{indent}  {'App / Service':<46s}  {'NetPwr':>8s}  {'TotalPwr':>9s}"
+        )
+        total_net = sum(a.network_mw for a in net_apps) or 1.0
+        for a in net_apps[:10]:
+            share = a.network_mw / total_net * 100.0
+            lines.append(
+                f"{indent}  {a.app[:46]:<46s}  {a.network_mw:>6.0f}mW  "
+                f"{a.total_mw:>7.0f}mW  ({share:.0f}% of net)"
+            )
+        # Promote the dominant network-power consumer to a root-cause hint.
+        top_net = net_apps[0]
+        if top_net.network_mw >= 5:
+            share = top_net.network_mw / total_net * 100.0
+            conclusions.append(
+                f"`{top_net.app}` consumed {top_net.network_mw:.0f} mW of network "
+                f"power ({share:.0f}% of all network power this session) — "
+                "likely Wi-Fi sleepstudy power-drain root cause."
+            )
+        for a in net_apps[1:3]:
+            if a.network_mw >= 5:
+                conclusions.append(
+                    f"`{a.app}` also drew {a.network_mw:.0f} mW of network power."
+                )
+
+    # ---- Activator-driven probes & well-known offenders ----
+    if any("ncsi" in a.name.lower() for a in wifi_activators):
+        conclusions.append(
+            "NCSI internet-connectivity probes were active — Windows was "
+            "polling the network through Wi-Fi."
+        )
+    if any(("wu" == a.name.lower() or "usosvc" in a.name.lower()
+            or "dosvc" in a.name.lower()) for a in wifi_activators):
+        conclusions.append(
+            "Windows Update / Delivery Optimization activity detected — "
+            "background download/check kept Wi-Fi awake."
+        )
+    # Specific common offenders by app name (NDIS wake-traffic).
+    names = {u.app.lower() for u in merged if u.wake_count > 0}
+    if any("teams" in n for n in names):
+        conclusions.append("Microsoft Teams was sending presence/keepalive traffic.")
+    if any("outlook" in n for n in names):
+        conclusions.append("Outlook was syncing mail/calendar over Wi-Fi.")
+    if any("monagent" in n or "azure monitor" in n for n in names):
+        conclusions.append("Azure Monitor Agent was uploading telemetry.")
+    if any("it-servicecontroller" in n or "it-agent" in n for n in names):
+        conclusions.append("IT-managed agent was beaconing/check-in over Wi-Fi.")
+
+    if conclusions:
+        lines.append(f"{indent}Wi-Fi root-cause hints:")
+        for c in conclusions:
+            lines.append(f"{indent}  * {c}")
+
+    return lines
+
+
+def _classify_wifi_fx_reason(name: str) -> str:
+    """Map a Wi-Fi FX-device child node name to a short human explanation
+    of why it would prevent SW-DRIPS.  Returns an empty string when the
+    node name carries no actionable insight (e.g. anonymous components)."""
+    n = name.lower()
+    if "datapathwake" in n or "data path wake" in n:
+        return ("OS Wi-Fi data-path wakes (incoming packets / ARP / ND / "
+                "keepalive responses) kept Wi-Fi awake")
+    if "wol" in n or "wake on lan" in n or "magic packet" in n:
+        return "Wake-on-LAN / magic-packet processing kept Wi-Fi awake"
+    if "protocol offload" in n or "protocoloffload" in n:
+        return ("Protocol-offload events (NS/ARP offload mismatches) forced "
+                "Wi-Fi out of low power")
+    if "ncsi" in n or "internet probe" in n:
+        return "NCSI internet-connectivity probes polled the network via Wi-Fi"
+    if "dhcp" in n:
+        return "DHCP renewal traffic kept Wi-Fi awake"
+    if "wlan" in n and "scan" in n:
+        return "WLAN background scanning kept Wi-Fi awake"
+    if "rsn" in n or "4-way" in n or "key rotation" in n:
+        return "WPA2/WPA3 key-rotation handshakes kept Wi-Fi awake"
+    if "os wi-fi jobs" in n or "wifi jobs" in n:
+        return "OS-scheduled Wi-Fi jobs (system networking work) kept Wi-Fi awake"
+    return ""
+
+
+def _explain_sw_drips(s: Session, drips_threshold: float = 80.0) -> str:
+    """Build a one-line explanation of why SW-DRIPS coverage was low for this
+    session, focused on what kept the system out of the software low-power
+    state — preferring Wi-Fi-related causes.
+
+    Source preference:
+      1. Wi-Fi-related software activators (NCSI / Wlansvc / DoSvc / ...).
+      2. Wi-Fi FX-device child reasons (e.g. OS Wi-Fi DataPathWake) when
+         the Activators group is empty (modern reports often omit it).
+      3. Top non-Wi-Fi software activator as a last resort.
+
+    Returns \"\" when SW-DRIPS is healthy (>= threshold)."""
+    if s.sw_drips_pct >= drips_threshold:
+        return ""
+
+    gap = max(0.0, drips_threshold - s.sw_drips_pct)
+    prefix = f"SW-DRIPS only {s.sw_drips_pct:.1f}% (gap {gap:.1f}%); "
+
+    # 1) Wi-Fi-related software activators.
+    wifi_acts = [a for a in s.activators if a.is_wifi_related() and a.time_s > 0]
+    wifi_acts.sort(key=lambda a: (a.active_pct, a.time_s), reverse=True)
+    if wifi_acts:
+        parts = []
+        for a in wifi_acts[:3]:
+            reason = f" [{a.leaf_reasons[0]}]" if a.leaf_reasons else ""
+            parts.append(f"{a.name} ({a.active_pct:.1f}% active, {a.time_s:.0f}s){reason}")
+        return (prefix + "Wi-Fi-related software activator(s) kept the OS out "
+                "of DRIPS-SW: " + "; ".join(parts))
+
+    # 2) Wi-Fi FX-device child reasons (OS-side networking work).
+    if s.wifi_fx_reasons:
+        # Pick the longest-active child that classifies cleanly; fall back to
+        # the longest one with its raw name.
+        best_classified: Optional[tuple] = None
+        best_raw: Optional[tuple] = None
+        for name, t_s in s.wifi_fx_reasons:
+            if best_raw is None or t_s > best_raw[1]:
+                best_raw = (name, t_s)
+            cls = _classify_wifi_fx_reason(name)
+            if cls and (best_classified is None or t_s > best_classified[2]):
+                best_classified = (name, cls, t_s)
+        if best_classified:
+            name, cls, t_s = best_classified
+            extra = []
+            for name2, t2 in s.wifi_fx_reasons[1:3]:
+                if name2 != name:
+                    extra.append(f"{name2} ({t2:.0f}s)")
+            extra_txt = ("; also: " + ", ".join(extra)) if extra else ""
+            return (prefix + f"{cls} — top child `{name}` was active for "
+                    f"{t_s:.0f}s{extra_txt}.")
+        if best_raw:
+            return (prefix + "Wi-Fi adapter child activity kept SW-DRIPS low: "
+                    f"`{best_raw[0]}` was active for {best_raw[1]:.0f}s "
+                    "(no specific class match).")
+
+    # 3) Fallback to top non-Wi-Fi activator.
+    other_acts = sorted(
+        [a for a in s.activators if not a.is_wifi_related() and a.time_s > 0],
+        key=lambda a: (a.active_pct, a.time_s), reverse=True,
+    )
+    if other_acts:
+        top = other_acts[0]
+        return (prefix + "no Wi-Fi-related activator/FX-child detected — "
+                f"non-Wi-Fi software activator `{top.name}` "
+                f"({top.active_pct:.1f}% active) was the dominant cause.")
+
+    return (prefix + "no software activator data captured for this session — "
+            "OS-side root cause cannot be attributed (likely captured under "
+            "the Wi-Fi FX device only).")
+
+
 def render_wifi_focused(report: Report, top_n: int = 3,
                         wifi_only: bool = True,
                         max_sessions: int = 10,
@@ -515,6 +948,49 @@ def render_wifi_focused(report: Report, top_n: int = 3,
     # Sort matched sessions by drain rate (worst first), cap the list.
     matched.sort(key=lambda s: s.drain_mw, reverse=True)
     _LEVEL = {0: "neutral", 1: "low", 2: "moderate", 3: "high"}
+
+    # ------------------------------------------------------------------
+    # Compact per-session Markdown table.  Surfaced verbatim so the
+    # LLM can copy it into its response with all the columns we want
+    # (including the new "SW DRIP Cause" column).
+    # ------------------------------------------------------------------
+    def _short_sw_cause(s: Session) -> str:
+        """One-line, table-cell-friendly explanation of the SW-DRIPS cause."""
+        full = _explain_sw_drips(s, drips_threshold)
+        if not full:
+            return "Healthy (>= threshold)"
+        # Drop the "SW-DRIPS only X% (gap Y%); " prefix — that info is
+        # already in the dedicated SW-DRIPS column.
+        cleaned = re.sub(r"^SW-DRIPS only [^;]+;\s*", "", full)
+        # Collapse newlines / pipes which would break Markdown tables.
+        cleaned = cleaned.replace("|", "/").replace("\n", " ").strip()
+        if len(cleaned) > 220:
+            cleaned = cleaned[:217] + "..."
+        return cleaned or "n/a"
+
+    out.append("Per-session summary (copy this table into the response):")
+    out.append("")
+    out.append("| Session | Date/Time (UTC) | Duration | SW-DRIPS | "
+               "Wi-Fi Active | Wi-Fi Net Power | Exit Reason | SW DRIP Cause |")
+    out.append("|---|---|---|---|---|---|---|---|")
+    for s in matched[:max_sessions]:
+        wifi_off = s.wifi_in_top(top_n)
+        wifi_active_txt = (f"{wifi_off.active_pct:.1f}%"
+                           if wifi_off else "n/a")
+        wifi_net_mw = sum(a.network_mw for a in s.network_app_power)
+        wifi_net_txt = f"{wifi_net_mw:.0f} mW" if wifi_net_mw > 0 else "n/a"
+        sid = s.session_id or s.index
+        date_txt = (s.start or "").replace("|", "/")
+        dur_txt = (s.duration or f"{s.duration_s:.0f}s").replace("|", "/")
+        exit_txt = (s.exit_reason or "").replace("|", "/").replace("\n", " ")
+        if len(exit_txt) > 60:
+            exit_txt = exit_txt[:57] + "..."
+        out.append(
+            f"| {sid} | {date_txt} | {dur_txt} | {s.sw_drips_pct:.1f}% | "
+            f"{wifi_active_txt} | {wifi_net_txt} | {exit_txt or 'n/a'} | "
+            f"{_short_sw_cause(s)} |"
+        )
+    out.append("")
     for s in matched[:max_sessions]:
         wifi_off = s.wifi_in_top(top_n)
         out.append(
@@ -527,6 +1003,9 @@ def render_wifi_focused(report: Report, top_n: int = 3,
         )
         if s.exit_reason:
             out.append(f"  ExitReason: {s.exit_reason}")
+        sw_reason = _explain_sw_drips(s, drips_threshold)
+        if sw_reason:
+            out.append(f"  SW-DRIPS reason: {sw_reason}")
         out.append(f"  Wi-Fi offender: {wifi_off.name}")
         out.append(f"    active={wifi_off.active_pct:.1f}%  "
                    f"time={wifi_off.time_s:.1f}s  "
@@ -542,6 +1021,9 @@ def render_wifi_focused(report: Report, top_n: int = 3,
                 f"energy={o.energy_mwh:>6.1f} mWh  "
                 f"({o.kind}){marker}"
             )
+        # Wi-Fi deep-dive: activators that may be holding Wi-Fi awake +
+        # per-process NDIS traffic + heuristic conclusions.
+        out.extend(_render_wifi_deep_dive(s, indent="  "))
         out.append("")
 
     if len(matched) > max_sessions:

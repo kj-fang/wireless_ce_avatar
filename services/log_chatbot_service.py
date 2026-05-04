@@ -2786,7 +2786,16 @@ class WifiLogAgentSystem:
                         "appears in the top-N battery-drain offenders. Use this when the user "
                         "is investigating Modern Standby / connected-standby drain or suspects "
                         "Wi-Fi is keeping the system awake. The summary lists every matching "
-                        "Session ID and explains why if no sessions match."
+                        "Session ID and explains why if no sessions match. "
+                        "When you present the per-session results to the user, render a "
+                        "Markdown table with EXACTLY these columns and in this order: "
+                        "Session | Date/Time (UTC) | Duration | SW-DRIPS | Wi-Fi Active | "
+                        "Wi-Fi Net Power | Exit Reason | SW DRIP Cause. Populate the "
+                        "'SW DRIP Cause' column from the 'SW-DRIPS reason' line / 'SW DRIP "
+                        "Cause' column emitted in the tool result for that session (a brief "
+                        "explanation of why SW-DRIPS coverage was low). The tool result "
+                        "already contains a ready-to-copy table immediately after the "
+                        "VERDICT line — prefer reusing it verbatim."
                     ),
                     "parameters": {
                         "type": "object",

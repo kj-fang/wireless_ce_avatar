@@ -64,56 +64,64 @@ def _extract_issue_context() -> dict:
 
     attachment_time = ""
 
-    def _desc_time_to_str(desc: str) -> str:
-        """Parse issue time from attachment gray subtitle text and normalize to MM/DD/YYYY-HH:MM:SS."""
-        parsed = extract_time_from_description(desc)
-        if hasattr(parsed, 'strftime'):
-            return parsed.strftime('%m/%d/%Y-%H:%M:%S')
-        if isinstance(parsed, str) and parsed.strip():
-            # time-only case: keep as HH:MM:SS so agent can still apply segment2 on log date.
-            return parsed.strip()
-        return ""
+    # Return cached value if already computed this session (avoids re-parsing on every request)
+    cached = session.get("_attachment_time_cache")
+    if cached is not None:
+        attachment_time = cached
+    else:
+        def _desc_time_to_str(desc: str) -> str:
+            """Parse issue time from attachment gray subtitle text and normalize to MM/DD/YYYY-HH:MM:SS."""
+            parsed = extract_time_from_description(desc)
+            if hasattr(parsed, 'strftime'):
+                return parsed.strftime('%m/%d/%Y-%H:%M:%S')
+            if isinstance(parsed, str) and parsed.strip():
+                # time-only case: keep as HH:MM:SS so agent can still apply segment2 on log date.
+                return parsed.strip()
+            return ""
 
-    # Step 1: Get the list of selected file names
-    selected_files = session.get("selected_files", [])
-    selected_names = set()
-    for sf in selected_files:
-        if isinstance(sf, (list, tuple)) and len(sf) >= 1:
-            selected_names.add(sf[0])
+        # Step 1: Get the list of selected file names
+        selected_files = session.get("selected_files", [])
+        selected_names = set()
+        for sf in selected_files:
+            if isinstance(sf, (list, tuple)) and len(sf) >= 1:
+                selected_names.add(sf[0])
 
-    # Step 2: Read from case_context.attachment_list (same data source as the template)
-    raw_ctx_dict = session.get("case_context", {})
-    att_list = raw_ctx_dict.get("attachment_list", []) if isinstance(raw_ctx_dict, dict) else []
+        # Step 2: Read from case_context.attachment_list (same data source as the template)
+        raw_ctx_dict = session.get("case_context", {})
+        att_list = raw_ctx_dict.get("attachment_list", []) if isinstance(raw_ctx_dict, dict) else []
 
-    # Step 3: Prefer user-selected attachments; if selected_names is empty, take the first one
-    candidates = [item for item in att_list
-                  if isinstance(item, (list, tuple)) and len(item) >= 3
-                  and (not selected_names or item[0] in selected_names)]
-    if not candidates:
-        candidates = [item for item in att_list if isinstance(item, (list, tuple)) and len(item) >= 3]
+        # Step 3: Prefer user-selected attachments; if selected_names is empty, take the first one
+        candidates = [item for item in att_list
+                      if isinstance(item, (list, tuple)) and len(item) >= 3
+                      and (not selected_names or item[0] in selected_names)]
+        if not candidates:
+            candidates = [item for item in att_list if isinstance(item, (list, tuple)) and len(item) >= 3]
 
-    # Step 4 (PRIMARY): parse from gray subtitle description (item[2][1])
-    for item in candidates:
-        desc_raw = item[2][1] if isinstance(item[2], (list, tuple)) and len(item[2]) >= 2 else None
-        result = _desc_time_to_str(desc_raw)
-        if result:
-            attachment_time = result
-            print(f"[DEBUG] attachment_time from attachment description['{item[0]}']: {attachment_time}")
-            break
+        # Step 4 (PRIMARY): parse from gray subtitle description (item[2][1])
+        for item in candidates:
+            desc_raw = item[2][1] if isinstance(item[2], (list, tuple)) and len(item[2]) >= 2 else None
+            result = _desc_time_to_str(desc_raw)
+            if result:
+                attachment_time = result
+                print(f"[DEBUG] attachment_time from attachment description['{item[0]}']: {attachment_time}")
+                break
 
-    # Step 5: Fallback — try directly from selected_files
-    if not attachment_time:
-        for file_info in selected_files:
-            if isinstance(file_info, (list, tuple)) and len(file_info) >= 3:
-                desc_raw = file_info[2][1] if isinstance(file_info[2], (list, tuple)) and len(file_info[2]) >= 2 else None
-                result = _desc_time_to_str(desc_raw)
-                if result:
-                    attachment_time = result
-                    print(f"[DEBUG] attachment_time from selected_files description['{file_info[0]}']: {attachment_time}")
-                    break
+        # Step 5: Fallback — try directly from selected_files
+        if not attachment_time:
+            for file_info in selected_files:
+                if isinstance(file_info, (list, tuple)) and len(file_info) >= 3:
+                    desc_raw = file_info[2][1] if isinstance(file_info[2], (list, tuple)) and len(file_info[2]) >= 2 else None
+                    result = _desc_time_to_str(desc_raw)
+                    if result:
+                        attachment_time = result
+                        print(f"[DEBUG] attachment_time from selected_files description['{file_info[0]}']: {attachment_time}")
+                        break
 
-    if not attachment_time:
-        print(f"[DEBUG] attachment_time: NOT FOUND. selected_names={selected_names}, att_list len={len(att_list)}")
+        if not attachment_time:
+            print(f"[DEBUG] attachment_time: NOT FOUND. selected_names={selected_names}, att_list len={len(att_list)}")
+
+        # Cache in session so subsequent requests in the same flow skip re-parsing
+        session["_attachment_time_cache"] = attachment_time
 
     return {
         "case_nbr":    ctx.case_nbr or "",
@@ -150,7 +158,7 @@ def _extract_disconnect_time(*text_sources: str) -> str:
     return ""
 
 
-def _compose_concise_description() -> str:
+def _compose_concise_description(ctx: dict = None) -> str:
     """
     Auto-compose the most effective issue description for auto-analysis via chat.
 
@@ -158,7 +166,8 @@ def _compose_concise_description() -> str:
         e.g. "6G Weak Signal disconnected at around 10/28/2025-11:25:49"
     """
     try:
-        ctx = _extract_issue_context()
+        if ctx is None:
+            ctx = _extract_issue_context()
     except Exception:
         return "Perform full multi-skill log analysis"
 
@@ -185,11 +194,14 @@ def _compose_concise_description() -> str:
     return "Perform full multi-skill log analysis"
 
 
-def _get_or_create_agent() -> WifiLogAgentSystem:
+def _get_or_create_agent(skip_prime: bool = False) -> WifiLogAgentSystem:
     """
     Return a per-session WifiLogAgentSystem.
     Borrows client/model from app_config.log_chatbot_agent which is
     initialised at app startup (set_up_app.py -> set_up()).
+
+    skip_prime: if True, skip the auto prime_with_context on new session creation.
+                Use this when the caller will immediately call prime_with_context itself.
     """
     sid = session.get("chatbot_session_id")
     if not sid or sid not in _chatbot_instances:
@@ -221,12 +233,14 @@ def _get_or_create_agent() -> WifiLogAgentSystem:
         if app_config.last_analyzed_log_path:
             agent.current_log_path = app_config.last_analyzed_log_path
         # Prime with session issue context so every new session is context-aware
-        try:
-            ctx = _extract_issue_context()
-            if any(ctx.values()):
-                agent.prime_with_context(**ctx)
-        except Exception:
-            pass  # session may not have case context (standalone chatbot)
+        # (skipped when caller will immediately call prime_with_context itself)
+        if not skip_prime:
+            try:
+                ctx = _extract_issue_context()
+                if any(ctx.values()):
+                    agent.prime_with_context(**ctx)
+            except Exception:
+                pass  # session may not have case context (standalone chatbot)
         _chatbot_instances[sid] = agent
 
     return _chatbot_instances[sid]
@@ -287,7 +301,7 @@ def set_log():
         return jsonify({"success": False, "error": "log_path is required"}), 400
 
     try:
-        agent = _get_or_create_agent()
+        agent = _get_or_create_agent(skip_prime=True)
         agent.current_log_path = log_path
         agent.reset_conversation()          # fresh conversation for a new file
         ctx = _extract_issue_context()      # re-extract context in case session was updated after agent creation
@@ -347,16 +361,20 @@ def chat():
         # Issue Time: the sidebar field is the SINGLE source of truth.
         # When the frontend includes the `issue_time` key, override whatever
         # was pre-populated by prime_with_context (e.g. attachment_time).
-        # An empty string means "user explicitly chose no time" — clear the
-        # agent's issue_time AND any backup sources so the fallback chain in
-        # _chat_with_tools cannot resurrect an attachment-derived time.
+        # An empty string with `issue_time_cleared=True` means "user explicitly
+        # chose no time" — clear the agent's issue_time AND any backup sources.
+        # An empty string WITHOUT that flag means the sidebar had only time
+        # fields filled (time-only, no date) — keep the sentinel so pre-scan
+        # can align the date to the log file range.
         # ------------------------------------------------------------------
         if "issue_time" in data:
             raw_it = (data.get("issue_time") or "").strip()
-            agent.issue_time = None
-            if isinstance(agent.issue_context, dict):
-                agent.issue_context.pop("attachment_time", None)
+            explicitly_cleared = bool(data.get("issue_time_cleared", False))
             if raw_it:
+                # Full datetime from sidebar — override agent's issue_time
+                agent.issue_time = None
+                if isinstance(agent.issue_context, dict):
+                    agent.issue_context.pop("attachment_time", None)
                 # Try the canonical formats produced by the frontend picker.
                 for fmt in ("%m/%d/%Y-%H:%M:%S.%f",
                             "%m/%d/%Y-%H:%M:%S",
@@ -369,10 +387,12 @@ def chat():
                         break
                     except ValueError:
                         continue
-            else:
-                # Explicit "no time": neutralise description/subject so the
-                # agent's _chat_with_tools fallback doesn't re-extract one.
+            elif explicitly_cleared:
+                # Explicit "no time": clear agent state and neutralise
+                # description/subject so the fallback chain can't re-extract one.
+                agent.issue_time = None
                 if isinstance(agent.issue_context, dict):
+                    agent.issue_context.pop("attachment_time", None)
                     for k in ("description", "subject"):
                         v = agent.issue_context.get(k)
                         if isinstance(v, str) and v:
@@ -381,6 +401,8 @@ def chat():
                             v = re.sub(r'\d{4}[-/]\d{1,2}[-/]\d{1,2}[\sT]\d{1,2}:\d{2}:\d{2}', '', v)
                             v = re.sub(r'\b\d{1,2}:\d{2}:\d{2}(?:\.\d{1,3})?\b', '', v)
                             agent.issue_context[k] = re.sub(r'\s+', ' ', v).strip()
+            # else: empty but not explicitly cleared (time-only in sidebar, date blank)
+            # → keep agent.issue_time as-is (sentinel 0001-01-01) so pre-scan aligns date
 
         # Use the mode flag sent by the frontend toggle.
         use_tools = bool(data.get("use_tools", False))
@@ -496,6 +518,7 @@ def back_to_avatar():
         "selected_files",
         "attachment_list",
         "issue_time",
+        "_attachment_time_cache",
     ):
         session.pop(key, None)
 
@@ -538,7 +561,8 @@ def prepare():
         app_config.last_analyzed_log_path = log_path
 
         # Get/create per-session agent and prime it
-        agent = _get_or_create_agent()
+        # skip_prime=True: we call prime_with_context explicitly below (after setting log path)
+        agent = _get_or_create_agent(skip_prime=True)
         agent.current_log_path = log_path
         agent.prime_with_context(**ctx)
 
@@ -750,13 +774,13 @@ def get_skills():
 
 @log_chatbot_bp.route("/get_issue_context", methods=["GET"])
 def get_issue_context():
-    # Use _compose_concise_description() instead to get a cleaned and concise title/description.
-    concise_desc = _compose_concise_description()
     try:
         ctx = _extract_issue_context()
         attachment_time = ctx.get("attachment_time", "")
     except Exception:
+        ctx = {}
         attachment_time = ""
+    concise_desc = _compose_concise_description(ctx)
     return jsonify({"description": concise_desc, "attachment_time": attachment_time})
 
 
@@ -835,6 +859,8 @@ def find_best_log():
         return jsonify({"best_path": etl_paths[0] if etl_paths else None,
                         "reason": "No readable log files found; defaulting to first.",
                         "resolved_issue_time": ""})
+
+    print(f"[find_best_log] candidates={[c['etl_path'] for c in candidates]}, issue_time={issue_time}, issue_time_only_str={issue_time_only_str}")
 
     # --- Resolve time-only issue_time_str using log file dates ---
     # e.g. '14:50:51' -> combine with the date from the log's first/last timestamp

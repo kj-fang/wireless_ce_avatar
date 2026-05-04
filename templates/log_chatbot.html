@@ -1932,11 +1932,14 @@
 
         // Compose final message: description + (optional) issue time hint.
         // The sidebar Issue Time field is the SINGLE source of truth for the
-        // timestamp; any timestamp the user typed inside the description is
-        // stripped so it can't leak into the sent message.
-        const cleanDesc = trimTrailingTimeConnector(
-            stripTimestampsFromDesc(desc)
-        );
+        // timestamp on AUTO-FILLED first-round messages. Strip embedded
+        // timestamps only when auto-fill mode is active (sidebar time will be
+        // appended instead). For manually typed follow-up questions the user
+        // may intentionally include a timestamp (e.g. "what happened at 12:28:03")
+        // — leave those intact.
+        const cleanDesc = isAutoFillMode
+            ? trimTrailingTimeConnector(stripTimestampsFromDesc(desc))
+            : desc;
         const text = issueTime
             ? `${cleanDesc} at around ${issueTime}`
             : cleanDesc;
@@ -2099,7 +2102,10 @@
                     // Sidebar Issue Time is the SINGLE source of truth.
                     // Always send the field explicitly so the backend can
                     // override / clear any pre-primed attachment_time.
+                    // issue_time_cleared=true signals the user explicitly
+                    // removed all time fields (vs. time-only with blank date).
                     issue_time: issueTime || "",
+                    issue_time_cleared: !issueTime && !checkIssueTime().anyFilled,
                 })
             });
 

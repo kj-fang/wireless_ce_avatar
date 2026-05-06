@@ -666,9 +666,12 @@ class WifiLogAgentSystem:
             f"(Seg1: {len(self._driver_init_lines)} + Seg2: {len(seg2_lines)} — overlap: {overlap})"
         )
         if self.issue_time:
-            print(f"[PreScan]  Skill filter will use: scoped {len(merged)} lines")
+            print(f"[PreScan]  Skill filter will use: scoped {len(merged)} lines (±5 min window around issue_time)")
         else:
-            print(f"[PreScan]  Skill filter will use: full raw log (no issue_time — scoping skipped)")
+            print(
+                f"[PreScan]  Skill filter will use: scoped {len(merged)} lines "
+                f"(no issue_time — Segment2 falls back to Segment1 end → EOF)"
+            )
 
         scoped_path = self._export_scoped_log_file()
         if scoped_path:

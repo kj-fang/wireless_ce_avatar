@@ -694,7 +694,7 @@ class WifiLogAgentSystem:
 
     def _export_assembled_log_file(self) -> str:
         """
-        Increment export index on each call (fliterlog1, fliterlog2, ...)
+        Increment export index on each call (filterlog1, filterlog2, ...)
         and overwrite the existing file with the same index.
         """
         if not self.current_log_path:
@@ -707,7 +707,7 @@ class WifiLogAgentSystem:
 
         # Always advance index; write_text will overwrite same-name files.
         self._filter_export_counter += 1
-        candidate = parent_dir / f"fliterlog{self._filter_export_counter}.txt"
+        candidate = parent_dir / f"filterlog{self._filter_export_counter}.txt"
 
         try:
             candidate.write_text(export_text, encoding="utf-8")

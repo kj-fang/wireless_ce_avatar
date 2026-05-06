@@ -13,11 +13,32 @@ from configs.global_configs import app_config
 from models.models import CaseContext
 from services.log_chatbot_service import WifiLogAgentSystem, load_skills_from_data_dir, get_builtin_skills, build_skill_file_map, load_skills_from_yaml
 from utils.etl_utils import extract_time_from_description
+from utils.issue_time_utils import (
+    parse_issue_time_string,
+    read_log_time_range,
+    resolve_issue_time,
+    format_issue_time,
+)
+from services import feedback_service
 
 log_chatbot_bp = Blueprint("log_chatbot", __name__, url_prefix="/log_chatbot")
 
 # Server-side store: session_id -> WifiLogAgentSystem instance
 _chatbot_instances: dict = {}
+
+
+# ------------------------------------------------------------------
+# Feedback sidecar helpers (anonymous, side-car, never blocks chat)
+# ------------------------------------------------------------------
+def _ensure_feedback_conversation_id(*, rotate: bool = False) -> str:
+    """
+    Return the current feedback conversation_id, creating one if missing
+    or if `rotate=True` (e.g. on set_log / prepare — a new log = new case).
+    Stored in Flask session so it persists across requests.
+    """
+    if rotate or not session.get("feedback_conversation_id"):
+        session["feedback_conversation_id"] = str(uuid.uuid4())
+    return session["feedback_conversation_id"]
 
 
 def _extract_issue_context() -> dict:
@@ -130,6 +151,25 @@ def _extract_issue_context() -> dict:
         "issue_type":  issue_type,
         "attachment_time": attachment_time,
     }
+
+
+def _resolved_issue_time_for(log_path: str, attachment_time: str) -> str:
+    """
+    Session-level cache for the canonical sidebar-prefill issue_time.
+    Mirrors `_attachment_time_cache`: keyed by log_path so reloading a
+    different log naturally invalidates. Lets /get_issue_context return
+    the same value prime_with_context resolved without re-reading the
+    log file's first/last timestamps every time.
+    """
+    cache = session.get("_resolved_issue_time_cache") or {}
+    cache_key = log_path or "__nolog__"
+    if cache_key in cache:
+        return cache[cache_key]
+    dt, _ = resolve_issue_time(attachment_time, log_path)
+    formatted = format_issue_time(dt)
+    cache[cache_key] = formatted
+    session["_resolved_issue_time_cache"] = cache
+    return formatted
 
 
 def _extract_disconnect_time(*text_sources: str) -> str:
@@ -305,14 +345,29 @@ def set_log():
         agent.current_log_path = log_path
         agent.reset_conversation()          # fresh conversation for a new file
         ctx = _extract_issue_context()      # re-extract context in case session was updated after agent creation
-        if any(ctx.values()):
-            agent.prime_with_context(**ctx)
+        # Always prime: prime_with_context falls back to the log file's latest
+        # timestamp when ctx has no usable issue time, so the sidebar always
+        # gets an issue_time to display (covers the no-session entry path).
+        agent.prime_with_context(**ctx)
 
         session["chatbot_log_path"] = log_path
+
+        # Sidecar: a new log file = a new conversation. Rotate the id and
+        # eagerly create the snapshot file so issue context is captured even
+        # if the user never sends a message.
+        new_conv_id = _ensure_feedback_conversation_id(rotate=True)
+        feedback_service.ensure_conversation(
+            conversation_id=new_conv_id,
+            session_id=session.get("chatbot_session_id", ""),
+            issue=ctx,
+            log_path=log_path,
+        )
+
         return jsonify({
             "success": True,
             "message": f"Log file set: {log_path}",
             "skills": agent.get_skill_descriptions(),
+            "issue_time": format_issue_time(agent.issue_time),
         })
     except Exception as e:
         return jsonify({"success": False, "error": str(e)}), 500
@@ -372,21 +427,11 @@ def chat():
             explicitly_cleared = bool(data.get("issue_time_cleared", False))
             if raw_it:
                 # Full datetime from sidebar — override agent's issue_time
-                agent.issue_time = None
                 if isinstance(agent.issue_context, dict):
                     agent.issue_context.pop("attachment_time", None)
-                # Try the canonical formats produced by the frontend picker.
-                for fmt in ("%m/%d/%Y-%H:%M:%S.%f",
-                            "%m/%d/%Y-%H:%M:%S",
-                            "%m/%d/%Y %H:%M:%S.%f",
-                            "%m/%d/%Y %H:%M:%S",
-                            "%Y-%m-%d %H:%M:%S",
-                            "%Y/%m/%d %H:%M:%S"):
-                    try:
-                        agent.issue_time = datetime.strptime(raw_it, fmt)
-                        break
-                    except ValueError:
-                        continue
+                parsed, is_time_only = parse_issue_time_string(raw_it)
+                agent.issue_time = parsed
+                agent._issue_time_time_only = is_time_only
             elif explicitly_cleared:
                 # Explicit "no time": clear agent state and neutralise
                 # description/subject so the fallback chain can't re-extract one.
@@ -404,14 +449,35 @@ def chat():
             # else: empty but not explicitly cleared (time-only in sidebar, date blank)
             # → keep agent.issue_time as-is (sentinel 0001-01-01) so pre-scan aligns date
 
+        # ------------------------------------------------------------------
+        # Feedback sidecar: identify this turn so the frontend can attach
+        # 👍/👎 to it, and so the conversation snapshot can record skill
+        # invocations. Both IDs are anonymous (no auth).
+        # ------------------------------------------------------------------
+        session_id = session.get("chatbot_session_id", "")
+        conversation_id = _ensure_feedback_conversation_id()
+        turn_id = str(uuid.uuid4())
+        turn_started_at = datetime.now()
+        try:
+            _issue_ctx_for_snapshot = _extract_issue_context()
+        except Exception:
+            _issue_ctx_for_snapshot = {}
+
         # Use the mode flag sent by the frontend toggle.
         use_tools = bool(data.get("use_tools", False))
 
         if use_tools:
             import queue as _queue
             step_queue = _queue.Queue()
+            collected_steps: list = []
 
             def step_cb(step):
+                # Collect for snapshot, then forward to SSE stream.
+                try:
+                    if isinstance(step, dict):
+                        collected_steps.append(step)
+                except Exception:
+                    pass
                 step_queue.put(("step", step))
 
             @copy_current_request_context
@@ -444,7 +510,21 @@ def chat():
                     if msg_type == "step":
                         yield f"data: {json.dumps({'type': 'step', 'step': payload}, ensure_ascii=False)}\n\n"
                     elif msg_type == "done":
-                        yield f"data: {json.dumps({'type': 'done', 'result': payload}, ensure_ascii=False)}\n\n"
+                        # Sidecar: persist the turn before signalling done.
+                        # Failures here are swallowed inside feedback_service.
+                        feedback_service.record_turn(
+                            session_id=session_id,
+                            conversation_id=conversation_id,
+                            turn_id=turn_id,
+                            user_message=user_message,
+                            agent_result=payload,
+                            steps=collected_steps,
+                            mode="tools",
+                            duration_ms=int((datetime.now() - turn_started_at).total_seconds() * 1000),
+                            issue=_issue_ctx_for_snapshot,
+                            log_path=getattr(agent, "current_log_path", "") or "",
+                        )
+                        yield f"data: {json.dumps({'type': 'done', 'turn_id': turn_id, 'conversation_id': conversation_id, 'result': payload}, ensure_ascii=False)}\n\n"
                         break
                     elif msg_type == "error":
                         yield f"data: {json.dumps({'type': 'error', 'content': payload})}\n\n"
@@ -464,8 +544,22 @@ def chat():
                 max_tokens=max_tokens,
             )
 
+            # Sidecar: persist the turn (no step trace in simple mode).
+            feedback_service.record_turn(
+                session_id=session_id,
+                conversation_id=conversation_id,
+                turn_id=turn_id,
+                user_message=user_message,
+                agent_result=result,
+                steps=[],
+                mode="simple",
+                duration_ms=int((datetime.now() - turn_started_at).total_seconds() * 1000),
+                issue=_issue_ctx_for_snapshot,
+                log_path=getattr(agent, "current_log_path", "") or "",
+            )
+
             def generate():
-                yield f"data: {json.dumps({'type': 'done', 'result': result}, ensure_ascii=False)}\n\n"
+                yield f"data: {json.dumps({'type': 'done', 'turn_id': turn_id, 'conversation_id': conversation_id, 'result': result}, ensure_ascii=False)}\n\n"
 
             return Response(generate(), mimetype="text/event-stream")
     except Exception as e:
@@ -519,6 +613,8 @@ def back_to_avatar():
         "attachment_list",
         "issue_time",
         "_attachment_time_cache",
+        "_resolved_issue_time_cache",
+        "feedback_conversation_id",   # next /log_chatbot/ visit starts a fresh conversation
     ):
         session.pop(key, None)
 
@@ -565,6 +661,15 @@ def prepare():
         agent = _get_or_create_agent(skip_prime=True)
         agent.current_log_path = log_path
         agent.prime_with_context(**ctx)
+
+        # Sidecar: prepare = entering a new analysis = new conversation.
+        new_conv_id = _ensure_feedback_conversation_id(rotate=True)
+        feedback_service.ensure_conversation(
+            conversation_id=new_conv_id,
+            session_id=session.get("chatbot_session_id", ""),
+            issue=ctx,
+            log_path=log_path,
+        )
 
         return jsonify({"success": True})
     except Exception as e:
@@ -781,7 +886,20 @@ def get_issue_context():
         ctx = {}
         attachment_time = ""
     concise_desc = _compose_concise_description(ctx)
-    return jsonify({"description": concise_desc, "attachment_time": attachment_time})
+
+    # Resolve a final issue_time for sidebar display: prefer attachment_time,
+    # fall back to the loaded log's latest timestamp so direct chatbot entry
+    # (no session) still gets a usable value. Cached by log_path so a
+    # repeat call from the frontend doesn't re-read the log's timestamp
+    # range — same canonical value prime_with_context already computed.
+    log_path = session.get("chatbot_log_path") or app_config.last_analyzed_log_path or ""
+    issue_time_str = _resolved_issue_time_for(log_path, attachment_time)
+
+    return jsonify({
+        "description": concise_desc,
+        "attachment_time": attachment_time,
+        "issue_time": issue_time_str,
+    })
 
 
 # ------------------------------------------------------------------
@@ -808,46 +926,27 @@ def find_best_log():
         return jsonify({"best_path": None, "reason": "No ETL paths provided."})
 
     # --- Parse issue time from the provided string ---
-    _parsed = extract_time_from_description(issue_time_str)
-    issue_time = _parsed if isinstance(_parsed, datetime) else None
-    issue_time_only_str = _parsed if isinstance(_parsed, str) else None  # e.g. '14:50:51'
+    # Try strict canonical parse first (sidebar/auto-extract path), then
+    # fall back to the looser description scanner for legacy free-form input.
+    issue_time, is_time_only = parse_issue_time_string(issue_time_str)
+    issue_time_only_str = None
+    if issue_time and is_time_only:
+        issue_time_only_str = issue_time.strftime("%H:%M:%S")
+        issue_time = None
+    if issue_time is None and issue_time_only_str is None:
+        _parsed = extract_time_from_description(issue_time_str)
+        if isinstance(_parsed, datetime):
+            issue_time = _parsed
+        elif isinstance(_parsed, str):
+            issue_time_only_str = _parsed  # e.g. '14:50:51'
 
-    # --- Scan each log file for its time range ---
-    TIME_PATTERN = re.compile(r'(\d{2}/\d{2}/\d{4}-\d{2}:\d{2}:\d{2}\.\d{3})')
+    # --- Scan each log file for its time range (shared helper) ---
     candidates = []
-
     for etl_path in etl_paths:
         log_path = etl_path + ".log"
         if not os.path.exists(log_path):
             continue
-
-        first_ts, last_ts = None, None
-        try:
-            with open(log_path, "r", encoding="utf-8", errors="ignore") as f:
-                # Read first timestamp from the beginning (first 200 lines)
-                for i, line in enumerate(f):
-                    if i > 200:
-                        break
-                    m = TIME_PATTERN.search(line)
-                    if m:
-                        first_ts = datetime.strptime(m.group(1), "%m/%d/%Y-%H:%M:%S.%f")
-                        break
-
-                # Read last timestamp by scanning from the end
-                # (seek backwards for large files, or just read through)
-                f.seek(0, 2)  # go to end
-                file_size = f.tell()
-                # Read last 64KB to find the last timestamp
-                read_size = min(file_size, 65536)
-                f.seek(file_size - read_size)
-                tail_chunk = f.read()
-                matches = TIME_PATTERN.findall(tail_chunk)
-                if matches:
-                    last_ts = datetime.strptime(matches[-1], "%m/%d/%Y-%H:%M:%S.%f")
-        except Exception as e:
-            print(f"[find_best_log] Error reading {log_path}: {e}")
-            continue
-
+        first_ts, last_ts = read_log_time_range(log_path)
         candidates.append({
             "etl_path": etl_path,
             "log_path": log_path,
@@ -926,28 +1025,3 @@ def find_best_log():
         "reason": "Could not determine timestamps; defaulting to first.",
         "resolved_issue_time": "",
     })
-
-
-def _parse_issue_time(time_str: str):
-    """
-    Try to parse an issue time string in various common formats.
-    Returns a datetime object or None.
-    """
-    if not time_str:
-        return None
-
-    # Try common patterns
-    patterns = [
-        (r'(\d{2}/\d{2}/\d{4}-\d{2}:\d{2}:\d{2})', "%m/%d/%Y-%H:%M:%S"),
-        (r'(\d{2}/\d{2}/\d{4}\s+\d{2}:\d{2}:\d{2})', "%m/%d/%Y %H:%M:%S"),
-        (r'(\d{4}-\d{2}-\d{2}\s+\d{2}:\d{2}:\d{2})', "%Y-%m-%d %H:%M:%S"),
-        (r'(\d{4}/\d{2}/\d{2}-\d{2}:\d{2}:\d{2})', "%Y/%m/%d-%H:%M:%S"),
-    ]
-    for regex, fmt in patterns:
-        m = re.search(regex, time_str)
-        if m:
-            try:
-                return datetime.strptime(m.group(1), fmt)
-            except ValueError:
-                continue
-    return None

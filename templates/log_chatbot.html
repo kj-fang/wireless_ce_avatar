@@ -743,6 +743,203 @@
             color: #374151;
         }
         .agent-step-content strong { color: #1e40af; }
+
+        /* ── Feedback widget (thumbs up / down on each agent reply) ── */
+        .feedback-widget {
+            display: flex;
+            gap: 6px;
+            margin-top: 6px;
+            opacity: 0.75;
+            transition: opacity 0.15s;
+        }
+        .feedback-widget:hover { opacity: 1; }
+        .feedback-btn {
+            background: white;
+            border: 1px solid #d8dee5;
+            border-radius: 14px;
+            padding: 2px 9px;
+            font-size: 0.85rem;
+            cursor: pointer;
+            line-height: 1.2;
+            transition: background 0.15s, border-color 0.15s, transform 0.1s;
+            user-select: none;
+        }
+        .feedback-btn:hover:not(:disabled) {
+            background: #f5f9ff;
+            border-color: #0071c5;
+        }
+        .feedback-btn:active:not(:disabled) { transform: scale(0.95); }
+        .feedback-btn.voted-up   { background: #e8f7ec; border-color: #2ea043; color: #1a7f37; }
+        .feedback-btn.voted-down { background: #fdecec; border-color: #cf222e; color: #b42318; }
+        .feedback-btn:disabled   { cursor: default; }
+        .feedback-thanks {
+            font-size: 0.72rem;
+            color: #6a737d;
+            margin-left: 4px;
+            align-self: center;
+        }
+        .feedback-more-link {
+            font-size: 0.75rem;
+            color: #0071c5;
+            cursor: pointer;
+            text-decoration: none;
+            align-self: center;
+            margin-left: 4px;
+            user-select: none;
+        }
+        .feedback-more-link:hover { text-decoration: underline; }
+        .feedback-more-link.submitted { color: #1a7f37; cursor: default; text-decoration: none; }
+
+        /* ── Feedback detail modal ───────────────────────────────────── */
+        .fbd-modal { position: fixed; inset: 0; z-index: 9000; display: none; }
+        .fbd-modal.open { display: block; }
+        .fbd-backdrop {
+            position: absolute; inset: 0;
+            background: rgba(0,0,0,0.45);
+        }
+        .fbd-card {
+            position: relative;
+            margin: 5vh auto;
+            width: min(680px, 92vw);
+            max-height: 88vh;
+            background: white;
+            border-radius: 10px;
+            box-shadow: 0 20px 60px rgba(0,0,0,0.25);
+            display: flex; flex-direction: column;
+            overflow: hidden;
+        }
+        .fbd-header {
+            padding: 14px 20px;
+            border-bottom: 1px solid #e5e7eb;
+            display: flex; align-items: center; gap: 10px;
+        }
+        .fbd-header h3 { margin: 0; font-size: 1rem; font-weight: 600; }
+        .fbd-vote-badge {
+            display: inline-block;
+            padding: 2px 9px;
+            border-radius: 10px;
+            font-size: 0.78rem;
+            background: #f0f2f5;
+        }
+        .fbd-vote-badge.up   { background: #e8f7ec; color: #1a7f37; }
+        .fbd-vote-badge.down { background: #fdecec; color: #b42318; }
+        .fbd-close {
+            margin-left: auto;
+            background: none; border: none;
+            font-size: 1.5rem; line-height: 1;
+            cursor: pointer; color: #6a737d;
+        }
+        .fbd-body {
+            padding: 16px 20px;
+            overflow-y: auto;
+            flex: 1;
+            font-size: 0.85rem;
+        }
+        .fbd-section-label {
+            font-size: 0.72rem;
+            color: #6a737d;
+            text-transform: uppercase;
+            letter-spacing: 0.05em;
+            margin: 14px 0 6px;
+            font-weight: 600;
+        }
+        .fbd-section-label:first-child { margin-top: 0; }
+        .fbd-issue-row {
+            border: 1px solid #e5e7eb;
+            border-radius: 8px;
+            padding: 12px 44px 12px 12px;
+            margin-bottom: 10px;
+            background: #fafbfc;
+            position: relative;
+        }
+        .fbd-row-grid {
+            display: grid;
+            grid-template-columns: 1fr 1fr;
+            gap: 10px;
+            margin-bottom: 8px;
+        }
+        .fbd-issue-row select,
+        .fbd-issue-row input[type="text"],
+        .fbd-issue-row textarea,
+        .fbd-body textarea {
+            width: 100%;
+            padding: 6px 8px;
+            border: 1px solid #d8dee5;
+            border-radius: 6px;
+            font-size: 0.82rem;
+            font-family: inherit;
+            background: white;
+        }
+        .fbd-issue-row select,
+        .fbd-body select {
+            padding-right: 32px;
+            -webkit-appearance: none;
+            -moz-appearance: none;
+            appearance: none;
+            background-image: url("data:image/svg+xml;utf8,<svg xmlns='http://www.w3.org/2000/svg' width='12' height='12' viewBox='0 0 12 12'><path fill='%236a737d' d='M2 4l4 4 4-4z'/></svg>");
+            background-repeat: no-repeat;
+            background-position: right 10px center;
+            text-overflow: ellipsis;
+        }
+        .fbd-issue-row textarea,
+        .fbd-body > textarea {
+            resize: vertical;
+            min-height: 50px;
+        }
+        .fbd-row-extra { margin-bottom: 8px; }
+        .fbd-remove {
+            position: absolute;
+            top: 10px; right: 10px;
+            width: 24px; height: 24px;
+            border-radius: 50%;
+            background: white;
+            border: 1px solid #e5e7eb;
+            color: #cf222e;
+            cursor: pointer;
+            font-size: 0.95rem;
+            line-height: 1;
+            padding: 0;
+            display: flex;
+            align-items: center;
+            justify-content: center;
+        }
+        .fbd-remove:hover {
+            background: #fdecec;
+            border-color: #cf222e;
+        }
+        .fbd-add-row {
+            background: white;
+            border: 1px dashed #0071c5;
+            color: #0071c5;
+            border-radius: 6px;
+            padding: 6px 12px;
+            cursor: pointer;
+            font-size: 0.8rem;
+            margin-top: 4px;
+        }
+        .fbd-add-row:hover { background: #f5f9ff; }
+        .fbd-footer {
+            padding: 12px 20px;
+            border-top: 1px solid #e5e7eb;
+            display: flex; gap: 8px; justify-content: flex-end;
+            background: #fafbfc;
+        }
+        .fbd-btn {
+            padding: 6px 14px;
+            border-radius: 6px;
+            border: 1px solid #d8dee5;
+            background: white;
+            cursor: pointer;
+            font-size: 0.85rem;
+        }
+        .fbd-btn.primary {
+            background: #0071c5;
+            color: white;
+            border-color: #0071c5;
+        }
+        .fbd-btn.primary:hover { background: #005a9e; }
+        .fbd-btn:disabled { opacity: 0.6; cursor: not-allowed; }
+        .hidden-row { display: none !important; }
     </style>
 </head>
 <body>
@@ -1582,13 +1779,16 @@
         if (t) t.remove();
     }
 
-    function appendAssistantText(text) {
+    function appendAssistantText(text, turnId) {
         removeTyping();
         const row = document.createElement('div');
         row.className = 'msg-row assistant';
         row.innerHTML = `
             <div class="avatar-icon">🤖</div>
-            <div class="msg-bubble">${marked.parse(text)}</div>
+            <div style="flex:1;min-width:0;">
+                <div class="msg-bubble">${marked.parse(text)}</div>
+                ${turnId ? renderFeedbackWidget(turnId) : ''}
+            </div>
         `;
         document.getElementById('chat-window').appendChild(row);
         scrollBottom();
@@ -1610,7 +1810,7 @@
         }
     }
 
-    function appendReport(data, header = '📊 Analysis Report', eventTime = null) {
+    function appendReport(data, header = '📊 Analysis Report', eventTime = null, turnId = null) {
         removeTyping();
         hideWelcome();
 
@@ -1697,7 +1897,7 @@
         const wrapper = document.createElement('div');
         wrapper.className = 'msg-row assistant';
         wrapper.style.maxWidth = '95%';
-        wrapper.innerHTML = `<div class="avatar-icon">🤖</div><div style="flex:1;">${html}</div>`;
+        wrapper.innerHTML = `<div class="avatar-icon">🤖</div><div style="flex:1;">${html}${turnId ? renderFeedbackWidget(turnId) : ''}</div>`;
         document.getElementById('chat-window').appendChild(wrapper);
         scrollBottom();
 
@@ -1848,6 +2048,15 @@
                 showStatus(statusEl, '✔ ' + data.message, 'ok');
                 renderSkills(data.skills);
                 logLoaded = true;
+                // Auto-fill the sidebar Issue Time when nothing is filled yet.
+                // The backend resolves it by falling back to the log's latest
+                // timestamp when no attachment_time was found, so a direct
+                // chatbot entry (no session) still sees a usable default.
+                if (data.issue_time && !checkIssueTime().anyFilled) {
+                    setIssueTimeFromString(data.issue_time);
+                    const warn = document.getElementById('it-unknown-warn');
+                    if (warn) warn.style.display = 'none';
+                }
                 updateAnalyzeBtn();
                 validateUserInput();
             } else {
@@ -2128,14 +2337,17 @@
                 } else if (evt.type === 'done') {
                     removeTyping();
                     const result = evt.result;
+                    const turnId = evt.turn_id || null;
+                    if (evt.conversation_id) window.__feedbackConversationId = evt.conversation_id;
+                    if (turnId) captureTurnContext(turnId, steps);
                     if (result && result.type === 'report') {
                         if (agentCardId) collapseAgentProcessCard(agentCardId);
-                        appendReport(result.data, '📊 Analysis Report', result.issue_time || null);
+                        appendReport(result.data, '📊 Analysis Report', result.issue_time || null, turnId);
                     } else if (result && result.type === 'partial_report' && result.data) {
                         if (agentCardId) collapseAgentProcessCard(agentCardId);
-                        appendReport(result.data, '⚠️ Partial Analysis (Step Limit)', result.issue_time || null);
-                    } else if (result && result.type === 'text') appendAssistantText(result.data || '_No response._');
-                    else if (result) appendAssistantText('⚠️ ' + (result.data || 'Unknown response.'));
+                        appendReport(result.data, '⚠️ Partial Analysis (Step Limit)', result.issue_time || null, turnId);
+                    } else if (result && result.type === 'text') appendAssistantText(result.data || '_No response._', turnId);
+                    else if (result) appendAssistantText('⚠️ ' + (result.data || 'Unknown response.'), turnId);
                 } else if (evt.type === 'error') {
                     removeTyping();
                     appendAssistantText('❌ Error: ' + (evt.content || 'Unknown error'));
@@ -2310,6 +2522,10 @@
             const contextRes = await fetch('/log_chatbot/get_issue_context');
             const contextData = await contextRes.json();
             const question = contextData.description;
+            // Prefer the backend-resolved issue_time (attachment_time, with
+            // log-latest fallback). attachment_time is kept as a separate
+            // signal in case the description still embeds the same string.
+            const resolvedTime = (contextData.issue_time || '').trim();
             const attachmentTime = (contextData.attachment_time || '').trim();
 
             // Enable agentic mode for auto-analysis
@@ -2331,7 +2547,10 @@
                 // Highest priority: resolved_issue_time passed via URL query param
                 // (set by download_result when find_best_log resolved a time-only string).
                 let descPart = rawQuestion;
-                let foundTime = urlIssueTime || attachmentTime;
+                // Priority: URL ?issue_time= (find_best_log result) →
+                // attachment_time (gray subtitle) → backend-resolved
+                // issue_time (log-latest fallback) → regex on description.
+                let foundTime = urlIssueTime || attachmentTime || resolvedTime;
                 if (!foundTime) {
                     for (const re of VALID_TIME_REGEXES) {
                         const m = rawQuestion.match(re);
@@ -2373,6 +2592,305 @@
         validateUserInput();
         tryAutoAnalyzeOnLoad();
     });
+</script>
+
+<!-- ===== Feedback detail modal (Layer 2 — "More feedback") ============= -->
+<div id="feedback-detail-modal" class="fbd-modal" aria-hidden="true">
+    <div class="fbd-backdrop" onclick="closeFeedbackModal()"></div>
+    <div class="fbd-card" role="dialog" aria-modal="true">
+        <div class="fbd-header">
+            <h3>More feedback</h3>
+            <span id="fbd-vote-badge" class="fbd-vote-badge"></span>
+            <button type="button" class="fbd-close" onclick="closeFeedbackModal()" aria-label="Close">×</button>
+        </div>
+        <div class="fbd-body">
+            <div class="fbd-section-label">Specific issues (add multiple if needed — all fields optional)</div>
+            <div id="fbd-issues-list"></div>
+            <button type="button" class="fbd-add-row" onclick="addIssueRow()">+ Add another issue</button>
+
+            <div class="fbd-section-label">Overall suggestion (optional)</div>
+            <textarea id="fbd-general-comment" placeholder="e.g. The overall direction was wrong — the root cause looks more like ..."></textarea>
+        </div>
+        <div class="fbd-footer">
+            <button type="button" class="fbd-btn" onclick="closeFeedbackModal()">Cancel</button>
+            <button type="button" class="fbd-btn primary" id="fbd-submit-btn" onclick="submitFeedbackDetail()">Submit</button>
+        </div>
+    </div>
+</div>
+
+<template id="fbd-issue-row-template">
+    <div class="fbd-issue-row">
+        <button type="button" class="fbd-remove" title="Remove" onclick="removeIssueRow(this)">×</button>
+        <div class="fbd-row-grid">
+            <select class="fbd-scope" onchange="onScopeChange(this)">
+                <option value="">— Scope (optional) —</option>
+                <option value="overall">Overall reasoning flow</option>
+                <option value="skill">A specific Skill</option>
+                <option value="step">A specific reasoning Step</option>
+            </select>
+            <select class="fbd-category" onchange="onCategoryChange(this)" disabled>
+                <option value="">— Select scope first —</option>
+            </select>
+        </div>
+        <div class="fbd-row-extra fbd-skill-wrap hidden-row">
+            <select class="fbd-skill">
+                <option value="">— Select skill —</option>
+            </select>
+        </div>
+        <div class="fbd-row-extra fbd-step-wrap hidden-row">
+            <select class="fbd-step">
+                <option value="">— Select step —</option>
+            </select>
+        </div>
+        <div class="fbd-row-extra fbd-shouldbe-wrap hidden-row">
+            <input type="text" class="fbd-should-be" placeholder="(Optional) Suggested replacement skill">
+        </div>
+        <textarea class="fbd-comment" placeholder="Additional notes (optional)"></textarea>
+    </div>
+</template>
+
+<script>
+    // ── Feedback widget renderer (called by appendAssistantText / appendReport) ─
+    function renderFeedbackWidget(turnId) {
+        return `
+            <div class="feedback-widget" data-turn-id="${turnId}">
+                <button type="button" class="feedback-btn" title="Helpful"
+                        onclick="submitFeedback('${turnId}', 1, this)">👍</button>
+                <button type="button" class="feedback-btn" title="Not helpful"
+                        onclick="submitFeedback('${turnId}', -1, this)">👎</button>
+            </div>`;
+    }
+
+    async function submitFeedback(turnId, vote, btnEl) {
+        const widget = btnEl ? btnEl.closest('.feedback-widget') : null;
+        if (!widget) return;
+        widget.querySelectorAll('.feedback-btn').forEach(b => b.disabled = true);
+        const conversationId = window.__feedbackConversationId || '';
+
+        try {
+            const res = await fetch('/feedback/vote', {
+                method: 'POST',
+                headers: {'Content-Type': 'application/json'},
+                body: JSON.stringify({ conversation_id: conversationId, turn_id: turnId, vote }),
+            });
+            const data = await res.json().catch(() => ({}));
+            if (data && data.success) {
+                btnEl.classList.add(vote === 1 ? 'voted-up' : 'voted-down');
+                widget.dataset.castVote = String(vote);
+                const more = document.createElement('a');
+                more.className = 'feedback-more-link';
+                more.textContent = '✏️ More feedback';
+                more.onclick = () => openFeedbackModal(turnId, vote, more);
+                widget.appendChild(more);
+                const thanks = document.createElement('span');
+                thanks.className = 'feedback-thanks';
+                thanks.textContent = 'Thanks!';
+                widget.appendChild(thanks);
+            } else {
+                widget.querySelectorAll('.feedback-btn').forEach(b => b.disabled = false);
+                console.warn('Feedback save failed:', data);
+            }
+        } catch (e) {
+            widget.querySelectorAll('.feedback-btn').forEach(b => b.disabled = false);
+            console.warn('Feedback network error:', e);
+        }
+    }
+
+    // ── Feedback Layer 2: detailed structured feedback modal ─────────
+    window.__turnContext = window.__turnContext || {};
+    window.__currentFeedbackCtx = null;
+
+    function captureTurnContext(turnId, steps) {
+        if (!turnId || !Array.isArray(steps)) return;
+        const skillSeen = new Set();
+        const skillList = [];
+        const stepList = [];
+        let reasoningStep = 0;
+        const invokeRe = /(?:Invoking|Fetching filtered logs.*for)\s+`([^`]+)`/;
+
+        steps.forEach((s, idx) => {
+            const c = (s && s.content ? String(s.content) : '');
+            const rm = c.match(/Reasoning Step\s+(\d+)\s*\/\s*\d+/);
+            if (rm) { reasoningStep = parseInt(rm[1], 10) || reasoningStep + 1; return; }
+            const m = c.match(invokeRe);
+            if (m) {
+                const sid = m[1].trim();
+                if (sid && !skillSeen.has(sid)) { skillSeen.add(sid); skillList.push(sid); }
+                stepList.push({
+                    step_index: idx, skill_id: sid,
+                    label: `Step ${reasoningStep || stepList.length + 1} — Invoking ${sid}`,
+                });
+                return;
+            }
+            if (/Conclusion reached/.test(c)) {
+                stepList.push({
+                    step_index: idx, skill_id: null,
+                    label: `Step ${reasoningStep || stepList.length + 1} — Final report`,
+                });
+            }
+        });
+        window.__turnContext[turnId] = { skills: skillList, steps: stepList };
+    }
+
+    const FBD_CATEGORIES_BY_SCOPE = {
+        overall: [
+            { value: 'wrong_order',  label: 'Wrong reasoning order' },
+            { value: 'missing_step', label: 'Missing a step' },
+            { value: 'stuck',        label: 'Stuck / looped' },
+        ],
+        skill: [
+            { value: 'bad_output',   label: 'Suggestion on this skill’s content / output' },
+        ],
+        step: [
+            { value: 'wrong_skill',  label: 'Wrong skill chosen (should use a different one)' },
+            { value: 'wrong_input',  label: 'Right skill, but wrong function call / parameters' },
+        ],
+    };
+
+    function openFeedbackModal(turnId, vote, linkEl) {
+        window.__currentFeedbackCtx = {
+            turnId, vote,
+            conversationId: window.__feedbackConversationId || '',
+            linkEl,
+        };
+        const badge = document.getElementById('fbd-vote-badge');
+        badge.classList.remove('up', 'down');
+        if (vote === 1) { badge.classList.add('up'); badge.textContent = '👍'; }
+        else if (vote === -1) { badge.classList.add('down'); badge.textContent = '👎'; }
+        else { badge.textContent = ''; }
+
+        document.getElementById('fbd-issues-list').innerHTML = '';
+        document.getElementById('fbd-general-comment').value = '';
+        addIssueRow();
+
+        const modal = document.getElementById('feedback-detail-modal');
+        modal.classList.add('open');
+        modal.setAttribute('aria-hidden', 'false');
+        document.getElementById('fbd-submit-btn').disabled = false;
+    }
+    function closeFeedbackModal() {
+        const modal = document.getElementById('feedback-detail-modal');
+        modal.classList.remove('open');
+        modal.setAttribute('aria-hidden', 'true');
+        window.__currentFeedbackCtx = null;
+    }
+
+    function addIssueRow() {
+        const tpl = document.getElementById('fbd-issue-row-template');
+        const list = document.getElementById('fbd-issues-list');
+        const node = tpl.content.firstElementChild.cloneNode(true);
+        const ctx = (window.__currentFeedbackCtx
+                     && window.__turnContext[window.__currentFeedbackCtx.turnId])
+                    || { skills: [], steps: [] };
+        const skillSel = node.querySelector('.fbd-skill');
+        ctx.skills.forEach(sid => {
+            const opt = document.createElement('option');
+            opt.value = sid; opt.textContent = sid;
+            skillSel.appendChild(opt);
+        });
+        const stepSel = node.querySelector('.fbd-step');
+        ctx.steps.forEach(st => {
+            const opt = document.createElement('option');
+            opt.value = String(st.step_index);
+            opt.textContent = st.label;
+            opt.dataset.stepLabel = st.label;
+            opt.dataset.skillId = st.skill_id || '';
+            stepSel.appendChild(opt);
+        });
+        list.appendChild(node);
+    }
+    function removeIssueRow(btn) {
+        const row = btn.closest('.fbd-issue-row');
+        const list = document.getElementById('fbd-issues-list');
+        if (row && list.children.length > 1) row.remove();
+    }
+    function onScopeChange(selectEl) {
+        const row = selectEl.closest('.fbd-issue-row');
+        const scope = selectEl.value;
+        row.querySelector('.fbd-skill-wrap').classList.toggle('hidden-row', scope !== 'skill');
+        row.querySelector('.fbd-step-wrap').classList.toggle('hidden-row', scope !== 'step');
+        row.querySelector('.fbd-shouldbe-wrap').classList.add('hidden-row');
+
+        const catSel = row.querySelector('.fbd-category');
+        const opts = FBD_CATEGORIES_BY_SCOPE[scope] || [];
+        catSel.innerHTML = '';
+        const placeholder = document.createElement('option');
+        placeholder.value = '';
+        placeholder.textContent = scope ? '— Issue type (optional) —' : '— Select scope first —';
+        catSel.appendChild(placeholder);
+        opts.forEach(o => {
+            const opt = document.createElement('option');
+            opt.value = o.value; opt.textContent = o.label;
+            catSel.appendChild(opt);
+        });
+        catSel.disabled = !scope;
+    }
+    function onCategoryChange(selectEl) {
+        const row = selectEl.closest('.fbd-issue-row');
+        const sbWrap = row.querySelector('.fbd-shouldbe-wrap');
+        sbWrap.classList.toggle('hidden-row', selectEl.value !== 'wrong_skill');
+    }
+
+    async function submitFeedbackDetail() {
+        const ctx = window.__currentFeedbackCtx;
+        if (!ctx) return;
+        const rows = document.querySelectorAll('#fbd-issues-list .fbd-issue-row');
+        const issues = [];
+        rows.forEach(r => {
+            const scope    = r.querySelector('.fbd-scope').value || '';
+            const category = r.querySelector('.fbd-category').value || '';
+            const skillId  = r.querySelector('.fbd-skill').value || '';
+            const stepSel  = r.querySelector('.fbd-step');
+            const stepIdxRaw = stepSel.value;
+            const stepLabel  = stepSel.selectedOptions[0]
+                              && stepSel.selectedOptions[0].dataset.stepLabel || '';
+            const shouldBe = r.querySelector('.fbd-should-be').value.trim();
+            const comment  = r.querySelector('.fbd-comment').value.trim();
+            if (!scope && !category && !skillId && !stepIdxRaw && !shouldBe && !comment) return;
+            issues.push({
+                scope:      scope || null,
+                category:   category || null,
+                skill_id:   skillId || null,
+                step_index: stepIdxRaw === '' ? null : parseInt(stepIdxRaw, 10),
+                step_label: stepLabel || null,
+                should_be:  shouldBe || null,
+                comment:    comment || null,
+            });
+        });
+        const generalComment = document.getElementById('fbd-general-comment').value.trim();
+        if (issues.length === 0 && !generalComment) { closeFeedbackModal(); return; }
+
+        const submitBtn = document.getElementById('fbd-submit-btn');
+        submitBtn.disabled = true;
+        try {
+            const res = await fetch('/feedback/detail', {
+                method: 'POST',
+                headers: {'Content-Type': 'application/json'},
+                body: JSON.stringify({
+                    conversation_id: ctx.conversationId,
+                    turn_id:         ctx.turnId,
+                    vote:            ctx.vote,
+                    issues,
+                    general_comment: generalComment,
+                }),
+            });
+            const data = await res.json().catch(() => ({}));
+            if (data && data.success) {
+                if (ctx.linkEl) {
+                    ctx.linkEl.classList.add('submitted');
+                    ctx.linkEl.textContent = '✓ Detailed feedback submitted';
+                    ctx.linkEl.onclick = null;
+                }
+                closeFeedbackModal();
+            } else {
+                submitBtn.disabled = false;
+                alert('Submit failed: ' + (data && data.error ? data.error : 'Unknown error'));
+            }
+        } catch (e) {
+            submitBtn.disabled = false;
+            alert('Network error: ' + e.message);
+        }
+    }
 </script>
 </body>
 </html>

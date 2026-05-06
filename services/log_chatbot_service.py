@@ -24,6 +24,7 @@ from typing import Dict, List, Optional, Tuple
 from pydantic import BaseModel, Field
 
 from utils import helpers
+from utils.issue_time_utils import resolve_issue_time
 from utils.log_parser_preprocess import (
     extract_enabled_keywords_from_filter_file,
     filter_log_by_keywords,
@@ -1530,21 +1531,17 @@ class WifiLogAgentSystem:
             self.conversation_history.append({"role": "user", "content": user_message})
 
             # --- Issue time extraction ---
-            # Prefer pre-set issue_time (e.g. from attachment_time via
-            # prime_with_context), then try user message, then description.
+            # By the time we get here `self.issue_time` is normally already
+            # set: prime_with_context resolved it from attachment_time (and
+            # fell back to the log's latest timestamp if needed), and the
+            # /chat route may have overridden it with the sidebar value.
+            # Only run the LLM-based extractor if everything upstream came
+            # back empty — and try the user's message first.
             if self.issue_time:
-                time_source = "attachment_time"
+                time_source = "primed"
             else:
                 self.issue_time = self._extract_issue_time(user_message)
                 time_source = "user_message"
-
-            if not self.issue_time and self.issue_context.get("description"):
-                self.issue_time = self._extract_issue_time(self.issue_context["description"])
-                time_source = "issue_context.description"
-
-            if not self.issue_time and self.issue_context.get("subject"):
-                self.issue_time = self._extract_issue_time(self.issue_context["subject"])
-                time_source = "issue_context.subject"
 
             if self.issue_time:
                 _emit({
@@ -2615,41 +2612,14 @@ class WifiLogAgentSystem:
             "description": description,
             "issue_type": issue_type,
         }
-        # Pre-parse attachment_time so _chat_with_tools can use it directly
-        # support multiple date formats (session deserialization may result in different formats)
-        
-        if attachment_time:
-            self.issue_time = None
-            self._issue_time_time_only = False
-            _formats = [
-                ("%m/%d/%Y-%H:%M:%S", False),
-                ("%m/%d/%Y %H:%M:%S", False),
-                ("%Y-%m-%dT%H:%M:%S", False),
-                ("%Y-%m-%d %H:%M:%S", False),
-                ("%Y-%m-%d %H:%M",    False),
-                ("%m/%d/%Y-%H:%M:%S.%f", False),
-                ("%H:%M:%S", True),
-                ("%H:%M", True),
-            ]
-            for fmt, is_time_only in _formats:
-                try:
-                    parsed = datetime.strptime(attachment_time, fmt)
-                    if is_time_only:
-                        # Use a sentinel date (date.min) so it is obviously wrong;
-                        # pre-scan will always align the date to the log's time range.
-                        self.issue_time = datetime.combine(datetime.min.date(), parsed.time())
-                        self._issue_time_time_only = True
-                    else:
-                        self.issue_time = parsed
-                        self._issue_time_time_only = False
-                    print(f"[DEBUG] prime_with_context parsed issue_time={self.issue_time} from '{attachment_time}' fmt={fmt}")
-                    break
-                except ValueError:
-                    continue
-            if self.issue_time is None:
-                print(f"[DEBUG] prime_with_context: could not parse attachment_time='{attachment_time}'")
-        else:
-            self._issue_time_time_only = False
+        # Resolve issue_time once: parse attachment_time strictly, fall back to
+        # the log file's latest timestamp when no usable input exists, and
+        # auto-align time-only strings against the log date. After this call
+        # `self.issue_time` is the canonical value used everywhere downstream.
+        dt, src = resolve_issue_time(attachment_time, self.current_log_path)
+        self.issue_time = dt
+        self._issue_time_time_only = (src == "input_time_only")
+        print(f"[DEBUG] prime_with_context issue_time={dt} source={src} raw='{attachment_time}'")
         context_parts = []
         if case_nbr:
             context_parts.append(f"Case: {case_nbr}")

@@ -43,6 +43,13 @@ def set_up(socketio):
     # project root
     app_config.set_project_root(str(Path(__file__).parent.parent.absolute()))
 
+    # Pre-warm the feedback sidecar's share probe now that
+    # avatarfiles_dir is set — running this earlier (e.g. at module
+    # import) would race the config and pin the local fallback to a
+    # cwd-relative path instead of <avatarfiles_dir>/feedback.
+    from services import feedback_service
+    feedback_service.prewarm()
+
 
     # key
     key_path = helpers.get_load_path(KEY_PATH_prim, KEY_PATH_bkup)

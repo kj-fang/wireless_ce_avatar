@@ -102,17 +102,28 @@ def _feedback_root() -> Path:
     return _resolve_root()
 
 
-# Prewarm: resolve the share in a daemon thread at import time so the SMB
-# probe (up to 16 s combined timeout) doesn't block the FIRST 👍/👎 click.
-# By the time a user can actually vote, _root_cache is almost always set.
-def _prewarm_root() -> None:
-    try:
-        _resolve_root()
-    except Exception as e:
-        print(f"[feedback] prewarm failed: {e}")
+# Prewarm: resolve the share in a daemon thread so the SMB probe (up to
+# 16 s combined timeout) doesn't block the FIRST 👍/👎 click. By the
+# time a user can actually vote, _root_cache is almost always set.
+#
+# We deliberately do NOT auto-fire at module import: doing that races
+# `set_up()` and would resolve the local fallback before
+# `app_config.avatarfiles_dir` is populated, leaving feedback files in
+# an inconsistent location (cwd-relative `data/feedback/` instead of
+# `<avatarfiles_dir>/feedback/`). Callers should invoke `prewarm()`
+# from set_up_app.py once configuration is ready.
+def prewarm() -> None:
+    """Kick off share resolution in a daemon thread. Idempotent."""
+    if _root_cache is not None:
+        return
 
+    def _run():
+        try:
+            _resolve_root()
+        except Exception as e:
+            print(f"[feedback] prewarm failed: {e}")
 
-threading.Thread(target=_prewarm_root, name="feedback-prewarm", daemon=True).start()
+    threading.Thread(target=_run, name="feedback-prewarm", daemon=True).start()
 
 
 # --- Privacy scrub -------------------------------------------------------

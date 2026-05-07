@@ -204,22 +204,20 @@
 
         <!-- Tab 2: Local File Upload -->
         <div id="local-upload-tab" class="tab-content">
-                <div class="upload-zone" id="upload-zone" onclick="openLocalFileChooser()">
+                <div class="upload-zone" id="upload-zone" onclick="document.getElementById('file-input').click()">
+                    <input type="file" id="file-input" style="display: none;" onchange="handleFileSelect(event)">
                     <div style="pointer-events: none;">
                         <svg xmlns="http://www.w3.org/2000/svg" width="32" height="32" fill="#0068B6" viewBox="0 0 16 16" style="margin-bottom: 10px;">
                             <path d="M.5 9.9a.5.5 0 0 1 .5.5v2.5a1 1 0 0 0 1 1h12a1 1 0 0 0 1-1v-2.5a.5.5 0 0 1 1 0v2.5a2 2 0 0 1-2 2H2a2 2 0 0 1-2-2v-2.5a.5.5 0 0 1 .5-.5z"/>
                             <path d="M7.646 1.146a.5.5 0 0 1 .708 0l3 3a.5.5 0 0 1-.708.708L8.5 2.707V11.5a.5.5 0 0 1-1 0V2.707L5.354 4.854a.5.5 0 1 1-.708-.708l3-3z"/>
                         </svg>
                         <h5 style="color: #0068B6; margin-bottom: 10px;">Click to browse</h5>
-                        <p style="color: #666; font-size: 14px; margin: 0;">Supported: .zip, .7z, .rar, .etl, .log or .dmp files</p>
+                        <p style="color: #666; font-size: 14px; margin: 0;">Supported: .zip, .etl or .log files</p>
                     </div>
                 </div>
 
                 <div id="file-list" class="file-list"></div>
-                <label id="bsod-checkbox" style="margin-top: 5px;">
-                    <input type="checkbox" id="bsod-checkbox-input">
-                    <span style="color: #666; font-size: 14px;">This is a BSOD dump</span>
-                </label>
+
                 <button id="upload-submit-btn" class="upload-submit-btn" onclick="submitLocalUpload()" disabled>
                     Start Analysis
                 </button>
@@ -274,18 +272,21 @@
 
 
     
-    <!-- 🤖 Log Chatbot shortcut -->
-    <div style="width: 480px; margin: 20px auto 0; background: transparent; padding: 16px 24px; text-align: center;">
+    <!-- 🤖 Log Chatbot shortcut - Floating Action Button -->
+    <div style="position: fixed; bottom: 30px; right: 30px; background: transparent; padding: 0; text-align: center; z-index: 1000;">
         <a href="/log_chatbot/" style="
-            display: inline-flex; align-items: center; gap: 7px;
+            display: inline-flex; align-items: center; justify-content: center;
+            width: 70px; height: 70px;
             background: linear-gradient(135deg,#0071c5,#00a3e0);
             color: white; text-decoration: none;
-            padding: 9px 22px; border-radius: 25px;
-            font-size: 0.85rem; font-weight: 600;
-            box-shadow: 0 2px 8px rgba(0,113,197,0.3);
-            transition: opacity 0.2s;"
-            onmouseover="this.style.opacity='0.85'" onmouseout="this.style.opacity='1'">
-            📡 Wi-Fi Log Chatbot
+            border-radius: 50%;
+            font-size: 1.8rem;
+            box-shadow: 0 4px 12px rgba(0,113,197,0.4);
+            transition: all 0.3s ease;"
+            onmouseover="this.style.transform='scale(1.1)'; this.style.boxShadow='0 6px 16px rgba(0,113,197,0.6)';" 
+            onmouseout="this.style.transform='scale(1)'; this.style.boxShadow='0 4px 12px rgba(0,113,197,0.4)';"
+            title="Wi-Fi Log Chatbot">
+            📡
         </a>
     </div>
 
@@ -310,15 +311,6 @@
         let activeMessages = CASE_MESSAGES;
         let activeLogAreaId = 'case-log-messages';
         let uploadSocket = null;
-        let uploadProgressLine = null;
-        let uploadPreparingTimeoutId = null;
-
-        function clearUploadPreparingTimeout() {
-            if (uploadPreparingTimeoutId !== null) {
-                clearTimeout(uploadPreparingTimeoutId);
-                uploadPreparingTimeoutId = null;
-            }
-        }
 
         function hideAllLoadingBoxes() {
             document.getElementById('case-loading-box').style.display = 'none';
@@ -369,20 +361,7 @@
             hideAllLoadingBoxes();
             document.getElementById('upload-loading-box').style.display = 'block';
             const logArea = document.getElementById('upload-log-messages');
-            if (logArea) {
-                logArea.innerHTML = '- Validating the files....';
-                uploadProgressLine = null;
-                clearUploadPreparingTimeout();
-                uploadPreparingTimeoutId = setTimeout(() => {
-                    uploadPreparingTimeoutId = null;
-                    if (logArea) {
-                        const p = document.createElement('div');
-                        p.textContent = '- Preparing the uploads';
-                        logArea.appendChild(p);
-                        logArea.scrollTop = logArea.scrollHeight;
-                    }
-                }, 3000);
-            }
+            if (logArea) logArea.innerHTML = '';
         }
 
         function connectUploadProgressSocket() {
@@ -393,34 +372,10 @@
             uploadSocket = io('/progress');
             uploadSocket.on('wpp_log', function(data) {
                 const logArea = document.getElementById('upload-log-messages');
-                if (!logArea) {
-                    return;
-                }
-
-                const message = String(data.data || '').trim();
-                if (!message) {
-                    return;
-                }
-
-                clearUploadPreparingTimeout();
-
-                if (message.startsWith('Uploading ')) {
-                    if (!uploadProgressLine || !uploadProgressLine.isConnected) {
-                        uploadProgressLine = document.createElement('div');
-                        uploadProgressLine.style.whiteSpace = 'pre';
-                        logArea.appendChild(uploadProgressLine);
-                    }
-                    uploadProgressLine.textContent = '- ' + message;
-                } else {
-                    const p = document.createElement('div');
-                    p.textContent = '- ' + message;
-                    logArea.appendChild(p);
-
-                    if (message.startsWith('Upload complete')) {
-                        uploadProgressLine = null;
-                    }
-                }
-
+                if (!logArea) return;
+                const p = document.createElement('div');
+                p.textContent = '- ' + (data.data || '');
+                logArea.appendChild(p);
                 logArea.scrollTop = logArea.scrollHeight;
             });
         }
@@ -430,7 +385,6 @@
                 uploadSocket.disconnect();
                 uploadSocket = null;
             }
-            clearUploadPreparingTimeout();
         }
 
         // Handle form submission based on dropdown selection
@@ -600,31 +554,34 @@
         // File Upload Handling
         let selectedFiles = [];
 
-        function fileNameFromPath(pathValue) {
-            const normalized = String(pathValue || '').replace(/\\/g, '/');
-            const parts = normalized.split('/');
-            return parts[parts.length - 1] || '';
+        // Validate file type based on name
+        function isAllowedLocalAnalysisFile(fileName) {
+            const lowerName = (fileName || '').toLowerCase();
+            return lowerName.endsWith('.zip') || /\.etl\.\d+$/i.test(fileName || '') || lowerName.endsWith('.log');
         }
 
-        async function openLocalFileChooser() {
-            try {
-                const response = await fetch('/log_parser/pick_local_analysis_file', {
-                    method: 'POST'
-                });
-                const result = await response.json();
-                if (!response.ok || !result.success || !result.source_path) {
-                    throw new Error(result.message || 'Native picker was cancelled or unavailable.');
-                }
+        function collectInvalidFiles(files) {
+            return files.filter(file => !isAllowedLocalAnalysisFile(file.name));
+        }
 
-                const pickedName = result.filename || fileNameFromPath(result.source_path);
-                selectedFiles = [{
-                    file: { name: pickedName, size: 0 },
-                    sourcePath: result.source_path,
-                }];
-                updateFileList();
-            } catch (error) {
-                alert('❌ Native file picker unavailable: ' + error.message);
+        function handleFileSelect(event) {
+            const files = Array.from(event.target.files);
+            
+            const invalidFiles = collectInvalidFiles(files);
+            if (invalidFiles.length > 0) {
+                alert(
+                    'Only .zip, .etl or .log files are allowed.\n\nInvalid file(s):\n' +
+                    invalidFiles.map(file => `- ${file.name}`).join('\n')
+                );
             }
+
+            files.forEach(file => {
+                if (isAllowedLocalAnalysisFile(file.name) && !selectedFiles.find(f => f.name === file.name && f.size === file.size)) {
+                    selectedFiles.push(file);
+                }
+            });
+            updateFileList();
+            event.target.value = ''; // Reset input
         }
 
         function updateFileList() {
@@ -640,16 +597,14 @@
             
             submitBtn.disabled = false;
             
-            selectedFiles.forEach((item, index) => {
-                const file = item.file;
-                const sizeLabel = item.sourcePath ? 'native path' : formatFileSize(file.size);
+            selectedFiles.forEach((file, index) => {
                 const fileItem = document.createElement('div');
                 fileItem.className = 'file-item';
                 fileItem.innerHTML = `
                     <div class="file-item-info">
                         <span>📄</span>
                         <span style="font-weight: 500;">${escapeHtml(file.name)}</span>
-                        <span style="color: #666; font-size: 12px;">(${escapeHtml(sizeLabel)})</span>
+                        <span style="color: #666; font-size: 12px;">(${formatFileSize(file.size)})</span>
                     </div>
                     <span class="file-remove" onclick="removeFile(${index})">✕</span>
                 `;
@@ -708,7 +663,22 @@
             e.stopPropagation();
             dragCounter = 0;
             uploadZone.classList.remove('drag-over');
-            alert('⚠️ Drag and drop is disabled in native-path mode. Please click to open the native file picker.');
+            const files = Array.from(e.dataTransfer.files);
+
+            const invalidFiles = collectInvalidFiles(files);
+            if (invalidFiles.length > 0) {
+                alert(
+                    'Only .zip, .etl or .log files are allowed.\n\nInvalid file(s):\n' +
+                    invalidFiles.map(file => `- ${file.name}`).join('\n')
+                );
+            }
+
+            files.forEach(file => {
+                if (isAllowedLocalAnalysisFile(file.name) && !selectedFiles.find(f => f.name === file.name && f.size === file.size)) {
+                    selectedFiles.push(file);
+                }
+            });
+            updateFileList();
         });
 
         // Submit Local Upload
@@ -717,24 +687,15 @@
                 alert('⚠️ Please select at least one file!');
                 return;
             }
-
             const formData = new FormData();
-
-            const selectedItem = selectedFiles[0];
-            if (!selectedItem || !selectedItem.sourcePath) {
-                alert('⚠️ Please use the native picker and select a local file path.');
-                return;
-            }
-
-            formData.append('source_path', selectedItem.sourcePath);
+            
+            selectedFiles.forEach(file => {
+                formData.append('files', file);
+            });
 
             // Show local-upload specific loading and connect socket for real-time logs
             showLocalUploadLoading();
             connectUploadProgressSocket();
-            
-            if (document.getElementById('bsod-checkbox-input').checked) {
-                formData.append('is_bsod', 'true');
-            }
 
             try {
                 const response = await fetch('/log_parser/upload_local_analysis', {

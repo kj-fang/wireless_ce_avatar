@@ -207,6 +207,20 @@ class LogParserService:
             self.analysis_result['llm_result_html'] = markdown.markdown(llm_result, 
                                                                 extensions=["fenced_code", "tables", "nl2br", "sane_lists", "codehilite"])
             self.analysis_result['log_output_path'] = save_filtered_log_path
+
+            # Notify chatbot: store log path in app_config so any chatbot session
+            # can pick it up, and emit a SocketIO event for the UI to react.
+            try:
+                app_config.last_analyzed_log_path = log_path
+                if app_config.log_chatbot_agent is not None:
+                    app_config.log_chatbot_agent.current_log_path = log_path
+                app_config.socketio.emit('chatbot_log_ready', {
+                    'log_path': log_path,
+                    'message': 'Log analysis complete — open the chatbot to ask follow-up questions.'
+                }, namespace='/progress')
+            except Exception:
+                pass
+
             app_config.socketio.emit('analysis_completed', {
                 'success': True,
                 'result_html': self.analysis_result['llm_result_html'],

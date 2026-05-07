@@ -10,6 +10,8 @@ from pathlib import Path
 from textwrap import dedent
 from utils import helpers
 from anthropic import Anthropic
+from services.log_chatbot_service import load_skills_from_data_dir, get_builtin_skills
+from anthropic import Anthropic
 
 # ---------------------------------------------------------------------------
 # Adapter: wraps an Anthropic client with an OpenAI-compatible interface so
@@ -206,6 +208,7 @@ class LLM_helper:
             'https': 'http://proxy-dmz.intel.com:912',
         }
         self.client = None
+        self.skills = None   # Dict[str, Skill] shared with log chatbot agent
         self.issue_categories = ["BSOD", "Yellow Bang (YB)", "Connectivity", "PPAG", 
                                 "MLO", "Assert", "WRDS/WGDS/EWRD/SGOM", "TAS", "Roaming", 
                                 "P2P", "DSM", "VLP/UHB/AFC", "UATS", "Unclassified"]
@@ -228,6 +231,20 @@ class LLM_helper:
         if Path(classifitation_path).exists():
             self.classifitation_path = classifitation_path
         print("classifitation_path", classifitation_path, self.classifitation_path)
+
+    def load_skills(self, data_dir: str) -> None:
+        """
+        Load diagnostic skills from the shared folder into self.skills.
+        Called once at startup so the same skill objects are shared with
+        WifiLogAgentSystem (avoids reading the files twice).
+        """
+        if data_dir and Path(data_dir).exists():
+            print(f"🛠  Loading skills via LLM_helper from: {data_dir}")
+            self.skills = load_skills_from_data_dir(data_dir)
+            print(f"✅  {len(self.skills)} skills loaded.")
+        else:
+            print("⚠️  Skills data_dir not available – skills will fall back to built-ins.")
+            self.skills = get_builtin_skills()
     
     
     def classify_issue(self, case_context: dict):

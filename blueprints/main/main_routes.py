@@ -251,7 +251,6 @@ def render_download_result_form():
     
     auto_analysis_etl = get_auto_analysis_etl(file_dicts['wifi_dict'], file_dicts['ddd_dict'])
     
-    tmp_selected_files = session["selected_files"]
     return render_template('download_result.html',
                          case_path=session['download_path'],
                          auto_analysis_etl = auto_analysis_etl,

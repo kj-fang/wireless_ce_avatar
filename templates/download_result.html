@@ -84,43 +84,17 @@
     </div>
     {% endif %}
 
-    {% if time_filter_info %}
-    <div class="alert alert-success alert-dismissible fade show" role="alert">
-        <i class="fas fa-clock"></i> <strong>Time Filter Applied:</strong>
-        <ul class="mb-0 mt-2" style="list-style: none; padding-left: 0;">
-            {% for file_name, time_display in time_filter_info %}
-            <li>📁 <strong>{{ file_name }}</strong> → Showing folders closest to <strong>{{ time_display }}</strong></li>
-            {% endfor %}
-        </ul>
-        <button type="button" class="close" data-dismiss="alert" aria-label="Close" onclick="this.parentElement.style.display='none';">
-            <span aria-hidden="true">&times;</span>
-        </button>
-    </div>
-    {% endif %}
-
-    {% if time_filter_warnings %}
-    <div class="alert alert-warning alert-dismissible fade show" role="alert">
-        <i class="fas fa-exclamation-triangle"></i> <strong>Warning:</strong>
-        <ul class="mb-0 mt-2" style="list-style: none; padding-left: 0;">
-            {% for file_name, warning_msg in time_filter_warnings %}
-            <li>⚠️ <strong>{{ file_name }}</strong>: {{ warning_msg }}</li>
-            {% endfor %}
-        </ul>
-        <p class="mb-0 mt-2"><small>Showing all folders for these files since no logs were captured after the issue time.</small></p>
-        <button type="button" class="close" data-dismiss="alert" aria-label="Close" onclick="this.parentElement.style.display='none';">
-            <span aria-hidden="true">&times;</span>
-        </button>
-    </div>
-    {% endif %}
-
     <h2>📊 Analysis Log</h2>
     
     <div id="log">...</div>
     
     <div class="d-flex justify-content-between align-items-center mb-2">
         <h2>🔍 Analysis WIFI Results</h2>
-        <div class="d-flex gap-1">
-            <button class="btn btn-secondary btn-sm me-2" onclick="location.href='/'">Back to Home</button>
+        <div class="d-flex align-items-center">
+            <button id="global-skills-agent-btn" class="btn btn-info btn-sm" style="color:white; font-weight:bold; box-shadow: 0 2px 4px rgba(0,0,0,0.2);" onclick="startGlobalSkillsAgentAnalysis()">
+                ⏱️ Skills-Agent Analysis
+            </button>
+            <button class="btn btn-secondary btn-sm" onclick="location.href='/'">Back to Home</button>
         </div>
     </div>
     <div class="d-flex align-items-center mb-3">
@@ -154,11 +128,17 @@
                         <td class="text-center">
                             <div class="d-flex flex-column align-items-center">
                                 <button class="btn btn-primary btn-sm mb-2" onclick="startAnalysis(this, '{{ etl_path | urlencode }}')">
-                                    Analyze
+                                    Parse & Analyze
                                 </button>
-                                <button class="btn btn-success btn-sm" onclick="startLogParser(this, '{{ etl_path | urlencode }}')">
-                                    Analyze with LLM
+                                <button class="btn btn-success btn-sm mb-2" onclick="startLogParser(this, '{{ etl_path | urlencode }}')">
+                                    Parse & Analyze with LLM
                                 </button>
+                                <!-- <button class="btn btn-info btn-sm" style="color:white;" onclick="startChatbotAnalysis(this, '{{ etl_path | urlencode }}')">
+                                    🤖 Chatbot Analysis
+                                </button> -->
+                                <button id="global-skills-agent-btn" class="btn btn-info btn-sm" style="color:white; font-weight:bold; box-shadow: 0 2px 4px rgba(0,0,0,0.2);" onclick="startGlobalSkillsAgentAnalysis(this, '{{ etl_path | urlencode }}')">
+                                    ⏱️ Skills-Agent Analysis
+                                </button>                                
                             </div>
                         </td>
                     </tr>
@@ -397,20 +377,92 @@
             });
     }
 
+    // === Unified Socket.io handler for ETL completion ===
     socket.on("wpp_complete", function(msg) {
-        
+
+        // Handle pending Log Parser redirect
         if (window.pendingLogParser) {
             const { etlPathEncoded, button } = window.pendingLogParser;
             if (msg.status === 'done') {
                 logBox.innerText += ` Starting LLM Analysis...\n`;
                 logBox.scrollTop = logBox.scrollHeight;
-
                 window.location.href = `${LOGPARSER_URL}?etl_path=${etlPathEncoded}`;
-
                 button.classList.remove('disabled');
                 button.innerText = 'Analyze with LLM';
             }
             window.pendingLogParser = null;
+        }
+
+        // Handle pending Chatbot redirect (supports both manual and auto-match flows)
+        if (window.pendingChatbot) {
+            const { etlPathEncoded, button, isAnalyzeAll, resolvedIssueTime, rawIssueTimeStr } = window.pendingChatbot;
+            window.pendingChatbot = null;
+
+            if (msg.status === 'done') {
+                logBox.innerText += `✅ ETL done — preparing Agent environment...\n`;
+                logBox.scrollTop = logBox.scrollHeight;
+                button.innerText = '⏳ Preparing UI...';
+
+                const etlPath = decodeURIComponent(etlPathEncoded);
+                fetch(CHATBOT_PREPARE_URL, {
+                    method: 'POST',
+                    headers: { 'Content-Type': 'application/json' },
+                    body: JSON.stringify({ etl_path: etlPath })
+                })
+                .then(res => res.json())
+                .then(data => {
+                    if (data.success) {
+                        logBox.innerText += `✅ Ready — opening Agent Chatbot...\n`;
+                        logBox.scrollTop = logBox.scrollHeight;
+
+                        if (!isAnalyzeAll) {
+                            window.location.href = CHATBOT_URL;
+                            return;
+                        }
+
+                        // For auto-analyze: now that the .log file exists,
+                        // re-run find_best_log to resolve the issue time
+                        // (first call returned "" because the log wasn't parsed yet).
+                        // rawIssueTimeStr is the original value (may be time-only like "10:00:03").
+                        const issueTimeStrForRefetch = rawIssueTimeStr || resolvedIssueTime || "";
+
+                        fetch('/log_chatbot/find_best_log', {
+                            method: 'POST',
+                            headers: { 'Content-Type': 'application/json' },
+                            body: JSON.stringify({
+                                etl_paths: [etlPath],
+                                issue_time_str: issueTimeStrForRefetch
+                            })
+                        })
+                        .then(r => r.json())
+                        .then(fbResult => {
+                            const finalIssueTime = fbResult.resolved_issue_time || resolvedIssueTime || "";
+                            if (finalIssueTime && finalIssueTime !== resolvedIssueTime) {
+                                logBox.innerText += `🕐 Resolved issue time (post-ETL): ${finalIssueTime}\n`;
+                                logBox.scrollTop = logBox.scrollHeight;
+                            }
+                            const targetUrl = `${CHATBOT_URL}?auto_run=analyze_all${finalIssueTime ? '&issue_time=' + encodeURIComponent(finalIssueTime) : ''}`;
+                            window.location.href = targetUrl;
+                        })
+                        .catch(() => {
+                            // fall back to original resolvedIssueTime (may be empty)
+                            const targetUrl = `${CHATBOT_URL}?auto_run=analyze_all${resolvedIssueTime ? '&issue_time=' + encodeURIComponent(resolvedIssueTime) : ''}`;
+                            window.location.href = targetUrl;
+                        });
+                    } else {
+                        button.classList.remove('disabled');
+                        button.innerText = isAnalyzeAll ? '⏱️ Skills-Agent Analysis' : '🤖 Chatbot Analysis';
+                        logBox.innerText += `❌ Agent prepare failed: ${data.error}\n`;
+                        logBox.scrollTop = logBox.scrollHeight;
+                    }
+                })
+                .catch(err => {
+                    button.classList.remove('disabled');
+                    button.innerText = isAnalyzeAll ? '⏱️ Skills-Agent Analysis' : '🤖 Chatbot Analysis';
+                    logBox.innerText += `❌ Error: ${err}\n`;
+                    logBox.scrollTop = logBox.scrollHeight;
+                });
+            }
         }
     });
 
@@ -428,7 +480,151 @@
         // jump to fw_analysis.html with fw_path para
         window.location.href = `/${FW_ETL_ANALYSIS_URL}?fw_path=${fwPathEncoded}`;
     }
-        
+
+    const CHATBOT_PREPARE_URL = "{{ url_for('log_chatbot.prepare') }}";
+    const CHATBOT_URL = "{{ url_for('log_chatbot.index') }}";
+
+    function startChatbotAnalysis(button, etlPathEncoded) {
+        if (button.classList.contains('disabled')) return;
+        button.classList.add('disabled');
+        button.innerText = '⏳ Running ETL...';
+
+        const decoded = decodeURIComponent(etlPathEncoded);
+        logBox.innerText += `🤖 Starting Chatbot Analysis for: ${decoded}\n`;
+        logBox.innerText += `🛠️ Step 1: Running ETL Analysis...\n`;
+        logBox.scrollTop = logBox.scrollHeight;
+
+        window.pendingChatbot = {
+            etlPathEncoded: etlPathEncoded,
+            button: button
+        };
+
+        fetch(`${ETL_ANALYSIS_URL}?etl_path=${etlPathEncoded}&mode=`)
+            .then(res => res.text())
+            .catch(err => {
+                console.error('ETL Analysis failed:', err);
+                logBox.innerText += `❌ ETL Analysis Failed: ${decoded}\n`;
+                logBox.scrollTop = logBox.scrollHeight;
+                button.classList.remove('disabled');
+                button.innerText = '🤖 Chatbot Analysis';
+                window.pendingChatbot = null;
+            });
+    }
+   
+    
+    // === 1. Auto-match the correct log by reading actual file timestamps (backend) ===
+    function startGlobalSkillsAgentAnalysis() {
+        const btn = document.getElementById('global-skills-agent-btn');
+        if (btn.classList.contains('disabled')) return;
+        btn.classList.add('disabled');
+        btn.innerText = '⏳ Matching Log...';
+
+        // Collect all ETL paths from the Parse & Analyze with LLM buttons in the WIFI table
+        const buttons = document.querySelectorAll('button[onclick^="startGlobalSkillsAgentAnalysis"]');
+        if (buttons.length === 0) {
+            alert("⚠️ No available WIFI Logs found in the table for analysis.");
+            btn.classList.remove('disabled');
+            btn.innerText = '⏱️ Skills-Agent Analysis';
+            return;
+        }
+
+        const etlPaths = [];
+        const pathToEncoded = {};  // map decoded path -> encoded path for ETL call
+        buttons.forEach(b => {
+            const m = b.getAttribute('onclick').match(/'([^']+)'/);
+            if (m && m[1]) {
+                const encoded = m[1];
+                const decoded = decodeURIComponent(encoded);
+                etlPaths.push(decoded);
+                pathToEncoded[decoded] = encoded;
+            }
+        });
+
+        // Step 1: Fetch issue description to extract the issue time
+        let issueTimeStr = "";  // hoisted so the result callback can pass it to executeAutoETL
+        fetch('/log_chatbot/get_issue_context')
+            .then(res => res.json())
+            .then(ctxData => {
+                const description = ctxData.description || "";
+
+                // Prefer attachment_time returned by backend (already handles DD-MM-YYYY,
+                // time-only, MM/DD/YYYY, etc. via extract_time_from_description).
+                // Fall back to regex on description for legacy cases without attachment metadata.
+                issueTimeStr = ctxData.attachment_time || (() => {
+                    const m = description.match(
+                        /(\d{1,2}[\/\-]\d{1,2}[\/\-]\d{4}[\s\-]+\d{2}:\d{2}:\d{2})/
+                    );
+                    return m ? m[1] : "";
+                })();
+
+                logBox.innerText += `\n🔍 [Auto-Match] Scanning ${etlPaths.length} log file(s) for issue time: ${issueTimeStr || '(not found)'} ${description} AND ${etlPaths}...\n`;
+                logBox.scrollTop = logBox.scrollHeight;
+
+                // Step 2: Ask backend to read actual log timestamps and find the best match
+                return fetch('/log_chatbot/find_best_log', {
+                    method: 'POST',
+                    headers: { 'Content-Type': 'application/json' },
+                    body: JSON.stringify({
+                        etl_paths: etlPaths,
+                        issue_time_str: issueTimeStr
+                    })
+                });
+            })
+            .then(res => res.json())
+            .then(result => {
+                const bestPath = result.best_path;
+                const reason = result.reason || "";
+                const resolvedIssueTime = result.resolved_issue_time || "";
+
+                if (!bestPath) {
+                    alert("⚠️ Could not determine the best log file.");
+                    btn.classList.remove('disabled');
+                    btn.innerText = '⏱️ Skills-Agent Analysis';
+                    return;
+                }
+
+                logBox.innerText += `✅ [Auto-Match] ${reason}\n`;
+                if (resolvedIssueTime) {
+                    logBox.innerText += `🕐 Resolved issue time: ${resolvedIssueTime}\n`;
+                }
+                logBox.scrollTop = logBox.scrollHeight;
+
+                // Use the encoded version for the ETL call
+                const encodedPath = pathToEncoded[bestPath] || encodeURIComponent(bestPath);
+                executeAutoETL(btn, encodedPath, resolvedIssueTime, issueTimeStr);
+            })
+            .catch(err => {
+                console.error("Auto-match failed", err);
+                btn.classList.remove('disabled');
+                btn.innerText = '⏱️ Skills-Agent Analysis';
+            });
+    }
+
+    // === 2. Execute ETL and mark it as triggered by the green button (analyze_all) ===
+    function executeAutoETL(button, etlPathEncoded, resolvedIssueTime, rawIssueTimeStr) {
+        button.innerText = '⏳ Running ETL...';
+        const decoded = decodeURIComponent(etlPathEncoded);
+        logBox.innerText += `👉 Selected: ${decoded}\n`;
+        logBox.scrollTop = logBox.scrollHeight;
+
+        window.pendingChatbot = {
+            etlPathEncoded: etlPathEncoded,
+            button: button,
+            isAnalyzeAll: true, // Key flag: trigger green button on redirect
+            resolvedIssueTime: resolvedIssueTime || "",
+            rawIssueTimeStr: rawIssueTimeStr || "",  // original (may be time-only)
+        };
+
+        fetch(`${ETL_ANALYSIS_URL}?etl_path=${etlPathEncoded}&mode=`)
+            .then(res => res.text())
+            .catch(err => {
+                console.error('ETL Analysis failed:', err);
+                button.classList.remove('disabled');
+                button.innerText = '⏱️ Skills-Agent Analysis';
+                window.pendingChatbot = null;
+            });
+    }
+
     </script>
 </body>
 </html>

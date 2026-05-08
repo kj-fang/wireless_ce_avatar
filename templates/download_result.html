@@ -202,6 +202,13 @@
             filter: grayscale(100%);
             opacity: 0.55;
         }
+        .analysis-controls-locked button,
+        .analysis-controls-locked .nav-link {
+            opacity: 0.55 !important;
+            filter: grayscale(100%);
+            pointer-events: none;
+            cursor: not-allowed !important;
+        }
     </style>
 </head>
 <body>
@@ -326,7 +333,7 @@
         {% set active_tab = 'wifi' %}
     {% endif %}
 
-    <div class="card mb-4" style="border: 2px solid transparent #005A9C; border-radius: 0.5rem;">
+    <div id="analysis-card" class="card mb-4" style="border: 2px solid transparent #005A9C; border-radius: 0.5rem;">
         <div id="analysisTabs-wrapper">
             <ul class="nav nav-tabs" id="analysisTabs" role="tablist" style="font-family: 'Inter'; border-bottom: none;">
                 <li class="nav-item">
@@ -480,6 +487,28 @@
         const ETL_ANALYSIS_URL = "{{ url_for('analysis_etl.process_etl_path') }}";
         const LOGPARSER_URL = "{{ url_for('log_parser.log_parser') }}";
 
+        function setAnalysisCardLocked(isLocked) {
+            const analysisCard = document.getElementById('analysis-card');
+            if (!analysisCard) {
+                return;
+            }
+
+            analysisCard.classList.toggle('analysis-controls-locked', !!isLocked);
+            const actionButtons = analysisCard.querySelectorAll('button');
+
+            actionButtons.forEach((btn) => {
+                if (isLocked) {
+                    if (!btn.dataset.prevDisabled) {
+                        btn.dataset.prevDisabled = btn.disabled ? '1' : '0';
+                    }
+                    btn.disabled = true;
+                } else if (btn.dataset.prevDisabled) {
+                    btn.disabled = btn.dataset.prevDisabled === '1';
+                    delete btn.dataset.prevDisabled;
+                }
+            });
+        }
+
         // Receive backend logs
         socket.on("wpp_log", function(msg) {
             console.log("wpp_log:",msg)
@@ -492,6 +521,7 @@
             const etlPathEncoded = autoAnalysisEtlElement.value;
             const dummyButton = document.createElement('button');
             dummyButton.classList.add('btn', 'btn-success');
+            setAnalysisCardLocked(true);
             startLogParser(dummyButton, etlPathEncoded);
             
         }
@@ -580,6 +610,7 @@
                 logBox.innerText += `❌ Analysis Failed: ${decoded}\n`;
                 logBox.scrollTop = logBox.scrollHeight;
                 setWifiActionButtonsBusy(false);
+                setAnalysisCardLocked(false);
             });
     }
 
@@ -598,6 +629,7 @@
                 button.innerText = 'Analyze with LLM';
             } else {
                 setWifiActionButtonsBusy(false);
+                setAnalysisCardLocked(false);
             }
             window.pendingLogParser = null;
         }
@@ -973,86 +1005,6 @@
         }
     }
    
-    
-    // === 1. Auto-match the correct log by reading actual file timestamps (backend) ===
-    /*
-    function startGlobalSkillsAgentAnalysis() {
-        const btn = document.getElementById('global-skills-agent-btn');
-        if (btn.classList.contains('disabled')) return;
-        btn.classList.add('disabled');
-        btn.innerText = '⏳ Matching Log...';
-
-        // Collect all ETL paths from clickable WiFi rows
-        const rows = document.querySelectorAll('.wifi-file-item[data-etl-encoded]');
-        if (rows.length === 0) {
-            alert("⚠️ No available WIFI Logs found in the table for analysis.");
-            btn.classList.remove('disabled');
-            btn.innerText = '⏱️ Skills-Agent Analysis';
-            return;
-        }
-
-        const etlPaths = [];
-        const pathToEncoded = {};  // map decoded path -> encoded path for ETL call
-        rows.forEach(row => {
-            const encoded = row.dataset.etlEncoded;
-            if (encoded) {
-                const decoded = decodeURIComponent(encoded);
-                etlPaths.push(decoded);
-                pathToEncoded[decoded] = encoded;
-            }
-        });
-
-        // Step 1: Fetch issue description to extract the issue time
-        fetch('/log_chatbot/get_issue_context')
-            .then(res => res.json())
-            .then(ctxData => {
-                const description = ctxData.description || "";
-
-                // Extract a time string from the description (e.g. "10/28/2025-11:25:49")
-                const timeMatch = description.match(
-                    /(\d{2}\/\d{2}\/\d{4}[\s-]\d{2}:\d{2}:\d{2})/
-                );
-                const issueTimeStr = timeMatch ? timeMatch[1] : "";
-
-                logBox.innerText += `\n🔍 [Auto-Match] Scanning ${etlPaths.length} log file(s) for issue time: ${issueTimeStr || '(not found)'}...\n`;
-                logBox.scrollTop = logBox.scrollHeight;
-
-                // Step 2: Ask backend to read actual log timestamps and find the best match
-                return fetch('/log_chatbot/find_best_log', {
-                    method: 'POST',
-                    headers: { 'Content-Type': 'application/json' },
-                    body: JSON.stringify({
-                        etl_paths: etlPaths,
-                        issue_time_str: issueTimeStr
-                    })
-                });
-            })
-            .then(res => res.json())
-            .then(result => {
-                const bestPath = result.best_path;
-                const reason = result.reason || "";
-
-                if (!bestPath) {
-                    alert("⚠️ Could not determine the best log file.");
-                    btn.classList.remove('disabled');
-                    btn.innerText = '⏱️ Skills-Agent Analysis';
-                    return;
-                }
-
-                logBox.innerText += `✅ [Auto-Match] ${reason}\n`;
-                logBox.scrollTop = logBox.scrollHeight;
-
-                // Use the encoded version for the ETL call
-                const encodedPath = pathToEncoded[bestPath] || encodeURIComponent(bestPath);
-                executeAutoETL(btn, encodedPath);
-            })
-            .catch(err => {
-                console.error("Auto-match failed", err);
-                btn.classList.remove('disabled');
-                btn.innerText = '⏱️ Skills-Agent Analysis';
-            });
-    }
-     */
 
     // === 2. Execute ETL and mark it as triggered by the green button (analyze_all) ===
     function executeAutoETL(button, etlPathEncoded) {

@@ -645,14 +645,12 @@
             
             selectedFiles.forEach((item, index) => {
                 const file = item.file;
-                const sizeLabel = item.sourcePath ? 'native path' : formatFileSize(file.size);
                 const fileItem = document.createElement('div');
                 fileItem.className = 'file-item';
                 fileItem.innerHTML = `
                     <div class="file-item-info">
                         <span>📄</span>
                         <span style="font-weight: 500;">${escapeHtml(file.name)}</span>
-                        <span style="color: #666; font-size: 12px;">(${escapeHtml(sizeLabel)})</span>
                     </div>
                     <span class="file-remove" onclick="removeFile(${index})">✕</span>
                 `;

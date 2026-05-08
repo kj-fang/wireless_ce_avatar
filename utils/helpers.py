@@ -9,6 +9,26 @@ import threading
 from pathlib import Path
 from typing import List
 
+
+def to_long_path(path: str) -> str:
+    """Return a Windows extended-length path to bypass the 260-char MAX_PATH limit.
+
+    - Already-prefixed paths (\\\\?\\) are returned unchanged.
+    - UNC paths (\\\\server\\share\\...) become \\\\?\\UNC\\server\\share\\...
+    - All other paths are made absolute then prefixed with \\\\?\\
+    - Non-Windows paths are returned as-is.
+    """
+    if os.name != 'nt':
+        return path
+    if path.startswith('\\\\?\\'):
+        return path
+    path = os.path.abspath(path)
+    if path.startswith('\\\\'):
+        # UNC path: \\\\server\\share\\... \u2192 \\\\?\\UNC\\server\\share\\...
+        return '\\\\?\\UNC\\' + path[2:]
+    return '\\\\?\\' + path
+
+
 def get_available_port(start=54000, end=60000, max_tries=20):
     for _ in range(max_tries):
         port = random.randint(start, end)

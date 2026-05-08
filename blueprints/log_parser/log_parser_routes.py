@@ -317,11 +317,21 @@ def upload_local_analysis():
         logging.exception("Failed local analysis flow for %s: %s", file_path, e)
         return jsonify({'success': False, 'message': f'Failed local analysis flow: {str(e)}'}), 500
 
-    return jsonify({
+    resp = {
         'success': True,
         'uploaded_source_path': source_path,
-        'redirect': redirect_url
-    })
+        'redirect': redirect_url,
+    }
+    # Signal the client to use the chatbot flow instead of the log-parser redirect.
+    # Use the extended-length path so prepare/set_log don't fail on long paths.
+    source_lower = source_path.lower()
+    if source_lower.endswith('.log'):
+        resp['use_chatbot'] = True
+        resp['log_path'] = helpers.to_long_path(source_path)
+    elif source_lower.endswith('.etl') or bool(re.search(r'\.etl\.\d+$', source_lower)):
+        resp['use_chatbot'] = True
+        resp['etl_path'] = helpers.to_long_path(source_path)
+    return jsonify(resp)
 
 #------------ Section for SendTo file -------------#
 

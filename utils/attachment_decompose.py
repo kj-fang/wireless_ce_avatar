@@ -7,6 +7,8 @@ import subprocess
 import tempfile
 import traceback
 
+from utils.helpers import to_long_path
+
 def find_compressed_files(directory):
     """Find all compressed files (.zip, .rar, .7z) in directory recursively."""
     compressed_files = []
@@ -62,7 +64,11 @@ def extract_archive(archive, extract_to):
                 archive.extract(member, path=temp_dir)
                 src_path = os.path.join(temp_dir, filename)
                 dst_path = os.path.normpath(os.path.join(extract_to, filename))
-                
+
+                # Use the shared helper to apply the Windows extended-length path
+                # prefix, bypassing the 260-char MAX_PATH limit (handles UNC paths too).
+                dst_path = to_long_path(dst_path)
+
                 if not os.path.isfile(src_path):
                     continue
                     

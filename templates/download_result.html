@@ -326,25 +326,34 @@
         {% set active_tab = 'wifi' %}
     {% endif %}
 
-    <div class="card mb-4" style="border: 2px transparent #005A9C; border-radius: 0.5rem;">
+    <div class="card mb-4" style="border: 2px solid transparent #005A9C; border-radius: 0.5rem;">
         <div id="analysisTabs-wrapper">
-            <ul class="nav nav-tabs" id="analysisTabs" role="tablist" style="font-family: 'Inter'; border-bottom: none;">&NewLine;            <li class="nav-item">
-                <a class="nav-link {% if active_tab == 'wifi' %}active{% endif %} {% if not wifi_ns.has_items %}disabled tab-unavailable{% endif %}" id="wifi-tab" {% if wifi_ns.has_items %}data-toggle="tab" href="#wifi-panel"{% else %}href="#" tabindex="-1" aria-disabled="true"{% endif %} role="tab" aria-controls="wifi-panel" aria-selected="{{ 'true' if active_tab == 'wifi' else 'false' }}">WiFi</a>
-            </li>
-            <li class="nav-item">
-                <a class="nav-link {% if active_tab == 'bt' %}active{% endif %} {% if not bt_ns.has_items %}disabled tab-unavailable{% endif %}" id="bt-tab" {% if bt_ns.has_items %}data-toggle="tab" href="#bt-panel"{% else %}href="#" tabindex="-1" aria-disabled="true"{% endif %} role="tab" aria-controls="bt-panel" aria-selected="{{ 'true' if active_tab == 'bt' else 'false' }}">BT</a>
-            </li>
-            <li class="nav-item">
-                <a class="nav-link {% if active_tab == 'ddd' %}active{% endif %} {% if not ddd_ns.has_items %}disabled tab-unavailable{% endif %}" id="ddd-tab" {% if ddd_ns.has_items %}data-toggle="tab" href="#ddd-panel"{% else %}href="#" tabindex="-1" aria-disabled="true"{% endif %} role="tab" aria-controls="ddd-panel" aria-selected="{{ 'true' if active_tab == 'ddd' else 'false' }}">DDD</a>
-            </li>
-            <li class="nav-item">
-                <a class="nav-link {% if active_tab == 'fw' %}active{% endif %} {% if not fw_ns.has_items %}disabled tab-unavailable{% endif %}" id="fw-tab" {% if fw_ns.has_items %}data-toggle="tab" href="#fw-panel"{% else %}href="#" tabindex="-1" aria-disabled="true"{% endif %} role="tab" aria-controls="fw-panel" aria-selected="{{ 'true' if active_tab == 'fw' else 'false' }}">FW</a>
-            </li>
+            <ul class="nav nav-tabs" id="analysisTabs" role="tablist" style="font-family: 'Inter'; border-bottom: none;">
+                <li class="nav-item">
+                    <a class="nav-link {% if active_tab == 'wifi' %}active{% endif %} {% if not wifi_ns.has_items %}disabled tab-unavailable{% endif %}" id="wifi-tab" {% if wifi_ns.has_items %}data-toggle="tab" href="#wifi-panel"{% else %}href="#" tabindex="-1" aria-disabled="true"{% endif %} role="tab" aria-controls="wifi-panel" aria-selected="{{ 'true' if active_tab == 'wifi' else 'false' }}">WiFi</a>
+                </li>
+                <li class="nav-item">
+                    <a class="nav-link {% if active_tab == 'bt' %}active{% endif %} {% if not bt_ns.has_items %}disabled tab-unavailable{% endif %}" id="bt-tab" {% if bt_ns.has_items %}data-toggle="tab" href="#bt-panel"{% else %}href="#" tabindex="-1" aria-disabled="true"{% endif %} role="tab" aria-controls="bt-panel" aria-selected="{{ 'true' if active_tab == 'bt' else 'false' }}">BT</a>
+                </li>
+                <li class="nav-item">
+                    <a class="nav-link {% if active_tab == 'ddd' %}active{% endif %} {% if not ddd_ns.has_items %}disabled tab-unavailable{% endif %}" id="ddd-tab" {% if ddd_ns.has_items %}data-toggle="tab" href="#ddd-panel"{% else %}href="#" tabindex="-1" aria-disabled="true"{% endif %} role="tab" aria-controls="ddd-panel" aria-selected="{{ 'true' if active_tab == 'ddd' else 'false' }}">DDD</a>
+                </li>
+                <li class="nav-item">
+                    <a class="nav-link {% if active_tab == 'fw' %}active{% endif %} {% if not fw_ns.has_items %}disabled tab-unavailable{% endif %}" id="fw-tab" {% if fw_ns.has_items %}data-toggle="tab" href="#fw-panel"{% else %}href="#" tabindex="-1" aria-disabled="true"{% endif %} role="tab" aria-controls="fw-panel" aria-selected="{{ 'true' if active_tab == 'fw' else 'false' }}">FW</a>
+                </li>
         </ul>
         </div>
         <div class="card-body bg-light">
             <div class="tab-content" id="analysisTabContent">
                 <div class="tab-pane fade {% if active_tab == 'wifi' %}show active{% endif %}" id="wifi-panel" role="tabpanel" aria-labelledby="wifi-tab">
+                    <div class="d-flex flex-wrap justify-content-center align-items-center mt-3 p-3" style="background: #f8f9fa; border: 1px solid #ddd; border-radius: 8px; gap: 8px;">
+                        <button id="wifi-action-analyze" class="btn btn-primary" style="font-size: 1.15rem; padding: 0.5rem 1rem;" disabled onclick="runSelectedWifiAction(this, 'parse')">
+                            Parse
+                        </button>
+                        <button id="wifi-action-chatbot" class="btn btn-info" style="color:white; font-size: 1.15rem; padding: 0.5rem 1rem;" disabled onclick="runSelectedWifiAction(this, 'chatbot')">
+                            🤖 Chatbot Analysis
+                        </button>
+                    </div>
                     <div class="mb-3">
                         {% for name, etl_list in wifi_dict.items() %}
                             {% for etl_path in etl_list %}
@@ -364,18 +373,6 @@
                                 {% endif %}
                             {% endfor %}
                         {% endfor %}
-                    </div>
-
-                    <div class="d-flex flex-wrap justify-content-center align-items-center mt-3 p-3" style="background: #f8f9fa; border: 1px solid #ddd; border-radius: 8px; gap: 8px;">
-                        <button id="wifi-action-analyze" class="btn btn-primary btn-sm" disabled onclick="runSelectedWifiAction(this, 'parse')">
-                            Parse
-                        </button>
-                        <button id="wifi-action-llm" class="btn btn-success btn-sm" disabled onclick="runSelectedWifiAction(this, 'llm')">
-                            Analyze with LLM
-                        </button>
-                        <button id="wifi-action-chatbot" class="btn btn-info btn-sm" style="color:white;" disabled onclick="runSelectedWifiAction(this, 'chatbot')">
-                            🤖 Chatbot Analysis
-                        </button>
                     </div>
                 </div>
 
@@ -414,6 +411,11 @@
                 </div>
 
                 <div class="tab-pane fade {% if active_tab == 'ddd' %}show active{% endif %}" id="ddd-panel" role="tabpanel" aria-labelledby="ddd-tab">
+                    <div class="d-flex flex-wrap justify-content-center align-items-center mt-3 p-3" style="background: #f8f9fa; border: 1px solid #ddd; border-radius: 8px; gap: 8px;">
+                        <button id="ddd-action-analyze" class="btn btn-primary btn-sm" style="font-size: 1.15rem; padding: 0.5rem 1rem;" disabled onclick="runSelectedDddAction(this, 'parse')">
+                            Parse
+                        </button>
+                    </div>
                     <div class="mb-3">
                         {% for name, ddd_list in ddd_dict.items() %}
                                 {% for ddd_path in ddd_list %}
@@ -434,15 +436,15 @@
                             {% endfor %}
                         {% endfor %}
                     </div>
-                    <div class="d-flex flex-wrap justify-content-center align-items-center mt-3 p-3" style="background: #f8f9fa; border: 1px solid #ddd; border-radius: 8px; gap: 8px;">
-                        <button id="ddd-action-analyze" class="btn btn-primary btn-sm" disabled onclick="runSelectedDddAction(this, 'parse')">
-                            Parse
-                        </button>
-                    </div>
                 </div>
 
 
                 <div class="tab-pane fade {% if active_tab == 'fw' %}show active{% endif %}" id="fw-panel" role="tabpanel" aria-labelledby="fw-tab">
+                    <div class="d-flex flex-wrap justify-content-center align-items-center mt-3 p-3" style="background: #f8f9fa; border: 1px solid #ddd; border-radius: 8px; gap: 8px;">
+                        <button id="fw-action-analyze" class="btn btn-primary btn-sm" style="font-size: 1.15rem; padding: 0.5rem 1rem;" disabled onclick="runSelectedFwAction(this, 'parse')">
+                            Parse
+                        </button>
+                    </div>
                     <div class="mb-3">
                         {% for name, fw_list in fw_dict.items() %}
                                 {% for fw_path in fw_list %}
@@ -462,12 +464,6 @@
                                 {% endif %}
                             {% endfor %}
                         {% endfor %}
-                    </div>
-
-                    <div class="d-flex flex-wrap justify-content-center align-items-center mt-3 p-3" style="background: #f8f9fa; border: 1px solid #ddd; border-radius: 8px; gap: 8px;">
-                        <button id="fw-action-analyze" class="btn btn-primary btn-sm" disabled onclick="runSelectedFwAction(this, 'parse')">
-                            Parse
-                        </button>
                     </div>
                 </div>
             </div>
@@ -496,7 +492,7 @@
             const etlPathEncoded = autoAnalysisEtlElement.value;
             const dummyButton = document.createElement('button');
             dummyButton.classList.add('btn', 'btn-success');
-            startLogParser(dummyButton, etlPathEncoded);s
+            startLogParser(dummyButton, etlPathEncoded);
             
         }
         
@@ -979,6 +975,7 @@
    
     
     // === 1. Auto-match the correct log by reading actual file timestamps (backend) ===
+    /*
     function startGlobalSkillsAgentAnalysis() {
         const btn = document.getElementById('global-skills-agent-btn');
         if (btn.classList.contains('disabled')) return;
@@ -1055,6 +1052,7 @@
                 btn.innerText = '⏱️ Skills-Agent Analysis';
             });
     }
+     */
 
     // === 2. Execute ETL and mark it as triggered by the green button (analyze_all) ===
     function executeAutoETL(button, etlPathEncoded) {

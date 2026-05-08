@@ -39,7 +39,6 @@
         transition: all 0.3s ease;
         background-color: #fff;
         cursor: pointer;
-        max-width: 800px;
     }
     
     .file-item:hover {
@@ -107,6 +106,40 @@
     .content-section.active {
         display: block;
         animation: fadeIn 0.5s ease-in;
+    }
+
+    .attachments-control-row {
+        position: relative;
+        min-height: 44px;
+        display: flex;
+        align-items: center;
+    }
+
+    .attachments-actions {
+        position: absolute;
+        left: 50%;
+        transform: translateX(-50%);
+        display: flex;
+        flex-wrap: wrap;
+        align-items: center;
+        justify-content: center;
+        gap: 8px;
+    }
+
+    @media (max-width: 992px) {
+        .attachments-control-row {
+            min-height: auto;
+            flex-direction: column;
+            align-items: flex-start;
+            gap: 10px;
+        }
+
+        .attachments-actions {
+            position: static;
+            transform: none;
+            width: 100%;
+            justify-content: center;
+        }
     }
     
     @keyframes fadeIn {
@@ -191,7 +224,7 @@
         <div class="card mb-3" style="border: 2px solid #005A9C; border-radius: 0.5rem;">
             <div class="card-header text-white font-weight-bold py-3 px-3" style="background-color: #005A9C;">
             </div>
-            <div class="card-body bg-light px-3" style="white-space: normal; line-height: 1.5; border-radius: 0.5rem;">
+            <div class="card-body bg-light px-2" style="white-space: normal; line-height: 1.5; border-radius: 0.5rem;">
                 <div id="ai-analysis-content">
                     <div class="loading-container">
                         <div class="text-center">
@@ -280,13 +313,39 @@
             <div class="card-body bg-light px-3" style="white-space: normal; line-height: 1.5; border-radius: 0.5rem;">
          <span class="fw-bolder text-primary h4 d-block mb-3">Attachments:</span>
          
-         <div class="mb-3">
-             <button type="button" class="btn btn-primary btn-sm px-4" id="selectAllBtn" onclick="toggleSelectAllBtn()" style="font-weight: 500; border-radius: 25px;">
-                 <i class="fas fa-check-square mr-1"></i>Select All
-             </button>
-         </div>
-        
         <form method="post">
+            <div class="mb-3 attachments-control-row" style="gap: 10px;">
+                <button type="button" class="btn btn-primary btn-sm px-3" id="selectAllBtn" onclick="toggleSelectAllBtn()" style="font-weight: 500; border-radius: 25px;">
+                    <i class="fas fa-check-square mr-1"></i>Select All
+                </button>
+
+                <div class="attachments-actions">
+                    <div style="position: relative; display: inline-block;">
+                        <button type="submit" name="action" value="normal" class="btn btn-primary mr-2" id="downloadBtn" disabled style="border-radius: 25px; padding: 8px 24px 8px 48px; border: 2px solid #28816f; background-color: #28816f; color: #fff;">
+                            <span class="spinner-border spinner-border-sm mr-2" role="status" style="display: none;"></span>
+                            Download
+                        </button>
+                        <img src="{{ url_for('static', filename='download.svg') }}" alt="" aria-hidden="true" style="position: absolute; left: 20px; top: 50%; transform: translateY(-50%); width: 24px; height: 24px; pointer-events: none;">
+                    </div>
+
+                    <div style="position: relative; display: inline-block;">
+                        <button type="submit" name="action" value="bsod" class="btn btn-success mr-2" id="bsodBtn" disabled style="border-radius: 25px; padding: 8px 24px 8px 48px; border: 2px solid #d11f5d; background-color: #d11f5d; color: #fff;">
+                            <span class="spinner-border spinner-border-sm mr-2" role="status" style="display: none;"></span>
+                            BSOD Parser
+                        </button>
+                        <img src="{{ url_for('static', filename='BSOD.svg') }}" alt="" aria-hidden="true" style="position: absolute; left: 15px; top: 50%; transform: translateY(-50%); width: 24px; height: 24px; pointer-events: none;">
+                    </div>
+
+                    <div style="position: relative; display: inline-block;">
+                        <button type="submit" name="action" value="latest_etl_llm" class="btn btn-secondary" id="etlLlmBtn" disabled style="border-radius: 25px; padding: 8px 24px 8px 48px; border: 2px solid #116285; background-color: #116285; color: #fff;">
+                            <span class="spinner-border spinner-border-sm mr-2" role="status" style="display: none;"></span>
+                            Run Analysis
+                        </button>
+                        <img src="{{ url_for('static', filename='analysis.svg') }}" alt="" aria-hidden="true" style="position: absolute; left: 15px; top: 50%; transform: translateY(-50%); width: 24px; height: 24px; pointer-events: none;">
+                    </div>
+                </div>
+            </div>
+
             {% if case_context.attachment_list %}
                 {% for sublist in case_context.attachment_list %}
                     {% if sublist|length > 2 %}
@@ -306,30 +365,6 @@
                 <p>No attachment detected</p>
             {% endif %}
             
-            <div style="position: relative; display: inline-block;">
-                <button type="submit" name="action" value="normal" class="btn btn-primary mr-2 mb-5" id="downloadBtn" disabled style="border-radius: 25px; padding: 8px 24px 8px 48px; border: 2px solid #28816f; background-color: #28816f; color: #fff;">
-                    <span class="spinner-border spinner-border-sm mr-2" role="status" style="display: none;"></span>
-                    Download
-                </button>
-                <img src="{{ url_for('static', filename='download.svg') }}" alt="" aria-hidden="true" style="position: absolute; left: 20px; top: 22%; transform: translateY(-50%); width: 24px; height: 24px; pointer-events: none;">
-            </div>
-
-            <div style="position: relative; display: inline-block;">
-            <button type="submit" name="action" value="bsod" class="btn btn-success mb-5 mr-2" id="bsodBtn" disabled style="border-radius: 25px; padding: 8px 24px 8px 48px; border: 2px solid #d11f5d; background-color: #d11f5d; color: #fff;">
-                <span class="spinner-border spinner-border-sm mr-2" role="status" style="display: none;"></span>
-                BSOD Parser
-            </button>
-            <img src="{{ url_for('static', filename='BSOD.svg') }}" alt="" aria-hidden="true" style="position: absolute; left: 15px; top: 22%; transform: translateY(-50%); width: 24px; height: 24px; pointer-events: none;">
-
-            </div>
-
-            <div style="position: relative; display: inline-block;">
-            <button type="submit" name="action" value="latest_etl_llm" class="btn btn-secondary mb-5" id="etlLlmBtn" disabled style="border-radius: 25px; padding: 8px 24px 8px 48px; border: 2px solid #116285; background-color: #116285; color: #fff;">
-                <span class="spinner-border spinner-border-sm mr-2" role="status" style="display: none;"></span>
-                Run Analysis
-            </button>
-            <img src="{{ url_for('static', filename='analysis.svg') }}" alt="" aria-hidden="true" style="position: absolute; left: 15px; top: 22%; transform: translateY(-50%); width: 24px; height: 24px; pointer-events: none;">
-            </div>
         </form>
             </div>
         </div>
@@ -371,9 +406,9 @@
                     
                     if (enabled) {
                         btn.classList.remove('btn-outline-secondary');
-                        if (btnId === 'downloadBtn') btn.className = 'btn btn-primary mr-2 mb-5';
-                        if (btnId === 'bsodBtn') btn.className = 'btn btn-success mb-5 mr-2';
-                        if (btnId === 'etlLlmBtn') btn.className = 'btn btn-secondary mb-5';
+                        if (btnId === 'downloadBtn') btn.className = 'btn btn-primary mr-2';
+                        if (btnId === 'bsodBtn') btn.className = 'btn btn-success mr-2';
+                        if (btnId === 'etlLlmBtn') btn.className = 'btn btn-secondary';
                     } else {
                         btn.classList.add('btn-outline-secondary');
                     }

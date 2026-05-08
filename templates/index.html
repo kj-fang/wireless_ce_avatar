@@ -748,7 +748,34 @@
                 }
 
                 disconnectUploadSocket();
-                if (result.redirect) {
+
+                // .log / .etl: mirror the wpp_complete chatbot flow from download_result.html
+                if (result.use_chatbot) {
+                    try {
+                        if (result.etl_path) {
+                            // .etl — ETL already parsed server-side; call prepare to prime the agent
+                            const prepareRes = await fetch('/log_chatbot/prepare', {
+                                method: 'POST',
+                                headers: { 'Content-Type': 'application/json' },
+                                body: JSON.stringify({ etl_path: result.etl_path })
+                            });
+                            const prepareData = await prepareRes.json();
+                            if (!prepareData.success) {
+                                console.warn('Chatbot prepare warning:', prepareData.error);
+                            }
+                        } else if (result.log_path) {
+                            // .log — set the log directly on the agent
+                            await fetch('/log_chatbot/set_log', {
+                                method: 'POST',
+                                headers: { 'Content-Type': 'application/json' },
+                                body: JSON.stringify({ log_path: result.log_path })
+                            });
+                        }
+                    } catch (e) {
+                        console.warn('Chatbot prepare step failed, navigating anyway:', e);
+                    }
+                    window.location.href = '/log_chatbot/?auto_run=analyze_all';
+                } else if (result.redirect) {
                     window.location.href = result.redirect;
                 } else {
                     alert('✅ Analysis completed successfully!');

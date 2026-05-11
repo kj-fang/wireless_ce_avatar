@@ -190,8 +190,8 @@
             <div style="display: flex; gap: 0; margin-bottom: 15px; position: relative;">
                 <select id="action_type" class="form-control action-type-select" style="border-radius: 25px 0 0 25px; padding: 8px 15px 8px 10px; border-right: none; background-color: #0068B6 ; color: rgb(255, 255, 255); font-weight: bold;">
                     <option value="submit" style="background-color: white; color: black;">Submit</option>
-                    <option value="etl" style="background-color: white; color: black;">ETL Analysis</option>
-                    <option value="etl_llm" style="background-color: white; color: black;">ETL Analysis with LLM</option>
+                    <option value="etl" style="background-color: white; color: black;">ETL Parse</option>
+                    <option value="etl_llm" style="background-color: white; color: black;">ETL Parse with LLM</option>
                 </select>
                 <input type="text" class="form-control" id="case_number" name="case_number" placeholder="Enter case number here" value="" required style="border-radius: 0 25px 25px 0; padding: 12px 50px 12px 20px; flex: 1;">
                 <button type="submit" class="btn btn-primary" aria-label="Search" style="position: absolute; right: 5px; top: 50%; transform: translateY(-50%); border-radius: 20px; padding: 6px 12px; font-size: 14px; background-color: transparent; border-color: transparent;">
@@ -273,21 +273,25 @@
     </div>
 
 
-    
-    <!-- 🤖 Log Chatbot shortcut -->
-    <div style="width: 480px; margin: 20px auto 0; background: transparent; padding: 16px 24px; text-align: center;">
+    <!-- 🤖 Log Chatbot shortcut - Floating Action Button -->
+    <div style="position: fixed; bottom: 30px; right: 30px; background: transparent; padding: 0; text-align: center; z-index: 1000;">
         <a href="/log_chatbot/" style="
-            display: inline-flex; align-items: center; gap: 7px;
+            display: inline-flex; align-items: center; justify-content: center;
+            width: 70px; height: 70px;
             background: linear-gradient(135deg,#0071c5,#00a3e0);
             color: white; text-decoration: none;
-            padding: 9px 22px; border-radius: 25px;
-            font-size: 0.85rem; font-weight: 600;
-            box-shadow: 0 2px 8px rgba(0,113,197,0.3);
-            transition: opacity 0.2s;"
-            onmouseover="this.style.opacity='0.85'" onmouseout="this.style.opacity='1'">
-            📡 Wi-Fi Log Chatbot
+            border-radius: 50%;
+            font-size: 1.8rem;
+            box-shadow: 0 4px 12px rgba(0,113,197,0.4);
+            transition: all 0.3s ease;"
+            onmouseover="this.style.transform='scale(1.1)'; this.style.boxShadow='0 6px 16px rgba(0,113,197,0.6)';" 
+            onmouseout="this.style.transform='scale(1)'; this.style.boxShadow='0 4px 12px rgba(0,113,197,0.4)';"
+            title="Wi-Fi Log Chatbot"
+            aria-label="Wi-Fi Log Chatbot">
+            📡
         </a>
-    </div>
+    </div>  
+
 
     <div class="mb-5"></div>
 
@@ -450,10 +454,10 @@
                 showCaseLoading();
                 document.getElementById('mainForm').submit();
             } else if (actionType === 'etl') {
-                // ETL Analysis
+                // ETL Parse
                 await runLatestETL(caseNumber);
             } else if (actionType === 'etl_llm') {
-                // ETL Analysis with LLM
+                // ETL Parse with LLM
                 await runLatestETLWithLLM(caseNumber);    
             } else {
                 alert("❌ Unsupported action selected. Please choose a valid option and try again.");
@@ -642,14 +646,12 @@
             
             selectedFiles.forEach((item, index) => {
                 const file = item.file;
-                const sizeLabel = item.sourcePath ? 'native path' : formatFileSize(file.size);
                 const fileItem = document.createElement('div');
                 fileItem.className = 'file-item';
                 fileItem.innerHTML = `
                     <div class="file-item-info">
                         <span>📄</span>
                         <span style="font-weight: 500;">${escapeHtml(file.name)}</span>
-                        <span style="color: #666; font-size: 12px;">(${escapeHtml(sizeLabel)})</span>
                     </div>
                     <span class="file-remove" onclick="removeFile(${index})">✕</span>
                 `;

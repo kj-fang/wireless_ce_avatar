@@ -7,7 +7,10 @@ import threading
 from concurrent.futures import ThreadPoolExecutor
 from flask import session
 from typing import Dict, Any, Optional, Tuple
+
+from configs.path_configs import LOG_PARSER_DIR
 import markdown
+import bleach
 
 from configs.path_configs import LOG_PARSER_DIR
 from configs.global_configs import app_config
@@ -228,8 +231,15 @@ class LogParserService:
             self.update_progress(100, "Analysis completed!")
             
             # save result
-            self.analysis_result['llm_result_html'] = markdown.markdown(llm_result, 
-                                                                extensions=["fenced_code", "tables", "nl2br", "sane_lists", "codehilite"])
+            # Sanitize HTML with bleach to prevent XSS
+            markdown_html = markdown.markdown(llm_result, 
+                                            extensions=["fenced_code", "tables", "nl2br", "sane_lists", "codehilite"])
+            self.analysis_result['llm_result_html'] = bleach.clean(
+                markdown_html,
+                tags=['p', 'br', 'strong', 'em', 'code', 'pre', 'h1', 'h2', 'h3', 'h4', 'h5', 'h6', 'ul', 'ol', 'li', 'table', 'thead', 'tbody', 'tr', 'td', 'th', 'blockquote', 'a'],
+                attributes={'a': ['href']},
+                strip=True
+            )
             self.analysis_result['log_output_path'] = save_filtered_log_path
 
             # Notify chatbot: store log path in app_config so any chatbot session

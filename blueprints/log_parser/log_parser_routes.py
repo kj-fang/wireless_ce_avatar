@@ -8,6 +8,7 @@ import re
 import shutil
 import traceback
 import markdown
+import bleach
 from urllib.parse import unquote
 from werkzeug.utils import secure_filename
 
@@ -25,6 +26,27 @@ log_parser_bp = Blueprint("log_parser", __name__, url_prefix="/log_parser")
 
 log_parser_service = LogParserService()
 file_manager_service = FileManagerService()
+
+_SAFE_MARKDOWN_TAGS = [
+    'p', 'br', 'strong', 'em', 'code', 'pre',
+    'h1', 'h2', 'h3', 'h4', 'h5', 'h6',
+    'ul', 'ol', 'li',
+    'table', 'thead', 'tbody', 'tr', 'td', 'th',
+    'blockquote', 'a'
+]
+
+
+def _render_safe_markdown_html(text: str) -> str:
+    html = markdown.markdown(
+        text,
+        extensions=["fenced_code", "tables", "nl2br", "sane_lists", "codehilite"]
+    )
+    return bleach.clean(
+        html,
+        tags=_SAFE_MARKDOWN_TAGS,
+        attributes={'a': ['href']},
+        strip=True,
+    )
 
 #------------Section for Local dmp file upload bar -------------#
 def _copy_file_with_console_progress(src_path: str, dst_path: str, chunk_size: int = 4 * 1024 * 1024) -> None:
@@ -719,9 +741,7 @@ def handle_chat_message(data, socketio=None):
             return
 
         reply = log_parser_service.handle_chat_message(user_message, llm_helper)
-        reply_html = markdown.markdown(
-            reply, extensions=["fenced_code", "tables", "nl2br", "sane_lists", "codehilite"]
-        )
+        reply_html = _render_safe_markdown_html(reply)
 
         print(f"💬 LLM reply length: {len(reply)}")
 
@@ -796,9 +816,7 @@ Based on these re-filtered logs, please respond to my instruction:
 
         reply = log_parser_service.handle_chat_message(enhanced_message, llm_helper)
         
-        reply_html = markdown.markdown(
-            reply, extensions=["fenced_code", "tables", "nl2br", "sane_lists", "codehilite"]
-        )
+        reply_html = _render_safe_markdown_html(reply)
 
         print(f"💬 LLM reply length: {len(reply)}")
 

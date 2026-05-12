@@ -496,7 +496,8 @@ def render_download_result_bsod_form():
 
 def handle_open_path():
     """Open a local folder path in Windows Explorer."""
-    path = request.json.get('path')
+    path = request.get_json(silent=True) or {}
+    path = path.get('path', '')
     print("Now opening path:", path)
     if path and os.path.exists(path):
         subprocess.run(['explorer', path])
@@ -509,7 +510,8 @@ def handle_dump_event_txt():
     except ImportError as e:
         return jsonify({'error': f'Event log feature unavailable: {e}'}), 503
 
-    path = request.json.get('path')
+    path = request.get_json(silent=True) or {}
+    path = path.get('path', '')
     if not path or not os.path.exists(path):
         return jsonify({'error': 'Invalid path'}), 400
     try:
@@ -527,7 +529,8 @@ def handle_parse_event_log():
     except ImportError as e:
         return jsonify({'error': f'Event log feature unavailable: {e}'}), 503
 
-    path = request.get_json(silent=True).get('path') or ''
+    path = request.get_json(silent=True) or {}
+    path = path.get('path', '')
     print(f"\n[UI View] 🔍 Scanning Event Log: {path}")
     if not path or not os.path.exists(path):
         return jsonify({'error': 'Invalid path'}), 400

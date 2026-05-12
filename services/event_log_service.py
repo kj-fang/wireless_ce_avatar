@@ -52,7 +52,7 @@ def get_system_timezone(event_path):
                 pass
         elif os.path.exists(special_direct_info):
             try:
-                with open(special_direct_info, 'r', encoding='utf-16 le') as f:
+                with open(special_direct_info, 'r', encoding='utf-16le') as f:
                     for line in f:
                         if line.startswith('Time Zone:'):
                             return line.split(':', 1)[1].strip()
@@ -79,7 +79,7 @@ def get_system_timezone(event_path):
                         continue
                 elif os.path.exists(child_special_info):
                     try:
-                        with open(child_special_info, 'r', encoding='utf-16 le') as f:
+                        with open(child_special_info, 'r', encoding='utf-16le') as f:
                             for line in f:
                                 if line.startswith('Time Zone:'):
                                     return line.split(':', 1)[1].strip()
@@ -119,12 +119,6 @@ def _resolve_timezone(timezone_name):
         minutes = int(prefix_match.group(3))
         total_minutes = sign * (hours * 60 + minutes)
         return timezone(timedelta(minutes=total_minutes))
-
-        display_name = (prefix_match.group(4) or '').strip()
-        if display_name:
-            target_timezone = tz.gettz(display_name)
-            if target_timezone is not None:
-                return target_timezone
 
     # 2) Legacy handling for strings like: Pacific Standard Time (GMT-0800)
     legacy_name = tz_name.split(' (')[0].strip()

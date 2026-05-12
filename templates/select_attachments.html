@@ -126,22 +126,29 @@
         gap: 8px;
     }
 
-    @media (max-width: 992px) {
-        .attachments-control-row {
-            min-height: auto;
-            flex-direction: column;
-            align-items: flex-start;
-            gap: 10px;
-        }
-
-        .attachments-actions {
-            position: static;
-            transform: none;
-            width: 100%;
-            justify-content: center;
-        }
+    .attachments-actions button:disabled {
+        background-color: #adb5bd !important;
+        border-color: #adb5bd !important;
+        color: #ffffff !important;
+        cursor: not-allowed !important;
+        opacity: 0.65;
+        box-shadow: none !important;
     }
-    
+
+    html,
+    body {
+        overflow-x: auto;
+    }
+
+    body {
+        min-width: 1280px;
+    }
+
+    .container {
+        width: 1240px !important;
+        max-width: 1240px !important;
+    }
+
     @keyframes fadeIn {
         from {
             opacity: 0;
@@ -204,11 +211,11 @@
         <div class="content-wrapper">
             <!-- Top Navigation -->
             <div class="side-nav">
-                <div class="nav-item active" data-target="ai-summary" onmouseenter="showSection('ai-summary')">
-                    AI Summary
-                </div>
-                <div class="nav-item" data-target="description" onmouseenter="showSection('description')">
+                <div class="nav-item active" data-target="description" onmouseenter="showSection('description')">
                     Description
+                </div>
+                <div class="nav-item" data-target="ai-summary" onmouseenter="showSection('ai-summary')">
+                    AI Summary
                 </div>
                 <div class="nav-item" data-target="attachments" onmouseenter="showSection('attachments')">
                     Choose Attachment
@@ -217,33 +224,9 @@
             
             <!-- Content Area -->
             <div class="content-area">
-                <!-- AI Summary Section -->
-                <div id="ai-summary" class="content-section active">
-        
-        <!-- AI Summary Card -->
-        <div class="card mb-3" style="border: 2px solid #005A9C; border-radius: 0.5rem;">
-            <div class="card-header text-white font-weight-bold py-3 px-3" style="background-color: #005A9C;">
-            </div>
-            <div class="card-body bg-light px-2" style="white-space: normal; line-height: 1.5; border-radius: 0.5rem;">
-                <div id="ai-analysis-content">
-                    <div class="loading-container">
-                        <div class="text-center">
-                            <div class="spinner-border text-primary" role="status" style="width: 2rem; height: 2rem;">
-                                <span class="sr-only">Loading...</span>
-                            </div>
-                            <div class="mt-2">
-                                <p class="text-muted mb-0">Analyzing Issue with gpt...</p>
-                            </div>
-                        </div>
-                    </div>
-                </div>
-            </div>
-        </div>
-                </div>
-                <!-- End AI Summary Section -->
         
                 <!-- Description Section -->
-                <div id="description" class="content-section">
+                <div id="description" class="content-section active">
         <div class="card mb-3" style="border: 2px solid #005A9C; border-radius: 0.5rem;">
             <div class="card-header text-white font-weight-bold py-3 px-3" style="background-color: #005A9C;">
             </div>
@@ -251,8 +234,6 @@
         <span class="fw-bolder text-primary h4 d-block mt-2 mb-1">Issue Description:</span>        
         <p>{{ case_context.description }}</p>
 
-        
-        
         <p>
             <a class="btn btn-link text-primary p-0" data-toggle="collapse" href="#envDetailCollapse" role="button" aria-expanded="false" aria-controls="envDetailCollapse">
                 Show Environment Details
@@ -303,7 +284,27 @@
             </div>
         </div>
                 </div>
+
                 <!-- End Description Section -->
+                 <!-- AI Summary Section -->
+                <div id="ai-summary" class="content-section">
+        
+        <!-- AI Summary Card -->
+        <div class="card mb-3" style="border: 2px solid #005A9C; border-radius: 0.5rem;">
+            <div class="card-header text-white font-weight-bold py-3 px-3" style="background-color: #005A9C;">
+            </div>
+            <div class="card-body bg-light px-2" style="white-space: normal; line-height: 1.5; border-radius: 0.5rem;">
+                <div id="ai-analysis-content">
+                    <div class="loading-container">
+                        <div class="text-center">
+                            <button class="btn btn-primary btn-sm" type="button" onclick="loadAiAnalysis()">Start the AI Analysis</button>
+                        </div>
+                    </div>
+                </div>
+            </div>
+        </div>
+                </div>
+                <!-- End AI Summary Section -->
         
                 <!-- Attachments Section -->
                 <div id="attachments" class="content-section">
@@ -395,6 +396,7 @@
     </script>
     <script>
         window.submitting = false;
+        window.aiAnalysisLoading = false;
 
 
         function toggleSubmitButtons(enabled) {
@@ -448,6 +450,10 @@
         }
         
         function updateSubmitButtons() {
+            if (window.aiAnalysisLoading) {
+                toggleSubmitButtons(false);
+                return;
+            }
             const checkboxes = document.querySelectorAll('.file-item input[type="checkbox"]');
             const anyChecked = Array.from(checkboxes).some(cb => cb.checked);
             toggleSubmitButtons(anyChecked);
@@ -568,8 +574,23 @@
         // Ai Analysis
         const AI_ANALYSIS_URL = "{{ url_for('llm.get_llm_analysis') }}";
         function loadAiAnalysis() {
+            window.aiAnalysisLoading = true;
+            toggleSubmitButtons(false);
 
-            updateSubmitButtons();
+            // Show loading state
+            $('#ai-analysis-content').html(`
+                <div class="loading-container">
+                    <div class="text-center">
+                        <div class="spinner-border text-primary" role="status" style="width: 2rem; height: 2rem;">
+                            <span class="sr-only">Loading...</span>
+                        </div>
+                        <div class="mt-2">
+                            <p class="text-muted mb-0">Analyzing...</p>
+                        </div>
+                    </div>
+                </div>
+            `);
+
             $.ajax({
                 url: AI_ANALYSIS_URL,
                 method: 'GET',
@@ -598,16 +619,13 @@
                             <button class="btn btn-sm btn-outline-primary ml-2" onclick="loadAiAnalysis()">Retry</button>
                         </div>
                     `);
+                },
+                complete: function() {
+                    window.aiAnalysisLoading = false;
                     updateSubmitButtons();
                 }
             });
         }
-
-        
-
-        $(document).ready(function() {
-            loadAiAnalysis();
-        });
 
         document.addEventListener('DOMContentLoaded', function () {
             const form = document.querySelector('form');

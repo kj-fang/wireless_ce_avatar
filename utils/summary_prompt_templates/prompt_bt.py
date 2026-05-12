@@ -40,11 +40,11 @@ for "Unclassified":
 Step 3. Output your analysis as a valid JSON object without any additional explanations or characters, do not change the field order:
  
     {
-        "Issue_summary": {
+        "Issue summary": {
             "Symptom": ["<summarize this issue in clear sentence based on the issue description, configuration, reproduce steps, and comments>"]
             "Repro Steps": ["<list reproduce steps>"]
             "Other Information": ["<list all the questions in string format, only present if needed>"]},
-        "Next_action": {
+        "Next action": {
             "Recommendation": ["<If needed, list any questions in bullet points that should be asked to the customer>",
                 "<Recommended next step, e.g., 'Request missing dump file' or 'Logs are sufficient, proceed to triage'>"]
         }
@@ -88,13 +88,13 @@ For "Connectivity":
 Step 3. Output your analysis as a valid JSON object without any additional explanations or characters, do not change the field order:
 
     {
-        "Issue_summary": {
+        "Issue summary": {
             "Issue_type": ["<Identified issue type>"],
             "Symptoms": ["<A list of description of each key symptom based on subject/description>"]
             "Evidence": ["<Explain what keywords or clues led to the classification>"]
             "Other information":["<A list of anything else important>"]
         },
-        "Next_action": {
+        "Next action": {
             "Attachments_present": ["<Attachment Name/None>"],
             "Recommendation": ["<Recommended next step, e.g., 'Request missing dump file' or 'Logs are sufficient, proceed to triage'>"]
         }
@@ -124,12 +124,12 @@ Your tasks:
 3. Output your analysis as a valid JSON object without any additional explanations or characters:
 
     {
-        "Issue_summary": {
+        "Issue summary": {
             "Issue_type": ["<Identified issue type>"],
             "Symptoms": ["<a list of description of each key symptom based on subject/description>"]
             "Evidence": ["<Explain what keywords or clues led to the classification>"]
         },
-        "Next_action": {
+        "Next action": {
             "Attachments_present": ["<Attachment Name/None>"],
             "Recommendation": ["<Recommended next step, e.g., 'Request missing dump file' or 'Logs are sufficient, proceed to triage'>"]
         }

@@ -574,6 +574,9 @@
         // Ai Analysis
         const AI_ANALYSIS_URL = "{{ url_for('llm.get_llm_analysis') }}";
         function loadAiAnalysis() {
+            if (window.aiAnalysisLoading) {
+                 return;
+             }
             window.aiAnalysisLoading = true;
             toggleSubmitButtons(false);
 

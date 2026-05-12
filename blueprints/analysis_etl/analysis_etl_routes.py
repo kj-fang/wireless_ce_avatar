@@ -38,7 +38,14 @@ def process_etl_path():
     if 'wifi' in case_context.wifi_or_bt:
         wifi_service.analyze(etl_path)
     elif 'bt' in case_context.wifi_or_bt:
-        bt_service.analyze(etl_path, mode=mode)
+        classification = session.get("classification", {})
+        issue_type = (classification or {}).get("issue_type")
+        bt_service.analyze(
+            etl_path,
+            mode=mode,
+            issue_type=issue_type,
+            wifi_or_bt=case_context.wifi_or_bt,
+        )
     else:
         return "❌ Unknown case subcategory", 400
     
@@ -50,14 +57,55 @@ def process_etl_path_fw():
     case_context = session["case_context"]
     case_context = CaseContext.from_session(case_context)
 
-    fw_path = request.args.get("fw_path")
-    result = None
+    fw_path = unquote(request.args.get("fw_path", ""))
+
+    if case_context.wifi_or_bt in ['wifi', 'bt']:
+        task_id, error_msg = fw_service.start_async(fw_path, case_context.wifi_or_bt)
+        if not task_id:
+            return jsonify({"ok": False, "error": error_msg}), 400
+    else:
+        return jsonify({"ok": False, "error": "Unknown case subcategory"}), 400
 
     subprocess.run(['explorer', '/select,', fw_path])
 
-    if case_context.wifi_or_bt in ['wifi', 'bt']:
-        result = fw_service.analyze(fw_path, case_context.wifi_or_bt)
-    else:
-        return "❌ Unknown case subcategory", 400
-    
-    return render_template("fw_analysis.html", fw_path=fw_path, result=result)
+    return jsonify({"ok": True, "task_id": task_id, "fw_path": fw_path})
+
+
+@analysis_etl_bp.route('/cancel_fw_analysis', methods=['POST'])
+def cancel_fw_analysis():
+    task_id = request.args.get('task_id', '')
+    if not task_id:
+        body = request.get_json(silent=True) or {}
+        task_id = body.get('task_id', '')
+
+    if not task_id:
+        return jsonify({"ok": False, "error": "task_id is required"}), 400
+
+    canceled = fw_service.cancel_task(task_id)
+    if not canceled:
+        return jsonify({"ok": False, "error": "task not found or already finished"}), 404
+
+    return jsonify({"ok": True, "task_id": task_id})
+
+
+@analysis_etl_bp.route('/fw_analysis_result')
+def fw_analysis_result():
+    task_id = request.args.get('task_id', '')
+    if not task_id:
+        return "❌ task_id is required", 400
+
+    task = fw_service.get_task(task_id)
+    if not task:
+        return f"❌ task not found: {task_id}", 404
+
+    if task['status'] != 'completed':
+        return f"❌ task is not completed yet (status={task['status']})", 400
+
+    results = task['result']
+    return render_template(
+        "fw_analysis.html",
+        fw_path=task['fw_path'],
+        system_info=results['system_info'],
+        system_text=results['system_text'],
+        log=results['log']
+    )

@@ -29,7 +29,7 @@ def filter_files(type, etl_files):
 
     elif type == "bt":
         for file in etl_files:
-            if os.path.basename(file).lower().startswith(('ibtusb-', 'ibtpci-')):
+            if os.path.basename(file).lower().startswith(('ibtusb-', 'ibtpci-')) and os.path.basename(file).lower().endswith('.etl'):
                 filtered_tiles.append(file)
 
     elif type == "fw":
@@ -188,11 +188,15 @@ def process_single_zip(zip_path, download_path_tmp, already_downloaded):
         bt_files.extend(filter_files('bt', etl_files))
         fw_files.extend(filter_files('fw', etl_files))
         
-        # Find DDD files (non-compressed files containing 'ddd')
+        # Find DDD files (non-compressed files containing 'ddd') and System Event files (.evt)
         compressed_exts = ('.zip', '.rar', '.7z', '.tar', '.gz', '.xz')
         for root, _, files in os.walk(extract_to):
             for fname in files:
-                if 'ddd' in fname.lower() and not fname.lower().endswith(compressed_exts):
+                # Include files with 'ddd' in name or .evt files (System Event logs)
+                is_ddd_file = 'ddd' in fname.lower() and not fname.lower().endswith(compressed_exts)
+                is_evt_file = fname.lower() == "raweventviewersystemlogs.evt" or fname.lower() == 'system.evtx'
+                # print(f"[DEBUG] File: {fname} (DDD: {is_ddd_file}, EVT: {is_evt_file})")
+                if is_ddd_file or is_evt_file:
                     ddd_files.append(os.path.abspath(os.path.join(root, fname)))
         
         processed_files.add(file_to_unzip)

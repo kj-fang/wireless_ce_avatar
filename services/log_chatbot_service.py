@@ -301,6 +301,18 @@ def load_skills_from_yaml(yaml_path: str) -> Dict[str, "Skill"]:
         if not isinstance(exclusive, list):
             exclusive = [str(exclusive)]
 
+        # expert_rules is stored as a single string in YAML. If a caller
+        # (or a hand-edited file) passes a list, fold it down to a numbered
+        # string defensively so the agent always sees a plain prompt fragment.
+        if isinstance(expert_rules, list):
+            items = [str(r).strip() for r in expert_rules if str(r).strip()]
+            expert_rules = (
+                "\n\n".join(f"{i}. {r}" for i, r in enumerate(items, start=1))
+                if items else "Please analyze the logs."
+            )
+        elif not isinstance(expert_rules, str):
+            expert_rules = str(expert_rules)
+
         skills[key] = Skill(
             name=name,
             description=description,

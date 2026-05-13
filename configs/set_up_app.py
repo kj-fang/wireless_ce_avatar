@@ -9,6 +9,11 @@ from configs.path_configs import (
     LOCAL_SKILLS_YAML,
 )
 from utils import helpers
+from utils.skills_yaml_utils import (
+    current_active_yaml,
+    refresh_local_cloud_baseline,
+    set_active_source,
+)
 from services.llm_service import LLM_helper
 from services.log_chatbot_service import WifiLogAgentSystem, sync_to_local, load_skills_from_yaml
 
@@ -71,22 +76,35 @@ def set_up(socketio):
 
     app_config.set_llm_helper(llm_helper)
 
-    # Load diagnostic skills into LLM_helper (shared with chatbot agent)
-    # Priority: Shared YAML → Local cache (prompt/filter dirs)
-    
-    # Step 1: Try to load from shared YAML location
-    skills_yaml_shared = helpers.get_load_path(
-        str(Path(SKILLS_CONFIG_DIR_prim) / SKILLS_YAML_FILENAME),
-        str(Path(SKILLS_CONFIG_DIR_bkup) / SKILLS_YAML_FILENAME)
-    )
-    
+    # Load diagnostic skills into LLM_helper (shared with chatbot agent).
+    #
+    # Every boot:
+    #   1. Refresh the local `cloud/` mirror from the share folder so the
+    #      baseline tracks team-published revisions.
+    #   2. Reset the active source to "cloud" — user overrides persist on
+    #      disk but the agent always starts on the published baseline,
+    #      matching the user-visible "Cloud baseline" badge.
+    #   3. Load whichever file `current_active_yaml()` resolves to.
+
     skills_loaded = False
-    if skills_yaml_shared and Path(skills_yaml_shared).exists():
+    set_active_source("cloud")
+    try:
+        refreshed_path, refreshed_date = refresh_local_cloud_baseline()
+        if refreshed_path is not None:
+            print(f"📥 Refreshed local cloud baseline → {refreshed_path} "
+                  f"(date={refreshed_date})")
+        else:
+            print("ℹ️  Cloud baseline refresh skipped — share folder unreachable.")
+    except Exception as e:
+        print(f"⚠️  Cloud baseline refresh failed: {e}")
+
+    chosen_yaml, chosen_date, chosen_source = current_active_yaml()
+    if chosen_yaml is not None and chosen_yaml.exists():
         try:
-            print(f"📦 Loading skills from shared YAML: {skills_yaml_shared}")
-            llm_helper.skills = load_skills_from_yaml(skills_yaml_shared)
+            llm_helper.skills = load_skills_from_yaml(str(chosen_yaml))
             skills_loaded = True
-            print(f"✅  {len(llm_helper.skills)} skills loaded from YAML")
+            print(f"✅  {len(llm_helper.skills)} skills loaded from "
+                  f"{chosen_source} YAML: {chosen_yaml} (date={chosen_date})")
         except Exception as e:
             print(f"⚠️  Failed to load skills from YAML: {e}")
     

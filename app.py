@@ -5,6 +5,13 @@ import json
 import os
 import sys
 import webbrowser
+
+# Force UTF-8 stdout/stderr so emoji print() calls don't crash on Windows
+# cp1252 consoles (this is undone by cachelib/flask-session locale init).
+if hasattr(sys.stdout, 'reconfigure'):
+    sys.stdout.reconfigure(encoding='utf-8', errors='replace')
+if hasattr(sys.stderr, 'reconfigure'):
+    sys.stderr.reconfigure(encoding='utf-8', errors='replace')
 from urllib.parse import quote
 from urllib.request import Request, urlopen
 

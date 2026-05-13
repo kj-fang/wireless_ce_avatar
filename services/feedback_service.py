@@ -36,18 +36,19 @@ from utils import helpers
 # --- Storage location ----------------------------------------------------
 #
 # Resolution order (cached for the lifetime of the process):
-#   1. Shared primary  \\infs089b.iil.intel.com\...\feedback\<user>
-#   2. Shared backup   \\infs089.iil.intel.com\...\feedback\<user>
+#   1. Shared primary  \\infs089b.iil.intel.com\...\feedback
+#   2. Shared backup   \\infs089.iil.intel.com\...\feedback
 #   3. Local fallback  <avatarfiles_dir>\feedback   (off-VPN / share down)
 #
-# Per-user partition is the security mitigation:
-#   - SMB cannot reliably synchronise per-process locks across machines.
-#     Two users voting at the same instant would race for one file. Putting
-#     each user under their own subfolder makes those writes target
-#     different files, so the existing in-process locks are sufficient.
-#   - Per-user folder also makes attribution explicit, so a "submitted_by"
-#     field is recorded once at write time rather than inferred from the
-#     Windows path embedded in log_path.
+# Layout is flat — every user writes to the same files. Attribution travels
+# inside the record itself via the `submitted_by` field, so a reviewer can
+# read the whole feedback history from a single `feedback.jsonl` without
+# crawling per-user subfolders.
+#
+# Cross-machine write contention on the JSONL files is acceptable for our
+# volume: appended lines are small (a few KB at most), the in-process lock
+# serialises writes within each process, and even an SMB-level interleave
+# would only ever corrupt a single line — which the reader can simply skip.
 
 _root_cache: Optional[Path] = None
 _root_lock = threading.Lock()
@@ -69,6 +70,8 @@ def _resolve_root() -> Path:
     Resolve the feedback root once and cache it. Runs the share probe in
     a worker thread (helpers.get_load_path) with an 8-second timeout so a
     slow / off-VPN machine doesn't stall the chat path.
+
+    The root is shared across all users — no per-user partitioning.
     """
     global _root_cache
     if _root_cache is not None:
@@ -77,11 +80,10 @@ def _resolve_root() -> Path:
         if _root_cache is not None:
             return _root_cache
 
-        user = _current_user()
         share = helpers.get_load_path(FEEDBACK_DIR_prim, FEEDBACK_DIR_bkup)
         if share:
             try:
-                root = Path(share) / user
+                root = Path(share)
                 (root / "conversations").mkdir(parents=True, exist_ok=True)
                 _root_cache = root
                 print(f"[feedback] using shared root: {root}")
@@ -160,20 +162,61 @@ def _feedback_detail_path() -> Path:
     return _feedback_root() / "feedback_details.jsonl"
 
 
+def _step_votes_path() -> Path:
+    """Per-step thumbs from the live conversation view (one row each)."""
+    return _feedback_root() / "feedback_step_votes.jsonl"
+
+
+def _helpful_skills_path() -> Path:
+    """`Glad it helped` quick-prompt picks — positive ACE signal stream."""
+    return _feedback_root() / "feedback_helpful_skills.jsonl"
+
+
 def _conversation_path(conversation_id: str) -> Path:
     return _feedback_root() / "conversations" / f"{conversation_id}.json"
 
 
+def _attached_logs_dir(conversation_id: str) -> Path:
+    """Shared sub-folder for opt-in attached session logs, keyed by conv id."""
+    return _feedback_root() / "logs" / (conversation_id or "unknown")
+
+
+def _attached_yaml_dir() -> Path:
+    """Shared sub-folder for user-uploaded skill YAMLs accompanying feedback."""
+    return _feedback_root() / "yaml_reports"
+
+
+def _feedback_weight(*, has_detail: bool, yaml_modified: bool) -> str:
+    """
+    Classify a feedback event into one of two weight buckets.
+
+      "high" — the user filled out structured details, attached a YAML, or
+               edited the skill configuration earlier in the session.
+      "low"  — the user only cast a thumbs-up / thumbs-down.
+
+    Reviewers sort the queue by weight so high-signal feedback surfaces first.
+    """
+    return "high" if (has_detail or yaml_modified) else "low"
+
+
 # Allowed `category` values for structured feedback issues. Kept as a stable
-# label space so downstream training data has consistent classes.
+# label space so downstream training data has consistent classes. These
+# describe the common Wi-Fi-log-debug failure modes a user will tag.
 DETAIL_CATEGORIES = {
-    "wrong_skill",   # the chosen skill is wrong; another would have been better
-    "wrong_input",   # right skill, wrong arguments / filter
-    "wrong_order",   # called at the wrong point in the reasoning sequence
-    "bad_output",    # skill ran, but its output was unhelpful
-    "missing_step",  # the agent should have done an additional step
-    "stuck",         # reasoning got stuck / looped
+    "missed_evidence",     # agent missed a critical log line / event
+    "wrong_skill",         # wrong skill chosen for the symptom
+    "wrong_conclusion",    # wrong root cause / category
+    "hallucinated",        # cited log lines that don't exist
+    "stuck_repeated",      # loop / repeated same fetch
+    "incomplete",          # stopped before finishing the analysis
+    "over_investigated",   # did unnecessary follow-up
+    "bad_output",          # output unclear / misleading
     "other",
+    # Legacy values still accepted for back-compat with older clients.
+    "wrong_input",
+    "wrong_order",
+    "missing_step",
+    "stuck",
 }
 
 DETAIL_SCOPES = {"overall", "skill", "step"}
@@ -231,8 +274,21 @@ def _io_worker_loop() -> None:
             elif kind == "flush":
                 _, conversation_id = job
                 _do_flush(conversation_id)
+            elif kind == "copy_file":
+                _, src, dst = job
+                _do_copy_file(src, dst)
         except Exception as e:
             print(f"[feedback] worker job {job!r} failed: {e}")
+
+
+def _do_copy_file(src: Path, dst: Path) -> None:
+    """Worker-side file copy with create-dir + mtime preservation."""
+    import shutil as _shutil
+    try:
+        dst.parent.mkdir(parents=True, exist_ok=True)
+        _shutil.copy2(str(src), str(dst))
+    except Exception as e:
+        print(f"[feedback] copy_file failed ({src} → {dst}): {e}")
 
 
 def _do_append_jsonl(path: Path, line: str) -> None:
@@ -280,6 +336,11 @@ def _enqueue_append(path: Path, record: dict) -> None:
     line = json.dumps(record, ensure_ascii=False) + "\n"
     _ensure_worker()
     _io_queue.put(("append_jsonl", path, line))
+
+
+def _enqueue_copy(src: Path, dst: Path) -> None:
+    _ensure_worker()
+    _io_queue.put(("copy_file", src, dst))
 
 
 def _lock_for(path: Path) -> threading.Lock:
@@ -561,12 +622,20 @@ def record_vote(
     conversation_id: str,
     turn_id: str,
     vote: int,
+    yaml_modified: bool = False,
 ) -> bool:
     """
     Append a vote event to feedback.jsonl AND patch the matching turn in
     the conversation snapshot so a turn's feedback is visible in one place.
 
     vote: +1 (thumbs up) or -1 (thumbs down). Other values are rejected.
+    yaml_modified: True if the user edited the skill YAML during this session
+                   — promotes the event to weight="high".
+
+    Session logs are NOT attached here. Log attachment is an explicit opt-in
+    inside the "More feedback" modal (typically when the user gives a
+    thumbs-down and chooses to share the log for diagnosis).
+
     Returns True on success, False otherwise.
     """
     if vote not in (1, -1):
@@ -574,6 +643,7 @@ def record_vote(
     if not conversation_id or not turn_id:
         return False
 
+    weight = _feedback_weight(has_detail=False, yaml_modified=bool(yaml_modified))
     event = {
         "ts": _now_iso(),
         "session_id": session_id or "",
@@ -581,6 +651,8 @@ def record_vote(
         "conversation_id": conversation_id,
         "turn_id": turn_id,
         "vote": vote,
+        "weight": weight,
+        "yaml_modified": bool(yaml_modified),
     }
 
     # 1) Patch the in-memory buffer immediately — fast, no disk IO. This is
@@ -590,11 +662,16 @@ def record_vote(
         if snap is not None:
             for t in snap.get("turns", []):
                 if t.get("turn_id") == turn_id:
-                    t["feedback"] = {"vote": vote, "ts": event["ts"]}
+                    t["feedback"] = {
+                        "vote": vote,
+                        "ts": event["ts"],
+                        "weight": weight,
+                        "yaml_modified": bool(yaml_modified),
+                    }
                     break
             snap["_persisted"] = True   # subsequent record_turn writes through
 
-    # 2) Enqueue both writes — return to client immediately.
+    # 2) Enqueue writes — return to client immediately.
     _enqueue_append(_feedback_log_path(), event)
     _enqueue_flush(conversation_id)
     return True
@@ -642,6 +719,54 @@ def _sanitise_issues(issues: Any) -> list[dict]:
     return cleaned
 
 
+# Whitelist of `feedback_layer` values — the dispatch hint that tells
+# downstream Reflectors whether to route this record to the skill-bullet
+# pipeline or the agent-prompt pipeline.
+FEEDBACK_LAYERS = {"skill", "agent", "both"}
+
+# Whitelist of `agent_workflow` assessments. These map directly to
+# specific sections of the agent's system prompt that ACE Reflector /
+# Curator can target:
+#   * appropriate            → no delta needed (positive signal)
+#   * stopped_too_early      → Phase 2 trigger bullet ("invoke more skills when …")
+#   * over_investigated      → Phase 2 / termination bullet ("stop after Phase 1 if …")
+#   * loop_or_stuck          → constraint bullet ("avoid repeating the same fetch")
+#   * wrong_direction        → routing / direction bullet ("when keywords X
+#                              dominate, pursue Y first") — covers wrong
+#                              skill at ANY step, not just Phase 1
+AGENT_WORKFLOW_TAGS = {
+    "appropriate",
+    "stopped_too_early",
+    "over_investigated",
+    "loop_or_stuck",
+    "wrong_direction",
+    # Legacy value (renamed from "wrong_first_skill"). Kept so older
+    # cached client submissions keep validating.
+    "wrong_phase1_skill",
+}
+
+
+# Whitelist of conclusion tag values accepted from the "More feedback"
+# modal. Keeping the list server-side prevents typos / arbitrary strings
+# from polluting the structured feedback stream that Reflector / Curator
+# downstream will aggregate over.
+CORRECT_CONCLUSION_TAGS = {
+    "OS_INITIATED",
+    "RF_INTERFERENCE",
+    "AP_KICK",
+    "FIRMWARE_CRASH",
+    "MCC_MISMATCH",
+    "DRIVER_INIT_FAILURE",
+    "AUTH_FAILURE",
+    "ASSOC_FAILURE",
+    "HANDSHAKE_FAILURE",
+    "WAKE_RESUME_DELAY",
+    "BIOS_CONFIG_ISSUE",
+    "ROAMING_DECISION",
+    "OTHER",
+}
+
+
 def record_detail(
     *,
     session_id: str,
@@ -649,24 +774,106 @@ def record_detail(
     turn_id: str,
     vote: Optional[int] = None,
     issues: Optional[list] = None,
-    general_comment: str = "",
+    expected_outcome: str = "",
+    correct_root_cause: str = "",
+    correct_conclusion_tag: str = "",
+    correct_skill: str = "",
+    correct_approach: str = "",
+    evidence_log_lines: Optional[list] = None,
+    agent_workflow: str = "",
+    severity: Optional[int] = None,
+    yaml_modified: bool = False,
+    attached_yaml_path: str = "",
+    log_path: str = "",
+    attach_log: bool = False,
+    general_comment: str = "",          # legacy, kept for back-compat
 ) -> bool:
     """
     Append a structured detailed feedback record. Used by the "More feedback"
     modal: lets the user point at specific skills / steps and label what
     went wrong, so the data is suitable as training labels.
 
-    All fields are optional — at minimum we need conversation_id + turn_id.
-    Returns True on success.
+    yaml_modified:       True if the user edited the local skill YAML during
+                         this session.
+    attached_yaml_path:  Optional local path to the user's skill YAML; copied
+                         asynchronously to `<feedback_root>/yaml_reports/`.
+    log_path:            Local path to the current session log. Only copied
+                         to `<feedback_root>/logs/<conversation_id>/` when
+                         `attach_log=True` — typically when the user ticks
+                         "Attach session log" in the More feedback modal
+                         after a thumbs-down.
+    attach_log:          Explicit user consent to share the session log.
+
+    All filled-form submissions are weighted "high" so they sort above plain
+    👍/👎 events in the review queue.
     """
     if not conversation_id or not turn_id:
         return False
 
     cleaned_issues = _sanitise_issues(issues)
     general_comment = (general_comment or "").strip()
-    # If everything is empty and there is no vote either, ignore — nothing to log.
-    if not cleaned_issues and not general_comment and vote not in (1, -1):
+    expected_outcome = (expected_outcome or "").strip()
+    correct_root_cause = (correct_root_cause or "").strip()
+    correct_skill = (correct_skill or "").strip()
+    correct_approach = (correct_approach or "").strip()
+
+    # Severity 1-5 (or None when the user skipped it).
+    severity_val: Optional[int] = None
+    if severity is not None and severity != "":
+        try:
+            s = int(severity)
+            if 1 <= s <= 5:
+                severity_val = s
+        except (TypeError, ValueError):
+            severity_val = None
+
+    # Conclusion tag must come from the whitelisted set (or be empty).
+    tag_in = (correct_conclusion_tag or "").strip().upper()
+    correct_conclusion_tag = tag_in if tag_in in CORRECT_CONCLUSION_TAGS else ""
+
+    # Agent-workflow assessment must come from the whitelisted set (or empty).
+    # This is the primary ACE signal for the agent-prompt-layer Playbook —
+    # each value maps cleanly to a target prompt section.
+    wf_in = (agent_workflow or "").strip().lower()
+    agent_workflow = wf_in if wf_in in AGENT_WORKFLOW_TAGS else ""
+
+    # Auto-infer the dispatch hint (Skill Playbook vs Agent-prompt Playbook)
+    # purely from which structured fields the user filled — the UI no
+    # longer asks the user this question directly.
+    feedback_layer = ""
+    cat_set = {(it.get("category") or "") for it in cleaned_issues}
+    if (agent_workflow
+            or correct_skill
+            or correct_approach
+            or cat_set & {"wrong_skill", "wrong_input", "wrong_order",
+                          "missing_step", "stuck"}):
+        feedback_layer = "agent"
+    if (correct_root_cause or correct_conclusion_tag
+            or evidence_log_lines or cat_set & {"bad_output"}):
+        feedback_layer = "both" if feedback_layer == "agent" else "skill"
+
+    # Evidence log lines — strip blanks; cap to a sane length so a stray
+    # paste of an entire log file doesn't bloat the JSONL stream.
+    cleaned_evidence: list[str] = []
+    if isinstance(evidence_log_lines, list):
+        for line in evidence_log_lines:
+            s = str(line).rstrip()
+            if s:
+                cleaned_evidence.append(s)
+        cleaned_evidence = cleaned_evidence[:50]
+
+    has_detail = bool(
+        cleaned_issues or general_comment or expected_outcome
+        or correct_root_cause or correct_conclusion_tag
+        or correct_skill or correct_approach or cleaned_evidence
+        or agent_workflow or severity_val is not None
+    )
+
+    # If everything is empty and there is no vote either, ignore.
+    if not has_detail and vote not in (1, -1):
         return False
+
+    weight = _feedback_weight(has_detail=has_detail, yaml_modified=bool(yaml_modified))
 
     record = {
         "ts": _now_iso(),
@@ -676,8 +883,58 @@ def record_detail(
         "turn_id": turn_id,
         "vote": vote if vote in (1, -1) else None,
         "issues": cleaned_issues,
-        "general_comment": general_comment or None,
+        # High-ACE-value structured signals.
+        "correct_root_cause":     correct_root_cause or None,
+        "correct_conclusion_tag": correct_conclusion_tag or None,
+        "correct_skill":          correct_skill or None,
+        # Free-text "right direction" — abstract approach the agent should
+        # have taken, complementing the skill dropdown. Either or both may
+        # be filled.
+        "correct_approach":       correct_approach or None,
+        "evidence_log_lines":     cleaned_evidence or None,
+        "expected_outcome":       expected_outcome or None,
+        # Auto-inferred dispatch hint (skill vs agent vs both).
+        "feedback_layer":         feedback_layer or None,
+        # Agent-prompt-layer ACE signal (maps to specific prompt sections).
+        "agent_workflow":         agent_workflow or None,
+        # Quantitative severity 1-5 — used to prioritise the ACE review queue.
+        "severity":               severity_val,
+        # Legacy free-form field; UI no longer surfaces it, but we keep
+        # accepting + persisting whatever older clients send so historic
+        # data already on disk stays consistent.
+        "general_comment":        general_comment or None,
+        "weight": weight,
+        "yaml_modified": bool(yaml_modified),
+        "attached_yaml": None,   # filled in below once the copy is enqueued
+        "attached_log":  bool(attach_log and log_path),
     }
+
+    # Schedule the YAML side-car copy. The destination path is recorded in
+    # the JSONL record so reviewers can correlate the bug report with the
+    # exact configuration the user was running. The filename embeds the
+    # submitter so a reviewer scanning the folder can see attribution at a
+    # glance and so two submissions for the same turn never overwrite each
+    # other.
+    if attached_yaml_path:
+        try:
+            src = Path(attached_yaml_path)
+            if src.exists() and src.is_file():
+                user_tag = _current_user()
+                dst = (
+                    _attached_yaml_dir()
+                    / f"{conversation_id}__{turn_id}__{user_tag}__{src.name}"
+                )
+                _enqueue_copy(src, dst)
+                record["attached_yaml"] = str(dst)
+        except Exception as e:
+            print(f"[feedback] attach_yaml skipped ({attached_yaml_path}): {e}")
+
+    # Attach the session log only when the user explicitly opted in. The
+    # checkbox lives in the More feedback modal; defaults to checked on
+    # thumbs-down so submitting a bug report sends the log by default,
+    # while a thumbs-up never silently uploads the log.
+    if attach_log and log_path:
+        _enqueue_log_attach(conversation_id, turn_id, log_path)
 
     # 1) Patch the in-memory buffer immediately. Preserve any prior
     # Layer-1 vote unless this submission overrides it.
@@ -690,10 +947,22 @@ def record_detail(
                 fb = t.get("feedback") or {}
                 if record["vote"] is not None:
                     fb["vote"] = record["vote"]
+                fb["weight"] = weight
+                fb["yaml_modified"] = bool(yaml_modified)
                 fb["details"] = {
                     "ts": record["ts"],
                     "issues": cleaned_issues,
-                    "general_comment": record["general_comment"],
+                    "correct_root_cause":     record["correct_root_cause"],
+                    "correct_conclusion_tag": record["correct_conclusion_tag"],
+                    "correct_skill":          record["correct_skill"],
+                    "correct_approach":       record["correct_approach"],
+                    "evidence_log_lines":     record["evidence_log_lines"],
+                    "expected_outcome":       record["expected_outcome"],
+                    "feedback_layer":         record["feedback_layer"],
+                    "agent_workflow":         record["agent_workflow"],
+                    "severity":               record["severity"],
+                    "general_comment":        record["general_comment"],
+                    "attached_yaml":          record["attached_yaml"],
                 }
                 t["feedback"] = fb
                 break
@@ -701,6 +970,158 @@ def record_detail(
 
     # 2) Enqueue both writes — return to client immediately.
     _enqueue_append(_feedback_detail_path(), record)
+    _enqueue_flush(conversation_id)
+    return True
+
+
+# --- Public attach helpers (also used directly from blueprints) --------
+
+def _enqueue_log_attach(conversation_id: str, turn_id: str, log_path: str) -> None:
+    """
+    Copy `log_path` to the shared per-conversation logs folder. The filename
+    embeds `<turn_id>__<submitted_by>__<original_name>` so the on-disk layout
+    is self-describing — a reviewer can see which user attached which log
+    without having to open the JSONL record.
+    """
+    if not conversation_id or not log_path:
+        return
+    try:
+        src = Path(log_path)
+        if not src.exists() or not src.is_file():
+            return
+        user_tag = _current_user()
+        dst = (
+            _attached_logs_dir(conversation_id)
+            / f"{turn_id or 'turn'}__{user_tag}__{src.name}"
+        )
+        _enqueue_copy(src, dst)
+    except Exception as e:
+        print(f"[feedback] attach_log skipped ({log_path}): {e}")
+
+
+def attach_log(conversation_id: str, turn_id: str, log_path: str) -> bool:
+    """
+    Public helper: copy a session log to the shared logs folder. Safe to
+    call from any thread; the copy happens on the IO worker. Returns False
+    only when arguments are obviously bad — never raises.
+    """
+    if not conversation_id or not log_path:
+        return False
+    try:
+        _enqueue_log_attach(conversation_id, turn_id, log_path)
+        return True
+    except Exception as e:
+        print(f"[feedback] attach_log failed: {e}")
+        return False
+
+
+def record_step_vote(
+    *,
+    session_id: str,
+    conversation_id: str,
+    turn_id: str,
+    step_index: int,
+    vote: int,
+) -> bool:
+    """
+    Record a per-step thumbs from the live conversation view. Each click
+    lands as one row in `feedback_step_votes.jsonl` AND patches the
+    conversation snapshot's `turns[].step_votes[]` so reviewers can see
+    which steps the user flagged when reading the conversation back.
+
+    vote: +1 or -1. Anything else is rejected silently (return False).
+    """
+    if vote not in (1, -1):
+        return False
+    if not conversation_id or not turn_id:
+        return False
+    try:
+        step_index_int = int(step_index)
+    except (TypeError, ValueError):
+        return False
+    if step_index_int < 0:
+        return False
+
+    event = {
+        "ts": _now_iso(),
+        "session_id": session_id or "",
+        "submitted_by": _current_user(),
+        "conversation_id": conversation_id,
+        "turn_id": turn_id,
+        "step_index": step_index_int,
+        "vote": vote,
+    }
+
+    # Patch in-memory buffer first so subsequent flushes carry the vote.
+    with _pending_lock:
+        snap = _pending_buffer.get(conversation_id)
+        if snap is not None:
+            for t in snap.get("turns", []):
+                if t.get("turn_id") != turn_id:
+                    continue
+                votes = t.setdefault("step_votes", [])
+                existing = next(
+                    (s for s in votes if s.get("step_index") == step_index_int),
+                    None,
+                )
+                if existing is not None:
+                    existing["vote"] = vote
+                    existing["ts"] = event["ts"]
+                else:
+                    votes.append({
+                        "step_index": step_index_int,
+                        "vote": vote,
+                        "ts": event["ts"],
+                    })
+                break
+            snap["_persisted"] = True
+
+    _enqueue_append(_step_votes_path(), event)
+    _enqueue_flush(conversation_id)
+    return True
+
+
+def record_helpful_skill(
+    *,
+    session_id: str,
+    conversation_id: str,
+    turn_id: str,
+    skill_id: str,
+) -> bool:
+    """
+    Record the "Glad it helped" picker output after a thumbs-up vote.
+    Appended to `feedback_helpful_skills.jsonl` and attached to the
+    conversation snapshot's `turns[].helpful_skills[]` so ACE Curator
+    can aggregate skill-level `helpful_count` over time.
+    """
+    if not conversation_id or not turn_id or not skill_id:
+        return False
+    skill_id = str(skill_id).strip()
+    if not skill_id:
+        return False
+
+    event = {
+        "ts": _now_iso(),
+        "session_id": session_id or "",
+        "submitted_by": _current_user(),
+        "conversation_id": conversation_id,
+        "turn_id": turn_id,
+        "skill_id": skill_id,
+    }
+
+    with _pending_lock:
+        snap = _pending_buffer.get(conversation_id)
+        if snap is not None:
+            for t in snap.get("turns", []):
+                if t.get("turn_id") != turn_id:
+                    continue
+                hs = t.setdefault("helpful_skills", [])
+                if skill_id not in hs:
+                    hs.append(skill_id)
+                break
+            snap["_persisted"] = True
+
+    _enqueue_append(_helpful_skills_path(), event)
     _enqueue_flush(conversation_id)
     return True
 

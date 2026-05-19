@@ -1585,48 +1585,81 @@
         .hidden-row { display: none !important; }
 
         /* ── Multi-issue-time UI ──────────────────────────────────────
-           Compact row format for the secondary issue-time list shown
-           below the primary picker, plus the +/- buttons. The capture
-           popup uses the same row template. */
+           Extra issue-time rows in the sidebar AND rows inside the
+           time-capture popup. Both reuse the exact .it-row / .it-field
+           / .it-label / .it-input / .it-sep structure of the primary
+           Issue Time picker so they look identical, just wrapped in a
+           soft card with a ✕ remove affordance. */
         .eit-row {
-            display: grid;
-            grid-template-columns: 1fr auto;
-            gap: 6px;
-            align-items: center;
-            padding: 6px 8px;
-            margin-top: 6px;
+            position: relative;
+            padding: 10px 12px 6px;
+            margin-top: 10px;
             background: #f9fafb;
             border: 1px solid #e5e7eb;
             border-radius: 6px;
         }
-        .eit-row .eit-fields {
+        .eit-row .it-row:last-child { margin-bottom: 0; }
+        .eit-row .eit-remove {
+            position: absolute;
+            top: 4px;
+            right: 6px;
+            background: none;
+            border: none;
+            color: #dc2626;
+            font-size: 16px;
+            font-weight: 700;
+            cursor: pointer;
+            line-height: 1;
+            padding: 2px 5px;
+            border-radius: 4px;
+            z-index: 1;
+        }
+        .eit-row .eit-remove:hover {
+            color: #991b1b;
+            background: #fee2e2;
+        }
+
+        /* ── Compact one-row variant (time-capture popup) ──────────
+           Wider drawer width lets us pack MM/DD/YYYY HH:MM:SS.mmm
+           on a single line. Placeholders carry the field meaning so
+           we drop the labels for a slimmer look. */
+        .eit-row.eit-row-compact {
+            padding: 8px 36px 8px 10px;
+        }
+        .eit-row.eit-row-compact .eit-fields {
             display: flex;
-            flex-wrap: wrap;
+            flex-wrap: nowrap;
             align-items: center;
             gap: 4px;
         }
-        .eit-row input[type="number"] {
-            width: 44px;
-            padding: 2px 4px;
-            font-size: 0.75rem;
-            border: 1px solid #d1d5db;
-            border-radius: 3px;
+        .eit-row.eit-row-compact .eit-fields input[type="number"] {
+            width: 46px;
+            padding: 4px 4px;
+            font-size: 0.82rem;
             text-align: center;
+            border: 1px solid #d1d5db;
+            border-radius: 4px;
+            font-family: 'SFMono-Regular', Consolas, monospace;
+            background: #fff;
             -moz-appearance: textfield;
+            appearance: textfield;
         }
-        .eit-row input[type="number"]::-webkit-outer-spin-button,
-        .eit-row input[type="number"]::-webkit-inner-spin-button {
+        .eit-row.eit-row-compact .eit-fields input[type="number"]::-webkit-outer-spin-button,
+        .eit-row.eit-row-compact .eit-fields input[type="number"]::-webkit-inner-spin-button {
             -webkit-appearance: none; margin: 0;
         }
-        .eit-row input.eit-year { width: 56px; }
-        .eit-row input.eit-ms   { width: 50px; }
-        .eit-row .eit-sep { color: #6b7280; font-size: 0.75rem; }
-        .eit-row .eit-remove {
-            background: none; border: none;
-            color: #dc2626; font-size: 16px;
-            cursor: pointer; padding: 0 4px;
+        .eit-row.eit-row-compact .eit-fields .eit-year { width: 60px; }
+        .eit-row.eit-row-compact .eit-fields .eit-ms   { width: 54px; }
+        .eit-row.eit-row-compact .eit-fields .eit-sep {
+            color: #9ca3af;
+            font-weight: 700;
+            font-size: 0.85rem;
+            user-select: none;
         }
-        .eit-row .eit-remove:hover { color: #991b1b; }
+        .eit-row.eit-row-compact .eit-fields .eit-gap {
+            display: inline-block;
+            width: 6px;
+        }
 
         .eit-add-btn {
             display: inline-flex;
@@ -3667,7 +3700,10 @@
     }
 
     function addTimeCaptureRow(t) {
-        const tpl = document.getElementById('eit-row-template');
+        // Popup uses the COMPACT one-row template (slimmer than the
+        // sidebar's labeled two-row version) so 2-5 detected times
+        // stack neatly inside the modal.
+        const tpl = document.getElementById('eit-row-template-compact');
         const list = document.getElementById('time-capture-list');
         const node = tpl.content.firstElementChild.cloneNode(true);
         _populateEitRow(node, t);
@@ -3885,26 +3921,83 @@
     </div>
 </div>
 
-<!-- Row template shared by both the sidebar extras list AND the
-     time-capture popup. Compact MM/DD/YYYY HH:MM:SS.mmm strip. -->
-<template id="eit-row-template">
-    <div class="eit-row">
+<!-- Compact one-row template used INSIDE the time-capture popup.
+     Same .eit-month / .eit-day / ... hook classes so the shared JS
+     helpers (_populateEitRow, _readEitRow) work unchanged. -->
+<template id="eit-row-template-compact">
+    <div class="eit-row eit-row-compact">
+        <button type="button" class="eit-remove" onclick="removeEitRow(this)" aria-label="Remove">×</button>
         <div class="eit-fields">
-            <input type="number" class="eit-month" min="1"  max="12"  placeholder="MM" inputmode="numeric">
+            <input type="number" class="eit-month" min="1"  max="12"  placeholder="MM"   inputmode="numeric">
             <span class="eit-sep">/</span>
-            <input type="number" class="eit-day"   min="1"  max="31"  placeholder="DD" inputmode="numeric">
+            <input type="number" class="eit-day"   min="1"  max="31"  placeholder="DD"   inputmode="numeric">
             <span class="eit-sep">/</span>
             <input type="number" class="eit-year"  min="1970" max="2999" placeholder="YYYY" inputmode="numeric">
-            <span class="eit-sep">&nbsp;&nbsp;</span>
-            <input type="number" class="eit-hour"  min="0"  max="23"  placeholder="HH" inputmode="numeric">
+            <span class="eit-gap"></span>
+            <input type="number" class="eit-hour"  min="0"  max="23"  placeholder="HH"   inputmode="numeric">
             <span class="eit-sep">:</span>
-            <input type="number" class="eit-min"   min="0"  max="59"  placeholder="MM" inputmode="numeric">
+            <input type="number" class="eit-min"   min="0"  max="59"  placeholder="MM"   inputmode="numeric">
             <span class="eit-sep">:</span>
-            <input type="number" class="eit-sec"   min="0"  max="59"  placeholder="SS" inputmode="numeric">
+            <input type="number" class="eit-sec"   min="0"  max="59"  placeholder="SS"   inputmode="numeric">
             <span class="eit-sep">.</span>
-            <input type="number" class="eit-ms"    min="0"  max="999" placeholder="mmm" inputmode="numeric">
+            <input type="number" class="eit-ms"    min="0"  max="999" placeholder="mmm"  inputmode="numeric">
         </div>
+    </div>
+</template>
+
+<!-- Verbose two-row template used by the SIDEBAR extras list. Mirrors
+     the primary Issue Time picker layout (Date row + Time row, with
+     MONTH / DAY / YEAR / HOUR / MINUTE / SECOND / MS labels) so the
+     extras look identical to the first. -->
+<template id="eit-row-template">
+    <div class="eit-row">
         <button type="button" class="eit-remove" onclick="removeEitRow(this)" aria-label="Remove">×</button>
+        <!-- Date row -->
+        <div class="it-row">
+            <div class="it-field">
+                <label class="it-label">Month</label>
+                <input type="number" class="it-input eit-month"
+                       min="1" max="12" placeholder="MM" inputmode="numeric">
+            </div>
+            <span class="it-sep">/</span>
+            <div class="it-field">
+                <label class="it-label">Day</label>
+                <input type="number" class="it-input eit-day"
+                       min="1" max="31" placeholder="DD" inputmode="numeric">
+            </div>
+            <span class="it-sep">/</span>
+            <div class="it-field it-field-wide">
+                <label class="it-label">Year</label>
+                <input type="number" class="it-input eit-year"
+                       min="1970" max="2999" placeholder="YYYY" inputmode="numeric">
+            </div>
+        </div>
+        <!-- Time row -->
+        <div class="it-row">
+            <div class="it-field">
+                <label class="it-label">Hour</label>
+                <input type="number" class="it-input eit-hour"
+                       min="0" max="23" placeholder="HH" inputmode="numeric">
+            </div>
+            <span class="it-sep">:</span>
+            <div class="it-field">
+                <label class="it-label">Minute</label>
+                <input type="number" class="it-input eit-min"
+                       min="0" max="59" placeholder="MM" inputmode="numeric">
+            </div>
+            <span class="it-sep">:</span>
+            <div class="it-field">
+                <label class="it-label">Second</label>
+                <input type="number" class="it-input eit-sec"
+                       min="0" max="59" placeholder="SS" inputmode="numeric">
+            </div>
+            <span class="it-sep">.</span>
+            <div class="it-field it-field-ms">
+                <label class="it-label">ms</label>
+                <input type="number" class="it-input eit-ms"
+                       min="0" max="999" placeholder="mmm" inputmode="numeric">
+            </div>
+        </div>
     </div>
 </template>
 

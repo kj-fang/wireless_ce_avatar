@@ -5332,10 +5332,31 @@
 
 
 <script>
-    // ── Tracks whether the user edited the skill YAML this session.
-    // Server is authoritative; we mirror it locally so the More-feedback
-    // modal and the post-vote prompt can read it synchronously.
+    // ── Two related but DISTINCT skill-YAML flags ─────────────────────
+    //
+    // __yamlModified
+    //   "Did the user modify the skill YAML *this session*?"
+    //   Transient. Set TRUE after a successful Save in the skill
+    //   editor (line ~6230) or when /feedback/vote echoes back
+    //   yaml_modified=true (the server-side session flag). Reset to
+    //   false on log switch / by the user explicitly switching back
+    //   to the cloud baseline isn't relevant — that's the OTHER flag.
+    //   Read by: isYamlModified() (feedback attach-yaml default),
+    //            uploadModifiedYamlSilently() (auto-fire after 👍).
+    //
+    // __usingUserYaml
+    //   "Is the currently active YAML the user/ customised one (vs
+    //   cloud baseline)?"
+    //   Persistent — survives sessions because it reflects on-disk
+    //   state. Set from /skills_yaml/status.effective_source. Used
+    //   to drive UI hints / source-badge logic.
+    //
+    // Previously a single window.__yamlModified flag was overloaded
+    // with both meanings, which let stale "active source = user" from
+    // a previous session silently trigger an upload on the next 👍
+    // even when nothing was modified this session.
     window.__yamlModified = false;
+    window.__usingUserYaml = false;
 
     // ── Skill source state (cloud baseline ⇄ user customised) ─────────
     window.__skillYamlStatus = null;
@@ -5349,7 +5370,11 @@
                 return null;
             }
             window.__skillYamlStatus = data;
-            window.__yamlModified = (data.effective_source === 'user');
+            // /skills_yaml/status reports which YAML is ACTIVE on disk
+            // (persistent state). It does NOT tell us whether the user
+            // modified anything this session — only a Save in the
+            // editor (or a server-echoed yaml_modified=true) does.
+            window.__usingUserYaml = (data.effective_source === 'user');
             renderSkillSourcePanel(data);
             return data;
         } catch (e) {
@@ -5448,7 +5473,12 @@
             const data = await res.json().catch(() => ({}));
             if (data && data.success) {
                 if (data.skills) renderSkills(data.skills);
-                window.__yamlModified = false;
+                // We just switched the ACTIVE source to cloud baseline.
+                // refreshSkillSourcePanel() will re-read /status and
+                // set __usingUserYaml = false anyway, but set it
+                // eagerly here so any code between this point and the
+                // refresh resolving sees the consistent state.
+                window.__usingUserYaml = false;
                 await refreshSkillSourcePanel();
             } else {
                 alert('Switch failed: ' + (data && data.error ? data.error : 'Unknown error'));

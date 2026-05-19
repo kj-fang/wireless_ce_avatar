@@ -33,6 +33,28 @@ from configs.path_configs import FEEDBACK_DIR_prim, FEEDBACK_DIR_bkup
 from utils import helpers
 
 
+# ---------------------------------------------------------------------------
+# Record schema version.
+#
+# Every record this service writes — JSONL rows, per-turn dicts inside the
+# conversation snapshot, and the snapshot itself — carries an integer
+# `schema_version` field. ETL / downstream Reflectors use this to know which
+# parsing rules to apply when new fields are added in the future, so a
+# schema bump never breaks bulk loads.
+#
+# Bump checklist when adding/removing fields:
+#   1. Increment RECORD_SCHEMA_VERSION
+#   2. Add a one-liner in CHANGELOG-style comment below describing the diff
+#
+# Version history:
+#   v1  - Initial bronze-layer format (vote / detail / step_vote / snapshot)
+#   v2  - Added `schema_version` field + `parent_message_id` on turn records
+#         (linking multiple turns emitted from a single Send for the
+#         multi-incident analysis flow).
+# ---------------------------------------------------------------------------
+RECORD_SCHEMA_VERSION = 2
+
+
 # --- Storage location ----------------------------------------------------
 #
 # Resolution order (cached for the lifetime of the process):
@@ -482,6 +504,7 @@ _pending_lock = threading.Lock()
 def _new_snapshot(conversation_id: str, session_id: str,
                   issue: Optional[dict], log_path: str) -> dict:
     return {
+        "schema_version": RECORD_SCHEMA_VERSION,
         "conversation_id": conversation_id,
         "session_id": session_id or "",
         "submitted_by": _current_user(),
@@ -558,11 +581,19 @@ def record_turn(
     duration_ms: int = 0,
     issue: Optional[dict] = None,
     log_path: str = "",
+    parent_message_id: str = "",
 ) -> None:
     """
     Append one turn to the conversation buffer. Writes to disk only if
     the conversation already has a snapshot file (i.e., a previous turn
     in this conversation was voted on). Never raises.
+
+    parent_message_id:
+        UUID stamped client-side once per Send click. When a single Send
+        produces multiple incident analyses (multi-time chained calls),
+        every resulting turn shares the same parent_message_id, letting
+        downstream ETL recover the co-firing relationship that's
+        otherwise lost when turns are flattened into a per-row table.
     """
     if not conversation_id or not turn_id:
         return
@@ -571,7 +602,9 @@ def record_turn(
         skills_used = _extract_skills_used(steps_list)
 
         turn_record = {
+            "schema_version": RECORD_SCHEMA_VERSION,
             "turn_id": turn_id,
+            "parent_message_id": (parent_message_id or "").strip() or None,
             "ts": _now_iso(),
             "user_message": _scrub_user_path(user_message or ""),
             "agent_response": _scrub_user_path(_summarise_response(agent_result)),
@@ -645,6 +678,7 @@ def record_vote(
 
     weight = _feedback_weight(has_detail=False, yaml_modified=bool(yaml_modified))
     event = {
+        "schema_version": RECORD_SCHEMA_VERSION,
         "ts": _now_iso(),
         "session_id": session_id or "",
         "submitted_by": _current_user(),
@@ -876,6 +910,7 @@ def record_detail(
     weight = _feedback_weight(has_detail=has_detail, yaml_modified=bool(yaml_modified))
 
     record = {
+        "schema_version": RECORD_SCHEMA_VERSION,
         "ts": _now_iso(),
         "session_id": session_id or "",
         "submitted_by": _current_user(),
@@ -1043,6 +1078,7 @@ def record_step_vote(
         return False
 
     event = {
+        "schema_version": RECORD_SCHEMA_VERSION,
         "ts": _now_iso(),
         "session_id": session_id or "",
         "submitted_by": _current_user(),
@@ -1101,6 +1137,7 @@ def record_helpful_skill(
         return False
 
     event = {
+        "schema_version": RECORD_SCHEMA_VERSION,
         "ts": _now_iso(),
         "session_id": session_id or "",
         "submitted_by": _current_user(),

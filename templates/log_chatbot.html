@@ -15,6 +15,11 @@
             height: 100vh;
             display: flex;
             flex-direction: column;
+            /* All real scrolling happens inside child containers
+               (.sidebar / #chat-window / .fbd-body). Anchor body to
+               100vh and clip it so subpixel rounding can't trigger a
+               phantom right-edge scrollbar. */
+            overflow: hidden;
         }
 
         /* ── Top bar ── */
@@ -1296,6 +1301,122 @@
             display: flex; flex-direction: column;
             overflow: hidden;
         }
+
+        /* ── Feedback panel = RIGHT sidebar, formatted identically to
+              the existing LEFT sidebar: flush against the bottom of
+              the top blue bar, full height of the main-layout area,
+              flat (no card-style shadow / rounded corners), thin
+              divider on its inward edge. Opening it auto-collapses
+              the LEFT sidebar so the chat has breathing room; the
+              hamburger button in the top-bar can re-show the left
+              sidebar manually. Skill editor keeps its centered-modal
+              look — these rules only apply via the .fbd-modal--drawer
+              modifier. ────────────────────────────────────────────── */
+        :root {
+            --fbd-topbar-height: 58px;
+            --fbd-sidebar-width: 320px;
+            --fbd-drawer-width: 420px;
+        }
+        .fbd-modal--drawer { pointer-events: none; background: transparent; }
+        .fbd-modal--drawer .fbd-backdrop { display: none; }
+        .fbd-modal--drawer .fbd-card {
+            pointer-events: auto;
+            position: fixed;
+            top: var(--fbd-topbar-height);
+            bottom: 0;
+            left: auto;
+            right: 0;
+            margin: 0;
+            padding: 0;
+            width: var(--fbd-drawer-width);
+            max-height: none;
+            background: #ffffff;
+            border-radius: 0;
+            border-left: 1px solid #e0e0e0;
+            box-shadow: none;
+            transform: translateX(var(--fbd-drawer-width));
+            transition: transform 0.22s ease;
+            overflow: hidden;
+        }
+        .fbd-modal--drawer.open .fbd-card { transform: translateX(0); }
+
+        /* Push the chat-area's right edge inward when the drawer is
+           open so the AI analysis content doesn't slide under it. */
+        body.fbd-drawer-expanded .chat-area {
+            margin-right: var(--fbd-drawer-width);
+            margin-left: 0;
+        }
+        .chat-area { transition: margin-left 0.22s ease, margin-right 0.22s ease; }
+
+        /* Left sidebar collapse — driven by `body.sidebar-collapsed`.
+           Used both for the manual hamburger toggle AND auto-collapse
+           when a feedback session opens. */
+        .sidebar {
+            transition: width 0.22s ease, min-width 0.22s ease,
+                        padding 0.22s ease, opacity 0.18s ease;
+        }
+        body.sidebar-collapsed .sidebar {
+            width: 0;
+            min-width: 0;
+            padding: 0;
+            border-right: none;
+            overflow: hidden;
+            opacity: 0;
+        }
+
+        /* Top-bar hamburger button — manually shows / hides the left
+           sidebar. Always visible so the user can recover the sidebar
+           after the feedback panel auto-collapsed it. */
+        .sidebar-toggle {
+            background: rgba(255,255,255,0.18);
+            color: white;
+            border: 1px solid rgba(255,255,255,0.3);
+            border-radius: 5px;
+            padding: 3px 9px;
+            font-size: 1rem;
+            line-height: 1;
+            cursor: pointer;
+            transition: background 0.15s ease;
+        }
+        .sidebar-toggle:hover { background: rgba(255,255,255,0.28); }
+        .sidebar-toggle:focus { outline: 2px solid rgba(255,255,255,0.5); outline-offset: 1px; }
+        .fbd-draft-hint {
+            font-size: 11px;
+            color: #1a7f37;
+            margin-left: 8px;
+            font-style: italic;
+            display: none;
+        }
+        .fbd-draft-hint.show { display: inline-block; }
+
+        /* ── Top toast (used by the auto-reset on log switch) ────────── */
+        .toast-stack {
+            position: fixed; top: 14px; left: 50%;
+            transform: translateX(-50%);
+            z-index: 10000;
+            display: flex; flex-direction: column; gap: 8px;
+            pointer-events: none;
+        }
+        .toast {
+            pointer-events: auto;
+            background: #1f2937; color: #f3f4f6;
+            border-left: 4px solid #22d3ee;
+            padding: 10px 14px; border-radius: 6px;
+            font-size: 13px; box-shadow: 0 6px 20px rgba(0,0,0,0.25);
+            display: flex; align-items: center; gap: 12px;
+            min-width: 320px; max-width: 560px;
+        }
+        .toast .toast-msg { flex: 1; }
+        .toast .toast-btn {
+            background: transparent; border: 1px solid #22d3ee;
+            color: #22d3ee; padding: 3px 10px;
+            border-radius: 4px; cursor: pointer; font-size: 12px;
+        }
+        .toast .toast-btn:hover { background: rgba(34,211,238,0.1); }
+        .toast .toast-close {
+            background: none; border: none; color: #9ca3af;
+            font-size: 18px; cursor: pointer; line-height: 1;
+        }
         .fbd-header {
             padding: 14px 20px;
             border-bottom: 1px solid #e5e7eb;
@@ -1462,12 +1583,115 @@
         .fbd-btn.primary:hover { background: #005a9e; }
         .fbd-btn:disabled { opacity: 0.6; cursor: not-allowed; }
         .hidden-row { display: none !important; }
+
+        /* ── Multi-issue-time UI ──────────────────────────────────────
+           Compact row format for the secondary issue-time list shown
+           below the primary picker, plus the +/- buttons. The capture
+           popup uses the same row template. */
+        .eit-row {
+            display: grid;
+            grid-template-columns: 1fr auto;
+            gap: 6px;
+            align-items: center;
+            padding: 6px 8px;
+            margin-top: 6px;
+            background: #f9fafb;
+            border: 1px solid #e5e7eb;
+            border-radius: 6px;
+        }
+        .eit-row .eit-fields {
+            display: flex;
+            flex-wrap: wrap;
+            align-items: center;
+            gap: 4px;
+        }
+        .eit-row input[type="number"] {
+            width: 44px;
+            padding: 2px 4px;
+            font-size: 0.75rem;
+            border: 1px solid #d1d5db;
+            border-radius: 3px;
+            text-align: center;
+            -moz-appearance: textfield;
+        }
+        .eit-row input[type="number"]::-webkit-outer-spin-button,
+        .eit-row input[type="number"]::-webkit-inner-spin-button {
+            -webkit-appearance: none; margin: 0;
+        }
+        .eit-row input.eit-year { width: 56px; }
+        .eit-row input.eit-ms   { width: 50px; }
+        .eit-row .eit-sep { color: #6b7280; font-size: 0.75rem; }
+        .eit-row .eit-remove {
+            background: none; border: none;
+            color: #dc2626; font-size: 16px;
+            cursor: pointer; padding: 0 4px;
+        }
+        .eit-row .eit-remove:hover { color: #991b1b; }
+
+        .eit-add-btn {
+            display: inline-flex;
+            align-items: center;
+            gap: 4px;
+            background: none;
+            border: 1px dashed #93c5fd;
+            color: #0071c5;
+            border-radius: 5px;
+            padding: 4px 10px;
+            font-size: 0.72rem;
+            font-weight: 600;
+            cursor: pointer;
+            margin-top: 8px;
+            width: 100%;
+            justify-content: center;
+        }
+        .eit-add-btn:hover { background: #eff6ff; }
+
+        /* ── Time-capture popup (uses .fbd-modal centered shell) ──── */
+        #time-capture-modal .fbd-card { width: min(580px, 94vw); }
+        .tc-mode-row {
+            display: flex;
+            gap: 14px;
+            margin-top: 10px;
+            font-size: 0.78rem;
+        }
+        .tc-mode-row label {
+            display: inline-flex;
+            align-items: center;
+            gap: 4px;
+            cursor: pointer;
+        }
+        .tc-hint {
+            font-size: 0.72rem;
+            color: #6a737d;
+            margin: 8px 0;
+            line-height: 1.4;
+        }
+
+        /* ── Per-incident report wrapper (multi-time analysis) ────── */
+        .incident-tag {
+            display: inline-block;
+            background: #eff6ff;
+            border: 1px solid #93c5fd;
+            color: #1d4ed8;
+            font-size: 0.72rem;
+            font-weight: 700;
+            padding: 2px 9px;
+            border-radius: 10px;
+            margin: 4px 0;
+        }
     </style>
 </head>
 <body>
 
 <!-- Top bar -->
 <div class="top-bar">
+    <!-- Hamburger — manually shows / hides the left sidebar. Stays
+         visible at all times so the user can recover the sidebar
+         after a feedback session auto-collapses it. -->
+    <button type="button" class="sidebar-toggle"
+            onclick="toggleSidebar()"
+            title="Show / hide sidebar"
+            aria-label="Toggle sidebar">☰</button>
     <span style="font-size:1.4rem;">📡</span>
     <h1>Wi-Fi Log Chatbot</h1>
     <span class="badge-model">Avatar · Multi-Skill Agent</span>
@@ -1582,6 +1806,16 @@
                  style="font-size:0.78rem;color:#0071c5;margin-top:8px;font-weight:600;font-family:'SFMono-Regular',Consolas,monospace;min-height:1.1em;"></div>
             <div id="issue-time-error"
                  style="display:none;font-size:0.7rem;color:#c62828;margin-top:4px;"></div>
+
+            <!-- Extras list: additional issue times beyond the primary
+                 picker above. Each row is a compact MM/DD/YYYY HH:MM:SS.mmm
+                 strip with its own ✕ remove button. Multi-time analysis
+                 runs one agent pass per filled row. -->
+            <div id="extra-issue-times"></div>
+            <button type="button" class="eit-add-btn"
+                    onclick="addExtraIssueTimeRow()">
+                ＋ Add another issue time
+            </button>
         </div>
 
         <!-- Skills -->
@@ -2582,6 +2816,65 @@
                 showStatus(statusEl, '✔ ' + data.message, 'ok');
                 renderSkills(data.skills);
                 logLoaded = true;
+
+                // ── Auto-reset when switching from one log to another ──
+                // Backend signals `rotated=true` when this set_log replaces
+                // a DIFFERENT log path. We snapshot the chat UI + per-turn
+                // caches before clearing, so the user can undo within 30 s.
+                if (data.rotated) {
+                    const undoCache = {
+                        chatHTML:           document.getElementById('chat-window').innerHTML,
+                        feedbackConvId:     window.__feedbackConversationId || '',
+                        lastFeedback:       window.__lastFeedback || {},
+                        turnContext:        window.__turnContext || {},
+                        yamlModified:       window.__yamlModified,
+                        previousLogPath:    data.previous_log_path || '',
+                    };
+                    // Clear everything the previous conversation owned.
+                    document.getElementById('chat-window').innerHTML = `
+                        <div class="welcome-msg" id="welcome-msg">
+                            <div class="big-icon">🔄</div>
+                            <strong>New log loaded.</strong><br>
+                            Previous chat history was cleared so the agent
+                            starts fresh on this log.
+                        </div>`;
+                    window.__feedbackConversationId = data.new_conversation_id || '';
+                    window.__lastFeedback = {};
+                    window.__turnContext = {};
+                    window.__yamlModified = false;
+
+                    showToast({
+                        message: '🔄 Detected new log — chat history cleared.',
+                        actionLabel: 'Undo (30s)',
+                        ttlMs: 30000,
+                        onAction: () => {
+                            // Visual restore: bring back the previous chat
+                            // panel + per-turn caches. The previous
+                            // conversation_id is also restored so any
+                            // feedback widgets in the restored HTML keep
+                            // writing into the right snapshot. The agent's
+                            // in-memory state for the old log is gone, but
+                            // the user can re-load that log to re-prime.
+                            document.getElementById('chat-window').innerHTML = undoCache.chatHTML;
+                            window.__feedbackConversationId = undoCache.feedbackConvId;
+                            window.__lastFeedback = undoCache.lastFeedback;
+                            window.__turnContext  = undoCache.turnContext;
+                            window.__yamlModified = undoCache.yamlModified;
+                            if (undoCache.previousLogPath) {
+                                document.getElementById('log-path-input').value =
+                                    undoCache.previousLogPath;
+                            }
+                            showToast({
+                                message: '↩️ Restored previous chat view. Reload the old log file to continue chatting.',
+                                ttlMs: 6000,
+                            });
+                        },
+                    });
+                } else if (data.new_conversation_id) {
+                    // First-time load (no rotation) — just record the id.
+                    window.__feedbackConversationId = data.new_conversation_id;
+                }
+
                 // Auto-fill the sidebar Issue Time when nothing is filled yet.
                 // The backend resolves it by falling back to the log's latest
                 // timestamp when no attachment_time was found, so a direct
@@ -2590,6 +2883,13 @@
                     setIssueTimeFromString(data.issue_time);
                     const warn = document.getElementById('it-unknown-warn');
                     if (warn) warn.style.display = 'none';
+                }
+                // Cache JUST the date portion of the log's auto-detected
+                // timestamp, so the time-capture popup can pre-fill MM/DD/
+                // YYYY when the user types a time-only token (e.g.
+                // "17:36:13"). Survives after the sidebar gets cleared.
+                if (data.issue_time) {
+                    window.__logAutoDate = _extractDateFromTimeString(data.issue_time);
                 }
                 updateAnalyzeBtn();
                 validateUserInput();
@@ -2653,18 +2953,87 @@
     async function sendMessage() {
         const input = document.getElementById('user-input');
         let desc = input.value.trim();
+
+        // ── Multi-time CONTINUATION? ──────────────────────────────────
+        // When the previous /chat iteration finished and there are
+        // queued issue times, sendMessage is re-entered with the saved
+        // desc + the next time popped from the queue.
+        const isContinuation = !!window.__multiTimeContext;
+        let multiTimeForThisIter = null;
+        // parentMessageId: UUID shared across every iteration of a
+        // single Send click. Created on the FIRST iteration, reused
+        // on all continuations, sent to /chat so the sidecar stamps
+        // every resulting turn with it (multi-incident co-firing
+        // recoverable downstream).
+        let parentMessageId = '';
+
+        if (isContinuation) {
+            const ctx = window.__multiTimeContext;
+            multiTimeForThisIter = ctx.queue.shift();
+            ctx.currentIdx += 1;
+            desc = ctx.desc;
+            parentMessageId = ctx.parentMessageId || '';
+            appendIncidentTag(ctx.currentIdx, ctx.total, multiTimeForThisIter);
+        } else {
+            parentMessageId = _uuid4();
+        }
+
         if (!desc) return;
 
-        // Hard blockers (log not loaded, empty description) keep Send disabled
-        if (!validateUserInput(true)) {
+        // Hard blockers (log not loaded, empty description). Skipped on
+        // continuations because the textbox was cleared after iteration
+        // 1 — we already know the original input passed validation.
+        if (!isContinuation && !validateUserInput(true)) {
             input.focus();
             return;
+        }
+
+        // ── Detect time tokens inside the typed message ──────────────
+        // Skipped on continuations and on the second-pass call after
+        // the popup has already been resolved (via __skipTimeCaptureOnce).
+        if (!isContinuation && !window.__skipTimeCaptureOnce) {
+            const detected = _detectIssueTimesInText(desc);
+            if (detected.length > 0) {
+                openTimeCaptureModal(detected, (times, mode) => {
+                    if (times.length > 0) {
+                        _applyCapturedTimesToSidebar(times, mode);
+                    }
+                    window.__skipTimeCaptureOnce = true;
+                    sendMessage();
+                    window.__skipTimeCaptureOnce = false;
+                });
+                return;     // wait for popup before continuing
+            }
+        }
+        window.__skipTimeCaptureOnce = false;
+
+        // ── Decide the issue time for THIS iteration ──────────────────
+        let issueTime = '';
+        if (multiTimeForThisIter) {
+            issueTime = _formatEitRowString(multiTimeForThisIter);
+        } else if (!isContinuation) {
+            // Fresh send: gather all times. If >1, set up multi-time
+            // context now and use the FIRST time on this iteration; the
+            // rest will be processed in chained re-calls from finally{}.
+            const allTimes = getAllIssueTimesParsed();
+            if (allTimes.length > 1) {
+                window.__multiTimeContext = {
+                    desc:             desc,
+                    queue:            allTimes.slice(1),
+                    currentIdx:       1,
+                    total:            allTimes.length,
+                    parentMessageId:  parentMessageId,
+                };
+                issueTime = _formatEitRowString(allTimes[0]);
+                appendIncidentTag(1, allTimes.length, allTimes[0]);
+            } else if (allTimes.length === 1) {
+                issueTime = _formatEitRowString(allTimes[0]);
+            }
         }
 
         // Soft gate: first round without an Issue Time. Ask for explicit
         // confirmation via a modal dialog before proceeding.
         const firstRound = !firstRoundSent;
-        const issueTime = getIssueTimeString();
         if (firstRound && !issueTime) {
             const confirmed = await confirmNoIssueTime();
             if (!confirmed) {
@@ -2674,12 +3043,6 @@
         }
 
         // Compose final message: description + (optional) issue time hint.
-        // The sidebar Issue Time field is the SINGLE source of truth for the
-        // timestamp on AUTO-FILLED first-round messages. Strip embedded
-        // timestamps only when auto-fill mode is active (sidebar time will be
-        // appended instead). For manually typed follow-up questions the user
-        // may intentionally include a timestamp (e.g. "what happened at 12:28:03")
-        // — leave those intact.
         const cleanDesc = isAutoFillMode
             ? trimTrailingTimeConnector(stripTimestampsFromDesc(desc))
             : desc;
@@ -2687,29 +3050,32 @@
             ? `${cleanDesc} at around ${issueTime}`
             : cleanDesc;
 
-        input.value = '';
-        input.style.height = 'auto';
-        // Hide the prefill / time hints once the message is actually sent.
-        const prefillHint = document.getElementById('prefill-hint');
-        if (prefillHint) prefillHint.style.display = 'none';
-        const timeHint = document.getElementById('time-hint');
-        if (timeHint) timeHint.style.display = 'none';
-        const noTimeHint = document.getElementById('no-time-hint');
-        if (noTimeHint) noTimeHint.style.display = 'none';
-        const noDescHint = document.getElementById('no-desc-hint');
-        if (noDescHint) noDescHint.style.display = 'none';
-        const noLogHint = document.getElementById('no-log-hint');
-        if (noLogHint) noLogHint.style.display = 'none';
+        // Reset the textbox only on the FIRST iteration (not on
+        // continuations — we don't want the user's input to disappear
+        // before all queued times have been processed).
+        if (!isContinuation) {
+            input.value = '';
+            input.style.height = 'auto';
+            // Hide the prefill / time hints once the message is actually sent.
+            ['prefill-hint','time-hint','no-time-hint','no-desc-hint','no-log-hint']
+                .forEach((id) => {
+                    const el = document.getElementById(id);
+                    if (el) el.style.display = 'none';
+                });
+        }
         isAutoFillMode = false;  // auto-fill obligation fulfilled
         firstRoundSent = true;   // subsequent rounds skip the strict gate
-        // Auto-clear the sidebar Issue Time after the message has been
-        // composed & captured. Each follow-up question must therefore have
-        // its time explicitly re-entered by the user; otherwise no time is
-        // attached. This prevents an old timestamp from silently leaking
-        // into a new, unrelated question.
-        clearIssueTime();
+
+        // Clear the sidebar Issue Time only when we won't need it again.
+        // Single-time send → clear now. Multi-time → clear after the
+        // last iteration finishes (handled in the finally block below).
+        if (!window.__multiTimeContext) {
+            clearIssueTime();
+        }
         document.getElementById('send-btn').disabled = true;
-        appendUserMsg(text);
+        // Only show the user's typed message ONCE — at the start of the
+        // very first iteration. Continuations re-use the same message.
+        if (!isContinuation) appendUserMsg(text);
         const typingRow = appendTyping();
 
         const steps = [];
@@ -2849,6 +3215,10 @@
                     // removed all time fields (vs. time-only with blank date).
                     issue_time: issueTime || "",
                     issue_time_cleared: !issueTime && !checkIssueTime().anyFilled,
+                    // Per-Send UUID; shared across every iteration of a
+                    // multi-incident chained send so all resulting turns
+                    // carry the same parent_message_id in the snapshot.
+                    parent_message_id: parentMessageId,
                 })
             });
 
@@ -2906,7 +3276,37 @@
         } finally {
             removeTyping();
             document.getElementById('send-btn').disabled = false;
+            // ── Multi-time chain: if the queue still has unprocessed
+            // issue times, schedule the next sendMessage to pick the
+            // next one up. The small delay lets the just-rendered
+            // report settle before the next progress card starts.
+            if (window.__multiTimeContext) {
+                if (window.__multiTimeContext.queue.length > 0) {
+                    setTimeout(() => sendMessage(), 250);
+                } else {
+                    // All iterations done — reset state + clean sidebar.
+                    window.__multiTimeContext = null;
+                    clearIssueTime();
+                    clearAllExtraIssueTimes();
+                }
+            }
         }
+    }
+
+    // Insert a small "Incident N/M at <time>" chip into the chat — used
+    // before each multi-time analysis iteration so the user can scan
+    // which result belongs to which issue time.
+    function appendIncidentTag(idx, total, timeObj) {
+        if (!total || total <= 1) return;
+        const fmt = _formatEitRowString(timeObj);
+        const wrapper = document.createElement('div');
+        wrapper.className = 'msg-row assistant';
+        wrapper.innerHTML =
+            `<div class="avatar-icon">🕒</div>` +
+            `<div style="flex:1;"><span class="incident-tag">Incident ${idx} / ${total}` +
+            (fmt ? ` &nbsp;·&nbsp; ${fmt}` : '') + `</span></div>`;
+        document.getElementById('chat-window').appendChild(wrapper);
+        scrollBottom();
     }
 
 
@@ -3128,15 +3528,399 @@
         validateUserInput();
         tryAutoAnalyzeOnLoad();
     });
+
+    // ============================================================
+    // Multi-issue-time support
+    //   1. Pattern detection on the user's chat message
+    //   2. Capture popup with editable rows
+    //   3. Sidebar "extras" list with + / × buttons
+    //   4. getAllIssueTimes() — primary picker + extras combined
+    // ============================================================
+
+    // RFC4122 v4 UUID — used for parent_message_id (multi-incident
+    // co-firing key). crypto.randomUUID() is available in all modern
+    // browsers; this fallback is purely defensive for old environments.
+    function _uuid4() {
+        if (window.crypto && typeof window.crypto.randomUUID === 'function') {
+            return window.crypto.randomUUID();
+        }
+        return 'xxxxxxxx-xxxx-4xxx-yxxx-xxxxxxxxxxxx'.replace(/[xy]/g, (c) => {
+            const r = Math.random() * 16 | 0;
+            const v = c === 'x' ? r : (r & 0x3) | 0x8;
+            return v.toString(16);
+        });
+    }
+
+    // Match HH:MM:SS or HH:MM:SS.mmm anywhere in the text. The negative
+    // lookbehind avoids gluing onto preceding decimal patterns ("1.17:36:13"
+    // — the "17:36:13" part is what we want, not "1.17"). Hours/minutes/
+    // seconds are bounds-checked after match so things like "99:88:77"
+    // don't slip through.
+    function _detectIssueTimesInText(text) {
+        if (!text || typeof text !== 'string') return [];
+        const re = /\b(\d{1,2}):([0-5]?\d):([0-5]?\d)(?:\.(\d{1,3}))?\b/g;
+        const out = [];
+        const seen = new Set();
+        let m;
+        while ((m = re.exec(text)) !== null) {
+            const H = parseInt(m[1], 10);
+            const M = parseInt(m[2], 10);
+            const S = parseInt(m[3], 10);
+            if (H > 23 || M > 59 || S > 59) continue;
+            const key = `${H}:${M}:${S}.${m[4] || ''}`;
+            if (seen.has(key)) continue;
+            seen.add(key);
+            out.push({
+                hh: H, mm: M, ss: S,
+                ms: m[4] != null ? parseInt(m[4], 10) : null,
+                raw: m[0], index: m.index,
+            });
+        }
+        return out;
+    }
+
+    // ---- Time-capture popup ----
+    let _timeCaptureOnApply = null;
+
+    function openTimeCaptureModal(detectedTimes, onApply) {
+        const list = document.getElementById('time-capture-list');
+        list.innerHTML = '';
+        const summary = document.getElementById('tc-summary');
+        const n = (detectedTimes || []).length;
+
+        // For every detected time that's missing MM/DD/YYYY (the user's
+        // text only contained "HH:MM:SS"), borrow the date from a
+        // reference source: the sidebar primary picker if filled, else
+        // the log's auto-detected timestamp captured at /set_log time.
+        const refDate = _getReferenceDateForCapture();
+        const enrichedTimes = (detectedTimes || []).map((t) => {
+            if (!refDate) return t;
+            return {
+                ...t,
+                month: t.month != null ? t.month : refDate.month,
+                day:   t.day   != null ? t.day   : refDate.day,
+                year:  t.year  != null ? t.year  : refDate.year,
+            };
+        });
+
+        if (summary) {
+            const dateHint = refDate
+                ? ` &middot; MM/DD/YYYY pre-filled from the loaded log.`
+                : '';
+            summary.innerHTML = `Found ${n} time(s) in your text. Edit any field, add more with “+ Add another time”, or remove any you don’t want.${dateHint}`;
+        }
+
+        if (n === 0) {
+            addTimeCaptureRow(refDate ? { ...refDate } : undefined);
+        } else {
+            enrichedTimes.forEach((t) => addTimeCaptureRow(t));
+        }
+        _timeCaptureOnApply = (typeof onApply === 'function') ? onApply : null;
+        const modal = document.getElementById('time-capture-modal');
+        modal.classList.add('open');
+        modal.setAttribute('aria-hidden', 'false');
+    }
+
+    // Pull MM/DD/YYYY from the sidebar primary picker first (the user's
+    // current explicit choice). Fall back to the log's auto-detected
+    // timestamp cached at /set_log. Returns null if neither is available.
+    function _getReferenceDateForCapture() {
+        const num = (id) => {
+            const el = document.getElementById(id);
+            const v = el ? el.value : '';
+            return v === '' ? null : parseInt(v, 10);
+        };
+        const sidebar = {
+            month: num('it-month'),
+            day:   num('it-day'),
+            year:  num('it-year'),
+        };
+        if (sidebar.month != null && sidebar.day != null && sidebar.year != null) {
+            return sidebar;
+        }
+        if (window.__logAutoDate
+            && window.__logAutoDate.month != null
+            && window.__logAutoDate.day   != null
+            && window.__logAutoDate.year  != null) {
+            return { ...window.__logAutoDate };
+        }
+        return null;
+    }
+
+    // Extract the date portion of a "MM/DD/YYYY-HH:MM:SS(.mmm)" or
+    // "MM/DD/YYYY HH:MM:SS(.mmm)" or "YYYY-MM-DD HH:MM:SS(.mmm)" string.
+    // Returns {month, day, year} or null.
+    function _extractDateFromTimeString(s) {
+        if (!s || typeof s !== 'string') return null;
+        let m = s.match(/(\d{1,2})\/(\d{1,2})\/(\d{4})/);     // MM/DD/YYYY
+        if (m) return { month: +m[1], day: +m[2], year: +m[3] };
+        m = s.match(/(\d{4})[-/](\d{1,2})[-/](\d{1,2})/);    // YYYY-MM-DD
+        if (m) return { year: +m[1], month: +m[2], day: +m[3] };
+        return null;
+    }
+
+    function closeTimeCaptureModal() {
+        const modal = document.getElementById('time-capture-modal');
+        modal.classList.remove('open');
+        modal.setAttribute('aria-hidden', 'true');
+        _timeCaptureOnApply = null;
+    }
+
+    function addTimeCaptureRow(t) {
+        const tpl = document.getElementById('eit-row-template');
+        const list = document.getElementById('time-capture-list');
+        const node = tpl.content.firstElementChild.cloneNode(true);
+        _populateEitRow(node, t);
+        list.appendChild(node);
+    }
+
+    function applyTimeCapture() {
+        const list = document.getElementById('time-capture-list');
+        const times = [];
+        list.querySelectorAll('.eit-row').forEach((row) => {
+            const t = _readEitRow(row);
+            if (t.hh != null && t.mm != null && t.ss != null) times.push(t);
+        });
+        const modeEl = document.querySelector('input[name="tc-mode"]:checked');
+        const mode = modeEl ? modeEl.value : 'replace';
+        const cb = _timeCaptureOnApply;
+        closeTimeCaptureModal();
+        if (cb) cb(times, mode);
+    }
+
+    // ---- Sidebar extras list ----
+    function addExtraIssueTimeRow(t) {
+        const tpl  = document.getElementById('eit-row-template');
+        const list = document.getElementById('extra-issue-times');
+        const node = tpl.content.firstElementChild.cloneNode(true);
+        _populateEitRow(node, t);
+        list.appendChild(node);
+        return node;
+    }
+
+    function removeEitRow(btn) {
+        const row = btn.closest('.eit-row');
+        if (row) row.remove();
+    }
+
+    function clearAllExtraIssueTimes() {
+        const list = document.getElementById('extra-issue-times');
+        if (list) list.innerHTML = '';
+    }
+
+    // ---- Shared row helpers ----
+    function _populateEitRow(node, t) {
+        if (!t) return;
+        const set = (sel, v) => {
+            const el = node.querySelector(sel);
+            if (el && v != null && v !== '') el.value = String(v);
+        };
+        set('.eit-month', t.month);
+        set('.eit-day',   t.day);
+        set('.eit-year',  t.year);
+        set('.eit-hour',  t.hh);
+        set('.eit-min',   t.mm);
+        set('.eit-sec',   t.ss);
+        set('.eit-ms',    t.ms);
+    }
+    function _readEitRow(row) {
+        const num = (sel) => {
+            const v = row.querySelector(sel).value;
+            return v === '' ? null : parseInt(v, 10);
+        };
+        return {
+            month: num('.eit-month'),
+            day:   num('.eit-day'),
+            year:  num('.eit-year'),
+            hh:    num('.eit-hour'),
+            mm:    num('.eit-min'),
+            ss:    num('.eit-sec'),
+            ms:    num('.eit-ms'),
+        };
+    }
+    // Render an eit-row's fields into the same string format that
+    // getIssueTimeString() emits for the primary picker, so the agent
+    // sees a uniform "at around MM/DD/YYYY HH:MM:SS.mmm" suffix.
+    function _formatEitRowString(t) {
+        if (!t || t.hh == null || t.mm == null || t.ss == null) return '';
+        const pad2 = (n) => String(n).padStart(2, '0');
+        const pad3 = (n) => String(n).padStart(3, '0');
+        let s = '';
+        if (t.month != null && t.day != null) {
+            s += pad2(t.month) + '/' + pad2(t.day);
+            if (t.year != null) s += '/' + String(t.year);
+            s += ' ';
+        }
+        s += pad2(t.hh) + ':' + pad2(t.mm) + ':' + pad2(t.ss);
+        if (t.ms != null) s += '.' + pad3(t.ms);
+        return s;
+    }
+
+    // Combined accessor: primary picker first, then each filled extra row.
+    function getAllIssueTimes() {
+        const out = [];
+        const primary = getIssueTimeString();
+        if (primary) out.push(primary);
+        document.querySelectorAll('#extra-issue-times .eit-row').forEach((row) => {
+            const s = _formatEitRowString(_readEitRow(row));
+            if (s) out.push(s);
+        });
+        return out;
+    }
+
+    // Same idea but returns the PARSED row objects ({month, day, year,
+    // hh, mm, ss, ms}) rather than formatted strings — used by the
+    // multi-time chain in sendMessage so it can re-inject each row into
+    // _formatEitRowString on its own turn.
+    function getAllIssueTimesParsed() {
+        const out = [];
+        const primary = _readPrimaryIssueTime();
+        if (primary) out.push(primary);
+        document.querySelectorAll('#extra-issue-times .eit-row').forEach((row) => {
+            const t = _readEitRow(row);
+            if (t.hh != null && t.mm != null && t.ss != null) out.push(t);
+        });
+        return out;
+    }
+
+    // Read the sidebar primary picker fields and return a row object,
+    // or null when the time portion (HH:MM:SS) isn't fully filled.
+    function _readPrimaryIssueTime() {
+        const num = (id) => {
+            const el = document.getElementById(id);
+            const v = el ? el.value : '';
+            return v === '' ? null : parseInt(v, 10);
+        };
+        const t = {
+            month: num('it-month'),
+            day:   num('it-day'),
+            year:  num('it-year'),
+            hh:    num('it-hour'),
+            mm:    num('it-min'),
+            ss:    num('it-sec'),
+            ms:    num('it-ms'),
+        };
+        return (t.hh != null && t.mm != null && t.ss != null) ? t : null;
+    }
+
+    // Apply captured times to the sidebar. Mode: 'replace' clears
+    // existing first; 'append' keeps existing entries.
+    function _applyCapturedTimesToSidebar(times, mode) {
+        if (!Array.isArray(times) || times.length === 0) return;
+        if (mode === 'replace') {
+            clearIssueTime();
+            clearAllExtraIssueTimes();
+        }
+        // First time goes into the primary picker IF empty; otherwise
+        // it gets added as an extra row (keeps the existing primary).
+        const primaryIsEmpty = !getIssueTimeString();
+        let startIdx = 0;
+        if (primaryIsEmpty) {
+            _writeTimeToPrimary(times[0]);
+            startIdx = 1;
+        }
+        for (let i = startIdx; i < times.length; i++) {
+            addExtraIssueTimeRow(times[i]);
+        }
+    }
+
+    function _writeTimeToPrimary(t) {
+        if (!t) return;
+        const setIf = (id, v) => {
+            const el = document.getElementById(id);
+            if (el && v != null) el.value = String(v);
+        };
+        setIf('it-month', t.month);
+        setIf('it-day',   t.day);
+        setIf('it-year',  t.year);
+        setIf('it-hour',  t.hh);
+        setIf('it-min',   t.mm);
+        setIf('it-sec',   t.ss);
+        setIf('it-ms',    t.ms);
+        // Refresh the validation + display readout. Direct .value
+        // assignment doesn't fire input events, so the existing live
+        // helpers won't run on their own.
+        if (typeof updateIssueTimeDisplay === 'function') updateIssueTimeDisplay();
+        if (typeof checkIssueTime === 'function') checkIssueTime();
+        if (typeof validateUserInput === 'function') validateUserInput();
+    }
 </script>
 
-<!-- ===== Feedback detail modal (Layer 2 — "More feedback") ============= -->
-<div id="feedback-detail-modal" class="fbd-modal" aria-hidden="true">
-    <div class="fbd-backdrop" onclick="closeFeedbackModal()"></div>
+<!-- ===== Time-capture popup ============================================
+     Pops up when the user's message contains time tokens like
+     "17:36:13" or "1.17:36:13". Each detected token is rendered as a
+     full MM/DD/YYYY HH:MM:SS.mmm row matching the sidebar format. The
+     user can edit, add (+) or remove (×) rows, then choose whether to
+     REPLACE or APPEND to the sidebar Issue Time list. ================ -->
+<div id="time-capture-modal" class="fbd-modal" aria-hidden="true">
+    <div class="fbd-backdrop" onclick="closeTimeCaptureModal()"></div>
     <div class="fbd-card" role="dialog" aria-modal="true">
+        <div class="fbd-header">
+            <h3>Detected issue time(s) in your message</h3>
+            <button type="button" class="fbd-close" onclick="closeTimeCaptureModal()" aria-label="Close">×</button>
+        </div>
+        <div class="fbd-body">
+            <div class="tc-hint" id="tc-summary">
+                Found 0 time(s). Edit any field, add more with “+ Add another time”,
+                or remove any you don’t want.
+            </div>
+            <div id="time-capture-list"></div>
+            <button type="button" class="eit-add-btn" style="margin-top:6px;"
+                    onclick="addTimeCaptureRow()">
+                ＋ Add another time
+            </button>
+
+            <div class="tc-hint" style="margin-top:14px;font-weight:600;color:#374151;">
+                What should happen to the sidebar Issue Time list?
+            </div>
+            <div class="tc-mode-row">
+                <label><input type="radio" name="tc-mode" value="replace" checked> Replace existing</label>
+                <label><input type="radio" name="tc-mode" value="append"> Append to existing</label>
+            </div>
+        </div>
+        <div class="fbd-footer">
+            <button type="button" class="fbd-btn" onclick="closeTimeCaptureModal()">Cancel</button>
+            <button type="button" class="fbd-btn primary" id="tc-apply-btn" onclick="applyTimeCapture()">Apply &amp; send</button>
+        </div>
+    </div>
+</div>
+
+<!-- Row template shared by both the sidebar extras list AND the
+     time-capture popup. Compact MM/DD/YYYY HH:MM:SS.mmm strip. -->
+<template id="eit-row-template">
+    <div class="eit-row">
+        <div class="eit-fields">
+            <input type="number" class="eit-month" min="1"  max="12"  placeholder="MM" inputmode="numeric">
+            <span class="eit-sep">/</span>
+            <input type="number" class="eit-day"   min="1"  max="31"  placeholder="DD" inputmode="numeric">
+            <span class="eit-sep">/</span>
+            <input type="number" class="eit-year"  min="1970" max="2999" placeholder="YYYY" inputmode="numeric">
+            <span class="eit-sep">&nbsp;&nbsp;</span>
+            <input type="number" class="eit-hour"  min="0"  max="23"  placeholder="HH" inputmode="numeric">
+            <span class="eit-sep">:</span>
+            <input type="number" class="eit-min"   min="0"  max="59"  placeholder="MM" inputmode="numeric">
+            <span class="eit-sep">:</span>
+            <input type="number" class="eit-sec"   min="0"  max="59"  placeholder="SS" inputmode="numeric">
+            <span class="eit-sep">.</span>
+            <input type="number" class="eit-ms"    min="0"  max="999" placeholder="mmm" inputmode="numeric">
+        </div>
+        <button type="button" class="eit-remove" onclick="removeEitRow(this)" aria-label="Remove">×</button>
+    </div>
+</template>
+
+<!-- ===== Feedback detail modal (Layer 2 — "More feedback") ============= -->
+<!-- Top-of-page toast stack (auto-reset notifications, etc.) -->
+<div id="toast-stack" class="toast-stack"></div>
+
+<div id="feedback-detail-modal" class="fbd-modal fbd-modal--drawer" aria-hidden="true">
+    <!-- Backdrop kept in DOM but hidden by .fbd-modal--drawer so the
+         page stays interactive while the drawer is open. -->
+    <div class="fbd-backdrop"></div>
+    <div class="fbd-card" role="dialog" aria-modal="false">
         <div class="fbd-header">
             <h3>More feedback</h3>
             <span id="fbd-vote-badge" class="fbd-vote-badge"></span>
+            <span class="fbd-draft-hint" id="fbd-draft-hint">draft auto-saved</span>
             <button type="button" class="fbd-close" onclick="closeFeedbackModal()" aria-label="Close">×</button>
         </div>
         <div class="fbd-body">
@@ -3246,7 +4030,6 @@
         </div>
     </div>
 </div>
-
 <!-- One "Specific problem" row inside the Agent workflow group.
      Where + Problem are the always-visible quick pickers; Skill / Step
      dropdowns reveal themselves only when their scope is chosen. -->
@@ -3864,10 +4647,125 @@
         const cached = (window.__lastFeedback || {})[turnId];
         if (cached) prefillFeedbackModal(cached);
 
+        // Draft auto-save: if the user closed the page or got interrupted
+        // mid-edit on THIS turn, restore what they had typed. Draft wins
+        // over cached submission (it's the more recent state).
+        const draft = _loadFeedbackDraft(turnId);
+        if (draft) {
+            prefillFeedbackModal(draft);
+            _showDraftHint('draft restored');
+        } else {
+            _hideDraftHint();
+        }
+
         const modal = document.getElementById('feedback-detail-modal');
         modal.classList.add('open');
         modal.setAttribute('aria-hidden', 'false');
         document.getElementById('fbd-submit-btn').disabled = false;
+        // Mark session active + expanded → drawer slides in on the RIGHT,
+        // chat-area's right margin grows to leave room for it.
+        document.body.classList.add('fbd-drawer-active', 'fbd-drawer-expanded');
+        // Auto-collapse the LEFT sidebar so the chat-area has breathing
+        // room while feedback is open. Remember the user's previous
+        // collapsed/expanded choice so we can restore it on close. The
+        // hamburger button in the top-bar lets the user manually re-show
+        // the sidebar even while the feedback drawer is open.
+        _autoCollapseSidebarForFeedback();
+
+        // One-time listener wiring: every field change inside the modal
+        // dumps the current snapshot to localStorage. Debounced 300 ms
+        // so we don't burn cycles on every keystroke.
+        if (!modal.dataset.draftWired) {
+            modal.dataset.draftWired = '1';
+            ['input', 'change'].forEach((evtName) => {
+                modal.addEventListener(evtName, () => {
+                    const cur = window.__currentFeedbackCtx;
+                    if (cur && cur.turnId) _saveFeedbackDraftDebounced(cur.turnId);
+                });
+            });
+        }
+    }
+
+    // ── Draft auto-save (localStorage, per turn_id) ───────────────────
+    const _FEEDBACK_DRAFT_PREFIX = 'feedback_draft_v1__';
+    let _draftSaveTimer = null;
+
+    function _saveFeedbackDraftDebounced(turnId) {
+        if (!turnId) return;
+        clearTimeout(_draftSaveTimer);
+        _draftSaveTimer = setTimeout(() => _saveFeedbackDraftNow(turnId), 300);
+    }
+    function _saveFeedbackDraftNow(turnId) {
+        try {
+            const snap = _currentFeedbackFormSnapshot();
+            if (!snap) return;
+            localStorage.setItem(_FEEDBACK_DRAFT_PREFIX + turnId, JSON.stringify(snap));
+            _showDraftHint('draft auto-saved');
+        } catch (e) {}
+    }
+    function _loadFeedbackDraft(turnId) {
+        try {
+            const raw = localStorage.getItem(_FEEDBACK_DRAFT_PREFIX + turnId);
+            return raw ? JSON.parse(raw) : null;
+        } catch (e) { return null; }
+    }
+    function _clearFeedbackDraft(turnId) {
+        try { localStorage.removeItem(_FEEDBACK_DRAFT_PREFIX + turnId); } catch (e) {}
+    }
+    function _showDraftHint(text) {
+        const el = document.getElementById('fbd-draft-hint');
+        if (!el) return;
+        el.textContent = text;
+        el.classList.add('show');
+    }
+    function _hideDraftHint() {
+        const el = document.getElementById('fbd-draft-hint');
+        if (el) el.classList.remove('show');
+    }
+    // Build the same snapshot shape that submitFeedbackDetail caches, but
+    // straight from the live DOM — used by both the draft saver and the
+    // no-change guard.
+    function _currentFeedbackFormSnapshot() {
+        const _val = (id) => {
+            const el = document.getElementById(id);
+            return el ? String(el.value || '').trim() : '';
+        };
+        const severityRaw = (document.getElementById('fbd-severity-scale') || {}).dataset
+                            ? document.getElementById('fbd-severity-scale').dataset.value || ''
+                            : '';
+        const severity = severityRaw ? parseInt(severityRaw, 10) : null;
+        const evidenceLogLines = (document.getElementById('fbd-evidence-log-lines')?.value || '')
+            .split(/\r?\n/).map((s) => s.replace(/\s+$/, '')).filter((s) => s.length > 0);
+        const issues = [];
+        document.querySelectorAll('#fbd-issues-list .fbd-issue-row').forEach((r) => {
+            const where   = r.querySelector('.fbd-where').value || '';
+            const cat     = r.querySelector('.fbd-category').value || '';
+            const skillId = r.querySelector('.fbd-skill').value || '';
+            const stepSel = r.querySelector('.fbd-step');
+            const stepIdx = stepSel.value;
+            const stepLabel = stepSel.selectedOptions[0]
+                            && stepSel.selectedOptions[0].dataset.stepLabel || '';
+            const note    = r.querySelector('.fbd-note').value.trim();
+            if (!where && !cat && !skillId && !stepIdx && !note) return;
+            issues.push({
+                scope: (where === 'skill' || where === 'step') ? where : 'overall',
+                category: cat || null, skill_id: skillId || null,
+                step_index: stepIdx === '' ? null : parseInt(stepIdx, 10),
+                step_label: stepLabel || (where && where !== 'skill' && where !== 'step' ? where : null),
+                comment: note || null,
+            });
+        });
+        return {
+            severity,
+            correctConclusionTag: _val('fbd-correct-conclusion-tag'),
+            correctRootCause:     _val('fbd-correct-root-cause'),
+            correctSkill:         _val('fbd-correct-skill'),
+            correctApproach:      _val('fbd-correct-approach'),
+            agentWorkflow:        _val('fbd-agent-workflow'),
+            evidenceLogLines, issues,
+            attachLog:       !!(document.getElementById('fbd-attach-log') || {}).checked,
+            attachLocalYaml: !!(document.getElementById('fbd-attach-yaml') || {}).checked,
+        };
     }
 
     // Restore every visible field from a previous submission cached in
@@ -3937,14 +4835,119 @@
     }
 
     function closeFeedbackModal() {
+        // Cancel / X / submit-success = explicit close → drop draft +
+        // reclaim chat-area space + restore sidebar to whatever state
+        // the user had it in BEFORE the auto-collapse fired.
+        const ctx = window.__currentFeedbackCtx;
+        if (ctx && ctx.turnId) _clearFeedbackDraft(ctx.turnId);
+        _hideDraftHint();
+
         const modal = document.getElementById('feedback-detail-modal');
         modal.classList.remove('open');
         modal.setAttribute('aria-hidden', 'true');
+        document.body.classList.remove('fbd-drawer-active', 'fbd-drawer-expanded');
+        _restoreSidebarAfterFeedback();
         window.__currentFeedbackCtx = null;
+    }
+
+    // ── Top-bar height sync ──────────────────────────────────────────
+    // Measure the real rendered top-bar height (which depends on font
+    // metrics, padding and the box-shadow) and pin --fbd-topbar-height
+    // to it. Guarantees the feedback right-sidebar slots exactly under
+    // the blue bar with no gap and no overlap. Runs on load + resize.
+    function _syncTopbarHeightVar() {
+        const tb = document.querySelector('.top-bar');
+        if (!tb) return;
+        const h = Math.ceil(tb.getBoundingClientRect().height);
+        document.documentElement.style.setProperty(
+            '--fbd-topbar-height', h + 'px');
+    }
+    window.addEventListener('load', _syncTopbarHeightVar);
+    window.addEventListener('resize', _syncTopbarHeightVar);
+
+    // ── Left sidebar (LOG FILE / ISSUE TIME) collapse helpers ─────────
+    // Manual toggle wired to the hamburger button in the top-bar.
+    function toggleSidebar() {
+        document.body.classList.toggle('sidebar-collapsed');
+    }
+
+    // Auto-collapse on feedback open. Remembers the user's previous
+    // sidebar state so we can put it back when feedback closes. Null
+    // means "no feedback session currently in flight".
+    let _sidebarStateBeforeFeedback = null;
+    function _autoCollapseSidebarForFeedback() {
+        _sidebarStateBeforeFeedback =
+            document.body.classList.contains('sidebar-collapsed');
+        document.body.classList.add('sidebar-collapsed');
+    }
+    function _restoreSidebarAfterFeedback() {
+        // If the user had the sidebar EXPANDED before opening feedback,
+        // bring it back. If they had it collapsed already, leave it.
+        // Either way, if they manually re-expanded the sidebar WHILE
+        // feedback was open, their explicit choice wins — so we only
+        // touch state when restoring the EXPANDED case.
+        if (_sidebarStateBeforeFeedback === false) {
+            document.body.classList.remove('sidebar-collapsed');
+        }
+        _sidebarStateBeforeFeedback = null;
+    }
+
+    // ── Top-of-page toast (also used by log-switch auto-reset) ────────
+    function showToast({ message, actionLabel, onAction, ttlMs = 30000 }) {
+        const stack = document.getElementById('toast-stack');
+        if (!stack) return null;
+        const el = document.createElement('div');
+        el.className = 'toast';
+        const msg = document.createElement('span');
+        msg.className = 'toast-msg';
+        msg.textContent = message;
+        el.appendChild(msg);
+        if (actionLabel && typeof onAction === 'function') {
+            const btn = document.createElement('button');
+            btn.className = 'toast-btn';
+            btn.textContent = actionLabel;
+            btn.onclick = () => { try { onAction(); } catch (e) {} el.remove(); };
+            el.appendChild(btn);
+        }
+        const close = document.createElement('button');
+        close.className = 'toast-close';
+        close.textContent = '×';
+        close.onclick = () => el.remove();
+        el.appendChild(close);
+        stack.appendChild(el);
+        if (ttlMs > 0) setTimeout(() => { if (el.parentNode) el.remove(); }, ttlMs);
+        return el;
     }
 
     function isYamlModified() {
         return Boolean(window.__yamlModified);
+    }
+
+    // Canonical string form of a feedback snapshot — used to detect
+    // "no-change" resubmits from the Edit-feedback flow so we don't
+    // append duplicate JSONL rows for the same payload.
+    function _normalizeFeedbackForCompare(d) {
+        const d_ = d || {};
+        return JSON.stringify({
+            severity:             d_.severity == null ? null : Number(d_.severity),
+            correctConclusionTag: d_.correctConclusionTag || '',
+            correctRootCause:     d_.correctRootCause || '',
+            correctSkill:         d_.correctSkill || '',
+            correctApproach:      d_.correctApproach || '',
+            agentWorkflow:        d_.agentWorkflow || '',
+            evidenceLogLines:     Array.isArray(d_.evidenceLogLines)
+                                    ? d_.evidenceLogLines.slice() : [],
+            issues: (Array.isArray(d_.issues) ? d_.issues : []).map((i) => ({
+                scope:      i && i.scope      != null ? i.scope      : null,
+                category:   i && i.category   != null ? i.category   : null,
+                skill_id:   i && i.skill_id   != null ? i.skill_id   : null,
+                step_index: i && i.step_index != null ? i.step_index : null,
+                step_label: i && i.step_label != null ? i.step_label : null,
+                comment:    i && i.comment    != null ? i.comment    : null,
+            })),
+            attachLog:       !!d_.attachLog,
+            attachLocalYaml: !!d_.attachLocalYaml,
+        });
     }
 
     async function submitFeedbackDetail() {
@@ -4010,11 +5013,32 @@
             return;
         }
 
+        // Read attachment checkboxes up here so we can include them in
+        // the no-change comparison below.
+        const attachLocalYaml = !!document.getElementById('fbd-attach-yaml').checked;
+        const attachLog       = !!document.getElementById('fbd-attach-log').checked;
+
+        // No-change guard: when the user re-opens the modal via
+        // "✏️ Edit feedback" and clicks Submit without touching
+        // anything, the current payload is byte-identical to what we
+        // already sent. Submitting again would append a duplicate row
+        // to feedback_details.jsonl, so short-circuit here.
+        const currentSnapshot = {
+            severity, correctConclusionTag, correctRootCause,
+            correctSkill, correctApproach, agentWorkflow,
+            evidenceLogLines, issues, attachLog, attachLocalYaml,
+        };
+        const cachedSnapshot = (window.__lastFeedback || {})[ctx.turnId];
+        if (cachedSnapshot
+            && _normalizeFeedbackForCompare(currentSnapshot)
+                === _normalizeFeedbackForCompare(cachedSnapshot)) {
+            closeFeedbackModal();
+            return;
+        }
+
         const submitBtn = document.getElementById('fbd-submit-btn');
         submitBtn.disabled = true;
         try {
-            const attachLocalYaml = !!document.getElementById('fbd-attach-yaml').checked;
-            const attachLog       = !!document.getElementById('fbd-attach-log').checked;
             const res = await fetch('/feedback/detail', {
                 method: 'POST',
                 headers: {'Content-Type': 'application/json'},
@@ -4055,6 +5079,8 @@
                     attachLog:              attachLog,
                     attachLocalYaml:        attachLocalYaml,
                 };
+                // Persisted to the server — draft no longer needed.
+                _clearFeedbackDraft(ctx.turnId);
                 if (ctx.linkEl) {
                     ctx.linkEl.classList.add('submitted');
                     ctx.linkEl.textContent = '✓ Edit feedback';

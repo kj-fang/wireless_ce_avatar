@@ -107,8 +107,12 @@ def _extract_issue_context() -> dict:
             if isinstance(sf, (list, tuple)) and len(sf) >= 1:
                 selected_names.add(sf[0])
 
-        # Step 2: Read from case_context.attachment_list (same data source as the template)
+        # Step 2: Read from case_context.attachment_list (same data source as the template).
+        # Heavy fields like attachment_list are stashed on disk for big
+        # cases — go through from_session() so the sidecar is loaded.
         raw_ctx_dict = session.get("case_context", {})
+        if isinstance(raw_ctx_dict, dict) and raw_ctx_dict:
+            raw_ctx_dict = CaseContext.from_session(raw_ctx_dict).to_dict()
         att_list = raw_ctx_dict.get("attachment_list", []) if isinstance(raw_ctx_dict, dict) else []
 
         # Step 3: Prefer user-selected attachments; if selected_names is empty, take the first one
@@ -341,6 +345,14 @@ def set_log():
         return jsonify({"success": False, "error": "log_path is required"}), 400
 
     try:
+        # Capture the previous log_path + conv_id BEFORE we rotate, so the
+        # client can show a "log switched, chat cleared" toast and offer
+        # undo within a short window. `rotated` is True only when this
+        # genuinely replaces a different log (not the first load).
+        prev_log_path = (session.get("chatbot_log_path") or "").strip()
+        rotated = bool(prev_log_path) and prev_log_path != log_path
+        prev_conv_id = (session.get("feedback_conversation_id") or "") if rotated else ""
+
         agent = _get_or_create_agent(skip_prime=True)
         agent.current_log_path = log_path
         agent.reset_conversation()          # fresh conversation for a new file
@@ -368,6 +380,11 @@ def set_log():
             "message": f"Log file set: {log_path}",
             "skills": agent.get_skill_descriptions(),
             "issue_time": format_issue_time(agent.issue_time),
+            # Hints for the client to clear chat history + show the toast.
+            "rotated": rotated,
+            "previous_log_path": prev_log_path if rotated else "",
+            "previous_conversation_id": prev_conv_id if rotated else "",
+            "new_conversation_id": new_conv_id,
         })
     except Exception as e:
         return jsonify({"success": False, "error": str(e)}), 500
@@ -404,6 +421,13 @@ def chat():
     except Exception:
         max_steps = 6
     max_steps = max(1, min(12, max_steps))
+
+    # Parent-message id: client-generated UUID stamped on every iteration
+    # of a single Send click. When the user types one message that yields
+    # multiple incident analyses (multi-time chained calls), every
+    # resulting turn shares this id, so downstream ETL can recover the
+    # co-firing relationship from the bronze layer.
+    parent_message_id = (data.get("parent_message_id") or "").strip()
 
     try:
         agent = _get_or_create_agent()
@@ -523,6 +547,7 @@ def chat():
                             duration_ms=int((datetime.now() - turn_started_at).total_seconds() * 1000),
                             issue=_issue_ctx_for_snapshot,
                             log_path=getattr(agent, "current_log_path", "") or "",
+                            parent_message_id=parent_message_id,
                         )
                         yield f"data: {json.dumps({'type': 'done', 'turn_id': turn_id, 'conversation_id': conversation_id, 'result': payload}, ensure_ascii=False)}\n\n"
                         break
@@ -556,6 +581,7 @@ def chat():
                 duration_ms=int((datetime.now() - turn_started_at).total_seconds() * 1000),
                 issue=_issue_ctx_for_snapshot,
                 log_path=getattr(agent, "current_log_path", "") or "",
+                parent_message_id=parent_message_id,
             )
 
             def generate():

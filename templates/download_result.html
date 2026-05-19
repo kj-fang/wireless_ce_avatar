@@ -1,4 +1,4 @@
-<!DOCTYPE html>
+﻿<!DOCTYPE html>
 <html lang="zh-Hant">
 <head>
     <meta charset="UTF-8">
@@ -62,10 +62,14 @@
             width: fit-content;
             max-width: 80%;
             background: transparent;
-            flex-wrap: wrap;
+            flex-wrap: nowrap;
+            overflow-x: auto;
+            overflow-y: hidden;
+            -webkit-overflow-scrolling: touch;
+            margin: 0 auto;
         }
         #analysisTabs .nav-item {
-            flex: 1;
+            flex: 0 0 auto;
             text-align: center;
             min-width: 150px;
         }
@@ -78,6 +82,7 @@
             border-radius: 8px 8px 0 0;
             font-weight: 500;
             font-size: 1.1rem;
+            white-space: nowrap;
             color: #333;
             border-bottom: 3px solid transparent;
             transition: all 0.3s ease;
@@ -209,16 +214,93 @@
             pointer-events: none;
             cursor: not-allowed !important;
         }
+        button {
+            white-space: nowrap;
+        }
+        .fw-system-info-panel {
+            border: 1px solid #d1d5db;
+            border-radius: 6px;
+            background: #ffffff;
+            box-shadow: 0 4px 12px rgba(0, 0, 0, 0.08);
+            padding: 12px;
+            margin-bottom: 20px;
+            font-family: Consolas, monospace;
+            font-size: 12px;
+            line-height: 1.45;
+            white-space: normal;
+            position: relative;
+            z-index: 1;
+        }
+        .fw-system-info-toggle {
+            font-weight: 700;
+            color: #111111;
+            cursor: pointer;
+            list-style: none;
+            user-select: none;
+        }
+        /* .fw-system-info-toggle::-webkit-details-marker {
+            display: none;
+        }
+        .fw-system-info-toggle::before {
+            content: "▶";
+            display: inline-block;
+            margin-right: 6px;
+            color: #374151;
+            transition: transform 0.15s ease;
+        } */
+        .fw-system-info-panel[open] .fw-system-info-toggle::before {
+            transform: rotate(90deg);
+        }
+        .fw-system-info-content {
+            margin-top: 8px;
+            padding-top: 6px;
+            border-top: 1px solid #e5e7eb;
+        }
+        .fw-system-info-path {
+            color: #6b7280;
+            margin-bottom: 8px;
+            white-space: pre-wrap;
+            word-break: break-all;
+        }
+        .fw-system-info-body {
+            color: #3f3f46;
+            white-space: normal;
+        }
+        .fw-system-info-table {
+            width: 100%;
+            border-collapse: collapse;
+            margin-top: 2px;
+        }
+        .fw-system-info-table th,
+        .fw-system-info-table td {
+            border: 1px solid #e5e7eb;
+            padding: 6px 8px;
+            vertical-align: top;
+            font-size: 12px;
+            line-height: 1.4;
+        }
+        .fw-system-info-table th {
+            width: 32%;
+            color: #0f172a;
+            font-weight: 600;
+            white-space: nowrap;
+            background: #f8fafc;
+        }
+        .fw-system-info-table td {
+            color: #475569;
+            white-space: pre-wrap;
+            word-break: break-word;
+        }
     </style>
 </head>
-<body>
+<body data-latest-evt-path="{{ latest_evt_path | e if latest_evt_path else '' }}">
     <div class="form-container mb-4 p-0 overflow-hidden" 
-        style="position: relative; border-radius: 0; margin-top: -20px; margin-left: -20px; margin-right: -20px; ">
+        style="border-radius: 0; margin-top: -20px; margin-left: -20px; margin-right: -20px; position: relative;">
         <img src="{{ url_for('static', filename='nav_bar.svg') }}" 
             alt="nav_bar" 
             class="w-100" 
             style="border-radius: 0; display: block;">
-            
+        
         <!-- clickable  logo -->  
         <a href="{{ url_for('main.index') }}" 
             style="position: absolute; 
@@ -227,22 +309,24 @@
                     width: 20%; 
                     height: 100%; 
                     cursor: pointer; 
-                    z-index: 10;"
+                    z-index: 5;
+                    pointer-events: auto;"
             title="Return to home"
             aria-label="Return to home">
-        </a>            
+        </a>
     </div>
 
     {% if auto_analysis_etl %}
     <div class="alert alert-info alert-dismissible fade show" role="alert">
         <i class="fas fa-robot"></i> <strong>Auto Running: Latest ETL with LLM analysis</strong> 
-        <button type="button" class="close" data-dismiss="alert" aria-label="Close" onclick="this.parentElement.style.display='none';">
+        <button type="button" class="close" data-dismiss="alert" aria-label="Close">
             <span aria-hidden="true">&times;</span>
         </button>
         <input type="hidden" id="autoAnalysisEtl" value="{{ auto_analysis_etl | urlencode }}">
     </div>
     {% endif %}
-    
+
+    <!-- <h2>📊 Analysis Log</h2> -->
     <div id="log">...</div>
     
     <div class="d-flex justify-content-between align-items-center mb-2">
@@ -287,6 +371,7 @@
         {% endfor %}
     {% endfor %}
 
+    <!-- System event -->
     {% set ddd_ns = namespace(has_items=false) %}
     {% for name, ddd_list in ddd_dict.items() %}
         {% for ddd_path in ddd_list %}
@@ -320,6 +405,12 @@
             {% endif %}
         {% endfor %}
     {% endfor %}
+    
+    <!-- System Info -->
+    {% set sys_info_ns = namespace(has_items=false) %}
+    {% if latest_fw_system_info %}
+        {% set sys_info_ns.has_items = true %}
+    {% endif %}
 
     {% if wifi_ns.has_items %}
         {% set active_tab = 'wifi' %}
@@ -329,6 +420,8 @@
         {% set active_tab = 'ddd' %}
     {% elif fw_ns.has_items %}
         {% set active_tab = 'fw' %}
+    {% elif sys_info_ns.has_items %}
+        {% set active_tab = 'sys_info' %}
     {% else %}
         {% set active_tab = 'wifi' %}
     {% endif %}
@@ -343,12 +436,15 @@
                     <a class="nav-link {% if active_tab == 'bt' %}active{% endif %} {% if not bt_ns.has_items %}disabled tab-unavailable{% endif %}" id="bt-tab" {% if bt_ns.has_items %}data-toggle="tab" href="#bt-panel"{% else %}href="#" tabindex="-1" aria-disabled="true"{% endif %} role="tab" aria-controls="bt-panel" aria-selected="{{ 'true' if active_tab == 'bt' else 'false' }}">BT</a>
                 </li>
                 <li class="nav-item">
-                    <a class="nav-link {% if active_tab == 'ddd' %}active{% endif %} {% if not ddd_ns.has_items %}disabled tab-unavailable{% endif %}" id="ddd-tab" {% if ddd_ns.has_items %}data-toggle="tab" href="#ddd-panel"{% else %}href="#" tabindex="-1" aria-disabled="true"{% endif %} role="tab" aria-controls="ddd-panel" aria-selected="{{ 'true' if active_tab == 'ddd' else 'false' }}">DDD</a>
+                    <a class="nav-link {% if active_tab == 'ddd' %}active{% endif %} {% if not ddd_ns.has_items %}disabled tab-unavailable{% endif %}" id="ddd-tab" {% if ddd_ns.has_items %}data-toggle="tab" href="#ddd-panel"{% else %}href="#" tabindex="-1" aria-disabled="true"{% endif %} role="tab" aria-controls="ddd-panel" aria-selected="{{ 'true' if active_tab == 'ddd' else 'false' }}">SystemEvent</a>
                 </li>
                 <li class="nav-item">
                     <a class="nav-link {% if active_tab == 'fw' %}active{% endif %} {% if not fw_ns.has_items %}disabled tab-unavailable{% endif %}" id="fw-tab" {% if fw_ns.has_items %}data-toggle="tab" href="#fw-panel"{% else %}href="#" tabindex="-1" aria-disabled="true"{% endif %} role="tab" aria-controls="fw-panel" aria-selected="{{ 'true' if active_tab == 'fw' else 'false' }}">FW</a>
                 </li>
-        </ul>
+                <li class="nav-item">
+                    <a class="nav-link {% if active_tab == 'sys_info' %}active{% endif %} {% if not sys_info_ns.has_items %}disabled tab-unavailable{% endif %}" id="sys_info-tab" {% if sys_info_ns.has_items %}data-toggle="tab" href="#sys_info-panel"{% else %}href="#" tabindex="-1" aria-disabled="true"{% endif %} role="tab" aria-controls="sys_info-panel" aria-selected="{{ 'true' if active_tab == 'sys_info' else 'false' }}">SystemInfo</a>
+                </li>
+            </ul>
         </div>
         <div class="card-body bg-light">
             <div class="tab-content" id="analysisTabContent">
@@ -405,27 +501,46 @@
                         {% endfor %}
                     </div>
                     <div class="d-flex flex-wrap justify-content-center align-items-center mt-3 p-3" style="background: #f8f9fa; border: 1px solid #ddd; border-radius: 8px; gap: 8px;">
-                        <button id="bt-action-autofile" class="btn btn-primary btn-sm" onclick="runSelectedBtAction(this, 'AutoFile')">
-                            AutoFile
-                        </button>
-                        <button id="bt-action-autofolder" class="btn btn-primary btn-sm" disabled onclick="runSelectedBtAction(this, 'AutoFolder')">
+                        <button id="bt-action-autofolder" class="btn btn-primary btn-sm" data-mode="AutoFolder" disabled onclick="runSelectedBtAction(this, 'AutoFolder')">
                             AutoFolder
                         </button>
-                        <button id="bt-action-manual" class="btn btn-primary btn-sm" disabled onclick="runSelectedBtAction(this, 'Manual')">
+                        <button id="bt-action-manual" class="btn btn-primary btn-sm" data-mode="Manual" disabled onclick="runSelectedBtAction(this, 'Manual')">
                             Manual
+                        </button>
+                        <button id="bt-action-llm" class="btn btn-primary btn-sm" data-mode="LLM" disabled onclick="runSelectedBtAction(this, 'LLM')">
+                            Analyze with LLM
                         </button>
                     </div>
                 </div>
 
                 <div class="tab-pane fade {% if active_tab == 'ddd' %}show active{% endif %}" id="ddd-panel" role="tabpanel" aria-labelledby="ddd-tab">
-                    <div class="d-flex flex-wrap justify-content-center align-items-center mt-3 p-3" style="background: #f8f9fa; border: 1px solid #ddd; border-radius: 8px; gap: 8px;">
-                        <button id="ddd-action-analyze" class="btn btn-primary btn-sm" style="font-size: 1.15rem; padding: 0.5rem 1rem;" disabled onclick="runSelectedDddAction(this, 'parse')">
-                            Parse
-                        </button>
+                    <!-- System Event Log Display Box -->
+                    <div id="eventLogSection" class="mt-3 mb-4">
+                        <div class="d-flex justify-content-between align-items-center mb-2">
+                            <h5>📋 System Event Log Content</h5>
+                            <div>
+                                <select id="eventSourceFilter" class="form-control form-control-sm d-inline-block mr-2" style="width: auto;" onchange="filterEventLogs()">
+                                    <option value="pci_bt" selected>ibtpci / bthmini</option>
+                                    <option value="usb_bt">ibtusb / bthusb</option>
+                                    <option value="pci_bt_wifi">ibtpci / bthmini + Netwaw / Netwtw</option>
+                                    <option value="usb_bt_wifi">ibtusb / bthusb + Netwaw / Netwtw</option>
+                                    <option value="all">All Sources</option>
+                                </select>
+                                <select id="eventLevelFilter" class="form-control form-control-sm d-inline-block" style="width: auto;" onchange="filterEventLogs()">
+                                    <option value="all">All Levels</option>
+                                    <option value="warning_error">Warning + Error</option>
+                                    <option value="information">Information</option>
+                                </select>
+                            </div>
+                        </div>
+                        <div id="eventLogContent" class="border rounded p-2" style="height: 300px; overflow-y: auto; background-color: #1e1e1e; color: #d4d4d4; font-family: 'Consolas', monospace; font-size: 12px;">
+                            <p class="text-muted">Loading...</p>
+                        </div>
                     </div>
+
                     <div class="mb-3">
                         {% for name, ddd_list in ddd_dict.items() %}
-                                {% for ddd_path in ddd_list %}
+                        {% for ddd_path in ddd_list %}
                                     {# determine if ddd_path should be skipped based on exclude_keywords #}
                                     {% set ns = namespace(skip=false) %}
                                     {% if exclude_keywords %}
@@ -443,15 +558,15 @@
                             {% endfor %}
                         {% endfor %}
                     </div>
-                </div>
-
-
-                <div class="tab-pane fade {% if active_tab == 'fw' %}show active{% endif %}" id="fw-panel" role="tabpanel" aria-labelledby="fw-tab">
+                    
                     <div class="d-flex flex-wrap justify-content-center align-items-center mt-3 p-3" style="background: #f8f9fa; border: 1px solid #ddd; border-radius: 8px; gap: 8px;">
-                        <button id="fw-action-analyze" class="btn btn-primary btn-sm" style="font-size: 1.15rem; padding: 0.5rem 1rem;" disabled onclick="runSelectedFwAction(this, 'parse')">
-                            Parse
+                        <button id="ddd-action-analyze" class="btn btn-primary btn-sm" style="font-size: 1.15rem; padding: 0.5rem 1rem;" disabled onclick="runSelectedDddAction(this, 'analysis')">
+                            Event Analysis
                         </button>
                     </div>
+                </div>
+
+                <div class="tab-pane fade {% if active_tab == 'fw' %}show active{% endif %}" id="fw-panel" role="tabpanel" aria-labelledby="fw-tab">
                     <div class="mb-3">
                         {% for name, fw_list in fw_dict.items() %}
                                 {% for fw_path in fw_list %}
@@ -472,15 +587,304 @@
                             {% endfor %}
                         {% endfor %}
                     </div>
+
+                    <div class="d-flex flex-wrap justify-content-center align-items-center mt-3 p-3" style="background: #f8f9fa; border: 1px solid #ddd; border-radius: 8px; gap: 8px;">
+                        <button id="fw-action-analyze" class="btn btn-primary btn-sm" style="font-size: 1.15rem; padding: 0.5rem 1rem;" disabled onclick="runSelectedFwAction(this, 'parse')">
+                            Parse
+                        </button>
+                    </div>
+                </div>
+
+                <div class="tab-pane fade {% if active_tab == 'sys_info' %}show active{% endif %}" id="sys_info-panel" role="tabpanel" aria-labelledby="sys_info-tab">
+                    {% if latest_fw_system_info %}
+                    <summary class="fw-system-info-toggle">Latest System Info</summary>
+                    <div class="fw-system-info-content">
+                        {% if latest_fw_system_info_path %}
+                        <div class="fw-system-info-path">FW Path: {{ latest_fw_system_info_path }}</div>
+                        {% endif %}
+                        <div class="fw-system-info-body">
+                            <table class="fw-system-info-table">
+                                <tbody>
+                                    {% for key, value in latest_fw_system_info.items() %}
+                                    <tr>
+                                        <th>{{ key }}</th>
+                                        <td>{{ value }}</td>
+                                    </tr>
+                                    {% endfor %}
+                                </tbody>
+                            </table>
+                        </div>
+                    </div>
+                    {% endif %}
                 </div>
             </div>
+        </div>  
+    </div>
+
+    <!-- System Event Results Section -->
+    <!-- {% if event_table_rows %}
+    <h2 class="mt-4">🔍 Analysis System Event Results</h2>
+    <table>
+        <thead>
+            <tr>
+                <th>Zip File</th>
+                <th>Folder Name</th>
+                <th>File Name</th>
+                <th>Analysis</th>
+            </tr>
+        </thead>
+        <tbody>
+            {% for row in event_table_rows %}
+                <tr>
+                    {% if row.show_zip_cell %}
+                    <td rowspan="{{ row.zip_rowspan }}">{{ row.zip_name }}</td>
+                    {% endif %}
+                    {% if row.show_folder_cell %}
+                    <td rowspan="{{ row.folder_rowspan }}">{{ row.folder_name }}</td>
+                    {% endif %}
+                    <td title="Click to copy" style="cursor: pointer;" data-path="{{ row.ddd_path }}" onclick="copyToClipboard(this.getAttribute('data-path'))">
+                        {{ row.ddd_path.split('\\')[-1] if '\\' in row.ddd_path else row.ddd_path.split('/')[-1] }}
+                    </td>
+                    <td class="text-center">
+                        <div class="d-flex flex-column align-items-center">
+                            <button class="btn btn-primary btn-sm" 
+                                    data-evt-path="{{ row.ddd_path | e }}" 
+                                    onclick="eventAnalysis(this.dataset.evtPath, this)">
+                                Event Analysis
+                            </button>
+                        </div>
+                    </td>
+                </tr>
+            {% endfor %}
+        </tbody>
+    </table> -->
+    <!-- System Event Log Display Box -->
+    <!-- <div id="eventLogSection" class="mt-3 mb-4">
+        <div class="d-flex justify-content-between align-items-center mb-2">
+            <h5>📋 System Event Log Content</h5>
+            <div>
+                <select id="eventSourceFilter" class="form-control form-control-sm d-inline-block mr-2" style="width: auto;" onchange="filterEventLogs()">
+                    <option value="pci_bt" selected>ibtpci / bthmini</option>
+                    <option value="usb_bt">ibtusb / bthusb</option>
+                    <option value="pci_bt_wifi">ibtpci / bthmini + Netwaw / Netwtw</option>
+                    <option value="usb_bt_wifi">ibtusb / bthusb + Netwaw / Netwtw</option>
+                    <option value="all">All Sources</option>
+                </select>
+                <select id="eventLevelFilter" class="form-control form-control-sm d-inline-block" style="width: auto;" onchange="filterEventLogs()">
+                    <option value="all">All Levels</option>
+                    <option value="warning_error">Warning + Error</option>
+                    <option value="information">Information</option>
+                </select>
+            </div>
+        </div>
+        <div id="eventLogContent" class="border rounded p-2" style="height: 300px; overflow-y: auto; background-color: #1e1e1e; color: #d4d4d4; font-family: 'Consolas', monospace; font-size: 12px;">
+            <p class="text-muted">Loading...</p>
         </div>
     </div>
+    {% endif %} -->
+    
+
+
+    <!-- {% if wifi_or_bt == 'wifi' and wifi_table_rows %}
+    <div class="d-flex justify-content-between align-items-center mb-2">
+        <h2>🔍 Analysis WIFI Results</h2>
+    </div>
+    <table>
+        <thead>
+            <tr>
+                <th>Zip File</th>
+                <th>Folder Name</th>
+                <th>ETL Path</th>
+                <th>Analysis</th>
+            </tr>
+        </thead>
+        <tbody>
+            {% for row in wifi_table_rows %}
+                <tr>
+                    {% if row.show_zip_cell %}
+                    <td rowspan="{{ row.zip_rowspan }}">{{ row.zip_name }}</td>
+                    {% endif %}
+                    {% if row.show_folder_cell %}
+                    <td rowspan="{{ row.folder_rowspan }}">{{ row.folder_name }}</td>
+                    {% endif %}
+                    <td title="Click to copy" style="cursor: pointer;" data-path="{{ row.etl_path }}" onclick="copyToClipboard(this.getAttribute('data-path'))">
+                        {{ row.etl_path.split('\\')[-1] if '\\' in row.etl_path else row.etl_path.split('/')[-1] }}
+                    </td>
+                    <td class="text-center">
+                        <div class="d-flex flex-column align-items-center">
+                            <button class="btn btn-primary btn-sm mb-2" onclick="startAnalysis(this, '{{ row.etl_path | urlencode }}')">
+                                Analyze
+                            </button>
+                            <button class="btn btn-success btn-sm" onclick="startLogParser(this, '{{ row.etl_path | urlencode }}')">
+                                Analyze with LLM
+                            </button>
+                        </div>
+                    </td>
+                </tr>
+            {% endfor %}
+        </tbody>
+    </table>
+    {% endif %} -->
+    
+    
+    <!-- {% if wifi_or_bt == 'bt' %}
+    <h2 class="mt-4">🔍 Analysis BT Results</h2>
+    <table>
+        <thead>
+            <tr>
+                <th>Zip File</th>
+                <th>Folder Name</th>
+                <th>File Name</th>
+                <th>Analysis</th>
+            </tr>
+        </thead>
+        <tbody>
+            {% for row in bt_table_rows %}
+                <tr>
+                    {% if row.show_zip_cell %}
+                    <td rowspan="{{ row.zip_rowspan }}">{{ row.zip_name }}</td>
+                    {% endif %}
+                    {% if row.show_folder_cell %}
+                    <td rowspan="{{ row.folder_rowspan }}">{{ row.folder_name }}</td>
+                    {% endif %}
+                    <td title="Click to copy" style="cursor: pointer;" data-path="{{ row.bt_path }}" onclick="copyToClipboard(this.getAttribute('data-path'))">
+                        {{ row.bt_path.split('\\')[-1] if '\\' in row.bt_path else row.bt_path.split('/')[-1] }}
+                    </td>
+                    <td class="text-center">
+                        <div class="d-flex flex-column align-items-center">
+
+                            <button class="btn btn-primary btn-sm mb-2" data-path="{{ row.bt_path | urlencode }}" data-mode="AutoFolder" onclick="startAnalysis(this, '{{ row.bt_path | urlencode }}', 'AutoFolder')">
+                                AutoFolder
+                            </button>
+
+                            <button class="btn btn-success btn-sm mb-2" data-path="{{ row.bt_path | urlencode }}" data-mode="Manual" onclick="startAnalysis(this, '{{ row.bt_path | urlencode }}', 'Manual')">
+                                Manual
+                            </button>
+
+                            <button class="btn btn-warning btn-sm" data-path="{{ row.bt_path | urlencode }}" data-mode="LLM" onclick="startBtLogParser(this, '{{ row.bt_path | urlencode }}')">
+                                Analyze with LLM
+                            </button>
+                        </div>
+                    </td>
+                </tr>
+            {% endfor %}
+        </tbody>
+
+    </table>
+    {% endif %} -->
+
+    <!-- FW Results Section -->
+    <!-- <h2 class="mt-4">🔍 Analysis FW Results</h2>
+    <table>
+        <thead>
+            <tr>
+                <th>Zip File</th>
+                <th>Folder Name</th>
+                <th>File Name</th>
+                <th>Analysis</th>
+            </tr>
+        </thead>
+        <tbody>
+            {% for row in fw_table_rows %}
+                <tr>
+                    {% if row.show_zip_cell %}
+                    <td rowspan="{{ row.zip_rowspan }}">{{ row.zip_name }}</td>
+                    {% endif %}
+                    {% if row.show_folder_cell %}
+                    <td rowspan="{{ row.folder_rowspan }}">{{ row.folder_name }}</td>
+                    {% endif %}
+                    <td title="Click to copy" style="cursor: pointer;" data-path="{{ row.fw_path }}" onclick="copyToClipboard(this.getAttribute('data-path'))">
+                        {{ row.fw_path.split('\\')[-1] if '\\' in row.fw_path else row.fw_path.split('/')[-1] }}
+                    </td>
+                    <td>
+                        <button class="btn btn-primary btn-sm" onclick="startFwAnalysis(this, '{{ row.fw_path | urlencode }}')">
+                            Parse
+                        </button>
+                    </td>
+                </tr>
+            {% endfor %}
+        </tbody>
+    </table> -->
 
 
     <script>
-        const socket = io('/progress');
+        // Utility function to copy text to clipboard
+        function copyToClipboard(text) {
+            navigator.clipboard.writeText(text).then(() => {
+                alert('✓ Copied to clipboard');
+            }).catch(err => {
+                console.error('Failed to copy:', err);
+                alert('Failed to copy');
+            });
+        }
+
+        // Extract filename from full path (handle both / and \)
+        function getFilename(fullPath) {
+            return fullPath.split(/[\\\/]/).pop();
+        }
+        let socket = null;
         const logBox = document.getElementById("log");
+
+        function bindProgressSocketHandlers() {
+            socket.on("wpp_log", handleWppLog);
+            socket.on("fw_tool_log", handleFwToolLog);
+            socket.on("fw_tool_closed", handleFwToolClosed);
+            socket.on("fw_tool_error", handleFwToolError);
+            socket.on("wpp_complete", handleWppComplete);
+            socket.on("bt_hci_ready", handleBtHciReady);
+            socket.on("bt_hci_failed", handleBtHciFailed);
+            socket.on("manual_complete", handleManualComplete);
+            socket.on("autofolder_complete", handleAutofolderComplete);
+            socket.on("fw_analysis_complete", handleFwAnalysisComplete);
+            socket.on("fw_analysis_cancelled", handleFwAnalysisCancelled);
+            socket.on("fw_analysis_failed", handleFwAnalysisFailed);
+            socket.on("fw_analysis_warning", handleFwAnalysisWarning);
+        }
+
+        function reconnectProgressSocket(forceFresh = false) {
+            if (socket && forceFresh) {
+                socket.removeAllListeners();
+                socket.disconnect();
+                socket = null;
+            }
+
+            if (!socket) {
+                socket = io('/progress');
+                bindProgressSocketHandlers();
+                return;
+            }
+
+            if (!socket.connected) {
+                socket.connect();
+            }
+        }
+
+        reconnectProgressSocket();
+        
+        function appendLog(text, color) {
+            const span = document.createElement('span');
+            if (color) span.style.color = color;
+            span.textContent = text;
+            logBox.appendChild(span);
+            logBox.scrollTop = logBox.scrollHeight;
+        }
+
+        function escapeHtml(value) {
+            return String(value ?? '')
+                .replace(/&/g, '&amp;')
+                .replace(/</g, '&lt;')
+                .replace(/>/g, '&gt;')
+                .replace(/"/g, '&quot;')
+                .replace(/'/g, '&#39;');
+        }
+
+        function postJson(url, payload) {
+            return fetch(url, {
+                method: 'POST',
+                headers: { 'Content-Type': 'application/json' },
+                body: JSON.stringify(payload)
+            });
+        }
 
         const autoAnalysisEtlElement = document.getElementById('autoAnalysisEtl');
 
@@ -510,12 +914,25 @@
         }
 
         // Receive backend logs
-        socket.on("wpp_log", function(msg) {
+        function handleWppLog(msg) {
             console.log("wpp_log:",msg)
-            logBox.innerText += msg.data + "\n";
-            logBox.scrollTop = logBox.scrollHeight;
-        });
+            appendLog(msg.data + "\n");
+        }
 
+        function handleFwToolLog(msg) {
+            console.log("fw_tool_log:", msg);
+            appendLog((msg.data || 'FW viewer event') + "\n");
+        }
+
+        function handleFwToolClosed(msg) {
+            console.log("fw_tool_closed:", msg);
+            appendLog((msg.data || 'TextAnalysisTool.NET viewer closed.') + "\n");
+        }
+
+        function handleFwToolError(msg) {
+            console.log("fw_tool_error:", msg);
+            appendLog(`❌ ${msg.data || 'FW viewer open failed'}\n`, 'red');
+        }
 
         if (autoAnalysisEtlElement) {
             const etlPathEncoded = autoAnalysisEtlElement.value;
@@ -528,16 +945,10 @@
         
 
         function openDownloadPath() {
+            cancelPendingFwAnalysis();
             const path = document.querySelector('#open-btn').dataset.path;
             console.log(path)
-            fetch('/open_path', {
-                
-                method: 'POST',
-                headers: {
-                    'Content-Type': 'application/json'
-                },
-                body: JSON.stringify({ path: path })
-            })
+            postJson('/open_path', { path: path })
             .then(response => {
                 if (response.ok) {
                     console.log('Path opened successfully');
@@ -546,11 +957,267 @@
                 }
             });
         }
+        // ------------------ Restored function ------------------
+        // ------------------ Event Log Virtual Scroll (Pagination) ------------------
+        const EVT_ROW_H = 26;
+        const EVT_BUFFER = 30;
+        const INITIAL_PAGE_SIZE = 30; // Initial page size
+        
+        let allEventLogs = []; // Store all event logs for filtering
+        let currentEvtPath = '';
+        let currentTimeHeader = 'Time';
+        let eventPagingState = {
+            totalCount: 0,
+            loadedCount: 0,
+            hasMore: false,
+            isLoading: false
+        };
+
+        // Fetch initial page: offset=0, limit=INITIAL_PAGE_SIZE
+        function loadEventLog(evtPath) {
+            currentEvtPath = evtPath;
+            document.getElementById('eventLogSection').style.display = 'block';
+            
+            const contentBox = document.getElementById('eventLogContent');
+            contentBox.innerHTML = '<p class="text-info">Loading event logs...</p>';
+            
+            if (contentBox._evtScrollHandler) {
+                contentBox.removeEventListener('scroll', contentBox._evtScrollHandler);
+                contentBox._evtScrollHandler = null;
+            }
+
+            // Reset paging state
+            allEventLogs = [];
+            currentTimeHeader = 'Time';
+            eventPagingState = {
+                totalCount: 0,
+                loadedCount: 0,
+                hasMore: false,
+                isLoading: false
+            };
+
+            // Fetch first page
+            fetchEventPage(evtPath, 0, INITIAL_PAGE_SIZE);
+        }
+        // -------------------------------------------------------
+        // Fetch a page of events from backend
+        function fetchEventPage(evtPath, offset, limit) {
+            if (eventPagingState.isLoading) return;
+            eventPagingState.isLoading = true;
+
+            const contentBox = document.getElementById('eventLogContent');
+
+            postJson('/parse_event_log', {
+                path: evtPath,
+                offset: offset,
+                limit: limit,
+                source_filter: document.getElementById('eventSourceFilter').value,
+                level_filter: document.getElementById('eventLevelFilter').value,
+            })
+            .then(response => response.json())
+            .then(data => {
+                if (data.error) {
+                    if (offset === 0) {
+                        contentBox.innerHTML = `<p class="text-danger">Error: ${data.error}</p>`;
+                    }
+                    eventPagingState.isLoading = false;
+                    return;
+                }
+
+                // Update state
+                allEventLogs = allEventLogs.concat(data.events || []);
+                eventPagingState.totalCount = data.total || 0;
+                eventPagingState.loadedCount = allEventLogs.length;
+                eventPagingState.hasMore = data.has_more || false;
+                eventPagingState.isLoading = false;
+                currentTimeHeader = data.time_header || currentTimeHeader;
+
+                // Render all loaded events (virtual scroll will handle visibility)
+                renderEventLogs(allEventLogs, eventPagingState, currentTimeHeader);
+            })
+            .catch(err => {
+                if (offset === 0) {
+                    contentBox.innerHTML = `<p class="text-danger">Failed to load events: ${err}</p>`;
+                }
+                eventPagingState.isLoading = false;
+            });
+        }
+        // -------------------------------------------------------
+        // --- BT Event ID Map ---
+        // Initialized as empty object; populated from backend API on page load.
+        // Fallback: if the API call fails, event details column will simply be blank.
+        let BT_EVENT_DETAILS = {};
+
+        // Fetch bt_event_id_map.json from the backend when the page loads.
+        // The JSON is sourced from configs/bt_event_id_map.json (38 entries including NA).
+        // details_list field supports multiple ETW IDs sharing the same WEV ID (e.g. WEV 1864).
+        fetch('/api/bt_event_map')
+            .then(res => res.json())
+            .then(data => {
+                if (data && Object.keys(data).length > 0) {
+                    BT_EVENT_DETAILS = data;
+                    console.log(`[Success] BT Event Map loaded: ${Object.keys(data).length} entries`);
+                    // Re-render the event log table if data is already displayed
+                    if (typeof allEventLogs !== 'undefined' && allEventLogs.length > 0) {
+                        filterEventLogs();
+                    }
+                }
+            })
+            .catch(err => {
+                console.warn('[Warning] Failed to load BT Event Map from backend API.', err);
+            });
+
+        function getBtEventDetails(eventId) {
+            const info = BT_EVENT_DETAILS[String(eventId)];
+            if (!info) return '';
+
+            const tooltipAttr = info.comments
+                ? `title="${escapeHtml(info.comments)}" style="cursor:help;"`
+                : '';
+
+            // Clean detail text only, no ETW IDs
+            const detailsList = info.details_list && info.details_list.length > 1
+                ? info.details_list.map(d =>
+                    `<div style="border-left:2px solid #ccc;padding-left:4px;margin-top:2px;">
+                        <span style="font-size:11px;">${escapeHtml(d.details)}</span>
+                    </div>`
+                  ).join('')
+                : `<span style="font-size:11px;">${escapeHtml(info.details || '')}</span>`;
+
+            return `<div ${tooltipAttr}>
+                ${detailsList}
+            </div>`;
+        }
+
+        // Render event logs with virtual scrolling — only visible rows are in the DOM.
+        // Spacer rows at top/bottom maintain correct scrollbar height.
+        // Also triggers lazy-load of next page when scrolling near bottom.
+        function renderEventLogs(events, pagingState, timeHeader) {
+            const contentBox = document.getElementById('eventLogContent');
+
+            if (contentBox._evtScrollHandler) {
+                contentBox.removeEventListener('scroll', contentBox._evtScrollHandler);
+                contentBox._evtScrollHandler = null;
+            }
+
+            if (events.length === 0) {
+                contentBox.innerHTML = '<p class="text-muted">No events found.</p>';
+                return;
+            }
+
+            const COL_STYLE = `
+                <colgroup>
+                  <col style="width:135px;"><col style="width:72px;"><col style="width:175px;">
+                  <col style="width:65px;"><col style="width:155px;"><col>
+                </colgroup>`;
+            const TH_STYLE = 'background-color:#005A9C !important; color:#ffffff !important;';
+            const TABLE_STYLE = 'font-size:11px; background-color:#ffffff; color:#333333; table-layout:fixed; width:100%;';
+
+            // Build table structure once — thead is sticky inside the scrollable box
+            const safeTimeHeader = escapeHtml(timeHeader || 'Time');
+            contentBox.innerHTML = `
+                <table class="table table-sm table-bordered mb-0" style="${TABLE_STYLE}">
+                  ${COL_STYLE}
+                  <thead style="position:sticky; top:0; z-index:1;">
+                    <tr>
+                      <th style="${TH_STYLE}">${safeTimeHeader}</th>
+                      <th style="${TH_STYLE}">Level</th>
+                      <th style="${TH_STYLE}">Source</th>
+                      <th style="${TH_STYLE}">Event ID</th>
+                      <th style="${TH_STYLE}">Details</th>
+                      <th style="${TH_STYLE}">Message</th>
+                    </tr>
+                  </thead>
+                  <tbody id="evtTbody"></tbody>
+                </table>`;
+
+            const tbody = document.getElementById('evtTbody');
+
+            function renderRows() {
+                const scrollTop = contentBox.scrollTop;
+                const visibleH = contentBox.clientHeight;
+                const start = Math.max(0, Math.floor(scrollTop / EVT_ROW_H) - EVT_BUFFER);
+                const end   = Math.min(events.length, Math.ceil((scrollTop + visibleH) / EVT_ROW_H) + EVT_BUFFER);
+
+                let html = '';
+                if (start > 0)
+                    html += `<tr><td colspan="6" style="height:${start * EVT_ROW_H}px; padding:0; border:none;"></td></tr>`;
+
+                for (let i = start; i < end; i++) {
+                    const ev  = events[i];
+                    const lc  = ev.level === 'Error' ? 'text-danger' : ev.level === 'Warning' ? 'text-warning' : 'text-info';
+                    const det = getBtEventDetails(ev.event_id);
+                    const bg  = det ? 'background-color:#fff8f0;' : '';
+                    const safeTime = escapeHtml(ev.time || '');
+                    const safeLevel = escapeHtml(ev.level || '');
+                    const safeSource = escapeHtml(ev.source || '');
+                    const safeEventId = escapeHtml(ev.event_id || '');
+                    const safeMessage = escapeHtml(ev.message || '');
+                    html += `<tr style="${bg}">
+                        <td style="white-space:nowrap;">${safeTime}</td>
+                        <td class="${lc}">${safeLevel}</td>
+                        <td>${safeSource}</td>
+                        <td>${safeEventId}</td>
+                        <td class="${lc}">${det}</td>
+                        <td style="overflow:hidden; text-overflow:ellipsis;">${safeMessage}</td>
+                    </tr>`;
+                }
+
+                // Show "loading more..." indicator at bottom if has more pages
+                if (pagingState && pagingState.hasMore && end === events.length) {
+                    html += `<tr><td colspan="6" style="text-align:center; padding:8px; color:#999;">
+                        Loading more...
+                    </td></tr>`;
+                }
+
+                // Bottom spacer: based ONLY on already-loaded data (events.length)
+                // This keeps scrollbar size STABLE as user scrolls
+                const bottomSpacerH = (events.length - end) * EVT_ROW_H;
+                if (bottomSpacerH > 0)
+                    html += `<tr><td colspan="6" style="height:${bottomSpacerH}px; padding:0; border:none;"></td></tr>`;
+
+                tbody.innerHTML = html;
+
+                // Auto-load next page if scrolling near bottom and has more data
+                if (pagingState && pagingState.hasMore && !pagingState.isLoading) {
+                    // Trigger load when user scrolls to near the end of currently loaded data
+                    const scrolledPercentage = (scrollTop + visibleH) / (events.length * EVT_ROW_H);
+                    if (scrolledPercentage > 0.7) {
+                        // Near bottom of loaded data — trigger next page load
+                        fetchEventPage(currentEvtPath, eventPagingState.loadedCount, INITIAL_PAGE_SIZE);
+                    }
+                }
+            }
+
+            contentBox._evtScrollHandler = renderRows;
+            contentBox.addEventListener('scroll', renderRows);
+            renderRows();
+        }
+
+        // Re-apply filter: reset paging and re-fetch first page
+        function filterEventLogs() {
+            if (!currentEvtPath) return;
+            
+            // Reset paging state for new filter
+            eventPagingState = {
+                totalCount: 0,
+                loadedCount: 0,
+                hasMore: false,
+                isLoading: false
+            };
+            allEventLogs = [];
+            
+            // Re-fetch with new filter from offset 0
+            fetchEventPage(currentEvtPath, 0, INITIAL_PAGE_SIZE);
+        }
 
         
 
         function startAnalysis(button, etlPathEncoded, mode) {
+            cancelPendingFwAnalysis();
             if (button.classList.contains('disabled')) return;
+
+            reconnectProgressSocket();
 
             button.classList.add('disabled');
             button.innerText = `Parsing...`;
@@ -584,17 +1251,18 @@
         }
     
     function startLogParser(button, etlPathEncoded) {
+        cancelPendingFwAnalysis();
         if (button.classList.contains('disabled')) return;
+
+        reconnectProgressSocket();
 
         button.classList.add('disabled');
         button.innerText = 'Processing & Parsing...';
 
         const decoded = decodeURIComponent(etlPathEncoded);
-        logBox.innerText += `🚀 Starting Analyze with LLM: ${decoded}\n`;
-        logBox.scrollTop = logBox.scrollHeight;
+        appendLog(`\n\n🚀 Starting Analyze with LLM: ${decoded}\n`);
 
-        logBox.innerText += `🛠️ Step 1: Running Analysis...\n`;
-        logBox.scrollTop = logBox.scrollHeight;
+        appendLog(`🛠️ Step 1: Running Analysis...\n`);
 
         const processId = Date.now(); 
         window.pendingLogParser = {
@@ -614,10 +1282,7 @@
             });
     }
 
-    // === Unified Socket.io handler for ETL completion ===
-    socket.on("wpp_complete", function(msg) {
-
-        // Handle pending Log Parser redirect
+    function handleWppComplete(msg) {
         if (window.pendingLogParser) {
             const { etlPathEncoded, button } = window.pendingLogParser;
             if (msg.status === 'done') {
@@ -697,21 +1362,257 @@
             window.pendingBtAnalyze = false;
             setBtActionButtonsBusy(false);
         }
-    });
+    };
 
+    // -------------------- BT LLM Analysis --------------------
+
+    function startBtLogParser(button, btPathEncoded) {
+        cancelPendingFwAnalysis();
+        if (button.classList.contains('disabled')) return;
+
+        reconnectProgressSocket();
+
+        button.classList.add('disabled');
+        button.innerText = 'Decoding HCI...';
+
+        const decoded = decodeURIComponent(btPathEncoded);
+        appendLog(`\n\n🚀 Starting BT Analyze with LLM: ${decoded}\n`);
+        appendLog(`🔍 Step 1: Decoding HCI log (this may take ~1-2 min)...\n`);
+
+        window.pendingBtLogParser = {
+            btPathEncoded: btPathEncoded,
+            button: button
+        };
+
+        fetch(`${ETL_ANALYSIS_URL}?etl_path=${btPathEncoded}&mode=LLM`)
+            .then(res => res.text())
+            .catch(err => {
+                console.error("BT HCI decode request failed:", err);
+                appendLog(`❌ HCI decode request failed: ${decoded}\n`, 'red');
+                if (window.pendingBtLogParser && window.pendingBtLogParser.button === button) {
+                    button.classList.remove('disabled');
+                    button.innerText = 'Analyze with LLM';
+                    window.pendingBtLogParser = null;
+                }
+                window.pendingBtAnalyze = false;
+                setBtActionButtonsBusy(false);
+            });
+    }
+
+    function handleBtHciReady(msg) {
+        if (!window.pendingBtLogParser) return;
+        const { button } = window.pendingBtLogParser;
+
+        appendLog(`✅ HCI decode done! Redirecting to LLM analysis...\n`);
+
+        button.classList.remove('disabled');
+        button.innerText = 'Analyze with LLM';
+        window.pendingBtLogParser = null;
+        window.pendingBtAnalyze = false;
+        setBtActionButtonsBusy(false);
+
+        const hciPathEncoded = encodeURIComponent(msg.hci_path);
+        window.location.href = `${LOGPARSER_URL}?etl_path=${hciPathEncoded}&preselect_filter=BT_YB_LOST.tat&preselect_prompt=BT_YB_Lost.py`;
+    }
+
+    function handleBtHciFailed(msg) {
+        if (!window.pendingBtLogParser) return;
+        const { button } = window.pendingBtLogParser;
+
+        appendLog(`❌ BT HCI decode failed or timed out.\n`, 'red');
+
+        button.classList.remove('disabled');
+        button.innerText = 'Analyze with LLM';
+        window.pendingBtLogParser = null;
+        window.pendingBtAnalyze = false;
+        setBtActionButtonsBusy(false);
+    }
 
     const FW_ETL_ANALYSIS_URL = "{{ url_for('analysis_etl.process_etl_path_fw') }}";
+    const FW_CANCEL_URL = "{{ url_for('analysis_etl.cancel_fw_analysis') }}";
+    const FW_RESULT_URL = "{{ url_for('analysis_etl.fw_analysis_result') }}";
+
+    window.pendingFwAnalysis = null;
+
+    function handleManualComplete(msg) {
+        console.log("Manual analysis complete for:", msg.etl_path);
+        restoreButton(msg.etl_path, 'Manual');
+        window.pendingBtAnalyze = false;
+        setBtActionButtonsBusy(false);
+    }
+
+    function handleAutofolderComplete(msg) {
+        console.log("AutoFolder analysis complete for:", msg.etl_path);
+        restoreButton(msg.etl_path, 'AutoFolder');
+        window.pendingBtAnalyze = false;
+        setBtActionButtonsBusy(false);
+    }
+
+    function restoreButton(path, mode) {
+        const buttons = document.querySelectorAll('button.disabled');
+        buttons.forEach(btn => {
+            const btnPathEnc = btn.getAttribute('data-path');
+            const btnMode = btn.getAttribute('data-mode');
+            if (btnMode === mode) {
+                try {
+                    if (!btnPathEnc) {
+                        btn.classList.remove('disabled');
+                        if (btn.innerText.includes('Analyzing') || btn.innerText.includes('Decoding')) {
+                            btn.innerText = mode === 'LLM' ? 'Analyze with LLM' : mode;
+                        }
+                        return;
+                    }
+
+                    const btnPath = decodeURIComponent(btnPathEnc);
+                    if (btnPath.replace(/\\/g, '/') === path.replace(/\\/g, '/')) {
+                        btn.classList.remove('disabled');
+                        if (btn.innerText.includes('Analyzing') || btn.innerText.includes('Decoding')) {
+                            btn.innerText = mode === 'LLM' ? 'Analyze with LLM' : mode;
+                        }
+                    }
+                } catch (e) {
+                    console.error("Error decoding path:", e);
+                }
+            }
+        });
+    }
+
+    function resetFwButton(button) {
+        if (!button) return;
+        button.classList.remove('disabled');
+        button.innerText = 'Parse';
+    }
+
+    function resetBtButton(button) {
+        if (!button) return;
+        button.classList.remove('disabled');
+
+        const mode = (button.getAttribute('data-mode') || '').trim();
+        if (!mode) return;
+
+        if (mode === 'LLM') {
+            button.innerText = 'Analyze with LLM';
+            return;
+        }
+
+        button.innerText = mode;
+    }
+
+    function normalizeClientPath(path) {
+        return String(path || '').replace(/\\/g, '/');
+    }
+
+    function findFwButtonByEncodedPath(fwPathEncoded) {
+        return document.querySelector(`button[onclick="startFwAnalysis(this, '${fwPathEncoded}')"]`);
+    }
+
+    function isMatchingFwAnalysisEvent(pending, msg) {
+        if (!pending || !msg) return false;
+        if (pending.taskId && msg.task_id) {
+            return pending.taskId === msg.task_id;
+        }
+
+        const pendingPath = decodeURIComponent(pending.fwPathEncoded || '');
+        const messagePath = msg.fw_path || '';
+        if (pendingPath && messagePath) {
+            return normalizeClientPath(pendingPath) === normalizeClientPath(messagePath);
+        }
+
+        return false;
+    }
+
+    function cancelPendingFwAnalysis(silent = true) {
+        const pending = window.pendingFwAnalysis;
+        if (!pending || !pending.taskId) {
+            return Promise.resolve(false);
+        }
+
+        const taskId = pending.taskId;
+        const button = pending.button;
+        window.pendingFwAnalysis = null;
+        resetFwButton(button);
+
+        return fetch(FW_CANCEL_URL, {
+            method: 'POST',
+            headers: { 'Content-Type': 'application/json' },
+            body: JSON.stringify({ task_id: taskId })
+        })
+            .then(() => true)
+            .catch(err => {
+                if (!silent) {
+                    console.error('FW cancel request failed:', err);
+                }
+                return false;
+            });
+    }
+
+    function cancelFwAndNavigate(targetUrl) {
+        cancelPendingFwAnalysis().finally(() => {
+            window.location.href = targetUrl;
+        });
+    }
 
     function startFwAnalysis(button, fwPathEncoded) {
         if (button.classList.contains('disabled')) return;
 
-        button.classList.add('disabled');
-        button.innerText = 'Parsing...';
+        reconnectProgressSocket();
+
+        cancelPendingFwAnalysis().finally(() => {
+            button.classList.add('disabled');
+            button.innerText = 'Analyzing...';
+
+            window.pendingFwAnalysis = {
+                taskId: null,
+                fwPathEncoded: fwPathEncoded,
+                button: button
+            };
+
+            const decoded = decodeURIComponent(fwPathEncoded);
+            appendLog(`\n\n🚀 Starting FW Analysis: ${decoded}\n`);
+
+            fetch(`${FW_ETL_ANALYSIS_URL}?fw_path=${fwPathEncoded}`)
+                .then(res => res.json())
+                .then(data => {
+                    if (!data.ok || !data.task_id) {
+                        const wasPending = Boolean(
+                            window.pendingFwAnalysis
+                            && window.pendingFwAnalysis.fwPathEncoded === fwPathEncoded
+                        );
+                        window.pendingFwAnalysis = null;
+                        resetFwButton(button);
+                        if (wasPending) {
+                            const reason = data.error || 'precheck failed';
+                            appendLog(`⚠️ FW analysis rejected: ${reason}\n`, 'red');
+                        }
+                        return;
+                    }
+
+                    if (window.pendingFwAnalysis && window.pendingFwAnalysis.fwPathEncoded === fwPathEncoded) {
+                        window.pendingFwAnalysis.taskId = data.task_id;
+                    }
+                })
+                .catch(err => {
+                    console.error(err);
+                    window.pendingFwAnalysis = null;
+                    appendLog(`❌ FW analysis start failed: ${decoded}\n`, 'red');
+                    resetFwButton(button);
+                });
+        });
+    }
+
+    function handleFwAnalysisComplete(msg) {
+        const pending = window.pendingFwAnalysis;
+        if (!pending) return;
+        if (!isMatchingFwAnalysisEvent(pending, msg)) return;
+
+        const { button, taskId, fwPathEncoded } = pending;
+        window.pendingFwAnalysis = null;
+        resetFwButton(button);
 
         const decoded = decodeURIComponent(fwPathEncoded);
+        appendLog(`✅ FW analysis complete: ${decoded}\n`);
 
-        // jump to fw_analysis.html with fw_path para
-        window.location.href = `${FW_ETL_ANALYSIS_URL}?fw_path=${fwPathEncoded}`;
+        // window.location.href = `${FW_RESULT_URL}?task_id=${encodeURIComponent(taskId)}`;
     }
 
     const CHATBOT_PREPARE_URL = "{{ url_for('log_chatbot.prepare') }}";
@@ -813,8 +1714,8 @@
         const selectedEncoded = getSelectedDddEtlEncoded();
         const selectedText = document.getElementById('selected-ddd-etl-text');
         const analyzeBtn = document.getElementById('ddd-action-analyze');
-        const llmBtn = document.getElementById('ddd-action-llm');
-        const chatbotBtn = document.getElementById('ddd-action-chatbot');
+        // const llmBtn = document.getElementById('ddd-action-llm');
+        // const chatbotBtn = document.getElementById('ddd-action-chatbot');
 
         if (selectedText) {
             selectedText.innerText = selectedEncoded ? decodeURIComponent(selectedEncoded) : 'None';
@@ -827,6 +1728,7 @@
         }
 
         const hasSelection = !!selectedEncoded;
+        console.log("DDD selection changed. Encoded:", selectedEncoded, "Has selection?", hasSelection);
         if (analyzeBtn) analyzeBtn.disabled = !hasSelection;
     }
 
@@ -834,8 +1736,8 @@
         const selectedEncoded = getSelectedFwEncoded();
         const selectedText = document.getElementById('selected-fw-etl-text');
         const analyzeBtn = document.getElementById('fw-action-analyze');
-        const llmBtn = document.getElementById('fw-action-llm');
-        const chatbotBtn = document.getElementById('fw-action-chatbot');
+        // const llmBtn = document.getElementById('fw-action-llm');
+        // const chatbotBtn = document.getElementById('fw-action-chatbot');
 
         if (selectedText) {
             selectedText.innerText = selectedEncoded ? decodeURIComponent(selectedEncoded) : 'None';
@@ -889,10 +1791,11 @@
             return;
         }
 
-        if (actionType === 'parse') {
+        if (actionType === 'analysis') {
             window.pendingDddAnalyze = true;
             setDddActionButtonsBusy(true, 'ddd-action-analyze');
-            startAnalysis(button, selectedEncoded);
+            const evtPath = decodeURIComponent(selectedEncoded);
+            eventAnalysis(button, evtPath);
             return;
         }
     }
@@ -950,7 +1853,7 @@
     function setDddActionButtonsBusy(isBusy, activeButtonId = null) {
         window.dddActionsBusy = !!isBusy;
         const defaultLabels = {
-            'ddd-action-analyze': 'Parse'
+            'ddd-action-analyze': 'Event Analysis'
         };
         const buttonIds = ['ddd-action-analyze'];
         buttonIds.forEach(id => {
@@ -1044,19 +1947,19 @@
 
     function updateBtActionButtons() {
         const selectedEncoded = getSelectedBtEncoded();
-        const autoFileBtn = document.getElementById('bt-action-autofile');
         const autoFolderBtn = document.getElementById('bt-action-autofolder');
         const manualBtn = document.getElementById('bt-action-manual');
+        const llmBtn = document.getElementById('bt-action-llm');
 
         if (window.btActionsBusy) {
-            if (autoFileBtn) autoFileBtn.disabled = true;
+            if (llmBtn) llmBtn.disabled = true;
             if (autoFolderBtn) autoFolderBtn.disabled = true;
             if (manualBtn) manualBtn.disabled = true;
             return;
         }
 
         const hasSelection = !!selectedEncoded;
-        if (autoFileBtn) autoFileBtn.disabled = !hasSelection;
+        if (llmBtn) llmBtn.disabled = !hasSelection;
         if (autoFolderBtn) autoFolderBtn.disabled = !hasSelection;
         if (manualBtn) manualBtn.disabled = !hasSelection;
     }
@@ -1072,17 +1975,21 @@
 
         window.pendingBtAnalyze = true;
         setBtActionButtonsBusy(true, button.id);
-        startAnalysis(button, selectedEncoded, mode);
+        if (mode === 'LLM') {
+            startBtLogParser(button, selectedEncoded);
+        } else {
+            startAnalysis(button, selectedEncoded, mode);
+        }
     }
 
     function setBtActionButtonsBusy(isBusy, activeButtonId = null) {
         window.btActionsBusy = !!isBusy;
         const defaultLabels = {
-            'bt-action-autofile': 'AutoFile',
+            'bt-action-llm': 'Analyze with LLM',
             'bt-action-autofolder': 'AutoFolder',
             'bt-action-manual': 'Manual'
         };
-        const buttonIds = ['bt-action-autofile', 'bt-action-autofolder', 'bt-action-manual'];
+        const buttonIds = ['bt-action-llm', 'bt-action-autofolder', 'bt-action-manual'];
         buttonIds.forEach(id => {
             const btn = document.getElementById(id);
             if (!btn) return;
@@ -1119,6 +2026,15 @@
         updateBtActionButtons();
         updateDddActionButtons();
         updateFwActionButtons();
+
+        // auto-load event table
+        const body = document.body;
+        const latestEvtPath = body.getAttribute('data-latest-evt-path');
+        
+        if (latestEvtPath && latestEvtPath.trim()) {
+            console.log(`[Auto-Init] Loading latest evt file: ${latestEvtPath}`);
+            loadEventLog(latestEvtPath);
+        }
     });
 
     // Auto-refresh page when returning via browser back button
@@ -1126,8 +2042,129 @@
         if (event.persisted) {
             // Page was restored from back/forward cache - reload to reset all button states
             location.reload();
+            reconnectProgressSocket(true);
         }
+
+        document.querySelectorAll("button[onclick^=\"startFwAnalysis\"]").forEach(btn => {
+            if ((btn.innerText || '').includes('Analyzing')) {
+                resetFwButton(btn);
+            }
+        });
+
+        document.querySelectorAll('button[data-mode="Manual"], button[data-mode="AutoFolder"], button[data-mode="LLM"]').forEach(btn => {
+            const text = btn.innerText || '';
+            if (text.includes('Decoding') || text.includes('Analyzing')) {
+                resetBtButton(btn);
+            }
+        });
     });
+
+
+    function handleFwAnalysisCancelled(msg) {
+        const pending = window.pendingFwAnalysis;
+        if (!pending) return;
+        if (!isMatchingFwAnalysisEvent(pending, msg)) return;
+
+        const { button, fwPathEncoded } = pending;
+        window.pendingFwAnalysis = null;
+        resetFwButton(button);
+
+        const decoded = decodeURIComponent(fwPathEncoded);
+        appendLog(`⏹ FW analysis canceled: ${decoded}\n`, 'red');
+    }
+
+    function handleFwAnalysisFailed(msg) {
+        const pending = window.pendingFwAnalysis;
+        if (!pending) return;
+        if (!isMatchingFwAnalysisEvent(pending, msg)) return;
+
+        const { button, fwPathEncoded } = pending;
+        window.pendingFwAnalysis = null;
+        resetFwButton(button);
+
+        const decoded = decodeURIComponent(fwPathEncoded);
+        appendLog(`❌ FW analysis failed: ${decoded} (${msg.error || 'unknown error'})\n`, 'red');
+    }
+
+    function handleFwAnalysisWarning(msg) {
+        const pending = window.pendingFwAnalysis;
+        if (!pending) return;
+        if (!isMatchingFwAnalysisEvent(pending, msg)) return;
+
+        appendLog(`⚠️ FW analysis warning: ${msg.error || 'precheck failed'}\n`, 'red');
+    }
+
+    // window.addEventListener('pageshow', function(event) {
+    //     if (event.persisted) {
+    //         reconnectProgressSocket(true);
+    //     }
+
+    //     document.querySelectorAll("button[onclick^=\"startFwAnalysis\"]").forEach(btn => {
+    //         if ((btn.innerText || '').includes('Analyzing')) {
+    //             resetFwButton(btn);
+    //         }
+    //     });
+
+    //     document.querySelectorAll('button[data-mode="Manual"], button[data-mode="AutoFolder"], button[data-mode="LLM"]').forEach(btn => {
+    //         const text = btn.innerText || '';
+    //         if (text.includes('Decoding') || text.includes('Analyzing')) {
+    //             resetBtButton(btn);
+    //         }
+    //     });
+    // });
+
+    window.addEventListener('beforeunload', function() {
+        cancelPendingFwAnalysis();
+    });
+
+    // Combined function: Dumps TXT file AND loads to UI
+    function eventAnalysis(button, evtPath) {
+        button.innerText = 'Analyzing...';
+
+        // 1. Load data to UI Table immediately
+        loadEventLog(evtPath);
+
+        // 2. Trigger background Dump request
+        postJson('/dump_event_txt', { path: evtPath })
+        .then(response => response.json())
+        .then(data => {
+            if (data.success) {
+                appendLog(`✅ Event TXT dump success\n`);
+                appendLog(`📂 TXT path: ${data.txt_path || '(empty path)'}\n`);
+               
+            } else {
+                console.error('Dump failed:', data.error);
+                appendLog(`❌ Event TXT dump failed\n`, 'red');
+                appendLog(`📂 Source EVT path: ${evtPath}\n`, 'red');
+                appendLog(`🧾 Reason: ${data.error || 'unknown error'}\n`, 'red');
+                
+                alert('Error: Dump failed - ' + data.error);
+            }
+        })
+        .catch(err => {
+            console.error('Error:', err);
+            appendLog(`❌ Event TXT dump request error\n`, 'red');
+            appendLog(`📂 Source EVT path: ${evtPath}\n`, 'red');
+            appendLog(`🧾 Reason: ${err}\n`, 'red');
+           
+            alert('Error: A network error occurred during analysis.');
+        })
+        .finally(() => {
+            window.pendingDddAnalyze = false;
+            setDddActionButtonsBusy(false);
+        });
+    }
+
+    // // Auto-load event table for the latest evt file when page loads
+    // document.addEventListener('DOMContentLoaded', function() {
+    //     const body = document.body;
+    //     const latestEvtPath = body.getAttribute('data-latest-evt-path');
+        
+    //     if (latestEvtPath && latestEvtPath.trim()) {
+    //         console.log(`[Auto-Init] Loading latest evt file: ${latestEvtPath}`);
+    //         loadEventLog(latestEvtPath);
+    //     }
+    // });
 
     </script>
 </body>

@@ -6,6 +6,9 @@ import hmac
 import logging
 import re
 import shutil
+import traceback
+import markdown
+import bleach
 from urllib.parse import unquote
 from werkzeug.utils import secure_filename
 
@@ -13,6 +16,7 @@ from utils import helpers, attachment_decompose
 from configs.global_configs import app_config
 from configs.path_configs import LOG_PARSER_DIR, LOAD_PATH_prim, LOAD_PATH_bkup
 from models.models import CaseContext
+from utils.log_parser_preprocess import extract_all_keywords_from_filter_file
 
 from services.log_parser_file_manage_service import FileManagerService
 from services.log_parser_service import LogParserService
@@ -22,6 +26,27 @@ log_parser_bp = Blueprint("log_parser", __name__, url_prefix="/log_parser")
 
 log_parser_service = LogParserService()
 file_manager_service = FileManagerService()
+
+_SAFE_MARKDOWN_TAGS = [
+    'p', 'br', 'strong', 'em', 'code', 'pre',
+    'h1', 'h2', 'h3', 'h4', 'h5', 'h6',
+    'ul', 'ol', 'li',
+    'table', 'thead', 'tbody', 'tr', 'td', 'th',
+    'blockquote', 'a'
+]
+
+
+def _render_safe_markdown_html(text: str) -> str:
+    html = markdown.markdown(
+        text,
+        extensions=["fenced_code", "tables", "nl2br", "sane_lists", "codehilite"]
+    )
+    return bleach.clean(
+        html,
+        tags=_SAFE_MARKDOWN_TAGS,
+        attributes={'a': ['href']},
+        strip=True,
+    )
 
 #------------Section for Local dmp file upload bar -------------#
 def _copy_file_with_console_progress(src_path: str, dst_path: str, chunk_size: int = 4 * 1024 * 1024) -> None:
@@ -430,6 +455,47 @@ def verify_sendto_token():
     })
 
 
+@log_parser_bp.route("/get_filter_details", methods=["POST"])
+def get_filter_details():
+    """Return all keywords from a single .tat file with their enabled status."""
+    data = request.get_json()
+    filter_file = data.get('filter_file', '')
+    if not filter_file:
+        return jsonify({'success': False, 'message': 'No filter file specified'})
+    
+    filter_path = os.path.join(LOG_PARSER_DIR, "filter", filter_file)
+    if not os.path.exists(filter_path):
+        return jsonify({'success': False, 'message': f'Filter file not found: {filter_file}'})
+    
+    try:
+        keywords = extract_all_keywords_from_filter_file(filter_path)
+        return jsonify({'success': True, 'keywords': keywords})
+    except Exception as e:
+        return jsonify({'success': False, 'message': f'Failed to read filter: {str(e)}'})
+
+
+@log_parser_bp.route("/get_all_filter_details", methods=["POST"])
+def get_all_filter_details():
+    """Return ALL .tat files with ALL their keywords and enabled status."""
+    filter_dir = os.path.join(LOG_PARSER_DIR, "filter")
+    if not os.path.exists(filter_dir):
+        return jsonify({'success': False, 'message': 'Filter directory not found'})
+    
+    try:
+        tat_files = sorted([f for f in os.listdir(filter_dir) if f.endswith('.tat')])
+        all_filters = []
+        for tat_file in tat_files:
+            tat_path = os.path.join(filter_dir, tat_file)
+            keywords = extract_all_keywords_from_filter_file(tat_path)
+            all_filters.append({
+                'file': tat_file,
+                'keywords': keywords
+            })
+        return jsonify({'success': True, 'filters': all_filters})
+    except Exception as e:
+        return jsonify({'success': False, 'message': f'Failed to load filters: {str(e)}'})
+
+
 @log_parser_bp.route("/edit_prompt", methods=["POST"])
 def edit_prompt():
     data = request.get_json()
@@ -493,7 +559,23 @@ def estimate_tokens():
 def register_socketio_handlers(socketio):
     @socketio.on('submit_analysis', namespace='/progress')
     def socketio_submit_analysis(data):
-        return handle_submit_analysis(data)
+        print("✅ Received socket event 'submit_analysis':", data)
+        return handle_submit_analysis(data, socketio)
+
+    @socketio.on('chat_message', namespace='/progress')
+    def socketio_chat_message(data):
+        print("💬 Received chat_message:", data)
+        return handle_chat_message(data, socketio)
+
+    @socketio.on('chat_message_with_filter', namespace='/progress')
+    def socketio_chat_message_with_filter(data):
+        print("💬 Received chat_message_with_filter:", data)
+        return handle_chat_message_with_filter(data, socketio)
+
+    @socketio.on('reset_log_parser_session', namespace='/progress')
+    def socketio_reset_log_parser_session():
+        print("♻️ Received reset_log_parser_session")
+        return handle_reset_log_parser_session(request.sid, socketio)
 
 
 #------------Llog parser render -------------#
@@ -522,6 +604,17 @@ def render_log_parser_form():
 
     should_auto_analyze, auto_analysis_data = log_parser_service.check_auto_analysis_availability(classification)
 
+    # BT LLM flow: caller may supply explicit filter/prompt to override auto-detection
+    preselect_filter = request.args.get('preselect_filter', '').strip()
+    preselect_prompt = request.args.get('preselect_prompt', '').strip()
+    if preselect_filter and preselect_prompt:
+        should_auto_analyze = True
+        auto_analysis_data = {
+            'filter_file': preselect_filter,
+            'prompt_file': preselect_prompt,
+            'issue_type': 'bt_hci',
+        }
+
     latest_etl_path = request.args.get('latest_etl_path', None) or session.get('latest_etl_path', None)
     if latest_etl_path:
         etl_path_input = latest_etl_path
@@ -529,11 +622,18 @@ def render_log_parser_form():
         etl_path_encoded = request.args.get('etl_path', '')
         etl_path_input = unquote(etl_path_encoded)
 
+    # Accept .log and .txt (incl. .hci.txt from BT HCI decode) as direct log files
+    _is_direct_log = (
+        etl_path_input
+        and os.path.exists(etl_path_input)
+        and (etl_path_input.lower().endswith('.log') or etl_path_input.lower().endswith('.txt'))
+    )
+    
     if session.get('local_in_place') and etl_path_input:
         # In-place mode: output is already in source dir, no copy needed.
         candidate = etl_path_input if etl_path_input.lower().endswith('.log') else etl_path_input + '.log'
         log_path = candidate if os.path.exists(candidate) else None
-    elif etl_path_input and etl_path_input.lower().endswith('.log') and os.path.exists(etl_path_input):
+    elif _is_direct_log:
         log_path = os.path.join(output_dir, os.path.basename(etl_path_input))
         shutil.copy2(etl_path_input, log_path)
     else:
@@ -544,7 +644,6 @@ def render_log_parser_form():
     available_filters, (available_prompts, available_custom_prompts) = log_parser_service.get_available_resources()
 
     result = log_parser_service.analysis_result
-    
     return render_template('log_parser.html', 
                           classification=json.dumps(classification),
                           should_auto_analyze=should_auto_analyze,
@@ -553,26 +652,45 @@ def render_log_parser_form():
                           log_output_path=result.get('log_output_path'), 
                           available_filters=available_filters,
                           available_prompts=available_prompts,
-                          available_custom_prompts=available_custom_prompts)
+                          available_custom_prompts=available_custom_prompts,
+                          log_path=log_path)
 
 
-def handle_submit_analysis(data):
+def handle_submit_analysis(data, socketio=None):
     print("Received analysis submission:", data)
     
     log_path = session.get('log_path', '')
+    output_dir = session.get('logparser_output_dir', '')
     selected_filter = data.get('filter_file')
     custom_prompt_content = data.get('prompt_content')
+    
+    print(f"📋 Validation data:")
+    print(f"   - log_path: {log_path}")
+    print(f"   - output_dir: {output_dir}")
+    print(f"   - filter: {selected_filter}")
+    print(f"   - prompt length: {len(custom_prompt_content) if custom_prompt_content else 0}")
     
     is_valid, error_message = log_parser_service.validate_analysis_inputs(
         log_path, selected_filter, custom_prompt_content
     )
     
     if not is_valid:
-        app_config.socketio.emit('validation_error', {'message': error_message})
+        print(f"❌ Validation failed: {error_message}")
+        if socketio:
+            socketio.emit('validation_error', {'message': error_message}, namespace='/progress')
+        else:
+            app_config.socketio.emit('validation_error', {'message': error_message})
         return
+    
+    # Check if user sent custom keyword selections
+    custom_keywords = data.get('custom_keywords', None)
     
     try:
         filter_path = os.path.join(LOG_PARSER_DIR, "filter", selected_filter)
+        print(f"📂 Filter path: {filter_path}")
+        if custom_keywords is not None:
+            print(f"🔧 Using {len(custom_keywords)} user-selected keywords")
+        print(f"📖 Starting analysis...")
         
         # Get case description from session
         case_context_dict = session.get('case_context', {})
@@ -584,7 +702,143 @@ def handle_submit_analysis(data):
         )
         
         if not success:
-            app_config.socketio.emit('analysis_error', {'message': 'Failed to start analysis'})
+            print("❌ Analysis failed to start")
+            if socketio:
+                socketio.emit('analysis_error', {'message': 'Failed to start analysis'}, namespace='/progress')
+            else:
+                app_config.socketio.emit('analysis_error', {'message': 'Failed to start analysis'})
         
     except Exception as e:
-        app_config.socketio.emit('analysis_error', {'message': f'Failed to start analysis: {str(e)}'})
+        print(f"❌ Exception during analysis: {str(e)}")
+        traceback.print_exc()
+        if socketio:
+            socketio.emit('analysis_error', {'message': f'Failed to start analysis: {str(e)}'}, namespace='/progress')
+        else:
+            app_config.socketio.emit('analysis_error', {'message': f'Failed to start analysis: {str(e)}'})
+
+
+def handle_chat_message(data, socketio=None):
+    """Handle a chat message from the user, forward to LLM, return reply."""
+    user_message = data.get('message', '').strip()
+    if not user_message:
+        emit_fn = socketio or app_config.socketio
+        emit_fn.emit('chat_error', {'message': 'Empty message'}, namespace='/progress')
+        return
+
+    print(f"💬 User message: {user_message}")
+
+    # Check if analysis has been run (conversation history exists)
+    if not log_parser_service.conversation_history:
+        emit_fn = socketio or app_config.socketio
+        emit_fn.emit('chat_error', {'message': 'Please run analysis first before chatting.'}, namespace='/progress')
+        return
+
+    try:
+        llm_helper = app_config.llm_helper
+        if llm_helper is None:
+            emit_fn = socketio or app_config.socketio
+            emit_fn.emit('chat_error', {'message': 'LLM helper is not available.'}, namespace='/progress')
+            return
+
+        reply = log_parser_service.handle_chat_message(user_message, llm_helper)
+        reply_html = _render_safe_markdown_html(reply)
+
+        print(f"💬 LLM reply length: {len(reply)}")
+
+        emit_fn = socketio or app_config.socketio
+        emit_fn.emit('chat_response', {
+            'message': reply,
+            'message_html': reply_html
+        }, namespace='/progress')
+
+    except Exception as e:
+        print(f"❌ Chat error: {str(e)}")
+        traceback.print_exc()
+        emit_fn = socketio or app_config.socketio
+        emit_fn.emit('chat_error', {'message': f'Chat failed: {str(e)}'}, namespace='/progress')
+
+
+def handle_chat_message_with_filter(data, socketio=None):
+    """Handle a chat message with user-selected filter keywords.
+    
+    Re-filters the raw log with the selected keywords, preprocesses it,
+    and sends it along with the user's instruction to the LLM as a new chat message.
+    """
+    user_message = data.get('message', '').strip()
+    selected_keywords = data.get('keywords', [])
+    
+    emit_fn = socketio or app_config.socketio
+    
+    if not user_message:
+        emit_fn.emit('chat_error', {'message': 'Empty message'}, namespace='/progress')
+        return
+    
+    if not selected_keywords:
+        emit_fn.emit('chat_error', {'message': 'No filter keywords selected'}, namespace='/progress')
+        return
+
+    # Check that raw log lines exist (analysis must have been run)
+    if not log_parser_service.raw_log_lines:
+        emit_fn.emit('chat_error', {'message': 'Please run analysis first. No raw log available.'}, namespace='/progress')
+        return
+
+    print(f"💬 User message with filter: {user_message}")
+    print(f"🔧 Selected {len(selected_keywords)} keywords for re-filtering")
+
+    try:
+        llm_helper = app_config.llm_helper
+        if llm_helper is None:
+            emit_fn.emit('chat_error', {'message': 'LLM helper is not available.'}, namespace='/progress')
+            return
+
+        # Re-filter and preprocess the raw log with user-selected keywords
+        from utils.log_parser_preprocess import filter_log_by_keywords, preprocess_log_for_llm, group_similar_logs
+        filtered_log = filter_log_by_keywords(log_parser_service.raw_log_lines, selected_keywords)
+        processed_lines = preprocess_log_for_llm(filtered_log)
+        grouped = group_similar_logs(processed_lines)
+        filtered_content = str(grouped)
+        
+        print(f"📋 Re-filtered: {len(log_parser_service.raw_log_lines)} raw lines → {len(filtered_log)} filtered → {len(grouped)} grouped")
+
+        # Build the enhanced message with re-filtered log content
+        enhanced_message = f"""I have re-filtered the raw log with the following keywords: {', '.join(selected_keywords)}
+
+Here are the re-filtered and preprocessed log entries:
+{filtered_content}
+
+Based on these re-filtered logs, please respond to my instruction:
+{user_message}"""
+
+        # Must have conversation history (analysis must have been run)
+        if not log_parser_service.conversation_history:
+            log_parser_service.chat_system_prompt = "You are an expert log analyzer."
+            log_parser_service.conversation_history = []
+
+        reply = log_parser_service.handle_chat_message(enhanced_message, llm_helper)
+        
+        reply_html = _render_safe_markdown_html(reply)
+
+        print(f"💬 LLM reply length: {len(reply)}")
+
+        emit_fn.emit('chat_response', {
+            'message': reply,
+            'message_html': reply_html
+        }, namespace='/progress')
+
+    except Exception as e:
+        print(f"❌ Chat with filter error: {str(e)}")
+        traceback.print_exc()
+        emit_fn.emit('chat_error', {'message': f'Chat failed: {str(e)}'}, namespace='/progress')
+
+
+def handle_reset_log_parser_session(client_sid: str, socketio=None):
+    """Reset in-memory log parser/chat state for a fresh analysis session."""
+    emit_fn = socketio or app_config.socketio
+    try:
+        log_parser_service.reset_log_parser()
+        emit_fn.emit('session_reset', {'success': True}, namespace='/progress', to=client_sid)
+    except Exception as e:
+        emit_fn.emit('session_reset', {
+            'success': False,
+            'message': f'Failed to reset session: {str(e)}'
+        }, namespace='/progress', to=client_sid)

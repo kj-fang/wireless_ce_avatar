@@ -10,7 +10,13 @@ import subprocess, glob
 active_bt_pid = None
 
 
-def open_with_text_analysis_tool(file_path: str) -> bool:
+def reset_active_bt_pid():
+    """Reset the cached BT tool PID (e.g. after force-killing the process)."""
+    global active_bt_pid
+    active_bt_pid = None
+
+
+def open_with_text_analysis_tool(file_path: str, filter_path: str = None) -> bool:
     """
     Open a generated .hci.txt file using TextAnalysisTool.NET.
 
@@ -42,9 +48,13 @@ def open_with_text_analysis_tool(file_path: str) -> bool:
         print(f"❌ File not found: {file_path}")
         return False
 
-    # Launch the viewer with the file path as an argument.
+    # Launch the viewer with file path and optional precomputed filter path.
+    cmd = [exe_path, file_path]
+    if filter_path and os.path.exists(filter_path):
+        cmd.append(f"/Filters:{filter_path}")
+
     try:
-        subprocess.Popen([exe_path, file_path])
+        subprocess.Popen(cmd)
         print(f"✅ Opened with TextAnalysisTool.NET: {file_path}")
         return True
     except Exception as e:
@@ -113,11 +123,109 @@ def close_error_dialog() -> None:
         print("⚠️ Failed to close error dialog:", e)
 
 
+def bt_decode_hci_via_folder(log_folder_path: str, log_path: str, timeout: int = 180) -> str:
+    """
+    Decode an ETL folder via the 'BT Driver Log Parser' tab (same as AutoFolder mode)
+    but WITHOUT opening TextAnalysisTool.NET.
+
+    Used by the LLM analysis flow: decodes the folder, waits for the specific
+    <log_path>.hci.txt to appear, then returns its path so the caller can pass
+    it directly to the log_parser / LLM pipeline.
+
+    Args:
+        log_folder_path: Directory that contains the ETL file(s) to decode.
+        log_path:        Full path of the target ETL file (without .hci.txt suffix).
+                         The function waits for '<log_path>.hci.txt'.
+        timeout:         Max seconds to wait for the output file.
+
+    Returns:
+        str path to the generated .hci.txt, or None on failure / timeout.
+    """
+    # If hci.txt already exists and is ready, return it immediately
+    hci_txt = log_path + ".hci.txt"
+    if os.path.exists(hci_txt) and is_file_ready(hci_txt):
+        print(f"✅ HCI log already exists and is ready: {hci_txt}")
+        return hci_txt
+
+    global active_bt_pid
+
+    exe_path = os.path.abspath(os.path.join(os.path.dirname(__file__), 'ibtdrvlogparser.exe'))
+    if not os.path.exists(exe_path):
+        print(f"❌ Executable not found: {exe_path}")
+        return None
+
+    app = None
+
+    # Reuse existing tool if possible
+    if active_bt_pid and psutil.pid_exists(active_bt_pid):
+        try:
+            app = Application(backend='uia').connect(process=active_bt_pid)
+            print(f"🔁 Reusing BT tool instance (PID: {active_bt_pid})")
+        except Exception as e:
+            print(f"⚠️ Reconnect failed: {e}")
+            active_bt_pid = None
+
+    if not app:
+        app = Application(backend="uia").start(exe_path)
+        active_bt_pid = app.process
+        print(f"🚀 Launched BT tool: {exe_path} (PID: {active_bt_pid})")
+        time.sleep(0.5)
+
+    try:
+        app_window = app.top_window()
+    except Exception as e:
+        print(f"❌ Failed to get app window: {e}")
+        return None
+
+    # Switch to 'BT Driver Log Parser' tab (same as AutoFolder mode)
+    try:
+        bt_tab = app_window.child_window(
+            title="BT Driver Log Parser", control_type="TabItem"
+        ).wrapper_object()
+        bt_tab.select()
+        print("✅ Selected 'BT Driver Log Parser' tab.")
+        time.sleep(1)
+    except Exception as e:
+        print(f"❌ Failed to select 'BT Driver Log Parser' tab: {e}")
+
+    # Set folder path
+    try:
+        folder_input = app_window.child_window(auto_id="txt_parse_folder", control_type="Edit")
+        folder_input.set_edit_text(log_folder_path)
+        print(f"✅ Folder path set: {log_folder_path}")
+    except Exception as e:
+        print(f"❌ Failed to set folder path: {e}")
+
+    # Click 'Decode Folder'
+    try:
+        decode_btn = app_window.child_window(auto_id="btn_parse_decode", control_type="Button")
+        decode_btn.invoke()
+        print("✅ Decode Folder triggered.")
+    except Exception as e:
+        print(f"❌ Failed to trigger Decode Folder: {e}")
+
+    # Poll for <log_path>.hci.txt with timeout (same logic as bt_analysis_autoFolder_mode)
+    print(f"⏳ Waiting for HCI output (timeout={timeout}s): {hci_txt}")
+
+    for _ in range(timeout):
+        if not psutil.pid_exists(active_bt_pid):
+            print("❌ BT tool closed unexpectedly during HCI wait.")
+            active_bt_pid = None
+            return None
+        close_error_dialog()
+        if os.path.exists(hci_txt) and is_file_ready(hci_txt):
+            print(f"✅ HCI log ready: {hci_txt}")
+            return hci_txt
+        time.sleep(1)
+
+    print(f"⚠️ Timed out ({timeout}s) waiting for HCI log: {hci_txt}")
+    return None
 
 
 def bt_analysis_autoFile_mode(
     log_path: str,
-    debug: bool = False
+    debug: bool = False,
+    filter_path: str = None
     
 ) -> None:
     """
@@ -361,7 +469,7 @@ def bt_analysis_autoFile_mode(
             found_file = files[0]
             if is_file_ready(found_file):
                 print(f"📂 HCI log is ready: {found_file}")
-                if open_with_text_analysis_tool(found_file):
+                if open_with_text_analysis_tool(found_file, filter_path=filter_path):
                     break  # Stop once opened
             else:
                 print(f"⚠️ File exists but still being written: {found_file}")
@@ -375,7 +483,7 @@ def bt_analysis_manualSelect_mode(
     log_path: str,
     debug: bool = False,
     wait_hci_timeout: int = 180
-) -> None:
+) -> int:
     """
     Prepare the 'IbtSnoopgen' tab and populate the ETL path for manual follow-up.
 
@@ -388,13 +496,16 @@ def bt_analysis_manualSelect_mode(
         log_path: Absolute path to the ETL file to decode.
         debug: If True, dumps the control tree for troubleshooting.
         wait_hci_timeout: Reserved for future use.
+
+    Returns:
+        int: The process ID (PID) of the BT tool.
     """
     global active_bt_pid
 
     exe_path = os.path.abspath(os.path.join(os.path.dirname(__file__), 'ibtdrvlogparser.exe'))
     if not os.path.exists(exe_path):
         print(f"❌ Executable not found: {exe_path}")
-        return
+        return None
 
     app = None
 
@@ -472,15 +583,19 @@ def bt_analysis_manualSelect_mode(
             time.sleep(1)
     if not folder_set:
         print("❌ Failed to set ETL path after multiple retries.")
-        return
+        return active_bt_pid
+    
+    return active_bt_pid
 
 
 def bt_analysis_autoFolder_mode(
     log_folder_path: str,
     log_path: str,
     debug: bool = False,
-    wait_hci_timeout: int = 15
-) -> None:
+    wait_hci_timeout: int = 15,
+    should_stop: callable = None,
+    filter_path: str = None
+) -> int:
     """
     Decode an entire folder via the 'BT Driver Log Parser' tab and open the target .hci.txt.
 
@@ -497,6 +612,10 @@ def bt_analysis_autoFolder_mode(
                   The function waits for '<log_path>.hci.txt'.
         debug: If True, prints control identifiers for debugging.
         wait_hci_timeout: (Currently unused) intended for adding a timeout later.
+        should_stop: Optional callable that returns True if this operation should be aborted.
+
+    Returns:
+        int: The process ID (PID) of the BT tool, or None if failed/aborted.
 
     Notes:
         - Uses the same attach-or-launch pattern as other functions.
@@ -508,7 +627,7 @@ def bt_analysis_autoFolder_mode(
     exe_path = os.path.abspath(os.path.join(os.path.dirname(__file__), 'ibtdrvlogparser.exe'))
     if not os.path.exists(exe_path):
         print(f"❌ Executable not found: {exe_path}")
-        return
+        return None
 
     app = None
 
@@ -533,7 +652,8 @@ def bt_analysis_autoFolder_mode(
         app_window = app.top_window()
     except Exception as e:
         print(f"❌ Failed to get app window: {e}")
-        return
+        active_bt_pid = None
+        return None
 
     if debug:
         print("🔎 Dumping all controls:")
@@ -571,6 +691,17 @@ def bt_analysis_autoFolder_mode(
     retry_count = 0
 
     while True:
+        # Check if this operation was superseded by another
+        if should_stop and should_stop():
+            print("⚠️ AutoFolder operation superseded, stopping wait.")
+            return None
+
+        # Check if process is still alive
+        if not psutil.pid_exists(active_bt_pid):
+            print("❌ BT tool closed during HCI wait.")
+            active_bt_pid = None
+            return None
+
         # Proactively close any modal error dialog that might appear
         close_error_dialog()
 
@@ -578,9 +709,13 @@ def bt_analysis_autoFolder_mode(
         if os.path.exists(hci_txt):
             if is_file_ready(hci_txt):
                 print(f"📂 HCI log is ready: {hci_txt}")
-                if open_with_text_analysis_tool(hci_txt):
-                    break
+                if open_with_text_analysis_tool(hci_txt, filter_path=filter_path):
+                    return active_bt_pid
 
         time.sleep(1)
         retry_count += 1
         # Optionally: enforce a timeout using wait_hci_timeout
+
+        if retry_count >= wait_hci_timeout:
+            print(f"⚠️ Waited {wait_hci_timeout} seconds for HCI log, giving up.")
+            return active_bt_pid

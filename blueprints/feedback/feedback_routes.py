@@ -143,8 +143,17 @@ def detail():
     # explicitly ticked "Attach session log" in the modal. The log path is
     # resolved server-side from the session so the client cannot designate
     # an arbitrary file for upload.
+    #
+    # Spelled out as an explicit if/else (instead of
+    # `session.get(...) or "" if attach_log else ""`) because the
+    # one-liner relies on `or` binding tighter than the ternary, which
+    # is correct today but reads as ambiguous and is easy to break in
+    # future edits.
     attach_log = bool(data.get("attach_log"))
-    log_path = session.get("chatbot_log_path", "") or "" if attach_log else ""
+    if attach_log:
+        log_path = session.get("chatbot_log_path", "") or ""
+    else:
+        log_path = ""
 
     # New high-ACE-value structured fields (replace the old free-form
     # `general_comment`). `general_comment` is still forwarded for

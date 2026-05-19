@@ -1,9 +1,11 @@
 from flask import Blueprint, render_template, request, session, redirect, url_for, flash, jsonify
 import os
 import subprocess
+from datetime import datetime
 
 from utils import helpers
-from utils.etl_utils import get_auto_analysis_etl, get_issue_time_from_selected_files, filter_folders_by_time, pick_latest_zip_attachment
+from utils.etl_utils import get_auto_analysis_etl, get_issue_time_from_selected_files, filter_folders_by_time, extract_timestamp_from_folder, pick_latest_zip_attachment
+from utils.fw_utils import load_fw_system_info
 from services.case_info_service import CaseService
 from models.models import CaseContext
 from services.llm_service import LLM_helper
@@ -38,8 +40,24 @@ def download_result():
 def download_result_bsod():
     return render_download_result_bsod_form()
 
+@main_bp.route('/open_path', methods=['POST'])
+def open_path():
+    return handle_open_path()
 
-#------------INDEX render/submission -------------#
+@main_bp.route('/dump_event_txt', methods=['POST'])
+def dump_event_txt():
+    return handle_dump_event_txt()
+
+@main_bp.route('/parse_event_log', methods=['POST'])
+def parse_event_log():
+    return handle_parse_event_log()
+
+@main_bp.route('/api/bt_event_map', methods=['GET'])
+def get_bt_event_map():
+    return handle_get_bt_event_map()
+
+
+#------------ INDEX render/submission -------------#
 
 def render_case_form():
     clipboard_text = helpers.get_clipboard_case_number()
@@ -48,8 +66,9 @@ def render_case_form():
                          clipboard_text=clipboard_text)
 
 def handle_case_submission():
-    """submit IPS number"""
+    """Submit IPS number"""
     case_nbr = request.form.get('case_number', '').strip().replace(" ", "")
+
     if not case_nbr:
         flash("❌ No case number provided.", "danger")
         return redirect(url_for('main.index'))
@@ -69,13 +88,15 @@ def handle_case_submission():
 
         session['bsod'] = False
         session['latest_etl_llm'] = False
+        session['debug_mode'] = False
+
         return redirect(url_for('main.select_attachments'))
-            
+
     except Exception as e:
         print(f"❌ Error processing case: {e}")
         flash("An error occurred while processing the case.", "danger")
         return redirect(url_for('main.index'))
-    
+
 #------------ETL+LLM Route-------------#
 @main_bp.route('/start_latest_etl_llm', methods=['POST'])
 def start_latest_etl_llm():
@@ -128,17 +149,23 @@ def start_latest_etl_llm():
         return jsonify({'success': False, 'message': 'An error occurred while processing the case.'}), 500
        
 
-#------------SELLECT ATTACHMENT render/submission -------------#
+#------------ SELECT ATTACHMENT render/submission -------------#
 
 def render_select_attachments_form():
-    case_context = session["case_context"]
+    case_context = session.get("case_context")
+    if not case_context:
+        flash("Session expired. Please start again.", "warning")
+        return redirect(url_for('main.index'))
     return render_template('select_attachments.html',
                            ai_analysis=None,     
                            case_context=case_context)
 
 def handle_select_attachments_submission():
     selected_names = request.form.getlist('selected_files')
-    case_context = session["case_context"]
+    case_context = session.get("case_context")
+    if not case_context:
+        flash("Session expired. Please start again.", "warning")
+        return redirect(url_for('main.index'))
     case_context = CaseContext.from_session(case_context)
     
     selected_files = [item for item in case_context.attachment_list if item[0] in selected_names]
@@ -150,20 +177,32 @@ def handle_select_attachments_submission():
 
     return redirect(url_for('main.download_attachments'))
 
+def _resolve_download_path(case_context: CaseContext, is_bsod: bool) -> str:
+    if not case_context:
+        return ''
+
+    if not is_bsod:
+        return case_context.case_download_dir or ''
+
+    from configs.path_configs import LOAD_PATH_prim, LOAD_PATH_bkup
+
+    load_path_bsod = helpers.get_load_path(LOAD_PATH_prim, LOAD_PATH_bkup)
+    if not load_path_bsod:
+        return ''
+
+    case_folder = case_context.backend_id if "-" in str(case_context.backend_id) else case_context.case_nbr
+    return rf"{load_path_bsod}\{case_context.wifi_or_bt.upper()}\{case_folder}"
+
 #------------DOWNLOAD ATTACHMENT render -------------#
 
 def render_download_attachments_form():
-    # if bsod: change download directory from local to shared folder 
-    case_context = session["case_context"]
+    # If bsod: change download directory from local to shared folder
+    case_context = session.get("case_context")
+    if not case_context:
+        flash("Session expired. Please start again.", "warning")
+        return redirect(url_for('main.index'))
     case_context = CaseContext.from_session(case_context)
-    download_path = case_context.case_download_dir
-
-    if session['bsod'] == True:
-        
-        from configs.path_configs import LOAD_PATH_prim, LOAD_PATH_bkup
-        LOAD_PATH_bsod = helpers.get_load_path(LOAD_PATH_prim, LOAD_PATH_bkup)
-        case_folder = case_context.backend_id if "-" in str(case_context.backend_id) else case_context.case_nbr
-        download_path = rf"{LOAD_PATH_bsod}\{case_context.wifi_or_bt.upper()}\{case_folder}"
+    download_path = _resolve_download_path(case_context, session.get('bsod') == True)
         
     files_to_download = {name: 0 for name, _, _ in session.get('selected_files', [])}
     session["download_path"] = download_path
@@ -173,16 +212,160 @@ def render_download_attachments_form():
                            download_path=download_path)
 
 
-#------------DOWNLOAD RESULT render -------------#
+#------------ DOWNLOAD RESULT render -------------#
+
+def _get_latest_fw_system_info(fw_dict):
+    fw_paths = [path for paths in (fw_dict or {}).values() for path in paths if path]
+    if not fw_paths:
+        return None, None
+
+    def sort_key(path):
+        timestamp = extract_timestamp_from_folder(path)
+        return (timestamp or datetime.min, path)
+
+    latest_fw_path = max(fw_paths, key=sort_key)
+    return latest_fw_path, load_fw_system_info(latest_fw_path)
+
+
+def _extract_first_folder_from_zip(file_path, zip_name, download_path):
+    """Extract the first folder inside the zip extraction directory.
+    
+    Given a file path like: /downloads/test/20250101/subfolder/file.txt
+    And zip_name: test.zip
+    Returns: 20250101 (first folder under the extraction directory)
+    """
+    if not file_path or not zip_name or not download_path:
+        return ''
+    
+    # Reconstruct the extraction folder path
+    extract_folder_name = os.path.splitext(zip_name)[0].replace(" ", "_")
+    extract_folder_path = os.path.join(download_path, extract_folder_name)
+    
+    # Normalize paths for comparison
+    file_path_norm = os.path.normpath(str(file_path))
+    extract_folder_norm = os.path.normpath(extract_folder_path)
+    
+    # Ensure proper path comparison (not just string prefix)
+    try:
+        rel_path = os.path.relpath(file_path_norm, extract_folder_norm)
+        # If relative path starts with '..', file is not under extraction folder
+        if rel_path.startswith('..'):
+            return ''
+    except ValueError:
+        # Paths are on different drives (Windows)
+        return ''
+    
+    # Extract the first folder component
+    if rel_path in ('', '.'):
+        return ''
+
+    parts = rel_path.split(os.sep)
+    first_folder = parts[0] if parts else ''
+    if not first_folder:
+        return ''
+
+    # Fallback: if the first component is not a directory, use file's parent folder name.
+    first_folder_path = os.path.join(extract_folder_norm, first_folder)
+    if os.path.isdir(first_folder_path):
+        return first_folder
+
+    return os.path.basename(os.path.dirname(file_path_norm))
+
+
+def _build_merged_table_rows(file_dict, path_key, path_filter=None, download_path=None):
+    rows = []
+
+    for zip_name, path_list in (file_dict or {}).items():
+        items = []
+        for item_path in (path_list or []):
+            if path_filter and not path_filter(item_path):
+                continue
+            
+            # Extract the first folder from zip
+            folder_name = _extract_first_folder_from_zip(item_path, zip_name, download_path) if download_path else ''
+            
+            items.append({
+                'zip_name': zip_name,
+                'folder_name': folder_name,
+                path_key: item_path,
+            })
+
+        if not items:
+            continue
+
+        zip_rowspan = len(items)
+
+        folder_counts = {}
+        for item in items:
+            folder = item['folder_name']
+            folder_counts[folder] = folder_counts.get(folder, 0) + 1
+
+        folder_seen = {}
+        for idx, item in enumerate(items):
+            folder = item['folder_name']
+            folder_seen[folder] = folder_seen.get(folder, 0) + 1
+
+            row = {
+                'zip_name': item['zip_name'],
+                'folder_name': folder,
+                'zip_rowspan': zip_rowspan,
+                'folder_rowspan': folder_counts[folder],
+                'show_zip_cell': idx == 0,
+                'show_folder_cell': folder_seen[folder] == 1,
+            }
+            row[path_key] = item[path_key]
+            rows.append(row)
+
+    return rows
+
+
+def _build_fw_table_rows(fw_dict, download_path=None):
+    return _build_merged_table_rows(fw_dict, 'fw_path', download_path=download_path)
+
+
+def _build_wifi_table_rows(wifi_dict, download_path=None):
+    return _build_merged_table_rows(
+        wifi_dict,
+        'etl_path',
+        path_filter=lambda p: not str(p).lower().endswith('.log'),
+        download_path=download_path
+    )
+
+
+def _build_bt_table_rows(bt_dict, download_path=None):
+    return _build_merged_table_rows(bt_dict, 'bt_path', download_path=download_path)
+
+
+def _build_event_table_rows(ddd_dict, download_path=None):
+    return _build_merged_table_rows(
+        ddd_dict,
+        'ddd_path',
+        path_filter=lambda p: 'raweventviewersystemlogs.evt' in str(p).lower() or 'system.evtx' in str(p).lower(),
+        download_path=download_path
+    )
+
 
 def render_download_result_form():
-    
-    case_context = session["case_context"]
+    case_context = session.get("case_context")
+    if not case_context:
+        flash("Session expired. Please start again.", "warning")
+        return redirect(url_for('main.index'))
     case_context = CaseContext.from_session(case_context)
+    download_path = _resolve_download_path(case_context, session.get('bsod') == True)
+    if not download_path:
+        flash("Session expired. Please start again.", "warning")
+        return redirect(url_for('main.index'))
 
     result_data = app_config.get_download_results(case_context.case_nbr)
 
-    if case_context.wifi_or_bt == 'wifi':
+    if session.get('debug_mode'):
+        file_dicts = {
+            'wifi_dict': result_data.get('wifi', {}),
+            'ddd_dict': result_data.get('ddd', {}),
+            'bt_dict': result_data.get('bt', {}),
+            'fw_dict': result_data.get('fw', {})
+        }
+    elif case_context.wifi_or_bt == 'wifi':
         file_dicts = {
             'wifi_dict': result_data.get('wifi', {}),
             'ddd_dict': result_data.get('ddd', {}),
@@ -192,7 +375,7 @@ def render_download_result_form():
     else:
         file_dicts = {
             'wifi_dict': {},
-            'ddd_dict': {},
+            'ddd_dict': result_data.get('ddd', {}),
             'bt_dict': result_data.get('bt', {}),
             'fw_dict': result_data.get('fw', {})
         }
@@ -250,24 +433,57 @@ def render_download_result_form():
         print(f"No issue time found in selected files, skipping time filter")
     
     auto_analysis_etl = get_auto_analysis_etl(file_dicts['wifi_dict'], file_dicts['ddd_dict'])
+    latest_fw_system_info_path, latest_fw_system_info = _get_latest_fw_system_info(file_dicts['fw_dict'])
+    wifi_table_rows = _build_wifi_table_rows(file_dicts['wifi_dict'], download_path=download_path)
+    bt_table_rows = _build_bt_table_rows(file_dicts['bt_dict'], download_path=download_path)
+    event_table_rows = _build_event_table_rows(file_dicts['ddd_dict'], download_path=download_path)
+    fw_table_rows = _build_fw_table_rows(file_dicts['fw_dict'], download_path=download_path)
+
+    # Find the evt path with the latest timestamp for auto-load
+    latest_evt_path = None
+    latest_evt_time = None
+
+    for row in event_table_rows:
+        ts = extract_timestamp_from_folder(row['ddd_path'])
+        if ts and (latest_evt_time is None or ts > latest_evt_time):
+            latest_evt_time = ts
+            latest_evt_path = row['ddd_path']
     
+    if not latest_evt_path and event_table_rows:
+        latest_evt_path = event_table_rows[-1]['ddd_path'] 
+
     return render_template('download_result.html',
-                         case_path=session['download_path'],
+                         case_path=download_path,
+                         wifi_or_bt=case_context.wifi_or_bt,
                          auto_analysis_etl = auto_analysis_etl,
                          exclude_keywords=app_config.etl_exclude_keywords,
+                         latest_fw_system_info=latest_fw_system_info,
+                         latest_fw_system_info_path=latest_fw_system_info_path,
+                         wifi_table_rows=wifi_table_rows,
+                         bt_table_rows=bt_table_rows,
+                         event_table_rows=event_table_rows,
+                         fw_table_rows=fw_table_rows,
+                         latest_evt_path=latest_evt_path,
                          time_filter_info=time_filter_info,
                          time_filter_warnings=time_filter_warnings,
                          **file_dicts)
 
 
-#------------[BSOD] DOWNLOAD RESULT render -------------#
+#------------ [BSOD] DOWNLOAD RESULT render -------------#
 
 def render_download_result_bsod_form():
 
-    case_context = session["case_context"]
+    case_context = session.get("case_context")
+    if not case_context:
+        flash("Session expired. Please start again.", "warning")
+        return redirect(url_for('main.index'))
     case_context = CaseContext.from_session(case_context)
+    download_path = _resolve_download_path(case_context, True)
+    if not download_path:
+        flash("Session expired. Please start again.", "warning")
+        return redirect(url_for('main.index'))
 
-    case_path = session['download_path']
+    case_path = download_path
     email = helpers.detect_user_email()
 
     return render_template('bsod.html', 
@@ -276,17 +492,76 @@ def render_download_result_bsod_form():
                            case_path=case_path)
 
 
+#------------ Utility Handlers -------------#
 
-
-
-
-#------------ Other Utils -------------#
-
-@main_bp.route('/open_path', methods=['POST']) 
-def open_path():
-    path = request.json.get('path')
-    print("now open path:", path)
+def handle_open_path():
+    """Open a local folder path in Windows Explorer."""
+    path = request.get_json(silent=True) or {}
+    path = path.get('path', '')
+    print("Now opening path:", path)
     if path and os.path.exists(path):
         subprocess.run(['explorer', path])
         return '', 204
     return 'Invalid path', 400
+
+def handle_dump_event_txt():
+    try:
+        from services import event_log_service
+    except ImportError as e:
+        return jsonify({'error': f'Event log feature unavailable: {e}'}), 503
+
+    path = request.get_json(silent=True) or {}
+    path = path.get('path', '')
+    if not path or not os.path.exists(path):
+        return jsonify({'error': 'Invalid path'}), 400
+    try:
+        txt_path, count = event_log_service.dump_event_to_txt(path)
+        print(f"[Background Task] ✅ Processed {count} events → {txt_path}")
+        return jsonify({'success': True, 'txt_path': txt_path})
+    except Exception as e:
+        import traceback
+        traceback.print_exc()
+        return jsonify({'error': str(e)}), 500
+
+def handle_parse_event_log():
+    try:
+        from services import event_log_service
+    except ImportError as e:
+        return jsonify({'error': f'Event log feature unavailable: {e}'}), 503
+
+    path = request.get_json(silent=True) or {}
+    path = path.get('path', '')
+    print(f"\n[UI View] 🔍 Scanning Event Log: {path}")
+    if not path or not os.path.exists(path):
+        return jsonify({'error': 'Invalid path'}), 400
+    try:
+        offset = max(0, int(request.json.get('offset', 0) or 0))
+        limit = int(request.json.get('limit', 0) or 0)
+        source_filter = request.json.get('source_filter', 'all')
+        level_filter = request.json.get('level_filter', 'all')
+        result = event_log_service.get_paged_events(path, offset, limit, source_filter, level_filter)
+        return jsonify(result)
+    except Exception as e:
+        import traceback
+        traceback.print_exc()
+        return jsonify({'error': str(e)}), 500
+
+def handle_get_bt_event_map():
+    """Read the local JSON file and provide the BT Event ID map to the frontend."""
+    import json
+    
+    # Locate the JSON file in the configs directory
+    base_dir = os.path.abspath(os.path.dirname(__file__))
+    json_path = os.path.join(base_dir, '..', '..', 'configs', 'bt_event_id_map.json')
+    
+    try:
+        if os.path.exists(json_path):
+            with open(json_path, 'r', encoding='utf-8') as f:
+                event_map = json.load(f)
+            return jsonify(event_map)
+        else:
+            print(f"[Warning] BT Event map JSON not found at: {json_path}")
+            return jsonify({})
+    except Exception as e:
+        print(f"[Error] Failed to read BT Event map JSON: {e}")
+        return jsonify({})

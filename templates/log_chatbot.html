@@ -4928,11 +4928,16 @@
     }
 
     function closeFeedbackModal() {
-        // Cancel / X / submit-success = explicit close → drop draft +
-        // reclaim chat-area space + restore sidebar to whatever state
-        // the user had it in BEFORE the auto-collapse fired.
-        const ctx = window.__currentFeedbackCtx;
-        if (ctx && ctx.turnId) _clearFeedbackDraft(ctx.turnId);
+        // ✕ / Cancel = "close for now". DOES NOT clear the draft —
+        // the autosaved localStorage entry stays so the user can
+        // re-open the same turn's More-feedback link later and pick
+        // up exactly where they left off. The only paths that
+        // actively erase a draft are:
+        //   * Submit success (handled in submitFeedbackDetail) —
+        //     fields are persisted on the server, draft no longer needed
+        //   * Manual "Discard draft" affordance (not implemented yet)
+        // This matters especially in multi-incident analyses: turn A's
+        // draft must survive while the user briefly inspects turn B.
         _hideDraftHint();
 
         const modal = document.getElementById('feedback-detail-modal');

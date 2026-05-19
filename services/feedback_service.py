@@ -194,13 +194,45 @@ def _helpful_skills_path() -> Path:
     return _feedback_root() / "feedback_helpful_skills.jsonl"
 
 
+# Strict pattern for client-supplied IDs that end up as filesystem path
+# components. UUIDs (server-generated) match this; short alphanumeric IDs
+# do too. Anything containing `/`, `\`, `..`, control chars or other
+# odd punctuation is REJECTED to prevent path-traversal attacks via the
+# /feedback/* endpoints, which all read conversation_id / turn_id from
+# the request body.
+_SAFE_ID_RE = re.compile(r"^[A-Za-z0-9_-]{1,80}$")
+
+
+def _safe_id(value: Any, fallback: str = "unknown") -> str:
+    """
+    Sanitise an ID coming from an untrusted source so it's safe to use
+    in filesystem path components. Returns `fallback` when the value is
+    missing, the wrong type, empty after trimming, or doesn't match the
+    strict allow-list pattern. The allow-list also implicitly rejects
+    `..`, `.`, and path separators since those contain non-matching
+    characters or violate the length check.
+    """
+    if not isinstance(value, str):
+        return fallback
+    cleaned = value.strip()
+    if not _SAFE_ID_RE.match(cleaned):
+        return fallback
+    return cleaned
+
+
 def _conversation_path(conversation_id: str) -> Path:
-    return _feedback_root() / "conversations" / f"{conversation_id}.json"
+    # Hard-stop path traversal: even though the server generates
+    # conversation_id as a uuid4, the /feedback/* endpoints accept
+    # whatever the client sends — sanitise before the value ever
+    # becomes a path component.
+    safe = _safe_id(conversation_id)
+    return _feedback_root() / "conversations" / f"{safe}.json"
 
 
 def _attached_logs_dir(conversation_id: str) -> Path:
     """Shared sub-folder for opt-in attached session logs, keyed by conv id."""
-    return _feedback_root() / "logs" / (conversation_id or "unknown")
+    safe = _safe_id(conversation_id)
+    return _feedback_root() / "logs" / safe
 
 
 def _attached_yaml_dir() -> Path:
@@ -955,9 +987,15 @@ def record_detail(
             src = Path(attached_yaml_path)
             if src.exists() and src.is_file():
                 user_tag = _current_user()
+                # Sanitise client-supplied IDs before building the
+                # destination filename — same path-traversal concern
+                # as _conversation_path / _attached_logs_dir.
+                # src.name is already a basename (no path component)
+                # by virtue of Path.name semantics.
                 dst = (
                     _attached_yaml_dir()
-                    / f"{conversation_id}__{turn_id}__{user_tag}__{src.name}"
+                    / f"{_safe_id(conversation_id)}__{_safe_id(turn_id)}"
+                      f"__{user_tag}__{src.name}"
                 )
                 _enqueue_copy(src, dst)
                 record["attached_yaml"] = str(dst)
@@ -1025,9 +1063,12 @@ def _enqueue_log_attach(conversation_id: str, turn_id: str, log_path: str) -> No
         if not src.exists() or not src.is_file():
             return
         user_tag = _current_user()
+        # Sanitise turn_id same as conversation_id — both come from
+        # the client. src.name is a basename via Path.name semantics.
+        safe_turn = _safe_id(turn_id, fallback="turn")
         dst = (
             _attached_logs_dir(conversation_id)
-            / f"{turn_id or 'turn'}__{user_tag}__{src.name}"
+            / f"{safe_turn}__{user_tag}__{src.name}"
         )
         _enqueue_copy(src, dst)
     except Exception as e:

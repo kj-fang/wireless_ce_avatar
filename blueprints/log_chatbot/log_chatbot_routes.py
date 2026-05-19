@@ -1297,7 +1297,16 @@ def _persist_user_yaml_snapshot(data: dict) -> object:
 _DISABLED_COMMENT_RE = __import__("re").compile(
     r"""^\s*\#\s*-\s*(['"])(?P<val>.+?)\1\s*$"""
 )
-_DISABLED_SKILL_RE = __import__("re").compile(r"^([A-Za-z_]\w*):\s*$")
+# Top-level skill header (column 0, ends with bare ":"). Widened from
+# the original `[A-Za-z_]\w*` so it accepts the real skill IDs in this
+# codebase that contain "/" (e.g. "VLP/UHB/AFC", "WRDS/WGDS/EWRD/SGOM"
+# — see services/log_chatbot_service.py:SKILL_FILE_MAP). The previous
+# regex silently failed on those, dropping their `# - "..."` disabled
+# entries on every save round-trip. The first char is anchored to
+# [A-Za-z0-9_] so list items ("- foo:") and comment lines ("# x:")
+# are still rejected, and `\s*$` guarantees we only match bare key
+# headers — not inline mappings like `Foo: bar`.
+_DISABLED_SKILL_RE = __import__("re").compile(r"^([A-Za-z0-9_][^:]*):\s*$")
 _DISABLED_LIST_HEADER_RE = __import__("re").compile(
     r"^  (keywords|exclusive):\s*$"
 )

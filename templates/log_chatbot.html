@@ -3308,20 +3308,29 @@
             appendAssistantText('❌ Network error: ' + e.message);
         } finally {
             removeTyping();
-            document.getElementById('send-btn').disabled = false;
             // ── Multi-time chain: if the queue still has unprocessed
-            // issue times, schedule the next sendMessage to pick the
-            // next one up. The small delay lets the just-rendered
-            // report settle before the next progress card starts.
-            if (window.__multiTimeContext) {
-                if (window.__multiTimeContext.queue.length > 0) {
-                    setTimeout(() => sendMessage(), 250);
-                } else {
-                    // All iterations done — reset state + clean sidebar.
+            // issue times, schedule the next iteration AND keep Send
+            // disabled. Re-enabling Send between iterations lets the
+            // user click it during the ~250ms gap, which would re-
+            // enter sendMessage with isContinuation=true (because
+            // __multiTimeContext is still set) — popping the queue
+            // early and ignoring whatever they had just typed.
+            // We only re-enable Send when the chain is fully drained
+            // (or on a regular single-time finish).
+            const stillChaining = !!(window.__multiTimeContext
+                                     && window.__multiTimeContext.queue.length > 0);
+            if (stillChaining) {
+                setTimeout(() => sendMessage(), 250);
+                // intentionally NOT touching send-btn.disabled here
+            } else {
+                if (window.__multiTimeContext) {
+                    // Last iteration of the multi-time chain — reset state
+                    // and clean the sidebar so the next Send starts fresh.
                     window.__multiTimeContext = null;
                     clearIssueTime();
                     clearAllExtraIssueTimes();
                 }
+                document.getElementById('send-btn').disabled = false;
             }
         }
     }

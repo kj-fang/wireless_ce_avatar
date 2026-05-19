@@ -6,11 +6,34 @@ agent responses. Decoupled from the chatbot agent: failures here never
 affect chat behaviour.
 """
 
+import re
+
 from flask import Blueprint, request, jsonify, session
 
 from services import feedback_service
 
 feedback_bp = Blueprint("feedback", __name__, url_prefix="/feedback")
+
+
+# ---- Defense-in-depth: validate client-supplied IDs at the route
+# boundary before they reach feedback_service. The service layer ALSO
+# sanitises (see feedback_service._safe_id), but route-level rejection
+# is preferred because:
+#   * fast-fail with a clear 400 to the client instead of silently
+#     substituting "unknown" downstream,
+#   * an obvious choke-point in case any future service function
+#     forgets to call _safe_id on a path component,
+#   * one consistent allow-list across both /feedback/* and
+#     services.feedback_service so the schema is unambiguous.
+_SAFE_ID_RE = re.compile(r"^[A-Za-z0-9_-]{1,80}$")
+
+
+def _bad_id_response(field_name: str):
+    """Build the 400 response used when an ID fails the allow-list."""
+    return jsonify({
+        "success": False,
+        "error": f"{field_name} must match [A-Za-z0-9_-]{{1,80}}",
+    }), 400
 
 
 @feedback_bp.route("/vote", methods=["POST"])
@@ -44,6 +67,10 @@ def vote():
             "success": False,
             "error": "conversation_id and turn_id are required",
         }), 400
+    if not _SAFE_ID_RE.match(conversation_id):
+        return _bad_id_response("conversation_id")
+    if not _SAFE_ID_RE.match(turn_id):
+        return _bad_id_response("turn_id")
 
     # Reuse the chatbot's anonymous session id; no login required.
     session_id = session.get("chatbot_session_id", "")
@@ -110,6 +137,10 @@ def detail():
             "success": False,
             "error": "conversation_id and turn_id are required",
         }), 400
+    if not _SAFE_ID_RE.match(conversation_id):
+        return _bad_id_response("conversation_id")
+    if not _SAFE_ID_RE.match(turn_id):
+        return _bad_id_response("turn_id")
 
     raw_vote = data.get("vote")
     try:
@@ -215,6 +246,10 @@ def step_vote():
             "success": False,
             "error": "conversation_id and turn_id are required",
         }), 400
+    if not _SAFE_ID_RE.match(conversation_id):
+        return _bad_id_response("conversation_id")
+    if not _SAFE_ID_RE.match(turn_id):
+        return _bad_id_response("turn_id")
 
     try:
         step_index = int(data.get("step_index"))
@@ -259,6 +294,12 @@ def skill_helpful():
             "success": False,
             "error": "conversation_id, turn_id, and skill_id are required",
         }), 400
+    if not _SAFE_ID_RE.match(conversation_id):
+        return _bad_id_response("conversation_id")
+    if not _SAFE_ID_RE.match(turn_id):
+        return _bad_id_response("turn_id")
+    # skill_id can legitimately contain spaces or punctuation ("Connection Flow"),
+    # so don't enforce _SAFE_ID_RE — it never reaches a filesystem path.
 
     session_id = session.get("chatbot_session_id", "")
     ok = feedback_service.record_helpful_skill(

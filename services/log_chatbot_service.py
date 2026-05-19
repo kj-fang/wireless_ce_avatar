@@ -304,14 +304,24 @@ def load_skills_from_yaml(yaml_path: str) -> Dict[str, "Skill"]:
         # expert_rules is stored as a single string in YAML. If a caller
         # (or a hand-edited file) passes a list, fold it down to a numbered
         # string defensively so the agent always sees a plain prompt fragment.
+        # Anything else that resolves to None / "" / whitespace falls back to
+        # the same default the list-branch uses, so an `expert_rules: null`
+        # or bare `expert_rules:` in the YAML doesn't leak the literal
+        # string "None" into the agent prompt.
+        _DEFAULT_RULES = "Please analyze the logs."
         if isinstance(expert_rules, list):
             items = [str(r).strip() for r in expert_rules if str(r).strip()]
             expert_rules = (
                 "\n\n".join(f"{i}. {r}" for i, r in enumerate(items, start=1))
-                if items else "Please analyze the logs."
+                if items else _DEFAULT_RULES
             )
+        elif expert_rules is None:
+            expert_rules = _DEFAULT_RULES
         elif not isinstance(expert_rules, str):
-            expert_rules = str(expert_rules)
+            coerced = str(expert_rules).strip()
+            expert_rules = coerced if coerced else _DEFAULT_RULES
+        elif not expert_rules.strip():
+            expert_rules = _DEFAULT_RULES
 
         skills[key] = Skill(
             name=name,

@@ -3593,11 +3593,16 @@
         });
     }
 
-    // Match HH:MM:SS or HH:MM:SS.mmm anywhere in the text. The negative
-    // lookbehind avoids gluing onto preceding decimal patterns ("1.17:36:13"
-    // — the "17:36:13" part is what we want, not "1.17"). Hours/minutes/
-    // seconds are bounds-checked after match so things like "99:88:77"
-    // don't slip through.
+    // Match HH:MM:SS or HH:MM:SS.mmm anywhere in the text. The leading
+    // \b is a word boundary — between a non-word char (e.g. "." or
+    // space) and a digit. That's what lets enumerated inputs like
+    // "1.17:36:13" pick up the "17:36:13" portion: the regex engine
+    // anchors the match at the `.→1` transition, not at the leading
+    // "1". (Earlier comment versions described this as a "negative
+    // lookbehind" — that was inaccurate; there is no lookbehind in
+    // the pattern, just `\b`.) Hours / minutes / seconds are bounds-
+    // checked AFTER the regex match so things like "99:88:77" don't
+    // slip through.
     function _detectIssueTimesInText(text) {
         if (!text || typeof text !== 'string') return [];
         const re = /\b(\d{1,2}):([0-5]?\d):([0-5]?\d)(?:\.(\d{1,3}))?\b/g;

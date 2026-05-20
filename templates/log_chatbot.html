@@ -2853,7 +2853,7 @@
                 // ── Auto-reset when switching from one log to another ──
                 // Backend signals `rotated=true` when this set_log replaces
                 // a DIFFERENT log path. We snapshot the chat UI + per-turn
-                // caches before clearing, so the user can undo within 30 s.
+                // caches so the user can undo the reset for 30 s.
                 if (data.rotated) {
                     const undoCache = {
                         chatHTML:           document.getElementById('chat-window').innerHTML,
@@ -2866,9 +2866,6 @@
                     // Clear everything the previous conversation owned.
                     document.getElementById('chat-window').innerHTML = `
                         <div class="welcome-msg" id="welcome-msg">
-                            <div class="big-icon">🔄</div>
-                            <strong>New log loaded.</strong><br>
-                            Previous chat history was cleared so the agent
                             starts fresh on this log.
                         </div>`;
                     window.__feedbackConversationId = data.new_conversation_id || '';

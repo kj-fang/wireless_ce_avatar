@@ -140,7 +140,8 @@ def _create_windows_shortcut(appdata_subdir, label, extra_ps_props=''):
         label: Human-readable label for log messages (e.g. 'Startup', 'SendTo').
         extra_ps_props: Additional PowerShell property assignments inserted before $s.Save().
     """
-    if not getattr(sys, 'frozen', False) or os.name != 'nt':
+    # if not getattr(sys, 'frozen', False) or os.name != 'nt':
+    if os.name != 'nt':
         return
     appdata = os.environ.get('APPDATA')
     if not appdata:
@@ -192,6 +193,8 @@ def ensure_startup_shortcut():
     """Create or refresh the IntelAvatar shortcut in the Windows Startup folder.
     Only runs when frozen (packaged exe); skipped in dev mode.
     """
+    if not getattr(sys, 'frozen', False):
+        return
     _create_windows_shortcut(
         r'Microsoft\Windows\Start Menu\Programs\Startup',
         'Startup',
@@ -201,13 +204,25 @@ def ensure_startup_shortcut():
 
 def ensure_sendto_shortcut(sendto_token=None):
     """Create or refresh the IntelAvatar shortcut in the Windows SendTo folder.
-    Only runs when frozen (packaged exe); skipped in dev mode.
-    
+
     Args:
         sendto_token: If provided, appended as --sendto-token argument in the shortcut.
     """
+    # In dev mode sys.executable is python.exe, not IntelAvatar.exe.
+    # We must prepend the app.py path to Arguments so the shortcut runs
+    # `python "app.py" --sendto-token=…` instead of `python --sendto-token=…`
+    # (the latter would not execute the app at all).
+    if not getattr(sys, 'frozen', False):
+        root = os.path.dirname(os.path.dirname(os.path.abspath(__file__)))
+        app_py = os.path.join(root, 'app.py').replace('"', '`"')
+        script_arg = f'`"{app_py}`" '
+    else:
+        script_arg = ''
+
     extra = ''
     if sendto_token:
         safe_token = sendto_token.replace('"', '`"')
-        extra = f'$s.Arguments = "--sendto-token={safe_token}"; '
+        extra = f'$s.Arguments = "{script_arg}--sendto-token={safe_token}"; '
+    elif script_arg:
+        extra = f'$s.Arguments = "{script_arg}"; '
     _create_windows_shortcut(r'Microsoft\Windows\SendTo', 'SendTo', extra_ps_props=extra)

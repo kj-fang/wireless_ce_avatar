@@ -211,12 +211,14 @@ def _process_local_analysis(source_path: str, source_dir: str, file_path: str,
 
     elif file_path.lower().endswith('.log'):
         session['latest_etl_path'] = None
-        return url_for('log_parser.log_parser', etl_path=file_path)
+        app_config.last_analyzed_log_path = file_path
+        return url_for('log_chatbot.index', auto_run='analyze_all')
 
     else:
         wpp_ddd_parser_run(file_path)
         session['latest_etl_path'] = file_path
-        return url_for('log_parser.log_parser', etl_path=file_path)
+        app_config.last_analyzed_log_path = file_path + '.log'
+        return url_for('log_chatbot.index', auto_run='analyze_all')
 
 
 @log_parser_bp.route('/log_parser', methods=['POST', 'GET'])

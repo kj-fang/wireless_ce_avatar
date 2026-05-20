@@ -1,3 +1,4 @@
+import sys
 from typing import Optional, Dict, Any
 import secrets
 from services.driver_manage_service import DriverManager
@@ -15,7 +16,18 @@ class GlobalConfig:
         self.socketio: Optional[SocketIO] = None
         self.driver_manager: Optional[DriverManager] = None
         self.llm_helper: Optional[LLM_helper] = None
+        self.log_chatbot_agent: Optional[Any] = None   # WifiLogAgentSystem
+        self.nw_analysis_agent: Optional[Any] = None
         self.key_module: Optional[Any] = None
+        self.key: Optional[Any] = None
+        
+        # SendTo security token
+        # Dev mode: fixed token for easy testing. Packaged: random per startup.
+        self.sendto_token: str = (
+        'dev-debug-token-12345'  # TODO: remove before release
+        if not getattr(sys, 'frozen', False)
+        else secrets.token_urlsafe(32)
+        )
         
         # Directory paths
         self.avatarfiles_dir: Optional[str] = None
@@ -35,14 +47,6 @@ class GlobalConfig:
 
         # Last log path analysed by LogParserService (shared with chatbot)
         self.last_analyzed_log_path: Optional[str] = None
-
-        # SendTo security token — random per process; used to validate
-        # requests originating from the Windows SendTo shortcut.
-        self.sendto_token: str = secrets.token_urlsafe(32)
-
-        # Agent backends (initialized in configs.set_up_app.set_up)
-        self.log_chatbot_agent: Optional[Any] = None
-        self.nw_analysis_agent: Optional[Any] = None
 
     # SocketIO management
     def set_socketio(self, socketio: SocketIO) -> None:

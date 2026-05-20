@@ -1,4 +1,4 @@
-from flask import Blueprint, render_template, request, session, jsonify, Response, copy_current_request_context
+from flask import Blueprint, render_template, request, session, jsonify, Response, copy_current_request_context, redirect, url_for
 import json
 import re
 import traceback
@@ -13,11 +13,32 @@ from configs.global_configs import app_config
 from models.models import CaseContext
 from services.log_chatbot_service import WifiLogAgentSystem, load_skills_from_data_dir, get_builtin_skills, build_skill_file_map, load_skills_from_yaml
 from utils.etl_utils import extract_time_from_description
+from utils.issue_time_utils import (
+    parse_issue_time_string,
+    read_log_time_range,
+    resolve_issue_time,
+    format_issue_time,
+)
+from services import feedback_service
 
 log_chatbot_bp = Blueprint("log_chatbot", __name__, url_prefix="/log_chatbot")
 
 # Server-side store: session_id -> WifiLogAgentSystem instance
 _chatbot_instances: dict = {}
+
+
+# ------------------------------------------------------------------
+# Feedback sidecar helpers (anonymous, side-car, never blocks chat)
+# ------------------------------------------------------------------
+def _ensure_feedback_conversation_id(*, rotate: bool = False) -> str:
+    """
+    Return the current feedback conversation_id, creating one if missing
+    or if `rotate=True` (e.g. on set_log / prepare — a new log = new case).
+    Stored in Flask session so it persists across requests.
+    """
+    if rotate or not session.get("feedback_conversation_id"):
+        session["feedback_conversation_id"] = str(uuid.uuid4())
+    return session["feedback_conversation_id"]
 
 
 def _extract_issue_context() -> dict:
@@ -64,56 +85,64 @@ def _extract_issue_context() -> dict:
 
     attachment_time = ""
 
-    def _desc_time_to_str(desc: str) -> str:
-        """Parse issue time from attachment gray subtitle text and normalize to MM/DD/YYYY-HH:MM:SS."""
-        parsed = extract_time_from_description(desc)
-        if hasattr(parsed, 'strftime'):
-            return parsed.strftime('%m/%d/%Y-%H:%M:%S')
-        if isinstance(parsed, str) and parsed.strip():
-            # time-only case: keep as HH:MM:SS so agent can still apply segment2 on log date.
-            return parsed.strip()
-        return ""
+    # Return cached value if already computed this session (avoids re-parsing on every request)
+    cached = session.get("_attachment_time_cache")
+    if cached is not None:
+        attachment_time = cached
+    else:
+        def _desc_time_to_str(desc: str) -> str:
+            """Parse issue time from attachment gray subtitle text and normalize to MM/DD/YYYY-HH:MM:SS."""
+            parsed = extract_time_from_description(desc)
+            if hasattr(parsed, 'strftime'):
+                return parsed.strftime('%m/%d/%Y-%H:%M:%S')
+            if isinstance(parsed, str) and parsed.strip():
+                # time-only case: keep as HH:MM:SS so agent can still apply segment2 on log date.
+                return parsed.strip()
+            return ""
 
-    # Step 1: Get the list of selected file names
-    selected_files = session.get("selected_files", [])
-    selected_names = set()
-    for sf in selected_files:
-        if isinstance(sf, (list, tuple)) and len(sf) >= 1:
-            selected_names.add(sf[0])
+        # Step 1: Get the list of selected file names
+        selected_files = session.get("selected_files", [])
+        selected_names = set()
+        for sf in selected_files:
+            if isinstance(sf, (list, tuple)) and len(sf) >= 1:
+                selected_names.add(sf[0])
 
-    # Step 2: Read from case_context.attachment_list (same data source as the template)
-    raw_ctx_dict = session.get("case_context", {})
-    att_list = raw_ctx_dict.get("attachment_list", []) if isinstance(raw_ctx_dict, dict) else []
+        # Step 2: Read from case_context.attachment_list (same data source as the template)
+        raw_ctx_dict = session.get("case_context", {})
+        att_list = raw_ctx_dict.get("attachment_list", []) if isinstance(raw_ctx_dict, dict) else []
 
-    # Step 3: Prefer user-selected attachments; if selected_names is empty, take the first one
-    candidates = [item for item in att_list
-                  if isinstance(item, (list, tuple)) and len(item) >= 3
-                  and (not selected_names or item[0] in selected_names)]
-    if not candidates:
-        candidates = [item for item in att_list if isinstance(item, (list, tuple)) and len(item) >= 3]
+        # Step 3: Prefer user-selected attachments; if selected_names is empty, take the first one
+        candidates = [item for item in att_list
+                      if isinstance(item, (list, tuple)) and len(item) >= 3
+                      and (not selected_names or item[0] in selected_names)]
+        if not candidates:
+            candidates = [item for item in att_list if isinstance(item, (list, tuple)) and len(item) >= 3]
 
-    # Step 4 (PRIMARY): parse from gray subtitle description (item[2][1])
-    for item in candidates:
-        desc_raw = item[2][1] if isinstance(item[2], (list, tuple)) and len(item[2]) >= 2 else None
-        result = _desc_time_to_str(desc_raw)
-        if result:
-            attachment_time = result
-            print(f"[DEBUG] attachment_time from attachment description['{item[0]}']: {attachment_time}")
-            break
+        # Step 4 (PRIMARY): parse from gray subtitle description (item[2][1])
+        for item in candidates:
+            desc_raw = item[2][1] if isinstance(item[2], (list, tuple)) and len(item[2]) >= 2 else None
+            result = _desc_time_to_str(desc_raw)
+            if result:
+                attachment_time = result
+                print(f"[DEBUG] attachment_time from attachment description['{item[0]}']: {attachment_time}")
+                break
 
-    # Step 5: Fallback — try directly from selected_files
-    if not attachment_time:
-        for file_info in selected_files:
-            if isinstance(file_info, (list, tuple)) and len(file_info) >= 3:
-                desc_raw = file_info[2][1] if isinstance(file_info[2], (list, tuple)) and len(file_info[2]) >= 2 else None
-                result = _desc_time_to_str(desc_raw)
-                if result:
-                    attachment_time = result
-                    print(f"[DEBUG] attachment_time from selected_files description['{file_info[0]}']: {attachment_time}")
-                    break
+        # Step 5: Fallback — try directly from selected_files
+        if not attachment_time:
+            for file_info in selected_files:
+                if isinstance(file_info, (list, tuple)) and len(file_info) >= 3:
+                    desc_raw = file_info[2][1] if isinstance(file_info[2], (list, tuple)) and len(file_info[2]) >= 2 else None
+                    result = _desc_time_to_str(desc_raw)
+                    if result:
+                        attachment_time = result
+                        print(f"[DEBUG] attachment_time from selected_files description['{file_info[0]}']: {attachment_time}")
+                        break
 
-    if not attachment_time:
-        print(f"[DEBUG] attachment_time: NOT FOUND. selected_names={selected_names}, att_list len={len(att_list)}")
+        if not attachment_time:
+            print(f"[DEBUG] attachment_time: NOT FOUND. selected_names={selected_names}, att_list len={len(att_list)}")
+
+        # Cache in session so subsequent requests in the same flow skip re-parsing
+        session["_attachment_time_cache"] = attachment_time
 
     return {
         "case_nbr":    ctx.case_nbr or "",
@@ -122,6 +151,25 @@ def _extract_issue_context() -> dict:
         "issue_type":  issue_type,
         "attachment_time": attachment_time,
     }
+
+
+def _resolved_issue_time_for(log_path: str, attachment_time: str) -> str:
+    """
+    Session-level cache for the canonical sidebar-prefill issue_time.
+    Mirrors `_attachment_time_cache`: keyed by log_path so reloading a
+    different log naturally invalidates. Lets /get_issue_context return
+    the same value prime_with_context resolved without re-reading the
+    log file's first/last timestamps every time.
+    """
+    cache = session.get("_resolved_issue_time_cache") or {}
+    cache_key = log_path or "__nolog__"
+    if cache_key in cache:
+        return cache[cache_key]
+    dt, _ = resolve_issue_time(attachment_time, log_path)
+    formatted = format_issue_time(dt)
+    cache[cache_key] = formatted
+    session["_resolved_issue_time_cache"] = cache
+    return formatted
 
 
 def _extract_disconnect_time(*text_sources: str) -> str:
@@ -150,7 +198,7 @@ def _extract_disconnect_time(*text_sources: str) -> str:
     return ""
 
 
-def _compose_concise_description() -> str:
+def _compose_concise_description(ctx: dict = None) -> str:
     """
     Auto-compose the most effective issue description for auto-analysis via chat.
 
@@ -158,7 +206,8 @@ def _compose_concise_description() -> str:
         e.g. "6G Weak Signal disconnected at around 10/28/2025-11:25:49"
     """
     try:
-        ctx = _extract_issue_context()
+        if ctx is None:
+            ctx = _extract_issue_context()
     except Exception:
         return "Perform full multi-skill log analysis"
 
@@ -185,11 +234,14 @@ def _compose_concise_description() -> str:
     return "Perform full multi-skill log analysis"
 
 
-def _get_or_create_agent() -> WifiLogAgentSystem:
+def _get_or_create_agent(skip_prime: bool = False) -> WifiLogAgentSystem:
     """
     Return a per-session WifiLogAgentSystem.
     Borrows client/model from app_config.log_chatbot_agent which is
     initialised at app startup (set_up_app.py -> set_up()).
+
+    skip_prime: if True, skip the auto prime_with_context on new session creation.
+                Use this when the caller will immediately call prime_with_context itself.
     """
     sid = session.get("chatbot_session_id")
     if not sid or sid not in _chatbot_instances:
@@ -221,12 +273,14 @@ def _get_or_create_agent() -> WifiLogAgentSystem:
         if app_config.last_analyzed_log_path:
             agent.current_log_path = app_config.last_analyzed_log_path
         # Prime with session issue context so every new session is context-aware
-        try:
-            ctx = _extract_issue_context()
-            if any(ctx.values()):
-                agent.prime_with_context(**ctx)
-        except Exception:
-            pass  # session may not have case context (standalone chatbot)
+        # (skipped when caller will immediately call prime_with_context itself)
+        if not skip_prime:
+            try:
+                ctx = _extract_issue_context()
+                if any(ctx.values()):
+                    agent.prime_with_context(**ctx)
+            except Exception:
+                pass  # session may not have case context (standalone chatbot)
         _chatbot_instances[sid] = agent
 
     return _chatbot_instances[sid]
@@ -287,18 +341,33 @@ def set_log():
         return jsonify({"success": False, "error": "log_path is required"}), 400
 
     try:
-        agent = _get_or_create_agent()
+        agent = _get_or_create_agent(skip_prime=True)
         agent.current_log_path = log_path
         agent.reset_conversation()          # fresh conversation for a new file
         ctx = _extract_issue_context()      # re-extract context in case session was updated after agent creation
-        if any(ctx.values()):
-            agent.prime_with_context(**ctx)
+        # Always prime: prime_with_context falls back to the log file's latest
+        # timestamp when ctx has no usable issue time, so the sidebar always
+        # gets an issue_time to display (covers the no-session entry path).
+        agent.prime_with_context(**ctx)
 
         session["chatbot_log_path"] = log_path
+
+        # Sidecar: a new log file = a new conversation. Rotate the id and
+        # eagerly create the snapshot file so issue context is captured even
+        # if the user never sends a message.
+        new_conv_id = _ensure_feedback_conversation_id(rotate=True)
+        feedback_service.ensure_conversation(
+            conversation_id=new_conv_id,
+            session_id=session.get("chatbot_session_id", ""),
+            issue=ctx,
+            log_path=log_path,
+        )
+
         return jsonify({
             "success": True,
             "message": f"Log file set: {log_path}",
             "skills": agent.get_skill_descriptions(),
+            "issue_time": format_issue_time(agent.issue_time),
         })
     except Exception as e:
         return jsonify({"success": False, "error": str(e)}), 500
@@ -343,14 +412,72 @@ def chat():
                 yield f"data: {json.dumps({'type': 'error', 'content': 'No log file loaded. Please set a log file first.'})}\n\n"
             return Response(_no_log(), mimetype="text/event-stream")
 
+        # ------------------------------------------------------------------
+        # Issue Time: the sidebar field is the SINGLE source of truth.
+        # When the frontend includes the `issue_time` key, override whatever
+        # was pre-populated by prime_with_context (e.g. attachment_time).
+        # An empty string with `issue_time_cleared=True` means "user explicitly
+        # chose no time" — clear the agent's issue_time AND any backup sources.
+        # An empty string WITHOUT that flag means the sidebar had only time
+        # fields filled (time-only, no date) — keep the sentinel so pre-scan
+        # can align the date to the log file range.
+        # ------------------------------------------------------------------
+        if "issue_time" in data:
+            raw_it = (data.get("issue_time") or "").strip()
+            explicitly_cleared = bool(data.get("issue_time_cleared", False))
+            if raw_it:
+                # Full datetime from sidebar — override agent's issue_time
+                if isinstance(agent.issue_context, dict):
+                    agent.issue_context.pop("attachment_time", None)
+                parsed, is_time_only = parse_issue_time_string(raw_it)
+                agent.issue_time = parsed
+                agent._issue_time_time_only = is_time_only
+            elif explicitly_cleared:
+                # Explicit "no time": clear agent state and neutralise
+                # description/subject so the fallback chain can't re-extract one.
+                agent.issue_time = None
+                if isinstance(agent.issue_context, dict):
+                    agent.issue_context.pop("attachment_time", None)
+                    for k in ("description", "subject"):
+                        v = agent.issue_context.get(k)
+                        if isinstance(v, str) and v:
+                            # Strip recognisable timestamp fragments.
+                            v = re.sub(r'\d{1,2}/\d{1,2}/\d{4}[\s-]\d{1,2}:\d{2}:\d{2}(?:\.\d{1,3})?', '', v)
+                            v = re.sub(r'\d{4}[-/]\d{1,2}[-/]\d{1,2}[\sT]\d{1,2}:\d{2}:\d{2}', '', v)
+                            v = re.sub(r'\b\d{1,2}:\d{2}:\d{2}(?:\.\d{1,3})?\b', '', v)
+                            agent.issue_context[k] = re.sub(r'\s+', ' ', v).strip()
+            # else: empty but not explicitly cleared (time-only in sidebar, date blank)
+            # → keep agent.issue_time as-is (sentinel 0001-01-01) so pre-scan aligns date
+
+        # ------------------------------------------------------------------
+        # Feedback sidecar: identify this turn so the frontend can attach
+        # 👍/👎 to it, and so the conversation snapshot can record skill
+        # invocations. Both IDs are anonymous (no auth).
+        # ------------------------------------------------------------------
+        session_id = session.get("chatbot_session_id", "")
+        conversation_id = _ensure_feedback_conversation_id()
+        turn_id = str(uuid.uuid4())
+        turn_started_at = datetime.now()
+        try:
+            _issue_ctx_for_snapshot = _extract_issue_context()
+        except Exception:
+            _issue_ctx_for_snapshot = {}
+
         # Use the mode flag sent by the frontend toggle.
         use_tools = bool(data.get("use_tools", False))
 
         if use_tools:
             import queue as _queue
             step_queue = _queue.Queue()
+            collected_steps: list = []
 
             def step_cb(step):
+                # Collect for snapshot, then forward to SSE stream.
+                try:
+                    if isinstance(step, dict):
+                        collected_steps.append(step)
+                except Exception:
+                    pass
                 step_queue.put(("step", step))
 
             @copy_current_request_context
@@ -383,7 +510,21 @@ def chat():
                     if msg_type == "step":
                         yield f"data: {json.dumps({'type': 'step', 'step': payload}, ensure_ascii=False)}\n\n"
                     elif msg_type == "done":
-                        yield f"data: {json.dumps({'type': 'done', 'result': payload}, ensure_ascii=False)}\n\n"
+                        # Sidecar: persist the turn before signalling done.
+                        # Failures here are swallowed inside feedback_service.
+                        feedback_service.record_turn(
+                            session_id=session_id,
+                            conversation_id=conversation_id,
+                            turn_id=turn_id,
+                            user_message=user_message,
+                            agent_result=payload,
+                            steps=collected_steps,
+                            mode="tools",
+                            duration_ms=int((datetime.now() - turn_started_at).total_seconds() * 1000),
+                            issue=_issue_ctx_for_snapshot,
+                            log_path=getattr(agent, "current_log_path", "") or "",
+                        )
+                        yield f"data: {json.dumps({'type': 'done', 'turn_id': turn_id, 'conversation_id': conversation_id, 'result': payload}, ensure_ascii=False)}\n\n"
                         break
                     elif msg_type == "error":
                         yield f"data: {json.dumps({'type': 'error', 'content': payload})}\n\n"
@@ -403,8 +544,22 @@ def chat():
                 max_tokens=max_tokens,
             )
 
+            # Sidecar: persist the turn (no step trace in simple mode).
+            feedback_service.record_turn(
+                session_id=session_id,
+                conversation_id=conversation_id,
+                turn_id=turn_id,
+                user_message=user_message,
+                agent_result=result,
+                steps=[],
+                mode="simple",
+                duration_ms=int((datetime.now() - turn_started_at).total_seconds() * 1000),
+                issue=_issue_ctx_for_snapshot,
+                log_path=getattr(agent, "current_log_path", "") or "",
+            )
+
             def generate():
-                yield f"data: {json.dumps({'type': 'done', 'result': result}, ensure_ascii=False)}\n\n"
+                yield f"data: {json.dumps({'type': 'done', 'turn_id': turn_id, 'conversation_id': conversation_id, 'result': result}, ensure_ascii=False)}\n\n"
 
             return Response(generate(), mimetype="text/event-stream")
     except Exception as e:
@@ -428,6 +583,49 @@ def reset():
         return jsonify({"success": True, "message": "Conversation reset."})
     except Exception as e:
         return jsonify({"success": False, "error": str(e)}), 500
+
+
+# ------------------------------------------------------------------
+# Back to Avatar: drop the chatbot session entirely so the next visit
+# to /log_chatbot/ starts with a fresh conversation (no prior analysis).
+# ------------------------------------------------------------------
+@log_chatbot_bp.route("/back_to_avatar", methods=["GET"])
+def back_to_avatar():
+    # 1) Discard the per-session WifiLogAgentSystem instance (chat history,
+    #    skill cache, primed context, issue_time, etc.).
+    sid = session.pop("chatbot_session_id", None)
+    if sid and sid in _chatbot_instances:
+        try:
+            _chatbot_instances.pop(sid, None)
+        except Exception:
+            pass
+
+    # 2) Drop every Flask-session key that would otherwise re-seed a new
+    #    agent via prime_with_context() the next time /log_chatbot/ is
+    #    visited (case context, AI analysis, classification, selected
+    #    attachments, cached log path, etc.).
+    for key in (
+        "chatbot_log_path",
+        "case_context",
+        "ai_ips_analysis",
+        "classification",
+        "selected_files",
+        "attachment_list",
+        "issue_time",
+        "_attachment_time_cache",
+        "_resolved_issue_time_cache",
+        "feedback_conversation_id",   # next /log_chatbot/ visit starts a fresh conversation
+    ):
+        session.pop(key, None)
+
+    # 3) Clear the global "last analyzed log" hint so the chatbot page
+    #    doesn't pre-fill the previous run's log path.
+    try:
+        app_config.last_analyzed_log_path = ""
+    except Exception:
+        pass
+
+    return redirect(url_for("main.index"))
 
 
 # ------------------------------------------------------------------
@@ -459,9 +657,19 @@ def prepare():
         app_config.last_analyzed_log_path = log_path
 
         # Get/create per-session agent and prime it
-        agent = _get_or_create_agent()
+        # skip_prime=True: we call prime_with_context explicitly below (after setting log path)
+        agent = _get_or_create_agent(skip_prime=True)
         agent.current_log_path = log_path
         agent.prime_with_context(**ctx)
+
+        # Sidecar: prepare = entering a new analysis = new conversation.
+        new_conv_id = _ensure_feedback_conversation_id(rotate=True)
+        feedback_service.ensure_conversation(
+            conversation_id=new_conv_id,
+            session_id=session.get("chatbot_session_id", ""),
+            issue=ctx,
+            log_path=log_path,
+        )
 
         return jsonify({"success": True})
     except Exception as e:
@@ -671,14 +879,27 @@ def get_skills():
 
 @log_chatbot_bp.route("/get_issue_context", methods=["GET"])
 def get_issue_context():
-    # Use _compose_concise_description() instead to get a cleaned and concise title/description.
-    concise_desc = _compose_concise_description()
     try:
         ctx = _extract_issue_context()
         attachment_time = ctx.get("attachment_time", "")
     except Exception:
+        ctx = {}
         attachment_time = ""
-    return jsonify({"description": concise_desc, "attachment_time": attachment_time})
+    concise_desc = _compose_concise_description(ctx)
+
+    # Resolve a final issue_time for sidebar display: prefer attachment_time,
+    # fall back to the loaded log's latest timestamp so direct chatbot entry
+    # (no session) still gets a usable value. Cached by log_path so a
+    # repeat call from the frontend doesn't re-read the log's timestamp
+    # range — same canonical value prime_with_context already computed.
+    log_path = session.get("chatbot_log_path") or app_config.last_analyzed_log_path or ""
+    issue_time_str = _resolved_issue_time_for(log_path, attachment_time)
+
+    return jsonify({
+        "description": concise_desc,
+        "attachment_time": attachment_time,
+        "issue_time": issue_time_str,
+    })
 
 
 # ------------------------------------------------------------------
@@ -705,44 +926,27 @@ def find_best_log():
         return jsonify({"best_path": None, "reason": "No ETL paths provided."})
 
     # --- Parse issue time from the provided string ---
-    issue_time = _parse_issue_time(issue_time_str)
+    # Try strict canonical parse first (sidebar/auto-extract path), then
+    # fall back to the looser description scanner for legacy free-form input.
+    issue_time, is_time_only = parse_issue_time_string(issue_time_str)
+    issue_time_only_str = None
+    if issue_time and is_time_only:
+        issue_time_only_str = issue_time.strftime("%H:%M:%S")
+        issue_time = None
+    if issue_time is None and issue_time_only_str is None:
+        _parsed = extract_time_from_description(issue_time_str)
+        if isinstance(_parsed, datetime):
+            issue_time = _parsed
+        elif isinstance(_parsed, str):
+            issue_time_only_str = _parsed  # e.g. '14:50:51'
 
-    # --- Scan each log file for its time range ---
-    TIME_PATTERN = re.compile(r'(\d{2}/\d{2}/\d{4}-\d{2}:\d{2}:\d{2}\.\d{3})')
+    # --- Scan each log file for its time range (shared helper) ---
     candidates = []
-
     for etl_path in etl_paths:
         log_path = etl_path + ".log"
         if not os.path.exists(log_path):
             continue
-
-        first_ts, last_ts = None, None
-        try:
-            with open(log_path, "r", encoding="utf-8", errors="ignore") as f:
-                # Read first timestamp from the beginning (first 200 lines)
-                for i, line in enumerate(f):
-                    if i > 200:
-                        break
-                    m = TIME_PATTERN.search(line)
-                    if m:
-                        first_ts = datetime.strptime(m.group(1), "%m/%d/%Y-%H:%M:%S.%f")
-                        break
-
-                # Read last timestamp by scanning from the end
-                # (seek backwards for large files, or just read through)
-                f.seek(0, 2)  # go to end
-                file_size = f.tell()
-                # Read last 64KB to find the last timestamp
-                read_size = min(file_size, 65536)
-                f.seek(file_size - read_size)
-                tail_chunk = f.read()
-                matches = TIME_PATTERN.findall(tail_chunk)
-                if matches:
-                    last_ts = datetime.strptime(matches[-1], "%m/%d/%Y-%H:%M:%S.%f")
-        except Exception as e:
-            print(f"[find_best_log] Error reading {log_path}: {e}")
-            continue
-
+        first_ts, last_ts = read_log_time_range(log_path)
         candidates.append({
             "etl_path": etl_path,
             "log_path": log_path,
@@ -752,7 +956,26 @@ def find_best_log():
 
     if not candidates:
         return jsonify({"best_path": etl_paths[0] if etl_paths else None,
-                        "reason": "No readable log files found; defaulting to first."})
+                        "reason": "No readable log files found; defaulting to first.",
+                        "resolved_issue_time": ""})
+
+    print(f"[find_best_log] candidates={[c['etl_path'] for c in candidates]}, issue_time={issue_time}, issue_time_only_str={issue_time_only_str}")
+
+    # --- Resolve time-only issue_time_str using log file dates ---
+    # e.g. '14:50:51' -> combine with the date from the log's first/last timestamp
+    if not issue_time and issue_time_only_str and candidates:
+        try:
+            ih, im, is_ = map(int, issue_time_only_str.split(':'))
+            for c in candidates:
+                ref_ts = c["last_ts"] or c["first_ts"]
+                if ref_ts:
+                    issue_time = ref_ts.replace(hour=ih, minute=im, second=is_, microsecond=0)
+                    break
+        except Exception:
+            pass
+
+    # Serialize the resolved issue_time so the frontend can use the full datetime
+    resolved_issue_time_str = issue_time.strftime("%m/%d/%Y-%H:%M:%S") if issue_time else ""
 
     # --- If we have an issue time, pick the log whose range covers it ---
     if issue_time:
@@ -764,6 +987,7 @@ def find_best_log():
                         "best_path": c["etl_path"],
                         "reason": f"Log covers issue time {issue_time_str} "
                                   f"(range: {c['first_ts']} ~ {c['last_ts']})",
+                        "resolved_issue_time": resolved_issue_time_str,
                     })
 
         # Priority 2: log file whose last_ts is closest to (but before) issue_time
@@ -781,6 +1005,7 @@ def find_best_log():
                 "reason": f"Closest log to issue time {issue_time_str} "
                           f"(range: {best['first_ts']} ~ {best['last_ts']}, "
                           f"delta: {best_delta:.0f}s)",
+                "resolved_issue_time": resolved_issue_time_str,
             })
 
     # --- Fallback: pick the log with the latest last_ts ---
@@ -791,35 +1016,12 @@ def find_best_log():
             "best_path": latest["etl_path"],
             "reason": f"No issue time provided; picked latest log "
                       f"(range: {latest['first_ts']} ~ {latest['last_ts']})",
+            "resolved_issue_time": resolved_issue_time_str,
         })
 
     # --- Ultimate fallback ---
     return jsonify({
         "best_path": candidates[0]["etl_path"],
         "reason": "Could not determine timestamps; defaulting to first.",
+        "resolved_issue_time": "",
     })
-
-
-def _parse_issue_time(time_str: str):
-    """
-    Try to parse an issue time string in various common formats.
-    Returns a datetime object or None.
-    """
-    if not time_str:
-        return None
-
-    # Try common patterns
-    patterns = [
-        (r'(\d{2}/\d{2}/\d{4}-\d{2}:\d{2}:\d{2})', "%m/%d/%Y-%H:%M:%S"),
-        (r'(\d{2}/\d{2}/\d{4}\s+\d{2}:\d{2}:\d{2})', "%m/%d/%Y %H:%M:%S"),
-        (r'(\d{4}-\d{2}-\d{2}\s+\d{2}:\d{2}:\d{2})', "%Y-%m-%d %H:%M:%S"),
-        (r'(\d{4}/\d{2}/\d{2}-\d{2}:\d{2}:\d{2})', "%Y/%m/%d-%H:%M:%S"),
-    ]
-    for regex, fmt in patterns:
-        m = re.search(regex, time_str)
-        if m:
-            try:
-                return datetime.strptime(m.group(1), fmt)
-            except ValueError:
-                continue
-    return None

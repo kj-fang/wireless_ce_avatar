@@ -15,6 +15,7 @@ import logging
 
 from selenium import webdriver
 from selenium.webdriver.chrome.service import Service
+from urllib.parse import urljoin
 
 from utils import helpers
 
@@ -25,12 +26,13 @@ class DriverManager:
         self.all_drivers = []
         self.shutdown_event = threading.Event()
         self.main_driver = None
+        self._driver_lock = threading.Lock()
         
 
-        driver_dir = os.path.join(downloads_dir, "chrome_driver")
-        self.chrome_driver_path = self.setup_chromedriver(driver_dir)
+        self._driver_dir = os.path.join(downloads_dir, "chrome_driver")
+        self.chrome_driver_path = self.setup_chromedriver(self._driver_dir)
 
-    def run_driver(self, socketio, app, port=None):
+    def run_driver(self, socketio, app, port=None, startup_path='/'):
         try:
             signal.signal(signal.SIGINT, self.signal_handler)
             signal.signal(signal.SIGTERM, self.signal_handler)
@@ -39,7 +41,7 @@ class DriverManager:
                 rand_port = helpers.get_available_port(54000, 60000)
             else:
                 rand_port = port
-            threading.Timer(1.5, self.open_browser, args=(rand_port, )).start()
+            threading.Timer(1.5, self.open_browser, args=(rand_port, startup_path)).start()
             socketio.run(app,  host="0.0.0.0", debug=False, port=rand_port)
         except Exception as e:
             print("❌  An error has occurred：")
@@ -108,7 +110,7 @@ class DriverManager:
             print(f"❌ ChromeDriver setup failed: {e}")
             return None
 
-    def open_browser(self, port):
+    def open_browser(self, port, startup_path='/'):
         for proxy_var in ["HTTP_PROXY", "HTTPS_PROXY", "NO_PROXY"]:
             os.environ.pop(proxy_var, None)
         options = webdriver.ChromeOptions()
@@ -119,12 +121,35 @@ class DriverManager:
         options.add_experimental_option("detach", False)
         if not self.chrome_driver_path:
             print("⚠️ No pre-installed driver, downloading now...")
-            self.chrome_driver_path = self.setup_chromedriver()
+            self.chrome_driver_path = self.setup_chromedriver(self._driver_dir)
             print(f"✅ ChromeDriver ready: {self.chrome_driver_path}")
         
         self.main_driver = webdriver.Chrome(service=Service(self.chrome_driver_path), options=options)
-        self.main_driver.get(f"http://localhost:{port}")
+        # set a longer timeout for slow-loading pages, default is 120s.
+        self.main_driver.set_page_load_timeout(300)
+        base_url = f"http://localhost:{port}/"
+        target_url = urljoin(base_url, (startup_path or '/').lstrip('/'))
+        with self._driver_lock:
+            self.main_driver.get(target_url)
         threading.Thread(target=self.monitor_browser, daemon=True).start()
+
+    def navigate_main_browser(self, base_url, startup_path='/'):
+        if self.main_driver is None:
+            raise RuntimeError('Main browser is not available')
+
+        target_url = urljoin(base_url, (startup_path or '/').lstrip('/'))
+        def _navigate():
+            try:
+                with self._driver_lock:
+                    self.main_driver.get(target_url)
+                    try:
+                        self.main_driver.switch_to.window(self.main_driver.current_window_handle)
+                    except Exception:
+                        pass
+            except Exception as error:
+                print(f"⚠️ Failed to navigate main browser: {error}")
+
+        threading.Thread(target=_navigate, daemon=True).start()
     
     def get_chrome_version(self):
         """get local chrome version"""
@@ -314,7 +339,8 @@ class DriverManager:
 
     def is_browser_closed(self):
         try:
-            return len(self.main_driver.window_handles) == 0
+            with self._driver_lock:
+                return len(self.main_driver.window_handles) == 0
         except Exception as e:
             msg = str(e).lower()
             if "invalid session id" not in msg and "session deleted" not in msg:
@@ -325,12 +351,13 @@ class DriverManager:
         print("📴 Received shutdown from client")
         print("all_drivers", self.all_drivers)
         
-        for driver in self.all_drivers:
-            try:
-                print("now closing: ", driver)
-                driver.quit()
-            except Exception as e:
-                print(f"⚠️ Failed to quit driver: {e}")
+        with self._driver_lock:
+            for driver in self.all_drivers:
+                try:
+                    print("now closing: ", driver)
+                    driver.quit()
+                except Exception as e:
+                    print(f"⚠️ Failed to quit driver: {e}")
         self.shutdown_event.set()
         print("All ChromeDriver instances stopped. Shutting down server.")
         os.kill(os.getpid(), signal.SIGINT) 

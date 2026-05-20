@@ -753,10 +753,17 @@ def parse_single_binary(parser: object) -> None:
     parser.copy_parsed_log_to_orig_path()
 
 
+from utils.helpers import to_long_path as _to_long_path  # shared MAX_PATH helper
+
+
 def wpp_ddd_parser_run(binary_path: str, is_use_custom_filter=False, is_add_tracefmt_format=False) -> None:
     """
     entry point for main parser script
     """
+    # Normalize once at the top so every subsequent os.path/Path call uses the
+    # extended-length form, avoiding MAX_PATH failures before any file is processed.
+    binary_path = _to_long_path(binary_path)
+
     binaries_file_list = []
 
     # create list of all potential files to parse
@@ -765,7 +772,7 @@ def wpp_ddd_parser_run(binary_path: str, is_use_custom_filter=False, is_add_trac
     elif os.path.isdir(binary_path):
         # in case of a directory, look for all relevant files recursively
         for file in Path(binary_path).rglob("*"):
-            binaries_file_list.append(str(file))
+            binaries_file_list.append(_to_long_path(str(file)))
 
     # iterate over the list of files and parse each one of them
     for binary_file in binaries_file_list:

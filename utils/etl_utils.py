@@ -149,14 +149,15 @@ def extract_timestamp_from_folder(folder_path):
     Returns datetime object or None
     """
     try:
-        # Extract date and time pattern: MM-DD-YYYY_HH-MM-SS
+        # Extract date and time pattern: DD-MM-YYYY_HH-MM-SS
         pattern = r'(\d{2})-(\d{2})-(\d{4})_(\d{2})-(\d{2})-(\d{2})'
         match = re.search(pattern, folder_path)
         
         if match:
-            month, day, year, hour, minute, second = match.groups()
+            day, month, year, hour, minute, second = match.groups()
             return datetime(int(year), int(month), int(day), 
-                          int(hour), int(minute), int(second))
+                        int(hour), int(minute), int(second))
+
     except Exception as e:
         print(f"Failed to extract timestamp from folder: {folder_path}\n{e}")
     

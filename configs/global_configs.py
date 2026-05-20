@@ -1,4 +1,5 @@
 from typing import Optional, Dict, Any
+import secrets
 from services.driver_manage_service import DriverManager
 from services.llm_service import LLM_helper
 from flask_socketio import SocketIO
@@ -14,10 +15,7 @@ class GlobalConfig:
         self.socketio: Optional[SocketIO] = None
         self.driver_manager: Optional[DriverManager] = None
         self.llm_helper: Optional[LLM_helper] = None
-        self.log_chatbot_agent: Optional[Any] = None   # WifiLogAgentSystem
-        self.nw_analysis_agent: Optional[Any] = None   # WifiLogAgentSystem (NW Analysis)
         self.key_module: Optional[Any] = None
-        self.key: Optional[Any] = None
         
         # Directory paths
         self.avatarfiles_dir: Optional[str] = None
@@ -49,14 +47,6 @@ class GlobalConfig:
     # LLM Helper
     def set_llm_helper(self, llm_helper: LLM_helper) -> None:
         self.llm_helper = llm_helper
-
-    # Log Chatbot Agent
-    def set_log_chatbot_agent(self, agent: Any) -> None:
-        self.log_chatbot_agent = agent
-
-    # NW Analysis Agent
-    def set_nw_analysis_agent(self, agent: Any) -> None:
-        self.nw_analysis_agent = agent
     
     # Key management
     def set_key(self, key: Any) -> None:
@@ -101,8 +91,6 @@ class GlobalConfig:
             'socketio': self.socketio is not None,
             'driver_manager': self.driver_manager is not None,
             'llm_helper': self.llm_helper is not None,
-            'log_chatbot_agent': self.log_chatbot_agent is not None,
-            'nw_analysis_agent': self.nw_analysis_agent is not None,
             'key': self.key is not None,
             'project_root': self.project_root is not None,
         }

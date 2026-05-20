@@ -24,6 +24,7 @@ from typing import Dict, List, Optional, Tuple
 from pydantic import BaseModel, Field
 
 from utils import helpers
+from utils.issue_time_utils import resolve_issue_time
 from utils.log_parser_preprocess import (
     extract_enabled_keywords_from_filter_file,
     filter_log_by_keywords,
@@ -665,9 +666,12 @@ class WifiLogAgentSystem:
             f"(Seg1: {len(self._driver_init_lines)} + Seg2: {len(seg2_lines)} — overlap: {overlap})"
         )
         if self.issue_time:
-            print(f"[PreScan]  Skill filter will use: scoped {len(merged)} lines")
+            print(f"[PreScan]  Skill filter will use: scoped {len(merged)} lines (±5 min window around issue_time)")
         else:
-            print(f"[PreScan]  Skill filter will use: full raw log (no issue_time — scoping skipped)")
+            print(
+                f"[PreScan]  Skill filter will use: scoped {len(merged)} lines "
+                f"(no issue_time — Segment2 falls back to Segment1 end → EOF)"
+            )
 
         scoped_path = self._export_scoped_log_file()
         if scoped_path:
@@ -693,7 +697,7 @@ class WifiLogAgentSystem:
 
     def _export_assembled_log_file(self) -> str:
         """
-        Increment export index on each call (fliterlog1, fliterlog2, ...)
+        Increment export index on each call (filterlog1, filterlog2, ...)
         and overwrite the existing file with the same index.
         """
         if not self.current_log_path:
@@ -706,7 +710,7 @@ class WifiLogAgentSystem:
 
         # Always advance index; write_text will overwrite same-name files.
         self._filter_export_counter += 1
-        candidate = parent_dir / f"fliterlog{self._filter_export_counter}.txt"
+        candidate = parent_dir / f"filterlog{self._filter_export_counter}.txt"
 
         try:
             candidate.write_text(export_text, encoding="utf-8")
@@ -1530,21 +1534,17 @@ class WifiLogAgentSystem:
             self.conversation_history.append({"role": "user", "content": user_message})
 
             # --- Issue time extraction ---
-            # Prefer pre-set issue_time (e.g. from attachment_time via
-            # prime_with_context), then try user message, then description.
+            # By the time we get here `self.issue_time` is normally already
+            # set: prime_with_context resolved it from attachment_time (and
+            # fell back to the log's latest timestamp if needed), and the
+            # /chat route may have overridden it with the sidebar value.
+            # Only run the LLM-based extractor if everything upstream came
+            # back empty — and try the user's message first.
             if self.issue_time:
-                time_source = "attachment_time"
+                time_source = "primed"
             else:
                 self.issue_time = self._extract_issue_time(user_message)
                 time_source = "user_message"
-
-            if not self.issue_time and self.issue_context.get("description"):
-                self.issue_time = self._extract_issue_time(self.issue_context["description"])
-                time_source = "issue_context.description"
-
-            if not self.issue_time and self.issue_context.get("subject"):
-                self.issue_time = self._extract_issue_time(self.issue_context["subject"])
-                time_source = "issue_context.subject"
 
             if self.issue_time:
                 _emit({
@@ -1664,15 +1664,15 @@ class WifiLogAgentSystem:
                     f"completion={usage.completion_tokens} "
                     f"total={usage.total_tokens}"
                 )
-                _emit({
-                    "role": "token_usage",
-                    "content": (
-                        f"📊 **Token Usage (Step {step_idx + 1}):** "
-                        f"Prompt: {usage.prompt_tokens} | "
-                        f"Completion: {usage.completion_tokens} | "
-                        f"Total: {usage.total_tokens}"
-                    ),
-                })
+                # _emit({
+                #     "role": "token_usage",
+                #     "content": (
+                #         f"📊 **Token Usage (Step {step_idx + 1}):** "
+                #         f"Prompt: {usage.prompt_tokens} | "
+                #         f"Completion: {usage.completion_tokens} | "
+                #         f"Total: {usage.total_tokens}"
+                #     ),
+                # })
                 step_token_usages.append({
                     "step": step_idx + 1,
                     "prompt": usage.prompt_tokens,
@@ -1812,7 +1812,7 @@ class WifiLogAgentSystem:
                         _emit({"role": "agent", "content": f"🔍 **Fetching filtered logs** for `{skill_label}`..."})
                         tool_result = self._invoke_tool("fetch_filtered_logs", {"skill_name": skill_label})
                         preview = tool_result[:400].replace('\n', ' ') + "..."
-                        _emit({"role": "tool", "content": f"📄 **Logs loaded** (`{skill_label}`):\n```\n{preview}\n```"})
+                        # _emit({"role": "tool", "content": f"📄 **Logs loaded** (`{skill_label}`):\n```\n{preview}\n```"})
 
                         # No-progress detection
                         if "New lines merged this round: 0" in tool_result or "Skill cache hit:" in tool_result:
@@ -2214,12 +2214,12 @@ class WifiLogAgentSystem:
                         + "\n"
                         "PHASE 1 (SYMPTOM LOCALIZATION): \n"
                         # "   - Identify the exact timestamp when the reported failure occurred in the logs.\n"
-                        "   - Use the most relevant skill to analyze the logs by calling`fetch_focused_logs`.\n"
+                        "   - Use the most relevant one skill to analyze the logs by calling`fetch_focused_logs`.\n"                     
                         "PHASE 2 (SOURCE RETROSPECTIVE - optional):\n"
-                        "   - if needed, based on the analysis from PHASE1, use additional skill to get more detail from the logs.\n"
+                        "   - if needed, based on the analysis from PHASE1, use additional skills to get more detail from the logs.\n"
                         "PHASE 3. Call `submit_final_report` to conclude.\n\n"
                         "CRITICAL CONSTRAINTS:\n"
-                        "- Max step is 6, and use at most 2 skills per step.\n"
+                        "- Max step is 8\n"
                         "- 🛑 NO REPETITION: Do not fetch the same data twice. If Phase 1 keywords are found in Phase 2, ignore them.\n"
                         "- 🛑 IMMEDIATELY call `submit_final_report` after your detail query. Do not over-analyze.\n\n"
                         "Your `markdown_summary` format (REQUIRED):\n"
@@ -2242,21 +2242,6 @@ class WifiLogAgentSystem:
         """Centralized tool dispatch used by both chat and analyze flows."""
         if tool_name == "fetch_filtered_logs":
             return self.fetch_filtered_logs(args.get("skill_name", ""))
-
-        if tool_name == "analyze_sleepstudy_report":
-            from services.sleepstudy_service import analyze_sleepstudy
-            result = analyze_sleepstudy(
-                report_path=args.get("report_path", ""),
-                top_n=int(args.get("top_n", 3)),
-                wifi_only=bool(args.get("wifi_only", True)),
-                max_sessions=int(args.get("max_sessions", 10)),
-                drips_threshold=float(args.get("drips_threshold", 80.0)),
-            )
-            # Cap to keep the agent's context window safe.
-            cap = self.MAX_TOOL_RESULT_CHARS_IN_MESSAGES
-            if len(result) > cap:
-                result = result[:cap] + f"\n\u26a0 Output truncated at {cap} chars."
-            return result
 
         if tool_name == "query_log_detail":
             anchor_text = args.get("anchor_text", "")
@@ -2327,24 +2312,6 @@ class WifiLogAgentSystem:
 
         self._append_tool_message(messages, tool_call, "Final report accepted.")
         emit_cb({"role": "agent", "content": " **Conclusion Reached!** Generating report."})
-        # Defensive coercion: some models return array fields as strings or
-        # dicts despite the JSON schema. Normalise to list[str] so the frontend
-        # never hits `.map is not a function`.
-        for _key in ("recommended_actions", "involved_skills"):
-            _val = args.get(_key)
-            if _val is None:
-                args[_key] = []
-            elif isinstance(_val, str):
-                # Split on newlines / bullets / semicolons; fall back to single item.
-                _parts = [p.strip("- *•\t ").strip()
-                          for p in re.split(r"[\n;]+", _val) if p.strip()]
-                args[_key] = _parts or [_val]
-            elif isinstance(_val, dict):
-                args[_key] = [str(v) for v in _val.values()]
-            elif not isinstance(_val, list):
-                args[_key] = [str(_val)]
-            else:
-                args[_key] = [str(x) for x in _val]
         self._inject_analysis_into_history(issue_description, steps, args)
         return {
             "type": "report",
@@ -2382,10 +2349,10 @@ class WifiLogAgentSystem:
 
         line_count = tool_result.count('\n')
         preview = tool_result[:500].replace('\n', ' ') + "..."
-        emit_cb({
-            "role": "tool",
-            "content": f" **Logs Loaded** (`{skill_name}`, ~{line_count} lines):\n```\n{preview}\n```"
-        })
+        # emit_cb({
+        #     "role": "tool",
+        #     "content": f" **Logs Loaded** (`{skill_name}`, ~{line_count} lines):\n```\n{preview}\n```"
+        # })
 
         # Expert rules are prepended in full (never clipped); only the evidence
         # section is clipped so the tool_result immediately follows tool_use.
@@ -2647,40 +2614,14 @@ class WifiLogAgentSystem:
             "description": description,
             "issue_type": issue_type,
         }
-        # Pre-parse attachment_time so _chat_with_tools can use it directly
-        # support multiple date formats (session deserialization may result in different formats)
-        
-        if attachment_time:
-            self.issue_time = None
-            self._issue_time_time_only = False
-            _formats = [
-                ("%m/%d/%Y-%H:%M:%S", False),
-                ("%m/%d/%Y %H:%M:%S", False),
-                ("%Y-%m-%dT%H:%M:%S", False),
-                ("%Y-%m-%d %H:%M:%S", False),
-                ("%Y-%m-%d %H:%M",    False),
-                ("%m/%d/%Y-%H:%M:%S.%f", False),
-                ("%H:%M:%S", True),
-                ("%H:%M", True),
-            ]
-            for fmt, is_time_only in _formats:
-                try:
-                    parsed = datetime.strptime(attachment_time, fmt)
-                    if is_time_only:
-                        # Keep clock time now; pre-scan will align date to log range.
-                        self.issue_time = datetime.combine(datetime.now().date(), parsed.time())
-                        self._issue_time_time_only = True
-                    else:
-                        self.issue_time = parsed
-                        self._issue_time_time_only = False
-                    print(f"[DEBUG] prime_with_context parsed issue_time={self.issue_time} from '{attachment_time}' fmt={fmt}")
-                    break
-                except ValueError:
-                    continue
-            if self.issue_time is None:
-                print(f"[DEBUG] prime_with_context: could not parse attachment_time='{attachment_time}'")
-        else:
-            self._issue_time_time_only = False
+        # Resolve issue_time once: parse attachment_time strictly, fall back to
+        # the log file's latest timestamp when no usable input exists, and
+        # auto-align time-only strings against the log date. After this call
+        # `self.issue_time` is the canonical value used everywhere downstream.
+        dt, src = resolve_issue_time(attachment_time, self.current_log_path)
+        self.issue_time = dt
+        self._issue_time_time_only = (src == "input_time_only")
+        print(f"[DEBUG] prime_with_context issue_time={dt} source={src} raw='{attachment_time}'")
         context_parts = []
         if case_nbr:
             context_parts.append(f"Case: {case_nbr}")

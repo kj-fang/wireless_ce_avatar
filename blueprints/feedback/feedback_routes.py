@@ -6,11 +6,34 @@ agent responses. Decoupled from the chatbot agent: failures here never
 affect chat behaviour.
 """
 
+import re
+
 from flask import Blueprint, request, jsonify, session
 
 from services import feedback_service
 
 feedback_bp = Blueprint("feedback", __name__, url_prefix="/feedback")
+
+
+# ---- Defense-in-depth: validate client-supplied IDs at the route
+# boundary before they reach feedback_service. The service layer ALSO
+# sanitises (see feedback_service._safe_id), but route-level rejection
+# is preferred because:
+#   * fast-fail with a clear 400 to the client instead of silently
+#     substituting "unknown" downstream,
+#   * an obvious choke-point in case any future service function
+#     forgets to call _safe_id on a path component,
+#   * one consistent allow-list across both /feedback/* and
+#     services.feedback_service so the schema is unambiguous.
+_SAFE_ID_RE = re.compile(r"^[A-Za-z0-9_-]{1,80}$")
+
+
+def _bad_id_response(field_name: str):
+    """Build the 400 response used when an ID fails the allow-list."""
+    return jsonify({
+        "success": False,
+        "error": f"{field_name} must match [A-Za-z0-9_-]{{1,80}}",
+    }), 400
 
 
 @feedback_bp.route("/vote", methods=["POST"])
@@ -44,19 +67,37 @@ def vote():
             "success": False,
             "error": "conversation_id and turn_id are required",
         }), 400
+    if not _SAFE_ID_RE.match(conversation_id):
+        return _bad_id_response("conversation_id")
+    if not _SAFE_ID_RE.match(turn_id):
+        return _bad_id_response("turn_id")
 
     # Reuse the chatbot's anonymous session id; no login required.
     session_id = session.get("chatbot_session_id", "")
+
+    # Optional context for weighting. The frontend sets `yaml_modified` to
+    # true when the user edited the side-panel skill configuration earlier
+    # in the session — those vote events are weighted "high" so reviewers
+    # see them first.
+    yaml_modified = bool(session.get("yaml_modified"))
 
     ok = feedback_service.record_vote(
         session_id=session_id,
         conversation_id=conversation_id,
         turn_id=turn_id,
         vote=vote_val,
+        yaml_modified=yaml_modified,
     )
     if not ok:
         return jsonify({"success": False, "error": "failed to record vote"}), 500
-    return jsonify({"success": True})
+
+    # Surface the "modified YAML" hint so the client can show the
+    # post-vote upload prompt without having to track this state itself.
+    return jsonify({
+        "success": True,
+        "yaml_modified": yaml_modified,
+        "yaml_modified_path": session.get("yaml_modified_path", "") or "",
+    })
 
 
 @feedback_bp.route("/detail", methods=["POST"])
@@ -96,6 +137,10 @@ def detail():
             "success": False,
             "error": "conversation_id and turn_id are required",
         }), 400
+    if not _SAFE_ID_RE.match(conversation_id):
+        return _bad_id_response("conversation_id")
+    if not _SAFE_ID_RE.match(turn_id):
+        return _bad_id_response("turn_id")
 
     raw_vote = data.get("vote")
     try:
@@ -107,12 +152,72 @@ def detail():
 
     session_id = session.get("chatbot_session_id", "")
 
+    # The "More feedback" modal lets the user opt to attach their local
+    # skill YAML alongside the bug report (the "When uploaded skill has
+    # issues" branch of the v2 flow). We resolve the file server-side from
+    # the session marker so the client cannot point us at an arbitrary path.
+    attached_yaml_path = ""
+    if data.get("attach_local_yaml"):
+        attached_yaml_path = session.get("yaml_modified_path", "") or ""
+        if not attached_yaml_path:
+            # Fall back to the most recent local file on disk.
+            try:
+                from utils.skills_yaml_utils import find_latest_local_yaml
+                local_path, _ = find_latest_local_yaml()
+                attached_yaml_path = str(local_path) if local_path else ""
+            except Exception:
+                attached_yaml_path = ""
+
+    yaml_modified = bool(session.get("yaml_modified"))
+
+    # Log attachment is opt-in: only ship the session log when the user
+    # explicitly ticked "Attach session log" in the modal. The log path is
+    # resolved server-side from the session so the client cannot designate
+    # an arbitrary file for upload.
+    #
+    # Spelled out as an explicit if/else (instead of
+    # `session.get(...) or "" if attach_log else ""`) because the
+    # one-liner relies on `or` binding tighter than the ternary, which
+    # is correct today but reads as ambiguous and is easy to break in
+    # future edits.
+    attach_log = bool(data.get("attach_log"))
+    if attach_log:
+        log_path = session.get("chatbot_log_path", "") or ""
+    else:
+        log_path = ""
+
+    # New high-ACE-value structured fields (replace the old free-form
+    # `general_comment`). `general_comment` is still forwarded for
+    # back-compat with any older client that hasn't refreshed, but the
+    # new UI no longer surfaces it.
+    raw_evidence = data.get("evidence_log_lines")
+    if isinstance(raw_evidence, str):
+        # Accept legacy textarea-as-string payloads too.
+        raw_evidence = [
+            ln.rstrip() for ln in raw_evidence.splitlines() if ln.strip()
+        ]
+    elif not isinstance(raw_evidence, list):
+        raw_evidence = []
+
     ok = feedback_service.record_detail(
         session_id=session_id,
         conversation_id=conversation_id,
         turn_id=turn_id,
         vote=vote_val,
         issues=data.get("issues") or [],
+        correct_root_cause=(data.get("correct_root_cause") or "").strip(),
+        correct_conclusion_tag=(data.get("correct_conclusion_tag") or "").strip(),
+        correct_skill=(data.get("correct_skill") or "").strip(),
+        correct_approach=(data.get("correct_approach") or "").strip(),
+        evidence_log_lines=raw_evidence,
+        agent_workflow=(data.get("agent_workflow") or "").strip(),
+        severity=data.get("severity"),
+        yaml_modified=yaml_modified,
+        attached_yaml_path=attached_yaml_path,
+        log_path=log_path,
+        attach_log=attach_log,
+        # Legacy free-form fields forwarded only for old-client back-compat.
+        expected_outcome=(data.get("expected_outcome") or "").strip(),
         general_comment=(data.get("general_comment") or "").strip(),
     )
     if not ok:
@@ -120,6 +225,91 @@ def detail():
             "success": False,
             "error": "nothing to record (all fields empty)",
         }), 400
+    return jsonify({"success": True})
+
+
+@feedback_bp.route("/step_vote", methods=["POST"])
+def step_vote():
+    """
+    Per-step thumbs from the live conversation view. Each click on a
+    reasoning step's mini 👍/👎 fires one request.
+
+    Request JSON:
+      { "conversation_id": "...", "turn_id": "...",
+        "step_index": 3, "vote": 1 | -1 }
+    """
+    data = request.get_json(silent=True) or {}
+    conversation_id = (data.get("conversation_id") or "").strip()
+    turn_id = (data.get("turn_id") or "").strip()
+    if not conversation_id or not turn_id:
+        return jsonify({
+            "success": False,
+            "error": "conversation_id and turn_id are required",
+        }), 400
+    if not _SAFE_ID_RE.match(conversation_id):
+        return _bad_id_response("conversation_id")
+    if not _SAFE_ID_RE.match(turn_id):
+        return _bad_id_response("turn_id")
+
+    try:
+        step_index = int(data.get("step_index"))
+        vote = int(data.get("vote"))
+    except (TypeError, ValueError):
+        return jsonify({
+            "success": False,
+            "error": "step_index and vote must be integers",
+        }), 400
+    if vote not in (1, -1):
+        return jsonify({"success": False, "error": "vote must be 1 or -1"}), 400
+
+    session_id = session.get("chatbot_session_id", "")
+    ok = feedback_service.record_step_vote(
+        session_id=session_id,
+        conversation_id=conversation_id,
+        turn_id=turn_id,
+        step_index=step_index,
+        vote=vote,
+    )
+    if not ok:
+        return jsonify({"success": False, "error": "failed to record"}), 500
+    return jsonify({"success": True})
+
+
+@feedback_bp.route("/skill_helpful", methods=["POST"])
+def skill_helpful():
+    """
+    Post-thumbs-up quick prompt: the user names which skill drove the
+    correct answer. Increments the ACE `helpful_count` for that skill
+    when aggregated downstream.
+
+    Request JSON: { "conversation_id": "...", "turn_id": "...",
+                    "skill_id": "Connection Flow" }
+    """
+    data = request.get_json(silent=True) or {}
+    conversation_id = (data.get("conversation_id") or "").strip()
+    turn_id = (data.get("turn_id") or "").strip()
+    skill_id = (data.get("skill_id") or "").strip()
+    if not conversation_id or not turn_id or not skill_id:
+        return jsonify({
+            "success": False,
+            "error": "conversation_id, turn_id, and skill_id are required",
+        }), 400
+    if not _SAFE_ID_RE.match(conversation_id):
+        return _bad_id_response("conversation_id")
+    if not _SAFE_ID_RE.match(turn_id):
+        return _bad_id_response("turn_id")
+    # skill_id can legitimately contain spaces or punctuation ("Connection Flow"),
+    # so don't enforce _SAFE_ID_RE — it never reaches a filesystem path.
+
+    session_id = session.get("chatbot_session_id", "")
+    ok = feedback_service.record_helpful_skill(
+        session_id=session_id,
+        conversation_id=conversation_id,
+        turn_id=turn_id,
+        skill_id=skill_id,
+    )
+    if not ok:
+        return jsonify({"success": False, "error": "failed to record"}), 500
     return jsonify({"success": True})
 
 

@@ -19,9 +19,16 @@ def get_llm_analysis():
     try:
         llm_helper: LLM_helper = app_config.llm_helper
         if llm_helper != None:
+            # Rehydrate from the on-disk sidecar so the LLM analysis
+            # sees the comments/attachment_list payload that doesn't
+            # fit in the cookie session for heavyweight cases.
+            from models.models import CaseContext as _CaseContextLocal
+            _ctx_full = _CaseContextLocal.from_session(
+                session.get("case_context") or {}
+            ).to_dict()
             ai_analysis = llm_helper.analyze_desc(
                 prompt_path = session['prompt_file_path'],
-                case_context = session["case_context"]
+                case_context = _ctx_full
             )
             if type(ai_analysis) == dict:
                 session['classification'] = ai_analysis["Classification"]

@@ -107,8 +107,12 @@ def _extract_issue_context() -> dict:
             if isinstance(sf, (list, tuple)) and len(sf) >= 1:
                 selected_names.add(sf[0])
 
-        # Step 2: Read from case_context.attachment_list (same data source as the template)
+        # Step 2: Read from case_context.attachment_list (same data source as the template).
+        # Heavy fields like attachment_list are stashed on disk for big
+        # cases — go through from_session() so the sidecar is loaded.
         raw_ctx_dict = session.get("case_context", {})
+        if isinstance(raw_ctx_dict, dict) and raw_ctx_dict:
+            raw_ctx_dict = CaseContext.from_session(raw_ctx_dict).to_dict()
         att_list = raw_ctx_dict.get("attachment_list", []) if isinstance(raw_ctx_dict, dict) else []
 
         # Step 3: Prefer user-selected attachments; if selected_names is empty, take the first one
@@ -341,6 +345,14 @@ def set_log():
         return jsonify({"success": False, "error": "log_path is required"}), 400
 
     try:
+        # Capture the previous log_path + conv_id BEFORE we rotate, so the
+        # client can show a "log switched, chat cleared" toast and offer
+        # undo within a short window. `rotated` is True only when this
+        # genuinely replaces a different log (not the first load).
+        prev_log_path = (session.get("chatbot_log_path") or "").strip()
+        rotated = bool(prev_log_path) and prev_log_path != log_path
+        prev_conv_id = (session.get("feedback_conversation_id") or "") if rotated else ""
+
         agent = _get_or_create_agent(skip_prime=True)
         agent.current_log_path = log_path
         agent.reset_conversation()          # fresh conversation for a new file
@@ -368,6 +380,11 @@ def set_log():
             "message": f"Log file set: {log_path}",
             "skills": agent.get_skill_descriptions(),
             "issue_time": format_issue_time(agent.issue_time),
+            # Hints for the client to clear chat history + show the toast.
+            "rotated": rotated,
+            "previous_log_path": prev_log_path if rotated else "",
+            "previous_conversation_id": prev_conv_id if rotated else "",
+            "new_conversation_id": new_conv_id,
         })
     except Exception as e:
         return jsonify({"success": False, "error": str(e)}), 500
@@ -404,6 +421,13 @@ def chat():
     except Exception:
         max_steps = 6
     max_steps = max(1, min(12, max_steps))
+
+    # Parent-message id: client-generated UUID stamped on every iteration
+    # of a single Send click. When the user types one message that yields
+    # multiple incident analyses (multi-time chained calls), every
+    # resulting turn shares this id, so downstream ETL can recover the
+    # co-firing relationship from the bronze layer.
+    parent_message_id = (data.get("parent_message_id") or "").strip()
 
     try:
         agent = _get_or_create_agent()
@@ -523,6 +547,7 @@ def chat():
                             duration_ms=int((datetime.now() - turn_started_at).total_seconds() * 1000),
                             issue=_issue_ctx_for_snapshot,
                             log_path=getattr(agent, "current_log_path", "") or "",
+                            parent_message_id=parent_message_id,
                         )
                         yield f"data: {json.dumps({'type': 'done', 'turn_id': turn_id, 'conversation_id': conversation_id, 'result': payload}, ensure_ascii=False)}\n\n"
                         break
@@ -556,6 +581,7 @@ def chat():
                 duration_ms=int((datetime.now() - turn_started_at).total_seconds() * 1000),
                 issue=_issue_ctx_for_snapshot,
                 log_path=getattr(agent, "current_log_path", "") or "",
+                parent_message_id=parent_message_id,
             )
 
             def generate():
@@ -1025,3 +1051,896 @@ def find_best_log():
         "reason": "Could not determine timestamps; defaulting to first.",
         "resolved_issue_time": "",
     })
+
+
+# ==================================================================
+# Skills YAML lifecycle — dated filenames (skills_YYYY-MM-DD.yaml)
+# ==================================================================
+#
+# Endpoints below implement the SVG v2 "Skill" column: detect cloud
+# revisions newer than the local cache, let the user opt in to replace
+# the local copy, edit individual skills through a structured side panel,
+# and upload a user-tuned local file back to the share folder.
+# ------------------------------------------------------------------
+
+from configs.path_configs import (
+    LOCAL_SKILLS_YAML as _LOCAL_SKILLS_YAML,
+    SKILLS_CONFIG_DIR_prim as _SK_DIR_prim,
+    SKILLS_CONFIG_DIR_bkup as _SK_DIR_bkup,
+)
+from utils.skills_yaml_utils import (
+    current_active_yaml as _current_active_yaml,
+    find_latest_cloud_baseline_yaml as _latest_cloud_baseline,
+    find_latest_share_yaml as _latest_share_yaml,
+    find_latest_user_yaml as _latest_user_yaml,
+    get_active_source as _get_active_source,
+    local_cloud_baseline_dir as _cloud_local_dir,
+    local_user_overrides_dir as _user_local_dir,
+    refresh_local_cloud_baseline as _refresh_cloud_baseline,
+    resolve_cloud_skills_dir as _resolve_cloud_skills_dir,
+    set_active_source as _set_active_source,
+    skills_yaml_status as _skills_yaml_status_payload,
+    today_dated_filename as _today_yaml_filename,
+)
+
+
+def _read_yaml_file(path) -> dict:
+    """Load a YAML file as a plain dict. Raises on parse failure."""
+    import yaml
+    with open(path, "r", encoding="utf-8") as f:
+        data = yaml.safe_load(f) or {}
+    if not isinstance(data, dict):
+        raise ValueError(
+            f"Invalid YAML structure: expected a dict, got {type(data).__name__}"
+        )
+    return data
+
+
+_CLOUD_YAML_HEADER = (
+    "# skill features:\n"
+    "#   name: skill name\n"
+    "#   description: a brief description of the skill\n"
+    "#   keywords: use \"-\" to represent each keyword\n"
+    "#   expert_rules: use \"|\" to start a multi-line string\n"
+    "\n"
+)
+
+_USER_YAML_WRITE_LOCK = threading.Lock()
+
+
+def _write_yaml_file(path, data: dict, disabled_comments: dict | None = None) -> None:
+    """
+    Write a dict to a YAML file using the same hand-authored layout the
+    cloud baseline file uses, so files written from the side-panel editor
+    are visually consistent with files maintained by the Wireless CE team.
+
+    Conventions copied from the cloud `skills_<date>.yaml`:
+      * Top-of-file schema comment block.
+      * Scalar VALUES are double-quoted (mapping KEYS stay unquoted).
+      * Lists indent one level deeper than their parent key
+        (`  keywords:\\n    - "..."`).
+      * Multi-line strings use the literal block scalar `|`.
+      * Top-level skills are separated by a blank line.
+
+    ``disabled_comments`` (optional) re-injects commented-out keyword /
+    exclusive entries — yaml.safe_load drops comments on load, so this
+    parameter is the bridge that keeps cloud-baseline "historically used
+    but disabled" entries from disappearing on round-trip.
+    Shape: ``{skill_key: {'keywords' | 'exclusive': [str, ...]}}``.
+    """
+    import yaml
+    from pathlib import Path as _P
+
+    class _CloudDumper(yaml.SafeDumper):
+        # Track whether we're currently emitting a mapping KEY vs a VALUE
+        # so the str representer can quote values without quoting keys.
+        pass
+
+    _CloudDumper._cloud_in_key = False  # type: ignore[attr-defined]
+
+    def _str_representer(dumper, value):
+        # Multi-line text → literal block style for readability.
+        #
+        # PyYAML silently FALLS BACK to a double-quoted scalar (with
+        # embedded "\n" / "\t" escapes) whenever the input contains
+        # characters the literal block style can't represent safely:
+        #
+        #   * line-internal trailing whitespace → rstrip each line
+        #   * tab characters anywhere           → convert to 4 spaces
+        #     (cloud-baseline `[ALON \t\t]` cosmetic alignment survives
+        #      with spaces and looks the same in a monospace editor)
+        #
+        # Also append a final "\n" so the emitter uses "|" (clip) instead
+        # of "|-" (strip), matching the hand-authored cloud baseline.
+        if isinstance(value, str) and "\n" in value:
+            value = value.replace("\t", "    ")
+            value = "\n".join(line.rstrip() for line in value.split("\n"))
+            if not value.endswith("\n"):
+                value = value + "\n"
+            return dumper.represent_scalar("tag:yaml.org,2002:str", value, style="|")
+        # Plain scalar for keys, quoted for values.
+        if getattr(dumper, "_cloud_in_key", False):
+            return dumper.represent_scalar("tag:yaml.org,2002:str", value)
+        # For value scalars, flatten stray tabs so the YAML emitter never
+        # has to fall back to escape-heavy quoting.
+        cleaned = value.replace("\t", "    ")
+        # Smart quote pick: when the content already contains double
+        # quotes (e.g. PDF examples pasted by the user) but no single
+        # quotes, use single-quoted YAML so we don't litter the output
+        # with `\"...\"` escapes. Default to double-quoted otherwise to
+        # match the cloud baseline's hand-authored convention.
+        if '"' in cleaned and "'" not in cleaned:
+            style = "'"
+        else:
+            style = '"'
+        return dumper.represent_scalar("tag:yaml.org,2002:str", cleaned, style=style)
+
+    _CloudDumper.add_representer(str, _str_representer)
+
+    # Re-implement represent_mapping so KEYs go through the unquoted
+    # path while VALUEs get the double-quote treatment.
+    def _represent_mapping(self, tag, mapping, flow_style=None):
+        value = []
+        node = yaml.MappingNode(tag, value, flow_style=flow_style)
+        if self.alias_key is not None:
+            self.represented_objects[self.alias_key] = node
+        best_style = True
+        if hasattr(mapping, "items"):
+            mapping = list(mapping.items())
+        for item_key, item_value in mapping:
+            self._cloud_in_key = True
+            node_key = self.represent_data(item_key)
+            self._cloud_in_key = False
+            node_value = self.represent_data(item_value)
+            if not (isinstance(node_key, yaml.ScalarNode) and not node_key.style):
+                best_style = False
+            if not (isinstance(node_value, yaml.ScalarNode) and not node_value.style):
+                best_style = False
+            value.append((node_key, node_value))
+        if flow_style is None:
+            if self.default_flow_style is not None:
+                node.flow_style = self.default_flow_style
+            else:
+                node.flow_style = best_style
+        return node
+    _CloudDumper.represent_mapping = _represent_mapping
+
+    # Indent list items so they sit ONE level deeper than the parent key
+    # (i.e. never use indentless sequences).
+    def _increase_indent(self, flow=False, indentless=False):
+        return yaml.SafeDumper.increase_indent(self, flow, False)
+    _CloudDumper.increase_indent = _increase_indent
+
+    def _dump_one(skill_key: str, skill_val) -> str:
+        return yaml.dump(
+            {skill_key: skill_val},
+            Dumper=_CloudDumper,
+            allow_unicode=True,
+            sort_keys=False,
+            default_flow_style=False,
+            width=1000,
+        ).rstrip("\n")
+
+    if isinstance(data, dict):
+        blocks = [_dump_one(k, v) for k, v in data.items()]
+    else:
+        blocks = [yaml.dump(
+            data, Dumper=_CloudDumper, allow_unicode=True,
+            sort_keys=False, default_flow_style=False, width=1000,
+        ).rstrip("\n")]
+
+    content = _CLOUD_YAML_HEADER + "\n\n".join(blocks) + "\n"
+
+    # Re-inject any commented-out keyword / exclusive entries that the
+    # caller asked us to preserve (`disabled_comments`). yaml.safe_load
+    # drops comments on load, so we scan the cloud baseline / previous
+    # user file separately and stitch them back in here.
+    if disabled_comments:
+        content = _inject_disabled_comments(content, disabled_comments)
+
+    p = _P(path)
+    p.parent.mkdir(parents=True, exist_ok=True)
+    tmp = p.with_name(f"{p.name}.{uuid.uuid4().hex}.tmp")
+    try:
+        tmp.write_text(content, encoding="utf-8")
+        tmp.replace(p)
+    finally:
+        try:
+            if tmp.exists():
+                tmp.unlink()
+        except OSError:
+            pass
+
+
+def _persist_user_yaml_snapshot(data: dict) -> object:
+    """
+    Persist the current user-edited YAML under today's dated filename.
+
+    The file name is date-based, so repeated saves on the same day target the
+    same path. Serialise writes in-process so overlapping save/delete requests
+    do not race on the same target and temp file.
+    """
+    with _USER_YAML_WRITE_LOCK:
+        target_dir = _user_local_dir()
+        target = target_dir / _today_yaml_filename()
+        _write_yaml_file(target, data, _gather_disabled_comments(data))
+
+        # Keep only today's active revision in the user/ dir so lookup stays
+        # unambiguous.
+        for entry in target_dir.iterdir():
+            if entry.is_file() and entry.name != target.name \
+                    and entry.name.startswith("skills_") and entry.suffix == ".yaml":
+                try:
+                    entry.unlink()
+                except OSError:
+                    pass
+
+        return target
+
+
+# ---- Disabled-comment scanning + injection -------------------------------
+#
+# The cloud baseline uses lines like:
+#
+#     keywords:
+#       - "TASK_DISCONNECT"
+#       - "CNCT_FLOW"
+#       # - "Got Command"
+#       - "candidate grade"
+#
+# to mark "historically used but currently disabled" entries. yaml.safe_load
+# discards those comments. The two helpers below let us scan a YAML file
+# for such commented entries (grouped by skill + list key) and then inject
+# them back into a freshly-written YAML so a round-trip through the editor
+# doesn't lose them.
+
+_DISABLED_COMMENT_RE = __import__("re").compile(
+    r"""^\s*\#\s*-\s*(['"])(?P<val>.+?)\1\s*$"""
+)
+# Top-level skill header (column 0, ends with bare ":"). Widened from
+# the original `[A-Za-z_]\w*` so it accepts the real skill IDs in this
+# codebase that contain "/" (e.g. "VLP/UHB/AFC", "WRDS/WGDS/EWRD/SGOM"
+# — see services/log_chatbot_service.py:SKILL_FILE_MAP). The previous
+# regex silently failed on those, dropping their `# - "..."` disabled
+# entries on every save round-trip. The first char is anchored to
+# [A-Za-z0-9_] so list items ("- foo:") and comment lines ("# x:")
+# are still rejected, and `\s*$` guarantees we only match bare key
+# headers — not inline mappings like `Foo: bar`.
+_DISABLED_SKILL_RE = __import__("re").compile(r"^([A-Za-z0-9_][^:]*):\s*$")
+_DISABLED_LIST_HEADER_RE = __import__("re").compile(
+    r"^  (keywords|exclusive):\s*$"
+)
+_DISABLED_DEPTH2_RE = __import__("re").compile(r"^  \w+\s*:")
+
+
+def _scan_disabled_comments(text: str) -> dict:
+    """
+    Walk a YAML text and pull out commented-out entries inside each skill's
+    ``keywords:`` and ``exclusive:`` block. Returns:
+
+        { skill_key: { 'keywords' | 'exclusive': [str, ...] } }
+    """
+    if not text:
+        return {}
+    result: dict = {}
+    current_skill = None
+    current_list = None
+    for line in text.split("\n"):
+        m = _DISABLED_SKILL_RE.match(line)
+        if m:
+            current_skill = m.group(1)
+            current_list = None
+            continue
+        m = _DISABLED_LIST_HEADER_RE.match(line)
+        if m:
+            current_list = m.group(1)
+            continue
+        # Any other depth-2 mapping key terminates the current list block
+        # so a comment far away isn't misattributed.
+        if (current_list is not None
+                and _DISABLED_DEPTH2_RE.match(line)
+                and not _DISABLED_LIST_HEADER_RE.match(line)):
+            current_list = None
+            continue
+        if current_skill and current_list:
+            m = _DISABLED_COMMENT_RE.match(line)
+            if m:
+                result.setdefault(current_skill, {}) \
+                      .setdefault(current_list, []) \
+                      .append(m.group("val"))
+    return result
+
+
+def _inject_disabled_comments(content: str, disabled: dict) -> str:
+    """
+    Walk the freshly-rendered YAML text and append ``# - "..."`` comment
+    lines AFTER the last list item of each (skill, list_key) block whose
+    disabled entries are still meaningful. Lines we know how to recognise:
+
+      * skill header        — column-0 ``key:``  → starts a new skill
+      * list header         — depth-2 ``keywords:`` / ``exclusive:``
+      * list item           — depth-4 ``- "..."`` (current dumper uses 4)
+      * any other depth-2 key — ends the current list block
+    """
+    if not disabled:
+        return content
+
+    lines = content.split("\n")
+    # Pass 1: figure out, for each (skill, list_key) we have disabled
+    # entries for, the line index AFTER which we should insert comments.
+    insertions: dict = {}   # line_idx -> [str, ...]
+    current_skill = None
+    current_list = None
+    last_list_item_idx = -1
+
+    def _commit():
+        nonlocal current_list, last_list_item_idx
+        if current_skill and current_list:
+            entries = disabled.get(current_skill, {}).get(current_list) or []
+            if entries and last_list_item_idx >= 0:
+                comments = [f'    # - "{v}"' for v in entries]
+                insertions.setdefault(last_list_item_idx, []).extend(comments)
+        current_list = None
+        last_list_item_idx = -1
+
+    for i, line in enumerate(lines):
+        if _DISABLED_SKILL_RE.match(line):
+            _commit()
+            current_skill = _DISABLED_SKILL_RE.match(line).group(1)
+            continue
+        m_list = _DISABLED_LIST_HEADER_RE.match(line)
+        if m_list:
+            _commit()
+            current_list = m_list.group(1)
+            continue
+        if (current_list is not None
+                and _DISABLED_DEPTH2_RE.match(line)
+                and not _DISABLED_LIST_HEADER_RE.match(line)):
+            _commit()
+            continue
+        if current_list is not None and line.startswith("    - "):
+            last_list_item_idx = i
+    _commit()
+
+    # Pass 2: rebuild text with the comments stitched in.
+    if not insertions:
+        return content
+    out = []
+    for i, line in enumerate(lines):
+        out.append(line)
+        if i in insertions:
+            out.extend(insertions[i])
+    return "\n".join(out)
+
+
+def _gather_disabled_comments(active_data: dict) -> dict:
+    """
+    Build the `disabled_comments` map for the save path: scan the cloud
+    baseline and the current user file (whichever exist) for commented
+    `# - "..."` keyword / exclusive entries, MERGE them per skill +
+    list-key, and strip any entry that the editor is about to write as an
+    ACTIVE keyword (so re-enabling something through the UI doesn't leave
+    a phantom commented duplicate behind).
+    """
+    merged: dict = {}
+
+    def _absorb(path):
+        if not path:
+            return
+        try:
+            text = path.read_text(encoding="utf-8")
+        except Exception:
+            return
+        for skill_key, blocks in _scan_disabled_comments(text).items():
+            for list_key, vals in blocks.items():
+                bucket = merged.setdefault(skill_key, {}).setdefault(list_key, [])
+                for v in vals:
+                    if v not in bucket:
+                        bucket.append(v)
+
+    try:
+        cloud_path, _ = _latest_cloud_baseline()
+        _absorb(cloud_path)
+    except Exception:
+        pass
+    try:
+        user_path, _ = _latest_user_yaml()
+        _absorb(user_path)
+    except Exception:
+        pass
+
+    # Drop entries that are now active in the about-to-be-saved data.
+    if isinstance(active_data, dict):
+        for skill_key, blocks in list(merged.items()):
+            skill_row = active_data.get(skill_key)
+            if not isinstance(skill_row, dict):
+                continue
+            for list_key in ("keywords", "exclusive"):
+                if list_key not in blocks:
+                    continue
+                active_vals = set(skill_row.get(list_key) or [])
+                blocks[list_key] = [
+                    v for v in blocks[list_key] if v not in active_vals
+                ]
+                if not blocks[list_key]:
+                    blocks.pop(list_key, None)
+            if not blocks:
+                merged.pop(skill_key, None)
+
+    return merged
+
+
+def _refresh_loaded_skills(yaml_path: str) -> dict:
+    """Re-load skills from `yaml_path` into the live agent and llm_helper."""
+    skills = load_skills_from_yaml(yaml_path)
+    agent = _get_or_create_agent()
+    agent.skills = skills
+    if app_config.log_chatbot_agent:
+        app_config.log_chatbot_agent.skills = skills
+    if app_config.llm_helper:
+        app_config.llm_helper.skills = skills
+    return skills
+
+
+def _activate_yaml(path) -> dict:
+    """Re-load skills from `path` and return the chatbot's descriptions."""
+    _refresh_loaded_skills(str(path))
+    agent = _get_or_create_agent()
+    return agent.get_skill_descriptions()
+
+
+@log_chatbot_bp.route("/skills_yaml_status", methods=["GET"])
+def skills_yaml_status():
+    """
+    Report the cloud-baseline vs user-overrides state for the side panel.
+
+    Response JSON:
+      {
+        "success":          True,
+        "active_source":    "cloud" | "user",
+        "effective_source": "cloud" | "user",
+        "cloud_local":      {path, date, filename},     # local cloud/ mirror
+        "user_local":       {path, date, filename},     # local user/ overrides
+        "share_remote":     {path, date, filename, reachable},
+      }
+    """
+    try:
+        return jsonify({"success": True, **_skills_yaml_status_payload()})
+    except Exception as e:
+        traceback.print_exc()
+        return jsonify({"success": False, "error": str(e)}), 500
+
+
+@log_chatbot_bp.route("/skills_yaml_use_cloud", methods=["POST"])
+def skills_yaml_use_cloud():
+    """
+    Switch the running agent to the local cloud/ baseline (the latest file
+    pulled from the share folder). The user/ overrides on disk are kept
+    intact so the user can toggle back later via /skills_yaml_use_user.
+    """
+    try:
+        c_path, c_date = _latest_cloud_baseline()
+        if c_path is None:
+            return jsonify({
+                "success": False,
+                "error":   "No cloud baseline found. Connect to VPN and retry "
+                           "so the baseline can be refreshed from the share folder.",
+            }), 404
+        _set_active_source("cloud")
+        skills = _activate_yaml(c_path)
+        return jsonify({
+            "success":         True,
+            "active_source":   "cloud",
+            "local_path":      str(c_path),
+            "local_date":      c_date.isoformat() if c_date else None,
+            "filename":        c_path.name,
+            "message":         "Now using the cloud baseline configuration.",
+            "skills":          skills,
+        })
+    except Exception as e:
+        traceback.print_exc()
+        return jsonify({"success": False, "error": str(e)}), 500
+
+
+@log_chatbot_bp.route("/skills_yaml_use_user", methods=["POST"])
+def skills_yaml_use_user():
+    """
+    Switch the running agent to the user's local overrides. Returns 404 when
+    the user has not yet edited the configuration this session — the toggle
+    is only meaningful once a user override exists.
+    """
+    try:
+        u_path, u_date = _latest_user_yaml()
+        if u_path is None:
+            return jsonify({
+                "success": False,
+                "error":   "No customised configuration found yet. Edit a "
+                           "skill via 'Edit Skills Configuration' first.",
+            }), 404
+        _set_active_source("user")
+        skills = _activate_yaml(u_path)
+        return jsonify({
+            "success":         True,
+            "active_source":   "user",
+            "local_path":      str(u_path),
+            "local_date":      u_date.isoformat() if u_date else None,
+            "filename":        u_path.name,
+            "message":         "Now using your customised configuration.",
+            "skills":          skills,
+        })
+    except Exception as e:
+        traceback.print_exc()
+        return jsonify({"success": False, "error": str(e)}), 500
+
+
+@log_chatbot_bp.route("/refresh_cloud_baseline", methods=["POST"])
+def refresh_cloud_baseline_route():
+    """
+    Force-refresh the local cloud/ mirror from the share folder. Idempotent —
+    safe to call from a "retry" button when the user reconnects to VPN.
+    """
+    try:
+        path, dt = _refresh_cloud_baseline()
+        if path is None:
+            return jsonify({
+                "success": False,
+                "error":   "Share folder is unreachable; please retry on VPN.",
+            }), 503
+
+        # If the agent is currently running on the cloud baseline, reload it
+        # with the freshly pulled file so the user immediately sees the new
+        # skills without having to click the toggle.
+        if _get_active_source() == "cloud":
+            _activate_yaml(path)
+
+        agent = _get_or_create_agent()
+        return jsonify({
+            "success":     True,
+            "local_path":  str(path),
+            "local_date":  dt.isoformat() if dt else None,
+            "filename":    path.name,
+            "message":     "Cloud baseline refreshed from the share folder.",
+            "skills":      agent.get_skill_descriptions(),
+        })
+    except Exception as e:
+        traceback.print_exc()
+        return jsonify({"success": False, "error": str(e)}), 500
+
+
+@log_chatbot_bp.route("/load_local_skills_yaml", methods=["GET"])
+def load_local_skills_yaml():
+    """
+    Return the raw contents of a local YAML for the side-panel editor.
+
+    Query string:
+      ?source=cloud|user   (default = current active source)
+
+    The editor uses `source=user` to pre-fill from the user's previous
+    edits, and `source=cloud` to start from the pristine baseline.
+    """
+    requested = (request.args.get("source") or "").strip().lower() or _get_active_source()
+    try:
+        if requested == "user":
+            local_path, local_date = _latest_user_yaml()
+        else:
+            requested = "cloud"
+            local_path, local_date = _latest_cloud_baseline()
+
+        if local_path is None:
+            return jsonify({
+                "success":   False,
+                "error":     ("No customised configuration on disk yet."
+                              if requested == "user"
+                              else "Cloud baseline not present locally. "
+                                   "Connect to VPN and use 'Refresh from share folder'."),
+                "source":    requested,
+            }), 404
+
+        data = _read_yaml_file(local_path)
+        return jsonify({
+            "success":    True,
+            "source":     requested,
+            "local_path": str(local_path),
+            "local_date": local_date.isoformat() if local_date else None,
+            "filename":   local_path.name,
+            "skills":     data,
+        })
+    except Exception as e:
+        traceback.print_exc()
+        return jsonify({"success": False, "error": str(e)}), 500
+
+
+def _sanitise_skill_payload(skills_dict) -> tuple[dict, str]:
+    """
+    Validate the per-skill payload sent by the editor. Returns (cleaned, "")
+    on success or ({}, error_message) on validation failure. Only known
+    fields are persisted; the top-level skill key plus name + description
+    must be non-empty strings; lists are coerced.
+    """
+    if not isinstance(skills_dict, dict) or not skills_dict:
+        return ({}, "Request body must contain a non-empty 'skills' object.")
+
+    allowed_keys = {"name", "description", "keywords", "exclusive", "expert_rules"}
+    cleaned: dict = {}
+    for key, val in skills_dict.items():
+        if not isinstance(key, str) or not key.strip():
+            return ({}, "Skill ID is required.")
+        if not isinstance(val, dict):
+            return ({}, f"Skill '{key}' must be an object.")
+
+        row = {k: v for k, v in val.items() if k in allowed_keys}
+
+        name = (row.get("name") or "").strip() if isinstance(row.get("name"), str) else ""
+        desc = (row.get("description") or "").strip() if isinstance(row.get("description"), str) else ""
+        if not name:
+            return ({}, f"Skill '{key}': display name is required.")
+        if not desc:
+            return ({}, f"Skill '{key}': description is required.")
+        row["name"] = name
+        row["description"] = desc
+
+        for list_key in ("keywords", "exclusive"):
+            if list_key in row:
+                v = row[list_key]
+                # rstrip ONLY: leading whitespace can be load-matching-
+                # critical (the cloud baseline uses entries like
+                # " ------- RESUME FLOW" or " [prvDpTlcConfigSendTlcConfigCmd]"
+                # where the leading space is part of the literal log
+                # prefix). Trailing whitespace is almost always accidental
+                # (user typed a trailing space after the keyword) and is
+                # still cleaned.
+                if isinstance(v, list):
+                    raw_items = (str(x).rstrip() for x in v)
+                elif v:
+                    raw_items = (str(v).rstrip(),)
+                else:
+                    raw_items = ()
+                cleaned_list = [s for s in raw_items if s]
+                # Match the cloud baseline: omit the field entirely when
+                # it has no entries (no `exclusive: []` placeholder).
+                if cleaned_list:
+                    row[list_key] = cleaned_list
+                else:
+                    row.pop(list_key, None)
+
+        # expert_rules is stored in YAML as a single string. The structured
+        # editor sends EITHER:
+        #
+        #   {"preamble": "free-form text", "items": ["1st", "2nd"]}
+        #     → joined as:
+        #         <preamble>
+        #         1. 1st
+        #         2. 2nd
+        #
+        #   "raw string"            (legacy — passed through verbatim)
+        #   ["item1", "item2"]      (legacy — flat numbered list, no preamble)
+        rules = row.get("expert_rules")
+        if isinstance(rules, dict):
+            # Items can be either:
+            #   * a plain string  → auto-numbered with the next integer
+            #   * a dict {prefix, text} → emitted with the original prefix
+            #     verbatim (preserves cloud-baseline numbering such as
+            #     "2-1.", "2-2.", "3-1." for section sub-steps)
+            preamble = str(rules.get("preamble", "") or "")
+            raw_items = rules.get("items") or []
+            items: list[tuple[str | None, str]] = []
+            if isinstance(raw_items, list):
+                for entry in raw_items:
+                    if isinstance(entry, dict):
+                        pref = entry.get("prefix")
+                        pref_str = str(pref).strip() if pref is not None else None
+                        text = str(entry.get("text", "") or "")
+                    else:
+                        pref_str = None
+                        text = str(entry)
+                    if text.strip():
+                        items.append((pref_str or None, text))
+
+            # Assign auto-numbered integer prefixes to items that came in
+            # without one. The next-int pool starts above the largest
+            # explicit integer prefix already in use, so a list mixing
+            # "1, 2-1, 2-2, 3" with one fresh entry will yield "4" — not
+            # collide with an existing "2".
+            max_int = 0
+            for pref_str, _ in items:
+                if pref_str and pref_str.isdigit():
+                    try:
+                        max_int = max(max_int, int(pref_str))
+                    except ValueError:
+                        pass
+
+            parts: list[str] = []
+            if preamble.strip():
+                parts.append(preamble)
+            for pref_str, text in items:
+                if not pref_str:
+                    max_int += 1
+                    pref_str = str(max_int)
+                parts.append(f"{pref_str}. {text}")
+            joined = "\n".join(parts)
+        elif isinstance(rules, list):
+            items_str = [str(s).strip() for s in rules if str(s).strip()]
+            joined = "\n".join(
+                f"{i}. {item}" for i, item in enumerate(items_str, start=1)
+            )
+        elif isinstance(rules, str):
+            joined = rules.strip()
+        else:
+            joined = ""
+        # Expert rules are required. Reject the whole save if any skill
+        # would end up with an empty rules block.
+        if not joined.strip():
+            return ({}, f"Skill '{key}': expert rules are required.")
+        # Append a trailing newline whenever there is any content so the
+        # str representer sees "\n" and emits the YAML literal block "|"
+        # style — even when there's only a single short item. Without
+        # this, "1. rfe" would round-trip as `expert_rules: "1. rfe"`
+        # (double-quoted), inconsistent with every other skill.
+        if not joined.endswith("\n"):
+            joined += "\n"
+        row["expert_rules"] = joined
+
+        cleaned[key.strip()] = row
+
+    if not cleaned:
+        return ({}, "No valid skills found in the request body.")
+    return (cleaned, "")
+
+
+@log_chatbot_bp.route("/save_local_skills_yaml", methods=["POST"])
+def save_local_skills_yaml():
+    """
+    Persist edits made in the side-panel structured form to the local
+    `user/` overrides directory (a NEW dated file for today). The
+    `cloud/` baseline is NEVER modified; uploads back to the share
+    folder happen only when the user explicitly clicks "Upload".
+
+    Saving always switches the active source to "user" so the agent
+    starts using the edits immediately.
+
+    Request JSON:
+      { "skills": { "<skill_key>": { name, description, keywords, exclusive, expert_rules } } }
+    """
+    data = request.get_json(silent=True) or {}
+    cleaned, err = _sanitise_skill_payload(data.get("skills"))
+    if err:
+        return jsonify({"success": False, "error": err}), 400
+
+    try:
+        target = _persist_user_yaml_snapshot(cleaned)
+
+        _set_active_source("user")
+        skills = _activate_yaml(target)
+        session["yaml_modified"] = True
+        session["yaml_modified_path"] = str(target)
+
+        return jsonify({
+            "success":       True,
+            "active_source": "user",
+            "local_path":    str(target),
+            "local_date":    None,  # filename carries the date
+            "filename":      target.name,
+            "message":       f"Saved {len(cleaned)} skill(s) to {target.name}.",
+            "skills":        skills,
+        })
+    except Exception as e:
+        traceback.print_exc()
+        return jsonify({"success": False, "error": str(e)}), 500
+
+
+@log_chatbot_bp.route("/delete_local_skill", methods=["POST"])
+def delete_local_skill():
+    """
+    Remove a single skill from whichever local source is currently active
+    and save the result under today's dated filename in `user/`. Always
+    flips the active source to "user".
+
+    Request JSON: { "skill_key": "Roaming" }
+    """
+    data = request.get_json(silent=True) or {}
+    skill_key = (data.get("skill_key") or "").strip()
+    if not skill_key:
+        return jsonify({
+            "success": False,
+            "error":   "skill_key is required.",
+        }), 400
+
+    try:
+        # Start from the user copy if it exists, otherwise from the cloud
+        # baseline — the resulting file always lands in user/ and becomes
+        # the new active configuration.
+        src_path, _ = _latest_user_yaml()
+        if src_path is None:
+            src_path, _ = _latest_cloud_baseline()
+        if src_path is None:
+            return jsonify({
+                "success": False,
+                "error":   "No local skill YAML to edit.",
+            }), 404
+
+        existing = _read_yaml_file(src_path)
+        if skill_key not in existing:
+            return jsonify({
+                "success": False,
+                "error":   f"Skill '{skill_key}' is not present in the active configuration.",
+            }), 404
+
+        existing.pop(skill_key, None)
+        target = _persist_user_yaml_snapshot(existing)
+
+        _set_active_source("user")
+        skills = _activate_yaml(target)
+        session["yaml_modified"] = True
+        session["yaml_modified_path"] = str(target)
+
+        return jsonify({
+            "success":       True,
+            "active_source": "user",
+            "local_path":    str(target),
+            "filename":      target.name,
+            "message":       f"Removed skill '{skill_key}'.",
+            "skills":        skills,
+        })
+    except Exception as e:
+        traceback.print_exc()
+        return jsonify({"success": False, "error": str(e)}), 500
+
+
+@log_chatbot_bp.route("/upload_modified_yaml", methods=["POST"])
+def upload_modified_yaml():
+    """
+    Push the user's customised YAML to the share folder so the Wireless CE
+    team can incorporate the tuning. Uploads ONLY ever come from the
+    `user/` overrides directory — the cloud baseline is never re-uploaded
+    back to itself.
+    """
+    import shutil as _shutil
+    from pathlib import Path as _P
+
+    try:
+        local_path_str = session.get("yaml_modified_path") or ""
+        local_path = _P(local_path_str) if local_path_str else None
+        if local_path is None or not local_path.exists():
+            latest, _ = _latest_user_yaml()
+            local_path = latest
+        if local_path is None or not local_path.exists():
+            return jsonify({
+                "success": False,
+                "error":   "No customised skill YAML was found to upload.",
+            }), 404
+
+        cloud_dir_str = _resolve_cloud_skills_dir()
+        if not cloud_dir_str:
+            return jsonify({
+                "success": False,
+                "error":   "Shared skill folder is unreachable; please retry on VPN.",
+            }), 503
+
+        # Upload under a contributions sub-folder so cloud "latest" detection
+        # still ranks team-approved revisions; reviewers promote files to the
+        # top-level skills_config folder once vetted.
+        contrib_dir = _P(cloud_dir_str) / "user_contributions"
+        try:
+            contrib_dir.mkdir(parents=True, exist_ok=True)
+        except OSError as e:
+            return jsonify({
+                "success": False,
+                "error":   f"Cannot create contributions folder on share: {e}",
+            }), 500
+
+        import getpass
+        import re as _re
+        user = _re.sub(r"[^A-Za-z0-9_.-]+", "_",
+                       (getpass.getuser() or os.environ.get("USERNAME") or "anon"))
+        target = contrib_dir / f"{user}__{local_path.name}"
+        _shutil.copy2(str(local_path), str(target))
+
+        return jsonify({
+            "success":     True,
+            "uploaded_to": str(target),
+            "message":     "Thank you. Your modified configuration has been "
+                           "uploaded for review.",
+        })
+    except Exception as e:
+        traceback.print_exc()
+        return jsonify({"success": False, "error": str(e)}), 500

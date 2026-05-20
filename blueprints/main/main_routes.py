@@ -93,11 +93,7 @@ def handle_case_submission():
         return redirect(url_for('main.select_attachments'))
 
     except Exception as e:
-        # Print the full traceback so root-cause "NoneType is not iterable"
-        # style failures don't disappear behind a one-line summary.
-        import traceback
         print(f"❌ Error processing case: {e}")
-        traceback.print_exc()
         flash("An error occurred while processing the case.", "danger")
         return redirect(url_for('main.index'))
 
@@ -135,11 +131,7 @@ def start_latest_etl_llm():
         llm_helper: LLM_helper = app_config.llm_helper
         if llm_helper is not None:
             try:
-                # Pass the rehydrated dict (heavy fields included) so
-                # the LLM classifier sees the full context — comments
-                # can be a strong signal for category routing.
-                _full_ctx = CaseContext.from_session(session.get("case_context") or {}).to_dict()
-                classification = llm_helper.classify_issue(_full_ctx)
+                classification = llm_helper.classify_issue(session["case_context"])
                 
                 if isinstance(classification, dict):
                      session['classification'] = classification
@@ -160,20 +152,12 @@ def start_latest_etl_llm():
 #------------ SELECT ATTACHMENT render/submission -------------#
 
 def render_select_attachments_form():
-    # Merged behaviour:
-    #   * Session-expired guard from main — bails out gracefully if the
-    #     cookie session got cleared between requests.
-    #   * Sidecar rehydration from this branch — for heavyweight cases
-    #     the cookie session only carries a pointer to the on-disk
-    #     <case_download_dir>/.case_context_session.json; from_session()
-    #     transparently loads comments / attachment_list back in.
-    raw = session.get("case_context")
-    if not raw:
+    case_context = session.get("case_context")
+    if not case_context:
         flash("Session expired. Please start again.", "warning")
         return redirect(url_for('main.index'))
-    case_context = CaseContext.from_session(raw).to_dict()
     return render_template('select_attachments.html',
-                           ai_analysis=None,
+                           ai_analysis=None,     
                            case_context=case_context)
 
 def handle_select_attachments_submission():

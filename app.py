@@ -83,16 +83,7 @@ def _navigate_existing_browser(instance_url, startup_path):
 
 def create_app():
     app = Flask(__name__)
-    # Preserve dict insertion order in jsonify responses. The legacy
-    # `JSON_SORT_KEYS` config flag was removed in Flask 2.2+ in favour of
-    # the JSON provider attribute below; setting only the legacy flag
-    # silently sorted skill YAMLs alphabetically on round-trip.
     app.config['JSON_SORT_KEYS'] = False
-    try:
-        app.json.sort_keys = False
-    except AttributeError:
-        # Older Flask (<2.2) — the config flag above is the only knob.
-        pass
     app.secret_key = 'autoparselog2025'
     socketio = SocketIO(app, async_mode='threading', cors_allowed_origins="*")
 

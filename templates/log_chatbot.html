@@ -15,11 +15,6 @@
             height: 100vh;
             display: flex;
             flex-direction: column;
-            /* All real scrolling happens inside child containers
-               (.sidebar / #chat-window / .fbd-body). Anchor body to
-               100vh and clip it so subpixel rounding can't trigger a
-               phantom right-edge scrollbar. */
-            overflow: hidden;
         }
 
         /* ── Top bar ── */
@@ -795,494 +790,6 @@
         .feedback-more-link:hover { text-decoration: underline; }
         .feedback-more-link.submitted { color: #1a7f37; cursor: default; text-decoration: none; }
 
-        /* ── Sidebar: skill source badge + cloud/user toggle ─────────── */
-        /* No outer panel frame — the badge already conveys state, and a
-           frame here visually competes with the bordered card the whole
-           "Available Skills" section sits in. */
-        .skill-source-panel {
-            margin-bottom: 8px;
-            padding: 0;
-            border: none;
-            background: transparent;
-        }
-        .skill-source-row {
-            display: flex; align-items: center; gap: 6px;
-            flex-wrap: wrap;
-        }
-        .skill-source-badge {
-            display: inline-block;
-            padding: 2px 8px;
-            font-size: 0.7rem;
-            font-weight: 700;
-            border-radius: 10px;
-            letter-spacing: 0.02em;
-        }
-        .skill-source-badge.cloud { background: #e1efff; color: #0050a0; }
-        .skill-source-badge.user  { background: #fff2d6; color: #8a5a00; }
-        .skill-source-badge.unknown {
-            background: transparent;
-            color: #9ba3ad;
-            font-weight: 500;
-            font-style: italic;
-        }
-        .skill-source-panel.unknown {
-            background: transparent;
-            border-color: transparent;
-            padding: 2px 0;
-        }
-        .skill-source-file {
-            font-size: 0.72rem;
-            color: #5a6470;
-            font-family: ui-monospace, Menlo, Consolas, monospace;
-            word-break: break-all;
-        }
-        .skill-source-actions {
-            margin-top: 6px;
-            font-size: 0.74rem; color: #1f2937;
-            line-height: 1.4;
-        }
-        /* Neutral grey pill: lives in a different colour family AND a
-           different shape from the prominent rectangular blue
-           "Edit Skills Configuration" button below, so the eye separates
-           the two without either feeling visually loud. */
-        .skill-source-btn {
-            background: #eef0f3;
-            color: #3f4a55;
-            border: none;
-            border-radius: 12px;
-            padding: 4px 12px;
-            font-size: 0.74rem;
-            font-weight: 600;
-            font-family: inherit;
-            cursor: pointer;
-            line-height: 1.2;
-        }
-        .skill-source-btn:hover {
-            background: #dfe4ea;
-            color: #1f2937;
-        }
-        .skill-source-btn:active { background: #d0d6dd; }
-
-        /* ── Skill editor (reuses .fbd-modal shell) ───────────────────── */
-        .skill-edit-row {
-            border: 1px solid #e5e7eb;
-            border-radius: 8px;
-            padding: 12px 12px 12px 12px;
-            margin-bottom: 12px;
-            background: #fafbfc;
-        }
-        .skill-edit-row .row-head {
-            display: flex; align-items: center; gap: 8px;
-            margin-bottom: 8px;
-        }
-        /* Collapsed mode: only the skill-key input + delete + toggle are
-           visible. Click the ▾ triangle to expand the full editor. */
-        .skill-edit-row.collapsed { padding-bottom: 0; }
-        .skill-edit-row.collapsed .row-head { margin-bottom: 0; }
-        .skill-edit-row.collapsed .row-body { display: none; }
-        .skill-edit-row .row-toggle {
-            flex: 0 0 auto;
-            width: 22px; height: 22px;
-            border-radius: 4px;
-            border: 1px solid #cdd6e0;
-            background: #fff;
-            color: #6a737d;
-            font-size: 0.85rem;
-            line-height: 1;
-            padding: 0;
-            cursor: pointer;
-            transition: transform 120ms ease, color 120ms ease, border-color 120ms ease;
-        }
-        .skill-edit-row .row-toggle:hover {
-            color: #0071c5; border-color: #0071c5;
-        }
-        .skill-edit-row.collapsed .row-toggle {
-            transform: rotate(-90deg);
-        }
-        .skill-edit-row .row-head input.skill-key {
-            flex: 0 0 30%;
-            font-weight: 600;
-            font-family: ui-monospace, Menlo, Consolas, monospace;
-            font-size: 0.82rem;
-            padding: 6px 8px;
-            border: 1px solid #d8dee5;
-            border-radius: 6px;
-            background: #fff;
-        }
-        .skill-edit-row input.skill-name {
-            width: 100%;
-            font-size: 0.82rem;
-            padding: 6px 8px;
-            border: 1px solid #d8dee5;
-            border-radius: 6px;
-            background: #fff;
-        }
-        .skill-edit-row input.skill-name:disabled {
-            background: #f3f4f6;
-            color: #6b7280;
-        }
-        .skill-edit-row .inline-check {
-            display: flex;
-            align-items: center;
-            gap: 6px;
-            margin: 0 0 6px;
-            font-size: 0.76rem;
-            color: #4b5563;
-            text-transform: none;
-            letter-spacing: 0;
-            font-weight: 500;
-        }
-        .skill-edit-row .inline-check input[type="checkbox"] {
-            width: 14px;
-            height: 14px;
-            margin: 0;
-        }
-        .skill-edit-row .row-head .delete-skill-btn {
-            margin-left: auto;
-            background: #fff0f0;
-            border: 1px solid #f5c2c7;
-            color: #b42318;
-            border-radius: 6px;
-            padding: 5px 10px;
-            font-size: 0.78rem;
-            cursor: pointer;
-        }
-        .skill-edit-row label {
-            display: block;
-            font-size: 0.72rem;
-            color: #6a737d;
-            text-transform: uppercase;
-            letter-spacing: 0.05em;
-            margin: 8px 0 4px;
-            font-weight: 600;
-        }
-        .skill-edit-row label .required-star { color: #cf222e; margin-left: 2px; }
-        .skill-edit-row .field-hint {
-            font-size: 0.72rem;
-            color: #6a737d;
-            line-height: 1.4;
-            margin: -2px 0 5px;
-        }
-        .skill-edit-row .field-hint code {
-            background: #f0f3f7;
-            padding: 0 4px;
-            border-radius: 3px;
-            font-size: 0.92em;
-        }
-        .skill-edit-row input.skill-desc {
-            width: 100%;
-            padding: 6px 8px;
-            border: 1px solid #d8dee5;
-            border-radius: 6px;
-            font-size: 0.82rem;
-            font-family: inherit;
-            background: #fff;
-        }
-        .skill-edit-row input.invalid { border-color: #cf222e; background: #fdecec; }
-
-        /* Description strength meter — password-style grade.
-           Non-blocking: it never prevents save, it just hints at what
-           would make the description more discoverable for the agent. */
-        .desc-strength {
-            margin: 3px 0 6px;
-            font-size: 0.71rem;
-            color: #6a737d;
-            line-height: 1.45;
-        }
-        .desc-strength-bar {
-            display: flex; gap: 3px;
-            height: 4px;
-            margin-bottom: 3px;
-        }
-        .desc-strength-bar .seg {
-            flex: 1;
-            background: #e5e7eb;
-            border-radius: 2px;
-            transition: background 120ms ease;
-        }
-        .desc-strength-bar .seg.weak    { background: #cf222e; }
-        .desc-strength-bar .seg.fair    { background: #d4a017; }
-        .desc-strength-bar .seg.good    { background: #57a23a; }
-        .desc-strength-bar .seg.strong  { background: #1a7f37; }
-        .desc-strength-line { display: flex; flex-wrap: wrap; gap: 6px; align-items: baseline; }
-        .desc-strength-label { font-weight: 700; }
-        .desc-strength-label.weak    { color: #cf222e; }
-        .desc-strength-label.fair    { color: #b58007; }
-        .desc-strength-label.good    { color: #57a23a; }
-        .desc-strength-label.strong  { color: #1a7f37; }
-        .desc-strength-count { color: #6a737d; font-variant-numeric: tabular-nums; }
-        .desc-strength-hints { color: #6a737d; flex: 1 1 100%; }
-
-        /* Chip-style editor for keywords / exclusive */
-        .chip-box {
-            display: flex; flex-wrap: wrap; gap: 6px;
-            padding: 6px;
-            border: 1px solid #d8dee5;
-            border-radius: 6px;
-            background: #fff;
-            min-height: 38px;
-        }
-        .chip-box.focused { border-color: #0071c5; box-shadow: 0 0 0 2px rgba(0,113,197,0.15); }
-        .chip {
-            display: inline-flex; align-items: center; gap: 6px;
-            padding: 3px 4px 3px 8px;
-            background: #eef3f8;
-            border: 1px solid #cdd9e3;
-            border-radius: 12px;
-            font-size: 0.76rem;
-            font-family: ui-monospace, Menlo, Consolas, monospace;
-            color: #1f3850;
-            max-width: 100%;
-            word-break: break-all;
-        }
-        .chip.invalid { background: #fdecec; border-color: #f5c2c7; color: #b42318; }
-        .chip button.chip-x {
-            background: none; border: none; cursor: pointer;
-            font-size: 0.95rem; line-height: 1;
-            color: #6a737d; padding: 0; width: 16px; height: 16px;
-            display: inline-flex; align-items: center; justify-content: center;
-            border-radius: 50%;
-        }
-        .chip button.chip-x:hover { background: #d6dde3; color: #1f2937; }
-        .chip-input {
-            flex: 1; min-width: 80px;
-            border: none; outline: none;
-            background: transparent;
-            font-size: 0.82rem;
-            font-family: inherit;
-            padding: 2px 4px;
-        }
-        .chip-hint {
-            font-size: 0.7rem; color: #6a737d; margin-top: 3px;
-        }
-
-        /* Expert rules: collapsible preamble + flat numbered list */
-        .skill-edit-row .preamble-wrap {
-            margin-bottom: 8px;
-        }
-        .skill-edit-row textarea.rules-preamble {
-            width: 100%;
-            min-height: 60px;
-            max-height: 240px;
-            padding: 8px 10px;
-            border: 1px solid #d8dee5; border-radius: 6px;
-            font-size: 0.82rem; font-family: inherit;
-            background: #fff;
-            resize: none; overflow-y: auto;
-            line-height: 1.45;
-            display: block;
-        }
-        .skill-edit-row .preamble-show-btn {
-            background: none;
-            border: 1px dashed #99a3b3;
-            color: #6a737d;
-            padding: 4px 10px;
-            border-radius: 6px;
-            font-size: 0.76rem;
-            cursor: pointer;
-        }
-        .skill-edit-row .preamble-show-btn:hover {
-            color: #0071c5; border-color: #0071c5;
-        }
-        .skill-edit-row .preamble-show-btn.invalid {
-            color: #cf222e; border-color: #cf222e; background: #fdecec;
-        }
-        /* "× Hide overview" sits BELOW the textarea, outside its border —
-           a plain text link, never overlaps the typing area. */
-        .skill-edit-row .preamble-hide-btn {
-            margin-top: 3px;
-            background: none;
-            border: none;
-            color: #9ba3ad;
-            font-size: 0.72rem;
-            font-family: inherit;
-            cursor: pointer;
-            padding: 0;
-        }
-        .skill-edit-row .preamble-hide-btn:hover { color: #1f2937; }
-        /* Collapsed: show only the "+ Add overview" button */
-        .skill-edit-row .preamble-wrap.collapsed textarea.rules-preamble,
-        .skill-edit-row .preamble-wrap.collapsed .preamble-hide-btn {
-            display: none;
-        }
-        .skill-edit-row .preamble-wrap:not(.collapsed) .preamble-show-btn {
-            display: none;
-        }
-        .add-rule-icon {
-            display: inline-block;
-            font-weight: 700;
-            color: #0071c5;
-            margin-right: 4px;
-        }
-        .rules-list { display: flex; flex-direction: column; gap: 8px; }
-        .rule-point {
-            display: flex; gap: 8px; align-items: flex-start;
-            padding: 8px; border: 1px solid #e5e7eb; border-radius: 6px;
-            background: #fff;
-        }
-        .rule-point .rule-number {
-            flex: 0 0 auto;
-            min-width: 24px; height: 24px;
-            /* Pill shape so hyphenated prefixes like "2-1" / "3-12" fit
-               without distorting the badge. */
-            padding: 0 8px;
-            border-radius: 12px;
-            background: #0071c5; color: #fff;
-            display: inline-flex; align-items: center; justify-content: center;
-            font-size: 0.76rem; font-weight: 700;
-            font-variant-numeric: tabular-nums;
-        }
-        .rule-point textarea.rule-text {
-            flex: 1; min-height: 36px;
-            max-height: 220px;
-            border: 1px solid #d8dee5; border-radius: 6px;
-            padding: 6px 8px; font-size: 0.82rem; font-family: inherit;
-            background: #fff;
-            resize: none;
-            overflow-y: auto;
-            line-height: 1.45;
-        }
-        .rule-point .rule-delete-btn {
-            flex: 0 0 auto;
-            background: #fff0f0; border: 1px solid #f5c2c7; color: #b42318;
-            border-radius: 6px; padding: 4px 8px; font-size: 0.76rem;
-            cursor: pointer; height: 24px;
-        }
-        .add-rule-btn {
-            align-self: flex-start;
-            margin-top: 4px;
-            padding: 5px 10px;
-            background: none; border: 1px dashed #0071c5;
-            border-radius: 6px; color: #0071c5;
-            font-size: 0.78rem; cursor: pointer;
-        }
-
-        .fbd-btn.danger { background: #fff0f0; color: #b42318; border-color: #f5c2c7; }
-
-        .fbd-attach-row {
-            display: flex; align-items: center; gap: 8px;
-            margin-top: 10px;
-            font-size: 0.85rem;
-            color: #374151;
-        }
-        .fbd-attach-row input[type="checkbox"] { width: 16px; height: 16px; }
-        .fbd-attach-row .hint { color: #6a737d; font-size: 0.78rem; }
-
-        /* ─── Grouped card containers inside the feedback modal ───
-           Mirrors the visual style used elsewhere in the app
-           (.skill-card / .sidebar-section) — subtle off-white
-           background with a soft border, generous internal padding. */
-        .fbd-group {
-            background: #fafbfc;
-            border: 1px solid #e5e7eb;
-            border-radius: 8px;
-            padding: 10px 14px 14px;
-            margin-bottom: 12px;
-        }
-        .fbd-group-title {
-            font-size: 0.84rem;
-            font-weight: 700;
-            color: #1f2937;
-            padding-bottom: 6px;
-            margin-bottom: 6px;
-            border-bottom: 1px solid #eaecef;
-        }
-        /* Per-field label inside a group. Tightened spacing so the
-           label sits close to its input without overlapping the
-           previous group's bottom border. */
-        .fbd-sub-label {
-            display: block;
-            font-size: 0.7rem;
-            color: #6a737d;
-            text-transform: uppercase;
-            letter-spacing: 0.05em;
-            margin: 10px 0 4px;
-            font-weight: 600;
-        }
-        .fbd-sub-label:first-child,
-        .fbd-group-title + .fbd-sub-label { margin-top: 0; }
-
-        /* Severity 1-5 single-click rating row. */
-        .fbd-severity-row {
-            display: flex;
-            align-items: center;
-            gap: 12px;
-            margin: 4px 0 0;
-        }
-        .fbd-severity-scale {
-            display: inline-flex;
-            gap: 6px;
-        }
-        .sev-btn {
-            width: 30px;
-            height: 30px;
-            border-radius: 50%;
-            border: 1px solid #cdd9e3;
-            background: #fff;
-            color: #6a737d;
-            font-size: 0.82rem;
-            font-weight: 700;
-            cursor: pointer;
-            transition: background 120ms ease, color 120ms ease, border-color 120ms ease;
-            font-variant-numeric: tabular-nums;
-            padding: 0;
-        }
-        .sev-btn:hover {
-            border-color: #0071c5;
-            color: #0071c5;
-        }
-        .sev-btn.selected[data-value="1"],
-        .sev-btn.selected[data-value="2"] {
-            background: #57a23a; border-color: #57a23a; color: #fff;
-        }
-        .sev-btn.selected[data-value="3"] {
-            background: #d4a017; border-color: #d4a017; color: #fff;
-        }
-        .sev-btn.selected[data-value="4"] {
-            background: #d44a17; border-color: #d44a17; color: #fff;
-        }
-        .sev-btn.selected[data-value="5"] {
-            background: #cf222e; border-color: #cf222e; color: #fff;
-        }
-        .fbd-severity-readout {
-            font-size: 0.85rem;
-            font-weight: 600;
-            color: #6a737d;
-            font-variant-numeric: tabular-nums;
-        }
-        .fbd-severity-readout.s1, .fbd-severity-readout.s2 { color: #1a7f37; }
-        .fbd-severity-readout.s3 { color: #b58007; }
-        .fbd-severity-readout.s4 { color: #b45117; }
-        .fbd-severity-readout.s5 { color: #cf222e; }
-
-        /* Inline help text under feedback-modal fields — kept tiny so it
-           hints without competing with the actual input. */
-        .fbd-field-hint {
-            font-size: 0.7rem;
-            color: #6a737d;
-            line-height: 1.4;
-            margin: -2px 0 8px;
-        }
-        .fbd-field-hint code {
-            background: #f0f3f7;
-            padding: 0 4px;
-            border-radius: 3px;
-            font-size: 0.92em;
-        }
-        /* The feedback modal's free-text inputs already pick up the
-           shared `.fbd-body textarea` rules; this tweak keeps the new
-           single-line correct-root-cause input and selects visually
-           consistent with the legacy textareas. */
-        .fbd-body input[type="text"] {
-            width: 100%;
-            padding: 6px 8px;
-            border: 1px solid #d8dee5;
-            border-radius: 6px;
-            font-size: 0.82rem;
-            font-family: inherit;
-            background: white;
-        }
-
         /* ── Feedback detail modal ───────────────────────────────────── */
         .fbd-modal { position: fixed; inset: 0; z-index: 9000; display: none; }
         .fbd-modal.open { display: block; }
@@ -1300,122 +807,6 @@
             box-shadow: 0 20px 60px rgba(0,0,0,0.25);
             display: flex; flex-direction: column;
             overflow: hidden;
-        }
-
-        /* ── Feedback panel = RIGHT sidebar, formatted identically to
-              the existing LEFT sidebar: flush against the bottom of
-              the top blue bar, full height of the main-layout area,
-              flat (no card-style shadow / rounded corners), thin
-              divider on its inward edge. Opening it auto-collapses
-              the LEFT sidebar so the chat has breathing room; the
-              hamburger button in the top-bar can re-show the left
-              sidebar manually. Skill editor keeps its centered-modal
-              look — these rules only apply via the .fbd-modal--drawer
-              modifier. ────────────────────────────────────────────── */
-        :root {
-            --fbd-topbar-height: 58px;
-            --fbd-sidebar-width: 320px;
-            --fbd-drawer-width: 420px;
-        }
-        .fbd-modal--drawer { pointer-events: none; background: transparent; }
-        .fbd-modal--drawer .fbd-backdrop { display: none; }
-        .fbd-modal--drawer .fbd-card {
-            pointer-events: auto;
-            position: fixed;
-            top: var(--fbd-topbar-height);
-            bottom: 0;
-            left: auto;
-            right: 0;
-            margin: 0;
-            padding: 0;
-            width: var(--fbd-drawer-width);
-            max-height: none;
-            background: #ffffff;
-            border-radius: 0;
-            border-left: 1px solid #e0e0e0;
-            box-shadow: none;
-            transform: translateX(var(--fbd-drawer-width));
-            transition: transform 0.22s ease;
-            overflow: hidden;
-        }
-        .fbd-modal--drawer.open .fbd-card { transform: translateX(0); }
-
-        /* Push the chat-area's right edge inward when the drawer is
-           open so the AI analysis content doesn't slide under it. */
-        body.fbd-drawer-expanded .chat-area {
-            margin-right: var(--fbd-drawer-width);
-            margin-left: 0;
-        }
-        .chat-area { transition: margin-left 0.22s ease, margin-right 0.22s ease; }
-
-        /* Left sidebar collapse — driven by `body.sidebar-collapsed`.
-           Used both for the manual hamburger toggle AND auto-collapse
-           when a feedback session opens. */
-        .sidebar {
-            transition: width 0.22s ease, min-width 0.22s ease,
-                        padding 0.22s ease, opacity 0.18s ease;
-        }
-        body.sidebar-collapsed .sidebar {
-            width: 0;
-            min-width: 0;
-            padding: 0;
-            border-right: none;
-            overflow: hidden;
-            opacity: 0;
-        }
-
-        /* Top-bar hamburger button — manually shows / hides the left
-           sidebar. Always visible so the user can recover the sidebar
-           after the feedback panel auto-collapsed it. */
-        .sidebar-toggle {
-            background: rgba(255,255,255,0.18);
-            color: white;
-            border: 1px solid rgba(255,255,255,0.3);
-            border-radius: 5px;
-            padding: 3px 9px;
-            font-size: 1rem;
-            line-height: 1;
-            cursor: pointer;
-            transition: background 0.15s ease;
-        }
-        .sidebar-toggle:hover { background: rgba(255,255,255,0.28); }
-        .sidebar-toggle:focus { outline: 2px solid rgba(255,255,255,0.5); outline-offset: 1px; }
-        .fbd-draft-hint {
-            font-size: 11px;
-            color: #1a7f37;
-            margin-left: 8px;
-            font-style: italic;
-            display: none;
-        }
-        .fbd-draft-hint.show { display: inline-block; }
-
-        /* ── Top toast (used by the auto-reset on log switch) ────────── */
-        .toast-stack {
-            position: fixed; top: 14px; left: 50%;
-            transform: translateX(-50%);
-            z-index: 10000;
-            display: flex; flex-direction: column; gap: 8px;
-            pointer-events: none;
-        }
-        .toast {
-            pointer-events: auto;
-            background: #1f2937; color: #f3f4f6;
-            border-left: 4px solid #22d3ee;
-            padding: 10px 14px; border-radius: 6px;
-            font-size: 13px; box-shadow: 0 6px 20px rgba(0,0,0,0.25);
-            display: flex; align-items: center; gap: 12px;
-            min-width: 320px; max-width: 560px;
-        }
-        .toast .toast-msg { flex: 1; }
-        .toast .toast-btn {
-            background: transparent; border: 1px solid #22d3ee;
-            color: #22d3ee; padding: 3px 10px;
-            border-radius: 4px; cursor: pointer; font-size: 12px;
-        }
-        .toast .toast-btn:hover { background: rgba(34,211,238,0.1); }
-        .toast .toast-close {
-            background: none; border: none; color: #9ca3af;
-            font-size: 18px; cursor: pointer; line-height: 1;
         }
         .fbd-header {
             padding: 14px 20px;
@@ -1453,24 +844,33 @@
             font-weight: 600;
         }
         .fbd-section-label:first-child { margin-top: 0; }
-
-        /* Shared input / textarea / select styling inside the modal body.
-           One ruleset, no per-component overrides, no negative margins —
-           keeps everything aligned and prevents the "text overlapping
-           border" symptoms that come from competing CSS specificity. */
-        .fbd-body input[type="text"],
-        .fbd-body textarea,
-        .fbd-body select {
+        .fbd-issue-row {
+            border: 1px solid #e5e7eb;
+            border-radius: 8px;
+            padding: 12px 44px 12px 12px;
+            margin-bottom: 10px;
+            background: #fafbfc;
+            position: relative;
+        }
+        .fbd-row-grid {
+            display: grid;
+            grid-template-columns: 1fr 1fr;
+            gap: 10px;
+            margin-bottom: 8px;
+        }
+        .fbd-issue-row select,
+        .fbd-issue-row input[type="text"],
+        .fbd-issue-row textarea,
+        .fbd-body textarea {
             width: 100%;
-            padding: 7px 10px;
+            padding: 6px 8px;
             border: 1px solid #d8dee5;
             border-radius: 6px;
             font-size: 0.82rem;
             font-family: inherit;
-            background: #fff;
-            color: #1f2937;
-            box-sizing: border-box;
+            background: white;
         }
+        .fbd-issue-row select,
         .fbd-body select {
             padding-right: 32px;
             -webkit-appearance: none;
@@ -1481,62 +881,22 @@
             background-position: right 10px center;
             text-overflow: ellipsis;
         }
-        .fbd-body textarea {
+        .fbd-issue-row textarea,
+        .fbd-body > textarea {
             resize: vertical;
-            min-height: 60px;
-            line-height: 1.45;
+            min-height: 50px;
         }
-        .fbd-body input[type="text"]:focus,
-        .fbd-body textarea:focus,
-        .fbd-body select:focus {
-            outline: none;
-            border-color: #0071c5;
-            box-shadow: 0 0 0 2px rgba(0,113,197,0.12);
-        }
-        /* "Or describe the approach" input sits directly under the skill
-           dropdown in the Wrong-direction sub-block — small breathing
-           room so the two fields don't fuse visually. */
-        .fbd-body input.fbd-approach-input { margin-top: 6px; }
-
-        /* "Specific problems" — one row per issue inside the
-           Agent-workflow group. Compact two-column grid for the
-           always-visible Where / Problem pickers, sub-rows reveal
-           skill / step dropdowns conditionally. */
-        .fbd-issue-row {
-            position: relative;
-            background: #fff;
-            border: 1px solid #e5e7eb;
-            border-radius: 6px;
-            padding: 10px 36px 10px 10px;
-            margin: 6px 0;
-        }
-        .fbd-row-grid {
-            display: grid;
-            grid-template-columns: 1fr 1fr;
-            gap: 8px;
-            margin-bottom: 6px;
-        }
-        .fbd-row-extra { margin-bottom: 6px; }
-        .fbd-issue-row .fbd-note {
-            margin-top: 4px;
-        }
-        /* Options the area↔note-type matrix says don't apply stay
-           visible but greyed out, so the user can see the full taxonomy
-           and understand which combinations are valid. */
-        .fbd-issue-row select option:disabled {
-            color: #b0b6c0;
-            font-style: italic;
-        }
+        .fbd-row-extra { margin-bottom: 8px; }
         .fbd-remove {
             position: absolute;
-            top: 8px; right: 8px;
-            width: 22px; height: 22px;
+            top: 10px; right: 10px;
+            width: 24px; height: 24px;
             border-radius: 50%;
-            background: #fff;
+            background: white;
             border: 1px solid #e5e7eb;
             color: #cf222e;
             cursor: pointer;
-            font-size: 0.9rem;
+            font-size: 0.95rem;
             line-height: 1;
             padding: 0;
             display: flex;
@@ -1547,9 +907,6 @@
             background: #fdecec;
             border-color: #cf222e;
         }
-
-        /* Shared dashed-outline "add" button (still used by the skill
-           editor's "+ Add new skill" and the issue rows). */
         .fbd-add-row {
             background: white;
             border: 1px dashed #0071c5;
@@ -1583,148 +940,12 @@
         .fbd-btn.primary:hover { background: #005a9e; }
         .fbd-btn:disabled { opacity: 0.6; cursor: not-allowed; }
         .hidden-row { display: none !important; }
-
-        /* ── Multi-issue-time UI ──────────────────────────────────────
-           Extra issue-time rows in the sidebar AND rows inside the
-           time-capture popup. Both reuse the exact .it-row / .it-field
-           / .it-label / .it-input / .it-sep structure of the primary
-           Issue Time picker so they look identical, just wrapped in a
-           soft card with a ✕ remove affordance. */
-        .eit-row {
-            position: relative;
-            padding: 10px 12px 6px;
-            margin-top: 10px;
-            background: #f9fafb;
-            border: 1px solid #e5e7eb;
-            border-radius: 6px;
-        }
-        .eit-row .it-row:last-child { margin-bottom: 0; }
-        .eit-row .eit-remove {
-            position: absolute;
-            top: 4px;
-            right: 6px;
-            background: none;
-            border: none;
-            color: #dc2626;
-            font-size: 16px;
-            font-weight: 700;
-            cursor: pointer;
-            line-height: 1;
-            padding: 2px 5px;
-            border-radius: 4px;
-            z-index: 1;
-        }
-        .eit-row .eit-remove:hover {
-            color: #991b1b;
-            background: #fee2e2;
-        }
-
-        /* ── Compact one-row variant (time-capture popup) ──────────
-           Wider drawer width lets us pack MM/DD/YYYY HH:MM:SS.mmm
-           on a single line. Placeholders carry the field meaning so
-           we drop the labels for a slimmer look. */
-        .eit-row.eit-row-compact {
-            padding: 8px 36px 8px 10px;
-        }
-        .eit-row.eit-row-compact .eit-fields {
-            display: flex;
-            flex-wrap: nowrap;
-            align-items: center;
-            gap: 4px;
-        }
-        .eit-row.eit-row-compact .eit-fields input[type="number"] {
-            width: 46px;
-            padding: 4px 4px;
-            font-size: 0.82rem;
-            text-align: center;
-            border: 1px solid #d1d5db;
-            border-radius: 4px;
-            font-family: 'SFMono-Regular', Consolas, monospace;
-            background: #fff;
-            -moz-appearance: textfield;
-            appearance: textfield;
-        }
-        .eit-row.eit-row-compact .eit-fields input[type="number"]::-webkit-outer-spin-button,
-        .eit-row.eit-row-compact .eit-fields input[type="number"]::-webkit-inner-spin-button {
-            -webkit-appearance: none; margin: 0;
-        }
-        .eit-row.eit-row-compact .eit-fields .eit-year { width: 60px; }
-        .eit-row.eit-row-compact .eit-fields .eit-ms   { width: 54px; }
-        .eit-row.eit-row-compact .eit-fields .eit-sep {
-            color: #9ca3af;
-            font-weight: 700;
-            font-size: 0.85rem;
-            user-select: none;
-        }
-        .eit-row.eit-row-compact .eit-fields .eit-gap {
-            display: inline-block;
-            width: 6px;
-        }
-
-        .eit-add-btn {
-            display: inline-flex;
-            align-items: center;
-            gap: 4px;
-            background: none;
-            border: 1px dashed #93c5fd;
-            color: #0071c5;
-            border-radius: 5px;
-            padding: 4px 10px;
-            font-size: 0.72rem;
-            font-weight: 600;
-            cursor: pointer;
-            margin-top: 8px;
-            width: 100%;
-            justify-content: center;
-        }
-        .eit-add-btn:hover { background: #eff6ff; }
-
-        /* ── Time-capture popup (uses .fbd-modal centered shell) ──── */
-        #time-capture-modal .fbd-card { width: min(580px, 94vw); }
-        .tc-mode-row {
-            display: flex;
-            gap: 14px;
-            margin-top: 10px;
-            font-size: 0.78rem;
-        }
-        .tc-mode-row label {
-            display: inline-flex;
-            align-items: center;
-            gap: 4px;
-            cursor: pointer;
-        }
-        .tc-hint {
-            font-size: 0.72rem;
-            color: #6a737d;
-            margin: 8px 0;
-            line-height: 1.4;
-        }
-
-        /* ── Per-incident report wrapper (multi-time analysis) ────── */
-        .incident-tag {
-            display: inline-block;
-            background: #eff6ff;
-            border: 1px solid #93c5fd;
-            color: #1d4ed8;
-            font-size: 0.72rem;
-            font-weight: 700;
-            padding: 2px 9px;
-            border-radius: 10px;
-            margin: 4px 0;
-        }
     </style>
 </head>
 <body>
 
 <!-- Top bar -->
 <div class="top-bar">
-    <!-- Hamburger — manually shows / hides the left sidebar. Stays
-         visible at all times so the user can recover the sidebar
-         after a feedback session auto-collapses it. -->
-    <button type="button" class="sidebar-toggle"
-            onclick="toggleSidebar()"
-            title="Show / hide sidebar"
-            aria-label="Toggle sidebar">☰</button>
     <span style="font-size:1.4rem;">📡</span>
     <h1>Wi-Fi Log Chatbot</h1>
     <span class="badge-model">Avatar · Multi-Skill Agent</span>
@@ -1839,36 +1060,14 @@
                  style="font-size:0.78rem;color:#0071c5;margin-top:8px;font-weight:600;font-family:'SFMono-Regular',Consolas,monospace;min-height:1.1em;"></div>
             <div id="issue-time-error"
                  style="display:none;font-size:0.7rem;color:#c62828;margin-top:4px;"></div>
-
-            <!-- Extras list: additional issue times beyond the primary
-                 picker above. Each row is a compact MM/DD/YYYY HH:MM:SS.mmm
-                 strip with its own ✕ remove button. Multi-time analysis
-                 runs one agent pass per filled row. -->
-            <div id="extra-issue-times"></div>
-            <button type="button" class="eit-add-btn"
-                    onclick="addExtraIssueTimeRow()">
-                ＋ Add another issue time
-            </button>
         </div>
 
         <!-- Skills -->
         <div class="sidebar-section">
             <h6>🛠 Available Skills</h6>
-            <div id="skill-source-panel" class="skill-source-panel">
-                <div class="skill-source-row">
-                    <span id="skill-source-badge" class="skill-source-badge cloud">Cloud baseline</span>
-                    <span id="skill-source-file"  class="skill-source-file"></span>
-                </div>
-                <div id="skill-source-actions" class="skill-source-actions"></div>
-            </div>
             <div id="skills-list">
                 <div style="font-size:0.78rem;color:#aaa;">Load a log file to see skills.</div>
             </div>
-            <button class="btn-set-log" style="width:100%;margin-top:8px;"
-                    onclick="openSkillEditor()" id="skill-editor-btn"
-                    title="Edit the local skill configuration"
-                    >✏️ Edit Skills Configuration</button>
-            <div id="skill-editor-status" class="log-status"></div>
         </div>
 
         <!-- Reload skills from directory -->
@@ -2849,65 +2048,6 @@
                 showStatus(statusEl, '✔ ' + data.message, 'ok');
                 renderSkills(data.skills);
                 logLoaded = true;
-
-                // ── Auto-reset when switching from one log to another ──
-                // Backend signals `rotated=true` when this set_log replaces
-                // a DIFFERENT log path. We snapshot the chat UI + per-turn
-                // caches before clearing, so the user can undo within 30 s.
-                if (data.rotated) {
-                    const undoCache = {
-                        chatHTML:           document.getElementById('chat-window').innerHTML,
-                        feedbackConvId:     window.__feedbackConversationId || '',
-                        lastFeedback:       window.__lastFeedback || {},
-                        turnContext:        window.__turnContext || {},
-                        yamlModified:       window.__yamlModified,
-                        previousLogPath:    data.previous_log_path || '',
-                    };
-                    // Clear everything the previous conversation owned.
-                    document.getElementById('chat-window').innerHTML = `
-                        <div class="welcome-msg" id="welcome-msg">
-                            <div class="big-icon">🔄</div>
-                            <strong>New log loaded.</strong><br>
-                            Previous chat history was cleared so the agent
-                            starts fresh on this log.
-                        </div>`;
-                    window.__feedbackConversationId = data.new_conversation_id || '';
-                    window.__lastFeedback = {};
-                    window.__turnContext = {};
-                    window.__yamlModified = false;
-
-                    showToast({
-                        message: '🔄 Detected new log — chat history cleared.',
-                        actionLabel: 'Undo (30s)',
-                        ttlMs: 30000,
-                        onAction: () => {
-                            // Visual restore: bring back the previous chat
-                            // panel + per-turn caches. The previous
-                            // conversation_id is also restored so any
-                            // feedback widgets in the restored HTML keep
-                            // writing into the right snapshot. The agent's
-                            // in-memory state for the old log is gone, but
-                            // the user can re-load that log to re-prime.
-                            document.getElementById('chat-window').innerHTML = undoCache.chatHTML;
-                            window.__feedbackConversationId = undoCache.feedbackConvId;
-                            window.__lastFeedback = undoCache.lastFeedback;
-                            window.__turnContext  = undoCache.turnContext;
-                            window.__yamlModified = undoCache.yamlModified;
-                            if (undoCache.previousLogPath) {
-                                document.getElementById('log-path-input').value =
-                                    undoCache.previousLogPath;
-                            }
-                            showToast({
-                                message: '↩️ Restored previous chat view. Reload the old log file to continue chatting.',
-                                ttlMs: 6000,
-                            });
-                        },
-                    });
-                } else if (data.new_conversation_id) {
-                    // First-time load (no rotation) — just record the id.
-                    window.__feedbackConversationId = data.new_conversation_id;
-                }
-
                 // Auto-fill the sidebar Issue Time when nothing is filled yet.
                 // The backend resolves it by falling back to the log's latest
                 // timestamp when no attachment_time was found, so a direct
@@ -2916,13 +2056,6 @@
                     setIssueTimeFromString(data.issue_time);
                     const warn = document.getElementById('it-unknown-warn');
                     if (warn) warn.style.display = 'none';
-                }
-                // Cache JUST the date portion of the log's auto-detected
-                // timestamp, so the time-capture popup can pre-fill MM/DD/
-                // YYYY when the user types a time-only token (e.g.
-                // "17:36:13"). Survives after the sidebar gets cleared.
-                if (data.issue_time) {
-                    window.__logAutoDate = _extractDateFromTimeString(data.issue_time);
                 }
                 updateAnalyzeBtn();
                 validateUserInput();
@@ -2986,87 +2119,18 @@
     async function sendMessage() {
         const input = document.getElementById('user-input');
         let desc = input.value.trim();
-
-        // ── Multi-time CONTINUATION? ──────────────────────────────────
-        // When the previous /chat iteration finished and there are
-        // queued issue times, sendMessage is re-entered with the saved
-        // desc + the next time popped from the queue.
-        const isContinuation = !!window.__multiTimeContext;
-        let multiTimeForThisIter = null;
-        // parentMessageId: UUID shared across every iteration of a
-        // single Send click. Created on the FIRST iteration, reused
-        // on all continuations, sent to /chat so the sidecar stamps
-        // every resulting turn with it (multi-incident co-firing
-        // recoverable downstream).
-        let parentMessageId = '';
-
-        if (isContinuation) {
-            const ctx = window.__multiTimeContext;
-            multiTimeForThisIter = ctx.queue.shift();
-            ctx.currentIdx += 1;
-            desc = ctx.desc;
-            parentMessageId = ctx.parentMessageId || '';
-            appendIncidentTag(ctx.currentIdx, ctx.total, multiTimeForThisIter);
-        } else {
-            parentMessageId = _uuid4();
-        }
-
         if (!desc) return;
 
-        // Hard blockers (log not loaded, empty description). Skipped on
-        // continuations because the textbox was cleared after iteration
-        // 1 — we already know the original input passed validation.
-        if (!isContinuation && !validateUserInput(true)) {
+        // Hard blockers (log not loaded, empty description) keep Send disabled
+        if (!validateUserInput(true)) {
             input.focus();
             return;
-        }
-
-        // ── Detect time tokens inside the typed message ──────────────
-        // Skipped on continuations and on the second-pass call after
-        // the popup has already been resolved (via __skipTimeCaptureOnce).
-        if (!isContinuation && !window.__skipTimeCaptureOnce) {
-            const detected = _detectIssueTimesInText(desc);
-            if (detected.length > 0) {
-                openTimeCaptureModal(detected, (times, mode) => {
-                    if (times.length > 0) {
-                        _applyCapturedTimesToSidebar(times, mode);
-                    }
-                    window.__skipTimeCaptureOnce = true;
-                    sendMessage();
-                    window.__skipTimeCaptureOnce = false;
-                });
-                return;     // wait for popup before continuing
-            }
-        }
-        window.__skipTimeCaptureOnce = false;
-
-        // ── Decide the issue time for THIS iteration ──────────────────
-        let issueTime = '';
-        if (multiTimeForThisIter) {
-            issueTime = _formatEitRowString(multiTimeForThisIter);
-        } else if (!isContinuation) {
-            // Fresh send: gather all times. If >1, set up multi-time
-            // context now and use the FIRST time on this iteration; the
-            // rest will be processed in chained re-calls from finally{}.
-            const allTimes = getAllIssueTimesParsed();
-            if (allTimes.length > 1) {
-                window.__multiTimeContext = {
-                    desc:             desc,
-                    queue:            allTimes.slice(1),
-                    currentIdx:       1,
-                    total:            allTimes.length,
-                    parentMessageId:  parentMessageId,
-                };
-                issueTime = _formatEitRowString(allTimes[0]);
-                appendIncidentTag(1, allTimes.length, allTimes[0]);
-            } else if (allTimes.length === 1) {
-                issueTime = _formatEitRowString(allTimes[0]);
-            }
         }
 
         // Soft gate: first round without an Issue Time. Ask for explicit
         // confirmation via a modal dialog before proceeding.
         const firstRound = !firstRoundSent;
+        const issueTime = getIssueTimeString();
         if (firstRound && !issueTime) {
             const confirmed = await confirmNoIssueTime();
             if (!confirmed) {
@@ -3076,6 +2140,12 @@
         }
 
         // Compose final message: description + (optional) issue time hint.
+        // The sidebar Issue Time field is the SINGLE source of truth for the
+        // timestamp on AUTO-FILLED first-round messages. Strip embedded
+        // timestamps only when auto-fill mode is active (sidebar time will be
+        // appended instead). For manually typed follow-up questions the user
+        // may intentionally include a timestamp (e.g. "what happened at 12:28:03")
+        // — leave those intact.
         const cleanDesc = isAutoFillMode
             ? trimTrailingTimeConnector(stripTimestampsFromDesc(desc))
             : desc;
@@ -3083,32 +2153,29 @@
             ? `${cleanDesc} at around ${issueTime}`
             : cleanDesc;
 
-        // Reset the textbox only on the FIRST iteration (not on
-        // continuations — we don't want the user's input to disappear
-        // before all queued times have been processed).
-        if (!isContinuation) {
-            input.value = '';
-            input.style.height = 'auto';
-            // Hide the prefill / time hints once the message is actually sent.
-            ['prefill-hint','time-hint','no-time-hint','no-desc-hint','no-log-hint']
-                .forEach((id) => {
-                    const el = document.getElementById(id);
-                    if (el) el.style.display = 'none';
-                });
-        }
+        input.value = '';
+        input.style.height = 'auto';
+        // Hide the prefill / time hints once the message is actually sent.
+        const prefillHint = document.getElementById('prefill-hint');
+        if (prefillHint) prefillHint.style.display = 'none';
+        const timeHint = document.getElementById('time-hint');
+        if (timeHint) timeHint.style.display = 'none';
+        const noTimeHint = document.getElementById('no-time-hint');
+        if (noTimeHint) noTimeHint.style.display = 'none';
+        const noDescHint = document.getElementById('no-desc-hint');
+        if (noDescHint) noDescHint.style.display = 'none';
+        const noLogHint = document.getElementById('no-log-hint');
+        if (noLogHint) noLogHint.style.display = 'none';
         isAutoFillMode = false;  // auto-fill obligation fulfilled
         firstRoundSent = true;   // subsequent rounds skip the strict gate
-
-        // Clear the sidebar Issue Time only when we won't need it again.
-        // Single-time send → clear now. Multi-time → clear after the
-        // last iteration finishes (handled in the finally block below).
-        if (!window.__multiTimeContext) {
-            clearIssueTime();
-        }
+        // Auto-clear the sidebar Issue Time after the message has been
+        // composed & captured. Each follow-up question must therefore have
+        // its time explicitly re-entered by the user; otherwise no time is
+        // attached. This prevents an old timestamp from silently leaking
+        // into a new, unrelated question.
+        clearIssueTime();
         document.getElementById('send-btn').disabled = true;
-        // Only show the user's typed message ONCE — at the start of the
-        // very first iteration. Continuations re-use the same message.
-        if (!isContinuation) appendUserMsg(text);
+        appendUserMsg(text);
         const typingRow = appendTyping();
 
         const steps = [];
@@ -3248,10 +2315,6 @@
                     // removed all time fields (vs. time-only with blank date).
                     issue_time: issueTime || "",
                     issue_time_cleared: !issueTime && !checkIssueTime().anyFilled,
-                    // Per-Send UUID; shared across every iteration of a
-                    // multi-incident chained send so all resulting turns
-                    // carry the same parent_message_id in the snapshot.
-                    parent_message_id: parentMessageId,
                 })
             });
 
@@ -3276,9 +2339,7 @@
                     const result = evt.result;
                     const turnId = evt.turn_id || null;
                     if (evt.conversation_id) window.__feedbackConversationId = evt.conversation_id;
-                    if (turnId) {
-                        captureTurnContext(turnId, steps);
-                    }
+                    if (turnId) captureTurnContext(turnId, steps);
                     if (result && result.type === 'report') {
                         if (agentCardId) collapseAgentProcessCard(agentCardId);
                         appendReport(result.data, '📊 Analysis Report', result.issue_time || null, turnId);
@@ -3308,47 +2369,8 @@
             appendAssistantText('❌ Network error: ' + e.message);
         } finally {
             removeTyping();
-            // ── Multi-time chain: if the queue still has unprocessed
-            // issue times, schedule the next iteration AND keep Send
-            // disabled. Re-enabling Send between iterations lets the
-            // user click it during the ~250ms gap, which would re-
-            // enter sendMessage with isContinuation=true (because
-            // __multiTimeContext is still set) — popping the queue
-            // early and ignoring whatever they had just typed.
-            // We only re-enable Send when the chain is fully drained
-            // (or on a regular single-time finish).
-            const stillChaining = !!(window.__multiTimeContext
-                                     && window.__multiTimeContext.queue.length > 0);
-            if (stillChaining) {
-                setTimeout(() => sendMessage(), 250);
-                // intentionally NOT touching send-btn.disabled here
-            } else {
-                if (window.__multiTimeContext) {
-                    // Last iteration of the multi-time chain — reset state
-                    // and clean the sidebar so the next Send starts fresh.
-                    window.__multiTimeContext = null;
-                    clearIssueTime();
-                    clearAllExtraIssueTimes();
-                }
-                document.getElementById('send-btn').disabled = false;
-            }
+            document.getElementById('send-btn').disabled = false;
         }
-    }
-
-    // Insert a small "Incident N/M at <time>" chip into the chat — used
-    // before each multi-time analysis iteration so the user can scan
-    // which result belongs to which issue time.
-    function appendIncidentTag(idx, total, timeObj) {
-        if (!total || total <= 1) return;
-        const fmt = _formatEitRowString(timeObj);
-        const wrapper = document.createElement('div');
-        wrapper.className = 'msg-row assistant';
-        wrapper.innerHTML =
-            `<div class="avatar-icon">🕒</div>` +
-            `<div style="flex:1;"><span class="incident-tag">Incident ${idx} / ${total}` +
-            (fmt ? ` &nbsp;·&nbsp; ${fmt}` : '') + `</span></div>`;
-        document.getElementById('chat-window').appendChild(wrapper);
-        scrollBottom();
     }
 
 
@@ -3570,566 +2592,24 @@
         validateUserInput();
         tryAutoAnalyzeOnLoad();
     });
-
-    // ============================================================
-    // Multi-issue-time support
-    //   1. Pattern detection on the user's chat message
-    //   2. Capture popup with editable rows
-    //   3. Sidebar "extras" list with + / × buttons
-    //   4. getAllIssueTimes() — primary picker + extras combined
-    // ============================================================
-
-    // RFC4122 v4 UUID — used for parent_message_id (multi-incident
-    // co-firing key). crypto.randomUUID() is available in all modern
-    // browsers; this fallback is purely defensive for old environments.
-    function _uuid4() {
-        if (window.crypto && typeof window.crypto.randomUUID === 'function') {
-            return window.crypto.randomUUID();
-        }
-        return 'xxxxxxxx-xxxx-4xxx-yxxx-xxxxxxxxxxxx'.replace(/[xy]/g, (c) => {
-            const r = Math.random() * 16 | 0;
-            const v = c === 'x' ? r : (r & 0x3) | 0x8;
-            return v.toString(16);
-        });
-    }
-
-    // Match HH:MM:SS or HH:MM:SS.mmm anywhere in the text. The leading
-    // \b is a word boundary — between a non-word char (e.g. "." or
-    // space) and a digit. That's what lets enumerated inputs like
-    // "1.17:36:13" pick up the "17:36:13" portion: the regex engine
-    // anchors the match at the `.→1` transition, not at the leading
-    // "1". (Earlier comment versions described this as a "negative
-    // lookbehind" — that was inaccurate; there is no lookbehind in
-    // the pattern, just `\b`.) Hours / minutes / seconds are bounds-
-    // checked AFTER the regex match so things like "99:88:77" don't
-    // slip through.
-    function _detectIssueTimesInText(text) {
-        if (!text || typeof text !== 'string') return [];
-        const re = /\b(\d{1,2}):([0-5]?\d):([0-5]?\d)(?:\.(\d{1,3}))?\b/g;
-        const out = [];
-        const seen = new Set();
-        let m;
-        while ((m = re.exec(text)) !== null) {
-            const H = parseInt(m[1], 10);
-            const M = parseInt(m[2], 10);
-            const S = parseInt(m[3], 10);
-            if (H > 23 || M > 59 || S > 59) continue;
-            const key = `${H}:${M}:${S}.${m[4] || ''}`;
-            if (seen.has(key)) continue;
-            seen.add(key);
-            out.push({
-                hh: H, mm: M, ss: S,
-                ms: m[4] != null ? parseInt(m[4], 10) : null,
-                raw: m[0], index: m.index,
-            });
-        }
-        return out;
-    }
-
-    // ---- Time-capture popup ----
-    let _timeCaptureOnApply = null;
-
-    function openTimeCaptureModal(detectedTimes, onApply) {
-        const list = document.getElementById('time-capture-list');
-        list.innerHTML = '';
-        const summary = document.getElementById('tc-summary');
-        const n = (detectedTimes || []).length;
-
-        // For every detected time that's missing MM/DD/YYYY (the user's
-        // text only contained "HH:MM:SS"), borrow the date from a
-        // reference source: the sidebar primary picker if filled, else
-        // the log's auto-detected timestamp captured at /set_log time.
-        const refDate = _getReferenceDateForCapture();
-        const enrichedTimes = (detectedTimes || []).map((t) => {
-            if (!refDate) return t;
-            return {
-                ...t,
-                month: t.month != null ? t.month : refDate.month,
-                day:   t.day   != null ? t.day   : refDate.day,
-                year:  t.year  != null ? t.year  : refDate.year,
-            };
-        });
-
-        if (summary) {
-            const dateHint = refDate
-                ? ` &middot; MM/DD/YYYY pre-filled from the loaded log.`
-                : '';
-            summary.innerHTML = `Found ${n} time(s) in your text. Edit any field, add more with “+ Add another time”, or remove any you don’t want.${dateHint}`;
-        }
-
-        if (n === 0) {
-            addTimeCaptureRow(refDate ? { ...refDate } : undefined);
-        } else {
-            enrichedTimes.forEach((t) => addTimeCaptureRow(t));
-        }
-        _timeCaptureOnApply = (typeof onApply === 'function') ? onApply : null;
-        const modal = document.getElementById('time-capture-modal');
-        modal.classList.add('open');
-        modal.setAttribute('aria-hidden', 'false');
-    }
-
-    // Pull MM/DD/YYYY from the sidebar primary picker first (the user's
-    // current explicit choice). Fall back to the log's auto-detected
-    // timestamp cached at /set_log. Returns null if neither is available.
-    function _getReferenceDateForCapture() {
-        const num = (id) => {
-            const el = document.getElementById(id);
-            const v = el ? el.value : '';
-            return v === '' ? null : parseInt(v, 10);
-        };
-        const sidebar = {
-            month: num('it-month'),
-            day:   num('it-day'),
-            year:  num('it-year'),
-        };
-        if (sidebar.month != null && sidebar.day != null && sidebar.year != null) {
-            return sidebar;
-        }
-        if (window.__logAutoDate
-            && window.__logAutoDate.month != null
-            && window.__logAutoDate.day   != null
-            && window.__logAutoDate.year  != null) {
-            return { ...window.__logAutoDate };
-        }
-        return null;
-    }
-
-    // Extract the date portion of a "MM/DD/YYYY-HH:MM:SS(.mmm)" or
-    // "MM/DD/YYYY HH:MM:SS(.mmm)" or "YYYY-MM-DD HH:MM:SS(.mmm)" string.
-    // Returns {month, day, year} or null.
-    function _extractDateFromTimeString(s) {
-        if (!s || typeof s !== 'string') return null;
-        let m = s.match(/(\d{1,2})\/(\d{1,2})\/(\d{4})/);     // MM/DD/YYYY
-        if (m) return { month: +m[1], day: +m[2], year: +m[3] };
-        m = s.match(/(\d{4})[-/](\d{1,2})[-/](\d{1,2})/);    // YYYY-MM-DD
-        if (m) return { year: +m[1], month: +m[2], day: +m[3] };
-        return null;
-    }
-
-    function closeTimeCaptureModal() {
-        const modal = document.getElementById('time-capture-modal');
-        modal.classList.remove('open');
-        modal.setAttribute('aria-hidden', 'true');
-        _timeCaptureOnApply = null;
-    }
-
-    function addTimeCaptureRow(t) {
-        // Popup uses the COMPACT one-row template (slimmer than the
-        // sidebar's labeled two-row version) so 2-5 detected times
-        // stack neatly inside the modal.
-        const tpl = document.getElementById('eit-row-template-compact');
-        const list = document.getElementById('time-capture-list');
-        const node = tpl.content.firstElementChild.cloneNode(true);
-        _populateEitRow(node, t);
-        list.appendChild(node);
-    }
-
-    function applyTimeCapture() {
-        const list = document.getElementById('time-capture-list');
-        const times = [];
-        list.querySelectorAll('.eit-row').forEach((row) => {
-            const t = _readEitRow(row);
-            if (t.hh != null && t.mm != null && t.ss != null) times.push(t);
-        });
-        const modeEl = document.querySelector('input[name="tc-mode"]:checked');
-        const mode = modeEl ? modeEl.value : 'replace';
-        const cb = _timeCaptureOnApply;
-        closeTimeCaptureModal();
-        if (cb) cb(times, mode);
-    }
-
-    // ---- Sidebar extras list ----
-    function addExtraIssueTimeRow(t) {
-        const tpl  = document.getElementById('eit-row-template');
-        const list = document.getElementById('extra-issue-times');
-        const node = tpl.content.firstElementChild.cloneNode(true);
-        _populateEitRow(node, t);
-        list.appendChild(node);
-        return node;
-    }
-
-    function removeEitRow(btn) {
-        const row = btn.closest('.eit-row');
-        if (row) row.remove();
-    }
-
-    function clearAllExtraIssueTimes() {
-        const list = document.getElementById('extra-issue-times');
-        if (list) list.innerHTML = '';
-    }
-
-    // ---- Shared row helpers ----
-    function _populateEitRow(node, t) {
-        if (!t) return;
-        const set = (sel, v) => {
-            const el = node.querySelector(sel);
-            if (el && v != null && v !== '') el.value = String(v);
-        };
-        set('.eit-month', t.month);
-        set('.eit-day',   t.day);
-        set('.eit-year',  t.year);
-        set('.eit-hour',  t.hh);
-        set('.eit-min',   t.mm);
-        set('.eit-sec',   t.ss);
-        set('.eit-ms',    t.ms);
-    }
-    function _readEitRow(row) {
-        const num = (sel) => {
-            const v = row.querySelector(sel).value;
-            return v === '' ? null : parseInt(v, 10);
-        };
-        return {
-            month: num('.eit-month'),
-            day:   num('.eit-day'),
-            year:  num('.eit-year'),
-            hh:    num('.eit-hour'),
-            mm:    num('.eit-min'),
-            ss:    num('.eit-sec'),
-            ms:    num('.eit-ms'),
-        };
-    }
-    // Render an eit-row's fields into the same string format that
-    // getIssueTimeString() emits for the primary picker, so the agent
-    // sees a uniform "at around MM/DD/YYYY HH:MM:SS.mmm" suffix.
-    function _formatEitRowString(t) {
-        if (!t || t.hh == null || t.mm == null || t.ss == null) return '';
-        const pad2 = (n) => String(n).padStart(2, '0');
-        const pad3 = (n) => String(n).padStart(3, '0');
-        let s = '';
-        if (t.month != null && t.day != null) {
-            s += pad2(t.month) + '/' + pad2(t.day);
-            if (t.year != null) s += '/' + String(t.year);
-            s += ' ';
-        }
-        s += pad2(t.hh) + ':' + pad2(t.mm) + ':' + pad2(t.ss);
-        if (t.ms != null) s += '.' + pad3(t.ms);
-        return s;
-    }
-
-    // Combined accessor: primary picker first, then each filled extra row.
-    function getAllIssueTimes() {
-        const out = [];
-        const primary = getIssueTimeString();
-        if (primary) out.push(primary);
-        document.querySelectorAll('#extra-issue-times .eit-row').forEach((row) => {
-            const s = _formatEitRowString(_readEitRow(row));
-            if (s) out.push(s);
-        });
-        return out;
-    }
-
-    // Same idea but returns the PARSED row objects ({month, day, year,
-    // hh, mm, ss, ms}) rather than formatted strings — used by the
-    // multi-time chain in sendMessage so it can re-inject each row into
-    // _formatEitRowString on its own turn.
-    function getAllIssueTimesParsed() {
-        const out = [];
-        const primary = _readPrimaryIssueTime();
-        if (primary) out.push(primary);
-        document.querySelectorAll('#extra-issue-times .eit-row').forEach((row) => {
-            const t = _readEitRow(row);
-            if (t.hh != null && t.mm != null && t.ss != null) out.push(t);
-        });
-        return out;
-    }
-
-    // Read the sidebar primary picker fields and return a row object,
-    // or null when the time portion (HH:MM:SS) isn't fully filled.
-    function _readPrimaryIssueTime() {
-        const num = (id) => {
-            const el = document.getElementById(id);
-            const v = el ? el.value : '';
-            return v === '' ? null : parseInt(v, 10);
-        };
-        const t = {
-            month: num('it-month'),
-            day:   num('it-day'),
-            year:  num('it-year'),
-            hh:    num('it-hour'),
-            mm:    num('it-min'),
-            ss:    num('it-sec'),
-            ms:    num('it-ms'),
-        };
-        return (t.hh != null && t.mm != null && t.ss != null) ? t : null;
-    }
-
-    // Apply captured times to the sidebar. Mode: 'replace' clears
-    // existing first; 'append' keeps existing entries.
-    function _applyCapturedTimesToSidebar(times, mode) {
-        if (!Array.isArray(times) || times.length === 0) return;
-        if (mode === 'replace') {
-            clearIssueTime();
-            clearAllExtraIssueTimes();
-        }
-        // First time goes into the primary picker IF empty; otherwise
-        // it gets added as an extra row (keeps the existing primary).
-        const primaryIsEmpty = !getIssueTimeString();
-        let startIdx = 0;
-        if (primaryIsEmpty) {
-            _writeTimeToPrimary(times[0]);
-            startIdx = 1;
-        }
-        for (let i = startIdx; i < times.length; i++) {
-            addExtraIssueTimeRow(times[i]);
-        }
-    }
-
-    function _writeTimeToPrimary(t) {
-        if (!t) return;
-        const setIf = (id, v) => {
-            const el = document.getElementById(id);
-            if (el && v != null) el.value = String(v);
-        };
-        setIf('it-month', t.month);
-        setIf('it-day',   t.day);
-        setIf('it-year',  t.year);
-        setIf('it-hour',  t.hh);
-        setIf('it-min',   t.mm);
-        setIf('it-sec',   t.ss);
-        setIf('it-ms',    t.ms);
-        // Refresh the validation + display readout. Direct .value
-        // assignment doesn't fire input events, so the existing live
-        // helpers won't run on their own.
-        if (typeof updateIssueTimeDisplay === 'function') updateIssueTimeDisplay();
-        if (typeof checkIssueTime === 'function') checkIssueTime();
-        if (typeof validateUserInput === 'function') validateUserInput();
-    }
 </script>
 
-<!-- ===== Time-capture popup ============================================
-     Pops up when the user's message contains time tokens like
-     "17:36:13" or "1.17:36:13". Each detected token is rendered as a
-     full MM/DD/YYYY HH:MM:SS.mmm row matching the sidebar format. The
-     user can edit, add (+) or remove (×) rows, then choose whether to
-     REPLACE or APPEND to the sidebar Issue Time list. ================ -->
-<div id="time-capture-modal" class="fbd-modal" aria-hidden="true">
-    <div class="fbd-backdrop" onclick="closeTimeCaptureModal()"></div>
-    <div class="fbd-card" role="dialog" aria-modal="true">
-        <div class="fbd-header">
-            <h3>Detected issue time(s) in your message</h3>
-            <button type="button" class="fbd-close" onclick="closeTimeCaptureModal()" aria-label="Close">×</button>
-        </div>
-        <div class="fbd-body">
-            <div class="tc-hint" id="tc-summary">
-                Found 0 time(s). Edit any field, add more with “+ Add another time”,
-                or remove any you don’t want.
-            </div>
-            <div id="time-capture-list"></div>
-            <button type="button" class="eit-add-btn" style="margin-top:6px;"
-                    onclick="addTimeCaptureRow()">
-                ＋ Add another time
-            </button>
-
-            <div class="tc-hint" style="margin-top:14px;font-weight:600;color:#374151;">
-                What should happen to the sidebar Issue Time list?
-            </div>
-            <div class="tc-mode-row">
-                <label><input type="radio" name="tc-mode" value="replace" checked> Replace existing</label>
-                <label><input type="radio" name="tc-mode" value="append"> Append to existing</label>
-            </div>
-        </div>
-        <div class="fbd-footer">
-            <button type="button" class="fbd-btn" onclick="closeTimeCaptureModal()">Cancel</button>
-            <button type="button" class="fbd-btn primary" id="tc-apply-btn" onclick="applyTimeCapture()">Apply &amp; send</button>
-        </div>
-    </div>
-</div>
-
-<!-- Compact one-row template used INSIDE the time-capture popup.
-     Same .eit-month / .eit-day / ... hook classes so the shared JS
-     helpers (_populateEitRow, _readEitRow) work unchanged. -->
-<template id="eit-row-template-compact">
-    <div class="eit-row eit-row-compact">
-        <button type="button" class="eit-remove" onclick="removeEitRow(this)" aria-label="Remove">×</button>
-        <div class="eit-fields">
-            <input type="number" class="eit-month" min="1"  max="12"  placeholder="MM"   inputmode="numeric">
-            <span class="eit-sep">/</span>
-            <input type="number" class="eit-day"   min="1"  max="31"  placeholder="DD"   inputmode="numeric">
-            <span class="eit-sep">/</span>
-            <input type="number" class="eit-year"  min="1970" max="2999" placeholder="YYYY" inputmode="numeric">
-            <span class="eit-gap"></span>
-            <input type="number" class="eit-hour"  min="0"  max="23"  placeholder="HH"   inputmode="numeric">
-            <span class="eit-sep">:</span>
-            <input type="number" class="eit-min"   min="0"  max="59"  placeholder="MM"   inputmode="numeric">
-            <span class="eit-sep">:</span>
-            <input type="number" class="eit-sec"   min="0"  max="59"  placeholder="SS"   inputmode="numeric">
-            <span class="eit-sep">.</span>
-            <input type="number" class="eit-ms"    min="0"  max="999" placeholder="mmm"  inputmode="numeric">
-        </div>
-    </div>
-</template>
-
-<!-- Verbose two-row template used by the SIDEBAR extras list. Mirrors
-     the primary Issue Time picker layout (Date row + Time row, with
-     MONTH / DAY / YEAR / HOUR / MINUTE / SECOND / MS labels) so the
-     extras look identical to the first. -->
-<template id="eit-row-template">
-    <div class="eit-row">
-        <button type="button" class="eit-remove" onclick="removeEitRow(this)" aria-label="Remove">×</button>
-        <!-- Date row -->
-        <div class="it-row">
-            <div class="it-field">
-                <label class="it-label">Month</label>
-                <input type="number" class="it-input eit-month"
-                       min="1" max="12" placeholder="MM" inputmode="numeric">
-            </div>
-            <span class="it-sep">/</span>
-            <div class="it-field">
-                <label class="it-label">Day</label>
-                <input type="number" class="it-input eit-day"
-                       min="1" max="31" placeholder="DD" inputmode="numeric">
-            </div>
-            <span class="it-sep">/</span>
-            <div class="it-field it-field-wide">
-                <label class="it-label">Year</label>
-                <input type="number" class="it-input eit-year"
-                       min="1970" max="2999" placeholder="YYYY" inputmode="numeric">
-            </div>
-        </div>
-        <!-- Time row -->
-        <div class="it-row">
-            <div class="it-field">
-                <label class="it-label">Hour</label>
-                <input type="number" class="it-input eit-hour"
-                       min="0" max="23" placeholder="HH" inputmode="numeric">
-            </div>
-            <span class="it-sep">:</span>
-            <div class="it-field">
-                <label class="it-label">Minute</label>
-                <input type="number" class="it-input eit-min"
-                       min="0" max="59" placeholder="MM" inputmode="numeric">
-            </div>
-            <span class="it-sep">:</span>
-            <div class="it-field">
-                <label class="it-label">Second</label>
-                <input type="number" class="it-input eit-sec"
-                       min="0" max="59" placeholder="SS" inputmode="numeric">
-            </div>
-            <span class="it-sep">.</span>
-            <div class="it-field it-field-ms">
-                <label class="it-label">ms</label>
-                <input type="number" class="it-input eit-ms"
-                       min="0" max="999" placeholder="mmm" inputmode="numeric">
-            </div>
-        </div>
-    </div>
-</template>
-
 <!-- ===== Feedback detail modal (Layer 2 — "More feedback") ============= -->
-<!-- Top-of-page toast stack (auto-reset notifications, etc.) -->
-<div id="toast-stack" class="toast-stack"></div>
-
-<div id="feedback-detail-modal" class="fbd-modal fbd-modal--drawer" aria-hidden="true">
-    <!-- Backdrop kept in DOM but hidden by .fbd-modal--drawer so the
-         page stays interactive while the drawer is open. -->
-    <div class="fbd-backdrop"></div>
-    <div class="fbd-card" role="dialog" aria-modal="false">
+<div id="feedback-detail-modal" class="fbd-modal" aria-hidden="true">
+    <div class="fbd-backdrop" onclick="closeFeedbackModal()"></div>
+    <div class="fbd-card" role="dialog" aria-modal="true">
         <div class="fbd-header">
             <h3>More feedback</h3>
             <span id="fbd-vote-badge" class="fbd-vote-badge"></span>
-            <span class="fbd-draft-hint" id="fbd-draft-hint">draft auto-saved</span>
             <button type="button" class="fbd-close" onclick="closeFeedbackModal()" aria-label="Close">×</button>
         </div>
         <div class="fbd-body">
-            <!-- ─── Severity (1-5, single-click quantifiable signal) ─── -->
-            <div class="fbd-section-label" id="fbd-sev-label">Severity (optional)</div>
-            <div class="fbd-severity-row">
-                <div class="fbd-severity-scale" id="fbd-severity-scale">
-                    <button type="button" class="sev-btn" data-value="1">1</button>
-                    <button type="button" class="sev-btn" data-value="2">2</button>
-                    <button type="button" class="sev-btn" data-value="3">3</button>
-                    <button type="button" class="sev-btn" data-value="4">4</button>
-                    <button type="button" class="sev-btn" data-value="5">5</button>
-                </div>
-                <span class="fbd-severity-readout" id="fbd-severity-readout">Not rated</span>
-            </div>
-            <div class="fbd-field-hint" id="fbd-sev-hint">1 = minor wording miss · 3 = wrong sub-claim · 5 = critical wrong root cause</div>
+            <div class="fbd-section-label">Specific issues (add multiple if needed — all fields optional)</div>
+            <div id="fbd-issues-list"></div>
+            <button type="button" class="fbd-add-row" onclick="addIssueRow()">+ Add another issue</button>
 
-            <!-- ─── Group 1: Correct answer ─── -->
-            <div class="fbd-group">
-                <div class="fbd-group-title" id="fbd-grp-correct-title">Correct answer</div>
-
-                <label class="fbd-sub-label" id="fbd-conc-label">Conclusion category</label>
-                <select id="fbd-correct-conclusion-tag">
-                    <option value="">— Select if you know —</option>
-                    <option value="OS_INITIATED">OS-initiated (TASK_DISCONNECT / user/policy)</option>
-                    <option value="RF_INTERFERENCE">RF / signal issue (weak coverage, missed beacons)</option>
-                    <option value="AP_KICK">AP-initiated (Deauth without missed beacons)</option>
-                    <option value="FIRMWARE_CRASH">Firmware crash (UMAC / LMAC / TCM)</option>
-                    <option value="MCC_MISMATCH">MCC / regulatory mismatch</option>
-                    <option value="DRIVER_INIT_FAILURE">Driver / device initialization failure</option>
-                    <option value="AUTH_FAILURE">Authentication failure</option>
-                    <option value="ASSOC_FAILURE">Association failure</option>
-                    <option value="HANDSHAKE_FAILURE">EAPOL / 4-way handshake failure</option>
-                    <option value="WAKE_RESUME_DELAY">Wake / resume delay</option>
-                    <option value="BIOS_CONFIG_ISSUE">BIOS DSM / UEFI misconfiguration</option>
-                    <option value="ROAMING_DECISION">Roaming decision / AP selection</option>
-                    <option value="OTHER">Other</option>
-                </select>
-
-                <label class="fbd-sub-label" id="fbd-rootcause-label">Real root cause</label>
-                <input type="text" id="fbd-correct-root-cause"
-                       placeholder='e.g. "AP idle timeout kicked client off after 60s of inactivity."'>
-
-                <label class="fbd-sub-label" id="fbd-evidence-label">Key evidence log lines</label>
-                <textarea id="fbd-evidence-log-lines"
-                          placeholder='Paste log lines the agent missed or misread, one per line.&#10;e.g. [CNCT_FLOW][11] AUTH_RSP - received from "ASUS_BE98_MLO"'></textarea>
-                <div class="fbd-field-hint" id="fbd-evidence-hint">Reflector will grep these against the log to verify your correction.</div>
-            </div>
-
-            <!-- ─── Group 2: Agent workflow (orchestration ACE signal) ─── -->
-            <div class="fbd-group">
-                <div class="fbd-group-title" id="fbd-grp-flow-title">Agent workflow</div>
-
-                <label class="fbd-sub-label" id="fbd-flow-label">Investigation flow (overall)</label>
-                <select id="fbd-agent-workflow">
-                    <option value="">— Select if orchestration was off —</option>
-                    <option value="appropriate">Appropriate — flow was efficient</option>
-                    <option value="stopped_too_early">Stopped too early — should have invoked more skills</option>
-                    <option value="over_investigated">Over-investigated — could have concluded earlier</option>
-                    <option value="loop_or_stuck">Loop / stuck — repeated or never converged</option>
-                    <option value="wrong_direction">Wrong direction — investigation followed the wrong path</option>
-                </select>
-
-                <div id="fbd-correct-skill-wrap" class="hidden-row">
-                    <label class="fbd-sub-label" id="fbd-rightdir-label">Right direction</label>
-                    <select id="fbd-correct-skill">
-                        <option value="">— Pick the skill that should have led —</option>
-                    </select>
-                    <input type="text" id="fbd-correct-approach"
-                           class="fbd-approach-input"
-                           placeholder='Or describe the approach — e.g. "Check MCC regulatory state first, then connection flow"'>
-                    <div class="fbd-field-hint" id="fbd-rightdir-hint">Pick the right skill, describe the approach in words, or both.</div>
-                </div>
-
-                <label class="fbd-sub-label" id="fbd-problems-label">Specific problems (optional — pinpoint where / what)</label>
-                <div id="fbd-issues-list"></div>
-                <button type="button" class="fbd-add-row" id="fbd-add-issue-btn" onclick="addIssueRow()">+ Add another issue</button>
-                <div class="fbd-field-hint" id="fbd-problems-hint">Add one row per concrete problem you noticed. Each row: where it happened + what kind of problem + a short note.</div>
-            </div>
-
-            <!-- ─── Group 3: Attachments ─── -->
-            <div class="fbd-group">
-                <div class="fbd-group-title">Attachments</div>
-                <label class="fbd-attach-row">
-                    <input type="checkbox" id="fbd-attach-log">
-                    <span>
-                        Attach the current session log for diagnosis.
-                        <span class="hint" id="fbd-attach-log-hint">
-                            Lets reviewers replay the exact log you analysed. Recommended when reporting a wrong answer.
-                        </span>
-                    </span>
-                </label>
-                <label class="fbd-attach-row">
-                    <input type="checkbox" id="fbd-attach-yaml">
-                    <span>
-                        Attach my local skill configuration for diagnosis.
-                        <span class="hint" id="fbd-attach-yaml-hint">
-                            Helps the Wireless CE team reproduce the issue with the exact configuration you are running.
-                        </span>
-                    </span>
-                </label>
-            </div>
+            <div class="fbd-section-label">Overall suggestion (optional)</div>
+            <textarea id="fbd-general-comment" placeholder="e.g. The overall direction was wrong — the root cause looks more like ..."></textarea>
         </div>
         <div class="fbd-footer">
             <button type="button" class="fbd-btn" onclick="closeFeedbackModal()">Cancel</button>
@@ -4137,47 +2617,35 @@
         </div>
     </div>
 </div>
-<!-- One "Specific problem" row inside the Agent workflow group.
-     Where + Problem are the always-visible quick pickers; Skill / Step
-     dropdowns reveal themselves only when their scope is chosen. -->
+
 <template id="fbd-issue-row-template">
     <div class="fbd-issue-row">
         <button type="button" class="fbd-remove" title="Remove" onclick="removeIssueRow(this)">×</button>
         <div class="fbd-row-grid">
-            <select class="fbd-where" onchange="onIssueWhereChange(this)">
-                <option value="">— Where —</option>
-                <option value="phase_1">Initial skill choice</option>
-                <option value="phase_2">Investigation steps</option>
-                <option value="phase_3">Final conclusion</option>
+            <select class="fbd-scope" onchange="onScopeChange(this)">
+                <option value="">— Scope (optional) —</option>
+                <option value="overall">Overall reasoning flow</option>
                 <option value="skill">A specific Skill</option>
-                <option value="step">A specific Step</option>
-                <option value="overall">Overall flow</option>
+                <option value="step">A specific reasoning Step</option>
             </select>
-            <select class="fbd-category">
-                <option value="">— Problem —</option>
-                <option value="missed_evidence">Missed key log evidence</option>
-                <option value="wrong_skill">Wrong skill chosen</option>
-                <option value="wrong_conclusion">Wrong root cause / conclusion</option>
-                <option value="hallucinated">Cited a log line that doesn't exist</option>
-                <option value="stuck_repeated">Stuck / repeated the same fetch</option>
-                <option value="incomplete">Stopped before finishing</option>
-                <option value="over_investigated">Over-investigated unnecessarily</option>
-                <option value="bad_output">Output unclear / misleading</option>
-                <option value="other">Other</option>
+            <select class="fbd-category" onchange="onCategoryChange(this)" disabled>
+                <option value="">— Select scope first —</option>
             </select>
         </div>
         <div class="fbd-row-extra fbd-skill-wrap hidden-row">
             <select class="fbd-skill">
-                <option value="">— Pick the skill —</option>
+                <option value="">— Select skill —</option>
             </select>
         </div>
         <div class="fbd-row-extra fbd-step-wrap hidden-row">
             <select class="fbd-step">
-                <option value="">— Pick the step —</option>
+                <option value="">— Select step —</option>
             </select>
         </div>
-        <input type="text" class="fbd-note"
-               placeholder="Short note (optional) — e.g. 'missed [MISSED BEACONS] at 14:52:11'">
+        <div class="fbd-row-extra fbd-shouldbe-wrap hidden-row">
+            <input type="text" class="fbd-should-be" placeholder="(Optional) Suggested replacement skill">
+        </div>
+        <textarea class="fbd-comment" placeholder="Additional notes (optional)"></textarea>
     </div>
 </template>
 
@@ -4218,21 +2686,6 @@
                 thanks.className = 'feedback-thanks';
                 thanks.textContent = 'Thanks!';
                 widget.appendChild(thanks);
-
-                // Keep the local flag in sync with the server's view so the
-                // post-vote upload prompt and the More-feedback modal stay
-                // consistent across page reloads.
-                if (typeof data.yaml_modified === 'boolean') {
-                    window.__yamlModified = data.yaml_modified;
-                }
-
-                // Thumbs-up follow-up: when the user already edited their
-                // YAML this session, just upload it silently in the
-                // background — no extra modal to dismiss. A 👍 after
-                // tuning is implicit consent.
-                if (vote === 1 && data.yaml_modified) {
-                    uploadModifiedYamlSilently();
-                }
             } else {
                 widget.querySelectorAll('.feedback-btn').forEach(b => b.disabled = false);
                 console.warn('Feedback save failed:', data);
@@ -4279,374 +2732,20 @@
         window.__turnContext[turnId] = { skills: skillList, steps: stepList };
     }
 
-    // ── "Specific problems" multi-row issue editor ────────────────
-    // One row per concrete problem the user spotted. The Where dropdown
-    // governs which sub-field reveals (Skill picker or Step picker), so
-    // the form stays compact until detail is actually needed.
-    function addIssueRow() {
-        const tpl = document.getElementById('fbd-issue-row-template');
-        const list = document.getElementById('fbd-issues-list');
-        const node = tpl.content.firstElementChild.cloneNode(true);
-        const turnId = (window.__currentFeedbackCtx || {}).turnId;
-        const ctx = (turnId && window.__turnContext[turnId])
-                    || { skills: [], steps: [] };
-        const skillSel = node.querySelector('.fbd-skill');
-        ctx.skills.forEach((sid) => {
-            const opt = document.createElement('option');
-            opt.value = sid; opt.textContent = sid;
-            skillSel.appendChild(opt);
-        });
-        const stepSel = node.querySelector('.fbd-step');
-        ctx.steps.forEach((st) => {
-            const opt = document.createElement('option');
-            opt.value = String(st.step_index);
-            opt.textContent = st.label;
-            opt.dataset.stepLabel = st.label;
-            opt.dataset.skillId = st.skill_id || '';
-            stepSel.appendChild(opt);
-        });
-        list.appendChild(node);
-        // Re-tone Where / Category / note placeholder so a row added
-        // while the modal is already open matches the current vote.
-        if (typeof applyToneToIssueRow === 'function') applyToneToIssueRow(node);
-        // Wire Category change → bidirectional filter. (Where already
-        // wires through onIssueWhereChange in the template.)
-        const catSel = node.querySelector('.fbd-category');
-        if (catSel) {
-            catSel.addEventListener('change',
-                () => filterIssueRowOptions(node));
-        }
-    }
-    function removeIssueRow(btn) {
-        const row = btn.closest('.fbd-issue-row');
-        const list = document.getElementById('fbd-issues-list');
-        if (row && list.children.length >= 1) row.remove();
-    }
-    function onIssueWhereChange(selectEl) {
-        const row = selectEl.closest('.fbd-issue-row');
-        const w = selectEl.value;
-        row.querySelector('.fbd-skill-wrap').classList.toggle('hidden-row', w !== 'skill');
-        row.querySelector('.fbd-step-wrap').classList.toggle('hidden-row', w !== 'step');
-        filterIssueRowOptions(row);
-    }
-
-    // ── Area ↔ Note-type compatibility matrix ────────────────────────
-    // Only block truly impossible combos (a single moment can't be
-    // "repeated"; nothing has been "output" yet at the initial skill
-    // pick). A wrong final conclusion can ORIGINATE from any earlier
-    // area, so wrong_conclusion / missed_evidence stay valid across the
-    // whole flow — restricting them frustrated users with that mental
-    // model.
-    //   Initial skill choice   = the agent's first routing decision
-    //   Investigation steps    = log fetching / reasoning loop
-    //   Final conclusion       = the answer + report rendering
-    //   skill / step / overall = any note type is fair game
-    const ALL_NOTE_TYPES = [
-        'missed_evidence', 'wrong_skill', 'wrong_conclusion', 'hallucinated',
-        'stuck_repeated', 'incomplete', 'over_investigated', 'bad_output', 'other',
-    ];
-    const FBD_ISSUE_MATRIX = {
-        // Initial skill pick is a SINGLE moment with no output yet, so
-        // "stuck/repeated", "over-investigated", "bad output" can't
-        // apply here. Everything else (including wrong_conclusion =
-        // "this pick set us on the wrong track") is fair game.
-        phase_1: new Set([
-            'missed_evidence', 'wrong_skill', 'wrong_conclusion',
-            'hallucinated', 'incomplete', 'other',
-        ]),
-        // Investigation steps cover everything except "bad output",
-        // which describes the final user-facing wording.
-        phase_2: new Set([
-            'missed_evidence', 'wrong_skill', 'wrong_conclusion', 'hallucinated',
-            'stuck_repeated', 'incomplete', 'over_investigated', 'other',
-        ]),
-        // Final conclusion / report — by this point the skill choices
-        // and investigation loop are over, so "wrong_skill",
-        // "stuck_repeated", "over_investigated" don't apply *here*.
-        phase_3: new Set([
-            'missed_evidence', 'wrong_conclusion', 'hallucinated',
-            'incomplete', 'bad_output', 'other',
-        ]),
-        skill:   new Set(ALL_NOTE_TYPES),
-        step:    new Set(ALL_NOTE_TYPES),
-        overall: new Set(ALL_NOTE_TYPES),
+    const FBD_CATEGORIES_BY_SCOPE = {
+        overall: [
+            { value: 'wrong_order',  label: 'Wrong reasoning order' },
+            { value: 'missing_step', label: 'Missing a step' },
+            { value: 'stuck',        label: 'Stuck / looped' },
+        ],
+        skill: [
+            { value: 'bad_output',   label: 'Suggestion on this skill’s content / output' },
+        ],
+        step: [
+            { value: 'wrong_skill',  label: 'Wrong skill chosen (should use a different one)' },
+            { value: 'wrong_input',  label: 'Right skill, but wrong function call / parameters' },
+        ],
     };
-    function _areasAllowingCategory(cat) {
-        if (!cat) return null;  // null = "no filter"
-        const out = [];
-        for (const [area, set] of Object.entries(FBD_ISSUE_MATRIX)) {
-            if (set.has(cat)) out.push(area);
-        }
-        return out;
-    }
-    // Two-way filter on a single issue row. Runs whenever Where or
-    // Category changes. Disallowed options stay VISIBLE but disabled +
-    // dimmed so the user can see the full taxonomy and understand which
-    // combinations don't apply — rather than wondering where an option
-    // went. A previously-selected value that just became invalid is
-    // auto-cleared so the dropdown drops back to its placeholder.
-    function filterIssueRowOptions(row) {
-        const whereSel = row.querySelector('.fbd-where');
-        const catSel   = row.querySelector('.fbd-category');
-        if (!whereSel || !catSel) return;
-        const where = whereSel.value;
-        const cat   = catSel.value;
-
-        // Where → Category: disable categories that don't fit this area.
-        Array.from(catSel.options).forEach((opt) => {
-            if (!opt.value) { opt.disabled = false; return; }
-            const allow = !where
-                || (FBD_ISSUE_MATRIX[where] && FBD_ISSUE_MATRIX[where].has(opt.value));
-            opt.disabled = !allow;
-        });
-        if (cat && where && FBD_ISSUE_MATRIX[where] && !FBD_ISSUE_MATRIX[where].has(cat)) {
-            catSel.value = '';
-        }
-
-        // Category → Where: disable areas where this note type doesn't apply.
-        const validAreas = _areasAllowingCategory(catSel.value);
-        Array.from(whereSel.options).forEach((opt) => {
-            if (!opt.value) { opt.disabled = false; return; }
-            const allow = !validAreas || validAreas.includes(opt.value);
-            opt.disabled = !allow;
-        });
-        if (where && validAreas && !validAreas.includes(where)) {
-            whereSel.value = '';
-            // Area cleared → skill / step sub-rows must also collapse.
-            row.querySelector('.fbd-skill-wrap').classList.add('hidden-row');
-            row.querySelector('.fbd-step-wrap').classList.add('hidden-row');
-        }
-    }
-
-    // ── Severity 1-5 quick rating ──────────────────────────────────
-    // The readout label depends on which mode the modal is in:
-    // 👎 surfaces problem severity, 👍 surfaces match quality.
-    const FBD_SEVERITY_LABELS_DOWN = {
-        '1': 'Minor', '2': 'Small', '3': 'Moderate', '4': 'Major', '5': 'Critical',
-    };
-    const FBD_SEVERITY_LABELS_UP = {
-        '1': 'Roughly helpful', '2': 'Helpful', '3': 'Mostly right',
-        '4': 'Very good', '5': 'Spot-on',
-    };
-    function pickSeverity(value) {
-        const v = String(value || '');
-        const readout = document.getElementById('fbd-severity-readout');
-        document.querySelectorAll('.sev-btn').forEach((b) => {
-            b.classList.toggle('selected', b.dataset.value === v);
-        });
-        const tone = (window.__feedbackTone === 'up')
-            ? FBD_SEVERITY_LABELS_UP : FBD_SEVERITY_LABELS_DOWN;
-        if (!v) {
-            readout.textContent = 'Not rated';
-            readout.className = 'fbd-severity-readout';
-        } else {
-            readout.textContent = `${v} / 5 · ${tone[v]}`;
-            readout.className = 'fbd-severity-readout s' + v;
-        }
-        document.getElementById('fbd-severity-scale').dataset.value = v;
-    }
-
-    // ── Tone presets: 👍 vs 👎 wording ────────────────────────────────
-    // Same form, same backend payload — only the display text shifts so
-    // a thumbs-up reviewer isn't asked to label things as "wrong" or
-    // "problems". Option *values* stay identical so ACE downstream
-    // analytics keep working without a schema change.
-    const FBD_TONE = {
-        down: {
-            title:           'More feedback',
-            badge:           '👎',
-            sevLabel:        'Severity (optional)',
-            sevHint:         '1 = minor wording miss · 3 = wrong sub-claim · 5 = critical wrong root cause',
-            grp1Title:       'Correct answer',
-            concLabel:       'Conclusion category',
-            concFirstOpt:    '— Select if you know —',
-            rootCauseLabel:  'Real root cause',
-            rootCausePh:     'e.g. "AP idle timeout kicked client off after 60s of inactivity."',
-            evidenceLabel:   'Key evidence log lines',
-            evidencePh:      'Paste log lines the agent missed or misread, one per line.\ne.g. [CNCT_FLOW][11] AUTH_RSP - received from "ASUS_BE98_MLO"',
-            evidenceHint:    'Reflector will grep these against the log to verify your correction.',
-            grp2Title:       'Agent workflow',
-            flowLabel:       'Investigation flow (overall)',
-            flowFirstOpt:    '— Select if orchestration was off —',
-            flowOpts: {
-                appropriate:        'Appropriate — flow was efficient',
-                stopped_too_early:  'Stopped too early — should have invoked more skills',
-                over_investigated:  'Over-investigated — could have concluded earlier',
-                loop_or_stuck:      'Loop / stuck — repeated or never converged',
-                wrong_direction:    'Wrong direction — investigation followed the wrong path',
-            },
-            rightDirLabel:   'Right direction',
-            rightDirFirstOpt:'— Pick the skill that should have led —',
-            rightDirPh:      'Or describe the approach — e.g. "Check MCC regulatory state first, then connection flow"',
-            rightDirHint:    'Pick the right skill, describe the approach in words, or both.',
-            problemsLabel:   'Specific problems (optional — pinpoint where / what)',
-            problemsHint:    'Add one row per concrete problem you noticed. Each row: where it happened + what kind of problem + a short note.',
-            addRowText:      '+ Add another issue',
-            whereFirstOpt:   '— Where —',
-            categoryFirstOpt:'— Problem —',
-            categoryOpts: {
-                missed_evidence:   'Missed key log evidence',
-                wrong_skill:       'Wrong skill chosen',
-                wrong_conclusion:  'Wrong root cause / conclusion',
-                hallucinated:      'Cited a log line that doesn\'t exist',
-                stuck_repeated:    'Stuck / repeated the same fetch',
-                incomplete:        'Stopped before finishing',
-                over_investigated: 'Over-investigated unnecessarily',
-                bad_output:        'Output unclear / misleading',
-                other:             'Other',
-            },
-            notePh:          "Short note (optional) — e.g. 'missed [MISSED BEACONS] at 14:52:11'",
-            attachLogHint:   'Lets reviewers replay the exact log you analysed. Recommended when reporting a wrong answer.',
-            submitText:      'Submit',
-        },
-        up: {
-            title:           'What worked well?',
-            badge:           '👍',
-            sevLabel:        'How well did it match? (optional)',
-            sevHint:         '1 = roughly helpful · 3 = mostly right · 5 = spot-on',
-            grp1Title:       'What landed',
-            concLabel:       'Conclusion category the agent nailed (optional)',
-            concFirstOpt:    '— Select if it matched —',
-            rootCauseLabel:  'Root cause the agent captured (optional)',
-            rootCausePh:     'e.g. "Agent correctly traced the disconnect to AP idle timeout."',
-            evidenceLabel:   'Log lines the agent surfaced well (optional)',
-            evidencePh:      'Paste log lines the agent surfaced correctly, one per line.\ne.g. [CNCT_FLOW][11] AUTH_RSP - received from "ASUS_BE98_MLO"',
-            evidenceHint:    'Tells reviewers which evidence to keep prioritising — the skill stays good at catching these.',
-            grp2Title:       'How the investigation flowed',
-            flowLabel:       'Overall flow',
-            flowFirstOpt:    '— How did the flow feel? —',
-            flowOpts: {
-                appropriate:        'Spot-on — efficient and clear',
-                stopped_too_early:  'Mostly there — could go one step further next time',
-                over_investigated:  'Worked well — could even conclude a bit earlier',
-                loop_or_stuck:      'Worked, but doubled back along the way',
-                wrong_direction:    'A different starting angle is also worth trying',
-            },
-            rightDirLabel:   'Angle worth trying next time (optional)',
-            rightDirFirstOpt:'— A skill worth trying earlier —',
-            rightDirPh:      'Or describe an angle — e.g. "Check MCC regulatory state first"',
-            rightDirHint:    'Optional — name a skill or thinking path that could lead even faster next time.',
-            problemsLabel:   'Highlights & suggestions (optional)',
-            problemsHint:    'Add one row per highlight or a small idea for next time. Each row: area + type + a short note.',
-            addRowText:      '+ Add another note',
-            whereFirstOpt:   '— Area —',
-            categoryFirstOpt:'— Note type —',
-            categoryOpts: {
-                missed_evidence:   'Praise — could surface even more evidence',
-                wrong_skill:       'Suggestion — a different skill could lead faster',
-                wrong_conclusion:  'Suggestion — conclusion could be sharper',
-                hallucinated:      'Suggestion — double-check a cited log line',
-                stuck_repeated:    'Suggestion — trim a repeated fetch',
-                incomplete:        'Suggestion — could go one step further',
-                over_investigated: 'Suggestion — could conclude a bit earlier',
-                bad_output:        'Suggestion — wording could be clearer',
-                other:             'Other note',
-            },
-            notePh:          "Short note (optional) — e.g. 'great catch on [MISSED BEACONS] at 14:52:11'",
-            attachLogHint:   'Lets reviewers replay the same log the agent analysed — only attach if you want to share it.',
-            submitText:      'Submit',
-        },
-    };
-
-    function applyFeedbackTone(vote) {
-        const key = (vote === 1) ? 'up' : 'down';
-        window.__feedbackTone = key;
-        const T = FBD_TONE[key];
-
-        const setText = (id, val) => {
-            const el = document.getElementById(id);
-            if (el) el.textContent = val;
-        };
-        const setPh = (id, val) => {
-            const el = document.getElementById(id);
-            if (el) el.placeholder = val;
-        };
-
-        const titleEl = document.querySelector('#feedback-detail-modal .fbd-header h3');
-        if (titleEl) titleEl.textContent = T.title;
-
-        setText('fbd-sev-label',        T.sevLabel);
-        setText('fbd-sev-hint',         T.sevHint);
-        setText('fbd-grp-correct-title',T.grp1Title);
-        setText('fbd-conc-label',       T.concLabel);
-        setText('fbd-rootcause-label',  T.rootCauseLabel);
-        setPh  ('fbd-correct-root-cause', T.rootCausePh);
-        setText('fbd-evidence-label',   T.evidenceLabel);
-        setPh  ('fbd-evidence-log-lines', T.evidencePh);
-        setText('fbd-evidence-hint',    T.evidenceHint);
-        setText('fbd-grp-flow-title',   T.grp2Title);
-        setText('fbd-flow-label',       T.flowLabel);
-        setText('fbd-rightdir-label',   T.rightDirLabel);
-        setPh  ('fbd-correct-approach', T.rightDirPh);
-        setText('fbd-rightdir-hint',    T.rightDirHint);
-        setText('fbd-problems-label',   T.problemsLabel);
-        setText('fbd-problems-hint',    T.problemsHint);
-        setText('fbd-add-issue-btn',    T.addRowText);
-
-        // Conclusion-category first option text.
-        const concSel = document.getElementById('fbd-correct-conclusion-tag');
-        if (concSel && concSel.options.length > 0) {
-            concSel.options[0].textContent = T.concFirstOpt;
-        }
-
-        // Investigation-flow dropdown: rewrite labels for the existing
-        // values so the ACE schema stays unchanged.
-        const flowSel = document.getElementById('fbd-agent-workflow');
-        if (flowSel) {
-            Array.from(flowSel.options).forEach((opt) => {
-                if (!opt.value) { opt.textContent = T.flowFirstOpt; return; }
-                if (T.flowOpts[opt.value]) opt.textContent = T.flowOpts[opt.value];
-            });
-        }
-
-        // Right-direction skill picker first option (other options are
-        // populated dynamically from the sidebar skills).
-        const rdSel = document.getElementById('fbd-correct-skill');
-        if (rdSel && rdSel.options.length > 0) {
-            rdSel.options[0].textContent = T.rightDirFirstOpt;
-        }
-
-        // Re-tone any already-rendered issue rows.
-        document.querySelectorAll('#fbd-issues-list .fbd-issue-row')
-                .forEach((row) => applyToneToIssueRow(row));
-
-        // Attach-log hint.
-        const logHint = document.getElementById('fbd-attach-log-hint');
-        if (logHint) logHint.textContent = T.attachLogHint;
-
-        // Submit button label.
-        const submitBtn = document.getElementById('fbd-submit-btn');
-        if (submitBtn) submitBtn.textContent = T.submitText;
-
-        // Re-render the severity readout in the new tone's vocabulary.
-        const scale = document.getElementById('fbd-severity-scale');
-        if (scale) pickSeverity(scale.dataset.value || '');
-    }
-
-    // Rewrite the Where / Category dropdowns + note placeholder on a
-    // single issue row to match the current tone.
-    function applyToneToIssueRow(row) {
-        const T = FBD_TONE[window.__feedbackTone === 'up' ? 'up' : 'down'];
-        const where = row.querySelector('.fbd-where');
-        if (where && where.options.length > 0) {
-            where.options[0].textContent = T.whereFirstOpt;
-        }
-        const cat = row.querySelector('.fbd-category');
-        if (cat) {
-            Array.from(cat.options).forEach((opt) => {
-                if (!opt.value) opt.textContent = T.categoryFirstOpt;
-                else if (T.categoryOpts[opt.value]) opt.textContent = T.categoryOpts[opt.value];
-            });
-        }
-        const note = row.querySelector('.fbd-note');
-        if (note) note.placeholder = T.notePh;
-    }
-    // Toggle the "Correct skill" sub-field on/off based on workflow choice.
-    function onAgentWorkflowChange(selectEl) {
-        const wrap = document.getElementById('fbd-correct-skill-wrap');
-        if (!wrap) return;
-        wrap.classList.toggle('hidden-row', selectEl.value !== 'wrong_direction');
-    }
 
     function openFeedbackModal(turnId, vote, linkEl) {
         window.__currentFeedbackCtx = {
@@ -4660,493 +2759,106 @@
         else if (vote === -1) { badge.classList.add('down'); badge.textContent = '👎'; }
         else { badge.textContent = ''; }
 
-        // Reset structured ACE feedback fields.
-        ['fbd-correct-root-cause',
-         'fbd-correct-conclusion-tag',
-         'fbd-correct-skill',
-         'fbd-correct-approach',
-         'fbd-evidence-log-lines',
-         'fbd-agent-workflow'].forEach((id) => {
-            const el = document.getElementById(id);
-            if (el) el.value = '';
-        });
-        // Reset severity rating.
-        pickSeverity('');
-        // Hide the conditional "Correct skill" sub-field.
-        document.getElementById('fbd-correct-skill-wrap')
-                .classList.add('hidden-row');
-        // Reset the "Specific problems" list. Start with one empty row
-        // so the user can fill it in without an extra "+ Add" click —
-        // but it's free to leave blank (filter on submit).
-        const issuesList = document.getElementById('fbd-issues-list');
-        if (issuesList) {
-            issuesList.innerHTML = '';
-            addIssueRow();
-        }
-
-        // Wire severity button clicks (idempotent — wireOnce flag).
-        const scale = document.getElementById('fbd-severity-scale');
-        if (scale && !scale.dataset.wired) {
-            scale.dataset.wired = '1';
-            scale.querySelectorAll('.sev-btn').forEach((btn) => {
-                btn.addEventListener('click', () => {
-                    // Allow toggling off by clicking the selected button.
-                    pickSeverity(
-                        scale.dataset.value === btn.dataset.value ? '' : btn.dataset.value
-                    );
-                });
-            });
-        }
-        // Wire workflow conditional reveal once.
-        const wfSel = document.getElementById('fbd-agent-workflow');
-        if (wfSel && !wfSel.dataset.wired) {
-            wfSel.dataset.wired = '1';
-            wfSel.addEventListener('change', () => onAgentWorkflowChange(wfSel));
-        }
-
-        // Populate "Correct skill" dropdown from whatever skills are
-        // currently visible in the sidebar, so the user can flag the
-        // skill the agent SHOULD have picked when Phase 1 routing was off.
-        const correctSkillSel = document.getElementById('fbd-correct-skill');
-        if (correctSkillSel) {
-            // First option text is re-toned by applyFeedbackTone below.
-            correctSkillSel.innerHTML =
-                '<option value="">— Pick the skill that should have led —</option>';
-            document.querySelectorAll('#skills-list .skill-card .skill-name')
-                .forEach((nameEl) => {
-                    const v = (nameEl.textContent || '').trim();
-                    if (!v) return;
-                    const opt = document.createElement('option');
-                    opt.value = v;
-                    opt.textContent = v;
-                    correctSkillSel.appendChild(opt);
-                });
-        }
-
-        // Apply tone-specific labels / hints / option text before the
-        // user sees anything. Must run after the reset block (which
-        // recreates the empty issue row) so the new row is re-toned too.
-        applyFeedbackTone(vote);
-
-        // Attach-LOG default: ticked on thumbs-down (you're reporting a
-        // bad answer → log is the most useful artefact). Untouched on
-        // thumbs-up so the log is never silently uploaded.
-        const logCb = document.getElementById('fbd-attach-log');
-        if (logCb) logCb.checked = (vote === -1);
-
-        // Attach-YAML default: ticked when the user edited their
-        // configuration this session — that's exactly the case where
-        // sending the YAML helps reviewers reproduce.
-        const attachCb = document.getElementById('fbd-attach-yaml');
-        const attachHint = document.getElementById('fbd-attach-yaml-hint');
-        if (attachCb) {
-            attachCb.checked = isYamlModified();
-            if (attachHint) {
-                attachHint.textContent = isYamlModified()
-                    ? 'Your local configuration was modified this session; attaching it lets reviewers reproduce the issue exactly.'
-                    : 'Helps the Wireless CE team reproduce the issue with the exact configuration you are running.';
-            }
-        }
-
-        // If the user already submitted feedback for this turn, pre-fill
-        // every field with what they sent last time — so they can revise
-        // and re-submit instead of starting from scratch.
-        const cached = (window.__lastFeedback || {})[turnId];
-        if (cached) prefillFeedbackModal(cached);
-
-        // Draft auto-save: if the user closed the page or got interrupted
-        // mid-edit on THIS turn, restore what they had typed. Draft wins
-        // over cached submission (it's the more recent state).
-        const draft = _loadFeedbackDraft(turnId);
-        if (draft) {
-            prefillFeedbackModal(draft);
-            _showDraftHint('draft restored');
-        } else {
-            _hideDraftHint();
-        }
+        document.getElementById('fbd-issues-list').innerHTML = '';
+        document.getElementById('fbd-general-comment').value = '';
+        addIssueRow();
 
         const modal = document.getElementById('feedback-detail-modal');
         modal.classList.add('open');
         modal.setAttribute('aria-hidden', 'false');
         document.getElementById('fbd-submit-btn').disabled = false;
-        // Mark session active + expanded → drawer slides in on the RIGHT,
-        // chat-area's right margin grows to leave room for it.
-        document.body.classList.add('fbd-drawer-active', 'fbd-drawer-expanded');
-        // Auto-collapse the LEFT sidebar so the chat-area has breathing
-        // room while feedback is open. Remember the user's previous
-        // collapsed/expanded choice so we can restore it on close. The
-        // hamburger button in the top-bar lets the user manually re-show
-        // the sidebar even while the feedback drawer is open.
-        _autoCollapseSidebarForFeedback();
-
-        // One-time listener wiring: every field change inside the modal
-        // dumps the current snapshot to localStorage. Debounced 300 ms
-        // so we don't burn cycles on every keystroke.
-        if (!modal.dataset.draftWired) {
-            modal.dataset.draftWired = '1';
-            ['input', 'change'].forEach((evtName) => {
-                modal.addEventListener(evtName, () => {
-                    const cur = window.__currentFeedbackCtx;
-                    if (cur && cur.turnId) _saveFeedbackDraftDebounced(cur.turnId);
-                });
-            });
-        }
     }
-
-    // ── Draft auto-save (localStorage, per turn_id) ───────────────────
-    const _FEEDBACK_DRAFT_PREFIX = 'feedback_draft_v1__';
-    let _draftSaveTimer = null;
-
-    function _saveFeedbackDraftDebounced(turnId) {
-        if (!turnId) return;
-        clearTimeout(_draftSaveTimer);
-        _draftSaveTimer = setTimeout(() => _saveFeedbackDraftNow(turnId), 300);
-    }
-    function _saveFeedbackDraftNow(turnId) {
-        try {
-            const snap = _currentFeedbackFormSnapshot();
-            if (!snap) return;
-            localStorage.setItem(_FEEDBACK_DRAFT_PREFIX + turnId, JSON.stringify(snap));
-            _showDraftHint('draft auto-saved');
-        } catch (e) {}
-    }
-    function _loadFeedbackDraft(turnId) {
-        try {
-            const raw = localStorage.getItem(_FEEDBACK_DRAFT_PREFIX + turnId);
-            return raw ? JSON.parse(raw) : null;
-        } catch (e) { return null; }
-    }
-    function _clearFeedbackDraft(turnId) {
-        try { localStorage.removeItem(_FEEDBACK_DRAFT_PREFIX + turnId); } catch (e) {}
-    }
-    function _showDraftHint(text) {
-        const el = document.getElementById('fbd-draft-hint');
-        if (!el) return;
-        el.textContent = text;
-        el.classList.add('show');
-    }
-    function _hideDraftHint() {
-        const el = document.getElementById('fbd-draft-hint');
-        if (el) el.classList.remove('show');
-    }
-    // Build the same snapshot shape that submitFeedbackDetail caches, but
-    // straight from the live DOM — used by both the draft saver and the
-    // no-change guard.
-    function _currentFeedbackFormSnapshot() {
-        const _val = (id) => {
-            const el = document.getElementById(id);
-            return el ? String(el.value || '').trim() : '';
-        };
-        const severityRaw = (document.getElementById('fbd-severity-scale') || {}).dataset
-                            ? document.getElementById('fbd-severity-scale').dataset.value || ''
-                            : '';
-        const severity = severityRaw ? parseInt(severityRaw, 10) : null;
-        const evidenceLogLines = (document.getElementById('fbd-evidence-log-lines')?.value || '')
-            .split(/\r?\n/).map((s) => s.replace(/\s+$/, '')).filter((s) => s.length > 0);
-        const issues = [];
-        document.querySelectorAll('#fbd-issues-list .fbd-issue-row').forEach((r) => {
-            const where   = r.querySelector('.fbd-where').value || '';
-            const cat     = r.querySelector('.fbd-category').value || '';
-            const skillId = r.querySelector('.fbd-skill').value || '';
-            const stepSel = r.querySelector('.fbd-step');
-            const stepIdx = stepSel.value;
-            const stepLabel = stepSel.selectedOptions[0]
-                            && stepSel.selectedOptions[0].dataset.stepLabel || '';
-            const note    = r.querySelector('.fbd-note').value.trim();
-            if (!where && !cat && !skillId && !stepIdx && !note) return;
-            issues.push({
-                scope: (where === 'skill' || where === 'step') ? where : 'overall',
-                category: cat || null, skill_id: skillId || null,
-                step_index: stepIdx === '' ? null : parseInt(stepIdx, 10),
-                step_label: stepLabel || (where && where !== 'skill' && where !== 'step' ? where : null),
-                comment: note || null,
-            });
-        });
-        return {
-            severity,
-            correctConclusionTag: _val('fbd-correct-conclusion-tag'),
-            correctRootCause:     _val('fbd-correct-root-cause'),
-            correctSkill:         _val('fbd-correct-skill'),
-            correctApproach:      _val('fbd-correct-approach'),
-            agentWorkflow:        _val('fbd-agent-workflow'),
-            evidenceLogLines, issues,
-            attachLog:       !!(document.getElementById('fbd-attach-log') || {}).checked,
-            attachLocalYaml: !!(document.getElementById('fbd-attach-yaml') || {}).checked,
-        };
-    }
-
-    // Restore every visible field from a previous submission cached in
-    // window.__lastFeedback. Runs AFTER the modal's reset block so the
-    // baseline defaults (attach-log auto-tick, empty issue row, etc.)
-    // are applied first and then selectively overwritten.
-    function prefillFeedbackModal(d) {
-        if (d.severity) pickSeverity(String(d.severity));
-
-        const setVal = (id, v) => {
-            const el = document.getElementById(id);
-            if (el && v !== undefined && v !== null) el.value = v;
-        };
-        setVal('fbd-correct-conclusion-tag', d.correctConclusionTag || '');
-        setVal('fbd-correct-root-cause',     d.correctRootCause || '');
-        setVal('fbd-correct-skill',          d.correctSkill || '');
-        setVal('fbd-correct-approach',       d.correctApproach || '');
-        setVal('fbd-agent-workflow',         d.agentWorkflow || '');
-        setVal('fbd-evidence-log-lines',
-               Array.isArray(d.evidenceLogLines) ? d.evidenceLogLines.join('\n') : '');
-
-        // Conditional reveal: "Correct skill" sub-field re-opens whenever
-        // workflow == wrong_direction.
-        const wfSel = document.getElementById('fbd-agent-workflow');
-        if (wfSel) onAgentWorkflowChange(wfSel);
-
-        // Rebuild the "Specific problems" list verbatim from the cached
-        // payload. Map the saved scope+step_label back to the UI's
-        // "Where" enum so phase tags don't get lost.
-        const list = document.getElementById('fbd-issues-list');
-        if (list) {
-            list.innerHTML = '';
-            const cachedIssues = Array.isArray(d.issues) ? d.issues : [];
-            if (cachedIssues.length === 0) {
-                addIssueRow();
-            } else {
-                cachedIssues.forEach((issue) => {
-                    addIssueRow();
-                    const row = list.lastElementChild;
-                    let where;
-                    if (issue.scope === 'skill') where = 'skill';
-                    else if (issue.scope === 'step') where = 'step';
-                    else if (['phase_1', 'phase_2', 'phase_3', 'overall']
-                             .includes(issue.step_label)) where = issue.step_label;
-                    else where = 'overall';
-                    const whereEl = row.querySelector('.fbd-where');
-                    whereEl.value = where;
-                    onIssueWhereChange(whereEl);
-                    row.querySelector('.fbd-category').value = issue.category || '';
-                    row.querySelector('.fbd-skill').value = issue.skill_id || '';
-                    row.querySelector('.fbd-step').value =
-                        issue.step_index !== null && issue.step_index !== undefined
-                            ? String(issue.step_index) : '';
-                    row.querySelector('.fbd-note').value = issue.comment || '';
-                    // Re-apply the area↔category matrix so the dropdown
-                    // visibility matches the restored values.
-                    filterIssueRowOptions(row);
-                });
-            }
-        }
-
-        // Attachment checkboxes pick up whatever the user last chose.
-        const logCb = document.getElementById('fbd-attach-log');
-        const yamlCb = document.getElementById('fbd-attach-yaml');
-        if (logCb && d.attachLog !== undefined) logCb.checked = !!d.attachLog;
-        if (yamlCb && d.attachLocalYaml !== undefined) yamlCb.checked = !!d.attachLocalYaml;
-    }
-
     function closeFeedbackModal() {
-        // ✕ / Cancel = "close for now". DOES NOT clear the draft —
-        // the autosaved localStorage entry stays so the user can
-        // re-open the same turn's More-feedback link later and pick
-        // up exactly where they left off. The only paths that
-        // actively erase a draft are:
-        //   * Submit success (handled in submitFeedbackDetail) —
-        //     fields are persisted on the server, draft no longer needed
-        //   * Manual "Discard draft" affordance (not implemented yet)
-        // This matters especially in multi-incident analyses: turn A's
-        // draft must survive while the user briefly inspects turn B.
-        _hideDraftHint();
-
         const modal = document.getElementById('feedback-detail-modal');
         modal.classList.remove('open');
         modal.setAttribute('aria-hidden', 'true');
-        document.body.classList.remove('fbd-drawer-active', 'fbd-drawer-expanded');
-        _restoreSidebarAfterFeedback();
         window.__currentFeedbackCtx = null;
     }
 
-    // ── Top-bar height sync ──────────────────────────────────────────
-    // Measure the real rendered top-bar height (which depends on font
-    // metrics, padding and the box-shadow) and pin --fbd-topbar-height
-    // to it. Guarantees the feedback right-sidebar slots exactly under
-    // the blue bar with no gap and no overlap. Runs on load + resize.
-    function _syncTopbarHeightVar() {
-        const tb = document.querySelector('.top-bar');
-        if (!tb) return;
-        const h = Math.ceil(tb.getBoundingClientRect().height);
-        document.documentElement.style.setProperty(
-            '--fbd-topbar-height', h + 'px');
-    }
-    window.addEventListener('load', _syncTopbarHeightVar);
-    window.addEventListener('resize', _syncTopbarHeightVar);
-
-    // ── Left sidebar (LOG FILE / ISSUE TIME) collapse helpers ─────────
-    // Manual toggle wired to the hamburger button in the top-bar.
-    function toggleSidebar() {
-        document.body.classList.toggle('sidebar-collapsed');
-    }
-
-    // Auto-collapse on feedback open. Remembers the user's previous
-    // sidebar state so we can put it back when feedback closes. Null
-    // means "no feedback session currently in flight".
-    let _sidebarStateBeforeFeedback = null;
-    function _autoCollapseSidebarForFeedback() {
-        _sidebarStateBeforeFeedback =
-            document.body.classList.contains('sidebar-collapsed');
-        document.body.classList.add('sidebar-collapsed');
-    }
-    function _restoreSidebarAfterFeedback() {
-        // If the user had the sidebar EXPANDED before opening feedback,
-        // bring it back. If they had it collapsed already, leave it.
-        // Either way, if they manually re-expanded the sidebar WHILE
-        // feedback was open, their explicit choice wins — so we only
-        // touch state when restoring the EXPANDED case.
-        if (_sidebarStateBeforeFeedback === false) {
-            document.body.classList.remove('sidebar-collapsed');
-        }
-        _sidebarStateBeforeFeedback = null;
-    }
-
-    // ── Top-of-page toast (also used by log-switch auto-reset) ────────
-    function showToast({ message, actionLabel, onAction, ttlMs = 30000 }) {
-        const stack = document.getElementById('toast-stack');
-        if (!stack) return null;
-        const el = document.createElement('div');
-        el.className = 'toast';
-        const msg = document.createElement('span');
-        msg.className = 'toast-msg';
-        msg.textContent = message;
-        el.appendChild(msg);
-        if (actionLabel && typeof onAction === 'function') {
-            const btn = document.createElement('button');
-            btn.className = 'toast-btn';
-            btn.textContent = actionLabel;
-            btn.onclick = () => { try { onAction(); } catch (e) {} el.remove(); };
-            el.appendChild(btn);
-        }
-        const close = document.createElement('button');
-        close.className = 'toast-close';
-        close.textContent = '×';
-        close.onclick = () => el.remove();
-        el.appendChild(close);
-        stack.appendChild(el);
-        if (ttlMs > 0) setTimeout(() => { if (el.parentNode) el.remove(); }, ttlMs);
-        return el;
-    }
-
-    function isYamlModified() {
-        return Boolean(window.__yamlModified);
-    }
-
-    // Canonical string form of a feedback snapshot — used to detect
-    // "no-change" resubmits from the Edit-feedback flow so we don't
-    // append duplicate JSONL rows for the same payload.
-    function _normalizeFeedbackForCompare(d) {
-        const d_ = d || {};
-        return JSON.stringify({
-            severity:             d_.severity == null ? null : Number(d_.severity),
-            correctConclusionTag: d_.correctConclusionTag || '',
-            correctRootCause:     d_.correctRootCause || '',
-            correctSkill:         d_.correctSkill || '',
-            correctApproach:      d_.correctApproach || '',
-            agentWorkflow:        d_.agentWorkflow || '',
-            evidenceLogLines:     Array.isArray(d_.evidenceLogLines)
-                                    ? d_.evidenceLogLines.slice() : [],
-            issues: (Array.isArray(d_.issues) ? d_.issues : []).map((i) => ({
-                scope:      i && i.scope      != null ? i.scope      : null,
-                category:   i && i.category   != null ? i.category   : null,
-                skill_id:   i && i.skill_id   != null ? i.skill_id   : null,
-                step_index: i && i.step_index != null ? i.step_index : null,
-                step_label: i && i.step_label != null ? i.step_label : null,
-                comment:    i && i.comment    != null ? i.comment    : null,
-            })),
-            attachLog:       !!d_.attachLog,
-            attachLocalYaml: !!d_.attachLocalYaml,
+    function addIssueRow() {
+        const tpl = document.getElementById('fbd-issue-row-template');
+        const list = document.getElementById('fbd-issues-list');
+        const node = tpl.content.firstElementChild.cloneNode(true);
+        const ctx = (window.__currentFeedbackCtx
+                     && window.__turnContext[window.__currentFeedbackCtx.turnId])
+                    || { skills: [], steps: [] };
+        const skillSel = node.querySelector('.fbd-skill');
+        ctx.skills.forEach(sid => {
+            const opt = document.createElement('option');
+            opt.value = sid; opt.textContent = sid;
+            skillSel.appendChild(opt);
         });
+        const stepSel = node.querySelector('.fbd-step');
+        ctx.steps.forEach(st => {
+            const opt = document.createElement('option');
+            opt.value = String(st.step_index);
+            opt.textContent = st.label;
+            opt.dataset.stepLabel = st.label;
+            opt.dataset.skillId = st.skill_id || '';
+            stepSel.appendChild(opt);
+        });
+        list.appendChild(node);
+    }
+    function removeIssueRow(btn) {
+        const row = btn.closest('.fbd-issue-row');
+        const list = document.getElementById('fbd-issues-list');
+        if (row && list.children.length > 1) row.remove();
+    }
+    function onScopeChange(selectEl) {
+        const row = selectEl.closest('.fbd-issue-row');
+        const scope = selectEl.value;
+        row.querySelector('.fbd-skill-wrap').classList.toggle('hidden-row', scope !== 'skill');
+        row.querySelector('.fbd-step-wrap').classList.toggle('hidden-row', scope !== 'step');
+        row.querySelector('.fbd-shouldbe-wrap').classList.add('hidden-row');
+
+        const catSel = row.querySelector('.fbd-category');
+        const opts = FBD_CATEGORIES_BY_SCOPE[scope] || [];
+        catSel.innerHTML = '';
+        const placeholder = document.createElement('option');
+        placeholder.value = '';
+        placeholder.textContent = scope ? '— Issue type (optional) —' : '— Select scope first —';
+        catSel.appendChild(placeholder);
+        opts.forEach(o => {
+            const opt = document.createElement('option');
+            opt.value = o.value; opt.textContent = o.label;
+            catSel.appendChild(opt);
+        });
+        catSel.disabled = !scope;
+    }
+    function onCategoryChange(selectEl) {
+        const row = selectEl.closest('.fbd-issue-row');
+        const sbWrap = row.querySelector('.fbd-shouldbe-wrap');
+        sbWrap.classList.toggle('hidden-row', selectEl.value !== 'wrong_skill');
     }
 
     async function submitFeedbackDetail() {
         const ctx = window.__currentFeedbackCtx;
         if (!ctx) return;
-
-        const _val = (id) => {
-            const el = document.getElementById(id);
-            return el ? String(el.value || '').trim() : '';
-        };
-        const correctRootCause     = _val('fbd-correct-root-cause');
-        const correctConclusionTag = _val('fbd-correct-conclusion-tag');
-        const correctSkill         = _val('fbd-correct-skill');
-        const correctApproach      = _val('fbd-correct-approach');
-        const agentWorkflow        = _val('fbd-agent-workflow');
-        const severityRaw = document.getElementById('fbd-severity-scale')?.dataset.value || '';
-        const severity = severityRaw ? parseInt(severityRaw, 10) : null;
-
-        // Evidence log lines come in as a textarea; split per-line and
-        // drop blanks so the backend gets a clean array.
-        const evidenceLogLines = (document.getElementById('fbd-evidence-log-lines')?.value || '')
-            .split(/\r?\n/)
-            .map((s) => s.replace(/\s+$/, ''))
-            .filter((s) => s.length > 0);
-
-        // Collect "Specific problems" rows. Each row is dropped silently
-        // when none of its fields were filled — keeps the form forgiving.
+        const rows = document.querySelectorAll('#fbd-issues-list .fbd-issue-row');
         const issues = [];
-        document.querySelectorAll('#fbd-issues-list .fbd-issue-row').forEach((r) => {
-            const where    = r.querySelector('.fbd-where').value || '';
+        rows.forEach(r => {
+            const scope    = r.querySelector('.fbd-scope').value || '';
             const category = r.querySelector('.fbd-category').value || '';
             const skillId  = r.querySelector('.fbd-skill').value || '';
             const stepSel  = r.querySelector('.fbd-step');
-            const stepIdx  = stepSel.value;
-            const stepLabel = stepSel.selectedOptions[0]
+            const stepIdxRaw = stepSel.value;
+            const stepLabel  = stepSel.selectedOptions[0]
                               && stepSel.selectedOptions[0].dataset.stepLabel || '';
-            const note     = r.querySelector('.fbd-note').value.trim();
-            if (!where && !category && !skillId && !stepIdx && !note) return;
+            const shouldBe = r.querySelector('.fbd-should-be').value.trim();
+            const comment  = r.querySelector('.fbd-comment').value.trim();
+            if (!scope && !category && !skillId && !stepIdxRaw && !shouldBe && !comment) return;
             issues.push({
-                // Map "Where" to the backend's `scope` taxonomy. Phase
-                // tags collapse to "overall" with the phase recorded in
-                // `step_label` so existing analytics keep working.
-                scope:      (where === 'skill' || where === 'step') ? where : 'overall',
+                scope:      scope || null,
                 category:   category || null,
                 skill_id:   skillId || null,
-                step_index: stepIdx === '' ? null : parseInt(stepIdx, 10),
-                step_label: stepLabel || (where && where !== 'skill' && where !== 'step' ? where : null),
-                comment:    note || null,
+                step_index: stepIdxRaw === '' ? null : parseInt(stepIdxRaw, 10),
+                step_label: stepLabel || null,
+                should_be:  shouldBe || null,
+                comment:    comment || null,
             });
         });
-
-        const hasAny =
-            correctRootCause
-            || correctConclusionTag
-            || correctSkill
-            || correctApproach
-            || agentWorkflow
-            || severity
-            || evidenceLogLines.length > 0
-            || issues.length > 0;
-        if (!hasAny) {
-            closeFeedbackModal();
-            return;
-        }
-
-        // Read attachment checkboxes up here so we can include them in
-        // the no-change comparison below.
-        const attachLocalYaml = !!document.getElementById('fbd-attach-yaml').checked;
-        const attachLog       = !!document.getElementById('fbd-attach-log').checked;
-
-        // No-change guard: when the user re-opens the modal via
-        // "✏️ Edit feedback" and clicks Submit without touching
-        // anything, the current payload is byte-identical to what we
-        // already sent. Submitting again would append a duplicate row
-        // to feedback_details.jsonl, so short-circuit here.
-        const currentSnapshot = {
-            severity, correctConclusionTag, correctRootCause,
-            correctSkill, correctApproach, agentWorkflow,
-            evidenceLogLines, issues, attachLog, attachLocalYaml,
-        };
-        const cachedSnapshot = (window.__lastFeedback || {})[ctx.turnId];
-        if (cachedSnapshot
-            && _normalizeFeedbackForCompare(currentSnapshot)
-                === _normalizeFeedbackForCompare(cachedSnapshot)) {
-            closeFeedbackModal();
-            return;
-        }
+        const generalComment = document.getElementById('fbd-general-comment').value.trim();
+        if (issues.length === 0 && !generalComment) { closeFeedbackModal(); return; }
 
         const submitBtn = document.getElementById('fbd-submit-btn');
         submitBtn.disabled = true;
@@ -5155,51 +2867,19 @@
                 method: 'POST',
                 headers: {'Content-Type': 'application/json'},
                 body: JSON.stringify({
-                    conversation_id:          ctx.conversationId,
-                    turn_id:                  ctx.turnId,
-                    vote:                     ctx.vote,
-                    // High-ACE-value structured signals.
-                    severity:                 severity,
-                    correct_conclusion_tag:   correctConclusionTag,
-                    correct_root_cause:       correctRootCause,
-                    evidence_log_lines:       evidenceLogLines,
-                    correct_skill:            correctSkill,
-                    correct_approach:         correctApproach,
-                    // Agent-prompt-layer ACE signal: overall flow.
-                    agent_workflow:           agentWorkflow,
-                    // Per-issue granularity: where + what + optional note.
-                    issues:                   issues,
-                    attach_local_yaml:        attachLocalYaml,
-                    attach_log:               attachLog,
+                    conversation_id: ctx.conversationId,
+                    turn_id:         ctx.turnId,
+                    vote:            ctx.vote,
+                    issues,
+                    general_comment: generalComment,
                 }),
             });
             const data = await res.json().catch(() => ({}));
             if (data && data.success) {
-                // Cache every field the user filled in so reopening the
-                // modal pre-fills exactly what they last submitted —
-                // letting them tweak and re-submit without retyping.
-                window.__lastFeedback = window.__lastFeedback || {};
-                window.__lastFeedback[ctx.turnId] = {
-                    severity:               severity,
-                    correctConclusionTag:   correctConclusionTag,
-                    correctRootCause:       correctRootCause,
-                    correctSkill:           correctSkill,
-                    correctApproach:        correctApproach,
-                    agentWorkflow:          agentWorkflow,
-                    evidenceLogLines:       evidenceLogLines,
-                    issues:                 issues,
-                    attachLog:              attachLog,
-                    attachLocalYaml:        attachLocalYaml,
-                };
-                // Persisted to the server — draft no longer needed.
-                _clearFeedbackDraft(ctx.turnId);
                 if (ctx.linkEl) {
                     ctx.linkEl.classList.add('submitted');
-                    ctx.linkEl.textContent = '✓ Edit feedback';
-                    // Link stays clickable on purpose — clicking it
-                    // reopens the modal pre-filled with the last
-                    // submission so the user can revise & re-submit.
-                    ctx.linkEl.onclick = () => openFeedbackModal(ctx.turnId, ctx.vote, ctx.linkEl);
+                    ctx.linkEl.textContent = '✓ Detailed feedback submitted';
+                    ctx.linkEl.onclick = null;
                 }
                 closeFeedbackModal();
             } else {
@@ -5211,1117 +2891,6 @@
             alert('Network error: ' + e.message);
         }
     }
-</script>
-
-
-<!-- ===== Skill editor modal (per-skill structured form) ============= -->
-<div id="skill-editor-modal" class="fbd-modal" aria-hidden="true">
-    <div class="fbd-backdrop" onclick="closeSkillEditor()"></div>
-    <div class="fbd-card" role="dialog" aria-modal="true" style="width: min(820px, 96vw);">
-        <div class="fbd-header">
-            <h3>Edit skill configuration</h3>
-            <span class="fbd-vote-badge" id="skill-editor-file"></span>
-            <button type="button" class="fbd-close" onclick="closeSkillEditor()" aria-label="Close">×</button>
-        </div>
-        <div class="fbd-body">
-            <div style="font-size:0.82rem;color:#555;margin-bottom:12px;">
-                Edits are saved to a new dated file
-                (<code>skills_YYYY-MM-DD.yaml</code>) in the local cache. Use
-                <strong>Upload to share folder</strong> later if you would like
-                the Wireless CE team to incorporate your tuning.
-            </div>
-            <div id="skill-editor-list"></div>
-            <button type="button" class="fbd-add-row" onclick="addSkillEditorRow()">+ Add new skill</button>
-        </div>
-        <div class="fbd-footer">
-            <button type="button" class="fbd-btn" onclick="closeSkillEditor()">Cancel</button>
-            <button type="button" class="fbd-btn primary" id="skill-editor-save-btn"
-                    onclick="saveSkillEditor()">Save changes</button>
-        </div>
-    </div>
-</div>
-
-<template id="skill-edit-row-template">
-    <div class="skill-edit-row collapsed">
-        <div class="row-head">
-            <button type="button" class="row-toggle"
-                    onclick="toggleSkillEditorRow(this)"
-                    title="Expand / collapse this skill">▾</button>
-            <input type="text" class="skill-key" placeholder="e.g. Roaming">
-            <button type="button" class="delete-skill-btn" onclick="removeSkillEditorRow(this)">Delete</button>
-        </div>
-        <div class="row-body">
-
-        <label>Skill ID<span class="required-star">*</span></label>
-        <div class="field-hint">
-            The YAML key for this skill, for example <code>Roaming:</code>.
-        </div>
-
-        <label>Display name<span class="required-star">*</span></label>
-        <label class="inline-check">
-            <input type="checkbox" class="skill-name-sync" checked>
-            <span>Same as Skill ID</span>
-        </label>
-        <div class="field-hint">
-            The skill name shown in the sidebar. Keep it short and capitalised.
-            Example: <code>Roaming Diagnostics</code>.
-        </div>
-        <input type="text" class="skill-name"
-               placeholder="e.g. Roaming Diagnostics">
-
-        <label>Description<span class="required-star">*</span></label>
-        <div class="field-hint">
-            One sentence — what this skill does + when the agent should pick it.
-            Example: <code>Identifies roaming events and reconnection flows. Use when the user asks about roaming, scan, or AP switching.</code>
-        </div>
-        <input type="text" class="skill-desc"
-               placeholder="e.g. Identifies roaming events and reconnection flows. Use when …">
-        <div class="desc-strength" aria-live="polite">
-            <div class="desc-strength-bar">
-                <span class="seg"></span>
-                <span class="seg"></span>
-                <span class="seg"></span>
-                <span class="seg"></span>
-            </div>
-            <div class="desc-strength-line">
-                <span class="desc-strength-label">—</span>
-                <span class="desc-strength-count"></span>
-                <span class="desc-strength-hints"></span>
-            </div>
-        </div>
-
-        <label>Keywords</label>
-        <div class="field-hint">
-            Tokens that flag this skill when found in the log. Each chip is
-            one keyword (equivalent to a YAML list item under <code>keywords:</code>).
-            Example: <code>ROAMING_DECISION</code>, <code>scan_request</code>.
-        </div>
-        <div class="chip-box keywords-box" tabindex="-1">
-            <input type="text" class="chip-input keywords-input"
-                   placeholder="Type a keyword and press Enter, or paste multiple lines">
-        </div>
-        <div class="chip-hint">Press Enter or comma to add a chip. Paste multi-line text to bulk-add. Click ✕ to remove.</div>
-
-        <label>Exclusive (optional)</label>
-        <div class="field-hint">
-            Tokens that, when present, prevent this skill from being chosen.
-            Use to disambiguate skills with overlapping keywords.
-        </div>
-        <div class="chip-box exclusive-box" tabindex="-1">
-            <input type="text" class="chip-input exclusive-input"
-                   placeholder="Keywords that must NOT appear">
-        </div>
-
-        <label>Expert rules<span class="required-star">*</span></label>
-        <div class="preamble-wrap">
-            <button type="button" class="preamble-show-btn"
-                    onclick="showPreamble(this.closest('.skill-edit-row'))"
-                    title="Add an overall analysis approach or framing the agent reads before the numbered steps">+ Add overview</button>
-            <textarea class="rules-preamble"
-                      placeholder="Overall approach, priorities, or context the agent should keep in mind before walking through the steps."></textarea>
-            <button type="button" class="preamble-hide-btn"
-                    onclick="hidePreamble(this.closest('.skill-edit-row'))"
-                    title="Collapse the overview box (only when empty)">▲ Collapse</button>
-        </div>
-        <div class="rules-list"></div>
-        <button type="button" class="add-rule-btn"
-                onclick="addRulePoint(this.closest('.skill-edit-row'))"
-                title="Add a discrete analysis step the agent should walk through (1, 2, 3 …)">
-            <span class="add-rule-icon">+</span>
-            <span>Add analysis step</span>
-        </button>
-        </div><!-- /.row-body -->
-    </div>
-</template>
-
-<template id="rule-point-template">
-    <div class="rule-point">
-        <span class="rule-number">1</span>
-        <textarea class="rule-text"
-                  placeholder="Step text."></textarea>
-        <button type="button" class="rule-delete-btn"
-                onclick="removeRulePoint(this)">Delete</button>
-    </div>
-</template>
-
-
-<script>
-    // ── Two related but DISTINCT skill-YAML flags ─────────────────────
-    //
-    // __yamlModified
-    //   "Did the user modify the skill YAML *this session*?"
-    //   Transient. Set TRUE after a successful Save in the skill
-    //   editor (line ~6230) or when /feedback/vote echoes back
-    //   yaml_modified=true (the server-side session flag). Reset to
-    //   false on log switch / by the user explicitly switching back
-    //   to the cloud baseline isn't relevant — that's the OTHER flag.
-    //   Read by: isYamlModified() (feedback attach-yaml default),
-    //            uploadModifiedYamlSilently() (auto-fire after 👍).
-    //
-    // __usingUserYaml
-    //   "Is the currently active YAML the user/ customised one (vs
-    //   cloud baseline)?"
-    //   Persistent — survives sessions because it reflects on-disk
-    //   state. Set from /skills_yaml/status.effective_source. Used
-    //   to drive UI hints / source-badge logic.
-    //
-    // Previously a single window.__yamlModified flag was overloaded
-    // with both meanings, which let stale "active source = user" from
-    // a previous session silently trigger an upload on the next 👍
-    // even when nothing was modified this session.
-    window.__yamlModified = false;
-    window.__usingUserYaml = false;
-
-    // ── Skill source state (cloud baseline ⇄ user customised) ─────────
-    window.__skillYamlStatus = null;
-
-    async function refreshSkillSourcePanel() {
-        try {
-            const res = await fetch('/log_chatbot/skills_yaml_status');
-            const data = await res.json().catch(() => ({}));
-            if (!data || !data.success) {
-                renderSkillSourcePanel(null);
-                return null;
-            }
-            window.__skillYamlStatus = data;
-            // /skills_yaml/status reports which YAML is ACTIVE on disk
-            // (persistent state). It does NOT tell us whether the user
-            // modified anything this session — only a Save in the
-            // editor (or a server-echoed yaml_modified=true) does.
-            window.__usingUserYaml = (data.effective_source === 'user');
-            renderSkillSourcePanel(data);
-            return data;
-        } catch (e) {
-            console.warn('skills_yaml_status fetch failed:', e);
-            renderSkillSourcePanel(null);
-            return null;
-        }
-    }
-
-    function renderSkillSourcePanel(status) {
-        const badgeEl   = document.getElementById('skill-source-badge');
-        const fileEl    = document.getElementById('skill-source-file');
-        const actionsEl = document.getElementById('skill-source-actions');
-        const panelEl   = document.getElementById('skill-source-panel');
-        if (!badgeEl || !fileEl || !actionsEl) return;
-        actionsEl.innerHTML = '';
-
-        if (!status) {
-            // Status not resolved yet — render as a muted, near-invisible
-            // placeholder so the sidebar doesn't draw the user's eye to a
-            // transient state. The badge animates back to its normal
-            // colour as soon as a real status payload arrives.
-            if (panelEl) panelEl.classList.add('unknown');
-            badgeEl.className = 'skill-source-badge unknown';
-            badgeEl.textContent = '…';
-            fileEl.textContent = '';
-            return;
-        }
-        if (panelEl) panelEl.classList.remove('unknown');
-
-        const effective = status.effective_source || 'cloud';
-        const cloudFile = (status.cloud_local && status.cloud_local.filename) || '';
-        const userFile  = (status.user_local  && status.user_local.filename)  || '';
-
-        // Both states share the SAME visual layout:
-        //   line 1 — coloured badge + filename inline
-        //   line 2 — a single subtle ghost-button action. The button has a
-        //            light blue 1-px border + white background so it reads
-        //            as clickable without competing with the prominent
-        //            "Edit Skills Configuration" button below.
-        if (effective === 'user') {
-            badgeEl.className = 'skill-source-badge user';
-            badgeEl.textContent = 'Customised (user)';
-            fileEl.textContent = userFile;
-
-            const btn = document.createElement('button');
-            btn.type = 'button';
-            btn.className = 'skill-source-btn';
-            btn.textContent = 'Use cloud version';
-            btn.title = 'Switch the agent back to the cloud baseline configuration';
-            btn.onclick = switchToCloudBaseline;
-            actionsEl.appendChild(btn);
-        } else {
-            badgeEl.className = 'skill-source-badge cloud';
-            badgeEl.textContent = 'Cloud baseline';
-            fileEl.textContent = cloudFile || '—';
-
-            if (userFile) {
-                const btn = document.createElement('button');
-                btn.type = 'button';
-                btn.className = 'skill-source-btn';
-                btn.textContent = 'Use customised version';
-                btn.title = 'Switch the agent to your customised file (' + userFile + ')';
-                btn.onclick = switchToUserOverride;
-                actionsEl.appendChild(btn);
-            }
-        }
-    }
-
-    async function switchToUserOverride() {
-        try {
-            const res = await fetch('/log_chatbot/skills_yaml_use_user', {
-                method: 'POST',
-                headers: {'Content-Type': 'application/json'},
-                body: '{}',
-            });
-            const data = await res.json().catch(() => ({}));
-            if (data && data.success) {
-                if (data.skills) renderSkills(data.skills);
-                await refreshSkillSourcePanel();
-            } else {
-                alert('Switch failed: ' + (data && data.error ? data.error : 'Unknown error'));
-                await refreshSkillSourcePanel();
-            }
-        } catch (e) {
-            alert('Network error: ' + e.message);
-        }
-    }
-    async function switchToCloudBaseline() {
-        try {
-            const res = await fetch('/log_chatbot/skills_yaml_use_cloud', {
-                method: 'POST',
-                headers: {'Content-Type': 'application/json'},
-                body: '{}',
-            });
-            const data = await res.json().catch(() => ({}));
-            if (data && data.success) {
-                if (data.skills) renderSkills(data.skills);
-                // We just switched the ACTIVE source to cloud baseline.
-                // refreshSkillSourcePanel() will re-read /status and
-                // set __usingUserYaml = false anyway, but set it
-                // eagerly here so any code between this point and the
-                // refresh resolving sees the consistent state.
-                window.__usingUserYaml = false;
-                await refreshSkillSourcePanel();
-            } else {
-                alert('Switch failed: ' + (data && data.error ? data.error : 'Unknown error'));
-                await refreshSkillSourcePanel();
-            }
-        } catch (e) {
-            alert('Network error: ' + e.message);
-        }
-    }
-
-    // ── Side-panel skill editor (per-skill structured form) ────────────
-    async function openSkillEditor() {
-        const statusEl = document.getElementById('skill-editor-status');
-        const saveBtn = document.getElementById('skill-editor-save-btn');
-        if (saveBtn) saveBtn.disabled = false;
-        statusEl.textContent = 'Loading…';
-        statusEl.className = 'log-status';
-        statusEl.style.display = 'block';
-        try {
-            // Load whichever source is currently active so the editor shows
-            // exactly what the agent is using.
-            const res = await fetch('/log_chatbot/load_local_skills_yaml');
-            const data = await res.json().catch(() => ({}));
-            if (!data || !data.success) {
-                showStatus(statusEl, '✘ ' + (data && data.error ? data.error : 'Failed to load YAML.'), 'err');
-                return;
-            }
-            renderSkillEditor(
-                data.skills || {},
-                data.local_path || '',
-                data.filename || '',
-                data.source || 'cloud'
-            );
-            statusEl.style.display = 'none';
-
-            const modal = document.getElementById('skill-editor-modal');
-            modal.classList.add('open');
-            modal.setAttribute('aria-hidden', 'false');
-
-            // Now the modal is laid out, rule textareas can read their real
-            // scrollHeight — re-grow each one so multi-line content reveals
-            // itself without the user having to click into the field.
-            // Skip textareas inside collapsed skill rows — they're
-            // `display:none`, so scrollHeight reads as 0 and would lock
-            // the field to a 1-line height. They re-grow when the row is
-            // expanded (see toggleSkillEditorRow).
-            modal.querySelectorAll(
-                '.skill-edit-row:not(.collapsed) .preamble-wrap:not(.collapsed) textarea.rules-preamble'
-            ).forEach(ta => autoGrowPreamble(ta));
-            modal.querySelectorAll(
-                '.skill-edit-row:not(.collapsed) .rule-point > textarea.rule-text'
-            ).forEach(ta => autoGrowRule(ta));
-        } catch (e) {
-            showStatus(statusEl, '✘ Network error: ' + e.message, 'err');
-        }
-    }
-    function closeSkillEditor() {
-        const modal = document.getElementById('skill-editor-modal');
-        const saveBtn = document.getElementById('skill-editor-save-btn');
-        if (saveBtn) saveBtn.disabled = false;
-        modal.classList.remove('open');
-        modal.setAttribute('aria-hidden', 'true');
-    }
-    function renderSkillEditor(skillsDict, localPath, filename, source) {
-        const fileLabel = document.getElementById('skill-editor-file');
-        const label = filename || (localPath ? localPath.split(/[\\\/]/).pop() : '');
-        if (label) {
-            fileLabel.textContent = (source === 'user' ? 'Customised · ' : 'Cloud baseline · ') + label;
-        } else {
-            fileLabel.textContent = '';
-        }
-
-        const list = document.getElementById('skill-editor-list');
-        list.innerHTML = '';
-        Object.keys(skillsDict).forEach(key => {
-            list.appendChild(buildSkillEditorRow(key, skillsDict[key] || {}));
-        });
-        if (!list.children.length) addSkillEditorRow();
-    }
-
-    // ── Description strength evaluator (WiFi-debug + PDF hybrid) ──────
-    //
-    // The Anthropic "Building Skills for Claude" guide is written for
-    // chat-style skills whose triggering depends entirely on the
-    // description. This project triggers skills primarily on LOG keywords
-    // (the `keywords:` and `exclusive:` fields), so the PDF's strict
-    // requirement that every description carries "Use when user asks …"
-    // would be overkill here. The rubric below keeps the PDF's HARD rules
-    // (no XML brackets, 1024-char cap, no vague openers) but pushes the
-    // chat-style trigger signals into a bonus tier.
-    //
-    //   Base (each independent, +1):
-    //     • Length sits in a healthy band (20 ≤ len ≤ 1024 chars)
-    //     • Concrete content — an action verb OR a domain noun
-    //       (Wi-Fi, BIOS, DSM, MCC, EAPOL, AP, roaming, scan, …)
-    //     • Scope hint — mentions a specific symptom, event, or context
-    //       ("disconnection", "after resume", "country-specific", …)
-    //
-    //   Bonus (+1, capped):
-    //     • Explicit chat-style trigger: "Use when …", quoted phrases,
-    //       "asks about", "mentions" — OR a negative trigger
-    //       ("Do NOT use for …") that suppresses over-triggering.
-    //
-    //   Penalties:
-    //     −1  Opens with a vague verb (Helps / Does / Works with)
-    //     −2  Length > 1024 (hard PDF limit)
-    //     CAP Weak when text contains `<` or `>` (PDF security rule)
-    //
-    // Non-blocking: nothing here stops the user from saving.
-    function evaluateDescription(text) {
-        const t = (text || '').trim();
-        const LEN = t.length;
-
-        if (!t) {
-            return {
-                score: 0, label: 'Empty', cls: 'weak', length: 0,
-                hints: ['Add a description.'],
-            };
-        }
-
-        // Action verbs — generous whitelist, both PDF examples and
-        // log-analysis vocabulary.
-        const verbRe = new RegExp(
-            '^\\s*(' +
-                'analy[sz]es?|identif|check|inspect|diagnos|find|detect|' +
-                'determin|extract|track|comput|measur|verif|validat|' +
-                'assess|review|summari[sz]|categori[sz]|generat|creat|' +
-                'used to|provides?|handles?|manages?|monitors?|audits?|' +
-                'orchestrat|automat|enables?|applies?|runs?|parses?|' +
-                'processes?|walks?|derives?|maps?|flags?|reports?|' +
-                'triages?|surveys?|correlat|traces?|covers?|spots?|' +
-                'end-to-end|multi-step' +
-            ')\\b', 'i');
-
-        // Generic "concrete content" signals — works across any debug
-        // domain (Wi-Fi, Bluetooth, USB, audio, …), no hard-coded
-        // vocabulary. ANY one of these counts as concrete content even
-        // without an action-verb opener.
-        //   * acronym       — 2+ contiguous capitals (BT, BLE, GATT, BIOS, AP, RF…)
-        //   * camelOrSnake  — mixed-case or underscored identifier
-        //                     (TASK_DISCONNECT, prvLarStoreCurrentMcc,
-        //                      bssVifClcConnected, profileSwitch, …)
-        //   * numericTech   — alphanumeric blends (6GHz, 11ax, 11be, A2DP, USB3)
-        //   * markedTerm    — explicitly marked tokens: `term`, [TAG], "TERM"
-        //   * debugDomain   — generic debug-vocabulary words
-        const acronymRe     = /\b[A-Z]{2,}(?:[_-][A-Z]+)*\b/;
-        const camelOrSnake  = /\b(?:[a-z]+_[a-zA-Z0-9_]+|[a-z]+[A-Z][a-zA-Z0-9]*)\b/;
-        const numericTech   = /\b(?:\d+[A-Za-z][A-Za-z0-9]*|[A-Za-z]+\d+[A-Za-z0-9]*)\b/;
-        const markedTerm    = /`[^`]+`|\[[A-Za-z0-9_-]+\]/;
-        const debugDomainRe = /\b(log|logs|debug|trace|error|errors|issue|issues|failure|failures|fault|crash|crashes|connect|disconnect|disconnection|connection|associat|authent|handshake|pair|pairing|profile|register|registers|frame|frames|packet|packets|event|events|interface|controller|host|device|driver|firmware|stack|protocol|spec|specification|standard|config|configuration|setting|setup|init|reset|state|state\s+machine|roaming|scan|signal|coverage|timeout|interference|drop|kick[_-]?off|wake|resume|suspend)\b/i;
-
-        // Scope hint — symptom, event, condition, audience. Same
-        // domain-agnostic vocabulary as above plus structural cues
-        // ("when …", "after …", "for cases where …").
-        const scopeRe = /\b(when|after|during|before|while|whenever|on\s+\w+|for\s+\w+|in\s+cases?|distinguish|categori[sz]e|fallback|range\s+of|driven\s+by|set[_-]?up|reconnection|drops?|kick[_-]?off|failure|timeout|crash|reset|resume|suspend|wake|specific|country[_-]?specific|platform[_-]?specific|signal|coverage|interference|profile|pairing|initiali[sz]ation|negotiation)\b/i;
-
-        // Bonus signals (any one counts).
-        const triggerRe = /"[^"]+"|'[^']+'|\basks?\s+about\b|\bmentions?\b|\brequests?\s+about\b|\bsays?\b/i;
-        const whenRe    = /\b(use\s+when|use\s+for|when\s+the?\s*user|if\s+user|triggers?\s+on|for\s+cases?\s+where|on\s+requests?\s+about)/i;
-        const negRe     = /\b(do\s+not\s+use|don['’]?t\s+use|not\s+for|skip\s+when|avoid\s+when|exclude(?:\s+when)?)\b/i;
-
-        const vagueRe   = /^\s*(helps?(?:\s+with)?|does|works?\s+with|deals?\s+with|takes?\s+care\s+of|is\s+for)\b/i;
-        const xmlRe     = /[<>]/;
-
-        const HAS_XML      = xmlRe.test(t);
-        const HAS_VAGUE    = vagueRe.test(t);
-        const HAS_VERB     = verbRe.test(t);
-        const HAS_DOMAIN   = (
-            acronymRe.test(t) ||
-            camelOrSnake.test(t) ||
-            numericTech.test(t) ||
-            markedTerm.test(t)  ||
-            debugDomainRe.test(t)
-        );
-        const HAS_SCOPE    = scopeRe.test(t);
-        const HAS_TRIGGER  = whenRe.test(t) || triggerRe.test(t) || negRe.test(t);
-        const LENGTH_OK    = LEN >= 20 && LEN <= 1024;
-        const TOO_SHORT    = LEN < 15;
-        const TOO_LONG     = LEN > 1024;
-
-        // Concrete content = real verb OR a domain noun (and not vague).
-        const HAS_CONCRETE = (HAS_VERB || HAS_DOMAIN) && !HAS_VAGUE;
-
-        let score = 0;
-        if (LENGTH_OK)     score += 1;
-        if (HAS_CONCRETE)  score += 1;
-        if (HAS_SCOPE)     score += 1;
-        if (HAS_TRIGGER)   score += 1;   // bonus tier
-        if (HAS_VAGUE)     score -= 1;
-        if (TOO_LONG)      score -= 2;
-        score = Math.max(0, Math.min(score, 4));
-        if (HAS_XML) score = Math.min(score, 1);
-
-        // Hints surface only what would lift the description to the NEXT
-        // grade — never floods the user with everything at once.
-        const hints = [];
-        if (HAS_XML) {
-            hints.push('⚠ Remove "<" / ">" — angle brackets are forbidden in skill descriptions.');
-        } else if (HAS_VAGUE) {
-            hints.push('Replace the vague verb with something concrete (Analyses, Identifies, Checks …).');
-        } else if (!HAS_CONCRETE) {
-            hints.push('Add an action verb OR a concrete debug term (a log keyword, a protocol acronym, a code identifier, etc.).');
-        } else if (!HAS_SCOPE) {
-            hints.push('Hint at when this applies (e.g. "after resume", "during pairing", "for unexpected drops").');
-        } else if (!HAS_TRIGGER) {
-            hints.push('Optional: add a chat trigger ("Use when …") or a negative scope ("Not for …").');
-        }
-        if (TOO_SHORT)
-            hints.push('A bit more detail would help the agent and other engineers.');
-        if (TOO_LONG)
-            hints.push('Exceeds 1024 chars — shorten it.');
-
-        let label = 'Weak', cls = 'weak';
-        if (HAS_XML)          { label = 'Invalid'; cls = 'weak';   }
-        else if (score <= 1)  { label = 'Weak';    cls = 'weak';   }
-        else if (score === 2) { label = 'Fair';    cls = 'fair';   }
-        else if (score === 3) { label = 'Good';    cls = 'good';   }
-        else                  { label = 'Strong';  cls = 'strong'; }
-
-        return { score, label, cls, length: LEN, hints };
-    }
-
-    function updateDescStrength(skillRow) {
-        const input = skillRow.querySelector('.skill-desc');
-        const wrap  = skillRow.querySelector('.desc-strength');
-        if (!input || !wrap) return;
-        const r = evaluateDescription(input.value);
-
-        const segs = wrap.querySelectorAll('.desc-strength-bar .seg');
-        segs.forEach((s, i) => {
-            s.classList.remove('weak', 'fair', 'good', 'strong');
-            if (i < r.score) s.classList.add(r.cls);
-        });
-
-        const labelEl = wrap.querySelector('.desc-strength-label');
-        labelEl.className = 'desc-strength-label ' + r.cls;
-        labelEl.textContent = r.label;
-
-        const countEl = wrap.querySelector('.desc-strength-count');
-        countEl.textContent = '· ' + r.length + '/1024';
-
-        const hintEl = wrap.querySelector('.desc-strength-hints');
-        hintEl.textContent = r.hints.length ? '— ' + r.hints.join(' ') : '';
-    }
-
-    function syncSkillNameFromKey(skillRow) {
-        const keyEl = skillRow.querySelector('.skill-key');
-        const nameEl = skillRow.querySelector('.skill-name');
-        const syncEl = skillRow.querySelector('.skill-name-sync');
-        if (!keyEl || !nameEl || !syncEl || !syncEl.checked) return;
-        nameEl.value = keyEl.value.trim();
-    }
-
-    function wireSkillNameSync(skillRow, initialName) {
-        const keyEl = skillRow.querySelector('.skill-key');
-        const nameEl = skillRow.querySelector('.skill-name');
-        const syncEl = skillRow.querySelector('.skill-name-sync');
-        if (!keyEl || !nameEl || !syncEl) return;
-
-        const startSynced = !initialName || initialName === (keyEl.value || '').trim();
-        syncEl.checked = startSynced;
-        if (startSynced) {
-            syncSkillNameFromKey(skillRow);
-        }
-        nameEl.disabled = syncEl.checked;
-
-        keyEl.addEventListener('input', () => syncSkillNameFromKey(skillRow));
-        syncEl.addEventListener('change', () => {
-            if (syncEl.checked) {
-                syncSkillNameFromKey(skillRow);
-                nameEl.disabled = true;
-            } else {
-                nameEl.disabled = false;
-                nameEl.focus();
-            }
-        });
-    }
-
-    function buildSkillEditorRow(key, val) {
-        const tpl = document.getElementById('skill-edit-row-template');
-        const node = tpl.content.firstElementChild.cloneNode(true);
-        node.querySelector('.skill-key').value  = key || '';
-        node.querySelector('.skill-name').value = val.name || '';
-        wireSkillNameSync(node, val.name || '');
-
-        const descEl = node.querySelector('.skill-desc');
-        descEl.value = val.description || '';
-        descEl.addEventListener('input', () => updateDescStrength(node));
-        // Initial paint so the bar / hint reflect loaded content immediately.
-        // Runs again after the modal opens, when layout is final.
-        updateDescStrength(node);
-
-        // Chip-style keywords / exclusive
-        const kwBox = node.querySelector('.keywords-box');
-        const exBox = node.querySelector('.exclusive-box');
-        wireChipBox(kwBox);
-        wireChipBox(exBox);
-        // rstrip only on load: a leading space inside a keyword
-        // (e.g. " ------- RESUME FLOW") is part of the literal log
-        // prefix the keyword is meant to match and must survive the
-        // round trip. Trailing space is stripped — that's always noise.
-        const _rstripChip = (s) => String(s).replace(/\s+$/, '');
-        const kw = Array.isArray(val.keywords) ? val.keywords
-                  : (val.keywords ? [String(val.keywords)] : []);
-        kw.forEach(k => addChip(kwBox, _rstripChip(k)));
-        const ex = Array.isArray(val.exclusive) ? val.exclusive
-                  : (val.exclusive ? [String(val.exclusive)] : []);
-        ex.forEach(k => addChip(exBox, _rstripChip(k)));
-
-        // Expert rules → { preamble, items[] }. The YAML on disk is a
-        // single string; everything BEFORE the first numbered "N." line
-        // is the preamble, the numbered items become individual list rows.
-        const raw = val.expert_rules;
-        let parsed = { preamble: '', items: [] };
-        if (raw && typeof raw === 'object' && !Array.isArray(raw)) {
-            parsed = {
-                preamble: String(raw.preamble || '').trim(),
-                items: Array.isArray(raw.items)
-                       ? raw.items.map(s => String(s).trim()).filter(Boolean)
-                       : [],
-            };
-        } else if (Array.isArray(raw)) {
-            // Legacy: an unwrapped list of items, no preamble.
-            parsed = {
-                preamble: '',
-                items: raw.map(item => {
-                    if (item && typeof item === 'object') {
-                        return String(item.text || '').trim();
-                    }
-                    return String(item).trim();
-                }).filter(Boolean),
-            };
-        } else if (typeof raw === 'string' && raw.trim()) {
-            parsed = parseRulesString(raw);
-        }
-
-        const preambleEl  = node.querySelector('textarea.rules-preamble');
-        const preambleBox = node.querySelector('.preamble-wrap');
-        if (preambleEl && preambleBox) {
-            preambleEl.value = parsed.preamble || '';
-            preambleEl.addEventListener('input', () => autoGrowPreamble(preambleEl));
-            // Collapse the description box whenever the loaded YAML had no
-            // preamble — the user can still hit "+ Add description" to bring
-            // it back. When there IS content, expand so it is immediately
-            // visible and editable.
-            if (parsed.preamble) {
-                preambleBox.classList.remove('collapsed');
-                autoGrowPreamble(preambleEl);
-            } else {
-                preambleBox.classList.add('collapsed');
-            }
-        }
-        parsed.items.forEach(text => addRulePoint(node, text));
-
-        return node;
-    }
-
-    function addSkillEditorRow() {
-        const list = document.getElementById('skill-editor-list');
-        const row = buildSkillEditorRow('', {});
-        // Brand-new rows start EXPANDED so the user can fill in fields
-        // immediately. Existing skills loaded from YAML stay collapsed
-        // (see renderSkillEditor) — that's where the clutter comes from
-        // when many skills are present.
-        row.classList.remove('collapsed');
-        list.appendChild(row);
-    }
-    function removeSkillEditorRow(btn) {
-        const row = btn.closest('.skill-edit-row');
-        if (row) row.remove();
-    }
-    // Toggle a single skill row between collapsed (header-only) and
-    // expanded (full editor). Rotation of the ▾ triangle is purely CSS.
-    // On expand, re-grow the textareas inside — while collapsed they had
-    // scrollHeight=0 and any earlier auto-grow pass left them at 1 line.
-    function toggleSkillEditorRow(btn) {
-        const row = btn.closest('.skill-edit-row');
-        if (!row) return;
-        const wasCollapsed = row.classList.contains('collapsed');
-        row.classList.toggle('collapsed');
-        if (wasCollapsed) {
-            row.querySelectorAll('.preamble-wrap:not(.collapsed) textarea.rules-preamble')
-               .forEach(ta => autoGrowPreamble(ta));
-            row.querySelectorAll('.rule-point > textarea.rule-text')
-               .forEach(ta => autoGrowRule(ta));
-        }
-    }
-
-    // --- Chip-input helpers ----------------------------------------------
-    function wireChipBox(box) {
-        if (!box || box.__wired) return;
-        box.__wired = true;
-        const input = box.querySelector('.chip-input');
-        box.addEventListener('click', e => {
-            if (e.target === box) input.focus();
-        });
-        input.addEventListener('focus', () => box.classList.add('focused'));
-        input.addEventListener('blur',  () => {
-            const v = input.value.trim();
-            if (v) addChip(box, v);
-            input.value = '';
-            box.classList.remove('focused');
-        });
-        input.addEventListener('keydown', e => {
-            if (e.key === 'Enter' || e.key === ',') {
-                e.preventDefault();
-                const v = input.value.trim();
-                if (v) addChip(box, v);
-                input.value = '';
-            } else if (e.key === 'Backspace' && !input.value) {
-                const chips = box.querySelectorAll('.chip');
-                if (chips.length) chips[chips.length - 1].remove();
-            }
-        });
-        input.addEventListener('paste', e => {
-            const text = (e.clipboardData || window.clipboardData).getData('text');
-            if (text && /[\n,]/.test(text)) {
-                e.preventDefault();
-                text.split(/[\n,]+/).forEach(t => {
-                    const v = t.trim();
-                    if (v) addChip(box, v);
-                });
-                input.value = '';
-            }
-        });
-    }
-    function addChip(box, value) {
-        if (!box || !value) return;
-        // rstrip only — preserve any leading whitespace passed in by the
-        // caller. Callers that DON'T want leading whitespace (e.g. fresh
-        // input from the keydown / blur / paste handlers) already strip
-        // their own input before calling. This is the path that keeps
-        // cloud-baseline keywords like " ------- RESUME FLOW" intact
-        // through edit + save.
-        const v = String(value).replace(/\s+$/, '');
-        if (!v) return;
-        // Deduplicate within the same box.
-        const existing = Array.from(box.querySelectorAll('.chip'))
-            .map(c => c.dataset.value);
-        if (existing.includes(v)) return;
-        const chip = document.createElement('span');
-        chip.className = 'chip';
-        chip.dataset.value = v;
-        const text = document.createElement('span');
-        text.textContent = v;
-        const x = document.createElement('button');
-        x.type = 'button';
-        x.className = 'chip-x';
-        x.textContent = '✕';
-        x.title = 'Remove';
-        x.onclick = () => chip.remove();
-        chip.appendChild(text);
-        chip.appendChild(x);
-        const input = box.querySelector('.chip-input');
-        box.insertBefore(chip, input);
-    }
-    function readChips(box) {
-        return Array.from(box.querySelectorAll('.chip')).map(c => c.dataset.value);
-    }
-
-    // --- Numbered rules helpers ------------------------------------------
-    // Rule rows are two-level: top-level "1., 2., 3." with optional
-    // Word-style nested "a., b., c." sub-steps under each one. The data
-    // model passed between frontend ↔ backend is:
-    //
-    //   expert_rules: [
-    //     { text: "Main rule …", subs: ["sub a", "sub b"] },
-    //     { text: "Next main …", subs: [] }
-    //   ]
-    //
-    // The backend joins this back into the single multi-line string that
-    // is stored under `expert_rules:` in YAML.
-
-    // Parse a single-string expert_rules block stored in YAML into the
-    // {preamble, items} shape the editor uses. Rules:
-    //
-    //   * Lines BEFORE the first "N." item become the preamble (kept as a
-    //     single multi-line string in the main description box).
-    //   * Each line starting with "N." or "N)" — at any indentation —
-    //     opens a new numbered item. Subsequent continuation lines fall
-    //     into whichever item is currently open.
-    //   * If the text has no numbered items at all, the entire string is
-    //     preamble and there are zero list items.
-    //
-    // No 2-level nesting any more — this matches the simplified
-    // "one description + a flat list" model the editor exposes.
-    function parseRulesString(raw) {
-        const trimmed = String(raw || '').replace(/\s+$/, '');
-        if (!trimmed) return { preamble: '', items: [] };
-
-        // A new numbered item only starts on a line whose number sits at
-        // the beginning (after yaml.load has already stripped the block
-        // scalar's base indent). Continuation lines that happen to start
-        // with their own indentation must NOT match — otherwise an
-        // indented sub-bullet like "  1) sub" would be misread as a new
-        // top-level item.
-        //
-        // The captured prefix supports hyphenated section numbering used
-        // by the cloud baseline (`2-1.`, `2-2.`, `3-1.`, …). The prefix
-        // is preserved verbatim through the round trip so the original
-        // author's section structure (e.g. "step 2 has sub-parts 2-1 / 2-2")
-        // survives editing.
-        const ITEM_RE = /^(\d+(?:-\d+)*)[.)]\s*(.*)$/;
-
-        // Leading whitespace on continuation lines is PRESERVED verbatim
-        // so the indented log examples / nested bullets that the cloud
-        // baseline relies on survive the round trip and re-emerge under
-        // the same numbered item on save.
-        const preambleLines = [];
-        const items = [];   // { prefix: "2-1", text: "..." }
-        let current = null;
-
-        const rstrip = (s) => s.replace(/\s+$/, '');
-
-        for (const rawLine of trimmed.split(/\r?\n/)) {
-            const line = rstrip(rawLine);
-            const m = line.match(ITEM_RE);
-            if (m) {
-                if (current !== null) items.push(current);
-                current = { prefix: m[1], text: m[2] };
-                continue;
-            }
-            if (current !== null) {
-                current.text += '\n' + line;
-            } else {
-                preambleLines.push(line);
-            }
-        }
-        if (current !== null) items.push(current);
-
-        // Items keep their trailing newline if one was there in the source —
-        // that newline represents an intentional blank line between this
-        // numbered item and the next one (the cloud baseline uses these
-        // gaps as paragraph separators). Per-line rstrip already removed
-        // line-internal trailing whitespace, so anything left at the end
-        // is structural.
-        //
-        // Preamble: cap trailing whitespace to AT MOST one "\n". A trailing
-        // newline encodes "the cloud baseline left a blank line between
-        // my preamble and item 1"; no newline means "no gap". Both shapes
-        // round-trip back to YAML faithfully via the dumper.
-        const _capTrailingNewline = (s) =>
-            s.replace(/\s+$/, (m) => (m.includes('\n') ? '\n' : ''));
-        return {
-            preamble: _capTrailingNewline(preambleLines.join('\n')),
-            items: items
-                .map((it) => ({
-                    prefix: it.prefix,
-                    text: _capTrailingNewline(it.text),
-                }))
-                .filter((it) => it.text.replace(/\s/g, '').length > 0),
-        };
-    }
-
-    // The expert_rules editor is one preamble textarea + a flat list of
-    // numbered items. Wire-shape between frontend ↔ backend:
-    //
-    //   expert_rules: { preamble: "free-form text", items: ["1st", "2nd"] }
-    //
-    // The backend joins this back into the single multi-line string
-    // stored under `expert_rules:` in YAML (preamble lines first, then
-    // "1. …", "2. …" on the lines that follow).
-
-    function addRulePoint(skillRow, textOrItem) {
-        const list = skillRow.querySelector('.rules-list');
-        const tpl  = document.getElementById('rule-point-template');
-        const node = tpl.content.firstElementChild.cloneNode(true);
-        const ta   = node.querySelector('.rule-text');
-
-        // Accept either a plain string (new item the user just clicked
-        // "+ Add" for) or an object {prefix, text} from the parser. When
-        // a prefix is supplied (e.g. cloud baseline's "2-1"), pin it onto
-        // the row via dataset so renumberRules() leaves it alone.
-        let prefix = null;
-        let text = '';
-        if (textOrItem && typeof textOrItem === 'object' && !Array.isArray(textOrItem)) {
-            prefix = (textOrItem.prefix != null) ? String(textOrItem.prefix) : null;
-            text = String(textOrItem.text || '');
-        } else {
-            text = String(textOrItem || '');
-        }
-        if (prefix !== null) {
-            node.dataset.prefix = prefix;
-        }
-        ta.value = text;
-        ta.addEventListener('input', () => autoGrowRule(ta));
-        list.appendChild(node);
-        autoGrowRule(ta);
-        renumberRules(skillRow);
-    }
-
-    function removeRulePoint(btn) {
-        const row = btn.closest('.rule-point');
-        const skillRow = btn.closest('.skill-edit-row');
-        if (!row) return;
-        row.remove();
-        if (skillRow) renumberRules(skillRow);
-    }
-
-    function autoGrowRule(ta) {
-        if (!ta) return;
-        ta.style.height = 'auto';
-        ta.style.height = Math.min(ta.scrollHeight, 220) + 'px';
-    }
-    function autoGrowPreamble(ta) {
-        if (!ta) return;
-        ta.style.height = 'auto';
-        ta.style.height = Math.min(ta.scrollHeight, 240) + 'px';
-    }
-
-    function showPreamble(skillRow) {
-        const box = skillRow.querySelector('.preamble-wrap');
-        const ta  = skillRow.querySelector('textarea.rules-preamble');
-        if (!box) return;
-        box.classList.remove('collapsed');
-        if (ta) {
-            autoGrowPreamble(ta);
-            ta.focus();
-        }
-    }
-    function hidePreamble(skillRow) {
-        const box = skillRow.querySelector('.preamble-wrap');
-        const ta  = skillRow.querySelector('textarea.rules-preamble');
-        if (!box) return;
-        // Only collapse when the textarea is empty; otherwise the action
-        // would silently hide non-empty content the user just typed.
-        if (ta && ta.value.trim()) {
-            alert('Please clear the description before hiding the box.');
-            ta.focus();
-            return;
-        }
-        box.classList.add('collapsed');
-    }
-    function renumberRules(skillRow) {
-        const items = skillRow.querySelectorAll('.rules-list > .rule-point');
-        // Items with an explicit `data-prefix` (loaded from cloud, e.g.
-        // "2-1") keep their original label so the cloud baseline's
-        // section structure survives editing. Items without a prefix —
-        // typically rows the user just added via "+ Add analysis step"
-        // — get the next integer after the largest integer-only prefix
-        // currently in use.
-        let maxInt = 0;
-        items.forEach((r) => {
-            const p = r.dataset.prefix;
-            if (p && /^\d+$/.test(p)) {
-                maxInt = Math.max(maxInt, parseInt(p, 10));
-            }
-        });
-        items.forEach((r) => {
-            let label = r.dataset.prefix;
-            if (!label) {
-                maxInt += 1;
-                label = String(maxInt);
-                r.dataset.prefix = label;
-            }
-            const num = r.querySelector('.rule-number');
-            if (num) num.textContent = label;
-        });
-    }
-    function _cleanRuleField(s) {
-        // Per-line rstrip (kill trailing spaces / tabs but keep newlines),
-        // strip leading whitespace, and cap trailing whitespace to AT MOST
-        // one "\n" so an intentional blank line at the end survives the
-        // round trip but stray multi-blank-line typos are cleaned up.
-        let v = String(s || '');
-        v = v.split('\n').map((l) => l.replace(/[ \t]+$/, '')).join('\n');
-        v = v.replace(/^\s+/, '');
-        v = v.replace(/\s+$/, (m) => (m.includes('\n') ? '\n' : ''));
-        return v;
-    }
-    function readRules(skillRow) {
-        const preambleEl = skillRow.querySelector('textarea.rules-preamble');
-        const preamble = _cleanRuleField(preambleEl ? preambleEl.value : '');
-        const items = Array.from(
-            skillRow.querySelectorAll('.rules-list > .rule-point')
-        )
-            .map((row) => {
-                const ta = row.querySelector('.rule-text');
-                return {
-                    prefix: row.dataset.prefix || null,
-                    text: _cleanRuleField(ta ? ta.value : ''),
-                };
-            })
-            .filter((it) => it.text.replace(/\s/g, '').length > 0);
-        return { preamble, items };
-    }
-
-    async function saveSkillEditor() {
-        const rows = document.querySelectorAll('#skill-editor-list .skill-edit-row');
-        const skills = {};
-        const seenKeys = new Set();
-
-        // Clear any prior invalid markers.
-        document.querySelectorAll('#skill-editor-list .invalid')
-            .forEach(el => el.classList.remove('invalid'));
-
-        let firstError = null;
-        for (const r of rows) {
-            const keyEl  = r.querySelector('.skill-key');
-            const nameEl = r.querySelector('.skill-name');
-            const descEl = r.querySelector('.skill-desc');
-
-            const key  = keyEl.value.trim();
-            const name = nameEl.value.trim();
-            // <input type="text"> can still hold a multi-line value when
-            // pasted from outside; collapse any newline/tab/multi-space
-            // runs into a single space so the saved YAML stays on one line
-            // and no double-space artefacts survive in the description.
-            const desc = descEl.value.replace(/\s+/g, ' ').trim();
-
-            if (!key) {
-                keyEl.classList.add('invalid');
-                firstError = firstError || 'Skill ID is required.';
-                continue;
-            }
-            if (!name) {
-                nameEl.classList.add('invalid');
-                firstError = firstError || ('Skill "' + key + '": display name is required.');
-                continue;
-            }
-            if (!desc) {
-                descEl.classList.add('invalid');
-                firstError = firstError || ('Skill "' + key + '": description is required.');
-                continue;
-            }
-            if (seenKeys.has(key)) {
-                keyEl.classList.add('invalid');
-                firstError = firstError || ('Duplicate skill key: "' + key + '".');
-                continue;
-            }
-            seenKeys.add(key);
-
-            const rulesPayload = readRules(r);
-            const hasRules = rulesPayload.preamble.trim().length > 0
-                          || rulesPayload.items.length > 0;
-            if (!hasRules) {
-                // Flag whichever box is currently visible so the user knows
-                // where to type — the preamble textarea if it's expanded,
-                // otherwise the "+ Add overview" button.
-                const wrap = r.querySelector('.preamble-wrap');
-                const preEl = r.querySelector('textarea.rules-preamble');
-                if (wrap && wrap.classList.contains('collapsed')) {
-                    const showBtn = r.querySelector('.preamble-show-btn');
-                    if (showBtn) showBtn.classList.add('invalid');
-                } else if (preEl) {
-                    preEl.classList.add('invalid');
-                }
-                firstError = firstError || ('Skill "' + key + '": expert rules are required (add an overview or at least one analysis step).');
-                continue;
-            }
-
-            skills[key] = {
-                name:         name,
-                description:  desc,
-                keywords:     readChips(r.querySelector('.keywords-box')),
-                exclusive:    readChips(r.querySelector('.exclusive-box')),
-                expert_rules: rulesPayload,
-            };
-        }
-
-        if (firstError) { alert(firstError); return; }
-        if (!Object.keys(skills).length) {
-            alert('Please define at least one skill before saving.');
-            return;
-        }
-
-        const saveBtn = document.getElementById('skill-editor-save-btn');
-        saveBtn.disabled = true;
-        const statusEl = document.getElementById('skill-editor-status');
-        try {
-            const res = await fetch('/log_chatbot/save_local_skills_yaml', {
-                method: 'POST',
-                headers: {'Content-Type': 'application/json'},
-                body: JSON.stringify({skills}),
-            });
-            const data = await res.json().catch(() => ({}));
-            if (data && data.success) {
-                if (data.skills) renderSkills(data.skills);
-                window.__yamlModified = true;
-                showStatus(statusEl, '✔ ' + data.message, 'ok');
-                statusEl.style.display = 'block';
-                closeSkillEditor();
-                await refreshSkillSourcePanel();
-            } else {
-                alert('Save failed: ' + (data && data.error ? data.error : 'Unknown error'));
-                saveBtn.disabled = false;
-            }
-        } catch (e) {
-            alert('Network error: ' + e.message);
-            saveBtn.disabled = false;
-        }
-    }
-
-    // ── Silent upload of the user's modified YAML after a 👍 ──────────
-    // Fires only when window.__yamlModified is true (i.e. the user
-    // actually edited their skill config this session). Runs in the
-    // background — no confirmation dialog, no UI interruption.
-    // Re-triggers are de-duplicated so refreshing a turn / clicking 👍
-    // twice doesn't upload twice.
-    async function uploadModifiedYamlSilently() {
-        if (window.__yamlUploadInFlight || window.__yamlUploadedThisSession) return;
-        window.__yamlUploadInFlight = true;
-        try {
-            const res = await fetch('/log_chatbot/upload_modified_yaml', {
-                method: 'POST',
-                headers: {'Content-Type': 'application/json'},
-                body: '{}',
-            });
-            const data = await res.json().catch(() => ({}));
-            if (data && data.success) {
-                window.__yamlUploadedThisSession = true;
-                console.info('[skill upload] uploaded:', data.uploaded_to || '');
-            } else {
-                console.warn('[skill upload] failed:', data && data.error);
-            }
-        } catch (e) {
-            console.warn('[skill upload] network error:', e);
-        } finally {
-            window.__yamlUploadInFlight = false;
-        }
-    }
-
-    // ── On page load, render the skill source badge + toggle ──────────
-    // Active source is always reset to "cloud" on app restart, so the page
-    // boots showing the cloud baseline. If a user-customised file exists
-    // on disk, the toggle to switch back to it shows up here.
-    document.addEventListener('DOMContentLoaded', function () {
-        refreshSkillSourcePanel();
-    });
 </script>
 </body>
 </html>

@@ -18,19 +18,10 @@ LOG_PARSER_DIR = rf"\\infs089.iil.intel.com\HOME\WirelessCE\Intel_WirelessCE_Ava
 LOG_PARSER_DATA_DIR_prim = rf"\\infs089b.iil.intel.com\HOME\WirelessCE\Intel_WirelessCE_Avatar\log_parser_data"
 LOG_PARSER_DATA_DIR_bkup = rf"\\infs089.iil.intel.com\HOME\WirelessCE\Intel_WirelessCE_Avatar\log_parser_data"
 
-# Skills YAML — unified location for skill definitions.
-#
-# Files are written with an ISO date suffix so multiple revisions can coexist
-# in the shared folder (e.g. skills_2026-05-06.yaml). The application always
-# picks the most recent dated file on both the cloud and local side; the
-# legacy un-dated filename ("skills.yaml") is still accepted for backward
-# compatibility so existing deployments keep working until they are migrated.
+# Skills YAML — unified location for skill definitions
 SKILLS_CONFIG_DIR_prim = rf"\\infs089b.iil.intel.com\HOME\WirelessCE\Intel_WirelessCE_Avatar\log_parser_data\skills_config"
 SKILLS_CONFIG_DIR_bkup = rf"\\infs089.iil.intel.com\HOME\WirelessCE\Intel_WirelessCE_Avatar\log_parser_data\skills_config"
-SKILLS_YAML_FILENAME = "skills.yaml"                       # legacy un-dated file
-SKILLS_YAML_DATED_GLOB = "skills_*.yaml"                   # e.g. skills_2026-05-06.yaml
-SKILLS_YAML_DATED_RE = r"^skills_(\d{4}-\d{2}-\d{2})\.yaml$"
-SKILLS_YAML_DATED_TEMPLATE = "skills_{date}.yaml"          # date = YYYY-MM-DD
+SKILLS_YAML_FILENAME = "skills.yaml"
 
 # Feedback sidecar — shared training-data layer.
 # Each user writes under a per-user subfolder (see feedback_service) so
@@ -44,17 +35,6 @@ FEEDBACK_DIR_bkup = rf"\\infs089.iil.intel.com\HOME\WirelessCE\Intel_WirelessCE_
 # Using a path relative to this file so it works regardless of install location.
 from pathlib import Path as _Path
 LOCAL_LOG_PARSER_DATA_DIR = str(_Path(__file__).parent.parent / "data" / "log_parser_data")
-
-# Local skill YAML cache.
-#
-# Primary location: <IntelAvatar_files>/skills_config/  — same root the rest of
-# the app uses for case-number downloads, so users can find / edit / replace
-# their skill configs in one familiar place.
-# That path is only known after helpers.init_download_dir() runs, so
-# skills_yaml_utils.local_skills_dir() resolves it at runtime via
-# app_config.avatarfiles_dir. This module-level constant is the fallback used
-# when avatarfiles_dir is not yet set (e.g. during import-time helpers).
-LOCAL_SKILLS_DIR_NAME = "skills_config"
 LOCAL_SKILLS_YAML = str(_Path(__file__).parent.parent / "data" / "skills.yaml")
 
 

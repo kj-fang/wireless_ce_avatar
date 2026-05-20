@@ -243,24 +243,31 @@ class CaseService:
     @staticmethod
     def _get_case_comments_from_snowflake(case_id, passwd):
         sql_query = f"""
-        SELECT CORE_IPS_CREATED_DTM, CORE_IPS_COMMENT_AUTHOR_TYPE_TXT, CORE_IPS_CASE_COMMENT_TXT 
-        FROM SALES_MARKETING.SALES_SUPPORT_PREMIER_ANALYSIS.DIM_CORE_IPS_CASE_COMMENTS 
+        SELECT CORE_IPS_CREATED_DTM, CORE_IPS_COMMENT_AUTHOR_TYPE_TXT, CORE_IPS_CASE_COMMENT_TXT
+        FROM SALES_MARKETING.SALES_SUPPORT_PREMIER_ANALYSIS.DIM_CORE_IPS_CASE_COMMENTS
         WHERE CORE_IPS_CASE_ID='{case_id}'
         """
         schema = "sales_support_premier_analysis.DIM_CORE_IPS_CASE_COMMENTS"
         comments = snowflake_query(passwd, sql_query, schema, fetch_mode="all")
-        
+
         att_info = {}
         processed_comments = []
-        
-        for comm in comments:
+        # Some Snowflake rows have a NULL comment text — comm[2] then comes
+        # back as None. Both `"Download link" in None` and `None.replace(...)`
+        # raise — the former throws exactly the cryptic
+        # `argument of type 'NoneType' is not iterable` error that case
+        # 00984509 hit. Coerce None to "" so a single bad row never
+        # poisons the whole case-processing pipeline.
+        for comm in (comments or []):
             comm = list(comm)
-            if "Download link" in comm[2]:
-                att = comm[2].split(' \xa0 \xa0 ')
-                att_info[att[-2]] = [comm[0], att[-1]]
-            comm[2] = comm[2].replace('\xa0', ' ').replace('\n', ' ').strip()
+            text = comm[2] if comm[2] is not None else ""
+            if "Download link" in text:
+                att = text.split(' \xa0 \xa0 ')
+                if len(att) >= 2:
+                    att_info[att[-2]] = [comm[0], att[-1]]
+            comm[2] = text.replace('\xa0', ' ').replace('\n', ' ').strip()
             processed_comments.append(comm)
-            
+
         return processed_comments, att_info
     
     @staticmethod
@@ -273,6 +280,15 @@ class CaseService:
     def _supplement_attachment_info_from_api(case_id, att_info):
         """Query Salesforce REST API for case comments and supplement att_info
         with entries not found in Snowflake (handles replication lag)."""
+        # Defensive: cases where Snowflake returned no comments leave
+        # att_info as an empty dict, but the upstream contract isn't
+        # enforced at the type level — if a caller ever passes None we
+        # would die at `filename in att_info` with the cryptic
+        # `argument of type 'NoneType' is not iterable`. Treat None
+        # exactly like {} so the supplementing pass still runs.
+        if att_info is None:
+            print(f"  [SF API] att_info was None for case {case_id}; treating as empty dict")
+            att_info = {}
         try:
             vf_session = CaseService._get_vf_session()
             print(f"  [SF API] Supplementing attachment info for case {case_id}...")

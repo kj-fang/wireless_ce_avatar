@@ -6,10 +6,16 @@ import fitz
 from models.models import CaseContext
 
 def parse_pdf_for_attachments(downloaded_pdf_path, att_name_desc):
+    # Some upstream paths (e.g. cases with no Snowflake comments) can
+    # leave attachment_info as None — `att_name_desc.get(...)` below
+    # would then raise AttributeError. Coerce to empty dict so we still
+    # produce the link list, just without per-file descriptions.
+    if att_name_desc is None:
+        att_name_desc = {}
     doc = fitz.open(downloaded_pdf_path)
     att_links = []
 
-    filename_count = {}  
+    filename_count = {}
 
     for page_num in range(len(doc)):
         page = doc[page_num]

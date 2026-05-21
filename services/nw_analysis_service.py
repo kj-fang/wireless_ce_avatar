@@ -2243,21 +2243,6 @@ class WifiLogAgentSystem:
         if tool_name == "fetch_filtered_logs":
             return self.fetch_filtered_logs(args.get("skill_name", ""))
 
-        if tool_name == "analyze_sleepstudy_report":
-            from services.sleepstudy_service import analyze_sleepstudy
-            result = analyze_sleepstudy(
-                report_path=args.get("report_path", ""),
-                top_n=int(args.get("top_n", 3)),
-                wifi_only=bool(args.get("wifi_only", True)),
-                max_sessions=int(args.get("max_sessions", 10)),
-                drips_threshold=float(args.get("drips_threshold", 80.0)),
-            )
-            # Cap to keep the agent's context window safe.
-            cap = self.MAX_TOOL_RESULT_CHARS_IN_MESSAGES
-            if len(result) > cap:
-                result = result[:cap] + f"\n\u26a0 Output truncated at {cap} chars."
-            return result
-
         if tool_name == "query_log_detail":
             anchor_text = args.get("anchor_text", "")
             anchor_timestamp = args.get("anchor_timestamp", "")
@@ -2772,60 +2757,6 @@ class WifiLogAgentSystem:
                             }
                         },
                         "required": []
-                    }
-                }
-            },
-            {
-                "type": "function",
-                "function": {
-                    "name": "analyze_sleepstudy_report",
-                    "description": (
-                        "Parse a Windows SleepStudy report (XML or HTML produced by "
-                        "`powercfg /sleepstudy`) and return ONLY sessions where (1) SW DRIPS "
-                        "or HW DRIPS coverage is below `drips_threshold` AND (2) Wi-Fi / WLAN "
-                        "appears in the top-N battery-drain offenders. Use this when the user "
-                        "is investigating Modern Standby / connected-standby drain or suspects "
-                        "Wi-Fi is keeping the system awake. The summary lists every matching "
-                        "Session ID and explains why if no sessions match. "
-                        "When you present the per-session results to the user, render a "
-                        "Markdown table with EXACTLY these columns and in this order: "
-                        "Session | Date/Time (UTC) | Duration | SW-DRIPS | Wi-Fi Active | "
-                        "Wi-Fi Net Power | Exit Reason | SW DRIP Cause. Populate the "
-                        "'SW DRIP Cause' column from the 'SW-DRIPS reason' line / 'SW DRIP "
-                        "Cause' column emitted in the tool result for that session (a brief "
-                        "explanation of why SW-DRIPS coverage was low). The tool result "
-                        "already contains a ready-to-copy table immediately after the "
-                        "VERDICT line — prefer reusing it verbatim."
-                    ),
-                    "parameters": {
-                        "type": "object",
-                        "properties": {
-                            "report_path": {
-                                "type": "string",
-                                "description": "Absolute path to sleepstudy-report.xml or sleepstudy-report.html."
-                            },
-                            "top_n": {
-                                "type": "integer",
-                                "description": "How deep to look in each session's offender ranking when checking for Wi-Fi. Default 3.",
-                                "default": 3
-                            },
-                            "wifi_only": {
-                                "type": "boolean",
-                                "description": "If true (default), only sessions with Wi-Fi in the top offenders are returned.",
-                                "default": True
-                            },
-                            "max_sessions": {
-                                "type": "integer",
-                                "description": "Maximum number of Wi-Fi-implicated sessions to include in the response. Default 10.",
-                                "default": 10
-                            },
-                            "drips_threshold": {
-                                "type": "number",
-                                "description": "DRIPS coverage threshold (0-100). A session qualifies when SW DRIPS or HW DRIPS is below this value. Default 80.",
-                                "default": 80
-                            }
-                        },
-                        "required": ["report_path"]
                     }
                 }
             },

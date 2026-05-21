@@ -997,24 +997,113 @@
             const data = await res.json();
             if (data.success) {
                 showStatus(statusEl, '✔ ' + (data.message || 'Sleepstudy file loaded.'), 'ok');
-
-                // Enable agentic (tools) mode so the agent runs the full chat_with_tools flow
-                agenticMode = true;
-                const toggle = document.getElementById('agentic-mode-toggle');
-                if (toggle) {
-                    toggle.checked = true;
-                    onModeToggle(toggle);
-                }
-
-                // Populate the chat input and trigger the agent
-                const input = document.getElementById('user-input');
-                if (input) input.value = `Analysising the uploaded sleepstudy at \`${path}\``;
-                sendMessage();
+                // Run the dedicated sleepstudy analyzer pipeline
+                runSleepstudyAnalysis(path);
             } else {
                 showStatus(statusEl, '✘ ' + data.error, 'err');
             }
         } catch (e) {
             showStatus(statusEl, '✘ Network error: ' + e.message, 'err');
+        }
+    }
+
+    // ── Run dedicated sleepstudy analyzer (SSE stream) ──────────────
+    async function runSleepstudyAnalysis(path) {
+        appendUserMsg('Analysing the uploaded sleepstudy at `' + path + '`');
+        appendTyping();
+
+        let agentCardBodyEl = null;
+        let agentCardId = null;
+        let stepCount = 0;
+
+        function ensureCard() {
+            if (agentCardBodyEl) return;
+            removeTyping();
+            hideWelcome();
+            agentCardId = 'agent-process-' + Date.now();
+            const html = `
+            <div class="agent-process-card">
+                <div class="agent-process-header" onclick="
+                    this.classList.toggle('collapsed');
+                    document.getElementById('${agentCardId}').classList.toggle('hidden');
+                    const icon = this.querySelector('.toggle-icon');
+                    icon.textContent = this.classList.contains('collapsed') ? '▼' : '▲';
+                ">
+                    Sleepstudy Analyzer Steps
+                    <span id="${agentCardId}-summary" style="font-weight:400;font-size:0.75rem;opacity:0.75;margin-left:8px;"></span>
+                    <span class="toggle-icon">▲</span>
+                </div>
+                <div class="agent-process-body" id="${agentCardId}"></div>
+            </div>`;
+            const wrapper = document.createElement('div');
+            wrapper.className = 'msg-row assistant';
+            wrapper.style.maxWidth = '95%';
+            wrapper.innerHTML = `<div class="avatar-icon">🛌</div><div style="flex:1;">${html}</div>`;
+            document.getElementById('chat-window').appendChild(wrapper);
+            agentCardBodyEl = document.getElementById(agentCardId);
+            scrollBottom();
+        }
+
+        function appendStep(content) {
+            ensureCard();
+            stepCount++;
+            const stepHtml = `<div class="agent-step"><div class="agent-step-content">${marked.parse(content || '')}</div></div>`;
+            agentCardBodyEl.insertAdjacentHTML('beforeend', stepHtml);
+            const summaryEl = document.getElementById(agentCardId + '-summary');
+            if (summaryEl) summaryEl.textContent = `${stepCount} steps`;
+            scrollBottom();
+        }
+
+        try {
+            const res = await fetch('/nw_analysis/analyze_sleepstudy', {
+                method: 'POST',
+                headers: {'Content-Type': 'application/json'},
+                body: JSON.stringify({log_path: path})
+            });
+
+            if (!res.ok) throw new Error(`Server error ${res.status}`);
+
+            const reader = res.body.getReader();
+            const decoder = new TextDecoder();
+            let buffer = '';
+
+            const processLine = (line) => {
+                if (!line.startsWith('data:')) return;
+                const jsonStr = line.slice(5).trim();
+                if (!jsonStr) return;
+                let evt;
+                try { evt = JSON.parse(jsonStr); } catch { return; }
+
+                if (evt.type === 'step') {
+                    appendStep(evt.step && evt.step.content);
+                } else if (evt.type === 'done') {
+                    removeTyping();
+                    if (agentCardId) collapseAgentProcessCard(agentCardId);
+                    const result = evt.result;
+                    if (result && result.type === 'text') {
+                        appendAssistantText(result.data || '_No response._');
+                    } else {
+                        appendAssistantText('⚠️ ' + (result && result.data ? result.data : 'Unknown response.'));
+                    }
+                } else if (evt.type === 'error') {
+                    removeTyping();
+                    appendAssistantText('❌ Error: ' + (evt.content || 'Unknown error'));
+                }
+            };
+
+            while (true) {
+                const { done, value } = await reader.read();
+                if (done) break;
+                buffer += decoder.decode(value, { stream: true });
+                const lines = buffer.split('\n');
+                buffer = lines.pop();
+                lines.forEach(processLine);
+            }
+            if (buffer) processLine(buffer);
+
+        } catch (e) {
+            removeTyping();
+            appendAssistantText('❌ Network error: ' + e.message);
         }
     }
 

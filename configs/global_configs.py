@@ -36,6 +36,14 @@ class GlobalConfig:
         # Last log path analysed by LogParserService (shared with chatbot)
         self.last_analyzed_log_path: Optional[str] = None
 
+        # SendTo security token — random per process; used to validate
+        # requests originating from the Windows SendTo shortcut.
+        self.sendto_token: str = secrets.token_urlsafe(32)
+
+        # Agent backends (initialized in configs.set_up_app.set_up)
+        self.log_chatbot_agent: Optional[Any] = None
+        self.nw_analysis_agent: Optional[Any] = None
+
     # SocketIO management
     def set_socketio(self, socketio: SocketIO) -> None:
         self.socketio = socketio
@@ -47,6 +55,13 @@ class GlobalConfig:
     # LLM Helper
     def set_llm_helper(self, llm_helper: LLM_helper) -> None:
         self.llm_helper = llm_helper
+
+    # Agent backends
+    def set_log_chatbot_agent(self, agent: Any) -> None:
+        self.log_chatbot_agent = agent
+
+    def set_nw_analysis_agent(self, agent: Any) -> None:
+        self.nw_analysis_agent = agent
     
     # Key management
     def set_key(self, key: Any) -> None:

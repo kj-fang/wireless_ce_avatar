@@ -12,6 +12,7 @@ from tkinter import filedialog
 from configs.global_configs import app_config
 from models.models import CaseContext
 from services.nw_analysis_service import WifiLogAgentSystem, load_skills_from_data_dir, get_builtin_skills, build_skill_file_map, load_skills_from_yaml
+from services.sleepstudy_analyzer import analyze_sleepstudy_stream
 from utils.etl_utils import extract_time_from_description
 
 nw_analysis_bp = Blueprint("nw_analysis", __name__, url_prefix="/nw_analysis")
@@ -329,6 +330,78 @@ def set_log_sleepstudy():
         })
     except Exception as e:
         return jsonify({"success": False, "error": str(e)}), 500
+
+
+# ------------------------------------------------------------------
+# API: analyze sleepstudy via the script (SSE stream)
+# ------------------------------------------------------------------
+@nw_analysis_bp.route("/analyze_sleepstudy", methods=["POST"])
+def analyze_sleepstudy():
+    """
+    Run the sleepstudy_analyzer.py pipeline against the given .html report
+    and stream progress + per-session reports back as SSE events compatible
+    with the existing chat UI consumer.
+
+    Request JSON: { "log_path": "<absolute path to sleepstudy-report.html>" }
+    """
+    data = request.get_json(silent=True) or {}
+    sleep_path = (data.get("log_path") or "").strip()
+    if not sleep_path:
+        def _err():
+            yield f"data: {json.dumps({'type': 'error', 'content': 'log_path is required'})}\n\n"
+        return Response(_err(), mimetype="text/event-stream")
+
+    if not os.path.exists(sleep_path):
+        def _missing():
+            yield f"data: {json.dumps({'type': 'error', 'content': f'File not found: {sleep_path}'})}\n\n"
+        return Response(_missing(), mimetype="text/event-stream")
+
+    @copy_current_request_context
+    def event_stream():
+        # Build an llm_call adapter from the configured OpenAI-style client.
+        llm_helper = app_config.llm_helper
+        llm_client = getattr(llm_helper, "client", None) if llm_helper else None
+        llm_model  = getattr(llm_helper, "model", "gpt-4.1") if llm_helper else "gpt-4.1"
+
+        if llm_client is None:
+            llm_call = None
+        else:
+            def llm_call(system_prompt: str, user_message: str) -> str:
+                resp = llm_client.chat.completions.create(
+                    model=llm_model,
+                    messages=[
+                        {"role": "system", "content": system_prompt},
+                        {"role": "user",   "content": user_message},
+                    ],
+                    temperature=0.2,
+                    max_tokens=1500,
+                )
+                return resp.choices[0].message.content or ""
+
+        try:
+            for event in analyze_sleepstudy_stream(sleep_path, llm_call=llm_call):
+                kind = event["type"]
+                if kind == "step":
+                    sse = {"type": "step", "step": {"content": event["content"]}}
+                elif kind == "done":
+                    sse = {"type": "done", "result": {"type": "text", "data": event["data"]}}
+                elif kind == "error":
+                    sse = {"type": "error", "content": event["content"]}
+                else:
+                    continue
+                yield f"data: {json.dumps(sse, ensure_ascii=False)}\n\n"
+
+        except Exception as exc:
+            tb = traceback.format_exc()
+            print(f"analyze_sleepstudy error:\n{tb}")
+            err_payload = {"type": "error", "content": str(exc)}
+            yield f"data: {json.dumps(err_payload, ensure_ascii=False)}\n\n"
+
+    return Response(
+        event_stream(),
+        mimetype="text/event-stream",
+        headers={"Cache-Control": "no-cache", "X-Accel-Buffering": "no"},
+    )
 
 
 # ------------------------------------------------------------------

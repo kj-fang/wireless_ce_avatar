@@ -17,7 +17,7 @@ __all__ = [
     "automation_bp",
     "download_bp",
     "log_parser_bp",
-    "nw_analysis_bp",,
+    "nw_analysis_bp",
     "log_chatbot_bp",
     "feedback_bp",
 ]

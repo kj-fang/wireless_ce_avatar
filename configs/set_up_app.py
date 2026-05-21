@@ -16,6 +16,7 @@ from utils.skills_yaml_utils import (
 )
 from services.llm_service import LLM_helper
 from services.log_chatbot_service import WifiLogAgentSystem, sync_to_local, load_skills_from_yaml
+from services.nw_analysis_service import WifiLogAgentSystem as NwAnalysisAgentSystem
 
 from configs.global_configs import app_config
 
@@ -142,6 +143,20 @@ def set_up(socketio):
         log_chatbot_agent = None
         print("⚠️  Log Chatbot Agent skipped — LLM client not configured (no API key).")
     app_config.set_log_chatbot_agent(log_chatbot_agent)
+
+    # NW Analysis Agent — separate backend instance (own copy of WifiLogAgentSystem)
+    if llm_helper.client is not None:
+        model = getattr(llm_helper, 'model', 'gpt-4.1')
+        nw_analysis_agent = NwAnalysisAgentSystem(
+            client=llm_helper.client,
+            model=model,
+            skills=llm_helper.skills,   # reuse, no second disk read
+        )
+        print(f"🌐 NW Analysis Agent loaded (model={model})")
+    else:
+        nw_analysis_agent = None
+        print("⚠️  NW Analysis Agent skipped — LLM client not configured (no API key).")
+    app_config.set_nw_analysis_agent(nw_analysis_agent)
 
     # socketio
     app_config.set_socketio(socketio)

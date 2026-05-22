@@ -440,6 +440,28 @@ class WifiLogAgentSystem:
             print("⚠️  No skills source available – using built-in fallback skills.")
             self.skills = get_builtin_skills()
 
+        # ACE adaptation hook. When attach_ace() has been called with an
+        # AceRunner instance, the agent injects the workflow + domain
+        # playbooks into its prompts at generation time, and can also drive
+        # post-feedback Reflector/Curator updates. Unattached -> no-op.
+        self.ace_runner = None
+
+    def attach_ace(self, runner) -> None:
+        """Wire an AceRunner into this agent so it reads/writes playbooks."""
+        self.ace_runner = runner
+        print(f"🧠 ACE attached to chatbot agent (playbooks_dir={getattr(runner, 'playbooks_dir', '?')})")
+
+    def adapt_from_feedback(self, conversation_id: str, turn_id: str) -> dict:
+        """
+        Run one Reflector + Curator pass against a voted conversation turn.
+        Returns the runner's per-turn summary (or {'status': 'no_ace'} when
+        ACE is not attached). Safe to call from any thread — playbook IO is
+        lock-guarded inside the runner.
+        """
+        if self.ace_runner is None:
+            return {"status": "no_ace"}
+        return self.ace_runner.run_one(conversation_id, turn_id)
+
     def get_skill_names(self) -> List[str]:
         return list(self.skills.keys())
 
@@ -1859,7 +1881,10 @@ class WifiLogAgentSystem:
                                 ),
                             })
 
-                        # Expert rules injection
+                        # Expert rules injection (+ ACE domain playbook for the
+                        # same skill, once per case, gated by the same set so
+                        # the token-saving omit-on-repeat behaviour applies to
+                        # both).
                         skill_obj = self.skills.get(skill_label)
                         expert_rules = getattr(skill_obj, 'expert_rules', '') if skill_obj else ''
                         if expert_rules:
@@ -1871,6 +1896,7 @@ class WifiLogAgentSystem:
                                     "For each important claim, map each rule clue to concrete log evidence\n"
                                     "and decide: supported, refuted, or uncertain.\n\n"
                                 )
+                                rules_section += self._build_ace_domain_block(skill_label)
                                 self._chat_rules_injected_skills.add(skill_label)
                             else:
                                 rules_section = (
@@ -1882,7 +1908,19 @@ class WifiLogAgentSystem:
                                 limit=self.MAX_TOOL_RESULT_CHARS_IN_MESSAGES,
                             )
                         else:
-                            content = self._clip_for_prompt(tool_result, limit=self.MAX_TOOL_RESULT_CHARS_IN_MESSAGES)
+                            # No expert rules for this skill, but ACE may still
+                            # have learned domain bullets — inject them so the
+                            # playbook isn't silently dropped on cold skills.
+                            ace_block = (
+                                self._build_ace_domain_block(skill_label)
+                                if skill_label not in self._chat_rules_injected_skills
+                                else ""
+                            )
+                            if ace_block:
+                                self._chat_rules_injected_skills.add(skill_label)
+                            content = ace_block + self._clip_for_prompt(
+                                tool_result, limit=self.MAX_TOOL_RESULT_CHARS_IN_MESSAGES
+                            )
 
                         self.conversation_history.append({
                             "role": "tool",
@@ -2197,10 +2235,57 @@ class WifiLogAgentSystem:
             + "\n".join(compact)
         )
 
+    def _build_ace_workflow_block(self) -> str:
+        """
+        Render the ACE workflow playbook + bullet-citation reminder for the
+        agent's system prompt. Returns "" when no AceRunner is attached or
+        the workflow playbook has no bullets yet (so we don't waste tokens
+        on an empty header on a cold install).
+        """
+        if self.ace_runner is None:
+            return ""
+        try:
+            text = self.ace_runner.render_workflow()
+        except Exception as e:
+            print(f"[ace] render_workflow failed: {e}")
+            return ""
+        if not text or text.strip() in ("", "(empty playbook)"):
+            return ""
+        return (
+            "\n=== ACE Workflow Playbook (orchestration rules learned from past cases) ===\n"
+            + text
+            + "\nApply the bullets above when they fit. Cite the bullet ids you used in\n"
+              "submit_final_report.applied_bullet_ids; cite ids you found misleading in\n"
+              "flagged_bullet_ids. Ignore bullets that don't apply.\n"
+              "=== End Workflow Playbook ===\n\n"
+        )
+
+    def _build_ace_domain_block(self, skill_name: str) -> str:
+        """
+        Render the ACE domain playbook for one skill. Returns "" when ACE is
+        not attached, the playbook is empty, or rendering fails.
+        """
+        if self.ace_runner is None or not skill_name:
+            return ""
+        try:
+            text = self.ace_runner.render_domain(skill_name, ensure=True)
+        except Exception as e:
+            print(f"[ace] render_domain({skill_name}) failed: {e}")
+            return ""
+        if not text or text.strip() in ("", "(empty playbook)"):
+            return ""
+        return (
+            f"=== ACE Domain Playbook for {skill_name} (lessons from past cases) ===\n"
+            + text
+            + "\n=== End Domain Playbook ===\n\n"
+        )
+
     def _build_analyze_system_prompt(self, context_section: str) -> str:
         """Build the agentic analysis system prompt used by _chat_with_tools."""
+        ace_block = self._build_ace_workflow_block()
         return (
             f"{context_section}"
+            + ace_block
                         # "You are an Elite Wi-Fi Diagnostic Detective. Your mission is to reconcile the USER'S COMPLAINT with the LOG EVIDENCE.\n\n"
                         # "=== THE INVESTIGATIVE MINDSET (MANDATORY) ===\n"
                         # "1. RECONCILE THE GAP: If the user complains a feature (like 6GHz) is 'missing' or 'not scanning', but you see it CONNECTED at the end of the log, DO NOT just say 'it is normal'.\n"
@@ -2226,7 +2311,7 @@ class WifiLogAgentSystem:
                         # "  - T-Final: Successful 6GHz Connection\n\n"
                         # "  ## Conclusion\n"
                         # "  (Confirm if this is a transient normal behavior or a real bug)"
-                        "You are an Elite Wi-Fi Diagnostic Detective. Your GOAL: Find the REAL Root Cause based on evidence.\n"
+                        + "You are an Elite Wi-Fi Diagnostic Detective. Your GOAL: Find the REAL Root Cause based on evidence.\n"
                         + "Available skills:\n"
                         + "".join(
                             f"  - {s['name']}: {s['description']}\n"
@@ -2770,6 +2855,23 @@ class WifiLogAgentSystem:
                             "markdown_summary": {
                                 "type": "string",
                                 "description": "Full Markdown report for engineers"
+                            },
+                            "applied_bullet_ids": {
+                                "type": "array",
+                                "items": {"type": "string"},
+                                "description": (
+                                    "ACE playbook bullet ids (e.g. 'conn-00042', 'agent-00007') "
+                                    "that you actually relied on for this analysis. "
+                                    "Leave empty if no playbook bullets applied."
+                                )
+                            },
+                            "flagged_bullet_ids": {
+                                "type": "array",
+                                "items": {"type": "string"},
+                                "description": (
+                                    "ACE playbook bullet ids that conflicted with the evidence "
+                                    "and should be flagged as harmful in the next reflection."
+                                )
                             }
                         },
                         "required": [

@@ -1,0 +1,13 @@
+{
+  "permissions": {
+    "allow": [
+      "Bash(where pdftoppm *)",
+      "Bash(python -c \"import pypdf; print\\(pypdf.__version__\\)\")",
+      "Bash(pdftotext -layout \"C:\\\\Users\\\\chuchar1\\\\source\\\\repos\\\\wifi_avator\\\\wireless_ce_avatar\\\\ACE.pdf\" \"C:\\\\Users\\\\chuchar1\\\\source\\\\repos\\\\wifi_avator\\\\wireless_ce_avatar\\\\ACE.txt\")",
+      "Bash(python -c \"import ast, pathlib; [ast.parse\\(pathlib.Path\\(p\\).read_text\\(encoding='utf-8'\\)\\) for p in ['services/ace/__init__.py','services/ace/prompts.py','services/ace/playbook.py','services/ace/roles.py','services/ace/pipeline.py','services/ace/cli.py']]; print\\('ok'\\)\")",
+      "Bash(python -c ' *)",
+      "Bash(set PYTHONIOENCODING=utf-8)",
+      "Bash(python _ace_trial_run.py)"
+    ]
+  }
+}

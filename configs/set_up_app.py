@@ -139,6 +139,24 @@ def set_up(socketio):
             skills=llm_helper.skills,   # reuse, no second disk read
         )
         print(f"🤖 Log Chatbot Agent loaded (model={model})")
+
+        # Attach the ACE adapter so the agent reads its evolving workflow +
+        # domain playbooks at generation time and can run Reflector/Curator
+        # updates from feedback. Safe to skip on failure — the agent keeps
+        # working without playbooks.
+        try:
+            from services.ace import AceRunner
+            from services import feedback_service
+            playbooks_root = Path(getattr(app_config, "avatarfiles_dir", ".")) / "ace_playbooks"
+            ace_runner = AceRunner(
+                llm=llm_helper,
+                playbooks_dir=playbooks_root,
+                feedback_root=feedback_service._feedback_root(),
+                skills=list(llm_helper.skills.keys()) if llm_helper.skills else None,
+            )
+            log_chatbot_agent.attach_ace(ace_runner)
+        except Exception as e:
+            print(f"⚠️  ACE attach skipped: {e}")
     else:
         log_chatbot_agent = None
         print("⚠️  Log Chatbot Agent skipped — LLM client not configured (no API key).")

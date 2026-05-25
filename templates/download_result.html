@@ -79,7 +79,7 @@
             padding: 10px 32px;
             background-color: #f8f9fa;
             border: 2px solid transparent;
-            border-radius: 8px 8px 0 0;
+            border-radius: 30px;
             font-weight: 500;
             font-size: 1.1rem;
             white-space: nowrap;
@@ -89,7 +89,7 @@
         }
         #analysisTabs .nav-item .nav-link:hover {
             background-color: #e9ecef;
-            border-bottom-color: #005A9C;
+            border-bottom-color: transparent;
             color: #005A9C;
             transform: translateY(-2px);
             text-decoration: none;
@@ -98,7 +98,7 @@
             background-color: #005A9C;
             color: white;
             border-color: transparent;
-            border-bottom-color: #003d6b;
+            border-bottom-color: transparent;
         }
         #analysisTabs .nav-item .nav-link.disabled.tab-unavailable {
             background-color: #e9ecef;
@@ -158,6 +158,29 @@
             background-color: #e7f3ff;
         }
         .ddd-action-dimmed {
+            filter: grayscale(100%);
+            opacity: 0.55;
+        }
+        .event-file-item {
+            padding: 1rem;
+            border: 2px solid #e9ecef;
+            border-radius: 8px;
+            transition: all 0.3s ease;
+            background-color: #fff;
+            cursor: pointer;
+            margin-bottom: 0.75rem;
+        }
+        .event-file-item:hover {
+            border-color: #005A9C;
+            background-color: #f8f9fa;
+            transform: translateX(5px);
+            box-shadow: 0 2px 8px rgba(0, 90, 156, 0.1);
+        }
+        .event-file-item.selected {
+            border-color: #005A9C;
+            background-color: #e7f3ff;
+        }
+        .event-action-dimmed {
             filter: grayscale(100%);
             opacity: 0.55;
         }
@@ -291,6 +314,18 @@
             white-space: pre-wrap;
             word-break: break-word;
         }
+        .analysis-file-name {
+            font-family: 'Inter';
+            font-size: 1.2rem;
+        }
+        .analysis-file-path {
+            font-family: Consolas, monospace;
+            font-size: 0.8rem;
+            color: #6b7280;
+            margin-top: 0.2rem;
+            white-space: normal;
+            word-break: break-all;
+        }
     </style>
 </head>
 <body data-latest-evt-path="{{ latest_evt_path | e if latest_evt_path else '' }}">
@@ -371,7 +406,7 @@
         {% endfor %}
     {% endfor %}
 
-    <!-- System event -->
+    <!-- DDD files -->
     {% set ddd_ns = namespace(has_items=false) %}
     {% for name, ddd_list in ddd_dict.items() %}
         {% for ddd_path in ddd_list %}
@@ -383,8 +418,26 @@
                     {% endif %}
                 {% endfor %}
             {% endif %}
-            {% if not ns.skip %}
+            {% if not ns.skip and ddd_path.lower().endswith('.bin') %}
                 {% set ddd_ns.has_items = true %}
+            {% endif %}
+        {% endfor %}
+    {% endfor %}
+
+    <!-- System event files (non-DDD) -->
+    {% set system_event_ns = namespace(has_items=false) %}
+    {% for name, ddd_list in ddd_dict.items() %}
+        {% for ddd_path in ddd_list %}
+            {% set ns = namespace(skip=false) %}
+            {% if exclude_keywords %}
+                {% for kw in exclude_keywords %}
+                    {% if kw.lower() in ddd_path.lower() %}
+                        {% set ns.skip = true %}
+                    {% endif %}
+                {% endfor %}
+            {% endif %}
+            {% if not ns.skip and not ddd_path.lower().endswith('.ddd') %}
+                {% set system_event_ns.has_items = true %}
             {% endif %}
         {% endfor %}
     {% endfor %}
@@ -418,6 +471,8 @@
         {% set active_tab = 'bt' %}
     {% elif ddd_ns.has_items %}
         {% set active_tab = 'ddd' %}
+    {% elif system_event_ns.has_items %}
+        {% set active_tab = 'system_event' %}
     {% elif fw_ns.has_items %}
         {% set active_tab = 'fw' %}
     {% elif sys_info_ns.has_items %}
@@ -433,13 +488,16 @@
                     <a class="nav-link {% if active_tab == 'wifi' %}active{% endif %} {% if not wifi_ns.has_items %}disabled tab-unavailable{% endif %}" id="wifi-tab" {% if wifi_ns.has_items %}data-toggle="tab" href="#wifi-panel"{% else %}href="#" tabindex="-1" aria-disabled="true"{% endif %} role="tab" aria-controls="wifi-panel" aria-selected="{{ 'true' if active_tab == 'wifi' else 'false' }}">WiFi</a>
                 </li>
                 <li class="nav-item">
+                    <a class="nav-link {% if active_tab == 'ddd' %}active{% endif %} {% if not ddd_ns.has_items %}disabled tab-unavailable{% endif %}" id="ddd-tab" {% if ddd_ns.has_items %}data-toggle="tab" href="#ddd-panel"{% else %}href="#" tabindex="-1" aria-disabled="true"{% endif %} role="tab" aria-controls="ddd-panel" aria-selected="{{ 'true' if active_tab == 'ddd' else 'false' }}">DDD</a>
+                </li>
+                <li class="nav-item">
                     <a class="nav-link {% if active_tab == 'bt' %}active{% endif %} {% if not bt_ns.has_items %}disabled tab-unavailable{% endif %}" id="bt-tab" {% if bt_ns.has_items %}data-toggle="tab" href="#bt-panel"{% else %}href="#" tabindex="-1" aria-disabled="true"{% endif %} role="tab" aria-controls="bt-panel" aria-selected="{{ 'true' if active_tab == 'bt' else 'false' }}">BT</a>
                 </li>
-                <li class="nav-item">
-                    <a class="nav-link {% if active_tab == 'ddd' %}active{% endif %} {% if not ddd_ns.has_items %}disabled tab-unavailable{% endif %}" id="ddd-tab" {% if ddd_ns.has_items %}data-toggle="tab" href="#ddd-panel"{% else %}href="#" tabindex="-1" aria-disabled="true"{% endif %} role="tab" aria-controls="ddd-panel" aria-selected="{{ 'true' if active_tab == 'ddd' else 'false' }}">SystemEvent</a>
+                 <li class="nav-item">
+                    <a class="nav-link {% if active_tab == 'fw' %}active{% endif %} {% if not fw_ns.has_items %}disabled tab-unavailable{% endif %}" id="fw-tab" {% if fw_ns.has_items %}data-toggle="tab" href="#fw-panel"{% else %}href="#" tabindex="-1" aria-disabled="true"{% endif %} role="tab" aria-controls="fw-panel" aria-selected="{{ 'true' if active_tab == 'fw' else 'false' }}">FW</a>
                 </li>
                 <li class="nav-item">
-                    <a class="nav-link {% if active_tab == 'fw' %}active{% endif %} {% if not fw_ns.has_items %}disabled tab-unavailable{% endif %}" id="fw-tab" {% if fw_ns.has_items %}data-toggle="tab" href="#fw-panel"{% else %}href="#" tabindex="-1" aria-disabled="true"{% endif %} role="tab" aria-controls="fw-panel" aria-selected="{{ 'true' if active_tab == 'fw' else 'false' }}">FW</a>
+                    <a class="nav-link {% if active_tab == 'system_event' %}active{% endif %} {% if not system_event_ns.has_items %}disabled tab-unavailable{% endif %}" id="system_event-tab" {% if system_event_ns.has_items %}data-toggle="tab" href="#system_event-panel"{% else %}href="#" tabindex="-1" aria-disabled="true"{% endif %} role="tab" aria-controls="system_event-panel" aria-selected="{{ 'true' if active_tab == 'system_event' else 'false' }}">SystemEvent</a>
                 </li>
                 <li class="nav-item">
                     <a class="nav-link {% if active_tab == 'sys_info' %}active{% endif %} {% if not sys_info_ns.has_items %}disabled tab-unavailable{% endif %}" id="sys_info-tab" {% if sys_info_ns.has_items %}data-toggle="tab" href="#sys_info-panel"{% else %}href="#" tabindex="-1" aria-disabled="true"{% endif %} role="tab" aria-controls="sys_info-panel" aria-selected="{{ 'true' if active_tab == 'sys_info' else 'false' }}">SystemInfo</a>
@@ -450,11 +508,11 @@
             <div class="tab-content" id="analysisTabContent">
                 <div class="tab-pane fade {% if active_tab == 'wifi' %}show active{% endif %}" id="wifi-panel" role="tabpanel" aria-labelledby="wifi-tab">
                     <div class="d-flex flex-wrap justify-content-center align-items-center mt-3 p-3" style="background: #f8f9fa; border: 1px solid #ddd; border-radius: 8px; gap: 8px;">
-                        <button id="wifi-action-analyze" class="btn btn-primary" style="font-size: 1.15rem; padding: 0.5rem 1rem;" disabled onclick="runSelectedWifiAction(this, 'parse')">
+                        <button id="wifi-action-analyze" class="btn btn-primary" style="border-radius: 30px; font-size: 1.15rem; padding: 0.5rem 1rem;" disabled onclick="runSelectedWifiAction(this, 'parse')">
                             Parse
                         </button>
-                        <button id="wifi-action-chatbot" class="btn btn-info" style="color:white; font-size: 1.15rem; padding: 0.5rem 1rem;" disabled onclick="runSelectedWifiAction(this, 'chatbot')">
-                            🤖 Chatbot Analysis
+                        <button id="wifi-action-chatbot" class="btn btn-info" style="border-radius: 30px; color:white; font-size: 1.15rem; padding: 0.5rem 1rem;" disabled onclick="runSelectedWifiAction(this, 'chatbot')">
+                            🤖 Wi-Fi Analysis Agent
                         </button>
                     </div>
                     <div class="mb-3">
@@ -471,7 +529,8 @@
                                 {% endif %}
                                 {% if not etl_path.endswith('.log') and not ns.skip %}
                                 <div class="wifi-file-item" data-etl-encoded="{{ etl_path | urlencode }}" onclick="selectWifiEtlRow(this)">
-                                    <p class="text-muted mb-0 small" style="font-family: 'Inter'; font-size: 1.2rem;" title="{{ etl_path }}">{{ etl_path.replace('\\', '/').split('/')[-1] }}</p>
+                                    <p class="text-muted mb-0 small analysis-file-name">{{ etl_path.replace('\\', '/').split('/')[-1] }}</p>
+                                    <p class="analysis-file-path mb-0">Path: {{ etl_path }}</p>
                                 </div>
                                 {% endif %}
                             {% endfor %}
@@ -494,26 +553,56 @@
                                 {% endif %}
                                 {% if not ns.skip %}
                                 <div class="bt-file-item" data-bt-encoded="{{ bt_path | urlencode }}" onclick="selectBtRow(this)">
-                                    <p class="text-muted mb-0 small" style="font-family: 'Inter'; font-size: 1.2rem;" title="{{ bt_path }}">{{ bt_path.replace('\\', '/').split('/')[-1] }}</p>
+                                    <p class="text-muted mb-0 small analysis-file-name">{{ bt_path.replace('\\', '/').split('/')[-1] }}</p>
+                                    <p class="analysis-file-path mb-0">Path: {{ bt_path }}</p>
                                 </div>
                                 {% endif %}
                             {% endfor %}
                         {% endfor %}
                     </div>
                     <div class="d-flex flex-wrap justify-content-center align-items-center mt-3 p-3" style="background: #f8f9fa; border: 1px solid #ddd; border-radius: 8px; gap: 8px;">
-                        <button id="bt-action-autofolder" class="btn btn-primary btn-sm" data-mode="AutoFolder" disabled onclick="runSelectedBtAction(this, 'AutoFolder')">
+                        <button id="bt-action-autofolder" class="btn btn-primary btn-sm" data-mode="AutoFolder" style="border-radius: 30px; color:white; font-size: 1.15rem; padding: 0.5rem 1rem;" disabled onclick="runSelectedBtAction(this, 'AutoFolder')">
                             AutoFolder
                         </button>
-                        <button id="bt-action-manual" class="btn btn-primary btn-sm" data-mode="Manual" disabled onclick="runSelectedBtAction(this, 'Manual')">
+                        <button id="bt-action-manual" class="btn btn-primary btn-sm" data-mode="Manual" style="border-radius: 30px; color:white; font-size: 1.15rem; padding: 0.5rem 1rem;" disabled onclick="runSelectedBtAction(this, 'Manual')">
                             Manual
                         </button>
-                        <button id="bt-action-llm" class="btn btn-primary btn-sm" data-mode="LLM" disabled onclick="runSelectedBtAction(this, 'LLM')">
-                            Analyze with LLM
+                        <button id="bt-action-llm" class="btn btn-primary btn-sm" data-mode="LLM" style="border-radius: 30px; color:white; font-size: 1.15rem; padding: 0.5rem 1rem;" disabled onclick="runSelectedBtAction(this, 'LLM')">
+                            🤖 Wi-Fi Analysis Agent
                         </button>
                     </div>
                 </div>
 
                 <div class="tab-pane fade {% if active_tab == 'ddd' %}show active{% endif %}" id="ddd-panel" role="tabpanel" aria-labelledby="ddd-tab">
+                    <div class="d-flex flex-wrap justify-content-center align-items-center mt-3 p-3" style="background: #f8f9fa; border: 1px solid #ddd; border-radius: 8px; gap: 8px;">
+                        <button id="ddd-action-analyze" class="btn btn-primary btn-sm" style="border-radius: 30px; font-size: 1.15rem; padding: 0.5rem 1rem;" disabled onclick="runSelectedDddAction(this, 'parse')">
+                            Parse
+                        </button>
+                    </div>
+                    <div class="mb-3">
+                        {% for name, ddd_list in ddd_dict.items() %}
+                        {% for ddd_path in ddd_list %}
+                                    {# determine if ddd_path should be skipped based on exclude_keywords #}
+                                    {% set ns = namespace(skip=false) %}
+                                    {% if exclude_keywords %}
+                                        {% for kw in exclude_keywords %}
+                                            {% if kw.lower() in ddd_path.lower() %}
+                                                {% set ns.skip = true %}
+                                            {% endif %}
+                                        {% endfor %}
+                                    {% endif %}
+                                    {% if not ns.skip and ddd_path.lower().endswith('.bin') %}
+                                <div class="ddd-file-item" data-ddd-encoded="{{ ddd_path | urlencode }}" onclick="selectDddRow(this)">
+                                    <p class="text-muted mb-0 small analysis-file-name">{{ ddd_path.replace('\\', '/').split('/')[-1] }}</p>
+                                    <p class="analysis-file-path mb-0">Path: {{ ddd_path }}</p>
+                                </div>
+                                {% endif %}
+                            {% endfor %}
+                        {% endfor %}
+                    </div>
+                </div>
+
+                <div class="tab-pane fade {% if active_tab == 'system_event' %}show active{% endif %}" id="system_event-panel" role="tabpanel" aria-labelledby="system_event-tab">
                     <!-- System Event Log Display Box -->
                     <div id="eventLogSection" class="mt-3 mb-4">
                         <div class="d-flex justify-content-between align-items-center mb-2">
@@ -538,9 +627,14 @@
                         </div>
                     </div>
 
+                    <div class="d-flex flex-wrap justify-content-center align-items-center mt-3 p-3" style="background: #f8f9fa; border: 1px solid #ddd; border-radius: 8px; gap: 8px;">
+                        <button id="event-action-analyze" class="btn btn-primary btn-sm" style="border-radius: 30px; font-size: 1.15rem; padding: 0.5rem 1rem;" disabled onclick="runSelectedEventAction(this, 'analysis')">
+                            Event Analysis
+                        </button>
+                    </div>
                     <div class="mb-3">
-                        {% for name, ddd_list in ddd_dict.items() %}
-                        {% for ddd_path in ddd_list %}
+                        {% for name, _list in ddd_dict.items() %}
+                        {% for ddd_path in _list %}
                                     {# determine if ddd_path should be skipped based on exclude_keywords #}
                                     {% set ns = namespace(skip=false) %}
                                     {% if exclude_keywords %}
@@ -550,23 +644,23 @@
                                             {% endif %}
                                         {% endfor %}
                                     {% endif %}
-                                    {% if not ns.skip %}
-                                <div class="ddd-file-item" data-ddd-encoded="{{ ddd_path | urlencode }}" onclick="selectDddRow(this)">
-                                    <p class="text-muted mb-0 small" style="font-family: 'Inter'; font-size: 1.2rem;" title="{{ ddd_path }}">{{ ddd_path.replace('\\', '/').split('/')[-1] }}</p>
+                                    {% if not ns.skip and not ddd_path.lower().endswith('.bin') %}
+                                <div class="event-file-item" data-event-encoded="{{ ddd_path | urlencode }}" onclick="selectEventRow(this)">
+                                    <p class="text-muted mb-0 small analysis-file-name">{{ ddd_path.replace('\\', '/').split('/')[-1] }}</p>
+                                    <p class="analysis-file-path mb-0">Path: {{ ddd_path }}</p>
                                 </div>
                                 {% endif %}
                             {% endfor %}
                         {% endfor %}
-                    </div>
-                    
-                    <div class="d-flex flex-wrap justify-content-center align-items-center mt-3 p-3" style="background: #f8f9fa; border: 1px solid #ddd; border-radius: 8px; gap: 8px;">
-                        <button id="ddd-action-analyze" class="btn btn-primary btn-sm" style="font-size: 1.15rem; padding: 0.5rem 1rem;" disabled onclick="runSelectedDddAction(this, 'analysis')">
-                            Event Analysis
-                        </button>
-                    </div>
+                    </div>     
                 </div>
 
                 <div class="tab-pane fade {% if active_tab == 'fw' %}show active{% endif %}" id="fw-panel" role="tabpanel" aria-labelledby="fw-tab">
+                     <div class="d-flex flex-wrap justify-content-center align-items-center mt-3 p-3" style="background: #f8f9fa; border: 1px solid #ddd; border-radius: 8px; gap: 8px;">
+                        <button id="fw-action-analyze" class="btn btn-primary btn-sm" style="border-radius: 30px; font-size: 1.15rem; padding: 0.5rem 1rem;" disabled onclick="runSelectedFwAction(this, 'parse')">
+                            Parse
+                        </button>
+                    </div>
                     <div class="mb-3">
                         {% for name, fw_list in fw_dict.items() %}
                                 {% for fw_path in fw_list %}
@@ -581,17 +675,12 @@
                                     {% endif %}
                                     {% if not ns.skip %}
                                 <div class="fw-file-item" data-fw-encoded="{{ fw_path | urlencode }}" onclick="selectFwRow(this)">
-                                    <p class="text-muted mb-0 small" style="font-family: 'Inter'; font-size: 1.2rem;" title="{{ fw_path }}">{{ fw_path.replace('\\', '/').split('/')[-1] }}</p>
+                                    <p class="text-muted mb-0 small analysis-file-name">{{ fw_path.replace('\\', '/').split('/')[-1] }}</p>
+                                    <p class="analysis-file-path mb-0">Path: {{ fw_path }}</p>
                                 </div>
                                 {% endif %}
                             {% endfor %}
                         {% endfor %}
-                    </div>
-
-                    <div class="d-flex flex-wrap justify-content-center align-items-center mt-3 p-3" style="background: #f8f9fa; border: 1px solid #ddd; border-radius: 8px; gap: 8px;">
-                        <button id="fw-action-analyze" class="btn btn-primary btn-sm" style="font-size: 1.15rem; padding: 0.5rem 1rem;" disabled onclick="runSelectedFwAction(this, 'parse')">
-                            Parse
-                        </button>
                     </div>
                 </div>
 
@@ -1318,7 +1407,7 @@
                 .then(res => res.json())
                 .then(data => {
                     if (data.success) {
-                        logBox.innerText += `✅ Ready — opening Agent Chatbot...\n`;
+                        logBox.innerText += `✅ Ready — opening Wi-Fi Analysis Agent...\n`;
                         logBox.scrollTop = logBox.scrollHeight;
 
                         // If triggered by Skills-Agent auto-match, append auto_run=analyze_all
@@ -1329,7 +1418,7 @@
                         window.location.href = targetUrl;
                     } else {
                         button.classList.remove('disabled');
-                        button.innerText = isAnalyzeAll ? '⏱️ Skills-Agent Analysis' : '🤖 Chatbot Analysis';
+                        button.innerText = isAnalyzeAll ? '⏱️ Skills-Agent Analysis' : '🤖 Wi-Fi Analysis Agent';
                         logBox.innerText += `❌ Agent prepare failed: ${data.error}\n`;
                         logBox.scrollTop = logBox.scrollHeight;
                         setWifiActionButtonsBusy(false);
@@ -1337,7 +1426,7 @@
                 })
                 .catch(err => {
                     button.classList.remove('disabled');
-                    button.innerText = isAnalyzeAll ? '⏱️ Skills-Agent Analysis' : '🤖 Chatbot Analysis';
+                    button.innerText = isAnalyzeAll ? '⏱️ Skills-Agent Analysis' : '🤖 Wi-Fi Analysis Agent';
                     logBox.innerText += `❌ Error: ${err}\n`;
                     logBox.scrollTop = logBox.scrollHeight;
                     setWifiActionButtonsBusy(false);
@@ -1624,7 +1713,7 @@
         button.innerText = '⏳ Running ETL...';
 
         const decoded = decodeURIComponent(etlPathEncoded);
-        logBox.innerText += `🤖 Starting Chatbot Analysis for: ${decoded}\n`;
+        logBox.innerText += `🤖 Starting Wi-Fi Analysis Agent for: ${decoded}\n`;
         logBox.innerText += `🛠️ Step 1: Running ETL Analysis...\n`;
         logBox.scrollTop = logBox.scrollHeight;
 
@@ -1640,7 +1729,7 @@
                 logBox.innerText += `❌ ETL Analysis Failed: ${decoded}\n`;
                 logBox.scrollTop = logBox.scrollHeight;
                 button.classList.remove('disabled');
-                button.innerText = '🤖 Chatbot Analysis';
+                button.innerText = '🤖 Wi-Fi Analysis Agent';
                 window.pendingChatbot = null;
                 setWifiActionButtonsBusy(false);
             });
@@ -1654,6 +1743,10 @@
     function getSelectedDddEtlEncoded() {
         const selectedItem = document.querySelector('.ddd-file-item.selected');
         return selectedItem ? selectedItem.dataset.dddEncoded : null;
+    }
+    function getSelectedEventEtlEncoded() {
+        const selectedItem = document.querySelector('.event-file-item.selected');
+        return selectedItem ? selectedItem.dataset.eventEncoded : null;
     }
 
     function getSelectedFwEncoded() {
@@ -1675,6 +1768,14 @@
         });
         itemEl.classList.add('selected');
         updateDddActionButtons();
+    }
+
+    function selectEventRow(itemEl) {
+        document.querySelectorAll('.event-file-item').forEach(item => {
+            item.classList.remove('selected');
+        });
+        itemEl.classList.add('selected');
+        updateEventActionButtons();
     }
 
     function selectFwRow(itemEl) {
@@ -1729,6 +1830,28 @@
 
         const hasSelection = !!selectedEncoded;
         console.log("DDD selection changed. Encoded:", selectedEncoded, "Has selection?", hasSelection);
+        if (analyzeBtn) analyzeBtn.disabled = !hasSelection;
+    }
+
+    function updateEventActionButtons() {
+        const selectedEncoded = getSelectedEventEtlEncoded();
+        const selectedText = document.getElementById('selected-event-etl-text');
+        const analyzeBtn = document.getElementById('event-action-analyze');
+        // const llmBtn = document.getElementById('event-action-llm');
+        // const chatbotBtn = document.getElementById('event-action-chatbot');
+
+        if (selectedText) {
+            selectedText.innerText = selectedEncoded ? decodeURIComponent(selectedEncoded) : 'None';
+        }
+
+        // Keep all Event action buttons locked while parser flow is still running.
+        if (window.eventActionsBusy) {
+            if (analyzeBtn) analyzeBtn.disabled = true;
+            return;
+        }
+
+        const hasSelection = !!selectedEncoded;
+        console.log("Event selection changed. Encoded:", selectedEncoded, "Has selection?", hasSelection);
         if (analyzeBtn) analyzeBtn.disabled = !hasSelection;
     }
 
@@ -1791,11 +1914,29 @@
             return;
         }
 
-        if (actionType === 'analysis') {
+        if (actionType === 'parse') {
             window.pendingDddAnalyze = true;
             setDddActionButtonsBusy(true, 'ddd-action-analyze');
-            const evtPath = decodeURIComponent(selectedEncoded);
-            eventAnalysis(button, evtPath);
+            startAnalysis(button, selectedEncoded);
+            return;
+        }
+    }
+
+    function runSelectedEventAction(button, actionType) {
+        if (window.eventActionsBusy) {
+            return;
+        }
+
+        const selectedEncoded = getSelectedEventEtlEncoded();
+        if (!selectedEncoded) {
+            alert('Please select one Event row first.');
+            return;
+        }
+
+        if (actionType === 'analysis') {
+            window.pendingEventAnalyze = true;
+            setEventActionButtonsBusy(true, 'event-action-analyze');
+            eventAnalysis(button, decodeURIComponent(selectedEncoded));
             return;
         }
     }
@@ -1824,7 +1965,7 @@
         const defaultLabels = {
             'wifi-action-analyze': 'Parse',
             'wifi-action-llm': 'Analyze with LLM',
-            'wifi-action-chatbot': '🤖 Chatbot Analysis'
+            'wifi-action-chatbot': '🤖 Wi-Fi Analysis Agent'
         };
         const buttonIds = ['wifi-action-analyze', 'wifi-action-llm', 'wifi-action-chatbot'];
         buttonIds.forEach(id => {
@@ -1853,7 +1994,7 @@
     function setDddActionButtonsBusy(isBusy, activeButtonId = null) {
         window.dddActionsBusy = !!isBusy;
         const defaultLabels = {
-            'ddd-action-analyze': 'Event Analysis'
+            'ddd-action-analyze': 'Parse'
         };
         const buttonIds = ['ddd-action-analyze'];
         buttonIds.forEach(id => {
@@ -1876,6 +2017,35 @@
 
         if (!isBusy) {
             updateDddActionButtons();
+        }
+    }
+
+    function setEventActionButtonsBusy(isBusy, activeButtonId = null) {
+        window.eventActionsBusy = !!isBusy;
+        const defaultLabels = {
+            'event-action-analyze': 'Event Analysis'
+        };
+        const buttonIds = ['event-action-analyze'];
+        buttonIds.forEach(id => {
+            const btn = document.getElementById(id);
+            if (!btn) return;
+
+            if (isBusy) {
+                btn.disabled = true;
+                if (activeButtonId && id !== activeButtonId) {
+                    btn.classList.add('event-action-dimmed');
+                } else {
+                    btn.classList.remove('event-action-dimmed');
+                }
+            } else {
+                btn.classList.remove('event-action-dimmed');
+                btn.classList.remove('disabled');
+                btn.innerText = defaultLabels[id];
+            }
+        });
+
+        if (!isBusy) {
+            updateEventActionButtons();
         }
     }
 
@@ -2022,9 +2192,26 @@
         window.pendingFwAnalyze = false;
         window.fwActionsBusy = false;
 
+        // Auto-select when only one item exists (also enables buttons)
+        const wifiItems = document.querySelectorAll('.wifi-file-item');
+        if (wifiItems.length === 1) { selectWifiEtlRow(wifiItems[0]); }
+
+        const btItems = document.querySelectorAll('.bt-file-item');
+        if (btItems.length === 1) { selectBtRow(btItems[0]); }
+
+        const dddItems = document.querySelectorAll('.ddd-file-item');
+        if (dddItems.length === 1) { selectDddRow(dddItems[0]); }
+
+        const eventItems = document.querySelectorAll('.event-file-item');
+        if (eventItems.length === 1) { selectEventRow(eventItems[0]); }
+
+        const fwItems = document.querySelectorAll('.fw-file-item');
+        if (fwItems.length === 1) { selectFwRow(fwItems[0]); }
+
         updateWifiActionButtons();
         updateBtActionButtons();
         updateDddActionButtons();
+        updateEventActionButtons();
         updateFwActionButtons();
 
         // auto-load event table
@@ -2150,8 +2337,8 @@
             alert('Error: A network error occurred during analysis.');
         })
         .finally(() => {
-            window.pendingDddAnalyze = false;
-            setDddActionButtonsBusy(false);
+            window.pendingEventAnalyze = false;
+            setEventActionButtonsBusy(false);
         });
     }
 

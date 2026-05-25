@@ -24,7 +24,7 @@ def filter_files(type, etl_files):
 
     if type == "wifi":
         for file in etl_files:
-            if 'wifi' in os.path.basename(file).lower() and 'history' not in file.lower():
+            if 'wifi' in os.path.basename(file).lower() and 'history' not in file.lower() and '.etl.' in file.lower():
                 filtered_tiles.append(file)
 
     elif type == "bt":

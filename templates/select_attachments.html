@@ -74,7 +74,7 @@
         padding: 12px 24px;
         background-color: #f8f9fa;
         border: 2px solid transparent;
-        border-radius: 8px 8px 0 0;
+        border-radius: 30px;
         cursor: pointer;
         transition: all 0.3s ease;
         font-weight: 500;
@@ -87,6 +87,13 @@
         border-bottom-color: #005A9C;
         color: #005A9C;
         transform: translateY(-2px);
+    }
+
+    .nav-hover-locked .nav-item:hover {
+        background-color: #f8f9fa;
+        border-bottom-color: transparent;
+        color: #333;
+        transform: none;
     }
     
     .nav-item.active {
@@ -171,7 +178,7 @@
     <script src="https://code.jquery.com/jquery-3.5.1.min.js"></script>
     <script src="https://stackpath.bootstrapcdn.com/bootstrap/4.5.2/js/bootstrap.bundle.min.js"></script>
 </head>
-<body>
+<body class="nav-hover-locked">
     <div class="form-container mb-4 p-0 overflow-hidden " 
         style="position: relative; border-radius: 0; margin-top: 0; ">
         <img src="{{ url_for('static', filename='nav_bar.svg') }}" 
@@ -211,100 +218,83 @@
         <div class="content-wrapper">
             <!-- Top Navigation -->
             <div class="side-nav">
-                <div class="nav-item active" data-target="description" onmouseenter="showSection('description')">
+                <div class="nav-item active" data-target="description" onclick="showSection('description')" onmouseenter="showSection('description', 'hover')">
                     Description
                 </div>
-                <div class="nav-item" data-target="ai-summary" onmouseenter="showSection('ai-summary')">
-                    AI Summary
-                </div>
-                <div class="nav-item" data-target="attachments" onmouseenter="showSection('attachments')">
-                    Choose Attachment
+                <div class="nav-item" data-target="attachments" onclick="showSection('attachments')" onmouseenter="showSection('attachments', 'hover')">
+                    Attachments
                 </div>
             </div>
             
             <!-- Content Area -->
             <div class="content-area">
-        
                 <!-- Description Section -->
                 <div id="description" class="content-section active">
-        <div class="card mb-3" style="border: 2px solid #005A9C; border-radius: 0.5rem;">
-            <div class="card-header text-white font-weight-bold py-3 px-3" style="background-color: #005A9C;">
-            </div>
-            <div class="card-body bg-light px-3" style="white-space: normal; line-height: 1.5; border-radius: 0.5rem;">
-        <span class="fw-bolder text-primary h4 d-block mt-2 mb-1">Issue Description:</span>        
-        <p>{{ case_context.description }}</p>
-
-        <p>
-            <a class="btn btn-link text-primary p-0" data-toggle="collapse" href="#envDetailCollapse" role="button" aria-expanded="false" aria-controls="envDetailCollapse">
-                Show Environment Details
-            </a>
-        </p>
-
-        <div class="collapse" id="envDetailCollapse">
-            <div class="card card-body bg-light mb-3">
-                <ul class="list-group list-group-flush">
-                {% for key, val in case_context.env_detail.items() %}
-                    <li class="list-group-item py-1 px-2">
-                    <strong>{{ key }}:</strong> {{ val }}
-                    </li>
-                {% endfor %}
-                </ul>
-            </div>
-        </div>
-
-        <p>
-            <a class="btn btn-link text-primary p-0" data-toggle="collapse" href="#commentCollapse" role="button" aria-expanded="false" aria-controls="commentCollapse">
-                Show Comments
-            </a>
-        </p>
-
-        <div class="collapse" id="commentCollapse">
-            <div class="card card-body bg-light mb-3">
-                {% set color_map = {
-                'Partner': 'primary',
-                'Agent': 'success'
-                } %}
-
-                {% if case_context.comments is sequence and case_context.comments is not string %}
-                    {% for date, commenter, context in case_context.comments %}
-                        <div class="mb-2">
-                            <span class="badge badge-{{ color_map.get(commenter, 'secondary') }}">
-                                {{ commenter }}
-                            </span>
-                            <span class="ml-2">{{ context }}</span>
-                            <small class="text-muted float-right">{{ date }}</small>
+                    <div class="card mb-3" style="border: 2px solid #005A9C; border-radius: 0.5rem;">
+                        <div class="card-header text-white font-weight-bold py-3 px-3" style="background-color: #005A9C;">
                         </div>
-                        <hr class="my-1">
-                    {% endfor %}
-                {% else %}
-                    <div class="text-dark">{{ case_context.comments }}</div>
-                {% endif %}
-            </div>
-        </div>
-            </div>
-        </div>
-                </div>
+                        <div class="card-body bg-light px-3" style="white-space: normal; line-height: 1.5; border-radius: 0.5rem;">
+                            <span class="fw-bolder text-primary h4 d-block mt-2 mb-1">AI Summary:</span>
+                            <div id="ai-analysis-content">
+                                <div class="mb-3">
+                                    <button class="btn btn-link text-primary p-0" type="button" onclick="loadAiAnalysis()">Show AI Analysis</button>
+                                </div>
+                            </div>
 
-                <!-- End Description Section -->
-                 <!-- AI Summary Section -->
-                <div id="ai-summary" class="content-section">
-        
-        <!-- AI Summary Card -->
-        <div class="card mb-3" style="border: 2px solid #005A9C; border-radius: 0.5rem;">
-            <div class="card-header text-white font-weight-bold py-3 px-3" style="background-color: #005A9C;">
-            </div>
-            <div class="card-body bg-light px-2" style="white-space: normal; line-height: 1.5; border-radius: 0.5rem;">
-                <div id="ai-analysis-content">
-                    <div class="loading-container">
-                        <div class="text-center">
-                            <button class="btn btn-primary btn-sm" type="button" onclick="loadAiAnalysis()">Start the AI Analysis</button>
+                            <span class="fw-bolder text-primary h4 d-block mt-2 mb-1">Issue Description:</span>
+                            <p>{{ case_context.description }}</p>
+
+                            <p>
+                                <a class="btn btn-link text-primary p-0" data-toggle="collapse" href="#envDetailCollapse" role="button" aria-expanded="false" aria-controls="envDetailCollapse">
+                                    Show Environment Details
+                                </a>
+                            </p>
+
+                            <div class="collapse" id="envDetailCollapse">
+                                <div class="card card-body bg-light mb-3">
+                                    <ul class="list-group list-group-flush">
+                                    {% for key, val in case_context.env_detail.items() %}
+                                        <li class="list-group-item py-1 px-2">
+                                        <strong>{{ key }}:</strong> {{ val }}
+                                        </li>
+                                    {% endfor %}
+                                    </ul>
+                                </div>
+                            </div>
+
+                            <p>
+                                <a class="btn btn-link text-primary p-0" data-toggle="collapse" href="#commentCollapse" role="button" aria-expanded="false" aria-controls="commentCollapse">
+                                    Show Comments
+                                </a>
+                            </p>
+
+                            <div class="collapse" id="commentCollapse">
+                                <div class="card card-body bg-light mb-3">
+                                    {% set color_map = {
+                                    'Partner': 'primary',
+                                    'Agent': 'success'
+                                    } %}
+
+                                    {% if case_context.comments is sequence and case_context.comments is not string %}
+                                        {% for date, commenter, context in case_context.comments %}
+                                            <div class="mb-2">
+                                                <span class="badge badge-{{ color_map.get(commenter, 'secondary') }}">
+                                                    {{ commenter }}
+                                                </span>
+                                                <span class="ml-2">{{ context }}</span>
+                                                <small class="text-muted float-right">{{ date }}</small>
+                                            </div>
+                                            <hr class="my-1">
+                                        {% endfor %}
+                                    {% else %}
+                                        <div class="text-dark">{{ case_context.comments }}</div>
+                                    {% endif %}
+                                </div>
+                            </div>
                         </div>
                     </div>
                 </div>
-            </div>
-        </div>
-                </div>
-                <!-- End AI Summary Section -->
+                <!-- End Description Section -->
         
                 <!-- Attachments Section -->
                 <div id="attachments" class="content-section">
@@ -376,7 +366,11 @@
     </div>
 
     <script>
-        function showSection(sectionId) {
+        function showSection(sectionId, trigger = 'click') {
+            if (trigger === 'hover' && !window.navHoverEnabled) {
+                return;
+            }
+
             // Hide all sections
             document.querySelectorAll('.content-section').forEach(section => {
                 section.classList.remove('active');
@@ -397,6 +391,7 @@
     <script>
         window.submitting = false;
         window.aiAnalysisLoading = false;
+        window.navHoverEnabled = false;
 
 
         function toggleSubmitButtons(enabled) {
@@ -577,6 +572,8 @@
             if (window.aiAnalysisLoading) {
                  return;
              }
+            window.navHoverEnabled = true;
+            document.body.classList.remove('nav-hover-locked');
             window.aiAnalysisLoading = true;
             toggleSubmitButtons(false);
 

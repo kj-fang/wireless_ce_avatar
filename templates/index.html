@@ -304,7 +304,7 @@
                 <div class="upload-bar" onclick="openLocalFileChooser()" onkeydown="handleUploadBarKeydown(event)" role="button" tabindex="0" aria-label="Select local file">
                     <span id="upload-file-name" class="upload-bar-file-name" style="font-family:'Inter', sans-serif; ">Click to browse (.zip, .7z, .rar, .etl, .log or .dmp files only)</span>
                     <button id="upload-bar-submit-btn" type="button" class="upload-action-btn" onclick="submitLocalUpload(event)" aria-label="Start analysis" title="Start analysis" disabled  style="background-color: rgba(226, 231, 241, 0.3)">
-                        <img src="{{ url_for('static', filename='send.svg') }}">
+                        <img src="{{ url_for('static', filename='send.svg') }}" alt="" aria-hidden="true">
                     </button>
                 </div>
                 <label id="bsod-checkbox" style="margin-top: 5px;">

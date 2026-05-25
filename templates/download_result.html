@@ -436,7 +436,7 @@
                     {% endif %}
                 {% endfor %}
             {% endif %}
-            {% if not ns.skip and not ddd_path.lower().endswith('.ddd') %}
+            {% if not ns.skip and not ddd_path.lower().endswith('.bin') %}
                 {% set system_event_ns.has_items = true %}
             {% endif %}
         {% endfor %}
@@ -568,7 +568,7 @@
                             Manual
                         </button>
                         <button id="bt-action-llm" class="btn btn-primary btn-sm" data-mode="LLM" style="border-radius: 30px; color:white; font-size: 1.15rem; padding: 0.5rem 1rem;" disabled onclick="runSelectedBtAction(this, 'LLM')">
-                            🤖 Wi-Fi Analysis Agent
+                            Analyze with LLM
                         </button>
                     </div>
                 </div>
@@ -1890,7 +1890,7 @@
         if (actionType === 'parse') {
             window.pendingWifiAnalyze = true;
             setWifiActionButtonsBusy(true, 'wifi-action-analyze');
-            startAnalysis(button, selectedEncoded);
+            startAnalysis(button, selectedEncoded, 'etl');
             return;
         }
         if (actionType === 'llm') {
@@ -1917,7 +1917,7 @@
         if (actionType === 'parse') {
             window.pendingDddAnalyze = true;
             setDddActionButtonsBusy(true, 'ddd-action-analyze');
-            startAnalysis(button, selectedEncoded);
+            startAnalysis(button, selectedEncoded, 'DDD');
             return;
         }
     }

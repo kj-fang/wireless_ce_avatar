@@ -158,26 +158,28 @@
             flex: 1;
             font-family: 'Inter', sans-serif !important;
             color: #61676f;
-            font-size: 15px;
+            font-size: 13.5px;
             padding-left: 20px;
             white-space: nowrap;
             overflow: hidden;
             text-overflow: ellipsis;
         }
         .upload-action-btn {
-            width: 37px;
+            width: 90px;
             height: 37px;
+            right: 0px;
             border: none;
-            border-radius: 50%;
+            border-radius: 30px;
             display: flex;
             align-items: center;
             justify-content: center;
+            gap: 2px;
             cursor: pointer;
             transition: transform 0.2s ease, box-shadow 0.2s ease;
             padding: 0;
-            overflow: hidden;
-            line-height: 0;
             background-color: transparent;
+            color: #474b52;
+            font-weight: 500;
         }
         .upload-action-btn img {
             width: 20px;
@@ -186,14 +188,15 @@
             object-fit: contain;
         }
         .upload-action-btn:hover:not(:disabled) {
-            background-color: #0056a0;
             transform: translateY(-1px);
+            box-shadow: 0 3px 10px rgba(0, 0, 0, 0.2);
         }
         .upload-action-btn:disabled {
             background-color: transparent;
             cursor: not-allowed;
             transform: none;
             opacity: 0.55;
+            box-shadow: none;
         }
         .upload-hint {
             margin-top: 8px;
@@ -220,10 +223,11 @@
             align-items: center;
         }
         .icon-action-btn {
-            width: 37px;
+            width: 90px;
             height: 37px;
+            color: #474b52;
             border: none;
-            border-radius: 50%;
+            border-radius: 30px;
             display: flex;
             align-items: center;
             justify-content: center;
@@ -235,11 +239,31 @@
             transform: translateY(-1px);
             box-shadow: 0 3px 10px rgba(0, 0, 0, 0.2);
         }
+        .icon-action-btn:disabled {
+            background-color: transparent;
+            color: #8a9099;
+            cursor: not-allowed;
+            transform: none;
+            box-shadow: none;
+            opacity: 0.65;
+        }
+        .icon-action-btn:disabled:hover {
+            transform: none;
+            box-shadow: none;
+        }
         .icon-action-btn.search {
             background-color: transparent;
         }
         .icon-action-btn.search.is-ready {
-            background-color: #58acece0;
+            background: linear-gradient(135deg, #7fd2ff, #58acec);
+            color: #ffffff;
+            font-weight: 700;
+            transform: translateY(-1px);
+            box-shadow: 0 8px 18px rgba(40, 135, 200, 0.35) inset;
+        }
+        .icon-action-btn.search.is-ready:hover {
+            transform: translateY(-2px);
+            box-shadow: 0 10px 22px rgba(40, 135, 200, 0.45) inset;
         }
         .icon-action-btn.etl {
             background-color: #0f8a5f;
@@ -253,7 +277,15 @@
         }
         
         .upload-action-btn.is-ready {
-            background-color: #58acece0;
+            background: linear-gradient(135deg, #7fd2ff, #58acec);
+            color: #ffffff;
+            font-weight: 700;
+            transform: translateY(-1px);
+            box-shadow: 0 8px 18px rgba(40, 135, 200, 0.35) inset;
+        }
+        .upload-action-btn.is-ready:hover {
+            transform: translateY(-2px);
+            box-shadow: 0 10px 22px rgba(40, 135, 200, 0.45) inset;
         }
     </style>
 </head>
@@ -320,8 +352,8 @@
             <div style="display: flex; gap: 0; margin-bottom: 35px; position: relative;">
                 <input type="text" class="form-control" id="case_number" name="case_number" placeholder="Enter case number here" value="" required style="border-radius: 25px; padding: 12px 150px 12px 20px; flex: 1; font-family:'Inter', sans-serif;">
                 <div class="action-icons">
-                    <button id="case-submit-btn" type="button" class="icon-action-btn search" aria-label="Submit" title="Submit" onclick="handleSubmit(event, 'submit')">
-                        <img src="{{ url_for('static', filename='send.svg') }}" alt="Submit">
+                    <button id="case-submit-btn" type="button" class="icon-action-btn search" aria-label="Submit" title="Submit" onclick="handleSubmit(event, 'submit')" disabled>
+                        Submit
                     </button>
                 </div>
             </div>
@@ -334,7 +366,7 @@
                 <div class="upload-bar" onclick="openLocalFileChooser()" onkeydown="handleUploadBarKeydown(event)" role="button" tabindex="0" aria-label="Select local file">
                     <span id="upload-file-name" class="upload-bar-file-name" style="font-family:'Inter', sans-serif; ">Click to browse (.zip, .7z, .rar, .etl, .log or .dmp files only)</span>
                     <button id="upload-bar-submit-btn" type="button" class="upload-action-btn" onclick="submitLocalUpload(event)" aria-label="Start analysis" title="Start analysis" disabled>
-                        <img src="{{ url_for('static', filename='send.svg') }}" alt="" aria-hidden="true">
+                        Submit
                     </button>
                 </div>
                 <label id="bsod-checkbox" style="margin-top: 5px;">
@@ -469,6 +501,7 @@
         }
 
         function showCaseLoading() {
+            document.getElementById('tabs-container').style.display = 'none';
             document.getElementById('form-box').style.display = 'none';
             hideAllLoadingBoxes();
             document.getElementById('case-loading-box').style.display = 'block';
@@ -598,6 +631,7 @@
             } catch (error) {
                 alert('❌ Error occurred: ' + error);
                 // Restore the original view if needed.
+                document.getElementById('tabs-container').style.display = 'block';
                 document.getElementById('form-box').style.display = 'block';
                 hideAllLoadingBoxes();
             }
@@ -624,6 +658,7 @@
                 window.location.href = data.redirect_url;
             } catch (error) {
                 alert('❌ Error occurred: ' + error.message);
+                document.getElementById('tabs-container').style.display = 'block';
                 document.getElementById('form-box').style.display = 'block';
                 hideAllLoadingBoxes();
             }
@@ -642,6 +677,7 @@
                     return;
                 }
                 const hasText = input.value.trim().length > 0;
+                caseSubmitBtn.disabled = !hasText;
                 caseSubmitBtn.classList.toggle('is-ready', hasText);
             };
 

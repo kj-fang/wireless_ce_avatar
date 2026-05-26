@@ -37,3 +37,6 @@ Thumbs.db
 # Logs
 *.log
 logs/
+
+# Assert code parser cache (auto-generated from assertLmac.h / assertUmac.h)
+assert_codes_cache.json

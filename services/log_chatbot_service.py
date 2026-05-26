@@ -24,6 +24,7 @@ from typing import Dict, List, Optional, Tuple
 from pydantic import BaseModel, Field
 
 from utils import helpers
+from utils.assert_code_utils import lookup_assert_code
 from utils.issue_time_utils import resolve_issue_time
 from utils.log_parser_preprocess import (
     extract_enabled_keywords_from_filter_file,
@@ -2505,31 +2506,6 @@ class WifiLogAgentSystem:
         """Build the agentic analysis system prompt used by _chat_with_tools."""
         return (
             f"{context_section}"
-                        # "You are an Elite Wi-Fi Diagnostic Detective. Your mission is to reconcile the USER'S COMPLAINT with the LOG EVIDENCE.\n\n"
-                        # "=== THE INVESTIGATIVE MINDSET (MANDATORY) ===\n"
-                        # "1. RECONCILE THE GAP: If the user complains a feature (like 6GHz) is 'missing' or 'not scanning', but you see it CONNECTED at the end of the log, DO NOT just say 'it is normal'.\n"
-                        # "   - You MUST explain the transition: Why was it missing initially? (e.g., Check 11d discovery, Country Code changes, or DSM/BIOS blocks at boot time).\n"
-                        # "2. HIERARCHY OF TRUTH:\n"
-                        # "   - [A] Physical Evidence (CONNECTED/RSSI) proves functional capacity.\n"
-                        # "   - [B] Regulatory Evidence (MCC/DSM) explains initial visibility/scanning restrictions.\n"
-                        # "3. IGNORE MAINTENANCE NOISE: If the link is stable, ignore RSSI adjustments (DCR-2260) and roaming decisions. They are NOT root causes.\n\n"
-                        # "=== WORKFLOW ===\n"
-                        # "Step 1: Inspect the INITIALIZATION phase (09:54:13 area) using `driver_dsm_analysis` and `connectivity_analysis` to find why the band was hidden.\n"
-                        # "Step 2: Compare this with the FINAL phase (17:47:55 area) where it is connected.\n"
-                        # "Step 3: Tell the STORY of how it went from 'Hidden' to 'Connected'.\n\n"
-                        # "Your `markdown_summary` format (REQUIRED):\n"
-                        # "  # Executive Summary\n"
-                        # "  (Answer 'Why' it was missing initially, then state that it eventually connected successfully.)\n\n"
-                        # "  | Aspect | Finding |\n"
-                        # "  |--------|---------|\n"
-                        # "  | Initial State | (Explain why it was not on scan list) |\n"
-                        # "  | Final State | (Connected to 6GHz) |\n\n"
-                        # "  ## Timeline\n"
-                        # "  - T-Initial: Boot/Init phase (Explain regulatory state)\n"
-                        # "  - T-Mid: 11d Discovery / MCC Update\n"
-                        # "  - T-Final: Successful 6GHz Connection\n\n"
-                        # "  ## Conclusion\n"
-                        # "  (Confirm if this is a transient normal behavior or a real bug)"
                         "You are an Elite Wi-Fi Diagnostic Detective. Your GOAL: Find the REAL Root Cause based on evidence.\n"
                         + "Available skills:\n"
                         + "".join(
@@ -2538,9 +2514,9 @@ class WifiLogAgentSystem:
                             if s.get('description')
                         )
                         + "\n"
-                        "PHASE 1 (SYMPTOM LOCALIZATION): \n"
-                        # "   - Identify the exact timestamp when the reported failure occurred in the logs.\n"
-                        "   - Use the most relevant one skill to analyze the logs by calling`fetch_focused_logs`.\n"
+                        "PHASE 1 (SYMPTOM LOCALIZATION):\n"
+                        "   - Call `fetch_filtered_logs` with the most relevant skill to get symptom-focused log evidence.\n"
+                        "   - Call `fetch_filtered_logs` with skill `assert_code_analysis` to scan for firmware asserts.\n"
                         "PHASE 2 (SOURCE RETROSPECTIVE - optional):\n"
                         "   - if needed, based on the analysis from PHASE1, use additional skills to get more detail from the logs.\n"
                         "PHASE 3. Call `submit_final_report` to conclude.\n\n"
@@ -2592,6 +2568,9 @@ class WifiLogAgentSystem:
 
         if tool_name == "get_final_state_snapshot":
             return self.get_final_state_snapshot(tail_lines=args.get("tail_lines", 120))
+
+        if tool_name == "lookup_assert_code":
+            return lookup_assert_code(args.get("code", ""))
 
         return f"Unknown tool: {tool_name}"
 
@@ -3072,6 +3051,38 @@ class WifiLogAgentSystem:
             {
                 "type": "function",
                 "function": {
+                    "name": "lookup_assert_code",
+                    "description": (
+                        "Look up a firmware assert/error code from the Intel Wi-Fi LMAC or UMAC header. "
+                        "Accepts the raw code exactly as it appears in the log — flag decomposition is "
+                        "handled automatically.\n"
+                        "Code formats seen in logs:\n"
+                        "  0x20xxxxxx → UMAC assert (0x20000000 CPU flag stripped automatically)\n"
+                        "  0x10xxxx   → UMAC namespace (UMAC_ASSERT_START)\n"
+                        "  0x40xxxx   → LMAC RCM sub-CPU assert\n"
+                        "  0x50xxxx   → LMAC TCM sub-CPU assert\n"
+                        "  0x00xxxx   → LMAC direct assert\n"
+                        "Call this whenever you see 'assert', 'ASSERT', or a hex code after "
+                        "'code=' in the logs."
+                    ),
+                    "parameters": {
+                        "type": "object",
+                        "properties": {
+                            "code": {
+                                "type": "string",
+                                "description": (
+                                    "Raw assert code from the log, as a hex string "
+                                    "e.g. '0x20100505' or '0x34'"
+                                )
+                            }
+                        },
+                        "required": ["code"]
+                    }
+                }
+            },
+            {
+                "type": "function",
+                "function": {
                     "name": "submit_final_report",
                     "description": (
                         "Call this tool once you have identified the root cause. "
@@ -3109,39 +3120,5 @@ class WifiLogAgentSystem:
                         ]
                     }
                 }
-            },
-            # {
-            #     "type": "function",
-            #     "function": {
-            #         "name": "query_log_detail",
-            #         "description": (
-            #             "Query context around semantic anchors in the assembled log without relying on line numbers. "
-            #             "Provide anchor_text and/or anchor_timestamp, then inspect nearby context."
-            #         ),
-            #         "parameters": {
-            #             "type": "object",
-            #             "properties": {
-            #                 "anchor_text": {
-            #                     "type": "string",
-            #                     "description": "Optional text anchor to search for (case-insensitive), e.g. 'deauth', 'roam complete'"
-            #                 },
-            #                 "anchor_timestamp": {
-            #                     "type": "string",
-            #                     "description": "Optional timestamp fragment anchor, e.g. '10/28/2025-11:25:49'"
-            #                 },
-            #                 "context_span": {
-            #                     "type": "integer",
-            #                     "description": "How many neighboring log rows to include around each match. Default 20; auto-escalates to 50 for scan/connect-style anchors.",
-            #                     "default": 20
-            #                 },
-            #                 "max_hits": {
-            #                     "type": "integer",
-            #                     "description": "Maximum matched anchor events to expand. Default 3.",
-            #                     "default": 3
-            #                 }
-            #             },
-            #             "required": []
-            #         }
-            #     }
-            # },
+            }
         ]

@@ -24,6 +24,7 @@ from typing import Dict, List, Optional, Tuple
 from pydantic import BaseModel, Field
 
 from utils import helpers
+from utils.assert_code_utils import lookup_assert_code
 from utils.log_parser_preprocess import (
     extract_enabled_keywords_from_filter_file,
     filter_log_by_keywords,
@@ -2267,6 +2268,9 @@ class WifiLogAgentSystem:
         if tool_name == "get_final_state_snapshot":
             return self.get_final_state_snapshot(tail_lines=args.get("tail_lines", 120))
 
+        if tool_name == "lookup_assert_code":
+            return lookup_assert_code(args.get("code", ""))
+
         return f"Unknown tool: {tool_name}"
 
     def _append_tool_message(self, messages: list, tool_call, content: str) -> None:
@@ -2757,6 +2761,38 @@ class WifiLogAgentSystem:
                             }
                         },
                         "required": []
+                    }
+                }
+            },
+            {
+                "type": "function",
+                "function": {
+                    "name": "lookup_assert_code",
+                    "description": (
+                        "Look up a firmware assert/error code from the Intel Wi-Fi LMAC or UMAC header. "
+                        "Accepts the raw code exactly as it appears in the log — flag decomposition is "
+                        "handled automatically.\n"
+                        "Code formats seen in logs:\n"
+                        "  0x20xxxxxx → UMAC assert (0x20000000 CPU flag stripped automatically)\n"
+                        "  0x10xxxx   → UMAC namespace (UMAC_ASSERT_START)\n"
+                        "  0x40xxxx   → LMAC RCM sub-CPU assert\n"
+                        "  0x50xxxx   → LMAC TCM sub-CPU assert\n"
+                        "  0x00xxxx   → LMAC direct assert\n"
+                        "Call this whenever you see 'assert', 'ASSERT', or a hex code after "
+                        "'code=' in the logs."
+                    ),
+                    "parameters": {
+                        "type": "object",
+                        "properties": {
+                            "code": {
+                                "type": "string",
+                                "description": (
+                                    "Raw assert code from the log, as a hex string "
+                                    "e.g. '0x20100505' or '0x34'"
+                                )
+                            }
+                        },
+                        "required": ["code"]
                     }
                 }
             },

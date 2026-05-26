@@ -49,34 +49,86 @@
 
         /* Tab Styles */
         .tabs-container {
-            width: 480px;
-            margin: 50px auto 0;
+            width: 520px;
+            max-width: calc(100% - 24px);
+            margin: 12px auto 0;
+			position: relative;
+        }
+        .chatbot-shortcut {
+            position: absolute;
+            top: 0;
+            left: calc(100% + 10px);
+        }
+        .chatbot-shortcut-link {
+            display: inline-flex;
+            align-items: center;
+            justify-content: center;
+            width: 45px;
+            height: 45px;
+            padding: 0;
+            border-radius: 50%;
+            background: linear-gradient(135deg, #0071c5, #00a3e0);
+            color: white;
+            font-weight: 600;
+            text-decoration: none;
+            transition: width 0.4s ease, box-shadow 0.2s ease, transform 0.2s ease;
+            box-shadow: 0 4px 12px rgba(0, 113, 197, 0.35);
+            overflow: hidden;
+            white-space: nowrap;
+        }
+        .chatbot-shortcut-icon {
+            flex: 0 0 auto;
+            width: 45px;
+            text-align: center;
+            line-height: 45px;
+        }
+        .chatbot-shortcut-label {
+            max-width: 0;
+            opacity: 0;
+            overflow: hidden;
+            white-space: nowrap;
+            transition: max-width 0.35s ease, opacity 0.2s ease;
+        }
+        .chatbot-shortcut-link:hover {
+            color: white;
+            text-decoration: none;
+            transform: translateY(-1px);
+            box-shadow: 0 6px 14px rgba(0, 113, 197, 0.45);
+            width: 210px;
+            border-radius: 25px;
+            padding: 0 12px 0 0;
+            justify-content: flex-start;
+        }
+        .chatbot-shortcut-link:hover .chatbot-shortcut-label {
+            max-width: 160px;
+            opacity: 1;
         }
         .tabs {
             display: flex;
-            border-bottom: 2px solid #ddd;
-            margin-bottom: 20px;
+            background-color: #cfd2d5;
+            border-radius: 30px;
+            margin-bottom: 15px;
+            padding: 2px;
+            gap: 2px;
         }
         .tab {
             flex: 1;
-            padding: 12px 20px;
+            padding: 5px 10px;
             text-align: center;
             cursor: pointer;
-            background-color: #f8f9fa;
-            border: none;
-            border-bottom: 3px solid transparent;
-            transition: all 0.3s ease;
-            border-radius: 5px;
+            background-color: #cfd2d5;
+            border: transparent;
+            border-radius: 30px;
             font-weight: 500;
-            color: #666;
+            color: #959595;
         }
         .tab:hover {
-            background-color: #e9ecef;
-            color: #1177c0;
+            background-color: #cfd2d5;
+            color: #343434;
         }
         .tab.active {
-            background-color: #1177c0;
-            color: white;
+            background-color: #fcfcfc;
+            color: rgba(0, 0, 0, 0.676);
         }
         .tab-content {
             display: none;
@@ -86,63 +138,71 @@
         }
         
         /* File Upload Styles */
-        .upload-zone {
-            border: 2px dashed #0068B6;
-            border-radius: 12px;
-            padding: 10px 40px;
-            text-align: center;
-            background-color: #f8f9fa;
-            cursor: pointer;
-            transition: all 0.3s ease;
-        }
-        .upload-zone:hover {
-            background-color: #e3f2fd;
-            border-color: #0056a0;
-        }
-        .upload-zone.drag-over {
-            background-color: #bbdefb;
-            border-color: #0056a0;
-        }
-        .file-list {
-            margin-top: 20px;
-        }
-        .file-item {
-            display: flex;
-            justify-content: space-between;
-            align-items: center;
-            padding: 10px 15px;
-            background-color: #f8f9fa;
-            border-radius: 8px;
-            margin-bottom: 8px;
-        }
-        .file-item-info {
+        .upload-bar {
+            margin-top: 8px;
             display: flex;
             align-items: center;
-            gap: 10px;
-        }
-        .file-remove {
-            cursor: pointer;
-            color: #dc3545;
-            font-weight: bold;
-        }
-        .upload-submit-btn {
+            gap: 6px;
             width: 100%;
-            padding: 12px;
-            margin-top: 20px;
-            background-color: #0068B6;
-            color: white;
-            border: none;
+            border: 1px solid #cfd8e3;
             border-radius: 25px;
-            font-weight: 600;
+            background-color: #ffffff;
             cursor: pointer;
-            transition: all 0.3s ease;
+            transition: border-color 0.2s ease, box-shadow 0.2s ease;
+            font-family: 'Inter', sans-serif;
         }
-        .upload-submit-btn:hover {
-            background-color: #0056a0;
+        .upload-bar:hover {
+            border-color: #9fb3c8;
+            box-shadow: 0 2px 8px rgba(17, 119, 192, 0.12);
         }
-        .upload-submit-btn:disabled {
-            background-color: #ccc;
+        .upload-bar-file-name {
+            flex: 1;
+            font-family: 'Inter', sans-serif !important;
+            color: #61676f;
+            font-size: 14.5px;
+            padding-left: 20px;
+            white-space: nowrap;
+            overflow: hidden;
+            text-overflow: ellipsis;
+        }
+        .upload-action-btn {
+            width: 90px;
+            height: 37px;
+            right: 0px;
+            border: none;
+            border-radius: 30px;
+            display: flex;
+            align-items: center;
+            justify-content: center;
+            gap: 2px;
+            cursor: pointer;
+            transition: transform 0.2s ease, box-shadow 0.2s ease;
+            padding: 0;
+            background-color: transparent;
+            color: #474b52;
+            font-weight: 500;
+        }
+        .upload-action-btn img {
+            width: 20px;
+            height: 20px;
+            display: block;
+            object-fit: contain;
+        }
+        .upload-action-btn:hover:not(:disabled) {
+            transform: translateY(-1px);
+            box-shadow: 0 3px 10px rgba(0, 0, 0, 0.2);
+        }
+        .upload-action-btn:disabled {
+            background-color: transparent;
             cursor: not-allowed;
+            transform: none;
+            opacity: 0.55;
+            box-shadow: none;
+        }
+        .upload-hint {
+            margin-top: 8px;
+            color: #666;
+            font-size: 15px;
         }
         .action-type-select {
             width: 160px !important;
@@ -150,12 +210,89 @@
             max-width: 160px !important;
             white-space: nowrap;
             overflow: hidden;
-            text-overflow: ellipsis;            text-align: center;
-            text-align-last: center;        }
+            text-overflow: ellipsis;            
+            text-align: center;
+            text-align-last: center;        
+        }
+        .action-icons {
+            position: absolute;
+            right: 0px;
+            top: 50%;
+            transform: translateY(-50%);
+            display: flex;
+            gap: 2px;
+            align-items: center;
+        }
+        .icon-action-btn {
+            width: 90px;
+            height: 37px;
+            color: #474b52;
+            border: none;
+            border-radius: 30px;
+            display: flex;
+            align-items: center;
+            justify-content: center;
+            cursor: pointer;
+            transition: transform 0.2s ease, box-shadow 0.2s ease;
+            padding: 0;
+        }
+        .icon-action-btn:hover {
+            transform: translateY(-1px);
+            box-shadow: 0 3px 10px rgba(0, 0, 0, 0.2);
+        }
+        .icon-action-btn:disabled {
+            background-color: transparent;
+            color: #8a9099;
+            cursor: not-allowed;
+            transform: none;
+            box-shadow: none;
+            opacity: 0.65;
+        }
+        .icon-action-btn:disabled:hover {
+            transform: none;
+            box-shadow: none;
+        }
+        .icon-action-btn.search {
+            background-color: transparent;
+        }
+        .icon-action-btn.search.is-ready {
+            background: linear-gradient(135deg, #7fd2ff, #58acec);
+            color: #ffffff;
+            font-weight: 700;
+            transform: translateY(-1px);
+            box-shadow: 0 8px 18px rgba(40, 135, 200, 0.35) inset;
+        }
+        .icon-action-btn.search.is-ready:hover {
+            transform: translateY(-2px);
+            box-shadow: 0 10px 22px rgba(40, 135, 200, 0.45) inset;
+        }
+        .icon-action-btn.etl {
+            background-color: #0f8a5f;
+        }
+        .icon-action-btn.etl-llm {
+            background-color: #5b4fcf;
+        }
+        .icon-action-btn img {
+            width: 20px;
+            height: 20px;
+        }
+        
+        .upload-action-btn.is-ready {
+            background: linear-gradient(135deg, #7fd2ff, #58acec);
+            color: #ffffff;
+            font-weight: 700;
+            transform: translateY(-1px);
+            box-shadow: 0 8px 18px rgba(40, 135, 200, 0.35) inset;
+        }
+        .upload-action-btn.is-ready:hover {
+            transform: translateY(-2px);
+            box-shadow: 0 10px 22px rgba(40, 135, 200, 0.45) inset;
+        }
     </style>
 </head>
 
-<body>
+
+
     <!-- SVG Banner -->
     <div class="form-container mb-4 p-0 overflow-hidden" 
         style="border-radius: 0; margin-top: 0; box-shadow: 0 4px 6px rgba(0, 0, 0, 0.3);">
@@ -176,6 +313,32 @@
         </div>
     </div>
 
+    <!-- 🤖 Log Chatbot shortcut -->
+    <div id="chatbot-shortcut-links" style="width: 70%; margin: 30px auto 14px; background: transparent; padding: 0; text-align: center; display: flex; justify-content: center; gap: 10px; flex-wrap: wrap;">
+            <a href="/log_chatbot/" style="
+                display: inline-flex; align-items: center; gap: 5px;
+                background: #fcfcfc; border: 2px solid transparent;
+                color: rgba(102, 107, 117, 0.848); text-decoration: none;
+                padding: 2px 10px; border-radius: 18px;
+                font-size: 0.78rem; font-weight: 600;
+                box-shadow: 0 1px 6px rgba(0,113,197,0.16);
+                transition: opacity 0.2s;"
+                onmouseover="this.style.opacity='0.85'" onmouseout="this.style.opacity='1'">
+                🤖 Wi-Fi Analysis Agent
+            </a>
+            <a href="/nw_analysis/" style="
+                display: inline-flex; align-items: center; gap: 5px;
+                background: #fcfcfc; border: 2px solid transparent;
+                color: rgba(102, 107, 117, 0.848); text-decoration: none;
+                padding: 2px 10px; border-radius: 18px;
+                font-size: 0.78rem; font-weight: 600;
+                box-shadow: 0 1px 6px rgba(0,113,197,0.16);
+                transition: opacity 0.2s;"
+                onmouseover="this.style.opacity='0.85'" onmouseout="this.style.opacity='1'">
+                🌐 Network Experience
+            </a>
+    </div>
+
     <!-- Tabs Container -->
     <div class="tabs-container" id="tabs-container">
         <div class="tabs">
@@ -187,16 +350,13 @@
         <div id="case-number-tab" class="tab-content active">
             <div id="form-box">
         <form id="mainForm" method="post" onsubmit="handleSubmit(event)">
-            <div style="display: flex; gap: 0; margin-bottom: 15px; position: relative;">
-                <select id="action_type" class="form-control action-type-select" style="border-radius: 25px 0 0 25px; padding: 8px 15px 8px 10px; border-right: none; background-color: #0068B6 ; color: rgb(255, 255, 255); font-weight: bold;">
-                    <option value="submit" style="background-color: white; color: black;">Submit</option>
-                    <option value="etl" style="background-color: white; color: black;">ETL Parse</option>
-                    <option value="etl_llm" style="background-color: white; color: black;">ETL Parse with LLM</option>
-                </select>
-                <input type="text" class="form-control" id="case_number" name="case_number" placeholder="Enter case number here" value="" required style="border-radius: 0 25px 25px 0; padding: 12px 50px 12px 20px; flex: 1;">
-                <button type="submit" class="btn btn-primary" aria-label="Search" style="position: absolute; right: 5px; top: 50%; transform: translateY(-50%); border-radius: 20px; padding: 6px 12px; font-size: 14px; background-color: transparent; border-color: transparent;">
-                    <img src="../static/Magnifying_glass.svg" alt="Search" style="width: 20px; height: 20px;">
-                </button>
+            <div style="display: flex; gap: 0; margin-bottom: 35px; position: relative;">
+                <input type="text" class="form-control" id="case_number" name="case_number" placeholder="Enter case number here (e.g., 00997200)" value="" required style="border-radius: 25px; padding: 12px 150px 12px 20px; flex: 1; font-family:'Inter', sans-serif;">
+                <div class="action-icons">
+                    <button id="case-submit-btn" type="button" class="icon-action-btn search" aria-label="Submit" title="Submit" onclick="handleSubmit(event, 'submit')" disabled>
+                        Submit
+                    </button>
+                </div>
             </div>
         </form>
             </div>
@@ -204,25 +364,16 @@
 
         <!-- Tab 2: Local File Upload -->
         <div id="local-upload-tab" class="tab-content">
-                <div class="upload-zone" id="upload-zone" onclick="openLocalFileChooser()">
-                    <div style="pointer-events: none;">
-                        <svg xmlns="http://www.w3.org/2000/svg" width="32" height="32" fill="#0068B6" viewBox="0 0 16 16" style="margin-bottom: 10px;">
-                            <path d="M.5 9.9a.5.5 0 0 1 .5.5v2.5a1 1 0 0 0 1 1h12a1 1 0 0 0 1-1v-2.5a.5.5 0 0 1 1 0v2.5a2 2 0 0 1-2 2H2a2 2 0 0 1-2-2v-2.5a.5.5 0 0 1 .5-.5z"/>
-                            <path d="M7.646 1.146a.5.5 0 0 1 .708 0l3 3a.5.5 0 0 1-.708.708L8.5 2.707V11.5a.5.5 0 0 1-1 0V2.707L5.354 4.854a.5.5 0 1 1-.708-.708l3-3z"/>
-                        </svg>
-                        <h5 style="color: #0068B6; margin-bottom: 10px;">Click to browse</h5>
-                        <p style="color: #666; font-size: 14px; margin: 0;">Supported: .zip, .7z, .rar, .etl, .log or .dmp files</p>
-                    </div>
+                <div class="upload-bar" onclick="openLocalFileChooser()" onkeydown="handleUploadBarKeydown(event)" role="button" tabindex="0" aria-label="Select local file">
+                    <span id="upload-file-name" class="upload-bar-file-name" style="font-family:'Inter', sans-serif; ">Click to browse (.zip, .7z, .rar, .etl, .log or .dmp files only)</span>
+                    <button id="upload-bar-submit-btn" type="button" class="upload-action-btn" onclick="submitLocalUpload(event)" aria-label="Start analysis" title="Start analysis" disabled>
+                        Submit
+                    </button>
                 </div>
-
-                <div id="file-list" class="file-list"></div>
                 <label id="bsod-checkbox" style="margin-top: 5px;">
                     <input type="checkbox" id="bsod-checkbox-input">
                     <span style="color: #666; font-size: 14px;">This is a BSOD dump</span>
                 </label>
-                <button id="upload-submit-btn" class="upload-submit-btn" onclick="submitLocalUpload()" disabled>
-                    Start Analysis
-                </button>
             </div>
     </div>
 
@@ -273,52 +424,6 @@
     </div>
 
 
-    <!-- 🤖 Log Chatbot shortcut - Floating Action Button -->
-    <div style="position: fixed; bottom: 30px; right: 30px; background: transparent; padding: 0; text-align: center; z-index: 1000;">
-        <a href="/log_chatbot/" style="
-            display: inline-flex; align-items: center; justify-content: center;
-            width: 70px; height: 70px;
-            background: linear-gradient(135deg,#0071c5,#00a3e0);
-            color: white; text-decoration: none;
-            border-radius: 50%;
-            font-size: 1.8rem;
-            box-shadow: 0 4px 12px rgba(0,113,197,0.4);
-            transition: all 0.3s ease;"
-            onmouseover="this.style.transform='scale(1.1)'; this.style.boxShadow='0 6px 16px rgba(0,113,197,0.6)';" 
-            onmouseout="this.style.transform='scale(1)'; this.style.boxShadow='0 4px 12px rgba(0,113,197,0.4)';"
-            title="Wi-Fi Log Chatbot"
-            aria-label="Wi-Fi Log Chatbot">
-            📡
-        </a>
-    </div>  
-
-    
-    <!-- 🤖 Log Chatbot shortcut -->
-    <div style="width: 480px; margin: 20px auto 0; background: transparent; padding: 16px 24px; text-align: center; display: flex; justify-content: center; gap: 12px; flex-wrap: wrap;">
-        <a href="/log_chatbot/" style="
-            display: inline-flex; align-items: center; gap: 7px;
-            background: linear-gradient(135deg,#0071c5,#00a3e0);
-            color: white; text-decoration: none;
-            padding: 9px 22px; border-radius: 25px;
-            font-size: 0.85rem; font-weight: 600;
-            box-shadow: 0 2px 8px rgba(0,113,197,0.3);
-            transition: opacity 0.2s;"
-            onmouseover="this.style.opacity='0.85'" onmouseout="this.style.opacity='1'">
-            📡 Wi-Fi Log Chatbot
-        </a>
-        <a href="/nw_analysis/" style="
-            display: inline-flex; align-items: center; gap: 7px;
-            background: linear-gradient(135deg,#0071c5,#00a3e0);
-            color: white; text-decoration: none;
-            padding: 9px 22px; border-radius: 25px;
-            font-size: 0.85rem; font-weight: 600;
-            box-shadow: 0 2px 8px rgba(0,113,197,0.3);
-            transition: opacity 0.2s;"
-            onmouseover="this.style.opacity='0.85'" onmouseout="this.style.opacity='1'">
-            🌐 Network Experience
-        </a>
-    </div>
-
     <div class="mb-5"></div>
 
     <!-- Bootstrap JS -->
@@ -350,9 +455,18 @@
             }
         }
 
+        function setChatbotShortcutsVisibility(isVisible) {
+            const shortcutContainer = document.getElementById('chatbot-shortcut-links');
+            if (!shortcutContainer) {
+                return;
+            }
+            shortcutContainer.style.display = isVisible ? 'flex' : 'none';
+        }
+
         function hideAllLoadingBoxes() {
             document.getElementById('case-loading-box').style.display = 'none';
             document.getElementById('upload-loading-box').style.display = 'none';
+            setChatbotShortcutsVisibility(true);
         }
 
         function showLogMessage() {
@@ -388,9 +502,11 @@
         }
 
         function showCaseLoading() {
+            document.getElementById('tabs-container').style.display = 'none';
             document.getElementById('form-box').style.display = 'none';
             hideAllLoadingBoxes();
             document.getElementById('case-loading-box').style.display = 'block';
+            setChatbotShortcutsVisibility(false);
             startLogs('case-log-messages', CASE_MESSAGES);
         }
 
@@ -398,6 +514,7 @@
             document.getElementById('tabs-container').style.display = 'none';
             hideAllLoadingBoxes();
             document.getElementById('upload-loading-box').style.display = 'block';
+            setChatbotShortcutsVisibility(false);
             const logArea = document.getElementById('upload-log-messages');
             if (logArea) {
                 logArea.innerHTML = '- Validating the files....';
@@ -464,10 +581,10 @@
         }
 
         // Handle form submission based on dropdown selection
-        async function handleSubmit(event) {
+        async function handleSubmit(event, forcedAction) {
             event.preventDefault();
-            
-            const actionType = document.getElementById('action_type').value;
+
+            const actionType = forcedAction || 'submit';
             const caseNumber = document.getElementById('case_number').value.trim();
 
             if (!caseNumber) {
@@ -515,6 +632,7 @@
             } catch (error) {
                 alert('❌ Error occurred: ' + error);
                 // Restore the original view if needed.
+                document.getElementById('tabs-container').style.display = 'block';
                 document.getElementById('form-box').style.display = 'block';
                 hideAllLoadingBoxes();
             }
@@ -541,6 +659,7 @@
                 window.location.href = data.redirect_url;
             } catch (error) {
                 alert('❌ Error occurred: ' + error.message);
+                document.getElementById('tabs-container').style.display = 'block';
                 document.getElementById('form-box').style.display = 'block';
                 hideAllLoadingBoxes();
             }
@@ -549,9 +668,19 @@
         // Auto-fill from clipboard and zero-padding
         document.addEventListener("DOMContentLoaded", () => {
             const input = document.getElementById("case_number");
+            const caseSubmitBtn = document.getElementById('case-submit-btn');
             if (!input) {
                 return;
             }
+
+            const updateCaseSubmitButtonColor = () => {
+                if (!caseSubmitBtn) {
+                    return;
+                }
+                const hasText = input.value.trim().length > 0;
+                caseSubmitBtn.disabled = !hasText;
+                caseSubmitBtn.classList.toggle('is-ready', hasText);
+            };
 
             // Auto-fill from clipboard
             const autoFillFromClipboard = async () => {
@@ -563,6 +692,7 @@
                         // Auto-pad to 8 digits
                         input.value = trimmed.padStart(8, '0');
                     }
+                    updateCaseSubmitButtonColor();
                 } catch (err) {
                     // Silently fail - clipboard access denied or not available
                 }
@@ -585,6 +715,7 @@
                 } else {
                     input.value = trimmed;
                 }
+                updateCaseSubmitButtonColor();
             });
 
             // Add zero-padding on blur
@@ -593,6 +724,7 @@
                 if (value && /^\d{1,8}$/.test(value)) {
                     input.value = value.padStart(8, '0');
                 }
+                updateCaseSubmitButtonColor();
             });
 
             // Format on Enter key
@@ -602,8 +734,12 @@
                     if (value && /^\d{1,8}$/.test(value)) {
                         input.value = value.padStart(8, '0');
                     }
+                    updateCaseSubmitButtonColor();
                 }
             });
+
+            input.addEventListener('input', updateCaseSubmitButtonColor);
+            updateCaseSubmitButtonColor();
         });
         // Tab Switching
         function switchTab(tabName) {
@@ -630,6 +766,12 @@
         // File Upload Handling
         let selectedFiles = [];
 
+        function handleUploadBarKeydown(event) {
+            if (event.key === 'Enter' || event.key === ' ') {
+                event.preventDefault();
+                openLocalFileChooser();
+            }
+        }
         function fileNameFromPath(pathValue) {
             const normalized = String(pathValue || '').replace(/\\/g, '/');
             const parts = normalized.split('/');
@@ -658,31 +800,26 @@
         }
 
         function updateFileList() {
-            const fileList = document.getElementById('file-list');
-            const submitBtn = document.getElementById('upload-submit-btn');
+            const fileNameLabel = document.getElementById('upload-file-name');
+            const submitBtn = document.getElementById('upload-bar-submit-btn');
             
-            fileList.innerHTML = '';
             
             if (selectedFiles.length === 0) {
+                if (fileNameLabel) {
+                    fileNameLabel.textContent = 'No file selected';
+                }
                 submitBtn.disabled = true;
+                submitBtn.classList.remove('is-ready');
                 return;
             }
             
             submitBtn.disabled = false;
+            submitBtn.classList.add('is-ready');
             
-            selectedFiles.forEach((item, index) => {
-                const file = item.file;
-                const fileItem = document.createElement('div');
-                fileItem.className = 'file-item';
-                fileItem.innerHTML = `
-                    <div class="file-item-info">
-                        <span>📄</span>
-                        <span style="font-weight: 500;">${escapeHtml(file.name)}</span>
-                    </div>
-                    <span class="file-remove" onclick="removeFile(${index})">✕</span>
-                `;
-                fileList.appendChild(fileItem);
-            });
+            const selectedName = selectedFiles[0]?.file?.name || '1 file selected';
+            if (fileNameLabel) {
+                fileNameLabel.textContent = selectedName;
+            }
         }
 
         function removeFile(index) {
@@ -695,52 +832,12 @@
             if (bytes < 1024 * 1024) return (bytes / 1024).toFixed(1) + ' KB';
             return (bytes / (1024 * 1024)).toFixed(1) + ' MB';
         }
-
-        function escapeHtml(text) {
-            const div = document.createElement('div');
-            div.textContent = text;
-            return div.innerHTML;
-        }
-
-        // Prevent browser from navigating when files are dropped anywhere on the page
-        document.addEventListener('dragover', (e) => e.preventDefault());
-        document.addEventListener('drop', (e) => e.preventDefault());
-
-        // Drag and Drop
-        const uploadZone = document.getElementById('upload-zone');
-        let dragCounter = 0;
-
-        uploadZone.addEventListener('dragenter', (e) => {
-            e.preventDefault();
-            e.stopPropagation();
-            dragCounter++;
-            uploadZone.classList.add('drag-over');
-        });
-
-        uploadZone.addEventListener('dragover', (e) => {
-            e.preventDefault();
-            e.stopPropagation();
-            e.dataTransfer.dropEffect = 'copy';
-        });
-
-        uploadZone.addEventListener('dragleave', (e) => {
-            e.stopPropagation();
-            dragCounter--;
-            if (dragCounter === 0) {
-                uploadZone.classList.remove('drag-over');
+// Submit Local Upload
+        async function submitLocalUpload(event) {
+            if (event) {
+                event.stopPropagation();
             }
-        });
 
-        uploadZone.addEventListener('drop', (e) => {
-            e.preventDefault();
-            e.stopPropagation();
-            dragCounter = 0;
-            uploadZone.classList.remove('drag-over');
-            alert('⚠️ Drag and drop is disabled in native-path mode. Please click to open the native file picker.');
-        });
-
-        // Submit Local Upload
-        async function submitLocalUpload() {
             if (selectedFiles.length === 0) {
                 alert('⚠️ Please select at least one file!');
                 return;

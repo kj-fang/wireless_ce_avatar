@@ -78,6 +78,7 @@
         cursor: pointer;
         transition: all 0.3s ease;
         font-weight: 500;
+        font-size: 1.1rem;
         color: #333;
         border-bottom: 3px solid transparent;
     }
@@ -141,6 +142,16 @@
         opacity: 0.65;
         box-shadow: none !important;
     }
+    .ai-analysis-btn {
+    background-color: #005A9C;
+    color: #ffffff !important;
+    border-radius: 30px;
+    padding: 6px 16px !important;
+    }
+    .ai-analysis-btn:hover {
+    color: #ffffff !important;
+    }
+
 
     html,
     body {
@@ -219,10 +230,10 @@
             <!-- Top Navigation -->
             <div class="side-nav">
                 <div class="nav-item active" data-target="description" onclick="showSection('description')" onmouseenter="showSection('description', 'hover')">
-                    Description
+                    Click to Show Issue Content
                 </div>
                 <div class="nav-item" data-target="attachments" onclick="showSection('attachments')" onmouseenter="showSection('attachments', 'hover')">
-                    Attachments
+                    Click to Choose Attachments
                 </div>
             </div>
             
@@ -234,14 +245,14 @@
                         <div class="card-header text-white font-weight-bold py-3 px-3" style="background-color: #005A9C;">
                         </div>
                         <div class="card-body bg-light px-3" style="white-space: normal; line-height: 1.5; border-radius: 0.5rem;">
-                            <span class="fw-bolder text-primary h4 d-block mt-2 mb-1">AI Summary:</span>
+                            <span class="fw-bolder h4 d-block mt-2 mb-1" style="color: black;">AI Summary:</span>
                             <div id="ai-analysis-content">
                                 <div class="mb-3">
-                                    <button class="btn btn-link text-primary p-0" type="button" onclick="loadAiAnalysis()">Show AI Analysis</button>
+                                    <button class="btn btn-link ai-analysis-btn" type="button" style="border-radius: 30px; background-color: #007bff; color: white;" onclick="loadAiAnalysis()">Click to Show AI Analysis</button>
                                 </div>
                             </div>
 
-                            <span class="fw-bolder text-primary h4 d-block mt-2 mb-1">Issue Description:</span>
+                            <span class="fw-bolder h4 d-block mt-2 mb-1" style="color: black;">Issue Description:</span>
                             <p>{{ case_context.description }}</p>
 
                             <p>
@@ -302,7 +313,6 @@
             <div class="card-header text-white font-weight-bold py-3 px-3" style="background-color: #005A9C;">
             </div>
             <div class="card-body bg-light px-3" style="white-space: normal; line-height: 1.5; border-radius: 0.5rem;">
-         <span class="fw-bolder text-primary h4 d-block mb-3">Attachments:</span>
          
         <form method="post">
             <div class="mb-3 attachments-control-row" style="gap: 10px;">
@@ -341,7 +351,7 @@
                 {% for sublist in case_context.attachment_list %}
                     {% if sublist|length > 2 %}
                         <div class="form-check mb-3 file-item" onclick="toggleCheck('file{{ loop.index0 }}')">
-                            <input type="checkbox" class="form-check-input" name="selected_files" value="{{ sublist[0] }}" id="file{{ loop.index0 }}" onchange="updateFileItemStyle('file{{ loop.index0 }}')">
+                            <input type="checkbox" class="form-check-input" name="selected_files" value="{{ sublist[0] }}" id="file{{ loop.index0 }}" data-sort-datetime="{{ sublist[2][0].strftime('%Y-%m-%dT%H:%M:%S') if sublist[2][0] and sublist[2][0] is not string else '' }}" onchange="updateFileItemStyle('file{{ loop.index0 }}')">
                             <label class="form-check-label font-weight-bold" for="file{{ loop.index0 }}" style="cursor: pointer;" onclick="event.preventDefault()">
                                 {{ sublist[0] }}
                                 <span class="text-primary font-weight-normal">
@@ -456,9 +466,37 @@
         
         // Initialize file item styles on page load
         document.addEventListener('DOMContentLoaded', function() {
-            document.querySelectorAll('.file-item input[type="checkbox"]').forEach(checkbox => {
+            const checkboxes = Array.from(document.querySelectorAll('.file-item input[type="checkbox"]'));
+            checkboxes.forEach(checkbox => {
                 updateFileItemStyle(checkbox.id);
             });
+
+            if (!checkboxes.length) {
+                return;
+            }
+
+            let latestCheckbox = null;
+            let latestTimestamp = Number.NEGATIVE_INFINITY;
+
+            checkboxes.forEach((checkbox) => {
+                const dt = (checkbox.dataset.sortDatetime || '').trim();
+                if (!dt) {
+                    return;
+                }
+
+                const ts = Date.parse(dt);
+                if (!Number.isNaN(ts) && ts > latestTimestamp) {
+                    latestTimestamp = ts;
+                    latestCheckbox = checkbox;
+                }
+            });
+
+            const targetCheckbox = latestCheckbox || checkboxes[0];
+            if (targetCheckbox && !targetCheckbox.checked) {
+                targetCheckbox.checked = true;
+                updateFileItemStyle(targetCheckbox.id);
+                updateSubmitButtons();
+            }
         });
 
         function renderAiAnalysis(data) {

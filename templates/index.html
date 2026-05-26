@@ -177,6 +177,7 @@
             padding: 0;
             overflow: hidden;
             line-height: 0;
+            background-color: transparent;
         }
         .upload-action-btn img {
             width: 20px;
@@ -189,9 +190,10 @@
             transform: translateY(-1px);
         }
         .upload-action-btn:disabled {
-            background-color: #c4c4c4;
+            background-color: transparent;
             cursor: not-allowed;
             transform: none;
+            opacity: 0.55;
         }
         .upload-hint {
             margin-top: 8px;
@@ -234,7 +236,10 @@
             box-shadow: 0 3px 10px rgba(0, 0, 0, 0.2);
         }
         .icon-action-btn.search {
-            background-color: #0068B6;
+            background-color: transparent;
+        }
+        .icon-action-btn.search.is-ready {
+            background-color: #58acece0;
         }
         .icon-action-btn.etl {
             background-color: #0f8a5f;
@@ -246,10 +251,15 @@
             width: 20px;
             height: 20px;
         }
+        
+        .upload-action-btn.is-ready {
+            background-color: #58acece0;
+        }
     </style>
 </head>
 
-<body>
+
+
     <!-- SVG Banner -->
     <div class="form-container mb-4 p-0 overflow-hidden" 
         style="border-radius: 0; margin-top: 0; box-shadow: 0 4px 6px rgba(0, 0, 0, 0.3);">
@@ -270,6 +280,32 @@
         </div>
     </div>
 
+    <!-- 🤖 Log Chatbot shortcut -->
+    <div id="chatbot-shortcut-links" style="width: 70%; margin: 30px auto 14px; background: transparent; padding: 0; text-align: center; display: flex; justify-content: center; gap: 10px; flex-wrap: wrap;">
+            <a href="/log_chatbot/" style="
+                display: inline-flex; align-items: center; gap: 7px;
+                background: #fcfcfc; border: 2px solid transparent;
+                color: rgba(102, 107, 117, 0.848); text-decoration: none;
+                padding: 4px 13px; border-radius: 25px;
+                font-size: 0.85rem; font-weight: 600;
+                box-shadow: 0 2px 8px rgba(0,113,197,0.18);
+                transition: opacity 0.2s;"
+                onmouseover="this.style.opacity='0.85'" onmouseout="this.style.opacity='1'">
+                🤖 Wi-Fi Analysis Agent
+            </a>
+            <a href="/nw_analysis/" style="
+                display: inline-flex; align-items: center; gap: 7px;
+                background: #fcfcfc; border: 2px solid transparent;
+                color: rgba(102, 107, 117, 0.848); text-decoration: none;
+                padding: 4px 13px; border-radius: 25px;
+                font-size: 0.85rem; font-weight: 600;
+                box-shadow: 0 2px 8px rgba(0,113,197,0.18);
+                transition: opacity 0.2s;"
+                onmouseover="this.style.opacity='0.85'" onmouseout="this.style.opacity='1'">
+                🌐 Network Experience
+            </a>
+    </div>
+
     <!-- Tabs Container -->
     <div class="tabs-container" id="tabs-container">
         <div class="tabs">
@@ -284,14 +320,8 @@
             <div style="display: flex; gap: 0; margin-bottom: 35px; position: relative;">
                 <input type="text" class="form-control" id="case_number" name="case_number" placeholder="Enter case number here" value="" required style="border-radius: 25px; padding: 12px 150px 12px 20px; flex: 1; font-family:'Inter', sans-serif;">
                 <div class="action-icons">
-                    <button type="button" class="icon-action-btn search" aria-label="Submit" title="Submit" onclick="handleSubmit(event, 'submit')" style="background-color: rgba(226, 231, 241, 0.3);">
+                    <button id="case-submit-btn" type="button" class="icon-action-btn search" aria-label="Submit" title="Submit" onclick="handleSubmit(event, 'submit')">
                         <img src="{{ url_for('static', filename='send.svg') }}" alt="Submit">
-                    </button>
-                    <button type="button" class="icon-action-btn etl" aria-label="ETL Parse" title="ETL Parse" onclick="handleSubmit(event, 'etl')" style="background-color: rgba(226, 231, 241, 0.3);">
-                        <img src="{{ url_for('static', filename='Magnifying_glass.svg') }}" alt="ETL Parse">
-                    </button>
-                    <button type="button" class="icon-action-btn etl-llm" aria-label="ETL Parse with LLM" title="ETL Parse with LLM" onclick="handleSubmit(event, 'etl_llm')" style="background-color: rgba(226, 231, 241, 0.3);">
-                        <img src="{{ url_for('static', filename='agent.svg') }}" alt="ETL Parse with LLM">
                     </button>
                 </div>
             </div>
@@ -303,7 +333,7 @@
         <div id="local-upload-tab" class="tab-content">
                 <div class="upload-bar" onclick="openLocalFileChooser()" onkeydown="handleUploadBarKeydown(event)" role="button" tabindex="0" aria-label="Select local file">
                     <span id="upload-file-name" class="upload-bar-file-name" style="font-family:'Inter', sans-serif; ">Click to browse (.zip, .7z, .rar, .etl, .log or .dmp files only)</span>
-                    <button id="upload-bar-submit-btn" type="button" class="upload-action-btn" onclick="submitLocalUpload(event)" aria-label="Start analysis" title="Start analysis" disabled  style="background-color: rgba(226, 231, 241, 0.3)">
+                    <button id="upload-bar-submit-btn" type="button" class="upload-action-btn" onclick="submitLocalUpload(event)" aria-label="Start analysis" title="Start analysis" disabled>
                         <img src="{{ url_for('static', filename='send.svg') }}" alt="" aria-hidden="true">
                     </button>
                 </div>
@@ -360,31 +390,7 @@
         </div>
     </div>
 
-    <!-- 🤖 Log Chatbot shortcut -->
-    <div id="chatbot-shortcut-links" style="width: 70%; margin: 30px auto 14px; background: transparent; padding: 0; text-align: center; display: flex; justify-content: center; gap: 10px; flex-wrap: wrap;">
-            <a href="/log_chatbot/" style="
-                display: inline-flex; align-items: center; gap: 7px;
-                background: #fcfcfc; border: 2px solid transparent;
-                color: rgba(102, 107, 117, 0.848); text-decoration: none;
-                padding: 4px 13px; border-radius: 25px;
-                font-size: 0.85rem; font-weight: 600;
-                box-shadow: 0 2px 8px rgba(0,113,197,0.18);
-                transition: opacity 0.2s;"
-                onmouseover="this.style.opacity='0.85'" onmouseout="this.style.opacity='1'">
-                🤖 Wi-Fi Analysis Agent
-            </a>
-            <a href="/nw_analysis/" style="
-                display: inline-flex; align-items: center; gap: 7px;
-                background: #fcfcfc; border: 2px solid transparent;
-                color: rgba(102, 107, 117, 0.848); text-decoration: none;
-                padding: 4px 13px; border-radius: 25px;
-                font-size: 0.85rem; font-weight: 600;
-                box-shadow: 0 2px 8px rgba(0,113,197,0.18);
-                transition: opacity 0.2s;"
-                onmouseover="this.style.opacity='0.85'" onmouseout="this.style.opacity='1'">
-                🌐 Network Experience
-            </a>
-        </div>
+
     <div class="mb-5"></div>
 
     <!-- Bootstrap JS -->
@@ -626,9 +632,18 @@
         // Auto-fill from clipboard and zero-padding
         document.addEventListener("DOMContentLoaded", () => {
             const input = document.getElementById("case_number");
+            const caseSubmitBtn = document.getElementById('case-submit-btn');
             if (!input) {
                 return;
             }
+
+            const updateCaseSubmitButtonColor = () => {
+                if (!caseSubmitBtn) {
+                    return;
+                }
+                const hasText = input.value.trim().length > 0;
+                caseSubmitBtn.classList.toggle('is-ready', hasText);
+            };
 
             // Auto-fill from clipboard
             const autoFillFromClipboard = async () => {
@@ -640,6 +655,7 @@
                         // Auto-pad to 8 digits
                         input.value = trimmed.padStart(8, '0');
                     }
+                    updateCaseSubmitButtonColor();
                 } catch (err) {
                     // Silently fail - clipboard access denied or not available
                 }
@@ -662,6 +678,7 @@
                 } else {
                     input.value = trimmed;
                 }
+                updateCaseSubmitButtonColor();
             });
 
             // Add zero-padding on blur
@@ -670,6 +687,7 @@
                 if (value && /^\d{1,8}$/.test(value)) {
                     input.value = value.padStart(8, '0');
                 }
+                updateCaseSubmitButtonColor();
             });
 
             // Format on Enter key
@@ -679,8 +697,12 @@
                     if (value && /^\d{1,8}$/.test(value)) {
                         input.value = value.padStart(8, '0');
                     }
+                    updateCaseSubmitButtonColor();
                 }
             });
+
+            input.addEventListener('input', updateCaseSubmitButtonColor);
+            updateCaseSubmitButtonColor();
         });
         // Tab Switching
         function switchTab(tabName) {
@@ -750,10 +772,12 @@
                     fileNameLabel.textContent = 'No file selected';
                 }
                 submitBtn.disabled = true;
+                submitBtn.classList.remove('is-ready');
                 return;
             }
             
             submitBtn.disabled = false;
+            submitBtn.classList.add('is-ready');
             
             const selectedName = selectedFiles[0]?.file?.name || '1 file selected';
             if (fileNameLabel) {

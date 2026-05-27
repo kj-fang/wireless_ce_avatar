@@ -48,6 +48,9 @@ class GlobalConfig:
         # Last log path analysed by LogParserService (shared with chatbot)
         self.last_analyzed_log_path: Optional[str] = None
 
+        # [DEBUG] for ACE local testing
+        self.ace_local_test = True
+
     # SocketIO management
     def set_socketio(self, socketio: SocketIO) -> None:
         self.socketio = socketio

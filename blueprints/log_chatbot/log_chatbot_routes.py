@@ -853,17 +853,21 @@ def reload_from_shared():
     from utils import helpers as _helpers
     
     try:
-        # Try to find shared YAML location
-        yaml_shared = _helpers.get_load_path(
-            str(Path(SKILLS_CONFIG_DIR_prim) / SKILLS_YAML_FILENAME),
-            str(Path(SKILLS_CONFIG_DIR_bkup) / SKILLS_YAML_FILENAME)
-        )
-        
-        if not yaml_shared or not Path(yaml_shared).exists():
-            return jsonify({
-                "success": False,
-                "error": f"Shared YAML not found at {SKILLS_CONFIG_DIR_prim} or {SKILLS_CONFIG_DIR_bkup}"
-            }), 400
+
+        if app_config.ace_local_test:
+            yaml_shared = Path(__file__).parents[2] / "data" / "skills.yaml"
+        else:
+            # Try to find shared YAML location
+            yaml_shared = _helpers.get_load_path(
+                str(Path(SKILLS_CONFIG_DIR_prim) / SKILLS_YAML_FILENAME),
+                str(Path(SKILLS_CONFIG_DIR_bkup) / SKILLS_YAML_FILENAME)
+            )
+            
+            if not yaml_shared or not Path(yaml_shared).exists():
+                return jsonify({
+                    "success": False,
+                    "error": f"Shared YAML not found at {SKILLS_CONFIG_DIR_prim} or {SKILLS_CONFIG_DIR_bkup}"
+                }), 400
         
         # Load skills from shared YAML
         skills = load_skills_from_yaml(yaml_shared)

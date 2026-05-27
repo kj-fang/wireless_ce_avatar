@@ -28,6 +28,12 @@ from .pipeline import AceRunner
 
 
 def _resolve_feedback_root() -> Path:
+    if app_config.ace_local_test:
+        print("⚠️  ACE local test mode enabled — using local feedback directory")
+        root = Path(__file__).parent / "data" / "feedback"
+        root.mkdir(parents=True, exist_ok=True)
+        return root
+    
     share = helpers.get_load_path(path_configs.FEEDBACK_DIR_prim, path_configs.FEEDBACK_DIR_bkup)
     if share:
         return Path(share)

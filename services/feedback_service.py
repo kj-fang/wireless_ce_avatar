@@ -102,16 +102,24 @@ def _resolve_root() -> Path:
         if _root_cache is not None:
             return _root_cache
 
-        share = helpers.get_load_path(FEEDBACK_DIR_prim, FEEDBACK_DIR_bkup)
-        if share:
-            try:
-                root = Path(share)
-                (root / "conversations").mkdir(parents=True, exist_ok=True)
-                _root_cache = root
-                print(f"[feedback] using shared root: {root}")
-                return root
-            except Exception as e:
-                print(f"[feedback] shared root unwritable ({share}): {e} — falling back to local")
+        if app_config.ace_local_test:
+            # Local testing mode: use a per-user subfolder under the local fallback
+            root = Path(__file__).parent.parent / "data" / "feedback"
+            (root / "conversations").mkdir(parents=True, exist_ok=True)
+            _root_cache = root
+            print(f"[feedback] using local test root: {root}")
+            return root
+        else:
+            share = helpers.get_load_path(FEEDBACK_DIR_prim, FEEDBACK_DIR_bkup)
+            if share:
+                try:
+                    root = Path(share)
+                    (root / "conversations").mkdir(parents=True, exist_ok=True)
+                    _root_cache = root
+                    print(f"[feedback] using shared root: {root}")
+                    return root
+                except Exception as e:
+                    print(f"[feedback] shared root unwritable ({share}): {e} — falling back to local")
 
         base = getattr(app_config, "avatarfiles_dir", None)
         root = Path(base) / "feedback" if base else Path.cwd() / "data" / "feedback"

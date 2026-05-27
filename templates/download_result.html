@@ -1375,12 +1375,37 @@
         if (window.pendingLogParser) {
             const { etlPathEncoded, button } = window.pendingLogParser;
             if (msg.status === 'done') {
-                logBox.innerText += ` Starting LLM Analysis...\n`;
+                logBox.innerText += ` ETL done — preparing Agent environment...\n`;
                 logBox.scrollTop = logBox.scrollHeight;
                 setWifiActionButtonsBusy(false);
-                window.location.href = `${LOGPARSER_URL}?etl_path=${etlPathEncoded}`;
-                button.classList.remove('disabled');
-                button.innerText = 'Analyze with LLM';
+                button.innerText = '⏳ Preparing UI...';
+                const etlPath = decodeURIComponent(etlPathEncoded);
+                fetch(CHATBOT_PREPARE_URL, {
+                    method: 'POST',
+                    headers: { 'Content-Type': 'application/json' },
+                    body: JSON.stringify({ etl_path: etlPath })
+                })
+                .then(res => res.json())
+                .then(data => {
+                    if (data.success) {
+                        logBox.innerText += `✅ Ready — opening Agent Chatbot...\n`;
+                        logBox.scrollTop = logBox.scrollHeight;
+                        window.location.href = `${CHATBOT_URL}?auto_run=analyze_all`;
+                    } else {
+                        button.classList.remove('disabled');
+                        button.innerText = 'Analyze with LLM';
+                        logBox.innerText += `❌ Agent prepare failed: ${data.error}\n`;
+                        logBox.scrollTop = logBox.scrollHeight;
+                        setAnalysisCardLocked(false);
+                    }
+                })
+                .catch(err => {
+                    button.classList.remove('disabled');
+                    button.innerText = 'Analyze with LLM';
+                    logBox.innerText += `❌ Error: ${err}\n`;
+                    logBox.scrollTop = logBox.scrollHeight;
+                    setAnalysisCardLocked(false);
+                });
             } else {
                 setWifiActionButtonsBusy(false);
                 setAnalysisCardLocked(false);

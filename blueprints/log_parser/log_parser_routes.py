@@ -179,11 +179,11 @@ def _process_local_analysis(source_path: str, source_dir: str, file_path: str,
 
     elif file_path.lower().endswith('.zip') or file_path.lower().endswith('.7z') or file_path.lower().endswith('.rar'):
         print(f"📦 Extracting file: {file_path}")
-        wifi_files, ddd_files, bt_files, fw_files = attachment_decompose.process_single_zip(
+        wifi_files, ddd_files, evt_files, bt_files, fw_files = attachment_decompose.process_single_zip(
             file_path, source_dir, already_downloaded=False
         )
 
-        extracted_files = wifi_files + ddd_files + bt_files + fw_files
+        extracted_files = wifi_files + ddd_files + evt_files + bt_files + fw_files
         if not extracted_files:
             raise ValueError('No supported analysis files found in the uploaded file.')
 
@@ -202,7 +202,7 @@ def _process_local_analysis(source_path: str, source_dir: str, file_path: str,
         app_config.set_download_results(
             local_case_nbr,
             wifi={original_name: wifi_files},
-            ddd={original_name: ddd_files},
+            ddd={original_name: ddd_files + evt_files},
             bt={original_name: bt_files},
             fw={original_name: fw_files}
         )

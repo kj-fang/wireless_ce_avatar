@@ -85,7 +85,7 @@ def handle_run_latest_etl():
 
         # 7) Extract contents of the ZIP file
         app_config.socketio.emit("stage", {"message": f"📂 Extracting {zip_name}..."})
-        wifi_files, ddd_files, bt_files, fw_files = process_single_zip(zip_path, download_path, already_dload)
+        wifi_files, ddd_files, evt_files, bt_files, fw_files = process_single_zip(zip_path, download_path, already_dload)
 
         # 8) Category filtering (WiFi keeps WiFi+DDD, BT keeps BT only)
         if 'wifi' in case_context.wifi_or_bt:

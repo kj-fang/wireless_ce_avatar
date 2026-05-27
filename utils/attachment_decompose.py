@@ -166,7 +166,7 @@ def process_single_zip(zip_path, download_path_tmp, already_downloaded):
     os.makedirs(download_path, exist_ok=True)
     
     # Initialize result lists
-    wifi_files, ddd_files, bt_files, fw_files = [], [], [], []
+    wifi_files, ddd_files, evt_files, bt_files, fw_files = [], [], [], [], []
     processed_files = set()
     unzip_pending = [os.path.abspath(zip_path)]
     
@@ -196,8 +196,10 @@ def process_single_zip(zip_path, download_path_tmp, already_downloaded):
                 is_ddd_file = 'ddd' in fname.lower() and not fname.lower().endswith(compressed_exts)
                 is_evt_file = fname.lower() == "raweventviewersystemlogs.evt" or fname.lower() == 'system.evtx'
                 # print(f"[DEBUG] File: {fname} (DDD: {is_ddd_file}, EVT: {is_evt_file})")
-                if is_ddd_file or is_evt_file:
+                if is_ddd_file:
                     ddd_files.append(os.path.abspath(os.path.join(root, fname)))
+                elif is_evt_file:
+                    evt_files.append(os.path.abspath(os.path.join(root, fname)))
         
         processed_files.add(file_to_unzip)
         
@@ -211,12 +213,14 @@ def process_single_zip(zip_path, download_path_tmp, already_downloaded):
     # Remove duplicates
     wifi_files = list(dict.fromkeys(wifi_files))
     ddd_files = list(dict.fromkeys(ddd_files))
+    evt_files = list(dict.fromkeys(evt_files))
     bt_files = list(dict.fromkeys(bt_files))
     fw_files = list(dict.fromkeys(fw_files))
     
     print(f"WiFi files: {len(wifi_files)}")
     print(f"DDD files: {len(ddd_files)}")
+    print(f"EVT files: {len(evt_files)}")
     print(f"BT files: {len(bt_files)}")
     print(f"FW files: {len(fw_files)}")
     
-    return wifi_files, ddd_files, bt_files, fw_files
+    return wifi_files, ddd_files, evt_files, bt_files, fw_files

@@ -152,7 +152,10 @@ Inputs follow. Empty fields mean the user did not supply that signal.
 CASE_CONTEXT (subject + description + configuration):
 {case_context}
 
-AGENT_TRAJECTORY (steps trace — each step is a tool call or reasoning chunk):
+CONVERSATION HISTORY (prior turns in this session — provides narrative context):
+{conversation_history}
+
+CURRENT TURN TRAJECTORY (the turn being reflected on — full steps trace):
 {agent_trajectory}
 
 AGENT_FINAL_REPORT (skills_invoked, root_cause, conclusion_tag, evidence, ...):

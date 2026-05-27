@@ -47,6 +47,9 @@ def _truncate_trace(steps: list[dict], max_chars: int = 6000) -> str:
     flat = []
     for s in steps:
         role = (s.get("role") or "").strip()
+        # Skip token_usage entries — they add no analytical value.
+        if role == "token_usage":
+            continue
         content = s.get("content") or ""
         if not isinstance(content, str):
             content = json.dumps(content, ensure_ascii=False)
@@ -57,6 +60,40 @@ def _truncate_trace(steps: list[dict], max_chars: int = 6000) -> str:
     head = blob[: int(max_chars * 0.7)]
     tail = blob[-int(max_chars * 0.3):]
     return f"{head}\n... [truncated {len(blob) - max_chars} chars] ...\n{tail}"
+
+
+def _format_prior_turns(prior_turns: list[dict] | None) -> str:
+    """
+    Format prior turns (before the reflected turn) into a concise summary.
+    Each turn gets: user_message, skills_used, conclusion (first 300 chars),
+    and feedback vote if any.
+    """
+    if not prior_turns:
+        return "(this is the first turn in the conversation)"
+    lines = []
+    for i, t in enumerate(prior_turns, 1):
+        user_msg = (t.get("user_message") or "")[:100]
+        skills = [s.get("skill_id", "") for s in (t.get("skills_used") or [])]
+        skills_str = ", ".join(skills) if skills else "(none)"
+
+        # Extract conclusion from agent_response_full or agent_response
+        full = t.get("agent_response_full")
+        if isinstance(full, dict):
+            conclusion = full.get("root_cause_summary") or full.get("root_cause") or ""
+        else:
+            conclusion = (t.get("agent_response") or "")
+
+        fb = t.get("feedback")
+        fb_str = f"vote={fb['vote']}" if fb else "no feedback"
+
+        lines.append(
+            f"  Turn {i} [{t.get('turn_id', '?')[:8]}...] @ {t.get('ts', '?')}\n"
+            f"    User: {user_msg}\n"
+            f"    Skills: {skills_str}\n"
+            f"    Conclusion: {conclusion}\n"
+            f"    Feedback: {fb_str}"
+        )
+    return "\n".join(lines)
 
 
 # ---------------------------------------------------------------------------
@@ -78,10 +115,11 @@ class Reflector:
     """
 
     def __init__(self, llm, model: Optional[str] = None,
-                 max_refine_rounds: int = 1):
+                 max_refine_rounds: int = 1, debug: bool = False):
         self.llm = llm
         self.model = model
         self.max_refine_rounds = max_refine_rounds
+        self.debug = debug
 
     def reflect(
         self,
@@ -90,6 +128,7 @@ class Reflector:
         turn: dict,
         feedback: dict,
         applied_bullets: list[Any],
+        prior_turns: list[dict] | None = None,
     ) -> dict:
         details = (feedback or {}).get("details") or {}
         vote = (feedback or {}).get("vote", 0)
@@ -101,6 +140,7 @@ class Reflector:
 
         prompt = prompts.fill_reflector_prompt(
             case_context=_safe_json_dump(case_context),
+            conversation_history=_format_prior_turns(prior_turns),
             agent_trajectory=_truncate_trace(turn.get("steps_trace") or []),
             agent_final_report=_safe_json_dump(final_report),
             vote=vote,
@@ -116,10 +156,25 @@ class Reflector:
             applied_bullets="\n".join(b.render() for b in applied_bullets) or "(none)",
         )
 
+        if self.debug:
+            print("\n" + "="*80)
+            print("[REFLECTOR] PROMPT SENT TO LLM:")
+            print("="*80)
+            print(prompt)
+            print("="*80 + "\n")
+
         reflection = self._call(prompt)
+
+        if self.debug:
+            print("\n" + "-"*80)
+            print("[REFLECTOR] LLM RESPONSE (parsed JSON):")
+            print("-"*80)
+            print(json.dumps(reflection, indent=2, ensure_ascii=False))
+            print("-"*80 + "\n")
+
         # Optional refinement rounds (paper §3, max_refine_rounds=5 by default —
         # we ship with 1 since wifi traces are smaller than AppWorld traces).
-        for _ in range(max(0, self.max_refine_rounds - 1)):
+        for i in range(max(0, self.max_refine_rounds - 1)):
             refine_prompt = (
                 prompt
                 + "\n\nYour previous reflection (JSON):\n"
@@ -128,7 +183,11 @@ class Reflector:
                   "ensure every key_insight maps to exactly ONE section. "
                   "Output the refined JSON only."
             )
+            if self.debug:
+                print(f"\n[REFLECTOR] REFINEMENT ROUND {i+1}")
             reflection = self._call(refine_prompt)
+            if self.debug:
+                print(json.dumps(reflection, indent=2, ensure_ascii=False))
         return reflection
 
     def _call(self, prompt: str) -> dict:
@@ -149,10 +208,12 @@ class Curator:
     then applies the delta deterministically.
     """
 
-    def __init__(self, llm, model: Optional[str] = None, token_budget: int = 8000):
+    def __init__(self, llm, model: Optional[str] = None, token_budget: int = 8000,
+                 debug: bool = False):
         self.llm = llm
         self.model = model
         self.token_budget = token_budget
+        self.debug = debug
 
     def curate(
         self,
@@ -198,7 +259,22 @@ class Curator:
             domain_playbook=domain_block,
             token_budget=self.token_budget,
         )
+
+        if self.debug:
+            print("\n" + "="*80)
+            print("[CURATOR] PROMPT SENT TO LLM:")
+            print("="*80)
+            print(prompt)
+            print("="*80 + "\n")
+
         result = self._call(prompt)
+
+        if self.debug:
+            print("\n" + "-"*80)
+            print("[CURATOR] LLM RESPONSE (parsed JSON):")
+            print("-"*80)
+            print(json.dumps(result, indent=2, ensure_ascii=False))
+            print("-"*80 + "\n")
 
         # 3. Apply the operations.
         applied: list[dict] = []
@@ -210,13 +286,31 @@ class Curator:
             else:
                 skipped.append({"op": op, "reason": reason})
 
-        return {
+        summary = {
             "operations_proposed": result.get("operations") or [],
             "operations_applied": applied,
             "operations_skipped": skipped,
             "counter_updates": counter_updates,
             "reasoning": result.get("reasoning", ""),
         }
+
+        if self.debug:
+            print("\n" + "-"*80)
+            print("[CURATOR] APPLY SUMMARY:")
+            print("-"*80)
+            print(f"  Operations proposed: {len(summary['operations_proposed'])}")
+            print(f"  Operations applied:  {len(applied)}")
+            for op in applied:
+                print(f"    ✓ {op.get('type')} → {op.get('target_playbook','')}/{op.get('section','')}")
+            print(f"  Operations skipped:  {len(skipped)}")
+            for s in skipped:
+                print(f"    ✗ {s['op'].get('type')} — {s['reason']}")
+            print(f"  Counter updates:     {len(counter_updates)}")
+            for cu in counter_updates:
+                print(f"    {cu['bullet_id']} → {cu['tag']}")
+            print("-"*80 + "\n")
+
+        return summary
 
     # ---- helpers ----
     def _relevant_skills(self, reflection: dict) -> list[str]:

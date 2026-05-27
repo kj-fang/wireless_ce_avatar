@@ -42,6 +42,7 @@ class AceRunner:
         feedback_root: str | Path,
         skills: Optional[Iterable[str]] = None,
         max_refine_rounds: int = 1,
+        debug: bool = False,
     ):
         """
         llm:            an LLM_helper instance (services.llm_service.LLM_helper).
@@ -63,8 +64,9 @@ class AceRunner:
         for sk in skills or []:
             self._ensure_domain_playbook(sk)
 
-        self.reflector = Reflector(llm, max_refine_rounds=max_refine_rounds)
-        self.curator = Curator(llm)
+        self.debug = debug
+        self.reflector = Reflector(llm, max_refine_rounds=max_refine_rounds, debug=debug)
+        self.curator = Curator(llm, debug=debug)
         self._cursor_path = self.playbooks_dir / ".ace_cursor.json"
         self._lock = threading.Lock()
 
@@ -147,6 +149,14 @@ class AceRunner:
 
         case_context = snap.get("issue") or {}
 
+        # Build prior turns summary (all turns before the current one)
+        all_turns = snap.get("turns", [])
+        prior_turns = []
+        for t in all_turns:
+            if t.get("turn_id") == turn_id:
+                break
+            prior_turns.append(t)
+
         # Resolve the bullets the agent claimed to apply. The Generator's
         # final report may not exist (older snapshots) or may store
         # `applied_bullet_ids` either in agent_response_full or in the text
@@ -160,6 +170,7 @@ class AceRunner:
             turn=turn,
             feedback=feedback,
             applied_bullets=applied,
+            prior_turns=prior_turns,
         )
 
         # 2. Make sure domain playbooks exist for every skill the reflection

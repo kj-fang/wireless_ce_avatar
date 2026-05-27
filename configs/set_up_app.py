@@ -148,6 +148,11 @@ def set_up(socketio):
             from services.ace import AceRunner
             from services import feedback_service
             playbooks_root = Path(getattr(app_config, "avatarfiles_dir", ".")) / "ace_playbooks"
+            
+            if app_config.ace_local_test:
+                print("⚠️  ACE local test mode enabled — ACE adapter will use local playbooks and feedback")
+                playbooks_root = Path(__file__).parent[1] / "data" / "ace_playbooks"
+
             ace_runner = AceRunner(
                 llm=llm_helper,
                 playbooks_dir=playbooks_root,

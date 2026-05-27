@@ -140,7 +140,6 @@ def _create_windows_shortcut(appdata_subdir, label, extra_ps_props=''):
         label: Human-readable label for log messages (e.g. 'Startup', 'SendTo').
         extra_ps_props: Additional PowerShell property assignments inserted before $s.Save().
     """
-    # if not getattr(sys, 'frozen', False) or os.name != 'nt':
     if os.name != 'nt':
         return
     appdata = os.environ.get('APPDATA')

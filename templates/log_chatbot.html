@@ -2866,6 +2866,9 @@
                     // Clear everything the previous conversation owned.
                     document.getElementById('chat-window').innerHTML = `
                         <div class="welcome-msg" id="welcome-msg">
+                            <div class="big-icon">🔄</div>
+                            <strong>New log loaded.</strong><br>
+                            Previous chat history was cleared so the agent
                             starts fresh on this log.
                         </div>`;
                     window.__feedbackConversationId = data.new_conversation_id || '';

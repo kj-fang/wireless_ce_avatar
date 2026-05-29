@@ -5,6 +5,13 @@ import json
 import os
 import sys
 import webbrowser
+
+# Force UTF-8 stdout/stderr so emoji print() calls don't crash on Windows
+# cp1252 consoles (this is undone by cachelib/flask-session locale init).
+if hasattr(sys.stdout, 'reconfigure'):
+    sys.stdout.reconfigure(encoding='utf-8', errors='replace')
+if hasattr(sys.stderr, 'reconfigure'):
+    sys.stderr.reconfigure(encoding='utf-8', errors='replace')
 from urllib.parse import quote
 from urllib.request import Request, urlopen
 
@@ -94,6 +101,31 @@ def create_app():
         # Older Flask (<2.2) — the config flag above is the only knob.
         pass
     app.secret_key = 'autoparselog2025'
+
+    # Store sessions server-side (filesystem) so large IPS context never
+    # overflows the browser's 4 KB cookie limit and causes a crash.
+    from flask_session import Session
+    import time as _time
+    import glob as _glob
+    _session_dir = os.path.join(os.path.expanduser('~'), '.intelavatar_sessions')
+    os.makedirs(_session_dir, exist_ok=True)
+
+    # Purge session files older than 24 h at startup to avoid unbounded growth.
+    _SESSION_TTL_SECS = 24 * 3600
+    _now = _time.time()
+    for _f in _glob.glob(os.path.join(_session_dir, '*')):
+        try:
+            if _now - os.path.getmtime(_f) > _SESSION_TTL_SECS:
+                os.remove(_f)
+        except Exception:
+            pass
+
+    app.config['SESSION_TYPE'] = 'filesystem'
+    app.config['SESSION_FILE_DIR'] = _session_dir
+    app.config['SESSION_PERMANENT'] = False
+    app.config['SESSION_USE_SIGNER'] = True   # sign the session-ID cookie for integrity
+    Session(app)
+
     socketio = SocketIO(app, async_mode='threading', cors_allowed_origins="*")
 
     # Register blueprints

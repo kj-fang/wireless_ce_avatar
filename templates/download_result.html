@@ -568,7 +568,7 @@
                             Manual
                         </button>
                         <button id="bt-action-llm" class="btn btn-primary btn-sm" data-mode="LLM" style="border-radius: 30px; color:white; font-size: 1.15rem; padding: 0.5rem 1rem;" disabled onclick="runSelectedBtAction(this, 'LLM')">
-                            Analyze with LLM
+                            🤖 Bluetooth Analysis Agent
                         </button>
                     </div>
                 </div>
@@ -1480,7 +1480,7 @@
                 appendLog(`❌ HCI decode request failed: ${decoded}\n`, 'red');
                 if (window.pendingBtLogParser && window.pendingBtLogParser.button === button) {
                     button.classList.remove('disabled');
-                    button.innerText = 'Analyze with LLM';
+                    button.innerText = '🤖 Bluetooth Analysis Agent';
                     window.pendingBtLogParser = null;
                 }
                 window.pendingBtAnalyze = false;
@@ -1492,16 +1492,34 @@
         if (!window.pendingBtLogParser) return;
         const { button } = window.pendingBtLogParser;
 
-        appendLog(`✅ HCI decode done! Redirecting to LLM analysis...\n`);
-
-        button.classList.remove('disabled');
-        button.innerText = 'Analyze with LLM';
+        appendLog(`✅ HCI decode done! Preparing BT Analysis Agent...\n`);
+        button.innerText = '⏳ Preparing UI...';
         window.pendingBtLogParser = null;
         window.pendingBtAnalyze = false;
-        setBtActionButtonsBusy(false);
 
-        const hciPathEncoded = encodeURIComponent(msg.hci_path);
-        window.location.href = `${LOGPARSER_URL}?etl_path=${hciPathEncoded}&preselect_filter=BT_YB_LOST.tat&preselect_prompt=BT_YB_Lost.py`;
+        fetch(CHATBOT_SET_LOG_URL, {
+            method: 'POST',
+            headers: { 'Content-Type': 'application/json' },
+            body: JSON.stringify({ log_path: msg.hci_path })
+        })
+        .then(res => res.json())
+        .then(data => {
+            button.classList.remove('disabled');
+            button.innerText = '🤖 Bluetooth Analysis Agent';
+            setBtActionButtonsBusy(false);
+            if (data.success) {
+                appendLog(`✅ Ready — opening BT Analysis Agent...\n`);
+                window.location.href = `${CHATBOT_URL}?auto_run=analyze_all`;
+            } else {
+                appendLog(`❌ Agent prepare failed: ${data.error}\n`);
+            }
+        })
+        .catch(err => {
+            button.classList.remove('disabled');
+            button.innerText = '🤖 Bluetooth Analysis Agent';
+            setBtActionButtonsBusy(false);
+            appendLog(`❌ Error: ${err}\n`);
+        });
     }
 
     function handleBtHciFailed(msg) {
@@ -1511,7 +1529,7 @@
         appendLog(`❌ BT HCI decode failed or timed out.\n`, 'red');
 
         button.classList.remove('disabled');
-        button.innerText = 'Analyze with LLM';
+        button.innerText = '🤖 Bluetooth Analysis Agent';
         window.pendingBtLogParser = null;
         window.pendingBtAnalyze = false;
         setBtActionButtonsBusy(false);
@@ -1580,7 +1598,7 @@
         if (!mode) return;
 
         if (mode === 'LLM') {
-            button.innerText = 'Analyze with LLM';
+            button.innerText = '🤖 Bluetooth Analysis Agent';
             return;
         }
 
@@ -1706,6 +1724,7 @@
 
     const CHATBOT_PREPARE_URL = "{{ url_for('log_chatbot.prepare') }}";
     const CHATBOT_URL = "{{ url_for('log_chatbot.index') }}";
+    const CHATBOT_SET_LOG_URL = "{{ url_for('log_chatbot.set_log') }}";
 
     function startChatbotAnalysis(button, etlPathEncoded) {
         if (button.classList.contains('disabled')) return;
@@ -2155,7 +2174,7 @@
     function setBtActionButtonsBusy(isBusy, activeButtonId = null) {
         window.btActionsBusy = !!isBusy;
         const defaultLabels = {
-            'bt-action-llm': 'Analyze with LLM',
+            'bt-action-llm': '🤖 Bluetooth Analysis Agent',
             'bt-action-autofolder': 'AutoFolder',
             'bt-action-manual': 'Manual'
         };

@@ -187,7 +187,7 @@
     }
 
     .download-btn {
-        background: linear-gradient(120deg, #3aa58b 0%, #28816f 25%, #49b19b 50%, #2d8f7c 75%, #3aa58b 100%);
+        background: linear-gradient(120deg, #0ea5a4 0%, #0284c7 25%, #22c1c3 50%, #0369a1 75%, #0ea5a4 100%);
         background-size: 300% auto;
         animation: gradientFlow 4.5s linear infinite !important;
         font-size: 1rem;
@@ -195,7 +195,7 @@
     }
 
     .bsod-btn {
-        background: linear-gradient(120deg, #e14a7a 0%, #d11f5d 25%, #f0628d 50%, #de3e70 75%, #e14a7a 100%);
+        background: linear-gradient(120deg, #6366f1 0%, #4f46e5 25%, #818cf8 50%, #4338ca 75%, #6366f1 100%);
         background-size: 300% auto;
         animation: gradientFlow 4.5s linear infinite !important;
         font-size: 1rem;
@@ -203,7 +203,7 @@
     }
 
     .analysis-btn {
-        background: linear-gradient(120deg, #4f74b7 0%, #3a85c2 25%, #6f9ed3 50%, #4a80c6 75%, #4f74b7 100%);
+        background: linear-gradient(120deg, #2563eb 0%, #1d4ed8 25%, #60a5fa 50%, #1e40af 75%, #2563eb 100%);
         background-size: 300% auto;
         animation: gradientFlow 4.5s linear infinite !important;
         font-size: 1rem;
@@ -247,17 +247,19 @@
         font-weight: 600;
         color: #ffffff !important;
         background: linear-gradient(
-            120deg,
-            #2d4d8a,
-            #3a85c2,
-            #5f8dc9
-        );
+                120deg,
+                #256b8f 0%,
+                #3a8aaf 20%,
+                #6fd3e0 50%,
+                #3ab2c2 75%,
+                #1f5f7a 100% 
+            );
         background-size: 300% auto;
         border: none;
         box-shadow:
             0 4px 10px rgba(0, 80, 140, 0.35),
             inset 0 1px 0 rgba(255,255,255,0.2);
-        transition: all 0.25s ease;
+        transition: transform 0.2s ease, box-shadow 0.2s ease;
         animation: gradientFlow 4.5s linear infinite;
     }
 
@@ -265,7 +267,7 @@
     .ai-analysis-btn:hover {
         color: #ffffff !important;
         transform: translateY(-2px) scale(1.03);
-        animation-duration: 1.5s;
+        animation-duration: 1.5s !important;
         box-shadow:
             0 6px 14px rgba(0, 90, 160, 0.35),
             inset 0 1px 0 rgba(255,255,255,0.4);
@@ -385,7 +387,7 @@
                         </div>
                         <div class="card-body bg-light px-3" style="white-space: normal; line-height: 1.5; border-radius: 0.5rem;">
                             <span class="fw-bolder h4 d-block mt-2 mb-1" style="color: black;">AI Summary:</span>
-                            <div id="ai-analysis-content">
+                            <div id="ai-analysis-content" style="margin-top: 12px;">
                                 <div class="mb-3">
                                     <button class="btn btn-link ai-analysis-btn" type="button" style="border-radius: 30px; background-color: #007bff; color: white;" onclick="loadAiAnalysis()">Click to Show AI Analysis</button>
                                 </div>

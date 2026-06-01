@@ -33,7 +33,7 @@
         }
         .loading-box {
             display: none;
-            margin-top: 20px;
+            margin-top: 45px;
         }
         .section-divider {
             border-top: 2px dashed #ccc;
@@ -47,247 +47,592 @@
             image-rendering: crisp-edges;
         }
 
-        /* Tab Styles */
+        :root {
+        --primary: #0071c5;
+        --primary-light: #4cc2ff;
+        --bg-soft: #f4f6f8;
+        --border: #d6dbe1;
+        --text-main: #2c2f33;
+        --text-muted: #7a8088;
+        }
+
         .tabs-container {
-            width: 520px;
-            max-width: calc(100% - 24px);
-            margin: 12px auto 0;
-			position: relative;
+        width: 520px;
+        max-width: calc(100% - 24px);
+        margin: 45px auto 0;
+        position: relative;
         }
+
         .chatbot-shortcut {
-            position: absolute;
-            top: 0;
-            left: calc(100% + 10px);
+        position: absolute;
+        top: 0;
+        left: calc(100% + 10px);
         }
+
         .chatbot-shortcut-link {
+        display: inline-flex;
+        align-items: center;
+        width: 45px;
+        height: 45px;
+        border-radius: 999px;
+        background: linear-gradient(135deg, var(--primary), var(--primary-light));
+        color: white;
+        text-decoration: none;
+        overflow: hidden;
+        transition: all 0.35s ease;
+        box-shadow: 0 6px 18px rgba(0,113,197,0.35);
+        }
+
+        .chatbot-shortcut-link:hover {
+        width: 220px;
+        border-radius: 30px;
+        transform: translateY(-2px);
+        }
+
+        .chatbot-shortcut-icon {
+        width: 45px;
+        text-align: center;
+        line-height: 45px;
+        }
+
+        .chatbot-shortcut-label {
+        max-width: 0;
+        opacity: 0;
+        overflow: hidden;
+        white-space: nowrap;
+        transition: all 0.3s ease;
+        }
+
+        .chatbot-shortcut-link:hover .chatbot-shortcut-label {
+        max-width: 160px;
+        opacity: 1;
+        }
+
+        /* ===== Tabs ===== */
+        .tabs {
+            position: relative;
+            display: flex;
+            background: #e8edf3;
+            border-radius: 999px;
+            padding: 4px;
+            gap: 4px;
+        }
+
+        .tabs::before {
+            content: "";
+            position: absolute;
+            top: 4px;
+            left: 4px;
+            height: calc(100% - 8px);
+            width: calc((100% - 8px) / 2);
+
+            border-radius: 999px;
+
+            background: linear-gradient(
+                120deg,
+                #4b3f9c,
+                #005fa3,
+                #4b3f9c
+            );
+
+            background-size: 200% auto;
+
+            box-shadow:
+                0 4px 10px rgba(0,90,160,0.35),
+                inset 0 1px 0 rgba(255,255,255,0.2);
+
+            transition: transform 0.6s cubic-bezier(.25, 1, .5, 1);
+        }
+        
+          .tabs.active-0::before {
+            transform: translateX(0%);
+        }
+
+        .tabs.active-1::before {
+            transform: translateX(100%);
+        }
+
+        .tab {
+            flex: 1;
+            padding: 8px 12px;
+            border-radius: 999px;
+            border-color: transparent;
+            position: relative;
+            z-index: 1;
+            background: transparent !important;
+            color: #6f7780;
+
+            font-weight: 500;
+            transition: all 0.25s ease;
+            cursor: pointer;
+        }
+   
+        .tab:focus:not(:focus-visible) {
+            outline: none;
+        }
+
+        .tab:hover {
+            background: rgba(255,255,255,0.6);
+            color: #2c2f33;
+        }
+
+        .tab.active {
+            color: #ffffff;
+            font-weight: 600;
+
+            background: linear-gradient(
+                120deg,
+                #4b3f9c,
+                #005fa3,
+                #4b3f9c
+            );
+            background-size: 200% auto;
+
+            box-shadow:
+                0 4px 10px rgba(0, 90, 160, 0.35),
+                inset 0 1px 0 rgba(255,255,255,0.2);
+
+            animation: tabFlow 3s linear infinite;
+        }
+
+        
+        @keyframes tabFlow {
+            0% { background-position: 0% center; }
+            100% { background-position: 200% center; }
+        }
+                 
+        .tab.active:hover {
+            animation-duration: 1.2s;
+        }
+
+        .tab-content {
+        display: none;
+        }
+
+        .tab-content.active {
+        display: block;
+        }
+
+        
+        #form-box > form > div {
+            background: #ffffff;
+            border-radius: 999px;
+            border: 1px solid #d6dbe1;
+            box-shadow: 0 4px 12px rgba(0,0,0,0.08);
+            transition: all 0.25s ease;
+        }
+
+        #form-box > form > div:hover {
+            box-shadow: 0 6px 18px rgba(0,0,0,0.12);
+        }
+
+        #form-box > form > div:focus-within {
+            border-color: #7fd2ff;
+            box-shadow: 
+                0 6px 20px rgba(0,113,197,0.25),
+                0 0 0 2px rgba(127, 210, 255, 0.4);
+        }
+
+        #case_number {
+            border: none !important;
+            outline: none;
+            height: 100%;
+            background: transparent;
+            font-size: 0.9em;
+            color: #2c2f33;
+            padding: 12px 140px 12px 20px;
+        }
+
+        #case_number::placeholder {
+            color: #9aa1a9;
+        }
+
+        #case-submit-btn,
+        #upload-bar-submit-btn {
+            height: 25px;
+            width: 75px;
+            border-radius: 999px;
+            font-size: 0.9em;
+            color: #ffffff;
+            font-weight: 600;
+
+            background: linear-gradient(
+                120deg,
+                #6a3fcf,
+                #0071c5,
+                #4a3ab2
+            );
+
+            background-size: 200% auto;
+
+            border: none;
+
+            box-shadow:
+                0 4px 10px rgba(0,90,160,0.35),
+                inset 0 1px 0 rgba(255,255,255,0.2);
+
+            transition: all 0.25s ease;
+
+            animation: gradientFlow 3s linear infinite;
+        }
+
+        #case-submit-btn:hover:not(:disabled),
+        #upload-bar-submit-btn:hover:not(:disabled) {
+            transform: translateY(-2px) scale(1.03);
+
+            animation-duration: 1.2s;
+
+            box-shadow:
+                0 8px 18px rgba(0,90,160,0.45),
+                inset 0 1px 0 rgba(255,255,255,0.3);
+        }
+
+            #case-submit-btn:disabled,
+            #upload-bar-submit-btn:disabled {
+            background: #d3d8de;
+            color: #8a9099;
+            box-shadow: none;
+            animation: none;
+        }
+
+        @keyframes gradientFlow {
+            0% { background-position: 0% center; }
+            100% { background-position: 200% center; }
+        }
+
+
+        /* ===== Upload Bar ===== */
+        .upload-bar {
+            position: relative;
+            margin-top: 20px;
+            height: 41px;
+            display: flex;
+            align-items: center;
+            width: 100%;
+            border-radius: 999px;
+            background: #ffffff;
+            border: 1px solid #d6dbe1;
+            box-shadow: 0 4px 12px rgba(0,0,0,0.08);
+            transition: all 0.25s ease;
+        }
+
+        .upload-bar:hover {
+            border-color: #7fd2ff;
+            box-shadow:
+                0 6px 18px rgba(0,113,197,0.18),
+                inset 0 1px 0 rgba(255,255,255,0.6);
+        }
+
+        .upload-bar:focus-within {
+            border-color: #7fd2ff;
+            box-shadow:
+                0 6px 20px rgba(0,113,197,0.25),
+                0 0 0 2px rgba(127,210,255,0.4);
+        }
+
+        .upload-bar-file-name {
+            flex: 1;
+            display: flex;
+            line-height: 41px;
+            align-items: center;
+            border: none;
+            background: transparent;
+            padding: 12px 10px 12px 20px;
+            font-size: 0.9em;
+            color: #9aa1a9;
+            opacity: 0.8;
+        }
+
+        .upload-bar-file-name.has-file {
+            color: #2c2f33;
+            opacity: 1;
+        }
+
+        .bsod-toggle {
+            margin: 20px auto 0;
+            display: flex;
+            width: fit-content;
+            align-items: center;
+            gap: 10px;
+            cursor: pointer;
+            user-select: none;
+        }
+
+        .bsod-toggle-input {
+            position: absolute;
+            opacity: 0;
+            width: 1px;
+            height: 1px;
+            pointer-events: none;
+        }
+
+        
+        .bsod-toggle-track {
+            width: 42px;
+            height: 24px;
+            border-radius: 999px;
+            background: #d6dbe1;
+            position: relative;
+            box-shadow: inset 0 1px 2px rgba(0,0,0,0.15);
+            transition: all 0.25s ease;
+        }
+
+
+        .bsod-toggle-track::after {
+            content: "";
+            position: absolute;
+            top: 3px;
+            left: 3px;
+            width: 18px;
+            height: 18px;
+            border-radius: 50%;
+            background: #ffffff;
+            box-shadow:
+                0 2px 6px rgba(0,0,0,0.25);
+            transition: transform 0.25s cubic-bezier(.34, 1.56, .64, 1);
+
+        }
+
+        .bsod-toggle-input:checked + .bsod-toggle-track {
+    
+            background: linear-gradient(
+                120deg,
+                #3f3b8f,
+                #005a9e,
+                #3f3b8f
+                );
+                background-size: 200% auto;
+                box-shadow:
+                    0 2px 6px rgba(0,90,160,0.35),
+                    inset 0 1px 0 rgba(255,255,255,0.2);
+                animation: gradientFlow 3s linear infinite;
+
+        }
+
+        .bsod-toggle-input:checked + .bsod-toggle-track::after {
+            transform: translateX(18px);
+        }
+
+        .bsod-toggle-input:focus-visible + .bsod-toggle-track {
+            box-shadow: 0 0 0 3px rgba(0,113,197,0.25);
+        }
+
+        .bsod-toggle-text {
+            color: #666;
+            font-size: 14px;
+        }
+        
+        .bsod-toggle:hover .bsod-toggle-track {
+            box-shadow:
+                inset 0 1px 2px rgba(0,0,0,0.2),
+                0 2px 6px rgba(0,0,0,0.12);
+        }
+        
+        .bsod-toggle-input:focus-visible + .bsod-toggle-track {
+            box-shadow:
+                0 0 0 3px rgba(127,210,255,0.5),
+                inset 0 1px 2px rgba(0,0,0,0.15);
+        }
+
+        .bsod-toggle-text {
+            color: #9aa1a9;
+            font-size: 14px;
+            font-weight: 500;
+        }
+
+        @keyframes gradientFlow {
+            0% { background-position: 0% center; }
+            100% { background-position: 200% center; }
+        }
+
+        
+        .bsod-toggle-input:checked ~ .bsod-toggle-text {
+            color: #3f3b8f;
+            font-weight: 600;
+        }
+
+
+        /* ===== Buttons ===== */
+        .upload-action-btn,
+        .icon-action-btn {
+        width: 75px;
+        height: 25px;
+        border: none;
+        border-radius: 999px;
+        background: transparent;
+        color: var(--text-main);
+        cursor: pointer;
+        display: flex;
+        align-items: center;
+        justify-content: center;
+        transition: all 0.2s ease;
+        }
+
+        .upload-action-btn {
+        position: relative;
+        margin-left: auto;
+        margin-right: 10px;
+        flex-shrink: 0;
+        }
+
+        .upload-action-btn:hover,
+        .icon-action-btn:hover {
+        transform: scale(1.03);
+        box-shadow: 0 6px 14px rgba(0,0,0,0.15);
+        }
+
+
+        .icon-action-btn.search.is-ready,
+        .upload-action-btn.is-ready {
+            background: linear-gradient(
+                120deg,
+                #4b3f9c,
+                #005fa3,
+                #4b3f9c
+            );
+            background-size: 200% auto;
+            color: #ffffff;
+            font-weight: 600;
+            border-radius: 999px;
+            box-shadow:
+                0 6px 16px rgba(0,90,160,0.35),
+                inset 0 1px 0 rgba(255,255,255,0.2);
+            animation: gradientFlow 3s linear infinite;
+            transition: all 0.25s ease;
+        }
+
+
+        .icon-action-btn.search.is-ready:hover,
+        .upload-action-btn.is-ready:hover {
+            transform: translateY(-2px) scale(1.04);
+
+            animation-duration: 1.2s;
+
+            box-shadow:
+                0 10px 22px rgba(0,90,160,0.45),
+                inset 0 1px 0 rgba(255,255,255,0.3);
+        }
+
+
+        /* ===== Disabled ===== */
+
+        .upload-action-btn:disabled,
+        .icon-action-btn:disabled {
+            opacity: 0.5;
+            cursor: not-allowed;
+            background: #e3e7ec;
+            color: #8a9099;
+            box-shadow: none;
+            transform: none;
+            animation: none;
+        }
+
+
+        @keyframes gradientFlow {
+            0% { background-position: 0% center; }
+            100% { background-position: 200% center; }
+        }
+
+        /* ===== Icons ===== */
+        .icon-action-btn img,
+        .upload-action-btn img {
+        width: 20px;
+        height: 20px;
+        }
+
+        /* ===== Right Action Group ===== */
+        .action-icons {
+        position: absolute;
+        right: 8px;
+        top: 50%;
+        transform: translateY(-50%);
+        display: flex;
+        gap: 4px;
+        }
+
+        /* ===== Select ===== */
+        .action-type-select {
+        width: 160px;
+        text-align: center;
+        border-radius: 999px;
+        border: 1px solid var(--border);
+        padding: 6px;
+        background: white;
+        }
+
+        /* ===== Hint Text ===== */
+        .upload-hint {
+        margin-top: 8px;
+        font-size: 13px;
+        color: var(--text-muted);
+        }
+
+        .chatbot-shortcut-links {
+            width: 70%;
+            margin: 0 auto 30px;
+            background: transparent;
+            padding: 0;
+            text-align: center;
+            display: flex;
+            justify-content: center;
+            gap: 10px;
+            flex-wrap: wrap;
+        }
+
+        .chatbot-tech-btn {
             display: inline-flex;
             align-items: center;
             justify-content: center;
-            width: 45px;
-            height: 45px;
-            padding: 0;
-            border-radius: 50%;
-            background: linear-gradient(135deg, #0071c5, #00a3e0);
-            color: white;
+            gap: 6px;
+
+            min-height: 38px;
+            padding: 7px 14px;
+            border-radius: 999px;
+            font-size: 0.8rem;
             font-weight: 600;
             text-decoration: none;
-            transition: width 0.4s ease, box-shadow 0.2s ease, transform 0.2s ease;
-            box-shadow: 0 4px 12px rgba(0, 113, 197, 0.35);
-            overflow: hidden;
-            white-space: nowrap;
-        }
-        .chatbot-shortcut-icon {
-            flex: 0 0 auto;
-            width: 45px;
-            text-align: center;
-            line-height: 45px;
-        }
-        .chatbot-shortcut-label {
-            max-width: 0;
-            opacity: 0;
-            overflow: hidden;
-            white-space: nowrap;
-            transition: max-width 0.35s ease, opacity 0.2s ease;
-        }
-        .chatbot-shortcut-link:hover {
-            color: white;
-            text-decoration: none;
-            transform: translateY(-1px);
-            box-shadow: 0 6px 14px rgba(0, 113, 197, 0.45);
-            width: 210px;
-            border-radius: 25px;
-            padding: 0 12px 0 0;
-            justify-content: flex-start;
-        }
-        .chatbot-shortcut-link:hover .chatbot-shortcut-label {
-            max-width: 160px;
-            opacity: 1;
-        }
-        .tabs {
-            display: flex;
-            background-color: #cfd2d5;
-            border-radius: 30px;
-            margin-bottom: 15px;
-            padding: 2px;
-            gap: 2px;
-        }
-        .tab {
-            flex: 1;
-            padding: 5px 10px;
-            text-align: center;
-            cursor: pointer;
-            background-color: #cfd2d5;
-            border: transparent;
-            border-radius: 30px;
-            font-weight: 500;
-            color: #959595;
-        }
-        .tab:hover {
-            background-color: #cfd2d5;
-            color: #343434;
-        }
-        .tab.active {
-            background-color: #fcfcfc;
-            color: rgba(0, 0, 0, 0.676);
-        }
-        .tab-content {
-            display: none;
-        }
-        .tab-content.active {
-            display: block;
+            color: #ffffff;
+            border: 1px solid rgba(0, 90, 160, 0.5);
+            background: linear-gradient(
+                120deg,
+                #7a55d6,
+                #2f8fd1,
+                #7a55d6
+            );
+            background-size: 200% auto;
+
+            box-shadow:
+                0 6px 16px rgba(0, 80, 140, 0.35),
+                inset 0 1px 0 rgba(255,255,255,0.15);
+            transition: all 0.2s ease;
+            animation: gradientFlow 3s linear infinite;
         }
         
-        /* File Upload Styles */
-        .upload-bar {
-            margin-top: 8px;
-            display: flex;
-            align-items: center;
-            gap: 6px;
-            width: 100%;
-            border: 1px solid #cfd8e3;
-            border-radius: 25px;
-            background-color: #ffffff;
-            cursor: pointer;
-            transition: border-color 0.2s ease, box-shadow 0.2s ease;
-            font-family: 'Inter', sans-serif;
-        }
-        .upload-bar:hover {
-            border-color: #9fb3c8;
-            box-shadow: 0 2px 8px rgba(17, 119, 192, 0.12);
-        }
-        .upload-bar-file-name {
-            flex: 1;
-            font-family: 'Inter', sans-serif !important;
-            color: #61676f;
-            font-size: 14.5px;
-            padding-left: 20px;
-            white-space: nowrap;
-            overflow: hidden;
-            text-overflow: ellipsis;
-        }
-        .upload-action-btn {
-            width: 90px;
-            height: 37px;
-            right: 0px;
-            border: none;
-            border-radius: 30px;
-            display: flex;
-            align-items: center;
-            justify-content: center;
-            gap: 2px;
-            cursor: pointer;
-            transition: transform 0.2s ease, box-shadow 0.2s ease;
-            padding: 0;
-            background-color: transparent;
-            color: #474b52;
-            font-weight: 500;
-        }
-        .upload-action-btn img {
-            width: 20px;
-            height: 20px;
-            display: block;
-            object-fit: contain;
-        }
-        .upload-action-btn:hover:not(:disabled) {
-            transform: translateY(-1px);
-            box-shadow: 0 3px 10px rgba(0, 0, 0, 0.2);
-        }
-        .upload-action-btn:disabled {
-            background-color: transparent;
-            cursor: not-allowed;
-            transform: none;
-            opacity: 0.55;
-            box-shadow: none;
-        }
-        .upload-hint {
-            margin-top: 8px;
-            color: #666;
-            font-size: 15px;
-        }
-        .action-type-select {
-            width: 160px !important;
-            min-width: 160px !important;
-            max-width: 160px !important;
-            white-space: nowrap;
-            overflow: hidden;
-            text-overflow: ellipsis;            
-            text-align: center;
-            text-align-last: center;        
-        }
-        .action-icons {
-            position: absolute;
-            right: 0px;
-            top: 50%;
-            transform: translateY(-50%);
-            display: flex;
-            gap: 2px;
-            align-items: center;
-        }
-        .icon-action-btn {
-            width: 90px;
-            height: 37px;
-            color: #474b52;
-            border: none;
-            border-radius: 30px;
-            display: flex;
-            align-items: center;
-            justify-content: center;
-            cursor: pointer;
-            transition: transform 0.2s ease, box-shadow 0.2s ease;
-            padding: 0;
-        }
-        .icon-action-btn:hover {
-            transform: translateY(-1px);
-            box-shadow: 0 3px 10px rgba(0, 0, 0, 0.2);
-        }
-        .icon-action-btn:disabled {
-            background-color: transparent;
-            color: #8a9099;
-            cursor: not-allowed;
-            transform: none;
-            box-shadow: none;
-            opacity: 0.65;
-        }
-        .icon-action-btn:disabled:hover {
-            transform: none;
-            box-shadow: none;
-        }
-        .icon-action-btn.search {
-            background-color: transparent;
-        }
-        .icon-action-btn.search.is-ready {
-            background: linear-gradient(135deg, #7fd2ff, #58acec);
+        .chatbot-tech-btn:hover {
+            transform: translateY(-2px) scale(1.03);
+
+            animation-duration: 1.2s;
+
             color: #ffffff;
-            font-weight: 700;
-            transform: translateY(-1px);
-            box-shadow: 0 8px 18px rgba(40, 135, 200, 0.35) inset;
-        }
-        .icon-action-btn.search.is-ready:hover {
-            transform: translateY(-2px);
-            box-shadow: 0 10px 22px rgba(40, 135, 200, 0.45) inset;
-        }
-        .icon-action-btn.etl {
-            background-color: #0f8a5f;
-        }
-        .icon-action-btn.etl-llm {
-            background-color: #5b4fcf;
-        }
-        .icon-action-btn img {
-            width: 20px;
-            height: 20px;
+
+            box-shadow:
+                0 10px 24px rgba(0, 90, 160, 0.45),
+                inset 0 1px 0 rgba(255,255,255,0.25);
         }
         
-        .upload-action-btn.is-ready {
-            background: linear-gradient(135deg, #7fd2ff, #58acec);
-            color: #ffffff;
-            font-weight: 700;
-            transform: translateY(-1px);
-            box-shadow: 0 8px 18px rgba(40, 135, 200, 0.35) inset;
+        .chatbot-tech-btn:active {
+            transform: scale(0.97);
         }
-        .upload-action-btn.is-ready:hover {
-            transform: translateY(-2px);
-            box-shadow: 0 10px 22px rgba(40, 135, 200, 0.45) inset;
+
+        @keyframes gradientFlow {
+            0% {
+                background-position: 0% center;
+            }
+            100% {
+                background-position: 200% center;
+            }
         }
+
     </style>
 </head>
 
@@ -296,7 +641,7 @@
     <!-- SVG Banner -->
     <div class="form-container mb-4 p-0 overflow-hidden" 
         style="border-radius: 0; margin-top: 0; box-shadow: 0 4px 6px rgba(0, 0, 0, 0.3);">
-        <img src="{{ url_for('static', filename='banner.svg') }}"
+        <img src="{{ url_for('static', filename='new_logo_banner.PNG') }}"
             alt="Banner" 
             class="w-100" 
             style="display: block; width: 100%; height: auto; shape-rendering: crispEdges;">
@@ -313,32 +658,6 @@
         </div>
     </div>
 
-    <!-- 🤖 Log Chatbot shortcut -->
-    <div id="chatbot-shortcut-links" style="width: 70%; margin: 30px auto 14px; background: transparent; padding: 0; text-align: center; display: flex; justify-content: center; gap: 10px; flex-wrap: wrap;">
-            <a href="/log_chatbot/" style="
-                display: inline-flex; align-items: center; gap: 5px;
-                background: #fcfcfc; border: 2px solid transparent;
-                color: rgba(102, 107, 117, 0.848); text-decoration: none;
-                padding: 2px 10px; border-radius: 18px;
-                font-size: 0.78rem; font-weight: 600;
-                box-shadow: 0 1px 6px rgba(0,113,197,0.16);
-                transition: opacity 0.2s;"
-                onmouseover="this.style.opacity='0.85'" onmouseout="this.style.opacity='1'">
-                🤖 Wi-Fi Analysis Agent
-            </a>
-            <a href="/nw_analysis/" style="
-                display: inline-flex; align-items: center; gap: 5px;
-                background: #fcfcfc; border: 2px solid transparent;
-                color: rgba(102, 107, 117, 0.848); text-decoration: none;
-                padding: 2px 10px; border-radius: 18px;
-                font-size: 0.78rem; font-weight: 600;
-                box-shadow: 0 1px 6px rgba(0,113,197,0.16);
-                transition: opacity 0.2s;"
-                onmouseover="this.style.opacity='0.85'" onmouseout="this.style.opacity='1'">
-                🌐 Network Experience
-            </a>
-    </div>
-
     <!-- Tabs Container -->
     <div class="tabs-container" id="tabs-container">
         <div class="tabs">
@@ -350,7 +669,7 @@
         <div id="case-number-tab" class="tab-content active">
             <div id="form-box">
         <form id="mainForm" method="post" onsubmit="handleSubmit(event)">
-            <div style="display: flex; gap: 0; margin-bottom: 35px; position: relative;">
+            <div style="display: flex; gap: 0; margin-top: 20px; margin-bottom: 35px; position: relative;">
                 <input type="text" class="form-control" id="case_number" name="case_number" placeholder="Enter case number here (e.g., 00997200)" value="" required style="border-radius: 25px; padding: 12px 150px 12px 20px; flex: 1; font-family:'Inter', sans-serif;">
                 <div class="action-icons">
                     <button id="case-submit-btn" type="button" class="icon-action-btn search" aria-label="Submit" title="Submit" onclick="handleSubmit(event, 'submit')" disabled>
@@ -370,9 +689,10 @@
                         Submit
                     </button>
                 </div>
-                <label id="bsod-checkbox" style="margin-top: 5px;">
-                    <input type="checkbox" id="bsod-checkbox-input">
-                    <span style="color: #666; font-size: 14px;">This is a BSOD dump</span>
+                <label id="bsod-checkbox" class="bsod-toggle">
+                    <input type="checkbox" id="bsod-checkbox-input" class="bsod-toggle-input">
+                    <span class="bsod-toggle-track" aria-hidden="true"></span>
+                    <span class="bsod-toggle-text">This is a BSOD dump</span>
                 </label>
             </div>
     </div>
@@ -424,7 +744,17 @@
     </div>
 
 
-    <div class="mb-5"></div>
+    <div style="height: 120px;"></div>
+
+    <!-- 🤖 Log Chatbot shortcut -->
+    <div id="chatbot-shortcut-links" class="chatbot-shortcut-links">
+            <a href="/log_chatbot/" class="chatbot-tech-btn">
+                🤖 Wi-Fi Analysis Agent
+            </a>
+            <a href="/nw_analysis/" class="chatbot-tech-btn">
+                🌐 Network Experience
+            </a>
+    </div>
 
     <!-- Bootstrap JS -->
     <script src="https://code.jquery.com/jquery-3.5.1.slim.min.js"></script>
@@ -447,6 +777,18 @@
         let uploadSocket = null;
         let uploadProgressLine = null;
         let uploadPreparingTimeoutId = null;
+        
+        const tabs = document.querySelectorAll('.tab');
+        const container = document.querySelector('.tabs');
+
+        tabs.forEach((tab, index) => {
+        tab.addEventListener('click', () => {
+            container.className = 'tabs active-' + index;
+
+            tabs.forEach(t => t.classList.remove('active'));
+            tab.classList.add('active');
+        });
+        });
 
         function clearUploadPreparingTimeout() {
             if (uploadPreparingTimeoutId !== null) {
@@ -807,6 +1149,7 @@
             if (selectedFiles.length === 0) {
                 if (fileNameLabel) {
                     fileNameLabel.textContent = 'No file selected';
+                    fileNameLabel.classList.remove('has-file');
                 }
                 submitBtn.disabled = true;
                 submitBtn.classList.remove('is-ready');
@@ -819,6 +1162,7 @@
             const selectedName = selectedFiles[0]?.file?.name || '1 file selected';
             if (fileNameLabel) {
                 fileNameLabel.textContent = selectedName;
+                fileNameLabel.classList.add('has-file');
             }
         }
 

@@ -1,7 +1,6 @@
 import psutil
 import json
 import os
-import ctypes
 import socket
 
 DEFAULT_PORT = 48596
@@ -82,11 +81,6 @@ def show_port_occupied_alert(port):
     """Show a user-visible alert when the fixed port is occupied."""
     message = f"Port {port} is already in use. IntelAvatar will not start."
     print(f"❌ {message}")
-    if os.name == 'nt':
-        try:
-            ctypes.windll.user32.MessageBoxW(0, message, "IntelAvatar", 0x00000010)
-        except Exception:
-            pass
 
 
 def show_port_reassigned_alert(old_port, new_port, persisted: bool = True):
@@ -102,8 +96,3 @@ def show_port_reassigned_alert(old_port, new_port, persisted: bool = True):
             f"IntelAvatar will use port {new_port} for this run only."
         )
     print(f"⚠️ {message}")
-    if os.name == 'nt':
-        try:
-            ctypes.windll.user32.MessageBoxW(0, message, "IntelAvatar", 0x00000040)
-        except Exception:
-            pass

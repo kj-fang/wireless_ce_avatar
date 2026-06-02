@@ -897,14 +897,22 @@
 
 
     <script>
-        // Utility function to copy text to clipboard
+        // Copy parent directory of a file path to clipboard
         function copyToClipboard(text) {
-            const dir = text.replace(/[/\\][^/\\]+$/, '');
-            navigator.clipboard.writeText(dir).then(() => {
-                console.log('Copied dir to clipboard:', dir);
-            }).catch(err => {
-                console.error('Failed to copy:', err);
-            });
+            // Jinja urlencode uses + for spaces; decodeURIComponent doesn't handle +
+            text = decodeURIComponent(text.replace(/\+/g, '%20'));
+            let dir = text.replace(/[/\\][^/\\]+$/, '');
+            if (!dir) dir = text.match(/^[A-Za-z]:/) ? text.slice(0, 3) : '/';
+            if (navigator.clipboard) {
+                navigator.clipboard.writeText(dir).catch(() => {});
+            } else {
+                const ta = Object.assign(document.createElement('textarea'), { value: dir });
+                ta.style.cssText = 'position:fixed;opacity:0';
+                document.body.appendChild(ta);
+                ta.select();
+                document.execCommand('copy');
+                document.body.removeChild(ta);
+            }
         }
 
         // Extract filename from full path (handle both / and \)
@@ -1785,7 +1793,7 @@
         });
         itemEl.classList.add('selected');
         updateWifiActionButtons();
-        copyToClipboard(decodeURIComponent(itemEl.dataset.etlEncoded));
+        copyToClipboard(itemEl.dataset.etlEncoded);
     }
 
     function selectDddRow(itemEl) {
@@ -1794,7 +1802,7 @@
         });
         itemEl.classList.add('selected');
         updateDddActionButtons();
-        copyToClipboard(decodeURIComponent(itemEl.dataset.dddEncoded));
+        copyToClipboard(itemEl.dataset.dddEncoded);
     }
 
     function selectEventRow(itemEl) {
@@ -1803,7 +1811,7 @@
         });
         itemEl.classList.add('selected');
         updateEventActionButtons();
-        copyToClipboard(decodeURIComponent(itemEl.dataset.eventEncoded));
+        copyToClipboard(itemEl.dataset.eventEncoded);
     }
 
     function selectFwRow(itemEl) {
@@ -1812,7 +1820,7 @@
         });
         itemEl.classList.add('selected');
         updateFwActionButtons();
-        copyToClipboard(decodeURIComponent(itemEl.dataset.fwEncoded));
+        copyToClipboard(itemEl.dataset.fwEncoded);
     }
 
     function updateWifiActionButtons() {
@@ -2142,7 +2150,7 @@
         });
         itemEl.classList.add('selected');
         updateBtActionButtons();
-        copyToClipboard(decodeURIComponent(itemEl.dataset.btEncoded));
+        copyToClipboard(itemEl.dataset.btEncoded);
     }
 
     function updateBtActionButtons() {

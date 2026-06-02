@@ -151,7 +151,7 @@ def set_up(socketio):
             
             if app_config.ace_local_test:
                 print("⚠️  ACE local test mode enabled — ACE adapter will use local playbooks and feedback")
-                playbooks_root = Path(__file__).parent[1] / "data" / "ace_playbooks"
+                playbooks_root = Path(__file__).parent.parent / "data" / "ace_playbooks"
 
             ace_runner = AceRunner(
                 llm=llm_helper,

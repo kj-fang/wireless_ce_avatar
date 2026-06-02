@@ -899,11 +899,11 @@
     <script>
         // Utility function to copy text to clipboard
         function copyToClipboard(text) {
-            navigator.clipboard.writeText(text).then(() => {
-                alert('✓ Copied to clipboard');
+            const dir = text.replace(/[/\\][^/\\]+$/, '');
+            navigator.clipboard.writeText(dir).then(() => {
+                console.log('Copied dir to clipboard:', dir);
             }).catch(err => {
                 console.error('Failed to copy:', err);
-                alert('Failed to copy');
             });
         }
 
@@ -1785,6 +1785,7 @@
         });
         itemEl.classList.add('selected');
         updateWifiActionButtons();
+        copyToClipboard(decodeURIComponent(itemEl.dataset.etlEncoded));
     }
 
     function selectDddRow(itemEl) {
@@ -1793,6 +1794,7 @@
         });
         itemEl.classList.add('selected');
         updateDddActionButtons();
+        copyToClipboard(decodeURIComponent(itemEl.dataset.dddEncoded));
     }
 
     function selectEventRow(itemEl) {
@@ -1801,6 +1803,7 @@
         });
         itemEl.classList.add('selected');
         updateEventActionButtons();
+        copyToClipboard(decodeURIComponent(itemEl.dataset.eventEncoded));
     }
 
     function selectFwRow(itemEl) {
@@ -1809,6 +1812,7 @@
         });
         itemEl.classList.add('selected');
         updateFwActionButtons();
+        copyToClipboard(decodeURIComponent(itemEl.dataset.fwEncoded));
     }
 
     function updateWifiActionButtons() {
@@ -2138,6 +2142,7 @@
         });
         itemEl.classList.add('selected');
         updateBtActionButtons();
+        copyToClipboard(decodeURIComponent(itemEl.dataset.btEncoded));
     }
 
     function updateBtActionButtons() {

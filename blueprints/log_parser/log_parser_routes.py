@@ -123,8 +123,8 @@ def _is_allowed_local_analysis_filename(filename: str) -> bool:
     )
 
 
-def _infer_local_upload_case_type(wifi_files, ddd_files, bt_files) -> str:
-    if bt_files and not (wifi_files or ddd_files):
+def _infer_local_upload_case_type(bt_files) -> str:
+    if bt_files:
         return 'bt'
     return 'wifi'
 
@@ -188,7 +188,7 @@ def _process_local_analysis(source_path: str, source_dir: str, file_path: str,
             raise ValueError('No supported analysis files found in the uploaded file.')
 
         local_case_nbr = f'local_upload_{timestamp}'
-        local_case_type = _infer_local_upload_case_type(wifi_files, ddd_files, bt_files)
+        local_case_type = _infer_local_upload_case_type(bt_files)
 
         session['case_context'] = CaseContext(
             case_nbr=local_case_nbr,

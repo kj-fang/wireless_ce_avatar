@@ -114,10 +114,25 @@ def close_error_dialog() -> None:
     try:
         windows = Desktop(backend="uia").windows()
         for win in windows:
-            if "HCI Decode" in win.window_text():
-                print("⚠️ Error dialog found. Closing it.")
-                # The button label is localized; here it's Traditional Chinese "確定"
-                win.child_window(title="確定", control_type="Button").click_input()
+            # The HCI Decode error dialog has an EMPTY title ("").
+            # We identify it by Win32 class "#32770" (standard MessageBox/Dialog),
+            # then verify its [Text] child contains the expected error message.
+            if win.element_info.class_name != "#32770":
+                continue
+            has_hci_error = any(
+                "HCI Decode" in c.window_text()
+                for c in win.descendants()
+                if c.element_info.control_type == "Text"
+            )
+            if has_hci_error:
+                print("⚠️ HCI Decode error dialog found. Closing it.")
+                # child_window() is not available on raw UIAWrapper from Desktop.windows().
+                # Use descendants() to locate the OK button directly.
+                for btn in win.descendants():
+                    if btn.element_info.control_type == "Button" and btn.window_text() == "OK":
+                        btn.click_input()
+                        print("✅ Closed dialog with button 'OK'")
+                        break
                 break
     except Exception as e:
         print("⚠️ Failed to close error dialog:", e)
@@ -276,7 +291,9 @@ def bt_analysis_autoFile_mode(
         app = Application(backend="uia").start(exe_path)
         active_bt_pid = app.process
         print(f"🚀 Launched BT tool at: {exe_path} (PID: {active_bt_pid})")
-        time.sleep(3)  # Allow GUI to initialize
+        time.sleep(2)           # Give the app time to fully load and show startup dialogs
+        close_error_dialog()    # Dismiss "Could not create/load HCI Decode library" and similar
+        time.sleep(0.5)         # Brief pause after dismissal before interacting with the UI
 
     # 3) Obtain the main window handle
     try:
@@ -525,7 +542,9 @@ def bt_analysis_manualSelect_mode(
         app = Application(backend="uia").start(exe_path)
         active_bt_pid = app.process
         print(f"🚀 Launched BT tool at: {exe_path} (PID: {active_bt_pid})")
-        time.sleep(1)
+        time.sleep(2)           # Give the app time to fully load and show startup dialogs
+        close_error_dialog()    # Dismiss "Could not create/load HCI Decode library" and similar
+        time.sleep(0.5)
 
     # Connect to window
     try:
@@ -533,7 +552,7 @@ def bt_analysis_manualSelect_mode(
         # app_window.set_focus()
     except Exception as e:
         print(f"❌ Failed to get app window: {e}")
-        return
+        return active_bt_pid
 
     if debug:
         print("🔎 Dumping all controls in main window:")
@@ -647,7 +666,9 @@ def bt_analysis_autoFolder_mode(
         app = Application(backend="uia").start(exe_path)
         active_bt_pid = app.process
         print(f"🚀 BT tool launched at: {exe_path} (PID: {active_bt_pid})")
-        time.sleep(0.5)  # Wait for GUI to initialize fully
+        time.sleep(2)           # Give the app time to fully load and show startup dialogs
+        close_error_dialog()    # Dismiss "Could not create/load HCI Decode library" and similar
+        time.sleep(0.5)
 
     # 4) Get the app window; dump controls if requested
     try:

@@ -897,14 +897,22 @@
 
 
     <script>
-        // Utility function to copy text to clipboard
+        // Copy parent directory of a file path to clipboard
         function copyToClipboard(text) {
-            navigator.clipboard.writeText(text).then(() => {
-                alert('✓ Copied to clipboard');
-            }).catch(err => {
-                console.error('Failed to copy:', err);
-                alert('Failed to copy');
-            });
+            // Jinja urlencode uses + for spaces; decodeURIComponent doesn't handle +
+            text = decodeURIComponent(text.replace(/\+/g, '%20'));
+            let dir = text.replace(/[/\\][^/\\]+$/, '');
+            if (!dir) dir = text.match(/^[A-Za-z]:/) ? text.slice(0, 3) : '/';
+            if (navigator.clipboard) {
+                navigator.clipboard.writeText(dir).catch(() => {});
+            } else {
+                const ta = Object.assign(document.createElement('textarea'), { value: dir });
+                ta.style.cssText = 'position:fixed;opacity:0';
+                document.body.appendChild(ta);
+                ta.select();
+                document.execCommand('copy');
+                document.body.removeChild(ta);
+            }
         }
 
         // Extract filename from full path (handle both / and \)
@@ -1375,12 +1383,37 @@
         if (window.pendingLogParser) {
             const { etlPathEncoded, button } = window.pendingLogParser;
             if (msg.status === 'done') {
-                logBox.innerText += ` Starting LLM Analysis...\n`;
+                logBox.innerText += ` ETL done — preparing Agent environment...\n`;
                 logBox.scrollTop = logBox.scrollHeight;
                 setWifiActionButtonsBusy(false);
-                window.location.href = `${LOGPARSER_URL}?etl_path=${etlPathEncoded}`;
-                button.classList.remove('disabled');
-                button.innerText = 'Analyze with LLM';
+                button.innerText = '⏳ Preparing UI...';
+                const etlPath = decodeURIComponent(etlPathEncoded);
+                fetch(CHATBOT_PREPARE_URL, {
+                    method: 'POST',
+                    headers: { 'Content-Type': 'application/json' },
+                    body: JSON.stringify({ etl_path: etlPath })
+                })
+                .then(res => res.json())
+                .then(data => {
+                    if (data.success) {
+                        logBox.innerText += `✅ Ready — opening Agent Chatbot...\n`;
+                        logBox.scrollTop = logBox.scrollHeight;
+                        window.location.href = `${CHATBOT_URL}?auto_run=analyze_all`;
+                    } else {
+                        button.classList.remove('disabled');
+                        button.innerText = 'Analyze with LLM';
+                        logBox.innerText += `❌ Agent prepare failed: ${data.error}\n`;
+                        logBox.scrollTop = logBox.scrollHeight;
+                        setAnalysisCardLocked(false);
+                    }
+                })
+                .catch(err => {
+                    button.classList.remove('disabled');
+                    button.innerText = 'Analyze with LLM';
+                    logBox.innerText += `❌ Error: ${err}\n`;
+                    logBox.scrollTop = logBox.scrollHeight;
+                    setAnalysisCardLocked(false);
+                });
             } else {
                 setWifiActionButtonsBusy(false);
                 setAnalysisCardLocked(false);
@@ -1779,6 +1812,7 @@
         });
         itemEl.classList.add('selected');
         updateWifiActionButtons();
+        copyToClipboard(itemEl.dataset.etlEncoded);
     }
 
     function selectDddRow(itemEl) {
@@ -1787,6 +1821,7 @@
         });
         itemEl.classList.add('selected');
         updateDddActionButtons();
+        copyToClipboard(itemEl.dataset.dddEncoded);
     }
 
     function selectEventRow(itemEl) {
@@ -1795,6 +1830,7 @@
         });
         itemEl.classList.add('selected');
         updateEventActionButtons();
+        copyToClipboard(itemEl.dataset.eventEncoded);
     }
 
     function selectFwRow(itemEl) {
@@ -1803,6 +1839,7 @@
         });
         itemEl.classList.add('selected');
         updateFwActionButtons();
+        copyToClipboard(itemEl.dataset.fwEncoded);
     }
 
     function updateWifiActionButtons() {
@@ -2132,6 +2169,7 @@
         });
         itemEl.classList.add('selected');
         updateBtActionButtons();
+        copyToClipboard(itemEl.dataset.btEncoded);
     }
 
     function updateBtActionButtons() {

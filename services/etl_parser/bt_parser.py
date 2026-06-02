@@ -157,7 +157,9 @@ def bt_decode_hci_via_folder(log_folder_path: str, log_path: str, timeout: int =
         str path to the generated .hci.txt, or None on failure / timeout.
     """
     # If hci.txt already exists and is ready, return it immediately
-    hci_txt = log_path + ".hci.txt"
+    print(log_path)
+    _base = log_path[:-4] if log_path.lower().endswith('.etl') else log_path
+    hci_txt = _base + ".hci.txt"
     if os.path.exists(hci_txt) and is_file_ready(hci_txt):
         print(f"✅ HCI log already exists and is ready: {hci_txt}")
         return hci_txt
@@ -706,7 +708,8 @@ def bt_analysis_autoFolder_mode(
         print("❌ Failed to trigger Decode Folder:", e)
 
     # 7) Wait for specific output '<log_path>.hci.txt' and open with viewer
-    hci_txt = log_path + ".hci.txt"
+    _base = log_path[:-4] if log_path.lower().endswith('.etl') else log_path
+    hci_txt = _base + ".hci.txt"
     print(f"⏳ Waiting for HCI log until found: {hci_txt}")
 
     retry_count = 0

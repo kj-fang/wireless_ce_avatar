@@ -669,11 +669,11 @@ def prepare():
     data = request.get_json(silent=True) or {}
     etl_path = data.get("etl_path", "").strip()
     if not etl_path:
-        return jsonify({"success": False, "error": "etl_path is required"}), 400
+         return jsonify({"success": False, "error": "etl_path is required"}), 400
 
     log_path = etl_path + ".log"
     if not os.path.exists(log_path):
-        return jsonify({"success": False, "error": f".log file not found: {log_path}"}), 404
+         return jsonify({"success": False, "error": f".log file not found: {log_path}"}), 404
 
     try:
         # Pull consolidated issue context from all session sources

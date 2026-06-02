@@ -21,6 +21,7 @@ from utils.log_parser_preprocess import extract_all_keywords_from_filter_file
 from services.log_parser_file_manage_service import FileManagerService
 from services.log_parser_service import LogParserService
 from services.etl_parser.wpp_ddd_parser import wpp_ddd_parser_run
+from services.etl_parser.bt_parser import bt_decode_hci_via_folder
 
 log_parser_bp = Blueprint("log_parser", __name__, url_prefix="/log_parser")
 
@@ -122,6 +123,10 @@ def _is_allowed_local_analysis_filename(filename: str) -> bool:
         or bool(re.search(r'\.etl\.\d+$', clean_name, re.IGNORECASE))
     )
 
+def _is_bt_etl(file_path: str) -> bool:
+    """Return True if the file is a BT ETL that should be decoded via bt_decode_hci_via_folder."""
+    name = os.path.basename(file_path).lower()
+    return name.startswith(('ibtpci-', 'ibtusb-')) and name.endswith('.etl')
 
 def _infer_local_upload_case_type(bt_files) -> str:
     if bt_files:
@@ -188,6 +193,7 @@ def _process_local_analysis(source_path: str, source_dir: str, file_path: str,
             raise ValueError('No supported analysis files found in the uploaded file.')
 
         local_case_nbr = f'local_upload_{timestamp}'
+        # Only consider bt_files for case type inference since wifi_files may be present in both wifi and bt cases
         local_case_type = _infer_local_upload_case_type(bt_files)
 
         session['case_context'] = CaseContext(
@@ -212,6 +218,14 @@ def _process_local_analysis(source_path: str, source_dir: str, file_path: str,
     elif file_path.lower().endswith('.log'):
         session['latest_etl_path'] = None
         app_config.last_analyzed_log_path = file_path
+        return url_for('log_chatbot.index', auto_run='analyze_all')
+
+    elif _is_bt_etl(file_path):    
+        hci_path = bt_decode_hci_via_folder(source_dir, file_path)
+        if not hci_path:
+            raise ValueError(f'BT HCI decode failed or timed out for: {original_name}')
+        session['latest_etl_path'] = hci_path
+        app_config.last_analyzed_log_path = hci_path
         return url_for('log_chatbot.index', auto_run='analyze_all')
 
     else:
@@ -355,6 +369,10 @@ def upload_local_analysis():
     if source_lower.endswith('.log'):
         resp['use_chatbot'] = True
         resp['log_path'] = helpers.to_long_path(source_path)
+    elif _is_bt_etl(source_path):                              # BT .etl go log_path
+        resp['use_chatbot'] = True
+        _base = source_path[:-4] if source_path.lower().endswith('.etl') else source_path
+        resp['log_path'] = helpers.to_long_path(_base + '.hci.txt')
     elif source_lower.endswith('.etl') or bool(re.search(r'\.etl\.\d+$', source_lower)):
         resp['use_chatbot'] = True
         resp['etl_path'] = helpers.to_long_path(source_path)

@@ -410,6 +410,10 @@ class WifiLogAgentSystem:
         self.issue_context: dict = {}  # populated by prime_with_context()
         self.issue_time: Optional[datetime] = None  # populated by prime_with_context() or _chat_with_tools()
         self._issue_time_time_only: bool = False
+        # Half-width (in minutes) of the Segment2 log window captured
+        # around issue_time. Default ±5 min; user-adjustable from the
+        # chatbot sidebar via the /chat `issue_time_window_minutes` param.
+        self.issue_time_window_minutes: int = 5
         # In-memory caches for this agent session
         self._raw_log_cache: List[str] = []
         self._raw_log_cache_path: str = ""
@@ -474,9 +478,100 @@ class WifiLogAgentSystem:
             self._driver_init_lines = []
             self._issue_time_window_lines = []
             self._scoped_log_lines = []
+            # Date-format detection is per-file — invalidate explicitly so a
+            # subsequent _log_has_date() call re-runs on the freshly loaded
+            # content. (_log_has_date already keys its own cache on the raw
+            # cache path, but clearing here makes the invariant impossible
+            # to miss when the user loads a WiFi log after a DDD log and
+            # expects the sidebar's date-required mode to come back.)
+            self._log_has_date_cache = None
+            self._log_has_date_cache_path = None
             return None
         except Exception as e:
             return f"Error reading log file: {e}"
+
+    def _log_has_date(self) -> bool:
+        """Whether the loaded log's timestamps carry a DATE
+        (MM/DD/YYYY-HH:MM:SS.mmm) or are time-only (e.g. DDD / tracefmt logs:
+        "HH:MM:SS.fffffff ..." with no date). Cached per loaded log path.
+
+        This splits the pre-scan into two paths: dated logs keep the original
+        datetime windowing; time-only logs match by time-of-day instead, so a
+        DDD log (no date) doesn't leave the agent with nothing to analyse.
+        """
+        if self._ensure_raw_log_cache():
+            return True  # load error → assume dated (keep the original path)
+        if getattr(self, "_log_has_date_cache_path", None) == self._raw_log_cache_path \
+                and getattr(self, "_log_has_date_cache", None) is not None:
+            return self._log_has_date_cache
+        full_re = re.compile(r'\d{2}/\d{2}/\d{4}-\d{2}:\d{2}:\d{2}\.\d{3}')
+        has_date = any(full_re.search(line) for line in (self._raw_log_cache or [])[:2000])
+        self._log_has_date_cache = has_date
+        self._log_has_date_cache_path = self._raw_log_cache_path
+        return has_date
+
+    def _merge_wrapped_lines_if_needed(self) -> None:
+        """Some time-only logs (e.g. DDD) wrap a single entry across extra
+        physical lines that carry no leading timestamp. Join each such
+        continuation line back onto the preceding entry so every logical entry
+        is one line — otherwise the orphan fragments break time-windowing and
+        skill filtering.
+
+        Surgical + idempotent: only runs for no-date logs (dated logs are
+        untouched), and only rewrites the cache when a wrap is actually found.
+        An entry line starts with an optional sequence number + a HH:MM:SS
+        time-of-day; anything else is treated as a continuation.
+        """
+        if self._log_has_date():
+            return
+        lines = self._raw_log_cache or []
+        start_re = re.compile(r'^\s*(?:\d+\s+)?\d{1,2}:\d{2}:\d{2}')
+        merged: List[str] = []
+        wrapped = 0
+        for line in lines:
+            if not line.strip() or not merged or start_re.match(line):
+                # Blank lines and entry-start lines pass through unchanged;
+                # blanks are never treated as continuations.
+                merged.append(line)
+            else:
+                merged[-1] = merged[-1].rstrip("\r\n") + " " + line.strip()
+                wrapped += 1
+        if wrapped:
+            self._raw_log_cache = merged
+            print(f"[PreScan] 🔗 Merged {wrapped} wrapped continuation line(s) "
+                  f"in time-only log (now {len(merged)} entries).")
+
+    def get_log_span_minutes(self) -> int:
+        """
+        Whole-minute span of the loaded log (first parseable timestamp to
+        last). Used to bound the sidebar issue-time capture window so the
+        user can't request a window wider than the log itself. Returns 0
+        when the log can't be read or has no parseable timestamps (the
+        caller then falls back to a generic cap).
+        """
+        if self._ensure_raw_log_cache():
+            return 0  # load error
+        import re as _re
+        import math as _math
+        from datetime import datetime as _dt
+        ts_re = _re.compile(r'(\d{2}/\d{2}/\d{4}-\d{2}:\d{2}:\d{2}\.\d{3})')
+        first_ts = None
+        last_ts = None
+        for line in self._raw_log_cache:
+            m = ts_re.search(line)
+            if not m:
+                continue
+            try:
+                t = _dt.strptime(m.group(1), "%m/%d/%Y-%H:%M:%S.%f")
+            except ValueError:
+                continue
+            if first_ts is None:
+                first_ts = t
+            last_ts = t
+        if first_ts is None or last_ts is None:
+            return 0
+        span_min = (last_ts - first_ts).total_seconds() / 60.0
+        return max(0, int(_math.ceil(span_min)))
 
     def _preprocess_raw_log_context(self) -> None:
         """
@@ -496,6 +591,11 @@ class WifiLogAgentSystem:
         DRIVER_ADD_MARKER = "os issued driver device add"
         RESET_MARKER      = "got command (m1 message) task_dot11_reset"
         TS_RE = re.compile(r'(\d{2}/\d{2}/\d{4}-\d{2}:\d{2}:\d{2}\.\d{3})')
+
+        # Time-only logs (e.g. DDD) may wrap one entry across extra lines —
+        # merge those back first so segments/scoping see whole entries. No-op
+        # for dated logs and for logs that don't wrap.
+        self._merge_wrapped_lines_if_needed()
 
         total_lines = len(self._raw_log_cache)
 
@@ -578,10 +678,76 @@ class WifiLogAgentSystem:
         seg2_start_idx: int = -1
         seg2_end_idx:   int = -1
 
-        if self.issue_time:
-            # --- 2A: issue_time ±5 min (timestamp indices + contiguous slice) ---
-            window_start = self.issue_time - timedelta(minutes=5)
-            window_end   = self.issue_time + timedelta(minutes=5)
+        if self.issue_time and not self._log_has_date():
+            # --- 2A (TIME-ONLY logs, e.g. DDD/tracefmt with no date) ---
+            # The log carries no date, so match the issue_time's TIME-OF-DAY
+            # only (seconds-of-day). issue_time's date part (if any) is ignored.
+            _raw_win = self.issue_time_window_minutes
+            _win = _raw_win if isinstance(_raw_win, int) and _raw_win >= 0 else 5
+            issue_sod = (self.issue_time.hour * 3600 + self.issue_time.minute * 60
+                         + self.issue_time.second)
+            win_sec = _win * 60
+            # Seconds-of-day is cyclic — the time-of-day axis wraps at
+            # midnight (86400). Issue times near 00:00 or 23:59 with a
+            # symmetric window will produce a lo/hi that crosses midnight
+            # (negative lo, or hi >= 86400). Build the predicate so it
+            # tests the union of the two valid sub-ranges in that case,
+            # so late-night entries that should be in the window are kept.
+            # The common case (window comfortably inside one day) falls
+            # through to a single-interval comparison.
+            SEC_PER_DAY = 86400
+            lo_sod, hi_sod = issue_sod - win_sec, issue_sod + win_sec
+            if 0 <= lo_sod and hi_sod < SEC_PER_DAY:
+                _in_window = lambda sod: lo_sod <= sod <= hi_sod
+            else:
+                lo_norm = lo_sod % SEC_PER_DAY
+                hi_norm = hi_sod % SEC_PER_DAY
+                if lo_norm <= hi_norm:
+                    _in_window = lambda sod: lo_norm <= sod <= hi_norm
+                else:
+                    # Window wraps midnight — split into two valid ranges.
+                    _in_window = lambda sod: sod >= lo_norm or sod <= hi_norm
+            _time_re = re.compile(r'\b(\d{1,2}):(\d{2}):(\d{2})')
+            # Track only first/last matching indices instead of every match.
+            # On a multi-hour DDD trace a wide capture window can land
+            # thousands of hits — accumulating them all into a List[int]
+            # spikes memory for no gain since we only ever read the first
+            # and the last to slice the cache.
+            seg2_first_hit: Optional[int] = None
+            seg2_last_hit: Optional[int] = None
+            for i, line in enumerate(self._raw_log_cache):
+                m = _time_re.search(line)
+                if not m:
+                    continue
+                sod = int(m.group(1)) * 3600 + int(m.group(2)) * 60 + int(m.group(3))
+                if _in_window(sod):
+                    if seg2_first_hit is None:
+                        seg2_first_hit = i
+                    seg2_last_hit = i
+            if seg2_first_hit is not None and seg2_last_hit is not None:
+                seg2_start_idx = seg2_first_hit
+                seg2_end_idx = seg2_last_hit
+                seg2_lines = self._raw_log_cache[seg2_start_idx:seg2_end_idx + 1]
+                print(
+                    f"[PreScan] ✅ Segment2 (time-only log) — Issue-time window: "
+                    f"line {seg2_start_idx + 1} → line {seg2_end_idx + 1} "
+                    f"({len(seg2_lines)} lines) | ±{_win} min of "
+                    f"{self.issue_time.strftime('%H:%M:%S')} (log has no date)"
+                )
+            else:
+                print(
+                    f"[PreScan] ⚠️  No time-only anchors within ±{_win} min of "
+                    f"{self.issue_time.strftime('%H:%M:%S')} (log has no date) — falling back."
+                )
+
+        elif self.issue_time:
+            # --- 2A: issue_time ±N min (timestamp indices + contiguous slice) ---
+            # 0 is allowed (capture only the exact issue instant); a None /
+            # negative falls back to the default 5.
+            _raw_win = self.issue_time_window_minutes
+            _win = _raw_win if isinstance(_raw_win, int) and _raw_win >= 0 else 5
+            window_start = self.issue_time - timedelta(minutes=_win)
+            window_end   = self.issue_time + timedelta(minutes=_win)
 
             ts_points: List[Tuple[datetime, int]] = []
             for i, line in enumerate(self._raw_log_cache):
@@ -612,8 +778,8 @@ class WifiLogAgentSystem:
                         f"{aligned.strftime('%m/%d/%Y %H:%M:%S')}"
                     )
                     self.issue_time = aligned
-                    window_start = self.issue_time - timedelta(minutes=5)
-                    window_end = self.issue_time + timedelta(minutes=5)
+                    window_start = self.issue_time - timedelta(minutes=_win)
+                    window_end = self.issue_time + timedelta(minutes=_win)
                     reasonable = (
                         (log_first_ts - timedelta(hours=24)) <= self.issue_time <= (log_last_ts + timedelta(hours=24))
                     )
@@ -642,11 +808,11 @@ class WifiLogAgentSystem:
                     f"[PreScan] ✅ Segment2 — Issue-time window: "
                     f"line {seg2_start_idx + 1} → line {seg2_end_idx + 1} "
                     f"({len(seg2_lines)} lines, contiguous index slice) | "
-                    f"±5 min of {self.issue_time.strftime('%m/%d/%Y %H:%M:%S')}"
+                    f"±{_win} min of {self.issue_time.strftime('%m/%d/%Y %H:%M:%S')}"
                 )
             elif self.issue_time is not None:
                 print(
-                    f"[PreScan] ⚠️  No timestamped anchors within ±5 min of "
+                    f"[PreScan] ⚠️  No timestamped anchors within ±{_win} min of "
                     f"{self.issue_time.strftime('%m/%d/%Y %H:%M:%S')} — "
                     f"falling back to Segment1 end → EOF."
                 )
@@ -666,6 +832,15 @@ class WifiLogAgentSystem:
                 )
             else:
                 print("[PreScan] ⚠️  No driver markers found — Segment2 empty.")
+
+        # Time-only logs (e.g. DDD) often have no driver markers AND no in-window
+        # anchors (wrong/empty issue time). Don't leave the agent with nothing —
+        # scope the whole log so analysis can still proceed.
+        if not seg2_lines and total_lines and not self._log_has_date():
+            seg2_lines = list(self._raw_log_cache)
+            seg2_start_idx = 0
+            seg2_end_idx = total_lines - 1
+            print(f"[PreScan] ℹ️  Time-only log: no window match — scoping full log ({total_lines} lines).")
 
         self._issue_time_window_lines = seg2_lines
 
@@ -688,7 +863,7 @@ class WifiLogAgentSystem:
             f"(Seg1: {len(self._driver_init_lines)} + Seg2: {len(seg2_lines)} — overlap: {overlap})"
         )
         if self.issue_time:
-            print(f"[PreScan]  Skill filter will use: scoped {len(merged)} lines (±5 min window around issue_time)")
+            print(f"[PreScan]  Skill filter will use: scoped {len(merged)} lines (±{_win} min window around issue_time)")
         else:
             print(
                 f"[PreScan]  Skill filter will use: scoped {len(merged)} lines "
@@ -1501,6 +1676,109 @@ class WifiLogAgentSystem:
             print(f"[ERROR] {error_msg}")
             return {"type": "text", "data": error_msg}
 
+    @staticmethod
+    def _msg_role(m):
+        return m.get("role") if isinstance(m, dict) else getattr(m, "role", None)
+
+    @staticmethod
+    def _msg_tool_call_ids(m):
+        """Return the list of tool_call ids on an assistant message
+        (works for both plain dicts and the OpenAI SDK message object)."""
+        tcs = m.get("tool_calls") if isinstance(m, dict) else getattr(m, "tool_calls", None)
+        ids = []
+        for tc in (tcs or []):
+            tid = tc.get("id") if isinstance(tc, dict) else getattr(tc, "id", None)
+            if tid:
+                ids.append(tid)
+        return ids
+
+    @staticmethod
+    def _msg_tool_call_id(m):
+        """tool_call_id of a role:\"tool\" message (dict or SDK object)."""
+        return m.get("tool_call_id") if isinstance(m, dict) else getattr(m, "tool_call_id", None)
+
+    def _repair_tool_use_consistency(self) -> None:
+        """Rebuild conversation_history so every assistant ``tool_use`` is
+        immediately followed by ``tool_result`` message(s) answering ALL of its
+        ids — the invariant the (Claude-backed) API enforces.
+
+        It drops only the broken parts, keeping valid context intact:
+          * an assistant message whose tool_calls are NOT all answered by the
+            tool messages right after it — dropped together with those partial
+            tool results;
+          * a stray ``role:"tool"`` message with no owning assistant tool_use.
+
+        Called right before every LLM request, so an orphan from ANY source —
+        an aborted prior turn, a per-step token-limit bail-out, a mid-history
+        injection (e.g. after editing a skill) — can never reach the API and
+        trigger a 400 ("tool_use ids ... without tool_result blocks ...").
+        """
+        hist = self.conversation_history or []
+        n = len(hist)
+        out = []
+        i = 0
+        dropped = 0
+        while i < n:
+            m = hist[i]
+            # Identify a tool-use message by its tool_calls, NOT by role: the
+            # raw assistant SDK message object does not reliably expose `.role`
+            # to our helpers (it can read back as None). Classifying by role
+            # would miss it and then wrongly drop its valid tool_results.
+            call_ids = set(self._msg_tool_call_ids(m))
+            if call_ids:
+                # Consume the immediately-following run of tool results and keep
+                # ONLY those that match THIS message's ids (exactly once each);
+                # extras / duplicates / mismatched ids are dropped.
+                j = i + 1
+                matched = []
+                seen = set()
+                while j < n and self._msg_role(hist[j]) == "tool":
+                    tid = self._msg_tool_call_id(hist[j])
+                    if tid in call_ids and tid not in seen:
+                        matched.append(hist[j])
+                        seen.add(tid)
+                    else:
+                        dropped += 1   # extra / duplicate / mismatched tool result
+                    j += 1
+                if seen == call_ids:
+                    out.append(m)
+                    out.extend(matched)
+                else:
+                    # Not every tool_use was answered → drop the message AND its
+                    # partial tool results (can't send an unanswered tool_use).
+                    dropped += 1 + len(matched)
+                i = j
+                continue
+            if self._msg_role(m) == "tool":
+                # A tool result not consumed by a tool-use run above = orphan.
+                dropped += 1
+                i += 1
+                continue
+            out.append(m)
+            i += 1
+        if dropped:
+            print(f"[chat] 🧹 Repaired tool_use/tool_result consistency — "
+                  f"dropped {dropped} orphan/stray message(s) before sending.")
+            self.conversation_history = out
+
+    def _history_skeleton(self) -> str:
+        """Compact one-line-per-message view of conversation_history showing
+        index + role + tool id(s). Dumped when an LLM request fails so a
+        tool_use/tool_result mismatch can be pinpointed by message index and id
+        (e.g. the API's "messages.N: tool_use ids ... without tool_result")."""
+        lines = []
+        for idx, m in enumerate(self.conversation_history or []):
+            role = self._msg_role(m)
+            ids = self._msg_tool_call_ids(m)
+            tcid = self._msg_tool_call_id(m)
+            if ids:  # tool-use message (classify by tool_calls, role may be None)
+                lines.append(f"  [{idx}] {role or 'assistant?'} tool_use={[s[:12] for s in ids]}")
+            elif tcid:
+                lines.append(f"  [{idx}] {role or 'tool?'} tool_result={tcid[:12]}")
+            else:
+                lines.append(f"  [{idx}] {role}")
+        return "\n".join(lines) if lines else "  (empty)"
+
     def _chat_with_tools(self, user_message: str, max_steps: int = 6,
                          temperature: float = 0.1, step_callback=None) -> dict:
         """
@@ -1519,6 +1797,12 @@ class WifiLogAgentSystem:
 
         tools = self._build_tools()
         final_report = None
+
+        # Self-heal: surgically drop any orphan tool_use/tool_result left by a
+        # prior aborted turn (LLM error, tool-arg JSON parse failure, per-step
+        # token-limit bail-out, etc.) so the API can't 400 on it. Keeps valid
+        # context — unlike a full conversation reset.
+        self._repair_tool_use_consistency()
 
         # Detect first user turn: prime_with_context may have added a system
         # message but no user message yet — treat that as first turn so full
@@ -1660,6 +1944,10 @@ class WifiLogAgentSystem:
                     ),
                 })
 
+            # Guarantee the request never carries an orphan tool_use/tool_result
+            # (created this turn or a prior one) — the #1 cause of the API's
+            # "tool_use ids ... without tool_result blocks" 400.
+            self._repair_tool_use_consistency()
             try:
                 response = self.client.chat.completions.create(
                     model=self.model,
@@ -1672,6 +1960,10 @@ class WifiLogAgentSystem:
             except Exception as e:
                 error_msg = f"LLM API error at reasoning step {step_idx}: {str(e)}"
                 print(f"[ERROR] {error_msg}")
+                # Dump the role + tool-id skeleton so a tool_use/tool_result
+                # mismatch can be pinpointed by message index + id.
+                print(f"[chat] 🧬 conversation_history skeleton at failure "
+                      f"({len(self.conversation_history)} msgs):\n{self._history_skeleton()}")
                 return {"type": "error", "data": error_msg}
 
             message = response.choices[0].message
@@ -1799,6 +2091,18 @@ class WifiLogAgentSystem:
                         args = json.loads(tool_call.function.arguments)
                     except json.JSONDecodeError as e:
                         print(f"[ERROR] Failed to parse tool arguments: {e}")
+                        # MUST still answer this tool_call — the assistant
+                        # message already carries it, so skipping the
+                        # response would leave an orphan tool_use and 400
+                        # the very next API call. Reply with an error so
+                        # the model can retry / recover.
+                        self.conversation_history.append({
+                            "role": "tool",
+                            "tool_call_id": tool_call.id,
+                            "name": getattr(tool_call.function, "name", "unknown"),
+                            "content": f"Error: could not parse tool arguments as JSON ({e}). "
+                                       f"Please re-issue the call with valid JSON arguments.",
+                        })
                         continue
 
                     if tool_call.function.name == "submit_final_report":
@@ -2236,7 +2540,7 @@ class WifiLogAgentSystem:
                         + "\n"
                         "PHASE 1 (SYMPTOM LOCALIZATION): \n"
                         # "   - Identify the exact timestamp when the reported failure occurred in the logs.\n"
-                        "   - Use the most relevant one skill to analyze the logs by calling`fetch_focused_logs`.\n"                     
+                        "   - Use the most relevant one skill to analyze the logs by calling`fetch_focused_logs`.\n"
                         "PHASE 2 (SOURCE RETROSPECTIVE - optional):\n"
                         "   - if needed, based on the analysis from PHASE1, use additional skills to get more detail from the logs.\n"
                         "PHASE 3. Call `submit_final_report` to conclude.\n\n"
@@ -2613,6 +2917,33 @@ class WifiLogAgentSystem:
         self._assembled_entries_by_key = {}
         self._assembled_entries_no_ts = {}
         self._assembled_log_text = ""
+        # Force date-format re-detection on the next _log_has_date() call.
+        # /set_log resets the conversation when the underlying file changes,
+        # so wiping this cache here makes the UI mode-switch (date-required
+        # vs time-only) reliably follow the actual file format.
+        self._log_has_date_cache = None
+        self._log_has_date_cache_path = None
+
+    def apply_updated_skills(self, skills) -> None:
+        """Swap in edited / reloaded skills WITHOUT discarding the conversation.
+
+        Replacing ``self.skills`` alone is NOT enough for a mid-conversation
+        edit to take effect, because two caches would keep serving the old
+        version:
+          * ``_chat_rules_injected_skills`` — makes the chat loop take the
+            "expert rules already provided; omitted to save tokens" path, so an
+            edited skill's NEW expert_rules would never be re-injected;
+          * ``_filter_cache_by_skill`` — makes ``fetch_filtered_logs`` return
+            the previously-filtered lines, so an edited FILTER would never
+            re-run.
+        Clearing both means the next ``fetch_filtered_logs`` for any skill
+        re-applies the latest definition. Conversation history (and the
+        assembled-log store) is preserved, so prior analysis context stays and
+        no tool_use/tool_result pairing is disturbed.
+        """
+        self.skills = skills or {}
+        self._chat_rules_injected_skills = set()
+        self._filter_cache_by_skill = {}
 
     def prime_with_context(self, case_nbr: str = "", subject: str = "",
                             description: str = "", issue_type: str = "",

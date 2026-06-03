@@ -1799,7 +1799,13 @@
             padding: 1px 8px;
             white-space: nowrap;
         }
-        .eit-row.eit-row-picked .eit-pick-badge { display: inline-block; }
+        /* "★ most likely" badge is tied to the top-ranked candidate (row 0
+           of the capture popup), NOT to whichever row the user has currently
+           ticked. Showing it on .eit-row-picked would re-label the badge as
+           the user changed their pick, which contradicts what "most likely"
+           means (it's the model's top ranking, fixed at the time the
+           suggestions arrived). */
+        #time-capture-list .eit-row:first-child .eit-pick-badge { display: inline-block; }
         .tc-multi-row {
             display: flex;
             align-items: flex-start;

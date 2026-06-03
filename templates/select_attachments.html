@@ -101,6 +101,8 @@
         background-color: #005A9C;
         color: white;
         border-bottom-color: #003d6b;
+        pointer-events: none;
+        cursor: default;
     }
     
     .content-area {
@@ -121,37 +123,176 @@
         min-height: 44px;
         display: flex;
         align-items: center;
+        justify-content: center;
     }
 
     .attachments-actions {
-        position: absolute;
-        left: 50%;
-        transform: translateX(-50%);
         display: flex;
-        flex-wrap: wrap;
+        gap: 10px;
+        margin-top: 10px;
+    }
+
+    #selectAllBtn {
+        position: absolute;
+        left: 0;
+        top: 50%;
+        transform: translateY(-50%);
+    }
+    
+    .btn-icon {
+        position: absolute;
+        left: 22px;
+        top: 50%;
+        transform: translateY(-50%);
+        width: 20px;
+        height: 20px;
+        pointer-events: none;
+        flex-shrink: 0;
+        opacity: 0.9;
+    }
+
+    .btn-wrap {
+        position: relative;
+        display: inline-block;
+        overflow: hidden;
+        border-radius: 30px;
+    }
+
+    .action-btn {
+        border-radius: 30px;
+        padding: 8px 14px;
+        width: 150px;
+        min-width: 150px;
+        background-size: 300% auto;
+        font-size: 1rem;
+        font-family: 'Inter', sans-serif !important;
+        color: #ffffff;
+        justify-content: center;
+        border: none;
+        cursor: pointer;
+        display: inline-flex;
+        align-items: center;
+        gap: 8px;
+        white-space: nowrap;
+        box-shadow:
+            0 4px 10px rgba(0,0,0,0.15),
+            inset 0 1px 0 rgba(255,255,255,0.2);
+        transition: transform 0.2s ease, box-shadow 0.2s ease;
+        animation: gradientFlow 4.5s linear infinite;
+    }
+    
+    .action-btn span {
+        flex: 0 1 auto;
+        text-align: center;
+    }
+
+    .download-btn {
+        background: linear-gradient(120deg, #0ea5a4 0%, #0284c7 25%, #22c1c3 50%, #0369a1 75%, #0ea5a4 100%);
+        background-size: 300% auto;
+        animation: gradientFlow 4.5s linear infinite !important;
+        font-size: 1rem;
+        font-family: 'Inter', sans-serif !important;
+    }
+
+    .bsod-btn {
+        background: linear-gradient(120deg, #6366f1 0%, #4f46e5 25%, #818cf8 50%, #4338ca 75%, #6366f1 100%);
+        background-size: 300% auto;
+        animation: gradientFlow 4.5s linear infinite !important;
+        font-size: 1rem;
+        font-family: 'Inter', sans-serif !important;
+    }
+
+    .analysis-btn {
+        background: linear-gradient(120deg, #2563eb 0%, #1d4ed8 25%, #60a5fa 50%, #1e40af 75%, #2563eb 100%);
+        background-size: 300% auto;
+        animation: gradientFlow 4.5s linear infinite !important;
+        font-size: 1rem;
+        font-family: 'Inter', sans-serif !important;
+    }
+
+    .action-btn:hover:not(:disabled) {
+        transform: translateY(-2px) scale(1.02);
+        animation: gradientFlow 3s ease-in-out infinite;
+        box-shadow:
+            0 8px 18px rgba(0,0,0,0.25),
+            inset 0 1px 0 rgba(255,255,255,0.25);
+    }
+
+    .action-btn:active {
+        transform: scale(0.96);
+        box-shadow:
+            inset 0 2px 6px rgba(0,0,0,0.2),
+            0 3px 8px rgba(0,0,0,0.15);
+    }
+
+    .action-btn:disabled {
+        opacity: 0.75;
+        color: #f7f9fb !important;
+        box-shadow: none;
+        cursor: not-allowed;
+    }
+
+    #selectAllBtn {
+        font-family: 'Inter', sans-serif !important;
+        font-size: 0.9rem;
+    }
+
+    .ai-analysis-btn {
+        display: inline-flex;
         align-items: center;
         justify-content: center;
-        gap: 8px;
-    }
-
-    .attachments-actions button:disabled {
-        background-color: #adb5bd !important;
-        border-color: #adb5bd !important;
+        padding: 6px 16px !important;
+        border-radius: 999px;
+        font-size: 0.9rem;
+        font-weight: 600;
         color: #ffffff !important;
-        cursor: not-allowed !important;
-        opacity: 0.65;
-        box-shadow: none !important;
-    }
-    .ai-analysis-btn {
-    background-color: #005A9C;
-    color: #ffffff !important;
-    border-radius: 30px;
-    padding: 6px 16px !important;
-    }
-    .ai-analysis-btn:hover {
-    color: #ffffff !important;
+        background: linear-gradient(
+                120deg,
+                #256b8f 0%,
+                #3a8aaf 20%,
+                #6fd3e0 50%,
+                #3ab2c2 75%,
+                #1f5f7a 100% 
+            );
+        background-size: 300% auto;
+        border: none;
+        box-shadow:
+            0 4px 10px rgba(0, 80, 140, 0.35),
+            inset 0 1px 0 rgba(255,255,255,0.2);
+        transition: transform 0.2s ease, box-shadow 0.2s ease;
+        animation: gradientFlow 4.5s linear infinite;
     }
 
+
+    .ai-analysis-btn:hover {
+        color: #ffffff !important;
+        transform: translateY(-2px) scale(1.03);
+        animation-duration: 1.5s !important;
+        box-shadow:
+            0 6px 14px rgba(0, 90, 160, 0.35),
+            inset 0 1px 0 rgba(255,255,255,0.4);
+    }
+
+    .ai-analysis-btn:active {
+        transform: scale(0.97);
+        box-shadow:
+            inset 0 2px 6px rgba(0,0,0,0.2),
+            0 3px 8px rgba(0,0,0,0.15);
+    }
+
+    .ai-analysis-btn:disabled {
+        background: #d3d8de;
+        color: #8a9099 !important;
+        box-shadow: none;
+        animation: none;
+        cursor: not-allowed;
+    }
+
+    @keyframes gradientFlow {
+        0%   { background-position: 0% center; }
+        50%  { background-position: 100% center; }
+        100% { background-position: 0% center; }
+    }
 
     html,
     body {
@@ -246,13 +387,13 @@
                         </div>
                         <div class="card-body bg-light px-3" style="white-space: normal; line-height: 1.5; border-radius: 0.5rem;">
                             <span class="fw-bolder h4 d-block mt-2 mb-1" style="color: black;">AI Summary:</span>
-                            <div id="ai-analysis-content">
+                            <div id="ai-analysis-content" style="margin: 20px 0 40px 0;">
                                 <div class="mb-3">
                                     <button class="btn btn-link ai-analysis-btn" type="button" style="border-radius: 30px; background-color: #007bff; color: white;" onclick="loadAiAnalysis()">Click to Show AI Analysis</button>
                                 </div>
                             </div>
 
-                            <span class="fw-bolder h4 d-block mt-2 mb-1" style="color: black;">Issue Description:</span>
+                            <span class="fw-bolder h4 d-block mb-1" style="color: black;">Issue Description:</span>
                             <p>{{ case_context.description }}</p>
 
                             <p>
@@ -321,28 +462,24 @@
                 </button>
 
                 <div class="attachments-actions">
-                    <div style="position: relative; display: inline-block;">
-                        <button type="submit" name="action" value="normal" class="btn btn-primary mr-2" id="downloadBtn" disabled style="border-radius: 25px; padding: 8px 24px 8px 48px; border: 2px solid #28816f; background-color: #28816f; color: #fff;">
-                            <span class="spinner-border spinner-border-sm mr-2" role="status" style="display: none;"></span>
-                            Download
+                    <div class="btn-wrap">
+                        <button type="submit" name="action" value="normal" class="action-btn download-btn" style="border-radius: 30px; width: 150px; justify-content: center; gap: 8px;" id="downloadBtn" disabled>
+                            <span>Download</span>
                         </button>
-                        <img src="{{ url_for('static', filename='download.svg') }}" alt="" aria-hidden="true" style="position: absolute; left: 20px; top: 50%; transform: translateY(-50%); width: 24px; height: 24px; pointer-events: none;">
+
                     </div>
 
-                    <div style="position: relative; display: inline-block;">
-                        <button type="submit" name="action" value="bsod" class="btn btn-success mr-2" id="bsodBtn" disabled style="border-radius: 25px; padding: 8px 24px 8px 48px; border: 2px solid #d11f5d; background-color: #d11f5d; color: #fff;">
-                            <span class="spinner-border spinner-border-sm mr-2" role="status" style="display: none;"></span>
-                            BSOD Parser
+                    <div class="btn-wrap">
+                        <button type="submit" name="action" value="bsod" class="action-btn bsod-btn" style="border-radius: 30px; width: 150px; justify-content: center; gap: 8px;" id="bsodBtn" disabled>
+                            <span>BSOD Parser</span>
                         </button>
-                        <img src="{{ url_for('static', filename='BSOD.svg') }}" alt="" aria-hidden="true" style="position: absolute; left: 15px; top: 50%; transform: translateY(-50%); width: 24px; height: 24px; pointer-events: none;">
                     </div>
 
-                    <div style="position: relative; display: inline-block;">
-                        <button type="submit" name="action" value="latest_etl_llm" class="btn btn-secondary" id="etlLlmBtn" disabled style="border-radius: 25px; padding: 8px 24px 8px 48px; border: 2px solid #116285; background-color: #116285; color: #fff;">
-                            <span class="spinner-border spinner-border-sm mr-2" role="status" style="display: none;"></span>
-                            Run Analysis
+                    <div class="btn-wrap">
+                        <button type="submit" name="action" value="analysis" class="action-btn analysis-btn" style="border-radius: 30px; width: 150px; justify-content: center; gap: 8px;" id="etlLlmBtn" disabled>
+                            <span>Run Analysis</span>
                         </button>
-                        <img src="{{ url_for('static', filename='analysis.svg') }}" alt="" aria-hidden="true" style="position: absolute; left: 15px; top: 50%; transform: translateY(-50%); width: 24px; height: 24px; pointer-events: none;">
+
                     </div>
                 </div>
             </div>
@@ -410,15 +547,6 @@
                 const btn = document.getElementById(btnId);
                 if (btn) {
                     btn.disabled = !enabled;
-                    
-                    if (enabled) {
-                        btn.classList.remove('btn-outline-secondary');
-                        if (btnId === 'downloadBtn') btn.className = 'btn btn-primary mr-2';
-                        if (btnId === 'bsodBtn') btn.className = 'btn btn-success mr-2';
-                        if (btnId === 'etlLlmBtn') btn.className = 'btn btn-secondary';
-                    } else {
-                        btn.classList.add('btn-outline-secondary');
-                    }
                 }
             });
         }

@@ -150,7 +150,7 @@ class DriverManager:
                 print(f"⚠️ Failed to navigate main browser: {error}")
 
         threading.Thread(target=_navigate, daemon=True).start()
-    
+
     def get_chrome_version(self):
         """get local chrome version"""
         try:

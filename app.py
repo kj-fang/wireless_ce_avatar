@@ -44,6 +44,67 @@ from configs.version import __version__, BUILD_DATE, GIT_HASH, GIT_BRANCH
 from blueprints import automation_bp, main_bp, llm_bp, download_bp, analysis_etl_bp, bsod_bp, log_parser_bp, log_chatbot_bp, nw_analysis_bp, feedback_bp # , attachment_bp, log_bp,
 import blueprints.download.download_routes
 
+def _bring_chrome_to_front(server_pid):
+    """Bring Avatar's Chrome browser to the foreground.
+
+    Called from the short-lived SendTo helper process which is spawned by
+    File Explorer and therefore has foreground permission.
+
+    Uses psutil to walk the Avatar server's descendant processes and find
+    only the chrome.exe that belongs to Avatar's ChromeDriver — not any
+    other Chrome window the user may have open.
+    """
+    if os.name != 'nt':
+        return
+    try:
+        import ctypes
+        import ctypes.wintypes as wt
+        import psutil
+
+        # Walk descendants of the Avatar server process to find its chrome.exe
+        chrome_pids = set()
+        try:
+            for proc in psutil.Process(server_pid).children(recursive=True):
+                try:
+                    if proc.name().lower() == 'chrome.exe':
+                        chrome_pids.add(proc.pid)
+                except Exception:
+                    pass
+        except Exception:
+            pass
+
+        if not chrome_pids:
+            print(f'⚠️ [SendTo] No chrome.exe children found under server PID={server_pid}')
+            return
+
+        print(f'ℹ️ [SendTo] Avatar Chrome PIDs: {chrome_pids}')
+
+        user32 = ctypes.windll.user32
+        found_hwnd = ctypes.c_size_t(0)  # pointer-sized to avoid truncation on 64-bit Windows
+        WNDENUMPROC = ctypes.WINFUNCTYPE(wt.BOOL, wt.HWND, wt.LPARAM)
+
+        def _cb(hwnd, _):
+            cls = ctypes.create_unicode_buffer(256)
+            user32.GetClassNameW(hwnd, cls, 256)
+            if cls.value != 'Chrome_WidgetWin_1':
+                return True
+            pid = wt.DWORD(0)
+            user32.GetWindowThreadProcessId(hwnd, ctypes.byref(pid))
+            if pid.value in chrome_pids:
+                found_hwnd.value = hwnd
+                return False  # stop — found it
+            return True
+
+        user32.EnumWindows(WNDENUMPROC(_cb), 0)
+        hwnd = found_hwnd.value
+        if hwnd:
+            user32.ShowWindow(hwnd, 9)          # SW_RESTORE
+            user32.SetForegroundWindow(hwnd)
+            print(f'✅ [SendTo] Chrome brought to front (HWND={hwnd:#010x})')
+        else:
+            print(f'⚠️ [SendTo] No Chrome_WidgetWin_1 found for pids={chrome_pids}')
+    except Exception as e:
+        print(f'⚠️ [SendTo] _bring_chrome_to_front failed: {e}')
 
 def _build_startup_path(input_paths, sendto_token=None):
     if not input_paths:
@@ -181,6 +242,10 @@ if __name__ == "__main__":
     existing = check_already_running()
     if existing:
         print(f"✅ Avatar is already running at {existing.get('url')} — opening in browser.")
+        if startup_path and startup_path != '/':
+            # This process was launched by File Explorer (SendTo) so it has
+            # foreground permission — bring Chrome to front before exiting.
+            _bring_chrome_to_front(existing['pid'])
         if not _navigate_existing_browser(existing['url'], startup_path):
             webbrowser.open(f"{existing['url']}{startup_path}")
         sys.exit(0)
@@ -212,6 +277,8 @@ if __name__ == "__main__":
         listener_pid = get_listening_pid_on_port(preferred_port)
         if listener_pid and is_intelavatar_process(listener_pid):
             print(f"✅ IntelAvatar is already running on port {preferred_port} (PID={listener_pid}).")
+            if startup_path and startup_path != '/':
+                _bring_chrome_to_front(listener_pid)
             existing_url = f'http://127.0.0.1:{preferred_port}'
             if not _navigate_existing_browser(existing_url, startup_path):
                 webbrowser.open(f'{existing_url}{startup_path}')

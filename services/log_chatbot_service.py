@@ -384,6 +384,57 @@ class WifiLogAgentSystem:
     MAX_TOOL_CALLS_PER_STEP = 3
     FORCE_CONCLUDE_LAST_N_STEPS = 2  # last 2 steps forces conclusion (5-step loop is tighter)
     MAX_SKILL_FETCHES = 4             # max distinct skills the agent may fetch per analysis
+
+    # Segment1 (driver/init context block) is an OPTIONAL part of scoping.
+    # The domain-agnostic scoping is the issue-time window (Segment2); the
+    # marker-based init block is an optimisation that only some log families
+    # (e.g. Wi-Fi/WDI) have a clean lifecycle for. When markers are empty or
+    # none match, Segment1 is simply not produced (a no-op, not an error) and
+    # Segment2 carries the scope.
+    #
+    # SCOPE_FULL_LOG_WHEN_EMPTY: when True, if BOTH the marker block and the
+    # issue-time window come up empty, scope the entire log instead of leaving
+    # the agent with nothing. The downstream skill keyword filter keeps the
+    # volume manageable. Default False (Wi-Fi keeps its original behaviour);
+    # log families without a reliable init/reset lifecycle set this True so
+    # analysis always has something to work on.
+    SCOPE_FULL_LOG_WHEN_EMPTY = False
+
+    # Pre-scan markers for Segment1 (driver init block).
+    #
+    # Class-level so subclasses can target their own log family without
+    # touching the scan logic. Each marker may be EITHER a single string OR
+    # a list of candidate strings — the scan matches a line if it contains
+    # ANY candidate (substring, case-insensitive). Keeping these as data
+    # (extend the list, don't edit the loop) lets new driver builds that
+    # rename a callback be supported by just adding another candidate.
+    #
+    # WiFi/WDI defaults below; the Bluetooth subclass overrides with
+    # ibtpci-flavoured candidates. Compared after lowercasing, so keep
+    # candidates lowercase.
+    DRIVER_ADD_MARKER = "os issued driver device add"
+    RESET_MARKER = "got command (m1 message) task_dot11_reset"
+
+    @staticmethod
+    def _normalize_markers(value) -> List[str]:
+        """Coerce a marker class-attr (str | list | None) into a lowercased
+        list of non-empty candidate substrings."""
+        if value is None:
+            return []
+        if isinstance(value, str):
+            value = [value]
+        out = []
+        for v in value:
+            s = str(v).strip().lower()
+            if s:
+                out.append(s)
+        return out
+
+    @staticmethod
+    def _line_matches_any(line_lower: str, markers: List[str]) -> bool:
+        """True if the (already-lowercased) line contains any candidate marker."""
+        return any(m in line_lower for m in markers)
+
     REPORT_MARKDOWN_TEMPLATE = (
         "Your `markdown_summary` format (REQUIRED):\n"
         "  # Executive Summary\n  (1-2 sentences that directly answer the user question)\n\n"
@@ -494,21 +545,46 @@ class WifiLogAgentSystem:
     def _log_has_date(self) -> bool:
         """Whether the loaded log's timestamps carry a DATE
         (MM/DD/YYYY-HH:MM:SS.mmm) or are time-only (e.g. DDD / tracefmt logs:
-        "HH:MM:SS.fffffff ..." with no date). Cached per loaded log path.
+        "HH:MM:SS.fffffff ..." with no date). Cached per log path.
 
         This splits the pre-scan into two paths: dated logs keep the original
         datetime windowing; time-only logs match by time-of-day instead, so a
         DDD log (no date) doesn't leave the agent with nothing to analyse.
+
+        Cheap by design: it only needs to inspect the first ~2000 lines, so it
+        does NOT pull the whole file into memory. When the full cache already
+        happens to be loaded it reuses it; otherwise it streams just the head
+        of the file. This keeps set_log / page-load fast even for a
+        multi-hundred-MB BT .hci.txt (the full read is deferred to the first
+        actual analysis).
         """
-        if self._ensure_raw_log_cache():
-            return True  # load error → assume dated (keep the original path)
-        if getattr(self, "_log_has_date_cache_path", None) == self._raw_log_cache_path \
+        if not self.current_log_path:
+            return True  # no log → assume dated (original path)
+
+        if getattr(self, "_log_has_date_cache_path", None) == self.current_log_path \
                 and getattr(self, "_log_has_date_cache", None) is not None:
             return self._log_has_date_cache
+
         full_re = re.compile(r'\d{2}/\d{2}/\d{4}-\d{2}:\d{2}:\d{2}\.\d{3}')
-        has_date = any(full_re.search(line) for line in (self._raw_log_cache or [])[:2000])
+
+        # Prefer the in-memory cache if it's already for this path; else peek
+        # the file head via a streaming read (no full load).
+        if self._raw_log_cache_path == self.current_log_path and self._raw_log_cache:
+            sample = self._raw_log_cache[:2000]
+        else:
+            sample = []
+            try:
+                with open(self.current_log_path, "r", encoding="utf-8", errors="replace") as f:
+                    for i, line in enumerate(f):
+                        if i >= 2000:
+                            break
+                        sample.append(line)
+            except Exception:
+                return True  # read error → assume dated (keep original path)
+
+        has_date = any(full_re.search(line) for line in sample)
         self._log_has_date_cache = has_date
-        self._log_has_date_cache_path = self._raw_log_cache_path
+        self._log_has_date_cache_path = self.current_log_path
         return has_date
 
     def _merge_wrapped_lines_if_needed(self) -> None:
@@ -519,14 +595,29 @@ class WifiLogAgentSystem:
         skill filtering.
 
         Surgical + idempotent: only runs for no-date logs (dated logs are
-        untouched), and only rewrites the cache when a wrap is actually found.
-        An entry line starts with an optional sequence number + a HH:MM:SS
-        time-of-day; anything else is treated as a continuation.
+        untouched, including most BT HCI ``.hci.txt`` dumps which carry
+        full ``MM/DD/YYYY-HH:MM:SS.mmm`` timestamps), and only rewrites the
+        cache when a wrap is actually found.
+
+        An entry line is recognised when it starts with — in any combination
+        — an optional sequence number, optional angle-bracket prefix, then a
+        ``HH:MM:SS`` time-of-day. Examples that match:
+          * ``12:34:56 ...``         (plain DDD)
+          * ``0004 12:34:56 ...``    (seq# + space + time)
+          * ``<12:34:56> ...``       (BT-style angle-bracket form)
+          * ``<12:34:56.789> ...``   (BT-style with ms)
+        Anything else is treated as a continuation. False positives are
+        cheaper than false negatives here — a misclassified entry-start
+        just doesn't get merged, but a misclassified continuation collapses
+        distinct entries together.
         """
         if self._log_has_date():
             return
         lines = self._raw_log_cache or []
-        start_re = re.compile(r'^\s*(?:\d+\s+)?\d{1,2}:\d{2}:\d{2}')
+        # ``<?`` makes the angle-bracket prefix optional, covering both the
+        # legacy DDD form (no brackets) and the BT HCI no-date form which
+        # wraps the time-of-day in ``<...>``.
+        start_re = re.compile(r'^\s*<?(?:\d+\s+)?\d{1,2}:\d{2}:\d{2}')
         merged: List[str] = []
         wrapped = 0
         for line in lines:
@@ -544,35 +635,27 @@ class WifiLogAgentSystem:
 
     def get_log_span_minutes(self) -> int:
         """
-        Whole-minute span of the loaded log (first parseable timestamp to
-        last). Used to bound the sidebar issue-time capture window so the
-        user can't request a window wider than the log itself. Returns 0
-        when the log can't be read or has no parseable timestamps (the
-        caller then falls back to a generic cap).
+        Whole-minute span of the log (first → last parseable timestamp). Used
+        to bound the sidebar issue-time capture window so the user can't
+        request a window wider than the log itself. Returns 0 when the log
+        can't be read or has no parseable (dated) timestamps.
+
+        Cheap by design: uses a seek-based first/last read (head + tail only),
+        so a multi-hundred-MB BT .hci.txt is NOT pulled into memory just to
+        size the sidebar slider. The full read is deferred to first analysis.
         """
-        if self._ensure_raw_log_cache():
-            return 0  # load error
-        import re as _re
-        import math as _math
-        from datetime import datetime as _dt
-        ts_re = _re.compile(r'(\d{2}/\d{2}/\d{4}-\d{2}:\d{2}:\d{2}\.\d{3})')
-        first_ts = None
-        last_ts = None
-        for line in self._raw_log_cache:
-            m = ts_re.search(line)
-            if not m:
-                continue
-            try:
-                t = _dt.strptime(m.group(1), "%m/%d/%Y-%H:%M:%S.%f")
-            except ValueError:
-                continue
-            if first_ts is None:
-                first_ts = t
-            last_ts = t
-        if first_ts is None or last_ts is None:
+        if not self.current_log_path:
             return 0
-        span_min = (last_ts - first_ts).total_seconds() / 60.0
-        return max(0, int(_math.ceil(span_min)))
+        try:
+            from utils.issue_time_utils import read_log_time_range
+            import math as _math
+            first_ts, last_ts = read_log_time_range(self.current_log_path)
+            if not first_ts or not last_ts:
+                return 0
+            span_min = (last_ts - first_ts).total_seconds() / 60.0
+            return max(0, int(_math.ceil(span_min)))
+        except Exception:
+            return 0
 
     def _preprocess_raw_log_context(self) -> None:
         """
@@ -589,8 +672,12 @@ class WifiLogAgentSystem:
           A) issue_time ±5 min  (if issue_time is available)
           B) last TASK_DOT11_RESET (after first Driver Add) → EOF  (fallback)
         """
-        DRIVER_ADD_MARKER = "os issued driver device add"
-        RESET_MARKER      = "got command (m1 message) task_dot11_reset"
+        # Markers come from class attributes so subclasses can override
+        # (e.g. BtLogAgentSystem uses ibtpci-specific markers). Each may be a
+        # single string or a list of candidates — normalise to a list and
+        # match ANY candidate, so the scan logic stays generic.
+        driver_add_markers = self._normalize_markers(self.DRIVER_ADD_MARKER)
+        reset_markers      = self._normalize_markers(self.RESET_MARKER)
         TS_RE = re.compile(r'(\d{2}/\d{2}/\d{4}-\d{2}:\d{2}:\d{2}\.\d{3})')
 
         # Time-only logs (e.g. DDD) may wrap one entry across extra lines —
@@ -607,10 +694,10 @@ class WifiLogAgentSystem:
         reset_indices = []
         for i, line in enumerate(self._raw_log_cache):
             line_lower = line.lower()
-            if DRIVER_ADD_MARKER in line_lower:
+            if self._line_matches_any(line_lower, driver_add_markers):
                 driver_add_indices.append(i)
-                print(f"[PreScan] 🚩 'os issued driver device add' found at line {i+1}")
-            if RESET_MARKER in line_lower:
+                print(f"[PreScan] 🚩 driver-add marker found at line {i+1}")
+            if self._line_matches_any(line_lower, reset_markers):
                 reset_indices.append(i)
 
         self._driver_init_count = len(driver_add_indices)
@@ -834,14 +921,18 @@ class WifiLogAgentSystem:
             else:
                 print("[PreScan] ⚠️  No driver markers found — Segment2 empty.")
 
-        # Time-only logs (e.g. DDD) often have no driver markers AND no in-window
-        # anchors (wrong/empty issue time). Don't leave the agent with nothing —
-        # scope the whole log so analysis can still proceed.
-        if not seg2_lines and total_lines and not self._log_has_date():
+        # Don't leave the agent with nothing to analyse when neither a marker
+        # block nor an issue-time window matched. This happens for:
+        #   * time-only logs (e.g. DDD) with no in-window anchors, and
+        #   * any log family that defines no init/reset lifecycle and so opts
+        #     into SCOPE_FULL_LOG_WHEN_EMPTY (e.g. the BT agent).
+        # The downstream skill keyword filter trims the full scope back down,
+        # so scoping everything is a safe fallback rather than a cost blow-up.
+        if not seg2_lines and total_lines and (self.SCOPE_FULL_LOG_WHEN_EMPTY or not self._log_has_date()):
             seg2_lines = list(self._raw_log_cache)
             seg2_start_idx = 0
             seg2_end_idx = total_lines - 1
-            print(f"[PreScan] ℹ️  Time-only log: no window match — scoping full log ({total_lines} lines).")
+            print(f"[PreScan] ℹ️  No marker block / issue-time window — scoping full log ({total_lines} lines).")
 
         self._issue_time_window_lines = seg2_lines
 
@@ -939,9 +1030,15 @@ class WifiLogAgentSystem:
     def _normalize_time_message(self, line: str) -> Tuple[Optional[datetime], str, str]:
         """
         Keep only HH:MM:SS + message from a raw filtered line.
-        Supports either full timestamps (MM/DD/YYYY-HH:MM:SS.mmm) or
-        compact markers like <TIME:HH:MM:SS>.
+        Supports:
+          * Full dated timestamps  ``MM/DD/YYYY-HH:MM:SS.mmm`` (WiFi WPP)
+          * BT HCI angle-bracket   ``<HH:MM:SS.mmm>``          (ibtpci HCI dump)
+          * DDD compact marker     ``<TIME:HH:MM:SS>`` / ``TIME:HH:MM:SS``
         Returns (parsed_ts_or_none, hhmmss_or_na, message_only).
+
+        BT HCI carries no date — a synthetic datetime is built from the
+        agent's ``issue_time`` date (or today's date) so the assembled-log
+        sort key and time-range header still work.
         """
         raw = self._strip_line_number_prefix(line)
 
@@ -958,14 +1055,38 @@ class WifiLogAgentSystem:
                 ts_dt = None
             msg = (raw[:dt_match.start()] + raw[dt_match.end():]).strip(" -:|\t")
         else:
-            # Fallback: handle logs like <TIME:09:54:13> or TIME:09:54:13
-            time_tag_match = re.search(r'(?:<)?TIME:(\d{2}:\d{2}:\d{2})(?:>)?', raw, flags=re.IGNORECASE)
-            ts_hms = time_tag_match.group(1) if time_tag_match else "N/A"
-            ts_dt = None
-            if time_tag_match:
-                msg = (raw[:time_tag_match.start()] + raw[time_tag_match.end():]).strip(" -:|\t")
+            # BT HCI angle-bracket timestamp ``<HH:MM:SS.mmm>`` (no date).
+            # Matched before the legacy ``<TIME:...>`` form because the BT
+            # variant has no ``TIME:`` prefix and would otherwise fall
+            # through to the "N/A" branch, losing time-axis fidelity.
+            hci_match = re.search(r'<(\d{2}):(\d{2}):(\d{2})(?:\.(\d{1,3}))?>', raw)
+            if hci_match:
+                h  = int(hci_match.group(1))
+                mn = int(hci_match.group(2))
+                s  = int(hci_match.group(3))
+                ms_str = hci_match.group(4) or "0"
+                ms = int(ms_str.ljust(3, "0")[:3])
+                ts_hms = f"{h:02d}:{mn:02d}:{s:02d}.{ms:03d}"
+                # Synthesise a datetime so the assembled-log sort key and
+                # time-range header keep working for time-only BT logs.
+                # Prefer the agent's issue_time date; fall back to today.
+                _base_date = (self.issue_time.date() if getattr(self, "issue_time", None)
+                              else datetime.today().date())
+                try:
+                    ts_dt = datetime(_base_date.year, _base_date.month, _base_date.day,
+                                     h, mn, s, ms * 1000)
+                except ValueError:
+                    ts_dt = None
+                msg = (raw[:hci_match.start()] + raw[hci_match.end():]).strip(" -:|\t")
             else:
-                msg = raw
+                # Fallback: handle logs like <TIME:09:54:13> or TIME:09:54:13
+                time_tag_match = re.search(r'(?:<)?TIME:(\d{2}:\d{2}:\d{2})(?:>)?', raw, flags=re.IGNORECASE)
+                ts_hms = time_tag_match.group(1) if time_tag_match else "N/A"
+                ts_dt = None
+                if time_tag_match:
+                    msg = (raw[:time_tag_match.start()] + raw[time_tag_match.end():]).strip(" -:|\t")
+                else:
+                    msg = raw
 
         # Keep the payload part after function markers when present, e.g. "[func]:### ..."
         if "###" in msg:

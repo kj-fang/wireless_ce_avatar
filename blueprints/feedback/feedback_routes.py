@@ -81,12 +81,18 @@ def vote():
     # see them first.
     yaml_modified = bool(session.get("yaml_modified"))
 
+    # Analysis domain ("" = wifi/default, "bt" = Bluetooth). The frontend
+    # tags each request so feedback streams stay partitioned; the service
+    # also inherits the conversation's recorded domain as a safety net.
+    domain = (data.get("domain") or "").strip()
+
     ok = feedback_service.record_vote(
         session_id=session_id,
         conversation_id=conversation_id,
         turn_id=turn_id,
         vote=vote_val,
         yaml_modified=yaml_modified,
+        domain=domain,
     )
     if not ok:
         return jsonify({"success": False, "error": "failed to record vote"}), 500
@@ -220,6 +226,7 @@ def detail():
         attached_yaml_path=attached_yaml_path,
         log_path=log_path,
         attach_log=attach_log,
+        domain=(data.get("domain") or "").strip(),
         # Legacy free-form fields forwarded only for old-client back-compat.
         expected_outcome=(data.get("expected_outcome") or "").strip(),
         general_comment=(data.get("general_comment") or "").strip(),
@@ -273,6 +280,7 @@ def step_vote():
         turn_id=turn_id,
         step_index=step_index,
         vote=vote,
+        domain=(data.get("domain") or "").strip(),
     )
     if not ok:
         return jsonify({"success": False, "error": "failed to record"}), 500
@@ -311,6 +319,7 @@ def skill_helpful():
         conversation_id=conversation_id,
         turn_id=turn_id,
         skill_id=skill_id,
+        domain=(data.get("domain") or "").strip(),
     )
     if not ok:
         return jsonify({"success": False, "error": "failed to record"}), 500
@@ -322,13 +331,22 @@ def recent():
     """
     Debug helper: return the last N feedback events.
     Useful during MVP development to verify writes are happening.
+
+    Query params:
+      limit  — max events to return (1..500, default 50)
+      domain — which feedback stream to read:
+                 ""/"wifi" → feedback.jsonl       (default)
+                 "bt"      → bt_feedback.jsonl
+               e.g. /feedback/recent?domain=bt to confirm BT writes landed.
     """
     try:
         limit = int(request.args.get("limit", "50"))
     except ValueError:
         limit = 50
     limit = max(1, min(500, limit))
+    domain = (request.args.get("domain") or "").strip()
     return jsonify({
         "success": True,
-        "events": feedback_service.get_recent_votes(limit),
+        "domain": domain or "wifi",
+        "events": feedback_service.get_recent_votes(limit, domain=domain),
     })

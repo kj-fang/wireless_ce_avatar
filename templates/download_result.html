@@ -579,9 +579,14 @@
                         <button id="bt-action-manual" class="btn btn-primary btn-sm" data-mode="Manual" style="border-radius: 30px; color:white; font-size: 1.15rem; padding: 0.5rem 1rem;" disabled onclick="runSelectedBtAction(this, 'Manual')">
                             Manual
                         </button>
-                        <button id="bt-action-llm" class="btn btn-primary btn-sm" data-mode="LLM" style="border-radius: 30px; color:white; font-size: 1.15rem; padding: 0.5rem 1rem;" disabled onclick="runSelectedBtAction(this, 'LLM')">
-                            🤖 Bluetooth Analysis Agent
+                        <button id="bt-action-chatbot" class="btn btn-info btn-sm" data-mode="CHATBOT" style="border-radius: 30px; color:white; font-size: 1.15rem; padding: 0.5rem 1rem;" disabled onclick="runSelectedBtAction(this, 'CHATBOT')">
+                            <i class="fab fa-bluetooth-b"></i> Bluetooth Analysis Agent
                         </button>
+                        <label id="bt-auto-pick-log-label" style="display:inline-flex;align-items:center;gap:6px;font-size:0.95rem;color:#0b4a78;cursor:pointer;margin:0 0 0 4px;"
+                               title="Auto-select the BT collection whose capture time best matches the issue time. The BT log isn't decoded yet, so this matches the capture-folder timestamp; with no issue time it picks the most recent collection.">
+                            <input type="checkbox" id="bt-auto-pick-log" onchange="onBtAutoPickLogToggle()">
+                            🪄 Auto-pick BT log by AI time{% if llm_issue_time %} <code style="font-size:0.85rem;">{{ llm_issue_time }}</code>{% endif %}
+                        </label>
                     </div>
                 </div>
 
@@ -909,22 +914,14 @@
 
 
     <script>
-        // Copy parent directory of a file path to clipboard
+        // Utility function to copy text to clipboard
         function copyToClipboard(text) {
-            // Jinja urlencode uses + for spaces; decodeURIComponent doesn't handle +
-            text = decodeURIComponent(text.replace(/\+/g, '%20'));
-            let dir = text.replace(/[/\\][^/\\]+$/, '');
-            if (!dir) dir = text.match(/^[A-Za-z]:/) ? text.slice(0, 3) : '/';
-            if (navigator.clipboard) {
-                navigator.clipboard.writeText(dir).catch(() => {});
-            } else {
-                const ta = Object.assign(document.createElement('textarea'), { value: dir });
-                ta.style.cssText = 'position:fixed;opacity:0';
-                document.body.appendChild(ta);
-                ta.select();
-                document.execCommand('copy');
-                document.body.removeChild(ta);
-            }
+            navigator.clipboard.writeText(text).then(() => {
+                alert('✓ Copied to clipboard');
+            }).catch(err => {
+                console.error('Failed to copy:', err);
+                alert('Failed to copy');
+            });
         }
 
         // Extract filename from full path (handle both / and \)
@@ -1624,6 +1621,14 @@
 
     // -------------------- BT LLM Analysis --------------------
 
+    // Default button label HTML for the BT chatbot button. Kept as HTML
+    // (not plain text) so the FontAwesome <i> icon renders — every reset
+    // path below uses `innerHTML = BT_CHATBOT_BUTTON_HTML` instead of
+    // `innerText = '...'`.
+    const BT_CHATBOT_BUTTON_HTML = '<i class="fab fa-bluetooth-b"></i> Bluetooth Analysis Agent';
+
+    // BT LLM-style analysis is single-target: HCI decode → bt_chatbot.
+    // (No classic log_parser variant — WiFi doesn't expose one either.)
     function startBtLogParser(button, btPathEncoded) {
         cancelPendingFwAnalysis();
         if (button.classList.contains('disabled')) return;
@@ -1634,12 +1639,12 @@
         button.innerText = 'Decoding HCI...';
 
         const decoded = decodeURIComponent(btPathEncoded);
-        appendLog(`\n\n🚀 Starting BT Analyze with LLM: ${decoded}\n`);
+        appendLog(`\n\n🚀 Starting Bluetooth Analysis Agent: ${decoded}\n`);
         appendLog(`🔍 Step 1: Decoding HCI log (this may take ~1-2 min)...\n`);
 
         window.pendingBtLogParser = {
             btPathEncoded: btPathEncoded,
-            button: button
+            button: button,
         };
 
         fetch(`${ETL_ANALYSIS_URL}?etl_path=${btPathEncoded}&mode=LLM`)
@@ -1649,7 +1654,7 @@
                 appendLog(`❌ HCI decode request failed: ${decoded}\n`, 'red');
                 if (window.pendingBtLogParser && window.pendingBtLogParser.button === button) {
                     button.classList.remove('disabled');
-                    button.innerText = '🤖 Bluetooth Analysis Agent';
+                    button.innerHTML = BT_CHATBOT_BUTTON_HTML;
                     window.pendingBtLogParser = null;
                 }
                 window.pendingBtAnalyze = false;
@@ -1661,33 +1666,41 @@
         if (!window.pendingBtLogParser) return;
         const { button } = window.pendingBtLogParser;
 
-        appendLog(`✅ HCI decode done! Preparing BT Analysis Agent...\n`);
+        // Bluetooth Analysis Agent flow: prepare the bt_chatbot agent
+        // server-side, then jump to /bt_chatbot/. msg.hci_path is the
+        // decoded HCI path; bt_chatbot.prepare appends ".log" internally —
+        // same convention the (now-removed) log_parser redirect used.
+        appendLog(`✅ HCI decode done — preparing Bluetooth Analysis Agent...\n`);
         button.innerText = '⏳ Preparing UI...';
-        window.pendingBtLogParser = null;
-        window.pendingBtAnalyze = false;
 
-        fetch(CHATBOT_SET_LOG_URL, {
+        fetch(BT_CHATBOT_PREPARE_URL, {
             method: 'POST',
             headers: { 'Content-Type': 'application/json' },
-            body: JSON.stringify({ log_path: msg.hci_path })
+            body: JSON.stringify({ etl_path: msg.hci_path })
         })
         .then(res => res.json())
         .then(data => {
-            button.classList.remove('disabled');
-            button.innerText = '🤖 Bluetooth Analysis Agent';
-            setBtActionButtonsBusy(false);
             if (data.success) {
-                appendLog(`✅ Ready — opening BT Analysis Agent...\n`);
-                window.location.href = `${CHATBOT_URL}?auto_run=analyze_all`;
+                appendLog(`✅ Ready — opening Bluetooth Analysis Agent...\n`);
+                window.pendingBtLogParser = null;
+                window.pendingBtAnalyze = false;
+                window.location.href = BT_CHATBOT_URL;
             } else {
-                appendLog(`❌ Agent prepare failed: ${data.error}\n`);
+                appendLog(`❌ BT Agent prepare failed: ${data.error}\n`, 'red');
+                button.classList.remove('disabled');
+                button.innerHTML = BT_CHATBOT_BUTTON_HTML;
+                window.pendingBtLogParser = null;
+                window.pendingBtAnalyze = false;
+                setBtActionButtonsBusy(false);
             }
         })
         .catch(err => {
+            appendLog(`❌ BT Agent prepare error: ${err}\n`, 'red');
             button.classList.remove('disabled');
-            button.innerText = '🤖 Bluetooth Analysis Agent';
+            button.innerHTML = BT_CHATBOT_BUTTON_HTML;
+            window.pendingBtLogParser = null;
+            window.pendingBtAnalyze = false;
             setBtActionButtonsBusy(false);
-            appendLog(`❌ Error: ${err}\n`);
         });
     }
 
@@ -1698,7 +1711,7 @@
         appendLog(`❌ BT HCI decode failed or timed out.\n`, 'red');
 
         button.classList.remove('disabled');
-        button.innerText = '🤖 Bluetooth Analysis Agent';
+        button.innerHTML = BT_CHATBOT_BUTTON_HTML;
         window.pendingBtLogParser = null;
         window.pendingBtAnalyze = false;
         setBtActionButtonsBusy(false);
@@ -1767,7 +1780,7 @@
         if (!mode) return;
 
         if (mode === 'LLM') {
-            button.innerText = '🤖 Bluetooth Analysis Agent';
+            button.innerText = 'Analyze with LLM';
             return;
         }
 
@@ -1893,7 +1906,8 @@
 
     const CHATBOT_PREPARE_URL = "{{ url_for('log_chatbot.prepare') }}";
     const CHATBOT_URL = "{{ url_for('log_chatbot.index') }}";
-    const CHATBOT_SET_LOG_URL = "{{ url_for('log_chatbot.set_log') }}";
+    const BT_CHATBOT_PREPARE_URL = "{{ url_for('bt_chatbot.prepare') }}";
+    const BT_CHATBOT_URL = "{{ url_for('bt_chatbot.index') }}";
     // AI-organized issue time (from the select-attachments pre-pass) used by the
     // "🪄 Auto-pick log by AI time" checkbox. Empty when none was detected.
     // `|tojson` (not `|e`) so the value lands as a proper JS string literal —
@@ -1957,7 +1971,6 @@
         });
         itemEl.classList.add('selected');
         updateWifiActionButtons();
-        copyToClipboard(itemEl.dataset.etlEncoded);
     }
 
     // ── Auto-pick the WiFi log matching the AI-detected issue time ───────
@@ -2030,13 +2043,75 @@
         }
     }
 
+    // ---- BT auto-pick by AI issue time --------------------------------
+    // BT logs aren't decoded until the agent button is clicked, so we can't
+    // read their internal timestamps here. Instead we ask the backend
+    // (/bt_chatbot/find_best_log) which parses the capture-folder timestamp
+    // (e.g. ...-2026-04-08-00-16-16Z\) and returns the closest match. We then
+    // select that BT row. Returns a Promise<bool>.
+    const BT_FIND_BEST_LOG_URL = "{{ url_for('bt_chatbot.find_best_log') }}";
+
+    async function autoSelectBtLogByIssueTime() {
+        const rows = Array.from(document.querySelectorAll('#bt-panel .bt-file-item'));
+        if (rows.length === 0) return false;
+        // One row → nothing to choose; just select it.
+        if (rows.length === 1) { selectBtRow(rows[0]); return true; }
+
+        // Resolve the issue time with graceful degradation:
+        //   1) the case-description AI pre-pass (window.__llmIssueTime), else
+        //   2) the backend's resolved issue context (attachment time / etc.), else
+        //   3) "" — find_best_log then falls back to the most recent collection
+        //      by capture-folder timestamp, which is always present for BT.
+        let issueTime = (window.__llmIssueTime || '').trim();
+        if (!issueTime) {
+            try {
+                const r = await fetch('/bt_chatbot/get_issue_context');
+                const d = await r.json().catch(() => ({}));
+                issueTime = (d.issue_time || '').trim();
+            } catch (e) { /* ignore — backend picks latest by folder timestamp */ }
+        }
+
+        const paths = rows.map(el => decodeURIComponent(el.dataset.btEncoded || ''));
+        try {
+            const res = await fetch(BT_FIND_BEST_LOG_URL, {
+                method: 'POST',
+                headers: {'Content-Type': 'application/json'},
+                body: JSON.stringify({ etl_paths: paths, issue_time_str: issueTime }),
+            });
+            const data = await res.json().catch(() => ({}));
+            const best = (data && data.best_path) ? String(data.best_path) : '';
+            if (!best) return false;
+            // Match the returned best_path back to its row (normalise slashes).
+            const norm = s => s.replace(/\\/g, '/');
+            const target = rows.find(el =>
+                norm(decodeURIComponent(el.dataset.btEncoded || '')) === norm(best));
+            if (!target) return false;
+            selectBtRow(target);
+            target.scrollIntoView({ block: 'nearest', behavior: 'smooth' });
+            return true;
+        } catch (err) {
+            console.warn('BT auto-pick failed:', err);
+            return false;
+        }
+    }
+
+    async function onBtAutoPickLogToggle() {
+        const cb = document.getElementById('bt-auto-pick-log');
+        if (cb && cb.checked) {
+            const ok = await autoSelectBtLogByIssueTime();
+            if (!ok) {
+                cb.checked = false;
+                alert('No BT collection with a capture time near the AI issue time was found — please pick one manually.');
+            }
+        }
+    }
+
     function selectDddRow(itemEl) {
         document.querySelectorAll('.ddd-file-item').forEach(item => {
             item.classList.remove('selected');
         });
         itemEl.classList.add('selected');
         updateDddActionButtons();
-        copyToClipboard(itemEl.dataset.dddEncoded);
     }
 
     function selectEventRow(itemEl) {
@@ -2045,7 +2120,6 @@
         });
         itemEl.classList.add('selected');
         updateEventActionButtons();
-        copyToClipboard(itemEl.dataset.eventEncoded);
     }
 
     function selectFwRow(itemEl) {
@@ -2054,7 +2128,6 @@
         });
         itemEl.classList.add('selected');
         updateFwActionButtons();
-        copyToClipboard(itemEl.dataset.fwEncoded);
     }
 
     function updateWifiActionButtons() {
@@ -2384,24 +2457,23 @@
         });
         itemEl.classList.add('selected');
         updateBtActionButtons();
-        copyToClipboard(itemEl.dataset.btEncoded);
     }
 
     function updateBtActionButtons() {
         const selectedEncoded = getSelectedBtEncoded();
         const autoFolderBtn = document.getElementById('bt-action-autofolder');
         const manualBtn = document.getElementById('bt-action-manual');
-        const llmBtn = document.getElementById('bt-action-llm');
+        const chatbotBtn = document.getElementById('bt-action-chatbot');
 
         if (window.btActionsBusy) {
-            if (llmBtn) llmBtn.disabled = true;
+            if (chatbotBtn) chatbotBtn.disabled = true;
             if (autoFolderBtn) autoFolderBtn.disabled = true;
             if (manualBtn) manualBtn.disabled = true;
             return;
         }
 
         const hasSelection = !!selectedEncoded;
-        if (llmBtn) llmBtn.disabled = !hasSelection;
+        if (chatbotBtn) chatbotBtn.disabled = !hasSelection;
         if (autoFolderBtn) autoFolderBtn.disabled = !hasSelection;
         if (manualBtn) manualBtn.disabled = !hasSelection;
     }
@@ -2417,7 +2489,7 @@
 
         window.pendingBtAnalyze = true;
         setBtActionButtonsBusy(true, button.id);
-        if (mode === 'LLM') {
+        if (mode === 'CHATBOT') {
             startBtLogParser(button, selectedEncoded);
         } else {
             startAnalysis(button, selectedEncoded, mode);
@@ -2427,11 +2499,13 @@
     function setBtActionButtonsBusy(isBusy, activeButtonId = null) {
         window.btActionsBusy = !!isBusy;
         const defaultLabels = {
-            'bt-action-llm': '🤖 Bluetooth Analysis Agent',
+            // HTML so the FontAwesome Bluetooth icon renders on reset.
+            // The other labels are plain text — innerHTML treats them identically.
+            'bt-action-chatbot': BT_CHATBOT_BUTTON_HTML,
             'bt-action-autofolder': 'AutoFolder',
             'bt-action-manual': 'Manual'
         };
-        const buttonIds = ['bt-action-llm', 'bt-action-autofolder', 'bt-action-manual'];
+        const buttonIds = ['bt-action-chatbot', 'bt-action-autofolder', 'bt-action-manual'];
         buttonIds.forEach(id => {
             const btn = document.getElementById(id);
             if (!btn) return;
@@ -2445,7 +2519,7 @@
             } else {
                 btn.classList.remove('bt-action-dimmed');
                 btn.classList.remove('disabled');
-                btn.innerText = defaultLabels[id];
+                btn.innerHTML = defaultLabels[id];
             }
         });
         if (!isBusy) {

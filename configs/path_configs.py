@@ -32,6 +32,19 @@ SKILLS_YAML_DATED_GLOB = "skills_*.yaml"                   # e.g. skills_2026-05
 SKILLS_YAML_DATED_RE = r"^skills_(\d{4}-\d{2}-\d{2})\.yaml$"
 SKILLS_YAML_DATED_TEMPLATE = "skills_{date}.yaml"          # date = YYYY-MM-DD
 
+# Bluetooth skills YAML — lives next to skills.yaml in the same shared
+# skills_config dir. Loaded at startup by set_up_app to populate the
+# bt_chatbot_agent. Falls back to the WiFi skills (skills.yaml) when this
+# file is missing.
+#
+# Naming convention mirrors WiFi (skills_YYYY-MM-DD.yaml) but with a
+# `bt_` prefix so both domains can coexist in the same skills_config/
+# (cloud, user) sub-folders without name collisions.
+BT_SKILLS_YAML_FILENAME = "bt_skills.yaml"                    # legacy un-dated file
+BT_SKILLS_YAML_DATED_GLOB = "bt_skills_*.yaml"                # e.g. bt_skills_2026-06-02.yaml
+BT_SKILLS_YAML_DATED_RE = r"^bt_skills_(\d{4}-\d{2}-\d{2})\.yaml$"
+BT_SKILLS_YAML_DATED_TEMPLATE = "bt_skills_{date}.yaml"       # date = YYYY-MM-DD
+
 # Feedback sidecar — shared training-data layer.
 # Each user writes under a per-user subfolder (see feedback_service) so
 # concurrent writes from different machines never touch the same file

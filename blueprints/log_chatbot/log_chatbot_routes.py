@@ -549,10 +549,15 @@ def chat():
     # is 0..log-span; the frontend enforces the log-span cap, here we
     # just clamp to a generous hard bound so a stray value can't blow up
     # the pre-scan. 0 is valid (capture only the exact issue instant).
+    # Cap at 1440 (24 h): the frontend already caps the slider at the actual
+    # log span, so the only way a larger value reaches this route is a
+    # bypassed / buggy / malicious client. 24 h is well above any realistic
+    # single-event window, so the tighter server-side hard cap doesn't
+    # constrain legitimate use.
     issue_time_window_minutes = None
     if "issue_time_window_minutes" in data:
         try:
-            issue_time_window_minutes = max(0, min(100000, int(data.get("issue_time_window_minutes"))))
+            issue_time_window_minutes = max(0, min(1440, int(data.get("issue_time_window_minutes"))))
         except (TypeError, ValueError):
             issue_time_window_minutes = None
 

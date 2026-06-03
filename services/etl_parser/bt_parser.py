@@ -138,7 +138,7 @@ def close_error_dialog() -> None:
         print("⚠️ Failed to close error dialog:", e)
 
 
-def bt_decode_hci_via_folder(log_folder_path: str, log_path: str, timeout: int = 180) -> str:
+def bt_decode_hci_via_folder(log_folder_path: str, log_path: str, timeout: int = 30) -> str:
     """
     Decode an ETL folder via the 'BT Driver Log Parser' tab (same as AutoFolder mode)
     but WITHOUT opening TextAnalysisTool.NET.
@@ -156,8 +156,8 @@ def bt_decode_hci_via_folder(log_folder_path: str, log_path: str, timeout: int =
     Returns:
         str path to the generated .hci.txt, or None on failure / timeout.
     """
-    # If hci.txt already exists and is ready, return it immediately
-    print(log_path)
+    # Check) If hci.txt already exists and is ready, return it immediately
+    print(f"📂 bt_decode_hci_via_folder: {log_path}")
     _base = log_path[:-4] if log_path.lower().endswith('.etl') else log_path
     hci_txt = _base + ".hci.txt"
     if os.path.exists(hci_txt) and is_file_ready(hci_txt):
@@ -166,6 +166,7 @@ def bt_decode_hci_via_folder(log_folder_path: str, log_path: str, timeout: int =
 
     global active_bt_pid
 
+    # 1) Construct the path to the tool and verify it exists.
     exe_path = os.path.abspath(os.path.join(os.path.dirname(__file__), 'ibtdrvlogparser.exe'))
     if not os.path.exists(exe_path):
         print(f"❌ Executable not found: {exe_path}")
@@ -173,21 +174,25 @@ def bt_decode_hci_via_folder(log_folder_path: str, log_path: str, timeout: int =
 
     app = None
 
-    # Reuse existing tool if possible
+    # 2) Reuse existing tool if possible
     if active_bt_pid and psutil.pid_exists(active_bt_pid):
         try:
             app = Application(backend='uia').connect(process=active_bt_pid)
-            print(f"🔁 Reusing BT tool instance (PID: {active_bt_pid})")
+            print(f"🔁 Reusing existing BT tool instance (PID: {active_bt_pid})")
         except Exception as e:
-            print(f"⚠️ Reconnect failed: {e}")
+            print(f"⚠️ Failed to reconnect to PID {active_bt_pid}: {e}")
             active_bt_pid = None
 
+    # 3) Launch if not attached
     if not app:
         app = Application(backend="uia").start(exe_path)
         active_bt_pid = app.process
-        print(f"🚀 Launched BT tool: {exe_path} (PID: {active_bt_pid})")
+        print(f"🚀 BT tool launched at: {exe_path} (PID: {active_bt_pid})")
+        time.sleep(2)           # Give the app time to fully load and show startup dialogs
+        close_error_dialog()    # Dismiss "Could not create/load HCI Decode library" and similar
         time.sleep(0.5)
 
+    # 4) Get the app window; dump controls if requested
     try:
         app_window = app.top_window()
     except Exception as e:
@@ -205,7 +210,7 @@ def bt_decode_hci_via_folder(log_folder_path: str, log_path: str, timeout: int =
     except Exception as e:
         print(f"❌ Failed to select 'BT Driver Log Parser' tab: {e}")
 
-    # Set folder path
+    # 5) Put the folder path into the input box
     try:
         folder_input = app_window.child_window(auto_id="txt_parse_folder", control_type="Edit")
         folder_input.set_edit_text(log_folder_path)
@@ -213,7 +218,7 @@ def bt_decode_hci_via_folder(log_folder_path: str, log_path: str, timeout: int =
     except Exception as e:
         print(f"❌ Failed to set folder path: {e}")
 
-    # Click 'Decode Folder'
+    # 6) Trigger "Decode Folder"
     try:
         decode_btn = app_window.child_window(auto_id="btn_parse_decode", control_type="Button")
         decode_btn.invoke()
@@ -221,24 +226,59 @@ def bt_decode_hci_via_folder(log_folder_path: str, log_path: str, timeout: int =
     except Exception as e:
         print(f"❌ Failed to trigger Decode Folder: {e}")
 
-    # Poll for <log_path>.hci.txt with timeout (same logic as bt_analysis_autoFolder_mode)
-    print(f"⏳ Waiting for HCI output (timeout={timeout}s): {hci_txt}")
+    # Poll until the output file stabilizes.
+    # Two separate timers are used to distinguish the two wait phases:
+    #   file_wait_start: tracks how long we have been waiting for the file to appear.
+    #   idle_start:      tracks how long the file size has been unchanged (write has stopped).
+    # Exits when: size is stable for >= timeout seconds, BT tool dies,
+    #             or file never appears within timeout seconds.
+    last_size = -1
+    file_wait_start = None  # timer: waiting for the file to appear
+    idle_start = None       # timer: waiting for the file size to stop changing
 
-    for _ in range(timeout):
+    print(f"⏳ Waiting for HCI log (timeout={timeout}s): {hci_txt}")
+
+    while True:
         if not psutil.pid_exists(active_bt_pid):
-            print("❌ BT tool closed unexpectedly during HCI wait.")
+            print(f"\n❌ BT tool closed unexpectedly during HCI wait.")
             active_bt_pid = None
             return None
         close_error_dialog()
-        if os.path.exists(hci_txt) and is_file_ready(hci_txt):
-            print(f"✅ HCI log ready: {hci_txt}")
-            return hci_txt
+
+        if os.path.exists(hci_txt):
+            file_wait_start = None  # file has appeared; reset the appearance timer
+            try:
+                current_size = os.path.getsize(hci_txt)
+            except OSError:
+                current_size = last_size
+
+            if current_size != last_size:
+                # File is still being written; reset the idle timer
+                last_size = current_size
+                idle_start = time.monotonic()
+                print(f"\r📝 Decoding... size={current_size} bytes", end='', flush=True)
+            else:
+                # File size is unchanged; start or continue the idle timer
+                if idle_start is None:
+                    idle_start = time.monotonic()
+                if time.monotonic() - idle_start >= timeout:
+                    if is_file_ready(hci_txt):
+                        print()
+                        return hci_txt
+                    print(f"\n⚠️ File idle for {timeout}s but not ready: {hci_txt}")
+                    return None
+        else:
+            # File not yet created; start the appearance timer
+            idle_start = None  # reset idle timer since file does not exist
+            if file_wait_start is None:
+                file_wait_start = time.monotonic()
+            if time.monotonic() - file_wait_start >= timeout:
+                print(f"\n⚠️ File never appeared after {timeout}s: {hci_txt}")
+                return None
+
         time.sleep(1)
 
-    print(f"⚠️ Timed out ({timeout}s) waiting for HCI log: {hci_txt}")
-    return None
-
-
+# This function is not accessed.
 def bt_analysis_autoFile_mode(
     log_path: str,
     debug: bool = False,
@@ -613,7 +653,7 @@ def bt_analysis_autoFolder_mode(
     log_folder_path: str,
     log_path: str,
     debug: bool = False,
-    wait_hci_timeout: int = 15,
+    wait_hci_timeout: int = 30,
     should_stop: callable = None,
     filter_path: str = None
 ) -> int:
@@ -632,8 +672,10 @@ def bt_analysis_autoFolder_mode(
         log_path: Full path (without .hci.txt suffix) of the specific output of interest.
                   The function waits for '<log_path>.hci.txt'.
         debug: If True, prints control identifiers for debugging.
-        wait_hci_timeout: (Currently unused) intended for adding a timeout later.
+        wait_hci_timeout: Seconds to wait both for the file to appear and for the file size
+                          to remain unchanged (write complete) before opening the viewer.
         should_stop: Optional callable that returns True if this operation should be aborted.
+        filter_path: Optional path to a filter file for the text analysis tool.
 
     Returns:
         int: The process ID (PID) of the BT tool, or None if failed/aborted.
@@ -712,7 +754,13 @@ def bt_analysis_autoFolder_mode(
     hci_txt = _base + ".hci.txt"
     print(f"⏳ Waiting for HCI log until found: {hci_txt}")
 
-    retry_count = 0
+    # Poll until the output file stabilizes and has been opened.
+    # Two separate timers distinguish the two wait phases:
+    #   file_wait_start: tracks how long we have been waiting for the file to appear.
+    #   idle_start:      tracks how long the file size has been unchanged (write has stopped).
+    last_size = -1
+    file_wait_start = None  # timer: waiting for the file to appear
+    idle_start = None       # timer: waiting for the file size to stop changing
 
     while True:
         # Check if this operation was superseded by another
@@ -729,17 +777,39 @@ def bt_analysis_autoFolder_mode(
         # Proactively close any modal error dialog that might appear
         close_error_dialog()
 
-        # If the output exists and is stable, open it and stop polling
         if os.path.exists(hci_txt):
-            if is_file_ready(hci_txt):
-                print(f"📂 HCI log is ready: {hci_txt}")
-                if open_with_text_analysis_tool(hci_txt, filter_path=filter_path):
-                    return active_bt_pid
+            file_wait_start = None  # file has appeared; reset the appearance timer
+            try:
+                current_size = os.path.getsize(hci_txt)
+            except OSError:
+                current_size = last_size
+
+            if current_size != last_size:
+                # File is still being written; reset the idle timer
+                last_size = current_size
+                idle_start = time.monotonic()
+            else:
+                # File size is unchanged; start or continue the idle timer
+                if idle_start is None:
+                    idle_start = time.monotonic()
+                if time.monotonic() - idle_start >= wait_hci_timeout:
+                    if is_file_ready(hci_txt):
+                        print(f"📂 HCI log is ready: {hci_txt}")
+                        if open_with_text_analysis_tool(hci_txt, filter_path=filter_path):
+                            print("✅ Opened HCI log with TextAnalysisTool.NET.")
+                        else:
+                            print("⚠️ Failed to open HCI log with TextAnalysisTool.NET.")    
+                        return active_bt_pid
+                    else:
+                        print(f"⚠️ File idle for {wait_hci_timeout}s but not ready: {hci_txt}")
+                        return active_bt_pid
+        else:
+            # File not yet created; start the appearance timer
+            idle_start = None  # reset idle timer since file does not exist
+            if file_wait_start is None:
+                file_wait_start = time.monotonic()
+            if time.monotonic() - file_wait_start >= wait_hci_timeout:
+                print(f"⚠️ File never appeared after {wait_hci_timeout}s: {hci_txt}")
+                return active_bt_pid
 
         time.sleep(1)
-        retry_count += 1
-        # Optionally: enforce a timeout using wait_hci_timeout
-
-        if retry_count >= wait_hci_timeout:
-            print(f"⚠️ Waited {wait_hci_timeout} seconds for HCI log, giving up.")
-            return active_bt_pid

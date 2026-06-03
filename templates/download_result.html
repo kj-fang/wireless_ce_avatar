@@ -639,7 +639,7 @@
                                 </select>
                             </div>
                         </div>
-                        <div id="eventLogContent" class="border rounded p-2" style="height: 300px; overflow-y: auto; background-color: #1e1e1e; color: #d4d4d4; font-family: 'Consolas', monospace; font-size: 12px;">
+                        <div id="eventLogContent" class="border rounded" style="height: 300px; overflow-y: auto; background-color: #ffffff; font-family: 'Consolas', monospace; font-size: 12px;">
                             <p class="text-muted">Loading...</p>
                         </div>
                     </div>
@@ -1187,8 +1187,13 @@
                 eventPagingState.isLoading = false;
                 currentTimeHeader = data.time_header || currentTimeHeader;
 
-                // Render all loaded events (virtual scroll will handle visibility)
-                renderEventLogs(allEventLogs, eventPagingState, currentTimeHeader);
+                // For first page: build full table. For subsequent pages: just re-render rows.
+                if (offset === 0) {
+                    renderEventLogs(allEventLogs, eventPagingState, currentTimeHeader);
+                } else {
+                    // Table already exists — just trigger re-render without rebuilding DOM
+                    updateEventRows();
+                }
             })
             .catch(err => {
                 if (offset === 0) {
@@ -1265,15 +1270,15 @@
                   <col style="width:135px;"><col style="width:72px;"><col style="width:175px;">
                   <col style="width:65px;"><col style="width:155px;"><col>
                 </colgroup>`;
-            const TH_STYLE = 'background-color:#005A9C !important; color:#ffffff !important;';
-            const TABLE_STYLE = 'font-size:11px; background-color:#ffffff; color:#333333; table-layout:fixed; width:100%;';
+            const TH_STYLE = 'background-color:#005A9C !important; color:#ffffff !important; position:sticky; top:0; z-index:10;';
+            const TABLE_STYLE = 'font-size:11px; background-color:#ffffff; color:#333333; table-layout:fixed; width:100%; border-collapse:separate; border-spacing:0; margin-top:0;';
 
             // Build table structure once — thead is sticky inside the scrollable box
             const safeTimeHeader = escapeHtml(timeHeader || 'Time');
             contentBox.innerHTML = `
                 <table class="table table-sm table-bordered mb-0" style="${TABLE_STYLE}">
                   ${COL_STYLE}
-                  <thead style="position:sticky; top:0; z-index:1;">
+                  <thead>
                     <tr>
                       <th style="${TH_STYLE}">${safeTimeHeader}</th>
                       <th style="${TH_STYLE}">Level</th>
@@ -1286,9 +1291,30 @@
                   <tbody id="evtTbody"></tbody>
                 </table>`;
 
+            _bindEventScrollHandler();
+        }
+
+        // Re-render rows without rebuilding table structure (used for pagination)
+        function updateEventRows() {
+            const contentBox = document.getElementById('eventLogContent');
+            if (!contentBox || !document.getElementById('evtTbody')) return;
+
+            // Remove old handler and rebind with updated data
+            if (contentBox._evtScrollHandler) {
+                contentBox.removeEventListener('scroll', contentBox._evtScrollHandler);
+                contentBox._evtScrollHandler = null;
+            }
+            _bindEventScrollHandler();
+        }
+
+        // Internal: bind scroll handler and render visible rows
+        function _bindEventScrollHandler() {
+            const contentBox = document.getElementById('eventLogContent');
             const tbody = document.getElementById('evtTbody');
 
             function renderRows() {
+                const events = allEventLogs;
+                const pagingState = eventPagingState;
                 const scrollTop = contentBox.scrollTop;
                 const visibleH = contentBox.clientHeight;
                 const start = Math.max(0, Math.floor(scrollTop / EVT_ROW_H) - EVT_BUFFER);

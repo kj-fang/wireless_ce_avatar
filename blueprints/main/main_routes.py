@@ -147,6 +147,27 @@ def start_latest_etl_llm():
             except Exception as llm_error:
                 print(f"⚠️ Classification failed in start_latest_etl_llm: {llm_error}")
 
+        # Mirror the select_attachments path: run the same token-frugal LLM
+        # pre-pass that organises Issue Description → clean_description +
+        # issue_times[] into session['_issue_ai_quick']. Without this, the
+        # index-page Run Analysis (which jumps straight to download_attachments
+        # via this route) never populates the AI cache, so download_result
+        # has no llm_issue_time — the "Auto-pick log by AI time" checkbox
+        # doesn't render and pick_etl_by_ai_time has nothing to compare.
+        # Best-effort: failures here must not block the auto-launch.
+        try:
+            _prime_issue_ai_cache(case_context)
+        except Exception as _e:
+            print(f"⚠️ issue-AI pre-pass skipped in start_latest_etl_llm: {_e}")
+
+        # Independent marker for download_result's auto-launch decision.
+        # Upstream's session['latest_etl_llm'] is cleared by the first call to
+        # get_auto_analysis_etl, so any redundant request to /download_result
+        # (browser prefetch, hot-reload, websocket reconnect, etc.) would
+        # silently lose the auto-fire. This marker survives until popped
+        # explicitly in render_download_result_form.
+        session['_run_analysis_requested'] = True
+
         return jsonify({
             'success': True,
             'redirect_url': url_for('main.download_attachments')
@@ -187,11 +208,49 @@ def handle_select_attachments_submission():
     selected_files = [item for item in case_context.attachment_list if item[0] in selected_names]
     session['selected_files'] = selected_files
 
+    # Quick LLM pre-pass: organize the Issue Description into a clean problem
+    # statement + issue time(s) now, so download_result can auto-match a log and
+    # the chatbot can reuse it (one LLM call for the whole flow). Best-effort.
+    try:
+        _prime_issue_ai_cache(case_context)
+    except Exception as _e:
+        print(f"⚠️ issue-AI pre-pass skipped: {_e}")
+
     action = request.form.get('action')
     session['bsod'] = action == 'bsod'
-    session['latest_etl_llm'] = action == 'latest_etl_llm'
+    # Accept both the legacy "latest_etl_llm" name and the new "analysis"
+    # name that the redesigned select_attachments template emits — the
+    # template's Run Analysis button was renamed but the route was never
+    # updated, which silently broke the auto-launch path (both this PR's
+    # AI-time pick AND the upstream newest-by-number pick). Keeping both
+    # values lets either template revision drive the auto flow.
+    _run_analysis = action in ('latest_etl_llm', 'analysis')
+    session['latest_etl_llm'] = _run_analysis
+    # Independent marker for download_result's auto-launch — see the
+    # corresponding comment in start_latest_etl_llm. Survives upstream's
+    # flag-clearing so the AI-time pick + auto-fire still trigger reliably
+    # even when /download_result is hit more than once.
+    if _run_analysis:
+        session['_run_analysis_requested'] = True
 
     return redirect(url_for('main.download_attachments'))
+
+
+def _prime_issue_ai_cache(case_context):
+    """Run the (token-frugal) LLM organize on the case Issue Description and
+    stash {clean_description, issue_times, interpretation} in the session under
+    ``_issue_ai_quick``. No log exists yet, so times come back clock-only; they
+    get dated against the actual log later (download_result / chatbot)."""
+    from utils.issue_time_ai import organize_issue_context
+    desc = (getattr(case_context, "description", "") or "").strip()
+    if not desc:
+        return
+    helper = app_config.llm_helper
+    client = getattr(helper, "client", None) if helper else None
+    model = getattr(helper, "model", "gpt-4.1") if helper else None
+    data = organize_issue_context(desc, first_ts=None, last_ts=None,
+                                  llm_client=client, llm_model=model)
+    session["_issue_ai_quick"] = {"data": data}
 
 def _resolve_download_path(case_context: CaseContext, is_bsod: bool) -> str:
     if not case_context:
@@ -448,7 +507,75 @@ def render_download_result_form():
     else:
         print(f"No issue time found in selected files, skipping time filter")
     
+    # AI-organized issue time(s) from the select-attachments pre-pass, used by
+    # the "auto-pick log by AI time" checkbox next to Chatbot Analysis.
+    _quick_ai = (session.get("_issue_ai_quick") or {}).get("data") or {}
+    llm_issue_times = _quick_ai.get("issue_times") or []
+    llm_issue_time = llm_issue_times[0] if llm_issue_times else ""
+
+    # Independent Run Analysis marker (see handle_select_attachments_submission /
+    # start_latest_etl_llm). Pop once so subsequent reloads of /download_result
+    # don't re-trigger an auto-launch — but it survives the upstream
+    # latest_etl_llm flag-clearing inside get_auto_analysis_etl, which made the
+    # auto-fire path fragile when /download_result was hit more than once.
+    run_analysis_pending = bool(session.pop('_run_analysis_requested', False))
+
+    # Upstream pick: newest-by-number (also clears session['latest_etl_llm']).
     auto_analysis_etl = get_auto_analysis_etl(file_dicts['wifi_dict'], file_dicts['ddd_dict'])
+    auto_analysis_etl_reason = 'latest_by_number' if auto_analysis_etl else None
+
+    # Recovery: if Run Analysis was pending but upstream picked nothing
+    # (most often because its latest_etl_llm flag was already cleared by an
+    # earlier request to this view), find any .etl ourselves so the auto-
+    # launch the user just asked for still happens.
+    if not auto_analysis_etl and run_analysis_pending:
+        try:
+            import re as _re
+            from utils.etl_utils import extract_file_number
+            for _dn in ('ddd_dict', 'wifi_dict'):
+                _cands = []
+                for _paths in (file_dicts.get(_dn) or {}).values():
+                    if not _paths:
+                        continue
+                    for _p in _paths:
+                        _pl = str(_p)
+                        if _pl.lower().endswith('.etl') or _re.search(r'\.etl\.\d+$', _pl, _re.IGNORECASE):
+                            _cands.append(_pl)
+                if _cands:
+                    auto_analysis_etl = max(_cands, key=extract_file_number)
+                    auto_analysis_etl_reason = 'latest_by_number'
+                    print(f"🛟 Run Analysis recovery: upstream returned None, "
+                          f"falling back to {auto_analysis_etl}")
+                    break
+        except Exception as _e:
+            print(f"⚠️ Run Analysis recovery pick failed: {_e}")
+
+    # Run Analysis path: when an AI-extracted issue time is available, prefer
+    # the time-based pick (the .etl whose folder timestamp best matches the
+    # issue time). More accurate than file-number sorting when the latest
+    # collection isn't actually the one that captured the issue. Gated on
+    # `auto_analysis_etl OR run_analysis_pending` so the override fires even
+    # when upstream returned None (now backed by the recovery above). Purely
+    # additive — falls back to the existing pick on any failure.
+    if llm_issue_time and (auto_analysis_etl or run_analysis_pending):
+        try:
+            from utils.issue_time_ai import pick_etl_by_ai_time
+            ai_pick = pick_etl_by_ai_time(file_dicts, llm_issue_time)
+            if ai_pick:
+                if not auto_analysis_etl or ai_pick != auto_analysis_etl:
+                    print(f"🎯 Run Analysis: AI-time pick "
+                          f"(issue_time={llm_issue_time})")
+                    print(f"   was: {auto_analysis_etl}")
+                    print(f"   now: {ai_pick}")
+                    auto_analysis_etl = ai_pick
+                    auto_analysis_etl_reason = 'ai_time'
+                else:
+                    # AI pick == newest-by-number → same file, tag the reason
+                    # so the UI alert shows "AI-verified" rather than blind newest.
+                    auto_analysis_etl_reason = 'ai_time'
+        except Exception as e:
+            print(f"⚠️ AI-time ETL pick failed, keeping newest-by-number: {e}")
+
     latest_fw_system_info_path, latest_fw_system_info = _get_latest_fw_system_info(file_dicts['fw_dict'])
     wifi_table_rows = _build_wifi_table_rows(file_dicts['wifi_dict'], download_path=download_path)
     bt_table_rows = _build_bt_table_rows(file_dicts['bt_dict'], download_path=download_path)
@@ -470,8 +597,11 @@ def render_download_result_form():
 
     return render_template('download_result.html',
                          case_path=download_path,
+                         llm_issue_time=llm_issue_time,
+                         llm_issue_times=llm_issue_times,
                          wifi_or_bt=case_context.wifi_or_bt,
                          auto_analysis_etl = auto_analysis_etl,
+                         auto_analysis_etl_reason = auto_analysis_etl_reason,
                          exclude_keywords=app_config.etl_exclude_keywords,
                          latest_fw_system_info=latest_fw_system_info,
                          latest_fw_system_info_path=latest_fw_system_info_path,

@@ -19,6 +19,7 @@ from utils.issue_time_utils import (
     resolve_issue_time,
     format_issue_time,
 )
+from utils.issue_time_ai import build_issue_time_suggestions, organize_issue_context, realign_times_to_log
 from services import feedback_service
 
 log_chatbot_bp = Blueprint("log_chatbot", __name__, url_prefix="/log_chatbot")
@@ -375,11 +376,68 @@ def set_log():
             log_path=log_path,
         )
 
+        # Whole-minute span of the log so the sidebar can cap the
+        # issue-time capture window at the log's actual length. 0 means
+        # "unknown" (no parseable timestamps) — client falls back to a
+        # generic cap.
+        try:
+            log_span_minutes = agent.get_log_span_minutes()
+        except Exception:
+            log_span_minutes = 0
+
+        # Whether this log carries dates. Time-only logs (e.g. DDD) let the
+        # sidebar leave the date fields blank and match Segment2 by time-of-day.
+        # Computed first so the log_last_time fallback below knows which format
+        # to look for.
+        try:
+            log_has_date = agent._log_has_date()
+        except Exception:
+            log_has_date = True
+
+        # Log's last parseable timestamp — offered in the "no issue time" prompt
+        # as a one-click anchor ("Use log's last time"). Two paths:
+        #   * Dated logs: read_log_time_range (MM/DD/YYYY-HH:MM:SS.fff).
+        #   * Time-only logs (DDD/tracefmt): scan the agent's raw cache from
+        #     the tail backwards for the last HH:MM:SS occurrence; emit as
+        #     "HH:MM:SS.mmm" (no date). read_log_time_range's regex doesn't
+        #     match DDD, so without this fallback the button silently no-ops
+        #     for every DDD upload.
+        log_last_time = ""
+        try:
+            _first_ts, _last_ts = read_log_time_range(log_path)
+            if _last_ts:
+                log_last_time = format_issue_time(_last_ts)
+            elif log_has_date is False:
+                cache = getattr(agent, "_raw_log_cache", None) or []
+                _time_re = re.compile(
+                    r'(?<!\d)(\d{1,2}):(\d{2}):(\d{2})(?:[:.](\d{1,6}))?(?!\d)'
+                )
+                for _line in reversed(cache):
+                    _m = _time_re.search(_line or "")
+                    if not _m:
+                        continue
+                    _hh, _mm, _ss = (int(_m.group(i)) for i in (1, 2, 3))
+                    if not (0 <= _hh <= 23 and 0 <= _mm <= 59 and 0 <= _ss <= 59):
+                        continue
+                    _raw_ms = _m.group(4)
+                    if _raw_ms:
+                        _ms = int(_raw_ms.ljust(6, "0")[:6]) // 1000
+                        log_last_time = f"{_hh:02d}:{_mm:02d}:{_ss:02d}.{_ms:03d}"
+                    else:
+                        log_last_time = f"{_hh:02d}:{_mm:02d}:{_ss:02d}"
+                    break
+        except Exception as _e:
+            print(f"⚠️  log_last_time lookup failed: {_e}")
+            log_last_time = ""
+
         return jsonify({
             "success": True,
             "message": f"Log file set: {log_path}",
             "skills": agent.get_skill_descriptions(),
             "issue_time": format_issue_time(agent.issue_time),
+            "log_span_minutes": log_span_minutes,
+            "log_last_time": log_last_time,
+            "log_has_date": log_has_date,
             # Hints for the client to clear chat history + show the toast.
             "rotated": rotated,
             "previous_log_path": prev_log_path if rotated else "",
@@ -387,6 +445,63 @@ def set_log():
             "new_conversation_id": new_conv_id,
         })
     except Exception as e:
+        return jsonify({"success": False, "error": str(e)}), 500
+
+
+# ------------------------------------------------------------------
+# API: suggest issue time(s) via LLM
+# ------------------------------------------------------------------
+@log_chatbot_bp.route("/suggest_issue_times", methods=["POST"])
+def suggest_issue_times():
+    """Suggest issue time(s) from the user's typed description + a rough browse
+    of the loaded log. User-first (explicit times bypass the LLM). The frontend
+    must obtain the user's consent before calling this route. The heavy lifting
+    lives in ``utils.issue_time_ai``; this handler just marshals request/agent
+    state in and jsonifies the result out."""
+    data = request.get_json(silent=True) or {}
+    text = (data.get("text") or "").strip()
+    try:
+        agent = _get_or_create_agent()
+        log_path = agent.current_log_path or ""
+        first_ts, last_ts = read_log_time_range(log_path) if log_path else (None, None)
+
+        # Cached raw log lines feed the rough-browse digest (best-effort).
+        log_lines = []
+        try:
+            if not agent._ensure_raw_log_cache():
+                log_lines = agent._raw_log_cache or []
+        except Exception:
+            log_lines = []
+
+        # An empty description is allowed — the AI can still infer the issue
+        # time from the log alone (a description just improves accuracy). Only
+        # block when there's truly nothing to analyze (no text AND no log).
+        if not text and not log_lines:
+            return jsonify({"success": False,
+                            "error": "Type a problem description or load a log first."}), 400
+
+        # Detect whether the loaded log carries dates (Wi-Fi ETL) or is
+        # time-only (DDD / tracefmt). Threading this into
+        # build_issue_time_suggestions makes the LLM prompt + the returned
+        # suggestion shape honest about it: time-only logs yield time-only
+        # suggestions with no fabricated date placeholder.
+        try:
+            log_has_date = agent._log_has_date()
+        except Exception:
+            log_has_date = None
+
+        payload = build_issue_time_suggestions(
+            text=text,
+            log_lines=log_lines,
+            first_ts=first_ts,
+            last_ts=last_ts,
+            llm_client=getattr(agent, "client", None),
+            llm_model=getattr(agent, "model", None),
+            log_has_date=log_has_date,
+        )
+        return jsonify(payload), (200 if payload.get("success") else 503)
+    except Exception as e:
+        traceback.print_exc()
         return jsonify({"success": False, "error": str(e)}), 500
 
 
@@ -429,8 +544,22 @@ def chat():
     # co-firing relationship from the bronze layer.
     parent_message_id = (data.get("parent_message_id") or "").strip()
 
+    # Issue-time window (minutes before/after issue_time captured for the
+    # Segment2 log slice). Sidebar-adjustable; default ±5. Allowed range
+    # is 0..log-span; the frontend enforces the log-span cap, here we
+    # just clamp to a generous hard bound so a stray value can't blow up
+    # the pre-scan. 0 is valid (capture only the exact issue instant).
+    issue_time_window_minutes = None
+    if "issue_time_window_minutes" in data:
+        try:
+            issue_time_window_minutes = max(0, min(100000, int(data.get("issue_time_window_minutes"))))
+        except (TypeError, ValueError):
+            issue_time_window_minutes = None
+
     try:
         agent = _get_or_create_agent()
+        if issue_time_window_minutes is not None:
+            agent.issue_time_window_minutes = issue_time_window_minutes
         if not agent.current_log_path:
             def _no_log():
                 yield f"data: {json.dumps({'type': 'error', 'content': 'No log file loaded. Please set a log file first.'})}\n\n"
@@ -640,6 +769,7 @@ def back_to_avatar():
         "issue_time",
         "_attachment_time_cache",
         "_resolved_issue_time_cache",
+        "_issue_ai_quick",            # LLM-organized description + issue times
         "feedback_conversation_id",   # next /log_chatbot/ visit starts a fresh conversation
     ):
         session.pop(key, None)
@@ -687,6 +817,16 @@ def prepare():
         agent = _get_or_create_agent(skip_prime=True)
         agent.current_log_path = log_path
         agent.prime_with_context(**ctx)
+
+        # Run the token-frugal LLM issue-time + description organize NOW, on the
+        # button click (deterministic pre-filter trims noise first). Cached in
+        # session so the chatbot page's /get_issue_context reuses it rather than
+        # calling the LLM a second time. Never let it fail the prepare step.
+        try:
+            _first_ts, _last_ts = read_log_time_range(log_path)
+            _issue_context_organized(ctx.get("description", "") or "", _first_ts, _last_ts)
+        except Exception as _org_err:
+            print(f"⚠️ Chatbot prepare: issue-context organize skipped: {_org_err}")
 
         # Sidecar: prepare = entering a new analysis = new conversation.
         new_conv_id = _ensure_feedback_conversation_id(rotate=True)
@@ -758,7 +898,9 @@ def reload_skills():
             warning = f"No directory specified. Using built-in skills."
 
         agent = _get_or_create_agent()
-        agent.skills = skills
+        # Mid-conversation skill edit: swap skills AND clear the rule/filter
+        # caches so the edit actually takes effect, while keeping history.
+        agent.apply_updated_skills(skills)
         # Also update the app-level agent so future sessions share the new skills
         if app_config.log_chatbot_agent:
             app_config.log_chatbot_agent.skills = skills
@@ -820,7 +962,9 @@ def load_skills_yaml_route():
         skills = load_skills_from_yaml(yaml_path)
 
         agent = _get_or_create_agent()
-        agent.skills = skills
+        # Mid-conversation skill edit: swap skills AND clear the rule/filter
+        # caches so the edit actually takes effect, while keeping history.
+        agent.apply_updated_skills(skills)
         # Also update app-level so future sessions share the new skills
         if app_config.log_chatbot_agent:
             app_config.log_chatbot_agent.skills = skills
@@ -870,7 +1014,9 @@ def reload_from_shared():
         
         # Update all instances
         agent = _get_or_create_agent()
-        agent.skills = skills
+        # Mid-conversation skill edit: swap skills AND clear the rule/filter
+        # caches so the edit actually takes effect, while keeping history.
+        agent.apply_updated_skills(skills)
         if app_config.log_chatbot_agent:
             app_config.log_chatbot_agent.skills = skills
         if app_config.llm_helper:
@@ -903,6 +1049,42 @@ def get_skills():
         return jsonify({"success": False, "error": str(e)}), 500
 
 
+def _get_llm_client_model():
+    """Return (client, model) for one-shot LLM calls, borrowing from the
+    pre-initialised chatbot agent or the llm_helper. (None, None) when the app
+    has no API key configured — callers then fall back to deterministic logic."""
+    base = getattr(app_config, "log_chatbot_agent", None)
+    if base is not None and getattr(base, "client", None) is not None:
+        return base.client, getattr(base, "model", None)
+    helper = getattr(app_config, "llm_helper", None)
+    if helper is not None and getattr(helper, "client", None) is not None:
+        return helper.client, getattr(helper, "model", "gpt-4.1")
+    return None, None
+
+
+def _issue_context_organized(raw_desc: str, first_ts, last_ts) -> dict:
+    """Return the organized issue context (clean description + issue time list).
+
+    Prefers the quick pre-pass cached at the select-attachments step
+    (``_issue_ai_quick``) so the whole flow makes a SINGLE LLM call — its
+    (possibly undated) times are just re-aligned to the loaded log's date here.
+    Falls back to organizing now (e.g. direct chatbot entry with no prior step).
+    """
+    quick = session.get("_issue_ai_quick")
+    if isinstance(quick, dict) and isinstance(quick.get("data"), dict):
+        d = quick["data"]
+    else:
+        client, model = _get_llm_client_model()
+        d = organize_issue_context(raw_desc, first_ts=first_ts, last_ts=last_ts,
+                                   llm_client=client, llm_model=model)
+        session["_issue_ai_quick"] = {"data": d}
+    return {
+        "clean_description": d.get("clean_description") or raw_desc,
+        "issue_times": realign_times_to_log(d.get("issue_times") or [], first_ts, last_ts),
+        "interpretation": d.get("interpretation", ""),
+    }
+
+
 @log_chatbot_bp.route("/get_issue_context", methods=["GET"])
 def get_issue_context():
     try:
@@ -911,20 +1093,31 @@ def get_issue_context():
     except Exception:
         ctx = {}
         attachment_time = ""
-    concise_desc = _compose_concise_description(ctx)
 
-    # Resolve a final issue_time for sidebar display: prefer attachment_time,
-    # fall back to the loaded log's latest timestamp so direct chatbot entry
-    # (no session) still gets a usable value. Cached by log_path so a
-    # repeat call from the frontend doesn't re-read the log's timestamp
-    # range — same canonical value prime_with_context already computed.
     log_path = session.get("chatbot_log_path") or app_config.last_analyzed_log_path or ""
-    issue_time_str = _resolved_issue_time_for(log_path, attachment_time)
+    first_ts, last_ts = read_log_time_range(log_path) if log_path else (None, None)
+
+    # Smart pass: let the LLM organize the raw case Issue Description into a
+    # clean problem statement + (possibly multiple) issue time points. Cached
+    # per-description so repeat fetches don't re-call the LLM; falls back to
+    # the regex extractor + concise composer when no LLM is configured.
+    organized = _issue_context_organized(ctx.get("description", "") or "", first_ts, last_ts)
+    clean_desc = organized.get("clean_description") or _compose_concise_description(ctx)
+    issue_times = organized.get("issue_times") or []
+
+    # Back-compat single issue_time: prefer the first organized time, else the
+    # previous attachment_time / log-latest resolution (cached by log_path).
+    if issue_times:
+        issue_time_str = issue_times[0]
+    else:
+        issue_time_str = _resolved_issue_time_for(log_path, attachment_time)
 
     return jsonify({
-        "description": concise_desc,
+        "description": clean_desc,
         "attachment_time": attachment_time,
         "issue_time": issue_time_str,
+        "issue_times": issue_times,
+        "interpretation": organized.get("interpretation", ""),
     })
 
 
@@ -1474,7 +1667,8 @@ def _refresh_loaded_skills(yaml_path: str) -> dict:
     """Re-load skills from `yaml_path` into the live agent and llm_helper."""
     skills = load_skills_from_yaml(yaml_path)
     agent = _get_or_create_agent()
-    agent.skills = skills
+    # Keep history; clear rule/filter caches so the reloaded skills apply.
+    agent.apply_updated_skills(skills)
     if app_config.log_chatbot_agent:
         app_config.log_chatbot_agent.skills = skills
     if app_config.llm_helper:

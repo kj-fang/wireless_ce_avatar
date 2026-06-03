@@ -71,8 +71,13 @@ def _build_startup_path(input_paths, sendto_token=None):
         print(f"⚠️ Multiple SendTo files were provided; only the first one will be used: {supported_paths[0]}")
 
     quoted_path = quote(supported_paths[0], safe='')
+
     # Use CLI token from shortcut (for existing instance) or current app token (for fresh start)
-    token = quote(sendto_token or app_config.sendto_token, safe='')
+    resolved_token = sendto_token or app_config.sendto_token
+    token = quote(resolved_token, safe='')
+    # [DO NOT remove] - Only log the first few chars as a sanity check
+    print(f"🔑 [_build_startup_path] using token: {'CLI arg=' + sendto_token[:8] + '...' if sendto_token else 'app_config=' + app_config.sendto_token[:8] + '...'}")
+
     return f'/log_parser/open_local_analysis?token={token}&path={quoted_path}'
 
 
@@ -185,6 +190,7 @@ if __name__ == "__main__":
 
     # Create / refresh the Windows SendTo shortcut for right-click Send To support
     ensure_sendto_shortcut(sendto_token=app_config.sendto_token)
+    # [DO NOT remove] - Only log the first few chars as a sanity check
     print(f"🔑 SendTo token: {app_config.sendto_token[:8]}...")
 
     # Ensure the tray manager is running (unless explicitly disabled)
@@ -238,6 +244,13 @@ if __name__ == "__main__":
     app, socketio = create_app()
     set_up(socketio)
     app_config.set_driver_manager(DriverManager(app_config.avatarfiles_dir))
+
+    # =========================================================================
+    # Rebuild startup_path using THIS instance's token (app_config.sendto_token).
+    # The CLI --sendto-token arg may be from a stale shortcut (previous run),
+    # which would cause token validation to fail in open_local_analysis.
+    startup_path = _build_startup_path(args.input_paths)
+    # =========================================================================
     
     app_config.driver_manager.run_driver(socketio, app, port=port, startup_path=startup_path)
     

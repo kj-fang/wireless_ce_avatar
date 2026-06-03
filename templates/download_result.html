@@ -353,7 +353,12 @@
 
     {% if auto_analysis_etl %}
     <div class="alert alert-info alert-dismissible fade show" role="alert">
-        <i class="fas fa-robot"></i> <strong>Auto Running: Latest ETL with LLM analysis</strong> 
+        {% if auto_analysis_etl_reason == 'ai_time' %}
+        <i class="fas fa-robot"></i> <strong>Auto Running: ETL matched to AI-extracted issue time</strong>
+        {% if llm_issue_time %}<code style="font-size:0.85rem;">{{ llm_issue_time }}</code>{% endif %}
+        {% else %}
+        <i class="fas fa-robot"></i> <strong>Auto Running: Latest ETL with LLM analysis</strong>
+        {% endif %}
         <button type="button" class="close" data-dismiss="alert" aria-label="Close">
             <span aria-hidden="true">&times;</span>
         </button>
@@ -514,6 +519,13 @@
                         <button id="wifi-action-chatbot" class="btn btn-info" style="border-radius: 30px; color:white; font-size: 1.15rem; padding: 0.5rem 1rem;" disabled onclick="runSelectedWifiAction(this, 'chatbot')">
                             🤖 Wi-Fi Analysis Agent
                         </button>
+                        {% if llm_issue_time %}
+                        <label id="auto-pick-log-label" style="display:inline-flex;align-items:center;gap:6px;font-size:0.95rem;color:#0b4a78;cursor:pointer;margin:0 0 0 4px;"
+                               title="Use the AI-detected issue time to auto-select the matching log (the one just after it). You can still pick a log manually.">
+                            <input type="checkbox" id="auto-pick-log" onchange="onAutoPickLogToggle()">
+                            🪄 Auto-pick log by AI time <code style="font-size:0.85rem;">{{ llm_issue_time }}</code>
+                        </label>
+                        {% endif %}
                     </div>
                     <div class="mb-3">
                         {% for name, etl_list in wifi_dict.items() %}
@@ -1758,6 +1770,14 @@
     const CHATBOT_PREPARE_URL = "{{ url_for('log_chatbot.prepare') }}";
     const CHATBOT_URL = "{{ url_for('log_chatbot.index') }}";
     const CHATBOT_SET_LOG_URL = "{{ url_for('log_chatbot.set_log') }}";
+    // AI-organized issue time (from the select-attachments pre-pass) used by the
+    // "🪄 Auto-pick log by AI time" checkbox. Empty when none was detected.
+    // `|tojson` (not `|e`) so the value lands as a proper JS string literal —
+    // `|e` does HTML escaping and would either corrupt the value (entities
+    // like &quot; inside a JS string) or break parsing on backslashes /
+    // newlines in the input. `or ""` keeps the output a string literal even
+    // when llm_issue_time is None server-side.
+    window.__llmIssueTime = {{ (llm_issue_time or "")|tojson }};
 
     function startChatbotAnalysis(button, etlPathEncoded) {
         if (button.classList.contains('disabled')) return;
@@ -1813,6 +1833,76 @@
         itemEl.classList.add('selected');
         updateWifiActionButtons();
         copyToClipboard(itemEl.dataset.etlEncoded);
+    }
+
+    // ── Auto-pick the WiFi log matching the AI-detected issue time ───────
+    // The date order is FIXED within a page (capture-tool folder names like
+    // "31-10-2025" are DD-MM-YYYY). Decide it ONCE for the whole page — default
+    // DD-MM; only flip to MM-DD if some timestamp proves it (2nd field > 12,
+    // which can't be a month). No per-file guessing.
+    function _detectDateOrder() {
+        let order = 'DD-MM';
+        document.querySelectorAll('#wifi-panel .wifi-file-item').forEach(el => {
+            const m = decodeURIComponent(el.dataset.etlEncoded || '')
+                .match(/(\d{2})-(\d{2})-(\d{4})_\d{2}-\d{2}-\d{2}/);
+            if (m && +m[2] > 12) order = 'MM-DD';
+        });
+        return order;
+    }
+    // Parse the "DD-MM-YYYY_HH-MM-SS_mmm" (or MM-DD) stamp from an ETL path,
+    // using the page's single fixed date order.
+    function _parseFileTimestamp(name, order) {
+        const m = (name || '').match(/(\d{2})-(\d{2})-(\d{4})_(\d{2})-(\d{2})-(\d{2})(?:_(\d{1,3}))?/);
+        if (!m) return null;
+        const day   = order === 'MM-DD' ? +m[2] : +m[1];
+        const month = order === 'MM-DD' ? +m[1] : +m[2];
+        const dt = new Date(+m[3], month - 1, day, +m[4], +m[5], +m[6], m[7] ? +m[7] : 0);
+        return { ms: dt.getTime(), sod: (+m[4]) * 3600 + (+m[5]) * 60 + (+m[6]) };
+    }
+    // Parse the AI issue time — full "MM/DD/YYYY-HH:MM:SS" or bare "HH:MM:SS".
+    function _parseAiIssueTime(s) {
+        if (!s) return null;
+        let m = s.match(/(\d{1,2})\/(\d{1,2})\/(\d{4})[-\s](\d{1,2}):(\d{2}):(\d{2})/);
+        if (m) {
+            const dt = new Date(+m[3], +m[1] - 1, +m[2], +m[4], +m[5], +m[6]);
+            return { ms: dt.getTime(), sod: (+m[4]) * 3600 + (+m[5]) * 60 + (+m[6]), hasDate: true };
+        }
+        m = s.match(/(\d{1,2}):(\d{2}):(\d{2})/);
+        if (m) return { ms: null, sod: (+m[1]) * 3600 + (+m[2]) * 60 + (+m[3]), hasDate: false };
+        return null;
+    }
+    // Pick the WiFi log to anchor on: among file timestamps that are >= the AI
+    // issue time, take the SMALLEST (the one just after it); if none is later,
+    // fall back to the closest earlier one. Full datetime when the issue time
+    // has a date, else time-of-day.
+    function autoSelectLogByIssueTime() {
+        const it = _parseAiIssueTime(window.__llmIssueTime || '');
+        if (!it) return false;
+        const order = _detectDateOrder();   // one fixed date order for the whole page
+        const cand = [];
+        document.querySelectorAll('#wifi-panel .wifi-file-item').forEach(el => {
+            const name = decodeURIComponent(el.dataset.etlEncoded || '');
+            const ft = _parseFileTimestamp(name, order);
+            if (ft) cand.push({ el, key: it.hasDate ? ft.ms : ft.sod });
+        });
+        if (cand.length === 0) return false;
+        const ival = it.hasDate ? it.ms : it.sod;
+        const ge = cand.filter(c => c.key >= ival).sort((a, b) => a.key - b.key);
+        const lt = cand.filter(c => c.key < ival).sort((a, b) => b.key - a.key);
+        const chosen = ge.length ? ge[0] : (lt.length ? lt[0] : null);
+        if (!chosen) return false;
+        selectWifiEtlRow(chosen.el);
+        chosen.el.scrollIntoView({ block: 'nearest', behavior: 'smooth' });
+        return true;
+    }
+    function onAutoPickLogToggle() {
+        const cb = document.getElementById('auto-pick-log');
+        if (cb && cb.checked) {
+            if (!autoSelectLogByIssueTime()) {
+                cb.checked = false;
+                alert('No WiFi log with a timestamp near the AI issue time was found — please pick one manually.');
+            }
+        }
     }
 
     function selectDddRow(itemEl) {

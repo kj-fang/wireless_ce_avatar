@@ -51,8 +51,16 @@ from utils import helpers
 #   v2  - Added `schema_version` field + `parent_message_id` on turn records
 #         (linking multiple turns emitted from a single Send for the
 #         multi-incident analysis flow).
+#   v3  - Added issue-time (analysis-anchor) feedback fields on detail records:
+#         `issue_time_problem` (free-text: what was wrong with the time),
+#         `correct_issue_time` (what it should have been), `used_issue_time`
+#         (the time the turn actually used), and `log_has_date`. When
+#         `log_has_date` is False the analysed log carried no dates, so the
+#         three time fields are time-only "HH:MM:SS" (e.g. DDD/tracefmt logs)
+#         rather than "MM/DD/YYYY-HH:MM:SS" — ACE can group/interpret them
+#         without ambiguity.
 # ---------------------------------------------------------------------------
-RECORD_SCHEMA_VERSION = 2
+RECORD_SCHEMA_VERSION = 3
 
 
 # --- Storage location ----------------------------------------------------
@@ -847,6 +855,10 @@ def record_detail(
     correct_approach: str = "",
     evidence_log_lines: Optional[list] = None,
     agent_workflow: str = "",
+    issue_time_problem: str = "",
+    correct_issue_time: str = "",
+    used_issue_time: str = "",
+    log_has_date: bool = True,
     severity: Optional[int] = None,
     yaml_modified: bool = False,
     attached_yaml_path: str = "",
@@ -903,6 +915,13 @@ def record_detail(
     wf_in = (agent_workflow or "").strip().lower()
     agent_workflow = wf_in if wf_in in AGENT_WORKFLOW_TAGS else ""
 
+    # Issue-time problem is free-text (capped so a stray paste can't bloat
+    # the JSONL stream). Was previously gated against ISSUE_TIME_PROBLEM_TAGS
+    # but the whitelist was dropped — feedback is now free-form by design.
+    issue_time_problem = (issue_time_problem or "").strip()[:500]
+    correct_issue_time = (correct_issue_time or "").strip()
+    used_issue_time = (used_issue_time or "").strip()
+
     # Auto-infer the dispatch hint (Skill Playbook vs Agent-prompt Playbook)
     # purely from which structured fields the user filled — the UI no
     # longer asks the user this question directly.
@@ -933,6 +952,7 @@ def record_detail(
         or correct_root_cause or correct_conclusion_tag
         or correct_skill or correct_approach or cleaned_evidence
         or agent_workflow or severity_val is not None
+        or issue_time_problem or correct_issue_time
     )
 
     # If everything is empty and there is no vote either, ignore.
@@ -964,6 +984,15 @@ def record_detail(
         "feedback_layer":         feedback_layer or None,
         # Agent-prompt-layer ACE signal (maps to specific prompt sections).
         "agent_workflow":         agent_workflow or None,
+        # Issue-time (analysis anchor) feedback: what was wrong with the time,
+        # the corrected time(s) the user expected, and the time actually used.
+        "issue_time_problem":     issue_time_problem or None,
+        "correct_issue_time":     correct_issue_time or None,
+        "used_issue_time":        used_issue_time or None,
+        # How to read the issue-time fields above: when False the analysed log
+        # had no dates, so used/correct issue times are time-only "HH:MM:SS"
+        # (e.g. DDD logs) — lets ACE group/interpret them without ambiguity.
+        "log_has_date":           bool(log_has_date),
         # Quantitative severity 1-5 — used to prioritise the ACE review queue.
         "severity":               severity_val,
         # Legacy free-form field; UI no longer surfaces it, but we keep

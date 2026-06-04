@@ -1,4 +1,4 @@
-from flask import Blueprint, render_template, request, session, redirect, url_for, flash, Response, jsonify
+from flask import Blueprint, render_template, request, session, redirect, url_for, flash, Response, jsonify, copy_current_request_context
 import json
 import os 
 import datetime
@@ -6,7 +6,10 @@ import hmac
 import logging
 import re
 import shutil
+import threading
+import time
 import traceback
+import uuid
 import markdown
 import bleach
 from urllib.parse import unquote
@@ -27,6 +30,39 @@ log_parser_bp = Blueprint("log_parser", __name__, url_prefix="/log_parser")
 
 log_parser_service = LogParserService()
 file_manager_service = FileManagerService()
+
+# ── One-time session pickup store for the SendTo background flow ─────────────
+# The background thread cannot call Flask-Session's save_session reliably
+# (flask-session 0.8.0 _ManagedSession is incompatible with direct save_session
+# calls from Socket.IO event contexts).  Instead we snapshot dict(session) here,
+# key it by a UUID token, and let before_app_request restore it on the next
+# real HTTP request (the browser redirect).  The token travels as ?_st=<token>.
+_sendto_session_store: dict = {}   # token -> (inserted_at, session_dict)
+_sendto_session_lock  = threading.Lock()
+_SENDTO_TOKEN_TTL     = 300  # seconds – tokens expire after 5 minutes
+
+
+@log_parser_bp.before_app_request
+def _pickup_sendto_session():
+    """Restore session data written by the SendTo background thread.
+
+    Also purges expired tokens on every call so the store never grows
+    unboundedly (e.g. user closes the tab before the redirect fires).
+    """
+    now = time.time()
+    token = request.args.get('_st', '').strip()
+    with _sendto_session_lock:
+        # Purge expired entries regardless of whether a token was provided
+        expired = [k for k, (ts, _) in _sendto_session_store.items()
+                   if now - ts > _SENDTO_TOKEN_TTL]
+        for k in expired:
+            del _sendto_session_store[k]
+
+        entry = _sendto_session_store.pop(token, None) if token else None
+
+    if entry:
+        _, data = entry
+        session.update(data)
 
 _SAFE_MARKDOWN_TAGS = [
     'p', 'br', 'strong', 'em', 'code', 'pre',
@@ -136,13 +172,22 @@ def _infer_local_upload_case_type(bt_files) -> str:
 
 def _process_local_analysis(source_path: str, source_dir: str, file_path: str,
                             original_name: str, timestamp: str,
-                            is_bsod: bool = False) -> str:
+                            is_bsod: bool = False,
+                            progress_cb=None) -> str:
     """Shared core logic for local analysis (used by both upload and SendTo flows).
 
     Sets up session state, extracts archives / parses ETL / handles .log/.dmp files.
     Returns the redirect URL on success.
     Raises ValueError for validation failures (e.g. no supported files found).
+
+    progress_cb: optional callable(pct: int, msg: str) – used by the SendTo flow
+                 to stream progress to the browser.  Pass None for other callers.
     """
+    def _cb(pct: int, msg: str):
+        if progress_cb:
+            progress_cb(pct, msg)
+            time.sleep(0.5)   # give the browser time to render each step
+
     session['download_path'] = source_dir
     session['uploaded_source_path'] = source_path
     session['local_in_place'] = True
@@ -164,7 +209,9 @@ def _process_local_analysis(source_path: str, source_dir: str, file_path: str,
         shared_case_dir = os.path.join(load_path_bsod, local_case_nbr)
         os.makedirs(shared_case_dir, exist_ok=True)
         shared_dmp_path = os.path.join(shared_case_dir, original_name)
+        _cb(20, 'Copying dump file to shared folder…')
         _copy_file_with_console_progress(file_path, shared_dmp_path)
+        _cb(90, 'Copy complete. Redirecting to BSOD submission page…')
 
         # Ensure downstream BSOD page/API submission uses shared folder path.
         session['download_path'] = shared_case_dir
@@ -184,13 +231,30 @@ def _process_local_analysis(source_path: str, source_dir: str, file_path: str,
 
     elif file_path.lower().endswith('.zip') or file_path.lower().endswith('.7z') or file_path.lower().endswith('.rar'):
         print(f"📦 Extracting file: {file_path}")
+        _cb(20, 'Extracting archive contents…')
+
+        # Stream per-file extraction progress (20 % → 60 %) when a progress_cb
+        # is available (SendTo flow).  Throttle so we only emit when the integer
+        # display value actually changes – avoids flooding the browser with
+        # hundreds of events for large archives.
+        _last_extract_pct = [20]
+        def _extract_progress(raw_pct, filename):
+            display_pct = 20 + int(raw_pct * 0.40)
+            if display_pct != _last_extract_pct[0] and progress_cb:
+                _last_extract_pct[0] = display_pct
+                progress_cb(display_pct, f'Extracting: {filename}')
+
         wifi_files, ddd_files, evt_files, bt_files, fw_files = attachment_decompose.process_single_zip(
-            file_path, source_dir, already_downloaded=False
+            file_path, source_dir, already_downloaded=False,
+            progress_cb=_extract_progress if progress_cb else None
         )
 
         extracted_files = wifi_files + ddd_files + evt_files + bt_files + fw_files
         if not extracted_files:
             raise ValueError('No supported analysis files found in the uploaded file.')
+
+        total = len(extracted_files)
+        _cb(60, f'Extraction complete. Found {total} file{"s" if total != 1 else ""}.')
 
         local_case_nbr = f'local_upload_{timestamp}'
         # Only consider bt_files for case type inference since wifi_files may be present in both wifi and bt cases
@@ -212,24 +276,31 @@ def _process_local_analysis(source_path: str, source_dir: str, file_path: str,
             bt={original_name: bt_files},
             fw={original_name: fw_files}
         )
+        _cb(90, 'File categories organised. Ready to analyse.')
 
         return url_for('main.download_result')
 
     elif file_path.lower().endswith('.log'):
         session['latest_etl_path'] = None
         app_config.last_analyzed_log_path = file_path
+        _cb(90, 'Log file ready.')
         return url_for('log_chatbot.index', auto_run='analyze_all')
 
-    elif _is_bt_etl(file_path):    
+    elif _is_bt_etl(file_path):
+        _cb(20, 'Launching BT HCI decoder…')
+        _cb(30, 'Decoding in progress (may take ~30 s)…')
         hci_path = bt_decode_hci_via_folder(source_dir, file_path)
         if not hci_path:
             raise ValueError(f'BT HCI decode failed or timed out for: {original_name}')
+        _cb(90, 'BT HCI decode complete.')
         session['latest_etl_path'] = hci_path
         app_config.last_analyzed_log_path = hci_path
         return url_for('log_chatbot.index', auto_run='analyze_all')
 
     else:
+        _cb(20, 'Starting WPP/DDD parser…')
         wpp_ddd_parser_run(file_path)
+        _cb(90, 'Parser complete.')
         session['latest_etl_path'] = file_path
         app_config.last_analyzed_log_path = file_path + '.log'
         return url_for('log_chatbot.index', auto_run='analyze_all')
@@ -410,21 +481,11 @@ def open_local_analysis():
         flash(f'Invalid file type: {original_name}. Only .zip, .7z, .rar, .etl, .log, or .dmp are allowed.', 'danger')
         return redirect(url_for('main.index'))
 
-    timestamp = datetime.datetime.now().strftime('%Y%m%d_%H%M%S')
-    source_dir = os.path.dirname(source_path) or os.getcwd()
-    file_path = source_path
+    # Store validated path in session; actual processing starts after the
+    # browser connects to the /sendto-progress Socket.IO namespace.
+    session['sendto_pending_path'] = source_path
 
-    try:
-        redirect_url = _process_local_analysis(source_path, source_dir, file_path, original_name, timestamp)
-    except ValueError as e:
-        flash(str(e), 'danger')
-        return redirect(url_for('main.index'))
-    except Exception as error:
-        logging.exception("Failed SendTo local analysis flow for %s: %s", source_path, error)
-        flash(f'Failed local analysis flow: {error}', 'danger')
-        return redirect(url_for('main.index'))
-
-    return redirect(redirect_url)
+    return render_template('sendto_transmission.html', filename=original_name)
 
 
 @log_parser_bp.route('/navigate_existing_browser', methods=['POST'])
@@ -596,6 +657,127 @@ def register_socketio_handlers(socketio):
     def socketio_reset_log_parser_session():
         print("♻️ Received reset_log_parser_session")
         return handle_reset_log_parser_session(request.sid, socketio)
+
+    # ── /sendto-progress namespace ─────────────────────────────────────────
+    @socketio.on('start_sendto', namespace='/sendto-progress')
+    def socketio_start_sendto():
+        client_sid = request.sid
+        source_path = (session.get('sendto_pending_path') or '').strip()
+        print(f"[sendto] start_sendto received, sid={client_sid}, path={source_path}")
+
+        if not source_path:
+            socketio.emit('sendto_error',
+                          {'message': 'No pending file in session. Please use Send To again.'},
+                          namespace='/sendto-progress', to=client_sid)
+            return
+
+        if not os.path.exists(source_path):
+            socketio.emit('sendto_error',
+                          {'message': f'File no longer exists: {source_path}'},
+                          namespace='/sendto-progress', to=client_sid)
+            return
+
+        # Clear the pending path so a page-refresh doesn't re-trigger processing
+        session.pop('sendto_pending_path', None)
+
+        # copy_current_request_context copies the Flask request/session context
+        # into the background thread so that session reads/writes work correctly.
+        @copy_current_request_context
+        def _run_with_context():
+            _run_sendto_in_background(socketio, client_sid, source_path)
+
+        t = threading.Thread(target=_run_with_context, daemon=True)
+        t.start()
+
+
+# ── SendTo background worker ────────────────────────────────────────────────
+
+def _emit_sendto(socketio, sid, event, data):
+    """Convenience wrapper: emit to a specific client in /sendto-progress."""
+    socketio.emit(event, data, namespace='/sendto-progress', to=sid)
+
+
+def _run_sendto_in_background(socketio, client_sid, source_path: str):
+    """Run _process_local_analysis in a background thread and stream progress
+    to the browser via Socket.IO namespace /sendto-progress.
+
+    Progress events emitted:
+        sendto_progress  { pct: int, msg: str, detail: str|None }
+        sendto_wpp_log   { data: str }   (forwarded from wpp_ddd_parser_run)
+        sendto_complete  { redirect_url: str }
+        sendto_error     { message: str }
+    """
+    def emit_progress(pct: int, msg: str, detail: str = None):
+        payload = {'pct': pct, 'msg': msg}
+        if detail:
+            payload['detail'] = detail
+        _emit_sendto(socketio, client_sid, 'sendto_progress', payload)
+        print(f"[sendto] {pct}% – {msg}")
+
+    try:
+        original_name = os.path.basename(source_path)
+        source_dir    = os.path.dirname(source_path) or os.getcwd()
+        timestamp     = datetime.datetime.now().strftime('%Y%m%d_%H%M%S')
+        file_lower    = source_path.lower()
+
+        emit_progress(5, f'File validated: {original_name}')
+        time.sleep(0.5)
+
+        # ── Determine file type and emit appropriate pre-step message ────────
+        if file_lower.endswith('.dmp'):
+            emit_progress(10, 'BSOD dump detected. Copying to shared folder…')
+        elif file_lower.endswith(('.zip', '.7z', '.rar')):
+            emit_progress(10, 'Archive detected. Extracting…')
+        elif file_lower.endswith('.log'):
+            emit_progress(10, 'Log file detected. Preparing chatbot…')
+        elif _is_bt_etl(source_path):
+            emit_progress(10, 'Bluetooth ETL detected. Starting HCI decode…')
+        else:
+            emit_progress(10, 'Wi-Fi ETL file detected. Starting WPP/DDD parser…')
+        time.sleep(0.5)
+        # ── Intercept wpp_log events and forward to /sendto-progress ─────────
+        # Temporarily monkey-patch the socketio emit for wpp_log so the
+        # detail log on the waiting page also shows ETL sub-step output.
+        _orig_emit = socketio.emit
+
+        def _forwarding_emit(event, data=None, **kwargs):
+            _orig_emit(event, data, **kwargs)
+            if event == 'wpp_log' and isinstance(data, dict):
+                _emit_sendto(socketio, client_sid, 'sendto_wpp_log', data)
+
+        socketio.emit = _forwarding_emit
+
+        try:
+            emit_progress(15, 'Processing file…')
+            time.sleep(0.5)
+            redirect_url = _process_local_analysis(
+                source_path, source_dir, source_path, original_name, timestamp,
+                progress_cb=emit_progress,
+            )
+        finally:
+            socketio.emit = _orig_emit   # always restore original emit
+
+        # Flask-Session (filesystem) save_session is unreliable from a background
+        # thread (flask-session 0.8.0 _ManagedSession has no 'sid' in Socket.IO
+        # event contexts).  Instead, snapshot the session into a module-level
+        # store and let the next real HTTP request (the browser redirect) pick it
+        # up via the before_app_request hook _pickup_sendto_session.
+        token = uuid.uuid4().hex
+        with _sendto_session_lock:
+            _sendto_session_store[token] = (time.time(), dict(session))
+        sep = '&' if '?' in redirect_url else '?'
+        redirect_url = redirect_url + sep + '_st=' + token
+
+        emit_progress(100, 'Processing complete!')
+        time.sleep(0.5)
+        _emit_sendto(socketio, client_sid, 'sendto_complete', {'redirect_url': redirect_url})
+
+    except ValueError as e:
+        logging.warning('[sendto] Validation error: %s', e)
+        _emit_sendto(socketio, client_sid, 'sendto_error', {'message': str(e)})
+    except Exception as e:
+        logging.exception('[sendto] Unexpected error for %s: %s', source_path, e)
+        _emit_sendto(socketio, client_sid, 'sendto_error', {'message': f'Processing failed: {e}'})
 
 
 #------------Llog parser render -------------#

@@ -1,0 +1,232 @@
+<!DOCTYPE html>
+<html lang="en">
+<head>
+  <meta charset="UTF-8">
+  <title>Processing File...</title>
+  <link href="https://fonts.googleapis.com/css2?family=Inter:wght@400;500;600;700&display=swap" rel="stylesheet">
+  <link href="https://stackpath.bootstrapcdn.com/bootstrap/4.5.2/css/bootstrap.min.css" rel="stylesheet">
+  <script src="https://cdn.socket.io/4.6.1/socket.io.min.js"></script>
+  <style>
+    * { font-family: 'Inter', sans-serif !important; }
+
+    body {
+      background-color: #f8f9fa;
+      padding: 30px;
+    }
+
+    .card {
+      border-radius: 10px;
+      box-shadow: 0 2px 12px rgba(0,0,0,0.08);
+    }
+
+    #stage-label {
+      font-size: 1.05rem;
+      font-weight: 500;
+      color: #333;
+      min-height: 1.5em;
+    }
+
+    .progress {
+      height: 22px;
+      border-radius: 11px;
+      background-color: #e9ecef;
+    }
+
+    .progress-bar {
+      border-radius: 11px;
+      transition: width 0.4s ease;
+      font-size: 0.85rem;
+      font-weight: 600;
+      background: linear-gradient(90deg, #0078d4, #00b0f0);
+    }
+
+    .progress-bar.bg-danger {
+      background: linear-gradient(90deg, #dc3545, #e07b84) !important;
+    }
+
+    .progress-bar.bg-success {
+      background: linear-gradient(90deg, #28a745, #5cb85c) !important;
+    }
+
+    #detail-log {
+      background: #1e1e1e;
+      color: #d4d4d4;
+      font-family: 'Consolas', 'Courier New', monospace !important;
+      font-size: 0.78rem;
+      padding: 12px 14px;
+      border-radius: 6px;
+      height: 200px;
+      overflow-y: auto;
+      white-space: pre-wrap;
+      word-break: break-all;
+    }
+
+    #detail-log .log-line { margin: 0; line-height: 1.5; }
+    #detail-log .log-info  { color: #9cdcfe; }
+    #detail-log .log-ok    { color: #4ec9b0; }
+    #detail-log .log-warn  { color: #dcdcaa; }
+    #detail-log .log-err   { color: #f48771; }
+
+    .filename-badge {
+      font-size: 0.82rem;
+      background: #e9ecef;
+      border-radius: 6px;
+      padding: 3px 10px;
+      color: #495057;
+      word-break: break-all;
+    }
+
+    #error-panel { display: none; }
+    #done-panel  { display: none; }
+  </style>
+</head>
+<body>
+
+  <!-- Navbar -->
+  <div class="form-container mb-4 p-0 overflow-hidden"
+       style="position: relative; border-radius: 0; margin-top: -30px; margin-left: -30px; margin-right: -30px;">
+    <img src="{{ url_for('static', filename='nav_bar.svg') }}"
+         alt="nav_bar"
+         class="w-100"
+         style="border-radius: 0; display: block;">
+    <a href="{{ url_for('main.index') }}"
+       style="position: absolute; top: 0; left: 0; width: 20%; height: 100%;
+              cursor: pointer; z-index: 10;"
+       title="Return to home" aria-label="Return to home"></a>
+  </div>
+
+  <div class="container" style="max-width: 720px;">
+    <div class="card p-4 mt-3">
+      <h5 class="mb-3"><strong>⚙️ Processing File via SendTo</strong></h5>
+
+      <!-- File name -->
+      <div class="mb-3">
+        <span class="text-muted" style="font-size:0.82rem;">File:</span>
+        <span class="filename-badge ml-1">{{ filename }}</span>
+      </div>
+
+      <!-- Status label -->
+      <p id="stage-label" class="mb-2">Initializing…</p>
+
+      <!-- Progress bar -->
+      <div class="progress mb-3">
+        <div id="progress-bar"
+             class="progress-bar progress-bar-striped progress-bar-animated"
+             role="progressbar"
+             style="width: 0%;">0%</div>
+      </div>
+
+      <!-- Detail log -->
+      <div id="detail-log"></div>
+
+      <!-- Error panel -->
+      <div id="error-panel" class="alert alert-danger mt-3" role="alert">
+        <strong>⚠️ Error:</strong> <span id="error-msg"></span>
+        <div class="mt-2">
+          <a href="{{ url_for('main.index') }}" class="btn btn-sm btn-secondary">Back to Home</a>
+        </div>
+      </div>
+
+      <!-- Done panel -->
+      <div id="done-panel" class="alert alert-success mt-3" role="alert">
+        ✅ Done! Redirecting…
+      </div>
+    </div>
+  </div>
+
+  <script>
+    const progressBar  = document.getElementById('progress-bar');
+    const stageLabel   = document.getElementById('stage-label');
+    const detailLog    = document.getElementById('detail-log');
+    const errorPanel   = document.getElementById('error-panel');
+    const errorMsg     = document.getElementById('error-msg');
+    const donePanel    = document.getElementById('done-panel');
+
+    // ── helpers ────────────────────────────────────────────────────────────
+    function appendLog(text, cls) {
+      const line = document.createElement('p');
+      line.className = 'log-line ' + (cls || 'log-info');
+      line.textContent = text;
+      detailLog.appendChild(line);
+      detailLog.scrollTop = detailLog.scrollHeight;
+    }
+
+    function setProgress(pct, animated) {
+      const clamped = Math.min(Math.max(pct, 0), 100);
+      progressBar.style.width  = clamped + '%';
+      progressBar.textContent  = clamped + '%';
+      if (animated === false) {
+        progressBar.classList.remove('progress-bar-striped', 'progress-bar-animated');
+      }
+    }
+
+    function showError(msg) {
+      stageLabel.textContent   = '⚠️ Processing failed.';
+      progressBar.classList.remove('progress-bar-striped', 'progress-bar-animated');
+      progressBar.classList.add('bg-danger');
+      progressBar.style.width  = '100%';
+      progressBar.textContent  = 'Error';
+      errorMsg.textContent     = msg;
+      errorPanel.style.display = 'block';
+    }
+
+    // ── Socket.IO ───────────────────────────────────────────────────────────
+    const socket = io('/sendto-progress');
+
+    // Guard: only emit start_sendto once per page load.
+    // Socket.IO auto-reconnects on network hiccups; without this flag the
+    // 'connect' handler would fire again after reconnect, triggering a second
+    // start attempt after the server already popped session['sendto_pending_path'].
+    let _startSent = false;
+
+    socket.on('connect', function () {
+      appendLog('Connected. Starting processing…', 'log-ok');
+      if (!_startSent) {
+        _startSent = true;
+        socket.emit('start_sendto');
+      }
+    });
+
+    socket.on('connect_error', function (err) {
+      showError('Cannot connect to server: ' + err.message);
+    });
+
+    // { pct: Number, msg: String, detail: String|undefined }
+    socket.on('sendto_progress', function (data) {
+      if (data.msg) {
+        stageLabel.textContent = data.msg;
+        appendLog(data.msg, 'log-info');
+      }
+      if (data.detail) {
+        appendLog(data.detail, 'log-info');
+      }
+      if (typeof data.pct === 'number') {
+        setProgress(data.pct);
+      }
+    });
+
+    // wpp_log forwarded from /progress so the detail box gets ETL sub-steps
+    socket.on('sendto_wpp_log', function (data) {
+      appendLog(data.data || data, 'log-info');
+    });
+
+    // { redirect_url: String }
+    socket.on('sendto_complete', function (data) {
+      stageLabel.textContent = '✅ Complete!';
+      setProgress(100, false);
+      progressBar.classList.add('bg-success');
+      donePanel.style.display = 'block';
+      appendLog('Processing complete. Redirecting…', 'log-ok');
+      setTimeout(function () {
+        window.location.href = data.redirect_url;
+      }, 800);
+    });
+
+    // { message: String }
+    socket.on('sendto_error', function (data) {
+      showError(data.message || 'Unknown error.');
+      appendLog('ERROR: ' + (data.message || 'Unknown error.'), 'log-err');
+    });
+  </script>
+</body>
+</html>

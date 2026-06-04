@@ -1,15 +1,23 @@
+# Scenario 1: Developer PR  → feature branch pushed, PR opened against main
+#   - Builds + runs linter, uploads artifact, posts version comment on PR
+#   - Version: 99.0.<base_patch>-dev.<sha1>  (DEV)
+#
+# Scenario 2: Merge to main  → PR merged (push to main)
+#   - Nightly build, uploads artifact, NO GitHub Release
+#   - Version: 99.0.<commit_count>  (NIGHTLY)
+
 name: Build and Test
 
 on:
   push:
-    branches: [ main ]
+    branches: [ main ]         # Scenario 2: nightly after merge
   pull_request:
-    branches: [ main ]
+    branches: [ main ]         # Scenario 1: dev PR build
   workflow_dispatch:
 
 permissions:
-  contents: write
-  pull-requests: write
+  contents: read
+  pull-requests: write        # needed to post PR comments
 
 jobs:
   build:
@@ -33,48 +41,40 @@ jobs:
     - name: Calculate version from git
       id: version
       run: |
-        # For PRs, we checked out the real branch tip (not the merge commit),
-        # so HEAD is the actual PR commit and merge-base resolves to the true branch point.
-        # Ensure origin/main is available for merge-base calculation.
         git fetch origin main --no-tags 2>$null
 
-        $gitHash = git rev-parse --short HEAD
+        $gitHash   = git rev-parse --short HEAD
         $buildDate = Get-Date -Format "yyyy-MM-dd HH:mm:ss"
+        $isNightly = ("${{ github.event_name }}" -eq "push") -and ("${{ github.ref }}" -eq "refs/heads/main")
 
-        # Release build: push directly to main
-        # Dev build: pull_request (feature branch) → version = 1.0.<base_release_count>-dev.<sha1>
-        $isRelease = ("${{ github.event_name }}" -eq "push") -and ("${{ github.ref }}" -eq "refs/heads/main")
-
-        if ($isRelease) {
+        if ($isNightly) {
+          # Scenario 2: Merge to main — nightly build
           $commitCount = git rev-list --count HEAD
-          $version = "1.0.$commitCount"
-          $buildType = "release"
+          $version     = "99.0.$commitCount"
+          $buildType   = "NIGHTLY"
         } else {
-          # Find where this branch diverged from main to get the base release version.
-          # git merge-base gives the exact commit where the branch split off main,
-          # and counting commits up to that point gives the correct PATCH number.
-          $mergeBase = git merge-base HEAD origin/main
+          # Scenario 1: PR from feature branch — dev build
+          # Anchor patch to the commit count on main at the branch point so the dev
+          # version number clearly identifies which nightly it was branched from.
+          $mergeBase = git merge-base HEAD origin/main 2>$null
           if ($LASTEXITCODE -ne 0 -or -not $mergeBase) {
-            # Fallback: merge-base unavailable (e.g. shallow clone with insufficient depth).
-            # Use the current tip of main as approximation — PATCH may be slightly ahead of
-            # the true branch point, so version alignment is approximate in this case.
             $baseCommitCount = git rev-list --count origin/main
-            Write-Host "::warning::Could not determine branch point — using tip of main as fallback (version may be approximate)"
+            Write-Host "::warning::Could not determine branch point — using tip of main as fallback"
           } else {
             $baseCommitCount = git rev-list --count $mergeBase
           }
-          $version = "1.0.$baseCommitCount-dev.$gitHash"
-          $buildType = "dev"
+          $version   = "99.0.$baseCommitCount-dev.$gitHash"
+          $buildType = "DEV"
         }
 
-        echo "VERSION=$version" >> $env:GITHUB_OUTPUT
-        echo "GIT_HASH=$gitHash" >> $env:GITHUB_OUTPUT
+        echo "VERSION=$version"      >> $env:GITHUB_OUTPUT
+        echo "GIT_HASH=$gitHash"     >> $env:GITHUB_OUTPUT
         echo "BUILD_DATE=$buildDate" >> $env:GITHUB_OUTPUT
         echo "BUILD_TYPE=$buildType" >> $env:GITHUB_OUTPUT
 
-        Write-Host "Build Type: $buildType"
-        Write-Host "Version: $version"
-        Write-Host "Git Hash: $gitHash"
+        Write-Host "Build Type : $buildType"
+        Write-Host "Version    : $version"
+        Write-Host "Git Hash   : $gitHash"
     
     - name: Update version files
       run: |
@@ -155,20 +155,30 @@ jobs:
         pip install pyinstaller
         pyinstaller IntelAvatar.spec
     
-    - name: Rename exe with version and SHA1
+    - name: Rename exe with version
       run: |
-        $version = "${{ steps.version.outputs.VERSION }}"
-        $gitHash = "${{ steps.version.outputs.GIT_HASH }}"
-        Move-Item -Path "dist/IntelAvatar/IntelAvatar.exe" -Destination "dist/IntelAvatar/IntelAvatar_v${version}_${gitHash}.exe" -Force
-    
+        # Both DEV and NIGHTLY include enough info in the version string:
+        #   DEV     → IntelAvatar_v99.0.312-dev.abc1234.exe  (sha embedded)
+        #   NIGHTLY → IntelAvatar_v99.0.315_abc1234.exe      (sha appended)
+        $version   = "${{ steps.version.outputs.VERSION }}"
+        $gitHash   = "${{ steps.version.outputs.GIT_HASH }}"
+        $buildType = "${{ steps.version.outputs.BUILD_TYPE }}"
+        $exeName   = if ($buildType -eq "NIGHTLY") {
+          "IntelAvatar_v${version}_${gitHash}.exe"
+        } else {
+          "IntelAvatar_v${version}.exe"
+        }
+        Move-Item -Path "dist/IntelAvatar/IntelAvatar.exe" -Destination "dist/IntelAvatar/$exeName" -Force
+
     - name: Upload build artifact
       uses: actions/upload-artifact@v4
-      id: artifact-upload
       with:
-        name: IntelAvatar-build
+        name: IntelAvatar-${{ steps.version.outputs.BUILD_TYPE }}-${{ steps.version.outputs.VERSION }}
         path: dist/
-    
-    - name: Comment PR with artifact link
+        retention-days: 14
+
+    # Post a PR comment with the dev build info (Scenario 1 only)
+    - name: Comment PR with build info
       if: github.event_name == 'pull_request'
       uses: actions/github-script@v7
       with:
@@ -179,9 +189,9 @@ jobs:
             repo: context.repo.repo,
             body: `✅ Build successful!
 
-            📦 **Dev Version:** \`${{ steps.version.outputs.VERSION }}\`
-            🔖 **Commit:** \`${{ steps.version.outputs.GIT_HASH }}\`
-            📅 **Build Date:** ${{ steps.version.outputs.BUILD_DATE }}
+**Dev Version:** \`${{ steps.version.outputs.VERSION }}\`
+**Commit:** \`${{ steps.version.outputs.GIT_HASH }}\`
+**Build Date:** ${{ steps.version.outputs.BUILD_DATE }}
 
-            📥 Download artifact: [IntelAvatar-build](https://github.com/${context.repo.owner}/${context.repo.repo}/actions/runs/${context.runId})`
+📥 [Download artifact](https://github.com/${context.repo.owner}/${context.repo.repo}/actions/runs/${context.runId})`
           })

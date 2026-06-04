@@ -6,6 +6,7 @@ import shutil
 import subprocess
 import tempfile
 import traceback
+import threading
 
 from utils.helpers import to_long_path
 
@@ -49,15 +50,18 @@ def list_etl_files(root_folder):
     return etl_files
         
 
-def extract_archive(archive, extract_to):
-    """Extract archive contents to target directory."""
-    print(f"Extracting to {extract_to} ({len(archive.infolist())} items)")
+def extract_archive(archive, extract_to, progress_cb=None):
+    """Extract archive contents to target directory.
+
+    progress_cb: optional callable(pct: int, basename: str) called after each
+                 successfully extracted file, where pct is 0-100.
+    """
+    members = [m for m in archive.infolist() if not m.is_dir()]
+    total = max(len(members), 1)
+    print(f"Extracting to {extract_to} ({total} items)")
     
     with tempfile.TemporaryDirectory() as temp_dir:
-        for member in archive.infolist():
-            if member.is_dir():
-                continue
-                
+        for i, member in enumerate(members):
             filename = member.filename.strip().replace('/', os.sep)
             
             try:
@@ -84,6 +88,12 @@ def extract_archive(archive, extract_to):
             except Exception as e:
                 print(f"Error extracting {filename}: {e}")
                 continue
+
+            if progress_cb:
+                try:
+                    progress_cb(int((i + 1) / total * 100), os.path.basename(filename))
+                except Exception:
+                    pass  # progress updates are best-effort; never abort extraction
     
     return extract_to
 
@@ -122,8 +132,29 @@ def _extract_rar_with_7zip(file_path, extract_to):
     return False
 
 
-def unzip_file(file_path, extract_to, already_downloaded):
-    """Extract compressed file to destination."""
+def _fake_progress_worker(progress_cb, stop_event):
+    """Increment progress 0→99% at ~3% per 0.5 s until stop_event is set.
+
+    Used for formats where real per-file progress is unavailable
+    (.7z via py7zr, .rar via 7-Zip CLI).
+    """
+    pct = 0
+    while not stop_event.wait(0.5):
+        if pct < 99:
+            pct = min(pct + 3, 99)
+            try:
+                progress_cb(pct, 'Processing…')
+            except Exception:
+                break
+
+
+def unzip_file(file_path, extract_to, already_downloaded, progress_cb=None):
+    """Extract compressed file to destination.
+
+    progress_cb: optional callable(pct: int, basename: str) – forwarded to
+                 extract_archive for .zip/.rar; for .7z a single 100% call is
+                 made after extractall completes.
+    """
     if already_downloaded and len(os.listdir(extract_to)) > 0:
         return extract_to
     
@@ -137,30 +168,72 @@ def unzip_file(file_path, extract_to, already_downloaded):
     try:
         if lower_path.endswith('.zip'):
             with zipfile.ZipFile(file_path, 'r') as archive:
-                return extract_archive(archive, extract_to)
+                return extract_archive(archive, extract_to, progress_cb=progress_cb)
         elif lower_path.endswith('.rar'):
             # Prefer 7-Zip CLI for RAR (rarfile requires unrar binary which is often absent).
-            if _extract_rar_with_7zip(file_path, extract_to):
+            stop_event = threading.Event()
+            fake_t = None
+            if progress_cb:
+                fake_t = threading.Thread(
+                    target=_fake_progress_worker, args=(progress_cb, stop_event), daemon=True
+                )
+                fake_t.start()
+            try:
+                success = _extract_rar_with_7zip(file_path, extract_to)
+            finally:
+                stop_event.set()
+                if fake_t:
+                    fake_t.join(timeout=1)
+            if success:
+                if progress_cb:
+                    try:
+                        progress_cb(100, os.path.basename(file_path))
+                    except Exception:
+                        pass
                 return extract_to
             # Fall back to rarfile if 7-Zip is not installed.
             print('7-Zip unavailable, trying rarfile (requires unrar).')
             try:
                 with rarfile.RarFile(file_path, 'r') as archive:
-                    return extract_archive(archive, extract_to)
+                    return extract_archive(archive, extract_to, progress_cb=progress_cb)
             except Exception as rar_err:
                 print(f'rarfile also failed: {rar_err}')
         elif lower_path.endswith('.7z'):
-            with py7zr.SevenZipFile(file_path, mode='r') as archive:
-                archive.extractall(path=extract_to)
-                return extract_to
+            stop_event = threading.Event()
+            fake_t = None
+            if progress_cb:
+                fake_t = threading.Thread(
+                    target=_fake_progress_worker, args=(progress_cb, stop_event), daemon=True
+                )
+                fake_t.start()
+            try:
+                with py7zr.SevenZipFile(file_path, mode='r') as archive:
+                    names = archive.getnames()
+                    archive.extractall(path=extract_to)
+            finally:
+                stop_event.set()
+                if fake_t:
+                    fake_t.join(timeout=1)
+            if progress_cb:
+                try:
+                    progress_cb(100, f'{len(names)} files extracted')
+                except Exception:
+                    pass
+            return extract_to
 
     except Exception as e:
         print(f"Extraction failed for {file_path}: {e}")
         
     return extract_to
 
-def process_single_zip(zip_path, download_path_tmp, already_downloaded):
-    """Process ZIP file and categorize extracted files."""
+def process_single_zip(zip_path, download_path_tmp, already_downloaded, progress_cb=None):
+    """Process ZIP file and categorize extracted files.
+
+    progress_cb: optional callable(pct: int, basename: str) – forwarded to
+                 unzip_file for the main (first) archive only.  Nested archives
+                 discovered inside it do not report per-file progress so the bar
+                 never goes backwards.
+    """
     folder_name = os.path.splitext(os.path.basename(zip_path))[0].replace(" ", "_")
     download_path = os.path.join(download_path_tmp, folder_name)
     os.makedirs(download_path, exist_ok=True)
@@ -169,15 +242,21 @@ def process_single_zip(zip_path, download_path_tmp, already_downloaded):
     wifi_files, ddd_files, evt_files, bt_files, fw_files = [], [], [], [], []
     processed_files = set()
     unzip_pending = [os.path.abspath(zip_path)]
+    is_first_archive = True
     
     while unzip_pending:
         file_to_unzip = unzip_pending.pop(0)
         
         if file_to_unzip in processed_files:
             continue
+
+        # Only stream progress for the top-level archive; nested ones are
+        # typically small and forwarding cb would reset the bar to 0.
+        cb = progress_cb if is_first_archive else None
+        is_first_archive = False
             
         try:
-            extract_to = unzip_file(file_to_unzip, download_path, already_downloaded)
+            extract_to = unzip_file(file_to_unzip, download_path, already_downloaded, progress_cb=cb)
         except Exception:
             continue
             

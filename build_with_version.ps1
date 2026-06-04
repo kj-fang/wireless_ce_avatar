@@ -1,7 +1,15 @@
-# Build script with automatic version increment
-# Release builds (on main): version = 1.0.<commit_count>
-# Dev builds (on feature branches): version = 1.0.<base_release_commit_count>-dev.<sha1>
-#   where base_release_commit_count is the commit count on main at the branch point
+# Local build script — mirrors the same 4-scenario version logic as CI:
+#
+#  Scenario 1 (PR build / local dev):  feature/* or fix/* branch
+#    → version: 99.0.<base_patch>-dev.<sha1>   BUILD_TYPE: DEV
+#
+#  Scenario 2 (nightly):  main branch
+#    → version: 99.0.<commit_count>             BUILD_TYPE: NIGHTLY
+#
+#  Scenario 3 & 4 (release candidate):  release/X.Y branch
+#    → version: X.Y.<commit_count_on_branch>   BUILD_TYPE: RELEASE
+#
+# Run from repo root:  .\build_with_version.ps1
 
 param(
     [string]$Branch = "main"
@@ -19,31 +27,48 @@ try {
     $buildDate = Get-Date -Format "yyyy-MM-dd HH:mm:ss"
 
     if ($currentBranch -eq $Branch) {
-        # ---- RELEASE build: on main branch ----
+        # ---- NIGHTLY build: on main branch ----
+        # Version 99.0.x — the high major makes it visually obvious this is a dev/nightly build
         $commitCount = git rev-list --count $Branch
-        $version = "1.0.$commitCount"
+        $version = "99.0.$commitCount"
+        $buildType = "NIGHTLY"
+    } elseif ($currentBranch -match '^release/(\d+\.\d+)$') {
+        # ---- RELEASE build: on a release/X.Y branch ----
+        # PATCH = commits on this branch SINCE it diverged from main (not the global count).
+        # This starts at 0 on branch cut and increments by 1 per hotfix commit.
+        $releasePrefix = $Matches[1]   # e.g. "1.1"
+        $releaseMajor  = ($releasePrefix -split '\.')[0]
+        $releaseMinor  = ($releasePrefix -split '\.')[1]
+        try {
+            $mergeBase  = git merge-base HEAD $Branch 2>$null
+            if ($LASTEXITCODE -ne 0 -or -not $mergeBase) { throw "merge-base failed" }
+            $patchCount = git rev-list --count "${mergeBase}..HEAD"
+        } catch {
+            # Fallback if merge-base is unavailable (shallow clone)
+            $patchCount = git rev-list --count HEAD
+            Write-Host "⚠️  Could not compute branch-point patch count — falling back to global count" -ForegroundColor Yellow
+        }
+        $version   = "$releaseMajor.$releaseMinor.$patchCount"
         $buildType = "RELEASE"
     } else {
-        # ---- DEV build: on a feature/dev branch ----
-        # Find the commit where this branch diverged from main, then count commits
-        # up to that point — this gives the PATCH number of the release this branch is based on.
+        # ---- DEV build: on a feature/fix branch ----
+        # Version 99.0.<base_commit_count>-dev.<sha1>
+        # base_commit_count = commits on main at the branch point, so the patch matches
+        # the nightly build this feature was branched from.
         try {
             $mergeBase = git merge-base HEAD $Branch 2>$null
             if ($LASTEXITCODE -ne 0 -or -not $mergeBase) { throw "merge-base failed" }
             $baseCommitCount = git rev-list --count $mergeBase
         } catch {
             # Fallback: merge-base unavailable (e.g. shallow clone).
-            # Use the current tip of $Branch (main) as an approximation.
-            # NOTE: this may report a PATCH number slightly ahead of the true branch point,
-            # so version alignment is approximate in this case.
             $baseCommitCount = git rev-list --count $Branch
             Write-Host "⚠️  Could not determine branch point — using tip of '$Branch' as fallback (version may be approximate)" -ForegroundColor Yellow
         }
-        $version = "1.0.$baseCommitCount-dev.$gitHash"
+        $version = "99.0.$baseCommitCount-dev.$gitHash"
         $buildType = "DEV"
     }
 
-    Write-Host "Build Type: $buildType" -ForegroundColor $(if ($buildType -eq "RELEASE") { "Green" } else { "Yellow" })
+    Write-Host "Build Type: $buildType" -ForegroundColor $(if ($buildType -eq "RELEASE") { "Green" } elseif ($buildType -eq "NIGHTLY") { "Cyan" } else { "Yellow" })
     Write-Host "Version: $version" -ForegroundColor Green
     Write-Host "Git Hash: $gitHash" -ForegroundColor Green
     Write-Host "Branch: $currentBranch" -ForegroundColor Green
@@ -151,9 +176,10 @@ try {
     # Rename exe with version
     Write-Host "Renaming executable with version..." -ForegroundColor Yellow
     $exePath = "dist/IntelAvatar/IntelAvatar.exe"
-    # For dev builds, $version already contains the SHA (e.g. 1.0.14-dev.b0530f21)
-    # For release builds, append _${gitHash} to include the SHA
-    $exeName = if ($buildType -eq "RELEASE") { "IntelAvatar_v${version}_${gitHash}.exe" } else { "IntelAvatar_v${version}.exe" }
+    # For dev builds, $version already contains the SHA (e.g. 99.0.14-dev.b0530f21)
+    # For nightly builds on main, append the short git hash
+    # For release builds (release/X.Y), version is clean (e.g. 1.1.5) — no hash needed
+    $exeName = if ($buildType -eq "RELEASE") { "IntelAvatar_v${version}.exe" } elseif ($buildType -eq "NIGHTLY") { "IntelAvatar_v${version}_${gitHash}.exe" } else { "IntelAvatar_v${version}.exe" }
     $newExePath = "dist/IntelAvatar/$exeName"
     
     if (Test-Path $exePath) {

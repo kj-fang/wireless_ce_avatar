@@ -1,13 +1,24 @@
-# GitHub Actions CI/CD Workflow for IntelAvatar
-# Automatically builds and creates releases when code is pushed to main branch
+# Release Candidate Build Workflow
+#
+# Scenario 3: Admin creates release/X.Y branch from main and pushes it
+#   → First build: version X.Y.0  (or X.Y.<commit_count> if branch has prior commits)
+#   → Creates GitHub Release tagged vX.Y.<patch>
+#
+# Scenario 4: Cherry-picked hotfix committed to release/X.Y branch
+#   → Incremented build: X.Y.1, X.Y.2, ...
+#   → Creates a new GitHub Release (replaces/supplements previous RC)
+#
+# NOTE: GitHub Actions detached HEAD — we use ${{ github.ref }} instead of
+# `git rev-parse --abbrev-ref HEAD` to detect the release/X.Y branch name.
+# build.yml handles main (nightly) and PR builds; this file handles release/** ONLY.
 
-name: Build and Release
+name: Release Candidate Build
 
 on:
   push:
     branches:
-      - main  # Trigger only on main branch
-  workflow_dispatch:  # Allow manual trigger
+      - 'release/**'   # Scenarios 3 & 4: any push to release/X.Y
+  workflow_dispatch:   # Allow manual trigger (e.g. rebuild without a new commit)
 
 permissions:
   contents: write
@@ -18,29 +29,58 @@ jobs:
     
     steps:
       - name: Checkout code
-        uses: actions/checkout@v3
+        uses: actions/checkout@v4
         with:
           fetch-depth: 0  # Full history for commit count
       
       - name: Set up Python
-        uses: actions/setup-python@v4
+        uses: actions/setup-python@v5
         with:
           python-version: '3.10'
       
       - name: Calculate version from git
         id: version
         run: |
-          $commitCount = git rev-list --count HEAD
-          $version = "1.0.$commitCount"
+          # Use github.ref (always set correctly even on detached HEAD) to detect branch type.
+          $ref = "${{ github.ref }}"   # e.g. refs/heads/main  or  refs/heads/release/1.1
           $gitHash = git rev-parse --short HEAD
           $buildDate = Get-Date -Format "yyyy-MM-dd HH:mm:ss"
-          
-          echo "VERSION=$version" >> $env:GITHUB_OUTPUT
-          echo "GIT_HASH=$gitHash" >> $env:GITHUB_OUTPUT
+
+          if ($ref -match '^refs/heads/release/(\d+)\.(\d+)$') {
+            # Scenarios 3 & 4: RELEASE build on release/X.Y branch
+            # PATCH = commits since the branch point with main (starts at 0 on branch cut,
+            # increments by 1 per hotfix). Avoids absorbing main's full commit history.
+            $major     = $Matches[1]
+            $minor     = $Matches[2]
+            $gitBranch = "release/$major.$minor"
+            git fetch origin main --no-tags 2>$null
+            $mergeBase = git merge-base HEAD origin/main 2>$null
+            if ($LASTEXITCODE -ne 0 -or -not $mergeBase) {
+              # Fallback: merge-base unavailable (shallow clone)
+              Write-Host "::warning::Could not compute merge-base — falling back to global commit count"
+              $patchCount = git rev-list --count HEAD
+            } else {
+              $patchCount = git rev-list --count "${mergeBase}..HEAD"
+            }
+            $version   = "$major.$minor.$patchCount"
+            $buildType = "RELEASE"
+          } else {
+            # Fail loudly if triggered on a non-release branch (should never happen
+            # given the trigger config, but guards against accidental workflow_dispatch).
+            Write-Host "::error::build-release.yml must only run on release/X.Y branches. Current ref: $ref"
+            exit 1
+          }
+
+          echo "VERSION=$version"     >> $env:GITHUB_OUTPUT
+          echo "GIT_HASH=$gitHash"    >> $env:GITHUB_OUTPUT
           echo "BUILD_DATE=$buildDate" >> $env:GITHUB_OUTPUT
-          
-          Write-Host "Version: $version"
-          Write-Host "Git Hash: $gitHash"
+          echo "BUILD_TYPE=$buildType" >> $env:GITHUB_OUTPUT
+          echo "GIT_BRANCH=$gitBranch" >> $env:GITHUB_OUTPUT
+
+          Write-Host "Build Type : $buildType"
+          Write-Host "Version    : $version"
+          Write-Host "Git Hash   : $gitHash"
+          Write-Host "Branch ref : $ref"
       
       - name: Update version files
         run: |
@@ -54,7 +94,7 @@ jobs:
             "__version__ = ""${{ steps.version.outputs.VERSION }}""",
             "BUILD_DATE = ""${{ steps.version.outputs.BUILD_DATE }}""",
             "GIT_HASH = ""${{ steps.version.outputs.GIT_HASH }}""",
-            'GIT_BRANCH = "main"'
+            "GIT_BRANCH = ""${{ steps.version.outputs.GIT_BRANCH }}"""
           ) -join "`n"
           
           Set-Content -Path "configs/version.py" -Value $versionContent -Encoding UTF8
@@ -114,9 +154,12 @@ jobs:
       
       - name: Rename exe with version
         run: |
-          $version = "${{ steps.version.outputs.VERSION }}"
-          $gitHash = "${{ steps.version.outputs.GIT_HASH }}"
-          Move-Item -Path "dist/IntelAvatar/IntelAvatar.exe" -Destination "dist/IntelAvatar/IntelAvatar_v${version}_${gitHash}.exe" -Force
+          $version   = "${{ steps.version.outputs.VERSION }}"
+          $gitHash   = "${{ steps.version.outputs.GIT_HASH }}"
+          $buildType = "${{ steps.version.outputs.BUILD_TYPE }}"
+          # Release builds get a clean name; nightly builds include the git hash
+          $exeName = if ($buildType -eq "RELEASE") { "IntelAvatar_v${version}.exe" } else { "IntelAvatar_v${version}_${gitHash}.exe" }
+          Move-Item -Path "dist/IntelAvatar/IntelAvatar.exe" -Destination "dist/IntelAvatar/$exeName" -Force
       
       - name: Create ZIP archive
         run: |
@@ -127,16 +170,14 @@ jobs:
         with:
           tag_name: v${{ steps.version.outputs.VERSION }}
           name: IntelAvatar v${{ steps.version.outputs.VERSION }}
+          prerelease: ${{ steps.version.outputs.BUILD_TYPE == 'NIGHTLY' }}
           body: |
             ## IntelAvatar v${{ steps.version.outputs.VERSION }}
             
-            **Build Information:**
-            - Version: ${{ steps.version.outputs.VERSION }}
-            - Commit: ${{ steps.version.outputs.GIT_HASH }}
-            - Build Date: ${{ steps.version.outputs.BUILD_DATE }}
-            
-            **Changes:**
-            - Auto-generated release from main branch
+            **Build Type:** ${{ steps.version.outputs.BUILD_TYPE }}
+            **Branch:** ${{ steps.version.outputs.GIT_BRANCH }}
+            **Commit:** ${{ steps.version.outputs.GIT_HASH }}
+            **Build Date:** ${{ steps.version.outputs.BUILD_DATE }}
           files: |
             IntelAvatar-v${{ steps.version.outputs.VERSION }}.zip
         env:

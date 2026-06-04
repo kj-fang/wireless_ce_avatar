@@ -1,91 +1,136 @@
 # IntelAvatar Version Control Guide
 
 ## Overview
-Version numbers are **aligned between development and release** builds. A dev build always carries the version number of the release it was branched from, plus the current commit SHA1, so you can immediately tell which release a dev build corresponds to.
 
-## Version Format
+Two parallel version lines keep nightly development and stable releases clearly separated.
 
-| Build type | Format | Example |
-|------------|--------|---------|
-| **Release** (main branch) | `MAJOR.MINOR.PATCH` | `1.0.245` |
-| **Dev** (feature branch) | `MAJOR.MINOR.BASE_PATCH-dev.SHA1` | `1.0.245-dev.abc1234` |
+| Line | Branch | Version format | Example |
+|------|--------|---------------|---------|
+| **Nightly** | `main` | `99.0.PATCH` | `99.0.312` |
+| **Release** | `release/X.Y` | `X.Y.PATCH` | `1.1.5` |
+| **Dev** (feature branch off main) | `feature/*` / `fix/*` | `99.0.BASE-dev.SHA1` | `99.0.312-dev.f3c9e12` |
 
-- `PATCH` / `BASE_PATCH` = commit count on `main` at the branch point
-- `SHA1` = short git hash of the current commit
+- `PATCH` on `main` / feature branches = total commit count on `main`
+- `PATCH` on `release/X.Y` = total commit count on that release branch (starts near 0, increments with each hotfix)
+- The `99` major makes it impossible to mistake a nightly build for a stable release
 
-### Example scenario
+---
+
+## Branching Model
+
 ```
-main:            ... o---o---o  (v1.0.245)
-                              \
-feature/my-fix:               o---o---o  (1.0.245-dev.f3c9e12)
+main (99.0.x)    o--o--o--o--o--o--o--o--o--o--o--o--o-->  open to all
+                          |                   |
+                    release/1.1         release/1.2
+                   o--o (hotfixes)      o (next cycle)
+                   1.1.0  1.1.1  1.1.2  1.2.0 ...
 ```
-When `feature/my-fix` is merged to main the release becomes `1.0.246`.
+
+### `main` branch
+- Everyone pushes here directly (or via PR, per team preference)
+- CI builds on every push → nightly artifact versioned `99.0.<commit_count>`
+
+### `release/X.Y` branches
+- Cut from `main` every **~4 weeks** by a maintainer
+- **Locked** — no direct pushes; only hotfix PRs reviewed and approved before merge
+- Version bumps to `X.Y.1`, `X.Y.2` etc. automatically with each merged hotfix
+- When the next cycle begins, cut `release/X.(Y+1)` from `main`
+
+### Feature / fix branches
+- Branch from `main`, merge back to `main`
+- Version: `99.0.<base_patch>-dev.<sha1>` — patch anchors to the nightly they branched from
+
+---
+
+## How to Cut a Release Branch
+
+```powershell
+# 1. Make sure main is up to date
+git checkout main
+git pull
+
+# 2. Cut the release branch (change 1.1 to the new MAJOR.MINOR)
+git checkout -b release/1.1
+
+# 3. Push and set upstream
+git push -u origin release/1.1
+```
+
+Then on GitHub/GitLab:
+- Set **branch protection** on `release/1.1`:
+  - Disable direct pushes
+  - Require at least 1 PR approval
+  - Optionally restrict who can merge
 
 ---
 
 ## How It Works
 
 ### Local Building
-Run the PowerShell build script:
 ```powershell
 .\build_with_version.ps1
 ```
 
-This will:
-1. Detect whether you are on `main` (release) or a feature branch (dev)
-2. **On `main`**: version = `1.0.<commit_count>` (release version)
-3. **On a feature branch**: version = `1.0.<base_release_commit_count>-dev.<short_SHA1>`
-   - `base_release_commit_count` is the commit count on `main` at the point this branch diverged
-4. Update `configs/version.py` with the computed version
-5. Build with PyInstaller
-6. Output to `dist/IntelAvatar/`
+| Current branch | Version produced | Build type |
+|---------------|-----------------|------------|
+| `main` | `99.0.<commit_count>` | `NIGHTLY` |
+| `release/1.1` | `1.1.<commit_count_on_branch>` | `RELEASE` |
+| `feature/my-fix` | `99.0.<base_patch>-dev.<sha1>` | `DEV` |
 
 ### CI/CD (GitHub Actions)
 
 #### Pull Requests (`build.yml`)
-When you open or update a PR to `main`:
-1. GitHub Actions triggers the **dev** versioning path
-2. Version = `1.0.<base_release_commit_count>-dev.<SHA1>`
-3. Builds the application and uploads an artifact
-4. Posts the dev version number as a PR comment
+Triggered on PRs to `main`:
+- Version = `99.0.<base_patch>-dev.<SHA1>`
+- Posts version as PR comment
 
-#### Merges to main (`build-release.yml`)
-When you merge to `main`:
-1. GitHub Actions triggers the **release** versioning path
-2. Version = `1.0.<total_commit_count_on_main>`
-3. Builds the application and creates a GitHub Release with a git tag
+#### Merges to `main` (`build.yml`)
+- Version = `99.0.<commit_count>`
+- Uploads nightly artifact (no GitHub Release)
+
+#### Merges to `release/X.Y` (`build-release.yml`)
+- Version = `X.Y.<commit_count_on_branch>`
+- Creates a GitHub Release and git tag `vX.Y.<patch>`
 
 ---
 
 ## Usage
 
-### 1. Check Current Version
+### Check Current Version
 ```python
 from configs.version import __version__, BUILD_DATE, GIT_HASH
 print(f"Version: {__version__}")
 ```
 
-Or run the app — it displays on startup:
+### Startup Output Examples
 ```
-# Release build (on main)
-🚀 IntelAvatar v1.0.245 starting...
-📅 Build: 2026-02-05 14:30:00
+# Nightly (on main)
+🚀 IntelAvatar v99.0.312 starting...
+📅 Build: 2026-06-04 14:30:00
 🔖 Git: abc1234 (main)
 
-# Dev build (on feature branch based on v1.0.245)
-🚀 IntelAvatar v1.0.245-dev.f3c9e12 starting...
-📅 Build: 2026-02-06 09:15:00
+# Release (on release/1.1)
+🚀 IntelAvatar v1.1.5 starting...
+📅 Build: 2026-06-04 10:00:00
+🔖 Git: def5678 (release/1.1)
+
+# Dev (on feature branch)
+🚀 IntelAvatar v99.0.312-dev.f3c9e12 starting...
+📅 Build: 2026-06-05 09:15:00
 🔖 Git: f3c9e12 (feature/my-fix)
 ```
 
-### 2. Build Locally
-```powershell
-# Build with version update
-.\build_with_version.ps1
+---
 
-# Or if using a different branch
-.\build_with_version.ps1 -Branch main
-```
+## Release Cadence Summary
+
+| Week | Action |
+|------|--------|
+| Week 0 | Cut `release/1.1` from `main` |
+| Week 0–4 | Hotfixes only on `release/1.1`; `main` continues freely |
+| Week 4 | Cut `release/1.2` from `main`; retire `release/1.1` |
+| Repeat | `release/1.3`, `release/1.4` ... |
+
 
 ### 3. Release Process
 1. Make changes on a feature branch
@@ -114,7 +159,8 @@ Or run the app — it displays on startup:
 
 1. **configs/version.py** - Stores version info (auto-updated)
 2. **build_with_version.ps1** - Local build script with versioning
-3. **.github/workflows/build-release.yml** - CI/CD automation
+3. **.github/workflows/build.yml** - CI/CD for PRs (scenarios 1) and main merges (scenario 2)
+4. **.github/workflows/build-release.yml** - CI/CD for release branches only (scenarios 3 & 4)
 
 ---
 

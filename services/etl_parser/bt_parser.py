@@ -96,6 +96,38 @@ def is_file_ready(path: str) -> bool:
         # Any exception here implies the file is not ready yet.
         return False
 
+def close_warning_dialog() -> None:
+    """
+    Dismiss the 'Systeminfo.txt not present' warning dialog that may appear
+    after clicking Decode.
+
+    The dialog has title "Warning" and contains a message about
+    Systeminfo.txt / system_info.txt not being present.  It is a benign
+    warning that does not affect the decode result, so we just click OK.
+    """
+    try:
+        windows = Desktop(backend="uia").windows()
+        for win in windows:
+            if win.window_text() != "Warning":
+                continue
+            if win.element_info.class_name != "#32770":
+                continue
+            has_sysinfo_warning = any(
+                "Systeminfo" in c.window_text() or "system_info" in c.window_text()
+                for c in win.descendants()
+                if c.element_info.control_type == "Text"
+            )
+            if has_sysinfo_warning:
+                print("⚠️ Systeminfo warning dialog found. Closing it.")
+                for btn in win.descendants():
+                    if btn.element_info.control_type == "Button" and btn.window_text() == "OK":
+                        btn.click_input()
+                        print("✅ Closed warning dialog with button 'OK'")
+                        break
+                break
+    except Exception as e:
+        print("⚠️ Failed to close warning dialog:", e)
+
 
 def close_error_dialog() -> None:
     """
@@ -109,7 +141,7 @@ def close_error_dialog() -> None:
     Behavior:
         - Enumerates all top-level windows via UIA (pywinauto).
         - Looks for window text containing 'HCI Decode'.
-        - Attempts to click the "確定" (OK/Confirm) button to close it.
+        - Attempts to click the "OK" button to close it.
     """
     try:
         windows = Desktop(backend="uia").windows()
@@ -138,7 +170,7 @@ def close_error_dialog() -> None:
         print("⚠️ Failed to close error dialog:", e)
 
 
-def bt_decode_hci_via_folder(log_folder_path: str, log_path: str, timeout: int = 30) -> str:
+def bt_decode_hci_via_folder(log_folder_path: str, log_path: str, timeout: int = 15) -> str | None:
     """
     Decode an ETL folder via the 'BT Driver Log Parser' tab (same as AutoFolder mode)
     but WITHOUT opening TextAnalysisTool.NET.
@@ -158,11 +190,11 @@ def bt_decode_hci_via_folder(log_folder_path: str, log_path: str, timeout: int =
     """
     # Check) If hci.txt already exists and is ready, return it immediately
     print(f"📂 bt_decode_hci_via_folder: {log_path}")
-    _base = log_path[:-4] if log_path.lower().endswith('.etl') else log_path
-    hci_txt = _base + ".hci.txt"
-    if os.path.exists(hci_txt) and is_file_ready(hci_txt):
-        print(f"✅ HCI log already exists and is ready: {hci_txt}")
-        return hci_txt
+    hci_txt = log_path + ".hci.txt"
+    etl_txt = log_path + ".txt"
+    # if os.path.exists(hci_txt) and is_file_ready(hci_txt):
+    #     print(f"✅ HCI log already exists and is ready: {hci_txt}")
+    #     return hci_txt
 
     global active_bt_pid
 
@@ -226,6 +258,10 @@ def bt_decode_hci_via_folder(log_folder_path: str, log_path: str, timeout: int =
     except Exception as e:
         print(f"❌ Failed to trigger Decode Folder: {e}")
 
+    time.sleep(0.5)
+    # Although this may only occur in ManualSelect via IbtSnoopgen.
+    close_warning_dialog()  # Dismiss benign "Systeminfo.txt not present" warning if it appears
+
     # Poll until the output file stabilizes.
     # Two separate timers are used to distinguish the two wait phases:
     #   file_wait_start: tracks how long we have been waiting for the file to appear.
@@ -235,13 +271,27 @@ def bt_decode_hci_via_folder(log_folder_path: str, log_path: str, timeout: int =
     last_size = -1
     file_wait_start = None  # timer: waiting for the file to appear
     idle_start = None       # timer: waiting for the file size to stop changing
+    last_etl_txt_size = -1  # tracker for intermediate .txt file size
+    etl_txt_idle_start = None  # timer: waiting for .txt to stop changing
 
     print(f"⏳ Waiting for HCI log (timeout={timeout}s): {hci_txt}")
 
     while True:
         if not psutil.pid_exists(active_bt_pid):
-            print(f"\n❌ BT tool closed unexpectedly during HCI wait.")
             active_bt_pid = None
+            # Tool exited — check if output file exists and wait for it to stabilize.
+            # The tool may close immediately after writing (or even while flushing),
+            # so retry is_file_ready a few times before giving up.
+            if os.path.exists(hci_txt):
+                print(f"\n⏳ BT tool exited; waiting for HCI file to stabilize: {hci_txt}")
+                for _attempt in range(5):
+                    if is_file_ready(hci_txt):
+                        print(f"✅ BT tool exited cleanly; HCI file ready: {hci_txt}")
+                        return hci_txt
+                    time.sleep(2)
+                print(f"⚠️ BT tool exited but file not stable after retries: {hci_txt}")
+                return None
+            print(f"\n❌ BT tool closed unexpectedly during HCI wait (file not found).")
             return None
         close_error_dialog()
 
@@ -264,17 +314,45 @@ def bt_decode_hci_via_folder(log_folder_path: str, log_path: str, timeout: int =
                 if time.monotonic() - idle_start >= timeout:
                     if is_file_ready(hci_txt):
                         print()
+                        # Decode complete — close the BT tool
+                        try:
+                            psutil.Process(active_bt_pid).terminate()
+                            active_bt_pid = None
+                            print(f"✅ BT tool closed after successful decode.")
+                        except Exception as e:
+                            print(f"⚠️ Failed to close BT tool: {e}")
                         return hci_txt
                     print(f"\n⚠️ File idle for {timeout}s but not ready: {hci_txt}")
                     return None
         else:
             # File not yet created; start the appearance timer
             idle_start = None  # reset idle timer since file does not exist
-            if file_wait_start is None:
-                file_wait_start = time.monotonic()
-            if time.monotonic() - file_wait_start >= timeout:
-                print(f"\n⚠️ File never appeared after {timeout}s: {hci_txt}")
-                return None
+            if os.path.exists(etl_txt):
+                # Intermediate .txt present — track its size; start timeout only when it stops changing
+                file_wait_start = None
+                try:
+                    etl_txt_size = os.path.getsize(etl_txt)
+                except OSError:
+                    etl_txt_size = last_etl_txt_size
+                if etl_txt_size != last_etl_txt_size:
+                    last_etl_txt_size = etl_txt_size
+                    etl_txt_idle_start = time.monotonic()
+                    print(f"\r⏳ File .etl.txt writing... size={etl_txt_size} bytes", end='', flush=True)
+                else:
+                    if etl_txt_idle_start is None:
+                        etl_txt_idle_start = time.monotonic()
+                    if time.monotonic() - etl_txt_idle_start >= timeout:
+                        print(f"\n⚠️ File .etl.txt idle for {timeout}s, .hci.txt never appeared: {hci_txt}")
+                        return None
+                    print(f"\r⏳ File .etl.txt idle, waiting for .hci.txt...", end='', flush=True)
+            else:
+                last_etl_txt_size = -1
+                etl_txt_idle_start = None
+                if file_wait_start is None:
+                    file_wait_start = time.monotonic()
+                if time.monotonic() - file_wait_start >= timeout:
+                    print(f"\n⚠️ File never appeared after {timeout}s: {hci_txt}")
+                    return None
 
         time.sleep(1)
 
@@ -749,9 +827,12 @@ def bt_analysis_autoFolder_mode(
     except Exception as e:
         print("❌ Failed to trigger Decode Folder:", e)
 
+    time.sleep(0.5)
+    # Although this may only occur in ManualSelect via IbtSnoopgen.
+    close_warning_dialog()  # Dismiss benign "Systeminfo.txt not present" warning if it appears
+
     # 7) Wait for specific output '<log_path>.hci.txt' and open with viewer
-    _base = log_path[:-4] if log_path.lower().endswith('.etl') else log_path
-    hci_txt = _base + ".hci.txt"
+    hci_txt = log_path + ".hci.txt"
     print(f"⏳ Waiting for HCI log until found: {hci_txt}")
 
     # Poll until the output file stabilizes and has been opened.
@@ -770,8 +851,19 @@ def bt_analysis_autoFolder_mode(
 
         # Check if process is still alive
         if not psutil.pid_exists(active_bt_pid):
-            print("❌ BT tool closed during HCI wait.")
             active_bt_pid = None
+            # Tool exited — check if output file exists and wait for it to stabilize.
+            if os.path.exists(hci_txt):
+                print(f"⏳ BT tool exited; waiting for HCI file to stabilize: {hci_txt}")
+                for _attempt in range(5):
+                    if is_file_ready(hci_txt):
+                        print(f"✅ BT tool exited cleanly; HCI file ready: {hci_txt}")
+                        open_with_text_analysis_tool(hci_txt, filter_path=filter_path)
+                        return None  # Return None so _finish_analysis emits autofolder_complete
+                    time.sleep(2)
+                print(f"⚠️ BT tool exited but file not stable after retries: {hci_txt}")
+                return None
+            print("❌ BT tool closed during HCI wait (file not found).")
             return None
 
         # Proactively close any modal error dialog that might appear
@@ -798,8 +890,15 @@ def bt_analysis_autoFolder_mode(
                         if open_with_text_analysis_tool(hci_txt, filter_path=filter_path):
                             print("✅ Opened HCI log with TextAnalysisTool.NET.")
                         else:
-                            print("⚠️ Failed to open HCI log with TextAnalysisTool.NET.")    
-                        return active_bt_pid
+                            print("⚠️ Failed to open HCI log with TextAnalysisTool.NET.")
+                        # Decode complete — close the BT tool
+                        try:
+                            psutil.Process(active_bt_pid).terminate()
+                            active_bt_pid = None
+                            print(f"✅ BT tool closed after successful decode.")
+                        except Exception as e:
+                            print(f"⚠️ Failed to close BT tool: {e}")
+                        return None  # Return None so _finish_analysis emits autofolder_complete immediately
                     else:
                         print(f"⚠️ File idle for {wait_hci_timeout}s but not ready: {hci_txt}")
                         return active_bt_pid

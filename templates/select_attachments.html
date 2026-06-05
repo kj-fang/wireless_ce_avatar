@@ -72,7 +72,7 @@
     
     .nav-item {
         padding: 12px 24px;
-        background-color: #f8f9fa;
+        background-color: #E6F3FB;
         border: 2px solid transparent;
         border-radius: 30px;
         cursor: pointer;
@@ -84,14 +84,14 @@
     }
     
     .nav-item:hover {
-        background-color: #e9ecef;
+        background-color: #E6F3FB;
         border-bottom-color: #005A9C;
         color: #005A9C;
         transform: translateY(-2px);
     }
 
     .nav-hover-locked .nav-item:hover {
-        background-color: #f8f9fa;
+        background-color: #E6F3FB;
         border-bottom-color: transparent;
         color: #333;
         transform: none;
@@ -203,7 +203,7 @@
     }
 
     .analysis-btn {
-        background: linear-gradient(120deg, #2563eb 0%, #1d4ed8 25%, #60a5fa 50%, #1e40af 75%, #2563eb 100%);
+        background: linear-gradient(120deg, #15803d 0%, #166534 25%, #22c55e 50%, #14532d 75%, #15803d 100%);
         background-size: 300% auto;
         animation: gradientFlow 4.5s linear infinite !important;
         font-size: 1rem;
@@ -457,9 +457,6 @@
          
         <form method="post">
             <div class="mb-3 attachments-control-row" style="gap: 10px;">
-                <button type="button" class="btn btn-primary btn-sm px-3" id="selectAllBtn" onclick="toggleSelectAllBtn()" style="font-weight: 500; border-radius: 25px;">
-                    <i class="fas fa-check-square mr-1"></i>Select All
-                </button>
 
                 <div class="attachments-actions">
                     <div class="btn-wrap">
@@ -588,8 +585,13 @@
                 return;
             }
             const checkboxes = document.querySelectorAll('.file-item input[type="checkbox"]');
-            const anyChecked = Array.from(checkboxes).some(cb => cb.checked);
-            toggleSubmitButtons(anyChecked);
+            const checkedCount = Array.from(checkboxes).filter(cb => cb.checked).length;
+            const downloadBtn = document.getElementById('downloadBtn');
+            const bsodBtn = document.getElementById('bsodBtn');
+            const etlLlmBtn = document.getElementById('etlLlmBtn');
+            if (downloadBtn) downloadBtn.disabled = checkedCount === 0;
+            if (bsodBtn) bsodBtn.disabled = checkedCount !== 1;
+            if (etlLlmBtn) etlLlmBtn.disabled = checkedCount !== 1;
         }
         
         // Initialize file item styles on page load

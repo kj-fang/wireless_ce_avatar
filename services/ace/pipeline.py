@@ -131,18 +131,31 @@ class AceRunner:
         )
 
     # ----- core: process one turn -----
-    def _process_turn(self, conversation_id: str, turn_id: str) -> dict:
+    def _process_turn(self, conversation_id: str, turn_id: str, progress=None) -> dict:
+        def _emit(event, **payload):
+            if progress is not None:
+                try:
+                    progress({"phase": "pipeline", "event": event,
+                              "conversation_id": conversation_id,
+                              "turn_id": turn_id, **payload})
+                except Exception:
+                    pass
+
+        _emit("turn_start")
         snap = self._load_snapshot(conversation_id)
         if snap is None:
+            _emit("turn_end", status="no_snapshot")
             return {"status": "no_snapshot", "conversation_id": conversation_id, "turn_id": turn_id}
 
         turn = next((t for t in snap.get("turns", []) if t.get("turn_id") == turn_id), None)
         if turn is None:
+            _emit("turn_end", status="no_turn")
             return {"status": "no_turn", "conversation_id": conversation_id, "turn_id": turn_id}
 
         feedback = turn.get("feedback") or {}
         if not feedback:
             # Untagged turn — nothing for the Reflector to learn from.
+            _emit("turn_end", status="no_feedback")
             return {"status": "no_feedback", "conversation_id": conversation_id, "turn_id": turn_id}
 
         case_context = snap.get("issue") or {}
@@ -153,6 +166,7 @@ class AceRunner:
         # blob. We accept both.
         applied_ids = self._extract_applied_bullet_ids(turn)
         applied = self._resolve_bullets(applied_ids)
+        _emit("bullets_resolved", applied_bullet_ids=applied_ids)
 
         # 1. Reflect
         reflection = self.reflector.reflect(
@@ -160,6 +174,7 @@ class AceRunner:
             turn=turn,
             feedback=feedback,
             applied_bullets=applied,
+            progress=progress,
         )
 
         # 2. Make sure domain playbooks exist for every skill the reflection
@@ -181,6 +196,7 @@ class AceRunner:
             workflow_playbook=self.workflow_pb,
             domain_playbooks=self.domain_pbs,
             turn_id=turn_id,
+            progress=progress,
         )
 
         # 4. Grow-and-refine (lazy: only when a section overflows)
@@ -193,18 +209,20 @@ class AceRunner:
         for pb in self.domain_pbs.values():
             pb.save()
 
-        return {
+        result = {
             "status": "ok",
             "conversation_id": conversation_id,
             "turn_id": turn_id,
             "reflection": reflection,
             "curate_result": curate_result,
         }
+        _emit("turn_end", status="ok")
+        return result
 
     # ----- public entry points -----
-    def run_one(self, conversation_id: str, turn_id: str) -> dict:
+    def run_one(self, conversation_id: str, turn_id: str, progress=None) -> dict:
         with self._lock:
-            return self._process_turn(conversation_id, turn_id)
+            return self._process_turn(conversation_id, turn_id, progress=progress)
 
     def run_batch(self, since: Optional[str] = None, max_turns: Optional[int] = None) -> list[dict]:
         with self._lock:

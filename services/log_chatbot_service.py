@@ -1982,6 +1982,25 @@ class WifiLogAgentSystem:
                 "content": system_content,
             })
 
+            # Surface the ACE workflow playbook that was injected into the
+            # system prompt, so users can see exactly which learned rules are
+            # steering the agent on this turn.
+            if self.ace_runner is not None:
+                try:
+                    _wf_text = self.ace_runner.render_workflow()
+                except Exception as _e:
+                    _wf_text = ""
+                    print(f"[ace] render_workflow (ui emit) failed: {_e}")
+                if _wf_text and _wf_text.strip() not in ("", "(empty playbook)"):
+                    _emit({
+                        "role": "agent",
+                        "content": (
+                            "🧠 **ACE Workflow Playbook injected** "
+                            "(orchestration rules learned from past cases)\n\n"
+                            f"```\n{_wf_text}\n```"
+                        ),
+                    })
+
             self.conversation_history.append({"role": "user", "content": user_message})
 
             # --- Issue time extraction ---
@@ -2323,7 +2342,17 @@ class WifiLogAgentSystem:
                                     "For each important claim, map each rule clue to concrete log evidence\n"
                                     "and decide: supported, refuted, or uncertain.\n\n"
                                 )
-                                rules_section += self._build_ace_domain_block(skill_label)
+                                ace_domain_block = self._build_ace_domain_block(skill_label)
+                                if ace_domain_block:
+                                    _emit({
+                                        "role": "agent",
+                                        "content": (
+                                            f"🧠 **ACE Domain Playbook injected for `{skill_label}`** "
+                                            "(lessons from past cases)\n\n"
+                                            f"```\n{ace_domain_block}```"
+                                        ),
+                                    })
+                                rules_section += ace_domain_block
                                 self._chat_rules_injected_skills.add(skill_label)
                             else:
                                 rules_section = (
@@ -2345,6 +2374,14 @@ class WifiLogAgentSystem:
                             )
                             if ace_block:
                                 self._chat_rules_injected_skills.add(skill_label)
+                                _emit({
+                                    "role": "agent",
+                                    "content": (
+                                        f"🧠 **ACE Domain Playbook injected for `{skill_label}`** "
+                                        "(lessons from past cases)\n\n"
+                                        f"```\n{ace_block}```"
+                                    ),
+                                })
                             content = ace_block + self._clip_for_prompt(
                                 tool_result, limit=self.MAX_TOOL_RESULT_CHARS_IN_MESSAGES
                             )
@@ -2670,6 +2707,7 @@ class WifiLogAgentSystem:
         on an empty header on a cold install).
         """
         if self.ace_runner is None:
+            print("[ace] workflow block skipped: no AceRunner attached")
             return ""
         try:
             text = self.ace_runner.render_workflow()
@@ -2677,7 +2715,14 @@ class WifiLogAgentSystem:
             print(f"[ace] render_workflow failed: {e}")
             return ""
         if not text or text.strip() in ("", "(empty playbook)"):
+            print("[ace] workflow block skipped: workflow playbook is empty")
             return ""
+        n_bullets = sum(1 for ln in text.splitlines() if ln.lstrip().startswith("- "))
+        try:
+            pb_path = getattr(self.ace_runner.workflow_pb, "path", "?")
+        except Exception:
+            pb_path = "?"
+        print(f"[ace] injecting {n_bullets} workflow bullets into prompt (from {pb_path})")
         return (
             "\n=== ACE Workflow Playbook (orchestration rules learned from past cases) ===\n"
             + text
@@ -2693,6 +2738,8 @@ class WifiLogAgentSystem:
         not attached, the playbook is empty, or rendering fails.
         """
         if self.ace_runner is None or not skill_name:
+            if self.ace_runner is None:
+                print(f"[ace] domain block skipped ({skill_name!r}): no AceRunner attached")
             return ""
         try:
             text = self.ace_runner.render_domain(skill_name, ensure=True)
@@ -2700,7 +2747,14 @@ class WifiLogAgentSystem:
             print(f"[ace] render_domain({skill_name}) failed: {e}")
             return ""
         if not text or text.strip() in ("", "(empty playbook)"):
+            print(f"[ace] domain block skipped ({skill_name!r}): playbook is empty")
             return ""
+        n_bullets = sum(1 for ln in text.splitlines() if ln.lstrip().startswith("- "))
+        try:
+            pb_path = getattr(self.ace_runner.domain_pbs.get(skill_name), "path", "?")
+        except Exception:
+            pb_path = "?"
+        print(f"[ace] injecting {n_bullets} domain bullets for {skill_name!r} into prompt (from {pb_path})")
         return (
             f"=== ACE Domain Playbook for {skill_name} (lessons from past cases) ===\n"
             + text

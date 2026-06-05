@@ -1,0 +1,46 @@
+{
+  "scope": "agent",
+  "next_seq": 4,
+  "updated_at": "2026-06-05T13:27:45+08:00",
+  "bullets": [
+    {
+      "id": "agent-00001",
+      "section": "skill_selection_rules",
+      "content": "For iperf/download interruption with post-disconnect no-reconnect pattern, start with connection_flow then disconnection_analysis; this two-skill sequence resolves missed-beacon cases efficiently.",
+      "helpful_count": 0,
+      "harmful_count": 0,
+      "neutral_count": 0,
+      "created_at": "2026-06-05T13:27:45+08:00",
+      "updated_at": "2026-06-05T13:27:45+08:00",
+      "source_turn_ids": [
+        "eb221aff-4594-4531-bc79-667535572f63"
+      ]
+    },
+    {
+      "id": "agent-00002",
+      "section": "termination_rules",
+      "content": "When missed-beacon threshold crossing is confirmed in disconnection_analysis, stop investigation and report; two skills (connection_flow + disconnection_analysis) are sufficient — do not escalate further.",
+      "helpful_count": 0,
+      "harmful_count": 0,
+      "neutral_count": 0,
+      "created_at": "2026-06-05T13:27:45+08:00",
+      "updated_at": "2026-06-05T13:27:45+08:00",
+      "source_turn_ids": [
+        "eb221aff-4594-4531-bc79-667535572f63"
+      ]
+    },
+    {
+      "id": "agent-00003",
+      "section": "termination_rules",
+      "content": "Always populate conclusion_tag explicitly (e.g., RF_INTERFERENCE) in the final report; never leave the classification implicit in recommendation text only.",
+      "helpful_count": 0,
+      "harmful_count": 0,
+      "neutral_count": 0,
+      "created_at": "2026-06-05T13:27:45+08:00",
+      "updated_at": "2026-06-05T13:27:45+08:00",
+      "source_turn_ids": [
+        "eb221aff-4594-4531-bc79-667535572f63"
+      ]
+    }
+  ]
+}

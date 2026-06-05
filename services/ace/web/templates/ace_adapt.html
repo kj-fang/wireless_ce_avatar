@@ -1,0 +1,416 @@
+<!doctype html>
+<html lang="en">
+<head>
+  <meta charset="utf-8" />
+  <title>ACE Adapt Console</title>
+  <style>
+    :root {
+      --bg: #0f1419; --panel: #1a1f29; --panel2: #232a36;
+      --fg: #e6edf3; --muted: #8b98a8; --accent: #4fc3f7;
+      --good: #50c878; --bad: #ff7676; --warn: #ffd96a;
+      --border: #2d3543;
+    }
+    * { box-sizing: border-box; }
+    body { margin: 0; font-family: 'Segoe UI', system-ui, sans-serif;
+           background: var(--bg); color: var(--fg); font-size: 14px; }
+    header { background: var(--panel); padding: 10px 16px; border-bottom: 1px solid var(--border);
+             display: flex; align-items: center; gap: 16px; flex-wrap: wrap; }
+    header h1 { margin: 0; font-size: 16px; }
+    header .paths { color: var(--muted); font-size: 12px; font-family: Consolas, monospace; }
+    nav { display: flex; gap: 4px; background: var(--panel); border-bottom: 1px solid var(--border); padding: 0 10px; }
+    nav button { background: transparent; color: var(--muted); border: none; padding: 10px 16px;
+                 cursor: pointer; border-bottom: 2px solid transparent; font-size: 13px; }
+    nav button.active { color: var(--accent); border-bottom-color: var(--accent); }
+    main { padding: 14px; }
+    .tab { display: none; }
+    .tab.active { display: block; }
+    .row { display: flex; gap: 14px; }
+    .col { flex: 1; min-width: 0; }
+    .panel { background: var(--panel); border: 1px solid var(--border); border-radius: 6px;
+             padding: 12px; margin-bottom: 12px; }
+    .panel h3 { margin: 0 0 8px 0; font-size: 13px; color: var(--accent); }
+    button.primary { background: var(--accent); color: #04222d; border: none; padding: 7px 14px;
+                     border-radius: 4px; cursor: pointer; font-weight: 600; }
+    button.primary:disabled { opacity: 0.5; cursor: not-allowed; }
+    button.ghost { background: transparent; color: var(--muted); border: 1px solid var(--border);
+                   padding: 6px 12px; border-radius: 4px; cursor: pointer; }
+    table { width: 100%; border-collapse: collapse; font-size: 12.5px; }
+    th, td { padding: 6px 8px; border-bottom: 1px solid var(--border); text-align: left;
+             vertical-align: top; }
+    th { color: var(--muted); font-weight: 600; }
+    tr:hover { background: rgba(79, 195, 247, 0.05); }
+    .cid { font-family: Consolas, monospace; font-size: 11.5px; color: var(--muted); }
+    .pill { display: inline-block; padding: 1px 7px; border-radius: 999px; font-size: 11px;
+            background: var(--panel2); color: var(--muted); }
+    .pill.good { background: rgba(80,200,120,0.15); color: var(--good); }
+    .pill.bad  { background: rgba(255,118,118,0.15); color: var(--bad); }
+    .pill.warn { background: rgba(255,217,106,0.15); color: var(--warn); }
+    pre { background: #0a0f15; border: 1px solid var(--border); border-radius: 4px;
+          padding: 10px; max-height: 350px; overflow: auto; font-size: 12px;
+          font-family: Consolas, monospace; white-space: pre-wrap; word-break: break-word; }
+    #progress-log { max-height: 50vh; overflow: auto; padding: 8px; background: #0a0f15;
+                    border: 1px solid var(--border); border-radius: 4px; font-family: Consolas, monospace;
+                    font-size: 12px; }
+    .log-entry { padding: 4px 6px; border-left: 3px solid var(--border); margin-bottom: 4px; }
+    .log-entry.reflector { border-left-color: var(--accent); }
+    .log-entry.curator   { border-left-color: var(--good); }
+    .log-entry.pipeline  { border-left-color: var(--warn); }
+    .log-entry.error     { border-left-color: var(--bad); color: var(--bad); }
+    .log-entry .ts { color: var(--muted); margin-right: 6px; }
+    .log-entry .ev { color: var(--accent); font-weight: 600; margin-right: 6px; }
+    .log-entry details { margin-top: 4px; }
+    .log-entry details summary { cursor: pointer; color: var(--muted); font-size: 11px; }
+    .diff-block { border: 1px solid var(--border); border-radius: 4px; padding: 8px;
+                  margin-bottom: 10px; background: var(--panel2); }
+    .diff-block h4 { margin: 0 0 6px 0; font-size: 13px; color: var(--accent); }
+    .diff-list { margin: 0; padding-left: 18px; }
+    .diff-list li.added   { color: var(--good); }
+    .diff-list li.removed { color: var(--bad); }
+    .diff-list li.bumped  { color: var(--warn); }
+    .diff-list li.updated { color: var(--accent); }
+    .controls { display: flex; gap: 8px; align-items: center; margin-bottom: 10px; flex-wrap: wrap; }
+    input[type="text"], select { background: var(--panel2); color: var(--fg); border: 1px solid var(--border);
+                                  padding: 6px 8px; border-radius: 4px; font-size: 13px; }
+    .checkbox-cell { width: 30px; }
+    .status-line { font-size: 12px; color: var(--muted); padding: 4px 8px; }
+    .status-line.running { color: var(--warn); }
+    .status-line.done    { color: var(--good); }
+    .status-line.error   { color: var(--bad); }
+  </style>
+</head>
+<body>
+<header>
+  <h1>🧠 ACE Adapt Console</h1>
+  <div class="paths">
+    playbooks: <span id="hdr-playbooks">{{ playbooks_dir }}</span><br>
+    feedback:  <span id="hdr-feedback">{{ feedback_root }}</span>
+  </div>
+</header>
+
+<nav>
+  <button data-tab="adapt" class="active">Adapt</button>
+  <button data-tab="playbooks">Playbooks</button>
+  <button data-tab="diff">Last-run Diff</button>
+  <button data-tab="stats">Stats</button>
+</nav>
+
+<main>
+  <!-- ADAPT TAB -->
+  <section class="tab active" id="tab-adapt">
+    <div class="row">
+      <div class="col" style="flex: 1.1;">
+        <div class="panel">
+          <h3>1. Pick feedback conversations</h3>
+          <div class="controls">
+            <button class="ghost" onclick="loadConversations()">↻ Refresh</button>
+            <input type="text" id="conv-filter" placeholder="filter by case_nbr / subject / submitter / cid…"
+                   oninput="renderConversations()" style="flex:1;">
+            <label style="font-size:12px;color:var(--muted);">
+              <input type="checkbox" id="only-feedback" checked onchange="renderConversations()">
+              only with feedback
+            </label>
+          </div>
+          <div id="conv-diag" class="status-line" style="margin-bottom:6px;">—</div>
+          <div style="max-height: 45vh; overflow: auto;">
+            <table id="conv-table">
+              <thead>
+                <tr>
+                  <th class="checkbox-cell"><input type="checkbox" id="select-all" onclick="toggleAll(this.checked)"></th>
+                  <th>Case</th><th>Subject</th><th>Submitted by</th><th>Turns</th><th>Vote</th><th>cid</th>
+                </tr>
+              </thead>
+              <tbody></tbody>
+            </table>
+          </div>
+          <div class="controls" style="margin-top: 12px;">
+            <button class="primary" id="run-btn" onclick="startAdapt()">▶ Run Adapt on selected</button>
+            <span class="status-line" id="status-line">idle</span>
+          </div>
+        </div>
+      </div>
+      <div class="col" style="flex: 1.4;">
+        <div class="panel">
+          <h3>2. Live Reflector & Curator stream</h3>
+          <div id="progress-log"></div>
+        </div>
+      </div>
+    </div>
+  </section>
+
+  <!-- PLAYBOOKS TAB -->
+  <section class="tab" id="tab-playbooks">
+    <div class="row">
+      <div class="col" style="max-width: 260px;">
+        <div class="panel">
+          <h3>Playbooks</h3>
+          <button class="ghost" onclick="loadPlaybooks()" style="margin-bottom:8px;">↻ Refresh</button>
+          <div id="pb-list"></div>
+        </div>
+      </div>
+      <div class="col">
+        <div class="panel">
+          <h3 id="pb-detail-name">(select a playbook)</h3>
+          <pre id="pb-detail-text">—</pre>
+        </div>
+      </div>
+    </div>
+  </section>
+
+  <!-- DIFF TAB -->
+  <section class="tab" id="tab-diff">
+    <div class="panel">
+      <h3>Diff from the most recent adapt run</h3>
+      <div class="status-line" id="diff-status">No run yet this session.</div>
+      <div id="diff-content"></div>
+    </div>
+  </section>
+
+  <!-- STATS TAB -->
+  <section class="tab" id="tab-stats">
+    <div class="panel">
+      <h3>Playbook stats</h3>
+      <button class="ghost" onclick="loadPlaybooks()" style="margin-bottom:8px;">↻ Refresh</button>
+      <table id="stats-table">
+        <thead><tr><th>Playbook</th><th>Total bullets</th><th>Sections</th><th>File</th><th>Modified</th></tr></thead>
+        <tbody></tbody>
+      </table>
+    </div>
+  </section>
+</main>
+
+<script src="https://cdn.socket.io/4.7.5/socket.io.min.js"></script>
+<script>
+  // ---------- tab switching ----------
+  document.querySelectorAll('nav button').forEach(btn => {
+    btn.addEventListener('click', () => {
+      document.querySelectorAll('nav button').forEach(b => b.classList.remove('active'));
+      document.querySelectorAll('.tab').forEach(s => s.classList.remove('active'));
+      btn.classList.add('active');
+      document.getElementById('tab-' + btn.dataset.tab).classList.add('active');
+    });
+  });
+
+  // ---------- conversation list ----------
+  let conversations = [];
+  async function loadConversations() {
+    const diag = document.getElementById('conv-diag');
+    diag.textContent = 'Loading… (the first call probes the feedback share, may take up to 15 s).';
+    diag.className = 'status-line running';
+    try {
+      const r = await fetch('/api/conversations');
+      const j = await r.json();
+      conversations = j.items || [];
+      const parts = [];
+      parts.push('Scanned: ' + (j.conversations_dir || j.feedback_root || '?'));
+      if (typeof j.json_file_count === 'number') parts.push(j.json_file_count + ' file(s)');
+      parts.push(conversations.length + ' loaded');
+      diag.textContent = parts.join(' — ');
+      if (j.error) {
+        diag.textContent += ' — ' + j.error;
+        diag.className = 'status-line error';
+      } else if (conversations.length === 0) {
+        diag.className = 'status-line error';
+      } else {
+        diag.className = 'status-line done';
+      }
+      document.getElementById('hdr-feedback').textContent = j.feedback_root || '';
+    } catch (e) {
+      diag.textContent = 'fetch failed: ' + e;
+      diag.className = 'status-line error';
+      conversations = [];
+    }
+    renderConversations();
+  }
+  function renderConversations() {
+    const filter = document.getElementById('conv-filter').value.toLowerCase().trim();
+    const onlyFb = document.getElementById('only-feedback').checked;
+    const tbody = document.querySelector('#conv-table tbody');
+    tbody.innerHTML = '';
+    let rows = conversations.slice();
+    if (onlyFb) rows = rows.filter(c => (c.feedback_turns || 0) > 0);
+    if (filter) {
+      rows = rows.filter(c =>
+        (c.case_nbr || '').toLowerCase().includes(filter) ||
+        (c.subject  || '').toLowerCase().includes(filter) ||
+        (c.issue_type || '').toLowerCase().includes(filter) ||
+        (c.submitted_by || '').toLowerCase().includes(filter) ||
+        (c.submitters || []).some(s => (s || '').toLowerCase().includes(filter)) ||
+        (c.conversation_id || '').toLowerCase().includes(filter)
+      );
+    }
+    rows.forEach(c => {
+      const tr = document.createElement('tr');
+      const votePill = c.last_vote > 0
+        ? '<span class="pill good">+' + c.last_vote + '</span>'
+        : c.last_vote < 0 ? '<span class="pill bad">' + c.last_vote + '</span>'
+        : '<span class="pill">0</span>';
+      const subj = c.subject ? c.subject : (c.issue_type || '—');
+      const submitters = (c.submitters && c.submitters.length)
+        ? c.submitters.join(', ')
+        : (c.submitted_by || '—');
+      tr.innerHTML = `
+        <td class="checkbox-cell"><input type="checkbox" class="conv-cb" data-cid="${c.conversation_id}"></td>
+        <td>${escapeHtml(c.case_nbr || '—')}</td>
+        <td title="${escapeHtml(c.subject || '')}">${escapeHtml(subj)}</td>
+        <td class="cid" title="${escapeHtml(submitters)}">${escapeHtml(submitters)}</td>
+        <td>${c.feedback_turns}/${c.total_turns}</td>
+        <td>${votePill}</td>
+        <td class="cid">${escapeHtml(c.conversation_id)}</td>
+      `;
+      tbody.appendChild(tr);
+    });
+  }
+  function toggleAll(checked) {
+    document.querySelectorAll('.conv-cb').forEach(cb => cb.checked = checked);
+  }
+
+  // ---------- playbooks ----------
+  let playbooks = [];
+  async function loadPlaybooks() {
+    const r = await fetch('/api/playbooks');
+    const j = await r.json();
+    playbooks = j.items || [];
+    document.getElementById('hdr-playbooks').textContent = j.playbooks_dir || '';
+    const list = document.getElementById('pb-list');
+    list.innerHTML = '';
+    playbooks.forEach(pb => {
+      const div = document.createElement('div');
+      div.style.padding = '6px 4px';
+      div.style.cursor = 'pointer';
+      div.style.borderBottom = '1px solid var(--border)';
+      div.innerHTML = `<strong>${escapeHtml(pb.display_name)}</strong>
+        <span class="pill" style="float:right;">${pb.total_bullets}</span>`;
+      div.onclick = () => showPlaybook(pb.display_name);
+      list.appendChild(div);
+    });
+    // stats table too
+    const tb = document.querySelector('#stats-table tbody');
+    tb.innerHTML = '';
+    playbooks.forEach(pb => {
+      const tr = document.createElement('tr');
+      tr.innerHTML = `
+        <td>${escapeHtml(pb.display_name)}</td>
+        <td>${pb.total_bullets}</td>
+        <td>${escapeHtml(JSON.stringify(pb.by_section || {}))}</td>
+        <td>${escapeHtml(pb.file || '')}</td>
+        <td>${pb.modified ? new Date(pb.modified*1000).toLocaleString() : ''}</td>
+      `;
+      tb.appendChild(tr);
+    });
+  }
+  async function showPlaybook(name) {
+    const r = await fetch('/api/playbooks/' + encodeURIComponent(name));
+    const j = await r.json();
+    document.getElementById('pb-detail-name').textContent = j.name + ' (' + j.file + ')';
+    document.getElementById('pb-detail-text').textContent = j.text;
+  }
+
+  // ---------- adapt ----------
+  const socket = io();
+  const progressLog = document.getElementById('progress-log');
+  const statusLine  = document.getElementById('status-line');
+
+  function setStatus(text, cls) {
+    statusLine.textContent = text;
+    statusLine.className = 'status-line ' + (cls || '');
+  }
+  function logEntry(phase, ev, payload) {
+    const el = document.createElement('div');
+    el.className = 'log-entry ' + (phase || '');
+    const ts = new Date().toLocaleTimeString();
+    let label = '<span class="ts">' + ts + '</span><span class="ev">' + escapeHtml(phase + ':' + ev) + '</span>';
+    let summary = '';
+    if (payload.conversation_id) summary += 'cid=' + payload.conversation_id.slice(0,8) + '… ';
+    if (payload.turn_id)         summary += 'tid=' + payload.turn_id.slice(0,8) + '…';
+    if (payload.reason)          summary += ' reason=' + payload.reason;
+    el.innerHTML = label + escapeHtml(summary);
+    const detailKeys = ['reflection','op','summary','reasoning','updates','applied_bullet_ids','prompt_chars','operation_count','relevant_skills'];
+    const detailObj = {};
+    detailKeys.forEach(k => { if (payload[k] !== undefined) detailObj[k] = payload[k]; });
+    if (Object.keys(detailObj).length) {
+      el.innerHTML += `<details><summary>details</summary><pre>${escapeHtml(JSON.stringify(detailObj, null, 2))}</pre></details>`;
+    }
+    progressLog.appendChild(el);
+    progressLog.scrollTop = progressLog.scrollHeight;
+  }
+
+  socket.on('adapt_started', (p) => {
+    progressLog.innerHTML = '';
+    logEntry('pipeline', 'started', p);
+    setStatus('running…', 'running');
+    document.getElementById('run-btn').disabled = true;
+  });
+  socket.on('adapt_progress', (p) => {
+    logEntry(p.phase || 'pipeline', p.event || '?', p);
+  });
+  socket.on('adapt_turn_diff', (p) => {
+    logEntry('pipeline', 'turn_diff', p);
+  });
+  socket.on('adapt_done', (p) => {
+    logEntry('pipeline', 'done', { totals: p.totals });
+    setStatus('done · ' + JSON.stringify(p.totals), 'done');
+    document.getElementById('run-btn').disabled = false;
+    renderDiff(p.overall_diff || {});
+    loadPlaybooks();
+  });
+  socket.on('adapt_error', (p) => {
+    logEntry('error', 'job_failed', p);
+    setStatus('error: ' + p.error, 'error');
+    document.getElementById('run-btn').disabled = false;
+  });
+
+  async function startAdapt() {
+    const cids = [...document.querySelectorAll('.conv-cb:checked')].map(cb => cb.dataset.cid);
+    if (cids.length === 0) { alert('Pick at least one conversation.'); return; }
+    document.getElementById('run-btn').disabled = true;
+    const r = await fetch('/api/adapt', {
+      method: 'POST',
+      headers: {'Content-Type': 'application/json'},
+      body: JSON.stringify({conversation_ids: cids}),
+    });
+    const j = await r.json();
+    if (!j.ok) {
+      alert('Failed to start: ' + (j.error || 'unknown'));
+      document.getElementById('run-btn').disabled = false;
+    }
+  }
+
+  // ---------- diff rendering ----------
+  function renderDiff(diff) {
+    const root = document.getElementById('diff-content');
+    const status = document.getElementById('diff-status');
+    root.innerHTML = '';
+    const names = Object.keys(diff);
+    if (names.length === 0) {
+      status.textContent = 'Run completed but no bullets changed.';
+      return;
+    }
+    status.textContent = 'Changes across ' + names.length + ' playbook(s):';
+    names.forEach(name => {
+      const d = diff[name];
+      const block = document.createElement('div');
+      block.className = 'diff-block';
+      let html = '<h4>' + escapeHtml(name) + '</h4><ul class="diff-list">';
+      (d.added || []).forEach(b => html += `<li class="added">+ [${escapeHtml(b.id)}] ${escapeHtml(b.section)} :: ${escapeHtml(b.content)}</li>`);
+      (d.removed || []).forEach(b => html += `<li class="removed">− [${escapeHtml(b.id)}] ${escapeHtml(b.content || '')}</li>`);
+      (d.updated || []).forEach(b => html += `<li class="updated">~ [${escapeHtml(b.id)}] "${escapeHtml(b.before)}" → "${escapeHtml(b.after)}"</li>`);
+      (d.bumped  || []).forEach(b => html += `<li class="bumped">✎ [${escapeHtml(b.id)}] helpful ${b.before.helpful_count}→${b.after.helpful_count}, harmful ${b.before.harmful_count}→${b.after.harmful_count}</li>`);
+      html += '</ul>';
+      block.innerHTML = html;
+      root.appendChild(block);
+    });
+  }
+
+  // ---------- helpers ----------
+  function escapeHtml(s) {
+    return String(s == null ? '' : s)
+      .replaceAll('&','&amp;').replaceAll('<','&lt;').replaceAll('>','&gt;')
+      .replaceAll('"','&quot;').replaceAll("'",'&#39;');
+  }
+
+  // ---------- init ----------
+  loadConversations();
+  loadPlaybooks();
+</script>
+</body>
+</html>

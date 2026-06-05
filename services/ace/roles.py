@@ -90,7 +90,15 @@ class Reflector:
         turn: dict,
         feedback: dict,
         applied_bullets: list[Any],
+        progress=None,
     ) -> dict:
+        def _emit(event, **payload):
+            if progress is not None:
+                try:
+                    progress({"phase": "reflector", "event": event, **payload})
+                except Exception:
+                    pass
+
         details = (feedback or {}).get("details") or {}
         vote = (feedback or {}).get("vote", 0)
         agent_workflow_tag = details.get("agent_workflow") or "appropriate"
@@ -116,10 +124,13 @@ class Reflector:
             applied_bullets="\n".join(b.render() for b in applied_bullets) or "(none)",
         )
 
+        _emit("start", prompt_chars=len(prompt), vote=vote, applied_bullet_count=len(applied_bullets))
         reflection = self._call(prompt)
+        _emit("draft", reflection=reflection)
         # Optional refinement rounds (paper §3, max_refine_rounds=5 by default —
         # we ship with 1 since wifi traces are smaller than AppWorld traces).
-        for _ in range(max(0, self.max_refine_rounds - 1)):
+        for i in range(max(0, self.max_refine_rounds - 1)):
+            _emit("refine_round", round=i + 1)
             refine_prompt = (
                 prompt
                 + "\n\nYour previous reflection (JSON):\n"
@@ -129,6 +140,7 @@ class Reflector:
                   "Output the refined JSON only."
             )
             reflection = self._call(refine_prompt)
+        _emit("done", reflection=reflection)
         return reflection
 
     def _call(self, prompt: str) -> dict:
@@ -161,6 +173,7 @@ class Curator:
         workflow_playbook: Playbook,
         domain_playbooks: dict[str, Playbook],
         turn_id: str = "",
+        progress=None,
     ) -> dict:
         """
         Returns a summary of what was applied. Side effect: mutates the
@@ -174,6 +187,14 @@ class Curator:
               "counter_updates":     [{"bullet_id": "...", "tag": "..."}]
             }
         """
+        def _emit(event, **payload):
+            if progress is not None:
+                try:
+                    progress({"phase": "curator", "event": event, **payload})
+                except Exception:
+                    pass
+
+        _emit("start", turn_id=turn_id)
         # 1. Apply bullet_tags first — they update counters on EXISTING bullets,
         # regardless of what the curator decides about new content.
         counter_updates = self._apply_bullet_tags(
@@ -181,6 +202,8 @@ class Curator:
             workflow_playbook,
             domain_playbooks,
         )
+        if counter_updates:
+            _emit("counter_updates", updates=counter_updates)
 
         # 2. Render the playbooks for the curator prompt.
         relevant_skills = self._relevant_skills(reflection)
@@ -198,7 +221,10 @@ class Curator:
             domain_playbook=domain_block,
             token_budget=self.token_budget,
         )
+        _emit("llm_request", prompt_chars=len(prompt), relevant_skills=relevant_skills)
         result = self._call(prompt)
+        _emit("llm_response", reasoning=result.get("reasoning", ""),
+              operation_count=len(result.get("operations") or []))
 
         # 3. Apply the operations.
         applied: list[dict] = []
@@ -207,16 +233,20 @@ class Curator:
             ok, reason = self._apply_op(op, workflow_playbook, domain_playbooks, turn_id)
             if ok:
                 applied.append(op)
+                _emit("op_applied", op=op)
             else:
                 skipped.append({"op": op, "reason": reason})
+                _emit("op_skipped", op=op, reason=reason)
 
-        return {
+        summary = {
             "operations_proposed": result.get("operations") or [],
             "operations_applied": applied,
             "operations_skipped": skipped,
             "counter_updates": counter_updates,
             "reasoning": result.get("reasoning", ""),
         }
+        _emit("done", summary=summary)
+        return summary
 
     # ---- helpers ----
     def _relevant_skills(self, reflection: dict) -> list[str]:

@@ -71,6 +71,13 @@ jobs:
         echo "GIT_HASH=$gitHash"     >> $env:GITHUB_OUTPUT
         echo "BUILD_DATE=$buildDate" >> $env:GITHUB_OUTPUT
         echo "BUILD_TYPE=$buildType" >> $env:GITHUB_OUTPUT
+        # For PRs use the head branch name; for pushes to main strip refs/heads/
+        $gitBranch = if ("${{ github.event_name }}" -eq "pull_request") {
+          "${{ github.head_ref }}"
+        } else {
+          "${{ github.ref }}" -replace '^refs/heads/', ''
+        }
+        echo "GIT_BRANCH=$gitBranch" >> $env:GITHUB_OUTPUT
 
         Write-Host "Build Type : $buildType"
         Write-Host "Version    : $version"
@@ -88,7 +95,7 @@ jobs:
         __version__ = "${{ steps.version.outputs.VERSION }}"
         BUILD_DATE = "${{ steps.version.outputs.BUILD_DATE }}"
         GIT_HASH = "${{ steps.version.outputs.GIT_HASH }}"
-        GIT_BRANCH = "main"
+        GIT_BRANCH = "${{ steps.version.outputs.GIT_BRANCH }}"
         "@
         
         Set-Content -Path "configs/version.py" -Value $versionContent -Encoding UTF8
@@ -183,15 +190,18 @@ jobs:
       uses: actions/github-script@v7
       with:
         script: |
+          const version = '${{ steps.version.outputs.VERSION }}';
+          const gitHash = '${{ steps.version.outputs.GIT_HASH }}';
+          const buildDate = '${{ steps.version.outputs.BUILD_DATE }}';
+          const artifactUrl = 'https://github.com/' + context.repo.owner + '/' + context.repo.repo + '/actions/runs/' + context.runId;
+          const body = '✅ Build successful!\n\n'
+            + '**Dev Version:** `' + version + '`\n'
+            + '**Commit:** `' + gitHash + '`\n'
+            + '**Build Date:** ' + buildDate + '\n\n'
+            + '📥 [Download artifact](' + artifactUrl + ')';
           github.rest.issues.createComment({
             issue_number: context.issue.number,
             owner: context.repo.owner,
             repo: context.repo.repo,
-            body: `✅ Build successful!
-
-**Dev Version:** \`${{ steps.version.outputs.VERSION }}\`
-**Commit:** \`${{ steps.version.outputs.GIT_HASH }}\`
-**Build Date:** ${{ steps.version.outputs.BUILD_DATE }}
-
-📥 [Download artifact](https://github.com/${context.repo.owner}/${context.repo.repo}/actions/runs/${context.runId})`
+            body: body
           })

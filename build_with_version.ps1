@@ -76,7 +76,7 @@ try {
 
 } catch {
     Write-Host "Error getting git information. Using defaults." -ForegroundColor Red
-    $version = "1.0.0-dev.unknown"
+    $version = "99.0.0-dev.unknown"
     $gitHash = "unknown"
     $currentBranch = "unknown"
     $buildDate = Get-Date -Format "yyyy-MM-dd HH:mm:ss"

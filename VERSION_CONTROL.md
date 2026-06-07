@@ -10,8 +10,9 @@ Two parallel version lines keep nightly development and stable releases clearly 
 | **Release** | `release/X.Y` | `X.Y.PATCH` | `1.1.5` |
 | **Dev** (feature branch off main) | `feature/*` / `fix/*` | `99.0.BASE-dev.SHA1` | `99.0.312-dev.f3c9e12` |
 
-- `PATCH` on `main` / feature branches = total commit count on `main`
-- `PATCH` on `release/X.Y` = total commit count on that release branch (starts near 0, increments with each hotfix)
+- `PATCH` on `main` = total commit count on `main`
+- `PATCH` on `feature/*` / `fix/*` = commit count on `main` **at the branch point** (i.e. `git rev-list --count <merge-base>`), so the dev version anchors to the nightly it was branched from
+- `PATCH` on `release/X.Y` = number of commits on that branch **since it was cut from `main`** (starts at 0 on branch cut, increments by 1 per hotfix)
 - The `99` major makes it impossible to mistake a nightly build for a stable release
 
 ---
@@ -164,12 +165,22 @@ print(f"Version: {__version__}")
 
 ---
 
-## Manual Version Override
+## Changing the Release Version (X.Y)
 
-If you need to change the major/minor version:
-1. In `build_with_version.ps1`, update the line that sets the `$version` value, for example:
-   ```powershell
-   $version = "2.0.$commitCount"  # Changed from 1.0
+The `X.Y` in a release version is derived entirely from the **branch name** — no code edits needed.
+
+To start a new release cycle with a different `X.Y`, simply cut a branch with the desired name:
+
+```powershell
+git checkout main
+git pull
+git checkout -b release/2.0   # → produces 2.0.0, 2.0.1, 2.0.2 ...
+git push -u origin release/2.0
+```
+
+The build script and CI workflow both parse `release/X.Y` via regex and use `X` and `Y` directly as the version components.
+
+> **Note:** Nightly builds on `main` are always `99.0.x` and cannot be changed — the `99` major is intentional to distinguish nightlies from stable releases at a glance.
 
 ---
 

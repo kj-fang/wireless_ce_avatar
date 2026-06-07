@@ -1,23 +1,23 @@
-# Release Candidate Build Workflow
+# Release Build Workflow
 #
 # Scenario 3: Admin creates release/X.Y branch from main and pushes it
-#   → First build: version X.Y.0  (or X.Y.<commit_count> if branch has prior commits)
-#   → Creates GitHub Release tagged vX.Y.<patch>
+#   → First build: version X.Y.0
+#   → Creates a stable GitHub Release tagged vX.Y.0
 #
 # Scenario 4: Cherry-picked hotfix committed to release/X.Y branch
 #   → Incremented build: X.Y.1, X.Y.2, ...
-#   → Creates a new GitHub Release (replaces/supplements previous RC)
+#   → Creates a new stable GitHub Release tagged vX.Y.<patch>
 #
 # NOTE: GitHub Actions detached HEAD — we use ${{ github.ref }} instead of
 # `git rev-parse --abbrev-ref HEAD` to detect the release/X.Y branch name.
 # build.yml handles main (nightly) and PR builds; this file handles release/** ONLY.
 
-name: Release Candidate Build
+name: Release Build
 
 on:
   push:
     branches:
-      - 'release/**'   # Scenarios 3 & 4: any push to release/X.Y
+      - 'release/**'   # Scenarios 3 & 4: stable release build for any release/X.Y branch
   workflow_dispatch:   # Allow manual trigger (e.g. rebuild without a new commit)
 
 permissions:
@@ -170,7 +170,7 @@ jobs:
         with:
           tag_name: v${{ steps.version.outputs.VERSION }}
           name: IntelAvatar v${{ steps.version.outputs.VERSION }}
-          prerelease: ${{ steps.version.outputs.BUILD_TYPE == 'NIGHTLY' }}
+          prerelease: false
           body: |
             ## IntelAvatar v${{ steps.version.outputs.VERSION }}
             

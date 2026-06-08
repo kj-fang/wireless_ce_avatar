@@ -3266,9 +3266,12 @@
                 // `rotated=true` means a DIFFERENT file was loaded — offer undo.
                 // `rotated=false` means same file or first load — no undo needed.
                 const chatWindow = document.getElementById('chat-window');
-                const hasRealMessages = !!chatWindow.querySelector('.msg-row');
+                const hasRealMessages = !chatWindow.querySelector('#welcome-msg');
 
                 if (data.rotated || hasRealMessages) {
+                // caches so the user can undo the reset for 30 s.
+
+                if (data.rotated) {
                     // Snapshot current state so the user can undo if this
                     // was a file switch (rotated). For same-file reloads
                     // there is nothing meaningful to undo.

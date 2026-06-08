@@ -21,6 +21,7 @@ import xml.etree.ElementTree as ET
 from pathlib import Path
 from datetime import datetime, timedelta
 from typing import Dict, List, Optional, Tuple
+from utils.softAP_supported_channel import softAP_supported_channel
 from pydantic import BaseModel, Field
 
 from utils import helpers
@@ -2572,6 +2573,15 @@ class WifiLogAgentSystem:
         if tool_name == "lookup_assert_code":
             return lookup_assert_code(args.get("code", ""))
 
+        if tool_name == "softAP_supported_channel":
+            err = self._ensure_raw_log_cache()
+            if err:
+                return err
+            log_text = args.get("log_text") or "\n".join(self._raw_log_cache)
+            if not log_text.strip():
+                return "ERROR: Raw log is empty or unavailable."
+            return softAP_supported_channel(log_text)
+
         return f"Unknown tool: {tool_name}"
 
     def _append_tool_message(self, messages: list, tool_call, content: str) -> None:
@@ -3077,6 +3087,22 @@ class WifiLogAgentSystem:
                             }
                         },
                         "required": ["code"]
+                    }
+                }
+            },
+            {
+                "type": "function",
+                "function": {
+                    "name": "softAP_supported_channel",
+                    "description": (
+                        "Analyze the SoftAP supported channels per country/region from the currently loaded log. "
+                        "Takes no arguments — the server reads the full raw log internally. "
+                        "Do NOT pass log_text; you do not have the full raw log in context."
+                    ),
+                    "parameters": {
+                        "type": "object",
+                        "properties": {},
+                        "required": []
                     }
                 }
             },

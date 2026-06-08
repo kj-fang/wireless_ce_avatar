@@ -3260,21 +3260,29 @@
                 renderSkills(data.skills);
                 logLoaded = true;
 
-                // ── Auto-reset when switching from one log to another ──
-                // Backend signals `rotated=true` when this set_log replaces
-                // a DIFFERENT log path. We snapshot the chat UI + per-turn
-                // caches so the user can undo the reset for 30 s.
-                if (data.rotated) {
-                    const undoCache = {
-                        chatHTML:           document.getElementById('chat-window').innerHTML,
+                // ── Always reset the chat UI when any log is loaded ──
+                // The backend always calls reset_conversation() in set_log,
+                // so the UI must always match: clear existing messages.
+                // `rotated=true` means a DIFFERENT file was loaded — offer undo.
+                // `rotated=false` means same file or first load — no undo needed.
+                const chatWindow = document.getElementById('chat-window');
+                const hasRealMessages = !!chatWindow.querySelector('.msg-row');
+
+                if (data.rotated || hasRealMessages) {
+                    // Snapshot current state so the user can undo if this
+                    // was a file switch (rotated). For same-file reloads
+                    // there is nothing meaningful to undo.
+                    const undoCache = data.rotated ? {
+                        chatHTML:           chatWindow.innerHTML,
                         feedbackConvId:     window.__feedbackConversationId || '',
                         lastFeedback:       window.__lastFeedback || {},
                         turnContext:        window.__turnContext || {},
                         yamlModified:       window.__yamlModified,
                         previousLogPath:    data.previous_log_path || '',
-                    };
+                    } : null;
+
                     // Clear everything the previous conversation owned.
-                    document.getElementById('chat-window').innerHTML = `
+                    chatWindow.innerHTML = `
                         <div class="welcome-msg" id="welcome-msg">
                             <div class="big-icon">🔄</div>
                             <strong>New log loaded.</strong><br>
@@ -3286,36 +3294,38 @@
                     window.__turnContext = {};
                     window.__yamlModified = false;
 
-                    showToast({
-                        message: '🔄 Detected new log — chat history cleared.',
-                        actionLabel: 'Undo (30s)',
-                        ttlMs: 30000,
-                        onAction: () => {
-                            // Visual restore: bring back the previous chat
-                            // panel + per-turn caches. The previous
-                            // conversation_id is also restored so any
-                            // feedback widgets in the restored HTML keep
-                            // writing into the right snapshot. The agent's
-                            // in-memory state for the old log is gone, but
-                            // the user can re-load that log to re-prime.
-                            document.getElementById('chat-window').innerHTML = undoCache.chatHTML;
-                            window.__feedbackConversationId = undoCache.feedbackConvId;
-                            window.__lastFeedback = undoCache.lastFeedback;
-                            window.__turnContext  = undoCache.turnContext;
-                            window.__yamlModified = undoCache.yamlModified;
-                            if (undoCache.previousLogPath) {
-                                document.getElementById('log-path-input').value =
-                                    undoCache.previousLogPath;
-                            }
-                            showToast({
-                                message: '↩️ Restored previous chat view. Reload the old log file to continue chatting.',
-                                ttlMs: 6000,
-                            });
-                        },
-                    });
-                } else if (data.new_conversation_id) {
-                    // First-time load (no rotation) — just record the id.
-                    window.__feedbackConversationId = data.new_conversation_id;
+                    if (data.rotated && undoCache) {
+                        showToast({
+                            message: '🔄 Detected new log — chat history cleared.',
+                            actionLabel: 'Undo (30s)',
+                            ttlMs: 30000,
+                            onAction: () => {
+                                // Visual restore: bring back the previous chat
+                                // panel + per-turn caches. The previous
+                                // conversation_id is also restored so any
+                                // feedback widgets in the restored HTML keep
+                                // writing into the right snapshot. The agent's
+                                // in-memory state for the old log is gone, but
+                                // the user can re-load that log to re-prime.
+                                chatWindow.innerHTML = undoCache.chatHTML;
+                                window.__feedbackConversationId = undoCache.feedbackConvId;
+                                window.__lastFeedback = undoCache.lastFeedback;
+                                window.__turnContext  = undoCache.turnContext;
+                                window.__yamlModified = undoCache.yamlModified;
+                                if (undoCache.previousLogPath) {
+                                    document.getElementById('log-path-input').value =
+                                        undoCache.previousLogPath;
+                                }
+                                showToast({
+                                    message: '↩️ Restored previous chat view. Reload the old log file to continue chatting.',
+                                    ttlMs: 6000,
+                                });
+                            },
+                        });
+                    }
+                } else {
+                    // First-time load with no existing messages — just record the id.
+                    window.__feedbackConversationId = data.new_conversation_id || '';
                 }
 
                 // NOTE: the sidebar Issue Time is intentionally left EMPTY on

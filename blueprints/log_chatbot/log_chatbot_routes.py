@@ -821,6 +821,7 @@ def prepare():
         # skip_prime=True: we call prime_with_context explicitly below (after setting log path)
         agent = _get_or_create_agent(skip_prime=True)
         agent.current_log_path = log_path
+        agent.reset_conversation()          # fresh conversation for a new file
         agent.prime_with_context(**ctx)
 
         # Run the token-frugal LLM issue-time + description organize NOW, on the

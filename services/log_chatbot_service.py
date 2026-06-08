@@ -2577,7 +2577,7 @@ class WifiLogAgentSystem:
             err = self._ensure_raw_log_cache()
             if err:
                 return err
-            log_text = args.get("log_text") or "\n".join(self._raw_log_cache)
+            log_text = "\n".join(self._raw_log_cache)
             if not log_text.strip():
                 return "ERROR: Raw log is empty or unavailable."
             return softAP_supported_channel(log_text)

@@ -54,10 +54,9 @@ def softAP_supported_channel(log_text: str) -> str:
 
             elif bit3 == 1 and bit6 == 1:
                 results[current_country]["Supported Channels"].add(ch)
-    
-    
+
     if not results:
-            return "ERROR: No MCC/channel data parsed."
+        return "ERROR: No MCC/channel data parsed."
 
     output = format_output(results)
 

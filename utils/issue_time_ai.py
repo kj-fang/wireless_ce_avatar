@@ -372,20 +372,25 @@ def build_issue_time_suggestions(
             log_has_date=not no_date,
         ))
 
-    # Fallback when the LLM returned nothing: at least offer the FIRST
-    # parseable timestamp in the log as a low-confidence anchor. Useful any
-    # time the relevant event sits at the start of the log (or the LLM is
-    # over-conservative about pinning a time). The user still sees "low"
-    # confidence + a reason explaining it's a guess, and needs_user_input
-    # stays True so they're prompted to confirm or edit.
+    # Fallback when the LLM returned nothing: at least offer the LAST
+    # parseable timestamp in the log as a low-confidence anchor. We align
+    # with the project-wide convention for "no specific time known" —
+    # /set_log auto-fills with log_last_time, the "Use log's last time"
+    # button uses it, and the inline "Log ends at:" hint surfaces it.
+    # Using the same value here keeps the AI fallback consistent with the
+    # rest of the UX and matches the common case where the user's issue
+    # describes the trailing state of the log (failure observed near the
+    # end). The user still sees "low" confidence + a reason explaining
+    # it's a guess, and needs_user_input stays True so they're prompted
+    # to confirm or edit.
     if not suggestions and log_lines:
-        fallback_dt = _find_first_log_timestamp(log_lines, no_date_log=no_date)
+        fallback_dt = _find_last_log_timestamp(log_lines, no_date_log=no_date)
         if fallback_dt is not None:
             suggestions.append(make_suggestion(
                 fallback_dt, "low",
                 ("No exact anchor matched the description; using the log's "
-                 "first event time as a starting point. Edit if the issue "
-                 "happens later in the log."),
+                 "last event time as a starting point. Edit if the issue "
+                 "happened earlier in the trace."),
                 "inferred",
                 log_has_date=not no_date,
             ))
@@ -418,22 +423,31 @@ _FALLBACK_TIME_ONLY_RE = re.compile(
 )
 
 
-def _find_first_log_timestamp(
+def _find_last_log_timestamp(
     log_lines: List[str], no_date_log: bool, scan_limit: int = 200
 ) -> Optional[datetime]:
-    """Return the FIRST parseable timestamp in the head of the log, or None.
+    """Return the LAST parseable timestamp in the tail of the log, or None.
 
-    Used as a low-confidence fallback when the LLM can't pin a time — the
-    first event time is a reasonable starting anchor regardless of the
-    log's domain. Scans only the first ``scan_limit`` lines, since the
-    "first event time" sits at the head of the file.
+    Used as a low-confidence fallback when the LLM can't pin a time. The
+    "last event time" matches the project-wide convention for unknown
+    issue times (see /set_log → log_last_time, the "Use log's last time"
+    button, and the DDD "Log ends at:" inline hint), so the AI fallback
+    stays consistent with the rest of the UX. Scans only the trailing
+    ``scan_limit`` lines, since the "last event time" sits at the end
+    of the file.
 
     For dated logs returns a real ``datetime``. For time-only logs returns a
     placeholder-dated datetime (only H/M/S matter — caller serialises via
     ``make_suggestion(log_has_date=False)`` which drops the date).
     """
     rx = _FALLBACK_TIME_ONLY_RE if no_date_log else _FALLBACK_DATED_RE
-    for line in (log_lines or [])[:scan_limit]:
+    # Walk the trailing scan_limit lines from the END toward the front, so
+    # the very last parseable timestamp wins. `reversed` returns lines in
+    # tail-first order; the first regex hit is the latest in chronological
+    # order assuming the log is time-ordered (which both dated WiFi ETL and
+    # DDD/tracefmt traces are).
+    tail = (log_lines or [])[-scan_limit:]
+    for line in reversed(tail):
         m = rx.search(line)
         if not m:
             continue

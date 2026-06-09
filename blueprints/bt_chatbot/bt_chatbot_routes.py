@@ -27,6 +27,59 @@ bt_chatbot_bp = Blueprint("bt_chatbot", __name__, url_prefix="/bt_chatbot")
 # Server-side store: session_id -> WifiLogAgentSystem instance
 _chatbot_instances: dict = {}
 
+# File names recognised as System Event logs (case-insensitive comparison)
+_EVT_FILENAMES = {"raweventviewersystemlogs.evt", "system.evtx"}
+
+
+def _find_evt_path_for_log(log_path: str) -> str:
+    """Return the path to a System Event log file associated with a BT log.
+
+    Strategy:
+      1. If a case_nbr exists in session, look through app_config download
+         results (the 'ddd' dict which contains evt_files merged in).
+      2. Fallback: search relative to the given BT log path:
+         - grandparent dir for rawEventViewerSystemLogs.evt
+         - sibling 'Event logs/' folder for System.evtx
+    Returns empty string if nothing found.
+    """
+    # --- Strategy 1: from download results ---
+    case_ctx = session.get("case_context", {})
+    case_nbr = case_ctx.get("case_nbr", "") if isinstance(case_ctx, dict) else ""
+    if case_nbr:
+        results = app_config.get_download_results(case_nbr)
+        ddd_dict = results.get("ddd", {})
+        for _zip_name, file_list in ddd_dict.items():
+            for fpath in file_list:
+                if os.path.basename(fpath).lower() in _EVT_FILENAMES:
+                    if os.path.isfile(fpath):
+                        return fpath
+
+    # --- Strategy 2: relative path search from BT log ---
+    if not log_path or not os.path.isfile(log_path):
+        return ""
+
+    log_dir = os.path.dirname(os.path.abspath(log_path))
+
+    # rawEventViewerSystemLogs.evt in grandparent directory
+    grandparent = os.path.dirname(os.path.dirname(log_dir))
+    if os.path.isdir(grandparent):
+        for fname in os.listdir(grandparent):
+            if fname.lower() in _EVT_FILENAMES:
+                candidate = os.path.join(grandparent, fname)
+                if os.path.isfile(candidate):
+                    return candidate
+
+    # System.evtx in "Event logs" subfolder of log's directory
+    event_logs_dir = os.path.join(log_dir, "Event logs")
+    if os.path.isdir(event_logs_dir):
+        for fname in os.listdir(event_logs_dir):
+            if fname.lower() in _EVT_FILENAMES:
+                candidate = os.path.join(event_logs_dir, fname)
+                if os.path.isfile(candidate):
+                    return candidate
+
+    return ""
+
 
 # ------------------------------------------------------------------
 # Feedback sidecar helpers (anonymous, side-car, never blocks chat)
@@ -421,6 +474,12 @@ def set_log():
         except Exception:
             log_has_date = True
 
+        # Locate associated System Event log (.evtx / .evt)
+        try:
+            evtx_path = _find_evt_path_for_log(log_path)
+        except Exception:
+            evtx_path = ""
+
         return jsonify({
             "success": True,
             "message": f"Log file set: {log_path}",
@@ -429,6 +488,7 @@ def set_log():
             "log_span_minutes": log_span_minutes,
             "log_last_time": log_last_time,
             "log_has_date": log_has_date,
+            "evtx_path": evtx_path,
             # Hints for the client to clear chat history + show the toast.
             "rotated": rotated,
             "previous_log_path": prev_log_path if rotated else "",

@@ -16,8 +16,9 @@ on:
   workflow_dispatch:
 
 permissions:
-  contents: read
-  pull-requests: write        # needed to post PR comments
+  contents: write             # needed to create nightly pre-releases
+  pull-requests: write        # needed to read PR context
+  issues: write               # needed to post PR comments (PRs use the Issues API)
 
 jobs:
   build:
@@ -184,6 +185,11 @@ jobs:
         path: dist/
         retention-days: 14
 
+    - name: Create nightly ZIP for release
+      if: github.event_name == 'push'
+      run: |
+        Compress-Archive -Path dist/IntelAvatar/* -DestinationPath dist/IntelAvatar-NIGHTLY-${{ steps.version.outputs.VERSION }}.zip
+
     # Post a PR comment with the dev build info (Scenario 1 only)
     - name: Comment PR with build info
       if: github.event_name == 'pull_request'
@@ -199,9 +205,57 @@ jobs:
             + '**Commit:** `' + gitHash + '`\n'
             + '**Build Date:** ' + buildDate + '\n\n'
             + '📥 [Download artifact](' + artifactUrl + ')';
-          github.rest.issues.createComment({
+          await github.rest.issues.createComment({
             issue_number: context.issue.number,
             owner: context.repo.owner,
             repo: context.repo.repo,
             body: body
           })
+
+    # Post a commit comment for nightly builds (Scenario 2 only)
+    # GitHub notifies all users watching the repo when a commit comment is posted.
+    - name: Comment nightly build info on commit
+      if: github.event_name == 'push'
+      uses: actions/github-script@v7
+      with:
+        script: |
+          const version = '${{ steps.version.outputs.VERSION }}';
+          const gitHash = '${{ steps.version.outputs.GIT_HASH }}';
+          const buildDate = '${{ steps.version.outputs.BUILD_DATE }}';
+          const artifactUrl = 'https://github.com/' + context.repo.owner + '/' + context.repo.repo + '/actions/runs/' + context.runId;
+          const body = '🌙 Nightly build complete!\n\n'
+            + '**Version:** `' + version + '`\n'
+            + '**Commit:** `' + gitHash + '`\n'
+            + '**Build Date:** ' + buildDate + '\n\n'
+            + '📥 [Download artifact](' + artifactUrl + ')';
+          await github.rest.repos.createCommitComment({
+            owner: context.repo.owner,
+            repo: context.repo.repo,
+            commit_sha: context.sha,
+            body: body
+          })
+
+    # Create/update the floating nightly-latest pre-release (Scenario 2 only)
+    # Uses a single fixed tag that moves to the latest commit on every nightly build.
+    # This means only ONE nightly entry ever appears in the Releases sidebar — no tag clutter.
+    - name: Create nightly pre-release
+      if: github.event_name == 'push'
+      uses: softprops/action-gh-release@v1
+      with:
+        tag_name: nightly-latest
+        name: "🌙 Nightly (latest)"
+        prerelease: true
+        body: |
+          ## Latest Nightly Build
+
+          > ⚠️ Automated build from `main`. Updates on every merge. Not a stable release.
+
+          **Version:** ${{ steps.version.outputs.VERSION }}
+          **Commit:** ${{ steps.version.outputs.GIT_HASH }}
+          **Build Date:** ${{ steps.version.outputs.BUILD_DATE }}
+
+          For the latest stable release see the [Releases page](https://github.com/${{ github.repository }}/releases/latest).
+        files: dist/IntelAvatar-NIGHTLY-${{ steps.version.outputs.VERSION }}.zip
+        fail_on_unmatched_files: false
+      env:
+        GITHUB_TOKEN: ${{ secrets.GITHUB_TOKEN }}

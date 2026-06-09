@@ -28,10 +28,13 @@ import json
 import threading
 from datetime import datetime
 from pathlib import Path
-from typing import Iterable, Optional
+from typing import Callable, Iterable, Optional
 
 from .playbook import Playbook
 from .roles import Reflector, Curator
+
+
+SkillContextProvider = Callable[[str], Optional[dict]]
 
 
 class AceRunner:
@@ -42,6 +45,7 @@ class AceRunner:
         feedback_root: str | Path,
         skills: Optional[Iterable[str]] = None,
         max_refine_rounds: int = 1,
+        skill_context_provider: Optional[SkillContextProvider] = None,
     ):
         """
         llm:            an LLM_helper instance (services.llm_service.LLM_helper).
@@ -52,11 +56,22 @@ class AceRunner:
         skills:         skill names to maintain domain playbooks for. If None,
                         the runner lazily creates one whenever a turn references
                         a new skill.
+        skill_context_provider:
+                        Optional callable invoked once per relevant skill before
+                        running the Reflector/Curator. Given a skill_id it
+                        should return a dict with any of:
+                            {"description": str,
+                             "expert_rules": str,
+                             "keywords": list[str]}
+                        These fields are injected into both prompts so newly
+                        added bullets match the existing skill voice/style.
+                        Return None when the skill is unknown.
         """
         self.llm = llm
         self.playbooks_dir = Path(playbooks_dir)
         self.feedback_root = Path(feedback_root)
         self.playbooks_dir.mkdir(parents=True, exist_ok=True)
+        self.skill_context_provider = skill_context_provider
 
         self.workflow_pb = Playbook("agent", self.playbooks_dir / "workflow.json")
         self.domain_pbs: dict[str, Playbook] = {}
@@ -169,11 +184,13 @@ class AceRunner:
         _emit("bullets_resolved", applied_bullet_ids=applied_ids)
 
         # 1. Reflect
+        skill_contexts = self._collect_skill_contexts(turn, feedback)
         reflection = self.reflector.reflect(
             case_context=case_context,
             turn=turn,
             feedback=feedback,
             applied_bullets=applied,
+            skill_contexts=skill_contexts,
             progress=progress,
         )
 
@@ -190,11 +207,16 @@ class AceRunner:
             if sid:
                 self._ensure_domain_playbook(sid)
 
+        # Reflection may have introduced new target skills — refresh contexts
+        # so the Curator sees them too.
+        skill_contexts = self._collect_skill_contexts(turn, feedback, reflection)
+
         # 3. Curate
         curate_result = self.curator.curate(
             reflection=reflection,
             workflow_playbook=self.workflow_pb,
             domain_playbooks=self.domain_pbs,
+            skill_contexts=skill_contexts,
             turn_id=turn_id,
             progress=progress,
         )
@@ -257,8 +279,66 @@ class AceRunner:
         domain_text = domain_pb.render() if domain_pb else "(no playbook yet for this skill)"
         return self.workflow_pb.render(), domain_text
 
+    # ----- skill metadata helper for Reflector / Curator alignment -----
+    def _collect_skill_contexts(self, turn: dict, feedback: dict,
+                                 reflection: Optional[dict] = None) -> dict:
+        """Resolve skill metadata for every skill this turn touched.
+
+        Combines the skill's static definition (via skill_context_provider, if
+        configured) with the current rendered domain playbook bullets so both
+        roles see voice + existing style anchored together. Returns an empty
+        dict when no skills can be resolved.
+        """
+        skill_ids: list[str] = []
+        seen: set[str] = set()
+
+        def _add(sid):
+            sid = (sid or "").strip()
+            if sid and sid not in seen:
+                seen.add(sid)
+                skill_ids.append(sid)
+
+        for s in turn.get("skills_used") or []:
+            if isinstance(s, dict):
+                _add(s.get("skill_id") or s.get("name"))
+            elif isinstance(s, str):
+                _add(s)
+        for s in turn.get("helpful_skills") or []:
+            if isinstance(s, dict):
+                _add(s.get("skill_id") or s.get("name"))
+            elif isinstance(s, str):
+                _add(s)
+        details = (feedback or {}).get("details") or {}
+        _add(details.get("correct_skill"))
+        if reflection:
+            for ki in reflection.get("key_insights") or []:
+                _add(ki.get("target_skill"))
+
+        contexts: dict[str, dict] = {}
+        for sid in skill_ids:
+            ctx: dict = {}
+            if self.skill_context_provider is not None:
+                try:
+                    provided = self.skill_context_provider(sid)
+                except Exception as e:
+                    print(f"[ace.pipeline] skill_context_provider({sid}) failed: {e}")
+                    provided = None
+                if isinstance(provided, dict):
+                    ctx.update(provided)
+            pb = self.domain_pbs.get(sid)
+            if pb is not None:
+                try:
+                    pb.reload_if_changed()
+                    ctx["domain_bullets"] = pb.render()
+                except Exception:
+                    pass
+            if ctx:
+                contexts[sid] = ctx
+        return contexts
+
     def render_workflow(self) -> str:
         """Workflow playbook text for injection at the top of the agent system prompt."""
+        self.workflow_pb.reload_if_changed()
         return self.workflow_pb.render()
 
     def render_domain(self, skill: str, ensure: bool = True) -> str:
@@ -270,7 +350,10 @@ class AceRunner:
         if ensure:
             self._ensure_domain_playbook(skill)
         pb = self.domain_pbs.get(skill)
-        return pb.render() if pb else ""
+        if pb is None:
+            return ""
+        pb.reload_if_changed()
+        return pb.render()
 
     # ----- internal helpers -----
     def _extract_applied_bullet_ids(self, turn: dict) -> list[str]:

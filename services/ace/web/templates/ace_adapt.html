@@ -103,6 +103,7 @@
           <h3>1. Pick feedback conversations</h3>
           <div class="controls">
             <button class="ghost" onclick="loadConversations()">↻ Refresh</button>
+            <button class="ghost" onclick="loadConversations(true)" title="Re-probe SMB and rebuild the cached root">↻ Force re-probe</button>
             <input type="text" id="conv-filter" placeholder="filter by case_nbr / subject / submitter / cid…"
                    oninput="renderConversations()" style="flex:1;">
             <label style="font-size:12px;color:var(--muted);">
@@ -116,7 +117,7 @@
               <thead>
                 <tr>
                   <th class="checkbox-cell"><input type="checkbox" id="select-all" onclick="toggleAll(this.checked)"></th>
-                  <th>Case</th><th>Subject</th><th>Submitted by</th><th>Turns</th><th>Vote</th><th>cid</th>
+                  <th>Case</th><th>Subject</th><th>Submitted by</th><th>Turns</th><th>Vote</th><th>Src</th><th>cid</th>
                 </tr>
               </thead>
               <tbody></tbody>
@@ -192,28 +193,35 @@
 
   // ---------- conversation list ----------
   let conversations = [];
-  async function loadConversations() {
+  async function loadConversations(force) {
     const diag = document.getElementById('conv-diag');
-    diag.textContent = 'Loading… (the first call probes the feedback share, may take up to 15 s).';
+    diag.textContent = (force ? 'Force re-probing remote…' : 'Loading…')
+                     + ' (remote SMB probe budget: up to 15 s, then local fallback).';
     diag.className = 'status-line running';
     try {
-      const r = await fetch('/api/conversations');
+      const url = '/api/conversations' + (force ? '?force=1' : '');
+      const r = await fetch(url);
       const j = await r.json();
       conversations = j.items || [];
       const parts = [];
-      parts.push('Scanned: ' + (j.conversations_dir || j.feedback_root || '?'));
-      if (typeof j.json_file_count === 'number') parts.push(j.json_file_count + ' file(s)');
-      parts.push(conversations.length + ' loaded');
-      diag.textContent = parts.join(' — ');
+      parts.push('remote [' + (j.source || '?') + ']: '
+                 + (j.remote_exists ? (j.remote_file_count + ' file(s) / ' + j.remote_loaded + ' loaded') : 'unreachable')
+                 + ' — ' + (j.remote_dir || '?'));
+      parts.push('local: '
+                 + (j.local_exists ? (j.local_file_count + ' file(s) / ' + j.local_loaded + ' loaded') : 'missing')
+                 + ' — ' + (j.local_dir || '?'));
+      parts.push('merged: ' + conversations.length + ' loaded');
+      diag.innerHTML = parts.map(escapeHtml).join('<br>');
       if (j.error) {
-        diag.textContent += ' — ' + j.error;
+        diag.innerHTML += '<br><b>' + escapeHtml(j.error) + '</b>';
         diag.className = 'status-line error';
       } else if (conversations.length === 0) {
         diag.className = 'status-line error';
       } else {
         diag.className = 'status-line done';
       }
-      document.getElementById('hdr-feedback').textContent = j.feedback_root || '';
+      document.getElementById('hdr-feedback').textContent =
+        (j.feedback_root || '') + ' [' + (j.source || '?') + ']';
     } catch (e) {
       diag.textContent = 'fetch failed: ' + e;
       diag.className = 'status-line error';
@@ -248,6 +256,8 @@
       const submitters = (c.submitters && c.submitters.length)
         ? c.submitters.join(', ')
         : (c.submitted_by || '—');
+      const srcShort = (c.source || '').replace('remote-', 'R/').replace('local-fallback', 'L').replace('override', 'O');
+      const srcPill = '<span class="pill" title="' + escapeHtml(c.feedback_root || '') + '">' + escapeHtml(srcShort) + '</span>';
       tr.innerHTML = `
         <td class="checkbox-cell"><input type="checkbox" class="conv-cb" data-cid="${c.conversation_id}"></td>
         <td>${escapeHtml(c.case_nbr || '—')}</td>
@@ -255,6 +265,7 @@
         <td class="cid" title="${escapeHtml(submitters)}">${escapeHtml(submitters)}</td>
         <td>${c.feedback_turns}/${c.total_turns}</td>
         <td>${votePill}</td>
+        <td>${srcPill}</td>
         <td class="cid">${escapeHtml(c.conversation_id)}</td>
       `;
       tbody.appendChild(tr);

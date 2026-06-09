@@ -175,7 +175,17 @@ USER_GROUND_TRUTH (only filled if the user submitted the More-feedback modal):
 
 PLAYBOOK_BULLETS_APPLIED (the bullets the agent claimed to have used):
 {applied_bullets}
-────────────────────────────────────────────────────────────────────────
+
+SKILL_DEFINITIONS (authoritative voice + existing knowledge for the skills this
+turn touched — use this to match terminology, granularity, and style):
+{skill_definitions}
+─────────────────────────────────────────────────────────────────────
+
+When writing `key_insights[*].content`, MIRROR the existing skill voice:
+ - use the same terminology and abbreviations as expert_rules,
+ - keep granularity comparable to the existing bullets shown above,
+ - prefer the same imperative/declarative form already in use,
+ - do NOT introduce a new section name — reuse one of the allowed sections.───
 
 Output ONLY a valid JSON object (no markdown, no code fences) with this shape:
 
@@ -247,6 +257,10 @@ CURRENT WORKFLOW PLAYBOOK (with bullet ids + counters):
 
 CURRENT DOMAIN PLAYBOOK for relevant skill(s):
 {domain_playbook}
+
+SKILL_DEFINITIONS (authoritative voice + existing knowledge for each relevant
+skill — ADDed/UPDATEd bullets MUST match this style):
+{skill_definitions}
 ────────────────────────────────────────────────────────────────────────
 
 Output ONLY a valid JSON object (no markdown, no code fences):
@@ -287,12 +301,14 @@ def _join(items):
 def fill_reflector_prompt(**fields):
     fields.setdefault("workflow_sections", _join(WORKFLOW_SECTIONS))
     fields.setdefault("domain_sections", _join(DOMAIN_SECTIONS))
+    fields.setdefault("skill_definitions", "(no skill metadata available)")
     return REFLECTOR_PROMPT.format(**fields)
 
 
 def fill_curator_prompt(**fields):
     fields.setdefault("workflow_sections", _join(WORKFLOW_SECTIONS))
     fields.setdefault("domain_sections", _join(DOMAIN_SECTIONS))
+    fields.setdefault("skill_definitions", "(no skill metadata available)")
     return CURATOR_PROMPT.format(**fields)
 
 

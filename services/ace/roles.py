@@ -18,6 +18,45 @@ from .playbook import Playbook
 _JSON_OBJECT_RE = re.compile(r"\{.*\}", re.DOTALL)
 
 
+def _render_skill_definitions(skill_contexts: Optional[dict]) -> str:
+    """Format a per-skill context dict into the prompt block.
+
+    Expected shape:
+        {skill_id: {"description": str,
+                    "expert_rules": str,
+                    "keywords": list[str],
+                    "domain_bullets": str}}   # any field optional
+    """
+    if not skill_contexts:
+        return "(no skill metadata available)"
+    blocks: list[str] = []
+    for sk, ctx in skill_contexts.items():
+        if not isinstance(ctx, dict):
+            continue
+        desc = (ctx.get("description") or "").strip()
+        rules = (ctx.get("expert_rules") or "").strip()
+        keywords = ctx.get("keywords") or []
+        domain_bullets = (ctx.get("domain_bullets") or "").strip()
+        lines = [f"### Skill: {sk}"]
+        if desc:
+            lines.append(f"description: {desc}")
+        if keywords:
+            kw = ", ".join(str(k) for k in keywords[:20])
+            if len(keywords) > 20:
+                kw += f", … (+{len(keywords) - 20} more)"
+            lines.append(f"keywords: {kw}")
+        if rules:
+            # Indent so the expert_rules block is visually distinct.
+            indented = "\n".join("  " + ln for ln in rules.splitlines())
+            lines.append("expert_rules (skill's authoritative voice):")
+            lines.append(indented)
+        if domain_bullets:
+            lines.append("existing domain playbook bullets (style guide):")
+            lines.append(domain_bullets)
+        blocks.append("\n".join(lines))
+    return "\n\n".join(blocks) if blocks else "(no skill metadata available)"
+
+
 def _extract_json(raw: str) -> dict:
     """
     LLMs sometimes wrap JSON in ```json ... ``` fences or add a stray sentence.
@@ -90,6 +129,7 @@ class Reflector:
         turn: dict,
         feedback: dict,
         applied_bullets: list[Any],
+        skill_contexts: Optional[dict] = None,
         progress=None,
     ) -> dict:
         def _emit(event, **payload):
@@ -122,6 +162,7 @@ class Reflector:
             step_votes=_safe_json_dump(turn.get("step_votes") or []),
             free_text_issues=_safe_json_dump(details.get("issues") or []),
             applied_bullets="\n".join(b.render() for b in applied_bullets) or "(none)",
+            skill_definitions=_render_skill_definitions(skill_contexts),
         )
 
         _emit("start", prompt_chars=len(prompt), vote=vote, applied_bullet_count=len(applied_bullets))
@@ -172,6 +213,7 @@ class Curator:
         reflection: dict,
         workflow_playbook: Playbook,
         domain_playbooks: dict[str, Playbook],
+        skill_contexts: Optional[dict] = None,
         turn_id: str = "",
         progress=None,
     ) -> dict:
@@ -220,6 +262,7 @@ class Curator:
             workflow_playbook=workflow_playbook.render(),
             domain_playbook=domain_block,
             token_budget=self.token_budget,
+            skill_definitions=_render_skill_definitions(skill_contexts),
         )
         _emit("llm_request", prompt_chars=len(prompt), relevant_skills=relevant_skills)
         result = self._call(prompt)

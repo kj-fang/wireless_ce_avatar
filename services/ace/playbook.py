@@ -109,6 +109,7 @@ class Playbook:
         self.bullets: list[Bullet] = []
         self._lock = threading.RLock()
         self._next_seq = 1
+        self._loaded_mtime: float = 0.0
         self.load()
 
     # ----- prefix / id allocation -----
@@ -280,6 +281,7 @@ class Playbook:
     # ----- persistence -----
     def load(self) -> None:
         if not self.path.exists():
+            self._loaded_mtime = 0.0
             return
         with self._lock:
             try:
@@ -290,6 +292,23 @@ class Playbook:
             self.bullets = [Bullet(**row) for row in data.get("bullets", [])]
             self._next_seq = data.get("next_seq", 1)
             self.scope = data.get("scope", self.scope)
+            try:
+                self._loaded_mtime = self.path.stat().st_mtime
+            except Exception:
+                self._loaded_mtime = 0.0
+
+    def reload_if_changed(self) -> bool:
+        """Re-read the JSON if another process has written it since our last load.
+        Returns True when a reload happened."""
+        try:
+            mtime = self.path.stat().st_mtime if self.path.exists() else 0.0
+        except Exception:
+            return False
+        if mtime and mtime != self._loaded_mtime:
+            print(f"[ace.playbook] reloading {self.path.name} (mtime changed)")
+            self.load()
+            return True
+        return False
 
     def save(self) -> None:
         with self._lock:
@@ -303,3 +322,7 @@ class Playbook:
             }
             tmp.write_text(json.dumps(payload, indent=2, ensure_ascii=False), encoding="utf-8")
             os.replace(tmp, self.path)
+            try:
+                self._loaded_mtime = self.path.stat().st_mtime
+            except Exception:
+                pass

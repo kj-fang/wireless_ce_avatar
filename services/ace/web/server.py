@@ -47,7 +47,7 @@ from utils import helpers
 
 from ..pipeline import AceRunner
 from ..playbook import Playbook
-from services import feedback_service
+from ..cli import _skill_context_provider as _ace_skill_context_provider
 
 
 # ---------------------------------------------------------------------------
@@ -64,15 +64,100 @@ def _ensure_avatarfiles_dir() -> None:
         print(f"[ace.web] could not initialise avatarfiles_dir: {e}")
 
 
+# Cached (path, source) so we only pay the SMB probe once per process.
+_FB_ROOT_CACHE: Optional[tuple[Path, str]] = None
+_FB_ROOT_LOCK = threading.Lock()
+# Optional override set by --feedback-dir on the CLI.
+_FB_ROOT_OVERRIDE: Optional[Path] = None
+# Hard wall-clock budget for the remote probe before we fall back to local.
+_REMOTE_PROBE_BUDGET_SEC = 15.0
+
+
+def _probe_share(path: str, timeout_sec: float) -> bool:
+    """Check Path(path).exists() in a worker thread; return True if reachable
+    within `timeout_sec`. Anything else (timeout, exception) → False."""
+    result = [False]
+
+    def _check():
+        try:
+            result[0] = Path(path).exists()
+        except Exception:
+            pass
+
+    t = threading.Thread(target=_check, daemon=True)
+    t.start()
+    t.join(timeout_sec)
+    return (not t.is_alive()) and bool(result[0])
+
+
+def _local_feedback_root() -> Path:
+    base = getattr(app_config, "avatarfiles_dir", None)
+    return Path(base) / "feedback" if base else Path.cwd() / "data" / "feedback"
+
+
+def _resolve_feedback_root_full(force: bool = False) -> tuple[Path, str]:
+    """Resolve the feedback root with remote-first / local-fallback semantics.
+
+    Returns ``(path, source)`` where ``source`` is one of
+    ``override`` | ``remote-primary`` | ``remote-backup`` | ``local-fallback``.
+    The remote probe shares a wall-clock budget of ``_REMOTE_PROBE_BUDGET_SEC``
+    across both shares so a slow / off-VPN machine cannot stall the UI.
+    Result is cached for the life of the process unless ``force=True``.
+    """
+    global _FB_ROOT_CACHE
+    if not force and _FB_ROOT_CACHE is not None:
+        return _FB_ROOT_CACHE
+
+    with _FB_ROOT_LOCK:
+        if not force and _FB_ROOT_CACHE is not None:
+            return _FB_ROOT_CACHE
+
+        if _FB_ROOT_OVERRIDE is not None:
+            try:
+                _FB_ROOT_OVERRIDE.mkdir(parents=True, exist_ok=True)
+                (_FB_ROOT_OVERRIDE / "conversations").mkdir(parents=True, exist_ok=True)
+            except Exception as e:
+                print(f"[ace.web] override path unwritable: {e}")
+            _FB_ROOT_CACHE = (_FB_ROOT_OVERRIDE, "override")
+            print(f"[ace.web] feedback root = {_FB_ROOT_OVERRIDE} (override)")
+            return _FB_ROOT_CACHE
+
+        deadline = time.time() + _REMOTE_PROBE_BUDGET_SEC
+        for label, share in (
+            ("remote-primary", path_configs.FEEDBACK_DIR_prim),
+            ("remote-backup", path_configs.FEEDBACK_DIR_bkup),
+        ):
+            budget = deadline - time.time()
+            if budget <= 0:
+                print(f"[ace.web] remote probe budget exhausted before {label}")
+                break
+            print(f"[ace.web] probing {label} ({budget:.1f}s budget): {share}")
+            if _probe_share(share, budget):
+                p = Path(share)
+                try:
+                    (p / "conversations").mkdir(parents=True, exist_ok=True)
+                except Exception as e:
+                    print(f"[ace.web] {label} reachable but unwritable: {e}")
+                    continue
+                _FB_ROOT_CACHE = (p, label)
+                print(f"[ace.web] feedback root = {p} ({label})")
+                return _FB_ROOT_CACHE
+            else:
+                print(f"[ace.web] {label} unreachable within budget")
+
+        local = _local_feedback_root()
+        try:
+            (local / "conversations").mkdir(parents=True, exist_ok=True)
+        except Exception as e:
+            print(f"[ace.web] local fallback unwritable: {e}")
+        _FB_ROOT_CACHE = (local, "local-fallback")
+        print(f"[ace.web] feedback root = {local} (local-fallback)")
+        return _FB_ROOT_CACHE
+
+
 def _resolve_feedback_root() -> Path:
-    # Reuse the live app's resolver (same SMB-probe + caching + local fallback)
-    # so the UI never disagrees with feedback_service about where snapshots live.
-    try:
-        return feedback_service._feedback_root()
-    except Exception as e:
-        print(f"[ace.web] feedback_service._feedback_root() failed: {e}")
-        base = getattr(app_config, "avatarfiles_dir", None)
-        return Path(base) / "feedback" if base else Path.cwd() / "data" / "feedback"
+    """Backward-compatible: return only the resolved path."""
+    return _resolve_feedback_root_full()[0]
 
 
 def _resolve_playbooks_dir() -> Path:
@@ -101,16 +186,16 @@ def _build_llm(model: Optional[str] = None) -> LLM_helper:
 # Conversation listing
 # ---------------------------------------------------------------------------
 
-def _list_conversations() -> list[dict]:
-    root = _resolve_feedback_root() / "conversations"
+def _list_conversations(conv_dir: Path, source: str) -> list[dict]:
     out: list[dict] = []
-    if not root.exists():
+    if not conv_dir.exists():
         return out
-    for f in sorted(root.glob("*.json"), key=lambda p: p.stat().st_mtime, reverse=True):
+    for f in sorted(conv_dir.glob("*.json"), key=lambda p: p.stat().st_mtime, reverse=True):
         try:
             snap = json.loads(f.read_text(encoding="utf-8"))
         except Exception as e:
-            out.append({"conversation_id": f.stem, "error": f"parse failed: {e}"})
+            out.append({"conversation_id": f.stem, "error": f"parse failed: {e}",
+                        "source": source, "feedback_root": str(conv_dir.parent)})
             continue
         turns = snap.get("turns") or []
         feedback_turns = [t for t in turns if t.get("feedback")]
@@ -142,8 +227,61 @@ def _list_conversations() -> list[dict]:
             "submitted_by": snap.get("submitted_by") or "",
             "submitters": submitters,
             "ts": snap.get("started_at") or snap.get("ended_at") or snap.get("ts") or "",
+            "source": source,
+            "feedback_root": str(conv_dir.parent),
         })
     return out
+
+
+def _list_all_conversations(force: bool = False) -> tuple[list[dict], dict]:
+    """Merge conversations from the resolved remote root and the local fallback.
+
+    Returns ``(items, diag)``. Items are deduped by ``conversation_id`` —
+    when both roots contain the same id, the remote copy wins (canonical),
+    but the diag reports how many were found in each.
+    """
+    remote_root, source = _resolve_feedback_root_full(force=force)
+    remote_dir = remote_root / "conversations"
+    local_root = _local_feedback_root()
+    local_dir = local_root / "conversations"
+
+    remote_items: list[dict] = []
+    local_items: list[dict] = []
+    # Don't double-scan when the resolved root IS the local fallback.
+    same_root = remote_root.resolve() == local_root.resolve() if local_root.exists() else False
+
+    if remote_dir.exists() and not same_root:
+        remote_items = _list_conversations(remote_dir, source)
+    if local_dir.exists():
+        local_items = _list_conversations(local_dir, "local-fallback" if not same_root else source)
+
+    # Dedup by conversation_id: prefer remote (canonical).
+    merged: dict[str, dict] = {}
+    for it in remote_items:
+        merged[it.get("conversation_id")] = it
+    for it in local_items:
+        cid = it.get("conversation_id")
+        if cid not in merged:
+            merged[cid] = it
+
+    items = sorted(merged.values(), key=lambda d: d.get("modified") or 0, reverse=True)
+    diag = {
+        "feedback_root": str(remote_root),
+        "source": source,
+        "remote_dir": str(remote_dir),
+        "remote_exists": remote_dir.exists(),
+        "remote_file_count": sum(1 for _ in remote_dir.glob("*.json")) if remote_dir.exists() else 0,
+        "remote_loaded": len(remote_items),
+        "local_dir": str(local_dir),
+        "local_exists": local_dir.exists(),
+        "local_file_count": sum(1 for _ in local_dir.glob("*.json")) if local_dir.exists() else 0,
+        "local_loaded": len(local_items),
+        "merged_loaded": len(items),
+        "remote_primary": path_configs.FEEDBACK_DIR_prim,
+        "remote_backup": path_configs.FEEDBACK_DIR_bkup,
+        "remote_budget_sec": _REMOTE_PROBE_BUDGET_SEC,
+    }
+    return items, diag
 
 
 def _list_playbooks() -> list[dict]:
@@ -265,8 +403,13 @@ class JobManager:
                 "started_at": time.time(),
                 "conversation_ids": conversation_ids,
             }
+        # Resolve which feedback_root each conversation lives in BEFORE we hand
+        # off to the worker, so the job can target remote vs local correctly.
+        items, _diag = _list_all_conversations()
+        roots_by_cid: dict[str, str] = {it["conversation_id"]: it["feedback_root"]
+                                        for it in items if it.get("conversation_id")}
         t = threading.Thread(target=self._run,
-                             args=(job_id, conversation_ids, model),
+                             args=(job_id, conversation_ids, model, roots_by_cid),
                              daemon=True)
         self._thread = t
         t.start()
@@ -280,22 +423,34 @@ class JobManager:
         except Exception as e:
             print(f"[ace.web] emit({event}) failed: {e}")
 
-    def _run(self, job_id: str, conversation_ids: list[str], model: Optional[str]) -> None:
+    def _run(self, job_id: str, conversation_ids: list[str], model: Optional[str],
+             roots_by_cid: dict[str, str]) -> None:
         self._emit("adapt_started", {
             "job_id": job_id,
             "conversation_ids": conversation_ids,
             "playbooks_dir": str(_resolve_playbooks_dir()),
             "feedback_root": str(_resolve_feedback_root()),
+            "roots_by_cid": roots_by_cid,
         })
         results: list[dict] = []
         totals = {"processed": 0, "ok": 0, "skipped": 0, "errors": 0}
         try:
             llm = _build_llm(model)
-            runner = AceRunner(
-                llm=llm,
-                playbooks_dir=_resolve_playbooks_dir(),
-                feedback_root=_resolve_feedback_root(),
-            )
+            playbooks_dir = _resolve_playbooks_dir()
+            default_root = _resolve_feedback_root()
+            # One AceRunner per distinct feedback_root so a job mixing remote +
+            # local conversations still finds each snapshot on disk.
+            runners: dict[str, AceRunner] = {}
+
+            def _runner_for(root_str: str) -> AceRunner:
+                if root_str not in runners:
+                    runners[root_str] = AceRunner(
+                        llm=llm,
+                        playbooks_dir=playbooks_dir,
+                        feedback_root=Path(root_str),
+                        skill_context_provider=_ace_skill_context_provider,
+                    )
+                return runners[root_str]
 
             def progress_cb(evt: dict) -> None:
                 self._emit("adapt_progress", {"job_id": job_id, **evt})
@@ -303,6 +458,8 @@ class JobManager:
             overall_before = _snapshot_bullets()
 
             for cid in conversation_ids:
+                root_str = roots_by_cid.get(cid) or str(default_root)
+                runner = _runner_for(root_str)
                 snap_path = runner.feedback_root / "conversations" / f"{cid}.json"
                 if not snap_path.exists():
                     self._emit("adapt_progress", {
@@ -402,28 +559,20 @@ def create_app() -> tuple[Flask, SocketIO, JobManager]:
 
     @app.route("/api/conversations")
     def api_conversations():
-        root = _resolve_feedback_root()
-        conv_dir = root / "conversations"
-        diag = {
-            "feedback_root": str(root),
-            "conversations_dir": str(conv_dir),
-            "exists": conv_dir.exists(),
-        }
-        if not conv_dir.exists():
-            diag["error"] = (
-                f"Folder does not exist: {conv_dir}. "
-                "Check VPN reachability to the feedback share, or ensure "
-                "the local fallback under <avatarfiles_dir>/feedback was populated."
-            )
-            return jsonify({"items": [], **diag})
-        items = _list_conversations()
-        diag["json_file_count"] = sum(1 for _ in conv_dir.glob("*.json"))
-        diag["loaded"] = len(items)
+        force = request.args.get("force", "").lower() in ("1", "true", "yes")
+        items, diag = _list_all_conversations(force=force)
         if not items:
-            diag["error"] = (
-                f"No usable conversation snapshots under {conv_dir}. "
-                f"({diag['json_file_count']} *.json file(s) present but none parseable.)"
-            )
+            if not diag["remote_exists"] and not diag["local_exists"]:
+                diag["error"] = (
+                    f"Neither remote ({diag['remote_dir']}) nor local "
+                    f"({diag['local_dir']}) conversations folder exists."
+                )
+            else:
+                diag["error"] = (
+                    f"No usable conversation snapshots found. "
+                    f"remote: {diag['remote_file_count']} file(s)/{diag['remote_loaded']} loaded; "
+                    f"local: {diag['local_file_count']} file(s)/{diag['local_loaded']} loaded."
+                )
         return jsonify({"items": items, **diag})
 
     @app.route("/api/playbooks")
@@ -459,12 +608,21 @@ def main(argv: Optional[list[str]] = None) -> int:
     parser = argparse.ArgumentParser(description="ACE adaptation web UI")
     parser.add_argument("--port", type=int, default=5055)
     parser.add_argument("--host", default="127.0.0.1")
+    parser.add_argument("--feedback-dir", default=None,
+                        help="Override feedback root (skips remote SMB probe). "
+                             "Useful when off-VPN or pointing at a captured dump.")
     args = parser.parse_args(argv)
+
+    if args.feedback_dir:
+        global _FB_ROOT_OVERRIDE
+        _FB_ROOT_OVERRIDE = Path(args.feedback_dir).expanduser().resolve()
+        print(f"[ace.web] --feedback-dir override: {_FB_ROOT_OVERRIDE}")
 
     app, socketio, _jobs = create_app()
     print(f"[ace.web] serving on http://{args.host}:{args.port}")
     print(f"[ace.web] playbooks_dir = {_resolve_playbooks_dir()}")
-    print(f"[ace.web] feedback_root = {_resolve_feedback_root()}")
+    root, source = _resolve_feedback_root_full()
+    print(f"[ace.web] feedback_root = {root} ({source})")
     # allow_unsafe_werkzeug=True keeps the dev server happy on flask-socketio>=5.
     socketio.run(app, host=args.host, port=args.port, allow_unsafe_werkzeug=True)
     return 0

@@ -77,6 +77,46 @@ def _build_llm(model: str | None) -> LLM_helper:
     return llm
 
 
+_SKILLS_CACHE: dict | None = None
+
+
+def _load_active_skills() -> dict:
+    """Best-effort load of the active skills YAML (same one the live agent uses)
+    so Reflector/Curator can see each skill's description + expert_rules. Cached.
+    Returns an empty dict on any failure — callers degrade gracefully."""
+    global _SKILLS_CACHE
+    if _SKILLS_CACHE is not None:
+        return _SKILLS_CACHE
+    try:
+        from utils import skills_yaml_utils
+        from services.log_chatbot_service import load_skills_from_yaml
+        yaml_path, _date, _src = skills_yaml_utils.current_active_yaml()
+        if not yaml_path:
+            _SKILLS_CACHE = {}
+            return _SKILLS_CACHE
+        _SKILLS_CACHE = load_skills_from_yaml(str(yaml_path)) or {}
+        print(f"[ace.cli] loaded {len(_SKILLS_CACHE)} skill definition(s) from {yaml_path}")
+    except Exception as e:
+        print(f"[ace.cli] skill YAML unavailable ({e}); Reflector/Curator will run without skill context")
+        _SKILLS_CACHE = {}
+    return _SKILLS_CACHE
+
+
+def _skill_context_provider(sid: str):
+    skills = _load_active_skills()
+    sk = skills.get(sid)
+    if sk is None:
+        return None
+    try:
+        return {
+            "description": getattr(sk, "description", "") or "",
+            "expert_rules": getattr(sk, "expert_rules", "") or "",
+            "keywords": list(getattr(sk, "keywords", []) or []),
+        }
+    except Exception:
+        return None
+
+
 # -- subcommands --------------------------------------------------------------
 
 def cmd_adapt(args):
@@ -86,6 +126,7 @@ def cmd_adapt(args):
         playbooks_dir=_resolve_playbooks_dir(),
         feedback_root=_resolve_feedback_root(),
         skills=args.skill or None,
+        skill_context_provider=_skill_context_provider,
     )
     results = runner.run_batch(since=args.since, max_turns=args.limit)
     summary = {
@@ -112,6 +153,7 @@ def cmd_adapt_one(args):
         playbooks_dir=_resolve_playbooks_dir(),
         feedback_root=_resolve_feedback_root(),
         skills=args.skill or None,
+        skill_context_provider=_skill_context_provider,
     )
 
     cid = args.conversation

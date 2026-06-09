@@ -1783,104 +1783,122 @@
             font-weight: 600;
             cursor: pointer;
             transition: background 0.15s, border-color 0.15s, opacity 0.15s;
-        }
-        .btn-evt-log:hover:not(:disabled) { background: #e0ecff; border-color: #2563eb; }
-        .btn-evt-log:disabled { opacity: 0.5; cursor: not-allowed; color: #888; background: #f5f5f5; border-color: #ddd; }
-
-        /* ── Event Log Popup overlay ── */
-        .evt-overlay {
-            position: fixed;
-            inset: 0;
-            background: rgba(15, 23, 42, 0.5);
-            z-index: 10000;
-            display: flex;
-            align-items: center;
-            justify-content: center;
-            animation: cmFadeIn 0.15s ease-out;
-        }
-        .evt-popup {
-            background: #fff;
-            border-radius: 12px;
-            box-shadow: 0 20px 60px rgba(0,0,0,0.3);
-            width: min(900px, 92vw);
-            max-height: 80vh;
-            display: flex;
-            flex-direction: column;
-            overflow: hidden;
-            animation: cmSlideUp 0.18s ease-out;
-        }
-        .evt-popup-header {
             display: flex;
             align-items: center;
             justify-content: space-between;
-            padding: 14px 18px;
-            border-bottom: 1px solid #e5e7eb;
-            background: #f8fafc;
         }
-        .evt-popup-header h3 { margin: 0; font-size: 1rem; font-weight: 700; color: #1f2937; }
-        .evt-popup-close {
-            background: none;
-            border: none;
-            font-size: 1.3rem;
-            cursor: pointer;
-            color: #6b7280;
-            padding: 4px 8px;
-            border-radius: 6px;
-        }
-        .evt-popup-close:hover { background: #f0f0f0; color: #111; }
-        .evt-popup-toolbar {
+        .btn-evt-log:hover:not(:disabled) { background: #e0ecff; border-color: #2563eb; }
+        .btn-evt-log:disabled { opacity: 0.5; cursor: not-allowed; color: #888; background: #f5f5f5; border-color: #ddd; }
+        .evt-arrow { transition: transform 0.2s; font-size: 0.7rem; }
+        .evt-arrow.open { transform: rotate(90deg); }
+
+        /* ── Inline Event Log table ── */
+        .evt-section { position: relative; }
+        .evt-inline-toolbar {
             display: flex;
-            gap: 10px;
-            padding: 10px 18px;
-            border-bottom: 1px solid #f0f0f0;
+            gap: 4px;
+            margin-bottom: 6px;
             flex-wrap: wrap;
             align-items: center;
         }
-        .evt-popup-toolbar select {
-            font-size: 0.8rem;
+        .evt-inline-toolbar select {
+            font-size: 0.68rem;
             border: 1px solid #d1d5db;
-            border-radius: 6px;
-            padding: 5px 8px;
-        }
-        .evt-popup-body {
+            border-radius: 4px;
+            padding: 3px 4px;
             flex: 1;
-            overflow-y: auto;
-            padding: 0;
-            font-family: Consolas, monospace;
-            font-size: 11px;
+            min-width: 0;
         }
-        .evt-popup-body table {
+        .evt-inline-count {
+            font-size: 0.65rem;
+            color: #6b7280;
+            margin-left: auto;
+        }
+        .evt-inline-body {
+            height: 250px;
+            overflow-y: auto;
+            border: 1px solid #e5e7eb;
+            border-radius: 6px;
+            background: #fff;
+            font-family: Consolas, monospace;
+            font-size: 10px;
+            line-height: 1.4;
+        }
+        .evt-inline-body table {
             width: 100%;
             border-collapse: collapse;
         }
-        .evt-popup-body th, .evt-popup-body td {
-            padding: 4px 6px;
-            border: 1px solid #e5e7eb;
+        .evt-inline-body th, .evt-inline-body td {
+            padding: 2px 4px;
+            border-bottom: 1px solid #f0f0f0;
             white-space: nowrap;
             overflow: hidden;
             text-overflow: ellipsis;
-            max-width: 300px;
         }
-        .evt-popup-body th {
+        .evt-inline-body th {
             position: sticky;
             top: 0;
             background: #f1f5f9;
-            font-size: 0.72rem;
+            font-size: 0.62rem;
             text-transform: uppercase;
-            letter-spacing: 0.03em;
+            letter-spacing: 0.02em;
             z-index: 1;
+            border-bottom: 1px solid #e5e7eb;
         }
-        .evt-popup-body td.msg-col { white-space: normal; max-width: 400px; }
+        .evt-inline-body tr:hover { background: #f0f7ff; }
+        .evt-inline-body tr { cursor: default; }
         .evt-level-error { color: #dc2626; font-weight: 600; }
         .evt-level-warning { color: #d97706; font-weight: 600; }
         .evt-level-info { color: #059669; }
-        .evt-popup-footer {
-            padding: 8px 18px;
-            border-top: 1px solid #e5e7eb;
-            font-size: 0.75rem;
+        .evt-inline-footer {
+            font-size: 0.65rem;
             color: #6b7280;
             text-align: center;
+            padding: 4px 0;
         }
+
+        /* ── Event hover card (fixed, appears to the right of sidebar) ── */
+        .evt-hover-card {
+            position: fixed;
+            z-index: 10001;
+            background: #fff;
+            border: 1px solid #d1d5db;
+            border-radius: 8px;
+            box-shadow: 0 8px 24px rgba(0,0,0,0.15);
+            padding: 0;
+            width: 380px;
+            max-height: 240px;
+            overflow-y: auto;
+            font-family: Consolas, monospace;
+            font-size: 11px;
+            line-height: 1.4;
+            pointer-events: none;
+        }
+        .evt-hover-card table {
+            width: 100%; border-collapse: collapse;
+        }
+        .evt-hover-card th {
+            text-align: left;
+            padding: 4px 10px;
+            background: #f3f4f6;
+            color: #6b7280;
+            font-size: 0.65rem;
+            font-weight: 700;
+            text-transform: uppercase;
+            white-space: nowrap;
+            width: 60px;
+            vertical-align: top;
+            border-bottom: 1px solid #e5e7eb;
+        }
+        .evt-hover-card td {
+            padding: 4px 10px;
+            color: #1f2937;
+            white-space: pre-wrap;
+            word-break: break-word;
+            border-bottom: 1px solid #f3f4f6;
+        }
+        .evt-hover-card tr:last-child th,
+        .evt-hover-card tr:last-child td { border-bottom: none; }
     </style>
 </head>
 <body>
@@ -1923,12 +1941,35 @@
             <div id="log-status" class="log-status"></div>
         </div>
 
-        <!-- System Event Log button -->
-        <div class="sidebar-section" style="padding:10px 16px;">
-            <button id="btn-evt-log" class="btn-evt-log" disabled onclick="openEvtPopup()" title="No event log available">
-                📋 System Event Log
+        <!-- System Event Log toggle + inline table -->
+        <div class="sidebar-section evt-section" style="padding:10px 16px;">
+            <button id="btn-evt-log" class="btn-evt-log" disabled onclick="toggleEvtPanel()" title="No event log available">
+                📋 System Event Log <span id="evt-toggle-arrow" class="evt-arrow">▸</span>
             </button>
+            <div id="evt-inline-panel" style="display:none;margin-top:8px;">
+                <div class="evt-inline-toolbar">
+                    <select id="evtPopupSourceFilter" onchange="evtFilterChanged()">
+                        <option value="pci_bt">pci_bt</option>
+                        <option value="usb_bt">usb_bt</option>
+                        <option value="pci_bt_wifi">pci+wifi</option>
+                        <option value="usb_bt_wifi">usb+wifi</option>
+                        <option value="all">All</option>
+                    </select>
+                    <select id="evtPopupLevelFilter" onchange="evtFilterChanged()">
+                        <option value="all">All</option>
+                        <option value="warning_error" selected>Warn+Err</option>
+                        <option value="information">Info</option>
+                    </select>
+                    <span id="evtPopupCount" class="evt-inline-count"></span>
+                </div>
+                <div class="evt-inline-body" id="evtPopupBody">
+                    <p style="padding:12px;color:#999;text-align:center;font-size:0.7rem;">Loading…</p>
+                </div>
+                <div id="evtPopupFooter" class="evt-inline-footer"></div>
+            </div>
         </div>
+        <!-- Hover card for event details (fixed position, appears to the right) -->
+        <div id="evt-hover-card" class="evt-hover-card" style="display:none;"></div>
 
         <!-- Issue Time -->
         <div class="sidebar-section">
@@ -2201,36 +2242,7 @@
     </div>
 </div>
 
-<!-- ── Popup: System Event Log viewer ── -->
-<div id="evt-popup-overlay" class="evt-overlay" style="display:none;" onclick="if(event.target===this)closeEvtPopup()">
-    <div class="evt-popup">
-        <div class="evt-popup-header">
-            <h3>📋 System Event Log</h3>
-            <button class="evt-popup-close" onclick="closeEvtPopup()" title="Close">&times;</button>
-        </div>
-        <div class="evt-popup-toolbar">
-            <label style="font-size:0.75rem;font-weight:600;color:#555;">Source:</label>
-            <select id="evtPopupSourceFilter" onchange="evtFilterChanged()">
-                <option value="pci_bt" selected>ibtpci / bthmini</option>
-                <option value="usb_bt">ibtusb / bthusb</option>
-                <option value="pci_bt_wifi">ibtpci / bthmini + Netwaw / Netwtw</option>
-                <option value="usb_bt_wifi">ibtusb / bthusb + Netwaw / Netwtw</option>
-                <option value="all">All Sources</option>
-            </select>
-            <label style="font-size:0.75rem;font-weight:600;color:#555;">Level:</label>
-            <select id="evtPopupLevelFilter" onchange="evtFilterChanged()">
-                <option value="all">All Levels</option>
-                <option value="warning_error">Warning + Error</option>
-                <option value="information">Information</option>
-            </select>
-            <span id="evtPopupCount" style="margin-left:auto;font-size:0.72rem;color:#6b7280;"></span>
-        </div>
-        <div class="evt-popup-body" id="evtPopupBody">
-            <p style="padding:20px;color:#999;text-align:center;">Loading event log…</p>
-        </div>
-        <div class="evt-popup-footer" id="evtPopupFooter"></div>
-    </div>
-</div>
+
 
 <!-- ── JavaScript ── -->
 <script>
@@ -7045,84 +7057,79 @@
     }
 
     // ══════════════════════════════════════════════════════════════════
-    // ── System Event Log Popup ───────────────────────────────────────
+    // ── System Event Log (inline sidebar table) ──────────────────────
     // ══════════════════════════════════════════════════════════════════
     (function () {
-        // State
         let _evtPath = '';
-        let _evtData = [];       // all events loaded so far
+        let _evtData = [];
         let _evtTotal = 0;
         let _evtOffset = 0;
         const _EVT_PAGE = 200;
         let _evtLoading = false;
         let _evtHasMore = false;
         let _evtTimeHeader = 'Time';
-        let _evtFirstOpen = true; // load on first open
-
-        // --- Public API (attached to window) ---
+        let _evtPanelOpen = false;
+        let _evtLoaded = false;
 
         window.updateEvtButton = function (path) {
             _evtPath = path || '';
             const btn = document.getElementById('btn-evt-log');
             if (_evtPath) {
                 btn.disabled = false;
-                btn.title = 'Open System Event Log viewer';
+                btn.title = 'Toggle System Event Log';
             } else {
                 btn.disabled = true;
                 btn.title = 'No event log available';
             }
-            // Reset state for new path
-            _evtData = [];
-            _evtOffset = 0;
-            _evtHasMore = false;
-            _evtFirstOpen = true;
+            _evtData = []; _evtOffset = 0; _evtHasMore = false; _evtLoaded = false;
+            const panel = document.getElementById('evt-inline-panel');
+            if (panel) panel.style.display = 'none';
+            const arrow = document.getElementById('evt-toggle-arrow');
+            if (arrow) arrow.classList.remove('open');
+            _evtPanelOpen = false;
+
+            const logPath = (document.getElementById('log-path-input') || {}).value || '';
+            const logName = logPath.split(/[\\\/]/).pop().toLowerCase();
+            const srcSel = document.getElementById('evtPopupSourceFilter');
+            if (srcSel && logName) {
+                if (logName.startsWith('ibtusb')) srcSel.value = 'usb_bt';
+                else if (logName.startsWith('ibtpci')) srcSel.value = 'pci_bt';
+            }
         };
 
-        window.openEvtPopup = function () {
+        window.toggleEvtPanel = function () {
             if (!_evtPath) return;
-            document.getElementById('evt-popup-overlay').style.display = 'flex';
-            document.body.style.overflow = 'hidden';
-            if (_evtFirstOpen) {
-                _evtFirstOpen = false;
+            const panel = document.getElementById('evt-inline-panel');
+            const arrow = document.getElementById('evt-toggle-arrow');
+            _evtPanelOpen = !_evtPanelOpen;
+            panel.style.display = _evtPanelOpen ? 'block' : 'none';
+            arrow.classList.toggle('open', _evtPanelOpen);
+            if (_evtPanelOpen && !_evtLoaded) {
+                _evtLoaded = true;
                 _evtResetAndFetch();
             }
         };
 
-        window.closeEvtPopup = function () {
-            document.getElementById('evt-popup-overlay').style.display = 'none';
-            document.body.style.overflow = '';
-        };
-
-        window.evtFilterChanged = function () {
-            _evtResetAndFetch();
-        };
-
-        // --- Internal ---
+        window.evtFilterChanged = function () { _evtResetAndFetch(); };
 
         function _evtResetAndFetch() {
-            _evtData = [];
-            _evtOffset = 0;
-            _evtHasMore = false;
+            _evtData = []; _evtOffset = 0; _evtHasMore = false;
             const body = document.getElementById('evtPopupBody');
-            body.innerHTML = '<p style="padding:20px;color:#999;text-align:center;">Loading event log…</p>';
+            body.innerHTML = '<p style="padding:12px;color:#999;text-align:center;font-size:0.7rem;">Loading…</p>';
             _evtFetchPage();
         }
 
         async function _evtFetchPage() {
             if (_evtLoading || !_evtPath) return;
             _evtLoading = true;
-            const srcFilter = document.getElementById('evtPopupSourceFilter').value;
-            const lvlFilter = document.getElementById('evtPopupLevelFilter').value;
             try {
                 const res = await fetch('/parse_event_log', {
                     method: 'POST',
                     headers: {'Content-Type': 'application/json'},
                     body: JSON.stringify({
-                        path: _evtPath,
-                        offset: _evtOffset,
-                        limit: _EVT_PAGE,
-                        source_filter: srcFilter,
-                        level_filter: lvlFilter
+                        path: _evtPath, offset: _evtOffset, limit: _EVT_PAGE,
+                        source_filter: document.getElementById('evtPopupSourceFilter').value,
+                        level_filter: document.getElementById('evtPopupLevelFilter').value
                     })
                 });
                 const json = await res.json();
@@ -7133,16 +7140,13 @@
                 _evtOffset += json.events.length;
                 _evtData = _evtData.concat(json.events);
                 _evtRenderTable();
-            } catch (e) {
-                _evtRenderError('Network error: ' + e.message);
-            } finally {
-                _evtLoading = false;
-            }
+            } catch (e) { _evtRenderError('Network error: ' + e.message); }
+            finally { _evtLoading = false; }
         }
 
         function _evtRenderError(msg) {
-            const body = document.getElementById('evtPopupBody');
-            body.innerHTML = `<p style="padding:20px;color:#dc2626;text-align:center;">${msg}</p>`;
+            document.getElementById('evtPopupBody').innerHTML =
+                `<p style="padding:12px;color:#dc2626;text-align:center;font-size:0.7rem;">${msg}</p>`;
             document.getElementById('evtPopupFooter').textContent = '';
             document.getElementById('evtPopupCount').textContent = '';
         }
@@ -7150,59 +7154,72 @@
         function _evtRenderTable() {
             const body = document.getElementById('evtPopupBody');
             let html = `<table><colgroup>
-                <col style="width:135px;">
-                <col style="width:72px;">
-                <col style="width:140px;">
-                <col style="width:65px;">
-                <col style="width:155px;">
-                <col>
+                <col style="width:120px;"><col style="width:18px;">
+                <col style="width:80px;"><col style="width:40px;">
             </colgroup><thead><tr>
-                <th>${_evtTimeHeader}</th><th>Level</th><th>Source</th>
-                <th>Event ID</th><th>Details</th><th>Message</th>
+                <th>${_evtTimeHeader}</th><th>Lv</th><th>Source</th><th>ID</th>
             </tr></thead><tbody>`;
-            for (const ev of _evtData) {
-                const lvlClass = ev.level === 'Error' || ev.level === 'Critical' ? 'evt-level-error'
-                    : ev.level === 'Warning' ? 'evt-level-warning'
-                    : 'evt-level-info';
-                const details = ev.details || '';
-                html += `<tr>
+            for (let i = 0; i < _evtData.length; i++) {
+                const ev = _evtData[i];
+                const dot = (ev.level === 'Error' || ev.level === 'Critical') ? '🔴'
+                    : ev.level === 'Warning' ? '🟡' : '🟢';
+                html += `<tr data-evt-idx="${i}">
                     <td>${_esc(ev.time)}</td>
-                    <td class="${lvlClass}">${_esc(ev.level)}</td>
+                    <td style="text-align:center;">${dot}</td>
                     <td>${_esc(ev.source)}</td>
                     <td>${_esc(ev.event_id)}</td>
-                    <td title="${_esc(details)}">${_esc(details)}</td>
-                    <td class="msg-col">${_esc(ev.message)}</td>
                 </tr>`;
             }
             html += '</tbody></table>';
             body.innerHTML = html;
+            document.getElementById('evtPopupCount').textContent = `${_evtData.length}/${_evtTotal}`;
+            document.getElementById('evtPopupFooter').textContent = _evtHasMore ? 'Scroll for more…' : '';
 
-            // Footer / count
-            document.getElementById('evtPopupCount').textContent =
-                `Showing ${_evtData.length} of ${_evtTotal}`;
-            document.getElementById('evtPopupFooter').textContent =
-                _evtHasMore ? 'Scroll down to load more…' : `Total: ${_evtTotal} events`;
-
-            // Lazy-load on scroll
             body.onscroll = function () {
                 if (!_evtHasMore || _evtLoading) return;
-                if (body.scrollTop + body.clientHeight >= body.scrollHeight * 0.7) {
-                    _evtFetchPage();
-                }
+                if (body.scrollTop + body.clientHeight >= body.scrollHeight * 0.7) _evtFetchPage();
             };
+            body.querySelectorAll('tr[data-evt-idx]').forEach(function (tr) {
+                tr.addEventListener('mouseenter', _onRowEnter);
+                tr.addEventListener('mouseleave', _onRowLeave);
+            });
+        }
+
+        function _onRowEnter(e) {
+            const idx = parseInt(e.currentTarget.dataset.evtIdx, 10);
+            const ev = _evtData[idx];
+            if (!ev) return;
+            const card = document.getElementById('evt-hover-card');
+            let h = '<table>';
+            h += '<tr><th>Time</th><td>' + _esc(ev.time) + '</td></tr>';
+            const lvColor = (ev.level === 'Error' || ev.level === 'Critical') ? '#dc2626'
+                : ev.level === 'Warning' ? '#ca8a04' : '#16a34a';
+            h += '<tr><th>Level</th><td style="color:' + lvColor + ';font-weight:600;">' + _esc(ev.level) + '</td></tr>';
+            h += '<tr><th>Source</th><td>' + _esc(ev.source) + '</td></tr>';
+            h += '<tr><th>ID</th><td>' + _esc(ev.event_id) + '</td></tr>';
+            if (ev.details) h += '<tr><th>Details</th><td>' + _esc(ev.details) + '</td></tr>';
+            h += '<tr><th>Message</th><td>' + _esc(ev.message) + '</td></tr>';
+            h += '</table>';
+            card.innerHTML = h;
+            const rect = e.currentTarget.getBoundingClientRect();
+            const sidebar = document.querySelector('.sidebar');
+            const sRight = sidebar ? sidebar.getBoundingClientRect().right : 340;
+            card.style.left = (sRight + 8) + 'px';
+            let top = rect.top;
+            if (top + 200 > window.innerHeight - 20) top = window.innerHeight - 220;
+            if (top < 60) top = 60;
+            card.style.top = top + 'px';
+            card.style.display = 'block';
+        }
+
+        function _onRowLeave() {
+            document.getElementById('evt-hover-card').style.display = 'none';
         }
 
         function _esc(s) {
             if (!s) return '';
             return String(s).replace(/&/g,'&amp;').replace(/</g,'&lt;').replace(/>/g,'&gt;').replace(/"/g,'&quot;');
         }
-
-        // Keyboard: Escape to close
-        document.addEventListener('keydown', function (e) {
-            if (e.key === 'Escape' && document.getElementById('evt-popup-overlay').style.display !== 'none') {
-                closeEvtPopup();
-            }
-        });
     })();
 
     // ── On page load, render the skill source badge + toggle ──────────

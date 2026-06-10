@@ -18,6 +18,7 @@ class GlobalConfig:
         self.llm_helper: Optional[LLM_helper] = None
         self.log_chatbot_agent: Optional[Any] = None   # WifiLogAgentSystem
         self.nw_analysis_agent: Optional[Any] = None
+        self.bt_chatbot_agent: Optional[Any] = None    # WifiLogAgentSystem (BT skills)
         self.key_module: Optional[Any] = None
         self.key: Optional[Any] = None
         
@@ -66,6 +67,9 @@ class GlobalConfig:
 
     def set_nw_analysis_agent(self, agent: Any) -> None:
         self.nw_analysis_agent = agent
+
+    def set_bt_chatbot_agent(self, agent: Any) -> None:
+        self.bt_chatbot_agent = agent
     
     # Key management
     def set_key(self, key: Any) -> None:

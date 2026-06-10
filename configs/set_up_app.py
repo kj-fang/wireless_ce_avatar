@@ -6,6 +6,7 @@ from configs.path_configs import (
     LOG_PARSER_DATA_DIR_prim, LOG_PARSER_DATA_DIR_bkup,
     LOCAL_LOG_PARSER_DATA_DIR,
     SKILLS_CONFIG_DIR_prim, SKILLS_CONFIG_DIR_bkup, SKILLS_YAML_FILENAME,
+    BT_SKILLS_YAML_FILENAME,
     LOCAL_SKILLS_YAML,
 )
 from utils import helpers
@@ -14,9 +15,15 @@ from utils.skills_yaml_utils import (
     refresh_local_cloud_baseline,
     set_active_source,
 )
+from utils.bt_skills_yaml_utils import (
+    current_active_yaml as bt_current_active_yaml,
+    refresh_local_cloud_baseline as bt_refresh_local_cloud_baseline,
+    set_active_source as bt_set_active_source,
+)
 from services.llm_service import LLM_helper
 from services.log_chatbot_service import WifiLogAgentSystem, sync_to_local, load_skills_from_yaml
 from services.nw_analysis_service import WifiLogAgentSystem as NwAnalysisAgentSystem
+from services.bt_chatbot_service import BtLogAgentSystem
 
 from configs.global_configs import app_config
 
@@ -157,6 +164,59 @@ def set_up(socketio):
         nw_analysis_agent = None
         print("⚠️  NW Analysis Agent skipped — LLM client not configured (no API key).")
     app_config.set_nw_analysis_agent(nw_analysis_agent)
+
+    # ------------------------------------------------------------------
+    # BT Chatbot Agent — Bluetooth-flavoured log analysis chatbot
+    # ------------------------------------------------------------------
+    # BT skills follow the SAME user/cloud lifecycle as WiFi (mirrored on
+    # share → local cloud/ at startup, user/ for hand edits) but file names
+    # carry a `bt_skills_` prefix so the two domains share the same
+    # skills_config sub-folders without collision.
+    #
+    # Loading sequence mirrors the WiFi block above:
+    #   1. Reset BT active source to "cloud" on every restart.
+    #   2. Refresh local `cloud/` mirror from share's bt_skills_*.yaml
+    #      (best-effort; off-VPN runs simply skip this).
+    #   3. Resolve and load whichever YAML `bt_current_active_yaml()`
+    #      picks (user override > cloud baseline > legacy un-dated).
+    #   4. If none reachable, fall back to the WiFi skills so the BT page
+    #      remains usable until a BT skills YAML is published.
+    bt_skills = None
+    bt_set_active_source("cloud")
+    try:
+        bt_refreshed_path, bt_refreshed_date = bt_refresh_local_cloud_baseline()
+        if bt_refreshed_path is not None:
+            print(f"📥 Refreshed local BT cloud baseline → {bt_refreshed_path} "
+                  f"(date={bt_refreshed_date})")
+        else:
+            print("ℹ️  BT cloud baseline refresh skipped — share folder unreachable.")
+    except Exception as e:
+        print(f"⚠️  BT cloud baseline refresh failed: {e}")
+
+    bt_chosen_yaml, bt_chosen_date, bt_chosen_source = bt_current_active_yaml()
+    if bt_chosen_yaml is not None and bt_chosen_yaml.exists():
+        try:
+            bt_skills = load_skills_from_yaml(str(bt_chosen_yaml))
+            print(f"✅  {len(bt_skills)} BT skills loaded from "
+                  f"{bt_chosen_source} YAML: {bt_chosen_yaml} (date={bt_chosen_date})")
+        except Exception as e:
+            print(f"⚠️  Failed to load BT skills from YAML ({e}); BT chatbot will reuse WiFi skills.")
+    else:
+        print("ℹ️  No BT skills YAML found (cloud/user/share all empty) — "
+              "BT chatbot will reuse WiFi skills.")
+
+    if llm_helper.client is not None:
+        model = getattr(llm_helper, 'model', 'gpt-4.1')
+        bt_chatbot_agent = BtLogAgentSystem(
+            client=llm_helper.client,
+            model=model,
+            skills=bt_skills if bt_skills else llm_helper.skills,
+        )
+        print(f"🔵 BT Chatbot Agent loaded (model={model}, markers=ibtpci)")
+    else:
+        bt_chatbot_agent = None
+        print("⚠️  BT Chatbot Agent skipped — LLM client not configured (no API key).")
+    app_config.set_bt_chatbot_agent(bt_chatbot_agent)
 
     # socketio
     app_config.set_socketio(socketio)

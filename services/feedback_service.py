@@ -184,22 +184,68 @@ def _deep_scrub(obj: Any) -> Any:
     return obj
 
 
-def _feedback_log_path() -> Path:
-    return _feedback_root() / "feedback.jsonl"
+# --- Domain partitioning -------------------------------------------------
+#
+# Feedback streams are split by analysis DOMAIN so the Bluetooth bot's
+# training signal never mixes with the Wi-Fi bot's. The domain becomes a
+# filename prefix on every JSONL stream and conversation snapshot:
+#
+#   wifi / "" (default) → feedback.jsonl,    conversations/<id>.json
+#                         (LEGACY names, kept byte-for-byte so existing
+#                          bronze-layer ETL keeps working)
+#   bt                  → bt_feedback.jsonl, conversations/bt_<id>.json
+#
+# A domain is resolved once per conversation: the value passed when the
+# conversation is first buffered wins, and every later vote/detail for that
+# conversation inherits it (see _resolve_domain), so a JSONL row and its
+# conversation snapshot can never disagree on which stream they belong to.
+
+_DOMAIN_PREFIXES = {"bt": "bt_"}   # canonical-domain → filename prefix
 
 
-def _feedback_detail_path() -> Path:
-    return _feedback_root() / "feedback_details.jsonl"
+def _norm_domain(domain: Any) -> str:
+    """Normalise a raw domain hint to a canonical key. '' = wifi/default."""
+    d = domain.strip().lower() if isinstance(domain, str) else ""
+    if d in ("bt", "bluetooth"):
+        return "bt"
+    return ""  # wifi / default — keep legacy filenames unchanged
 
 
-def _step_votes_path() -> Path:
+def _domain_prefix(domain: Any) -> str:
+    """Filename prefix for a domain ('' for wifi/default, 'bt_' for BT)."""
+    return _DOMAIN_PREFIXES.get(_norm_domain(domain), "")
+
+
+def _resolve_domain(conversation_id: str, domain_hint: Any) -> str:
+    """
+    Authoritative domain for a conversation: prefer the value recorded on
+    the buffered snapshot (set when the conversation was first created),
+    falling back to the caller's hint. Guarantees a vote/detail JSONL row
+    lands in the same stream as its conversation snapshot.
+    """
+    with _pending_lock:
+        snap = _pending_buffer.get(conversation_id)
+        if snap and snap.get("_domain"):
+            return snap["_domain"]
+    return _norm_domain(domain_hint)
+
+
+def _feedback_log_path(domain: str = "") -> Path:
+    return _feedback_root() / f"{_domain_prefix(domain)}feedback.jsonl"
+
+
+def _feedback_detail_path(domain: str = "") -> Path:
+    return _feedback_root() / f"{_domain_prefix(domain)}feedback_details.jsonl"
+
+
+def _step_votes_path(domain: str = "") -> Path:
     """Per-step thumbs from the live conversation view (one row each)."""
-    return _feedback_root() / "feedback_step_votes.jsonl"
+    return _feedback_root() / f"{_domain_prefix(domain)}feedback_step_votes.jsonl"
 
 
-def _helpful_skills_path() -> Path:
+def _helpful_skills_path(domain: str = "") -> Path:
     """`Glad it helped` quick-prompt picks — positive ACE signal stream."""
-    return _feedback_root() / "feedback_helpful_skills.jsonl"
+    return _feedback_root() / f"{_domain_prefix(domain)}feedback_helpful_skills.jsonl"
 
 
 # Strict pattern for client-supplied IDs that end up as filesystem path
@@ -228,19 +274,19 @@ def _safe_id(value: Any, fallback: str = "unknown") -> str:
     return cleaned
 
 
-def _conversation_path(conversation_id: str) -> Path:
+def _conversation_path(conversation_id: str, domain: str = "") -> Path:
     # Hard-stop path traversal: even though the server generates
     # conversation_id as a uuid4, the /feedback/* endpoints accept
     # whatever the client sends — sanitise before the value ever
     # becomes a path component.
     safe = _safe_id(conversation_id)
-    return _feedback_root() / "conversations" / f"{safe}.json"
+    return _feedback_root() / "conversations" / f"{_domain_prefix(domain)}{safe}.json"
 
 
-def _attached_logs_dir(conversation_id: str) -> Path:
+def _attached_logs_dir(conversation_id: str, domain: str = "") -> Path:
     """Shared sub-folder for opt-in attached session logs, keyed by conv id."""
     safe = _safe_id(conversation_id)
-    return _feedback_root() / "logs" / safe
+    return _feedback_root() / "logs" / f"{_domain_prefix(domain)}{safe}"
 
 
 def _attached_yaml_dir() -> Path:
@@ -374,7 +420,11 @@ def _do_flush(conversation_id: str) -> None:
         # and strip internal-only flags that don't belong on disk.
         snapshot_copy = json.loads(json.dumps(snap, ensure_ascii=False))
     snapshot_copy.pop("_persisted", None)
-    path = _conversation_path(conversation_id)
+    # `_domain` is an internal routing field — drive the on-disk path from it
+    # then strip it so the snapshot file carries only the human-readable
+    # `domain` field.
+    domain_for_path = snapshot_copy.pop("_domain", "")
+    path = _conversation_path(conversation_id, domain_for_path)
     try:
         with _lock_for(path):
             tmp = path.with_suffix(".json.tmp")
@@ -542,12 +592,19 @@ _pending_lock = threading.Lock()
 
 
 def _new_snapshot(conversation_id: str, session_id: str,
-                  issue: Optional[dict], log_path: str) -> dict:
+                  issue: Optional[dict], log_path: str,
+                  domain: str = "") -> dict:
+    norm = _norm_domain(domain)
     return {
         "schema_version": RECORD_SCHEMA_VERSION,
         "conversation_id": conversation_id,
         "session_id": session_id or "",
         "submitted_by": _current_user(),
+        # Human-readable analysis domain on disk ("wifi" | "bt").
+        "domain": norm or "wifi",
+        # Internal routing key (""/"bt") — stripped before the file is
+        # written (see _do_flush); drives the bt_ filename prefix.
+        "_domain": norm,
         "started_at": _now_iso(),
         "ended_at": _now_iso(),
         "log_path": _scrub_user_path(log_path or ""),
@@ -591,10 +648,15 @@ def ensure_conversation(
     session_id: str,
     issue: Optional[dict] = None,
     log_path: str = "",
+    domain: str = "",
 ) -> None:
     """
     Buffer a new conversation in memory. NOT written to disk yet —
     nothing persists until a vote arrives.
+
+    domain: "" (wifi/default) or "bt". Recorded on the snapshot so every
+            later vote/detail for this conversation routes to the same
+            (possibly bt_-prefixed) feedback stream.
     """
     if not conversation_id:
         return
@@ -603,7 +665,7 @@ def ensure_conversation(
             if conversation_id in _pending_buffer:
                 return
             _pending_buffer[conversation_id] = _new_snapshot(
-                conversation_id, session_id, issue, log_path
+                conversation_id, session_id, issue, log_path, domain
             )
     except Exception as e:
         print(f"[feedback] ensure_conversation failed: {e}")
@@ -622,6 +684,7 @@ def record_turn(
     issue: Optional[dict] = None,
     log_path: str = "",
     parent_message_id: str = "",
+    domain: str = "",
 ) -> None:
     """
     Append one turn to the conversation buffer. Writes to disk only if
@@ -667,11 +730,17 @@ def record_turn(
         with _pending_lock:
             snap = _pending_buffer.get(conversation_id)
             if snap is None:
-                snap = _new_snapshot(conversation_id, session_id, issue, log_path)
+                snap = _new_snapshot(conversation_id, session_id, issue, log_path, domain)
                 _pending_buffer[conversation_id] = snap
                 # Track whether a previous turn already flushed this conv to
                 # disk; if so we want write-through. We mark this on the
                 # buffer so we don't have to hit disk to check.
+            elif domain and not snap.get("_domain"):
+                # Back-fill domain on a snapshot created before domain
+                # tracking (e.g. ensure_conversation ran on an older path).
+                norm = _norm_domain(domain)
+                snap["_domain"] = norm
+                snap["domain"] = norm or "wifi"
             if issue:
                 snap["issue"] = issue
             if log_path:
@@ -696,6 +765,7 @@ def record_vote(
     turn_id: str,
     vote: int,
     yaml_modified: bool = False,
+    domain: str = "",
 ) -> bool:
     """
     Append a vote event to feedback.jsonl AND patch the matching turn in
@@ -716,12 +786,14 @@ def record_vote(
     if not conversation_id or not turn_id:
         return False
 
+    eff_domain = _resolve_domain(conversation_id, domain)
     weight = _feedback_weight(has_detail=False, yaml_modified=bool(yaml_modified))
     event = {
         "schema_version": RECORD_SCHEMA_VERSION,
         "ts": _now_iso(),
         "session_id": session_id or "",
         "submitted_by": _current_user(),
+        "domain": eff_domain or "wifi",
         "conversation_id": conversation_id,
         "turn_id": turn_id,
         "vote": vote,
@@ -746,7 +818,7 @@ def record_vote(
             snap["_persisted"] = True   # subsequent record_turn writes through
 
     # 2) Enqueue writes — return to client immediately.
-    _enqueue_append(_feedback_log_path(), event)
+    _enqueue_append(_feedback_log_path(eff_domain), event)
     _enqueue_flush(conversation_id)
     return True
 
@@ -840,6 +912,33 @@ CORRECT_CONCLUSION_TAGS = {
     "OTHER",
 }
 
+# Bluetooth conclusion categories — the common ibtpci / HCI controller
+# failure modes a BT triage reviewer tags. Kept separate from the Wi-Fi set
+# above so each chatbot offers domain-appropriate options; BT submissions
+# land in the bt_-prefixed feedback streams regardless.
+BT_CONCLUSION_TAGS = {
+    "FW_FATAL_EXCEPTION",        # FATAL/SYSTEM EXCEPTION in controller (FW assert)
+    "FW_DOWNLOAD_FAILURE",       # FW image / SFI burst download failed
+    "HW_ERROR",                  # HardwareError / HW reset failure
+    "DEVICE_YELLOW_BANG",        # device lost / Code 43 / YB
+    "SURPRISE_REMOVAL",          # surprise removal / device disappeared
+    "RECOVERY_FAILURE",          # PLDR rejected / recovery disabled / no recovery
+    "POWER_STATE_ISSUE",         # D0/D3 power-state transition issue
+    "SIGNATURE_VERIFY_FAILURE",  # secure boot / signature verification failed
+    "TRANSPORT_ERROR",           # USB / PCIe transport-level error
+    "DRIVER_INIT_FAILURE",       # driver / adapter init failure (shared w/ WiFi)
+    "COEX_INTERFERENCE",         # BT/Wi-Fi coexistence / RF interference
+    "PAIRING_CONNECTION",        # pairing / connection / HCI command failure
+    "AUDIO_QUALITY",             # A2DP / audio streaming quality
+    "OTHER",
+}
+
+# Validation accepts EITHER domain's tags. Each frontend only ever offers
+# its own set, and records are already partitioned into wifi/bt streams, so
+# a single union keeps one validation path without cross-contaminating the
+# offered options.
+ALL_CONCLUSION_TAGS = CORRECT_CONCLUSION_TAGS | BT_CONCLUSION_TAGS
+
 
 def record_detail(
     *,
@@ -865,6 +964,7 @@ def record_detail(
     log_path: str = "",
     attach_log: bool = False,
     general_comment: str = "",          # legacy, kept for back-compat
+    domain: str = "",
 ) -> bool:
     """
     Append a structured detailed feedback record. Used by the "More feedback"
@@ -906,8 +1006,10 @@ def record_detail(
             severity_val = None
 
     # Conclusion tag must come from the whitelisted set (or be empty).
+    # Accept either domain's tags — the frontend only offers its own set.
+    eff_domain = _resolve_domain(conversation_id, domain)
     tag_in = (correct_conclusion_tag or "").strip().upper()
-    correct_conclusion_tag = tag_in if tag_in in CORRECT_CONCLUSION_TAGS else ""
+    correct_conclusion_tag = tag_in if tag_in in ALL_CONCLUSION_TAGS else ""
 
     # Agent-workflow assessment must come from the whitelisted set (or empty).
     # This is the primary ACE signal for the agent-prompt-layer Playbook —
@@ -966,6 +1068,7 @@ def record_detail(
         "ts": _now_iso(),
         "session_id": session_id or "",
         "submitted_by": _current_user(),
+        "domain": eff_domain or "wifi",
         "conversation_id": conversation_id,
         "turn_id": turn_id,
         "vote": vote if vote in (1, -1) else None,
@@ -1036,7 +1139,7 @@ def record_detail(
     # thumbs-down so submitting a bug report sends the log by default,
     # while a thumbs-up never silently uploads the log.
     if attach_log and log_path:
-        _enqueue_log_attach(conversation_id, turn_id, log_path)
+        _enqueue_log_attach(conversation_id, turn_id, log_path, eff_domain)
 
     # 1) Patch the in-memory buffer immediately. Preserve any prior
     # Layer-1 vote unless this submission overrides it.
@@ -1071,14 +1174,15 @@ def record_detail(
             snap["_persisted"] = True
 
     # 2) Enqueue both writes — return to client immediately.
-    _enqueue_append(_feedback_detail_path(), record)
+    _enqueue_append(_feedback_detail_path(eff_domain), record)
     _enqueue_flush(conversation_id)
     return True
 
 
 # --- Public attach helpers (also used directly from blueprints) --------
 
-def _enqueue_log_attach(conversation_id: str, turn_id: str, log_path: str) -> None:
+def _enqueue_log_attach(conversation_id: str, turn_id: str, log_path: str,
+                        domain: str = "") -> None:
     """
     Copy `log_path` to the shared per-conversation logs folder. The filename
     embeds `<turn_id>__<submitted_by>__<original_name>` so the on-disk layout
@@ -1096,7 +1200,7 @@ def _enqueue_log_attach(conversation_id: str, turn_id: str, log_path: str) -> No
         # the client. src.name is a basename via Path.name semantics.
         safe_turn = _safe_id(turn_id, fallback="turn")
         dst = (
-            _attached_logs_dir(conversation_id)
+            _attached_logs_dir(conversation_id, domain)
             / f"{safe_turn}__{user_tag}__{src.name}"
         )
         _enqueue_copy(src, dst)
@@ -1104,7 +1208,8 @@ def _enqueue_log_attach(conversation_id: str, turn_id: str, log_path: str) -> No
         print(f"[feedback] attach_log skipped ({log_path}): {e}")
 
 
-def attach_log(conversation_id: str, turn_id: str, log_path: str) -> bool:
+def attach_log(conversation_id: str, turn_id: str, log_path: str,
+               domain: str = "") -> bool:
     """
     Public helper: copy a session log to the shared logs folder. Safe to
     call from any thread; the copy happens on the IO worker. Returns False
@@ -1113,7 +1218,8 @@ def attach_log(conversation_id: str, turn_id: str, log_path: str) -> bool:
     if not conversation_id or not log_path:
         return False
     try:
-        _enqueue_log_attach(conversation_id, turn_id, log_path)
+        _enqueue_log_attach(conversation_id, turn_id, log_path,
+                            _resolve_domain(conversation_id, domain))
         return True
     except Exception as e:
         print(f"[feedback] attach_log failed: {e}")
@@ -1127,6 +1233,7 @@ def record_step_vote(
     turn_id: str,
     step_index: int,
     vote: int,
+    domain: str = "",
 ) -> bool:
     """
     Record a per-step thumbs from the live conversation view. Each click
@@ -1147,11 +1254,13 @@ def record_step_vote(
     if step_index_int < 0:
         return False
 
+    eff_domain = _resolve_domain(conversation_id, domain)
     event = {
         "schema_version": RECORD_SCHEMA_VERSION,
         "ts": _now_iso(),
         "session_id": session_id or "",
         "submitted_by": _current_user(),
+        "domain": eff_domain or "wifi",
         "conversation_id": conversation_id,
         "turn_id": turn_id,
         "step_index": step_index_int,
@@ -1182,7 +1291,7 @@ def record_step_vote(
                 break
             snap["_persisted"] = True
 
-    _enqueue_append(_step_votes_path(), event)
+    _enqueue_append(_step_votes_path(eff_domain), event)
     _enqueue_flush(conversation_id)
     return True
 
@@ -1193,6 +1302,7 @@ def record_helpful_skill(
     conversation_id: str,
     turn_id: str,
     skill_id: str,
+    domain: str = "",
 ) -> bool:
     """
     Record the "Glad it helped" picker output after a thumbs-up vote.
@@ -1206,11 +1316,13 @@ def record_helpful_skill(
     if not skill_id:
         return False
 
+    eff_domain = _resolve_domain(conversation_id, domain)
     event = {
         "schema_version": RECORD_SCHEMA_VERSION,
         "ts": _now_iso(),
         "session_id": session_id or "",
         "submitted_by": _current_user(),
+        "domain": eff_domain or "wifi",
         "conversation_id": conversation_id,
         "turn_id": turn_id,
         "skill_id": skill_id,
@@ -1228,14 +1340,14 @@ def record_helpful_skill(
                 break
             snap["_persisted"] = True
 
-    _enqueue_append(_helpful_skills_path(), event)
+    _enqueue_append(_helpful_skills_path(eff_domain), event)
     _enqueue_flush(conversation_id)
     return True
 
 
-def get_recent_votes(limit: int = 50) -> list[dict]:
+def get_recent_votes(limit: int = 50, domain: str = "") -> list[dict]:
     """Read the last N feedback events. For debugging / UI inspection only."""
-    path = _feedback_log_path()
+    path = _feedback_log_path(domain)
     if not path.exists():
         return []
     try:

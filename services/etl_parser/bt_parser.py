@@ -129,6 +129,36 @@ def close_warning_dialog() -> None:
         print("⚠️ Failed to close warning dialog:", e)
 
 
+def candidate_hci_paths(log_path: str) -> list:
+    """
+    All plausible decoded-output names for an ETL path, most-likely first.
+
+    The BT tool keeps the original extension in the output name —
+    ``ibtpci-X-boot.etl`` decodes to ``ibtpci-X-boot.etl.hci.txt`` — so the
+    decoded file is ``<log_path>.hci.txt``. An older/other code path stripped
+    the ``.etl`` first (``<name>.hci.txt``); we keep that as a fallback so a
+    file produced either way is still recognised.
+    """
+    cands = [log_path + ".hci.txt"]                       # <name>.etl.hci.txt (tool's actual output)
+    if log_path.lower().endswith(".etl"):
+        cands.append(log_path[:-4] + ".hci.txt")          # <name>.hci.txt     (legacy fallback)
+    return cands
+
+
+def find_ready_hci(log_path: str) -> str:
+    """Return the first already-decoded, stable .hci.txt for this ETL (either
+    naming convention), or None. Lets callers skip an unnecessary re-decode —
+    important when the firmware symbols are no longer in the artifactory but a
+    previously-decoded .hci.txt still sits next to the ETL."""
+    for p in candidate_hci_paths(log_path):
+        try:
+            if os.path.exists(p) and is_file_ready(p):
+                return p
+        except Exception:
+            continue
+    return None
+
+
 def close_error_dialog() -> None:
     """
     Dismiss any error dialog that might block further GUI automation.
@@ -764,6 +794,15 @@ def bt_analysis_autoFolder_mode(
     """
     global active_bt_pid
 
+    # 0) If this ETL is already decoded (either naming convention), skip the
+    # decode entirely — just open the existing .hci.txt in the viewer. Avoids
+    # a pointless re-decode (and the artifactory symbol dependency it carries).
+    existing = find_ready_hci(log_path)
+    if existing:
+        print(f"✅ HCI log already exists, skipping decode: {existing}")
+        open_with_text_analysis_tool(existing, filter_path=filter_path)
+        return active_bt_pid
+
     # 1) Construct the path to the tool and verify it exists.
     exe_path = os.path.abspath(os.path.join(os.path.dirname(__file__), 'ibtdrvlogparser.exe'))
     if not os.path.exists(exe_path):
@@ -827,12 +866,8 @@ def bt_analysis_autoFolder_mode(
     except Exception as e:
         print("❌ Failed to trigger Decode Folder:", e)
 
-    time.sleep(0.5)
-    # Although this may only occur in ManualSelect via IbtSnoopgen.
-    close_warning_dialog()  # Dismiss benign "Systeminfo.txt not present" warning if it appears
-
-    # 7) Wait for specific output '<log_path>.hci.txt' and open with viewer
-    hci_txt = log_path + ".hci.txt"
+    # 7) Wait for the decoded output (either naming convention) and open it
+    hci_txt = candidate_hci_paths(log_path)[0]
     print(f"⏳ Waiting for HCI log until found: {hci_txt}")
 
     # Poll until the output file stabilizes and has been opened.

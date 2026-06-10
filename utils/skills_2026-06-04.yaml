@@ -1,4 +1,4 @@
-# skill features:
+# version skills_2026-06-04-1 features:
 #   name: skill name
 #   description: a brief description of the skill
 #   keywords: use "-" to represent each keyword
@@ -6,7 +6,7 @@
 
 connection_flow:
   name: "Connection Flow"
-  description: "Used to analyze the generitic Wi-Fi connectivity flow."
+  description: "Used to analyze the generic Wi-Fi connectivity flow."
   keywords:
     - "TASK_DISCONNECT"
     - "DeAuth"
@@ -58,7 +58,7 @@ connection_flow:
       [ALON         ][12] [S] legacy_alon_nic_identify Identified GALE_C
       [ALON         ][12] [S] legacy_alon_nic_identify GALE_C: MAC_ID: 0x47, MAC_STEP: MAC_STEP_C, PHY: FMP2 0x112, PHY_STEP: RADIO_STEP_C
 
-    2-1. OS issue to SCAN and driver detemined MCC according to country info from APs' beacons. check skill "drs_mcc_analysis" for more details.
+    2-1. OS issue to SCAN and driver determined MCC according to country info from APs' beacons. check skill "drs_mcc_analysis" for more details.
       [prvLarStoreCurrentMcc]: : LarEnable: 1, CurrMCC: 0x5553 (US), UEFI exist: 0, bWfaPunctEnabledUSA: 0, set bEhtPuncturingRegulatoryValid 1
 
     2-2. OS issue to Connect Request Configuration (CONNECT_REQ, AUTH[], CIPHER[]).
@@ -275,8 +275,8 @@ assert_code_analysis:
   name: "Assert Code Analysis"
   description: "Used to analyze the assert code for potential issues."
   keywords:
-    - '- "[E]"'
-    - '- "[error]"'
+    - "[E]"
+    - "[error]"
     - "Assert"
   expert_rules: |
     1. Locate and list every firmware assert event in the log.

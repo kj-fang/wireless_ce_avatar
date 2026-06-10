@@ -43,7 +43,7 @@ For "YB/Lost":
   - What is the failure rate across test units? (i.e., how many machines experienced the failure out of the total number tested)
   - Is this a regression?
   - Was the hardware reviewed by Intel?
-- Summarize this yellow bang symptom based on the answers and description provided above.
+- Summarize this YB/Lost symptom based on the answers and description provided above.
  
 For "Connectivity":
 - Answer all the following questions in `"Other information"`:
@@ -177,7 +177,7 @@ For "Yellow Bang":
 For "Connectivity":
 - Answer all the following questions in `"Other information"`:
   - AP Model/Firmware version
-  - Is this a regression issue?
+  - Is this a regression?
 - Check if log files are attached (New Case Attachment uploaded).
 
 

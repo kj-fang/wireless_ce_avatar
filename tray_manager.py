@@ -88,16 +88,23 @@ class TrayManager:
         return max(matches, key=os.path.getmtime)
 
     def _init_log(self) -> logging.Logger:
-        log_path = os.path.join(get_user_data_dir(), 'tray.log')
         logger = logging.getLogger('TrayManager')
         logger.setLevel(logging.DEBUG)
         logger.propagate = False
         logger.handlers.clear()
 
+        fmt = logging.Formatter('%(asctime)s [%(levelname)s] [TRAY] %(message)s',
+                                datefmt='%Y-%m-%d %H:%M:%S')
+
+        # Write to a dedicated tray.log rather than sharing avatar.log with the
+        # main process. On Windows, RotatingFileHandler rotates by renaming the
+        # file; if the tray process holds avatar.log open via its own handle,
+        # that rename fails and rotation breaks entirely.
         try:
-            file_handler = logging.FileHandler(log_path, encoding='utf-8')
-            file_handler.setFormatter(logging.Formatter('%(asctime)s [%(levelname)s] %(message)s'))
-            logger.addHandler(file_handler)
+            tray_log = os.path.join(get_user_data_dir(), 'tray.log')
+            tray_handler = logging.FileHandler(tray_log, mode='a', encoding='utf-8')
+            tray_handler.setFormatter(fmt)
+            logger.addHandler(tray_handler)
         except Exception:
             pass
 
@@ -270,7 +277,26 @@ class TrayManager:
                 self.instances = live_instances
                 self._push_menu()
 
+    def _pid_file(self) -> str:
+        return os.path.join(get_user_data_dir(), 'tray_manager.pid')
+
+    def _write_pid(self):
+        try:
+            with open(self._pid_file(), 'w', encoding='utf-8') as f:
+                f.write(str(os.getpid()))
+        except Exception as e:
+            self.logger.warning(f'Failed to write pid file: {e}')
+
+    def _remove_pid(self):
+        try:
+            pid_path = self._pid_file()
+            if os.path.exists(pid_path):
+                os.remove(pid_path)
+        except Exception:
+            pass
+
     def run(self):
+        self._write_pid()
         try:
             self.logger.info(f'Tray starting | base={self.base} | instance_file={self.instance_file}')
             self.instances = self._scan_instances()
@@ -289,6 +315,8 @@ class TrayManager:
         except Exception as error:
             self.logger.error(f'Tray startup failed: {error}')
             self.logger.error(traceback.format_exc())
+        finally:
+            self._remove_pid()
 
 
 if __name__ == '__main__':

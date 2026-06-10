@@ -366,6 +366,16 @@
     </div>
     {% endif %}
 
+    {% if auto_analysis_bt %}
+    <div class="alert alert-info alert-dismissible fade show" role="alert">
+        <i class="fab fa-bluetooth-b"></i> <strong>Auto Running: BT HCI decode → Bluetooth Analysis Agent</strong>
+        <button type="button" class="close" data-dismiss="alert" aria-label="Close">
+            <span aria-hidden="true">&times;</span>
+        </button>
+        <input type="hidden" id="autoAnalysisBt" value="{{ auto_analysis_bt | urlencode }}">
+    </div>
+    {% endif %}
+
     <!-- <h2>📊 Analysis Log</h2> -->
     <div id="log">...</div>
     
@@ -1097,6 +1107,43 @@
             startLogParser(dummyButton, etlPathEncoded);
             
         }
+
+        // --- BT Auto-Analysis: decode HCI → redirect to bt_chatbot ---
+        const autoAnalysisBtElement = document.getElementById('autoAnalysisBt');
+        if (autoAnalysisBtElement) {
+            const btPathEncoded = autoAnalysisBtElement.value;
+
+            function _fireBtAutoAnalysis() {
+                // Select the matching BT row in the list (enables action buttons)
+                const norm = s => s.replace(/\\/g, '/');
+                const targetPath = norm(decodeURIComponent(btPathEncoded));
+                const btRows = document.querySelectorAll('.bt-file-item');
+                let matched = null;
+                btRows.forEach(el => {
+                    if (norm(decodeURIComponent(el.dataset.btEncoded || '')) === targetPath) {
+                        matched = el;
+                    }
+                });
+                if (matched) { selectBtRow(matched); }
+
+                // Lock the card and fire the BT chatbot flow
+                setAnalysisCardLocked(true);
+                const dummyBtBtn = document.createElement('button');
+                dummyBtBtn.classList.add('btn', 'btn-info');
+                window.pendingBtAnalyze = true;
+                setBtActionButtonsBusy(true, 'bt-action-chatbot');
+                startBtLogParser(dummyBtBtn, btPathEncoded);
+            }
+
+            // Wait for socket to be connected before firing — otherwise
+            // bt_hci_ready / bt_hci_failed events emitted by the backend
+            // during the handshake window are silently lost.
+            if (socket && socket.connected) {
+                _fireBtAutoAnalysis();
+            } else {
+                socket.once('connect', _fireBtAutoAnalysis);
+            }
+        }
         
 
         function openDownloadPath() {
@@ -1741,6 +1788,7 @@
         window.pendingBtLogParser = null;
         window.pendingBtAnalyze = false;
         setBtActionButtonsBusy(false);
+        setAnalysisCardLocked(false);
     }
 
     const FW_ETL_ANALYSIS_URL = "{{ url_for('analysis_etl.process_etl_path_fw') }}";
@@ -2069,13 +2117,40 @@
         }
     }
 
-    // ---- BT auto-pick by AI issue time --------------------------------
+    // ---- BT auto-pick helpers ------------------------------------------
     // BT logs aren't decoded until the agent button is clicked, so we can't
     // read their internal timestamps here. Instead we ask the backend
     // (/bt_chatbot/find_best_log) which parses the capture-folder timestamp
     // (e.g. ...-2026-04-08-00-16-16Z\) and returns the closest match. We then
-    // select that BT row. Returns a Promise<bool>.
+    // select that BT row.
     const BT_FIND_BEST_LOG_URL = "{{ url_for('bt_chatbot.find_best_log') }}";
+
+    // Auto-select the NEWEST BT log by capture-folder timestamp (no issue
+    // time matching). Called on page load as the default selection.
+    async function autoSelectNewestBtLog() {
+        const rows = Array.from(document.querySelectorAll('#bt-panel .bt-file-item'));
+        if (rows.length <= 1) return;
+        const paths = rows.map(el => decodeURIComponent(el.dataset.btEncoded || ''));
+        try {
+            const res = await fetch(BT_FIND_BEST_LOG_URL, {
+                method: 'POST',
+                headers: {'Content-Type': 'application/json'},
+                body: JSON.stringify({ etl_paths: paths, issue_time_str: '' }),
+            });
+            const data = await res.json().catch(() => ({}));
+            const best = (data && data.best_path) ? String(data.best_path) : '';
+            if (!best) return;
+            const norm = s => s.replace(/\\/g, '/');
+            const target = rows.find(el =>
+                norm(decodeURIComponent(el.dataset.btEncoded || '')) === norm(best));
+            if (target) {
+                selectBtRow(target);
+                target.scrollIntoView({ block: 'nearest', behavior: 'smooth' });
+            }
+        } catch (err) {
+            console.warn('BT auto-select newest failed:', err);
+        }
+    }
 
     async function autoSelectBtLogByIssueTime() {
         const rows = Array.from(document.querySelectorAll('#bt-panel .bt-file-item'));
@@ -2569,7 +2644,13 @@
         if (wifiItems.length === 1) { selectWifiEtlRow(wifiItems[0]); }
 
         const btItems = document.querySelectorAll('.bt-file-item');
-        if (btItems.length === 1) { selectBtRow(btItems[0]); }
+        if (btItems.length === 1) {
+            selectBtRow(btItems[0]);
+        } else if (btItems.length > 1) {
+            // Default: select the newest BT collection by folder timestamp.
+            // User can click the "🪄 Auto-pick" checkbox to re-pick by issue time.
+            autoSelectNewestBtLog();
+        }
 
         const dddItems = document.querySelectorAll('.ddd-file-item');
         if (dddItems.length === 1) { selectDddRow(dddItems[0]); }

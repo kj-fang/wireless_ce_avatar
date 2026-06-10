@@ -576,6 +576,30 @@ def render_download_result_form():
         except Exception as e:
             print(f"⚠️ AI-time ETL pick failed, keeping newest-by-number: {e}")
 
+    # --- BT auto-analysis: pick the best BT path when Run Analysis was
+    # requested for a BT case. Reuses the same folder-timestamp logic as
+    # bt_chatbot.find_best_log (newest capture-folder timestamp wins).
+    auto_analysis_bt = None
+    if run_analysis_pending and 'bt' in case_context.wifi_or_bt:
+        try:
+            from blueprints.bt_chatbot.bt_chatbot_routes import _parse_path_timestamp
+            bt_paths = []
+            for _paths in (file_dicts.get('bt_dict') or {}).values():
+                bt_paths.extend(_paths or [])
+            if bt_paths:
+                # Pick the one with the latest folder timestamp
+                best_bt = None
+                best_bt_ts = None
+                for bp in bt_paths:
+                    ts = _parse_path_timestamp(bp)
+                    if ts and (best_bt_ts is None or ts > best_bt_ts):
+                        best_bt_ts = ts
+                        best_bt = bp
+                auto_analysis_bt = best_bt or bt_paths[0]
+                print(f"🚀 BT Run Analysis: auto-selected {auto_analysis_bt}")
+        except Exception as _e:
+            print(f"⚠️ BT auto-analysis pick failed: {_e}")
+
     latest_fw_system_info_path, latest_fw_system_info = _get_latest_fw_system_info(file_dicts['fw_dict'])
     wifi_table_rows = _build_wifi_table_rows(file_dicts['wifi_dict'], download_path=download_path)
     bt_table_rows = _build_bt_table_rows(file_dicts['bt_dict'], download_path=download_path)
@@ -602,6 +626,7 @@ def render_download_result_form():
                          wifi_or_bt=case_context.wifi_or_bt,
                          auto_analysis_etl = auto_analysis_etl,
                          auto_analysis_etl_reason = auto_analysis_etl_reason,
+                         auto_analysis_bt=auto_analysis_bt,
                          exclude_keywords=app_config.etl_exclude_keywords,
                          latest_fw_system_info=latest_fw_system_info,
                          latest_fw_system_info_path=latest_fw_system_info_path,

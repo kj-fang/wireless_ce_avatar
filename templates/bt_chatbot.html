@@ -3316,6 +3316,12 @@
 
                 // ── System Event Log button state ──
                 updateEvtButton(data.evtx_path || '');
+
+                // If an issue time is already filled (e.g. from session context),
+                // auto-refine it against the closest system event error.
+                if (getIssueTimeString()) {
+                    refineIssueTimeFromEventLog();
+                }
             } else {
                 showStatus(statusEl, '✘ ' + data.error, 'err');
             }
@@ -3958,11 +3964,48 @@
                 const prefillHint = document.getElementById('prefill-hint');
                 if (prefillHint) prefillHint.style.display = 'block';
                 validateUserInput();
+
+                // Auto-refine: cross-reference the issue time with system event
+                // errors and snap to the closest error timestamp (if within 10 min).
+                refineIssueTimeFromEventLog();
             }, 400);
 
         } catch (err) {
             autoAnalyzeTriggered = false;
             console.error('[Auto-Analysis] Failed:', err);
+        }
+    }
+
+    /**
+     * Auto-refine the issue time by finding the closest Error/Critical event
+     * in the system event log. Called after the issue time is set during the
+     * auto-analyze flow. Uses frontend-cached event data when available,
+     * avoiding a redundant backend parse.
+     */
+    async function refineIssueTimeFromEventLog() {
+        const currentTime = getIssueTimeString();
+        if (!currentTime) return;
+
+        try {
+            const result = await window.findClosestEventError(currentTime);
+            if (result && result.formatted_time) {
+                const diffSec = result.diff_seconds || 0;
+                // Only refine if the closest error is within 10 minutes of the original issue time
+                if (diffSec <= 600) {
+                    console.log(`[Auto-Refine] Closest event error: ${result.formatted_time} ` +
+                        `(${result.source}, ID: ${result.event_id}, ` +
+                        `diff: ${diffSec.toFixed(0)}s)`);
+                    setIssueTimeFromString(result.formatted_time);
+                    // Keep the confirm gate active — the user should still review
+                    issueTimeAwaitingConfirm = true;
+                    setIssueTimeConfirmUI(true);
+                    validateUserInput();
+                } else {
+                    console.log(`[Auto-Refine] Closest error too far (${diffSec.toFixed(0)}s) — keeping original time.`);
+                }
+            }
+        } catch (e) {
+            console.warn('[Auto-Refine] Failed to find closest event error:', e);
         }
     }
 
@@ -7219,6 +7262,100 @@
         function _esc(s) {
             if (!s) return '';
             return String(s).replace(/&/g,'&amp;').replace(/</g,'&lt;').replace(/>/g,'&gt;').replace(/"/g,'&quot;');
+        }
+
+        // ── Expose: find the closest Error/Critical event to a given time ──
+        // Used by the auto-refine logic to snap the issue time to the nearest
+        // system event error without a separate backend round-trip.
+        // If _evtData is already populated (panel was opened), search locally.
+        // Otherwise, fetch error events via the existing /parse_event_log API.
+        window.findClosestEventError = async function (issueTimeStr) {
+            if (!_evtPath || !issueTimeStr) return null;
+
+            // Parse the issue time into a JS Date for comparison
+            const issueDt = _parseEvtTimeStr(issueTimeStr);
+            if (!issueDt) return null;
+
+            // Get error events: prefer already-fetched data, else fetch from backend
+            let errorEvents = [];
+            if (_evtData && _evtData.length > 0) {
+                errorEvents = _evtData.filter(ev => ev.level === 'Error' || ev.level === 'Critical');
+            }
+            if (errorEvents.length === 0) {
+                // Fetch all error events (limit=0 means all) from the existing endpoint
+                try {
+                    const res = await fetch('/parse_event_log', {
+                        method: 'POST',
+                        headers: {'Content-Type': 'application/json'},
+                        body: JSON.stringify({
+                            path: _evtPath, offset: 0, limit: 0,
+                            source_filter: 'all',
+                            level_filter: 'warning_error'
+                        })
+                    });
+                    const json = await res.json();
+                    if (json.events) {
+                        errorEvents = json.events.filter(ev => ev.level === 'Error' || ev.level === 'Critical');
+                    }
+                } catch (e) {
+                    console.warn('[findClosestEventError] fetch failed:', e);
+                    return null;
+                }
+            }
+
+            if (errorEvents.length === 0) return null;
+
+            // Find the event closest in time
+            let best = null;
+            let bestDiff = Infinity;
+            for (const ev of errorEvents) {
+                const evDt = _parseEvtTimeStr(ev.time);
+                if (!evDt) continue;
+                const diff = Math.abs(evDt.getTime() - issueDt.getTime()) / 1000;
+                if (diff < bestDiff) {
+                    bestDiff = diff;
+                    best = ev;
+                }
+            }
+            if (!best) return null;
+
+            // Format the time as MM/DD/YYYY-HH:MM:SS
+            const evDt = _parseEvtTimeStr(best.time);
+            let formattedTime = best.time;
+            if (evDt) {
+                const mm = String(evDt.getMonth() + 1).padStart(2, '0');
+                const dd = String(evDt.getDate()).padStart(2, '0');
+                const yyyy = evDt.getFullYear();
+                const hh = String(evDt.getHours()).padStart(2, '0');
+                const mi = String(evDt.getMinutes()).padStart(2, '0');
+                const ss = String(evDt.getSeconds()).padStart(2, '0');
+                formattedTime = `${mm}/${dd}/${yyyy}-${hh}:${mi}:${ss}`;
+            }
+
+            return {
+                formatted_time: formattedTime,
+                diff_seconds: bestDiff,
+                source: best.source || '',
+                event_id: best.event_id || '',
+                level: best.level || '',
+                message: best.message || '',
+            };
+        };
+
+        /**
+         * Parse various time string formats into a Date object.
+         * Supports: "YYYY-MM-DD HH:MM:SS", "MM/DD/YYYY-HH:MM:SS(.mmm)",
+         *           "MM/DD/YYYY HH:MM:SS"
+         */
+        function _parseEvtTimeStr(s) {
+            if (!s) return null;
+            // YYYY-MM-DD HH:MM:SS
+            let m = s.match(/^(\d{4})-(\d{1,2})-(\d{1,2})\s+(\d{1,2}):(\d{2}):(\d{2})/);
+            if (m) return new Date(+m[1], +m[2]-1, +m[3], +m[4], +m[5], +m[6]);
+            // MM/DD/YYYY-HH:MM:SS or MM/DD/YYYY HH:MM:SS
+            m = s.match(/^(\d{1,2})\/(\d{1,2})\/(\d{4})[\s-](\d{1,2}):(\d{2}):(\d{2})/);
+            if (m) return new Date(+m[3], +m[1]-1, +m[2], +m[4], +m[5], +m[6]);
+            return null;
         }
     })();
 

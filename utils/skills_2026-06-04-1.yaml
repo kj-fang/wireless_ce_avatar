@@ -1,0 +1,429 @@
+# skill features:
+#   name: skill name
+#   description: a brief description of the skill
+#   keywords: use "-" to represent each keyword
+#   expert_rules: use "|" to start a multi-line string
+
+connection_flow:
+  name: "Connection Flow"
+  description: "Used to analyze the generitic Wi-Fi connectivity flow."
+  keywords:
+    - "TASK_DISCONNECT"
+    - "DeAuth"
+    - " ------- RESUME FLOW"
+    - "** SUSPEND"
+    - "WDI_ASSOC_STATUS_SUCCESS"
+    - "SCAN_RESULTS - SCANNED CHANNELS:"
+    - "CONNECTED - to:"
+    - "TASK_Connect"
+    - "Set SSID"
+    - "[ATTEMPT_TO_CONNECT]"
+    - "NIC State"
+    - "wakeup_by"
+    - "TASK ROAM"
+    - "CNCT_FLOW"
+    - "candidate grade"
+    - "ApSelectionApply"
+    - "Best Candidate"
+    - "WoWLAN is active!!!"
+    - " ---------- SUSPEND FLOW FINISHED ----------"
+    # - "Got Command"
+  exclusive:
+    - "SCAN_REQUEST"
+    - "WDI_GET_BSS_ENTRY_LIST_UPDATE"
+    - "printScanRequestInfo"
+    - "PROP_GET_STATISTICS"
+    - "TASK_SCAN"
+    - "PROP_IHV_REQUEST"
+    - "[findCandidateHandleTriggerScanEvent]:FIND_CANDIDATE"
+    - "[bssConnectionLifeCycleOnChannelSwitchCompleteApi]:"
+    - "[prvBssVifClcConnectedEntryHandler]:Setting timer to trigger Sync VIF manager on Bss connection"
+    - "PROP_SET_"
+    - "[dpTlcConfigSetAmsduParamsForTidMaskApi]:"
+    - "[hPolicyBeaconProbeReceivedEvent]:GOT BEACON/PROB"
+    - "[prvResumeFlowRequestJob]:"
+    - " [prvDpTlcConfigSendTlcConfigCmd]:+-+ HT/VHT/HE/EHT"
+    - "stateMachineSetStateNoCurrentFlow"
+    - "TASK_CONNECT_PARAMS"
+    - "prvLarStoreCurrentMcc"
+    # - "SCAN_RESULTS"
+  expert_rules: |
+    WIFI driver connection flow are listed below along with the log examples.
+    If firmware crash UMAC/LMAC//TCM errors are present in the failed log, prioritize those fields in Key evidence and include the full UMAC/TCM blocks as raw lines, including: driver, firmware version, legacy_alon_nic_identify, rtStatus, LOGPC, timestamp(s), and the full quoted UMAC/LMAC/TCM blocks.
+
+    1. Device Initialization (MAC/PHY and device ID lines).
+    - The device hardware is identified and initialized with MAC and PHY configurations.
+    - Log should contains the information below: `
+      [ALON         ][12] [S] legacy_alon_nic_identify [186]: HW identification: macId = 0x47, phyId = 0x112, macStep = 0x2, phyStep = 0x2, phyDash = 0x0, phyFlavor = 0x0, isPhyCdb = 0x0, isPhyJacket = 0x0, deviceId = 0x272b
+      [ALON         ][12] [S] legacy_alon_nic_identify Identified GALE_C
+      [ALON         ][12] [S] legacy_alon_nic_identify GALE_C: MAC_ID: 0x47, MAC_STEP: MAC_STEP_C, PHY: FMP2 0x112, PHY_STEP: RADIO_STEP_C
+
+    2-1. OS issue to SCAN and driver detemined MCC according to country info from APs' beacons. check skill "drs_mcc_analysis" for more details.
+      [prvLarStoreCurrentMcc]: : LarEnable: 1, CurrMCC: 0x5553 (US), UEFI exist: 0, bWfaPunctEnabledUSA: 0, set bEhtPuncturingRegulatoryValid 1
+
+    2-2. OS issue to Connect Request Configuration (CONNECT_REQ, AUTH[], CIPHER[]).
+      [OSC]:Got Command (M1 Message) TASK_CONNECT[6][0x6] (p-0x0, BSS, TransId-63[0x3F])
+
+    3. AP Selection (candidate AP lines: band, channel, BW, mode, RSSI, tput, MAC addresses, grading metrics).
+    - Log should contains the information below:`
+      [AP SELECTION ][BC 0]: grade:8506724 band:2, channel:37, BW:320MHz, mode:EHT, RSSI:-45, tput:6226560 Address = 08:BF:B8:8D:7C:79
+      [AP SELECTION ][BC 1]: grade:3819795 band:1, channel:36, BW:160MHz, mode:EHT, RSSI:-44, tput:2882400 Address = BA:BF:B8:8D:7C:75
+
+    4. Attempting Connection (ATTEMPT_TO_CONNECT lines for each link).
+    - List all the ATTEMPT_TO_CONNECT for device to connect to the selected AP, first on the primary link (channel 37, band 2) and then on the secondary link (channel 36, band 1).
+    - if there was only one ATTEMP_TO_CONNECT, this is single link WiFi7 connection. it would be multi links connection if there were over two ATTEMP_TO_CONNECT showed in logs
+    - Log should contains the information below:
+      [ATTEMPT_TO_CONNECT] to MLD:08:BF:B8:8D:7C:79 Ssid:ASUS_MLO band:2, Ch:37 Rssi:-45, assocLinkId: 0, Bssid:  Address = 08:BF:B8:8D:7C:79'
+      [ATTEMPT_TO_CONNECT] to MLD:08:BF:B8:8D:7C:79 Ssid:ASUS_MLO band:1, Ch:36 Rssi:-44, assocLinkId: 1, Bssid:  Address = BA:BF:B8:8D:7C:75'
+
+    5. Authentication and Association (AUTH_REQ/AUTH_RSP, ASSOC_REQ/ASSOC_RSP, EAPOL messages, 4‑way handshake lines)
+      - Log should contain the information below:`
+        [CNCT_FLOW    ][12] [S] AUTH_REQ - sent to:        "ASUS_BE98_MLO" CC:28:AA:5B:1A:09, channel = 37, band = 6_7GHz
+        [CNCT_FLOW    ][11] [S] AUTH_RSP - received  from:  "ASUS_BE98_MLO" CC:28:AA:5B:1A:09, channel = 37, band = 6_7GHz
+        [CNCT_FLOW    ][11] [S] ASSOC_REQ - sent to:       "ASUS_BE98_MLO" CC:28:AA:5B:1A:09, channel = 37, band = 6_7GHz
+        [CNCT_FLOW    ][11] [S] ASSOC_RSP - received from: "ASUS_BE98_MLO" CC:28:AA:5B:1A:09, channel = 37, band = 6_7GHz
+        [CNCT_FLOW    ][11] [S] EAPOL RECEIVED
+        [CNCT_FLOW    ][11] [S] EAPOL TRANSMIT
+        [CNCT_FLOW    ][11] [S] EAPOL RECEIVED
+        [CNCT_FLOW    ][12] [S] EAPOL TRANSMIT
+    6. Connection Establishment (WDI_IND_ASSOC_RESULT or similar success/failure lines).
+    7. Link and Resource Management (resource allocation and CCR_SM_* transitions).
+
+regulatory_country_code_determination:
+  name: "Regulatory Country Code Determination"
+  description: "Used to check which country MCC code that WIFI driver applied. WIFI driver would apply the country specific regulation in this location."
+  keywords:
+    - "prvLarStoreCurrentMcc"
+    - "[larMccCmdCB]: : source is"
+  expert_rules: |
+    1. During the 11d scans, WIFI driver would check country info from APs' beacons and then determine where the current country is in this location.
+    2. Check and list the CurrMCC from the log with keyword "prvLarStoreCurrentMcc to see which country that WIFI driver applied :
+      CurrMCC: 0x5457 (TW) means MCC code 0x5457 is an ACII code for Taiwan".
+      0x3030 and 0x5a5a are the default value as driver started.
+      catch the latest CurrMCC before connection to see which MCC code driver applied for the connection.
+      [prvLarStoreCurrentMcc]: : LarEnable: 1, CurrMCC: 0x5457 (TW), UEFI exist: 0, bWfaPunctEnabledUSA: 0, set bEhtPuncturingRegulatoryValid 1
+    3. Driver allow user to set specific MCC code for a test mode. you can check the MCC source from log with keyword "[larMccCmdCB]: : source is".
+        If the MCC source is 0x9, it means the MCC code was set by user through MCC API, not determined by driver according to country info from APs' beacons. This is usually used for testing purpose to verify if the driver can apply correct regulation according to different MCC code.
+        [larMccCmdCB]: : source is = 0x9
+        typedef enum _LARI_API_MCC_SOURCE_VER_2
+        {
+          MCC_SOURCE_ME                       = 0x1,
+          MCC_SOURCE_BIOS                     = 0x2,
+          MCC_SOURCE_3G_LTE_HOST              = 0x3,
+          MCC_SOURCE_3G_LTE_DEVICE            = 0x4,
+          MCC_SOURCE_11D                      = 0x5,
+          MCC_SOURCE_BIOS_LOW_PRIO            = 0x6,
+          MCC_SOURCE_DEFAULT                  = 0x7,
+          MCC_SOURCE_UNINITIALIZED            = 0x8,
+          MCC_SOURCE_MCC_API                  = 0x9,
+          MCC_SOURCE_GETTING_CURRENT_PROFILE  = 0x10,
+          MCC_SOURCE_GETTING_MCC_TEST_MODE    = 0x11,
+        } LARI_API_MCC_SOURCE_VER_2;
+
+bios_dsm_configuration:
+  name: "BIOS DSM Configuration"
+  description: "Used to check DSM functions in BIOS for platform specific configuration like regulatory, compliance, and performance etc."
+  keywords:
+    - "BIOS source of table:"
+    - "[mhiffTranslateMccAllowedUhbApTypeCmdVer1]"
+    - "[prvLarSendLariChangeConfig]: : oemUhbAllowBitMap"
+    # - " DSM"
+    # - "ACPIBiosAccessor"
+  expert_rules: |
+    0. There are two ways to impletnt DSN functions in BIOS, one is ACPI method, another is using custom defined UEFI method.
+    If both of them exist, the DSM function in UEFI table would be prior to the one in ACPI table.
+    if you saw the falure with ACPI ACPIBiosAccessor, you still can check the DSM function in UEFI table to see if there is any special configuration for this platform.
+    ACPI has been discredited by Intel for a while, if you see the log with ACPI error like below, it means the DSM function in ACPI table is not working properly, but you still can check if there is DSM function in UEFI table for this platform.
+      [platform::ACPIBiosAccessor::ACPIBiosAccessor] Failed to read OEM support UHB channels DSM. rc=<0xC00000BB>
+
+    1. List out all information after "BIOS source of table:".
+    If duplicate, list once.
+
+    2. mhiffTranslateMccAllowedUhbApTypeCmdVer1 supported by UATS.
+    List out the value group, which are in 1(LPI), 2(VLP), or 3(AFC)
+    No need summer table.
+
+    3. [prvLarSendLariChangeConfig] oemUhbAllowBitMap=<0x" "> convert to binary " "
+    This binary is very important, address the value as an evidence and parse it accordingly everytime when you see it.
+    Start from here, all check in test 3. according to this binary.
+    bit31 Follow Country by Country table for LPI Override
+    If bit31 set to 1, check bit0 set to 1, skip other bit in DSM Function3
+    3-1. Print "bit31 = 1, Follow Country by Country table for LPI Override"
+    If not, print "setting error bit31 (bit0 is not setting to 1)"
+
+    If bit31 set to 0, check below value
+    0 = not allow or disable
+    1 = allow or enable
+    3-1. Print bit27 value (0 or 1) VLP Soft AP/Active Scan in UHB in Japan
+    3-2. Print bit29 value (0 or 1) VLP Follow country by country table for VLP
+    3-3. Print bit30 value (0 or 1) Follow country by country table for AFC
+    bit:1 - UHB in USA,
+    bit:2 - UHB in Rest of World,
+    bit:3 - UHB in EU,
+    bit:4 - UHB in Sorth Korea,
+    bit:5 - UHB in Brazi,
+    bit:6 - UHB in Chile,
+    bit:7 - UHB in Japan,
+    bit:8 - UHB in Canada,
+    bit:9 - UHB in Morocco,
+    bit:10 - UHB in Mongolia,
+    bit:11 - UHB in Malaysia,
+    bit:12 - UHB in Saudi Arabia
+    3-4. Print "UHB support in (bit)(country)"
+
+    4. Check DSM function and Print value
+    If DSM is not UEFI, DSM use ACPI, skip this.
+    Print "DSM function setting by ACPI"
+    If not check below.
+    Function 0 - WiFi DSM supported functions, this is always required
+    Function 1 - Disable SRD Active Channels
+    0 - ETSI 5.8GHz SRD active scan,
+    1 - ETSI 5.8GHz SRD passive scan,
+    2 - ETSI 5.8GHz SRD disabled.
+    Function 2 - Supported Indonesia 5.15 - 5.35 GHz band
+    0 - Set 5.115-5.35GHz to Disable in Indonesia,
+    1 - Set 5.115-5.35GHz to Enable (Passive) in Indonesia.
+    Function 4 - Regulatory Special Configurations Enablements
+    1 - Enabling DRS for China Location, will work only in the NON CHINA SKU case. In cases where OEM also defines CHINA_SKU in the BIOS WRDD table, the bit will ignored by the driver,
+    2 - Enabling new SRRC spec.
+    Function 5 - M.2 UART Interface Configuration Default as defined in Intel SW Driver/FW,
+    1 - Reserved
+    Function 6 - Control Enablement 11ax on certificated modules Default as defined in Intel Wi-Fi certificated module,
+    3 - Enabling Ukraine for 11ax,
+    12 - Enabling Russia for 11ax,
+    15 - Enabling Ukraine and Russia for 11ax
+    Function 7 - Control Enablement UNII-4 on certificated modules Default as defined in Intel Wi-Fi certificated module,
+    3 - Enabling UNII-4 in FCC(US),
+    12 - Enabling UNII-4 in ETSI,
+    48 - Enabling UNII-4 in ISED(Canada)
+    Function 8 - Control Indoor usage for enable Soft AP mode
+    bit:0 - Enabling indoor usage in EU,
+    bit:1 - Enabling indoor usage in Japan,
+    bit:2 - Enabling indoor usage in China,
+    bit:3 - Enabling indoor usage in USA,
+    bit:4 - Enabling indoor usage in worldwide
+    Function 9 - Selective Wi-Fi band operation
+    bit:0 - Enabling 2.4GHz,
+    bit:1 - Enabling 5.2GHz,
+    bit:2 - Enabling 5.3GHz,
+    bit:3 - Enabling 5.5GHz,
+    bit:4 - Enabling 5.8GHz,
+    bit:5 - Enabling 5.9GHz,
+    bit:6 - Enabling 6.2GHz,
+    bit:7 - Enabling 6.5GHz,
+    bit:8 - Enabling 6.6GHz,
+    bit:9 - Enabling 6.8GHz,
+    bit:10 - Enabling 7.0GHz
+    Function 10 - Energy detection threshold (EDT)
+    bit:0-3 - EDT revision,
+    bit:6 - Enabling EDT for ETSI HB,
+    bit:9 - Enabling EDT for FCC UHB,
+    bit:13 - Enabling EDT for HB 5G2/3,
+    bit:14 - Enabling EDT for HB 5G4,
+    bit:15 - Enabling EDT for HB 5G6,
+    bit:16 - Enabling EDT for HB 5G8/9,
+    bit:17 - Enabling EDT for UHB 6G1,
+    bit:18 - Enabling EDT for UHB 6G3,
+    bit:19 - Enabling EDT for UHB 6G5,
+    bit:20 - Enabling EDT for UHB 6G6,
+    bit:21 - Enabling EDT for UHB 6G8,
+    bit:22 - Enabling EDT for UHB 7G0
+    Function 11 - DLVR RFI mitigation Configuration
+    bit0: DLVR RFI mitigation(0 - enabled, 1 - disabled),
+    bit1: DDR RFI mitigation(0 - enabled, 1 - disabled)
+    Function 12 - Wi-Fi 7 802.11be Support
+    bit:0 - Force disable all countries
+
+disconnection_analysis:
+  name: "Disconnection"
+  description: "Analyzes unexpected Wi-Fi disconnections after a successful connection, distinguishing among OS-initiated drops, AP kick-offs, or poor RF coverage/signal issues."
+  keywords:
+    - "CONNECTED - to:"
+    - "TASK_Connect"
+    - "TASK_DISCONNECT"
+    - "DeAuth"
+    - "DEAUTH_REQ"
+    - "reason:"
+    - "MISSED BEACONS"
+    - "ROAM_DECISION"
+    # - "OSC"
+  expert_rules: |
+    【Unexpected Disconnection Troubleshooting Guidelines】
+    Carefully analyze the timeline of events immediately preceding the disconnection. Categorize the root cause into one of the following three scenarios based on the log pattern:
+    1. OS Initiated (Client-Side Action): If you observe 'OSC' (OS Command) messages in the driver logs contain keyword TASK_DISCONNECT, this indicates the Operating System intentionally requested the disconnection. Conclude this as a system policy or user-triggered action.
+    2. RF/Signal Issue (Poor Coverage/Interference): If the logs show multiple consecutive 'MISSED BEACONS' events right before the driver ultimately sends out a Deauth message, this means the client lost connection due to weak signal or severe interference, causing beacon timeouts. Explicitly state this is an RF coverage or interference problem.
+    3. AP Initiated (Infrastructure-Side Action): If the driver logs do not show consecutive missed beacons and there are no OSC commands, but a direct 'Deauth' or 'Deauthentication' frame is received, it means the Access Point actively kicked the client off. Recommend checking the AP's configuration (e.g., Band Steering, Load Balancing, or Idle Timeout settings).
+
+resume_connection_setup_time_analysis:
+  name: "Resume_connection_setup_time_analysis"
+  description: "Used to analyze the time needed to set up a Wi-Fi connection after PC resume."
+  keywords:
+    - "TASK_DISCONNECT"
+    - "DeAuth"
+    - "CONNECTED - to"
+    - "TASK_Connect"
+    - "DEAUTH_REQ"
+    - "reason:"
+    - "RESUME FLOW STARTED"
+    - "timeout"
+  expert_rules: |
+    1. List the key configuration and log lines in each of the Key steps categories below, and display all the log information contained in the log example provided by the user under Key steps and log example. Always include timestamps and the exact log text for any item you cite. Key steps categories to include and the kinds of log lines to extract
+    2. Each network resume time is calculated by the time difference between the keyword 'RESUME FLOW STARTED' and the following 'CONNECTED - to'.
+    3. Calculate every network resume time in the log, summarize the network resume time statistics by showing the average, and list all the resume times greater than 3 seconds.
+
+assert_code_analysis:
+  name: "Assert Code Analysis"
+  description: "Used to analyze the assert code for potential issues."
+  keywords:
+    - '- "[E]"'
+    - '- "[error]"'
+    - "Assert"
+  expert_rules: |
+    1. Locate and list every firmware assert event in the log.
+       - Look for log lines that contain both `[prvNicDbgHandleLmacErrLog]` and `[prvNicDbgPrintRcmErrLog]`.
+       - A typical assert entry looks like:
+           [NIC_DEBUG] [ERROR] [prvNicDbgHandleLmacErrLog]:FATAL_ERROR: uCode ASSERT(LMAC1, rtStatus = 0x103C, log is valid. data1:0x12a, data2:0xdeadbeef),
+           [ALONDBG] [ERROR] [prvNicDbgPrintRcmErrLog]:0x00000070 | 0x0000312E | 0x20000000 | 0xDEADBEEF | 0xDEADBEEF | 0x00000000 | 0x00003198
+       - Extract the `rtStatus` hex value (e.g. `0x103C`) — this is the assert code.
+       - Call the tool `lookup_assert_code` with each extracted assert code to retrieve its meaning and details.
+       - Report the full raw log lines together with the lookup result.
+
+    2. When a UMAC, LMAC, or TCM assert is found, check whether the log contains the complete crash context block.
+       The following fields are required for root-cause analysis; extract and report each one if present:
+       - Driver version
+       - Firmware version
+       - `legacy_alon_nic_identify` line (hardware identification)
+       - `rtStatus` value
+       - `LOGPC` value
+       - Timestamp(s) associated with the assert
+       - The full raw UMAC / LMAC / TCM block (copy the lines verbatim, do not paraphrase)
+       If any of these fields are missing from the log, explicitly note which ones are absent.
+
+wfd_p2p_flow:
+  name: "WFD P2P Flow"
+  description: "Used to analysis the generic Wi-Fi Direct P2P connectivity flow"
+  keywords:
+    - "TASK_P2P_DISCOVERY"
+    - "DIRECT-"
+    - "OID_WIFI_P2P_GO_QUERY_SUPPORTED_CHANNELS"
+    - "TASK_P2P_SEND_REQUEST_ACTION_FRAME"
+    - "TASK_P2P_SEND_RESPONSE_ACTION_FRAME"
+    - "PROVISION_DISCOVERY"
+    - "TASK_CHANGE_OP_MODE"
+    - "WFD_CLIENT"
+    - "WFD_GO"
+    - "P2P_GON_RESPONSE"
+    - "GON_REQUEST"
+    - "TASK_START_AP"
+    - "Start as soft AP"
+    - "TASK_CONNECT*CLIENT"
+    - "Received Auth request from"
+    - "TASK_SEND_AP_ASSOCIATION_RESPONSE"
+    - "[CLIENT_VIF] [1] :  TRANSITION"
+    - "EAPOL"
+    - "DeAuth"
+    - "bestChSel"
+    - "chosen channel"
+  expert_rules: |
+    WiFi Driver P2P connection flow are listed below along with the log example.
+        If firmware crash UMAC/LMAC//TCM errors are present in the failed log, prioritize those fields in Key evidence and include the full UMAC/TCM blocks as raw lines, including: driver, firmware version, legacy_alon_nic_identify, rtStatus, LOGPC, timestamp(s), and the full quoted UMAC/LMAC/TCM blocks.
+    1. Device Initialization (MAC/PHY and device ID lines).
+        - The device hardware is identified and initialized with MAC and PHY configurations.
+        - Log should contains the information below: `
+          [ALON         ][12] [S] legacy_alon_nic_identify [186]: HW identification: macId = 0x47, phyId = 0x112, macStep = 0x2, phyStep = 0x2, phyDash = 0x0, phyFlavor = 0x0, isPhyCdb = 0x0, isPhyJacket = 0x0, deviceId = 0x272b
+          [ALON         ][12] [S] legacy_alon_nic_identify Identified GALE_C
+          [ALON         ][12] [S] legacy_alon_nic_identify GALE_C: MAC_ID: 0x47, MAC_STEP: MAC_STEP_C, PHY: FMP2 0x112, PHY_STEP: RADIO_STEP_C
+    2. OS issue to SCAN and driver detemined MCC according to country info from APs' beacons. check skill "drs_mcc_analysis" for more details.
+    [prvLarStoreCurrentMcc]: : LarEnable: 1, CurrMCC: 0x5553 (US), UEFI exist: 0, bWfaPunctEnabledUSA: 0, set bEhtPuncturingRegulatoryValid 1
+    3. OS issue to P2P discover "Got Command (M1 Message) TASK_P2P_DISCOVERY" and check if Probe response from another WFD device. For example:
+    [OSC] [SPECIAL] [CPort::handleOid]:Got Command (M1 Message) TASK_P2P_DISCOVERY[5][0x5] (p-0x1, DEVICE, TransId-1711[0x6AF])
+    [MGMTFRAME] [SPECIAL] [hmfmEvRxMgmtFrame]:PROBE_RX - 06:B9:E3:4F:6B:26, channel 1  , band 2.4GHz, RSSI -59, rate  6Mbps, seq 290 qbss:-1, qbss-mclm:-1 "DIRECT-"
+    4. P2P Provision Discovery flow or P2P GO negotiation flow.
+        Check if request and response are sent or received.
+        [SPECIAL] [CCoreIndicationsObserver::printHandlingInfo]:[OSC] [SPECIAL]coreInd: CORE_INDICATION_P2P_PROVISION_DISCOVERY_REQUEST_SEND
+        [SPECIAL] [CCoreIndicationsObserver::printHandlingInfo]:[OSC] [SPECIAL]coreInd: CORE_INDICATION_P2P_RECEIVED_PROVISION_DISCOVERY_RESPONSE
+        [SPECIAL] [CCoreIndicationsObserver::printHandlingInfo]:[OSC] [SPECIAL]coreInd: CORE_INDICATION_P2P_GON_REQUEST_SEND
+        [SPECIAL] [CCoreIndicationsObserver::printHandlingInfo]:[OSC] [SPECIAL]coreInd: CORE_INDICATION_P2P_RECEIVED_GON_RESPONSE
+
+        Check if driver RX path was intercepted due to peerGroup 0 port closed/detainer active, so the WFD layer couldn't receive, example from log:
+        [RXDATA] [SPECIAL] [rxPacketProcessValidMpduFrameApi]: : Rx port is closed - detaining data and action frames packet
+        Detainer for peerGroupId: 0 is full - drop packet
+    5. Check current wifi device is WFD_GO or WFD Client.
+    This "WFD_GO" means current wifi device is GO mode, another device will try to connect to this GO:
+    [VIF_MANAGER] [SPECIAL] [vifMgrPrintVifsInfo]:vifMgrPrintVifsInfo | 2  |    0x0002    |     WFD_GO |      WFD_GO |   3  |  0xFF |     0xFF    |  0xFF  |    0xFF    | Address(BE:F1:05:AE:C7:A7)
+
+    This "WFD_Client" means current wifi device is P2P Client mode, it will try to connect to another  P2P device(GO):
+    [VIF_MANAGER] [SPECIAL] [vifMgrPrintVifsInfo]:vifMgrPrintVifsInfo | 2  |    0x0002    | WFD_CLIENT |  WFD_CLIENT |   3  |  0xFF |     0xFF    |  0xFF  |    0xFF    | Address(EA:BF:E1:F1:45:64)
+    6. If GO mode, check is softap or P2P GO:
+        "Start as soft AP:", 0 means P2P GO, 1 means SoftAP.
+        OS trigger "TASK_START_AP" and select the channel of GO:
+        Here we need to check if channel of GO follow BSS channel. If no, why ?
+        [VIF_MANAGER] [SPECIAL] [prvChSelFindFirstValidGoOperatingChannel]:  chosen channel: channel:36, band:1, bandwidth:40mhz, priority:3
+
+    If P2P Client mode, check if OS trigger connect task:
+    Got Command (M1 Message) TASK_CONNECT[6][0x6] (p-0x3, CLIENT, TransId-4625[0x1211])
+    7. If GO mode, check Authentication and Association (AUTH_REQ/AUTH_RSP, ASSOC_REQ/ASSOC_RSP, EAPOL messages, 4‑way handshake lines)
+        [GO_VIF] [SPECIAL] [goVifClientCtrlHandleRxMgmtFrameApi]: : Received Auth request from a new Client Address
+        [OSC] [SPECIAL] [osal::CCmdTask::completeTask]:Completing Task (M4 Message) TASK_SEND_AP_ASSOCIATION_RESPONSE with indication
+        [CNCT_FLOW] [SPECIAL] [prvRxSecurityVerifyMpdu]:EAPOL RECEIVED
+        [CNCT_FLOW] [SPECIAL] [prvTxScdSendPacket]:EAPOL TRANSMIT
+
+    If P2P Client mode, check Authentication and Association (AUTH_REQ/AUTH_RSP, ASSOC_REQ/ASSOC_RSP, EAPOL messages, 4‑way handshake lines)
+        TRANSITION: CVC_SM_SENDING_AUTH ==> CVC_SM_WAIT_FOR_AUTH_RSP
+        TRANSITION: CVC_SM_WAIT_FOR_AUTH_RSP ==> CVC_SM_SENDING_ASSOC
+        TRANSITION: CVC_SM_SENDING_ASSOC ==> CVC_SM_WAIT_FOR_ASSOC_RSP
+        TRANSITION: CVC_SM_WAIT_FOR_ASSOC_RSP ==> CVC_SM_CONNECTED
+        EAPOL TRANSMIT
+        EAPOL RECEIVED
+    8. Connection Establishment (WDI_IND_ASSOC_RESULT or similar success/failure lines).
+    Check if there is any missed beacon issue.
+    9. Link and Resource Management (resource allocation and CCR_SM_* transitions).
+    10. Check disconnection or deauth, it come from OS or another P2P device.
+
+softap_supported_channels:
+  name: "SoftAP Supported Channels"
+  description: "Used to analyze the SoftAP supported channels in different country/region."
+  keywords:
+    - "[prvLarStoreCurrentMcc]"
+    - "[prvLarChannelArrUpdate]: : channel:"
+  expert_rules: |
+    1. Call Tool
+      - You MUST call the tool `softAP_supported_channel`.
+      - Pass the FULL input log as parameter "log_text".
+
+    2. Receive Tool Output
+      - Treat the tool output as the ONLY source of truth
+      - Do NOT question or verify the result
+      - Do NOT recompute any values
+
+    3. Generate Final Answer (STRICT)
+      - The final answer MUST be a direct transformation of the tool output
+      - Do NOT add any new information
+      - Do NOT remove any information
+      - Do NOT change the meaning
+
+    4. Forbidden Actions
+    The following actions are STRICTLY FORBIDDEN:
+      - Adding band classification (e.g., UNII-1, DFS)
+      - Grouping or merging channels (e.g., 36–48)
+      - Inferring extra meanings
+      - Translating or renaming status labels
+      - Generating tables unless already present in tool output
+
+    5. Channel Integrity Rules
+      - Only channels present in the tool output may appear
+      - Every channel in the tool output MUST be included
+      - Do NOT add, remove, or group channels
+
+    6. Output Requirement
+      - Preserve the exact meaning of the tool output
+      - Only reformat if necessary, without adding information
+
+    7. Enforcement
+      - If any content is added that is not from the tool output → INVALID
+      - If any channel is missing → INVALID
+      - If any inference is made → INVALID
+
+    8. Final Rule
+      - The model has NO authority to determine SoftAP support.
+      - All decisions must come from the tool output only.

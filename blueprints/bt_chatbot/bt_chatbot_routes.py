@@ -11,7 +11,7 @@ from tkinter import filedialog
 
 from configs.global_configs import app_config
 from models.models import CaseContext
-from services.bt_chatbot_service import WifiLogAgentSystem, load_skills_from_data_dir, get_builtin_skills, build_skill_file_map, load_skills_from_yaml
+from services.bt_chatbot_service import BtLogAgentSystem, WifiLogAgentSystem, load_skills_from_data_dir, get_builtin_skills, build_skill_file_map, load_skills_from_yaml
 from utils.etl_utils import extract_time_from_description
 from utils.issue_time_utils import (
     parse_issue_time_string,
@@ -316,13 +316,15 @@ def _get_or_create_agent(skip_prime: bool = False) -> WifiLogAgentSystem:
                     "Log Chatbot Agent is not available. "
                     "The app may not have an API key configured."
                 )
-            base = WifiLogAgentSystem(
+            base = BtLogAgentSystem(
                 client=llm_helper.client,
                 model=getattr(llm_helper, "model", "gpt-4.1"),
                 skills=getattr(llm_helper, "skills", None),
             )
-        # Create a fresh per-session instance sharing the same client + skills
-        agent = WifiLogAgentSystem(
+        # Create a fresh per-session instance sharing the same client + skills.
+        # Use type(base) so BtLogAgentSystem overrides (SCOPE_FULL_LOG_WHEN_EMPTY,
+        # empty DRIVER_ADD_MARKER/RESET_MARKER) are preserved in the clone.
+        agent = type(base)(
             client=base.client,
             model=base.model,
             skills=base.skills,   # reuse pre-loaded skills, no disk re-read
@@ -1507,12 +1509,7 @@ def find_best_log():
 # and upload a user-tuned local file back to the share folder.
 # ------------------------------------------------------------------
 
-from configs.path_configs import (
-    LOCAL_SKILLS_YAML as _LOCAL_SKILLS_YAML,
-    SKILLS_CONFIG_DIR_prim as _SK_DIR_prim,
-    SKILLS_CONFIG_DIR_bkup as _SK_DIR_bkup,
-)
-from utils.skills_yaml_utils import (
+from utils.bt_skills_yaml_utils import (
     current_active_yaml as _current_active_yaml,
     find_latest_cloud_baseline_yaml as _latest_cloud_baseline,
     find_latest_share_yaml as _latest_share_yaml,
@@ -1713,7 +1710,7 @@ def _persist_user_yaml_snapshot(data: dict) -> object:
         # unambiguous.
         for entry in target_dir.iterdir():
             if entry.is_file() and entry.name != target.name \
-                    and entry.name.startswith("skills_") and entry.suffix == ".yaml":
+                    and entry.name.startswith("bt_skills_") and entry.suffix == ".yaml":
                 try:
                     entry.unlink()
                 except OSError:

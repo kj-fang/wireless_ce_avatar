@@ -934,6 +934,12 @@
             });
         }
 
+        // Decode a urlencode'd path safely. Jinja's |urlencode uses form-
+        // encoding (spaces → +), but decodeURIComponent only handles %20.
+        function decodePath(encoded) {
+            return decodeURIComponent((encoded || '').replace(/\+/g, '%20'));
+        }
+
         // Extract filename from full path (handle both / and \)
         function getFilename(fullPath) {
             return fullPath.split(/[\\\/]/).pop();
@@ -1116,11 +1122,11 @@
             function _fireBtAutoAnalysis() {
                 // Select the matching BT row in the list (enables action buttons)
                 const norm = s => s.replace(/\\/g, '/');
-                const targetPath = norm(decodeURIComponent(btPathEncoded));
+                const targetPath = norm(decodePath(btPathEncoded));
                 const btRows = document.querySelectorAll('.bt-file-item');
                 let matched = null;
                 btRows.forEach(el => {
-                    if (norm(decodeURIComponent(el.dataset.btEncoded || '')) === targetPath) {
+                    if (norm(decodePath(el.dataset.btEncoded || '')) === targetPath) {
                         matched = el;
                     }
                 });
@@ -1488,7 +1494,7 @@
             button.classList.add('disabled');
             button.innerText = `Parsing...`;
 
-            const decoded = decodeURIComponent(etlPathEncoded);
+            const decoded = decodePath(etlPathEncoded);
             logBox.innerText += `🛠️ Parsing...\n`;
             logBox.scrollTop = logBox.scrollHeight;
             openWppModal(`🛠️ Parsing: ${decoded.split('\\').pop() || decoded.split('/').pop()}`);
@@ -1526,7 +1532,7 @@
         button.classList.add('disabled');
         button.innerText = 'Processing & Parsing...';
 
-        const decoded = decodeURIComponent(etlPathEncoded);
+        const decoded = decodePath(etlPathEncoded);
         appendLog(`\n\n🚀 Starting Analyze with LLM: ${decoded}\n`);
 
         appendLog(`🛠️ Step 1: Running Analysis...\n`);
@@ -1557,7 +1563,7 @@
                 logBox.scrollTop = logBox.scrollHeight;
                 setWifiActionButtonsBusy(false);
                 button.innerText = '⏳ Preparing UI...';
-                const etlPath = decodeURIComponent(etlPathEncoded);
+                const etlPath = decodePath(etlPathEncoded);
                 fetch(CHATBOT_PREPARE_URL, {
                     method: 'POST',
                     headers: { 'Content-Type': 'application/json' },
@@ -1601,7 +1607,7 @@
                 logBox.scrollTop = logBox.scrollHeight;
                 button.innerText = '⏳ Preparing UI...';
 
-                const etlPath = decodeURIComponent(etlPathEncoded);
+                const etlPath = decodePath(etlPathEncoded);
                 fetch(CHATBOT_PREPARE_URL, {
                     method: 'POST',
                     headers: { 'Content-Type': 'application/json' },
@@ -1711,7 +1717,7 @@
         button.classList.add('disabled');
         button.innerText = 'Decoding HCI...';
 
-        const decoded = decodeURIComponent(btPathEncoded);
+        const decoded = decodePath(btPathEncoded);
         appendLog(`\n\n🚀 Starting Bluetooth Analysis Agent: ${decoded}\n`);
         appendLog(`🔍 Step 1: Decoding HCI log (this may take ~1-2 min)...\n`);
 
@@ -1826,7 +1832,7 @@
                         return;
                     }
 
-                    const btnPath = decodeURIComponent(btnPathEnc);
+                    const btnPath = decodePath(btnPathEnc);
                     if (btnPath.replace(/\\/g, '/') === path.replace(/\\/g, '/')) {
                         btn.classList.remove('disabled');
                         if (btn.innerText.includes('Analyzing') || btn.innerText.includes('Decoding')) {
@@ -1875,7 +1881,7 @@
             return pending.taskId === msg.task_id;
         }
 
-        const pendingPath = decodeURIComponent(pending.fwPathEncoded || '');
+        const pendingPath = decodePath(pending.fwPathEncoded || '');
         const messagePath = msg.fw_path || '';
         if (pendingPath && messagePath) {
             return normalizeClientPath(pendingPath) === normalizeClientPath(messagePath);
@@ -1930,7 +1936,7 @@
                 button: button
             };
 
-            const decoded = decodeURIComponent(fwPathEncoded);
+            const decoded = decodePath(fwPathEncoded);
             appendLog(`\n\n🚀 Starting FW Analysis: ${decoded}\n`);
 
             fetch(`${FW_ETL_ANALYSIS_URL}?fw_path=${fwPathEncoded}`)
@@ -1972,7 +1978,7 @@
         window.pendingFwAnalysis = null;
         resetFwButton(button);
 
-        const decoded = decodeURIComponent(fwPathEncoded);
+        const decoded = decodePath(fwPathEncoded);
         appendLog(`✅ FW analysis complete: ${decoded}\n`);
 
         // window.location.href = `${FW_RESULT_URL}?task_id=${encodeURIComponent(taskId)}`;
@@ -1996,7 +2002,7 @@
         button.classList.add('disabled');
         button.innerText = '⏳ Running ETL...';
 
-        const decoded = decodeURIComponent(etlPathEncoded);
+        const decoded = decodePath(etlPathEncoded);
         logBox.innerText += `🤖 Starting Wi-Fi Analysis Agent for: ${decoded}\n`;
         logBox.innerText += `🛠️ Step 1: Running ETL Analysis...\n`;
         logBox.scrollTop = logBox.scrollHeight;
@@ -2055,7 +2061,7 @@
     function _detectDateOrder() {
         let order = 'DD-MM';
         document.querySelectorAll('#wifi-panel .wifi-file-item').forEach(el => {
-            const m = decodeURIComponent(el.dataset.etlEncoded || '')
+            const m = decodePath(el.dataset.etlEncoded || '')
                 .match(/(\d{2})-(\d{2})-(\d{4})_\d{2}-\d{2}-\d{2}/);
             if (m && +m[2] > 12) order = 'MM-DD';
         });
@@ -2093,7 +2099,7 @@
         const order = _detectDateOrder();   // one fixed date order for the whole page
         const cand = [];
         document.querySelectorAll('#wifi-panel .wifi-file-item').forEach(el => {
-            const name = decodeURIComponent(el.dataset.etlEncoded || '');
+            const name = decodePath(el.dataset.etlEncoded || '');
             const ft = _parseFileTimestamp(name, order);
             if (ft) cand.push({ el, key: it.hasDate ? ft.ms : ft.sod });
         });
@@ -2130,7 +2136,7 @@
     async function autoSelectNewestBtLog() {
         const rows = Array.from(document.querySelectorAll('#bt-panel .bt-file-item'));
         if (rows.length <= 1) return;
-        const paths = rows.map(el => decodeURIComponent(el.dataset.btEncoded || ''));
+        const paths = rows.map(el => decodePath(el.dataset.btEncoded || ''));
         try {
             const res = await fetch(BT_FIND_BEST_LOG_URL, {
                 method: 'POST',
@@ -2142,7 +2148,7 @@
             if (!best) return;
             const norm = s => s.replace(/\\/g, '/');
             const target = rows.find(el =>
-                norm(decodeURIComponent(el.dataset.btEncoded || '')) === norm(best));
+                norm(decodePath(el.dataset.btEncoded || '')) === norm(best));
             if (target) {
                 selectBtRow(target);
                 target.scrollIntoView({ block: 'nearest', behavior: 'smooth' });
@@ -2172,7 +2178,7 @@
             } catch (e) { /* ignore — backend picks latest by folder timestamp */ }
         }
 
-        const paths = rows.map(el => decodeURIComponent(el.dataset.btEncoded || ''));
+        const paths = rows.map(el => decodePath(el.dataset.btEncoded || ''));
         try {
             const res = await fetch(BT_FIND_BEST_LOG_URL, {
                 method: 'POST',
@@ -2185,7 +2191,7 @@
             // Match the returned best_path back to its row (normalise slashes).
             const norm = s => s.replace(/\\/g, '/');
             const target = rows.find(el =>
-                norm(decodeURIComponent(el.dataset.btEncoded || '')) === norm(best));
+                norm(decodePath(el.dataset.btEncoded || '')) === norm(best));
             if (!target) return false;
             selectBtRow(target);
             target.scrollIntoView({ block: 'nearest', behavior: 'smooth' });
@@ -2239,7 +2245,7 @@
         const chatbotBtn = document.getElementById('wifi-action-chatbot');
 
         if (selectedText) {
-            selectedText.innerText = selectedEncoded ? decodeURIComponent(selectedEncoded) : 'None';
+            selectedText.innerText = selectedEncoded ? decodePath(selectedEncoded) : 'None';
         }
 
         // Keep all WiFi action buttons locked while parser flow is still running.
@@ -2264,7 +2270,7 @@
         // const chatbotBtn = document.getElementById('ddd-action-chatbot');
 
         if (selectedText) {
-            selectedText.innerText = selectedEncoded ? decodeURIComponent(selectedEncoded) : 'None';
+            selectedText.innerText = selectedEncoded ? decodePath(selectedEncoded) : 'None';
         }
 
         // Keep all DDD action buttons locked while parser flow is still running.
@@ -2286,7 +2292,7 @@
         // const chatbotBtn = document.getElementById('event-action-chatbot');
 
         if (selectedText) {
-            selectedText.innerText = selectedEncoded ? decodeURIComponent(selectedEncoded) : 'None';
+            selectedText.innerText = selectedEncoded ? decodePath(selectedEncoded) : 'None';
         }
 
         // Keep all Event action buttons locked while parser flow is still running.
@@ -2308,7 +2314,7 @@
         // const chatbotBtn = document.getElementById('fw-action-chatbot');
 
         if (selectedText) {
-            selectedText.innerText = selectedEncoded ? decodeURIComponent(selectedEncoded) : 'None';
+            selectedText.innerText = selectedEncoded ? decodePath(selectedEncoded) : 'None';
         }
 
         // Keep all FW action buttons locked while parser flow is still running.
@@ -2381,7 +2387,7 @@
         if (actionType === 'analysis') {
             window.pendingEventAnalyze = true;
             setEventActionButtonsBusy(true, 'event-action-analyze');
-            eventAnalysis(button, decodeURIComponent(selectedEncoded));
+            eventAnalysis(button, decodePath(selectedEncoded));
             return;
         }
     }
@@ -2527,7 +2533,7 @@
     // === 2. Execute ETL and mark it as triggered by the green button (analyze_all) ===
     function executeAutoETL(button, etlPathEncoded) {
         button.innerText = '⏳ Running ETL...';
-        const decoded = decodeURIComponent(etlPathEncoded);
+        const decoded = decodePath(etlPathEncoded);
         logBox.innerText += `👉 Selected: ${decoded}\n`;
         logBox.scrollTop = logBox.scrollHeight;
 
@@ -2709,7 +2715,7 @@
         window.pendingFwAnalysis = null;
         resetFwButton(button);
 
-        const decoded = decodeURIComponent(fwPathEncoded);
+        const decoded = decodePath(fwPathEncoded);
         appendLog(`⏹ FW analysis canceled: ${decoded}\n`, 'red');
     }
 
@@ -2722,7 +2728,7 @@
         window.pendingFwAnalysis = null;
         resetFwButton(button);
 
-        const decoded = decodeURIComponent(fwPathEncoded);
+        const decoded = decodePath(fwPathEncoded);
         appendLog(`❌ FW analysis failed: ${decoded} (${msg.error || 'unknown error'})\n`, 'red');
     }
 

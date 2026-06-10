@@ -3996,9 +3996,9 @@
                         `(${result.source}, ID: ${result.event_id}, ` +
                         `diff: ${diffSec.toFixed(0)}s)`);
                     setIssueTimeFromString(result.formatted_time);
-                    // Keep the confirm gate active — the user should still review
-                    issueTimeAwaitingConfirm = true;
-                    setIssueTimeConfirmUI(true);
+                    // Refine = system-validated alignment → treat as user-owned
+                    // so the user doesn't need to manually confirm again.
+                    markIssueTimeUserOwned();
                     validateUserInput();
                 } else {
                     console.log(`[Auto-Refine] Closest error too far (${diffSec.toFixed(0)}s) — keeping original time.`);

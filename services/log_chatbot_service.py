@@ -3045,27 +3045,6 @@ class WifiLogAgentSystem:
         self._chat_rules_injected_skills = set()
         self._filter_cache_by_skill = {}
 
-    def apply_updated_skills(self, skills) -> None:
-        """Swap in edited / reloaded skills WITHOUT discarding the conversation.
-
-        Replacing ``self.skills`` alone is NOT enough for a mid-conversation
-        edit to take effect, because two caches would keep serving the old
-        version:
-          * ``_chat_rules_injected_skills`` — makes the chat loop take the
-            "expert rules already provided; omitted to save tokens" path, so an
-            edited skill's NEW expert_rules would never be re-injected;
-          * ``_filter_cache_by_skill`` — makes ``fetch_filtered_logs`` return
-            the previously-filtered lines, so an edited FILTER would never
-            re-run.
-        Clearing both means the next ``fetch_filtered_logs`` for any skill
-        re-applies the latest definition. Conversation history (and the
-        assembled-log store) is preserved, so prior analysis context stays and
-        no tool_use/tool_result pairing is disturbed.
-        """
-        self.skills = skills or {}
-        self._chat_rules_injected_skills = set()
-        self._filter_cache_by_skill = {}
-
     def prime_with_context(self, case_nbr: str = "", subject: str = "",
                             description: str = "", issue_type: str = "",
                             attachment_time: str = "") -> None:

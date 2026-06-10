@@ -12,6 +12,14 @@ if hasattr(sys.stdout, 'reconfigure'):
     sys.stdout.reconfigure(encoding='utf-8', errors='replace')
 if hasattr(sys.stderr, 'reconfigure'):
     sys.stderr.reconfigure(encoding='utf-8', errors='replace')
+
+# Install rotating-file log + stdout tee as early as possible so all
+# subsequent print() calls are captured in the log file.
+from configs.logger_setup import setup_file_logging as _setup_file_logging
+_log_path = _setup_file_logging()
+if _log_path:
+    print(f"📝 Log file: {_log_path}")
+
 from urllib.parse import quote
 from urllib.request import Request, urlopen
 

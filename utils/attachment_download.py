@@ -87,7 +87,9 @@ def download_file(name, url, download_path, driver_manager: DriverManager, socke
             time.sleep(5)
             logs = driver.get_log("performance")
             file_size_bytes = extract_content_length(logs)
-            if file_size_bytes > 0:
+            if not file_size_bytes:
+                raise ValueError(f"Could not get Content-Length for {name}, will retry")
+            if socketio:
                 socketio.emit('file_info', {
                     'name': name,
                     'size': file_size_bytes
@@ -100,9 +102,7 @@ def download_file(name, url, download_path, driver_manager: DriverManager, socke
             stall_elapsed = 0
             while True:
                 if driver_manager.shutdown_event.is_set():
-                    driver.quit()
-                    if driver in driver_manager.all_drivers:
-                        driver_manager.all_drivers.remove(driver)
+                    pbar.close()
                     return
                 
                 time.sleep(0.5)
@@ -120,7 +120,8 @@ def download_file(name, url, download_path, driver_manager: DriverManager, socke
 
                     pbar.update(initial_size - pbar.n)
                     progress_data[name] = initial_size / file_size_bytes * 100
-                    eta_seconds = (pbar.total - pbar.n) / pbar.format_dict['rate']
+                    rate = pbar.format_dict.get('rate')
+                    eta_seconds = (pbar.total - pbar.n) / rate if rate else None
                     if socketio:
                         socketio.emit('progress_update', {
                             'name': name,
@@ -129,8 +130,9 @@ def download_file(name, url, download_path, driver_manager: DriverManager, socke
                         }, namespace='/progress')
 
                 elif os.path.exists(file_path):
-                    pbar.update(file_size_bytes - pbar.n) 
-                    eta_seconds = (pbar.total - pbar.n) / pbar.format_dict['rate'] 
+                    pbar.update(file_size_bytes - pbar.n)
+                    rate = pbar.format_dict.get('rate')
+                    eta_seconds = (pbar.total - pbar.n) / rate if rate else None
                     pbar.close()
                     print(f"Download done! {name}")
                     progress_data[name] = 100
@@ -159,5 +161,7 @@ def download_file(name, url, download_path, driver_manager: DriverManager, socke
             print("done")
 
     print(f"❌ All retries failed for {name}")
+    if socketio:
+        socketio.emit('file_download_failed', {'name': name}, namespace='/progress')
     return [None, name, already_dload]
 

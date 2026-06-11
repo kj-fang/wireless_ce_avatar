@@ -28,13 +28,17 @@ def run_dload_threads(att_list, download_path, socketio):
             if driver_manager.shutdown_event.is_set():
                 print("shutddown!!!", driver_manager.shutdown_event)
                 break
-            [file_path, name, already_dload] = future.result()
+            result = future.result()
+            if result is None:
+                continue
+            [file_path, name, already_dload] = result
             print("thread done: ", file_path, name)
             if file_path:
                 all_file_path.append([file_path, name, already_dload])
                 yield [file_path, name, already_dload]
 
 def extract_content_length(logs):
+    max_size = None
     for entry in logs:
         log = json.loads(entry["message"])["message"]
         if log["method"] == "Network.responseReceived":
@@ -42,12 +46,16 @@ def extract_content_length(logs):
                 url = log["params"]["response"]["url"]
                 headers = log["params"]["response"]["headers"]
                 if "esft.intel.com" in url and "Content-Length" in headers:
+                    size = int(headers["Content-Length"])
                     print("✅ URL:", url)
-                    print("📦 Content-Length:", headers["Content-Length"])
-                    return int(headers["Content-Length"])
+                    print("📦 Content-Length:", size)
+                    if max_size is None or size > max_size:
+                        max_size = size
             except Exception as e:
                 continue
-    return None
+    return max_size
+
+STALL_TIMEOUT = 60   # 超過 60 秒進度沒有增加視為卡住
 
 def download_file(name, url, download_path, driver_manager: DriverManager, socketio):
 
@@ -63,14 +71,16 @@ def download_file(name, url, download_path, driver_manager: DriverManager, socke
         print("⚠️ Last download failed. Removing.")
         os.remove(temp_path)
 
-    driver = driver_manager.create_download_driver(download_path, performance_logging=True)
-    
     max_retry = 3
     retry = 0
 
     progress_data[name] = 0
     
     while (retry < max_retry) and not driver_manager.shutdown_event.is_set():
+        if os.path.exists(temp_path):
+            print(f"⚠️ Removing stale partial download before retry {retry + 1}.")
+            os.remove(temp_path)
+        driver = driver_manager.create_download_driver(download_path, performance_logging=True)
         try:
             driver.get(url)
 
@@ -86,6 +96,8 @@ def download_file(name, url, download_path, driver_manager: DriverManager, socke
             print("File path:", file_path)
 
             pbar = tqdm(total=file_size_bytes, unit='B', unit_scale=True, desc=name)
+            last_size = 0
+            stall_elapsed = 0
             while True:
                 if driver_manager.shutdown_event.is_set():
                     driver.quit()
@@ -94,8 +106,18 @@ def download_file(name, url, download_path, driver_manager: DriverManager, socke
                     return
                 
                 time.sleep(0.5)
+
                 if os.path.exists(temp_path):
                     initial_size = os.path.getsize(temp_path)
+
+                    if initial_size > last_size:
+                        last_size = initial_size
+                        stall_elapsed = 0
+                    else:
+                        stall_elapsed += 0.5
+                        if stall_elapsed >= STALL_TIMEOUT:
+                            raise TimeoutError(f"Download stalled for {name}")
+
                     pbar.update(initial_size - pbar.n)
                     progress_data[name] = initial_size / file_size_bytes * 100
                     eta_seconds = (pbar.total - pbar.n) / pbar.format_dict['rate']
@@ -119,6 +141,11 @@ def download_file(name, url, download_path, driver_manager: DriverManager, socke
                             'eta': int(eta_seconds) if eta_seconds is not None else None
                         }, namespace='/progress')
                     return [file_path, name, already_dload]
+
+                else:
+                    stall_elapsed += 0.5
+                    if stall_elapsed >= STALL_TIMEOUT:
+                        raise TimeoutError(f"Download stalled (no file) for {name}")
                 
         except Exception as e:
             print(f"Download failed {e}")
@@ -130,4 +157,7 @@ def download_file(name, url, download_path, driver_manager: DriverManager, socke
             if driver in driver_manager.all_drivers:
                 driver_manager.all_drivers.remove(driver)
             print("done")
+
+    print(f"❌ All retries failed for {name}")
+    return [None, name, already_dload]
 

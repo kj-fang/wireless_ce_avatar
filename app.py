@@ -15,10 +15,13 @@ if hasattr(sys.stderr, 'reconfigure'):
 
 # Install rotating-file log + stdout tee as early as possible so all
 # subsequent print() calls are captured in the log file.
-from configs.logger_setup import setup_file_logging as _setup_file_logging
-_log_path = _setup_file_logging()
-if _log_path:
-    print(f"📝 Log file: {_log_path}")
+# Skip for --tray-mode: the tray process has no console (DETACHED_PROCESS),
+# sys.stdout may be None, and the tray manager logs to its own tray.log.
+if '--tray-mode' not in sys.argv:
+    from configs.logger_setup import setup_file_logging as _setup_file_logging
+    _log_path = _setup_file_logging()
+    if _log_path:
+        print(f"📝 Log file: {_log_path}")
 
 from urllib.parse import quote
 from urllib.request import Request, urlopen
@@ -36,6 +39,8 @@ from utils.instance_utils import (
     is_intelavatar_process,
     check_already_running,
     register_instance,
+    acquire_app_start_lock,
+    release_app_start_lock,
     ensure_tray_manager,
     ensure_startup_shortcut,
     ensure_sendto_shortcut,
@@ -258,7 +263,18 @@ if __name__ == "__main__":
         if not _navigate_existing_browser(existing['url'], startup_path):
             webbrowser.open(f"{existing['url']}{startup_path}")
         sys.exit(0)
-    
+    # Acquire a startup lock so only one process proceeds past this point.
+    # Any other instance that starts while we are in the window between
+    # check_already_running() and register_instance() will hit the lock and exit.
+    if not acquire_app_start_lock():
+        print("\u2139\ufe0f Another IntelAvatar instance is starting up \u2014 exiting this instance.")
+        existing = check_already_running()
+        if existing:
+            if startup_path and startup_path != '/':
+                _bring_chrome_to_front(existing['pid'])
+            if not _navigate_existing_browser(existing['url'], startup_path):
+                webbrowser.open(f"{existing['url']}{startup_path}")
+        sys.exit(0)    
     # Create / refresh the Windows Startup shortcut so the app auto-starts on login
     ensure_startup_shortcut()
 
@@ -267,7 +283,7 @@ if __name__ == "__main__":
     # [DO NOT remove] - Only log the first few chars as a sanity check
     print(f"🔑 SendTo token: {app_config.sendto_token[:8]}...")
 
-    # Ensure the tray manager is running (unless explicitly disabled)
+    # Ensure the tray manager is running (unless explicitly disabled).
     if not args.no_tray:
         ensure_tray_manager()
 
@@ -310,6 +326,7 @@ if __name__ == "__main__":
     
     # Register this instance so single-instance enforcement works regardless of tray usage
     register_instance(port)
+    release_app_start_lock()  # Lock no longer needed — json is written
 
     print(f"🚀 IntelAvatar v{__version__} starting...")
     print(f"📅 Build: {BUILD_DATE}")

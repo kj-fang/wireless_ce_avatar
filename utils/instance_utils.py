@@ -86,26 +86,141 @@ def register_instance(port):
         print(f"⚠️  Registration failed: {e}")
 
 
+def _app_start_lock_path() -> str:
+    return os.path.join(get_user_data_dir(), 'app_start.lock')
+
+
+def acquire_app_start_lock() -> bool:
+    """Atomically acquire the app startup lock.
+
+    Returns True on success (this process is the one true starter).
+    Returns False if another instance is already starting up.
+    The lock must be released by calling release_app_start_lock() after
+    register_instance() completes.
+    """
+    lock_path = _app_start_lock_path()
+    try:
+        fd = os.open(lock_path, os.O_CREAT | os.O_EXCL | os.O_WRONLY)
+        os.write(fd, str(os.getpid()).encode())
+        os.close(fd)
+        return True
+    except FileExistsError:
+        # Stale lock detection: read the PID from the lock file and check if
+        # that process is still alive.  A previous crash may have left the lock
+        # behind without ever calling release_app_start_lock().
+        try:
+            with open(lock_path, 'r', encoding='utf-8') as f:
+                holder_pid = int(f.read().strip())
+            if not psutil.pid_exists(holder_pid):
+                # Holder is dead — remove stale lock and claim it ourselves.
+                os.remove(lock_path)
+                fd = os.open(lock_path, os.O_CREAT | os.O_EXCL | os.O_WRONLY)
+                os.write(fd, str(os.getpid()).encode())
+                os.close(fd)
+                print(f"⚠️  Removed stale app_start.lock (dead PID={holder_pid})")
+                return True
+        except (ValueError, FileNotFoundError, FileExistsError, OSError):
+            pass
+        return False
+    except Exception:
+        # If we can't create the lock for unexpected reasons, allow startup
+        # rather than blocking everyone.
+        return True
+
+
+def release_app_start_lock():
+    """Release the app startup lock after register_instance() completes."""
+    try:
+        os.remove(_app_start_lock_path())
+    except Exception:
+        pass
+
+
+def _tray_pid_file() -> str:
+    return os.path.join(get_user_data_dir(), 'tray_manager.pid')
+
+
+def _tray_spawn_lock() -> str:
+    return os.path.join(get_user_data_dir(), 'tray_spawn.lock')
+
+
+def _is_tray_process(proc: "psutil.Process") -> bool:
+    """Return True only if proc looks like an IntelAvatar tray-mode process."""
+    try:
+        name = (proc.name() or '').lower()
+        cmdline = [a.lower() for a in (proc.cmdline() or [])]
+        # Frozen: IntelAvatar.exe --tray-mode
+        if name == 'intelavatar.exe' and '--tray-mode' in cmdline:
+            return True
+        # Dev: python tray_manager.py
+        if name in ('python.exe', 'pythonw.exe'):
+            if any('tray_manager.py' in a for a in cmdline):
+                return True
+    except Exception:
+        pass
+    return False
+
+
+def _is_tray_running() -> bool:
+    """Step 1: check tray_manager.pid written by the tray process itself."""
+    pid_path = _tray_pid_file()
+    try:
+        with open(pid_path, 'r', encoding='utf-8') as f:
+            pid = int(f.read().strip())
+        if psutil.pid_exists(pid):
+            proc = psutil.Process(pid)
+            if proc.is_running() and _is_tray_process(proc):
+                return True
+        # Stale pid file (dead or PID reused by unrelated process) — remove it
+        os.remove(pid_path)
+    except (FileNotFoundError, ValueError):
+        pass
+    except Exception:
+        pass
+    return False
+
+
 def ensure_tray_manager():
     """Ensure the tray manager is running, launching it if necessary."""
-    tray_running = False
-    for proc in psutil.process_iter(['name', 'cmdline']):
-        try:
-            name    = (proc.info['name'] or '').lower()
-            cmdline = proc.info['cmdline'] or []
-            # Frozen:  IntelAvatar.exe --tray-mode
-            if name == 'intelavatar.exe' and '--tray-mode' in cmdline:
-                tray_running = True
-                break
-            # Dev:     python tray_manager.py  (no --tray-mode flag)
-            if name in ('python.exe', 'pythonw.exe'):
-                if any('tray_manager.py' in arg.lower() for arg in cmdline):
-                    tray_running = True
-                    break
-        except Exception:
-            pass
+    # Step 1: fast check via pid file written by the tray process itself.
+    if _is_tray_running():
+        print("ℹ️ Tray manager is already running")
+        return
 
-    if not tray_running:
+    # Step 2: atomic spawn lock — only one process may spawn the tray.
+    # os.open with O_CREAT|O_EXCL is atomic at the OS level; exactly one
+    # caller succeeds even when multiple processes race here simultaneously.
+    lock_path = _tray_spawn_lock()
+    try:
+        fd = os.open(lock_path, os.O_CREAT | os.O_EXCL | os.O_WRONLY)
+        os.write(fd, str(os.getpid()).encode())
+        os.close(fd)
+    except FileExistsError:
+        # Another process is already in the middle of spawning the tray.
+        # Stale lock detection: if the holder PID is dead, remove and proceed.
+        try:
+            with open(lock_path, 'r', encoding='utf-8') as f:
+                holder_pid = int(f.read().strip())
+            if not psutil.pid_exists(holder_pid):
+                os.remove(lock_path)
+                fd = os.open(lock_path, os.O_CREAT | os.O_EXCL | os.O_WRONLY)
+                os.write(fd, str(os.getpid()).encode())
+                os.close(fd)
+                print(f"⚠️  Removed stale tray_spawn.lock (dead PID={holder_pid})")
+                # Fall through to spawn the tray below.
+            else:
+                print("ℹ️ Tray manager is being launched by another process")
+                return
+        except (ValueError, FileNotFoundError, FileExistsError, OSError):
+            print("ℹ️ Tray manager is being launched by another process")
+            return
+
+    try:
+        # Re-check inside the lock in case tray started between our check and lock.
+        if _is_tray_running():
+            print("ℹ️ Tray manager is already running")
+            return
+
         detached_flags = getattr(subprocess, 'CREATE_NO_WINDOW', 0)
         detached_flags |= getattr(subprocess, 'DETACHED_PROCESS', 0)
         detached_flags |= getattr(subprocess, 'CREATE_NEW_PROCESS_GROUP', 0)
@@ -118,7 +233,6 @@ def ensure_tray_manager():
             )
         else:
             # Development: run tray_manager.py directly
-            # Go up one level from utils/ to reach the project root
             root = os.path.dirname(os.path.dirname(os.path.abspath(__file__)))
             tray_path = os.path.join(root, 'tray_manager.py')
             subprocess.Popen(
@@ -127,9 +241,13 @@ def ensure_tray_manager():
                 cwd=root
             )
         print("✅ Tray manager launched")
-        time.sleep(1.5)  # Give it a moment to create its tray icon
-    else:
-        print("ℹ️ Tray manager is already running")
+        time.sleep(1.5)  # Give the tray process time to write its pid file
+    finally:
+        # Always release the spawn lock.
+        try:
+            os.remove(lock_path)
+        except Exception:
+            pass
 
 
 def _create_windows_shortcut(appdata_subdir, label, extra_ps_props=''):

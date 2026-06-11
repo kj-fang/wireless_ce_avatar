@@ -154,6 +154,7 @@ def _is_allowed_local_analysis_filename(filename: str) -> bool:
         or lower_name.endswith('.7z')
         or lower_name.endswith('.rar')
         or lower_name.endswith('.log')
+        or lower_name.endswith('.hci.txt')
         or lower_name.endswith('.etl')
         or lower_name.endswith('.dmp')
         or bool(re.search(r'\.etl\.\d+$', clean_name, re.IGNORECASE))
@@ -286,6 +287,13 @@ def _process_local_analysis(source_path: str, source_dir: str, file_path: str,
         _cb(90, 'Log file ready.')
         return url_for('log_chatbot.index', auto_run='analyze_all')
 
+    elif file_path.lower().endswith('.hci.txt'):
+        # Treat .hci.txt from BT HCI decode as a decoded BT log
+        session['latest_etl_path'] = file_path
+        app_config.last_analyzed_log_path = file_path
+        _cb(90, 'BT HCI log file ready.')
+        return url_for('bt_chatbot.index', auto_run='analyze_all')
+
     elif _is_bt_etl(file_path):
         _cb(20, 'Launching BT HCI decoder…')
         _cb(30, 'Decoding in progress (may take ~30 s)…')
@@ -295,7 +303,7 @@ def _process_local_analysis(source_path: str, source_dir: str, file_path: str,
         _cb(90, 'BT HCI decode complete.')
         session['latest_etl_path'] = hci_path
         app_config.last_analyzed_log_path = hci_path
-        return url_for('log_chatbot.index', auto_run='analyze_all')
+        return url_for('bt_chatbot.index', auto_run='analyze_all')
 
     else:
         _cb(20, 'Starting WPP/DDD parser…')
@@ -345,7 +353,7 @@ def pick_local_analysis_file():
         selected_path = filedialog.askopenfilename(
             title='Select local analysis file',
             filetypes=[
-                ('Supported files', '*.zip *.7z *.rar *.log *.etl *.etl.* *.dmp'),
+                ('Supported files', '*.zip *.7z *.rar *.log *.hci.txt *.etl *.etl.* *.dmp'),
                 ('All files', '*.*'),
             ],
         )
@@ -358,7 +366,7 @@ def pick_local_analysis_file():
         if not _is_allowed_local_analysis_filename(selected_name):
             return jsonify({
                 'success': False,
-                'message': f'Invalid file type: {selected_name}. Only .zip, .7z, .rar, .etl, .log, or .dmp are allowed.'
+                'message': f'Invalid file type: {selected_name}. Only .zip, .7z, .rar, .etl, .hci.txt, .log, or .dmp are allowed.'
             }), 400
 
         normalized_selected_path = os.path.normpath(os.path.abspath(selected_path))
@@ -411,7 +419,7 @@ def upload_local_analysis():
     if not _is_allowed_local_analysis_filename(original_name):
         return jsonify({
             'success': False,
-            'message': f'Invalid file type: {original_name}. Only .zip, .7z, .rar, .etl, .log, or .dmp are allowed.'
+            'message': f'Invalid file type: {original_name}. Only .zip, .7z, .rar, .etl, .hci.txt, .log, or .dmp are allowed.'
         }), 400
 
     timestamp = datetime.datetime.now().strftime('%Y%m%d_%H%M%S')
@@ -440,10 +448,14 @@ def upload_local_analysis():
     if source_lower.endswith('.log'):
         resp['use_chatbot'] = True
         resp['log_path'] = helpers.to_long_path(source_path)
+    elif source_lower.endswith('.hci.txt'):                        # .hci.txt / BT decoded log
+        resp['use_chatbot'] = True
+        resp['is_bt'] = True
+        resp['log_path'] = helpers.to_long_path(source_path)
     elif _is_bt_etl(source_path):                              # BT .etl go log_path
         resp['use_chatbot'] = True
-        _base = source_path[:-4] if source_path.lower().endswith('.etl') else source_path
-        resp['log_path'] = helpers.to_long_path(_base + '.hci.txt')
+        resp['is_bt'] = True
+        resp['log_path'] = helpers.to_long_path(source_path + '.hci.txt')
     elif source_lower.endswith('.etl') or bool(re.search(r'\.etl\.\d+$', source_lower)):
         resp['use_chatbot'] = True
         resp['etl_path'] = helpers.to_long_path(source_path)
@@ -478,7 +490,7 @@ def open_local_analysis():
         return redirect(url_for('main.index'))
 
     if not _is_allowed_local_analysis_filename(original_name):
-        flash(f'Invalid file type: {original_name}. Only .zip, .7z, .rar, .etl, .log, or .dmp are allowed.', 'danger')
+        flash(f'Invalid file type: {original_name}. Only .zip, .7z, .rar, .etl, .hci.txt, .log, or .dmp are allowed.', 'danger')
         return redirect(url_for('main.index'))
 
     # Store validated path in session; actual processing starts after the
@@ -730,6 +742,8 @@ def _run_sendto_in_background(socketio, client_sid, source_path: str):
             emit_progress(10, 'Archive detected. Extracting…')
         elif file_lower.endswith('.log'):
             emit_progress(10, 'Log file detected. Preparing chatbot…')
+        elif file_lower.endswith('.hci.txt'):
+            emit_progress(10, 'Bluetooth log detected. Preparing Bluetooth chatbot…')
         elif _is_bt_etl(source_path):
             emit_progress(10, 'Bluetooth ETL detected. Starting HCI decode…')
         else:

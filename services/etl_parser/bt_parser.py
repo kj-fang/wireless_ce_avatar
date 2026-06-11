@@ -118,7 +118,11 @@ def close_warning_dialog() -> None:
                 if c.element_info.control_type == "Text"
             )
             if has_sysinfo_warning:
-                print("⚠️ Systeminfo warning dialog found. Closing it.")
+                print("⚠️ Systeminfo warning dialog found. Bringing to front and closing it.")
+                try:
+                    win.set_focus()
+                except Exception:
+                    pass
                 for btn in win.descendants():
                     if btn.element_info.control_type == "Button" and btn.window_text() == "OK":
                         btn.click_input()
@@ -187,7 +191,11 @@ def close_error_dialog() -> None:
                 if c.element_info.control_type == "Text"
             )
             if has_hci_error:
-                print("⚠️ HCI Decode error dialog found. Closing it.")
+                print("⚠️ HCI Decode error dialog found. Bringing to front and closing it.")
+                try:
+                    win.set_focus()
+                except Exception:
+                    pass
                 # child_window() is not available on raw UIAWrapper from Desktop.windows().
                 # Use descendants() to locate the OK button directly.
                 for btn in win.descendants():

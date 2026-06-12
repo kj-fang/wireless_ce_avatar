@@ -5,7 +5,7 @@ a = Analysis(
     ['app.py'],
     pathex=[],
     binaries=[],
-    datas=[('templates', 'templates'), ('blueprints', 'blueprints'), ('configs', 'configs'), ('models', 'models'), ('static', 'static'), ('services', 'services'), ('utils', 'utils'), ('tray_manager.py', '.'), ('icon.ico', '.')],
+    datas=[('templates', 'templates'), ('blueprints', 'blueprints'), ('configs', 'configs'), ('models', 'models'), ('static', 'static'), ('services', 'services'), ('utils', 'utils'), ('utils/assert_codes_cache.json', 'utils'), ('tray_manager.py', '.'), ('icon.ico', '.')],
     hiddenimports=['engineio.async_drivers.threading', 'socketio.async_drivers.threading', 'snowflake.connector.snow_logging', 'py7zr', 'psutil', 'pystray', 'PIL', 'PIL.Image', 'anthropic', 'flask_session', 'cachelib', 'cachelib.file'],
     hookspath=[],
     hooksconfig={},

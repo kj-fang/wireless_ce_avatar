@@ -37,15 +37,55 @@ from __future__ import annotations
 
 import json
 import re
+import sys
 import threading
 from pathlib import Path
 from typing import Optional
 
 # ── Paths ─────────────────────────────────────────────────────────────────────
-_UTILS_DIR  = Path(__file__).parent          # utils/
-_LMAC_H     = _UTILS_DIR / "assertLmac.h"
-_UMAC_H     = _UTILS_DIR / "assertUmac.h"
-_CACHE_JSON = _UTILS_DIR / "assert_codes_cache.json"
+def _resolve_paths() -> tuple:
+    """
+    Resolve .h header and cache paths for both dev and frozen (PyInstaller) modes.
+
+    .h files (read-only bundled assets):
+      - Dev:    utils/ (next to this file)
+      - Frozen: sys._MEIPASS/utils/
+
+    Cache file (writable):
+      - Always: Downloads/IntelAvatar_files/assert_codes_cache.json
+      This keeps a single consistent location regardless of how the app is run,
+      avoids writing into the source tree in dev mode, and survives exe rebuilds
+      without needing to re-parse the headers on every fresh install.
+      Falls back to utils/ if the Downloads folder cannot be resolved.
+    """
+    frozen = getattr(sys, 'frozen', False)
+    if frozen:
+        # Frozen exe: .h files are not bundled (private); cache is bundled read-only.
+        utils_dir = Path(sys._MEIPASS) / 'utils'
+        cache     = utils_dir / "assert_codes_cache.json"
+    else:
+        utils_dir = Path(__file__).resolve().parent   # dev: utils/
+        try:
+            import winreg
+            key = winreg.OpenKey(
+                winreg.HKEY_CURRENT_USER,
+                r"Software\Microsoft\Windows\CurrentVersion\Explorer\Shell Folders",
+            )
+            downloads = winreg.QueryValueEx(key, "{374DE290-123F-4565-9164-39C4925E467B}")[0]
+            winreg.CloseKey(key)
+            cache_dir = Path(downloads) / "IntelAvatar_files"
+            cache_dir.mkdir(parents=True, exist_ok=True)
+        except Exception:
+            cache_dir = utils_dir   # fallback
+        cache = cache_dir / "assert_codes_cache.json"
+
+    lmac = utils_dir / "assertLmac.h"
+    umac = utils_dir / "assertUmac.h"
+    print(f"[AssertCodes] frozen={frozen}, cache → {cache}")
+    return lmac, umac, cache, frozen
+
+
+_LMAC_H, _UMAC_H, _CACHE_JSON, _FROZEN = _resolve_paths()
 
 # ── CPU-context flag injected at runtime (not defined in these .h files) ──────
 # SYSASSERT_CPU_UMAC: prepended by hardware when a UMAC assert fires.
@@ -251,15 +291,32 @@ def _load_or_parse() -> dict:
     """
     Return the lookup dict from the JSON cache when it is up-to-date,
     otherwise re-parse the headers and refresh the cache.
+
+    Frozen mode: cache is pre-built and bundled read-only in the exe.
+    Load it directly — no mtime check, no writing.
+    Dev mode: parse .h files if cache is missing or stale, then write.
     """
+    if _FROZEN:
+        # Bundled cache is always authoritative for this exe version.
+        try:
+            data = json.loads(_CACHE_JSON.read_text(encoding="utf-8"))
+            print(f"[AssertCodes] Loaded {len(data)} entries from bundled cache.")
+            return data
+        except Exception as e:
+            print(f"[AssertCodes] Bundled cache read failed ({e}) — lookup unavailable.")
+            return {}
+
+    # Dev mode: check mtime and re-parse if stale.
     if _CACHE_JSON.exists():
         h_mtimes = [p.stat().st_mtime for p in (_LMAC_H, _UMAC_H) if p.exists()]
         if h_mtimes and _CACHE_JSON.stat().st_mtime >= max(h_mtimes):
             try:
                 data = json.loads(_CACHE_JSON.read_text(encoding="utf-8"))
-                print(f"[AssertCodes] Loaded {len(data)} entries from cache "
-                      f"({_CACHE_JSON.name}).")
-                return data
+                if data:
+                    print(f"[AssertCodes] Loaded {len(data)} entries from cache "
+                          f"({_CACHE_JSON.name}).")
+                    return data
+                print(f"[AssertCodes] Cache is empty, re-parsing headers.")
             except Exception as e:
                 print(f"[AssertCodes] Cache read failed ({e}), re-parsing headers.")
 
@@ -365,3 +422,7 @@ def lookup_assert_code(code: str) -> str:
         lines.append("      the log. Cross-reference the values above for failure details.")
 
     return "\n".join(lines)
+
+
+# ── Eager initialization: build / load cache at import time ──────────────────
+_ensure_loaded()

@@ -1,10 +1,13 @@
 # Scenario 1: Developer PR  → feature branch pushed, PR opened against main
 #   - Builds + runs linter, uploads artifact, posts version comment on PR
-#   - Version: 99.0.<base_patch>-dev.<sha1>  (DEV)
+#   - Version: 99.1.<patch>-dev.<sha1>  (DEV)
 #
 # Scenario 2: Merge to main  → PR merged (push to main)
 #   - Nightly build, uploads artifact, NO GitHub Release
-#   - Version: 99.0.<commit_count>  (NIGHTLY)
+#   - Version: 99.1.<patch>  (NIGHTLY)
+#
+# Patch resets to 0 at the version anchor tag (e.g. v99.1.0) and increments
+# with each commit since. Tag the bump commit to reset the counter.
 
 name: Build and Test
 
@@ -14,6 +17,18 @@ on:
   pull_request:
     branches: [ main ]         # Scenario 1: dev PR build
   workflow_dispatch:
+
+# ── Nightly version line ─────────────────────────────────────────────────────
+# To bump the nightly minor (e.g. 99.1 → 99.2), update ALL three locations:
+#   1. NIGHTLY_MAJOR / NIGHTLY_MINOR below (this file)
+#   2. $NightlyMajor / $NightlyMinor in build_with_version.ps1  ← must match
+#   3. Tag the bump commit: git tag v99.2.0 && git push origin v99.2.0
+# Keeping this file and build_with_version.ps1 in sync is REQUIRED — they are
+# two separate sources of truth for CI builds vs local builds respectively.
+env:
+  NIGHTLY_MAJOR: '99'
+  NIGHTLY_MINOR: '1'
+# ─────────────────────────────────────────────────────────────────────────────
 
 permissions:
   contents: write             # needed to create nightly pre-releases
@@ -50,8 +65,22 @@ jobs:
 
         if ($isNightly) {
           # Scenario 2: Merge to main — nightly build
-          $commitCount = git rev-list --count HEAD
-          $version     = "99.0.$commitCount"
+          # Patch = commits since the version anchor tag (e.g. v99.1.0).
+          # Auto-create the anchor tag on the first nightly after a minor bump
+          # if it doesn't already exist, so the patch counter resets to 0.
+          $anchorTag = "v$env:NIGHTLY_MAJOR.$env:NIGHTLY_MINOR.0"
+          git fetch origin --tags --quiet 2>$null
+          $tagExists = git tag -l $anchorTag
+          if (-not $tagExists) {
+            Write-Host "::notice::Anchor tag '$anchorTag' not found — creating it on HEAD"
+            git config user.email "github-actions[bot]@users.noreply.github.com"
+            git config user.name  "github-actions[bot]"
+            git tag $anchorTag
+            git push origin $anchorTag
+          }
+          $patchCount = git rev-list --count "${anchorTag}..HEAD" 2>$null
+          if ($LASTEXITCODE -ne 0 -or $null -eq $patchCount) { $patchCount = 0 }
+          $version     = "$env:NIGHTLY_MAJOR.$env:NIGHTLY_MINOR.$patchCount"
           $buildType   = "NIGHTLY"
         } else {
           # Scenario 1: PR from feature branch — dev build
@@ -62,9 +91,14 @@ jobs:
             $baseCommitCount = git rev-list --count origin/main
             Write-Host "::warning::Could not determine branch point — using tip of main as fallback"
           } else {
-            $baseCommitCount = git rev-list --count $mergeBase
+            $anchorTag = "v$env:NIGHTLY_MAJOR.$env:NIGHTLY_MINOR.0"
+            $baseCommitCount = git rev-list --count "${anchorTag}..${mergeBase}" 2>$null
+            if ($LASTEXITCODE -ne 0 -or $null -eq $baseCommitCount) {
+              Write-Host "::warning::Tag '$anchorTag' not found — falling back to commits from merge-base"
+              $baseCommitCount = git rev-list --count $mergeBase
+            }
           }
-          $version   = "99.0.$baseCommitCount-dev.$gitHash"
+          $version   = "$env:NIGHTLY_MAJOR.$env:NIGHTLY_MINOR.$baseCommitCount-dev.$gitHash"
           $buildType = "DEV"
         }
 

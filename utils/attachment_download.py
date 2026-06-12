@@ -153,6 +153,13 @@ def download_file(name, url, download_path, driver_manager: DriverManager, socke
             print(f"Download failed {e}")
             print(f"Retry download file: {name}")
             retry += 1
+            if socketio and retry < max_retry:
+                socketio.emit('download_retry', {
+                    'name': name,
+                    'retry': retry,
+                    'max_retry': max_retry,
+                    'stall_timeout': STALL_TIMEOUT
+                }, namespace='/progress')
         finally:
             
             driver.quit()

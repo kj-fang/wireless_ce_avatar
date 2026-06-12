@@ -419,6 +419,32 @@ def _infer_local_upload_case_type(bt_files) -> str:
     return 'wifi'
 
 
+def _detect_report_zip_artifacts(source_dir: str):
+    """Scan source_dir after extraction for the report-zip structure.
+
+    Expected layout (produced by the validation AI agent):
+        <source_dir>/<zip_stem>/<zip_stem>/
+            <driver_log_folder>/
+            artifacts/          <- various output files
+            <*report*.txt>      <- human-readable report
+
+    Returns (report_txt_path | None, artifacts_dir_path | None).
+    """
+    report_txt = None
+    artifacts_dir = None
+    for dirpath, dirnames, filenames in os.walk(source_dir):
+        if report_txt is None:
+            for fname in filenames:
+                if 'report' in fname.lower() and fname.lower().endswith('.txt'):
+                    report_txt = os.path.join(dirpath, fname)
+                    break
+        if artifacts_dir is None and os.path.basename(dirpath).lower() == 'artifacts':
+            artifacts_dir = dirpath
+        if report_txt and artifacts_dir:
+            break
+    return report_txt, artifacts_dir
+
+
 def _process_local_analysis(source_path: str, source_dir: str, file_path: str,
                             original_name: str, timestamp: str,
                             is_bsod: bool = False,
@@ -556,10 +582,42 @@ def _process_local_analysis(source_path: str, source_dir: str, file_path: str,
         total = len(extracted_files)
         _cb(60, f'Extraction complete. Found {total} file{"s" if total != 1 else ""}.')
 
-        local_case_nbr = f'local_upload_{timestamp}'
-        # Only consider bt_files for case type inference since wifi_files may be present in both wifi and bt cases
-        local_case_type = _infer_local_upload_case_type(bt_files)
+         # Only scan for agent-zip report/artifacts structure when the file came
+        # from --agent-zip (flagged via session['is_agent_zip']).  Skip for
+        # regular zip uploads to avoid unnecessary filesystem traversal.
+        if session.get('is_agent_zip'):
+            _zip_stem = os.path.splitext(original_name)[0]
+            _extract_root = os.path.join(source_dir, _zip_stem)
+            _scan_dir = _extract_root if os.path.isdir(_extract_root) else source_dir
+            _report_txt, _artifacts_dir = _detect_report_zip_artifacts(_scan_dir)
+            if _report_txt:
+                print(f"📄 [Agent-zip] report txt: {_report_txt}")
+                session['sendto_report_path'] = _report_txt
+            if _artifacts_dir:
+                print(f"📁 [Agent-zip] artifacts folder: {_artifacts_dir}")
+                session['sendto_artifacts_path'] = _artifacts_dir
 
+        local_case_nbr = f'local_upload_{timestamp}'
+        
+        # By default, only consider the bt_files list when determining the case type; if it's non-empty, classify as BT.
+        # For agent-zip, infer case type from the report txt's second line
+        # (e.g. "Bluetooth" or "Wi-Fi"); fall back to bt_files heuristic otherwise.
+        local_case_type = _infer_local_upload_case_type(bt_files)
+        if session.get('is_agent_zip'):
+            _rpt = session.get('sendto_report_path', '')
+            if _rpt:
+                try:
+                    with open(_rpt, 'r', encoding='utf-8', errors='ignore') as _f:
+                        _lines = [_f.readline(), _f.readline()]
+                    _second_line = _lines[1] if len(_lines) > 1 else ''
+                    if 'bluetooth' in _second_line.lower():
+                        local_case_type = 'bt'
+                    elif 'wi-fi' in _second_line.lower() or 'wifi' in _second_line.lower():
+                        local_case_type = 'wifi'
+                    print(f"🔍 [Agent-zip] Inferred case type from report: {local_case_type}")
+                except OSError:
+                    pass
+ 
         local_context = CaseContext(
             case_nbr=local_case_nbr,
             wifi_or_bt=local_case_type,
@@ -588,7 +646,10 @@ def _process_local_analysis(source_path: str, source_dir: str, file_path: str,
             issue=local_context.to_dict(), domain=local_case_type,
         )
         session['bsod'] = False
+
         session['latest_etl_llm'] = False
+        if session.get('sendto_report_path'):
+            session['latest_etl_llm'] = True
 
         app_config.set_download_results(
             local_case_nbr,
@@ -945,9 +1006,16 @@ def open_local_analysis():
         flash(f'Invalid file type: {original_name}. Only .zip, .7z, .rar, .etl, ddd, .hci.txt, .log, or .dmp are allowed.', 'danger')
         return redirect(url_for('main.index'))
 
+    print(f"📥 [open_local_analysis] source_path: {source_path}")
+
     # Store validated path in session; actual processing starts after the
     # browser connects to the /sendto-progress Socket.IO namespace.
     session['sendto_pending_path'] = source_path
+    session['is_agent_zip'] = request.args.get('is_agent_zip') == '1'
+    # Clear any stale report/json paths from a previous session; the zip
+    # auto-detection in _process_local_analysis will populate them if applicable.
+    session['sendto_report_path'] = ''
+    session['sendto_json_path'] = ''
 
     return render_template('sendto_transmission.html', filename=original_name)
 
@@ -1248,8 +1316,8 @@ def _run_sendto_in_background(socketio, client_sid, source_path: str):
         _emit_sendto(socketio, client_sid, 'sendto_error', {'message': f'Processing failed: {e}'})
 
 
-#------------Llog parser render -------------#
-
+#------------Log parser render -------------#
+ 
 def render_log_parser_form():
     # Validate local_in_place context: only honor this flag if we have an active uploaded_source_path
     # from a local analysis flow. This prevents stale session flags from affecting new/other flows.

@@ -471,6 +471,41 @@ def browse():
 # ------------------------------------------------------------------
 @log_chatbot_bp.route("/set_log", methods=["POST"])
 def set_log():
+    # These paths are auto-detected from the report zip structure after extraction
+    # (report_zip: <stem>/<stem>/artifacts/*.json  +  <stem>/<stem>/*report*.txt).
+    is_agent_zip = session.get('is_agent_zip', False)
+    if is_agent_zip:
+        _report_path = (session.get("sendto_report_path") or "").strip()
+        _artifacts_path = (session.get("sendto_artifacts_path") or "").strip()
+        if _report_path:
+            print(f'[Agent-zip] Report txt detected: {_report_path}')
+            try:
+                with open(_report_path, 'r', encoding='utf-8') as _f:
+                    _preview = [next(_f).rstrip() for _ in range(3)]
+                print(f'[Agent-zip] Report preview (first 3 lines):')
+                for _i, _line in enumerate(_preview, 1):
+                    print(f'  {_i}: {_line}')
+            except StopIteration:
+                print(f'[Agent-zip] Report has fewer than 3 lines.')
+            except Exception as _e:
+                print(f'[Agent-zip] Failed to read report: {_e}')
+
+        if _artifacts_path:
+            print(f'[Agent-zip] Artifacts folder detected: {_artifacts_path}')
+            try:
+                _ext_counts: dict = {}
+                for _fname in os.listdir(_artifacts_path):
+                    _fpath = os.path.join(_artifacts_path, _fname)
+                    if not os.path.isfile(_fpath):
+                        continue
+                    _ext = os.path.splitext(_fname)[1].lower() or '(no ext)'
+                    _ext_counts[_ext] = _ext_counts.get(_ext, 0) + 1
+                _total = sum(_ext_counts.values())
+                _summary = ', '.join(f'{cnt} {ext}' for ext, cnt in sorted(_ext_counts.items()))
+                print(f'[Agent-zip] Artifacts summary: {_total} file(s) — {_summary}')
+            except Exception as _e:
+                print(f'[Agent-zip] Failed to summarise artifacts folder: {_e}')
+
     data = request.get_json(silent=True) or {}
     log_path = data.get("log_path", "").strip()
     if not log_path:

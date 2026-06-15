@@ -161,6 +161,7 @@ class Reflector:
             helpful_skills=_safe_json_dump(turn.get("helpful_skills") or []),
             step_votes=_safe_json_dump(turn.get("step_votes") or []),
             free_text_issues=_safe_json_dump(details.get("issues") or []),
+            skill_assessments=_safe_json_dump(turn.get("skill_assessments") or []),
             applied_bullets="\n".join(b.render() for b in applied_bullets) or "(none)",
             skill_definitions=_render_skill_definitions(skill_contexts),
         )
@@ -243,6 +244,7 @@ class Curator:
             reflection.get("bullet_tags") or [],
             workflow_playbook,
             domain_playbooks,
+            skill_tags=reflection.get("skill_tags") or [],
         )
         if counter_updates:
             _emit("counter_updates", updates=counter_updates)
@@ -301,22 +303,43 @@ class Curator:
                 seen.append(sk)
         return seen
 
-    def _apply_bullet_tags(self, tags, workflow_pb, domain_pbs) -> list[dict]:
+    def _apply_bullet_tags(self, tags, workflow_pb, domain_pbs,
+                            skill_tags: Optional[list] = None) -> list[dict]:
+        # Build {skill_id: tag} index from the reflection's skill_tags so we can
+        # downgrade any `helpful` bullet that belongs to a skill the user (or
+        # the reflector) flagged as `redundant` or `wrong`. Defense in depth —
+        # the prompt also instructs the LLM to do this.
+        skill_tag_map: dict[str, str] = {}
+        for st in skill_tags or []:
+            sid = (st.get("skill_id") or "").strip()
+            stag = (st.get("tag") or "").strip().lower()
+            if sid and stag in {"helpful", "redundant", "wrong"}:
+                skill_tag_map[sid] = stag
+
         updates: list[dict] = []
         for t in tags:
             bid = (t.get("id") or "").strip()
             tag = (t.get("tag") or "").strip().lower()
             if not bid or tag not in {"helpful", "harmful", "neutral"}:
                 continue
-            # Look in workflow first, then every domain playbook.
+            # Look in workflow first, then every domain playbook. Remember
+            # which domain skill owned the bullet so we can downgrade below.
             target = workflow_pb if workflow_pb.get(bid) else None
+            owning_skill: Optional[str] = None
             if target is None:
-                for pb in domain_pbs.values():
+                for sk, pb in domain_pbs.items():
                     if pb.get(bid):
                         target = pb
+                        owning_skill = sk
                         break
             if target is None:
                 continue
+            # Downgrade rule: a bullet owned by a redundant/wrong skill cannot
+            # be `helpful`. Workflow bullets are skill-agnostic so they pass.
+            if tag == "helpful" and owning_skill:
+                sk_tag = skill_tag_map.get(owning_skill)
+                if sk_tag in {"redundant", "wrong"}:
+                    tag = "neutral"
             target.increment_counter(bid, tag)
             updates.append({"bullet_id": bid, "tag": tag})
         return updates

@@ -140,6 +140,22 @@ Instructions:
  - For each playbook bullet the agent applied, tag it `helpful`, `harmful`, or
    `neutral`. Be strict: a bullet is `helpful` only if it directly contributed to
    the correct answer; `harmful` if it misled the agent; otherwise `neutral`.
+ - For each skill the agent invoked, emit one `skill_tags` entry tagged
+   `helpful`, `redundant`, or `wrong`. When the user provided a
+   `skill_assessments` entry for that skill, that value is authoritative —
+   copy it. Otherwise infer from the trajectory: a skill is `redundant` if it
+   produced no evidence the final answer relied on; `wrong` if its output
+   misled the agent; `helpful` only if its output directly contributed.
+ - Cross-check `bullet_tags` against `skill_tags`: a bullet that belongs to a
+   skill tagged `redundant` or `wrong` MUST NOT be tagged `helpful`. Downgrade
+   it to `neutral` (or `harmful` if it actively misled).
+ - NO-SIGNAL GATE: if `vote` is +1 AND every USER_GROUND_TRUTH field below is
+   empty (`correct_root_cause`, `correct_conclusion_tag`, `correct_skill`,
+   `correct_approach`, `evidence_log_lines`, `helpful_skills`, `step_votes`,
+   `free_text_issues`, `skill_assessments`), you MUST return `key_insights: []`
+   and default every `bullet_tags` entry to `neutral` unless the bullet
+   demonstrably caused the answer. The user told you "good" without saying
+   what was good — do NOT bloat the playbook on guesswork.
  - Propose `key_insights`: each insight is the seed for a single playbook bullet.
    Specify the target playbook (`workflow` or `domain`), the target section, and
    the actionable content. Sections must be one of:
@@ -172,6 +188,7 @@ USER_GROUND_TRUTH (only filled if the user submitted the More-feedback modal):
   helpful_skills:         {helpful_skills}
   step_votes:             {step_votes}
   free_text_issues:       {free_text_issues}
+  skill_assessments:      {skill_assessments}
 
 PLAYBOOK_BULLETS_APPLIED (the bullets the agent claimed to have used):
 {applied_bullets}
@@ -205,6 +222,10 @@ Output ONLY a valid JSON object (no markdown, no code fences) with this shape:
   ],
   "bullet_tags": [
     {{"id": "conn-00042", "tag": "helpful|harmful|neutral",
+      "rationale": "<one short sentence>"}}
+  ],
+  "skill_tags": [
+    {{"skill_id": "Connectivity", "tag": "helpful|redundant|wrong",
       "rationale": "<one short sentence>"}}
   ]
 }}
@@ -302,6 +323,7 @@ def fill_reflector_prompt(**fields):
     fields.setdefault("workflow_sections", _join(WORKFLOW_SECTIONS))
     fields.setdefault("domain_sections", _join(DOMAIN_SECTIONS))
     fields.setdefault("skill_definitions", "(no skill metadata available)")
+    fields.setdefault("skill_assessments", "[]")
     return REFLECTOR_PROMPT.format(**fields)
 
 

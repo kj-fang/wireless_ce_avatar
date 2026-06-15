@@ -7,7 +7,11 @@
       "Bash(python -c \"import ast, pathlib; [ast.parse\\(pathlib.Path\\(p\\).read_text\\(encoding='utf-8'\\)\\) for p in ['services/ace/__init__.py','services/ace/prompts.py','services/ace/playbook.py','services/ace/roles.py','services/ace/pipeline.py','services/ace/cli.py']]; print\\('ok'\\)\")",
       "Bash(python -c ' *)",
       "Bash(set PYTHONIOENCODING=utf-8)",
-      "Bash(python _ace_trial_run.py)"
+      "Bash(python _ace_trial_run.py)",
+      "Bash(Get-ChildItem -Path \"C:\\\\Users\\\\chuchar1\\\\source\\\\repos\\\\wifi_avator\\\\wireless_ce_avatar\" -Force)",
+      "Bash(Select-Object Name, PSIsContainer)",
+      "Bash(Get-ChildItem -Path \"C:\\\\Users\\\\chuchar1\\\\source\\\\repos\\\\wifi_avator\\\\wireless_ce_avatar\" -Include \"*.json\" -Filter \"*playbook*\" -Recurse)",
+      "Bash(Select-Object -First 10)"
     ]
   }
 }

@@ -2242,6 +2242,34 @@
         updateFwActionButtons();
     }
 
+    function autoSelectNewestFwLog() {
+        const rows = Array.from(document.querySelectorAll('#fw-panel .fw-file-item'));
+        if (rows.length <= 1) return;
+        // Extract timestamp (DD-MM-YYYY_HH-MM-SS) from folder path and pick the latest
+        const tsPattern = /(\d{2})-(\d{2})-(\d{4})_(\d{2})-(\d{2})-(\d{2})/;
+        let best = null;
+        let bestDate = null;
+        rows.forEach(row => {
+            const path = decodePath(row.dataset.fwEncoded || '');
+            const m = tsPattern.exec(path);
+            if (m) {
+                const dt = new Date(parseInt(m[3]), parseInt(m[2]) - 1, parseInt(m[1]),
+                                    parseInt(m[4]), parseInt(m[5]), parseInt(m[6]));
+                if (!bestDate || dt > bestDate) {
+                    bestDate = dt;
+                    best = row;
+                }
+            }
+        });
+        if (best) {
+            selectFwRow(best);
+            best.scrollIntoView({ block: 'nearest', behavior: 'smooth' });
+        } else {
+            // No timestamp found in paths, fall back to selecting the first item
+            selectFwRow(rows[0]);
+        }
+    }
+
     function updateWifiActionButtons() {
         const selectedEncoded = getSelectedWifiEtlEncoded();
         const selectedText = document.getElementById('selected-wifi-etl-text');
@@ -2670,7 +2698,11 @@
         if (eventItems.length === 1) { selectEventRow(eventItems[0]); }
 
         const fwItems = document.querySelectorAll('.fw-file-item');
-        if (fwItems.length === 1) { selectFwRow(fwItems[0]); }
+        if (fwItems.length === 1) {
+            selectFwRow(fwItems[0]);
+        } else if (fwItems.length > 1) {
+            autoSelectNewestFwLog();
+        }
 
         updateWifiActionButtons();
         updateBtActionButtons();

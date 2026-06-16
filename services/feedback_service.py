@@ -248,11 +248,10 @@ def _helpful_skills_path(domain: str = "") -> Path:
     return _feedback_root() / f"{_domain_prefix(domain)}feedback_helpful_skills.jsonl"
 
 
-def _skill_assessments_path() -> Path:
+def _skill_assessments_path(domain: str = "") -> Path:
     """Per-skill chip assessments (helpful / redundant / wrong) from the
-    in-line response UI. Lets ACE distinguish 'good overall' turns from
-    'this specific skill was redundant' so the playbook does not bloat."""
-    return _feedback_root() / "feedback_skill_assessments.jsonl"
+    in-line response UI."""
+    return _feedback_root() / f"{_domain_prefix(domain)}feedback_skill_assessments.jsonl"
 
 
 # Strict pattern for client-supplied IDs that end up as filesystem path

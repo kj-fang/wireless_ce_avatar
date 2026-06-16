@@ -5230,7 +5230,7 @@
         const skills = ctx && Array.isArray(ctx.skills) ? ctx.skills : [];
         if (!skills.length) return '';
         const chips = skills.map((sid) => {
-            const safe = String(sid).replace(/"/g, '&quot;');
+            const safe = escapeHtml(String(sid));
             return `
                 <span class="skill-chip-group" data-skill-id="${safe}">
                     <span class="skill-chip-name">${safe}</span>

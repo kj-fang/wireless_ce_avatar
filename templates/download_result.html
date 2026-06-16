@@ -1497,7 +1497,9 @@
             const decoded = decodePath(etlPathEncoded);
             logBox.innerText += `🛠️ Parsing...\n`;
             logBox.scrollTop = logBox.scrollHeight;
-            openWppModal(`🛠️ Parsing: ${decoded.split('\\').pop() || decoded.split('/').pop()}`);
+            if (window.__wifiOrBt === 'wifi') {
+                openWppModal(`🛠️ Parsing: ${decoded.split('\\').pop() || decoded.split('/').pop()}`);
+            }
             console.log(`${ETL_ANALYSIS_URL}?etl_path=${etlPathEncoded}&mode=${mode}`)
             fetch(`${ETL_ANALYSIS_URL}?etl_path=${etlPathEncoded}&mode=${mode}`)
                 .then(res => res.text())
@@ -1995,7 +1997,8 @@
     // like &quot; inside a JS string) or break parsing on backslashes /
     // newlines in the input. `or ""` keeps the output a string literal even
     // when llm_issue_time is None server-side.
-    window.__llmIssueTime = {{ (llm_issue_time or "")|tojson }};
+    window.__llmIssueTime = {{ (llm_issue_time or "") | tojson }};
+    window.__wifiOrBt = {{ wifi_or_bt | tojson }};
 
     function startChatbotAnalysis(button, etlPathEncoded) {
         if (button.classList.contains('disabled')) return;

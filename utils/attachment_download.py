@@ -39,7 +39,7 @@ def run_dload_threads(att_list, download_path, socketio):
                 yield [file_path, name, already_dload]
 
 def extract_content_length(logs):
-    max_size = None
+    max_size = 0
     for entry in logs:
         log = json.loads(entry["message"])["message"]
         if log["method"] == "Network.responseReceived":

@@ -51,6 +51,37 @@ from ..cli import _skill_context_provider as _ace_skill_context_provider
 
 
 # ---------------------------------------------------------------------------
+# Module-level caches (shared across endpoints + adapt jobs)
+# ---------------------------------------------------------------------------
+# Conversation snapshot metadata — keyed by file path. Re-parse only when
+# the file's mtime changes. Without this, every /api/conversations call
+# re-reads and re-decodes every snapshot JSON on the (possibly remote) share.
+_CONV_META_CACHE: dict[Path, tuple[float, dict]] = {}
+_CONV_META_LOCK = threading.Lock()
+
+# Playbook objects — keyed by JSON path. Reuse the same Playbook instance
+# across calls and let `reload_if_changed()` handle on-disk updates instead
+# of constructing a fresh Playbook (which re-parses the JSON) every time.
+_PB_CACHE: dict[Path, Playbook] = {}
+_PB_CACHE_LOCK = threading.Lock()
+
+
+def _get_cached_playbook(scope: str, path: Path) -> Playbook:
+    """Return a shared Playbook instance for `path`, reloading if the file
+    has changed since we last read it."""
+    path = Path(path)
+    with _PB_CACHE_LOCK:
+        pb = _PB_CACHE.get(path)
+        if pb is None:
+            pb = Playbook(scope, path)
+            _PB_CACHE[path] = pb
+            return pb
+    # reload_if_changed has its own lock and a fast-path no-op when unchanged
+    pb.reload_if_changed()
+    return pb
+
+
+# ---------------------------------------------------------------------------
 # Path helpers (mirror services.ace.cli)
 # ---------------------------------------------------------------------------
 
@@ -192,6 +223,21 @@ def _list_conversations(conv_dir: Path, source: str) -> list[dict]:
         return out
     for f in sorted(conv_dir.glob("*.json"), key=lambda p: p.stat().st_mtime, reverse=True):
         try:
+            mtime = f.stat().st_mtime
+        except Exception:
+            mtime = 0.0
+
+        # Hot path: file unchanged since last parse → reuse cached metadata.
+        with _CONV_META_LOCK:
+            cached = _CONV_META_CACHE.get(f)
+        if cached and cached[0] == mtime:
+            item = dict(cached[1])
+            item["source"] = source
+            item["feedback_root"] = str(conv_dir.parent)
+            out.append(item)
+            continue
+
+        try:
             snap = json.loads(f.read_text(encoding="utf-8"))
         except Exception as e:
             out.append({"conversation_id": f.stem, "error": f"parse failed: {e}",
@@ -214,10 +260,10 @@ def _list_conversations(conv_dir: Path, source: str) -> list[dict]:
         _add(snap.get("submitted_by"))
         for t in feedback_turns:
             _add((t.get("feedback") or {}).get("submitted_by"))
-        out.append({
+        meta = {
             "conversation_id": snap.get("conversation_id") or f.stem,
             "file": f.name,
-            "modified": f.stat().st_mtime,
+            "modified": mtime,
             "case_nbr": issue.get("case_nbr") or "",
             "issue_type": issue.get("issue_type") or "",
             "subject": issue.get("subject") or "",
@@ -227,9 +273,14 @@ def _list_conversations(conv_dir: Path, source: str) -> list[dict]:
             "submitted_by": snap.get("submitted_by") or "",
             "submitters": submitters,
             "ts": snap.get("started_at") or snap.get("ended_at") or snap.get("ts") or "",
-            "source": source,
-            "feedback_root": str(conv_dir.parent),
-        })
+        }
+        with _CONV_META_LOCK:
+            _CONV_META_CACHE[f] = (mtime, meta)
+
+        item = dict(meta)
+        item["source"] = source
+        item["feedback_root"] = str(conv_dir.parent)
+        out.append(item)
     return out
 
 
@@ -289,7 +340,7 @@ def _list_playbooks() -> list[dict]:
     out: list[dict] = []
     for f in sorted(pbs_dir.glob("*.json")):
         scope = "agent" if f.name == "workflow.json" else f.stem.removeprefix("domain_")
-        pb = Playbook(scope, f)
+        pb = _get_cached_playbook(scope, f)
         st = pb.stats()
         st["file"] = f.name
         st["display_name"] = "workflow" if scope == "agent" else scope
@@ -302,11 +353,11 @@ def _render_playbook(name: str) -> dict:
     pbs_dir = _resolve_playbooks_dir()
     if name == "workflow":
         path = pbs_dir / "workflow.json"
-        pb = Playbook("agent", path)
+        pb = _get_cached_playbook("agent", path)
     else:
         safe = name.replace("/", "_").replace(" ", "_")
         path = pbs_dir / f"domain_{safe}.json"
-        pb = Playbook(name, path)
+        pb = _get_cached_playbook(name, path)
     return {
         "name": name,
         "file": path.name,
@@ -455,7 +506,18 @@ class JobManager:
             def progress_cb(evt: dict) -> None:
                 self._emit("adapt_progress", {"job_id": job_id, **evt})
 
+            # One disk-walk snapshot at job start. After each turn we build
+            # the new "after" state by overlaying the runner's in-memory
+            # playbook bullets onto the previous snapshot — no disk re-reads.
             overall_before = _snapshot_bullets()
+            prev_snap: dict[str, dict[str, dict]] = overall_before
+
+            def _overlay_runner_state(prev: dict, runner: AceRunner) -> dict:
+                snap = dict(prev)  # shallow copy: untouched playbooks share inner dicts
+                snap["workflow"] = {b.id: asdict(b) for b in runner.workflow_pb.bullets}
+                for nm, pb in runner.domain_pbs.items():
+                    snap[nm] = {b.id: asdict(b) for b in pb.bullets}
+                return snap
 
             for cid in conversation_ids:
                 root_str = roots_by_cid.get(cid) or str(default_root)
@@ -489,7 +551,7 @@ class JobManager:
                     continue
 
                 for tid in turn_ids:
-                    before = _snapshot_bullets()
+                    before = prev_snap
                     res = runner.run_one(cid, tid, progress=progress_cb)
                     results.append(res)
                     totals["processed"] += 1
@@ -497,7 +559,7 @@ class JobManager:
                         totals["ok"] += 1
                     else:
                         totals["skipped"] += 1
-                    after = _snapshot_bullets()
+                    after = _overlay_runner_state(before, runner)
                     diff = _diff_bullets(before, after)
                     self._emit("adapt_turn_diff", {
                         "job_id": job_id,
@@ -505,8 +567,9 @@ class JobManager:
                         "turn_id": tid,
                         "diff": diff,
                     })
+                    prev_snap = after
 
-            overall_after = _snapshot_bullets()
+            overall_after = prev_snap
             overall_diff = _diff_bullets(overall_before, overall_after)
 
             self._emit("adapt_done", {

@@ -154,7 +154,8 @@ def set_up(socketio):
         try:
             from services.ace import AceRunner
             from services import feedback_service
-            playbooks_root = Path(getattr(app_config, "avatarfiles_dir", ".")) / "ace_playbooks"
+            base = getattr(app_config, "avatarfiles_dir", None)
+            playbooks_root = (Path(base) / "ace_playbooks") if base else (Path.cwd() / "data" / "ace_playbooks")
 
             def _skill_provider(sid: str):
                 # Look up the skill in the agent's already-loaded skills dict

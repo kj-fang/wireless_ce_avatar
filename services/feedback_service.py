@@ -1420,7 +1420,7 @@ def record_skill_assessment(
                 break
             snap["_persisted"] = True
 
-    _enqueue_append(_skill_assessments_path(), event)
+    _enqueue_append(_skill_assessments_path(eff_domain), event)
     _enqueue_flush(conversation_id)
     return True
 

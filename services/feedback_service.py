@@ -1380,11 +1380,13 @@ def record_skill_assessment(
     if raw and raw not in SKILL_ASSESSMENT_VALUES:
         return False
 
+    eff_domain = _resolve_domain(conversation_id, "")
     event = {
         "schema_version": RECORD_SCHEMA_VERSION,
         "ts": _now_iso(),
         "session_id": session_id or "",
         "submitted_by": _current_user(),
+        "domain": eff_domain or "wifi",
         "conversation_id": conversation_id,
         "turn_id": turn_id,
         "skill_id": skill_id,

@@ -30,7 +30,6 @@ import sys
 import threading
 import time
 import uuid
-from copy import deepcopy
 from dataclasses import asdict
 from pathlib import Path
 from typing import Optional

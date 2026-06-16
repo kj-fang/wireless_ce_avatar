@@ -607,9 +607,7 @@ def create_app() -> tuple[Flask, SocketIO, JobManager]:
     _ensure_avatarfiles_dir()
     templates_dir = Path(__file__).parent / "templates"
     app = Flask(__name__, template_folder=str(templates_dir))
-    app.config["SECRET_KEY"] = "ace-web-" + str(uuid.uuid4())
-    socketio = SocketIO(app, async_mode="threading", cors_allowed_origins="*")
-    jobs = JobManager(socketio)
+    socketio = SocketIO(app, async_mode="threading")
 
     @app.route("/")
     def index():

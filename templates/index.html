@@ -567,9 +567,40 @@
         color: var(--text-muted);
         }
 
-        .chatbot-shortcut-links {
+        .chatbot-shortcut-section {
             width: 70%;
-            margin: 0 auto 30px;
+            margin: -60px auto 30px;
+            text-align: center;
+        }
+
+        .chatbot-shortcut-caption {
+            display: inline-flex;
+            align-items: center;
+            justify-content: center;
+            gap: 10px;
+            margin: 0 auto 14px;
+            font-size: 0.85rem;
+            font-weight: 600;
+            letter-spacing: 0.08em;
+            text-transform: uppercase;
+            color: #5a6270;
+        }
+
+        .chatbot-shortcut-caption::before,
+        .chatbot-shortcut-caption::after {
+            content: "";
+            display: inline-block;
+            width: 42px;
+            height: 1px;
+            background: linear-gradient(
+                90deg,
+                rgba(122, 85, 214, 0) 0%,
+                rgba(47, 143, 209, 0.65) 50%,
+                rgba(122, 85, 214, 0) 100%
+            );
+        }
+
+        .chatbot-shortcut-links {
             background: transparent;
             padding: 0;
             text-align: center;
@@ -747,13 +778,16 @@
     <div style="height: 120px;"></div>
 
     <!-- 🤖 Log Chatbot shortcut -->
-    <div id="chatbot-shortcut-links" class="chatbot-shortcut-links">
+    <div id="chatbot-shortcut-section" class="chatbot-shortcut-section">
+        <div class="chatbot-shortcut-caption">Already got logs?  Try these</div>
+        <div id="chatbot-shortcut-links" class="chatbot-shortcut-links">
             <a href="/log_chatbot/" class="chatbot-tech-btn">
                 🤖 Wi-Fi Analysis Agent
             </a>
             <a href="/nw_analysis/" class="chatbot-tech-btn">
                 🌐 Network Experience
             </a>
+        </div>
     </div>
 
     <!-- Bootstrap JS -->
@@ -798,11 +832,12 @@
         }
 
         function setChatbotShortcutsVisibility(isVisible) {
-            const shortcutContainer = document.getElementById('chatbot-shortcut-links');
+            const shortcutContainer = document.getElementById('chatbot-shortcut-section')
+                || document.getElementById('chatbot-shortcut-links');
             if (!shortcutContainer) {
                 return;
             }
-            shortcutContainer.style.display = isVisible ? 'flex' : 'none';
+            shortcutContainer.style.display = isVisible ? 'block' : 'none';
         }
 
         function hideAllLoadingBoxes() {

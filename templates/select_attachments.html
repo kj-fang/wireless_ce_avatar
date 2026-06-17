@@ -54,7 +54,26 @@
     
     .file-item.checked {
         border-color: #005A9C;
-        background-color: #e7f3ff;
+        border-width: 3px;
+        background-color: #cfe5f7;
+    }
+
+    .selected-badge {
+        display: none;
+        margin-left: 8px;
+        padding: 2px 10px;
+        background-color: #005A9C;
+        color: #ffffff;
+        font-size: 0.72rem;
+        font-weight: 600;
+        border-radius: 999px;
+        vertical-align: middle;
+        letter-spacing: 0.3px;
+        text-transform: uppercase;
+    }
+
+    .file-item.checked .selected-badge {
+        display: inline-block;
     }
     
     /* Top Navigation Styles */
@@ -503,6 +522,7 @@
                                 <span class="text-primary font-weight-normal">
                                     ({{ sublist[2][0].strftime('%Y-%m-%d %H:%M') if sublist[2][0] and sublist[2][0] is not string else sublist[2][0] if sublist[2][0] else 'no datetime' }})
                                 </span>
+                                <span class="selected-badge">&#10003; Selected</span>
                             </label>
                             <p class="ml-4 text-muted mb-0 small">{{ sublist[2][1] }}</p>
                         </div>

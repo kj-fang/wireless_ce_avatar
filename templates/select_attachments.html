@@ -812,10 +812,15 @@
             if (form) {
                 form.addEventListener('submit', function (event) {
                     window.submitting = true;
-                    const clickedBtn = event.submitter;
+                    const clickedBtn = event.submitter || document.activeElement;
                     if (clickedBtn && clickedBtn.name === 'action' && clickedBtn.value) {
-                        const hidden = document.createElement('input');
-                        hidden.type = 'hidden';
+                        let hidden = form.querySelector('input[type="hidden"][data-submit-action="true"]');
+                         if (!hidden) {
+                             hidden = document.createElement('input');
+                             hidden.type = 'hidden';
+                             hidden.setAttribute('data-submit-action', 'true');
+                             form.appendChild(hidden);
+                         }
                         hidden.name = clickedBtn.name;
                         hidden.value = clickedBtn.value;
                         form.appendChild(hidden);

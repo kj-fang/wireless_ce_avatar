@@ -149,34 +149,54 @@ def _is_tray_process(proc: "psutil.Process") -> bool:
     try:
         name = (proc.name() or '').lower()
         cmdline = [a.lower() for a in (proc.cmdline() or [])]
+        print(f"[TRAY CHECK] PID={proc.pid} name={name!r} cmdline={cmdline}")
         # Frozen: IntelAvatar.exe --tray-mode
         if name == 'intelavatar.exe' and '--tray-mode' in cmdline:
+            print(f"[TRAY CHECK] PID={proc.pid} → matched frozen tray")
             return True
         # Dev: python tray_manager.py
         if name in ('python.exe', 'pythonw.exe'):
             if any('tray_manager.py' in a for a in cmdline):
+                print(f"[TRAY CHECK] PID={proc.pid} → matched dev tray")
                 return True
-    except Exception:
-        pass
+    except Exception as e:
+        print(f"[TRAY CHECK] PID={proc.pid} → exception reading process info: {e} (result indeterminate)")
+        return False
+    print(f"[TRAY CHECK] PID={proc.pid} → NOT a tray process")
     return False
 
 
 def _is_tray_running() -> bool:
     """Step 1: check tray_manager.pid written by the tray process itself."""
     pid_path = _tray_pid_file()
+    print(f"[TRAY RUNNING] checking pid file: {pid_path}")
     try:
         with open(pid_path, 'r', encoding='utf-8') as f:
             pid = int(f.read().strip())
+        print(f"[TRAY RUNNING] pid file contains PID={pid}, exists={psutil.pid_exists(pid)}")
         if psutil.pid_exists(pid):
             proc = psutil.Process(pid)
-            if proc.is_running() and _is_tray_process(proc):
+            is_running = proc.is_running()
+            print(f"[TRAY RUNNING] PID={pid} is_running={is_running}")
+            if is_running and _is_tray_process(proc):
+                print(f"[TRAY RUNNING] → tray IS running (PID={pid})")
                 return True
         # Stale pid file (dead or PID reused by unrelated process) — remove it
+        print(f"[TRAY RUNNING] PID={pid} is stale — removing pid file")
         os.remove(pid_path)
     except (FileNotFoundError, ValueError):
-        pass
-    except Exception:
-        pass
+        print(f"[TRAY RUNNING] pid file not found or invalid")
+    except (psutil.NoSuchProcess, psutil.AccessDenied) as e:
+        # Race condition: process exited between pid_exists() and Process()/is_running().
+        # Treat as stale and remove the pid file so the next call doesn't hit the same path.
+        print(f"[TRAY RUNNING] PID={pid} vanished during check ({type(e).__name__}) — treating as stale, removing pid file")
+        try:
+            os.remove(pid_path)
+        except Exception:
+            pass
+    except Exception as e:
+        print(f"[TRAY RUNNING] unexpected error: {e}")
+    print(f"[TRAY RUNNING] → tray is NOT running")
     return False
 
 

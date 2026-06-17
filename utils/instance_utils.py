@@ -203,6 +203,7 @@ def _is_tray_running() -> bool:
 def ensure_tray_manager():
     """Ensure the tray manager is running, launching it if necessary."""
     # Step 1: fast check via pid file written by the tray process itself.
+    print("[TRAY ENSURE] checking if tray is already running before acquiring spawn lock...")
     if _is_tray_running():
         print("ℹ️ Tray manager is already running")
         return
@@ -237,6 +238,7 @@ def ensure_tray_manager():
 
     try:
         # Re-check inside the lock in case tray started between our check and lock.
+        print("[TRAY ENSURE] checking if tray is already running after acquiring spawn lock...")
         if _is_tray_running():
             print("ℹ️ Tray manager is already running")
             return

@@ -225,11 +225,23 @@
             0 3px 8px rgba(0,0,0,0.15);
     }
 
-    .action-btn:disabled {
-        opacity: 0.75;
-        color: #f7f9fb !important;
-        box-shadow: none;
+    .action-btn:disabled,
+    .action-btn[disabled] {
+        background: #d3d8de !important;
+        color: #8a9099 !important;
+        box-shadow: none !important;
+        animation: none !important;
         cursor: not-allowed;
+        opacity: 1;
+        transform: none !important;
+    }
+
+    .action-btn:disabled:hover,
+    .action-btn[disabled]:hover {
+        background: #d3d8de !important;
+        color: #8a9099 !important;
+        box-shadow: none !important;
+        transform: none !important;
     }
 
     #selectAllBtn {
@@ -798,8 +810,21 @@
         document.addEventListener('DOMContentLoaded', function () {
             const form = document.querySelector('form');
             if (form) {
-                form.addEventListener('submit', function () {
+                form.addEventListener('submit', function (event) {
                     window.submitting = true;
+                    const clickedBtn = event.submitter || document.activeElement;
+                    if (clickedBtn && clickedBtn.name === 'action' && clickedBtn.value) {
+                        let hidden = form.querySelector('input[type="hidden"][data-submit-action="true"]');
+                         if (!hidden) {
+                             hidden = document.createElement('input');
+                             hidden.type = 'hidden';
+                             hidden.setAttribute('data-submit-action', 'true');
+                             form.appendChild(hidden);
+                         }
+                        hidden.name = clickedBtn.name;
+                        hidden.value = clickedBtn.value;
+                    }
+                    toggleSubmitButtons(false);
                 });
             }
         });

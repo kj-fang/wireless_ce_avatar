@@ -53,6 +53,7 @@
             </div>
             <small id="eta-{{ name }}" class="text-muted">ETA: --</small>
             <small id="retry-{{ name }}" class="text-warning" style="display:none;"></small>
+            <ul id="retry-history-{{ name }}" class="mt-1 mb-0 pl-3 text-muted" style="font-size: 0.85em;"></ul>
         </div>
         {% endfor %}
     </div>
@@ -82,9 +83,26 @@
 
         socket.on('download_retry', function(data) {
             const retryElem = document.getElementById(`retry-${data.name}`);
+            const retryHistoryElem = document.getElementById(`retry-history-${data.name}`);
+            let reasonText = 'Retry triggered due to a temporary issue.';
+
+            if (data.reason === 'stall_timeout') {
+                reasonText = `No progress for ${data.stall_timeout}s.`;
+            } else if (data.reason === 'missing_content_length') {
+                reasonText = 'Unable to read Content-Length from server response.';
+            } else if (data.reason === 'unexpected_error') {
+                reasonText = 'Unexpected error occurred during download.';
+            }
+
             if (retryElem) {
                 retryElem.style.display = 'block';
-                retryElem.innerText = `⚠️ No progress for ${data.stall_timeout}s, retrying (${data.retry}/${data.max_retry})...`;
+                retryElem.innerText = `⚠️ Retrying download (${data.retry}/${data.max_retry})...`;
+            }
+
+            if (retryHistoryElem) {
+                const item = document.createElement('li');
+                item.innerText = `${data.retry_time} | Retry ${data.retry}/${data.max_retry} | ${reasonText}`;
+                retryHistoryElem.appendChild(item);
             }
         });
 

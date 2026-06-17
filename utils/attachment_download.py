@@ -6,6 +6,7 @@ import os
 from concurrent.futures import ThreadPoolExecutor, as_completed
 from tqdm import tqdm
 import json
+from datetime import datetime
 from configs.global_configs import app_config
 from services.driver_manage_service import DriverManager
 
@@ -55,7 +56,7 @@ def extract_content_length(logs):
                 continue
     return max_size
 
-STALL_TIMEOUT = 60   # 超過 60 秒進度沒有增加視為卡住
+STALL_TIMEOUT = 45   # If no progress for this many seconds, consider the download stalled
 
 def download_file(name, url, download_path, driver_manager: DriverManager, socketio):
 
@@ -77,11 +78,13 @@ def download_file(name, url, download_path, driver_manager: DriverManager, socke
     progress_data[name] = 0
     
     while (retry < max_retry) and not driver_manager.shutdown_event.is_set():
+        driver = None
+        pbar = None
         if os.path.exists(temp_path):
             print(f"⚠️ Removing stale partial download before retry {retry + 1}.")
             os.remove(temp_path)
-        driver = driver_manager.create_download_driver(download_path, performance_logging=True)
         try:
+            driver = driver_manager.create_download_driver(download_path, performance_logging=True)
             driver.get(url)
 
             time.sleep(5)
@@ -154,17 +157,31 @@ def download_file(name, url, download_path, driver_manager: DriverManager, socke
             print(f"Retry download file: {name}")
             retry += 1
             if socketio and retry < max_retry:
+                if isinstance(e, TimeoutError):
+                    retry_reason = 'stall_timeout'
+                elif isinstance(e, ValueError):
+                    retry_reason = 'missing_content_length'
+                else:
+                    retry_reason = 'unexpected_error'
                 socketio.emit('download_retry', {
                     'name': name,
                     'retry': retry,
                     'max_retry': max_retry,
-                    'stall_timeout': STALL_TIMEOUT
+                    'stall_timeout': STALL_TIMEOUT,
+                    'reason': retry_reason,
+                    'retry_time': datetime.now().strftime('%Y-%m-%d %H:%M:%S')
                 }, namespace='/progress')
         finally:
-            
-            driver.quit()
-            if driver in driver_manager.all_drivers:
-                driver_manager.all_drivers.remove(driver)
+            if pbar is not None:
+                pbar.close()
+            if driver:
+                try:
+                    driver.quit()
+                except Exception as quit_error:
+                    print(f"Driver quit failed for {name}: {quit_error}")
+                finally:
+                    if driver in driver_manager.all_drivers:
+                        driver_manager.all_drivers.remove(driver)
             print("done")
 
     print(f"❌ All retries failed for {name}")

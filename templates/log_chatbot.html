@@ -3357,11 +3357,19 @@
         }
     }
 
+    // Coerce a value to a plain array — handles the case where the LLM
+    // returns a newline-delimited string instead of a proper JSON array.
+    function _toArr(v) {
+        if (Array.isArray(v)) return v;
+        if (typeof v === 'string' && v.trim()) return v.split('\n').map(s => s.replace(/^[-•\s]+/, '').trim()).filter(Boolean);
+        return [];
+    }
+
     function appendReport(data, header = '📊 Analysis Report', eventTime = null, turnId = null) {
         removeTyping();
         hideWelcome();
 
-        const actions = (data.recommended_actions || []).map(a => `<li>${escapeHtml(a)}</li>`).join('');
+        const actions = _toArr(data.recommended_actions).map(a => `<li>${escapeHtml(a)}</li>`).join('');
         const skills  = (data.involved_skills || data.skill_findings ? Object.keys(data.skill_findings || {}) : [])
                          .map(s => `<span class="skills-badge">${s}</span>`).join(' ');
         const score   = data.confidence_score || 0;
@@ -4460,6 +4468,8 @@
         const _urlParams = new URLSearchParams(window.location.search);
         const autoRun = _urlParams.get('auto_run');
         const urlIssueTime = (_urlParams.get('issue_time') || '').trim();
+        const autoSend = _urlParams.get('auto_send') === '1';
+        console.log('[auto-llm] tryAutoAnalyzeOnLoad: autoRun=%s autoSend=%s suggestedLog=%s', autoRun, autoSend, suggestedLog);
         const shouldAutoRun = (autoRun === 'analyze_all') || !!suggestedLog;
 
         if (!shouldAutoRun || !suggestedLog) return;
@@ -4557,6 +4567,29 @@
                 const prefillHint = document.getElementById('prefill-hint');
                 if (prefillHint) prefillHint.style.display = 'block';
                 validateUserInput();
+
+                // [auto-llm] If --auto-llm was passed from CLI, skip user confirmation
+                // and submit automatically using the log's last timestamp.
+                if (autoSend) {
+                    const lastTime = window.__logLastTime || '';
+                    console.log('[auto-llm] auto_send=1: logLastTime=%s issueTimeAwaitingConfirm=%s desc=%s',
+                        lastTime, issueTimeAwaitingConfirm, input ? input.value : '(no input)');
+                    if (lastTime && setIssueTimeFromString(lastTime)) {
+                        // Use log's last time — override whatever was prefilled, no confirm tick needed.
+                        markIssueTimeUserOwned();
+                        console.log('[auto-llm] issue time set from logLastTime:', lastTime);
+                    } else if (issueTimeAwaitingConfirm) {
+                        // No last time but a prefilled time exists — accept it automatically.
+                        issueTimeAwaitingConfirm = false;
+                        setIssueTimeConfirmUI(false);
+                        validateUserInput();
+                        console.log('[auto-llm] no logLastTime — accepted prefilled time (confirm cleared)');
+                    } else {
+                        console.warn('[auto-llm] no logLastTime and no prefilled time — sendMessage will show no-time modal');
+                    }
+                    console.log('[auto-llm] scheduling sendMessage() in 100ms');
+                    setTimeout(() => sendMessage(), 100);
+                }
             }, 400);
 
         } catch (err) {

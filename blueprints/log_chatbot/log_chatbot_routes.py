@@ -410,6 +410,45 @@ def _job_sse(job):
         while True:
             try:
                 kind, payload = q.get(timeout=120)
+				
+				# --------------------------------------------------
+                # Auto-save LLM report to JSON next to the source file.
+                # Triggered whenever the agent returns a final report
+                # (both CLI --auto-llm and manual web UI flows).
+                # Save location priority:
+                #   1) folder of sendto_report_path  (CLI flow)
+                #   2) folder of current_log_path    (web UI flow)
+                # --------------------------------------------------
+                if isinstance(payload, dict) and payload.get("type") == "report":
+                    try:
+                        import os as _os
+                        from datetime import datetime as _dt
+                        _report_dir = ""
+                        _sendto_rp = _save_sendto_report_path
+                        _log_path  = _save_log_path
+                        if _sendto_rp:
+                            _report_dir = _os.path.dirname(_sendto_rp)
+                        elif _log_path:
+                            _report_dir = _os.path.dirname(_log_path)
+                        if _report_dir and _os.path.isdir(_report_dir):
+                            _ts = _dt.now().strftime("%Y%m%d_%H%M%S")
+                            _out_path = _os.path.join(_report_dir, f"llm_report_{_ts}.json")
+                            _save_data = {
+                                "turn_id": turn_id,
+                                "conversation_id": conversation_id,
+                                "user_message": user_message,
+                                "issue_time": payload.get("issue_time"),
+                                "report": payload.get("data", {}),
+                                "log_path": _log_path,
+                                "saved_at": _dt.now().isoformat(),
+                            }
+                            with open(_out_path, "w", encoding="utf-8") as _f:
+                                json.dump(_save_data, _f, ensure_ascii=False, indent=2)
+                            print(f"💾 [llm-report] Saved → {_out_path}")
+                        else:
+                            print(f"⚠️ [llm-report] No valid directory to save report (sendto_rp={_sendto_rp!r}, log_path={_log_path!r})")
+                    except Exception as _e:
+                        print(f"⚠️ [llm-report] Save failed: {_e}")
             except _q.Empty:
                 yield "data: " + json.dumps({"type": "error", "content": "Chat timed out."}) + "\n\n"
                 return
@@ -996,6 +1035,11 @@ def chat():
 
             t = threading.Thread(target=run_chat_with_tools, daemon=True)
             t.start()
+
+			# Capture session values NOW (inside request context) so the
+            # event_stream generator can use them after the context ends.
+            _save_sendto_report_path = (session.get("sendto_report_path") or "").strip()
+            _save_log_path = getattr(agent, "current_log_path", "") or ""
 
             # The original request streams the job exactly like a reconnect
             # would (replay buffered steps, then follow to done/error).

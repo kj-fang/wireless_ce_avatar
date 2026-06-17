@@ -119,7 +119,7 @@ def _bring_chrome_to_front(server_pid):
     except Exception as e:
         print(f'⚠️ [SendTo] _bring_chrome_to_front failed: {e}')
 
-def _build_startup_path(input_paths, sendto_token=None, is_agent_zip=False):
+def _build_startup_path(input_paths, sendto_token=None, is_agent_zip=False, auto_llm=False):
     if not input_paths:
         return '/'
 
@@ -155,7 +155,10 @@ def _build_startup_path(input_paths, sendto_token=None, is_agent_zip=False):
     url = f'/log_parser/open_local_analysis?token={token}&path={quoted_path}'
     if is_agent_zip:
         url += '&is_agent_zip=1'
+    if auto_llm:
+        url += '&auto_llm=1'
     print(f"🔗 Built startup path: {url}")
+    print(f"🤖 [auto-llm] flag={'ON' if auto_llm else 'OFF'} → auto_send will be {'appended to redirect URL' if auto_llm else 'omitted'}")
     return url
 
 
@@ -258,6 +261,7 @@ if __name__ == "__main__":
     parser.add_argument('--tray-mode', action='store_true', help='Run as tray manager')
     parser.add_argument('--sendto-token', type=str, default=None, help='SendTo security token (auto-set by shortcut, not for manual use).')
     parser.add_argument('--json', type=str, default=None, help='Optional json file path (.json / .jsonl) produced by validation AI agent.')
+    parser.add_argument('--auto-llm', action='store_true', help='Automatically submit LLM analysis using the log\'s last timestamp (no user click required).')
     parser.add_argument('input_paths', nargs='*', help='Optional local analysis file paths passed from Windows SendTo.')
     args = parser.parse_args()
 
@@ -280,7 +284,7 @@ if __name__ == "__main__":
             webbrowser.open(f"{_existing['url']}{_agent_startup_path}")
         sys.exit(0)
 
-    startup_path = _build_startup_path(args.input_paths, sendto_token=args.sendto_token, report=args.report, json_path=args.json)
+    startup_path = _build_startup_path(args.input_paths, sendto_token=args.sendto_token, report=args.report, json_path=args.json, auto_llm=args.auto_llm)
     
     # Check whether to run in tray mode
     if args.tray_mode:

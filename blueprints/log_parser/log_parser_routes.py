@@ -666,14 +666,18 @@ def _process_local_analysis(source_path: str, source_dir: str, file_path: str,
         session['latest_etl_path'] = None
         app_config.last_analyzed_log_path = file_path
         _cb(90, 'Log file ready.')
-        return url_for('log_chatbot.index', auto_run='analyze_all')
+        _auto_send = '1' if session.get('sendto_auto_llm') else '0'
+        print(f"🤖 [auto-llm] .log branch: sendto_auto_llm={session.get('sendto_auto_llm')}, auto_send={_auto_send}")
+        return url_for('log_chatbot.index', auto_run='analyze_all', auto_send=_auto_send)
 
     elif file_path.lower().endswith('.hci.txt'):
         # Treat .hci.txt from BT HCI decode as a decoded BT log
         session['latest_etl_path'] = file_path
         app_config.last_analyzed_log_path = file_path
         _cb(90, 'BT HCI log file ready.')
-        return url_for('bt_chatbot.index', auto_run='analyze_all')
+        _auto_send = '1' if session.get('sendto_auto_llm') else '0'
+        print(f"🤖 [auto-llm] .hci.txt branch: sendto_auto_llm={session.get('sendto_auto_llm')}, auto_send={_auto_send}")
+        return url_for('bt_chatbot.index', auto_run='analyze_all', auto_send=_auto_send)
 
     elif _is_bt_etl(file_path):
         _cb(20, 'Launching BT HCI decoder…')
@@ -685,7 +689,9 @@ def _process_local_analysis(source_path: str, source_dir: str, file_path: str,
         _cb(90, 'BT HCI decode complete.')
         session['latest_etl_path'] = hci_path
         app_config.last_analyzed_log_path = hci_path
-        return url_for('bt_chatbot.index', auto_run='analyze_all')
+        _auto_send = '1' if session.get('sendto_auto_llm') else '0'
+        print(f"🤖 [auto-llm] bt_etl branch: sendto_auto_llm={session.get('sendto_auto_llm')}, auto_send={_auto_send}")
+        return url_for('bt_chatbot.index', auto_run='analyze_all', auto_send=_auto_send)
 
     elif _is_fw_etl(file_path):
         _cb(20, 'FW ETL detected. Reading system_info.txt…')
@@ -742,7 +748,9 @@ def _process_local_analysis(source_path: str, source_dir: str, file_path: str,
         _cb(90, 'Parser complete.')
         session['latest_etl_path'] = file_path
         app_config.last_analyzed_log_path = file_path + '.log'
-        return url_for('log_chatbot.index', auto_run='analyze_all')
+        _auto_send = '1' if session.get('sendto_auto_llm') else '0'
+        print(f"🤖 [auto-llm] etl/ddd branch: sendto_auto_llm={session.get('sendto_auto_llm')}, auto_send={_auto_send}")
+        return url_for('log_chatbot.index', auto_run='analyze_all', auto_send=_auto_send)
 
 
 @log_parser_bp.route('/log_parser', methods=['POST', 'GET'])
@@ -1016,6 +1024,10 @@ def open_local_analysis():
     # auto-detection in _process_local_analysis will populate them if applicable.
     session['sendto_report_path'] = ''
     session['sendto_json_path'] = ''
+    # [auto-llm] Store flag so _process_local_analysis can append auto_send to redirect URL.
+    _auto_llm_flag = (request.args.get('auto_llm') == '1')
+    session['sendto_auto_llm'] = _auto_llm_flag
+    print(f"🤖 [auto-llm] open_local_analysis: auto_llm={_auto_llm_flag} stored in session")
 
     return render_template('sendto_transmission.html', filename=original_name)
 

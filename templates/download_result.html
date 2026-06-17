@@ -1983,7 +1983,8 @@
                     if (data.success) {
                         logBox.innerText += `✅ Ready — opening Wi-Fi Analysis Agent...\n`;
                         logBox.scrollTop = logBox.scrollHeight;
-                        window.location.href = `${CHATBOT_URL}?auto_run=analyze_all`;
+                        const _autoSendSuffix = SENDTO_AUTO_LLM ? '&auto_send=1' : '';
+                        window.location.href = `${CHATBOT_URL}?auto_run=analyze_all${_autoSendSuffix}`;
                     } else {
                         button.classList.remove('disabled');
                         button.innerText = 'Analyze with LLM';
@@ -2033,8 +2034,9 @@
 
                         // If triggered by Skills-Agent auto-match, append auto_run=analyze_all
                         // so the chatbot page automatically clicks the green "Analyze All" button
+                        const _autoSendSuffix2 = SENDTO_AUTO_LLM ? '&auto_send=1' : '';
                         const targetUrl = isAnalyzeAll
-                            ? `${CHATBOT_URL}?auto_run=analyze_all`
+                            ? `${CHATBOT_URL}?auto_run=analyze_all${_autoSendSuffix2}`
                             : CHATBOT_URL;
                         _closeParseModal(true, '✅ Agent Ready!', 'Opening Wi-Fi Analysis Agent...');
                         window.location.href = targetUrl;
@@ -2418,6 +2420,11 @@
     window.__aiPreSelectedEtl = {{ (ai_pre_selected_etl or "") | tojson }};
     window.__autoAnalysisFw = {{ (auto_analysis_fw or "") | tojson }};
 
+	// [auto-llm] True when app was launched with --auto-llm CLI flag.
+    // Appended to every chatbot redirect so the JS can auto-submit without user click.
+	const SENDTO_AUTO_LLM = {{ 'true' if sendto_auto_llm else 'false' }};
+    console.log('[auto-llm] download_result: SENDTO_AUTO_LLM=', SENDTO_AUTO_LLM);
+	
     function startChatbotAnalysis(button, etlPathEncoded) {
         if (button.classList.contains('disabled')) return;
         button.classList.add('disabled');

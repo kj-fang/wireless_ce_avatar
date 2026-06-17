@@ -2014,6 +2014,30 @@
                 </label>
             </div>
 
+            <!-- Refine picker: lets the user choose between the original issue
+                 time and the closest system-event error time. Hidden by default;
+                 shown by refineIssueTimeFromEventLog() when a close match exists. -->
+            <div id="it-refine-picker"
+                 style="display:none;margin-bottom:10px;font-size:0.72rem;color:#1e3a5f;background:#eff6ff;border:1px solid #93c5fd;border-radius:6px;padding:8px;line-height:1.35;">
+                <div style="margin-bottom:6px;font-weight:600;">
+                    🔍 Found a nearby system error — which time to use?
+                </div>
+                <div style="display:flex;flex-direction:column;gap:5px;">
+                    <button type="button" id="refine-pick-original" class="it-quick-btn"
+                            style="text-align:left;padding:6px 10px;background:#fff;border:1px solid #cbd5e1;font-size:0.72rem;line-height:1.4;white-space:normal;"
+                            onclick="pickRefineOption('original')">
+                        <strong>Keep original</strong><br>
+                        <span id="refine-original-label" style="color:#475569;"></span>
+                    </button>
+                    <button type="button" id="refine-pick-error" class="it-quick-btn"
+                            style="text-align:left;padding:6px 10px;background:#fff;border:1px solid #cbd5e1;font-size:0.72rem;line-height:1.4;white-space:normal;"
+                            onclick="pickRefineOption('error')">
+                        <strong>Use error time</strong><br>
+                        <span id="refine-error-label" style="color:#475569;"></span>
+                    </button>
+                </div>
+            </div>
+
             <!-- Hidden native datetime-local for the calendar popup -->
             <input id="issue-time-picker" type="datetime-local" step="1"
                    style="position:absolute;opacity:0;width:0;height:0;pointer-events:none;"
@@ -3990,36 +4014,75 @@
     }
 
     /**
-     * Auto-refine the issue time by finding the closest Error/Critical event
-     * in the system event log. Called after the issue time is set during the
-     * auto-analyze flow. Uses frontend-cached event data when available,
-     * avoiding a redundant backend parse.
+     * Show a two-button picker letting the user choose between the original
+     * issue time and the closest Error/Critical event time from the system
+     * event log.  Called after the issue time is set during auto-analyze.
      */
+    // Stash used by pickRefineOption() to know the two candidate times.
+    let _refineOriginalTime = '';
+    let _refineErrorTime   = '';
+
     async function refineIssueTimeFromEventLog() {
         const currentTime = getIssueTimeString();
         if (!currentTime) return;
 
+        // Always show the picker with the original time; add error time if found.
+        _refineOriginalTime = currentTime;
+        _refineErrorTime    = '';
+
+        const origLabel = document.getElementById('refine-original-label');
+        const errLabel  = document.getElementById('refine-error-label');
+        const errBtn    = document.getElementById('refine-pick-error');
+        if (origLabel) origLabel.textContent = `⏱ ${currentTime}`;
+
         try {
-            const result = await window.findClosestEventError(currentTime);
-            if (result && result.formatted_time) {
-                const diffSec = result.diff_seconds || 0;
-                // Only refine if the closest error is within 10 minutes of the original issue time
-                if (diffSec <= 600) {
-                    console.log(`[Auto-Refine] Closest event error: ${result.formatted_time} ` +
-                        `(${result.source}, ID: ${result.event_id}, ` +
-                        `diff: ${diffSec.toFixed(0)}s)`);
-                    setIssueTimeFromString(result.formatted_time);
-                    // Refine = system-validated alignment → treat as user-owned
-                    // so the user doesn't need to manually confirm again.
-                    markIssueTimeUserOwned();
-                    validateUserInput();
-                } else {
-                    console.log(`[Auto-Refine] Closest error too far (${diffSec.toFixed(0)}s) — keeping original time.`);
-                }
+            // Use the event log source filter (pci_bt / usb_bt) to only
+            // match errors from the relevant BT driver source.
+            const srcSel = document.getElementById('evtPopupSourceFilter');
+            const srcGroup = srcSel ? srcSel.value : '';
+            const result = await window.findClosestEventError(currentTime, srcGroup);
+
+            if (result && result.formatted_time && result.diff_seconds <= 600
+                && result.formatted_time !== currentTime) {
+                _refineErrorTime = result.formatted_time;
+                if (errLabel) errLabel.textContent =
+                    `⏱ ${result.formatted_time}  (${result.source}, ID ${result.event_id}, Δ${result.diff_seconds.toFixed(0)}s)`;
+                if (errBtn) { errBtn.disabled = false; errBtn.style.opacity = '1'; }
+                console.log(`[Refine-Picker] Closest event error: ${result.formatted_time} ` +
+                    `(${result.source}, ID: ${result.event_id}, diff: ${result.diff_seconds.toFixed(0)}s)`);
+            } else {
+                // No matching error within 10 min — disable the error button
+                if (errLabel) errLabel.textContent = '(no close error found)';
+                if (errBtn) { errBtn.disabled = true; errBtn.style.opacity = '0.5'; }
+                console.log('[Refine-Picker] No close error found — showing picker with original only.');
             }
         } catch (e) {
-            console.warn('[Auto-Refine] Failed to find closest event error:', e);
+            // Fetch/parse failed — still show picker, just disable error option
+            if (errLabel) errLabel.textContent = '(event log unavailable)';
+            if (errBtn) { errBtn.disabled = true; errBtn.style.opacity = '0.5'; }
+            console.warn('[Refine-Picker] Failed to find closest event error:', e);
         }
+
+        const picker = document.getElementById('it-refine-picker');
+        if (picker) picker.style.display = 'block';
+    }
+
+    /**
+     * Handler for the refine picker buttons.
+     * @param {'original'|'error'} choice
+     */
+    function pickRefineOption(choice) {
+        const timeStr = (choice === 'error') ? _refineErrorTime : _refineOriginalTime;
+        if (timeStr) {
+            setIssueTimeFromString(timeStr);
+            markIssueTimeUserOwned();
+            validateUserInput();
+        }
+        // Highlight the selected button, dim the other
+        const btnOrig = document.getElementById('refine-pick-original');
+        const btnErr  = document.getElementById('refine-pick-error');
+        if (btnOrig) btnOrig.style.border = (choice === 'original') ? '2px solid #2563eb' : '1px solid #cbd5e1';
+        if (btnErr)  btnErr.style.border  = (choice === 'error')    ? '2px solid #2563eb' : '1px solid #cbd5e1';
     }
 
     document.addEventListener('DOMContentLoaded', function () {
@@ -7252,7 +7315,15 @@
         // system event error without a separate backend round-trip.
         // If _evtData is already populated (panel was opened), search locally.
         // Otherwise, fetch error events via the existing /parse_event_log API.
-        window.findClosestEventError = async function (issueTimeStr) {
+        // Source group map (mirrors backend _SOURCE_GROUPS)
+        const _SOURCE_GROUPS = {
+            'pci_bt':      ['ibtpci', 'bthmini'],
+            'usb_bt':      ['ibtusb', 'bthusb'],
+            'pci_bt_wifi': ['ibtpci', 'bthmini', 'netwaw', 'netwtw'],
+            'usb_bt_wifi': ['ibtusb', 'bthusb', 'netwaw', 'netwtw'],
+        };
+
+        window.findClosestEventError = async function (issueTimeStr, sourceFilter) {
             if (!_evtPath || !issueTimeStr) return null;
 
             // Parse the issue time into a JS Date for comparison
@@ -7284,6 +7355,15 @@
                     console.warn('[findClosestEventError] fetch failed:', e);
                     return null;
                 }
+            }
+
+            // Filter by source group keywords (case-insensitive substring)
+            if (sourceFilter && sourceFilter !== 'all') {
+                const keywords = _SOURCE_GROUPS[sourceFilter] || [sourceFilter];
+                errorEvents = errorEvents.filter(ev => {
+                    const src = (ev.source || '').toLowerCase();
+                    return keywords.some(kw => src.includes(kw));
+                });
             }
 
             if (errorEvents.length === 0) return null;

@@ -522,15 +522,17 @@
         <div class="card-body bg-light">
             <div class="tab-content" id="analysisTabContent">
                 <div class="tab-pane fade {% if active_tab == 'wifi' %}show active{% endif %}" id="wifi-panel" role="tabpanel" aria-labelledby="wifi-tab">
-                    <div class="d-flex flex-wrap justify-content-center align-items-center mt-3 p-3" style="background: #f8f9fa; border: 1px solid #ddd; border-radius: 8px; gap: 8px;">
-                        <button id="wifi-action-analyze" class="btn btn-primary" style="border-radius: 30px; font-size: 1.15rem; padding: 0.5rem 1rem;" disabled onclick="runSelectedWifiAction(this, 'parse')">
-                            Parse
-                        </button>
-                        <button id="wifi-action-chatbot" class="btn btn-info" style="border-radius: 30px; color:white; font-size: 1.15rem; padding: 0.5rem 1rem;" disabled onclick="runSelectedWifiAction(this, 'chatbot')">
-                            🤖 Wi-Fi Analysis Agent
-                        </button>
+                    <div class="d-flex flex-column align-items-center mt-3 p-3" style="background: #f8f9fa; border: 1px solid #ddd; border-radius: 8px; gap: 8px;">
+                        <div class="d-flex flex-wrap justify-content-center align-items-center" style="gap: 8px;">
+                            <button id="wifi-action-analyze" class="btn btn-primary" style="border-radius: 30px; font-size: 1.15rem; padding: 0.5rem 1rem;" disabled onclick="runSelectedWifiAction(this, 'parse')">
+                                Parse
+                            </button>
+                            <button id="wifi-action-chatbot" class="btn btn-info" style="border-radius: 30px; color:white; font-size: 1.15rem; padding: 0.5rem 1rem;" disabled onclick="runSelectedWifiAction(this, 'chatbot')">
+                                🤖 Wi-Fi Analysis Agent
+                            </button>
+                        </div>
                         {% if llm_issue_time %}
-                        <label id="auto-pick-log-label" style="display:inline-flex;align-items:center;gap:6px;font-size:0.95rem;color:#0b4a78;cursor:pointer;margin:0 0 0 4px;"
+                        <label id="auto-pick-log-label" style="display:inline-flex;align-items:center;gap:6px;font-size:0.95rem;color:#0b4a78;cursor:pointer;margin:0;"
                                title="Use the AI-detected issue time to auto-select the matching log (the one just after it). You can still pick a log manually.">
                             <input type="checkbox" id="auto-pick-log" onchange="onAutoPickLogToggle()">
                             🪄 Auto-pick log by AI time <code style="font-size:0.85rem;">{{ llm_issue_time }}</code>

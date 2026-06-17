@@ -160,7 +160,8 @@ def _is_tray_process(proc: "psutil.Process") -> bool:
                 print(f"[TRAY CHECK] PID={proc.pid} → matched dev tray")
                 return True
     except Exception as e:
-        print(f"[TRAY CHECK] PID={proc.pid} → exception reading process info: {e}")
+        print(f"[TRAY CHECK] PID={proc.pid} → exception reading process info: {e} (result indeterminate)")
+        return False
     print(f"[TRAY CHECK] PID={proc.pid} → NOT a tray process")
     return False
 
@@ -185,6 +186,14 @@ def _is_tray_running() -> bool:
         os.remove(pid_path)
     except (FileNotFoundError, ValueError):
         print(f"[TRAY RUNNING] pid file not found or invalid")
+    except (psutil.NoSuchProcess, psutil.AccessDenied) as e:
+        # Race condition: process exited between pid_exists() and Process()/is_running().
+        # Treat as stale and remove the pid file so the next call doesn't hit the same path.
+        print(f"[TRAY RUNNING] PID={pid} vanished during check ({type(e).__name__}) — treating as stale, removing pid file")
+        try:
+            os.remove(pid_path)
+        except Exception:
+            pass
     except Exception as e:
         print(f"[TRAY RUNNING] unexpected error: {e}")
     print(f"[TRAY RUNNING] → tray is NOT running")

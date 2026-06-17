@@ -885,6 +885,46 @@
         .feedback-more-link:hover { text-decoration: underline; }
         .feedback-more-link.submitted { color: #1a7f37; cursor: default; text-decoration: none; }
 
+        /* ── In-line per-skill assessment chips (helpful / redundant / wrong) ── */
+        .skill-assessments {
+            display: flex;
+            flex-wrap: wrap;
+            gap: 6px 10px;
+            margin-top: 6px;
+            opacity: 0.85;
+        }
+        .skill-assessments:hover { opacity: 1; }
+        .skill-chip-group {
+            display: inline-flex;
+            align-items: center;
+            gap: 4px;
+            background: #f5f7fa;
+            border: 1px solid #e3e7ee;
+            border-radius: 14px;
+            padding: 2px 6px 2px 10px;
+            font-size: 0.78rem;
+        }
+        .skill-chip-name {
+            color: #2d333a;
+            font-weight: 500;
+            margin-right: 4px;
+        }
+        .skill-chip-btn {
+            background: white;
+            border: 1px solid #d8dee5;
+            border-radius: 10px;
+            padding: 1px 6px;
+            font-size: 0.78rem;
+            cursor: pointer;
+            line-height: 1.2;
+            user-select: none;
+            transition: background 0.12s, border-color 0.12s;
+        }
+        .skill-chip-btn:hover:not(:disabled) { background: #eef4ff; border-color: #0071c5; }
+        .skill-chip-btn.active.helpful   { background: #e8f7ec; border-color: #2ea043; color: #1a7f37; }
+        .skill-chip-btn.active.redundant { background: #fff5e6; border-color: #d29922; color: #9a6700; }
+        .skill-chip-btn.active.wrong     { background: #fdecec; border-color: #cf222e; color: #b42318; }
+
         /* ── Sidebar: skill source badge + cloud/user toggle ─────────── */
         /* No outer panel frame — the badge already conveys state, and a
            frame here visually competes with the bordered card the whole
@@ -5176,7 +5216,77 @@
                         onclick="submitFeedback('${turnId}', 1, this)">👍</button>
                 <button type="button" class="feedback-btn" title="Not helpful"
                         onclick="submitFeedback('${turnId}', -1, this)">👎</button>
-            </div>`;
+            </div>
+            ${renderSkillAssessmentChips(turnId)}`;
+    }
+
+    // ── In-line per-skill chips: helpful / redundant / wrong ──────────
+    // Skills were captured by captureTurnContext() right before
+    // appendReport / appendAssistantText, so window.__turnContext[turnId]
+    // already has the skill list. If it's empty (e.g. a plain-text reply
+    // with no skill invocations) we emit nothing.
+    function renderSkillAssessmentChips(turnId) {
+        const ctx = (window.__turnContext || {})[turnId];
+        const skills = ctx && Array.isArray(ctx.skills) ? ctx.skills : [];
+        if (!skills.length) return '';
+        const chips = skills.map((sid) => {
+            const safe = escapeHtml(String(sid));
+            return `
+                <span class="skill-chip-group" data-skill-id="${safe}">
+                    <span class="skill-chip-name">${safe}</span>
+                    <button type="button" class="skill-chip-btn" data-state="helpful"
+                            title="This skill was helpful"
+                            onclick="submitSkillAssessment('${turnId}', this, 'helpful')">👍</button>
+                    <button type="button" class="skill-chip-btn" data-state="redundant"
+                            title="This skill was used but not needed"
+                            onclick="submitSkillAssessment('${turnId}', this, 'redundant')">🔁</button>
+                    <button type="button" class="skill-chip-btn" data-state="wrong"
+                            title="This skill was the wrong choice"
+                            onclick="submitSkillAssessment('${turnId}', this, 'wrong')">❌</button>
+                </span>`;
+        }).join('');
+        return `<div class="skill-assessments" data-turn-id="${turnId}">${chips}</div>`;
+    }
+
+    async function submitSkillAssessment(turnId, btnEl, state) {
+        const group = btnEl ? btnEl.closest('.skill-chip-group') : null;
+        if (!group) return;
+        const skillId = group.dataset.skillId || '';
+        if (!skillId) return;
+        // Toggle: clicking the active state again clears the assessment.
+        const wasActive = btnEl.classList.contains('active');
+        const nextState = wasActive ? '' : state;
+        const conversationId = window.__feedbackConversationId || '';
+        if (!conversationId) return;
+
+        group.querySelectorAll('.skill-chip-btn').forEach(b => b.disabled = true);
+        try {
+            const res = await fetch('/feedback/skill_assessment', {
+                method: 'POST',
+                headers: {'Content-Type': 'application/json'},
+                body: JSON.stringify({
+                    conversation_id: conversationId,
+                    turn_id: turnId,
+                    skill_id: skillId,
+                    assessment: nextState,
+                }),
+            });
+            const data = await res.json().catch(() => ({}));
+            if (data && data.success) {
+                group.querySelectorAll('.skill-chip-btn').forEach(b => {
+                    b.classList.remove('active', 'helpful', 'redundant', 'wrong');
+                });
+                if (nextState) {
+                    btnEl.classList.add('active', nextState);
+                }
+            } else {
+                console.warn('Skill assessment save failed:', data);
+            }
+        } catch (e) {
+            console.warn('Skill assessment network error:', e);
+        } finally {
+            group.querySelectorAll('.skill-chip-btn').forEach(b => b.disabled = false);
+        }
     }
 
     async function submitFeedback(turnId, vote, btnEl) {

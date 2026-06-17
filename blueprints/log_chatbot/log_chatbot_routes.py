@@ -274,6 +274,11 @@ def _get_or_create_agent(skip_prime: bool = False) -> WifiLogAgentSystem:
             model=base.model,
             skills=base.skills,   # reuse pre-loaded skills, no disk re-read
         )
+        # Inherit ACE runner from the boot-time base agent so playbook blocks
+        # are injected into per-session prompts.
+        ace_runner = getattr(base, "ace_runner", None)
+        if ace_runner is not None:
+            agent.attach_ace(ace_runner)
         # Auto-populate log path from last LogParser analysis if available
         if app_config.last_analyzed_log_path:
             agent.current_log_path = app_config.last_analyzed_log_path

@@ -326,6 +326,53 @@ def skill_helpful():
     return jsonify({"success": True})
 
 
+@feedback_bp.route("/skill_assessment", methods=["POST"])
+def skill_assessment():
+    """
+    Per-skill chip click from the in-line response view. Three states:
+    `helpful`, `redundant`, `wrong`. Sending an empty assessment clears
+    the chip. Each click overwrites any previous assessment for the same
+    (turn_id, skill_id) pair.
+
+    Request JSON:
+      { "conversation_id": "...", "turn_id": "...",
+        "skill_id": "Connection Flow",
+        "assessment": "helpful" | "redundant" | "wrong" | "" }
+    """
+    data = request.get_json(silent=True) or {}
+    conversation_id = (data.get("conversation_id") or "").strip()
+    turn_id = (data.get("turn_id") or "").strip()
+    skill_id = (data.get("skill_id") or "").strip()
+    assessment = (data.get("assessment") or "").strip().lower()
+
+    if not conversation_id or not turn_id or not skill_id:
+        return jsonify({
+            "success": False,
+            "error": "conversation_id, turn_id, and skill_id are required",
+        }), 400
+    if not _SAFE_ID_RE.match(conversation_id):
+        return _bad_id_response("conversation_id")
+    if not _SAFE_ID_RE.match(turn_id):
+        return _bad_id_response("turn_id")
+    if assessment and assessment not in feedback_service.SKILL_ASSESSMENT_VALUES:
+        return jsonify({
+            "success": False,
+            "error": f"assessment must be one of {feedback_service.SKILL_ASSESSMENT_VALUES} or empty",
+        }), 400
+
+    session_id = session.get("chatbot_session_id", "")
+    ok = feedback_service.record_skill_assessment(
+        session_id=session_id,
+        conversation_id=conversation_id,
+        turn_id=turn_id,
+        skill_id=skill_id,
+        assessment=assessment,
+    )
+    if not ok:
+        return jsonify({"success": False, "error": "failed to record"}), 500
+    return jsonify({"success": True})
+
+
 @feedback_bp.route("/recent", methods=["GET"])
 def recent():
     """

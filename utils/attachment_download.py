@@ -45,9 +45,9 @@ def extract_content_length(logs):
         if log["method"] == "Network.responseReceived":
             try:
                 url = log["params"]["response"]["url"]
-                headers = log["params"]["response"]["headers"]
-                if "esft.intel.com" in url and "Content-Length" in headers:
-                    size = int(headers["Content-Length"])
+                headers = {k.lower(): v for k, v in log["params"]["response"]["headers"].items()}
+                if "esft.intel.com" in url and "content-length" in headers:
+                    size = int(headers["content-length"])
                     print("✅ URL:", url)
                     print("📦 Content-Length:", size)
                     if max_size is None or size > max_size:

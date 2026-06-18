@@ -22,6 +22,8 @@ from utils.instance_utils import is_intelavatar_process
 
 _logger = logging.getLogger('TrayManager')
 
+_logger = logging.getLogger('TrayManager')
+
 
 def _base_path() -> str:
     if getattr(sys, 'frozen', False):

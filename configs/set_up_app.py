@@ -146,6 +146,44 @@ def set_up(socketio):
             skills=llm_helper.skills,   # reuse, no second disk read
         )
         print(f"🤖 Log Chatbot Agent loaded (model={model})")
+
+        # Attach the ACE adapter so the agent reads its evolving workflow +
+        # domain playbooks at generation time and can run Reflector/Curator
+        # updates from feedback. Safe to skip on failure — the agent keeps
+        # working without playbooks.
+        try:
+            from services.ace import AceRunner
+            from services import feedback_service
+            base = getattr(app_config, "avatarfiles_dir", None)
+            playbooks_root = (Path(base) / "ace_playbooks") if base else (Path.cwd() / "data" / "ace_playbooks")
+
+            def _skill_provider(sid: str):
+                # Look up the skill in the agent's already-loaded skills dict
+                # so ACE prompts inherit the same description / expert_rules /
+                # keywords the live agent reads at chat time.
+                skills = getattr(llm_helper, "skills", None) or {}
+                sk = skills.get(sid)
+                if sk is None:
+                    return None
+                try:
+                    return {
+                        "description": getattr(sk, "description", "") or "",
+                        "expert_rules": getattr(sk, "expert_rules", "") or "",
+                        "keywords": list(getattr(sk, "keywords", []) or []),
+                    }
+                except Exception:
+                    return None
+
+            ace_runner = AceRunner(
+                llm=llm_helper,
+                playbooks_dir=playbooks_root,
+                feedback_root=feedback_service._feedback_root(),
+                skills=list(llm_helper.skills.keys()) if llm_helper.skills else None,
+                skill_context_provider=_skill_provider,
+            )
+            log_chatbot_agent.attach_ace(ace_runner)
+        except Exception as e:
+            print(f"⚠️  ACE attach skipped: {e}")
     else:
         log_chatbot_agent = None
         print("⚠️  Log Chatbot Agent skipped — LLM client not configured (no API key).")

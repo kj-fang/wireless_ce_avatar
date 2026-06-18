@@ -31,6 +31,40 @@ class DriverManager:
 
         self._driver_dir = os.path.join(downloads_dir, "chrome_driver")
         self.chrome_driver_path = self.setup_chromedriver(self._driver_dir)
+        self.chrome_binary_path = self.get_chrome_binary_path()
+
+    def get_chrome_binary_path(self):
+        """Locate the installed Chrome executable so Selenium does NOT call
+        Selenium Manager to probe for the browser (that probe hits
+        googlechromelabs.github.io directly and fails on Intel's network)."""
+        # 1) Registry: App Paths\chrome.exe
+        try:
+            import winreg
+            for hive in (winreg.HKEY_CURRENT_USER, winreg.HKEY_LOCAL_MACHINE):
+                try:
+                    with winreg.OpenKey(hive,
+                            r"SOFTWARE\Microsoft\Windows\CurrentVersion\App Paths\chrome.exe") as k:
+                        path, _ = winreg.QueryValueEx(k, None)
+                        if path and os.path.exists(path):
+                            return path
+                except OSError:
+                    continue
+        except Exception:
+            pass
+        # 2) Common install locations
+        candidates = [
+            os.path.join(os.environ.get("ProgramFiles", r"C:\Program Files"),
+                         "Google", "Chrome", "Application", "chrome.exe"),
+            os.path.join(os.environ.get("ProgramFiles(x86)", r"C:\Program Files (x86)"),
+                         "Google", "Chrome", "Application", "chrome.exe"),
+            os.path.join(os.environ.get("LOCALAPPDATA", ""),
+                         "Google", "Chrome", "Application", "chrome.exe"),
+        ]
+        for p in candidates:
+            if p and os.path.exists(p):
+                return p
+        print("⚠️ Chrome binary not found in registry or default locations.")
+        return None
 
     def run_driver(self, socketio, app, port=None, startup_path='/'):
         try:
@@ -56,6 +90,8 @@ class DriverManager:
         logging.basicConfig(level=logging.ERROR)
 
         options = webdriver.ChromeOptions()
+        if self.chrome_binary_path:
+            options.binary_location = self.chrome_binary_path
         prefs = {
             'download.default_directory': download_path,
             'profile.default_content_settings.popups': 0,
@@ -114,6 +150,8 @@ class DriverManager:
         for proxy_var in ["HTTP_PROXY", "HTTPS_PROXY", "NO_PROXY"]:
             os.environ.pop(proxy_var, None)
         options = webdriver.ChromeOptions()
+        if self.chrome_binary_path:
+            options.binary_location = self.chrome_binary_path
         options.add_argument('ignore-certificate-errors')
         options.add_argument("--disable-gpu")
         options.add_argument("--log-level=3")

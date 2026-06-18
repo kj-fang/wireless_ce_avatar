@@ -1,0 +1,46 @@
+{
+  "scope": "disconnection_analysis",
+  "next_seq": 4,
+  "updated_at": "2026-06-05T13:27:45+08:00",
+  "bullets": [
+    {
+      "id": "disc-00001",
+      "section": "key_log_patterns",
+      "content": "Look for '[ROAM_DECISION] [SPECIAL] [roamingDecisionHandleEventMissedBeacons]' with consecutive count >= extended threshold; this is the definitive missed-beacon disconnect trigger.",
+      "helpful_count": 0,
+      "harmful_count": 0,
+      "neutral_count": 0,
+      "created_at": "2026-06-05T13:27:45+08:00",
+      "updated_at": "2026-06-05T13:27:45+08:00",
+      "source_turn_ids": [
+        "eb221aff-4594-4531-bc79-667535572f63"
+      ]
+    },
+    {
+      "id": "disc-00002",
+      "section": "common_failure_modes",
+      "content": "19 consecutive missed beacons (~1.9s at 100ms interval) with no roaming candidate forces client-side DEAUTH_REQ; classify as RF_INTERFERENCE even when RSSI was adequate before the event.",
+      "helpful_count": 0,
+      "harmful_count": 0,
+      "neutral_count": 0,
+      "created_at": "2026-06-05T13:27:45+08:00",
+      "updated_at": "2026-06-05T13:27:45+08:00",
+      "source_turn_ids": [
+        "eb221aff-4594-4531-bc79-667535572f63"
+      ]
+    },
+    {
+      "id": "disc-00003",
+      "section": "diagnostic_checklist",
+      "content": "After confirming missed-beacon root cause check: (1) DeauthFrame_IsPresent=0 confirms client-side initiation; (2) RSSI before event to rule out signal degradation; (3) roaming candidates to explain hard disconnect.",
+      "helpful_count": 0,
+      "harmful_count": 0,
+      "neutral_count": 0,
+      "created_at": "2026-06-05T13:27:45+08:00",
+      "updated_at": "2026-06-05T13:27:45+08:00",
+      "source_turn_ids": [
+        "eb221aff-4594-4531-bc79-667535572f63"
+      ]
+    }
+  ]
+}

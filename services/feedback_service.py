@@ -248,6 +248,12 @@ def _helpful_skills_path(domain: str = "") -> Path:
     return _feedback_root() / f"{_domain_prefix(domain)}feedback_helpful_skills.jsonl"
 
 
+def _skill_assessments_path(domain: str = "") -> Path:
+    """Per-skill chip assessments (helpful / redundant / wrong) from the
+    in-line response UI."""
+    return _feedback_root() / f"{_domain_prefix(domain)}feedback_skill_assessments.jsonl"
+
+
 # Strict pattern for client-supplied IDs that end up as filesystem path
 # components. UUIDs (server-generated) match this; short alphanumeric IDs
 # do too. Anything containing `/`, `\`, `..`, control chars or other
@@ -1341,6 +1347,80 @@ def record_helpful_skill(
             snap["_persisted"] = True
 
     _enqueue_append(_helpful_skills_path(eff_domain), event)
+    _enqueue_flush(conversation_id)
+    return True
+
+
+SKILL_ASSESSMENT_VALUES = ("helpful", "redundant", "wrong")
+
+
+def record_skill_assessment(
+    *,
+    session_id: str,
+    conversation_id: str,
+    turn_id: str,
+    skill_id: str,
+    assessment: str,
+) -> bool:
+    """
+    Record an in-line per-skill chip click. One row in
+    `feedback_skill_assessments.jsonl` AND a patch into the conversation
+    snapshot's `turns[].skill_assessments[]`. Re-clicking the same chip
+    updates the assessment; passing an empty/None assessment clears it.
+
+    assessment: one of "helpful" | "redundant" | "wrong", or "" to clear.
+    """
+    if not conversation_id or not turn_id or not skill_id:
+        return False
+    skill_id = str(skill_id).strip()
+    if not skill_id:
+        return False
+
+    raw = (assessment or "").strip().lower()
+    if raw and raw not in SKILL_ASSESSMENT_VALUES:
+        return False
+
+    eff_domain = _resolve_domain(conversation_id, "")
+    event = {
+        "schema_version": RECORD_SCHEMA_VERSION,
+        "ts": _now_iso(),
+        "session_id": session_id or "",
+        "submitted_by": _current_user(),
+        "domain": eff_domain or "wifi",
+        "conversation_id": conversation_id,
+        "turn_id": turn_id,
+        "skill_id": skill_id,
+        "assessment": raw,
+    }
+
+    with _pending_lock:
+        snap = _pending_buffer.get(conversation_id)
+        if snap is not None:
+            for t in snap.get("turns", []):
+                if t.get("turn_id") != turn_id:
+                    continue
+                items = t.setdefault("skill_assessments", [])
+                existing = next(
+                    (s for s in items if s.get("skill_id") == skill_id),
+                    None,
+                )
+                if not raw:
+                    if existing is not None:
+                        items.remove(existing)
+                else:
+                    if existing is not None:
+                        existing["assessment"] = raw
+                        existing["ts"] = event["ts"]
+                    else:
+                        items.append({
+                            "skill_id": skill_id,
+                            "assessment": raw,
+                            "ts": event["ts"],
+                        })
+                break
+            snap["_persisted"] = True
+
+    _enqueue_append(_skill_assessments_path(eff_domain), event)
     _enqueue_flush(conversation_id)
     return True
 

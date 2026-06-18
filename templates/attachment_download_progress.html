@@ -51,7 +51,9 @@
             <div class="progress">
                 <div id="bar-{{ name }}" class="progress-bar" role="progressbar" style="width: 0%;">0%</div>
             </div>
-            <small id="eta-{{ name }}" class="text-muted">ETA: --</small> 
+            <small id="eta-{{ name }}" class="text-muted">ETA: --</small>
+            <small id="retry-{{ name }}" class="text-warning" style="display:none;"></small>
+            <ul id="retry-history-{{ name }}" class="mt-1 mb-0 pl-3 text-muted" style="font-size: 0.85em;"></ul>
         </div>
         {% endfor %}
     </div>
@@ -79,6 +81,31 @@
             });
         }
 
+        socket.on('download_retry', function(data) {
+            const retryElem = document.getElementById(`retry-${data.name}`);
+            const retryHistoryElem = document.getElementById(`retry-history-${data.name}`);
+            let reasonText = 'Retry triggered due to a temporary issue.';
+
+            if (data.reason === 'stall_timeout') {
+                reasonText = `No progress for ${data.stall_timeout}s.`;
+            } else if (data.reason === 'missing_content_length') {
+                reasonText = 'Unable to read Content-Length from server response.';
+            } else if (data.reason === 'unexpected_error') {
+                reasonText = 'Unexpected error occurred during download.';
+            }
+
+            if (retryElem) {
+                retryElem.style.display = 'block';
+                retryElem.innerText = `⚠️ Retrying download (${data.retry}/${data.max_retry})...`;
+            }
+
+            if (retryHistoryElem) {
+                const item = document.createElement('li');
+                item.innerText = `${data.retry_time} | Retry ${data.retry}/${data.max_retry} | ${reasonText}`;
+                retryHistoryElem.appendChild(item);
+            }
+        });
+
         socket.on('file_info', function(data) {
             const { name, size } = data;
             fileSizes[name] = size;
@@ -98,6 +125,7 @@
         socket.on('progress_update', function(data) {
             const bar = document.getElementById(`bar-${data.name}`);
             const etaElem = document.getElementById(`eta-${data.name}`);
+            const retryElem = document.getElementById(`retry-${data.name}`);
             console.log("etaElem:", etaElem)
             if (bar) {
                 bar.style.width = `${data.progress}%`;
@@ -107,6 +135,10 @@
                 const minutes = Math.floor(data.eta / 60);
                 const seconds = Math.floor(data.eta % 60);
                 etaElem.innerText = `ETA: ${minutes}m ${seconds}s`;
+            }
+            if (retryElem && data.progress > 0) {
+                retryElem.style.display = 'none';
+                retryElem.innerText = '';
             }
         });
 

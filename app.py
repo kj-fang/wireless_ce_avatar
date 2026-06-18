@@ -261,6 +261,7 @@ if __name__ == "__main__":
     parser.add_argument('--tray-mode', action='store_true', help='Run as tray manager')
     parser.add_argument('--sendto-token', type=str, default=None, help='SendTo security token (auto-set by shortcut, not for manual use).')
     parser.add_argument('--json', type=str, default=None, help='Optional json file path (.json / .jsonl) produced by validation AI agent.')
+    parser.add_argument('--agent-zip', type=str, default=None, help='Path to a report zip produced by the validation AI agent. Reads the SendTo token from the running instance automatically.')
     parser.add_argument('--auto-llm', action='store_true', help='Automatically submit LLM analysis using the log\'s last timestamp (no user click required).')
     parser.add_argument('input_paths', nargs='*', help='Optional local analysis file paths passed from Windows SendTo.')
     args = parser.parse_args()
@@ -278,13 +279,13 @@ if __name__ == "__main__":
         if not _instance_token:
             print('⚠️ Running instance has no sendto_token registered. Please restart IntelAvatar.')
             sys.exit(1)
-        _agent_startup_path = _build_startup_path([args.agent_zip], sendto_token=_instance_token, is_agent_zip=True)
+        _agent_startup_path = _build_startup_path([args.agent_zip], sendto_token=_instance_token, is_agent_zip=True, auto_llm=args.auto_llm)
         _bring_chrome_to_front(_existing['pid'])
         if not _navigate_existing_browser(_existing['url'], _agent_startup_path):
             webbrowser.open(f"{_existing['url']}{_agent_startup_path}")
         sys.exit(0)
 
-    startup_path = _build_startup_path(args.input_paths, sendto_token=args.sendto_token, report=args.report, json_path=args.json, auto_llm=args.auto_llm)
+    startup_path = _build_startup_path(args.input_paths, sendto_token=args.sendto_token, auto_llm=args.auto_llm)
     
     # Check whether to run in tray mode
     if args.tray_mode:

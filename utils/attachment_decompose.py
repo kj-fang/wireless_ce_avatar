@@ -336,7 +336,7 @@ def process_single_zip(zip_path, download_path_tmp, already_downloaded, progress
     os.makedirs(download_path, exist_ok=True)
     
     # Initialize result lists
-    wifi_files, ddd_files, evt_files, bt_files, fw_files = [], [], [], [], []
+    wifi_files, ddd_files, evt_files, bt_files, fw_files, wifilog_files = [], [], [], [], [], []
     processed_files = set()
     unzip_pending = [os.path.abspath(zip_path)]
     is_first_archive = True

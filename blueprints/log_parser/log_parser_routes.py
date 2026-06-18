@@ -569,13 +569,13 @@ def _process_local_analysis(source_path: str, source_dir: str, file_path: str,
                 _last_extract_pct[0] = display_pct
                 progress_cb(display_pct, f'Extracting: {filename}')
 
-        wifi_files, ddd_files, evt_files, bt_files, fw_files = attachment_decompose.process_single_zip(
+        wifi_files, ddd_files, evt_files, bt_files, fw_files, wifilog_files = attachment_decompose.process_single_zip(
             file_path, source_dir, already_downloaded=False,
             progress_cb=_extract_progress if progress_cb else None,
             cancel_event=cancel_event,
         )
 
-        extracted_files = wifi_files + ddd_files + evt_files + bt_files + fw_files
+        extracted_files = wifi_files + ddd_files + evt_files + bt_files + fw_files + wifilog_files
         if not extracted_files:
             raise ValueError('No supported analysis files found in the uploaded file.')
 
@@ -650,6 +650,15 @@ def _process_local_analysis(source_path: str, source_dir: str, file_path: str,
         session['latest_etl_llm'] = False
         if session.get('sendto_report_path'):
             session['latest_etl_llm'] = True
+
+        # WiFi driver plain-text logs: skip ETL parsing and go directly to the chatbot
+        if wifilog_files:
+            session['latest_etl_path'] = None
+            app_config.last_analyzed_log_path = wifilog_files[0]
+            _cb(90, f'WiFi driver log found: {os.path.basename(wifilog_files[0])}. Ready to analyse.')
+            _auto_send = '1' if session.get('sendto_auto_llm') else '0'
+            print(f"🤖 [wifilog] direct to chatbot: {wifilog_files[0]}, auto_send={_auto_send}")
+            return url_for('log_chatbot.index', auto_run='analyze_all', auto_send=_auto_send)
 
         app_config.set_download_results(
             local_case_nbr,

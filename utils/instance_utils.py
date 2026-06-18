@@ -18,7 +18,7 @@ def is_intelavatar_process(pid):
         name = (proc.name() or '').lower()
         cmdline = [part.lower() for part in (proc.cmdline() or [])]
 
-        if name == 'intelavatar.exe':
+        if 'intelavatar' in name:
             return True
 
         if name in ('python.exe', 'pythonw.exe'):
@@ -149,40 +149,67 @@ def _is_tray_process(proc: "psutil.Process") -> bool:
     try:
         name = (proc.name() or '').lower()
         cmdline = [a.lower() for a in (proc.cmdline() or [])]
-        # Frozen: IntelAvatar.exe --tray-mode
-        if name == 'intelavatar.exe' and '--tray-mode' in cmdline:
+        print(f"[TRAY CHECK] PID={proc.pid} name={name!r} cmdline={cmdline}")
+        # Frozen: IntelAvatar*.exe --tray-mode (supports versioned filenames e.g. IntelAvatar_v1.2.3.exe)
+        if 'intelavatar' in name and '--tray-mode' in cmdline:
+            print(f"[TRAY CHECK] PID={proc.pid} → matched frozen tray")
             return True
         # Dev: python tray_manager.py
         if name in ('python.exe', 'pythonw.exe'):
             if any('tray_manager.py' in a for a in cmdline):
+                print(f"[TRAY CHECK] PID={proc.pid} → matched dev tray")
                 return True
-    except Exception:
-        pass
+    except Exception as e:
+        print(f"[TRAY CHECK] PID={proc.pid} → exception reading process info: {e} (result indeterminate)")
+        return False
+    print(f"[TRAY CHECK] PID={proc.pid} → NOT a tray process")
     return False
 
 
 def _is_tray_running() -> bool:
     """Step 1: check tray_manager.pid written by the tray process itself."""
     pid_path = _tray_pid_file()
+    print(f"[TRAY RUNNING] checking pid file: {pid_path}")
     try:
         with open(pid_path, 'r', encoding='utf-8') as f:
             pid = int(f.read().strip())
-        if psutil.pid_exists(pid):
+        pid_exists = psutil.pid_exists(pid)
+        print(f"[TRAY RUNNING] pid file contains PID={pid}, exists={pid_exists}")
+        if pid_exists:
             proc = psutil.Process(pid)
-            if proc.is_running() and _is_tray_process(proc):
+            is_running = proc.is_running()
+            print(f"[TRAY RUNNING] PID={pid} is_running={is_running}")
+            if is_running and _is_tray_process(proc):
+                print(f"[TRAY RUNNING] → tray IS running (PID={pid})")
                 return True
         # Stale pid file (dead or PID reused by unrelated process) — remove it
+        print(f"[TRAY RUNNING] PID={pid} is stale — removing pid file")
         os.remove(pid_path)
     except (FileNotFoundError, ValueError):
-        pass
-    except Exception:
-        pass
+        print(f"[TRAY RUNNING] pid file not found or invalid")
+    except psutil.NoSuchProcess:
+        # Race condition: process exited between pid_exists() and Process()/is_running().
+        # Confirmed dead — treat as stale and remove the pid file.
+        print(f"[TRAY RUNNING] PID={pid} vanished during check (NoSuchProcess) — treating as stale, removing pid file")
+        try:
+            os.remove(pid_path)
+        except Exception:
+            pass
+    except psutil.AccessDenied:
+        # Cannot inspect the process, but the PID file was written by the tray itself.
+        # Assume the tray is still running to avoid spawning a duplicate.
+        print(f"[TRAY RUNNING] ⚠️ PID={pid} access denied — cannot confirm this is the Avatar tray process; assuming running to avoid duplicate spawn")
+        return True
+    except Exception as e:
+        print(f"[TRAY RUNNING] unexpected error: {e}")
+    print(f"[TRAY RUNNING] → tray is NOT running")
     return False
 
 
 def ensure_tray_manager():
     """Ensure the tray manager is running, launching it if necessary."""
     # Step 1: fast check via pid file written by the tray process itself.
+    print("[TRAY ENSURE] checking if tray is already running before acquiring spawn lock...")
     if _is_tray_running():
         print("ℹ️ Tray manager is already running")
         return
@@ -217,6 +244,7 @@ def ensure_tray_manager():
 
     try:
         # Re-check inside the lock in case tray started between our check and lock.
+        print("[TRAY ENSURE] checking if tray is already running after acquiring spawn lock...")
         if _is_tray_running():
             print("ℹ️ Tray manager is already running")
             return

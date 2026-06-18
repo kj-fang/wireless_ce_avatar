@@ -18,6 +18,9 @@ import psutil
 import pystray
 from PIL import Image
 from utils.port_utils import get_user_data_dir
+from utils.instance_utils import is_intelavatar_process
+
+_logger = logging.getLogger('TrayManager')
 
 _logger = logging.getLogger('TrayManager')
 
@@ -115,23 +118,6 @@ class TrayManager:
 
         return logger
 
-    def _is_intelavatar_process(self, pid) -> bool:
-        """Return True only if pid belongs to an IntelAvatar app process."""
-        try:
-            proc = psutil.Process(pid)
-            name = (proc.name() or '').lower()
-            cmdline = [part.lower() for part in (proc.cmdline() or [])]
-            if name == 'intelavatar.exe':
-                return True
-            if name in ('python.exe', 'pythonw.exe'):
-                if any('app.py' in part for part in cmdline):
-                    return True
-            if any('intelavatar' in part and ('exe' in part or 'app.py' in part) for part in cmdline):
-                return True
-        except Exception:
-            pass
-        return False
-
     def _scan_instances(self) -> list:
         live_instances = []
         try:
@@ -141,7 +127,7 @@ class TrayManager:
                 pid = instance.get('pid')
                 port = instance.get('port')
                 pid_exists = psutil.pid_exists(pid) if pid else False
-                is_avatar = self._is_intelavatar_process(pid) if pid_exists else False
+                is_avatar = is_intelavatar_process(pid) if pid_exists else False
                 self.logger.debug(f'[SCAN] instance file found | PID={pid} port={port} pid_exists={pid_exists} is_avatar={is_avatar}')
                 if pid and pid_exists and is_avatar:
                     live_instances.append(instance)

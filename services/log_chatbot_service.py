@@ -2605,14 +2605,6 @@ class WifiLogAgentSystem:
                         continue
 
                     if tool_call.function.name == "submit_final_report":
-                        # Normalise fields that the schema declares as arrays but the LLM
-                        # occasionally returns as a newline-/comma-delimited string.
-                        for _arr_key in ("recommended_actions", "involved_skills"):
-                            _v = args.get(_arr_key)
-                            if isinstance(_v, str):
-                                args[_arr_key] = [s.lstrip("-• \t") for s in _v.splitlines() if s.strip()]
-                            elif not isinstance(_v, list):
-                                args[_arr_key] = []
                         final_report = args
                         _emit({"role": "agent", "content": "✅ **Conclusion reached!** Generating report."})
                         self.conversation_history.append({

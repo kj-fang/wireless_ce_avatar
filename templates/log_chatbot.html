@@ -2449,6 +2449,12 @@
     let agenticMode = true;
     let isAutoFillMode = false;  // true after auto_run prefill; requires a timestamp before sending
     let firstRoundSent = false;  // true after the user successfully sends the first question
+    // Extracted SUMMARY from --report file (CLI --auto-llm flow). Empty string
+    // when not in CLI mode or report has no parseable SUMMARY section.
+    const REPORT_SUMMARY = {{ report_summary | default('') | tojson }};
+    // 'Test Error Happened Time' from --report file, converted to MM/DD/YYYY-HH:MM:SS.
+    // Takes priority over log's last timestamp in the auto-send branch.
+    const REPORT_ISSUE_TIME = {{ report_issue_time | default('') | tojson }};
     // True when the primary Issue Time was auto-filled from the PREVIOUS PAGE
     // and the user hasn't confirmed it yet. While true the primary time is
     // shown in the fields but does NOT count as a usable issue time (the user
@@ -4523,7 +4529,14 @@
             // the issue context (especially the timestamp) and clicks Send.
             setTimeout(() => {
                 const input = document.getElementById('user-input');
-                const rawQuestion = question || '🔍 Run full multi-skill analysis';
+                // CLI --auto-llm: prefer the extracted report summary over the
+                // generic context description so the agent sees the real test failure.
+                const rawQuestion = (autoSend && REPORT_SUMMARY)
+                    ? REPORT_SUMMARY
+                    : (question || '🔍 Run full multi-skill analysis');
+                if (autoSend && REPORT_SUMMARY) {
+                    console.log('[auto-llm] using report summary as description (%d chars)', REPORT_SUMMARY.length);
+                }
 
                 let descPart = rawQuestion;
                 // Priority: LLM-organized multi-time list (from the case
@@ -4569,23 +4582,26 @@
                 validateUserInput();
 
                 // [auto-llm] If --auto-llm was passed from CLI, skip user confirmation
-                // and submit automatically using the log's last timestamp.
+                // and submit automatically.
+                // Priority: report error time → log's last timestamp → prefilled time.
                 if (autoSend) {
-                    const lastTime = window.__logLastTime || '';
-                    console.log('[auto-llm] auto_send=1: logLastTime=%s issueTimeAwaitingConfirm=%s desc=%s',
-                        lastTime, issueTimeAwaitingConfirm, input ? input.value : '(no input)');
-                    if (lastTime && setIssueTimeFromString(lastTime)) {
-                        // Use log's last time — override whatever was prefilled, no confirm tick needed.
+                    const reportTime = REPORT_ISSUE_TIME || '';
+                    const lastTime   = window.__logLastTime || '';
+                    const chosenTime = reportTime || lastTime;
+                    console.log('[auto-llm] auto_send=1: reportTime=%s logLastTime=%s chosen=%s',
+                        reportTime, lastTime, chosenTime);
+                    if (chosenTime && setIssueTimeFromString(chosenTime)) {
                         markIssueTimeUserOwned();
-                        console.log('[auto-llm] issue time set from logLastTime:', lastTime);
+                        console.log('[auto-llm] issue time set from %s: %s',
+                            reportTime ? 'reportErrorTime' : 'logLastTime', chosenTime);
                     } else if (issueTimeAwaitingConfirm) {
-                        // No last time but a prefilled time exists — accept it automatically.
+                        // No extracted time but a prefilled time exists — accept it automatically.
                         issueTimeAwaitingConfirm = false;
                         setIssueTimeConfirmUI(false);
                         validateUserInput();
-                        console.log('[auto-llm] no logLastTime — accepted prefilled time (confirm cleared)');
+                        console.log('[auto-llm] no extracted time — accepted prefilled time (confirm cleared)');
                     } else {
-                        console.warn('[auto-llm] no logLastTime and no prefilled time — sendMessage will show no-time modal');
+                        console.warn('[auto-llm] no time source available — sendMessage will show no-time modal');
                     }
                     console.log('[auto-llm] scheduling sendMessage() in 100ms');
                     setTimeout(() => sendMessage(), 100);

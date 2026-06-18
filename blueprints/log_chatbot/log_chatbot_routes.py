@@ -464,6 +464,65 @@ def _job_sse(job):
 # ------------------------------------------------------------------
 # Pages
 # ------------------------------------------------------------------
+def _extract_report_summary(report_path: str) -> tuple:
+    """Extract Test Item, Test Result, SUMMARY section, and error time from a
+    structured validation report (.txt).
+
+    Returns: (summary: str, issue_time: str)
+      summary    — multi-part description for the LLM
+      issue_time — value of 'Test Error Happened Time' line, or "" if absent
+                   Format: 'YYYY-MM-DD HH:MM:SS' → converted to 'MM/DD/YYYY-HH:MM:SS'
+    """
+    import re as _re
+    try:
+        with open(report_path, 'r', encoding='utf-8', errors='replace') as _f:
+            content = _f.read()
+    except Exception:
+        return "", ""
+
+    parts = []
+
+    # Title / Test Item (first non-empty line after the top divider)
+    title_m = _re.search(r'={10,}\s*\n(.+?)\s*\n={10,}', content)
+    if title_m:
+        parts.append(title_m.group(1).strip())
+
+    # Test Item details
+    item_m = _re.search(r'Test Item:\s*(.+?)(?=\nTest Result:|\n\n={5,})', content, _re.DOTALL)
+    if item_m:
+        item = ' '.join(item_m.group(1).split())
+        parts.append(f"Test: {item}")
+
+    # Test Result (PASSED / FAILED / BLOCKED …)
+    result_m = _re.search(r'Test Result:\s*(\S+)', content)
+    if result_m:
+        parts.append(f"Result: {result_m.group(1)}")
+
+    # SUMMARY section body (between the two === dividers that wrap it)
+    summary_m = _re.search(
+        r'={10,}\s*\nSUMMARY\s*\n={10,}\s*\n(.*?)(?=\n={10,})',
+        content, _re.DOTALL | _re.IGNORECASE
+    )
+    if summary_m:
+        parts.append(summary_m.group(1).strip())
+
+    summary = '\n\n'.join(p for p in parts if p)
+
+    # Test Error Happened Time: 2026-06-17 17:30:21
+    # Convert YYYY-MM-DD HH:MM:SS → MM/DD/YYYY-HH:MM:SS (matches setIssueTimeFromString)
+    issue_time = ""
+    err_time_m = _re.search(
+        r'Test Error Happened Time:\s*(\d{4})-(\d{2})-(\d{2})\s+(\d{2}:\d{2}:\d{2})',
+        content
+    )
+    if err_time_m:
+        yyyy, mm, dd, hms = err_time_m.groups()
+        issue_time = f"{int(mm):02d}/{int(dd):02d}/{yyyy}-{hms}"
+        print(f"📅 [report-summary] Extracted error time: {issue_time}")
+
+    return summary, issue_time
+
+
 @log_chatbot_bp.route("/", methods=["GET"])
 def index():
     suggested_log = app_config.last_analyzed_log_path or ""
@@ -473,7 +532,21 @@ def index():
         issue_desc = ctx.get("description", "")
     except Exception:
         pass
-    return render_template("log_chatbot.html", suggested_log=suggested_log, issue_description=issue_desc)
+
+    # CLI --auto-llm flow: extract summary + error time from --report file.
+    report_summary = ""
+    report_issue_time = ""
+    _sendto_report = (session.get("sendto_report_path") or "").strip()
+    if _sendto_report and session.get("sendto_auto_llm"):
+        report_summary, report_issue_time = _extract_report_summary(_sendto_report)
+        if report_summary:
+            print(f"📄 [report-summary] Extracted {len(report_summary)} chars from {_sendto_report}")
+        if report_issue_time:
+            print(f"📅 [report-summary] Error time for issue time field: {report_issue_time}")
+
+    return render_template("log_chatbot.html", suggested_log=suggested_log,
+                           issue_description=issue_desc, report_summary=report_summary,
+                           report_issue_time=report_issue_time)
 
 
 # ------------------------------------------------------------------

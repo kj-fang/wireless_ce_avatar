@@ -93,6 +93,33 @@
             border-color: #0071c5;
             box-shadow: 0 0 0 2px rgba(0,113,197,0.15);
         }
+        /* Path input + overlay copy icon. The icon floats inside the
+           input's right edge so it doesn't add a third sidebar button. */
+        .log-input-wrap { position: relative; flex: 1; display: flex; }
+        .log-input-wrap input { padding-right: 26px; }
+        .log-input-copy {
+            position: absolute;
+            top: 50%;
+            right: 4px;
+            transform: translateY(-50%);
+            width: 20px; height: 20px;
+            border: none;
+            background: transparent;
+            color: #999;
+            font-size: 0.78rem;
+            line-height: 1;
+            padding: 0;
+            cursor: pointer;
+            opacity: 0.55;
+            border-radius: 4px;
+            transition: opacity 0.15s, background 0.15s, color 0.15s;
+        }
+        .log-input-copy:hover { opacity: 1; color: #0071c5; }
+        .log-input-copy.copied {
+            opacity: 1;
+            color: #1a7a3e;
+            background: #e6f7ee;
+        }
         .btn-set-log {
             background: #0071c5;
             color: white;
@@ -866,6 +893,14 @@
         .feedback-btn:active:not(:disabled) { transform: scale(0.95); }
         .feedback-btn.voted-up   { background: #e8f7ec; border-color: #2ea043; color: #1a7f37; }
         .feedback-btn.voted-down { background: #fdecec; border-color: #cf222e; color: #b42318; }
+        /* Lock the page-level thumbs while the More-feedback modal is open
+           so the user can't change the vote out from under the form they
+           are filling in. Restored on close. */
+        body.fbd-modal-open .feedback-btn {
+            pointer-events: none;
+            opacity: 0.5;
+            cursor: not-allowed;
+        }
         .feedback-btn:disabled   { cursor: default; }
         .feedback-thanks {
             font-size: 0.72rem;
@@ -884,6 +919,46 @@
         }
         .feedback-more-link:hover { text-decoration: underline; }
         .feedback-more-link.submitted { color: #1a7f37; cursor: default; text-decoration: none; }
+
+        /* ── In-line per-skill assessment chips (helpful / redundant / wrong) ── */
+        .skill-assessments {
+            display: flex;
+            flex-wrap: wrap;
+            gap: 6px 10px;
+            margin-top: 6px;
+            opacity: 0.85;
+        }
+        .skill-assessments:hover { opacity: 1; }
+        .skill-chip-group {
+            display: inline-flex;
+            align-items: center;
+            gap: 4px;
+            background: #f5f7fa;
+            border: 1px solid #e3e7ee;
+            border-radius: 14px;
+            padding: 2px 6px 2px 10px;
+            font-size: 0.78rem;
+        }
+        .skill-chip-name {
+            color: #2d333a;
+            font-weight: 500;
+            margin-right: 4px;
+        }
+        .skill-chip-btn {
+            background: white;
+            border: 1px solid #d8dee5;
+            border-radius: 10px;
+            padding: 1px 6px;
+            font-size: 0.78rem;
+            cursor: pointer;
+            line-height: 1.2;
+            user-select: none;
+            transition: background 0.12s, border-color 0.12s;
+        }
+        .skill-chip-btn:hover:not(:disabled) { background: #eef4ff; border-color: #0071c5; }
+        .skill-chip-btn.active.helpful   { background: #e8f7ec; border-color: #2ea043; color: #1a7f37; }
+        .skill-chip-btn.active.redundant { background: #fff5e6; border-color: #d29922; color: #9a6700; }
+        .skill-chip-btn.active.wrong     { background: #fdecec; border-color: #cf222e; color: #b42318; }
 
         /* ── Sidebar: skill source badge + cloud/user toggle ─────────── */
         /* No outer panel frame — the badge already conveys state, and a
@@ -1269,6 +1344,54 @@
             padding: 10px 14px 14px;
             margin-bottom: 12px;
         }
+
+        /* ─── Two-page wizard ─────────────────────────────────────────
+           Page 1 routes by problem type and shows the matching menu(s);
+           Page 2 always collects the correct answer. .hidden-row hides
+           the inactive page / menu. */
+        .fbd-page { display: block; }
+        .fbd-page.hidden-row { display: none; }
+        .fbd-footer-spacer { flex: 1 1 auto; }
+
+        /* Route picker: three stacked cards, one chosen on Page 1. */
+        .fbd-route-cards { display: flex; flex-direction: column; gap: 8px; margin-bottom: 12px; }
+        .fbd-route-card {
+            display: block; text-align: left;
+            background: #fafbfc; border: 1px solid #e5e7eb; border-radius: 8px;
+            padding: 10px 12px; cursor: pointer;
+            transition: border-color .12s, background .12s, box-shadow .12s;
+        }
+        .fbd-route-card:hover { border-color: #b9c4d0; background: #f5f8fb; }
+        .fbd-route-card.selected {
+            border-color: #1f6feb; background: #eef4ff;
+            box-shadow: inset 0 0 0 1px #1f6feb;
+        }
+        .fbd-route-title { display: block; font-size: 0.85rem; font-weight: 650; color: #1f2937; }
+        .fbd-route-desc  { display: block; font-size: 0.74rem; color: #6a737d; line-height: 1.3; margin-top: 2px; }
+
+        /* Workflow lane — "skills that weren't needed here" toggle list. */
+        .fbd-skill-toggle-list { display: flex; flex-direction: column; gap: 4px; margin-top: 4px; }
+
+        /* Skill lane — one row per skill that ran. */
+        .fbd-skill-rows { display: flex; flex-direction: column; gap: 8px; }
+        #fbd-step-rows { margin-top: 8px; }
+        .fbd-skill-row {
+            background: #fff; border: 1px solid #e5e7eb; border-radius: 6px; padding: 8px 10px;
+        }
+        .fbd-skill-row-head {
+            display: flex; align-items: center; gap: 8px; flex-wrap: wrap;
+        }
+        .fbd-skill-row-name { font-size: 0.82rem; font-weight: 600; color: #1f2937; flex: 1 1 auto; }
+        .fbd-skill-verdict { display: inline-flex; gap: 4px; }
+        .fbd-verdict-btn {
+            border: 1px solid #cdd9e3; background: #fff; color: #444;
+            border-radius: 6px; padding: 3px 8px; font-size: 0.74rem; cursor: pointer;
+        }
+        .fbd-verdict-btn:hover { background: #f5f9ff; }
+        .fbd-verdict-btn.active { background: #e6f0fb; border-color: #0071c5; color: #0071c5; }
+        .fbd-skill-row-detail { margin-top: 8px; }
+        .fbd-skill-row-detail.hidden-row { display: none; }
+        .fbd-skill-row-detail textarea { margin-top: 6px; }
         .fbd-group-title {
             font-size: 0.84rem;
             font-weight: 700;
@@ -1276,6 +1399,22 @@
             padding-bottom: 6px;
             margin-bottom: 6px;
             border-bottom: 1px solid #eaecef;
+            display: flex;
+            align-items: center;
+            justify-content: space-between;
+            gap: 8px;
+        }
+        .fbd-selected-count {
+            font-size: 0.72rem;
+            font-weight: 600;
+            color: #6a737d;
+            background: #eef1f5;
+            border-radius: 10px;
+            padding: 1px 8px;
+        }
+        .fbd-selected-count.has-pick {
+            color: #0071c5;
+            background: #e6f0fb;
         }
         /* Per-field label inside a group. Tightened spacing so the
            label sits close to its input without overlapping the
@@ -1351,7 +1490,7 @@
             font-size: 0.7rem;
             color: #6a737d;
             line-height: 1.4;
-            margin: -2px 0 8px;
+            margin: 6px 0 8px;
         }
         .fbd-field-hint code {
             background: #f0f3f7;
@@ -1472,7 +1611,7 @@
         .sidebar-toggle:focus { outline: 2px solid rgba(255,255,255,0.5); outline-offset: 1px; }
         .fbd-draft-hint {
             font-size: 11px;
-            color: #1a7f37;
+            color: #8a8f98;
             margin-left: 8px;
             font-style: italic;
             display: none;
@@ -1583,63 +1722,9 @@
             border-color: #0071c5;
             box-shadow: 0 0 0 2px rgba(0,113,197,0.12);
         }
-        /* "Or describe the approach" input sits directly under the skill
-           dropdown in the Wrong-direction sub-block — small breathing
-           room so the two fields don't fuse visually. */
-        .fbd-body input.fbd-approach-input { margin-top: 6px; }
 
-        /* "Specific problems" — one row per issue inside the
-           Agent-workflow group. Compact two-column grid for the
-           always-visible Where / Problem pickers, sub-rows reveal
-           skill / step dropdowns conditionally. */
-        .fbd-issue-row {
-            position: relative;
-            background: #fff;
-            border: 1px solid #e5e7eb;
-            border-radius: 6px;
-            padding: 10px 36px 10px 10px;
-            margin: 6px 0;
-        }
-        .fbd-row-grid {
-            display: grid;
-            grid-template-columns: 1fr 1fr;
-            gap: 8px;
-            margin-bottom: 6px;
-        }
-        .fbd-row-extra { margin-bottom: 6px; }
-        .fbd-issue-row .fbd-note {
-            margin-top: 4px;
-        }
-        /* Options the area↔note-type matrix says don't apply stay
-           visible but greyed out, so the user can see the full taxonomy
-           and understand which combinations are valid. */
-        .fbd-issue-row select option:disabled {
-            color: #b0b6c0;
-            font-style: italic;
-        }
-        .fbd-remove {
-            position: absolute;
-            top: 8px; right: 8px;
-            width: 22px; height: 22px;
-            border-radius: 50%;
-            background: #fff;
-            border: 1px solid #e5e7eb;
-            color: #cf222e;
-            cursor: pointer;
-            font-size: 0.9rem;
-            line-height: 1;
-            padding: 0;
-            display: flex;
-            align-items: center;
-            justify-content: center;
-        }
-        .fbd-remove:hover {
-            background: #fdecec;
-            border-color: #cf222e;
-        }
-
-        /* Shared dashed-outline "add" button (still used by the skill
-           editor's "+ Add new skill" and the issue rows). */
+        /* Shared dashed-outline "add" button (used by the skill editor's
+           "+ Add new skill"). */
         .fbd-add-row {
             background: white;
             border: 1px dashed #0071c5;
@@ -1893,17 +1978,18 @@
         <!-- Log file -->
         <div class="sidebar-section">
             <h6>📂 Log File</h6>
-            {% if suggested_log %}
-            <div style="font-size:0.75rem;background:#1a3a1a;border:1px solid #2d6a2d;border-radius:5px;padding:5px 8px;margin-bottom:6px;color:#7ec87e;">
-                ✅ Log from last analysis pre-loaded — click <strong>Load</strong> to confirm.
-            </div>
-            {% endif %}
             <div class="log-input-group">
-                <input id="log-path-input" type="text"
-                       placeholder="Full path to .log file…"
-                       value="{{ suggested_log | default('', true) }}">
+                <div class="log-input-wrap">
+                    <input id="log-path-input" type="text"
+                           placeholder="Full path to .log file…"
+                           value="{{ suggested_log | default('', true) }}"
+                           onkeydown="if(event.key==='Enter'){event.preventDefault();setLog();}"
+                           onchange="setLog()">
+                    <button type="button" class="log-input-copy"
+                            onclick="copyLogPath(this)" title="Copy log path"
+                            aria-label="Copy log path">📋</button>
+                </div>
                 <button class="btn-browse" onclick="browseLog()" title="Browse for file">📁</button>
-                <button class="btn-set-log" onclick="setLog()">Load</button>
             </div>
             <div id="log-status" class="log-status"></div>
         </div>
@@ -3256,7 +3342,14 @@
             });
             const data = await res.json();
             if (data.success) {
-                showStatus(statusEl, '✔ ' + data.message, 'ok');
+                showStatus(statusEl, '✔ Log loaded', 'ok');
+                setTimeout(() => {
+                    if (statusEl.textContent === '✔ Log loaded') {
+                        statusEl.className = 'log-status';
+                        statusEl.textContent = '';
+                        statusEl.style.display = 'none';
+                    }
+                }, 3000);
                 renderSkills(data.skills);
                 logLoaded = true;
 
@@ -3444,6 +3537,24 @@
         el.className = 'log-status ' + type;
     }
 
+    // Copy the current log path to the clipboard; flash the button so
+    // the user sees the action took effect (path is hidden from the
+    // success status now, so this is the only way to share it).
+    async function copyLogPath(btn) {
+        const path = (document.getElementById('log-path-input') || {}).value || '';
+        if (!path.trim()) return;
+        try {
+            await navigator.clipboard.writeText(path);
+        } catch (_e) {
+            const inp = document.getElementById('log-path-input');
+            inp.select(); document.execCommand('copy');
+        }
+        if (btn) {
+            btn.classList.add('copied');
+            setTimeout(() => btn.classList.remove('copied'), 1200);
+        }
+    }
+
     // ── Reload skills from shared folder ────────────────────────────
     async function reloadFromShared() {
         const statusEl = document.getElementById('reload-shared-status');
@@ -3472,16 +3583,29 @@
 
     function renderSkills(skills) {
         const container = document.getElementById('skills-list');
+        container.innerHTML = '';
         if (!skills || skills.length === 0) {
-            container.innerHTML = '<div style="font-size:0.78rem;color:#aaa;">No skills loaded. Use <strong>📦 Load Skills YAML</strong> below.</div>';
+            const empty = document.createElement('div');
+            empty.style.cssText = 'font-size:0.78rem;color:#aaa;';
+            empty.innerHTML = 'No skills loaded. Use <strong>📦 Load Skills YAML</strong> below.';
+            container.appendChild(empty);
             skillsLoaded = false;
         } else {
-            container.innerHTML = skills.map(s => `
-                <div class="skill-card" onclick="sendQuick('Analyse using the ${s.name} skill')">
-                    <div class="skill-name">${s.name}</div>
-                    <div class="skill-desc">${s.description}</div>
-                </div>
-            `).join('');
+            // Build nodes via the DOM API and assign text via textContent /
+            // addEventListener so skill names/descriptions sourced from the
+            // user's YAML can never break the markup or inject script.
+            skills.forEach((s) => {
+                const name = String(s && s.name != null ? s.name : '');
+                const card = document.createElement('div');
+                card.className = 'skill-card';
+                if (s && s.description) card.title = String(s.description);
+                card.addEventListener('click', () => sendQuick('Analyse using the ' + name + ' skill'));
+                const nameEl = document.createElement('div');
+                nameEl.className = 'skill-name';
+                nameEl.textContent = name;
+                card.appendChild(nameEl);
+                container.appendChild(card);
+            });
             skillsLoaded = true;
         }
         updateAnalyzeBtn();
@@ -4996,176 +5120,138 @@
             <button type="button" class="fbd-close" onclick="closeFeedbackModal()" aria-label="Close">×</button>
         </div>
         <div class="fbd-body">
-            <!-- ─── Severity (1-5, single-click quantifiable signal) ─── -->
-            <div class="fbd-section-label" id="fbd-sev-label">Severity (optional)</div>
-            <div class="fbd-severity-row">
-                <div class="fbd-severity-scale" id="fbd-severity-scale">
-                    <button type="button" class="sev-btn" data-value="1">1</button>
-                    <button type="button" class="sev-btn" data-value="2">2</button>
-                    <button type="button" class="sev-btn" data-value="3">3</button>
-                    <button type="button" class="sev-btn" data-value="4">4</button>
-                    <button type="button" class="sev-btn" data-value="5">5</button>
+            <!-- ===== PAGE 1 — problem type ONLY (pick one → new screen) === -->
+            <div id="fbd-page-1" class="fbd-page">
+                <div class="fbd-section-label" id="fbd-route-label">What kind of problem?</div>
+                <div class="fbd-route-cards" id="fbd-route-cards">
+                    <button type="button" class="fbd-route-card" data-route="workflow" onclick="selectFeedbackRoute('workflow')">
+                        <span class="fbd-route-title" data-route-title="workflow">How it investigated</span>
+                        <span class="fbd-route-desc" data-route-desc="workflow">The steps it took — repeated itself, ran checks it didn't need, stopped too early, or went in the wrong order.</span>
+                    </button>
+                    <button type="button" class="fbd-route-card" data-route="skill" onclick="selectFeedbackRoute('skill')">
+                        <span class="fbd-route-title" data-route-title="skill">What it knew</span>
+                        <span class="fbd-route-desc" data-route-desc="skill">Its knowledge was off — it misread the logs, reasoned wrongly, or used a wrong rule.</span>
+                    </button>
+                    <button type="button" class="fbd-route-card" data-route="both" onclick="selectFeedbackRoute('both')">
+                        <span class="fbd-route-title" data-route-title="both">Both</span>
+                        <span class="fbd-route-desc" data-route-desc="both">Both how it investigated and what it knew need fixing.</span>
+                    </button>
                 </div>
-                <span class="fbd-severity-readout" id="fbd-severity-readout">Not rated</span>
-            </div>
-            <div class="fbd-field-hint" id="fbd-sev-hint">1 = minor wording miss · 3 = wrong sub-claim · 5 = critical wrong root cause</div>
-
-            <!-- ─── Group 1: Correct answer ─── -->
-            <div class="fbd-group">
-                <div class="fbd-group-title" id="fbd-grp-correct-title">Correct answer</div>
-
-                <label class="fbd-sub-label" id="fbd-conc-label">Conclusion category</label>
-                <select id="fbd-correct-conclusion-tag">
-                    <option value="">— Select if you know —</option>
-                    <option value="OS_INITIATED">OS-initiated (TASK_DISCONNECT / user/policy)</option>
-                    <option value="RF_INTERFERENCE">RF / signal issue (weak coverage, missed beacons)</option>
-                    <option value="AP_KICK">AP-initiated (Deauth without missed beacons)</option>
-                    <option value="FIRMWARE_CRASH">Firmware crash (UMAC / LMAC / TCM)</option>
-                    <option value="MCC_MISMATCH">MCC / regulatory mismatch</option>
-                    <option value="DRIVER_INIT_FAILURE">Driver / device initialization failure</option>
-                    <option value="AUTH_FAILURE">Authentication failure</option>
-                    <option value="ASSOC_FAILURE">Association failure</option>
-                    <option value="HANDSHAKE_FAILURE">EAPOL / 4-way handshake failure</option>
-                    <option value="WAKE_RESUME_DELAY">Wake / resume delay</option>
-                    <option value="BIOS_CONFIG_ISSUE">BIOS DSM / UEFI misconfiguration</option>
-                    <option value="ROAMING_DECISION">Roaming decision / AP selection</option>
-                    <option value="OTHER">Other</option>
-                </select>
-
-                <label class="fbd-sub-label" id="fbd-rootcause-label">Real root cause</label>
-                <input type="text" id="fbd-correct-root-cause"
-                       placeholder='e.g. "AP idle timeout kicked client off after 60s of inactivity."'>
-
-                <label class="fbd-sub-label" id="fbd-evidence-label">Key evidence log lines</label>
-                <textarea id="fbd-evidence-log-lines"
-                          placeholder='Paste log lines the agent missed or misread, one per line.&#10;e.g. [CNCT_FLOW][11] AUTH_RSP - received from "ASUS_BE98_MLO"'></textarea>
-                <div class="fbd-field-hint" id="fbd-evidence-hint">Reflector will grep these against the log to verify your correction.</div>
             </div>
 
-            <!-- ─── Group 2: Agent workflow (orchestration ACE signal) ─── -->
-            <div class="fbd-group">
-                <div class="fbd-group-title" id="fbd-grp-flow-title">Agent workflow</div>
-
-                <label class="fbd-sub-label" id="fbd-flow-label">Investigation flow (overall)</label>
-                <select id="fbd-agent-workflow">
-                    <option value="">— Select if orchestration was off —</option>
-                    <option value="appropriate">Appropriate — flow was efficient</option>
-                    <option value="stopped_too_early">Stopped too early — should have invoked more skills</option>
-                    <option value="over_investigated">Over-investigated — could have concluded earlier</option>
-                    <option value="loop_or_stuck">Loop / stuck — repeated or never converged</option>
-                    <option value="wrong_direction">Wrong direction — investigation followed the wrong path</option>
-                </select>
-
-                <div id="fbd-correct-skill-wrap" class="hidden-row">
-                    <label class="fbd-sub-label" id="fbd-rightdir-label">Right direction</label>
-                    <select id="fbd-correct-skill">
-                        <option value="">— Pick the skill that should have led —</option>
+            <!-- ===== PAGE 2 — the chosen route's full interface ========= -->
+            <div id="fbd-page-2" class="fbd-page hidden-row">
+                <!-- ─── Category (ACE label) — top of every route ─── -->
+                <div class="fbd-group" id="fbd-category-block">
+                    <label class="fbd-sub-label" id="fbd-conc-label">Category</label>
+                    <select id="fbd-correct-conclusion-tag">
+                        <option value="">— Select if you know —</option>
+                        <option value="OS_INITIATED">OS-initiated (TASK_DISCONNECT / user/policy)</option>
+                        <option value="RF_INTERFERENCE">RF / signal issue (weak coverage, missed beacons)</option>
+                        <option value="AP_KICK">AP-initiated (Deauth without missed beacons)</option>
+                        <option value="FIRMWARE_CRASH">Firmware crash (UMAC / LMAC / TCM)</option>
+                        <option value="MCC_MISMATCH">MCC / regulatory mismatch</option>
+                        <option value="DRIVER_INIT_FAILURE">Driver / device initialization failure</option>
+                        <option value="AUTH_FAILURE">Authentication failure</option>
+                        <option value="ASSOC_FAILURE">Association failure</option>
+                        <option value="HANDSHAKE_FAILURE">EAPOL / 4-way handshake failure</option>
+                        <option value="WAKE_RESUME_DELAY">Wake / resume delay</option>
+                        <option value="BIOS_CONFIG_ISSUE">BIOS DSM / UEFI misconfiguration</option>
+                        <option value="ROAMING_DECISION">Roaming decision / AP selection</option>
+                        <option value="OTHER">Other</option>
                     </select>
-                    <input type="text" id="fbd-correct-approach"
-                           class="fbd-approach-input"
-                           placeholder='Or describe the approach — e.g. "Check MCC regulatory state first, then connection flow"'>
-                    <div class="fbd-field-hint" id="fbd-rightdir-hint">Pick the right skill, describe the approach in words, or both.</div>
                 </div>
 
-                <label class="fbd-sub-label" id="fbd-problems-label">Specific problems (optional — pinpoint where / what)</label>
-                <div id="fbd-issues-list"></div>
-                <button type="button" class="fbd-add-row" id="fbd-add-issue-btn" onclick="addIssueRow()">+ Add another issue</button>
-                <div class="fbd-field-hint" id="fbd-problems-hint">Add one row per concrete problem you noticed. Each row: where it happened + what kind of problem + a short note.</div>
-            </div>
+                <!-- ─── Workflow menu (shown for workflow / both) ─── -->
+                <div class="fbd-group hidden-row" id="fbd-workflow-menu">
+                    <div class="fbd-group-title" id="fbd-grp-flow-title">
+                        <span>Agent workflow</span>
+                        <span class="fbd-selected-count" id="fbd-step-count">selected 0/0</span>
+                    </div>
 
-            <!-- ─── Group: Issue Time — collapsed by default; tick to expand ─── -->
-            <div class="fbd-group">
-                <label class="fbd-attach-row">
-                    <input type="checkbox" id="fbd-issue-time-flag" onchange="onIssueTimeFlagToggle()">
-                    <span>
-                        ⏱ The issue time (or its capture window) was a problem.
-                        <span class="hint" id="fbd-issue-time-flag-hint">Tick to say what it should have been.</span>
-                    </span>
-                </label>
-                <div id="fbd-issue-time-detail" class="hidden-row" style="margin-top:8px;">
-                    <label class="fbd-sub-label" id="fbd-issuetime-label">What was wrong with the issue time?</label>
-                    <input type="text" id="fbd-issue-time-problem"
-                           placeholder='Describe it — e.g. "anchored ~10 min too late", "window too narrow, missed the disconnect", "should have used multiple times"'>
+                    <select id="fbd-agent-workflow">
+                        <option value="">— Pick the main issue —</option>
+                        <option value="missed_evidence">Missed key log evidence</option>
+                        <option value="wrong_conclusion">Wrong root cause / conclusion</option>
+                        <option value="hallucinated">Cited a log line that doesn't exist</option>
+                        <option value="stopped_too_early">Stopped too early / incomplete</option>
+                        <option value="over_investigated">Over-investigated unnecessarily</option>
+                        <option value="loop_or_stuck">Loop / stuck / repeated the same fetch</option>
+                        <option value="wrong_direction">Wrong direction — followed the wrong path</option>
+                        <option value="bad_output">Output unclear or misleading</option>
+                        <option value="other">Other</option>
+                    </select>
 
-                    <label class="fbd-sub-label" id="fbd-correct-issuetime-label">Correct issue time(s)</label>
-                    <input type="text" id="fbd-correct-issue-time"
-                           placeholder='What it should have been — e.g. "04/28/2026-23:17:09" or "23:17:09; 23:16:00"'>
-                    <div class="fbd-field-hint" id="fbd-issuetime-hint">The issue time actually used in this turn is recorded automatically, so reviewers can compare.</div>
+                    <label class="fbd-sub-label" id="fbd-rootcause-label">Real root cause</label>
+                    <textarea id="fbd-correct-root-cause" rows="2"
+                              placeholder="e.g. Stopped after first empty fetch — should widen time window before concluding"></textarea>
+
+                    <div class="fbd-field-hint" id="fbd-step-lane-hint"></div>
+                    <div id="fbd-step-rows" class="fbd-skill-rows"></div>
                 </div>
-            </div>
 
-            <!-- ─── Group 3: Attachments ─── -->
-            <div class="fbd-group">
-                <div class="fbd-group-title">Attachments</div>
-                <label class="fbd-attach-row">
-                    <input type="checkbox" id="fbd-attach-log">
-                    <span>
-                        Attach the current session log for diagnosis.
-                        <span class="hint" id="fbd-attach-log-hint">
-                            Lets reviewers replay the exact log you analysed. Recommended when reporting a wrong answer.
+                <!-- ─── Skill menu (shown for skill / both) ─── -->
+                <div class="fbd-group hidden-row" id="fbd-skill-menu">
+                    <div class="fbd-group-title" id="fbd-grp-skill-title">
+                        <span>Which skill was wrong?</span>
+                        <span class="fbd-selected-count" id="fbd-skill-count">selected 0/0</span>
+                    </div>
+                    <div class="fbd-field-hint" id="fbd-skill-lane-hint"></div>
+                    <div id="fbd-skill-rows" class="fbd-skill-rows"></div>
+                </div>
+
+                <!-- ─── Issue Time — collapsed by default; tick to expand ─── -->
+                <div class="fbd-group">
+                    <label class="fbd-attach-row" title="Tick to say what it should have been.">
+                        <input type="checkbox" id="fbd-issue-time-flag" onchange="onIssueTimeFlagToggle()">
+                        <span>
+                            ⏱ The issue time (or its capture window) was a problem.
                         </span>
-                    </span>
-                </label>
-                <label class="fbd-attach-row">
-                    <input type="checkbox" id="fbd-attach-yaml">
-                    <span>
-                        Attach my local skill configuration for diagnosis.
-                        <span class="hint" id="fbd-attach-yaml-hint">
-                            Helps the Wireless CE team reproduce the issue with the exact configuration you are running.
-                        </span>
-                    </span>
-                </label>
+                    </label>
+                    <div id="fbd-issue-time-detail" class="hidden-row" style="margin-top:8px;">
+                        <label class="fbd-sub-label" id="fbd-issuetime-label">What was wrong with the issue time?</label>
+                        <input type="text" id="fbd-issue-time-problem"
+                               placeholder='Describe it — e.g. "anchored ~10 min too late", "window too narrow, missed the disconnect", "should have used multiple times"'>
+
+                        <label class="fbd-sub-label" id="fbd-correct-issuetime-label">Correct issue time(s)</label>
+                        <input type="text" id="fbd-correct-issue-time"
+                               placeholder='What it should have been — e.g. "04/28/2026-23:17:09" or "23:17:09; 23:16:00"'>
+                        <div class="fbd-field-hint" id="fbd-issuetime-hint">The issue time actually used in this turn is recorded automatically, so reviewers can compare.</div>
+                    </div>
+                </div>
+
+                <!-- ─── Attachments ─── -->
+                <div class="fbd-group">
+                    <div class="fbd-group-title">Attachments</div>
+                    <label class="fbd-attach-row" id="fbd-attach-log-row"
+                           title="Lets reviewers replay the exact log you analysed. Recommended when reporting a wrong answer.">
+                        <input type="checkbox" id="fbd-attach-log">
+                        <span>Attach the current session log for diagnosis.</span>
+                    </label>
+                </div>
+
+                <!-- ─── Issue severity — bottom of the modal ─── -->
+                <div class="fbd-section-label" id="fbd-sev-label">Issue severity</div>
+                <div class="fbd-severity-row">
+                    <div class="fbd-severity-scale" id="fbd-severity-scale">
+                        <button type="button" class="sev-btn" data-value="1">1</button>
+                        <button type="button" class="sev-btn" data-value="2">2</button>
+                        <button type="button" class="sev-btn" data-value="3">3</button>
+                        <button type="button" class="sev-btn" data-value="4">4</button>
+                        <button type="button" class="sev-btn" data-value="5">5</button>
+                    </div>
+                    <span class="fbd-severity-readout" id="fbd-severity-readout">Not rated</span>
+                </div>
             </div>
         </div>
         <div class="fbd-footer">
-            <button type="button" class="fbd-btn" onclick="closeFeedbackModal()">Cancel</button>
-            <button type="button" class="fbd-btn primary" id="fbd-submit-btn" onclick="submitFeedbackDetail()">Submit</button>
+            <button type="button" class="fbd-btn" id="fbd-back-btn" onclick="feedbackWizardBack()" style="display:none;">← Back</button>
+            <span class="fbd-footer-spacer"></span>
+            <button type="button" class="fbd-btn" id="fbd-cancel-btn" onclick="closeFeedbackModal()">Cancel</button>
+            <button type="button" class="fbd-btn primary" id="fbd-submit-btn" onclick="submitFeedbackDetail()" style="display:none;">Submit</button>
         </div>
     </div>
 </div>
-<!-- One "Specific problem" row inside the Agent workflow group.
-     Where + Problem are the always-visible quick pickers; Skill / Step
-     dropdowns reveal themselves only when their scope is chosen. -->
-<template id="fbd-issue-row-template">
-    <div class="fbd-issue-row">
-        <button type="button" class="fbd-remove" title="Remove" onclick="removeIssueRow(this)">×</button>
-        <div class="fbd-row-grid">
-            <select class="fbd-where" onchange="onIssueWhereChange(this)">
-                <option value="">— Where —</option>
-                <option value="phase_1">Initial skill choice</option>
-                <option value="phase_2">Investigation steps</option>
-                <option value="phase_3">Final conclusion</option>
-                <option value="skill">A specific Skill</option>
-                <option value="step">A specific Step</option>
-                <option value="overall">Overall flow</option>
-            </select>
-            <select class="fbd-category">
-                <option value="">— Problem —</option>
-                <option value="missed_evidence">Missed key log evidence</option>
-                <option value="wrong_skill">Wrong skill chosen</option>
-                <option value="wrong_conclusion">Wrong root cause / conclusion</option>
-                <option value="hallucinated">Cited a log line that doesn't exist</option>
-                <option value="stuck_repeated">Stuck / repeated the same fetch</option>
-                <option value="incomplete">Stopped before finishing</option>
-                <option value="over_investigated">Over-investigated unnecessarily</option>
-                <option value="bad_output">Output unclear / misleading</option>
-                <option value="other">Other</option>
-            </select>
-        </div>
-        <div class="fbd-row-extra fbd-skill-wrap hidden-row">
-            <select class="fbd-skill">
-                <option value="">— Pick the skill —</option>
-            </select>
-        </div>
-        <div class="fbd-row-extra fbd-step-wrap hidden-row">
-            <select class="fbd-step">
-                <option value="">— Pick the step —</option>
-            </select>
-        </div>
-        <input type="text" class="fbd-note"
-               placeholder="Short note (optional) — e.g. 'missed [MISSED BEACONS] at 14:52:11'">
-    </div>
-</template>
 
 <script>
     // ── Feedback widget renderer (called by appendAssistantText / appendReport) ─
@@ -5176,56 +5262,118 @@
                         onclick="submitFeedback('${turnId}', 1, this)">👍</button>
                 <button type="button" class="feedback-btn" title="Not helpful"
                         onclick="submitFeedback('${turnId}', -1, this)">👎</button>
-            </div>`;
+            </div>
+            ${renderSkillAssessmentChips(turnId)}`;
+    }
+
+    // ── In-line per-skill chips — REMOVED ─────────────────────────────
+    // Per-skill feedback (good / not-needed / wrong) now lives inside the
+    // "More feedback" modal's Skill lane, so the response area stays clean.
+    // Kept as a no-op so renderFeedbackWidget's call site is unchanged.
+    function renderSkillAssessmentChips(turnId) {
+        return '';
+    }
+
+    async function submitSkillAssessment(turnId, btnEl, state) {
+        const group = btnEl ? btnEl.closest('.skill-chip-group') : null;
+        if (!group) return;
+        const skillId = group.dataset.skillId || '';
+        if (!skillId) return;
+        // Toggle: clicking the active state again clears the assessment.
+        const wasActive = btnEl.classList.contains('active');
+        const nextState = wasActive ? '' : state;
+        const conversationId = window.__feedbackConversationId || '';
+        if (!conversationId) return;
+
+        group.querySelectorAll('.skill-chip-btn').forEach(b => b.disabled = true);
+        try {
+            const res = await fetch('/feedback/skill_assessment', {
+                method: 'POST',
+                headers: {'Content-Type': 'application/json'},
+                body: JSON.stringify({
+                    conversation_id: conversationId,
+                    turn_id: turnId,
+                    skill_id: skillId,
+                    assessment: nextState,
+                }),
+            });
+            const data = await res.json().catch(() => ({}));
+            if (data && data.success) {
+                group.querySelectorAll('.skill-chip-btn').forEach(b => {
+                    b.classList.remove('active', 'helpful', 'redundant', 'wrong');
+                });
+                if (nextState) {
+                    btnEl.classList.add('active', nextState);
+                }
+            } else {
+                console.warn('Skill assessment save failed:', data);
+            }
+        } catch (e) {
+            console.warn('Skill assessment network error:', e);
+        } finally {
+            group.querySelectorAll('.skill-chip-btn').forEach(b => b.disabled = false);
+        }
     }
 
     async function submitFeedback(turnId, vote, btnEl) {
         const widget = btnEl ? btnEl.closest('.feedback-widget') : null;
         if (!widget) return;
-        widget.querySelectorAll('.feedback-btn').forEach(b => b.disabled = true);
+        // Toggle / switch: clicking the active vote again clears it (vote=0);
+        // clicking the opposite vote switches. Keep buttons clickable so the
+        // user can change their mind without reloading the turn.
+        const prev = parseInt(widget.dataset.castVote || '0', 10) || 0;
+        const nextVote = (prev === vote) ? 0 : vote;
         const conversationId = window.__feedbackConversationId || '';
+        widget.querySelectorAll('.feedback-btn').forEach(b => b.disabled = true);
 
         try {
             const res = await fetch('/feedback/vote', {
                 method: 'POST',
                 headers: {'Content-Type': 'application/json'},
-                body: JSON.stringify({ conversation_id: conversationId, turn_id: turnId, vote }),
+                body: JSON.stringify({ conversation_id: conversationId, turn_id: turnId, vote: nextVote }),
             });
             const data = await res.json().catch(() => ({}));
-            if (data && data.success) {
-                btnEl.classList.add(vote === 1 ? 'voted-up' : 'voted-down');
-                widget.dataset.castVote = String(vote);
-                const more = document.createElement('a');
-                more.className = 'feedback-more-link';
-                more.textContent = '✏️ More feedback';
-                more.onclick = () => openFeedbackModal(turnId, vote, more);
-                widget.appendChild(more);
-                const thanks = document.createElement('span');
-                thanks.className = 'feedback-thanks';
-                thanks.textContent = 'Thanks!';
-                widget.appendChild(thanks);
-
-                // Keep the local flag in sync with the server's view so the
-                // post-vote upload prompt and the More-feedback modal stay
-                // consistent across page reloads.
-                if (typeof data.yaml_modified === 'boolean') {
-                    window.__yamlModified = data.yaml_modified;
-                }
-
-                // Thumbs-up follow-up: when the user already edited their
-                // YAML this session, just upload it silently in the
-                // background — no extra modal to dismiss. A 👍 after
-                // tuning is implicit consent.
-                if (vote === 1 && data.yaml_modified) {
-                    uploadModifiedYamlSilently();
-                }
-            } else {
-                widget.querySelectorAll('.feedback-btn').forEach(b => b.disabled = false);
+            if (!data || !data.success) {
                 console.warn('Feedback save failed:', data);
+                return;
+            }
+            widget.dataset.castVote = String(nextVote);
+
+            // Repaint the two thumb buttons to match the active vote.
+            widget.querySelectorAll('.feedback-btn').forEach((b) => {
+                b.classList.remove('voted-up', 'voted-down');
+            });
+            const upBtn   = widget.querySelector('.feedback-btn[title="Helpful"]');
+            const downBtn = widget.querySelector('.feedback-btn[title="Not helpful"]');
+            if (nextVote === 1 && upBtn)   upBtn.classList.add('voted-up');
+            if (nextVote === -1 && downBtn) downBtn.classList.add('voted-down');
+
+            // Reuse a single More-feedback link + thanks span so flipping the
+            // vote doesn't stack duplicates onto the widget.
+            let more   = widget.querySelector('.feedback-more-link');
+            let thanks = widget.querySelector('.feedback-thanks');
+            if (nextVote === 0) {
+                if (more)   more.remove();
+                if (thanks) thanks.remove();
+            } else {
+                if (!more) {
+                    more = document.createElement('a');
+                    more.className = 'feedback-more-link';
+                    more.textContent = '✏️ More feedback';
+                    widget.appendChild(more);
+                }
+                more.onclick = () => openFeedbackModal(turnId, nextVote, more);
+                if (!thanks) {
+                    thanks = document.createElement('span');
+                    thanks.className = 'feedback-thanks';
+                    thanks.textContent = 'Thanks!';
+                    widget.appendChild(thanks);
+                }
             }
         } catch (e) {
-            widget.querySelectorAll('.feedback-btn').forEach(b => b.disabled = false);
             console.warn('Feedback network error:', e);
+        } finally {
+            widget.querySelectorAll('.feedback-btn').forEach(b => b.disabled = false);
         }
     }
 
@@ -5237,171 +5385,315 @@
         if (!turnId || !Array.isArray(steps)) return;
         const skillSeen = new Set();
         const skillList = [];
-        const stepList = [];
+        // Backend wraps the verb in markdown bold (`**Invoking** \`name\``),
+        // so allow any non-backtick filler between the verb and the name.
+        const invokeRe = /Invoking[^`]*`([^`]+)`/i;
+        const fetchRe  = /Fetching\s+filtered\s+logs[^`]*for[^`]*`([^`]+)`/i;
+        // Names like `get_final_state_snapshot` / `get_phase_summaries` are
+        // raw tool calls, not domain skills — surface them in the step row
+        // but keep them out of the skill picker (no playbook to feed back).
+        const toolRe   = /^(get|fetch)_/i;
+
+        // Bucket raw actions by their reasoning-step number so multiple
+        // actions (e.g. Invoke X + Fetch logs (X)) inside the same step
+        // collapse into a single row in the feedback modal.
+        const buckets = new Map();           // stepNo -> { stepNo, firstIdx, actions[] }
         let reasoningStep = 0;
-        const invokeRe = /(?:Invoking|Fetching filtered logs.*for)\s+`([^`]+)`/;
+        let synthetic = 0;                   // fallback when no "Reasoning Step" marker yet
+        const bucketFor = (idx) => {
+            const key = reasoningStep || (++synthetic + 1000);  // 1000+ marks pre-marker
+            let b = buckets.get(key);
+            if (!b) {
+                b = { stepNo: reasoningStep || 0, firstIdx: idx, actions: [] };
+                buckets.set(key, b);
+            }
+            return b;
+        };
 
         steps.forEach((s, idx) => {
             const c = (s && s.content ? String(s.content) : '');
             const rm = c.match(/Reasoning Step\s+(\d+)\s*\/\s*\d+/);
             if (rm) { reasoningStep = parseInt(rm[1], 10) || reasoningStep + 1; return; }
-            const m = c.match(invokeRe);
-            if (m) {
-                const sid = m[1].trim();
-                if (sid && !skillSeen.has(sid)) { skillSeen.add(sid); skillList.push(sid); }
-                stepList.push({
-                    step_index: idx, skill_id: sid,
-                    label: `Step ${reasoningStep || stepList.length + 1} — Invoking ${sid}`,
+            const im = c.match(invokeRe);
+            if (im) {
+                const sid = im[1].trim();
+                const isTool = toolRe.test(sid);
+                if (sid && !isTool && !skillSeen.has(sid)) {
+                    skillSeen.add(sid); skillList.push(sid);
+                }
+                bucketFor(idx).actions.push({
+                    kind: isTool ? 'tool' : 'invoke',
+                    skill_id: isTool ? null : sid,
+                    text: isTool ? `Tool ${sid}` : `Invoke ${sid}`,
                 });
                 return;
             }
-            if (/Conclusion reached/.test(c)) {
-                stepList.push({
-                    step_index: idx, skill_id: null,
-                    label: `Step ${reasoningStep || stepList.length + 1} — Final report`,
-                });
+            const fm = c.match(fetchRe);
+            if (fm) {
+                const sid = fm[1].trim();
+                if (sid && !skillSeen.has(sid)) { skillSeen.add(sid); skillList.push(sid); }
+                bucketFor(idx).actions.push({ kind: 'fetch_logs', skill_id: sid, text: `Fetch logs (${sid})` });
+                return;
             }
+            if (/Conclusion\s+reached/i.test(c)) {
+                bucketFor(idx).actions.push({ kind: 'final_report', skill_id: null, text: 'Final report' });
+            }
+        });
+
+        // Stable order by first occurrence; one stepList entry per bucket.
+        const sorted = Array.from(buckets.values()).sort((a, b) => a.firstIdx - b.firstIdx);
+        const stepList = sorted.map((b, i) => {
+            const stepNo = b.stepNo || (i + 1);
+            const primarySkill = (b.actions.find((a) => a.skill_id) || {}).skill_id || null;
+            const actionText = b.actions.map((a) => a.text).join(' · ');
+            const actions = b.actions.map((a) => ({ kind: a.kind, skill_id: a.skill_id }));
+            return {
+                step_index: b.firstIdx,
+                step_no:    stepNo,
+                skill_id:   primarySkill,
+                actions:    actions,
+                label:      `Step ${stepNo} — ${actionText || '(no action)'}`,
+            };
         });
         window.__turnContext[turnId] = { skills: skillList, steps: stepList };
     }
 
-    // ── "Specific problems" multi-row issue editor ────────────────
-    // One row per concrete problem the user spotted. The Where dropdown
-    // governs which sub-field reveals (Skill picker or Step picker), so
-    // the form stays compact until detail is actually needed.
-    function addIssueRow() {
-        const tpl = document.getElementById('fbd-issue-row-template');
-        const list = document.getElementById('fbd-issues-list');
-        const node = tpl.content.firstElementChild.cloneNode(true);
+    // ── Two-page wizard: route + per-skill menus ──────────────────────
+    // Page 1 routes by problem type and reveals the matching menu(s);
+    // Page 2 always collects the correct answer. The route maps directly
+    // to ACE's dispatch hint:
+    //   workflow → agent (workflow) playbook
+    //   skill    → domain (per-skill) playbook
+    //   both     → both
+    const FBD_ROUTE_TO_LAYER = { workflow: 'agent', skill: 'skill', both: 'both' };
+
+    function currentTurnSkills() {
         const turnId = (window.__currentFeedbackCtx || {}).turnId;
-        const ctx = (turnId && window.__turnContext[turnId])
-                    || { skills: [], steps: [] };
-        const skillSel = node.querySelector('.fbd-skill');
-        ctx.skills.forEach((sid) => {
-            const opt = document.createElement('option');
-            opt.value = sid; opt.textContent = sid;
-            skillSel.appendChild(opt);
-        });
-        const stepSel = node.querySelector('.fbd-step');
-        ctx.steps.forEach((st) => {
-            const opt = document.createElement('option');
-            opt.value = String(st.step_index);
-            opt.textContent = st.label;
-            opt.dataset.stepLabel = st.label;
-            opt.dataset.skillId = st.skill_id || '';
-            stepSel.appendChild(opt);
-        });
-        list.appendChild(node);
-        // Re-tone Where / Category / note placeholder so a row added
-        // while the modal is already open matches the current vote.
-        if (typeof applyToneToIssueRow === 'function') applyToneToIssueRow(node);
-        // Wire Category change → bidirectional filter. (Where already
-        // wires through onIssueWhereChange in the template.)
-        const catSel = node.querySelector('.fbd-category');
-        if (catSel) {
-            catSel.addEventListener('change',
-                () => filterIssueRowOptions(node));
-        }
+        const ctx = (turnId && window.__turnContext[turnId]) || { skills: [] };
+        return Array.isArray(ctx.skills) ? ctx.skills : [];
     }
-    function removeIssueRow(btn) {
-        const row = btn.closest('.fbd-issue-row');
-        const list = document.getElementById('fbd-issues-list');
-        if (row && list.children.length >= 1) row.remove();
+    function currentTurnSkillsKey() {
+        const turnId = (window.__currentFeedbackCtx || {}).turnId || '';
+        return turnId + '::' + currentTurnSkills().join('|');
     }
-    function onIssueWhereChange(selectEl) {
-        const row = selectEl.closest('.fbd-issue-row');
-        const w = selectEl.value;
-        row.querySelector('.fbd-skill-wrap').classList.toggle('hidden-row', w !== 'skill');
-        row.querySelector('.fbd-step-wrap').classList.toggle('hidden-row', w !== 'step');
-        filterIssueRowOptions(row);
+    function currentTurnSteps() {
+        const turnId = (window.__currentFeedbackCtx || {}).turnId;
+        const ctx = (turnId && window.__turnContext[turnId]) || { steps: [] };
+        return Array.isArray(ctx.steps) ? ctx.steps : [];
+    }
+    function currentTurnStepsKey() {
+        const turnId = (window.__currentFeedbackCtx || {}).turnId || '';
+        return turnId + '::' + currentTurnSteps()
+            .map((s) => `${s.step_index}:${s.skill_id || ''}`).join('|');
     }
 
-    // ── Area ↔ Note-type compatibility matrix ────────────────────────
-    // Only block truly impossible combos (a single moment can't be
-    // "repeated"; nothing has been "output" yet at the initial skill
-    // pick). A wrong final conclusion can ORIGINATE from any earlier
-    // area, so wrong_conclusion / missed_evidence stay valid across the
-    // whole flow — restricting them frustrated users with that mental
-    // model.
-    //   Initial skill choice   = the agent's first routing decision
-    //   Investigation steps    = log fetching / reasoning loop
-    //   Final conclusion       = the answer + report rendering
-    //   skill / step / overall = any note type is fair game
-    const ALL_NOTE_TYPES = [
-        'missed_evidence', 'wrong_skill', 'wrong_conclusion', 'hallucinated',
-        'stuck_repeated', 'incomplete', 'over_investigated', 'bad_output', 'other',
-    ];
-    const FBD_ISSUE_MATRIX = {
-        // Initial skill pick is a SINGLE moment with no output yet, so
-        // "stuck/repeated", "over-investigated", "bad output" can't
-        // apply here. Everything else (including wrong_conclusion =
-        // "this pick set us on the wrong track") is fair game.
-        phase_1: new Set([
-            'missed_evidence', 'wrong_skill', 'wrong_conclusion',
-            'hallucinated', 'incomplete', 'other',
-        ]),
-        // Investigation steps cover everything except "bad output",
-        // which describes the final user-facing wording.
-        phase_2: new Set([
-            'missed_evidence', 'wrong_skill', 'wrong_conclusion', 'hallucinated',
-            'stuck_repeated', 'incomplete', 'over_investigated', 'other',
-        ]),
-        // Final conclusion / report — by this point the skill choices
-        // and investigation loop are over, so "wrong_skill",
-        // "stuck_repeated", "over_investigated" don't apply *here*.
-        phase_3: new Set([
-            'missed_evidence', 'wrong_conclusion', 'hallucinated',
-            'incomplete', 'bad_output', 'other',
-        ]),
-        skill:   new Set(ALL_NOTE_TYPES),
-        step:    new Set(ALL_NOTE_TYPES),
-        overall: new Set(ALL_NOTE_TYPES),
-    };
-    function _areasAllowingCategory(cat) {
-        if (!cat) return null;  // null = "no filter"
+    // Picking a route on Page 1 reveals only that route's menu(s) and
+    // advances straight to Page 2 (the route's full interface). Pass
+    // advance=false to restore state without leaving Page 1 (used by
+    // prefill before the user re-confirms).
+    function selectFeedbackRoute(route, advance = true) {
+        window.__feedbackRoute = route;
+        document.querySelectorAll('#fbd-route-cards .fbd-route-card').forEach((c) => {
+            c.classList.toggle('selected', c.dataset.route === route);
+        });
+        const wfOn = (route === 'workflow' || route === 'both');
+        const skOn = (route === 'skill' || route === 'both');
+        const wf = document.getElementById('fbd-workflow-menu');
+        const sk = document.getElementById('fbd-skill-menu');
+        if (wf) wf.classList.toggle('hidden-row', !wfOn);
+        if (sk) sk.classList.toggle('hidden-row', !skOn);
+        if (wfOn) buildStepRows();
+        if (skOn) buildSkillRows();
+        if (advance && route) _setFeedbackPage(2);
+    }
+
+    // Skill lane — one verdict row per skill that ran. 👎 Wrong reveals a
+    // reason + per-skill evidence box.
+    function buildSkillRows() {
+        const list = document.getElementById('fbd-skill-rows');
+        if (!list || list.dataset.built === currentTurnSkillsKey()) return;
+        const skills = currentTurnSkills();
+        list.innerHTML = '';
+        if (!skills.length) {
+            list.innerHTML = '<div class="fbd-field-hint">No skills were invoked in this turn.</div>';
+            list.dataset.built = currentTurnSkillsKey();
+            updateSelectedCount('fbd-skill-rows', 'fbd-skill-count');
+            return;
+        }
+        skills.forEach((sid) => {
+            const safe = escapeHtml(String(sid));
+            const row = document.createElement('div');
+            row.className = 'fbd-skill-row';
+            row.dataset.skillId = sid;
+            row.innerHTML = `
+                <div class="fbd-skill-row-head">
+                    <span class="fbd-skill-row-name">${safe}</span>
+                    <div class="fbd-skill-verdict">
+                        <button type="button" class="fbd-verdict-btn" data-v="helpful" onclick="setSkillVerdict(this,'helpful')">👍 Good</button>
+                        <button type="button" class="fbd-verdict-btn" data-v="wrong" onclick="setSkillVerdict(this,'wrong')">👎 Wrong</button>
+                    </div>
+                </div>
+                <div class="fbd-skill-row-detail hidden-row">
+                    <input type="text" class="fbd-skill-reason"
+                           placeholder="What this skill got wrong">
+                    <textarea class="fbd-skill-evidence"
+                              placeholder="Correct conclusion"></textarea>
+                </div>`;
+            list.appendChild(row);
+        });
+        list.dataset.built = currentTurnSkillsKey();
+        updateSelectedCount('fbd-skill-rows', 'fbd-skill-count');
+    }
+
+    // Step lane — one verdict row per reasoning step that ran, mirroring
+    // the Skill lane so the user can pin good/bad to a specific step.
+    function buildStepRows() {
+        const list = document.getElementById('fbd-step-rows');
+        if (!list || list.dataset.built === currentTurnStepsKey()) return;
+        const steps = currentTurnSteps();
+        list.innerHTML = '';
+        if (!steps.length) {
+            list.innerHTML = '<div class="fbd-field-hint">No steps recorded for this turn.</div>';
+            list.dataset.built = currentTurnStepsKey();
+            updateSelectedCount('fbd-step-rows', 'fbd-step-count');
+            return;
+        }
+        steps.forEach((st) => {
+            const safe = escapeHtml(String(st.label || ''));
+            const row = document.createElement('div');
+            row.className = 'fbd-skill-row';
+            row.dataset.stepIndex = String(st.step_index);
+            if (st.skill_id) row.dataset.skillId = st.skill_id;
+            row.innerHTML = `
+                <div class="fbd-skill-row-head">
+                    <span class="fbd-skill-row-name">${safe}</span>
+                    <div class="fbd-skill-verdict">
+                        <button type="button" class="fbd-verdict-btn" data-v="helpful" onclick="setStepVerdict(this,'helpful')">👍 Good</button>
+                        <button type="button" class="fbd-verdict-btn" data-v="wrong" onclick="setStepVerdict(this,'wrong')">👎 Wrong</button>
+                    </div>
+                </div>
+                <div class="fbd-skill-row-detail hidden-row">
+                    <input type="text" class="fbd-skill-reason"
+                           placeholder="Why this step was wrong">
+                    <textarea class="fbd-skill-evidence"
+                              placeholder="What the agent should have done at this step"></textarea>
+                </div>`;
+            list.appendChild(row);
+        });
+        list.dataset.built = currentTurnStepsKey();
+        updateSelectedCount('fbd-step-rows', 'fbd-step-count');
+    }
+
+    // Update the "selected N/M" badge in a row group's header.
+    function updateSelectedCount(listId, badgeId) {
+        const list = document.getElementById(listId);
+        const badge = document.getElementById(badgeId);
+        if (!list || !badge) return;
+        const rows = list.querySelectorAll('.fbd-skill-row');
+        const total = rows.length;
+        let picked = 0;
+        rows.forEach((r) => { if (r.dataset.verdict) picked += 1; });
+        badge.textContent = `selected ${picked}/${total}`;
+        badge.classList.toggle('has-pick', picked > 0);
+    }
+
+    function setStepVerdict(btn, verdict) {
+        const row = btn.closest('.fbd-skill-row');
+        if (!row) return;
+        const already = btn.classList.contains('active');
+        const next = already ? '' : verdict;
+        row.querySelectorAll('.fbd-verdict-btn').forEach((b) => b.classList.remove('active'));
+        if (next) btn.classList.add('active');
+        row.dataset.verdict = next;
+        const detail = row.querySelector('.fbd-skill-row-detail');
+        if (detail) detail.classList.toggle('hidden-row', next !== 'wrong');
+        updateSelectedCount('fbd-step-rows', 'fbd-step-count');
+    }
+
+    // Toggle a skill's verdict; 'wrong' reveals the reason + evidence box.
+    // Clicking the active verdict again clears it.
+    function setSkillVerdict(btn, verdict) {
+        const row = btn.closest('.fbd-skill-row');
+        if (!row) return;
+        const already = btn.classList.contains('active');
+        const next = already ? '' : verdict;
+        row.querySelectorAll('.fbd-verdict-btn').forEach((b) => b.classList.remove('active'));
+        if (next) btn.classList.add('active');
+        row.dataset.verdict = next;   // '', 'helpful', or 'wrong'
+        const detail = row.querySelector('.fbd-skill-row-detail');
+        if (detail) detail.classList.toggle('hidden-row', next !== 'wrong');
+        updateSelectedCount('fbd-skill-rows', 'fbd-skill-count');
+    }
+
+    // ── Page navigation ──────────────────────────────────────────────
+    function _setFeedbackPage(page) {
+        window.__feedbackPage = page;
+        const p1 = document.getElementById('fbd-page-1');
+        const p2 = document.getElementById('fbd-page-2');
+        if (p1) p1.classList.toggle('hidden-row', page !== 1);
+        if (p2) p2.classList.toggle('hidden-row', page !== 2);
+        const show = (id, on) => {
+            const el = document.getElementById(id);
+            if (el) el.style.display = on ? '' : 'none';
+        };
+        show('fbd-back-btn',   page === 2);
+        show('fbd-cancel-btn', page === 1);
+        show('fbd-submit-btn', page === 2);
+    }
+    // Back returns to the route picker; the previously chosen card stays
+    // highlighted so the user can re-enter or switch routes.
+    function feedbackWizardBack() { _setFeedbackPage(1); }
+
+    // Collect per-skill verdicts from the Skill lane into the backend's
+    // skill_feedback shape:
+    //   👎 Wrong → assessment: wrong  (+ reason + evidence)
+    //   👍 Good  → assessment: helpful
+    // (Workflow-level "ran more than needed" is captured by the overall
+    // Investigation-flow dropdown's `over_investigated`, not per skill.)
+    function collectSkillFeedback() {
+        const bySkill = {};
+        document.querySelectorAll('#fbd-skill-rows .fbd-skill-row').forEach((row) => {
+            const sid = row.dataset.skillId || '';
+            const v = row.dataset.verdict || '';
+            if (!sid || !v || v === 'none') return;
+            if (v === 'wrong') {
+                const reason = (row.querySelector('.fbd-skill-reason')?.value || '').trim();
+                const ev = (row.querySelector('.fbd-skill-evidence')?.value || '')
+                    .split(/\r?\n/).map((s) => s.replace(/\s+$/, '')).filter((s) => s.length > 0);
+                bySkill[sid] = { skill_id: sid, assessment: 'wrong',
+                                 what_wrong: reason, evidence_lines: ev };
+            } else if (v === 'helpful') {
+                bySkill[sid] = { skill_id: sid, assessment: 'helpful' };
+            }
+        });
+        return Object.values(bySkill);
+    }
+
+    // Per-step verdicts from the Agent-workflow lane. Same shape as
+    // collectSkillFeedback but keyed by step_index so reviewers can pin
+    // good/bad to a specific reasoning step.
+    function collectStepFeedback() {
         const out = [];
-        for (const [area, set] of Object.entries(FBD_ISSUE_MATRIX)) {
-            if (set.has(cat)) out.push(area);
-        }
+        document.querySelectorAll('#fbd-step-rows .fbd-skill-row').forEach((row) => {
+            const idxRaw = row.dataset.stepIndex;
+            const v = row.dataset.verdict || '';
+            if (!idxRaw || !v || v === 'none') return;
+            const idx = parseInt(idxRaw, 10);
+            if (!Number.isFinite(idx)) return;
+            const sid = row.dataset.skillId || null;
+            const label = (row.querySelector('.fbd-skill-row-name')?.textContent || '').trim();
+            if (v === 'wrong') {
+                const reason = (row.querySelector('.fbd-skill-reason')?.value || '').trim();
+                const ev = (row.querySelector('.fbd-skill-evidence')?.value || '')
+                    .split(/\r?\n/).map((s) => s.replace(/\s+$/, '')).filter((s) => s.length > 0);
+                out.push({ step_index: idx, skill_id: sid, step_label: label,
+                           assessment: 'wrong', what_wrong: reason, evidence_lines: ev });
+            } else if (v === 'helpful') {
+                out.push({ step_index: idx, skill_id: sid, step_label: label,
+                           assessment: 'helpful' });
+            }
+        });
         return out;
-    }
-    // Two-way filter on a single issue row. Runs whenever Where or
-    // Category changes. Disallowed options stay VISIBLE but disabled +
-    // dimmed so the user can see the full taxonomy and understand which
-    // combinations don't apply — rather than wondering where an option
-    // went. A previously-selected value that just became invalid is
-    // auto-cleared so the dropdown drops back to its placeholder.
-    function filterIssueRowOptions(row) {
-        const whereSel = row.querySelector('.fbd-where');
-        const catSel   = row.querySelector('.fbd-category');
-        if (!whereSel || !catSel) return;
-        const where = whereSel.value;
-        const cat   = catSel.value;
-
-        // Where → Category: disable categories that don't fit this area.
-        Array.from(catSel.options).forEach((opt) => {
-            if (!opt.value) { opt.disabled = false; return; }
-            const allow = !where
-                || (FBD_ISSUE_MATRIX[where] && FBD_ISSUE_MATRIX[where].has(opt.value));
-            opt.disabled = !allow;
-        });
-        if (cat && where && FBD_ISSUE_MATRIX[where] && !FBD_ISSUE_MATRIX[where].has(cat)) {
-            catSel.value = '';
-        }
-
-        // Category → Where: disable areas where this note type doesn't apply.
-        const validAreas = _areasAllowingCategory(catSel.value);
-        Array.from(whereSel.options).forEach((opt) => {
-            if (!opt.value) { opt.disabled = false; return; }
-            const allow = !validAreas || validAreas.includes(opt.value);
-            opt.disabled = !allow;
-        });
-        if (where && validAreas && !validAreas.includes(where)) {
-            whereSel.value = '';
-            // Area cleared → skill / step sub-rows must also collapse.
-            row.querySelector('.fbd-skill-wrap').classList.add('hidden-row');
-            row.querySelector('.fbd-step-wrap').classList.add('hidden-row');
-        }
     }
 
     // ── Severity 1-5 quick rating ──────────────────────────────────
@@ -5441,94 +5733,70 @@
         down: {
             title:           'More feedback',
             badge:           '👎',
-            sevLabel:        'Severity (optional)',
-            sevHint:         '1 = minor wording miss · 3 = wrong sub-claim · 5 = critical wrong root cause',
-            grp1Title:       'Correct answer',
+            sevLabel:        'Issue severity',
+            sevHint:         '',
+            routeLabel:      'What kind of problem?',
+            routes: {
+                workflow: { title: 'Workflow',
+                            desc:  'The investigation flow was off — e.g. order of steps, stopping too early, looping, or going down the wrong path.' },
+                skill:    { title: 'Skill knowledge',
+                            desc:  'The agent\'s domain knowledge was off — e.g. misread a log, applied a wrong rule, or drew a wrong conclusion from the evidence.' },
+                both:     { title: 'Both',
+                            desc:  "Both the workflow and the skill knowledge need fixing." },
+            },
+            grpFlowTitle:    'Agent workflow',
+            flowFirstOpt:    '— Pick the main issue —',
+            flowOpts: {
+                missed_evidence:    'Missed key log evidence',
+                wrong_conclusion:   'Wrong root cause / conclusion',
+                hallucinated:       'Cited a log line that doesn\'t exist',
+                stopped_too_early:  'Stopped too early / incomplete',
+                over_investigated:  'Over-investigated unnecessarily',
+                loop_or_stuck:      'Loop / stuck / repeated the same fetch',
+                wrong_direction:    'Wrong direction — followed the wrong path',
+                bad_output:         'Output unclear or misleading',
+                other:              'Other',
+            },
+            grpSkillTitle:   'Which skill was wrong?',
+            stepLaneHint:    'Per step: mark 👎 Wrong on any step that went off-track and add the correction.',
+            skillLaneHint:   'Per skill: mark 👎 Wrong on any skill whose output was off and add the correction.',
             concLabel:       'Conclusion category',
             concFirstOpt:    '— Select if you know —',
-            rootCauseLabel:  'Real root cause',
-            rootCausePh:     'e.g. "AP idle timeout kicked client off after 60s of inactivity."',
-            evidenceLabel:   'Key evidence log lines',
-            evidencePh:      'Paste log lines the agent missed or misread, one per line.\ne.g. [CNCT_FLOW][11] AUTH_RSP - received from "ASUS_BE98_MLO"',
-            evidenceHint:    'Reflector will grep these against the log to verify your correction.',
-            grp2Title:       'Agent workflow',
-            flowLabel:       'Investigation flow (overall)',
-            flowFirstOpt:    '— Select if orchestration was off —',
-            flowOpts: {
-                appropriate:        'Appropriate — flow was efficient',
-                stopped_too_early:  'Stopped too early — should have invoked more skills',
-                over_investigated:  'Over-investigated — could have concluded earlier',
-                loop_or_stuck:      'Loop / stuck — repeated or never converged',
-                wrong_direction:    'Wrong direction — investigation followed the wrong path',
-            },
-            rightDirLabel:   'Right direction',
-            rightDirFirstOpt:'— Pick the skill that should have led —',
-            rightDirPh:      'Or describe the approach — e.g. "Check MCC regulatory state first, then connection flow"',
-            rightDirHint:    'Pick the right skill, describe the approach in words, or both.',
-            problemsLabel:   'Specific problems (optional — pinpoint where / what)',
-            problemsHint:    'Add one row per concrete problem you noticed. Each row: where it happened + what kind of problem + a short note.',
-            addRowText:      '+ Add another issue',
-            whereFirstOpt:   '— Where —',
-            categoryFirstOpt:'— Problem —',
-            categoryOpts: {
-                missed_evidence:   'Missed key log evidence',
-                wrong_skill:       'Wrong skill chosen',
-                wrong_conclusion:  'Wrong root cause / conclusion',
-                hallucinated:      'Cited a log line that doesn\'t exist',
-                stuck_repeated:    'Stuck / repeated the same fetch',
-                incomplete:        'Stopped before finishing',
-                over_investigated: 'Over-investigated unnecessarily',
-                bad_output:        'Output unclear / misleading',
-                other:             'Other',
-            },
-            notePh:          "Short note (optional) — e.g. 'missed [MISSED BEACONS] at 14:52:11'",
             attachLogHint:   'Lets reviewers replay the exact log you analysed. Recommended when reporting a wrong answer.',
             submitText:      'Submit',
         },
         up: {
-            title:           'What worked well?',
+            title:           'What worked — and what could still sharpen up?',
             badge:           '👍',
-            sevLabel:        'How well did it match? (optional)',
-            sevHint:         '1 = roughly helpful · 3 = mostly right · 5 = spot-on',
-            grp1Title:       'What landed',
+            sevLabel:        'Match quality',
+            sevHint:         '',
+            routeLabel:      'What to keep doing — and where to polish a little?',
+            routes: {
+                workflow: { title: 'Workflow',
+                            desc:  'Investigation flow was mostly right — note any small step that could be tightened.' },
+                skill:    { title: 'Skill knowledge',
+                            desc:  'Domain knowledge held up — flag any small misread or shaky claim worth correcting.' },
+                both:     { title: 'Both',
+                            desc:  'Right answer, good path — call out small slips so the next run is even cleaner.' },
+            },
+            grpFlowTitle:    'Agent workflow',
+            flowFirstOpt:    '— Pick the main issue —',
+            flowOpts: {
+                missed_evidence:    'Missed key log evidence',
+                wrong_conclusion:   'Wrong root cause / conclusion',
+                hallucinated:       'Cited a log line that doesn\'t exist',
+                stopped_too_early:  'Stopped too early / incomplete',
+                over_investigated:  'Over-investigated unnecessarily',
+                loop_or_stuck:      'Loop / stuck / repeated the same fetch',
+                wrong_direction:    'Wrong direction — followed the wrong path',
+                bad_output:         'Output unclear or misleading',
+                other:              'Other',
+            },
+            grpSkillTitle:   'Which skill did well?',
+            stepLaneHint:    'Mark 👎 Wrong and write what to do differently. Mark 👍 on what was done especially well.',
+            skillLaneHint:   'Mark 👎 Wrong and write what to do differently. Mark 👍 on what was done especially well.',
             concLabel:       'Conclusion category the agent nailed (optional)',
             concFirstOpt:    '— Select if it matched —',
-            rootCauseLabel:  'Root cause the agent captured (optional)',
-            rootCausePh:     'e.g. "Agent correctly traced the disconnect to AP idle timeout."',
-            evidenceLabel:   'Log lines the agent surfaced well (optional)',
-            evidencePh:      'Paste log lines the agent surfaced correctly, one per line.\ne.g. [CNCT_FLOW][11] AUTH_RSP - received from "ASUS_BE98_MLO"',
-            evidenceHint:    'Tells reviewers which evidence to keep prioritising — the skill stays good at catching these.',
-            grp2Title:       'How the investigation flowed',
-            flowLabel:       'Overall flow',
-            flowFirstOpt:    '— How did the flow feel? —',
-            flowOpts: {
-                appropriate:        'Spot-on — efficient and clear',
-                stopped_too_early:  'Mostly there — could go one step further next time',
-                over_investigated:  'Worked well — could even conclude a bit earlier',
-                loop_or_stuck:      'Worked, but doubled back along the way',
-                wrong_direction:    'A different starting angle is also worth trying',
-            },
-            rightDirLabel:   'Angle worth trying next time (optional)',
-            rightDirFirstOpt:'— A skill worth trying earlier —',
-            rightDirPh:      'Or describe an angle — e.g. "Check MCC regulatory state first"',
-            rightDirHint:    'Optional — name a skill or thinking path that could lead even faster next time.',
-            problemsLabel:   'Highlights & suggestions (optional)',
-            problemsHint:    'Add one row per highlight or a small idea for next time. Each row: area + type + a short note.',
-            addRowText:      '+ Add another note',
-            whereFirstOpt:   '— Area —',
-            categoryFirstOpt:'— Note type —',
-            categoryOpts: {
-                missed_evidence:   'Praise — could surface even more evidence',
-                wrong_skill:       'Suggestion — a different skill could lead faster',
-                wrong_conclusion:  'Suggestion — conclusion could be sharper',
-                hallucinated:      'Suggestion — double-check a cited log line',
-                stuck_repeated:    'Suggestion — trim a repeated fetch',
-                incomplete:        'Suggestion — could go one step further',
-                over_investigated: 'Suggestion — could conclude a bit earlier',
-                bad_output:        'Suggestion — wording could be clearer',
-                other:             'Other note',
-            },
-            notePh:          "Short note (optional) — e.g. 'great catch on [MISSED BEACONS] at 14:52:11'",
             attachLogHint:   'Lets reviewers replay the same log the agent analysed — only attach if you want to share it.',
             submitText:      'Submit',
         },
@@ -5551,23 +5819,35 @@
         const titleEl = document.querySelector('#feedback-detail-modal .fbd-header h3');
         if (titleEl) titleEl.textContent = T.title;
 
-        setText('fbd-sev-label',        T.sevLabel);
-        setText('fbd-sev-hint',         T.sevHint);
-        setText('fbd-grp-correct-title',T.grp1Title);
-        setText('fbd-conc-label',       T.concLabel);
-        setText('fbd-rootcause-label',  T.rootCauseLabel);
-        setPh  ('fbd-correct-root-cause', T.rootCausePh);
-        setText('fbd-evidence-label',   T.evidenceLabel);
-        setPh  ('fbd-evidence-log-lines', T.evidencePh);
-        setText('fbd-evidence-hint',    T.evidenceHint);
-        setText('fbd-grp-flow-title',   T.grp2Title);
-        setText('fbd-flow-label',       T.flowLabel);
-        setText('fbd-rightdir-label',   T.rightDirLabel);
-        setPh  ('fbd-correct-approach', T.rightDirPh);
-        setText('fbd-rightdir-hint',    T.rightDirHint);
-        setText('fbd-problems-label',   T.problemsLabel);
-        setText('fbd-problems-hint',    T.problemsHint);
-        setText('fbd-add-issue-btn',    T.addRowText);
+        setText('fbd-sev-label',  T.sevLabel);
+        setText('fbd-sev-hint',   T.sevHint);
+
+        // Page-1 route cards: prompt + per-card title/description.
+        setText('fbd-route-label', T.routeLabel);
+        document.querySelectorAll('#fbd-route-cards .fbd-route-card').forEach((card) => {
+            const meta = T.routes && T.routes[card.dataset.route];
+            if (!meta) return;
+            const tEl = card.querySelector('[data-route-title]');
+            const dEl = card.querySelector('[data-route-desc]');
+            if (tEl) tEl.textContent = meta.title;
+            if (dEl) dEl.textContent = meta.desc;
+        });
+
+        // Workflow menu.
+        const flowTitleEl = document.querySelector('#fbd-grp-flow-title > span:first-child');
+        if (flowTitleEl) flowTitleEl.textContent = T.grpFlowTitle;
+
+        // Skill menu.
+        const skillTitleEl = document.querySelector('#fbd-grp-skill-title > span:first-child');
+        if (skillTitleEl) skillTitleEl.textContent = T.grpSkillTitle;
+
+        // Per-lane instruction hints — tone-aware so a 1 reviewer is
+        // explicitly invited to flag small slips per step / per skill.
+        setText('fbd-step-lane-hint',  T.stepLaneHint  || '');
+        setText('fbd-skill-lane-hint', T.skillLaneHint || '');
+
+        // Category dropdown label.
+        setText('fbd-conc-label',        T.concLabel);
 
         // Conclusion-category first option text.
         const concSel = document.getElementById('fbd-correct-conclusion-tag');
@@ -5585,20 +5865,9 @@
             });
         }
 
-        // Right-direction skill picker first option (other options are
-        // populated dynamically from the sidebar skills).
-        const rdSel = document.getElementById('fbd-correct-skill');
-        if (rdSel && rdSel.options.length > 0) {
-            rdSel.options[0].textContent = T.rightDirFirstOpt;
-        }
-
-        // Re-tone any already-rendered issue rows.
-        document.querySelectorAll('#fbd-issues-list .fbd-issue-row')
-                .forEach((row) => applyToneToIssueRow(row));
-
-        // Attach-log hint.
-        const logHint = document.getElementById('fbd-attach-log-hint');
-        if (logHint) logHint.textContent = T.attachLogHint;
+        // Attach-log hover tooltip (lives on the row's `title` attribute now).
+        const logRow = document.getElementById('fbd-attach-log-row');
+        if (logRow) logRow.setAttribute('title', T.attachLogHint);
 
         // Submit button label.
         const submitBtn = document.getElementById('fbd-submit-btn');
@@ -5609,30 +5878,6 @@
         if (scale) pickSeverity(scale.dataset.value || '');
     }
 
-    // Rewrite the Where / Category dropdowns + note placeholder on a
-    // single issue row to match the current tone.
-    function applyToneToIssueRow(row) {
-        const T = FBD_TONE[window.__feedbackTone === 'up' ? 'up' : 'down'];
-        const where = row.querySelector('.fbd-where');
-        if (where && where.options.length > 0) {
-            where.options[0].textContent = T.whereFirstOpt;
-        }
-        const cat = row.querySelector('.fbd-category');
-        if (cat) {
-            Array.from(cat.options).forEach((opt) => {
-                if (!opt.value) opt.textContent = T.categoryFirstOpt;
-                else if (T.categoryOpts[opt.value]) opt.textContent = T.categoryOpts[opt.value];
-            });
-        }
-        const note = row.querySelector('.fbd-note');
-        if (note) note.placeholder = T.notePh;
-    }
-    // Toggle the "Correct skill" sub-field on/off based on workflow choice.
-    function onAgentWorkflowChange(selectEl) {
-        const wrap = document.getElementById('fbd-correct-skill-wrap');
-        if (!wrap) return;
-        wrap.classList.toggle('hidden-row', selectEl.value !== 'wrong_direction');
-    }
     // Issue-time feedback is collapsed by default — ticking the checkbox
     // expands the problem/correct-time fields; unticking clears them so a
     // stale value can't be submitted from a hidden field.
@@ -5662,12 +5907,9 @@
         else { badge.textContent = ''; }
 
         // Reset structured ACE feedback fields.
-        ['fbd-correct-root-cause',
-         'fbd-correct-conclusion-tag',
-         'fbd-correct-skill',
-         'fbd-correct-approach',
-         'fbd-evidence-log-lines',
+        ['fbd-correct-conclusion-tag',
          'fbd-agent-workflow',
+         'fbd-correct-root-cause',
          'fbd-issue-time-problem',
          'fbd-correct-issue-time'].forEach((id) => {
             const el = document.getElementById(id);
@@ -5675,22 +5917,24 @@
         });
         // Reset severity rating.
         pickSeverity('');
-        // Hide the conditional "Correct skill" sub-field.
-        document.getElementById('fbd-correct-skill-wrap')
-                .classList.add('hidden-row');
+        // Reset the wizard: clear the route, hide both menus, rebuild the
+        // per-skill rows for THIS turn, and start on Page 1.
+        window.__feedbackRoute = '';
+        document.querySelectorAll('#fbd-route-cards .fbd-route-card')
+                .forEach((c) => c.classList.remove('selected'));
+        document.getElementById('fbd-workflow-menu')?.classList.add('hidden-row');
+        document.getElementById('fbd-skill-menu')?.classList.add('hidden-row');
+        // Force a rebuild of the per-skill and per-step rows for the current turn.
+        const _sr = document.getElementById('fbd-skill-rows');
+        if (_sr) { _sr.dataset.built = ''; _sr.innerHTML = ''; }
+        const _st = document.getElementById('fbd-step-rows');
+        if (_st) { _st.dataset.built = ''; _st.innerHTML = ''; }
         // Collapse the Issue Time detail (checkbox-gated, unticked by default).
         const _itFlag = document.getElementById('fbd-issue-time-flag');
         if (_itFlag) _itFlag.checked = false;
         const _itDetail = document.getElementById('fbd-issue-time-detail');
         if (_itDetail) _itDetail.classList.add('hidden-row');
-        // Reset the "Specific problems" list. Start with one empty row
-        // so the user can fill it in without an extra "+ Add" click —
-        // but it's free to leave blank (filter on submit).
-        const issuesList = document.getElementById('fbd-issues-list');
-        if (issuesList) {
-            issuesList.innerHTML = '';
-            addIssueRow();
-        }
+        _setFeedbackPage(1);
 
         // Wire severity button clicks (idempotent — wireOnce flag).
         const scale = document.getElementById('fbd-severity-scale');
@@ -5705,56 +5949,15 @@
                 });
             });
         }
-        // Wire workflow conditional reveal once.
-        const wfSel = document.getElementById('fbd-agent-workflow');
-        if (wfSel && !wfSel.dataset.wired) {
-            wfSel.dataset.wired = '1';
-            wfSel.addEventListener('change', () => onAgentWorkflowChange(wfSel));
-        }
-
-        // Populate "Correct skill" dropdown from whatever skills are
-        // currently visible in the sidebar, so the user can flag the
-        // skill the agent SHOULD have picked when Phase 1 routing was off.
-        const correctSkillSel = document.getElementById('fbd-correct-skill');
-        if (correctSkillSel) {
-            // First option text is re-toned by applyFeedbackTone below.
-            correctSkillSel.innerHTML =
-                '<option value="">— Pick the skill that should have led —</option>';
-            document.querySelectorAll('#skills-list .skill-card .skill-name')
-                .forEach((nameEl) => {
-                    const v = (nameEl.textContent || '').trim();
-                    if (!v) return;
-                    const opt = document.createElement('option');
-                    opt.value = v;
-                    opt.textContent = v;
-                    correctSkillSel.appendChild(opt);
-                });
-        }
-
         // Apply tone-specific labels / hints / option text before the
         // user sees anything. Must run after the reset block (which
         // recreates the empty issue row) so the new row is re-toned too.
         applyFeedbackTone(vote);
 
-        // Attach-LOG default: ticked on thumbs-down (you're reporting a
-        // bad answer → log is the most useful artefact). Untouched on
-        // thumbs-up so the log is never silently uploaded.
+        // Attach-LOG default: always UNCHECKED. The option stays available
+        // so the user can opt in, but the log is never pre-selected.
         const logCb = document.getElementById('fbd-attach-log');
-        if (logCb) logCb.checked = (vote === -1);
-
-        // Attach-YAML default: pre-ticked so the user's skill configuration is
-        // shared by default (the reviewer almost always needs it to reproduce).
-        // The user can still untick it before submitting.
-        const attachCb = document.getElementById('fbd-attach-yaml');
-        const attachHint = document.getElementById('fbd-attach-yaml-hint');
-        if (attachCb) {
-            attachCb.checked = true;
-            if (attachHint) {
-                attachHint.textContent = isYamlModified()
-                    ? 'Your local configuration was modified this session; attaching it lets reviewers reproduce the issue exactly.'
-                    : 'Helps the Wireless CE team reproduce the issue with the exact configuration you are running.';
-            }
-        }
+        if (logCb) logCb.checked = false;
 
         // If the user already submitted feedback for this turn, pre-fill
         // every field with what they sent last time — so they can revise
@@ -5779,7 +5982,7 @@
         document.getElementById('fbd-submit-btn').disabled = false;
         // Mark session active + expanded → drawer slides in on the RIGHT,
         // chat-area's right margin grows to leave room for it.
-        document.body.classList.add('fbd-drawer-active', 'fbd-drawer-expanded');
+        document.body.classList.add('fbd-drawer-active', 'fbd-drawer-expanded', 'fbd-modal-open');
         // Auto-collapse the LEFT sidebar so the chat-area has breathing
         // room while feedback is open. Remember the user's previous
         // collapsed/expanded choice so we can restore it on close. The
@@ -5815,7 +6018,6 @@
             const snap = _currentFeedbackFormSnapshot();
             if (!snap) return;
             localStorage.setItem(_FEEDBACK_DRAFT_PREFIX + turnId, JSON.stringify(snap));
-            _showDraftHint('draft auto-saved');
         } catch (e) {}
     }
     function _loadFeedbackDraft(turnId) {
@@ -5849,46 +6051,24 @@
                             ? document.getElementById('fbd-severity-scale').dataset.value || ''
                             : '';
         const severity = severityRaw ? parseInt(severityRaw, 10) : null;
-        const evidenceLogLines = (document.getElementById('fbd-evidence-log-lines')?.value || '')
-            .split(/\r?\n/).map((s) => s.replace(/\s+$/, '')).filter((s) => s.length > 0);
-        const issues = [];
-        document.querySelectorAll('#fbd-issues-list .fbd-issue-row').forEach((r) => {
-            const where   = r.querySelector('.fbd-where').value || '';
-            const cat     = r.querySelector('.fbd-category').value || '';
-            const skillId = r.querySelector('.fbd-skill').value || '';
-            const stepSel = r.querySelector('.fbd-step');
-            const stepIdx = stepSel.value;
-            const stepLabel = stepSel.selectedOptions[0]
-                            && stepSel.selectedOptions[0].dataset.stepLabel || '';
-            const note    = r.querySelector('.fbd-note').value.trim();
-            if (!where && !cat && !skillId && !stepIdx && !note) return;
-            issues.push({
-                scope: (where === 'skill' || where === 'step') ? where : 'overall',
-                category: cat || null, skill_id: skillId || null,
-                step_index: stepIdx === '' ? null : parseInt(stepIdx, 10),
-                step_label: stepLabel || (where && where !== 'skill' && where !== 'step' ? where : null),
-                comment: note || null,
-            });
-        });
         return {
+            route:                window.__feedbackRoute || '',
             severity,
             correctConclusionTag: _val('fbd-correct-conclusion-tag'),
-            correctRootCause:     _val('fbd-correct-root-cause'),
-            correctSkill:         _val('fbd-correct-skill'),
-            correctApproach:      _val('fbd-correct-approach'),
             agentWorkflow:        _val('fbd-agent-workflow'),
+            correctRootCause:     _val('fbd-correct-root-cause'),
             issueTimeProblem:     _val('fbd-issue-time-problem'),
             correctIssueTime:     _val('fbd-correct-issue-time'),
-            evidenceLogLines, issues,
+            skillFeedback:        collectSkillFeedback(),
+            stepFeedback:         collectStepFeedback(),
             attachLog:       !!(document.getElementById('fbd-attach-log') || {}).checked,
-            attachLocalYaml: !!(document.getElementById('fbd-attach-yaml') || {}).checked,
         };
     }
 
     // Restore every visible field from a previous submission cached in
     // window.__lastFeedback. Runs AFTER the modal's reset block so the
-    // baseline defaults (attach-log auto-tick, empty issue row, etc.)
-    // are applied first and then selectively overwritten.
+    // baseline defaults (route cleared, Page 1, etc.) are applied first
+    // and then selectively overwritten.
     function prefillFeedbackModal(d) {
         if (d.severity) pickSeverity(String(d.severity));
 
@@ -5897,10 +6077,8 @@
             if (el && v !== undefined && v !== null) el.value = v;
         };
         setVal('fbd-correct-conclusion-tag', d.correctConclusionTag || '');
-        setVal('fbd-correct-root-cause',     d.correctRootCause || '');
-        setVal('fbd-correct-skill',          d.correctSkill || '');
-        setVal('fbd-correct-approach',       d.correctApproach || '');
         setVal('fbd-agent-workflow',         d.agentWorkflow || '');
+        setVal('fbd-correct-root-cause',     d.correctRootCause || '');
         setVal('fbd-issue-time-problem',     d.issueTimeProblem || '');
         setVal('fbd-correct-issue-time',     d.correctIssueTime || '');
         // Auto-expand the Issue Time detail if a prior submission filled it.
@@ -5909,54 +6087,50 @@
         if (_itFlag) _itFlag.checked = _itHas;
         const _itDetail = document.getElementById('fbd-issue-time-detail');
         if (_itDetail) _itDetail.classList.toggle('hidden-row', !_itHas);
-        setVal('fbd-evidence-log-lines',
-               Array.isArray(d.evidenceLogLines) ? d.evidenceLogLines.join('\n') : '');
 
-        // Conditional reveal: "Correct skill" sub-field re-opens whenever
-        // workflow == wrong_direction.
-        const wfSel = document.getElementById('fbd-agent-workflow');
-        if (wfSel) onAgentWorkflowChange(wfSel);
+        // Restore the Page-1 route (which builds the per-skill + per-step
+        // rows), then re-apply each verdict and its reason/evidence.
+        if (d.route) selectFeedbackRoute(d.route);
 
-        // Rebuild the "Specific problems" list verbatim from the cached
-        // payload. Map the saved scope+step_label back to the UI's
-        // "Where" enum so phase tags don't get lost.
-        const list = document.getElementById('fbd-issues-list');
-        if (list) {
-            list.innerHTML = '';
-            const cachedIssues = Array.isArray(d.issues) ? d.issues : [];
-            if (cachedIssues.length === 0) {
-                addIssueRow();
-            } else {
-                cachedIssues.forEach((issue) => {
-                    addIssueRow();
-                    const row = list.lastElementChild;
-                    let where;
-                    if (issue.scope === 'skill') where = 'skill';
-                    else if (issue.scope === 'step') where = 'step';
-                    else if (['phase_1', 'phase_2', 'phase_3', 'overall']
-                             .includes(issue.step_label)) where = issue.step_label;
-                    else where = 'overall';
-                    const whereEl = row.querySelector('.fbd-where');
-                    whereEl.value = where;
-                    onIssueWhereChange(whereEl);
-                    row.querySelector('.fbd-category').value = issue.category || '';
-                    row.querySelector('.fbd-skill').value = issue.skill_id || '';
-                    row.querySelector('.fbd-step').value =
-                        issue.step_index !== null && issue.step_index !== undefined
-                            ? String(issue.step_index) : '';
-                    row.querySelector('.fbd-note').value = issue.comment || '';
-                    // Re-apply the area↔category matrix so the dropdown
-                    // visibility matches the restored values.
-                    filterIssueRowOptions(row);
-                });
+        const sf = Array.isArray(d.skillFeedback) ? d.skillFeedback : [];
+        sf.forEach((item) => {
+            const sid = item && item.skill_id;
+            if (!sid) return;
+            if (item.assessment !== 'wrong' && item.assessment !== 'helpful') return;
+            const row = Array.from(
+                document.querySelectorAll('#fbd-skill-rows .fbd-skill-row'))
+                .find((r) => r.dataset.skillId === sid) || null;
+            if (!row) return;
+            const btn = row.querySelector(`.fbd-verdict-btn[data-v="${item.assessment}"]`);
+            if (btn) setSkillVerdict(btn, item.assessment);
+            if (item.assessment === 'wrong') {
+                const r = row.querySelector('.fbd-skill-reason');
+                const e = row.querySelector('.fbd-skill-evidence');
+                if (r && item.what_wrong) r.value = item.what_wrong;
+                if (e && Array.isArray(item.evidence_lines)) e.value = item.evidence_lines.join('\n');
             }
-        }
+        });
 
-        // Attachment checkboxes pick up whatever the user last chose.
+        const stf = Array.isArray(d.stepFeedback) ? d.stepFeedback : [];
+        stf.forEach((item) => {
+            if (!item || item.step_index == null) return;
+            if (item.assessment !== 'wrong' && item.assessment !== 'helpful') return;
+            const row = document.querySelector(
+                `#fbd-step-rows .fbd-skill-row[data-step-index="${item.step_index}"]`);
+            if (!row) return;
+            const btn = row.querySelector(`.fbd-verdict-btn[data-v="${item.assessment}"]`);
+            if (btn) setStepVerdict(btn, item.assessment);
+            if (item.assessment === 'wrong') {
+                const r = row.querySelector('.fbd-skill-reason');
+                const e = row.querySelector('.fbd-skill-evidence');
+                if (r && item.what_wrong) r.value = item.what_wrong;
+                if (e && Array.isArray(item.evidence_lines)) e.value = item.evidence_lines.join('\n');
+            }
+        });
+
+        // Attachment checkbox picks up whatever the user last chose.
         const logCb = document.getElementById('fbd-attach-log');
-        const yamlCb = document.getElementById('fbd-attach-yaml');
         if (logCb && d.attachLog !== undefined) logCb.checked = !!d.attachLog;
-        if (yamlCb && d.attachLocalYaml !== undefined) yamlCb.checked = !!d.attachLocalYaml;
     }
 
     function closeFeedbackModal() {
@@ -5975,7 +6149,7 @@
         const modal = document.getElementById('feedback-detail-modal');
         modal.classList.remove('open');
         modal.setAttribute('aria-hidden', 'true');
-        document.body.classList.remove('fbd-drawer-active', 'fbd-drawer-expanded');
+        document.body.classList.remove('fbd-drawer-active', 'fbd-drawer-expanded', 'fbd-modal-open');
         _restoreSidebarAfterFeedback();
         window.__currentFeedbackCtx = null;
     }
@@ -6049,36 +6223,34 @@
         return el;
     }
 
-    function isYamlModified() {
-        return Boolean(window.__yamlModified);
-    }
-
     // Canonical string form of a feedback snapshot — used to detect
     // "no-change" resubmits from the Edit-feedback flow so we don't
     // append duplicate JSONL rows for the same payload.
     function _normalizeFeedbackForCompare(d) {
         const d_ = d || {};
         return JSON.stringify({
+            route:                d_.route || '',
             severity:             d_.severity == null ? null : Number(d_.severity),
             correctConclusionTag: d_.correctConclusionTag || '',
-            correctRootCause:     d_.correctRootCause || '',
-            correctSkill:         d_.correctSkill || '',
-            correctApproach:      d_.correctApproach || '',
             agentWorkflow:        d_.agentWorkflow || '',
+            correctRootCause:     d_.correctRootCause || '',
             issueTimeProblem:     d_.issueTimeProblem || '',
             correctIssueTime:     d_.correctIssueTime || '',
-            evidenceLogLines:     Array.isArray(d_.evidenceLogLines)
-                                    ? d_.evidenceLogLines.slice() : [],
-            issues: (Array.isArray(d_.issues) ? d_.issues : []).map((i) => ({
-                scope:      i && i.scope      != null ? i.scope      : null,
-                category:   i && i.category   != null ? i.category   : null,
-                skill_id:   i && i.skill_id   != null ? i.skill_id   : null,
-                step_index: i && i.step_index != null ? i.step_index : null,
-                step_label: i && i.step_label != null ? i.step_label : null,
-                comment:    i && i.comment    != null ? i.comment    : null,
+            skillFeedback: (Array.isArray(d_.skillFeedback) ? d_.skillFeedback : []).map((s) => ({
+                skill_id:       s && s.skill_id   != null ? s.skill_id   : null,
+                assessment:     s && s.assessment != null ? s.assessment : null,
+                what_wrong:     s && s.what_wrong != null ? s.what_wrong : null,
+                evidence_lines: s && Array.isArray(s.evidence_lines) ? s.evidence_lines.slice() : [],
+            })),
+            stepFeedback: (Array.isArray(d_.stepFeedback) ? d_.stepFeedback : []).map((s) => ({
+                step_index:     s && s.step_index != null ? Number(s.step_index) : null,
+                skill_id:       s && s.skill_id   != null ? s.skill_id   : null,
+                step_label:     s && s.step_label != null ? s.step_label : '',
+                assessment:     s && s.assessment != null ? s.assessment : null,
+                what_wrong:     s && s.what_wrong != null ? s.what_wrong : null,
+                evidence_lines: s && Array.isArray(s.evidence_lines) ? s.evidence_lines.slice() : [],
             })),
             attachLog:       !!d_.attachLog,
-            attachLocalYaml: !!d_.attachLocalYaml,
         });
     }
 
@@ -6090,11 +6262,10 @@
             const el = document.getElementById(id);
             return el ? String(el.value || '').trim() : '';
         };
-        const correctRootCause     = _val('fbd-correct-root-cause');
+        const route                = window.__feedbackRoute || '';
         const correctConclusionTag = _val('fbd-correct-conclusion-tag');
-        const correctSkill         = _val('fbd-correct-skill');
-        const correctApproach      = _val('fbd-correct-approach');
         const agentWorkflow        = _val('fbd-agent-workflow');
+        const correctRootCause     = _val('fbd-correct-root-cause');
         const issueTimeProblem     = _val('fbd-issue-time-problem');
         const correctIssueTime     = _val('fbd-correct-issue-time');
         // Issue time the turn actually used (current sidebar value) — captured
@@ -6103,50 +6274,24 @@
         const severityRaw = document.getElementById('fbd-severity-scale')?.dataset.value || '';
         const severity = severityRaw ? parseInt(severityRaw, 10) : null;
 
-        // Evidence log lines come in as a textarea; split per-line and
-        // drop blanks so the backend gets a clean array.
-        const evidenceLogLines = (document.getElementById('fbd-evidence-log-lines')?.value || '')
-            .split(/\r?\n/)
-            .map((s) => s.replace(/\s+$/, ''))
-            .filter((s) => s.length > 0);
+        // Per-skill verdicts from the Skill lane and per-step verdicts
+        // from the Agent-workflow lane. Both share the same wrong / helpful
+        // shape; the backend treats them as parallel feedback streams.
+        const skillFeedback = collectSkillFeedback();
+        const stepFeedback  = collectStepFeedback();
 
-        // Collect "Specific problems" rows. Each row is dropped silently
-        // when none of its fields were filled — keeps the form forgiving.
-        const issues = [];
-        document.querySelectorAll('#fbd-issues-list .fbd-issue-row').forEach((r) => {
-            const where    = r.querySelector('.fbd-where').value || '';
-            const category = r.querySelector('.fbd-category').value || '';
-            const skillId  = r.querySelector('.fbd-skill').value || '';
-            const stepSel  = r.querySelector('.fbd-step');
-            const stepIdx  = stepSel.value;
-            const stepLabel = stepSel.selectedOptions[0]
-                              && stepSel.selectedOptions[0].dataset.stepLabel || '';
-            const note     = r.querySelector('.fbd-note').value.trim();
-            if (!where && !category && !skillId && !stepIdx && !note) return;
-            issues.push({
-                // Map "Where" to the backend's `scope` taxonomy. Phase
-                // tags collapse to "overall" with the phase recorded in
-                // `step_label` so existing analytics keep working.
-                scope:      (where === 'skill' || where === 'step') ? where : 'overall',
-                category:   category || null,
-                skill_id:   skillId || null,
-                step_index: stepIdx === '' ? null : parseInt(stepIdx, 10),
-                step_label: stepLabel || (where && where !== 'skill' && where !== 'step' ? where : null),
-                comment:    note || null,
-            });
-        });
+        // Page-1 route → ACE dispatch hint (workflow→agent, skill→skill, both).
+        const feedbackLayer = FBD_ROUTE_TO_LAYER[route] || '';
 
         const hasAny =
-            correctRootCause
-            || correctConclusionTag
-            || correctSkill
-            || correctApproach
+            correctConclusionTag
             || agentWorkflow
+            || correctRootCause
             || issueTimeProblem
             || correctIssueTime
             || severity
-            || evidenceLogLines.length > 0
-            || issues.length > 0;
+            || skillFeedback.length > 0
+            || stepFeedback.length > 0;
         if (!hasAny) {
             closeFeedbackModal();
             return;
@@ -6154,7 +6299,6 @@
 
         // Read attachment checkboxes up here so we can include them in
         // the no-change comparison below.
-        const attachLocalYaml = !!document.getElementById('fbd-attach-yaml').checked;
         const attachLog       = !!document.getElementById('fbd-attach-log').checked;
 
         // No-change guard: when the user re-opens the modal via
@@ -6163,10 +6307,9 @@
         // already sent. Submitting again would append a duplicate row
         // to feedback_details.jsonl, so short-circuit here.
         const currentSnapshot = {
-            severity, correctConclusionTag, correctRootCause,
-            correctSkill, correctApproach, agentWorkflow,
-            issueTimeProblem, correctIssueTime,
-            evidenceLogLines, issues, attachLog, attachLocalYaml,
+            route, severity, correctConclusionTag, agentWorkflow, correctRootCause,
+            issueTimeProblem, correctIssueTime, skillFeedback, stepFeedback,
+            attachLog,
         };
         const cachedSnapshot = (window.__lastFeedback || {})[ctx.turnId];
         if (cachedSnapshot
@@ -6190,11 +6333,14 @@
                     severity:                 severity,
                     correct_conclusion_tag:   correctConclusionTag,
                     correct_root_cause:       correctRootCause,
-                    evidence_log_lines:       evidenceLogLines,
-                    correct_skill:            correctSkill,
-                    correct_approach:         correctApproach,
                     // Agent-prompt-layer ACE signal: overall flow.
                     agent_workflow:           agentWorkflow,
+                    // Explicit dispatch lane chosen on Page 1.
+                    feedback_layer:           feedbackLayer,
+                    // Per-skill verdicts + attributed reason / evidence.
+                    skill_feedback:           skillFeedback,
+                    // Per-step verdicts (Agent-workflow lane).
+                    step_feedback:            stepFeedback,
                     // Issue-time (analysis anchor) feedback.
                     issue_time_problem:       issueTimeProblem,
                     correct_issue_time:       correctIssueTime,
@@ -6203,9 +6349,6 @@
                     // false the log has no dates, so used/correct issue times
                     // are time-only "HH:MM:SS" (e.g. DDD logs) — not malformed.
                     log_has_date:             (window.__logHasDate !== false),
-                    // Per-issue granularity: where + what + optional note.
-                    issues:                   issues,
-                    attach_local_yaml:        attachLocalYaml,
                     attach_log:               attachLog,
                 }),
             });
@@ -6216,18 +6359,16 @@
                 // letting them tweak and re-submit without retyping.
                 window.__lastFeedback = window.__lastFeedback || {};
                 window.__lastFeedback[ctx.turnId] = {
+                    route:                  route,
                     severity:               severity,
                     correctConclusionTag:   correctConclusionTag,
-                    correctRootCause:       correctRootCause,
-                    correctSkill:           correctSkill,
-                    correctApproach:        correctApproach,
                     agentWorkflow:          agentWorkflow,
+                    correctRootCause:       correctRootCause,
                     issueTimeProblem:       issueTimeProblem,
                     correctIssueTime:       correctIssueTime,
-                    evidenceLogLines:       evidenceLogLines,
-                    issues:                 issues,
+                    skillFeedback:          skillFeedback,
+                    stepFeedback:           stepFeedback,
                     attachLog:              attachLog,
-                    attachLocalYaml:        attachLocalYaml,
                 };
                 // Persisted to the server — draft no longer needed.
                 _clearFeedbackDraft(ctx.turnId);
@@ -6393,8 +6534,8 @@
     //   yaml_modified=true (the server-side session flag). Reset to
     //   false on log switch / by the user explicitly switching back
     //   to the cloud baseline isn't relevant — that's the OTHER flag.
-    //   Read by: isYamlModified() (feedback attach-yaml default),
-    //            uploadModifiedYamlSilently() (auto-fire after 👍).
+    //   (No longer attached/uploaded from feedback — the skill-config
+    //   attachment flow was removed. Kept only as a session marker.)
     //
     // __usingUserYaml
     //   "Is the currently active YAML the user/ customised one (vs
@@ -7321,35 +7462,6 @@
         } catch (e) {
             alert('Network error: ' + e.message);
             saveBtn.disabled = false;
-        }
-    }
-
-    // ── Silent upload of the user's modified YAML after a 👍 ──────────
-    // Fires only when window.__yamlModified is true (i.e. the user
-    // actually edited their skill config this session). Runs in the
-    // background — no confirmation dialog, no UI interruption.
-    // Re-triggers are de-duplicated so refreshing a turn / clicking 👍
-    // twice doesn't upload twice.
-    async function uploadModifiedYamlSilently() {
-        if (window.__yamlUploadInFlight || window.__yamlUploadedThisSession) return;
-        window.__yamlUploadInFlight = true;
-        try {
-            const res = await fetch('/log_chatbot/upload_modified_yaml', {
-                method: 'POST',
-                headers: {'Content-Type': 'application/json'},
-                body: '{}',
-            });
-            const data = await res.json().catch(() => ({}));
-            if (data && data.success) {
-                window.__yamlUploadedThisSession = true;
-                console.info('[skill upload] uploaded:', data.uploaded_to || '');
-            } else {
-                console.warn('[skill upload] failed:', data && data.error);
-            }
-        } catch (e) {
-            console.warn('[skill upload] network error:', e);
-        } finally {
-            window.__yamlUploadInFlight = false;
         }
     }
 

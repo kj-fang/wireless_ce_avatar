@@ -289,11 +289,6 @@ def _attached_logs_dir(conversation_id: str, domain: str = "") -> Path:
     return _feedback_root() / "logs" / f"{_domain_prefix(domain)}{safe}"
 
 
-def _attached_yaml_dir() -> Path:
-    """Shared sub-folder for user-uploaded skill YAMLs accompanying feedback."""
-    return _feedback_root() / "yaml_reports"
-
-
 def _feedback_weight(*, has_detail: bool, yaml_modified: bool) -> str:
     """
     Classify a feedback event into one of two weight buckets.
@@ -771,7 +766,8 @@ def record_vote(
     Append a vote event to feedback.jsonl AND patch the matching turn in
     the conversation snapshot so a turn's feedback is visible in one place.
 
-    vote: +1 (thumbs up) or -1 (thumbs down). Other values are rejected.
+    vote: +1 (thumbs up), -1 (thumbs down), or 0 (clear a previous vote).
+    Any other value is rejected.
     yaml_modified: True if the user edited the skill YAML during this session
                    — promotes the event to weight="high".
 
@@ -781,7 +777,7 @@ def record_vote(
 
     Returns True on success, False otherwise.
     """
-    if vote not in (1, -1):
+    if vote not in (1, -1, 0):
         return False
     if not conversation_id or not turn_id:
         return False
@@ -808,12 +804,17 @@ def record_vote(
         if snap is not None:
             for t in snap.get("turns", []):
                 if t.get("turn_id") == turn_id:
-                    t["feedback"] = {
-                        "vote": vote,
-                        "ts": event["ts"],
-                        "weight": weight,
-                        "yaml_modified": bool(yaml_modified),
-                    }
+                    if vote == 0:
+                        # Vote retracted — drop the inline verdict so the
+                        # ACE pipeline treats this turn as untagged again.
+                        t.pop("feedback", None)
+                    else:
+                        t["feedback"] = {
+                            "vote": vote,
+                            "ts": event["ts"],
+                            "weight": weight,
+                            "yaml_modified": bool(yaml_modified),
+                        }
                     break
             snap["_persisted"] = True   # subsequent record_turn writes through
 
@@ -954,13 +955,15 @@ def record_detail(
     correct_approach: str = "",
     evidence_log_lines: Optional[list] = None,
     agent_workflow: str = "",
+    feedback_layer: str = "",
+    skill_feedback: Optional[list] = None,
+    step_feedback: Optional[list] = None,
     issue_time_problem: str = "",
     correct_issue_time: str = "",
     used_issue_time: str = "",
     log_has_date: bool = True,
     severity: Optional[int] = None,
     yaml_modified: bool = False,
-    attached_yaml_path: str = "",
     log_path: str = "",
     attach_log: bool = False,
     general_comment: str = "",          # legacy, kept for back-compat
@@ -972,9 +975,8 @@ def record_detail(
     went wrong, so the data is suitable as training labels.
 
     yaml_modified:       True if the user edited the local skill YAML during
-                         this session.
-    attached_yaml_path:  Optional local path to the user's skill YAML; copied
-                         asynchronously to `<feedback_root>/yaml_reports/`.
+                         this session (used only as a review-queue priority
+                         signal — no skill config is copied).
     log_path:            Local path to the current session log. Only copied
                          to `<feedback_root>/logs/<conversation_id>/` when
                          `attach_log=True` — typically when the user ticks
@@ -1024,20 +1026,26 @@ def record_detail(
     correct_issue_time = (correct_issue_time or "").strip()
     used_issue_time = (used_issue_time or "").strip()
 
-    # Auto-infer the dispatch hint (Skill Playbook vs Agent-prompt Playbook)
-    # purely from which structured fields the user filled — the UI no
-    # longer asks the user this question directly.
-    feedback_layer = ""
-    cat_set = {(it.get("category") or "") for it in cleaned_issues}
-    if (agent_workflow
-            or correct_skill
-            or correct_approach
-            or cat_set & {"wrong_skill", "wrong_input", "wrong_order",
-                          "missing_step", "stuck"}):
-        feedback_layer = "agent"
-    if (correct_root_cause or correct_conclusion_tag
-            or evidence_log_lines or cat_set & {"bad_output"}):
-        feedback_layer = "both" if feedback_layer == "agent" else "skill"
+    # Dispatch hint (Skill Playbook vs Agent-prompt Playbook). The wizard's
+    # 3-way router sends an explicit `feedback_layer` (skill | agent | both);
+    # when present and valid it is authoritative — the user stated intent
+    # directly. Fall back to inferring from which fields were filled only for
+    # older pre-wizard clients that send nothing.
+    explicit_layer = (feedback_layer or "").strip().lower()
+    if explicit_layer in FEEDBACK_LAYERS:
+        feedback_layer = explicit_layer
+    else:
+        feedback_layer = ""
+        cat_set = {(it.get("category") or "") for it in cleaned_issues}
+        if (agent_workflow
+                or correct_skill
+                or correct_approach
+                or cat_set & {"wrong_skill", "wrong_input", "wrong_order",
+                              "missing_step", "stuck"}):
+            feedback_layer = "agent"
+        if (correct_root_cause or correct_conclusion_tag
+                or evidence_log_lines or cat_set & {"bad_output"}):
+            feedback_layer = "both" if feedback_layer == "agent" else "skill"
 
     # Evidence log lines — strip blanks; cap to a sane length so a stray
     # paste of an entire log file doesn't bloat the JSONL stream.
@@ -1049,12 +1057,121 @@ def record_detail(
                 cleaned_evidence.append(s)
         cleaned_evidence = cleaned_evidence[:50]
 
+    # Per-skill feedback from the wizard's skill lane. Each row:
+    #   {skill_id, assessment in {helpful,redundant,wrong}, what_wrong,
+    #    evidence_lines: [..]}
+    # We fan it out into the channels ACE already consumes, so no Reflector
+    # change is needed:
+    #   * assessment         → turns[].skill_assessments  (Reflector input)
+    #   * what_wrong (wrong) → an issues[] row scoped to that skill
+    #                          (becomes free_text_issues for the Reflector)
+    #   * evidence_lines     → aggregated into evidence_log_lines (grep-verified)
+    # The raw rows are also kept verbatim under `skill_feedback` so offline
+    # training keeps per-skill attribution of the reason + evidence.
+    cleaned_skill_feedback: list[dict] = []
+    skill_assessment_rows: list[dict] = []
+    if isinstance(skill_feedback, list):
+        for sf in skill_feedback:
+            if not isinstance(sf, dict):
+                continue
+            sid = (sf.get("skill_id") or "").strip()
+            assess = (sf.get("assessment") or "").strip().lower()
+            if not sid or assess not in SKILL_ASSESSMENT_VALUES:
+                continue
+            what_wrong = (sf.get("what_wrong") or "").strip()
+            ev: list[str] = []
+            raw_ev = sf.get("evidence_lines")
+            if isinstance(raw_ev, list):
+                for ln in raw_ev:
+                    s = str(ln).rstrip()
+                    if s:
+                        ev.append(s)
+            ev = ev[:50]
+            cleaned_skill_feedback.append({
+                "skill_id": sid,
+                "assessment": assess,
+                "what_wrong": what_wrong or None,
+                "evidence_lines": ev or None,
+            })
+            skill_assessment_rows.append({"skill_id": sid, "assessment": assess})
+            if ev:
+                cleaned_evidence.extend(ev)
+            # "wrong" skill + a reason → a skill-scoped issue row so the
+            # Reflector sees the per-skill correction in free_text_issues.
+            if assess == "wrong" and what_wrong:
+                cleaned_issues.append({
+                    "scope": "skill", "skill_id": sid, "step_index": None,
+                    "step_label": None, "category": "wrong_conclusion",
+                    "should_be": None, "comment": what_wrong,
+                })
+        cleaned_evidence = cleaned_evidence[:80]
+
+    # Per-step feedback from the wizard's Agent-workflow lane. Each row:
+    #   {step_index, skill_id, step_label,
+    #    assessment in {helpful,redundant,wrong}, what_wrong,
+    #    evidence_lines: [..]}
+    # Mirrors skill_feedback but pins the verdict to a specific reasoning
+    # step. We fan it into the channels the Reflector already reads:
+    #   * what_wrong (wrong) → a step-scoped issues[] row (free_text_issues)
+    #   * evidence_lines     → aggregated into evidence_log_lines
+    # and keep the raw rows verbatim under `step_feedback` for offline
+    # training so per-step attribution of the reason + evidence survives.
+    cleaned_step_feedback: list[dict] = []
+    if isinstance(step_feedback, list):
+        step_evidence: list[str] = []
+        for stf in step_feedback:
+            if not isinstance(stf, dict):
+                continue
+            assess = (stf.get("assessment") or "").strip().lower()
+            if assess not in SKILL_ASSESSMENT_VALUES:
+                continue
+            raw_idx = stf.get("step_index")
+            try:
+                step_idx = int(raw_idx) if raw_idx is not None and raw_idx != "" else None
+            except (TypeError, ValueError):
+                step_idx = None
+            if step_idx is None or step_idx < 0:
+                continue
+            sid = (stf.get("skill_id") or "").strip() or None
+            step_label = (stf.get("step_label") or "").strip() or None
+            what_wrong = (stf.get("what_wrong") or "").strip()
+            ev: list[str] = []
+            raw_ev = stf.get("evidence_lines")
+            if isinstance(raw_ev, list):
+                for ln in raw_ev:
+                    s = str(ln).rstrip()
+                    if s:
+                        ev.append(s)
+            ev = ev[:50]
+            cleaned_step_feedback.append({
+                "step_index": step_idx,
+                "skill_id": sid,
+                "step_label": step_label,
+                "assessment": assess,
+                "what_wrong": what_wrong or None,
+                "evidence_lines": ev or None,
+            })
+            if ev:
+                step_evidence.extend(ev)
+            # "wrong" step + a reason → a step-scoped issue row so the
+            # Reflector sees the per-step correction in free_text_issues.
+            if assess == "wrong" and what_wrong:
+                cleaned_issues.append({
+                    "scope": "step", "skill_id": sid, "step_index": step_idx,
+                    "step_label": step_label, "category": "wrong_conclusion",
+                    "should_be": None, "comment": what_wrong,
+                })
+        if step_evidence:
+            cleaned_evidence.extend(step_evidence)
+            cleaned_evidence = cleaned_evidence[:80]
+
     has_detail = bool(
         cleaned_issues or general_comment or expected_outcome
         or correct_root_cause or correct_conclusion_tag
         or correct_skill or correct_approach or cleaned_evidence
         or agent_workflow or severity_val is not None
         or issue_time_problem or correct_issue_time
+        or cleaned_skill_feedback or cleaned_step_feedback
     )
 
     # If everything is empty and there is no vote either, ignore.
@@ -1087,6 +1204,14 @@ def record_detail(
         "feedback_layer":         feedback_layer or None,
         # Agent-prompt-layer ACE signal (maps to specific prompt sections).
         "agent_workflow":         agent_workflow or None,
+        # Per-skill verdicts from the wizard's skill lane, with the reason +
+        # evidence kept attributed to each skill (also fanned out into
+        # skill_assessments / issues / evidence_log_lines above).
+        "skill_feedback":         cleaned_skill_feedback or None,
+        # Per-step verdicts from the wizard's Agent-workflow lane, attributed
+        # to a specific reasoning step (also fanned out into issues /
+        # evidence_log_lines above).
+        "step_feedback":          cleaned_step_feedback or None,
         # Issue-time (analysis anchor) feedback: what was wrong with the time,
         # the corrected time(s) the user expected, and the time actually used.
         "issue_time_problem":     issue_time_problem or None,
@@ -1104,35 +1229,8 @@ def record_detail(
         "general_comment":        general_comment or None,
         "weight": weight,
         "yaml_modified": bool(yaml_modified),
-        "attached_yaml": None,   # filled in below once the copy is enqueued
         "attached_log":  bool(attach_log and log_path),
     }
-
-    # Schedule the YAML side-car copy. The destination path is recorded in
-    # the JSONL record so reviewers can correlate the bug report with the
-    # exact configuration the user was running. The filename embeds the
-    # submitter so a reviewer scanning the folder can see attribution at a
-    # glance and so two submissions for the same turn never overwrite each
-    # other.
-    if attached_yaml_path:
-        try:
-            src = Path(attached_yaml_path)
-            if src.exists() and src.is_file():
-                user_tag = _current_user()
-                # Sanitise client-supplied IDs before building the
-                # destination filename — same path-traversal concern
-                # as _conversation_path / _attached_logs_dir.
-                # src.name is already a basename (no path component)
-                # by virtue of Path.name semantics.
-                dst = (
-                    _attached_yaml_dir()
-                    / f"{_safe_id(conversation_id)}__{_safe_id(turn_id)}"
-                      f"__{user_tag}__{src.name}"
-                )
-                _enqueue_copy(src, dst)
-                record["attached_yaml"] = str(dst)
-        except Exception as e:
-            print(f"[feedback] attach_yaml skipped ({attached_yaml_path}): {e}")
 
     # Attach the session log only when the user explicitly opted in. The
     # checkbox lives in the More feedback modal; defaults to checked on
@@ -1165,11 +1263,29 @@ def record_detail(
                     "expected_outcome":       record["expected_outcome"],
                     "feedback_layer":         record["feedback_layer"],
                     "agent_workflow":         record["agent_workflow"],
+                    "skill_feedback":         record["skill_feedback"],
+                    "step_feedback":          record["step_feedback"],
                     "severity":               record["severity"],
                     "general_comment":        record["general_comment"],
-                    "attached_yaml":          record["attached_yaml"],
                 }
                 t["feedback"] = fb
+                # Upsert per-skill verdicts into the turn's skill_assessments
+                # so the ACE Reflector reads them exactly as it does the
+                # inline chips' output (redundant → workflow, wrong → domain).
+                if skill_assessment_rows:
+                    existing = t.setdefault("skill_assessments", [])
+                    for srow in skill_assessment_rows:
+                        prev = next((s for s in existing
+                                     if s.get("skill_id") == srow["skill_id"]), None)
+                        if prev is not None:
+                            prev["assessment"] = srow["assessment"]
+                            prev["ts"] = record["ts"]
+                        else:
+                            existing.append({
+                                "skill_id": srow["skill_id"],
+                                "assessment": srow["assessment"],
+                                "ts": record["ts"],
+                            })
                 break
             snap["_persisted"] = True
 

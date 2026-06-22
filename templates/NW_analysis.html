@@ -1135,16 +1135,29 @@
 
     function renderSkills(skills) {
         const container = document.getElementById('skills-list');
+        container.innerHTML = '';
         if (!skills || skills.length === 0) {
-            container.innerHTML = '<div style="font-size:0.78rem;color:#aaa;">No skills loaded. Use <strong>📦 Load Skills YAML</strong> below.</div>';
+            const empty = document.createElement('div');
+            empty.style.cssText = 'font-size:0.78rem;color:#aaa;';
+            empty.innerHTML = 'No skills loaded. Use <strong>📦 Load Skills YAML</strong> below.';
+            container.appendChild(empty);
             skillsLoaded = false;
         } else {
-            container.innerHTML = skills.map(s => `
-                <div class="skill-card" onclick="sendQuick('Analyse using the ${s.name} skill')">
-                    <div class="skill-name">${s.name}</div>
-                    <div class="skill-desc">${s.description}</div>
-                </div>
-            `).join('');
+            // Build nodes via the DOM API and assign text via textContent /
+            // addEventListener so skill names/descriptions sourced from the
+            // user's YAML can never break the markup or inject script.
+            skills.forEach((s) => {
+                const name = String(s && s.name != null ? s.name : '');
+                const card = document.createElement('div');
+                card.className = 'skill-card';
+                if (s && s.description) card.title = String(s.description);
+                card.addEventListener('click', () => sendQuick('Analyse using the ' + name + ' skill'));
+                const nameEl = document.createElement('div');
+                nameEl.className = 'skill-name';
+                nameEl.textContent = name;
+                card.appendChild(nameEl);
+                container.appendChild(card);
+            });
             skillsLoaded = true;
         }
         updateAnalyzeBtn();

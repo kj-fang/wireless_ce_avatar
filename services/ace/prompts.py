@@ -149,13 +149,28 @@ Instructions:
  - Cross-check `bullet_tags` against `skill_tags`: a bullet that belongs to a
    skill tagged `redundant` or `wrong` MUST NOT be tagged `helpful`. Downgrade
    it to `neutral` (or `harmful` if it actively misled).
+ - `skill_feedback` rows are AUTHORITATIVE per-skill corrections from the user:
+   each row's `what_wrong` and `evidence_lines` belong to that row's `skill_id`.
+   When emitting `key_insights`, use that `skill_id` as `target_skill` and
+   prefer its `evidence_lines` over the global `evidence_log_lines` pool.
+ - `step_feedback` rows are AUTHORITATIVE per-step corrections from the user,
+   pinned to a specific reasoning step (`step_index` / `step_label`). A row
+   tagged `wrong` means that step went off-track: route its `what_wrong`
+   lesson into the `workflow` playbook (how the agent should sequence /
+   decide), unless the row names a `skill_id` whose own output was the
+   problem — then route it to that skill's domain playbook. A row tagged
+   `helpful` reinforces the step's approach; only emit a bullet for it when
+   the lesson is reusable, never on guesswork.
+ - Rows inside `free_text_issues` that carry `scope="skill"` + `skill_id` are
+   also skill-scoped comments — route their lesson into the same skill's
+   domain playbook, not into `workflow`.
  - NO-SIGNAL GATE: if `vote` is +1 AND every USER_GROUND_TRUTH field below is
    empty (`correct_root_cause`, `correct_conclusion_tag`, `correct_skill`,
    `correct_approach`, `evidence_log_lines`, `helpful_skills`, `step_votes`,
-   `free_text_issues`, `skill_assessments`), you MUST return `key_insights: []`
-   and default every `bullet_tags` entry to `neutral` unless the bullet
-   demonstrably caused the answer. The user told you "good" without saying
-   what was good — do NOT bloat the playbook on guesswork.
+   `free_text_issues`, `skill_assessments`, `skill_feedback`, `step_feedback`), you MUST return
+   `key_insights: []` and default every `bullet_tags` entry to `neutral`
+   unless the bullet demonstrably caused the answer. The user told you "good"
+   without saying what was good — do NOT bloat the playbook on guesswork.
  - Propose `key_insights`: each insight is the seed for a single playbook bullet.
    Specify the target playbook (`workflow` or `domain`), the target section, and
    the actionable content. Sections must be one of:
@@ -189,6 +204,8 @@ USER_GROUND_TRUTH (only filled if the user submitted the More-feedback modal):
   step_votes:             {step_votes}
   free_text_issues:       {free_text_issues}
   skill_assessments:      {skill_assessments}
+  skill_feedback:         {skill_feedback}
+  step_feedback:          {step_feedback}
 
 PLAYBOOK_BULLETS_APPLIED (the bullets the agent claimed to have used):
 {applied_bullets}
@@ -324,6 +341,8 @@ def fill_reflector_prompt(**fields):
     fields.setdefault("domain_sections", _join(DOMAIN_SECTIONS))
     fields.setdefault("skill_definitions", "(no skill metadata available)")
     fields.setdefault("skill_assessments", "[]")
+    fields.setdefault("skill_feedback", "[]")
+    fields.setdefault("step_feedback", "[]")
     return REFLECTOR_PROMPT.format(**fields)
 
 

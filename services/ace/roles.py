@@ -162,6 +162,8 @@ class Reflector:
             step_votes=_safe_json_dump(turn.get("step_votes") or []),
             free_text_issues=_safe_json_dump(details.get("issues") or []),
             skill_assessments=_safe_json_dump(turn.get("skill_assessments") or []),
+            skill_feedback=_safe_json_dump(details.get("skill_feedback") or []),
+            step_feedback=_safe_json_dump(details.get("step_feedback") or []),
             applied_bullets="\n".join(b.render() for b in applied_bullets) or "(none)",
             skill_definitions=_render_skill_definitions(skill_contexts),
         )

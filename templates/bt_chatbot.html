@@ -1319,7 +1319,7 @@
             font-size: 0.7rem;
             color: #6a737d;
             line-height: 1.4;
-            margin: -2px 0 8px;
+            margin: 6px 0 8px;
         }
         .fbd-field-hint code {
             background: #eef1ff;
@@ -3363,16 +3363,29 @@
 
     function renderSkills(skills) {
         const container = document.getElementById('skills-list');
+        container.innerHTML = '';
         if (!skills || skills.length === 0) {
-            container.innerHTML = '<div style="font-size:0.78rem;color:#aaa;">No skills loaded. Use <strong>📦 Load Skills YAML</strong> below.</div>';
+            const empty = document.createElement('div');
+            empty.style.cssText = 'font-size:0.78rem;color:#aaa;';
+            empty.innerHTML = 'No skills loaded. Use <strong>📦 Load Skills YAML</strong> below.';
+            container.appendChild(empty);
             skillsLoaded = false;
         } else {
-            container.innerHTML = skills.map(s => `
-                <div class="skill-card" onclick="sendQuick('Analyse using the ${s.name} skill')">
-                    <div class="skill-name">${s.name}</div>
-                    <div class="skill-desc">${s.description}</div>
-                </div>
-            `).join('');
+            // Build nodes via the DOM API and assign text via textContent /
+            // addEventListener so skill names/descriptions sourced from the
+            // user's YAML can never break the markup or inject script.
+            skills.forEach((s) => {
+                const name = String(s && s.name != null ? s.name : '');
+                const card = document.createElement('div');
+                card.className = 'skill-card';
+                if (s && s.description) card.title = String(s.description);
+                card.addEventListener('click', () => sendQuick('Analyse using the ' + name + ' skill'));
+                const nameEl = document.createElement('div');
+                nameEl.className = 'skill-name';
+                nameEl.textContent = name;
+                card.appendChild(nameEl);
+                container.appendChild(card);
+            });
             skillsLoaded = true;
         }
         updateAnalyzeBtn();
@@ -4737,20 +4750,6 @@
             <button type="button" class="fbd-close" onclick="closeFeedbackModal()" aria-label="Close">×</button>
         </div>
         <div class="fbd-body">
-            <!-- ─── Severity (1-5, single-click quantifiable signal) ─── -->
-            <div class="fbd-section-label" id="fbd-sev-label">Severity (optional)</div>
-            <div class="fbd-severity-row">
-                <div class="fbd-severity-scale" id="fbd-severity-scale">
-                    <button type="button" class="sev-btn" data-value="1">1</button>
-                    <button type="button" class="sev-btn" data-value="2">2</button>
-                    <button type="button" class="sev-btn" data-value="3">3</button>
-                    <button type="button" class="sev-btn" data-value="4">4</button>
-                    <button type="button" class="sev-btn" data-value="5">5</button>
-                </div>
-                <span class="fbd-severity-readout" id="fbd-severity-readout">Not rated</span>
-            </div>
-            <div class="fbd-field-hint" id="fbd-sev-hint">1 = minor wording miss · 3 = wrong sub-claim · 5 = critical wrong root cause</div>
-
             <!-- ─── Group 1: Correct answer ─── -->
             <div class="fbd-group">
                 <div class="fbd-group-title" id="fbd-grp-correct-title">Correct answer</div>
@@ -4817,11 +4816,10 @@
 
             <!-- ─── Group: Issue Time — collapsed by default; tick to expand ─── -->
             <div class="fbd-group">
-                <label class="fbd-attach-row">
+                <label class="fbd-attach-row" title="Tick to say what it should have been.">
                     <input type="checkbox" id="fbd-issue-time-flag" onchange="onIssueTimeFlagToggle()">
                     <span>
                         ⏱ The issue time (or its capture window) was a problem.
-                        <span class="hint" id="fbd-issue-time-flag-hint">Tick to say what it should have been.</span>
                     </span>
                 </label>
                 <div id="fbd-issue-time-detail" class="hidden-row" style="margin-top:8px;">
@@ -4839,24 +4837,24 @@
             <!-- ─── Group 3: Attachments ─── -->
             <div class="fbd-group">
                 <div class="fbd-group-title">Attachments</div>
-                <label class="fbd-attach-row">
+                <label class="fbd-attach-row" id="fbd-attach-log-row"
+                       title="Lets reviewers replay the exact log you analysed. Recommended when reporting a wrong answer.">
                     <input type="checkbox" id="fbd-attach-log">
-                    <span>
-                        Attach the current session log for diagnosis.
-                        <span class="hint" id="fbd-attach-log-hint">
-                            Lets reviewers replay the exact log you analysed. Recommended when reporting a wrong answer.
-                        </span>
-                    </span>
+                    <span>Attach the current session log for diagnosis.</span>
                 </label>
-                <label class="fbd-attach-row">
-                    <input type="checkbox" id="fbd-attach-yaml">
-                    <span>
-                        Attach my local skill configuration for diagnosis.
-                        <span class="hint" id="fbd-attach-yaml-hint">
-                            Helps the Wireless CE team reproduce the issue with the exact configuration you are running.
-                        </span>
-                    </span>
-                </label>
+            </div>
+
+            <!-- ─── Issue severity — bottom of the modal ─── -->
+            <div class="fbd-section-label" id="fbd-sev-label">Issue severity</div>
+            <div class="fbd-severity-row">
+                <div class="fbd-severity-scale" id="fbd-severity-scale">
+                    <button type="button" class="sev-btn" data-value="1">1</button>
+                    <button type="button" class="sev-btn" data-value="2">2</button>
+                    <button type="button" class="sev-btn" data-value="3">3</button>
+                    <button type="button" class="sev-btn" data-value="4">4</button>
+                    <button type="button" class="sev-btn" data-value="5">5</button>
+                </div>
+                <span class="fbd-severity-readout" id="fbd-severity-readout">Not rated</span>
             </div>
         </div>
         <div class="fbd-footer">
@@ -5185,8 +5183,8 @@
         down: {
             title:           'More feedback',
             badge:           '👎',
-            sevLabel:        'Severity (optional)',
-            sevHint:         '1 = minor wording miss · 3 = wrong sub-claim · 5 = critical wrong root cause',
+            sevLabel:        'Issue severity',
+            sevHint:         '',
             grp1Title:       'Correct answer',
             concLabel:       'Conclusion category',
             concFirstOpt:    '— Select if you know —',
@@ -5232,8 +5230,8 @@
         up: {
             title:           'What worked well?',
             badge:           '👍',
-            sevLabel:        'How well did it match? (optional)',
-            sevHint:         '1 = roughly helpful · 3 = mostly right · 5 = spot-on',
+            sevLabel:        'Match quality',
+            sevHint:         '',
             grp1Title:       'What landed',
             concLabel:       'Conclusion category the agent nailed (optional)',
             concFirstOpt:    '— Select if it matched —',
@@ -5340,9 +5338,9 @@
         document.querySelectorAll('#fbd-issues-list .fbd-issue-row')
                 .forEach((row) => applyToneToIssueRow(row));
 
-        // Attach-log hint.
-        const logHint = document.getElementById('fbd-attach-log-hint');
-        if (logHint) logHint.textContent = T.attachLogHint;
+        // Attach-log hover tooltip (lives on the row's `title` attribute now).
+        const logRow = document.getElementById('fbd-attach-log-row');
+        if (logRow) logRow.setAttribute('title', T.attachLogHint);
 
         // Submit button label.
         const submitBtn = document.getElementById('fbd-submit-btn');
@@ -5485,20 +5483,6 @@
         // thumbs-up so the log is never silently uploaded.
         const logCb = document.getElementById('fbd-attach-log');
         if (logCb) logCb.checked = (vote === -1);
-
-        // Attach-YAML default: pre-ticked so the user's skill configuration is
-        // shared by default (the reviewer almost always needs it to reproduce).
-        // The user can still untick it before submitting.
-        const attachCb = document.getElementById('fbd-attach-yaml');
-        const attachHint = document.getElementById('fbd-attach-yaml-hint');
-        if (attachCb) {
-            attachCb.checked = true;
-            if (attachHint) {
-                attachHint.textContent = isYamlModified()
-                    ? 'Your local configuration was modified this session; attaching it lets reviewers reproduce the issue exactly.'
-                    : 'Helps the Wireless CE team reproduce the issue with the exact configuration you are running.';
-            }
-        }
 
         // If the user already submitted feedback for this turn, pre-fill
         // every field with what they sent last time — so they can revise
@@ -5898,7 +5882,7 @@
 
         // Read attachment checkboxes up here so we can include them in
         // the no-change comparison below.
-        const attachLocalYaml = !!document.getElementById('fbd-attach-yaml').checked;
+        const attachLocalYaml = false;  // skill-config attach removed from feedback flow
         const attachLog       = !!document.getElementById('fbd-attach-log').checked;
 
         // No-change guard: when the user re-opens the modal via
@@ -5951,7 +5935,6 @@
                     log_has_date:             (window.__logHasDate !== false),
                     // Per-issue granularity: where + what + optional note.
                     issues:                   issues,
-                    attach_local_yaml:        attachLocalYaml,
                     attach_log:               attachLog,
                 }),
             });

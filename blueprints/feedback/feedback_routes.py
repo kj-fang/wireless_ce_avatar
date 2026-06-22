@@ -58,9 +58,9 @@ def vote():
     try:
         vote_val = int(raw_vote)
     except (TypeError, ValueError):
-        return jsonify({"success": False, "error": "vote must be 1 or -1"}), 400
-    if vote_val not in (1, -1):
-        return jsonify({"success": False, "error": "vote must be 1 or -1"}), 400
+        return jsonify({"success": False, "error": "vote must be 1, -1, or 0"}), 400
+    if vote_val not in (1, -1, 0):
+        return jsonify({"success": False, "error": "vote must be 1, -1, or 0"}), 400
 
     if not conversation_id or not turn_id:
         return jsonify({
@@ -158,22 +158,10 @@ def detail():
 
     session_id = session.get("chatbot_session_id", "")
 
-    # The "More feedback" modal lets the user opt to attach their local
-    # skill YAML alongside the bug report (the "When uploaded skill has
-    # issues" branch of the v2 flow). We resolve the file server-side from
-    # the session marker so the client cannot point us at an arbitrary path.
-    attached_yaml_path = ""
-    if data.get("attach_local_yaml"):
-        attached_yaml_path = session.get("yaml_modified_path", "") or ""
-        if not attached_yaml_path:
-            # Fall back to the most recent local file on disk.
-            try:
-                from utils.skills_yaml_utils import find_latest_local_yaml
-                local_path, _ = find_latest_local_yaml()
-                attached_yaml_path = str(local_path) if local_path else ""
-            except Exception:
-                attached_yaml_path = ""
-
+    # Skill-config attachment was removed from the feedback flow. We keep
+    # the `yaml_modified` session flag only as a priority signal (it bumps
+    # filled-form feedback to weight="high" in the review queue); no skill
+    # YAML is ever copied or uploaded from here.
     yaml_modified = bool(session.get("yaml_modified"))
 
     # Log attachment is opt-in: only ship the session log when the user
@@ -217,13 +205,22 @@ def detail():
         correct_approach=(data.get("correct_approach") or "").strip(),
         evidence_log_lines=raw_evidence,
         agent_workflow=(data.get("agent_workflow") or "").strip(),
+        # Explicit dispatch lane from the wizard's Step-1 router
+        # (skill | agent | both); empty falls back to field inference.
+        feedback_layer=(data.get("feedback_layer") or "").strip(),
+        # Per-skill verdicts (redundant / wrong) with attributed reason +
+        # evidence, from the skill lane. List of dicts; service validates.
+        skill_feedback=data.get("skill_feedback") or [],
+        # Per-step verdicts (helpful / wrong) with attributed reason +
+        # evidence, from the Agent-workflow lane. Same shape as
+        # skill_feedback but keyed by reasoning step. Service validates.
+        step_feedback=data.get("step_feedback") or [],
         issue_time_problem=(data.get("issue_time_problem") or "").strip(),
         correct_issue_time=(data.get("correct_issue_time") or "").strip(),
         used_issue_time=(data.get("used_issue_time") or "").strip(),
         log_has_date=bool(data.get("log_has_date", True)),
         severity=data.get("severity"),
         yaml_modified=yaml_modified,
-        attached_yaml_path=attached_yaml_path,
         log_path=log_path,
         attach_log=attach_log,
         domain=(data.get("domain") or "").strip(),

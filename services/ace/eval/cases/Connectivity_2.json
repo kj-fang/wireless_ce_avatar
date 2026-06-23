@@ -1,0 +1,29 @@
+{
+  "case_id": "00998628",
+  "skill": "Connectivity",
+  "log_path": "services\\ace\\eval\\cases\\Connectivity_2.log",
+  "user_question": "Analyze using the Connection Flow skill at around 01/29/2026-10:44:50.366",
+  "issue_context": {
+    "case_nbr": "00998628",
+    "issue_type": "Connectivity",
+    "subject": "iperf Download interrupted",
+    "description": "After disconnecting at 01/29/2026-10:41:43, the subsequent scan of 5G AAA_PC_test5_5G did not reconnect.",
+    "attachment_time": "01/29/2026 10:44:50.366"
+  },
+  "expected": {
+    "root_cause": "The Wi-Fi client abruptly lost its connection to AP \"AAA_PC_test5_5\" (BSSID: C8:9B:AD:1C:A2:09, Channel 36, 5.2 GHz) at 10:41:41.695 after accumulating 19 consecutive missed beacons — exactly crossing the extended threshold. With no alternative roaming candidate available, the driver self-issued a DEAUTH and entered a prolonged disconnected state, continuously scanning without successfully reconnecting through at least 10:49:16 (~7.5 minutes later). No firmware asserts (UMAC/LMAC/TCM) were detected.",
+    "key_evidence": [
+      "T-61s (10:40:41): RSSI level changed from -63 -> -65 dBm; still above -72 dBm threshold -- connection stable",
+      "T-30s (10:41:11): Background scan completes; roaming decision finds no better candidate (active entry only)",
+      "T-0s (10:41:40.671): First missed beacon event -- consecutive count = 9, crosses initial threshold",
+      "T+0.1s -> T+1.0s (10:41:40.773-10:41:41.593): Missed beacons escalate rapidly: 10 -> 11 -> 12 -> 13 -> 14 -> 15 -> 16 -> 17 -> 18 (all below extended threshold of 19)",
+      "T+1.024s (10:41:41.695): Missed beacon count reaches 19 -- extended threshold crossed; driver decides to disconnect ('no other candidate found')",
+      "T+1.025s (10:41:41.696): DEAUTH_REQ sent to AP; state machine transitions CONNECTED.IDLE -> TERMINATION_DEAUTH -> RELEASING_RESOURCES",
+      "T+1.11s (10:41:41.806): OS notified of disassociation (DeauthFrame_IsPresent = 0)",
+      "T+61s-T+73s (10:41:43-10:41:54): Three RESET_REQUEST events on port 0; mlmeStaDisconnect called repeatedly",
+      "T+~8min (10:49:16): Client still scanning all channels -- no reconnection established"
+    ],
+    "recommended_action": "P0 (Urgent): Investigate AP 'AAA_PC_test5_5' (C8:9B:AD:1C:A2:09, Ch 36) for a DFS event, firmware crash, or channel-switch that caused beacon transmission to stop abruptly around 10:41:40 -- the RSSI was healthy (-65 dBm) immediately before, pointing to an AP-side failure rather than client-side signal degradation. P0 (Urgent): Determine why the client failed to reconnect for at least 7.5 minutes post-disconnection -- check if the AP recovered and whether the SSID was visible in scan results during that window. P1 (Important): Improve roaming coverage -- at the time of the event, no alternative AP candidate existed. Deploying an additional AP or adjusting BSS transition/neighbor report settings would allow seamless failover. P2 (Nice-to-have): Review the missed beacon extended threshold (currently 19) -- the rapid escalation from 9->19 in under 1 second suggests a hard AP-side stop; consider whether a lower threshold or faster roaming trigger would reduce disconnection latency in similar scenarios."
+  },
+  "notes": "Connectivity_2"
+}

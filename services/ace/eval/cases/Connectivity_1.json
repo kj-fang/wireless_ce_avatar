@@ -1,0 +1,31 @@
+{
+  "case_id": "01005033",
+  "skill": "Connectivity",
+  "log_path": "services\\ace\\eval\\cases\\Connectivity_1.log",
+  "user_question": "Analyze using the Connection Flow skill at around 03/12/2026 10:21:31.659",
+  "issue_context": {
+    "case_nbr": "01005033",
+    "issue_type": "Connectivity",
+    "subject": "Intel Wi-Fi BE201 dropout issue/ PC APJ / NZ",
+    "description": "The WiFi can connect to the network, but the laptop is getting randomly disconnected. It cannot reconnect until the WiFi interface is disabled and re-enabled. When it disconnects it generates Event 8003 - Acmconnection. The NIC is an Intel Wi-Fi 7 BE201. Customer are using Aruba access points with Fast Roaming enabled, have tried several driver versions including the latest Intel driver 24.10.0 and downgrading to 23.170.1.1 Rev a. Customer have tried a number of changes including forcing wireless mode to .11ax, reducing roaming aggressiveness. They all have the Intel BE201 WiFi chip. Customer do not have any other 802.1x networks to test with unfortunately. At the time it has the issue (disconnected and won’t reconnect to corporate WiFi) it can successfully join guest network (captive portal) and to a tethered Hotspot (WPA3-PSK). However it will not authenticate to the corporate network until the interface reset. Customer have run the network troubleshooter and tried a number of HP drivers and Intel drivers directly from site.",
+    "attachment_time": "03/12/2026 10:21:31.659"
+  },
+  "expected": {
+    "root_cause": "After PC resume the client carried a stale 802.1x FT PMK (PMKSA) cache from the pre-suspend session. Every FT re-association to SSID 'WDC Corp' was rejected by APs with PMKID-invalid statuses (0x1C / 0x35), and each association was followed within ~5s by an AP-initiated DEAUTH carrying REASON_CODE_DEAUTH_CAUSE_STA_LEAVING. The driver cycled through every available BSSID until the exclude list saturated; recovery only happened when the OS issued a fresh TASK_CONNECT (TransId-128) at 10:22:09 that cleared the exclusions and forced a full re-authentication.",
+    "key_evidence": [
+      "PC Resume at 10:18:41: NIC_EVENT_RESUME (STDBY -> ACTIVE) immediately preceding the failure loop",
+      "First TASK_CONNECT at 10:18:43 to F0:61:C0:0D:D9:B2 (Ch:36, RSSI:-56) -> AUTH/ASSOC SUCCESS in 28ms",
+      "Repeated AP-initiated DEAUTH frames with Reason = REASON_CODE_DEAUTH_CAUSE_STA_LEAVING ~5s after each successful association",
+      "FT AUTH RESPONSE Status Code 0x1C (PMKID Invalid) on F0:61:C0:0D:84:12 and F0:61:C0:0D:84:72",
+      "FT AUTH RESPONSE Status Code 0x35 (PMKID Invalid) on F0:61:C0:0C:F3:52",
+      "AUTH_RESPONSE_FAIL(7) returned to the driver during the FT attempts",
+      "10+ EAPOL RX/TX rounds per association before DEAUTH -- 802.1x handshake never completing",
+      "Cascading roam across Ch:36 -> Ch:120 -> Ch:165 with each association ending in DEAUTH",
+      "Four BSSIDs hit the exclude threshold (Max=4 failures): F0:61:C0:0D:D5:52, F0:61:C0:08:FB:32, F0:61:C0:0D:84:12, F0:61:C0:0D:84:72",
+      "Recovery via fresh OS TASK_CONNECT (TransId-128) at 10:22:09 -> exclude list cleared -> RE-ASSOC to Ch:120 SUCCESS (560ms) -> ENCRYPTION READY at 10:22:10",
+      "No firmware assert detected during the ~3 min 28 s outage window"
+    ],
+    "recommended_action": "Fix PMK/PMKSA cache invalidation on resume: the driver must flush or re-validate the FT PMK context on NIC_EVENT_RESUME before any roaming attempt. Force the first post-resume association to use full 802.1x authentication (not FT re-association) to establish a fresh PMK before allowing FT for subsequent roams. Investigate the EAPOL stall (10+ rounds before DEAUTH) by correlating with the RADIUS/AAA server logs. Tune exclude-list thresholds or add a post-resume grace period so a PMK-staleness storm cannot blacklist every BSSID simultaneously. Add explicit telemetry for FT Status Code 0x1C/0x35 on resume to detect PMK staleness automatically."
+  },
+  "notes": "Connectivity_1"
+}

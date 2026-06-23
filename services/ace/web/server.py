@@ -608,6 +608,7 @@ def create_app() -> tuple[Flask, SocketIO, JobManager]:
     templates_dir = Path(__file__).parent / "templates"
     app = Flask(__name__, template_folder=str(templates_dir))
     socketio = SocketIO(app, async_mode="threading")
+    jobs = JobManager(socketio)
 
     @app.route("/")
     def index():

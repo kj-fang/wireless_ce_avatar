@@ -386,7 +386,7 @@ def index():
 # ------------------------------------------------------------------
 @bt_chatbot_bp.route("/browse", methods=["GET"])
 def browse():
-    """Open a native Windows file dialog and return the selected .log path."""
+    """Open a native Windows file dialog and return the selected .hci.txt path."""
     result = {"path": ""}
 
     def _open_dialog():
@@ -395,7 +395,7 @@ def browse():
         root.wm_attributes("-topmost", True)
         path = filedialog.askopenfilename(
             title="Select log file",
-            filetypes=[("Log files", "*.log"), ("All files", "*.*")],
+            filetypes=[("hci.txt files", "*.hci.txt"), ("All files", "*.*")],
         )
         root.destroy()
         result["path"] = path or ""

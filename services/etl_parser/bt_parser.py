@@ -10,6 +10,23 @@ import subprocess, glob
 active_bt_pid = None
 
 
+def _get_true_file_size(path: str) -> int:
+    """Return the real current file size by seeking to the end via a file handle.
+
+    Windows NTFS uses lazy metadata updates: the directory-level size cached in
+    the MFT is only flushed periodically, so os.path.getsize() (which reads the
+    directory cache) can return 0 while the file is actively being written.
+    Opening the file and seeking to the end bypasses the directory cache and
+    queries the in-memory inode directly, giving the true current size.
+    """
+    try:
+        with open(path, 'rb') as f:
+            f.seek(0, 2)
+            return f.tell()
+    except OSError:
+        return -1
+
+
 def reset_active_bt_pid():
     """Reset the cached BT tool PID (e.g. after force-killing the process)."""
     global active_bt_pid
@@ -82,9 +99,9 @@ def is_file_ready(path: str) -> bool:
         True if the file size is stable and it is readable; False otherwise.
     """
     try:
-        prev_size = os.path.getsize(path)
+        prev_size = _get_true_file_size(path)
         time.sleep(1)  # brief delay to detect ongoing writes
-        new_size = os.path.getsize(path)
+        new_size = _get_true_file_size(path)
         if prev_size != new_size:
             return False
 
@@ -208,7 +225,7 @@ def close_error_dialog() -> None:
         print("⚠️ Failed to close error dialog:", e)
 
 
-def bt_decode_hci_via_folder(log_folder_path: str, log_path: str, timeout: int = 15) -> str | None:
+def bt_decode_hci_via_folder(log_folder_path: str, log_path: str, timeout: int = 180) -> str | None:
     """
     Decode an ETL folder via the 'BT Driver Log Parser' tab (same as AutoFolder mode)
     but WITHOUT opening TextAnalysisTool.NET.
@@ -228,8 +245,7 @@ def bt_decode_hci_via_folder(log_folder_path: str, log_path: str, timeout: int =
     """
     # Check) If hci.txt already exists and is ready, return it immediately
     print(f"📂 bt_decode_hci_via_folder: {log_path}")
-    hci_txt = log_path + ".hci.txt"
-    etl_txt = log_path + ".txt"
+
     # if os.path.exists(hci_txt) and is_file_ready(hci_txt):
     #     print(f"✅ HCI log already exists and is ready: {hci_txt}")
     #     return hci_txt
@@ -296,6 +312,14 @@ def bt_decode_hci_via_folder(log_folder_path: str, log_path: str, timeout: int =
     except Exception as e:
         print(f"❌ Failed to trigger Decode Folder: {e}")
 
+    # 7) Wait for the decoded output (either naming convention) and open it
+    hci_txt = candidate_hci_paths(log_path)[0]
+    print(f"⏳ Waiting for HCI log until found (timeout={timeout}s): {hci_txt}")
+
+    etl_txt = log_path + ".txt"
+    txt_cfa = log_path + ".txt.cfa"
+    txt_pcap = log_path + ".txt.pcap"
+
     time.sleep(0.5)
     # Although this may only occur in ManualSelect via IbtSnoopgen.
     close_warning_dialog()  # Dismiss benign "Systeminfo.txt not present" warning if it appears
@@ -311,8 +335,6 @@ def bt_decode_hci_via_folder(log_folder_path: str, log_path: str, timeout: int =
     idle_start = None       # timer: waiting for the file size to stop changing
     last_etl_txt_size = -1  # tracker for intermediate .txt file size
     etl_txt_idle_start = None  # timer: waiting for .txt to stop changing
-
-    print(f"⏳ Waiting for HCI log (timeout={timeout}s): {hci_txt}")
 
     while True:
         if not psutil.pid_exists(active_bt_pid):
@@ -331,14 +353,13 @@ def bt_decode_hci_via_folder(log_folder_path: str, log_path: str, timeout: int =
                 return None
             print(f"\n❌ BT tool closed unexpectedly during HCI wait (file not found).")
             return None
+        
+        # Proactively close any modal error dialog that might appear
         close_error_dialog()
 
         if os.path.exists(hci_txt):
             file_wait_start = None  # file has appeared; reset the appearance timer
-            try:
-                current_size = os.path.getsize(hci_txt)
-            except OSError:
-                current_size = last_size
+            current_size = _get_true_file_size(hci_txt)
 
             if current_size != last_size:
                 # File is still being written; reset the idle timer
@@ -349,6 +370,19 @@ def bt_decode_hci_via_folder(log_folder_path: str, log_path: str, timeout: int =
                 # File size is unchanged; start or continue the idle timer
                 if idle_start is None:
                     idle_start = time.monotonic()
+
+                if os.path.exists(txt_cfa) and os.path.exists(txt_pcap):
+                    print(f"\n✅ Detected .txt.cfa and .txt.pcap alongside .hci.txt; assuming decode complete.")
+                    time.sleep(3)  # brief pause to ensure files are fully flushed and closed by the tool
+                    try:
+                        psutil.Process(active_bt_pid).terminate()
+                        active_bt_pid = None
+                        print(f"✅ BT tool closed after successful decode.")
+                    except Exception as e:
+                        print(f"⚠️ Failed to close BT tool: {e}")
+                    return hci_txt
+                
+                # Keep to avoid .txt.cfa and .txt.pcap being written after .hci.txt is stable.
                 if time.monotonic() - idle_start >= timeout:
                     if is_file_ready(hci_txt):
                         print()
@@ -368,10 +402,7 @@ def bt_decode_hci_via_folder(log_folder_path: str, log_path: str, timeout: int =
             if os.path.exists(etl_txt):
                 # Intermediate .txt present — track its size; start timeout only when it stops changing
                 file_wait_start = None
-                try:
-                    etl_txt_size = os.path.getsize(etl_txt)
-                except OSError:
-                    etl_txt_size = last_etl_txt_size
+                etl_txt_size = _get_true_file_size(etl_txt)
                 if etl_txt_size != last_etl_txt_size:
                     last_etl_txt_size = etl_txt_size
                     etl_txt_idle_start = time.monotonic()
@@ -389,7 +420,7 @@ def bt_decode_hci_via_folder(log_folder_path: str, log_path: str, timeout: int =
                 if file_wait_start is None:
                     file_wait_start = time.monotonic()
                 if time.monotonic() - file_wait_start >= timeout:
-                    print(f"\n⚠️ File never appeared after {timeout}s: {hci_txt}")
+                    print(f"\n⚠️ File never appeared after {timeout}s: {etl_txt}")
                     return None
 
         time.sleep(1)
@@ -769,7 +800,7 @@ def bt_analysis_autoFolder_mode(
     log_folder_path: str,
     log_path: str,
     debug: bool = False,
-    wait_hci_timeout: int = 30,
+    timeout: int = 180,
     should_stop: callable = None,
     filter_path: str = None
 ) -> int:
@@ -788,8 +819,8 @@ def bt_analysis_autoFolder_mode(
         log_path: Full path (without .hci.txt suffix) of the specific output of interest.
                   The function waits for '<log_path>.hci.txt'.
         debug: If True, prints control identifiers for debugging.
-        wait_hci_timeout: Seconds to wait both for the file to appear and for the file size
-                          to remain unchanged (write complete) before opening the viewer.
+        timeout: Seconds to wait both for the file to appear and for the file size
+                 to remain unchanged (write complete) before opening the viewer.
         should_stop: Optional callable that returns True if this operation should be aborted.
         filter_path: Optional path to a filter file for the text analysis tool.
 
@@ -876,7 +907,15 @@ def bt_analysis_autoFolder_mode(
 
     # 7) Wait for the decoded output (either naming convention) and open it
     hci_txt = candidate_hci_paths(log_path)[0]
-    print(f"⏳ Waiting for HCI log until found: {hci_txt}")
+    print(f"⏳ Waiting for HCI log until found (timeout={timeout}s): {hci_txt}")
+
+    etl_txt = log_path + ".txt"
+    txt_cfa = log_path + ".txt.cfa"
+    txt_pcap = log_path + ".txt.pcap"
+
+    time.sleep(0.5)
+    # Although this may only occur in ManualSelect via IbtSnoopgen.
+    close_warning_dialog()  # Dismiss benign "Systeminfo.txt not present" warning if it appears
 
     # Poll until the output file stabilizes and has been opened.
     # Two separate timers distinguish the two wait phases:
@@ -885,6 +924,8 @@ def bt_analysis_autoFolder_mode(
     last_size = -1
     file_wait_start = None  # timer: waiting for the file to appear
     idle_start = None       # timer: waiting for the file size to stop changing
+    last_etl_txt_size = -1  # tracker for intermediate .txt file size
+    etl_txt_idle_start = None  # timer: waiting for .txt to stop changing
 
     while True:
         # Check if this operation was superseded by another
@@ -914,20 +955,35 @@ def bt_analysis_autoFolder_mode(
 
         if os.path.exists(hci_txt):
             file_wait_start = None  # file has appeared; reset the appearance timer
-            try:
-                current_size = os.path.getsize(hci_txt)
-            except OSError:
-                current_size = last_size
+            current_size = _get_true_file_size(hci_txt)
 
             if current_size != last_size:
                 # File is still being written; reset the idle timer
                 last_size = current_size
                 idle_start = time.monotonic()
+                print(f"\r📝 Decoding... size={current_size} bytes", end='', flush=True)
             else:
                 # File size is unchanged; start or continue the idle timer
                 if idle_start is None:
                     idle_start = time.monotonic()
-                if time.monotonic() - idle_start >= wait_hci_timeout:
+
+                if os.path.exists(txt_cfa) and os.path.exists(txt_pcap):
+                    print(f"\n✅ Detected .txt.cfa and .txt.pcap alongside .hci.txt; assuming decode complete.")
+                    time.sleep(3)  # brief pause to ensure files are fully flushed and closed by the tool
+                    if open_with_text_analysis_tool(hci_txt, filter_path=filter_path):
+                        print("✅ Opened HCI log with TextAnalysisTool.NET.")
+                    else:
+                        print("⚠️ Failed to open HCI log with TextAnalysisTool.NET.")
+                    try:
+                        psutil.Process(active_bt_pid).terminate()
+                        active_bt_pid = None
+                        print(f"✅ BT tool closed after successful decode.")
+                    except Exception as e:
+                        print(f"⚠️ Failed to close BT tool: {e}")
+                    return None  # Return None so _finish_analysis emits autofolder_complete
+                
+                # Keep to avoid .txt.cfa and .txt.pcap being written after .hci.txt is stable.
+                if time.monotonic() - idle_start >= timeout:
                     if is_file_ready(hci_txt):
                         print(f"📂 HCI log is ready: {hci_txt}")
                         if open_with_text_analysis_tool(hci_txt, filter_path=filter_path):
@@ -943,15 +999,33 @@ def bt_analysis_autoFolder_mode(
                             print(f"⚠️ Failed to close BT tool: {e}")
                         return None  # Return None so _finish_analysis emits autofolder_complete immediately
                     else:
-                        print(f"⚠️ File idle for {wait_hci_timeout}s but not ready: {hci_txt}")
+                        print(f"⚠️ File idle for {timeout}s but not ready: {hci_txt}")
                         return active_bt_pid
         else:
             # File not yet created; start the appearance timer
             idle_start = None  # reset idle timer since file does not exist
-            if file_wait_start is None:
-                file_wait_start = time.monotonic()
-            if time.monotonic() - file_wait_start >= wait_hci_timeout:
-                print(f"⚠️ File never appeared after {wait_hci_timeout}s: {hci_txt}")
-                return active_bt_pid
+            if os.path.exists(etl_txt):
+                # Intermediate .txt present — track its size; start timeout only when it stops changing
+                file_wait_start = None
+                etl_txt_size = _get_true_file_size(etl_txt)
+                if etl_txt_size != last_etl_txt_size:
+                    last_etl_txt_size = etl_txt_size
+                    etl_txt_idle_start = time.monotonic()
+                    print(f"\r⏳ File .etl.txt writing... size={etl_txt_size} bytes", end='', flush=True)
+                else:
+                    if etl_txt_idle_start is None:
+                        etl_txt_idle_start = time.monotonic()
+                    if time.monotonic() - etl_txt_idle_start >= timeout:
+                        print(f"\n⚠️ File .etl.txt idle for {timeout}s, .hci.txt never appeared: {hci_txt}")
+                        return active_bt_pid
+                    print(f"\r⏳ File .etl.txt idle, waiting for .hci.txt...", end='', flush=True)
+            else:
+                last_etl_txt_size = -1
+                etl_txt_idle_start = None
+                if file_wait_start is None:
+                    file_wait_start = time.monotonic()
+                if time.monotonic() - file_wait_start >= timeout:
+                    print(f"⚠️ File never appeared after {timeout}s: {hci_txt}")
+                    return active_bt_pid
 
         time.sleep(1)

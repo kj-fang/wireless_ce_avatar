@@ -1,3 +1,5 @@
+from asyncio import timeout
+
 from pywinauto.application import Application
 from pywinauto import Desktop
 import os
@@ -249,7 +251,7 @@ def close_error_dialog() -> None:
         print("⚠️ Failed to close error dialog:", e)
 
 
-def bt_decode_hci_via_folder(log_folder_path: str, log_path: str, timeout: int = 180) -> str | None:
+def bt_decode_hci_via_folder(log_folder_path: str, log_path: str, etl_txt_timeout: int = 180, hci_txt_timeout: int = 15) -> str | None:
     """
     Decode an ETL folder via the 'BT Driver Log Parser' tab (same as AutoFolder mode)
     but WITHOUT opening TextAnalysisTool.NET.
@@ -262,7 +264,8 @@ def bt_decode_hci_via_folder(log_folder_path: str, log_path: str, timeout: int =
         log_folder_path: Directory that contains the ETL file(s) to decode.
         log_path:        Full path of the target ETL file (without .hci.txt suffix).
                          The function waits for '<log_path>.hci.txt'.
-        timeout:         Max seconds to wait for the output file.
+        etl_txt_timeout: Max seconds to wait for the .etl.txt file.
+        hci_txt_timeout: Max seconds to wait for the .hci.txt file.
 
     Returns:
         str path to the generated .hci.txt, or None on failure / timeout.
@@ -345,7 +348,7 @@ def bt_decode_hci_via_folder(log_folder_path: str, log_path: str, timeout: int =
 
     # 7) Wait for the decoded output (either naming convention) and open it
     hci_txt = candidate_hci_paths(log_path)[0]
-    print(f"⏳ Waiting for HCI log until found (timeout={timeout}s): {hci_txt}")
+    print(f"⏳ Waiting for HCI log until found: {hci_txt}")
 
     etl_txt = log_path + ".txt"
     txt_cfa = log_path + ".txt.cfa"
@@ -402,21 +405,16 @@ def bt_decode_hci_via_folder(log_folder_path: str, log_path: str, timeout: int =
                 if idle_start is None:
                     idle_start = time.monotonic()
 
-                if os.path.exists(txt_cfa) and os.path.exists(txt_pcap):
+                if is_file_ready(hci_txt) and os.path.exists(txt_cfa) and os.path.exists(txt_pcap):
                     print(f"\n✅ Detected .txt.cfa and .txt.pcap alongside .hci.txt; assuming decode complete.")
                     time.sleep(3)  # brief pause to ensure files are fully flushed and closed by the tool
                     _terminate_bt_tool("✅ BT tool closed after successful decode.")
                     return hci_txt
                 
                 # Keep to avoid .txt.cfa and .txt.pcap being written after .hci.txt is stable.
-                if time.monotonic() - idle_start >= timeout:
-                    if is_file_ready(hci_txt):
-                        print()
-                        # Decode complete — close the BT tool
-                        _terminate_bt_tool("✅ BT tool closed after successful decode.")
-                        return hci_txt
-                    print(f"\n⚠️ File idle for {timeout}s but not ready: {hci_txt}")
-                    _terminate_bt_tool("⚠️ BT tool terminated due to timeout.")
+                if time.monotonic() - idle_start >= hci_txt_timeout:
+                    print(f"\n⚠️ File .hci.txt idle for {hci_txt_timeout}s but not ready: {hci_txt}")
+                    _terminate_bt_tool("⚠️ BT tool terminated due to .hci.txt timeout.")
                     return None
         else:
             # File not yet created; start the appearance timer
@@ -432,9 +430,9 @@ def bt_decode_hci_via_folder(log_folder_path: str, log_path: str, timeout: int =
                 else:
                     if etl_txt_idle_start is None:
                         etl_txt_idle_start = time.monotonic()
-                    if time.monotonic() - etl_txt_idle_start >= timeout:
-                        print(f"\n⚠️ File .etl.txt idle for {timeout}s, .hci.txt never appeared: {hci_txt}")
-                        _terminate_bt_tool("⚠️ BT tool terminated due to timeout.")
+                    if time.monotonic() - etl_txt_idle_start >= etl_txt_timeout:
+                        print(f"\n⚠️ File .etl.txt idle for {etl_txt_timeout}s, .hci.txt never appeared: {hci_txt}")
+                        _terminate_bt_tool("⚠️ BT tool terminated due to .etl.txt timeout.")
                         return None
                     print(f"\r⏳ File .etl.txt idle, waiting for .hci.txt...", end='', flush=True)
             else:
@@ -442,9 +440,9 @@ def bt_decode_hci_via_folder(log_folder_path: str, log_path: str, timeout: int =
                 etl_txt_idle_start = None
                 if file_wait_start is None:
                     file_wait_start = time.monotonic()
-                if time.monotonic() - file_wait_start >= timeout:
-                    print(f"\n⚠️ File never appeared after {timeout}s: {etl_txt}")
-                    _terminate_bt_tool("⚠️ BT tool terminated due to timeout.")
+                if time.monotonic() - file_wait_start >= etl_txt_timeout:
+                    print(f"\n⚠️ File .etl.txt never appeared after {etl_txt_timeout}s: {etl_txt}")
+                    _terminate_bt_tool("⚠️ BT tool terminated due to .etl.txt timeout.")
                     return None
 
         time.sleep(1)
@@ -824,7 +822,8 @@ def bt_analysis_autoFolder_mode(
     log_folder_path: str,
     log_path: str,
     debug: bool = False,
-    timeout: int = 180,
+    etl_txt_timeout: int = 180,
+    hci_txt_timeout: int = 15,
     should_stop: callable = None,
     filter_path: str = None
 ) -> int:
@@ -843,8 +842,8 @@ def bt_analysis_autoFolder_mode(
         log_path: Full path (without .hci.txt suffix) of the specific output of interest.
                   The function waits for '<log_path>.hci.txt'.
         debug: If True, prints control identifiers for debugging.
-        timeout: Seconds to wait both for the file to appear and for the file size
-                 to remain unchanged (write complete) before opening the viewer.
+        etl_txt_timeout: Max seconds to wait for the .etl.txt file.
+        hci_txt_timeout: Max seconds to wait for the .hci.txt file.
         should_stop: Optional callable that returns True if this operation should be aborted.
         filter_path: Optional path to a filter file for the text analysis tool.
 
@@ -995,7 +994,7 @@ def bt_analysis_autoFolder_mode(
                 if idle_start is None:
                     idle_start = time.monotonic()
 
-                if os.path.exists(txt_cfa) and os.path.exists(txt_pcap):
+                if is_file_ready(hci_txt) and os.path.exists(txt_cfa) and os.path.exists(txt_pcap):
                     print(f"\n✅ Detected .txt.cfa and .txt.pcap alongside .hci.txt; assuming decode complete.")
                     time.sleep(3)  # brief pause to ensure files are fully flushed and closed by the tool
                     if open_with_text_analysis_tool(hci_txt, filter_path=filter_path):
@@ -1006,20 +1005,10 @@ def bt_analysis_autoFolder_mode(
                     return None  # Return None so _finish_analysis emits autofolder_complete
                 
                 # Keep to avoid .txt.cfa and .txt.pcap being written after .hci.txt is stable.
-                if time.monotonic() - idle_start >= timeout:
-                    if is_file_ready(hci_txt):
-                        print(f"📂 HCI log is ready: {hci_txt}")
-                        if open_with_text_analysis_tool(hci_txt, filter_path=filter_path):
-                            print("✅ Opened HCI log with TextAnalysisTool.NET.")
-                        else:
-                            print("⚠️ Failed to open HCI log with TextAnalysisTool.NET.")
-                        # Decode complete — close the BT tool
-                        _terminate_bt_tool("✅ BT tool closed after successful decode.")
-                        return None  # Return None so _finish_analysis emits autofolder_complete immediately
-                    else:
-                        print(f"⚠️ File idle for {timeout}s but not ready: {hci_txt}")
-                        _terminate_bt_tool("⚠️ BT tool terminated due to timeout.")
-                        return None
+                if time.monotonic() - idle_start >= hci_txt_timeout:
+                    print(f"⚠️ File .hci.txt idle for {hci_txt_timeout}s but not ready: {hci_txt}")
+                    _terminate_bt_tool("⚠️ BT tool terminated due to .hci.txt timeout.")
+                    return None
         else:
             # File not yet created; start the appearance timer
             idle_start = None  # reset idle timer since file does not exist
@@ -1034,9 +1023,9 @@ def bt_analysis_autoFolder_mode(
                 else:
                     if etl_txt_idle_start is None:
                         etl_txt_idle_start = time.monotonic()
-                    if time.monotonic() - etl_txt_idle_start >= timeout:
-                        print(f"\n⚠️ File .etl.txt idle for {timeout}s, .hci.txt never appeared: {hci_txt}")
-                        _terminate_bt_tool("⚠️ BT tool terminated due to timeout.")
+                    if time.monotonic() - etl_txt_idle_start >= etl_txt_timeout:
+                        print(f"\n⚠️ File .etl.txt idle for {etl_txt_timeout}s, .hci.txt never appeared: {hci_txt}")
+                        _terminate_bt_tool("⚠️ BT tool terminated due to .etl.txt timeout.")
                         return None
                     print(f"\r⏳ File .etl.txt idle, waiting for .hci.txt...", end='', flush=True)
             else:
@@ -1044,9 +1033,9 @@ def bt_analysis_autoFolder_mode(
                 etl_txt_idle_start = None
                 if file_wait_start is None:
                     file_wait_start = time.monotonic()
-                if time.monotonic() - file_wait_start >= timeout:
-                    print(f"⚠️ File never appeared after {timeout}s: {hci_txt}")
-                    _terminate_bt_tool("⚠️ BT tool terminated due to timeout.")
+                if time.monotonic() - file_wait_start >= etl_txt_timeout:
+                    print(f"⚠️ File .etl.txt never appeared after {etl_txt_timeout}s: {hci_txt}")
+                    _terminate_bt_tool("⚠️ BT tool terminated due to .etl.txt timeout.")
                     return None
 
         time.sleep(1)

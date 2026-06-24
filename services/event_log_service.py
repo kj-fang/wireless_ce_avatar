@@ -272,6 +272,7 @@ def _get_cached_raw_rows(path):
 
 def get_paged_events(path, offset=0, limit=0, source_filter='all', level_filter='all'):
     """Return a page of filtered, timezone-converted events for the UI virtual scroll."""
+    print(f"[System Event Log] evt file: {path}")
     raw_events, system_timezone = _get_cached_raw_rows(path)
 
     filtered = [

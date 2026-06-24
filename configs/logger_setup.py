@@ -3,7 +3,7 @@ logger_setup.py
 ---------------
 Redirect sys.stdout through a tee-stream so every regular print() call is
 *also* written to a rotating log file at:
-    %APPDATA%\\IntelAvatar\\avatar.log
+    %USERPROFILE%\\Downloads\\IntelAvatar_files\\logs\\avatar.log
 
 Design:
 - sys.stdout  → _TeeStream → terminal (unchanged) + log file
@@ -20,6 +20,7 @@ import re
 import sys
 import threading
 import traceback as _tb_mod
+from utils.port_utils import get_logs_dir
 from logging.handlers import RotatingFileHandler
 
 # Module-level logger — name "avatar" keeps it isolated from Flask/werkzeug.
@@ -117,10 +118,7 @@ def setup_file_logging() -> str:
     if isinstance(sys.stdout, _TeeStream):
         return ""
 
-    appdata = os.environ.get("APPDATA") or os.path.expanduser("~")
-    log_dir = os.path.join(appdata, "IntelAvatar")
-    os.makedirs(log_dir, exist_ok=True)
-    log_path = os.path.join(log_dir, "avatar.log")
+    log_path = os.path.join(get_logs_dir(), "avatar.log")
 
     _fmt = _AnsiStrippingFormatter(
         "%(asctime)s [%(levelname)s] %(message)s",

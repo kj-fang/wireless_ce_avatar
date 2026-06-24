@@ -17,7 +17,7 @@ import traceback
 import psutil
 import pystray
 from PIL import Image
-from utils.port_utils import get_user_data_dir
+from utils.port_utils import get_user_data_dir, get_logs_dir
 from utils.instance_utils import is_intelavatar_process
 
 _logger = logging.getLogger('TrayManager')
@@ -109,7 +109,7 @@ class TrayManager:
         # file; if the tray process holds avatar.log open via its own handle,
         # that rename fails and rotation breaks entirely.
         try:
-            tray_log = os.path.join(get_user_data_dir(), 'tray.log')
+            tray_log = os.path.join(get_logs_dir(), 'tray.log')
             tray_handler = logging.FileHandler(tray_log, mode='a', encoding='utf-8')
             tray_handler.setFormatter(fmt)
             logger.addHandler(tray_handler)

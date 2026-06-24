@@ -81,12 +81,23 @@ def _find_evt_path_for_log(log_path: str) -> str:
             and os.path.isfile(fpath)
         ]
         if candidates:
-            # Prefer the evt sharing the deepest folder with the BT log; only
-            # trust the proximity match when there IS a shared path, otherwise
-            # fall back to the first candidate (preserves previous behaviour).
+            # Prefer the evt sharing the deepest folder with the BT log. On
+            # Windows ANY two paths on the same drive share the drive root
+            # (e.g. 'C:\\'), so a positive common length alone is meaningless
+            # and would wrongly trust the heuristic. Only accept the proximity
+            # match when the shared prefix goes DEEPER than the drive root;
+            # otherwise fall back to the first candidate (previous behaviour).
             best = max(candidates, key=_common_len)
-            if log_dir and _common_len(best) > 0:
-                return best
+            if log_dir:
+                try:
+                    best_common = os.path.commonpath(
+                        [log_dir, os.path.dirname(os.path.abspath(best))]
+                    )
+                    drive_root = os.path.splitdrive(log_dir)[0] + os.sep
+                    if os.path.normcase(best_common) != os.path.normcase(drive_root):
+                        return best
+                except ValueError:
+                    pass
             return candidates[0]
 
     # --- Strategy 2: relative path search from BT log ---

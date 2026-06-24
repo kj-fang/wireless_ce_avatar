@@ -575,7 +575,7 @@ def _split_large_etl_files(app_window, log_folder_path: str, main_hwnd) -> None:
         print(f"⚠️ Failed to check file size for splitting: {e}")
 
 
-def bt_decode_hci_via_folder(log_folder_path: str, log_path: str, timeout: int = 15) -> str | None:
+def bt_decode_hci_via_folder(log_folder_path: str, log_path: str, etl_txt_timeout: int = 180, hci_txt_timeout: int = 15) -> str | None:
     """
     Decode an ETL folder via the 'BT Driver Log Parser' tab (same as AutoFolder mode)
     but WITHOUT opening TextAnalysisTool.NET.
@@ -1267,7 +1267,7 @@ def bt_analysis_autoFolder_mode(
 
     # 7) Wait for the decoded output (either naming convention) and open it
     hci_txt = candidate_hci_paths(log_path)[0]
-    print(f"⏳ Waiting for HCI log until found (timeout={timeout}s): {hci_txt}")
+    print(f"⏳ Waiting for HCI log until found (timeout={hci_txt_timeout}s): {hci_txt}")
 
     etl_txt = log_path + ".txt"
     txt_cfa = log_path + ".txt.cfa"

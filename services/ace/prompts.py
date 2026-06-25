@@ -45,6 +45,41 @@ DOMAIN_SECTIONS = [
 
 
 # ---------------------------------------------------------------------------
+# Deterministic routing: feedback `category` → playbook section
+# ---------------------------------------------------------------------------
+#
+# The user's structured feedback tags each issue with a `category` (the enum
+# in services.feedback_service.DETAIL_CATEGORIES). Mapping each category to a
+# fixed (workflow_section, domain_section) pair stops one signal from being
+# scattered across different sections by LLM drift, so the same complaint
+# always updates the same bullet family.
+
+CATEGORY_TO_SECTION = {
+    # category:            (workflow_section,        domain_section)
+    "wrong_skill":        ("skill_selection_rules", "common_mistakes"),
+    "wrong_order":        ("phase_escalation",      "diagnostic_checklist"),
+    "missing_step":       ("phase_escalation",      "diagnostic_checklist"),
+    "incomplete":         ("phase_escalation",      "diagnostic_checklist"),
+    "stuck_repeated":     ("loop_prevention",       "common_mistakes"),
+    "stuck":              ("loop_prevention",       "common_mistakes"),
+    "over_investigated":  ("termination_rules",     "diagnostic_checklist"),
+    "missed_evidence":    ("evidence_thresholds",   "key_log_patterns"),
+    "hallucinated":       ("evidence_thresholds",   "common_mistakes"),
+    "wrong_conclusion":   ("skill_selection_rules", "common_failure_modes"),
+    "bad_output":         ("user_clarification",    "common_mistakes"),
+    "wrong_input":        ("skill_selection_rules", "tool_use_notes"),
+}
+
+
+def _render_category_map() -> str:
+    """Format CATEGORY_TO_SECTION as an aligned reference table for prompts."""
+    return "\n".join(
+        f"     {cat:<18} -> workflow:{wf} | domain:{dom}"
+        for cat, (wf, dom) in CATEGORY_TO_SECTION.items()
+    )
+
+
+# ---------------------------------------------------------------------------
 # 1. GENERATOR prompt  (paper Figure 9 / 12)
 # ---------------------------------------------------------------------------
 #
@@ -146,36 +181,76 @@ Instructions:
    copy it. Otherwise infer from the trajectory: a skill is `redundant` if it
    produced no evidence the final answer relied on; `wrong` if its output
    misled the agent; `helpful` only if its output directly contributed.
- - Cross-check `bullet_tags` against `skill_tags`: a bullet that belongs to a
-   skill tagged `redundant` or `wrong` MUST NOT be tagged `helpful`. Downgrade
-   it to `neutral` (or `harmful` if it actively misled).
+ - Cross-check `bullet_tags` against `skill_tags`, but treat the two negative
+   skill verdicts as DIFFERENT — they are not interchangeable:
+     * `wrong` is a DOMAIN-quality verdict: the skill's OUTPUT misled the
+       agent. A bullet that belongs to a `wrong` skill MUST NOT stay
+       `helpful` if it fed that bad output — downgrade it to `neutral` (or
+       `harmful` if it actively misled).
+     * `redundant` is a WORKFLOW/orchestration verdict: the skill should not
+       have been invoked THIS turn. It says NOTHING about whether that skill's
+       domain bullets are correct, so do NOT downgrade a domain bullet just
+       because its skill was redundant. Instead, capture the lesson as a
+       `workflow` insight (skill_selection_rules / termination_rules) so the
+       agent stops invoking that skill in this situation.
  - `skill_feedback` rows are AUTHORITATIVE per-skill corrections from the user:
    each row's `what_wrong` and `evidence_lines` belong to that row's `skill_id`.
    When emitting `key_insights`, use that `skill_id` as `target_skill` and
    prefer its `evidence_lines` over the global `evidence_log_lines` pool.
- - `step_feedback` rows are AUTHORITATIVE per-step corrections from the user,
-   pinned to a specific reasoning step (`step_index` / `step_label`). A row
-   tagged `wrong` means that step went off-track: route its `what_wrong`
-   lesson into the `workflow` playbook (how the agent should sequence /
-   decide), unless the row names a `skill_id` whose own output was the
-   problem — then route it to that skill's domain playbook. A row tagged
-   `helpful` reinforces the step's approach; only emit a bullet for it when
-   the lesson is reusable, never on guesswork.
- - Rows inside `free_text_issues` that carry `scope="skill"` + `skill_id` are
-   also skill-scoped comments — route their lesson into the same skill's
-   domain playbook, not into `workflow`.
+ - `step_feedback` rows are AUTHORITATIVE per-step corrections from the user.
+   Each row is `{{step_index, step_label, skill_id, assessment, what_wrong,
+   evidence_lines}}`, pinned to one reasoning step via `step_index` /
+   `step_label`, and `assessment` is one of `helpful | redundant | wrong`:
+     * `wrong`  → that step went off-track. Route its `what_wrong` lesson into
+       the `workflow` playbook (how the agent should sequence / decide),
+       UNLESS the row names a `skill_id` whose own output was the problem —
+       then route it to that skill's domain playbook. Prefer the row's own
+       `evidence_lines` over the global `evidence_log_lines` pool, and cite
+       `step_label` in the lesson so it stays reproducible.
+     * `redundant` → that step was unnecessary (over-investigation / a loop).
+       Route a `workflow` lesson into `termination_rules`, `loop_prevention`,
+       or `phase_escalation` so the agent skips it next time.
+     * `helpful` → reinforces the step's approach; only emit a bullet when the
+       lesson is reusable across cases, never on guesswork.
+ - `free_text_issues` rows are the user's structured "what/where went wrong"
+   notes, shaped `{{scope, skill_id, step_index, step_label, category,
+   should_be, comment}}`. Use `category` to pick the section, `should_be` as the
+   corrected target, and `comment` as the rationale. Route by `scope`:
+     * `scope="skill"` (+`skill_id`) → that skill's domain playbook.
+     * `scope="step"` (+`step_index`/`step_label`) → the `workflow` playbook,
+       unless `skill_id` names the skill whose output was the culprit → that
+       skill's domain playbook.
+     * `scope="overall"` → the `workflow` playbook, unless the `comment`
+       describes a Wi-Fi log pattern / root-cause signature, which belongs in
+       the relevant skill's domain playbook.
+   Map `category` → section using the CATEGORY→SECTION table shown under
+   `key_insights` below; never invent a section outside that table.
  - NO-SIGNAL GATE: if `vote` is +1 AND every USER_GROUND_TRUTH field below is
    empty (`correct_root_cause`, `correct_conclusion_tag`, `correct_skill`,
    `correct_approach`, `evidence_log_lines`, `helpful_skills`, `step_votes`,
-   `free_text_issues`, `skill_assessments`, `skill_feedback`, `step_feedback`), you MUST return
-   `key_insights: []` and default every `bullet_tags` entry to `neutral`
-   unless the bullet demonstrably caused the answer. The user told you "good"
-   without saying what was good — do NOT bloat the playbook on guesswork.
+   `free_text_issues`, `skill_assessments`, `skill_feedback`, `step_feedback`),
+   you MUST return `key_insights: []` and default every `bullet_tags` entry to
+   `neutral` unless the bullet demonstrably caused the answer. The user told you
+   "good" without saying what was good — do NOT bloat the playbook on guesswork.
+ - SEVERITY-AWARE BUDGET: `severity` (1-5, the user's impact rating) caps how
+   much you may write. sev<=2 or empty on a thumbs-down → emit AT MOST 1
+   key_insight, only for a concrete reusable lesson. sev=3 → at most 2. sev>=4
+   → at most 3, and ONLY sev>=4 lessons may target a strong section
+   (`hard_rules` in domain, or `termination_rules`/`loop_prevention` in
+   workflow). Never invent a severity the user did not provide.
+ - SCOPE BY ROUTE: `feedback_layer` is the user's explicit routing choice.
+   `workflow` → emit ONLY `workflow` insights; `skill` → emit ONLY `domain`
+   insights; `both` or empty → either is allowed. Honour it over your own guess.
  - Propose `key_insights`: each insight is the seed for a single playbook bullet.
    Specify the target playbook (`workflow` or `domain`), the target section, and
    the actionable content. Sections must be one of:
      workflow: {workflow_sections}
      domain:   {domain_sections}
+   When an insight originates from a `free_text_issues` / `step_feedback` row
+   that carries a `category`, pick its section deterministically from this
+   CATEGORY→SECTION table (workflow column when target_playbook=workflow,
+   domain column when target_playbook=domain):
+{category_section_map}
 
 Inputs follow. Empty fields mean the user did not supply that signal.
 
@@ -193,6 +268,9 @@ USER_VOTE: {vote}   (+1 thumbs-up, -1 thumbs-down, 0 unspecified)
 USER_AGENT_WORKFLOW_TAG: {agent_workflow_tag}
    (one of: appropriate | stopped_too_early | over_investigated
             | loop_or_stuck | wrong_direction | wrong_phase1_skill)
+USER_SEVERITY: {severity}      (1-5 impact rating; empty = not provided)
+FEEDBACK_WEIGHT: {weight}      (high = detailed submission, low = bare vote)
+FEEDBACK_ROUTE: {feedback_layer}   (workflow | skill | both | empty)
 
 USER_GROUND_TRUTH (only filled if the user submitted the More-feedback modal):
   correct_root_cause:     {correct_root_cause}
@@ -279,6 +357,11 @@ Hard rules:
  - Each bullet must target an allowed section:
      workflow: {workflow_sections}
      domain:   {domain_sections}
+ - Keep each lesson in ONE place. When the reflection's insight names a section,
+   trust it; if it is missing or invalid, route by the originating category via
+   this CATEGORY→SECTION table (workflow column for workflow scope, domain
+   column for domain scope). Never split one lesson across multiple sections:
+{category_section_map}
  - Be conservative on REMOVE: only remove a bullet that the reflection explicitly
    tagged `harmful` AND that the harmful_count now exceeds helpful_count.
  - If the reflection reveals nothing new, return an empty `operations` list — it
@@ -339,16 +422,21 @@ def _join(items):
 def fill_reflector_prompt(**fields):
     fields.setdefault("workflow_sections", _join(WORKFLOW_SECTIONS))
     fields.setdefault("domain_sections", _join(DOMAIN_SECTIONS))
+    fields.setdefault("category_section_map", _render_category_map())
     fields.setdefault("skill_definitions", "(no skill metadata available)")
     fields.setdefault("skill_assessments", "[]")
     fields.setdefault("skill_feedback", "[]")
     fields.setdefault("step_feedback", "[]")
+    fields.setdefault("severity", "")
+    fields.setdefault("weight", "low")
+    fields.setdefault("feedback_layer", "")
     return REFLECTOR_PROMPT.format(**fields)
 
 
 def fill_curator_prompt(**fields):
     fields.setdefault("workflow_sections", _join(WORKFLOW_SECTIONS))
     fields.setdefault("domain_sections", _join(DOMAIN_SECTIONS))
+    fields.setdefault("category_section_map", _render_category_map())
     fields.setdefault("skill_definitions", "(no skill metadata available)")
     return CURATOR_PROMPT.format(**fields)
 

@@ -33,12 +33,33 @@ from .prompts import WORKFLOW_SECTIONS, DOMAIN_SECTIONS
 DEDUP_RATIO = 0.85
 
 # Soft cap on bullets per section. When exceeded, the lowest-net-score bullets
-# are evicted by `refine()`.
-SECTION_SOFT_CAP = 30
+# are evicted by `refine()`. Kept tight so the Generator reads a compact,
+# high-signal playbook instead of a sprawling list.
+SECTION_SOFT_CAP = 15
+
+# Aging eviction: a bullet that has NEVER proved helpful, has been marked
+# neutral at least this many times, and has not changed in STALE_DAYS days is
+# dead weight — refine() drops it so the playbook self-prunes.
+NEUTRAL_EVICT_THRESHOLD = 5
+STALE_DAYS = 30
 
 
 def _now() -> str:
     return datetime.now().astimezone().isoformat(timespec="seconds")
+
+
+def _age_days(ts: str) -> float:
+    """Days elapsed since an ISO timestamp; 0.0 when unparseable."""
+    if not ts:
+        return 0.0
+    try:
+        dt = datetime.fromisoformat(ts)
+    except Exception:
+        return 0.0
+    now = datetime.now().astimezone()
+    if dt.tzinfo is None:
+        dt = dt.astimezone()
+    return (now - dt).total_seconds() / 86400.0
 
 
 @dataclass
@@ -190,17 +211,20 @@ class Playbook:
                 return b
         return None
 
-    def increment_counter(self, bullet_id: str, tag: str) -> None:
-        """tag in {'helpful', 'harmful', 'neutral'}"""
+    def increment_counter(self, bullet_id: str, tag: str, weight: int = 1) -> None:
+        """tag in {'helpful', 'harmful', 'neutral'}. `weight` scales the bump
+        so a detailed, high-confidence feedback submission moves the counter
+        more than a bare thumbs vote."""
         b = self.get(bullet_id)
         if b is None:
             return
+        step = max(1, int(weight))
         if tag == "helpful":
-            b.helpful_count += 1
+            b.helpful_count += step
         elif tag == "harmful":
-            b.harmful_count += 1
+            b.harmful_count += step
         elif tag == "neutral":
-            b.neutral_count += 1
+            b.neutral_count += step
         b.updated_at = _now()
 
     def _find_duplicate(self, section: str, content: str) -> Optional[Bullet]:
@@ -215,17 +239,25 @@ class Playbook:
     # ----- grow-and-refine -----
     def refine(self, soft_cap: int = SECTION_SOFT_CAP) -> int:
         """
-        Evict bullets whose net_score is <= -2 OR whose section size exceeds
-        the soft cap (keep the highest-net-score bullets, drop the rest).
-        Returns the number of bullets removed.
+        Evict bullets that are dead weight:
+          - net_score <= -2  (repeatedly harmful), OR
+          - never helpful AND marked neutral >= NEUTRAL_EVICT_THRESHOLD times
+            AND untouched for STALE_DAYS days (stale noise),
+        then cap each section to `soft_cap`, keeping the highest-net-score
+        bullets. Returns the number of bullets removed.
         """
         with self._lock:
             removed = 0
 
-            # Drop net-negative bullets first.
+            # Drop net-negative and stale-neutral bullets first.
             keep: list[Bullet] = []
             for b in self.bullets:
                 if b.net_score <= -2:
+                    removed += 1
+                    continue
+                if (b.helpful_count == 0
+                        and b.neutral_count >= NEUTRAL_EVICT_THRESHOLD
+                        and _age_days(b.updated_at) >= STALE_DAYS):
                     removed += 1
                     continue
                 keep.append(b)

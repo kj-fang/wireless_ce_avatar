@@ -142,6 +142,11 @@ class Reflector:
         details = (feedback or {}).get("details") or {}
         vote = (feedback or {}).get("vote", 0)
         agent_workflow_tag = details.get("agent_workflow") or "appropriate"
+        # Severity (1-5) and submission weight gate how much the Reflector may
+        # write; route is the user's explicit workflow/skill/both choice.
+        severity = details.get("severity")
+        weight = (feedback or {}).get("weight") or "low"
+        feedback_layer = details.get("feedback_layer") or ""
 
         # The agent's final structured report (root_cause, conclusion_tag, ...)
         # is stashed by record_turn() as `agent_response_full`.
@@ -153,6 +158,9 @@ class Reflector:
             agent_final_report=_safe_json_dump(final_report),
             vote=vote,
             agent_workflow_tag=agent_workflow_tag,
+            severity="" if severity is None else severity,
+            weight=weight,
+            feedback_layer=feedback_layer,
             correct_root_cause=details.get("correct_root_cause") or "",
             correct_conclusion_tag=details.get("correct_conclusion_tag") or "",
             correct_skill=details.get("correct_skill") or "",
@@ -218,6 +226,7 @@ class Curator:
         domain_playbooks: dict[str, Playbook],
         skill_contexts: Optional[dict] = None,
         turn_id: str = "",
+        tag_weight: int = 1,
         progress=None,
     ) -> dict:
         """
@@ -247,6 +256,7 @@ class Curator:
             workflow_playbook,
             domain_playbooks,
             skill_tags=reflection.get("skill_tags") or [],
+            weight=tag_weight,
         )
         if counter_updates:
             _emit("counter_updates", updates=counter_updates)
@@ -306,11 +316,14 @@ class Curator:
         return seen
 
     def _apply_bullet_tags(self, tags, workflow_pb, domain_pbs,
-                            skill_tags: Optional[list] = None) -> list[dict]:
+                            skill_tags: Optional[list] = None,
+                            weight: int = 1) -> list[dict]:
         # Build {skill_id: tag} index from the reflection's skill_tags so we can
-        # downgrade any `helpful` bullet that belongs to a skill the user (or
-        # the reflector) flagged as `redundant` or `wrong`. Defense in depth —
-        # the prompt also instructs the LLM to do this.
+        # downgrade a `helpful` bullet whose skill the user (or reflector)
+        # flagged as `wrong` — i.e. the skill's OUTPUT was bad. A `redundant`
+        # verdict is a WORKFLOW judgment (the skill shouldn't have run this
+        # turn) and says nothing about the correctness of that skill's domain
+        # bullets, so it must NOT downgrade them.
         skill_tag_map: dict[str, str] = {}
         for st in skill_tags or []:
             sid = (st.get("skill_id") or "").strip()
@@ -336,14 +349,16 @@ class Curator:
                         break
             if target is None:
                 continue
-            # Downgrade rule: a bullet owned by a redundant/wrong skill cannot
-            # be `helpful`. Workflow bullets are skill-agnostic so they pass.
+            # Downgrade rule: a domain bullet owned by a skill whose OUTPUT was
+            # `wrong` cannot stay `helpful`. `redundant` skills are spared —
+            # their domain knowledge may still be correct. Workflow bullets are
+            # skill-agnostic so they always pass.
             if tag == "helpful" and owning_skill:
                 sk_tag = skill_tag_map.get(owning_skill)
-                if sk_tag in {"redundant", "wrong"}:
+                if sk_tag == "wrong":
                     tag = "neutral"
-            target.increment_counter(bid, tag)
-            updates.append({"bullet_id": bid, "tag": tag})
+            target.increment_counter(bid, tag, weight=weight)
+            updates.append({"bullet_id": bid, "tag": tag, "weight": weight})
         return updates
 
     def _apply_op(self, op, workflow_pb, domain_pbs, turn_id) -> tuple[bool, str]:

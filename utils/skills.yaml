@@ -427,3 +427,52 @@ softap_supported_channels:
     8. Final Rule
       - The model has NO authority to determine SoftAP support.
       - All decisions must come from the tool output only.
+
+TAS Settings Check:
+  name: "TAS Settings Check"
+  description: "Used to verify TAS related settings"
+  keywords:
+    - "TAS Feature is not licensed for Manufacturer"
+    - "TAS is  supported"
+    - "TAS is Enable"
+    - "[getTasDataFromBios]: : Successfully read TAS selection from BIOS config:"
+    - "BlackListEntry"
+    - "OEM not WhiteListed"
+  expert_rules: |
+    TAS setting checks are listed below:
+    First, check if TAS is enabled or not, the revision number. If it's enabled, check if the black list is empty or not and show the content.
+    Also, check if TAS is licensed for the manufacture, if not, issue a warning and indicate that USA and Canada are added to the blacklist due to this
+    First, verify whether TAS is enabled and confirm the revision number.
+    If TAS is enabled, check whether the blacklist is empty and display its contents.
+    Also, verify whether TAS is properly licensed for the manufacturer. If not, issue a warning indicating that the United States and Canada have been added to the blacklist due to the missing license.
+
+    1. Check if TAS is supported and the revision number
+    06/09/2026-13:18:15.105 [3] [PLATFORM] [SPECIAL] [tasInitApi]: : TAS is  supported. TAS is Enabled. Enable=1, TblSize=0, OvrTasRiec=0, EnTasRiec=0, UsUhb=0, CaUhb=0, Table Src=2, Rev=1, Val=0x1, TasEnabled registry TRUE
+
+    2. Read the TAS BIOS settings and print the BIOS configuration value. The value can be decoded by the following definitions
+        Bit #    Bit Description    Values    Default
+        0    Enable TAS feature    0 – TAS Disabled    0 – TAS Disabled
+                1 – TAS Enabled
+        1    IEC Optimization, override NIC configuration (BIOSoverrideTASrIEC), allow override NIC defaults    0 – No override, use device settings.    0 – NIC Defaults
+                1 – Override IEC Optimization (effective over certified NIC; value set by Bit #2)
+        2    IEC Optimization Control Value (BIOCenTrIC).    0 – Disabled TAS IEC optimization regulatory averaging time    0 – Disabled TAS IEC optimization
+            This bit is relevant only when Bit #1 = 1 and the NIC supports TAS over IEC.    1 – Enabled TAS IEC optimization regulatory averaging time
+        3:14    Reserved. Shall be set to zeroes    0    0
+        15    Rev1: Reserved. Shall be set to zeroes    Rev2:    0 – Disabled TAS UHB (6–7 GHz) for Canada
+            Rev2: Enable UHB for Canada    0 – Disabled TAS UHB (6–7 GHz) for Canada
+                1 – Enabled TAS UHB (6–7 GHz) for Canada
+        16    Enable UHB for USA    0 – Disabled TAS UHB (6–7 GHz) for USA    0 – Disabled TAS UHB (6–7 GHz) for USA
+                1 – Enabled TAS UHB (6–7 GHz) for USA
+        17:31    Reserved to other countries/locations. Shall be set to zeroes    0    0
+
+    06/09/2026-13:19:00.748 [3] [PLATFORM] [SPECIAL] [getTasDataFromBios]: : Successfully read TAS selection from BIOS config: value=0x00000001, tableSource=2, tableRevision=1
+
+    3. Check Manufacture License for a specific manufacture, below example shows that it is not licensed for Samsung
+    06/09/2026-13:19:00.748 [3] [PLATFORM] [SPECIAL] [oemCapabilitiesIsTasWhitelistedApi]:TAS Feature is not licensed for Manufacturer =  Samsung.
+
+    4. If manufacture is not licensed, it means that it is not in the whitelist, therefore US and Canada are added to blacklist
+    06/09/2026-13:19:04.253 [3] [PLATFORM] [SPECIAL] [prvSendTasDataToFW]: : OEM not WhiteListed, adding USA and Canada to the BlackList
+
+    5. List all entries in the blacklist
+    6470 06/09/2026-13:19:04.253 [3] [UTIL] [SPECIAL] [mhiffTranslatRegulatoryTasConfigVer5]: : BlackListEntry_0=0x5553 (US)
+    6471 06/09/2026-13:19:04.253 [3] [UTIL] [SPECIAL] [mhiffTranslatRegulatoryTasConfigVer5]: : BlackListEntry_1=0x4341 (CA)

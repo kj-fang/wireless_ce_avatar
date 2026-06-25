@@ -8,14 +8,13 @@ DEFAULT_PORT = 48596
 
 def _get_intelavatar_files_dir() -> str:
     """Return Downloads\\IntelAvatar_files, creating it if needed."""
-    import winreg
     try:
-        reg_key = winreg.OpenKey(
+        import winreg
+        with winreg.OpenKey(
             winreg.HKEY_CURRENT_USER,
             r"Software\Microsoft\Windows\CurrentVersion\Explorer\Shell Folders",
-        )
-        downloads_dir = winreg.QueryValueEx(reg_key, "{374DE290-123F-4565-9164-39C4925E467B}")[0]
-        winreg.CloseKey(reg_key)
+        ) as reg_key:
+            downloads_dir = winreg.QueryValueEx(reg_key, "{374DE290-123F-4565-9164-39C4925E467B}")[0]
     except Exception:
         downloads_dir = os.path.join(os.path.expanduser('~'), 'Downloads')
     base = os.path.join(downloads_dir, 'IntelAvatar_files')

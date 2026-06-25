@@ -25,6 +25,23 @@ _logger = logging.getLogger('TrayManager')
 _logger = logging.getLogger('TrayManager')
 
 
+class _OpenCloseFileHandler(logging.Handler):
+    """Open the log file on each emit and close it immediately after writing.
+    This avoids holding a persistent file handle so the main process
+    RotatingFileHandler can rename avatar.log during rotation without
+    being blocked by Windows."""
+    def __init__(self, filename: str):
+        super().__init__()
+        self.filename = filename
+
+    def emit(self, record):
+        try:
+            with open(self.filename, 'a', encoding='utf-8') as f:
+                f.write(self.format(record) + '\n')
+        except Exception:
+            self.handleError(record)
+
+
 def _base_path() -> str:
     if getattr(sys, 'frozen', False):
         return os.path.dirname(sys.executable)
@@ -97,20 +114,20 @@ class TrayManager:
 
     def _init_log(self) -> logging.Logger:
         logger = logging.getLogger('TrayManager')
-        logger.setLevel(logging.DEBUG)
+        logger.setLevel(logging.INFO)
         logger.propagate = False
         logger.handlers.clear()
 
         fmt = logging.Formatter('%(asctime)s [%(levelname)s] [TRAY] %(message)s',
                                 datefmt='%Y-%m-%d %H:%M:%S')
 
-        # Write to a dedicated tray.log rather than sharing avatar.log with the
-        # main process. On Windows, RotatingFileHandler rotates by renaming the
-        # file; if the tray process holds avatar.log open via its own handle,
-        # that rename fails and rotation breaks entirely.
+        # Use _OpenCloseFileHandler so the tray process does not hold a
+        # persistent file handle on avatar.log. Without this, the main
+        # process RotatingFileHandler would fail to rename the file during
+        # rotation (Windows blocks rename while any handle is open).
         try:
-            tray_log = os.path.join(get_logs_dir(), 'tray.log')
-            tray_handler = logging.FileHandler(tray_log, mode='a', encoding='utf-8')
+            avatar_log = os.path.join(get_logs_dir(), 'avatar.log')
+            tray_handler = _OpenCloseFileHandler(avatar_log)
             tray_handler.setFormatter(fmt)
             logger.addHandler(tray_handler)
         except Exception:

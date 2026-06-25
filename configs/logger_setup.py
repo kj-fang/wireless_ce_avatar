@@ -3,7 +3,9 @@ logger_setup.py
 ---------------
 Redirect sys.stdout through a tee-stream so every regular print() call is
 *also* written to a rotating log file at:
-    %USERPROFILE%\\Downloads\\IntelAvatar_files\\logs\\avatar.log
+    <Downloads>\\IntelAvatar_files\\logs\\avatar.log
+    where <Downloads> is resolved from the Windows shell registry
+    (CSIDL_DOWNLOADS), falling back to ~/Downloads on non-Windows.
 
 Design:
 - sys.stdout  → _TeeStream → terminal (unchanged) + log file

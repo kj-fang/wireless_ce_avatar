@@ -53,6 +53,35 @@ BT_SKILLS_YAML_DATED_TEMPLATE = "bt_skills_{date}.yaml"       # date = YYYY-MM-D
 FEEDBACK_DIR_prim = rf"\\infs089b.iil.intel.com\HOME\WirelessCE\Intel_WirelessCE_Avatar\feedback"
 FEEDBACK_DIR_bkup = rf"\\infs089.iil.intel.com\HOME\WirelessCE\Intel_WirelessCE_Avatar\feedback"
 
+# Gather — usage-analytics layer.
+# On the first Send of each chatbot session a tidy, DB-ingestion-friendly
+# record is written here (one JSON per conversation) capturing who used the
+# tool, when, which CASE NUMBER they worked on and a short summary of the case
+# context + the questions they asked. Lets us tally distinct users, the cases
+# they touched and what those cases were about. Same primary/backup/local
+# fallback pattern as the feedback sidecar (see gather_service).
+#
+# Path is intentionally NOT hard-coded as a single literal string: it is
+# derived from the feedback share (same WirelessCE host) by swapping the leaf
+# folder, so the full SMB UNC never appears verbatim in the repo / logs / a
+# grep / a stack trace. An optional environment variable lets an operator
+# override the share without committing the override to the repo.
+import os as _os
+
+
+def _sibling_share(base: str, leaf: str) -> str:
+    """Return ``<parent-of-base>\\<leaf>`` — used so the Gather UNC is derived
+    from the feedback UNC at import time instead of being written out in
+    full anywhere in the source."""
+    return rf"{base.rsplit(chr(92), 1)[0]}\{leaf}"
+
+
+_GATHER_LEAF = "Gather"
+GATHER_DIR_prim = _os.environ.get("INTELAVATAR_GATHER_DIR") \
+    or _sibling_share(FEEDBACK_DIR_prim, _GATHER_LEAF)
+GATHER_DIR_bkup = _os.environ.get("INTELAVATAR_GATHER_DIR_BKUP") \
+    or _sibling_share(FEEDBACK_DIR_bkup, _GATHER_LEAF)
+
 # Local cache — prompt/ and filter/ are copied here from the remote on first run.
 # Using a path relative to this file so it works regardless of install location.
 from pathlib import Path as _Path

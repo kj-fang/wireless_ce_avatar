@@ -23,6 +23,7 @@ from utils.issue_time_ai import build_issue_time_suggestions, organize_issue_con
 from services import feedback_service
 from services import history_service
 from services import chat_jobs
+from services import gather_service
 
 log_chatbot_bp = Blueprint("log_chatbot", __name__, url_prefix="/log_chatbot")
 
@@ -686,6 +687,24 @@ def chat():
             _issue_ctx_for_snapshot = _extract_issue_context()
         except Exception:
             _issue_ctx_for_snapshot = {}
+
+        # Usage analytics: on every Send, capture the entry session (user name,
+        # date, CASE NUMBER + case summary) and the asked question into the
+        # shared Gather folder for later DB ingestion. Non-blocking; never
+        # raises, so it can't affect the chat path.
+        try:
+            gather_service.record_send(
+                conversation_id=conversation_id,
+                session_id=session_id,
+                user_message=user_message,
+                issue=_issue_ctx_for_snapshot,
+                log_path=getattr(agent, "current_log_path", "") or "",
+                issue_time=format_issue_time(agent.issue_time),
+                issue_time_window_minutes=getattr(agent, "issue_time_window_minutes", None),
+                domain="wifi",
+            )
+        except Exception:
+            pass
 
         # Use the mode flag sent by the frontend toggle.
         use_tools = bool(data.get("use_tools", False))

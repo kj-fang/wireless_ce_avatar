@@ -3,6 +3,18 @@ import os
 from datetime import datetime, timedelta
 from flask import session
 
+# Shared timezone helpers — the autologger writes folder names with the
+# CUSTOMER's machine clock (e.g. CST), but engineers often type ``issue_time``
+# transcribed straight from the ETL-decoded log (which is in the log frame,
+# GMT+8). When those two frames disagree, the ±5-minute Segment-2 window in
+# ``filter_folders_by_time`` never matches anything. We shift the folder ts
+# into the log frame in that case so the comparison lands in the same frame.
+from utils.timezone_utils import (
+    get_effective_timezone as _tz_get_effective_timezone,
+    get_issue_time_basis as _tz_get_issue_time_basis,
+    local_to_taiwan as _tz_local_to_taiwan,
+)
+
 #-----------ZIP ATTACHMENT SELECTION--------------
 def pick_latest_zip_attachment(attachment_list):
     """Return the ZIP attachment with the most recent datetime metadata.
@@ -129,12 +141,23 @@ def extract_time_from_description(description):
         except ValueError as e:
             print(f"Invalid datetime values: {e}")
 
-    # Pattern 3: time only HH:MM[:SS] for legacy descriptions without date.
-    match = re.search(r'(?<!\d)(\d{1,2}):(\d{2})(?::(\d{2}))?(?!\d)', text)
+    # Pattern 3: time only HH:MM[:SS] with optional AM/PM, for descriptions
+    # without a date (e.g. "issue happened at 04:45 PM"). The AM/PM suffix is
+    # significant — "04:45 PM" is 16:45, and dropping it shifts the issue time
+    # 12 h, which then misses the ±5-min PreScan window entirely.
+    match = re.search(
+        r'(?<!\d)(\d{1,2}):(\d{2})(?::(\d{2}))?(?:\s*([AaPp][Mm]))?(?!\d)',
+        text,
+    )
     if match:
         hour = int(match.group(1))
         minute = int(match.group(2))
         second = int(match.group(3) or 0)
+        ampm = (match.group(4) or '').lower()
+        if ampm == 'pm' and hour < 12:
+            hour += 12
+        elif ampm == 'am' and hour == 12:
+            hour = 0
         if not (0 <= hour <= 23 and 0 <= minute <= 59 and 0 <= second <= 59):
             print(f"Invalid time values: {hour}:{minute}:{second}")
             return None
@@ -169,19 +192,82 @@ def filter_folders_by_time(file_dict, issue_time_or_datetime):
     """
     Filter folders based on issue time/datetime from description.
     Keep only the folder closest to (and after) the issue time.
-    
+
     Args:
         file_dict: Dict like {'zip_name': ['folder_path1', 'folder_path2', ...]}
         issue_time_or_datetime: Either a datetime object or time string in 'HH:MM:SS' format
-    
+
     Returns:
         Tuple: (filtered_dict, warnings_dict)
         - filtered_dict: Filtered file dict
         - warnings_dict: {zip_name: 'warning_message'} for files where all folders are before issue time
+
+    Note on timezones:
+        Autologger writes the folder name (``LUS-..._DD-MM-YYYY_HH-MM-SS_...``)
+        in the customer machine's local clock (e.g. CST). The typed
+        ``issue_time`` may live in either:
+          - "log"      frame (engineer transcribed from ETL output, GMT+8) — we
+                        then shift the folder ts FROM customer tz TO log frame
+                        via ``local_to_taiwan`` so the ±5-min Segment-2 window
+                        compares like-with-like.
+          - "customer" frame (customer typed their own clock) — no shift, both
+                        sides are already in customer tz.
+
+        Resolution: auto-detected from the first folder's
+        ``.timezone_override.json`` sidecar / parent ``system_info.txt``.
     """
     if not issue_time_or_datetime:
         return file_dict, {}
-    
+
+    # Pull customer tz + basis from the first available folder path. Both
+    # default cleanly (tz='', basis='log') when nothing is known.
+    customer_tz = ""
+    basis = "log"
+    for _zip, folders in file_dict.items():
+        if folders:
+            customer_tz = _tz_get_effective_timezone(folders[0])
+            basis = _tz_get_issue_time_basis(folders[0])
+            print(f"[filter_folders_by_time] tz={customer_tz!r}, basis={basis!r}")
+            break
+    should_shift_folder = bool(customer_tz) and basis == "log"
+
+    def _align_folder_ts(ts):
+        """Shift folder customer-tz ts into the log frame when basis='log'."""
+        return _tz_local_to_taiwan(ts, customer_tz) if should_shift_folder else ts
+
+    # Anchor a date-less issue clock (HH:MM[:SS]) to a candidate's decoded
+    # ``.log`` last-timestamp date when one exists — consistent with the
+    # chatbot's resolve_issue_time(ref=last_ts). Promote it to a full
+    # datetime IN THE SAME FRAME the folder ts get compared in (log frame
+    # when basis='log', else customer), so it hits the dated branch below
+    # instead of the per-folder-date grouping. Falls through unchanged when
+    # no candidate carries a ``.log`` sibling.
+    if isinstance(issue_time_or_datetime, str):
+        _anchor_date = None
+        _clock = None
+        _anchor_frame = "log" if should_shift_folder else "customer"
+        try:
+            _ih, _im, _is = (int(x) for x in issue_time_or_datetime.split(':'))
+            _clock = (_ih, _im, _is)
+            from utils.issue_time_ai import log_anchor_date_for_etl
+            for _folders in file_dict.values():
+                for _fp in (_folders or []):
+                    _anchor_date = log_anchor_date_for_etl(
+                        _fp, customer_tz, frame=_anchor_frame)
+                    if _anchor_date:
+                        break
+                if _anchor_date:
+                    break
+        except Exception as _e:
+            print(f"[filter_folders_by_time] log-date anchor skipped: {_e}")
+        if _anchor_date and _clock:
+            issue_time_or_datetime = datetime.combine(
+                _anchor_date,
+                datetime.min.time().replace(
+                    hour=_clock[0], minute=_clock[1], second=_clock[2]))
+            print(f"[filter_folders_by_time] time-only anchored to .log "
+                  f"last-date: {issue_time_or_datetime} (frame={_anchor_frame})")
+
     # Check if we have a full datetime or just time
     is_full_datetime = isinstance(issue_time_or_datetime, datetime)
     
@@ -198,31 +284,42 @@ def filter_folders_by_time(file_dict, issue_time_or_datetime):
         for zip_name, folder_list in file_dict.items():
             if not folder_list:
                 continue  # Keep original empty list from copy
-            
+
             # Extract timestamps from all folders
             folder_times = []
             for folder in folder_list:
-                timestamp = extract_timestamp_from_folder(folder)
+                timestamp = _align_folder_ts(extract_timestamp_from_folder(folder))
                 if timestamp:
                     folder_times.append((folder, timestamp))
-            
+
             if not folder_times:
                 continue  # Keep original list from copy
-            
-            # Segment2 baseline: prefer folders within issue_time ±5 minutes.
+
+            # Segment2 baseline: keep EVERY folder within issue_time ±5 min,
+            # sorted by closeness to the issue moment. Surfacing all of them
+            # lets the engineer see the full candidate set on /download_result;
+            # ``pick_etl_by_ai_time`` + ``ai_pre_selected_etl`` will tick the
+            # most-likely ETL automatically while the others remain pickable
+            # in case the AI's first guess is wrong (e.g. two zips extracted
+            # the same autologger run into nested + flat paths).
             folders_in_window = [(f, t) for f, t in folder_times if window_start <= t <= window_end]
             if folders_in_window:
-                closest = min(folders_in_window, key=lambda x: abs((x[1] - issue_datetime).total_seconds()))
-                filtered_dict[zip_name] = [closest[0]]
+                folders_in_window.sort(key=lambda x: abs((x[1] - issue_datetime).total_seconds()))
+                filtered_dict[zip_name] = [f for f, _ in folders_in_window]
                 continue
 
-            # Fallback: no match in ±5 minutes, keep previous behavior (closest after issue time).
+            # Fallback: no folder inside the ±5 min window. We still keep
+            # ALL ts-after-issue candidates (sorted by ascending distance) so
+            # the user can pick one — historical behaviour returned only the
+            # single closest one but that meant identical-timestamp duplicates
+            # got hidden silently.
             folders_after = [(f, t) for f, t in folder_times if t >= issue_datetime]
             if folders_after:
-                closest = min(folders_after, key=lambda x: (x[1] - issue_datetime).total_seconds())
-                filtered_dict[zip_name] = [closest[0]]
+                folders_after.sort(key=lambda x: (x[1] - issue_datetime).total_seconds())
+                filtered_dict[zip_name] = [f for f, _ in folders_after]
                 warnings_dict[zip_name] = (
-                    f"No folder in segment2 window (+/-5 min) around {issue_datetime.strftime('%Y-%m-%d %H:%M:%S')}"
+                    f"No folder in segment2 window (+/-5 min) around "
+                    f"{issue_datetime.strftime('%Y-%m-%d %H:%M:%S')}"
                 )
             else:
                 # No folder after issue time - keep all folders (already in filtered_dict) and add warning
@@ -249,14 +346,14 @@ def filter_folders_by_time(file_dict, issue_time_or_datetime):
         for zip_name, folder_list in file_dict.items():
             if not folder_list:
                 continue  # Keep original empty list from copy
-            
+
             # Extract timestamps from all folders
             folder_times = []
             for folder in folder_list:
-                timestamp = extract_timestamp_from_folder(folder)
+                timestamp = _align_folder_ts(extract_timestamp_from_folder(folder))
                 if timestamp:
                     folder_times.append((folder, timestamp))
-            
+
             if not folder_times:
                 # No valid timestamps found, keep all folders (already in filtered_dict)
                 continue
@@ -296,12 +393,15 @@ def filter_folders_by_time(file_dict, issue_time_or_datetime):
                     print(f"Error processing date {date_key}: {e}")
                     continue
             
+            # Keep ALL window candidates (sorted by closeness) so the engineer
+            # sees every plausible match; downstream auto-pick highlights the
+            # best one. Same rationale as the dated branch above.
             if window_candidates:
-                closest = min(window_candidates, key=lambda x: abs((x[1] - x[2]).total_seconds()))
-                filtered_dict[zip_name] = [closest[0]]
+                window_candidates.sort(key=lambda x: abs((x[1] - x[2]).total_seconds()))
+                filtered_dict[zip_name] = [f for f, _, _ in window_candidates]
             elif after_candidates:
-                closest = min(after_candidates, key=lambda x: (x[1] - x[2]).total_seconds())
-                filtered_dict[zip_name] = [closest[0]]
+                after_candidates.sort(key=lambda x: (x[1] - x[2]).total_seconds())
+                filtered_dict[zip_name] = [f for f, _, _ in after_candidates]
                 warnings_dict[zip_name] = f"No folder in segment2 window (+/-5 min) around {issue_time_str}"
             elif all_before_by_date:
                 warnings_dict[zip_name] = f"All folders are before issue time {issue_time_str}"

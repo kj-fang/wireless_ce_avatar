@@ -29,7 +29,12 @@ _FULL_FORMATS = (
     "%Y/%m/%d %H:%M:%S",
     "%Y-%m-%d %H:%M",
 )
-_TIME_ONLY_FORMATS = ("%H:%M:%S", "%H:%M")
+# 24-hour first so "04:45" / "04:45:00" keep their existing meaning; the 12-hour
+# `%p` variants only match when an explicit AM/PM is present (e.g. "04:45 PM").
+_TIME_ONLY_FORMATS = (
+    "%H:%M:%S", "%H:%M",
+    "%I:%M:%S %p", "%I:%M %p", "%I:%M:%S%p", "%I:%M%p",
+)
 
 # MM/DD/YYYY-HH:MM:SS.mmm — canonical timestamp format inside a .log file.
 _LOG_TS_RE = re.compile(r"(\d{2}/\d{2}/\d{4}-\d{2}:\d{2}:\d{2}\.\d{3})")
@@ -61,7 +66,13 @@ def parse_issue_time_string(s: str) -> Tuple[Optional[datetime], bool]:
 
 
 def read_log_time_range(log_path: str) -> Tuple[Optional[datetime], Optional[datetime]]:
-    """Return (first_ts, last_ts) parsed from a .log file. Either may be None."""
+    """Return (first_ts, last_ts) parsed from a .log file. Either may be None.
+
+    Timestamps are returned in the log's own frame (the decoder host's
+    clock — GMT+8 in our deployment). The chatbot keeps ``issue_time``
+    aligned to that same frame for in-log matching, with a customer-tz
+    annotation surfaced separately for the UI.
+    """
     if not log_path or not os.path.exists(log_path):
         return None, None
     first_ts = last_ts = None

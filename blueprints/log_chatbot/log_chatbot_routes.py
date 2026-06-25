@@ -20,6 +20,17 @@ from utils.issue_time_utils import (
     format_issue_time,
 )
 from utils.issue_time_ai import build_issue_time_suggestions, organize_issue_context, realign_times_to_log
+from utils.timezone_utils import (
+    get_effective_timezone,
+    taiwan_to_local,
+    format_tz_label,
+    to_iana_timezone,
+    set_manual_override,
+    get_manual_override,
+    get_system_timezone,
+    get_issue_time_basis,
+    VALID_ISSUE_TIME_BASES,
+)
 from services import feedback_service
 from services import history_service
 from services import chat_jobs
@@ -43,6 +54,26 @@ def _ensure_feedback_conversation_id(*, rotate: bool = False) -> str:
     if rotate or not session.get("feedback_conversation_id"):
         session["feedback_conversation_id"] = str(uuid.uuid4())
     return session["feedback_conversation_id"]
+
+
+def _invalidate_issue_context_caches() -> None:
+    """Drop the DERIVED issue-context caches so they get recomputed from the
+    current ``selected_files`` / ``case_context``.
+
+    These three caches are computed FROM the raw case sources but live
+    independently in the session, so they outlive the data they were derived
+    from. Without this, starting a SECOND analysis (download_result -> /prepare
+    -> /log_chatbot/?auto_run=analyze_all) without first clicking "Back to
+    Avatar" makes the new run inherit the PREVIOUS run's attachment time,
+    resolved issue time and LLM-organized description. Call this whenever a new
+    analysis is entered so the caches are rebuilt from the fresh case data.
+    """
+    for key in (
+        "_attachment_time_cache",     # parsed attachment subtitle time
+        "_resolved_issue_time_cache",  # log_path -> resolved issue_time
+        "_issue_ai_quick",            # LLM-organized description + issue times
+    ):
+        session.pop(key, None)
 
 
 def _extract_issue_context() -> dict:
@@ -282,9 +313,23 @@ def _get_or_create_agent(skip_prime: bool = False) -> WifiLogAgentSystem:
         ace_runner = getattr(base, "ace_runner", None)
         if ace_runner is not None:
             agent.attach_ace(ace_runner)
-        # Auto-populate log path from last LogParser analysis if available
-        if app_config.last_analyzed_log_path:
-            agent.current_log_path = app_config.last_analyzed_log_path
+        # Auto-populate log path from the last analysis. Use the SAME sources the
+        # sidebar reads (session first, then the process-global), so the two
+        # can't diverge. On a browser-back / bfcache re-run prepare()/set_log()
+        # don't re-execute, and run-1's chat() popped this agent out of
+        # _chatbot_instances — so this lazy rebuild is the only path source. If
+        # it consulted only the process-global (which back_to_avatar / another
+        # tab / a restart can empty) while session['chatbot_log_path'] still
+        # held the file, the sidebar would look right but the agent would have
+        # no log → "No log file loaded". Reading the session key too keeps them
+        # in agreement. The session value wins so a per-session log can't be
+        # clobbered by another tab / case that moved the process-global on.
+        restored_log_path = (
+            session.get("chatbot_log_path")
+            or app_config.last_analyzed_log_path
+        )
+        if restored_log_path:
+            agent.current_log_path = restored_log_path
         # Prime with session issue context so every new session is context-aware
         # (skipped when caller will immediately call prime_with_context itself)
         if not skip_prime:
@@ -535,6 +580,14 @@ def suggest_issue_times():
         log_path = agent.current_log_path or ""
         first_ts, last_ts = read_log_time_range(log_path) if log_path else (None, None)
 
+        # The log's first/last timestamps stay in the log frame (decoder
+        # host clock) — same frame the LLM sees in the digest. No shift
+        # needed before the model call.
+        local_tz_name = get_effective_timezone(log_path) if log_path else ""
+        tz_label = format_tz_label(local_tz_name) if local_tz_name else ""
+        log_frame_first_ts = None
+        log_frame_last_ts = None
+
         # Cached raw log lines feed the rough-browse digest (best-effort).
         log_lines = []
         try:
@@ -568,6 +621,9 @@ def suggest_issue_times():
             llm_client=getattr(agent, "client", None),
             llm_model=getattr(agent, "model", None),
             log_has_date=log_has_date,
+            log_frame_first_ts=log_frame_first_ts,
+            log_frame_last_ts=log_frame_last_ts,
+            tz_label=tz_label,
         )
         return jsonify(payload), (200 if payload.get("success") else 503)
     except Exception as e:
@@ -638,6 +694,16 @@ def chat():
         agent = _resume_agent_for(conversation_id)
         if issue_time_window_minutes is not None:
             agent.issue_time_window_minutes = issue_time_window_minutes
+        # Backstop: if the resolved agent lost its log path (e.g. a fresh agent
+        # rebuilt on a browser-back re-run where prepare()/set_log() didn't
+        # run), recover it from the SAME sources the sidebar uses before the
+        # guard below, so a valid in-session log isn't reported as missing.
+        if not agent.current_log_path:
+            agent.current_log_path = (
+                session.get("chatbot_log_path")
+                or app_config.last_analyzed_log_path
+                or ""
+            )
         if not agent.current_log_path:
             def _no_log():
                 yield f"data: {json.dumps({'type': 'error', 'content': 'No log file loaded. Please set a log file first.'})}\n\n"
@@ -663,6 +729,22 @@ def chat():
                 parsed, is_time_only = parse_issue_time_string(raw_it)
                 agent.issue_time = parsed
                 agent._issue_time_time_only = is_time_only
+                # Keep the customer-tz annotation in sync with the new
+                # sidebar value. The picker always shows the log-frame
+                # value (matches .log content), so the same instant on the
+                # customer's wall clock is just taiwan_to_local at the
+                # detected tz. Skip on time-only or when no tz is known.
+                if parsed and not is_time_only and agent.current_log_path:
+                    try:
+                        log_tz = get_effective_timezone(agent.current_log_path) or ""
+                        if log_tz:
+                            agent.issue_time_tz = log_tz
+                            agent.issue_time_customer = taiwan_to_local(parsed, log_tz)
+                        else:
+                            agent.issue_time_tz = ""
+                            agent.issue_time_customer = None
+                    except Exception as _e:
+                        print(f"[chat] sidebar issue_time customer refresh skipped ({_e})")
             elif explicitly_cleared:
                 # Explicit "no time": clear agent state and neutralise
                 # description/subject so the fallback chain can't re-extract one.
@@ -1183,6 +1265,13 @@ def prepare():
          return jsonify({"success": False, "error": f".log file not found: {log_path}"}), 404
 
     try:
+        # Entering a NEW analysis from download_result. Purge the derived
+        # issue-context caches FIRST so the context below is rebuilt from this
+        # run's selected_files / case_context — not a previous run's leftovers.
+        # (Fixes stale attachment time / description when a second analysis is
+        # started without going through "Back to Avatar".)
+        _invalidate_issue_context_caches()
+
         # Pull consolidated issue context from all session sources
         ctx = _extract_issue_context()
 
@@ -1440,7 +1529,7 @@ def _get_llm_client_model():
     return None, None
 
 
-def _issue_context_organized(raw_desc: str, first_ts, last_ts) -> dict:
+def _issue_context_organized(raw_desc: str, first_ts, last_ts, log_path: str = "") -> dict:
     """Return the organized issue context (clean description + issue time list).
 
     Prefers the quick pre-pass cached at the select-attachments step
@@ -1458,7 +1547,7 @@ def _issue_context_organized(raw_desc: str, first_ts, last_ts) -> dict:
         session["_issue_ai_quick"] = {"data": d}
     return {
         "clean_description": d.get("clean_description") or raw_desc,
-        "issue_times": realign_times_to_log(d.get("issue_times") or [], first_ts, last_ts),
+        "issue_times": realign_times_to_log(d.get("issue_times") or [], first_ts, last_ts, log_path),
         "interpretation": d.get("interpretation", ""),
     }
 
@@ -1475,11 +1564,23 @@ def get_issue_context():
     log_path = session.get("chatbot_log_path") or app_config.last_analyzed_log_path or ""
     first_ts, last_ts = read_log_time_range(log_path) if log_path else (None, None)
 
+    # Frame-correct a time-only attachment_time up front. A bare clock like
+    # "16:45:00" (the customer wall clock parsed from the attachment subtitle)
+    # must be anchored to the customer capture date and converted to the log
+    # frame HERE. Otherwise the frontend picker — which prefers attachment_time
+    # over the resolved issue_time — stamps the clock straight onto the log date
+    # and mixes frames (showing e.g. 06/03 16:45 instead of log-frame 06/03
+    # 05:45). Full datetimes pass through unchanged (handled by _to_log_frame).
+    if attachment_time:
+        _aligned_at = realign_times_to_log([attachment_time], first_ts, last_ts, log_path)
+        if _aligned_at:
+            attachment_time = _aligned_at[0]
+
     # Smart pass: let the LLM organize the raw case Issue Description into a
     # clean problem statement + (possibly multiple) issue time points. Cached
     # per-description so repeat fetches don't re-call the LLM; falls back to
     # the regex extractor + concise composer when no LLM is configured.
-    organized = _issue_context_organized(ctx.get("description", "") or "", first_ts, last_ts)
+    organized = _issue_context_organized(ctx.get("description", "") or "", first_ts, last_ts, log_path)
     clean_desc = organized.get("clean_description") or _compose_concise_description(ctx)
     issue_times = organized.get("issue_times") or []
 
@@ -1488,7 +1589,53 @@ def get_issue_context():
     if issue_times:
         issue_time_str = issue_times[0]
     else:
-        issue_time_str = _resolved_issue_time_for(log_path, attachment_time)
+        # attachment_time is already frame-corrected above; use it directly.
+        # When absent, fall back to the cached log-latest resolution.
+        issue_time_str = attachment_time or _resolved_issue_time_for(log_path, attachment_time)
+
+    # Align every surfaced time to the LOG frame so the picker drives
+    # PreScan / Segment-2 against the raw .log content (which the decoder
+    # writes in the log host's clock). Source values are usually log-frame
+    # strings already, but a customer-typed description ("at 12:26 PM CST")
+    # would land in customer frame and needs shifting back. The
+    # ``determine_issue_time_frames`` helper picks which interpretation
+    # applies per string and returns both frames so we can also surface a
+    # customer-tz annotation for the UI.
+    customer_annotations = {}
+    customer_tz_for_ui = ""
+    if log_path:
+        try:
+            from utils.issue_time_ai import determine_issue_time_frames
+
+            def _to_log_frame(s: str) -> str:
+                nonlocal customer_tz_for_ui
+                if not isinstance(s, str) or not s:
+                    return s
+                parsed, is_time_only = parse_issue_time_string(s)
+                if not parsed or is_time_only:
+                    return s
+                # Pass the log content range (GMT+8 engineer frame) as the
+                # second anchor so an ATTACH/issue time mistakenly entered in
+                # our engineer clock — rather than the customer's packed time —
+                # is detected and shifted back to the customer frame.
+                frames = determine_issue_time_frames(
+                    parsed, [log_path],
+                    log_first_ts=first_ts, log_last_ts=last_ts,
+                )
+                if frames.get("customer_tz") and not customer_tz_for_ui:
+                    customer_tz_for_ui = frames["customer_tz"]
+                log_dt = frames.get("log_frame") or parsed
+                cust_dt = frames.get("customer_frame")
+                log_str = format_issue_time(log_dt) if log_dt != parsed else s
+                if cust_dt and frames.get("customer_tz"):
+                    customer_annotations[log_str] = format_issue_time(cust_dt)
+                return log_str
+
+            attachment_time = _to_log_frame(attachment_time)
+            issue_time_str = _to_log_frame(issue_time_str)
+            issue_times = [_to_log_frame(s) for s in issue_times]
+        except Exception as e:
+            print(f"[get_issue_context] issue-time frame detect skipped ({e})")
 
     return jsonify({
         "description": clean_desc,
@@ -1496,6 +1643,19 @@ def get_issue_context():
         "issue_time": issue_time_str,
         "issue_times": issue_times,
         "interpretation": organized.get("interpretation", ""),
+        # Customer-tz annotation: same instant viewed from the customer's
+        # wall clock. The picker shows the log-frame value (matches .log
+        # content) and surfaces this map underneath so the engineer also
+        # sees what time it was on the customer's side. tz label is the
+        # detected system_info / sidecar value; empty string when nothing
+        # could be detected (chatbot then hides the annotation row).
+        "customer_tz": customer_tz_for_ui,
+        "customer_annotations": customer_annotations,
+        # IANA id for the customer tz (e.g. "America/Los_Angeles") so the
+        # browser can recompute the customer wall clock DST-correctly for any
+        # date typed into the picker. Empty when only a fixed offset is known —
+        # the frontend then falls back to the label's standard offset.
+        "customer_iana": to_iana_timezone(customer_tz_for_ui) if customer_tz_for_ui else "",
     })
 
 
@@ -1537,6 +1697,19 @@ def find_best_log():
         elif isinstance(_parsed, str):
             issue_time_only_str = _parsed  # e.g. '14:50:51'
 
+    # --- Detect customer's timezone for the response note. The picker now
+    # compares ``issue_time`` against the .log's own first/last timestamps
+    # directly (both in the log frame); customer-tz only matters for the
+    # user-facing "this is X in customer time" annotation surfaced by the
+    # caller — they'll have shifted the typed issue time into log frame
+    # already via ``determine_issue_time_frames``.
+    tz_name = ""
+    for p in etl_paths:
+        tz_name = get_effective_timezone(p)
+        if tz_name:
+            break
+    tz_label = format_tz_label(tz_name) if tz_name else ""
+
     # --- Scan each log file for its time range (shared helper) ---
     candidates = []
     for etl_path in etl_paths:
@@ -1554,9 +1727,11 @@ def find_best_log():
     if not candidates:
         return jsonify({"best_path": etl_paths[0] if etl_paths else None,
                         "reason": "No readable log files found; defaulting to first.",
-                        "resolved_issue_time": ""})
+                        "resolved_issue_time": "",
+                        "tz_used": tz_label})
 
-    print(f"[find_best_log] candidates={[c['etl_path'] for c in candidates]}, issue_time={issue_time}, issue_time_only_str={issue_time_only_str}")
+    print(f"[find_best_log] tz={tz_name!r} candidates={[c['etl_path'] for c in candidates]}, "
+          f"issue_time={issue_time}, issue_time_only_str={issue_time_only_str}")
 
     # --- Resolve time-only issue_time_str using log file dates ---
     # e.g. '14:50:51' -> combine with the date from the log's first/last timestamp
@@ -1574,6 +1749,8 @@ def find_best_log():
     # Serialize the resolved issue_time so the frontend can use the full datetime
     resolved_issue_time_str = issue_time.strftime("%m/%d/%Y-%H:%M:%S") if issue_time else ""
 
+    tz_note = f" [tz: {tz_label}]" if tz_label else ""
+
     # --- If we have an issue time, pick the log whose range covers it ---
     if issue_time:
         # Priority 1: log file whose [first_ts, last_ts] contains issue_time
@@ -1583,8 +1760,9 @@ def find_best_log():
                     return jsonify({
                         "best_path": c["etl_path"],
                         "reason": f"Log covers issue time {issue_time_str} "
-                                  f"(range: {c['first_ts']} ~ {c['last_ts']})",
+                                  f"(range: {c['first_ts']} ~ {c['last_ts']}){tz_note}",
                         "resolved_issue_time": resolved_issue_time_str,
+                        "tz_used": tz_label,
                     })
 
         # Priority 2: log file whose last_ts is closest to (but before) issue_time
@@ -1601,8 +1779,9 @@ def find_best_log():
                 "best_path": best["etl_path"],
                 "reason": f"Closest log to issue time {issue_time_str} "
                           f"(range: {best['first_ts']} ~ {best['last_ts']}, "
-                          f"delta: {best_delta:.0f}s)",
+                          f"delta: {best_delta:.0f}s){tz_note}",
                 "resolved_issue_time": resolved_issue_time_str,
+                "tz_used": tz_label,
             })
 
     # --- Fallback: pick the log with the latest last_ts ---
@@ -1612,8 +1791,9 @@ def find_best_log():
         return jsonify({
             "best_path": latest["etl_path"],
             "reason": f"No issue time provided; picked latest log "
-                      f"(range: {latest['first_ts']} ~ {latest['last_ts']})",
+                      f"(range: {latest['first_ts']} ~ {latest['last_ts']}){tz_note}",
             "resolved_issue_time": resolved_issue_time_str,
+            "tz_used": tz_label,
         })
 
     # --- Ultimate fallback ---
@@ -1621,6 +1801,7 @@ def find_best_log():
         "best_path": candidates[0]["etl_path"],
         "reason": "Could not determine timestamps; defaulting to first.",
         "resolved_issue_time": "",
+        "tz_used": tz_label,
     })
 
 

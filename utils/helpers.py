@@ -49,10 +49,13 @@ def init_download_dir():
     downloads_dir = os.path.join(downloads_dir, "IntelAvatar_files")
     os.makedirs(downloads_dir, exist_ok=True)
 
+    os.makedirs(os.path.join(downloads_dir, "logs"), exist_ok=True)
+    os.makedirs(os.path.join(downloads_dir, "app_state"), exist_ok=True)
+
     driver_dir = os.path.join(downloads_dir, "chrome_driver")
     os.makedirs(driver_dir, exist_ok=True)
 
-    prompt_dir = os.path.join( downloads_dir, "avatar_prompt")
+    prompt_dir = os.path.join(downloads_dir, "avatar_prompt")
     os.makedirs(prompt_dir, exist_ok=True)
     return downloads_dir, driver_dir, prompt_dir
 

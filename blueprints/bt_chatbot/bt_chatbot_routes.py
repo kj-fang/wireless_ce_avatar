@@ -34,31 +34,83 @@ _EVT_FILENAMES = {"raweventviewersystemlogs.evt", "system.evtx"}
 def _find_evt_path_for_log(log_path: str) -> str:
     """Return the path to a System Event log file associated with a BT log.
 
+    A case can contain several capture folders, each with its own
+    ``rawEventViewerSystemLogs.evt`` / ``System.evtx``. We must return the evt
+    that belongs to the SAME capture folder the user opened the chatbot from —
+    not just the first one we stumble on — otherwise the event log shown in the
+    chatbot panel comes from a different (e.g. older) capture than the BT log.
+
     Strategy:
-      1. If a case_nbr exists in session, look through app_config download
-         results (the 'ddd' dict which contains evt_files merged in).
+      1. Collect every evt candidate from the case download results ('ddd'
+         dict), then pick the one whose folder shares the DEEPEST path with the
+         BT log's folder (same capture folder wins; nearest sibling otherwise).
       2. Fallback: search relative to the given BT log path:
+         - the log's own directory
          - grandparent dir for rawEventViewerSystemLogs.evt
          - sibling 'Event logs/' folder for System.evtx
     Returns empty string if nothing found.
     """
-    # --- Strategy 1: from download results ---
+    log_dir = os.path.dirname(os.path.abspath(log_path)) if log_path else ""
+
+    def _common_len(evt_path: str) -> int:
+        """Length of the shared directory prefix between the BT log and an evt
+        candidate. Higher means the evt sits closer to (ideally in the same
+        folder as) the BT log the user opened."""
+        if not log_dir:
+            return -1
+        try:
+            common = os.path.commonpath(
+                [log_dir, os.path.dirname(os.path.abspath(evt_path))]
+            )
+            return len(common)
+        except ValueError:
+            # Different drives -> no shared path
+            return -1
+
+    # --- Strategy 1: from download results, choose the closest folder ---
     case_ctx = session.get("case_context", {})
     case_nbr = case_ctx.get("case_nbr", "") if isinstance(case_ctx, dict) else ""
     if case_nbr:
         results = app_config.get_download_results(case_nbr)
         ddd_dict = results.get("ddd", {})
-        for _zip_name, file_list in ddd_dict.items():
-            for fpath in file_list:
-                if os.path.basename(fpath).lower() in _EVT_FILENAMES:
-                    if os.path.isfile(fpath):
-                        return fpath
+        candidates = [
+            fpath
+            for file_list in ddd_dict.values()
+            for fpath in file_list
+            if os.path.basename(fpath).lower() in _EVT_FILENAMES
+            and os.path.isfile(fpath)
+        ]
+        if candidates:
+            # Prefer the evt sharing the deepest folder with the BT log. On
+            # Windows ANY two paths on the same drive share the drive root
+            # (e.g. 'C:\\'), so a positive common length alone is meaningless
+            # and would wrongly trust the heuristic. Only accept the proximity
+            # match when the shared prefix goes DEEPER than the drive root;
+            # otherwise fall back to the first candidate (previous behaviour).
+            best = max(candidates, key=_common_len)
+            if log_dir:
+                try:
+                    best_common = os.path.commonpath(
+                        [log_dir, os.path.dirname(os.path.abspath(best))]
+                    )
+                    drive_root = os.path.splitdrive(log_dir)[0] + os.sep
+                    if os.path.normcase(best_common) != os.path.normcase(drive_root):
+                        return best
+                except ValueError:
+                    pass
+            return candidates[0]
 
     # --- Strategy 2: relative path search from BT log ---
     if not log_path or not os.path.isfile(log_path):
         return ""
 
-    log_dir = os.path.dirname(os.path.abspath(log_path))
+    # rawEventViewerSystemLogs.evt / System.evtx in the log's OWN directory
+    if os.path.isdir(log_dir):
+        for fname in os.listdir(log_dir):
+            if fname.lower() in _EVT_FILENAMES:
+                candidate = os.path.join(log_dir, fname)
+                if os.path.isfile(candidate):
+                    return candidate
 
     # rawEventViewerSystemLogs.evt in grandparent directory
     grandparent = os.path.dirname(os.path.dirname(log_dir))
@@ -386,7 +438,7 @@ def index():
 # ------------------------------------------------------------------
 @bt_chatbot_bp.route("/browse", methods=["GET"])
 def browse():
-    """Open a native Windows file dialog and return the selected .log path."""
+    """Open a native Windows file dialog and return the selected .hci.txt path."""
     result = {"path": ""}
 
     def _open_dialog():
@@ -395,7 +447,7 @@ def browse():
         root.wm_attributes("-topmost", True)
         path = filedialog.askopenfilename(
             title="Select log file",
-            filetypes=[("Log files", "*.log"), ("All files", "*.*")],
+            filetypes=[("hci.txt files", "*.hci.txt"), ("All files", "*.*")],
         )
         root.destroy()
         result["path"] = path or ""

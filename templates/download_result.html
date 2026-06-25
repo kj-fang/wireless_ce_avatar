@@ -576,8 +576,12 @@
                                     {% endfor %}
                                 {% endif %}
                                 {% if not ns.skip %}
-                                <div class="bt-file-item" data-bt-encoded="{{ bt_path | urlencode }}" onclick="selectBtRow(this)">
-                                    <p class="text-muted mb-0 small analysis-file-name">{{ bt_path.replace('\\', '/').split('/')[-1] }}</p>
+                                {% set file_size_bytes = bt_file_sizes.get(bt_path, 0) if bt_file_sizes is defined else 0 %}
+                                <div class="bt-file-item" data-bt-encoded="{{ bt_path | urlencode }}" data-file-size="{{ file_size_bytes }}" onclick="selectBtRow(this)">
+                                    <p class="text-muted mb-0 small analysis-file-name">
+                                        {{ bt_path.replace('\\', '/').split('/')[-1] }}
+                                        <span class="badge ml-2" style="font-size: 0.75rem; background-color: {% if file_size_bytes >= 96 * 1024 %}#ff8c00{% else %}#6c757d{% endif %}; color: white;">{{ '%.1f' | format(file_size_bytes / 1048576) }} MB</span>
+                                    </p>
                                     <p class="analysis-file-path mb-0">Path: {{ bt_path }}</p>
                                 </div>
                                 {% endif %}
@@ -2138,9 +2142,18 @@
 
     // Auto-select the NEWEST BT log by capture-folder timestamp (no issue
     // time matching). Called on page load as the default selection.
+    // Only considers files > 96 KB; if none qualify, no auto-selection occurs.
+    const BT_MIN_SIZE_BYTES = 96 * 1024; // 96 KB
+
     async function autoSelectNewestBtLog() {
-        const rows = Array.from(document.querySelectorAll('#bt-panel .bt-file-item'));
-        if (rows.length <= 1) return;
+        const allRows = Array.from(document.querySelectorAll('#bt-panel .bt-file-item'));
+        if (allRows.length <= 1) return;
+        // Filter to only rows with file size >= 96 KB
+        const rows = allRows.filter(el => {
+            const size = parseInt(el.dataset.fileSize || '0', 10);
+            return size >= BT_MIN_SIZE_BYTES;
+        });
+        if (rows.length === 0) return; // No file >= 96KB, don't auto-select
         const paths = rows.map(el => decodePath(el.dataset.btEncoded || ''));
         try {
             const res = await fetch(BT_FIND_BEST_LOG_URL, {
@@ -2240,6 +2253,34 @@
         });
         itemEl.classList.add('selected');
         updateFwActionButtons();
+    }
+
+    function autoSelectNewestFwLog() {
+        const rows = Array.from(document.querySelectorAll('#fw-panel .fw-file-item'));
+        if (rows.length <= 1) return;
+        // Extract timestamp (DD-MM-YYYY_HH-MM-SS) from folder path and pick the latest
+        const tsPattern = /(\d{2})-(\d{2})-(\d{4})_(\d{2})-(\d{2})-(\d{2})/;
+        let best = null;
+        let bestDate = null;
+        rows.forEach(row => {
+            const path = decodePath(row.dataset.fwEncoded || '');
+            const m = tsPattern.exec(path);
+            if (m) {
+                const dt = new Date(parseInt(m[3]), parseInt(m[2]) - 1, parseInt(m[1]),
+                                    parseInt(m[4]), parseInt(m[5]), parseInt(m[6]));
+                if (!bestDate || dt > bestDate) {
+                    bestDate = dt;
+                    best = row;
+                }
+            }
+        });
+        if (best) {
+            selectFwRow(best);
+            best.scrollIntoView({ block: 'nearest', behavior: 'smooth' });
+        } else {
+            // No timestamp found in paths, fall back to selecting the first item
+            selectFwRow(rows[0]);
+        }
     }
 
     function updateWifiActionButtons() {
@@ -2670,7 +2711,11 @@
         if (eventItems.length === 1) { selectEventRow(eventItems[0]); }
 
         const fwItems = document.querySelectorAll('.fw-file-item');
-        if (fwItems.length === 1) { selectFwRow(fwItems[0]); }
+        if (fwItems.length === 1) {
+            selectFwRow(fwItems[0]);
+        } else if (fwItems.length > 1) {
+            autoSelectNewestFwLog();
+        }
 
         updateWifiActionButtons();
         updateBtActionButtons();

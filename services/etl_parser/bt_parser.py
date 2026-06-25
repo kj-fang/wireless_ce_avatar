@@ -1,11 +1,12 @@
-from asyncio import timeout
-
 from pywinauto.application import Application
 from pywinauto import Desktop
+from pywinauto.keyboard import send_keys
 import os
 import time
 import psutil
 import subprocess, glob
+import win32api
+import math
 
 # Global variable to cache a running instance's PID so we can reconnect
 # instead of launching a new GUI process every time.
@@ -251,6 +252,327 @@ def close_error_dialog() -> None:
         print("⚠️ Failed to close error dialog:", e)
 
 
+def _get_splitter_list_count(app_window) -> int:
+    """Return current ETL-Splitter list item count, or 0 if unavailable."""
+    try:
+        listbox = app_window.child_window(auto_id="lb_etlsplitter", control_type="List")
+        if listbox.exists(timeout=0.5):
+            return listbox.wrapper_object().item_count()
+    except Exception:
+        pass
+    return 0
+
+
+def _find_open_dialog(main_hwnd, timeout_sec: int = 10):
+    """Find the file-open dialog by standard controls, excluding the main window."""
+    deadline = time.monotonic() + timeout_sec
+    while time.monotonic() < deadline:
+        for win in Desktop(backend="uia").windows():
+            try:
+                if main_hwnd is not None and getattr(win, "handle", None) == main_hwnd:
+                    continue
+                file_name_ctrl = win.child_window(auto_id="1148")
+                open_btn_ctrl = win.child_window(auto_id="1", control_type="Button")
+                if file_name_ctrl.exists(timeout=0.1) and open_btn_ctrl.exists(timeout=0.1):
+                    return win
+            except Exception:
+                continue
+        time.sleep(0.2)
+    return None
+
+
+def _submit_path_in_open_dialog(open_dialog, file_path: str) -> None:
+    """Set file path in the open dialog and confirm selection."""
+    try:
+        open_dialog.set_focus()
+    except Exception:
+        pass
+
+    file_edit = None
+    try:
+        combo_1148 = open_dialog.child_window(auto_id="1148", control_type="ComboBox")
+        if combo_1148.exists(timeout=0.5):
+            file_edit = combo_1148.child_window(control_type="Edit")
+    except Exception:
+        file_edit = None
+
+    if file_edit is None or not file_edit.exists(timeout=0.3):
+        try:
+            file_edit = open_dialog.child_window(auto_id="1148", control_type="Edit")
+        except Exception:
+            file_edit = None
+
+    if file_edit is None or not file_edit.exists(timeout=0.3):
+        try:
+            file_edit = open_dialog.child_window(control_type="Edit", found_index=0)
+        except Exception:
+            file_edit = None
+
+    if file_edit is not None and file_edit.exists(timeout=0.3):
+        file_edit_wrapper = file_edit.wrapper_object()
+        try:
+            file_edit_wrapper.set_focus()
+        except Exception:
+            pass
+        try:
+            file_edit_wrapper.set_edit_text(file_path)
+        except Exception:
+            try:
+                file_edit_wrapper.type_keys("^a{BACKSPACE}", with_spaces=True)
+                file_edit_wrapper.type_keys(file_path, with_spaces=True)
+            except Exception:
+                open_dialog.set_focus()
+                send_keys("^a{BACKSPACE}")
+                send_keys(file_path, with_spaces=True)
+    else:
+        open_dialog.set_focus()
+        send_keys(file_path, with_spaces=True)
+
+    submitted = False
+    try:
+        open_btn = open_dialog.child_window(auto_id="1", control_type="Button")
+        if open_btn.exists(timeout=0.3):
+            try:
+                open_btn.wrapper_object().click_input()
+            except Exception:
+                open_btn.wrapper_object().click()
+            submitted = True
+    except Exception:
+        submitted = False
+
+    if not submitted:
+        try:
+            for btn in open_dialog.descendants(control_type="Button"):
+                t = (btn.window_text() or "").replace("&", "")
+                if t in ("Open", "開啟", "打开"):
+                    try:
+                        btn.click_input()
+                    except Exception:
+                        btn.click()
+                    submitted = True
+                    break
+        except Exception:
+            submitted = False
+
+    if not submitted:
+        open_dialog.set_focus()
+        send_keys("{ENTER}")
+
+
+def _add_etl_to_splitter(app_window, file_path: str, main_hwnd) -> bool:
+    """Add ETL to splitter list via browse flow, then fallback to LB_ADDSTRING."""
+    added_via_browse = False
+    before_count = _get_splitter_list_count(app_window)
+
+    try:
+        browse_btn = app_window.child_window(auto_id="btn_spliter_browse", control_type="Button")
+        if browse_btn.exists(timeout=1):
+            browse_wrapper = browse_btn.wrapper_object()
+            print("🖱️ Clicking 'Browse' for ETL-Splitter...")
+            try:
+                browse_wrapper.click_input()
+            except Exception as e_click_browse:
+                print(f"⚠️ browse click_input() failed: {e_click_browse}; trying click()")
+                browse_wrapper.click()
+            print("✅ Clicked 'Browse' for ETL-Splitter")
+
+            open_dialog = _find_open_dialog(main_hwnd, timeout_sec=10)
+            if open_dialog is not None:
+                _submit_path_in_open_dialog(open_dialog, file_path)
+            else:
+                print("⚠️ File-open dialog not detected after clicking Browse; trying blind input fallback")
+                try:
+                    send_keys("^a{BACKSPACE}")
+                    send_keys(file_path, with_spaces=True)
+                    send_keys("{ENTER}")
+                except Exception as e_blind:
+                    print(f"⚠️ Blind input fallback failed: {e_blind}")
+
+            verify_deadline = time.monotonic() + 5
+            while time.monotonic() < verify_deadline:
+                after_count = _get_splitter_list_count(app_window)
+                if after_count > before_count:
+                    added_via_browse = True
+                    print(f"✅ ETL-Splitter: added via Browse flow: {file_path}")
+                    break
+                time.sleep(0.2)
+
+            if not added_via_browse:
+                print("⚠️ Browse flow submitted but list item count did not increase")
+        else:
+            print("⚠️ 'Browse' button for ETL-Splitter not found")
+    except Exception as e_browse:
+        print(f"⚠️ Failed to add ETL via Browse flow: {e_browse}")
+
+    if not added_via_browse:
+        LB_ADDSTRING = 0x0180
+        listbox = app_window.child_window(auto_id="lb_etlsplitter", control_type="List")
+        hwnd = listbox.wrapper_object().handle
+        win32api.SendMessage(hwnd, LB_ADDSTRING, 0, file_path)
+        print(f"⚠️ Fallback: added via LB_ADDSTRING (may not enable Start): {file_path}")
+
+    return added_via_browse
+
+
+def _set_split_count_in_splitter(app_window, split_count: int) -> None:
+    """Set split count in ETL-Splitter spinner."""
+    try:
+        splitter_pane = app_window.child_window(
+            title="ETL-Splitter", auto_id="tab_splitter", control_type="Pane"
+        )
+        if splitter_pane.exists(timeout=1):
+            spinner_edit = splitter_pane.child_window(title="Spinner", control_type="Edit")
+            if spinner_edit.exists(timeout=1):
+                spinner_edit.wrapper_object().set_edit_text(str(split_count))
+                print(f"✅ Split count set to {split_count}")
+            else:
+                print("⚠️ Spinner Edit not found within Pane")
+        else:
+            print("⚠️ Pane (tab_splitter) not found")
+    except Exception as e:
+        print(f"⚠️ Failed to set split count: {e}")
+
+
+def _trigger_split_start(app_window) -> None:
+    """Click the Start Etl Split button with diagnostics."""
+    try:
+        split_btn = app_window.child_window(auto_id="btn_splitter_start", control_type="Button")
+        if split_btn.exists(timeout=1):
+            split_wrapper = split_btn.wrapper_object()
+            print("🔍 Button state:")
+            print(f"   Enabled: {split_wrapper.is_enabled()}")
+            print(f"   Window text: {split_wrapper.window_text()}")
+            print("🔍 ListBox state:")
+            print(f"   Item count: {_get_splitter_list_count(app_window)}")
+            try:
+                split_wrapper.invoke()
+                print("✅ Split triggered via invoke()")
+            except Exception as e_invoke:
+                print(f"⚠️ invoke() failed: {e_invoke}. Trying click()...")
+                try:
+                    split_wrapper.set_focus()
+                    time.sleep(0.2)
+                    split_wrapper.click()
+                    print("✅ Split triggered via click()")
+                except Exception as e_click:
+                    print(f"⚠️ click() also failed: {e_click}")
+        else:
+            print("⚠️ 'Start Etl Split' button not found")
+    except Exception as e:
+        print(f"⚠️ Failed to trigger split button: {e}")
+
+
+def _wait_for_split_outputs(file_path: str, split_count: int, wait_timeout: int = 300, stable_seconds: int = 60) -> bool:
+    """Return True when expected split outputs are stable; False otherwise."""
+    split_dir = os.path.dirname(file_path)
+    base_name = os.path.splitext(os.path.basename(file_path))[0]
+    wait_start = time.monotonic()
+    prev_parts_signature = None
+    stable_start = None
+
+    while time.monotonic() - wait_start < wait_timeout:
+        parts = sorted(glob.glob(os.path.join(split_dir, f"{base_name}_split*.etl")))
+        parts_signature = []
+        for p in parts:
+            try:
+                parts_signature.append((p, os.path.getsize(p)))
+            except OSError:
+                parts_signature.append((p, -1))
+        parts_signature = tuple(parts_signature)
+
+        if parts_signature != prev_parts_signature:
+            prev_parts_signature = parts_signature
+            stable_start = time.monotonic()
+            if parts:
+                print(
+                    f"⏳ Splitting in progress: {len(parts)}/{split_count} part(s), "
+                    f"sizes={[s for _, s in parts_signature]}"
+                )
+        else:
+            if stable_start is None:
+                stable_start = time.monotonic()
+
+            if time.monotonic() - stable_start >= stable_seconds:
+                if len(parts) >= split_count:
+                    print(
+                        f"✅ Split complete: {len(parts)} part(s) stable for "
+                        f"{stable_seconds}s for {file_path}"
+                    )
+                    return True
+
+                print(
+                    f"⚠️ Split stopped but incomplete: {len(parts)}/{split_count} part(s) "
+                    f"stable for {stable_seconds}s"
+                )
+                return False
+        time.sleep(2)
+
+    return False
+
+
+def _rename_split_source(file_path: str) -> None:
+    """Rename original ETL to .split after split success."""
+    try:
+        if os.path.exists(file_path):
+            renamed_path = file_path + ".split"
+            if os.path.exists(renamed_path):
+                renamed_path = file_path + f".split.{int(time.time()*1000)}"
+            os.rename(file_path, renamed_path)
+            print(f"📦 Renamed split source to prevent reprocessing: {file_path} → {renamed_path}")
+    except Exception as e_rename:
+        print(f"⚠️ Failed to rename split source {file_path}: {e_rename}")
+
+
+def _collect_large_etl_files(log_folder_path: str) -> list:
+    """Collect ETL files requiring split."""
+    split_file_path = []
+    for file in os.listdir(log_folder_path):
+        if file.lower().endswith(".etl"):
+            file_path = os.path.join(log_folder_path, file)
+            file_size_bytes = os.path.getsize(file_path)
+            if file_size_bytes >= 1 * 1024 * 1024 * 1024:
+                split_file_path.append({"path": file_path, "size": file_size_bytes})
+                print(f"⚠️ {file}: File size is {file_size_bytes / (1024 * 1024):.2f} MB (>1GB). Splitting...")
+    return split_file_path
+
+
+def _split_large_etl_files(app_window, log_folder_path: str, main_hwnd) -> None:
+    """Run ETL-Splitter flow for large ETLs in the folder."""
+    try:
+        split_file_path = _collect_large_etl_files(log_folder_path)
+        if not split_file_path:
+            return
+
+        split_tab = app_window.child_window(title="ETL-Splitter", control_type="TabItem").wrapper_object()
+        split_tab.select()
+        print("✅ Selected 'ETL-Splitter' tab.")
+        time.sleep(0.5)
+
+        for file_info in split_file_path:
+            try:
+                file_path = file_info["path"]
+                file_size_bytes = file_info["size"]
+                split_count = math.ceil(file_size_bytes / (512 * 1024 * 1024))
+                print(
+                    f"📐 Split count for {os.path.basename(file_path)}: {split_count} "
+                    f"(size={file_size_bytes / (1024 * 1024):.1f} MB)"
+                )
+
+                _set_split_count_in_splitter(app_window, split_count)
+                _add_etl_to_splitter(app_window, file_path, main_hwnd)
+                _trigger_split_start(app_window)
+
+                if _wait_for_split_outputs(file_path, split_count, wait_timeout=300, stable_seconds=15):
+                    _rename_split_source(file_path)
+                else:
+                    print(f"⚠️ Split not completed successfully for {file_path}")
+
+            except Exception as e:
+                print(f"⚠️ Failed to split {file_info.get('path')}: {e}")
+    except Exception as e:
+        print(f"⚠️ Failed to check file size for splitting: {e}")
+
+
 def bt_decode_hci_via_folder(log_folder_path: str, log_path: str, etl_txt_timeout: int = 180, hci_txt_timeout: int = 15) -> str | None:
     """
     Decode an ETL folder via the 'BT Driver Log Parser' tab (same as AutoFolder mode)
@@ -319,6 +641,15 @@ def bt_decode_hci_via_folder(log_folder_path: str, log_path: str, etl_txt_timeou
         print(f"❌ Failed to get app window: {e}")
         return None
 
+    main_hwnd = None
+    try:
+        main_hwnd = app_window.wrapper_object().handle
+    except Exception:
+        main_hwnd = None
+
+    # 4.5) Split oversized ETLs via ETL-Splitter before Decode Folder.
+    _split_large_etl_files(app_window, log_folder_path, main_hwnd)
+    
     # Switch to 'BT Driver Log Parser' tab (same as AutoFolder mode)
     try:
         bt_tab = app_window.child_window(
@@ -934,7 +1265,7 @@ def bt_analysis_autoFolder_mode(
 
     # 7) Wait for the decoded output (either naming convention) and open it
     hci_txt = candidate_hci_paths(log_path)[0]
-    print(f"⏳ Waiting for HCI log until found (timeout={timeout}s): {hci_txt}")
+    print(f"⏳ Waiting for HCI log until found: {hci_txt}")
 
     etl_txt = log_path + ".txt"
     txt_cfa = log_path + ".txt.cfa"

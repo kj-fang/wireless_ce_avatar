@@ -39,10 +39,13 @@ def run_dload_threads(att_list, download_path, socketio):
                 yield [file_path, name, already_dload]
 
 def extract_content_length(logs):
-    max_size = None
+    max_size = 0
     for entry in logs:
-        log = json.loads(entry["message"])["message"]
-        if log["method"] == "Network.responseReceived":
+        try:
+            log = json.loads(entry["message"])["message"]
+        except (KeyError, json.JSONDecodeError, TypeError):
+            continue
+        if log.get("method") == "Network.responseReceived":
             try:
                 url = log["params"]["response"]["url"]
                 headers = {k.lower(): v for k, v in log["params"]["response"]["headers"].items()}
@@ -50,7 +53,7 @@ def extract_content_length(logs):
                     size = int(headers["content-length"])
                     print("✅ URL:", url)
                     print("📦 Content-Length:", size)
-                    if max_size is None or size > max_size:
+                    if size > max_size:
                         max_size = size
             except Exception as e:
                 continue

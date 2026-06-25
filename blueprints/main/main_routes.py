@@ -606,6 +606,15 @@ def render_download_result_form():
     event_table_rows = _build_event_table_rows(file_dicts['ddd_dict'], download_path=download_path)
     fw_table_rows = _build_fw_table_rows(file_dicts['fw_dict'], download_path=download_path)
 
+    # Compute BT file sizes for display and auto-select filtering
+    bt_file_sizes = {}
+    for bt_paths in (file_dicts.get('bt_dict') or {}).values():
+        for bp in (bt_paths or []):
+            try:
+                bt_file_sizes[bp] = os.path.getsize(bp) if os.path.isfile(bp) else 0
+            except OSError:
+                bt_file_sizes[bp] = 0
+
     # Find the evt path with the latest timestamp for auto-load
     latest_evt_path = None
     latest_evt_time = None
@@ -634,6 +643,7 @@ def render_download_result_form():
                          bt_table_rows=bt_table_rows,
                          event_table_rows=event_table_rows,
                          fw_table_rows=fw_table_rows,
+                         bt_file_sizes=bt_file_sizes,
                          latest_evt_path=latest_evt_path,
                          time_filter_info=time_filter_info,
                          time_filter_warnings=time_filter_warnings,

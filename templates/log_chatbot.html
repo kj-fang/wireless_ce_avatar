@@ -197,6 +197,7 @@
            stay hidden — and excluded from getAllIssueTimes() — until
            the user opts in via this checkbox. */
         .sidebar-multi-toggle {
+            position: relative;
             display: flex;
             align-items: flex-start;
             gap: 8px;
@@ -217,11 +218,25 @@
             flex-shrink: 0;
         }
         .sidebar-multi-toggle .smt-sub {
-            display: block;
+            display: none;
+            position: absolute;
+            left: 50%;
+            top: calc(100% + 4px);
+            transform: translateX(-50%);
+            z-index: 1000;
+            white-space: nowrap;
+            padding: 5px 8px;
+            background: #1f2937;
+            color: #f9fafb;
+            border-radius: 4px;
+            box-shadow: 0 4px 10px rgba(0,0,0,0.15);
             font-size: 0.66rem;
-            color: #6b7280;
             font-weight: 400;
-            margin-top: 1px;
+            margin-top: 0;
+            pointer-events: none;
+        }
+        .sidebar-multi-toggle:hover .smt-sub {
+            display: block;
         }
         /* ── Issue-time capture window control ──────────────────────── */
         .itw-row { margin-top: 12px; }
@@ -300,6 +315,15 @@
             background: #f0f0f0;
             border-color: #888;
         }
+        /* Compact trash icon in the Issue Time header; reveals "Clear" on hover */
+        .it-clear-top {
+            background: none; border: none; cursor: pointer; color: #9aa3ad;
+            font-size: 0.85rem; display: inline-flex; align-items: center; gap: 4px;
+            padding: 2px 6px; border-radius: 5px; line-height: 1;
+        }
+        .it-clear-top:hover { color: #c62828; background: #fbeaea; }
+        .it-clear-top-label { display: none; font-size: 0.72rem; font-weight: 600; }
+        .it-clear-top:hover .it-clear-top-label { display: inline; }
 
         /* ── Confirm modal ── */
         .cm-overlay {
@@ -2124,45 +2148,46 @@
 
         <!-- Issue Time -->
         <div class="sidebar-section">
-            <h6>⏰ Issue Time</h6>
-            <div style="font-size:0.72rem;color:#666;margin-bottom:8px;line-height:1.4;">
-                When did the issue happen? Required for the first question.<br>
-                <span style="color:#0071c5;font-weight:600;">Format: MM / DD / YYYY &nbsp; HH : MM : SS . mmm</span>
-            </div>
-
-            <!-- Quick actions -->
-            <div style="display:flex;gap:6px;margin-bottom:10px;align-items:center;">
-                <div id="it-unknown-warn" style="display:none;flex:1;font-size:0.7rem;color:#92400e;background:#fff7ed;border:1px solid #fdba74;border-radius:6px;padding:5px 8px;line-height:1.3;">
-                    ⚠️ <strong>Unknown time.</strong> Couldn't auto-detect the issue time — please fill it in below.
-                </div>
-                <button class="it-quick-btn it-quick-btn-clear" onclick="clearAllIssueTimes()" title="Clear the primary time AND all extra issue-time rows">
-                    🗑️ Clear
+            <h6 style="display:flex;align-items:center;justify-content:space-between;">
+                <span>⏰ Issue Time</span>
+                <button type="button" class="it-clear-top" onclick="clearAllIssueTimes()"
+                        title="Clear the issue time (and any extra rows)">
+                    🗑️<span class="it-clear-top-label">Clear</span>
                 </button>
+            </h6>
+            <div style="font-size:0.72rem;color:#666;margin-bottom:10px;line-height:1.4;">
+                When did the issue happen?
             </div>
 
-            <!-- AI issue-time assistant: infers issue time(s) from the chat
-                 description + a rough browse of the log, into the capture popup. -->
-            <button type="button" class="it-quick-btn" id="ai-time-btn"
-                    style="display:flex;align-items:center;justify-content:center;gap:6px;width:100%;margin-bottom:6px;background:#eef4ff;border-color:#bcd3f5;"
-                    onclick="suggestIssueTimesWithAI()"
-                    title="Analyze your description + the loaded log with AI to suggest the issue time">
-                🪄 AI suggest issue time
-            </button>
-            <!-- Non-blocking hint when AI suggest is used with an empty chat box. -->
-            <div id="ai-time-nodesc" style="display:none;font-size:0.7rem;color:#92400e;margin-bottom:10px;line-height:1.35;">
-                ℹ No description — AI will infer from the log only. Add a problem description in the chat box for better accuracy.
+            <!-- Customer wall clock — the human-facing value (what the customer
+                 saw on their OWN clock). Shown ABOVE the editable fields, which
+                 hold the decode-host/log-frame value. Populated by
+                 populateCustomerAnnotation(); hidden until a tz is detected. -->
+            <div id="issue-time-customer-annotation"
+                 style="display:none;margin-bottom:12px;padding:9px 11px;
+                        background:linear-gradient(135deg,#eaf3ff 0%,#f4f9ff 100%);
+                        border:1px solid #cfe0fa;border-left:3px solid #0071c5;
+                        border-radius:10px;box-shadow:0 1px 2px rgba(0,113,197,0.06);">
+                <div style="display:flex;align-items:center;gap:5px;margin-bottom:3px;">
+                    <span style="font-size:0.9rem;line-height:1;">👤</span>
+                    <span style="font-size:0.64rem;font-weight:700;letter-spacing:0.05em;
+                                 text-transform:uppercase;color:#0071c5;">Customer time</span>
+                </div>
+                <div id="issue-time-customer-value"
+                     style="font-size:1.04rem;font-weight:700;color:#0b2e4f;line-height:1.2;
+                            font-family:'SFMono-Regular',Consolas,monospace;"></div>
+                <div id="issue-time-customer-tz"
+                     style="font-size:0.64rem;color:#7c93ad;margin-top:2px;"></div>
             </div>
 
-            <!-- Confirmation gate for an auto-filled (previous-page) time.
-                 Manually-typed times count immediately; a time carried over
-                 from the previous page does NOT count until the user ticks
-                 this box (or edits a field / applies an AI suggestion). -->
-            <div id="it-confirm-row"
-                 style="display:none;margin-bottom:10px;font-size:0.72rem;color:#92400e;background:#fff7ed;border:1px solid #fdba74;border-radius:6px;padding:6px 8px;line-height:1.35;">
-                <label style="display:flex;align-items:flex-start;gap:6px;cursor:pointer;margin:0;">
-                    <input type="checkbox" id="it-confirm-autofill" onchange="onIssueTimeConfirmToggle()" style="margin-top:2px;">
-                    <span>⏱ Auto-detected time(s) — <strong>tick to use</strong>.</span>
-                </label>
+            <!-- The editable fields below hold the issue time in the ETL
+                 DECODE-HOST clock (GMT+8) — the same frame the decoded .log
+                 content is written in and what the agent scans (PreScan ±5 min).
+                 The customer-time card above is that same instant on the
+                 customer's wall clock. -->
+            <div style="font-size:0.66rem;color:#475569;margin-bottom:6px;line-height:1.45;">
+                🖥 <strong>ETL decode-host time</strong> (GMT+8)
+                <span style="display:block;color:#9aa3ad;margin-top:1px;">Format: MM / DD / YYYY &nbsp; HH:MM:SS.mmm</span>
             </div>
 
             <!-- Hidden native datetime-local for the calendar popup -->
@@ -2244,10 +2269,31 @@
             <!-- Hidden legacy field kept so other code referencing it doesn't break -->
             <input id="issue-time-ms" type="hidden">
 
-            <div id="issue-time-display"
-                 style="font-size:0.78rem;color:#0071c5;margin-top:8px;font-weight:600;font-family:'SFMono-Regular',Consolas,monospace;min-height:1.1em;"></div>
             <div id="issue-time-error"
                  style="display:none;font-size:0.7rem;color:#c62828;margin-top:4px;"></div>
+
+            <!-- Issue-time actions (below the picker). Clear now lives as a
+                 trash icon in the section header (top-right). -->
+            <div style="margin-top:14px;border-top:1px solid #eef1f4;padding-top:12px;">
+
+                <!-- AI issue-time assistant: infers issue time(s) from the chat
+                     description + a rough browse of the log, into the capture popup. -->
+                <button type="button" class="it-quick-btn" id="ai-time-btn"
+                        style="display:flex;align-items:center;justify-content:center;gap:6px;width:100%;margin-bottom:6px;background:#eef4ff;border-color:#bcd3f5;"
+                        onclick="suggestIssueTimesWithAI()"
+                        title="Analyze your description + the loaded log with AI to suggest the issue time">
+                    🪄 AI suggest issue time
+                </button>
+                <!-- Non-blocking hint when AI suggest is used with an empty chat box. -->
+                <div id="ai-time-nodesc" style="display:none;font-size:0.7rem;color:#92400e;margin-bottom:6px;line-height:1.35;">
+                    ℹ No description — AI will infer from the log only. Add a problem description in the chat box for better accuracy.
+                </div>
+
+                <!-- Shown when no issue time could be auto-detected. -->
+                <div id="it-unknown-warn" style="display:none;font-size:0.7rem;color:#92400e;background:#fff7ed;border:1px solid #fdba74;border-radius:6px;padding:5px 8px;line-height:1.3;">
+                    ⚠️ <strong>Unknown time.</strong> Couldn't auto-detect the issue time — please fill it in above.
+                </div>
+            </div>
 
             <!-- Master toggle: hide additional issue times unless the user
                  opts in. AI auto-fill / popup-apply may add extras into
@@ -2289,10 +2335,6 @@
                            oninput="onIssueWindowChange()">
                     <button type="button" class="itw-step" onclick="stepIssueWindow(1)" title="More">＋</button>
                     <span class="itw-unit">min ± around issue time</span>
-                </div>
-                <div class="itw-hint" id="it-window-hint">
-                    Captures logs from <strong><span id="itw-readout">5</span></strong> min before to <strong><span id="itw-readout2">5</span></strong> min after.
-                    <br>Range 0 – <strong><span id="itw-max">120</span></strong> min (log length).
                 </div>
             </div>
         </div>
@@ -2957,6 +2999,109 @@
         validateUserInput();
     }
 
+    // Parse a "(GMT-0500)" / "(UTC-05:00)" / "GMT+8" style suffix into minutes
+    // from UTC. Returns null when no offset can be read.
+    function _parseTzOffsetMin(label) {
+        const m = String(label || '').match(/(?:GMT|UTC)\s*([+-])(\d{1,2})(?::?(\d{2}))?/i);
+        if (!m) return null;
+        const sign = (m[1] === '-') ? -1 : 1;
+        const hh = parseInt(m[2], 10) || 0;
+        const mm = parseInt(m[3] || '0', 10) || 0;
+        return sign * (hh * 60 + mm);
+    }
+
+    // Express a UTC instant as wall-clock parts in an IANA zone (e.g.
+    // "America/Los_Angeles"). Intl applies that zone's DST rules for the
+    // instant, so the result is correct in both standard and summer time.
+    // Returns null if the zone id is unusable.
+    function _partsInZone(date, iana) {
+        try {
+            const fmt = new Intl.DateTimeFormat('en-US', {
+                timeZone: iana, hour12: false,
+                year: 'numeric', month: '2-digit', day: '2-digit',
+                hour: '2-digit', minute: '2-digit', second: '2-digit'
+            });
+            const o = {};
+            for (const p of fmt.formatToParts(date)) {
+                if (p.type !== 'literal') o[p.type] = p.value;
+            }
+            return {
+                y: parseInt(o.year, 10), mo: parseInt(o.month, 10),
+                d: parseInt(o.day, 10), hh: parseInt(o.hour, 10) % 24,
+                mi: parseInt(o.minute, 10), ss: parseInt(o.second, 10)
+            };
+        } catch (e) { return null; }
+    }
+
+    // Update the 👤 Customer time card. The editable fields hold the ETL
+    // decode-host (GMT+8) value; this converts that LIVE to the customer wall
+    // clock so the card tracks manual edits (no server round-trip). When an
+    // IANA zone id is known (window.__customerIana) the conversion is
+    // DST-aware for the date in the picker; otherwise it falls back to the
+    // label's fixed standard offset (customer = decode_host + (offset − 8h)).
+    function populateCustomerAnnotation() {
+        const wrap = document.getElementById('issue-time-customer-annotation');
+        const valEl = document.getElementById('issue-time-customer-value');
+        const tzEl  = document.getElementById('issue-time-customer-tz');
+        if (!wrap || !valEl || !tzEl) return;
+        const tz = (window.__customerTzLabel || '').trim();
+        const iana = (window.__customerIana || '').trim();
+        const offMin = _parseTzOffsetMin(tz);
+        // Render when EITHER a parseable UTC/GMT offset OR an IANA zone id is
+        // available. A label like "Central Standard Time" carries no offset,
+        // but the backend can still supply __customerIana for the DST-aware
+        // path below, so don't hide on offMin === null alone.
+        if (!tz || (offMin === null && !iana)) { wrap.style.display = 'none'; return; }
+
+        const r = (typeof checkIssueTime === 'function') ? checkIssueTime() : { valid: false };
+        const hh = getPart('it-hour'), mi = getPart('it-min'), ss = getPart('it-sec');
+        if (!r.valid || hh === null || mi === null) { wrap.style.display = 'none'; return; }
+        const mo = getPart('it-month'), dy = getPart('it-day'), yr = getPart('it-year');
+        const hasDate = (mo !== null && dy !== null && yr !== null);
+
+        const DECODE_HOST_OFFSET_MIN = 8 * 60;          // GMT+8 (decoder host)
+        const p2 = n => String(n).padStart(2, '0');
+        const ms = getPart('it-ms');
+        const msStr = (ms !== null) ? '.' + String(ms).padStart(3, '0') : '';
+
+        // DST-aware path: only meaningful with a real date. Treat the picker
+        // value as GMT+8 wall clock, derive the UTC instant, then read it back
+        // in the customer IANA zone so summer/winter offsets are correct.
+        if (hasDate && iana) {
+            const utcMs = Date.UTC(yr, mo - 1, dy, hh, mi, ss || 0)
+                          - DECODE_HOST_OFFSET_MIN * 60000;
+            const cp = _partsInZone(new Date(utcMs), iana);
+            if (cp) {
+                const clock = `${p2(cp.hh)}:${p2(cp.mi)}:${p2(cp.ss)}${msStr}`;
+                valEl.textContent = `${p2(cp.mo)}/${p2(cp.d)}/${cp.y}-${clock}`;
+                tzEl.textContent = tz;
+                wrap.style.display = '';
+                return;
+            }
+        }
+
+        // Fallback fixed-offset path. It needs a numeric offset; the IANA
+        // path above already handled (and returned for) the DST-aware case.
+        // If the label carried no offset (offMin === null) and that path
+        // didn't render — no date, or an unusable zone id — there's nothing
+        // valid to show, so hide rather than emit a NaN timestamp.
+        if (offMin === null) { wrap.style.display = 'none'; return; }
+        const deltaMin = offMin - DECODE_HOST_OFFSET_MIN;
+        // Do the arithmetic entirely in UTC so the browser's own tz can't skew
+        // it. For time-only logs (no date) use a placeholder date and show only
+        // the shifted clock.
+        const baseY = hasDate ? yr : 2000;
+        const baseMo = hasDate ? (mo - 1) : 0;
+        const baseD = hasDate ? dy : 1;
+        const c = new Date(Date.UTC(baseY, baseMo, baseD, hh, mi, ss || 0) + deltaMin * 60000);
+        const clock = `${p2(c.getUTCHours())}:${p2(c.getUTCMinutes())}:${p2(c.getUTCSeconds())}${msStr}`;
+        valEl.textContent = hasDate
+            ? `${p2(c.getUTCMonth() + 1)}/${p2(c.getUTCDate())}/${c.getUTCFullYear()}-${clock}`
+            : clock;
+        tzEl.textContent = tz;
+        wrap.style.display = '';
+    }
+
     function updateIssueTimeDisplay() {
         const display = document.getElementById('issue-time-display');
         const errEl   = document.getElementById('issue-time-error');
@@ -2992,6 +3137,14 @@
             } else {
                 display.textContent = '';
             }
+        }
+        // Refresh the "Customer wall clock" annotation row whenever the
+        // composed value changes. populateCustomerAnnotation() recomputes the
+        // conversion live from the customer IANA zone (DST-aware) or, as a
+        // fallback, the label's fixed UTC/GMT offset — so it tracks every edit
+        // to the picker without consulting the backend annotation map.
+        if (typeof populateCustomerAnnotation === 'function') {
+            populateCustomerAnnotation();
         }
         if (errEl) {
             if (firstError) {
@@ -3116,12 +3269,6 @@
         if (cb) cb.checked = false;
         const row = document.getElementById('it-confirm-row');
         if (row) row.style.display = show ? 'block' : 'none';
-    }
-    function onIssueTimeConfirmToggle() {
-        const cb = document.getElementById('it-confirm-autofill');
-        issueTimeAwaitingConfirm = !(cb && cb.checked);
-        updateIssueTimeDisplay();
-        validateUserInput();
     }
     // Called from manual-edit / clear / AI-apply paths: the time is now
     // user-owned, so drop the pending-confirmation state.
@@ -3687,15 +3834,9 @@
                     if (_myLogGen !== window.__setLogGen) return;
                     if (chosen && typeof setIssueTimeFromString === 'function'
                             && setIssueTimeFromString(chosen)) {
-                        if (fromLlm) {
-                            // Same gate the auto-run prefill path uses for
-                            // LLM-sourced times — visible until the user
-                            // ticks the confirm box.
-                            issueTimeAwaitingConfirm = true;
-                            if (typeof setIssueTimeConfirmUI === 'function') {
-                                setIssueTimeConfirmUI(true);
-                            }
-                        } else if (typeof markIssueTimeUserOwned === 'function') {
+                        // Auto-detected time is applied immediately (the old
+                        // confirm-gate was removed).
+                        if (typeof markIssueTimeUserOwned === 'function') {
                             markIssueTimeUserOwned();
                         }
                     }
@@ -4353,6 +4494,17 @@
             // (may be several, e.g. "23:16 ... 23:17:09"). Best-first.
             const issueTimes = Array.isArray(contextData.issue_times)
                 ? contextData.issue_times.filter(Boolean) : [];
+            // Customer-tz annotation map: ``{ "<log_frame_str>": "<customer_str>" }``
+            // populated by determine_issue_time_frames on the server. The
+            // sidebar surfaces it under the picker once an issue time is
+            // applied so the engineer sees what time the customer would
+            // have seen on their own wall clock.
+            window.__customerAnnotations = contextData.customer_annotations || {};
+            window.__customerTzLabel = contextData.customer_tz || '';
+            window.__customerIana = contextData.customer_iana || '';
+            if (typeof populateCustomerAnnotation === 'function') {
+                populateCustomerAnnotation();
+            }
 
             // Enable agentic mode for auto-analysis
             agenticMode = true;
@@ -4374,10 +4526,8 @@
                 // backend-resolved issue_time → regex on description.
                 if (issueTimes.length > 0 && _prefillAutoTimes(issueTimes)) {
                     // The backend already returned a CLEAN description (raw
-                    // timestamps stripped), so use it verbatim. These auto-
-                    // filled time(s) await the user's confirm tick.
-                    issueTimeAwaitingConfirm = true;
-                    setIssueTimeConfirmUI(true);
+                    // timestamps stripped), so use it verbatim. Auto-detected
+                    // time(s) apply immediately (confirm-gate removed).
                     validateUserInput();
                 } else {
                     let foundTime = urlIssueTime || attachmentTime || resolvedTime;
@@ -4389,10 +4539,8 @@
                     }
                     if (foundTime && setIssueTimeFromString(foundTime)) {
                         descPart = rawQuestion.replace(foundTime, ' ');
-                        // Carried over from the previous page → show it, but
-                        // require the user to tick the confirm box first.
-                        issueTimeAwaitingConfirm = true;
-                        setIssueTimeConfirmUI(true);
+                        // Carried over from the previous page — applied
+                        // immediately (confirm-gate removed).
                         validateUserInput();
                     } else {
                         // Couldn't find/parse a time — surface the warning so

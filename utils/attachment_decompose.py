@@ -48,6 +48,54 @@ def list_etl_files(root_folder):
             if '.etl' in filename.lower():
                 etl_files.append(os.path.join(dirpath, filename))
     return etl_files
+
+
+def dedup_by_capture_signature(file_paths):
+    """Drop duplicate files that belong to the SAME autologger capture.
+
+    A redundantly-packaged upload often contains the same autologger run
+    twice — e.g. an already-extracted folder AND its own ``.zip`` — and the
+    recursive extractor then re-extracts the zip to a flat location, so the
+    same ``WifiDriverIHVSession.etl.004`` ends up at two paths:
+
+        .../Could not connect issue/LUS-..._wrt_.../LUS-..._12-26-53_/WifiDriverIHVSession.etl.004
+        .../Could_not_connect_issue/LUS-..._12-26-53_/WifiDriverIHVSession.etl.004
+
+    Both are byte-identical — the same capture. We collapse them to ONE so
+    the picker shows a single row.
+
+    Signature = (immediate parent folder name, file basename). The parent
+    folder carries the autologger's precise timestamp + address
+    (``LUS-..._DD-MM-YYYY_HH-MM-SS_<ms>_<addr...>``), so two genuinely
+    different captures keep distinct signatures and are NEVER merged.
+
+    Within a duplicate group we prefer the copy that already has a decoded
+    ``<file>.log`` sibling (saves the chatbot a re-decode); otherwise the
+    first-seen path wins, preserving the original ordering.
+
+    NOTE: this only de-duplicates the RESULT LIST. Every file is still
+    extracted to disk, so nothing the customer uploaded is lost — the other
+    copy's siblings (evt, system_info, pcapng, …) all remain available.
+    """
+    chosen = {}        # signature -> chosen path
+    order = []         # first-seen signature order
+    for p in file_paths:
+        parent = os.path.basename(os.path.dirname(p))
+        base = os.path.basename(p)
+        sig = (parent, base)
+        if sig not in chosen:
+            chosen[sig] = p
+            order.append(sig)
+        else:
+            # Same capture already recorded — upgrade to this path only when
+            # it carries a decoded .log and the incumbent does not.
+            incumbent = chosen[sig]
+            try:
+                if os.path.exists(p + ".log") and not os.path.exists(incumbent + ".log"):
+                    chosen[sig] = p
+            except Exception:
+                pass  # fs hiccup → keep incumbent
+    return [chosen[sig] for sig in order]
         
 
 def extract_archive(archive, extract_to, progress_cb=None):
@@ -289,13 +337,15 @@ def process_single_zip(zip_path, download_path_tmp, already_downloaded, progress
             if "history" not in new_file.lower() and new_file not in processed_files:
                 unzip_pending.append(new_file)
     
-    # Remove duplicates
-    wifi_files = list(dict.fromkeys(wifi_files))
-    ddd_files = list(dict.fromkeys(ddd_files))
-    evt_files = list(dict.fromkeys(evt_files))
-    bt_files = list(dict.fromkeys(bt_files))
-    fw_files = list(dict.fromkeys(fw_files))
-    
+    # Remove duplicates. First collapse identical paths (dict.fromkeys), then
+    # collapse same-capture-different-path duplicates produced by redundantly
+    # packaged uploads (same autologger extracted nested AND flat).
+    wifi_files = dedup_by_capture_signature(list(dict.fromkeys(wifi_files)))
+    ddd_files = dedup_by_capture_signature(list(dict.fromkeys(ddd_files)))
+    evt_files = dedup_by_capture_signature(list(dict.fromkeys(evt_files)))
+    bt_files = dedup_by_capture_signature(list(dict.fromkeys(bt_files)))
+    fw_files = dedup_by_capture_signature(list(dict.fromkeys(fw_files)))
+
     print(f"WiFi files: {len(wifi_files)}")
     print(f"DDD files: {len(ddd_files)}")
     print(f"EVT files: {len(evt_files)}")

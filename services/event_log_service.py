@@ -1,15 +1,21 @@
 import os
-import json
-import re
 import xml.etree.ElementTree as ET
-from datetime import datetime, timezone, timedelta
+from datetime import datetime
 
 try:
-    from dateutil import tz
     import win32evtlog
 except ImportError as e:
     print("Required modules not found. Please ensure 'pywin32' and 'python-dateutil' are installed.")
     raise e
+
+# Shared timezone helpers — system_info.txt parsing + resolver are now in
+# utils.timezone_utils so the chatbot / find_best_log / filter_folders_by_time
+# paths can reuse the same logic without copy-pasting it.
+from utils.timezone_utils import (
+    get_effective_timezone as _get_effective_timezone,
+    utc_to_local as _utc_to_local,
+    format_tz_label as _format_tz_label,
+)
 
 
 _CACHE = {}
@@ -25,142 +31,43 @@ _SOURCE_GROUPS = {
 
 _LEVEL_MAP = {'1': 'Critical', '2': 'Error', '3': 'Warning', '4': 'Information', '5': 'Verbose'}
 
-_UTC_PREFIX_RE = re.compile(r'^\(UTC([+-])(\d{2}):(\d{2})\)\s*(.*)$', re.IGNORECASE)
-_UTC_GMT_OFFSET_RE = re.compile(r'\((?:UTC|GMT)([+-])(\d{2}):?(\d{2})\)', re.IGNORECASE)
-
 
 def get_system_timezone(event_path):
-    if not event_path:
-        return ''
+    """Backwards-compatible wrapper around the shared helper.
 
-    search_dirs = []
-    current_dir = os.path.dirname(event_path)
-    for _ in range(4):
-        if not current_dir or current_dir in search_dirs:
-            break
-        search_dirs.append(current_dir)
-        current_dir = os.path.dirname(current_dir)
-    for base_dir in search_dirs:
-        direct_info = os.path.join(base_dir, 'system_info.txt')
-        special_direct_info = os.path.join(base_dir, 'systeminfo.txt')
-        if os.path.exists(direct_info):
-            try:
-                with open(direct_info, 'r', encoding='utf-8') as f:
-                    return json.load(f).get('System Time Zone', '') or ''
-            except Exception as e:
-                print(f"[Error] reading system_info.txt for timezone: {e}")
-                pass
-        elif os.path.exists(special_direct_info):
-            try:
-                with open(special_direct_info, 'r', encoding='utf-16le') as f:
-                    for line in f:
-                        if line.startswith('Time Zone:'):
-                            return line.split(':', 1)[1].strip()
-            except Exception as e:
-                print(f"[Error] reading systeminfo.txt for timezone: {e}")
-                pass
-
-        try:
-            for child_name in os.listdir(base_dir):
-                child_dir = os.path.join(base_dir, child_name)
-                child_info = os.path.join(child_dir, 'system_info.txt')
-                child_special_info = os.path.join(child_dir, 'systeminfo.txt')
-                if not os.path.isdir(child_dir):
-                    continue
-
-                if os.path.exists(child_info):
-                    try:
-                        with open(child_info, 'r', encoding='utf-8') as f:
-                            tz_name = json.load(f).get('System Time Zone', '') or ''
-                        if tz_name:
-                            return tz_name
-                    except Exception as e:
-                        print(f"[Error] reading system_info.txt for timezone: {e}")
-                        continue
-                elif os.path.exists(child_special_info):
-                    try:
-                        with open(child_special_info, 'r', encoding='utf-16le') as f:
-                            for line in f:
-                                if line.startswith('Time Zone:'):
-                                    return line.split(':', 1)[1].strip()
-                    except Exception as e:
-                        print(f"[Error] reading systeminfo.txt for timezone: {e}")
-                        continue
-            
-        except Exception:
-            continue
-
-    return ''
+    Honours the manual override sidecar in addition to system_info.txt so
+    event log views stay in lockstep with the chatbot's timezone picker.
+    """
+    return _get_effective_timezone(event_path)
 
 
 def convert_time(time_str, timezone_name):
+    """Convert a UTC-naive event log timestamp to the customer's local time."""
     if not time_str or time_str == 'Unknown' or not timezone_name:
         return time_str
     try:
-        event_time_utc = datetime.strptime(time_str, '%Y-%m-%d %H:%M:%S').replace(tzinfo=tz.UTC)
-        target_timezone = _resolve_timezone(timezone_name)
-        if target_timezone is None:
+        utc_naive = datetime.strptime(time_str, '%Y-%m-%d %H:%M:%S')
+        local_naive = _utc_to_local(utc_naive, timezone_name)
+        if local_naive is None:
             return time_str
-        return event_time_utc.astimezone(target_timezone).strftime('%Y-%m-%d %H:%M:%S')
+        return local_naive.strftime('%Y-%m-%d %H:%M:%S')
     except Exception:
         return time_str
 
 
-def _resolve_timezone(timezone_name):
-    tz_name = (timezone_name or '').strip()
-    if not tz_name:
-        return None
-
-    # 1) Handle strings like: (UTC-08:00) Pacific Time (US & Canada)
-    prefix_match = _UTC_PREFIX_RE.match(tz_name)
-    if prefix_match:
-        sign = 1 if prefix_match.group(1) == '+' else -1
-        hours = int(prefix_match.group(2))
-        minutes = int(prefix_match.group(3))
-        total_minutes = sign * (hours * 60 + minutes)
-        return timezone(timedelta(minutes=total_minutes))
-
-    # 2) Legacy handling for strings like: Pacific Standard Time (GMT-0800)
-    legacy_name = tz_name.split(' (')[0].strip()
-    if legacy_name:
-        target_timezone = tz.gettz(legacy_name)
-        if target_timezone is not None:
-            return target_timezone
-
-    # 3) Fallback: build fixed-offset timezone from UTC/GMT offset text.
-    offset_match = _UTC_GMT_OFFSET_RE.search(tz_name)
-    if offset_match:
-        sign = 1 if offset_match.group(1) == '+' else -1
-        hours = int(offset_match.group(2))
-        minutes = int(offset_match.group(3))
-        total_minutes = sign * (hours * 60 + minutes)
-        return timezone(timedelta(minutes=total_minutes))
-
-    # 4) Direct parse last to avoid dateutil misreading composite strings.
-    return tz.gettz(tz_name)
-
-
 def build_time_header(timezone_name):
+    """Pretty column-header label, e.g. "Time (UTC-05:00)"."""
     if not timezone_name:
         return 'Time'
-    try:
-        target_timezone = _resolve_timezone(timezone_name)
-        if target_timezone is None:
-            return 'Time'
-
-        utc_offset = datetime.now(target_timezone).utcoffset()
-        if utc_offset is None:
-            return 'Time'
-
-        total_minutes = int(utc_offset.total_seconds() // 60)
-        sign = '+' if total_minutes >= 0 else '-'
-        total_minutes = abs(total_minutes)
-        hours = total_minutes // 60
-        minutes = total_minutes % 60
-
-        return f"Time (UTC{sign}{hours:02d}:{minutes:02d})"
-    except Exception:
+    label = _format_tz_label(timezone_name)
+    if not label:
         return 'Time'
+    # `format_tz_label` returns "<name> (UTC±HH:MM)"; we only want the offset
+    # in the column header to keep it compact.
+    m = label.rsplit('(', 1)
+    if len(m) == 2:
+        return f"Time ({m[1].rstrip(')').strip()})"
+    return f"Time ({label})"
 
 
 def _source_matches(source, source_filter):

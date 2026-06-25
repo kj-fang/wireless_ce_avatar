@@ -2005,6 +2005,13 @@
     // when llm_issue_time is None server-side.
     window.__llmIssueTime = {{ (llm_issue_time or "") | tojson }};
     window.__wifiOrBt = {{ wifi_or_bt | tojson }};
+    // Server-side AI pick (timezone-aware via pick_etl_by_ai_time). When set,
+    // we use this path verbatim to pre-tick the auto-pick checkbox and
+    // select the matching .wifi-file-item row on page load — bypassing the
+    // frontend's autoSelectLogByIssueTime, which compares folder timestamps
+    // and `__llmIssueTime` as if they were in the same frame and misses by
+    // the customer's UTC offset on non-Asia cases.
+    window.__aiPreSelectedEtl = {{ (ai_pre_selected_etl or "")|tojson }};
 
     function startChatbotAnalysis(button, etlPathEncoded) {
         if (button.classList.contains('disabled')) return;
@@ -2125,6 +2132,12 @@
     function onAutoPickLogToggle() {
         const cb = document.getElementById('auto-pick-log');
         if (cb && cb.checked) {
+            // Prefer the server-side AI pick (timezone-aware). When that's
+            // present, just click the matching row directly instead of the
+            // frame-agnostic walk in autoSelectLogByIssueTime.
+            if (window.__aiPreSelectedEtl && selectAiPreSelectedEtl()) {
+                return;
+            }
             if (!autoSelectLogByIssueTime()) {
                 cb.checked = false;
                 alert('No WiFi log with a timestamp near the AI issue time was found — please pick one manually.');
@@ -2230,6 +2243,36 @@
             }
         }
     }
+
+    // Click the .wifi-file-item whose decoded etl path matches the server-
+    // computed AI pick. Returns true on success.
+    function selectAiPreSelectedEtl() {
+        const target = window.__aiPreSelectedEtl || '';
+        if (!target) return false;
+        const items = document.querySelectorAll('#wifi-panel .wifi-file-item');
+        for (const el of items) {
+            const decoded = decodeURIComponent(el.dataset.etlEncoded || '');
+            if (decoded === target) {
+                selectWifiEtlRow(el);
+                el.scrollIntoView({ block: 'nearest', behavior: 'smooth' });
+                return true;
+            }
+        }
+        return false;
+    }
+
+    // Pre-tick the checkbox + select the matching row on page load when the
+    // server-side AI pick is available. Runs once, only affects WiFi panel.
+    // We DON'T auto-fire the analysis — the user still presses "Wi-Fi
+    // Analysis Agent" themselves. Defers to existing auto_analysis_etl
+    // (Run Analysis path) when that's already going to trigger its own
+    // selection / launch.
+    document.addEventListener('DOMContentLoaded', function() {
+        if (!window.__aiPreSelectedEtl) return;
+        const cb = document.getElementById('auto-pick-log');
+        if (cb && !cb.checked) cb.checked = true;
+        selectAiPreSelectedEtl();
+    });
 
     function selectDddRow(itemEl) {
         document.querySelectorAll('.ddd-file-item').forEach(item => {

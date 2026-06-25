@@ -240,16 +240,57 @@ def _prime_issue_ai_cache(case_context):
     """Run the (token-frugal) LLM organize on the case Issue Description and
     stash {clean_description, issue_times, interpretation} in the session under
     ``_issue_ai_quick``. No log exists yet, so times come back clock-only; they
-    get dated against the actual log later (download_result / chatbot)."""
+    get dated against the actual log later (download_result / chatbot).
+
+    Source-of-truth chain (first non-empty wins):
+      1. ``case_context.description`` — the IPS Issue Description field. Usually
+         populated when the case came from the standard Salesforce pull.
+      2. Attachment subtitle text in ``case_context.attachment_list`` — the
+         small gray "uploaded by Partner at ..." line shown beneath each
+         attachment in the Choose Attachment picker. Many cases (especially
+         partner-uploaded ones) leave the IPS Issue Description blank and
+         instead put the symptom + time inline next to the attachment, e.g.
+         ``"could not connect to AP at 04/14/2026 01:26:00"``. Without this
+         fallback the AI cache stays empty for those cases and the
+         ``🪄 Auto-pick log by AI time`` checkbox on /download_result never
+         renders.
+    """
     from utils.issue_time_ai import organize_issue_context
     desc = (getattr(case_context, "description", "") or "").strip()
+    print(f"[_prime_issue_ai_cache] entry — case_nbr={getattr(case_context, 'case_nbr', '?')!r}  "
+          f"description empty? {not desc}")
     if not desc:
+        # Fall back to attachment subtitle text. attachment_list entries look
+        # like ``[name, link, [timestamp_meta, subtitle_text]]``; we collect
+        # every non-empty subtitle and let the LLM/regex pass mine it for a
+        # time + symptom statement.
+        try:
+            chunks = []
+            for item in (getattr(case_context, "attachment_list", []) or []):
+                if not item or len(item) < 3:
+                    continue
+                meta = item[2] if isinstance(item[2], (list, tuple)) else None
+                if meta and len(meta) >= 2 and isinstance(meta[1], str):
+                    s = meta[1].strip()
+                    if s:
+                        chunks.append(s)
+            desc = "\n".join(chunks).strip()
+            if desc:
+                print(f"[_prime_issue_ai_cache] description empty — using "
+                      f"{len(chunks)} attachment subtitle(s) as fallback")
+        except Exception as _e:
+            print(f"[_prime_issue_ai_cache] attachment fallback failed: {_e}")
+    if not desc:
+        print(f"[_prime_issue_ai_cache] STILL empty after attachment fallback — bailing")
         return
+    print(f"[_prime_issue_ai_cache] description ({len(desc)} chars): {desc[:200]!r}")
     helper = app_config.llm_helper
     client = getattr(helper, "client", None) if helper else None
     model = getattr(helper, "model", "gpt-4.1") if helper else None
     data = organize_issue_context(desc, first_ts=None, last_ts=None,
                                   llm_client=client, llm_model=model)
+    print(f"[_prime_issue_ai_cache] organize_issue_context returned: "
+          f"issue_times={data.get('issue_times')!r}")
     session["_issue_ai_quick"] = {"data": data}
 
 def _resolve_download_path(case_context: CaseContext, is_bsod: bool) -> str:
@@ -465,17 +506,31 @@ def render_download_result_form():
     
     if time_mapping:
         from datetime import datetime as dt
+        from utils.issue_time_ai import align_issue_datetime_to_customer_frame
         print(f"Applying time-based filtering for {len(time_mapping)} file(s)")
         try:
             # Filter each dict type with corresponding time for each file
             for dict_name in ['wifi_dict', 'ddd_dict', 'bt_dict', 'fw_dict']:
                 file_dict = file_dicts[dict_name]
-                
+
                 filtered_dict = {}
                 for zip_name, paths in file_dict.items():
                     if zip_name in time_mapping:
                         # Apply time filter for this specific file
                         issue_time = time_mapping[zip_name]
+                        # The attachment subtitle is often in log frame (e.g.
+                        # "04/14/2026 01:26:00" for a CST customer), but
+                        # folder names are in the customer's local clock.
+                        # filter_folders_by_time expects both sides in the
+                        # same frame — align here so the +/- 5 min window
+                        # actually catches the right folder instead of
+                        # warning "All folders are before issue time".
+                        if isinstance(issue_time, dt):
+                            aligned = align_issue_datetime_to_customer_frame(issue_time, paths)
+                            if aligned != issue_time:
+                                print(f"🪄 issue_time aligned for {zip_name!r}: "
+                                      f"{issue_time} → {aligned}")
+                            issue_time = aligned
                         temp_dict = {zip_name: paths}
                         filtered_temp, warnings = filter_folders_by_time(temp_dict, issue_time)
                         filtered_dict.update(filtered_temp)
@@ -511,7 +566,60 @@ def render_download_result_form():
     # the "auto-pick log by AI time" checkbox next to Chatbot Analysis.
     _quick_ai = (session.get("_issue_ai_quick") or {}).get("data") or {}
     llm_issue_times = _quick_ai.get("issue_times") or []
-    llm_issue_time = llm_issue_times[0] if llm_issue_times else ""
+    llm_issue_time_raw = llm_issue_times[0] if llm_issue_times else ""
+
+    # Fallback: the LLM pre-pass cache (``_issue_ai_quick``) can be empty —
+    # e.g. the chatbot primed it first with a blank description, or the
+    # select-attachments step was skipped. But ``time_mapping`` (parsed from
+    # the attachment subtitle just above, the SAME source filter_folders_by_time
+    # uses) often DOES carry a usable issue time. Reuse it so the auto-pick
+    # checkbox renders and the AI pre-select runs even when the LLM cache is
+    # cold. Prefer a full datetime; format it into the canonical string the
+    # rest of this view expects.
+    if not llm_issue_time_raw and time_mapping:
+        from datetime import datetime as _dt
+        for _zip, _it in time_mapping.items():
+            if isinstance(_it, _dt):
+                llm_issue_time_raw = _it.strftime("%m/%d/%Y-%H:%M:%S.%f")[:-3]
+                break
+            if isinstance(_it, str) and _it.strip():
+                llm_issue_time_raw = _it.strip()
+                break
+        if llm_issue_time_raw:
+            print(f"[download_result] _issue_ai_quick empty — using attachment "
+                  f"time from time_mapping: {llm_issue_time_raw!r}")
+            llm_issue_times = [llm_issue_time_raw]
+
+    # Trace why the chip might be missing: prime-pass ran? extracted times?
+    print(f"[download_result] _issue_ai_quick present: "
+          f"{bool(session.get('_issue_ai_quick'))}  "
+          f"issue_times: {llm_issue_times!r}  "
+          f"raw: {llm_issue_time_raw!r}")
+
+    # Rewrite the AI issue time into the customer wall-clock so the chip on
+    # /download_result reads in the SAME frame as the folder names. The
+    # description usually transcribes a log-frame value (e.g. ``04/14/2026
+    # 01:26:00`` for a CST customer = ``04/13/2026 12:26:00`` locally), which
+    # is confusing next to ``LUS-..._13-04-2026_12-26-53_...`` folders. The
+    # alignment is deterministic-first (compare both interpretations to the
+    # folder ts list, pick the smaller gap) and only consults the LLM when
+    # the two gaps are within a minute of each other. Falls back to the raw
+    # string when no tz can be detected.
+    llm_issue_time = llm_issue_time_raw
+    if llm_issue_time_raw:
+        try:
+            from utils.issue_time_ai import align_issue_time_for_display
+            helper = app_config.llm_helper
+            client = getattr(helper, "client", None) if helper else None
+            model = getattr(helper, "model", "gpt-4.1") if helper else None
+            llm_issue_time = align_issue_time_for_display(
+                llm_issue_time_raw, file_dicts,
+                llm_client=client, llm_model=model,
+            )
+            if llm_issue_time != llm_issue_time_raw:
+                print(f"🪄 issue_time aligned: {llm_issue_time_raw} → {llm_issue_time}")
+        except Exception as e:
+            print(f"⚠️ align_issue_time_for_display failed: {e}")
 
     # Independent Run Analysis marker (see handle_select_attachments_submission /
     # start_latest_etl_llm). Pop once so subsequent reloads of /download_result
@@ -560,6 +668,11 @@ def render_download_result_form():
     if llm_issue_time and (auto_analysis_etl or run_analysis_pending):
         try:
             from utils.issue_time_ai import pick_etl_by_ai_time
+            # Picker expects ``issue_time`` in the customer frame (folder
+            # names are written in customer time). ``llm_issue_time`` has
+            # been routed through ``align_issue_time_for_display`` above so
+            # any log-frame transcription in the description has already
+            # been shifted to customer.
             ai_pick = pick_etl_by_ai_time(file_dicts, llm_issue_time)
             if ai_pick:
                 if not auto_analysis_etl or ai_pick != auto_analysis_etl:
@@ -600,6 +713,45 @@ def render_download_result_form():
         except Exception as _e:
             print(f"⚠️ BT auto-analysis pick failed: {_e}")
 
+    # Download path: even when the user clicked "Download" (no auto-run), we
+    # still want the row PRE-SELECTED so the user just has to click "Wi-Fi
+    # Analysis Agent" — no second decision. The frontend's
+    # ``autoSelectLogByIssueTime`` walks the page itself but treats folder ts
+    # and ``__llmIssueTime`` as the same frame (off by ~13 h for non-Asia
+    # customers), so a manual checkbox click ends up picking the wrong row.
+    # We compute the path server-side once (timezone-aware via
+    # ``pick_etl_by_ai_time``) and hand it to the template; the JS only has
+    # to look up the matching ``.wifi-file-item`` and click it.
+    ai_pre_selected_etl = ""
+    if llm_issue_time:
+        try:
+            from utils.issue_time_ai import pick_etl_by_ai_time
+            ai_pre_selected_etl = pick_etl_by_ai_time(file_dicts, llm_issue_time) or ""
+            if ai_pre_selected_etl:
+                print(f"🪄 AI pre-select: {ai_pre_selected_etl} "
+                      f"(issue_time={llm_issue_time})")
+        except Exception as e:
+            print(f"⚠️ AI pre-select pick failed: {e}")
+
+    # Multi-ETL display: when the AI issue time is time-only (no date), anchor
+    # the CHIP to the AI-picked ETL's folder capture date so it reads as a real
+    # moment instead of a bare clock. Done AFTER the picks above so it only
+    # affects display, not which ETL is selected (the pickers handle time-only
+    # internally). Folder names + llm_issue_time are both customer frame here,
+    # so this is a pure date fill. Picked-folder priority: the download
+    # pre-select, else the Run-Analysis pick.
+    _picked_folder = ai_pre_selected_etl or auto_analysis_etl
+    if llm_issue_time and _picked_folder:
+        try:
+            from utils.issue_time_ai import anchor_time_only_to_folder_date
+            _dated = anchor_time_only_to_folder_date(llm_issue_time, _picked_folder)
+            if _dated != llm_issue_time:
+                print(f"[download_result] chip date anchored to folder: "
+                      f"{llm_issue_time} -> {_dated}")
+                llm_issue_time = _dated
+        except Exception as e:
+            print(f"[download_result] chip date anchor failed: {e}")
+
     latest_fw_system_info_path, latest_fw_system_info = _get_latest_fw_system_info(file_dicts['fw_dict'])
     wifi_table_rows = _build_wifi_table_rows(file_dicts['wifi_dict'], download_path=download_path)
     bt_table_rows = _build_bt_table_rows(file_dicts['bt_dict'], download_path=download_path)
@@ -632,6 +784,7 @@ def render_download_result_form():
                          case_path=download_path,
                          llm_issue_time=llm_issue_time,
                          llm_issue_times=llm_issue_times,
+                         ai_pre_selected_etl=ai_pre_selected_etl,
                          wifi_or_bt=case_context.wifi_or_bt,
                          auto_analysis_etl = auto_analysis_etl,
                          auto_analysis_etl_reason = auto_analysis_etl_reason,

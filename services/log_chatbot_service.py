@@ -26,7 +26,7 @@ from pydantic import BaseModel, Field
 
 from utils import helpers
 from utils.assert_code_utils import lookup_assert_code
-from utils.issue_time_utils import resolve_issue_time
+from utils.issue_time_utils import resolve_issue_time, parse_issue_time_string, format_issue_time
 from utils.log_parser_preprocess import (
     extract_enabled_keywords_from_filter_file,
     filter_log_by_keywords,
@@ -463,6 +463,14 @@ class WifiLogAgentSystem:
         self.issue_context: dict = {}  # populated by prime_with_context()
         self.issue_time: Optional[datetime] = None  # populated by prime_with_context() or _chat_with_tools()
         self._issue_time_time_only: bool = False
+        # Customer-tz annotation surfaced alongside ``issue_time``. The
+        # canonical ``self.issue_time`` is kept in the log's own frame so it
+        # matches the .log content for PreScan; ``issue_time_customer`` is
+        # the SAME instant viewed from the customer's wall clock (e.g. for
+        # a CST customer "01:26 GMT+8" surfaces as "12:26 CST"). Both stay
+        # None until ``prime_with_context`` resolves them.
+        self.issue_time_customer: Optional[datetime] = None
+        self.issue_time_tz: str = ""
         # Half-width (in minutes) of the Segment2 log window captured
         # around issue_time. Default ±5 min; user-adjustable from the
         # chatbot sidebar via the /chat `issue_time_window_minutes` param.
@@ -2017,14 +2025,33 @@ class WifiLogAgentSystem:
                 time_source = "user_message"
 
             if self.issue_time:
-                _emit({
-                    "role": "agent",
-                    "content": (
-                        f"🕒 **Issue Time Extracted:** `{self.issue_time.strftime('%m/%d/%Y %H:%M:%S')}`\n"
-                        f"(source: {time_source})\n"
-                        "Agent will look for events around this timestamp in filtered logs."
-                    ),
-                })
+                # Add a "customer wall clock" annotation when the issue time
+                # frame detection produced a different customer-side value
+                # (typical for non-Asia customers — the log shows GMT+8, the
+                # customer's screenshot shows their own clock). prime_with_
+                # context stamps these on self when it resolves the frames.
+                customer_dt = getattr(self, "issue_time_customer", None)
+                customer_tz = (getattr(self, "issue_time_tz", "") or "").strip()
+                extracted = self.issue_time.strftime('%m/%d/%Y %H:%M:%S')
+                has_customer = bool(customer_dt and customer_tz
+                                    and customer_dt != self.issue_time)
+                if has_customer:
+                    # Two clean lines, no nested parentheses: the log-frame
+                    # value (what we scan) on top, the customer wall clock below.
+                    content = (
+                        f"🕒 **Issue Time Extracted:** `{extracted}` — ETL decode-host time (GMT+8)\n"
+                        f"👤 **Customer wall clock:** "
+                        f"`{customer_dt.strftime('%m/%d/%Y %H:%M:%S')}` — {customer_tz}\n"
+                        f"Agent will look for events around this timestamp in filtered logs. "
+                        f"_(source: {time_source})_"
+                    )
+                else:
+                    content = (
+                        f"🕒 **Issue Time Extracted:** `{extracted}`\n"
+                        f"Agent will look for events around this timestamp in filtered logs. "
+                        f"_(source: {time_source})_"
+                    )
+                _emit({"role": "agent", "content": content})
 
             # --- Raw log preprocessing (scope-narrowing) ---
             load_err = self._ensure_raw_log_cache()
@@ -3216,14 +3243,76 @@ class WifiLogAgentSystem:
             "description": description,
             "issue_type": issue_type,
         }
+        # Resolve ``attachment_time`` into the LOG frame so PreScan can
+        # match against the raw .log content (the decoder writes the log
+        # host's clock — GMT+8 in our deployment). The same priority logic
+        # used for the customer-side picker is reused here: trust the
+        # input as customer wall-clock first, only flip to "input was
+        # already in log frame" when the evidence is strong. Either way we
+        # also remember the customer-frame equivalent so the UI / agent
+        # context can surface a "what this means on the customer's
+        # wall-clock" annotation alongside the log-frame value.
+        aligned_attachment_time = attachment_time
+        self.issue_time_customer = None
+        self.issue_time_tz = ""
+        if attachment_time and self.current_log_path:
+            try:
+                from utils.issue_time_ai import determine_issue_time_frames
+                parsed_dt, is_time_only = parse_issue_time_string(attachment_time)
+                if parsed_dt and not is_time_only:
+                    frames = determine_issue_time_frames(
+                        parsed_dt, [self.current_log_path]
+                    )
+                    log_dt = frames.get("log_frame") or parsed_dt
+                    self.issue_time_customer = frames.get("customer_frame")
+                    self.issue_time_tz = frames.get("customer_tz") or ""
+                    if log_dt != parsed_dt:
+                        aligned_attachment_time = format_issue_time(log_dt)
+                    print(f"[DEBUG] prime_with_context frames: "
+                          f"log={log_dt} customer={self.issue_time_customer} "
+                          f"tz={self.issue_time_tz!r} "
+                          f"source_frame={frames.get('source_frame')}")
+                elif parsed_dt and is_time_only:
+                    # Time-only input (e.g. "04:45 PM") carries no date. Per the
+                    # locked default (#4) treat the clock as the CUSTOMER wall
+                    # clock, anchor its date to the capture day (the log's last
+                    # timestamp shifted into the customer tz), then convert
+                    # customer -> log so the value lands in the same frame as the
+                    # .log content for PreScan. Also stash the customer-frame
+                    # equivalent for the UI annotation. Falls through to the raw
+                    # resolve_issue_time path (stamps the clock onto the log date,
+                    # no shift) when no tz / no log timestamp is available — which
+                    # is the correct no-op for a Taiwan-frame customer anyway.
+                    from utils.issue_time_utils import read_log_time_range
+                    from utils.timezone_utils import (
+                        get_effective_timezone, taiwan_to_local, local_to_taiwan,
+                    )
+                    tz = get_effective_timezone(self.current_log_path)
+                    _first_ts, _last_ts = read_log_time_range(self.current_log_path)
+                    _ref = _last_ts or _first_ts
+                    if tz and _ref:
+                        cust_date = (taiwan_to_local(_ref, tz) or _ref).date()
+                        cust_dt = datetime.combine(cust_date, parsed_dt.time())
+                        log_dt = local_to_taiwan(cust_dt, tz) or cust_dt
+                        self.issue_time_customer = cust_dt
+                        self.issue_time_tz = tz
+                        aligned_attachment_time = format_issue_time(log_dt)
+                        print(f"[DEBUG] prime_with_context time-only frames: "
+                              f"clock={parsed_dt.time()} customer={cust_dt} "
+                              f"log={log_dt} tz={tz!r}")
+            except Exception as e:
+                print(f"[DEBUG] prime_with_context frame detect skipped ({e})")
+
         # Resolve issue_time once: parse attachment_time strictly, fall back to
         # the log file's latest timestamp when no usable input exists, and
         # auto-align time-only strings against the log date. After this call
         # `self.issue_time` is the canonical value used everywhere downstream.
-        dt, src = resolve_issue_time(attachment_time, self.current_log_path)
+        dt, src = resolve_issue_time(aligned_attachment_time, self.current_log_path)
         self.issue_time = dt
         self._issue_time_time_only = (src == "input_time_only")
-        print(f"[DEBUG] prime_with_context issue_time={dt} source={src} raw='{attachment_time}'")
+        print(f"[DEBUG] prime_with_context issue_time={dt} source={src} "
+              f"raw='{attachment_time}' log_frame='{aligned_attachment_time}' "
+              f"customer_frame='{self.issue_time_customer}'")
         context_parts = []
         if case_nbr:
             context_parts.append(f"Case: {case_nbr}")

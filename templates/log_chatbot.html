@@ -5894,15 +5894,15 @@
                 <div class="fbd-skill-row-head">
                     <span class="fbd-skill-row-name">${safe}</span>
                     <div class="fbd-skill-verdict">
-                        <button type="button" class="fbd-verdict-btn" data-v="helpful" onclick="setSkillVerdict(this,'helpful')">👍 Good</button>
-                        <button type="button" class="fbd-verdict-btn" data-v="wrong" onclick="setSkillVerdict(this,'wrong')">👎 Wrong</button>
+                        <button type="button" class="fbd-verdict-btn" data-v="helpful" title="Helpful" onclick="setSkillVerdict(this,'helpful')">👍</button>
+                        <button type="button" class="fbd-verdict-btn" data-v="wrong" title="Not helpful" onclick="setSkillVerdict(this,'wrong')">👎</button>
                     </div>
                 </div>
                 <div class="fbd-skill-row-detail hidden-row">
                     <input type="text" class="fbd-skill-reason"
-                           placeholder="What this skill got wrong">
+                           placeholder="Comment (optional)">
                     <textarea class="fbd-skill-evidence"
-                              placeholder="Correct conclusion"></textarea>
+                              placeholder="Evidence log lines (optional)"></textarea>
                 </div>`;
             list.appendChild(row);
         });
@@ -5933,15 +5933,15 @@
                 <div class="fbd-skill-row-head">
                     <span class="fbd-skill-row-name">${safe}</span>
                     <div class="fbd-skill-verdict">
-                        <button type="button" class="fbd-verdict-btn" data-v="helpful" onclick="setStepVerdict(this,'helpful')">👍 Good</button>
-                        <button type="button" class="fbd-verdict-btn" data-v="wrong" onclick="setStepVerdict(this,'wrong')">👎 Wrong</button>
+                        <button type="button" class="fbd-verdict-btn" data-v="helpful" title="Helpful" onclick="setStepVerdict(this,'helpful')">👍</button>
+                        <button type="button" class="fbd-verdict-btn" data-v="wrong" title="Not helpful" onclick="setStepVerdict(this,'wrong')">👎</button>
                     </div>
                 </div>
                 <div class="fbd-skill-row-detail hidden-row">
                     <input type="text" class="fbd-skill-reason"
-                           placeholder="Why this step was wrong">
+                           placeholder="Comment (optional)">
                     <textarea class="fbd-skill-evidence"
-                              placeholder="What the agent should have done at this step"></textarea>
+                              placeholder="Evidence / what to do differently (optional)"></textarea>
                 </div>`;
             list.appendChild(row);
         });
@@ -5971,11 +5971,11 @@
         if (next) btn.classList.add('active');
         row.dataset.verdict = next;
         const detail = row.querySelector('.fbd-skill-row-detail');
-        if (detail) detail.classList.toggle('hidden-row', next !== 'wrong');
+        if (detail) detail.classList.toggle('hidden-row', !next);
         updateSelectedCount('fbd-step-rows', 'fbd-step-count');
     }
 
-    // Toggle a skill's verdict; 'wrong' reveals the reason + evidence box.
+    // Toggle a skill's verdict; either verdict reveals the same comment box.
     // Clicking the active verdict again clears it.
     function setSkillVerdict(btn, verdict) {
         const row = btn.closest('.fbd-skill-row');
@@ -5986,7 +5986,7 @@
         if (next) btn.classList.add('active');
         row.dataset.verdict = next;   // '', 'helpful', or 'wrong'
         const detail = row.querySelector('.fbd-skill-row-detail');
-        if (detail) detail.classList.toggle('hidden-row', next !== 'wrong');
+        if (detail) detail.classList.toggle('hidden-row', !next);
         updateSelectedCount('fbd-skill-rows', 'fbd-skill-count');
     }
 
@@ -6021,14 +6021,12 @@
             const sid = row.dataset.skillId || '';
             const v = row.dataset.verdict || '';
             if (!sid || !v || v === 'none') return;
-            if (v === 'wrong') {
-                const reason = (row.querySelector('.fbd-skill-reason')?.value || '').trim();
-                const ev = (row.querySelector('.fbd-skill-evidence')?.value || '')
-                    .split(/\r?\n/).map((s) => s.replace(/\s+$/, '')).filter((s) => s.length > 0);
-                bySkill[sid] = { skill_id: sid, assessment: 'wrong',
+            const reason = (row.querySelector('.fbd-skill-reason')?.value || '').trim();
+            const ev = (row.querySelector('.fbd-skill-evidence')?.value || '')
+                .split(/\r?\n/).map((s) => s.replace(/\s+$/, '')).filter((s) => s.length > 0);
+            if (v === 'wrong' || v === 'helpful') {
+                bySkill[sid] = { skill_id: sid, assessment: v,
                                  what_wrong: reason, evidence_lines: ev };
-            } else if (v === 'helpful') {
-                bySkill[sid] = { skill_id: sid, assessment: 'helpful' };
             }
         });
         return Object.values(bySkill);
@@ -6047,15 +6045,12 @@
             if (!Number.isFinite(idx)) return;
             const sid = row.dataset.skillId || null;
             const label = (row.querySelector('.fbd-skill-row-name')?.textContent || '').trim();
-            if (v === 'wrong') {
-                const reason = (row.querySelector('.fbd-skill-reason')?.value || '').trim();
-                const ev = (row.querySelector('.fbd-skill-evidence')?.value || '')
-                    .split(/\r?\n/).map((s) => s.replace(/\s+$/, '')).filter((s) => s.length > 0);
+            const reason = (row.querySelector('.fbd-skill-reason')?.value || '').trim();
+            const ev = (row.querySelector('.fbd-skill-evidence')?.value || '')
+                .split(/\r?\n/).map((s) => s.replace(/\s+$/, '')).filter((s) => s.length > 0);
+            if (v === 'wrong' || v === 'helpful') {
                 out.push({ step_index: idx, skill_id: sid, step_label: label,
-                           assessment: 'wrong', what_wrong: reason, evidence_lines: ev });
-            } else if (v === 'helpful') {
-                out.push({ step_index: idx, skill_id: sid, step_label: label,
-                           assessment: 'helpful' });
+                           assessment: v, what_wrong: reason, evidence_lines: ev });
             }
         });
         return out;
@@ -6468,12 +6463,10 @@
             if (!row) return;
             const btn = row.querySelector(`.fbd-verdict-btn[data-v="${item.assessment}"]`);
             if (btn) setSkillVerdict(btn, item.assessment);
-            if (item.assessment === 'wrong') {
-                const r = row.querySelector('.fbd-skill-reason');
-                const e = row.querySelector('.fbd-skill-evidence');
-                if (r && item.what_wrong) r.value = item.what_wrong;
-                if (e && Array.isArray(item.evidence_lines)) e.value = item.evidence_lines.join('\n');
-            }
+            const r = row.querySelector('.fbd-skill-reason');
+            const e = row.querySelector('.fbd-skill-evidence');
+            if (r && item.what_wrong) r.value = item.what_wrong;
+            if (e && Array.isArray(item.evidence_lines)) e.value = item.evidence_lines.join('\n');
         });
 
         const stf = Array.isArray(d.stepFeedback) ? d.stepFeedback : [];
@@ -6485,12 +6478,10 @@
             if (!row) return;
             const btn = row.querySelector(`.fbd-verdict-btn[data-v="${item.assessment}"]`);
             if (btn) setStepVerdict(btn, item.assessment);
-            if (item.assessment === 'wrong') {
-                const r = row.querySelector('.fbd-skill-reason');
-                const e = row.querySelector('.fbd-skill-evidence');
-                if (r && item.what_wrong) r.value = item.what_wrong;
-                if (e && Array.isArray(item.evidence_lines)) e.value = item.evidence_lines.join('\n');
-            }
+            const r = row.querySelector('.fbd-skill-reason');
+            const e = row.querySelector('.fbd-skill-evidence');
+            if (r && item.what_wrong) r.value = item.what_wrong;
+            if (e && Array.isArray(item.evidence_lines)) e.value = item.evidence_lines.join('\n');
         });
 
         // Attachment checkbox picks up whatever the user last chose.

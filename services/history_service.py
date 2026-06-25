@@ -1,0 +1,374 @@
+"""
+Conversation History Service (local, per-user, Gemini / Claude style)
+
+Stores one JSON file per conversation under ``<avatarfiles_dir>/history/``.
+
+How this differs from ``feedback_service``:
+  * feedback_service writes a SHARED, vote-gated, path-scrubbed training-data
+    layer (only persists when the user casts 👍/👎, lands on a network share).
+  * history_service is the user's OWN browsable chat history: every turn is
+    persisted immediately, nothing is scrubbed, and the files never leave the
+    local machine. It powers the left-sidebar "History" panel — list past
+    conversations, click to re-load + resume, delete.
+
+Design goals (borrowed from feedback_service):
+  * Never blocks / breaks the chat path — every public function swallows its
+    own errors.
+  * Files only, no DB.
+  * Per-file locks so concurrent SSE threads don't interleave writes.
+  * Client-supplied conversation ids are sanitised before becoming path
+    components (path-traversal hard-stop).
+"""
+
+from __future__ import annotations
+
+import json
+import os
+import re
+import threading
+from datetime import datetime
+from pathlib import Path
+from typing import Any, Optional
+
+from configs.global_configs import app_config
+
+
+# Bump when the on-disk shape changes so a future reader knows the rules.
+HISTORY_SCHEMA_VERSION = 1
+
+# Hard cap on how many conversations the list endpoint returns / scans.
+_LIST_LIMIT = 300
+
+# Trim very large stored results so a single huge report can't bloat a file
+# without bound. 200k chars is far above any real report.
+_MAX_RESULT_CHARS = 200_000
+
+
+# --- Storage location ----------------------------------------------------
+_root_cache: Optional[Path] = None
+_root_lock = threading.Lock()
+
+
+def _resolve_root() -> Path:
+    """
+    Resolve the local history root once and cache it.
+
+    Primary:  <avatarfiles_dir>/history   (same root the rest of the app uses
+              for case downloads — users find their history next to their logs)
+    Fallback: <cwd>/data/history          (avatarfiles_dir not set yet)
+    """
+    global _root_cache
+    if _root_cache is not None:
+        return _root_cache
+    with _root_lock:
+        if _root_cache is not None:
+            return _root_cache
+        base = getattr(app_config, "avatarfiles_dir", None)
+        root = Path(base) / "history" if base else Path.cwd() / "data" / "history"
+        try:
+            root.mkdir(parents=True, exist_ok=True)
+        except Exception as e:
+            print(f"[history] could not create root {root}: {e}")
+        _root_cache = root
+        return root
+
+
+def _history_root() -> Path:
+    return _resolve_root()
+
+
+# --- Path-traversal hard-stop -------------------------------------------
+# conversation_id is server-generated as a uuid4, but the /history/* routes
+# accept whatever the client sends — sanitise before it becomes a filename.
+_SAFE_ID_RE = re.compile(r"^[A-Za-z0-9_-]{1,80}$")
+
+
+def _safe_id(value: Any) -> str:
+    if not isinstance(value, str):
+        return ""
+    cleaned = value.strip()
+    return cleaned if _SAFE_ID_RE.match(cleaned) else ""
+
+
+def _conversation_path(conversation_id: str) -> Optional[Path]:
+    safe = _safe_id(conversation_id)
+    if not safe:
+        return None
+    return _history_root() / f"{safe}.json"
+
+
+# --- Locks ---------------------------------------------------------------
+_locks_guard = threading.Lock()
+_path_locks: dict[str, threading.Lock] = {}
+
+
+def _lock_for(path: Path) -> threading.Lock:
+    key = str(path)
+    with _locks_guard:
+        lock = _path_locks.get(key)
+        if lock is None:
+            lock = threading.Lock()
+            _path_locks[key] = lock
+        return lock
+
+
+# --- Helpers -------------------------------------------------------------
+
+def _now_iso() -> str:
+    return datetime.now().astimezone().isoformat(timespec="seconds")
+
+
+def _derive_title(user_message: str, issue: Optional[dict]) -> str:
+    """First user message wins; fall back to issue subject/description."""
+    msg = (user_message or "").strip()
+    if msg:
+        first_line = msg.splitlines()[0].strip()
+        return (first_line[:60] + "…") if len(first_line) > 60 else first_line
+    if isinstance(issue, dict):
+        for key in ("subject", "description"):
+            v = (issue.get(key) or "").strip()
+            if v:
+                return (v[:60] + "…") if len(v) > 60 else v
+    return "New conversation"
+
+
+def assistant_text_from_result(result: Any) -> str:
+    """
+    Compact plain-text rendering of an agent.chat() result. Used to rebuild
+    the agent's conversation_history when a saved conversation is resumed,
+    so follow-up questions have textual context.
+    """
+    if not isinstance(result, dict):
+        return str(result or "")
+    rtype = result.get("type", "")
+    data = result.get("data", "")
+    if rtype == "text" and isinstance(data, str):
+        return data
+    if rtype in ("report", "partial_report") and isinstance(data, dict):
+        parts: list[str] = []
+        if data.get("root_cause_summary"):
+            parts.append(f"Root cause: {data['root_cause_summary']}")
+        if data.get("confidence_score") is not None:
+            parts.append(f"Confidence: {data['confidence_score']}")
+        actions = data.get("recommended_actions")
+        if isinstance(actions, list) and actions:
+            parts.append("Recommended actions: " + "; ".join(str(a) for a in actions))
+        if data.get("markdown_summary"):
+            parts.append(str(data["markdown_summary"]))
+        return "\n".join(parts) or json.dumps(data, ensure_ascii=False)[:2000]
+    if rtype == "error":
+        return f"[error] {data}"
+    return json.dumps(result, ensure_ascii=False)[:2000]
+
+
+def _trim_result(result: Any) -> Any:
+    """Keep stored result JSON-safe and bounded in size."""
+    try:
+        encoded = json.dumps(result, ensure_ascii=False)
+    except Exception:
+        # Non-serialisable payload — fall back to its string form.
+        return {"type": "text", "data": str(result)}
+    if len(encoded) <= _MAX_RESULT_CHARS:
+        return result
+    # Too big — keep a readable text stand-in rather than the full blob.
+    return {"type": "text", "data": assistant_text_from_result(result)[:_MAX_RESULT_CHARS]}
+
+
+def _read_snapshot(path: Path) -> Optional[dict]:
+    try:
+        with path.open("r", encoding="utf-8") as f:
+            data = json.load(f)
+        return data if isinstance(data, dict) else None
+    except Exception:
+        return None
+
+
+# --- Public API ----------------------------------------------------------
+
+def record_turn(
+    *,
+    conversation_id: str,
+    session_id: str,
+    turn_id: str,
+    user_message: str,
+    agent_result: Any,
+    mode: str = "tools",
+    issue: Optional[dict] = None,
+    log_path: str = "",
+    issue_time: str = "",
+) -> None:
+    """
+    Append one turn to the conversation's history file, creating the file on
+    the first turn. Persists immediately (local disk, no vote gate).
+    Never raises.
+    """
+    path = _conversation_path(conversation_id)
+    if path is None or not turn_id:
+        return
+    try:
+        with _lock_for(path):
+            snapshot = None
+            if path.exists():
+                snapshot = _read_snapshot(path)
+            if not isinstance(snapshot, dict):
+                snapshot = {
+                    "schema_version": HISTORY_SCHEMA_VERSION,
+                    "conversation_id": _safe_id(conversation_id),
+                    "session_id": session_id or "",
+                    "title": _derive_title(user_message, issue),
+                    "created_at": _now_iso(),
+                    "updated_at": _now_iso(),
+                    "log_path": log_path or "",
+                    "issue": issue or {},
+                    "issue_time": issue_time or "",
+                    "turns": [],
+                }
+
+            # Keep latest context on the snapshot.
+            if log_path:
+                snapshot["log_path"] = log_path
+            if issue:
+                snapshot["issue"] = issue
+            if issue_time:
+                snapshot["issue_time"] = issue_time
+            snapshot["updated_at"] = _now_iso()
+
+            # Defend against a corrupt / non-list ``turns`` from an existing
+            # file: normalise to a list before appending so a bad snapshot
+            # can't make this best-effort writer raise and drop the turn.
+            turns = snapshot.get("turns")
+            if not isinstance(turns, list):
+                turns = []
+                snapshot["turns"] = turns
+            turns.append({
+                "turn_id": turn_id,
+                "ts": _now_iso(),
+                "user_message": user_message or "",
+                "result": _trim_result(agent_result),
+                "mode": mode,
+            })
+
+            # tmp+replace inline (already holding the lock).
+            tmp = path.with_suffix(".json.tmp")
+            tmp.write_text(
+                json.dumps(snapshot, ensure_ascii=False, indent=2),
+                encoding="utf-8",
+            )
+            tmp.replace(path)
+    except Exception as e:
+        print(f"[history] record_turn failed (conv={conversation_id}): {e}")
+
+
+def list_conversations(limit: int = _LIST_LIMIT) -> list[dict]:
+    """
+    Return lightweight summaries of stored conversations, newest first.
+    Each item: conversation_id, title, created_at, updated_at, turn_count,
+    log_path, case_nbr, issue_type. Conversations with no turns are skipped.
+    Never raises.
+    """
+    root = _history_root()
+    out: list[dict] = []
+    try:
+        files = list(root.glob("*.json"))
+    except Exception as e:
+        print(f"[history] list glob failed: {e}")
+        return []
+
+    for fp in files:
+        snap = _read_snapshot(fp)
+        if not snap:
+            continue
+        turns = snap.get("turns") or []
+        if not turns:
+            continue
+        issue = snap.get("issue") if isinstance(snap.get("issue"), dict) else {}
+        out.append({
+            "conversation_id": snap.get("conversation_id") or fp.stem,
+            "title": snap.get("title") or "Conversation",
+            "created_at": snap.get("created_at") or "",
+            "updated_at": snap.get("updated_at") or snap.get("created_at") or "",
+            "turn_count": len(turns),
+            "log_path": snap.get("log_path") or "",
+            "pinned": bool(snap.get("pinned")),
+            # Case fields so the sidebar can show more than the chat title.
+            # Cast to str first: a corrupt / future-schema file could hold a
+            # non-string here, and a bare .strip() would raise and break
+            # listing every conversation.
+            "case_nbr": str(issue.get("case_nbr") or "").strip(),
+            "issue_type": str(issue.get("issue_type") or "").strip(),
+        })
+
+    # Pinned conversations float to the top; within each group, newest first.
+    out.sort(key=lambda c: c.get("updated_at") or "", reverse=True)
+    out.sort(key=lambda c: bool(c.get("pinned")), reverse=True)
+    return out[: max(0, int(limit))]
+
+
+def get_conversation(conversation_id: str) -> Optional[dict]:
+    """Return the full snapshot for one conversation, or None. Never raises."""
+    path = _conversation_path(conversation_id)
+    if path is None or not path.exists():
+        return None
+    return _read_snapshot(path)
+
+
+def delete_conversation(conversation_id: str) -> bool:
+    """Delete one conversation file. Returns True if a file was removed."""
+    path = _conversation_path(conversation_id)
+    if path is None:
+        return False
+    try:
+        with _lock_for(path):
+            if path.exists():
+                path.unlink()
+                return True
+    except Exception as e:
+        print(f"[history] delete failed (conv={conversation_id}): {e}")
+    return False
+
+
+def _update_snapshot(conversation_id: str, mutate) -> bool:
+    """
+    Read the conversation snapshot, apply mutate(snapshot) in place, and write
+    it back atomically. Returns True on success. Never raises.
+    """
+    path = _conversation_path(conversation_id)
+    if path is None or not path.exists():
+        return False
+    try:
+        with _lock_for(path):
+            snapshot = _read_snapshot(path)
+            if not isinstance(snapshot, dict):
+                return False
+            mutate(snapshot)
+            tmp = path.with_suffix(".json.tmp")
+            tmp.write_text(
+                json.dumps(snapshot, ensure_ascii=False, indent=2),
+                encoding="utf-8",
+            )
+            tmp.replace(path)
+            return True
+    except Exception as e:
+        print(f"[history] update failed (conv={conversation_id}): {e}")
+        return False
+
+
+def rename_conversation(conversation_id: str, title: str) -> bool:
+    """Set a custom title for one conversation. Returns True on success."""
+    clean = (title or "").strip()
+    if not clean:
+        return False
+    clean = clean[:200]
+
+    def _apply(snap: dict) -> None:
+        snap["title"] = clean
+
+    return _update_snapshot(conversation_id, _apply)
+
+
+def set_pinned(conversation_id: str, pinned: bool) -> bool:
+    """Pin or unpin one conversation. Returns True on success."""
+    def _apply(snap: dict) -> None:
+        snap["pinned"] = bool(pinned)
+
+    return _update_snapshot(conversation_id, _apply)

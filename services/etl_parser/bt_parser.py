@@ -1,5 +1,3 @@
-from asyncio import timeout
-
 from pywinauto.application import Application
 from pywinauto import Desktop
 from pywinauto.keyboard import send_keys
@@ -1267,7 +1265,7 @@ def bt_analysis_autoFolder_mode(
 
     # 7) Wait for the decoded output (either naming convention) and open it
     hci_txt = candidate_hci_paths(log_path)[0]
-    print(f"⏳ Waiting for HCI log until found (timeout={hci_txt_timeout}s): {hci_txt}")
+    print(f"⏳ Waiting for HCI log until found: {hci_txt}")
 
     etl_txt = log_path + ".txt"
     txt_cfa = log_path + ".txt.cfa"

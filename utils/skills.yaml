@@ -382,7 +382,7 @@ wfd_p2p_flow:
 
 softap_supported_channels:
   name: "SoftAP Supported Channels"
-  description: "Used to analyze the SoftAP supported channels in different country/region."
+  description: "Used to analyze the SoftAP supported channels in different country/region. Must only be applicable when the context explicitly involves SoftAP."
   keywords:
     - "[prvLarStoreCurrentMcc]"
     - "[prvLarChannelArrUpdate]: : channel:"

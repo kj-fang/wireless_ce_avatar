@@ -911,7 +911,6 @@ class WifiLogAgentSystem:
             f"Current skill matched lines: {line_count}",
             f"New lines merged this round: {new_added}",
             f"Assembled total lines (stored): {total_count}",
-            "Note: Full assembled log is stored and can be requested via get_assembled_log_snapshot().",
             "",
             "=== Current Skill Evidence (message-only compact view) ===",
             "\n".join(focus_lines) if focus_lines else "(no lines)",
@@ -2259,14 +2258,12 @@ class WifiLogAgentSystem:
                 max_hits=max_hits,
             )
 
-        if tool_name == "get_assembled_log_snapshot":
-            mode = args.get("mode", "summary")
-            if mode == "full":
-                mode = "compact"
-            return self.get_assembled_log_snapshot(mode=mode)
-
-        if tool_name == "get_final_state_snapshot":
-            return self.get_final_state_snapshot(tail_lines=args.get("tail_lines", 120))
+        if tool_name in ("get_assembled_log_snapshot", "get_final_state_snapshot"):
+            return (
+                f"{tool_name} is disabled. "
+                "Use fetch_filtered_logs(skill_name) to retrieve skill-focused evidence "
+                "or query_log_detail(keyword) to search specific events."
+            )
 
         if tool_name == "lookup_assert_code":
             return lookup_assert_code(args.get("code", ""))
@@ -2720,50 +2717,50 @@ class WifiLogAgentSystem:
                     }
                 }
             },
-            {
-                "type": "function",
-                "function": {
-                    "name": "get_assembled_log_snapshot",
-                    "description": (
-                        "Retrieve assembled-log macro view on demand. "
-                        "Use mode='summary' for metadata only, 'compact' for limited body, "
-                        "or 'full' for complete assembled content."
-                    ),
-                    "parameters": {
-                        "type": "object",
-                        "properties": {
-                            "mode": {
-                                "type": "string",
-                                "enum": ["summary", "compact", "full"],
-                                "description": "How much assembled content to return.",
-                                "default": "summary"
-                            }
-                        },
-                        "required": []
-                    }
-                }
-            },
-            {
-                "type": "function",
-                "function": {
-                    "name": "get_final_state_snapshot",
-                    "description": (
-                        "Retrieve the latest assembled-log tail for end-of-analysis verification. "
-                        "Use this before declaring a persistent failure to check whether later logs show recovery/success."
-                    ),
-                    "parameters": {
-                        "type": "object",
-                        "properties": {
-                            "tail_lines": {
-                                "type": "integer",
-                                "description": "Number of latest lines to inspect. Default 120, range 20-400.",
-                                "default": 120
-                            }
-                        },
-                        "required": []
-                    }
-                }
-            },
+            # {
+            #     "type": "function",
+            #     "function": {
+            #         "name": "get_assembled_log_snapshot",
+            #         "description": (
+            #             "Retrieve assembled-log macro view on demand. "
+            #             "Use mode='summary' for metadata only, 'compact' for limited body, "
+            #             "or 'full' for complete assembled content."
+            #         ),
+            #         "parameters": {
+            #             "type": "object",
+            #             "properties": {
+            #                 "mode": {
+            #                     "type": "string",
+            #                     "enum": ["summary", "compact", "full"],
+            #                     "description": "How much assembled content to return.",
+            #                     "default": "summary"
+            #                 }
+            #             },
+            #             "required": []
+            #         }
+            #     }
+            # },
+            # {
+            #     "type": "function",
+            #     "function": {
+            #         "name": "get_final_state_snapshot",
+            #         "description": (
+            #             "Retrieve the latest assembled-log tail for end-of-analysis verification. "
+            #             "Use this before declaring a persistent failure to check whether later logs show recovery/success."
+            #         ),
+            #         "parameters": {
+            #             "type": "object",
+            #             "properties": {
+            #                 "tail_lines": {
+            #                     "type": "integer",
+            #                     "description": "Number of latest lines to inspect. Default 120, range 20-400.",
+            #                     "default": 120
+            #                 }
+            #             },
+            #             "required": []
+            #         }
+            #     }
+            # },
             {
                 "type": "function",
                 "function": {

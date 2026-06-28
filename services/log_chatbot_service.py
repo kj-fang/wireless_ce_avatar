@@ -1489,10 +1489,79 @@ class WifiLogAgentSystem:
             return filtered_lines
 
         body_lines = self._extract_lines_from_filtered_blob(filtered_lines)
-        compact_lines = []
-        for line in body_lines:
-            _, ts_display, message = self._normalize_time_message(line)
-            compact_lines.append(f"<{ts_display}> {message}".strip())
+
+        # Collapse burst-repeated lines that differ only in variable fields.
+        # For each consecutive run of similar lines:
+        #   - compact_lines (LLM payload): keep the first line as sample, then append
+        #     a single summary "(×N similar — label: v1, v2, …)" showing only what changed.
+        #   - deduped_body_lines (assembled log): keep first + last for detail storage.
+        _VAR_RE = re.compile(
+            r'(?:[0-9a-fA-F]{2}[:\-]){5}[0-9a-fA-F]{2}'  # MAC address
+            r'|\b\d{1,3}(?:\.\d{1,3}){3}\b'               # IPv4 address
+            r'|0x[0-9a-fA-F]+'                             # 0x hex literal
+            r'|\b[0-9a-fA-F]{4,}\b'                        # bare hex string (4+ hex digits)
+            r'|\b\d+\b'                                     # decimal integer
+        )
+
+        def _msg_pattern(msg: str) -> str:
+            return _VAR_RE.sub('*', msg)
+
+        def _variation_summary(run_lines: list) -> str:
+            """Return '(×N similar — label: v1, v2, …)' for a run of similar lines."""
+            msgs = [self._normalize_time_message(bl)[2] for bl in run_lines]
+            all_tok = [_VAR_RE.findall(m) for m in msgs]
+            if not all_tok or not all_tok[0]:
+                return f"×{len(msgs)} identical lines"
+            first_iters = list(_VAR_RE.finditer(msgs[0]))
+            varying = []
+            for pos in range(len(first_iters)):
+                values = [tl[pos] for tl in all_tok if pos < len(tl)]
+                if len(set(values)) <= 1:
+                    continue
+                # Label: last word before the token in the first message
+                label = f"field{pos + 1}"
+                before = msgs[0][:first_iters[pos].start()].rstrip(' \t=,(')
+                lm = re.search(r'(\w+)\s*$', before)
+                if lm:
+                    label = lm.group(1)
+                # Skip first value (already visible in the sample line); cap at 8
+                rest = values[1:]
+                val_str = (', '.join(rest) if len(rest) <= 8
+                           else ', '.join(rest[:5]) + ', …, ' + rest[-1])
+                varying.append(f"{label}: {val_str}")
+            if varying:
+                return f"(×{len(msgs)} similar — {'; '.join(varying)})"
+            return f"(×{len(msgs)} identical lines)"
+
+        deduped_body_lines: list = []
+        compact_lines: list = []
+        run_start = 0
+        while run_start < len(body_lines):
+            _, _, msg0 = self._normalize_time_message(body_lines[run_start])
+            pat0 = _msg_pattern(msg0)
+            run_end = run_start + 1
+            while run_end < len(body_lines):
+                _, _, msgN = self._normalize_time_message(body_lines[run_end])
+                if _msg_pattern(msgN) == pat0:
+                    run_end += 1
+                else:
+                    break
+            run_len = run_end - run_start
+            if run_len <= 2:
+                deduped_body_lines.extend(body_lines[run_start:run_end])
+                for line in body_lines[run_start:run_end]:
+                    _, ts, msg = self._normalize_time_message(line)
+                    compact_lines.append(f"<{ts}> {msg}".strip())
+            else:
+                # Assembled log: keep first + last
+                deduped_body_lines.append(body_lines[run_start])
+                deduped_body_lines.append(body_lines[run_end - 1])
+                # Compact: sample line + single variation summary
+                _, ts0, msg0_txt = self._normalize_time_message(body_lines[run_start])
+                compact_lines.append(f"<{ts0}> {msg0_txt}".strip())
+                compact_lines.append(f"    {_variation_summary(body_lines[run_start:run_end])}")
+            run_start = run_end
+        body_lines = deduped_body_lines
 
         self._filter_cache_by_skill[skill_name] = {
             "skill_name": skill_name,

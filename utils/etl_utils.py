@@ -48,10 +48,15 @@ def get_auto_analysis_etl(wifi_dict, ddd_dict):
         if ddd_files:
             return max(ddd_files, key=extract_file_number)
     
-    etl_paths = [f for files in wifi_dict.values() if files for f in files if 'history' not in f.lower()]
+    _EXCLUDE_FOLDER_KEYWORDS = ('history', 'autologger', 'pldr', 'stopservice')
+    etl_paths = [
+        f for files in wifi_dict.values() if files
+        for f in files
+        if not any(kw in os.path.basename(os.path.dirname(f)).lower() for kw in _EXCLUDE_FOLDER_KEYWORDS)
+    ]
     if etl_paths:
-        sorted_etls = sorted(etl_paths, 
-                           key=lambda x: (extract_address_digits(x), extract_etl_suffix_number(x)), 
+        sorted_etls = sorted(etl_paths,
+                           key=lambda x: (extract_timestamp_from_folder(x) or datetime.min, extract_etl_suffix_number(x)),
                            reverse=True)
         return sorted_etls[0] if sorted_etls else None
     

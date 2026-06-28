@@ -257,10 +257,26 @@ class DriverManager:
             print("correct driver exists! ", driver_exe_path)
             return driver_exe_path ## if exist: return 
         # if need download
-        # remove
+        # remove old driver dir; if Windows denies deletion because a stale
+        # chromedriver.exe is still locked, kill only that specific file's
+        # process as a last resort (avoids killing unrelated Selenium sessions).
         if os.path.exists(driver_dir):
             print("remove", driver_dir)
-            shutil.rmtree(driver_dir)
+            try:
+                shutil.rmtree(driver_dir)
+            except PermissionError:
+                # Find and kill only the process holding the old chromedriver.exe
+                old_exe = os.path.join(driver_dir, current_chrome_version, "chromedriver.exe")
+                if os.path.exists(old_exe):
+                    try:
+                        subprocess.run(
+                            ['taskkill', '/F', '/FI', f'MODULES eq {os.path.basename(old_exe)}',
+                             '/FI', f'STATUS eq RUNNING'],
+                            capture_output=True
+                        )
+                    except Exception:
+                        pass
+                shutil.rmtree(driver_dir, ignore_errors=True)
             os.makedirs(driver_dir)
 
         os_type = self.get_windows_type()

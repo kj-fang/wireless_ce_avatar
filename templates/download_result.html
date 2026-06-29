@@ -4,7 +4,7 @@
     <meta charset="UTF-8">
     <title>Analysis Results and Progress</title>
     <link href="https://stackpath.bootstrapcdn.com/bootstrap/4.5.2/css/bootstrap.min.css" rel="stylesheet">
-    <link rel="stylesheet" href="https://cdnjs.cloudflare.com/ajax/libs/font-awesome/5.15.4/css/all.min.css">
+    <link rel="stylesheet" href="https://cdnjs.cloudflare.com/ajax/libs/font-awesome/6.5.2/css/all.min.css">
     <script src="https://code.jquery.com/jquery-3.5.1.min.js"></script>
     <script src="https://stackpath.bootstrapcdn.com/bootstrap/4.5.2/js/bootstrap.bundle.min.js"></script>
     <script src="https://cdn.socket.io/4.6.1/socket.io.min.js"></script>
@@ -494,6 +494,92 @@
         {% set active_tab = 'sys_info' %}
     {% else %}
         {% set active_tab = 'wifi' %}
+    {% endif %}
+
+    {% set no_logs_found = not (wifi_ns.has_items or bt_ns.has_items or ddd_ns.has_items or fw_ns.has_items) %}
+
+    {% if no_logs_found %}
+    <style>
+        .no-logs-banner {
+            position: relative;
+            overflow: hidden;
+            border: none;
+            border-radius: 10px;
+            padding: 22px 28px;
+            background: #FFD60A;
+            color: #1a1a1a;
+            box-shadow: 0 6px 18px rgba(255, 214, 10, 0.35);
+            outline: 3px solid #1a1a1a;
+            outline-offset: -3px;
+        }
+        /* Top + bottom hazard stripes — the "blockade" tape look */
+        .no-logs-banner::before,
+        .no-logs-banner::after {
+            content: "";
+            position: absolute;
+            left: 0; right: 0;
+            height: 16px;
+            background-image: repeating-linear-gradient(
+                135deg,
+                #1a1a1a 0 14px,
+                #FFD60A 14px 28px
+            );
+            pointer-events: none;
+            z-index: 2;
+        }
+        .no-logs-banner::before { top: 0; }
+        .no-logs-banner::after  { bottom: 0; transform: scaleY(-1); }
+
+        .no-logs-banner-inner {
+            position: relative;
+            z-index: 1;
+            display: flex;
+            align-items: center;
+            padding: 14px 6px;
+        }
+        .no-logs-icon-wrap {
+            flex: 0 0 auto;
+            display: flex;
+            align-items: center;
+            justify-content: center;
+            margin-right: 20px;
+        }
+        .no-logs-icon-wrap i {
+            font-size: 3.6rem;
+            color: #1a1a1a;
+            filter: drop-shadow(0 2px 4px rgba(0,0,0,0.15));
+        }
+        .no-logs-title {
+            font-weight: 800;
+            font-size: 1.45rem;
+            letter-spacing: 0.3px;
+            margin-bottom: 6px;
+            text-transform: uppercase;
+            color: #1a1a1a;
+        }
+        .no-logs-sub {
+            font-size: 0.92rem;
+            line-height: 1.45;
+            color: #1a1a1a;
+            opacity: 0.85;
+        }
+    </style>
+    <div class="no-logs-banner mb-3" role="alert">
+        <div class="no-logs-banner-inner">
+            <div class="no-logs-icon-wrap">
+                <i class="fa-regular fa-face-angry"></i>
+            </div>
+            <div>
+                <div class="no-logs-title">
+                    Oops... It seems that no analyzable logs were found in this folder.
+                </div>
+                <div class="no-logs-sub">
+                    The selected download path does not contain any WiFi ETL, BT, DDD or FW logs
+                    that this tool can process.
+                </div>
+            </div>
+        </div>
+    </div>
     {% endif %}
 
     <div id="analysis-card" class="card mb-4" style="border: 2px hidden #005A9C; border-radius: 0.5rem;">

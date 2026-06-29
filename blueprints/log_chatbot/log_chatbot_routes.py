@@ -20,7 +20,21 @@ from utils.issue_time_utils import (
     format_issue_time,
 )
 from utils.issue_time_ai import build_issue_time_suggestions, organize_issue_context, realign_times_to_log
+from utils.timezone_utils import (
+    get_effective_timezone,
+    taiwan_to_local,
+    format_tz_label,
+    to_iana_timezone,
+    set_manual_override,
+    get_manual_override,
+    get_system_timezone,
+    get_issue_time_basis,
+    VALID_ISSUE_TIME_BASES,
+)
 from services import feedback_service
+from services import history_service
+from services import chat_jobs
+from services import gather_service
 
 log_chatbot_bp = Blueprint("log_chatbot", __name__, url_prefix="/log_chatbot")
 
@@ -40,6 +54,26 @@ def _ensure_feedback_conversation_id(*, rotate: bool = False) -> str:
     if rotate or not session.get("feedback_conversation_id"):
         session["feedback_conversation_id"] = str(uuid.uuid4())
     return session["feedback_conversation_id"]
+
+
+def _invalidate_issue_context_caches() -> None:
+    """Drop the DERIVED issue-context caches so they get recomputed from the
+    current ``selected_files`` / ``case_context``.
+
+    These three caches are computed FROM the raw case sources but live
+    independently in the session, so they outlive the data they were derived
+    from. Without this, starting a SECOND analysis (download_result -> /prepare
+    -> /log_chatbot/?auto_run=analyze_all) without first clicking "Back to
+    Avatar" makes the new run inherit the PREVIOUS run's attachment time,
+    resolved issue time and LLM-organized description. Call this whenever a new
+    analysis is entered so the caches are rebuilt from the fresh case data.
+    """
+    for key in (
+        "_attachment_time_cache",     # parsed attachment subtitle time
+        "_resolved_issue_time_cache",  # log_path -> resolved issue_time
+        "_issue_ai_quick",            # LLM-organized description + issue times
+    ):
+        session.pop(key, None)
 
 
 def _extract_issue_context() -> dict:
@@ -279,9 +313,23 @@ def _get_or_create_agent(skip_prime: bool = False) -> WifiLogAgentSystem:
         ace_runner = getattr(base, "ace_runner", None)
         if ace_runner is not None:
             agent.attach_ace(ace_runner)
-        # Auto-populate log path from last LogParser analysis if available
-        if app_config.last_analyzed_log_path:
-            agent.current_log_path = app_config.last_analyzed_log_path
+        # Auto-populate log path from the last analysis. Use the SAME sources the
+        # sidebar reads (session first, then the process-global), so the two
+        # can't diverge. On a browser-back / bfcache re-run prepare()/set_log()
+        # don't re-execute, and run-1's chat() popped this agent out of
+        # _chatbot_instances — so this lazy rebuild is the only path source. If
+        # it consulted only the process-global (which back_to_avatar / another
+        # tab / a restart can empty) while session['chatbot_log_path'] still
+        # held the file, the sidebar would look right but the agent would have
+        # no log → "No log file loaded". Reading the session key too keeps them
+        # in agreement. The session value wins so a per-session log can't be
+        # clobbered by another tab / case that moved the process-global on.
+        restored_log_path = (
+            session.get("chatbot_log_path")
+            or app_config.last_analyzed_log_path
+        )
+        if restored_log_path:
+            agent.current_log_path = restored_log_path
         # Prime with session issue context so every new session is context-aware
         # (skipped when caller will immediately call prime_with_context itself)
         if not skip_prime:
@@ -294,6 +342,68 @@ def _get_or_create_agent(skip_prime: bool = False) -> WifiLogAgentSystem:
         _chatbot_instances[sid] = agent
 
     return _chatbot_instances[sid]
+
+
+def _resume_agent_for(conversation_id: str):
+    """
+    Return the agent to use for ``conversation_id``.
+
+    A finished background analysis keeps its own (detached) agent, which holds
+    the full tool-grounded conversation history. When the user continues that
+    same conversation we adopt that agent — far higher fidelity than rebuilding
+    context from saved text. Running jobs are NOT adopted (their agent is busy
+    on a background thread); the caller falls back to a fresh session agent.
+    """
+    job = chat_jobs.get_job(conversation_id)
+    if job is not None and getattr(job, "agent", None) is not None and job.status != "running":
+        sid = session.get("chatbot_session_id")
+        if not sid:
+            sid = str(uuid.uuid4())
+            session["chatbot_session_id"] = sid
+        _chatbot_instances[sid] = job.agent
+        return job.agent
+    return _get_or_create_agent()
+
+
+def _terminal_sse(job, kind: str, payload) -> str:
+    """Format a job's terminal event (done / error) as one SSE frame."""
+    if kind == "done":
+        return ("data: " + json.dumps(
+            {"type": "done", "turn_id": job.turn_id,
+             "conversation_id": job.conversation_id, "result": payload},
+            ensure_ascii=False) + "\n\n")
+    return ("data: " + json.dumps(
+        {"type": "error", "content": payload}, ensure_ascii=False) + "\n\n")
+
+
+def _job_sse(job):
+    """
+    Shared SSE generator for a chat job: emit the steps buffered so far, then
+    follow live steps until the job reaches a terminal state. Used by both the
+    original /chat request and the /history/stream reconnect endpoint, so the
+    two render identically.
+    """
+    import queue as _q
+    q, replay, terminal = chat_jobs.subscribe(job)
+    try:
+        for step in replay:
+            yield "data: " + json.dumps({"type": "step", "step": step}, ensure_ascii=False) + "\n\n"
+        if terminal is not None:
+            yield _terminal_sse(job, terminal[0], terminal[1])
+            return
+        while True:
+            try:
+                kind, payload = q.get(timeout=120)
+            except _q.Empty:
+                yield "data: " + json.dumps({"type": "error", "content": "Chat timed out."}) + "\n\n"
+                return
+            if kind == "step":
+                yield "data: " + json.dumps({"type": "step", "step": payload}, ensure_ascii=False) + "\n\n"
+            else:
+                yield _terminal_sse(job, kind, payload)
+                return
+    finally:
+        chat_jobs.unsubscribe(job, q)
 
 
 # ------------------------------------------------------------------
@@ -470,6 +580,14 @@ def suggest_issue_times():
         log_path = agent.current_log_path or ""
         first_ts, last_ts = read_log_time_range(log_path) if log_path else (None, None)
 
+        # The log's first/last timestamps stay in the log frame (decoder
+        # host clock) — same frame the LLM sees in the digest. No shift
+        # needed before the model call.
+        local_tz_name = get_effective_timezone(log_path) if log_path else ""
+        tz_label = format_tz_label(local_tz_name) if local_tz_name else ""
+        log_frame_first_ts = None
+        log_frame_last_ts = None
+
         # Cached raw log lines feed the rough-browse digest (best-effort).
         log_lines = []
         try:
@@ -503,6 +621,9 @@ def suggest_issue_times():
             llm_client=getattr(agent, "client", None),
             llm_model=getattr(agent, "model", None),
             log_has_date=log_has_date,
+            log_frame_first_ts=log_frame_first_ts,
+            log_frame_last_ts=log_frame_last_ts,
+            tz_label=tz_label,
         )
         return jsonify(payload), (200 if payload.get("success") else 503)
     except Exception as e:
@@ -567,9 +688,22 @@ def chat():
             issue_time_window_minutes = None
 
     try:
-        agent = _get_or_create_agent()
+        # Resolve the conversation first so we can adopt a finished job's agent
+        # (full tool context) when the user continues a just-analysed thread.
+        conversation_id = _ensure_feedback_conversation_id()
+        agent = _resume_agent_for(conversation_id)
         if issue_time_window_minutes is not None:
             agent.issue_time_window_minutes = issue_time_window_minutes
+        # Backstop: if the resolved agent lost its log path (e.g. a fresh agent
+        # rebuilt on a browser-back re-run where prepare()/set_log() didn't
+        # run), recover it from the SAME sources the sidebar uses before the
+        # guard below, so a valid in-session log isn't reported as missing.
+        if not agent.current_log_path:
+            agent.current_log_path = (
+                session.get("chatbot_log_path")
+                or app_config.last_analyzed_log_path
+                or ""
+            )
         if not agent.current_log_path:
             def _no_log():
                 yield f"data: {json.dumps({'type': 'error', 'content': 'No log file loaded. Please set a log file first.'})}\n\n"
@@ -595,6 +729,22 @@ def chat():
                 parsed, is_time_only = parse_issue_time_string(raw_it)
                 agent.issue_time = parsed
                 agent._issue_time_time_only = is_time_only
+                # Keep the customer-tz annotation in sync with the new
+                # sidebar value. The picker always shows the log-frame
+                # value (matches .log content), so the same instant on the
+                # customer's wall clock is just taiwan_to_local at the
+                # detected tz. Skip on time-only or when no tz is known.
+                if parsed and not is_time_only and agent.current_log_path:
+                    try:
+                        log_tz = get_effective_timezone(agent.current_log_path) or ""
+                        if log_tz:
+                            agent.issue_time_tz = log_tz
+                            agent.issue_time_customer = taiwan_to_local(parsed, log_tz)
+                        else:
+                            agent.issue_time_tz = ""
+                            agent.issue_time_customer = None
+                    except Exception as _e:
+                        print(f"[chat] sidebar issue_time customer refresh skipped ({_e})")
             elif explicitly_cleared:
                 # Explicit "no time": clear agent state and neutralise
                 # description/subject so the fallback chain can't re-extract one.
@@ -618,7 +768,6 @@ def chat():
         # invocations. Both IDs are anonymous (no auth).
         # ------------------------------------------------------------------
         session_id = session.get("chatbot_session_id", "")
-        conversation_id = _ensure_feedback_conversation_id()
         turn_id = str(uuid.uuid4())
         turn_started_at = datetime.now()
         try:
@@ -626,22 +775,52 @@ def chat():
         except Exception:
             _issue_ctx_for_snapshot = {}
 
+        # Usage analytics: on every Send, capture the entry session (user name,
+        # date, CASE NUMBER + case summary) and the asked question into the
+        # shared Gather folder for later DB ingestion. Non-blocking; never
+        # raises, so it can't affect the chat path.
+        try:
+            gather_service.record_send(
+                conversation_id=conversation_id,
+                session_id=session_id,
+                user_message=user_message,
+                issue=_issue_ctx_for_snapshot,
+                log_path=getattr(agent, "current_log_path", "") or "",
+                issue_time=format_issue_time(agent.issue_time),
+                issue_time_window_minutes=getattr(agent, "issue_time_window_minutes", None),
+                domain="wifi",
+            )
+        except Exception:
+            pass
+
         # Use the mode flag sent by the frontend toggle.
         use_tools = bool(data.get("use_tools", False))
 
         if use_tools:
-            import queue as _queue
-            step_queue = _queue.Queue()
             collected_steps: list = []
 
+            # Register a background job that OWNS this analysis, then detach the
+            # agent from the session slot. The run keeps going — and stays
+            # uncorrupted — even if the user switches to another conversation
+            # mid-analysis (any later session use just creates a fresh agent).
+            # The job buffers every step so a reconnecting client can replay +
+            # follow it via /history/stream.
+            job = chat_jobs.start_job(
+                conversation_id=conversation_id,
+                turn_id=turn_id,
+                title=user_message,
+                agent=agent,
+            )
+            if session_id:
+                _chatbot_instances.pop(session_id, None)
+
             def step_cb(step):
-                # Collect for snapshot, then forward to SSE stream.
                 try:
                     if isinstance(step, dict):
                         collected_steps.append(step)
                 except Exception:
                     pass
-                step_queue.put(("step", step))
+                chat_jobs.publish_step(job, step)
 
             @copy_current_request_context
             def run_chat_with_tools():
@@ -654,48 +833,46 @@ def chat():
                         max_tokens=max_tokens,
                         step_callback=step_cb,
                     )
-                    step_queue.put(("done", result))
+                    # Persist BEFORE signalling done so any subscriber that
+                    # refreshes its history list on 'done' already sees this
+                    # turn. feedback is vote-gated; history always persists.
+                    feedback_service.record_turn(
+                        session_id=session_id,
+                        conversation_id=conversation_id,
+                        turn_id=turn_id,
+                        user_message=user_message,
+                        agent_result=result,
+                        steps=collected_steps,
+                        mode="tools",
+                        duration_ms=int((datetime.now() - turn_started_at).total_seconds() * 1000),
+                        issue=_issue_ctx_for_snapshot,
+                        log_path=getattr(agent, "current_log_path", "") or "",
+                        parent_message_id=parent_message_id,
+                    )
+                    history_service.record_turn(
+                        conversation_id=conversation_id,
+                        session_id=session_id,
+                        turn_id=turn_id,
+                        user_message=user_message,
+                        agent_result=result,
+                        mode="tools",
+                        issue=_issue_ctx_for_snapshot,
+                        log_path=getattr(agent, "current_log_path", "") or "",
+                        issue_time=format_issue_time(agent.issue_time),
+                    )
+                    chat_jobs.finish_job(job, result)
                 except Exception as exc:
                     error_tb = traceback.format_exc()
                     print(f"❌ Chat-with-tools thread error:\n{error_tb}")
-                    step_queue.put(("error", str(exc)))
+                    chat_jobs.fail_job(job, str(exc))
 
             t = threading.Thread(target=run_chat_with_tools, daemon=True)
             t.start()
 
-            def event_stream():
-                while True:
-                    try:
-                        msg_type, payload = step_queue.get(timeout=120)
-                    except _queue.Empty:
-                        yield f"data: {json.dumps({'type': 'error', 'content': 'Chat timed out.'})}\n\n"
-                        break
-                    if msg_type == "step":
-                        yield f"data: {json.dumps({'type': 'step', 'step': payload}, ensure_ascii=False)}\n\n"
-                    elif msg_type == "done":
-                        # Sidecar: persist the turn before signalling done.
-                        # Failures here are swallowed inside feedback_service.
-                        feedback_service.record_turn(
-                            session_id=session_id,
-                            conversation_id=conversation_id,
-                            turn_id=turn_id,
-                            user_message=user_message,
-                            agent_result=payload,
-                            steps=collected_steps,
-                            mode="tools",
-                            duration_ms=int((datetime.now() - turn_started_at).total_seconds() * 1000),
-                            issue=_issue_ctx_for_snapshot,
-                            log_path=getattr(agent, "current_log_path", "") or "",
-                            parent_message_id=parent_message_id,
-                        )
-                        yield f"data: {json.dumps({'type': 'done', 'turn_id': turn_id, 'conversation_id': conversation_id, 'result': payload}, ensure_ascii=False)}\n\n"
-                        break
-                    elif msg_type == "error":
-                        yield f"data: {json.dumps({'type': 'error', 'content': payload})}\n\n"
-                        break
-
+            # The original request streams the job exactly like a reconnect
+            # would (replay buffered steps, then follow to done/error).
             return Response(
-                event_stream(),
+                _job_sse(job),
                 mimetype="text/event-stream",
                 headers={"Cache-Control": "no-cache", "X-Accel-Buffering": "no"},
             )
@@ -722,6 +899,18 @@ def chat():
                 log_path=getattr(agent, "current_log_path", "") or "",
                 parent_message_id=parent_message_id,
             )
+            # Local browsable history (always persists).
+            history_service.record_turn(
+                conversation_id=conversation_id,
+                session_id=session_id,
+                turn_id=turn_id,
+                user_message=user_message,
+                agent_result=result,
+                mode="simple",
+                issue=_issue_ctx_for_snapshot,
+                log_path=getattr(agent, "current_log_path", "") or "",
+                issue_time=format_issue_time(agent.issue_time),
+            )
 
             def generate():
                 yield f"data: {json.dumps({'type': 'done', 'turn_id': turn_id, 'conversation_id': conversation_id, 'result': result}, ensure_ascii=False)}\n\n"
@@ -747,6 +936,266 @@ def reset():
         agent.reset_conversation()
         return jsonify({"success": True, "message": "Conversation reset."})
     except Exception as e:
+        return jsonify({"success": False, "error": str(e)}), 500
+
+
+# ------------------------------------------------------------------
+# API: local conversation history (Gemini / Claude style sidebar)
+#
+# Every chat turn is persisted to <avatarfiles_dir>/history/<id>.json by
+# history_service. These endpoints let the sidebar list / load / delete
+# those conversations. All are read/written on the local machine only.
+# ------------------------------------------------------------------
+@log_chatbot_bp.route("/history/list", methods=["GET"])
+def history_list():
+    try:
+        conversations = history_service.list_conversations()
+        # Merge in-memory running jobs so the sidebar can show a ⏳ marker:
+        #   * a persisted conversation that's mid-analysis  -> running: True
+        #   * a brand-new first analysis not yet on disk     -> synthetic entry
+        try:
+            running = {j["conversation_id"]: j for j in chat_jobs.active_summaries()}
+            if running:
+                seen = set()
+                for c in conversations:
+                    cid = c.get("conversation_id")
+                    seen.add(cid)
+                    if cid in running:
+                        c["running"] = True
+                for cid, j in running.items():
+                    if cid not in seen:
+                        conversations.append({
+                            "conversation_id": cid,
+                            "title": j.get("title") or "New conversation",
+                            "created_at": "",
+                            # Stamp "now" so a brand-new running conversation
+                            # sorts to the top of the running group.
+                            "updated_at": datetime.now().astimezone().isoformat(timespec="seconds"),
+                            "turn_count": j.get("step_count", 0),
+                            "log_path": "",
+                            "pinned": False,
+                            "running": True,
+                        })
+            # Final ordering (highest priority last in this stable-sort chain):
+            #   1. Pinned conversations at the very top.
+            #   2. Still-running conversations next (below pins, above the rest).
+            #   3. Everyone else — all newest-first within each group.
+            conversations.sort(key=lambda c: c.get("updated_at") or "", reverse=True)
+            conversations.sort(key=lambda c: bool(c.get("running")), reverse=True)
+            conversations.sort(key=lambda c: bool(c.get("pinned")), reverse=True)
+        except Exception:
+            pass
+        return jsonify({"success": True, "conversations": conversations})
+    except Exception as e:
+        return jsonify({"success": False, "error": str(e)}), 500
+
+
+@log_chatbot_bp.route("/history/stream", methods=["GET"])
+def history_stream():
+    """
+    Re-attach to a conversation's live analysis (Server-Sent Events).
+
+    Replays the steps buffered so far, then follows new steps until the job
+    reaches done/error — so switching back to a running conversation shows its
+    progress catching up in real time. If there's no active/recent job for the
+    conversation, emits a single 'idle' event and closes (the client then just
+    renders the saved turns).
+    """
+    conversation_id = (request.args.get("conversation_id") or "").strip()
+    headers = {"Cache-Control": "no-cache", "X-Accel-Buffering": "no"}
+    job = chat_jobs.get_job(conversation_id) if conversation_id else None
+    if job is None:
+        def _idle():
+            yield "data: " + json.dumps({"type": "idle"}) + "\n\n"
+        return Response(_idle(), mimetype="text/event-stream", headers=headers)
+    return Response(_job_sse(job), mimetype="text/event-stream", headers=headers)
+
+
+@log_chatbot_bp.route("/history/get", methods=["GET"])
+def history_get():
+    conversation_id = (request.args.get("conversation_id") or "").strip()
+    if not conversation_id:
+        return jsonify({"success": False, "error": "conversation_id is required"}), 400
+    conv = history_service.get_conversation(conversation_id)
+    if conv is None:
+        return jsonify({"success": False, "error": "Conversation not found"}), 404
+    return jsonify({"success": True, "conversation": conv})
+
+
+@log_chatbot_bp.route("/history/delete", methods=["POST"])
+def history_delete():
+    data = request.get_json(silent=True) or {}
+    conversation_id = (data.get("conversation_id") or "").strip()
+    if not conversation_id:
+        return jsonify({"success": False, "error": "conversation_id is required"}), 400
+    removed = history_service.delete_conversation(conversation_id)
+    # If the deleted conversation is the one currently active, drop the
+    # session pointer so the next turn starts a brand-new conversation.
+    if removed and (session.get("feedback_conversation_id") or "") == conversation_id:
+        session.pop("feedback_conversation_id", None)
+    return jsonify({"success": bool(removed)})
+
+
+@log_chatbot_bp.route("/history/rename", methods=["POST"])
+def history_rename():
+    data = request.get_json(silent=True) or {}
+    conversation_id = (data.get("conversation_id") or "").strip()
+    title = (data.get("title") or "").strip()
+    if not conversation_id:
+        return jsonify({"success": False, "error": "conversation_id is required"}), 400
+    if not title:
+        return jsonify({"success": False, "error": "title is required"}), 400
+    ok = history_service.rename_conversation(conversation_id, title)
+    return jsonify({"success": bool(ok)})
+
+
+@log_chatbot_bp.route("/history/pin", methods=["POST"])
+def history_pin():
+    data = request.get_json(silent=True) or {}
+    conversation_id = (data.get("conversation_id") or "").strip()
+    pinned = bool(data.get("pinned"))
+    if not conversation_id:
+        return jsonify({"success": False, "error": "conversation_id is required"}), 400
+    ok = history_service.set_pinned(conversation_id, pinned)
+    return jsonify({"success": bool(ok), "pinned": pinned})
+
+
+
+@log_chatbot_bp.route("/history/load", methods=["POST"])
+def history_load():
+    """
+    Resume a saved conversation: re-point the session at its id, restore the
+    log file + issue context into the per-session agent (so follow-up
+    questions keep working), rebuild the agent's textual conversation history,
+    and return the stored turns for the frontend to re-render.
+    """
+    data = request.get_json(silent=True) or {}
+    conversation_id = (data.get("conversation_id") or "").strip()
+    if not conversation_id:
+        return jsonify({"success": False, "error": "conversation_id is required"}), 400
+
+    # A first analysis still in flight has no disk file yet — fall back to its
+    # in-memory job so the sidebar's ⏳ entry is still openable.
+    job = chat_jobs.get_job(conversation_id)
+    conv = history_service.get_conversation(conversation_id)
+    if conv is None and job is None:
+        return jsonify({"success": False, "error": "Conversation not found"}), 404
+
+    try:
+        # Re-point BOTH sidecars at this conversation so new turns + feedback
+        # continue appending here instead of spawning a fresh conversation.
+        session["feedback_conversation_id"] = conversation_id
+
+        conv = conv or {}
+        running = bool(job is not None and job.status == "running")
+        issue = conv.get("issue") if isinstance(conv.get("issue"), dict) else {}
+        turns = conv.get("turns") or []
+
+        log_path = (conv.get("log_path") or "").strip()
+
+        # Prefer adopting the conversation's in-memory agent (it holds the full
+        # tool-grounded history) over rebuilding context from saved text.
+        adopted = False
+        if job is not None and getattr(job, "agent", None) is not None:
+            agent = job.agent
+            adopted = True
+            if not log_path:
+                log_path = (getattr(agent, "current_log_path", "") or "").strip()
+            # Don't pull a RUNNING job's agent into the session slot — it's busy
+            # on a background thread. Reinstate only finished ones for follow-ups.
+            if not running:
+                sid = session.get("chatbot_session_id")
+                if not sid:
+                    sid = str(uuid.uuid4())
+                    session["chatbot_session_id"] = sid
+                _chatbot_instances[sid] = agent
+        else:
+            agent = _get_or_create_agent(skip_prime=True)
+            agent.reset_conversation()
+
+        log_exists = bool(log_path) and os.path.exists(log_path)
+
+        skills = []
+        log_has_date = True
+        log_span_minutes = 0
+        if log_exists:
+            if not adopted:
+                agent.current_log_path = log_path
+                # Prime context (also resets conversation_history) BEFORE we
+                # rebuild the textual turn history below.
+                allowed = {"case_nbr", "subject", "description", "issue_type", "attachment_time"}
+                try:
+                    agent.prime_with_context(**{k: v for k, v in issue.items()
+                                                if k in allowed and isinstance(v, str)})
+                except Exception as _e:
+                    print(f"[history] prime_with_context skipped: {_e}")
+            # Read-only lookups — safe even while a run is in flight.
+            try:
+                skills = agent.get_skill_descriptions()
+            except Exception:
+                skills = []
+            try:
+                log_has_date = agent._log_has_date()
+            except Exception:
+                log_has_date = True
+            try:
+                log_span_minutes = agent.get_log_span_minutes()
+            except Exception:
+                log_span_minutes = 0
+
+        # Restore the issue time the conversation was anchored on.
+        issue_time_str = (conv.get("issue_time") or "").strip()
+        if adopted:
+            # The adopted agent already carries the right issue_time; just
+            # surface it to the client when the snapshot didn't record one.
+            if not issue_time_str:
+                try:
+                    issue_time_str = format_issue_time(agent.issue_time) or ""
+                except Exception:
+                    issue_time_str = ""
+        elif issue_time_str:
+            try:
+                parsed, is_time_only = parse_issue_time_string(issue_time_str)
+                agent.issue_time = parsed
+                agent._issue_time_time_only = is_time_only
+            except Exception:
+                pass
+
+        # Rebuild the agent's textual conversation history ONLY when we didn't
+        # adopt a live agent (which already holds the real history). Plain
+        # user/assistant text pairs — no tool_use blocks, so the tool loop's
+        # pairing invariants stay intact.
+        if not adopted:
+            for turn in turns:
+                um = (turn.get("user_message") or "").strip()
+                if um:
+                    agent.conversation_history.append({"role": "user", "content": um})
+                at = history_service.assistant_text_from_result(turn.get("result"))
+                if at:
+                    agent.conversation_history.append({"role": "assistant", "content": at})
+
+        if log_exists:
+            session["chatbot_log_path"] = log_path
+
+        return jsonify({
+            "success": True,
+            "conversation_id": conversation_id,
+            "title": conv.get("title") or (job.title if job else "") or "Conversation",
+            "turns": turns,
+            # Live-analysis hand-off: when running, the client renders these
+            # buffered steps and then opens /history/stream to follow the rest.
+            "running": running,
+            "running_user_message": (job.title if running else ""),
+            "steps": list(job.steps) if (job is not None and running) else [],
+            "log_path": log_path,
+            "log_exists": log_exists,
+            "issue_time": issue_time_str,
+            "log_has_date": log_has_date,
+            "log_span_minutes": log_span_minutes,
+            "skills": skills,
+        })
+    except Exception as e:
+        traceback.print_exc()
         return jsonify({"success": False, "error": str(e)}), 500
 
 
@@ -816,6 +1265,13 @@ def prepare():
          return jsonify({"success": False, "error": f".log file not found: {log_path}"}), 404
 
     try:
+        # Entering a NEW analysis from download_result. Purge the derived
+        # issue-context caches FIRST so the context below is rebuilt from this
+        # run's selected_files / case_context — not a previous run's leftovers.
+        # (Fixes stale attachment time / description when a second analysis is
+        # started without going through "Back to Avatar".)
+        _invalidate_issue_context_caches()
+
         # Pull consolidated issue context from all session sources
         ctx = _extract_issue_context()
 
@@ -1073,7 +1529,7 @@ def _get_llm_client_model():
     return None, None
 
 
-def _issue_context_organized(raw_desc: str, first_ts, last_ts) -> dict:
+def _issue_context_organized(raw_desc: str, first_ts, last_ts, log_path: str = "") -> dict:
     """Return the organized issue context (clean description + issue time list).
 
     Prefers the quick pre-pass cached at the select-attachments step
@@ -1091,7 +1547,7 @@ def _issue_context_organized(raw_desc: str, first_ts, last_ts) -> dict:
         session["_issue_ai_quick"] = {"data": d}
     return {
         "clean_description": d.get("clean_description") or raw_desc,
-        "issue_times": realign_times_to_log(d.get("issue_times") or [], first_ts, last_ts),
+        "issue_times": realign_times_to_log(d.get("issue_times") or [], first_ts, last_ts, log_path),
         "interpretation": d.get("interpretation", ""),
     }
 
@@ -1108,11 +1564,23 @@ def get_issue_context():
     log_path = session.get("chatbot_log_path") or app_config.last_analyzed_log_path or ""
     first_ts, last_ts = read_log_time_range(log_path) if log_path else (None, None)
 
+    # Frame-correct a time-only attachment_time up front. A bare clock like
+    # "16:45:00" (the customer wall clock parsed from the attachment subtitle)
+    # must be anchored to the customer capture date and converted to the log
+    # frame HERE. Otherwise the frontend picker — which prefers attachment_time
+    # over the resolved issue_time — stamps the clock straight onto the log date
+    # and mixes frames (showing e.g. 06/03 16:45 instead of log-frame 06/03
+    # 05:45). Full datetimes pass through unchanged (handled by _to_log_frame).
+    if attachment_time:
+        _aligned_at = realign_times_to_log([attachment_time], first_ts, last_ts, log_path)
+        if _aligned_at:
+            attachment_time = _aligned_at[0]
+
     # Smart pass: let the LLM organize the raw case Issue Description into a
     # clean problem statement + (possibly multiple) issue time points. Cached
     # per-description so repeat fetches don't re-call the LLM; falls back to
     # the regex extractor + concise composer when no LLM is configured.
-    organized = _issue_context_organized(ctx.get("description", "") or "", first_ts, last_ts)
+    organized = _issue_context_organized(ctx.get("description", "") or "", first_ts, last_ts, log_path)
     clean_desc = organized.get("clean_description") or _compose_concise_description(ctx)
     issue_times = organized.get("issue_times") or []
 
@@ -1121,7 +1589,53 @@ def get_issue_context():
     if issue_times:
         issue_time_str = issue_times[0]
     else:
-        issue_time_str = _resolved_issue_time_for(log_path, attachment_time)
+        # attachment_time is already frame-corrected above; use it directly.
+        # When absent, fall back to the cached log-latest resolution.
+        issue_time_str = attachment_time or _resolved_issue_time_for(log_path, attachment_time)
+
+    # Align every surfaced time to the LOG frame so the picker drives
+    # PreScan / Segment-2 against the raw .log content (which the decoder
+    # writes in the log host's clock). Source values are usually log-frame
+    # strings already, but a customer-typed description ("at 12:26 PM CST")
+    # would land in customer frame and needs shifting back. The
+    # ``determine_issue_time_frames`` helper picks which interpretation
+    # applies per string and returns both frames so we can also surface a
+    # customer-tz annotation for the UI.
+    customer_annotations = {}
+    customer_tz_for_ui = ""
+    if log_path:
+        try:
+            from utils.issue_time_ai import determine_issue_time_frames
+
+            def _to_log_frame(s: str) -> str:
+                nonlocal customer_tz_for_ui
+                if not isinstance(s, str) or not s:
+                    return s
+                parsed, is_time_only = parse_issue_time_string(s)
+                if not parsed or is_time_only:
+                    return s
+                # Pass the log content range (GMT+8 engineer frame) as the
+                # second anchor so an ATTACH/issue time mistakenly entered in
+                # our engineer clock — rather than the customer's packed time —
+                # is detected and shifted back to the customer frame.
+                frames = determine_issue_time_frames(
+                    parsed, [log_path],
+                    log_first_ts=first_ts, log_last_ts=last_ts,
+                )
+                if frames.get("customer_tz") and not customer_tz_for_ui:
+                    customer_tz_for_ui = frames["customer_tz"]
+                log_dt = frames.get("log_frame") or parsed
+                cust_dt = frames.get("customer_frame")
+                log_str = format_issue_time(log_dt) if log_dt != parsed else s
+                if cust_dt and frames.get("customer_tz"):
+                    customer_annotations[log_str] = format_issue_time(cust_dt)
+                return log_str
+
+            attachment_time = _to_log_frame(attachment_time)
+            issue_time_str = _to_log_frame(issue_time_str)
+            issue_times = [_to_log_frame(s) for s in issue_times]
+        except Exception as e:
+            print(f"[get_issue_context] issue-time frame detect skipped ({e})")
 
     return jsonify({
         "description": clean_desc,
@@ -1129,6 +1643,19 @@ def get_issue_context():
         "issue_time": issue_time_str,
         "issue_times": issue_times,
         "interpretation": organized.get("interpretation", ""),
+        # Customer-tz annotation: same instant viewed from the customer's
+        # wall clock. The picker shows the log-frame value (matches .log
+        # content) and surfaces this map underneath so the engineer also
+        # sees what time it was on the customer's side. tz label is the
+        # detected system_info / sidecar value; empty string when nothing
+        # could be detected (chatbot then hides the annotation row).
+        "customer_tz": customer_tz_for_ui,
+        "customer_annotations": customer_annotations,
+        # IANA id for the customer tz (e.g. "America/Los_Angeles") so the
+        # browser can recompute the customer wall clock DST-correctly for any
+        # date typed into the picker. Empty when only a fixed offset is known —
+        # the frontend then falls back to the label's standard offset.
+        "customer_iana": to_iana_timezone(customer_tz_for_ui) if customer_tz_for_ui else "",
     })
 
 
@@ -1170,6 +1697,19 @@ def find_best_log():
         elif isinstance(_parsed, str):
             issue_time_only_str = _parsed  # e.g. '14:50:51'
 
+    # --- Detect customer's timezone for the response note. The picker now
+    # compares ``issue_time`` against the .log's own first/last timestamps
+    # directly (both in the log frame); customer-tz only matters for the
+    # user-facing "this is X in customer time" annotation surfaced by the
+    # caller — they'll have shifted the typed issue time into log frame
+    # already via ``determine_issue_time_frames``.
+    tz_name = ""
+    for p in etl_paths:
+        tz_name = get_effective_timezone(p)
+        if tz_name:
+            break
+    tz_label = format_tz_label(tz_name) if tz_name else ""
+
     # --- Scan each log file for its time range (shared helper) ---
     candidates = []
     for etl_path in etl_paths:
@@ -1187,9 +1727,11 @@ def find_best_log():
     if not candidates:
         return jsonify({"best_path": etl_paths[0] if etl_paths else None,
                         "reason": "No readable log files found; defaulting to first.",
-                        "resolved_issue_time": ""})
+                        "resolved_issue_time": "",
+                        "tz_used": tz_label})
 
-    print(f"[find_best_log] candidates={[c['etl_path'] for c in candidates]}, issue_time={issue_time}, issue_time_only_str={issue_time_only_str}")
+    print(f"[find_best_log] tz={tz_name!r} candidates={[c['etl_path'] for c in candidates]}, "
+          f"issue_time={issue_time}, issue_time_only_str={issue_time_only_str}")
 
     # --- Resolve time-only issue_time_str using log file dates ---
     # e.g. '14:50:51' -> combine with the date from the log's first/last timestamp
@@ -1207,6 +1749,8 @@ def find_best_log():
     # Serialize the resolved issue_time so the frontend can use the full datetime
     resolved_issue_time_str = issue_time.strftime("%m/%d/%Y-%H:%M:%S") if issue_time else ""
 
+    tz_note = f" [tz: {tz_label}]" if tz_label else ""
+
     # --- If we have an issue time, pick the log whose range covers it ---
     if issue_time:
         # Priority 1: log file whose [first_ts, last_ts] contains issue_time
@@ -1216,8 +1760,9 @@ def find_best_log():
                     return jsonify({
                         "best_path": c["etl_path"],
                         "reason": f"Log covers issue time {issue_time_str} "
-                                  f"(range: {c['first_ts']} ~ {c['last_ts']})",
+                                  f"(range: {c['first_ts']} ~ {c['last_ts']}){tz_note}",
                         "resolved_issue_time": resolved_issue_time_str,
+                        "tz_used": tz_label,
                     })
 
         # Priority 2: log file whose last_ts is closest to (but before) issue_time
@@ -1234,8 +1779,9 @@ def find_best_log():
                 "best_path": best["etl_path"],
                 "reason": f"Closest log to issue time {issue_time_str} "
                           f"(range: {best['first_ts']} ~ {best['last_ts']}, "
-                          f"delta: {best_delta:.0f}s)",
+                          f"delta: {best_delta:.0f}s){tz_note}",
                 "resolved_issue_time": resolved_issue_time_str,
+                "tz_used": tz_label,
             })
 
     # --- Fallback: pick the log with the latest last_ts ---
@@ -1245,8 +1791,9 @@ def find_best_log():
         return jsonify({
             "best_path": latest["etl_path"],
             "reason": f"No issue time provided; picked latest log "
-                      f"(range: {latest['first_ts']} ~ {latest['last_ts']})",
+                      f"(range: {latest['first_ts']} ~ {latest['last_ts']}){tz_note}",
             "resolved_issue_time": resolved_issue_time_str,
+            "tz_used": tz_label,
         })
 
     # --- Ultimate fallback ---
@@ -1254,6 +1801,7 @@ def find_best_log():
         "best_path": candidates[0]["etl_path"],
         "reason": "Could not determine timestamps; defaulting to first.",
         "resolved_issue_time": "",
+        "tz_used": tz_label,
     })
 
 

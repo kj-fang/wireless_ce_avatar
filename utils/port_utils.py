@@ -6,12 +6,34 @@ import socket
 DEFAULT_PORT = 48596
 
 
-def get_user_data_dir():
-    """Return a per-user writable directory for runtime state/config files."""
-    base = os.environ.get('APPDATA') or os.path.expanduser('~')
-    user_dir = os.path.join(base, 'IntelAvatar')
-    os.makedirs(user_dir, exist_ok=True)
-    return user_dir
+def _get_intelavatar_files_dir() -> str:
+    """Return Downloads\\IntelAvatar_files, creating it if needed."""
+    try:
+        import winreg
+        with winreg.OpenKey(
+            winreg.HKEY_CURRENT_USER,
+            r"Software\Microsoft\Windows\CurrentVersion\Explorer\Shell Folders",
+        ) as reg_key:
+            downloads_dir = winreg.QueryValueEx(reg_key, "{374DE290-123F-4565-9164-39C4925E467B}")[0]
+    except Exception:
+        downloads_dir = os.path.join(os.path.expanduser('~'), 'Downloads')
+    base = os.path.join(downloads_dir, 'IntelAvatar_files')
+    os.makedirs(base, exist_ok=True)
+    return base
+
+
+def get_user_data_dir() -> str:
+    """Return Downloads\\IntelAvatar_files\\app_state for runtime state/config files."""
+    state_dir = os.path.join(_get_intelavatar_files_dir(), 'app_state')
+    os.makedirs(state_dir, exist_ok=True)
+    return state_dir
+
+
+def get_logs_dir() -> str:
+    """Return Downloads\\IntelAvatar_files\\logs for log files."""
+    logs_dir = os.path.join(_get_intelavatar_files_dir(), 'logs')
+    os.makedirs(logs_dir, exist_ok=True)
+    return logs_dir
 
 
 def get_port_config_file():

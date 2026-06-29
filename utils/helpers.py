@@ -49,10 +49,13 @@ def init_download_dir():
     downloads_dir = os.path.join(downloads_dir, "IntelAvatar_files")
     os.makedirs(downloads_dir, exist_ok=True)
 
+    os.makedirs(os.path.join(downloads_dir, "logs"), exist_ok=True)
+    os.makedirs(os.path.join(downloads_dir, "app_state"), exist_ok=True)
+
     driver_dir = os.path.join(downloads_dir, "chrome_driver")
     os.makedirs(driver_dir, exist_ok=True)
 
-    prompt_dir = os.path.join( downloads_dir, "avatar_prompt")
+    prompt_dir = os.path.join(downloads_dir, "avatar_prompt")
     os.makedirs(prompt_dir, exist_ok=True)
     return downloads_dir, driver_dir, prompt_dir
 
@@ -97,9 +100,27 @@ def get_load_path(primary, backup, timeout_sec=8):
 
 
 def read_log_file(path: str) -> List[str]:
+    """Read an ETL-decoded ``.log`` into a list of lines as-is.
+
+    Timestamps stay in the log's own frame (decoder host clock, GMT+8 in
+    practice). The chatbot now keeps ``issue_time`` aligned to that frame
+    for in-log matching and surfaces a customer-tz annotation separately,
+    so we no longer shift the file content here.
+
+    Skips the ``# WCE_LOG_TZ_SHIFTED=...`` header marker on files that
+    were previously rewritten by the now-retired decoder shift step, so
+    those legacy files still read cleanly.
+    """
+    if not path:
+        return []
     try:
         with open(path, 'r', encoding='utf-8', errors="replace") as f:
-            return f.readlines()
+            lines = f.readlines()
+        # Drop the legacy customer-tz marker if present so the marker line
+        # never reaches the chatbot's segment scanner as content.
+        if lines and lines[0].startswith("# WCE_LOG_TZ_SHIFTED="):
+            lines = lines[1:]
+        return lines
     except Exception as e:
         print(f"Error reading file {path}: {e}")
         return []

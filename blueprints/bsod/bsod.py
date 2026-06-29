@@ -53,13 +53,15 @@ def bsod_submit():
     try:
         response = requests.post(url, data=json.dumps(payload), proxies={"http": None, "https": None}, headers=headers, verify=False)
         if response.status_code == 200:
-            flash("✅ BSOD Analysis Form Submitted Successfully!", "success")
+            flash("BSOD Analysis Form Submitted Successfully! \n The analysis results will be emailed to you soon.", "success")
             print("submit bsod success!")
             return redirect(url_for('main.download_result_bsod'))
         else:
             print("submit bsod fail!")
-            return f"❌ Failed to call BSOD API：{response.status_code}<br>{response.text}"
-        
+            flash(f"Failed to call BSOD API (HTTP {response.status_code}): {response.text}", "error")
+            return redirect(url_for('main.download_result_bsod'))
+
     except requests.exceptions.RequestException as e:
         print("submit bsod error!", e)
-        return f"⚠️ An error occurred during API call：{e}"
+        flash(f"An error occurred during API call: {e}", "error")
+        return redirect(url_for('main.download_result_bsod'))

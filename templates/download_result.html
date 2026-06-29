@@ -2003,6 +2003,7 @@
 
             const decoded = decodePath(fwPathEncoded);
             appendLog(`\n\n🚀 Starting FW Analysis: ${decoded}\n`);
+            openWppModal(`🔬 FW Parsing: ${decoded.split('\\').pop() || decoded.split('/').pop()}`);
 
             fetch(`${FW_ETL_ANALYSIS_URL}?fw_path=${fwPathEncoded}`)
                 .then(res => res.json())
@@ -2034,6 +2035,33 @@
         });
     }
 
+    function _closeFwModal(isSuccess, statusText) {
+        const wppModal = document.getElementById('wppProgressModal');
+        if (!wppModal || !$(wppModal).hasClass('show')) return;
+        const header   = document.getElementById('wppModalHeader');
+        const spinner  = document.getElementById('wppModalSpinner');
+        const labelEl  = document.getElementById('wppProgressModalLabel');
+        const bar      = document.getElementById('wppModalProgressBar');
+        const pctLabel = document.getElementById('wppModalPctLabel');
+        const stageLbl = document.getElementById('wppModalStageLabel');
+        const statusEl = document.getElementById('wppModalStatusText');
+        const closeBtn = document.getElementById('wppModalCloseBtn');
+        if (header)   header.style.background = isSuccess ? '#155724' : '#721c24';
+        if (spinner)  spinner.style.display = 'none';
+        if (labelEl)  labelEl.textContent = isSuccess ? '✅ FW Parse Complete!' : '❌ FW Parse Failed';
+        if (bar) {
+            bar.classList.remove('progress-bar-striped', 'progress-bar-animated', 'bg-info');
+            bar.classList.add(isSuccess ? 'bg-success' : 'bg-danger');
+            if (isSuccess) bar.style.width = '100%';
+        }
+        if (pctLabel)  pctLabel.textContent  = isSuccess ? '100%' : '';
+        if (stageLbl)  stageLbl.textContent  = isSuccess ? 'All steps completed.' : 'An error occurred.';
+        if (statusEl)  statusEl.textContent  = statusText;
+        if (closeBtn)  closeBtn.style.display = '';
+        if (window._wppSafetyTimer) { clearTimeout(window._wppSafetyTimer); window._wppSafetyTimer = null; }
+        if (isSuccess) setTimeout(() => $('#wppProgressModal').modal('hide'), 3000);
+    }
+
     function handleFwAnalysisComplete(msg) {
         const pending = window.pendingFwAnalysis;
         if (!pending) return;
@@ -2045,6 +2073,7 @@
 
         const decoded = decodePath(fwPathEncoded);
         appendLog(`✅ FW analysis complete: ${decoded}\n`);
+        _closeFwModal(true, 'Done — output files have been generated.');
 
         // window.location.href = `${FW_RESULT_URL}?task_id=${encodeURIComponent(taskId)}`;
     }
@@ -2867,6 +2896,7 @@
 
         const decoded = decodePath(fwPathEncoded);
         appendLog(`⏹ FW analysis canceled: ${decoded}\n`, 'red');
+        _closeFwModal(false, 'Analysis was canceled.');
     }
 
     function handleFwAnalysisFailed(msg) {
@@ -2880,6 +2910,7 @@
 
         const decoded = decodePath(fwPathEncoded);
         appendLog(`❌ FW analysis failed: ${decoded} (${msg.error || 'unknown error'})\n`, 'red');
+        _closeFwModal(false, msg.error || 'An error occurred — please check the log above.');
     }
 
     function handleFwAnalysisWarning(msg) {

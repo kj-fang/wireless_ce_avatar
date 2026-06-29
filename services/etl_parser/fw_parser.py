@@ -296,10 +296,11 @@ def fw_wifi_analysis(fw_path: str, timeout: int = 30, cancel_event: Event | None
 
 
 
-def fw_bt_analysis(fw_path, use_cli=True, cancel_event: Event | None = None):
+def fw_bt_analysis(fw_path, use_cli=True, cancel_event: Event | None = None, on_log=None):
     """
     Launch WRT_BT_Decoder.exe with elevation and attach UI (via window detection)
     """
+    _log = on_log if callable(on_log) else print
     global active_fw_pid
     exe_path = r"C:\UtilityPackage\WRT_BT_Logs_Decoder\WRT_BT_Decoder.exe"
     exe_cli_path = r"C:\UtilityPackage\WRT_BT_Logs_Decoder\bt_decoder_cli.exe"
@@ -309,7 +310,7 @@ def fw_bt_analysis(fw_path, use_cli=True, cancel_event: Event | None = None):
             return None, f"❌ CLI executable not found: {exe_cli_path}"
     
         try:
-            print(f"🔍 Debug: Running CLI decoder with fw_path={fw_path}")
+            _log(f"🔍 Debug: Running CLI decoder with fw_path={fw_path}")
             arguments = ["-e", fw_path, "-autoFetchDevTrace_Headers"]
             result_proc = subprocess.Popen(
                 [exe_cli_path] + arguments,
@@ -329,7 +330,7 @@ def fw_bt_analysis(fw_path, use_cli=True, cancel_event: Event | None = None):
 
             while result_proc.poll() is None:
                 if cancel_event and cancel_event.is_set():
-                    print("⚠️ FW BT analysis canceled. Terminating bt_decoder_cli process...")
+                    _log("⚠️ FW BT analysis canceled. Terminating bt_decoder_cli process...")
                     _terminate_process_tree(result_proc.pid)
                     return False, None
                 time.sleep(0.5)
@@ -342,26 +343,26 @@ def fw_bt_analysis(fw_path, use_cli=True, cancel_event: Event | None = None):
 
             if result_proc.returncode != 0:
                 if outputs_ready:
-                    print(f"⚠️ bt_decoder_cli exited with code {result_proc.returncode}, but decode outputs exist. Continue parsing.")
+                    _log(f"⚠️ bt_decoder_cli exited with code {result_proc.returncode}, but decode outputs exist. Continue parsing.")
                     if stderr:
-                        print(stderr)
+                        _log(stderr)
                 else:
-                    print(f"❌ bt_decoder_cli exited with code {result_proc.returncode}")
+                    _log(f"❌ bt_decoder_cli exited with code {result_proc.returncode}")
                     
                     if stderr:
-                        print(stderr)
+                        _log(stderr)
                     return False, f"❌ bt_decoder_cli exited with code {result_proc.returncode}"
             
             # Todo: add completed msg to frontend log block
-            print("✅ Debug: FW bt decoder CLI is completed successfully.")
+            _log("✅ Debug: FW bt decoder CLI is completed successfully.")
 
             return True, None
 
         except subprocess.CalledProcessError as e:
-            print(f"❌ Failed to launch bt_decoder_cli.exe, (Error Code {e.returncode}):")
-            print(e.stderr)
+            _log(f"❌ Failed to launch bt_decoder_cli.exe, (Error Code {e.returncode}):")
+            _log(e.stderr)
         except Exception as e:
-            print(f"❌ Unexpected error: {e}")
+            _log(f"❌ Unexpected error: {e}")
 
     else:
             
@@ -371,7 +372,7 @@ def fw_bt_analysis(fw_path, use_cli=True, cancel_event: Event | None = None):
         try:
             
             params = f'"{fw_path}"'
-            print(f"🔍 Debug: Launching exe with params={params}")
+            _log(f"🔍 Debug: Launching exe with params={params}")
             rc = ctypes.windll.shell32.ShellExecuteW(
                 None, "runas", exe_path, params, os.path.dirname(exe_path), 1
             )
@@ -387,10 +388,10 @@ def fw_bt_analysis(fw_path, use_cli=True, cancel_event: Event | None = None):
                         title = (w.window_text() or "").strip()
                         if "WRT" in title and "Decoder" in title:
                             win, handle, pid = w, w.handle, w.process_id()
-                            print(f"✅ Debug: Found window '{title}' (handle={handle}, pid={pid}) after {i+1}s")
+                            _log(f"✅ Debug: Found window '{title}' (handle={handle}, pid={pid}) after {i+1}s")
                             break
                 except Exception as e:
-                    print(f"⚠️ Debug: Window search error: {e}")
+                    _log(f"⚠️ Debug: Window search error: {e}")
                 if win:
                     break
                 time.sleep(1)
@@ -399,11 +400,11 @@ def fw_bt_analysis(fw_path, use_cli=True, cancel_event: Event | None = None):
                 return "❌ Could not detect WRT_BT_Decoder.exe window after waiting."
 
             active_fw_pid = pid
-            print(f"🔍 Debug: Active PID set to {active_fw_pid}")
+            _log(f"🔍 Debug: Active PID set to {active_fw_pid}")
 
         
             app = Application(backend="uia").connect(handle=handle, timeout=10)
-            print(f"✅ Connected to WRT_BT_Decoder.exe via window handle (PID={pid})")
+            _log(f"✅ Connected to WRT_BT_Decoder.exe via window handle (PID={pid})")
 
             list_controls_clean(app)
             return f"✅ FW Analysis launched for {fw_path}"

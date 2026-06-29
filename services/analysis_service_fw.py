@@ -184,8 +184,8 @@ class FWAnalysisService():
                     return
                 task["status"] = "failed"
                 task["error"] = str(e)
-            self.emit_log(f"❌ FW analysis failed: {e}")
-            self.emit_log(traceback.format_exc())
+            self.emit_fw_log(f"❌ FW analysis failed: {e}")
+            self.emit_fw_log(traceback.format_exc())
             app_config.socketio.emit(
                 'fw_analysis_failed',
                 {'task_id': task_id, 'fw_path': file_path, 'error': str(e)},

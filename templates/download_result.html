@@ -1991,6 +1991,7 @@
         reconnectProgressSocket();
 
         cancelPendingFwAnalysis().finally(() => {
+            window.fwCurrentStage = -1;
             button.classList.add('disabled');
             button.innerText = 'Analyzing...';
 

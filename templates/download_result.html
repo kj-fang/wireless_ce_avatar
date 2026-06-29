@@ -2039,7 +2039,7 @@
 
     function _closeFwModal(isSuccess, statusText) {
         const wppModal = document.getElementById('wppProgressModal');
-        if (!wppModal || !$(wppModal).hasClass('show')) return;
+        if (!wppModal) return;
         const header   = document.getElementById('wppModalHeader');
         const spinner  = document.getElementById('wppModalSpinner');
         const labelEl  = document.getElementById('wppProgressModalLabel');

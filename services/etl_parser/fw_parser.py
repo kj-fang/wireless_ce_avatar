@@ -224,7 +224,8 @@ def fw_wifi_analysis(fw_path: str, timeout: int = 30, cancel_event: Event | None
             [DECODER_EXE, fw_path],
             stdout=subprocess.PIPE,
             stderr=subprocess.PIPE,
-            encoding='utf-8'
+            encoding='utf-8',
+            errors='replace'
         )
 
         _stdout_lines = []

@@ -316,7 +316,8 @@ def fw_bt_analysis(fw_path, use_cli=True, cancel_event: Event | None = None, on_
                 [exe_cli_path] + arguments,
                 stdout=subprocess.PIPE,
                 stderr=subprocess.PIPE,
-                encoding='utf-8'
+                encoding='utf-8',
+                errors='replace'
             )
 
             # Drain stdout in a background thread to prevent pipe-buffer deadlock
@@ -328,6 +329,15 @@ def fw_bt_analysis(fw_path, use_cli=True, cancel_event: Event | None = None, on_
             _drain_thread = Thread(target=_drain_stdout, daemon=True)
             _drain_thread.start()
 
+            # Drain stderr concurrently to prevent stderr pipe-buffer deadlock
+            _stderr_lines = []
+            def _drain_stderr():
+                for line in result_proc.stderr:
+                    _stderr_lines.append(line)
+                    _log(line.rstrip())  # Forward stderr lines to frontend in real-time
+            _stderr_thread = Thread(target=_drain_stderr, daemon=True)
+            _stderr_thread.start()
+
             while result_proc.poll() is None:
                 if cancel_event and cancel_event.is_set():
                     _log("⚠️ FW BT analysis canceled. Terminating bt_decoder_cli process...")
@@ -336,8 +346,9 @@ def fw_bt_analysis(fw_path, use_cli=True, cancel_event: Event | None = None, on_
                 time.sleep(0.5)
 
             _drain_thread.join(timeout=5)
+            _stderr_thread.join(timeout=5)
             stdout = ''.join(_stdout_lines)
-            stderr = result_proc.stderr.read()
+            stderr = ''.join(_stderr_lines)
 
             outputs_ready = _has_fw_bt_decode_outputs(fw_path)
 

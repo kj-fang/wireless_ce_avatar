@@ -2018,6 +2018,7 @@
                         if (wasPending) {
                             const reason = data.error || 'precheck failed';
                             appendLog(`⚠️ FW analysis rejected: ${reason}\n`, 'red');
+                            _closeFwModal(false, `Rejected: ${reason}`);
                         }
                         return;
                     }
@@ -2031,6 +2032,7 @@
                     window.pendingFwAnalysis = null;
                     appendLog(`❌ FW analysis start failed: ${decoded}\n`, 'red');
                     resetFwButton(button);
+                    _closeFwModal(false, 'Request failed: ' + (err.message || 'unknown error'));
                 });
         });
     }

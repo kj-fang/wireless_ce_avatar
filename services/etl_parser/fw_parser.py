@@ -198,7 +198,7 @@ def list_decoder_controls(verbose=True, max_depth=3):
 
 
 
-def fw_wifi_analysis(fw_path: str, timeout: int = 30, cancel_event: Event | None = None):
+def fw_wifi_analysis(fw_path: str, timeout: int = 30, cancel_event: Event | None = None, on_log=None):
     """
     Run the decoder exe with ETL file, wait for the generated output folder 
     (base name of fw_path without extension + '_xxxx'), and open that folder.
@@ -208,36 +208,68 @@ def fw_wifi_analysis(fw_path: str, timeout: int = 30, cancel_event: Event | None
         timeout (int): Max wait time for output folder in seconds
     """
     if not os.path.exists(DECODER_EXE):
-        print(f"❌ Decoder executable not found: {DECODER_EXE}")
+        _emit_viewer_log(on_log, f"❌ Decoder executable not found: {DECODER_EXE}")
         return False
     
     if not os.path.exists(fw_path):
-        print(f"❌ ETL file not found: {fw_path}")
+        _emit_viewer_log(on_log, f"❌ ETL file not found: {fw_path}")
         return False
 
     folder = os.path.dirname(fw_path)
     base_no_ext = os.path.splitext(os.path.basename(fw_path))[0]
 
     try:
-        print(f"⚙️ Running decoder: {DECODER_EXE} {fw_path}")
-        proc = subprocess.Popen([DECODER_EXE, fw_path])
+        _emit_viewer_log(on_log, f"⚙️ Running decoder: {DECODER_EXE} {fw_path}")
+        proc = subprocess.Popen(
+            [DECODER_EXE, fw_path],
+            stdout=subprocess.PIPE,
+            stderr=subprocess.PIPE,
+            encoding='utf-8'
+        )
+
+        _stdout_lines = []
+        _stderr_lines = []
+
+        def _drain_stdout():
+            for line in proc.stdout:
+                _stdout_lines.append(line)
+                clean_line = (line or '').strip()
+                if clean_line:
+                    _emit_viewer_log(on_log, clean_line)
+
+        def _drain_stderr():
+            for line in proc.stderr:
+                _stderr_lines.append(line)
+                clean_line = (line or '').strip()
+                if clean_line:
+                    _emit_viewer_log(on_log, clean_line)
+
+        _stdout_thread = Thread(target=_drain_stdout, daemon=True)
+        _stderr_thread = Thread(target=_drain_stderr, daemon=True)
+        _stdout_thread.start()
+        _stderr_thread.start()
 
         while proc.poll() is None:
             if cancel_event and cancel_event.is_set():
-                print("⚠️ FW WiFi analysis canceled. Terminating decoder process...")
+                _emit_viewer_log(on_log, "⚠️ FW WiFi analysis canceled. Terminating decoder process...")
                 _terminate_process_tree(proc.pid)
                 return None
             time.sleep(0.5)
 
+        _stdout_thread.join(timeout=5)
+        _stderr_thread.join(timeout=5)
+
         if proc.returncode != 0:
-            print(f"❌ Decoder failed with error code {proc.returncode}")
+            _emit_viewer_log(on_log, f"❌ Decoder failed with error code {proc.returncode}")
+            if _stderr_lines:
+                _emit_viewer_log(on_log, ''.join(_stderr_lines).strip())
             return False
 
         # Look for output folder matching "base_no_ext_*"
         output_folder = None
         for _ in range(timeout):
             if cancel_event and cancel_event.is_set():
-                print("⚠️ FW WiFi analysis canceled while waiting output folder.")
+                _emit_viewer_log(on_log, "⚠️ FW WiFi analysis canceled while waiting output folder.")
                 return None
             candidates = glob.glob(os.path.join(folder, base_no_ext + "_*"))
             candidates = [c for c in candidates if os.path.isdir(c)]
@@ -248,18 +280,18 @@ def fw_wifi_analysis(fw_path: str, timeout: int = 30, cancel_event: Event | None
             time.sleep(1)
 
         if output_folder and os.path.exists(output_folder):
-            print(f"✅ Output folder generated: {output_folder}")
+            _emit_viewer_log(on_log, f"✅ Output folder generated: {output_folder}")
             subprocess.run(['explorer', output_folder])
         else:
-            print(f"⚠️ Output folder not found for base: {base_no_ext}_* (waited {timeout}s)")
+            _emit_viewer_log(on_log, f"⚠️ Output folder not found for base: {base_no_ext}_* (waited {timeout}s)")
 
         return True
 
     except subprocess.CalledProcessError as e:
-        print(f"❌ Decoder failed with error code {e.returncode}")
+        _emit_viewer_log(on_log, f"❌ Decoder failed with error code {e.returncode}")
         return False
     except Exception as e:
-        print(f"❌ Failed to launch decoder: {e}")
+        _emit_viewer_log(on_log, f"❌ Failed to launch decoder: {e}")
         return False
 
 

@@ -955,6 +955,7 @@
 
         function bindProgressSocketHandlers() {
             socket.on("wpp_log", handleWppLog);
+            socket.on("fw_log", handleFwLog);
             socket.on("fw_tool_log", handleFwToolLog);
             socket.on("fw_tool_closed", handleFwToolClosed);
             socket.on("fw_tool_error", handleFwToolError);
@@ -1057,12 +1058,46 @@
               keywords: ['open text analysis', 'copying parsed log file'] },
         ];
         window.wppCurrentStage = -1;
+                const FW_STAGES = [
+                        { pct: 10, label: 'Step 1 / 7 — Loading ETL',
+                            keywords: ['Parsing file:', 'Processing ETL file:'] },
+                        { pct: 25, label: 'Step 2 / 7 — Enumerating dumps',
+                            keywords: ['Found dump file from ETL:', 'Processing dump file:'] },
+                        { pct: 40, label: 'Step 3 / 7 — Running LST flow',
+                            keywords: ['Running lst flow', 'Lst flow completed'] },
+                        { pct: 65, label: 'Step 4 / 7 — Running Sysmon flow',
+                            keywords: ['Download path', 'Running sysmon flow', 'Sysmon flow completed'] },
+                        { pct: 80, label: 'Step 5 / 7 — BT supplemental parsing',
+                            keywords: ['BT parsing started...', 'Warning: BT dev trace not found, skipping BT parsing.'] },
+                        { pct: 92, label: 'Step 6 / 7 — Generating GDB scripts',
+                            keywords: ['Writing GDB batch:', 'Writing GDB bash script:', 'GDB batch files created.'] },
+                        { pct: 100, label: 'Step 7 / 7 — Parse complete',
+                            keywords: ['Parsing completed successfully'] },
+                ];
+                window.fwCurrentStage = -1;
 
         function advanceWppStage(text) {
             for (let i = window.wppCurrentStage + 1; i < WPP_STAGES.length; i++) {
                 const stage = WPP_STAGES[i];
                 if (stage.keywords.some(k => text.includes(k))) {
                     window.wppCurrentStage = i;
+                    const pct = stage.pct;
+                    const bar = document.getElementById('wppModalProgressBar');
+                    if (bar) bar.style.width = pct + '%';
+                    const pctLabel = document.getElementById('wppModalPctLabel');
+                    if (pctLabel) pctLabel.textContent = pct + '%';
+                    const stageLabel = document.getElementById('wppModalStageLabel');
+                    if (stageLabel) stageLabel.textContent = stage.label;
+                    break;
+                }
+            }
+        }
+
+        function advanceFwStage(text) {
+            for (let i = window.fwCurrentStage + 1; i < FW_STAGES.length; i++) {
+                const stage = FW_STAGES[i];
+                if (stage.keywords.some(k => text.includes(k))) {
+                    window.fwCurrentStage = i;
                     const pct = stage.pct;
                     const bar = document.getElementById('wppModalProgressBar');
                     if (bar) bar.style.width = pct + '%';
@@ -1092,6 +1127,27 @@
                 modalLog.appendChild(line);
                 if (isNearBottom) modalLog.scrollTop = modalLog.scrollHeight;
             }
+            const statusEl = document.getElementById('wppModalStatusText');
+            if (statusEl) statusEl.textContent = text.slice(0, 90);
+        }
+
+        function handleFwLog(msg) {
+            console.log("fw_log:", msg);
+            const text = msg.data || '';
+            appendLog(text + "\n");
+            advanceFwStage(text);
+
+            const modalLog = document.getElementById('wppModalLog');
+            if (modalLog) {
+                const line = document.createElement('span');
+                if (text.startsWith('❌')) line.style.color = '#f48771';
+                else if (text.startsWith('✅')) line.style.color = '#89d185';
+                line.textContent = text + '\n';
+                const isNearBottom = modalLog.scrollHeight - modalLog.scrollTop - modalLog.clientHeight <= 60;
+                modalLog.appendChild(line);
+                if (isNearBottom) modalLog.scrollTop = modalLog.scrollHeight;
+            }
+
             const statusEl = document.getElementById('wppModalStatusText');
             if (statusEl) statusEl.textContent = text.slice(0, 90);
         }

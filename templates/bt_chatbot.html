@@ -3299,17 +3299,29 @@
                     window.__feedbackConversationId = data.new_conversation_id;
                 }
 
-                // NOTE: the sidebar Issue Time is intentionally left EMPTY on
-                // load — we no longer auto-fill it with the log's latest
-                // timestamp. The user either types a time, or uses the
-                // "🪄 AI suggest a time" option offered in the no-issue-time
-                // confirm prompt (which infers it from the description + log).
                 // Cache JUST the date portion of the log's auto-detected
                 // timestamp, so the time-capture popup can pre-fill MM/DD/
                 // YYYY when the user types a time-only token (e.g.
                 // "17:36:13"). Survives after the sidebar gets cleared.
                 if (data.issue_time) {
                     window.__logAutoDate = _extractDateFromTimeString(data.issue_time);
+                }
+                // Pre-fill the sidebar Issue Time with the log's resolved time
+                // (its last parseable timestamp when no case context supplies
+                // one). On ROTATION (a DIFFERENT log replaced the previous one)
+                // the old value belonged to the previous log, so wipe it and
+                // refresh to the new log's time — clearing first so a stale
+                // value can't survive when the new log has no detectable time.
+                // On a normal (non-rotated) load we only fill when empty, so we
+                // never clobber a value the user typed or that AI suggest /
+                // session context already placed. The user can still overwrite
+                // it via "🪄 AI suggest a time". Backend already returns the
+                // canonical resolved value in data.issue_time.
+                if (data.rotated) {
+                    clearAllIssueTimes();
+                    if (data.issue_time) setIssueTimeFromString(data.issue_time);
+                } else if (data.issue_time && !getIssueTimeString()) {
+                    setIssueTimeFromString(data.issue_time);
                 }
                 // Cap the capture-window control at the log's actual span.
                 if (typeof data.log_span_minutes === 'number' && data.log_span_minutes > 0) {
@@ -4016,41 +4028,53 @@
         const currentTime = getIssueTimeString();
         if (!currentTime) return;
 
-        // Always show the picker with the original time; add error time if found.
-        _refineOriginalTime = currentTime;
-        _refineErrorTime    = '';
-
-        const origLabel = document.getElementById('refine-original-label');
-        const errLabel  = document.getElementById('refine-error-label');
-        const errBtn    = document.getElementById('refine-pick-error');
-        if (origLabel) origLabel.textContent = `⏱ ${currentTime}`;
-
         try {
             // Use the event log source filter (pci_bt / usb_bt) to only
             // match errors from the relevant BT driver source.
             const srcSel = document.getElementById('evtPopupSourceFilter');
             const srcGroup = srcSel ? srcSel.value : '';
             const result = await window.findClosestEventError(currentTime, srcGroup);
-
-            if (result && result.formatted_time && result.diff_seconds <= 600
-                && result.formatted_time !== currentTime) {
-                _refineErrorTime = result.formatted_time;
-                if (errLabel) errLabel.textContent =
-                    `⏱ ${result.formatted_time}  (${result.source}, ID ${result.event_id}, Δ${result.diff_seconds.toFixed(0)}s)`;
-                if (errBtn) { errBtn.disabled = false; errBtn.style.opacity = '1'; }
-                console.log(`[Refine-Picker] Closest event error: ${result.formatted_time} ` +
-                    `(${result.source}, ID: ${result.event_id}, diff: ${result.diff_seconds.toFixed(0)}s)`);
-            } else {
-                // No matching error within 10 min — disable the error button
-                if (errLabel) errLabel.textContent = '(no close error found)';
-                if (errBtn) { errBtn.disabled = true; errBtn.style.opacity = '0.5'; }
-                console.log('[Refine-Picker] No close error found — showing picker with original only.');
-            }
+            showRefinePickerFromData(currentTime, result);
         } catch (e) {
-            // Fetch/parse failed — still show picker, just disable error option
-            if (errLabel) errLabel.textContent = '(event log unavailable)';
-            if (errBtn) { errBtn.disabled = true; errBtn.style.opacity = '0.5'; }
+            // Fetch/parse failed — still show picker, just disable error option.
+            showRefinePickerFromData(currentTime, null, '(event log unavailable)');
             console.warn('[Refine-Picker] Failed to find closest event error:', e);
+        }
+    }
+
+    /**
+     * Render the refine picker from already-resolved data — NO event-log fetch.
+     * Shared by both entry points:
+     *   1) refineIssueTimeFromEventLog()  → data from findClosestEventError()
+     *   2) the AI-suggest flow            → data reused from the suggest_issue_times
+     *      response (`nearest_error`), so the same events the AI weighed drive
+     *      the picker without a second /parse_event_log round-trip.
+     * @param {string} originalTime  current/applied issue time string
+     * @param {object|null} errInfo  {formatted_time, diff_seconds, source, event_id} or null
+     * @param {string} [noneLabel]   label to show when no usable error is given
+     */
+    function showRefinePickerFromData(originalTime, errInfo, noneLabel) {
+        if (!originalTime) return;
+        _refineOriginalTime = originalTime;
+        _refineErrorTime    = '';
+
+        const origLabel = document.getElementById('refine-original-label');
+        const errLabel  = document.getElementById('refine-error-label');
+        const errBtn    = document.getElementById('refine-pick-error');
+        if (origLabel) origLabel.textContent = `⏱ ${originalTime}`;
+
+        if (errInfo && errInfo.formatted_time && errInfo.diff_seconds <= 600
+            && errInfo.formatted_time !== originalTime) {
+            _refineErrorTime = errInfo.formatted_time;
+            if (errLabel) errLabel.textContent =
+                `⏱ ${errInfo.formatted_time}  (${errInfo.source}, ID ${errInfo.event_id}, Δ${Number(errInfo.diff_seconds).toFixed(0)}s)`;
+            if (errBtn) { errBtn.disabled = false; errBtn.style.opacity = '1'; }
+            console.log(`[Refine-Picker] Closest event error: ${errInfo.formatted_time} ` +
+                `(${errInfo.source}, ID: ${errInfo.event_id}, diff: ${Number(errInfo.diff_seconds).toFixed(0)}s)`);
+        } else {
+            if (errLabel) errLabel.textContent = noneLabel || '(no close error found)';
+            if (errBtn) { errBtn.disabled = true; errBtn.style.opacity = '0.5'; }
+            console.log('[Refine-Picker] No close error found — showing picker with original only.');
         }
 
         const picker = document.getElementById('it-refine-picker');
@@ -4203,6 +4227,11 @@
     function openTimeCaptureModal(detectedTimes) {
         const list = document.getElementById('time-capture-list');
         list.innerHTML = '';
+        // Clear any AI refine linkage by default; the AI-suggest flow re-sets it
+        // AFTER this call. This keeps typed-token captures (which also open this
+        // modal) from inheriting a stale nearest-error and showing the picker.
+        window.__aiNearestError = null;
+        window.__aiBestTimeStr = '';
         // Reset the title to the default; the AI flow relabels it afterwards.
         const _tcTitle = document.getElementById('tc-title');
         if (_tcTitle) _tcTitle.textContent = 'Detected issue time(s) in your message';
@@ -4312,6 +4341,14 @@
         closeTimeCaptureModal();
         // Applying = confirming → the time(s) become user-owned (no extra tick).
         if (times.length > 0) _applyCapturedTimesToSidebar(times, mode);
+        // If this apply came from the AI-suggest flow, surface the refine picker
+        // using the AI's own nearest-error data (no extra event-log fetch).
+        if (window.__aiNearestError) {
+            const origTime = getIssueTimeString() || window.__aiBestTimeStr || '';
+            if (origTime) showRefinePickerFromData(origTime, window.__aiNearestError);
+        }
+        window.__aiNearestError = null;
+        window.__aiBestTimeStr = '';
         if (send) {
             // Fire analysis now with the description in the chat box. The
             // skip-once guard stops sendMessage from re-opening this popup.
@@ -4574,10 +4611,19 @@
         const orig = btn ? btn.innerHTML : '';
         if (btn) { btn.disabled = true; btn.innerHTML = '⏳ Analyzing…'; }
         try {
+            // Forward the System Event Log dropdowns so the AI weighs the
+            // SAME Warn+Err selection the user sees on this page as a
+            // high-priority anchor for the issue time.
+            const srcSel = document.getElementById('evtPopupSourceFilter');
+            const lvlSel = document.getElementById('evtPopupLevelFilter');
             const res = await fetch('/bt_chatbot/suggest_issue_times', {
                 method: 'POST',
                 headers: { 'Content-Type': 'application/json' },
-                body: JSON.stringify({ text: _llmTimeConsentText }),
+                body: JSON.stringify({
+                    text: _llmTimeConsentText,
+                    source_filter: srcSel ? srcSel.value : 'all',
+                    level_filter: lvlSel ? lvlSel.value : 'warning_error',
+                }),
             });
             const data = await res.json();
             if (!data.success) {
@@ -4587,13 +4633,32 @@
                 return;
             }
             const sugg = data.suggestions || [];
+            // For AI suggestions, pre-select ONLY the single best candidate so
+            // the user isn't forced to prune a long auto-filled list. The user's
+            // own explicit times (user_explicit) are NOT narrowed — all of them
+            // are intentional, so we keep the original behaviour there.
+            const bestIdx = _pickBestSuggestionIndex(sugg);
+            const chosen = (data.user_explicit || sugg.length <= 1)
+                ? sugg
+                : (bestIdx >= 0 ? [sugg[bestIdx]] : []);
             // Funnel into the existing capture popup (handles replace/append).
-            const detected = sugg.map((s) => ({
+            const detected = chosen.map((s) => ({
                 month: s.month, day: s.day, year: s.year,
                 hh: s.hh, mm: s.mm, ss: s.ss, ms: s.ms,
             }));
             openTimeCaptureModal(detected);
-            _setAiTimeSummary(data);
+            // Link the refine picker to the SAME events the AI used: stash the
+            // best suggestion's nearest system Error/Critical (computed server-
+            // side in the suggest response) so applyTimeCapture() can show
+            // "Found a nearby system error" WITHOUT a second /parse_event_log
+            // fetch. Set AFTER openTimeCaptureModal (which clears the stash).
+            const _bestSugg = (!data.user_explicit && bestIdx >= 0) ? sugg[bestIdx]
+                : (sugg.length === 1 ? sugg[0] : null);
+            if (_bestSugg && _bestSugg.nearest_error) {
+                window.__aiNearestError = _bestSugg.nearest_error;
+                window.__aiBestTimeStr = _bestSugg.issue_time || '';
+            }
+            _setAiTimeSummary(data, bestIdx);
             if (sugg.length === 0 && typeof showToast === 'function') {
                 showToast({ message: 'ℹ️ ' + (data.message || "AI couldn't pin down a time — please fill it in."), ttlMs: 6000 });
             }
@@ -4606,9 +4671,25 @@
         }
     }
 
+    // Choose the index of the single most suitable AI suggestion.
+    // Ranking: higher confidence wins (high > medium > low); ties break by
+    // the backend's order, which is already "best first". Returns -1 for an
+    // empty list.
+    function _pickBestSuggestionIndex(sugg) {
+        if (!sugg || sugg.length === 0) return -1;
+        const rank = { high: 0, medium: 1, low: 2 };
+        let bestIdx = 0;
+        let bestRank = rank[String(sugg[0].confidence || '').toLowerCase()] ?? 1;
+        for (let i = 1; i < sugg.length; i++) {
+            const r = rank[String(sugg[i].confidence || '').toLowerCase()] ?? 1;
+            if (r < bestRank) { bestRank = r; bestIdx = i; }
+        }
+        return bestIdx;
+    }
+
     // Relabel + repopulate the capture popup's title/summary for the AI
     // flow. Called AFTER openTimeCaptureModal (which sets its own defaults).
-    function _setAiTimeSummary(data) {
+    function _setAiTimeSummary(data, bestIdx) {
         const title = document.getElementById('tc-title');
         if (title) title.textContent = data.user_explicit
             ? 'Issue time(s) from your message'
@@ -4622,17 +4703,30 @@
             parts.push('<strong>AI read:</strong> ' + _itEscHtml(data.interpretation));
         }
         const sugg = data.suggestions || [];
+        const onlyBest = !data.user_explicit && sugg.length > 1;
         if (sugg.length) {
-            const lis = sugg.map((s) => {
+            const lis = sugg.map((s, i) => {
                 const conf = s.confidence ? ` <em>(${_itEscHtml(s.confidence)})</em>` : '';
                 const reason = s.reason ? ' — ' + _itEscHtml(s.reason) : '';
-                return `<li><code>${_itEscHtml(s.issue_time)}</code>${conf}${reason}</li>`;
+                // Mark the auto-selected best candidate so the user can see
+                // which one was pre-filled below (the rest are alternatives).
+                const isBest = onlyBest && i === bestIdx;
+                const tag = isBest
+                    ? ' <strong style="color:#15803d;">✓ selected</strong>'
+                    : (onlyBest ? ' <span style="color:#94a3b8;">(alternative)</span>' : '');
+                return `<li><code>${_itEscHtml(s.issue_time)}</code>${conf}${tag}${reason}</li>`;
             }).join('');
             parts.push(`<ul style="margin:6px 0 0 16px;padding:0;font-size:0.72rem;line-height:1.45;">${lis}</ul>`);
         } else {
             parts.push('<em>No specific time found — edit the row below or add one.</em>');
         }
-        parts.push('<div style="margin-top:6px;">Edit if needed, then choose <strong>Replace</strong> or <strong>Append</strong>.</div>');
+        if (onlyBest) {
+            parts.push('<div style="margin-top:6px;">Only the <strong>best</strong> time is pre-filled below. '
+                + 'Add an alternative with “＋ Add another time” if needed, then choose '
+                + '<strong>Replace</strong> or <strong>Append</strong>.</div>');
+        } else {
+            parts.push('<div style="margin-top:6px;">Edit if needed, then choose <strong>Replace</strong> or <strong>Append</strong>.</div>');
+        }
         summary.innerHTML = parts.join(' ');
     }
 </script>

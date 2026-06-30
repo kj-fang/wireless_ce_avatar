@@ -2003,7 +2003,7 @@
 
             const decoded = decodePath(fwPathEncoded);
             appendLog(`\n\n🚀 Starting FW Analysis: ${decoded}\n`);
-            openWppModal(`🔬 FW Parsing: ${decoded.split('\\').pop() || decoded.split('/').pop()}`);
+            openWppModal(`🔬 FW Parsing: ${getFilename(decoded)}`);
 
             fetch(`${FW_ETL_ANALYSIS_URL}?fw_path=${fwPathEncoded}`)
                 .then(res => res.json())

@@ -308,6 +308,7 @@ def fw_bt_analysis(fw_path, use_cli=True, cancel_event: Event | None = None, on_
 
     if use_cli:
         if not os.path.exists(exe_cli_path):
+            _log(f"❌ CLI executable not found: {exe_cli_path}")
             return None, f"❌ CLI executable not found: {exe_cli_path}"
     
         try:

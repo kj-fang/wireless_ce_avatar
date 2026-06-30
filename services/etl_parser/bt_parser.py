@@ -686,9 +686,10 @@ def bt_decode_hci_via_folder(log_folder_path: str, log_path: str, etl_txt_timeou
         print(f"🎯 Chatbot input will use last split part: {chatbot_input_etl}")
 
     # Rename all the other ETL files to avoid decoding them (we only want the chatbot_input_etl to be decoded).
+    normalized_target = os.path.normcase(os.path.abspath(chatbot_input_etl))
     for etl_file in os.listdir(log_folder_path):
         etl_file_path = os.path.join(log_folder_path, etl_file)
-        if etl_file_path.lower().endswith(".etl") and etl_file_path != chatbot_input_etl:
+        if etl_file_path.lower().endswith(".etl") and os.path.normcase(os.path.abspath(etl_file_path)) != normalized_target:
             try:
                 renamed_path = etl_file_path + ".skip"
                 os.rename(etl_file_path, renamed_path)
@@ -742,9 +743,8 @@ def bt_decode_hci_via_folder(log_folder_path: str, log_path: str, etl_txt_timeou
     # Exits when: size is stable for >= timeout seconds, BT tool dies,
     #             or file never appears within timeout seconds.
     #
-    # IMPORTANT: timeout only triggers when there is NO decode activity in the
-    # entire folder.  As long as *any* .txt/.hci.txt is being written (even for
-    # a different ETL), the BT tool is still busy and we keep waiting.
+    # IMPORTANT: Timeouts below are based on the selected ETL's outputs. Other ETLs are
+    # renamed to ".skip" above so Decode Folder focuses on `chatbot_input_etl` only.
     last_size = -1
     file_wait_start = None  # timer: waiting for the file to appear
     idle_start = None       # timer: waiting for the file size to stop changing

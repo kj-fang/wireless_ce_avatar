@@ -2141,7 +2141,7 @@
                             onclick="copyLogPath(this)" title="Copy log path"
                             aria-label="Copy log path">📋</button>
                 </div>
-                <button class="btn-browse" onclick="browseLog()" title="Browse for file">📁</button>
+                <button type="button" class="btn-browse" onclick="browseLog()" title="Browse for file">📁</button>
             </div>
             <div id="log-status" class="log-status"></div>
         </div>
@@ -2364,7 +2364,7 @@
             <h6>🛠 Reload Skills</h6>
             <div class="log-input-group">
                 <input id="skills-dir-input" type="text" placeholder="Skills data directory…">
-                <button class="btn-browse" onclick="browseSkillsDir()" title="Browse for directory">📁</button>
+                <button type="button" class="btn-browse" onclick="browseSkillsDir()" title="Browse for directory">📁</button>
             </div>
             <button class="btn-set-log" style="width:100%;margin-top:6px;" onclick="reloadSkills()">🔄 Reload Skills</button>
             <div id="skills-reload-status" class="log-status"></div>

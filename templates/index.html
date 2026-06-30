@@ -1306,5 +1306,31 @@
         // document.getElementById('loading-box').style.display = 'block';
     </script>
 
+    <!-- Tool version badge -->
+    <div class="app-version-badge"
+         title="Build: {{ app_build_date }}&#10;Branch: {{ app_git_branch }}&#10;Commit: {{ app_git_hash }}">
+        v{{ app_version }}
+    </div>
+    
+    <style>
+    .app-version-badge {
+        position: fixed;
+        right: 14px;
+        bottom: 10px;
+
+        font-size: 15px;
+        font-family: system-ui, sans-serif;
+        color: rgba(0, 0, 0, 0.35);
+
+        background: none;
+        padding: 0;
+        border-radius: 0;
+        box-shadow: none;
+
+        pointer-events: none;
+    }
+    </style>
+
+
 </body>
 </html>

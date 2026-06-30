@@ -7,10 +7,13 @@ import psutil
 import subprocess, glob
 import win32api
 import math
+import re
 
 # Global variable to cache a running instance's PID so we can reconnect
 # instead of launching a new GUI process every time.
 active_bt_pid = None
+
+SPLIT_SIZE_THRESHOLD_BYTES = 1024 * 1024 * 1024  # 1 GB
 
 
 def _get_true_file_size(path: str) -> int:
@@ -523,6 +526,22 @@ def _rename_split_source(file_path: str) -> None:
         print(f"⚠️ Failed to rename split source {file_path}: {e_rename}")
 
 
+def _extract_split_index(file_path: str) -> int:
+    """Extract numeric suffix from '<name>_split<N>.etl'; return -1 if missing."""
+    m = re.search(r"_split(\d+)\.etl$", os.path.basename(file_path), re.IGNORECASE)
+    return int(m.group(1)) if m else -1
+
+
+def _pick_last_split_part(original_file_path: str) -> str | None:
+    """Pick split part with highest numeric index for an original ETL file."""
+    split_dir = os.path.dirname(original_file_path)
+    base_name = os.path.splitext(os.path.basename(original_file_path))[0]
+    parts = glob.glob(os.path.join(split_dir, f"{base_name}_split*.etl"))
+    if not parts:
+        return None
+    return max(parts, key=_extract_split_index)
+
+
 def _collect_large_etl_files(log_folder_path: str) -> list:
     """Collect ETL files requiring split."""
     split_file_path = []
@@ -530,18 +549,23 @@ def _collect_large_etl_files(log_folder_path: str) -> list:
         if file.lower().endswith(".etl"):
             file_path = os.path.join(log_folder_path, file)
             file_size_bytes = os.path.getsize(file_path)
-            if file_size_bytes >= 1 * 1024 * 1024 * 1024:
+            if file_size_bytes >= SPLIT_SIZE_THRESHOLD_BYTES:
                 split_file_path.append({"path": file_path, "size": file_size_bytes})
                 print(f"⚠️ {file}: File size is {file_size_bytes / (1024 * 1024):.2f} MB (>1GB). Splitting...")
     return split_file_path
 
 
-def _split_large_etl_files(app_window, log_folder_path: str, main_hwnd) -> None:
-    """Run ETL-Splitter flow for large ETLs in the folder."""
+def _split_large_etl_files(app_window, log_folder_path: str, main_hwnd) -> dict:
+    """Run ETL-Splitter flow for large ETLs in the folder.
+
+    Returns:
+        dict: original ETL path -> chosen split target path (highest split index).
+    """
+    split_target_map = {}
     try:
         split_file_path = _collect_large_etl_files(log_folder_path)
         if not split_file_path:
-            return
+            return split_target_map
 
         split_tab = app_window.child_window(title="ETL-Splitter", control_type="TabItem").wrapper_object()
         split_tab.select()
@@ -564,6 +588,12 @@ def _split_large_etl_files(app_window, log_folder_path: str, main_hwnd) -> None:
 
                 if _wait_for_split_outputs(file_path, split_count, wait_timeout=300, stable_seconds=15):
                     _rename_split_source(file_path)
+                    selected_split = _pick_last_split_part(file_path)
+                    if selected_split:
+                        split_target_map[file_path] = selected_split
+                        print(f"✅ Selected chatbot input target: {selected_split}")
+                    else:
+                        print(f"⚠️ Split succeeded but no split part found for: {file_path}")
                 else:
                     print(f"⚠️ Split not completed successfully for {file_path}")
 
@@ -571,6 +601,7 @@ def _split_large_etl_files(app_window, log_folder_path: str, main_hwnd) -> None:
                 print(f"⚠️ Failed to split {file_info.get('path')}: {e}")
     except Exception as e:
         print(f"⚠️ Failed to check file size for splitting: {e}")
+    return split_target_map
 
 
 def bt_decode_hci_via_folder(log_folder_path: str, log_path: str, etl_txt_timeout: int = 180, hci_txt_timeout: int = 15) -> str | None:
@@ -648,7 +679,11 @@ def bt_decode_hci_via_folder(log_folder_path: str, log_path: str, etl_txt_timeou
         main_hwnd = None
 
     # 4.5) Split oversized ETLs via ETL-Splitter before Decode Folder.
-    _split_large_etl_files(app_window, log_folder_path, main_hwnd)
+    # Decode still runs on the whole folder; map is only for final chatbot input selection.
+    split_target_map = _split_large_etl_files(app_window, log_folder_path, main_hwnd)
+    chatbot_input_etl = split_target_map.get(log_path, log_path)
+    if chatbot_input_etl != log_path:
+        print(f"🎯 Chatbot input will use last split part: {chatbot_input_etl}")
     
     # Switch to 'BT Driver Log Parser' tab (same as AutoFolder mode)
     try:
@@ -677,13 +712,13 @@ def bt_decode_hci_via_folder(log_folder_path: str, log_path: str, etl_txt_timeou
     except Exception as e:
         print(f"❌ Failed to trigger Decode Folder: {e}")
 
-    # 7) Wait for the decoded output (either naming convention) and open it
-    hci_txt = candidate_hci_paths(log_path)[0]
+    # 7) Wait for the decoded output used by chatbot input path.
+    hci_txt = candidate_hci_paths(chatbot_input_etl)[0]
     print(f"⏳ Waiting for HCI log until found: {hci_txt}")
 
-    etl_txt = log_path + ".txt"
-    txt_cfa = log_path + ".txt.cfa"
-    txt_pcap = log_path + ".txt.pcap"
+    etl_txt = chatbot_input_etl + ".txt"
+    txt_cfa = chatbot_input_etl + ".txt.cfa"
+    txt_pcap = chatbot_input_etl + ".txt.pcap"
 
     time.sleep(0.5)
     # Although this may only occur in ManualSelect via IbtSnoopgen.
@@ -695,11 +730,32 @@ def bt_decode_hci_via_folder(log_folder_path: str, log_path: str, etl_txt_timeou
     #   idle_start:      tracks how long the file size has been unchanged (write has stopped).
     # Exits when: size is stable for >= timeout seconds, BT tool dies,
     #             or file never appears within timeout seconds.
+    #
+    # IMPORTANT: timeout only triggers when there is NO decode activity in the
+    # entire folder.  As long as *any* .txt/.hci.txt is being written (even for
+    # a different ETL), the BT tool is still busy and we keep waiting.
     last_size = -1
     file_wait_start = None  # timer: waiting for the file to appear
     idle_start = None       # timer: waiting for the file size to stop changing
     last_etl_txt_size = -1  # tracker for intermediate .txt file size
     etl_txt_idle_start = None  # timer: waiting for .txt to stop changing
+    last_folder_activity_snapshot = None  # tracks any decode activity in folder
+
+    def _folder_has_decode_activity() -> bool:
+        """Check if any .txt or .hci.txt in the folder is still being written."""
+        nonlocal last_folder_activity_snapshot
+        try:
+            snapshot = {}
+            for f in os.listdir(log_folder_path):
+                if f.lower().endswith((".txt", ".hci.txt")):
+                    fp = os.path.join(log_folder_path, f)
+                    snapshot[fp] = _get_true_file_size(fp)
+            if snapshot != last_folder_activity_snapshot:
+                last_folder_activity_snapshot = snapshot
+                return True  # something changed → still active
+            return False  # nothing changed → idle
+        except Exception:
+            return False
 
     while True:
         if not psutil.pid_exists(active_bt_pid):
@@ -748,9 +804,15 @@ def bt_decode_hci_via_folder(log_folder_path: str, log_path: str, etl_txt_timeou
                     _terminate_bt_tool("⚠️ BT tool terminated due to .hci.txt timeout.")
                     return None
         else:
-            # File not yet created; start the appearance timer
+            # File not yet created; check if BT tool is still actively decoding anything.
             idle_start = None  # reset idle timer since file does not exist
-            if os.path.exists(etl_txt):
+
+            if _folder_has_decode_activity():
+                # Other ETLs still being decoded → reset all idle timers, keep waiting.
+                file_wait_start = None
+                etl_txt_idle_start = None
+                last_etl_txt_size = -1
+            elif os.path.exists(etl_txt):
                 # Intermediate .txt present — track its size; start timeout only when it stops changing
                 file_wait_start = None
                 etl_txt_size = _get_true_file_size(etl_txt)

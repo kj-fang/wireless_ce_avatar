@@ -1042,6 +1042,7 @@
 
         function bindProgressSocketHandlers() {
             socket.on("wpp_log", handleWppLog);
+            socket.on("fw_log", handleFwLog);
             socket.on("fw_tool_log", handleFwToolLog);
             socket.on("fw_tool_closed", handleFwToolClosed);
             socket.on("fw_tool_error", handleFwToolError);
@@ -1144,12 +1145,46 @@
               keywords: ['open text analysis', 'copying parsed log file'] },
         ];
         window.wppCurrentStage = -1;
+                const FW_STAGES = [
+                        { pct: 10, label: 'Step 1 / 7 — Loading ETL',
+                            keywords: ['Parsing file:', 'Processing ETL file:'] },
+                        { pct: 25, label: 'Step 2 / 7 — Enumerating dumps',
+                            keywords: ['Found dump file from ETL:', 'Processing dump file:'] },
+                        { pct: 40, label: 'Step 3 / 7 — Running LST flow',
+                            keywords: ['Running lst flow', 'Lst flow completed'] },
+                        { pct: 65, label: 'Step 4 / 7 — Running Sysmon flow',
+                            keywords: ['Download path', 'Running sysmon flow', 'Sysmon flow completed'] },
+                        { pct: 80, label: 'Step 5 / 7 — BT supplemental parsing',
+                            keywords: ['BT parsing started...', 'Warning: BT dev trace not found, skipping BT parsing.'] },
+                        { pct: 92, label: 'Step 6 / 7 — Generating GDB scripts',
+                            keywords: ['Writing GDB batch:', 'Writing GDB bash script:', 'GDB batch files created.'] },
+                        { pct: 100, label: 'Step 7 / 7 — Parse complete',
+                            keywords: ['Parsing completed successfully'] },
+                ];
+                window.fwCurrentStage = -1;
 
         function advanceWppStage(text) {
             for (let i = window.wppCurrentStage + 1; i < WPP_STAGES.length; i++) {
                 const stage = WPP_STAGES[i];
                 if (stage.keywords.some(k => text.includes(k))) {
                     window.wppCurrentStage = i;
+                    const pct = stage.pct;
+                    const bar = document.getElementById('wppModalProgressBar');
+                    if (bar) bar.style.width = pct + '%';
+                    const pctLabel = document.getElementById('wppModalPctLabel');
+                    if (pctLabel) pctLabel.textContent = pct + '%';
+                    const stageLabel = document.getElementById('wppModalStageLabel');
+                    if (stageLabel) stageLabel.textContent = stage.label;
+                    break;
+                }
+            }
+        }
+
+        function advanceFwStage(text) {
+            for (let i = window.fwCurrentStage + 1; i < FW_STAGES.length; i++) {
+                const stage = FW_STAGES[i];
+                if (stage.keywords.some(k => text.includes(k))) {
+                    window.fwCurrentStage = i;
                     const pct = stage.pct;
                     const bar = document.getElementById('wppModalProgressBar');
                     if (bar) bar.style.width = pct + '%';
@@ -1179,6 +1214,27 @@
                 modalLog.appendChild(line);
                 if (isNearBottom) modalLog.scrollTop = modalLog.scrollHeight;
             }
+            const statusEl = document.getElementById('wppModalStatusText');
+            if (statusEl) statusEl.textContent = text.slice(0, 90);
+        }
+
+        function handleFwLog(msg) {
+            console.log("fw_log:", msg);
+            const text = msg.data || '';
+            appendLog(text + "\n");
+            advanceFwStage(text);
+
+            const modalLog = document.getElementById('wppModalLog');
+            if (modalLog) {
+                const line = document.createElement('span');
+                if (text.startsWith('❌')) line.style.color = '#f48771';
+                else if (text.startsWith('✅')) line.style.color = '#89d185';
+                line.textContent = text + '\n';
+                const isNearBottom = modalLog.scrollHeight - modalLog.scrollTop - modalLog.clientHeight <= 60;
+                modalLog.appendChild(line);
+                if (isNearBottom) modalLog.scrollTop = modalLog.scrollHeight;
+            }
+
             const statusEl = document.getElementById('wppModalStatusText');
             if (statusEl) statusEl.textContent = text.slice(0, 90);
         }
@@ -2022,6 +2078,7 @@
         reconnectProgressSocket();
 
         cancelPendingFwAnalysis().finally(() => {
+            window.fwCurrentStage = -1;
             button.classList.add('disabled');
             button.innerText = 'Analyzing...';
 
@@ -2033,6 +2090,7 @@
 
             const decoded = decodePath(fwPathEncoded);
             appendLog(`\n\n🚀 Starting FW Analysis: ${decoded}\n`);
+            openWppModal(`🔬 FW Parsing: ${getFilename(decoded)}`);
 
             fetch(`${FW_ETL_ANALYSIS_URL}?fw_path=${fwPathEncoded}`)
                 .then(res => res.json())
@@ -2043,10 +2101,13 @@
                             && window.pendingFwAnalysis.fwPathEncoded === fwPathEncoded
                         );
                         window.pendingFwAnalysis = null;
+                        window.pendingFwAnalyze = false;
                         resetFwButton(button);
+                        setFwActionButtonsBusy(false);
                         if (wasPending) {
                             const reason = data.error || 'precheck failed';
                             appendLog(`⚠️ FW analysis rejected: ${reason}\n`, 'red');
+                            _closeFwModal(false, `Rejected: ${reason}`);
                         }
                         return;
                     }
@@ -2058,10 +2119,40 @@
                 .catch(err => {
                     console.error(err);
                     window.pendingFwAnalysis = null;
+                    window.pendingFwAnalyze = false;
                     appendLog(`❌ FW analysis start failed: ${decoded}\n`, 'red');
                     resetFwButton(button);
+                    setFwActionButtonsBusy(false);
+                    _closeFwModal(false, 'Request failed: ' + (err.message || 'unknown error'));
                 });
         });
+    }
+
+    function _closeFwModal(isSuccess, statusText) {
+        const wppModal = document.getElementById('wppProgressModal');
+        if (!wppModal) return;
+        const header   = document.getElementById('wppModalHeader');
+        const spinner  = document.getElementById('wppModalSpinner');
+        const labelEl  = document.getElementById('wppProgressModalLabel');
+        const bar      = document.getElementById('wppModalProgressBar');
+        const pctLabel = document.getElementById('wppModalPctLabel');
+        const stageLbl = document.getElementById('wppModalStageLabel');
+        const statusEl = document.getElementById('wppModalStatusText');
+        const closeBtn = document.getElementById('wppModalCloseBtn');
+        if (header)   header.style.background = isSuccess ? '#155724' : '#721c24';
+        if (spinner)  spinner.style.display = 'none';
+        if (labelEl)  labelEl.textContent = isSuccess ? '✅ FW Parse Complete!' : '❌ FW Parse Failed';
+        if (bar) {
+            bar.classList.remove('progress-bar-striped', 'progress-bar-animated', 'bg-info');
+            bar.classList.add(isSuccess ? 'bg-success' : 'bg-danger');
+            if (isSuccess) bar.style.width = '100%';
+        }
+        if (pctLabel)  pctLabel.textContent  = isSuccess ? '100%' : '';
+        if (stageLbl)  stageLbl.textContent  = isSuccess ? 'All steps completed.' : 'An error occurred.';
+        if (statusEl)  statusEl.textContent  = statusText;
+        if (closeBtn)  closeBtn.style.display = '';
+        if (window._wppSafetyTimer) { clearTimeout(window._wppSafetyTimer); window._wppSafetyTimer = null; }
+        if (isSuccess) setTimeout(() => $('#wppProgressModal').modal('hide'), 3000);
     }
 
     function handleFwAnalysisComplete(msg) {
@@ -2071,10 +2162,13 @@
 
         const { button, taskId, fwPathEncoded } = pending;
         window.pendingFwAnalysis = null;
+        window.pendingFwAnalyze = false;
         resetFwButton(button);
+        setFwActionButtonsBusy(false);
 
         const decoded = decodePath(fwPathEncoded);
         appendLog(`✅ FW analysis complete: ${decoded}\n`);
+        _closeFwModal(true, 'Done — output files have been generated.');
 
         // window.location.href = `${FW_RESULT_URL}?task_id=${encodeURIComponent(taskId)}`;
     }
@@ -2893,10 +2987,13 @@
 
         const { button, fwPathEncoded } = pending;
         window.pendingFwAnalysis = null;
+        window.pendingFwAnalyze = false;
         resetFwButton(button);
+        setFwActionButtonsBusy(false);
 
         const decoded = decodePath(fwPathEncoded);
         appendLog(`⏹ FW analysis canceled: ${decoded}\n`, 'red');
+        _closeFwModal(false, 'Analysis was canceled.');
     }
 
     function handleFwAnalysisFailed(msg) {
@@ -2906,10 +3003,13 @@
 
         const { button, fwPathEncoded } = pending;
         window.pendingFwAnalysis = null;
+        window.pendingFwAnalyze = false;
         resetFwButton(button);
+        setFwActionButtonsBusy(false);
 
         const decoded = decodePath(fwPathEncoded);
         appendLog(`❌ FW analysis failed: ${decoded} (${msg.error || 'unknown error'})\n`, 'red');
+        _closeFwModal(false, msg.error || 'An error occurred — please check the log above.');
     }
 
     function handleFwAnalysisWarning(msg) {

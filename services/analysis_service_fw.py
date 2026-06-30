@@ -184,8 +184,8 @@ class FWAnalysisService():
                     return
                 task["status"] = "failed"
                 task["error"] = str(e)
-            self.emit_log(f"❌ FW analysis failed: {e}")
-            self.emit_log(traceback.format_exc())
+            self.emit_fw_log(f"❌ FW analysis failed: {e}")
+            self.emit_fw_log(traceback.format_exc())
             app_config.socketio.emit(
                 'fw_analysis_failed',
                 {'task_id': task_id, 'fw_path': file_path, 'error': str(e)},
@@ -227,17 +227,17 @@ class FWAnalysisService():
         # returns complete success or not
 
         if 'wifi' in wifi_of_bt:
-            self.emit_log("Start FW WiFi analysis...")
-            completed = fw_wifi_analysis(file_path, cancel_event=cancel_event)
+            self.emit_fw_log("Start FW WiFi analysis...")
+            completed = fw_wifi_analysis(file_path, cancel_event=cancel_event, on_log=self.emit_fw_log)
             return completed, None
         else:  # BT case → run BT FW analysis
-            self.emit_log("Start FW BT analysis...")
-            completed, log = fw_bt_analysis(file_path, cancel_event=cancel_event)
+            self.emit_fw_log("Start FW BT analysis...")
+            completed, log = fw_bt_analysis(file_path, cancel_event=cancel_event, on_log=self.emit_fw_log)
             return completed, log
     
     
-    def emit_log(self, msg):
-        app_config.socketio.emit('wpp_log', {'data': msg}, namespace='/progress')  # Ensure the correct namespace is used
+    def emit_fw_log(self, msg):
+        app_config.socketio.emit('fw_log', {'data': msg}, namespace='/progress')
 
     def emit_tool_log(self, msg):
         app_config.socketio.emit('fw_tool_log', {'data': msg}, namespace='/progress')

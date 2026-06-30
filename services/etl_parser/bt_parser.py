@@ -13,7 +13,7 @@ import re
 # instead of launching a new GUI process every time.
 active_bt_pid = None
 
-SPLIT_SIZE_THRESHOLD_BYTES = 1024 * 1024 * 1024  # 1 GB
+SPLIT_SIZE_THRESHOLD_BYTES = 512 * 1024 * 1024  
 
 
 def _get_true_file_size(path: str) -> int:
@@ -684,6 +684,17 @@ def bt_decode_hci_via_folder(log_folder_path: str, log_path: str, etl_txt_timeou
     chatbot_input_etl = split_target_map.get(log_path, log_path)
     if chatbot_input_etl != log_path:
         print(f"🎯 Chatbot input will use last split part: {chatbot_input_etl}")
+
+    # Rename all the other ETL files to avoid decoding them (we only want the chatbot_input_etl to be decoded).
+    for etl_file in os.listdir(log_folder_path):
+        etl_file_path = os.path.join(log_folder_path, etl_file)
+        if etl_file_path.lower().endswith(".etl") and etl_file_path != chatbot_input_etl:
+            try:
+                renamed_path = etl_file_path + ".skip"
+                os.rename(etl_file_path, renamed_path)
+                print(f"📦 Renamed non-target ETL to avoid decode: {etl_file_path} → {renamed_path}")
+            except Exception as e_rename:
+                print(f"⚠️ Failed to rename {etl_file_path}: {e_rename}")
     
     # Switch to 'BT Driver Log Parser' tab (same as AutoFolder mode)
     try:
@@ -741,21 +752,33 @@ def bt_decode_hci_via_folder(log_folder_path: str, log_path: str, etl_txt_timeou
     etl_txt_idle_start = None  # timer: waiting for .txt to stop changing
     last_folder_activity_snapshot = None  # tracks any decode activity in folder
 
-    def _folder_has_decode_activity() -> bool:
-        """Check if any .txt or .hci.txt in the folder is still being written."""
-        nonlocal last_folder_activity_snapshot
-        try:
-            snapshot = {}
-            for f in os.listdir(log_folder_path):
-                if f.lower().endswith((".txt", ".hci.txt")):
-                    fp = os.path.join(log_folder_path, f)
-                    snapshot[fp] = _get_true_file_size(fp)
-            if snapshot != last_folder_activity_snapshot:
-                last_folder_activity_snapshot = snapshot
-                return True  # something changed → still active
-            return False  # nothing changed → idle
-        except Exception:
-            return False
+    # def _folder_has_decode_activity() -> bool:
+    #     """Check if any .txt or .hci.txt in the folder is still being written."""
+    #     nonlocal last_folder_activity_snapshot
+    #     try:
+    #         snapshot = {}
+    #         for f in os.listdir(log_folder_path):
+    #             if f.lower().endswith((".txt", ".hci.txt")):
+    #                 fp = os.path.join(log_folder_path, f)
+    #                 snapshot[fp] = _get_true_file_size(fp)
+    #         if snapshot != last_folder_activity_snapshot:
+    #             last_folder_activity_snapshot = snapshot
+    #             return True  # something changed → still active
+    #         return False  # nothing changed → idle
+    #     except Exception:
+    #         return False
+
+    def _recover_rename_etl_files() -> None:
+        """Rename any .etl.skip back to .etl to restore original state."""
+        for file in os.listdir(log_folder_path):
+            if file.lower().endswith(".etl.skip"):
+                skip_path = os.path.join(log_folder_path, file)
+                original_path = skip_path[:-5]  # remove ".skip"
+                try:
+                    os.rename(skip_path, original_path)
+                    print(f"🔄 Restored skipped ETL: {skip_path} → {original_path}")
+                except Exception as e_restore:
+                    print(f"⚠️ Failed to restore skipped ETL {skip_path}: {e_restore}")
 
     while True:
         if not psutil.pid_exists(active_bt_pid):
@@ -768,11 +791,14 @@ def bt_decode_hci_via_folder(log_folder_path: str, log_path: str, etl_txt_timeou
                 for _attempt in range(5):
                     if is_file_ready(hci_txt):
                         print(f"✅ BT tool exited cleanly; HCI file ready: {hci_txt}")
+                        _recover_rename_etl_files()  # restore any skipped ETLs
                         return hci_txt
                     time.sleep(2)
                 print(f"⚠️ BT tool exited but file not stable after retries: {hci_txt}")
+                _recover_rename_etl_files()
                 return None
             print(f"\n❌ BT tool closed unexpectedly during HCI wait (file not found).")
+            _recover_rename_etl_files()
             return None
         
         # Proactively close any modal error dialog that might appear
@@ -796,23 +822,20 @@ def bt_decode_hci_via_folder(log_folder_path: str, log_path: str, etl_txt_timeou
                     print(f"\n✅ Detected .txt.cfa and .txt.pcap alongside .hci.txt; assuming decode complete.")
                     time.sleep(3)  # brief pause to ensure files are fully flushed and closed by the tool
                     _terminate_bt_tool("✅ BT tool closed after successful decode.")
+                    _recover_rename_etl_files()  # restore any skipped ETLs
                     return hci_txt
                 
                 # Keep to avoid .txt.cfa and .txt.pcap being written after .hci.txt is stable.
                 if time.monotonic() - idle_start >= hci_txt_timeout:
                     print(f"\n⚠️ File .hci.txt idle for {hci_txt_timeout}s but not ready: {hci_txt}")
                     _terminate_bt_tool("⚠️ BT tool terminated due to .hci.txt timeout.")
+                    _recover_rename_etl_files()  # restore any skipped ETLs
                     return None
         else:
             # File not yet created; check if BT tool is still actively decoding anything.
             idle_start = None  # reset idle timer since file does not exist
 
-            if _folder_has_decode_activity():
-                # Other ETLs still being decoded → reset all idle timers, keep waiting.
-                file_wait_start = None
-                etl_txt_idle_start = None
-                last_etl_txt_size = -1
-            elif os.path.exists(etl_txt):
+            if os.path.exists(etl_txt):
                 # Intermediate .txt present — track its size; start timeout only when it stops changing
                 file_wait_start = None
                 etl_txt_size = _get_true_file_size(etl_txt)
@@ -826,6 +849,7 @@ def bt_decode_hci_via_folder(log_folder_path: str, log_path: str, etl_txt_timeou
                     if time.monotonic() - etl_txt_idle_start >= etl_txt_timeout:
                         print(f"\n⚠️ File .etl.txt idle for {etl_txt_timeout}s, .hci.txt never appeared: {hci_txt}")
                         _terminate_bt_tool("⚠️ BT tool terminated due to .etl.txt timeout.")
+                        _recover_rename_etl_files()
                         return None
                     print(f"\r⏳ File .etl.txt idle, waiting for .hci.txt...", end='', flush=True)
             else:
@@ -836,6 +860,7 @@ def bt_decode_hci_via_folder(log_folder_path: str, log_path: str, etl_txt_timeou
                 if time.monotonic() - file_wait_start >= etl_txt_timeout:
                     print(f"\n⚠️ File .etl.txt never appeared after {etl_txt_timeout}s: {etl_txt}")
                     _terminate_bt_tool("⚠️ BT tool terminated due to .etl.txt timeout.")
+                    _recover_rename_etl_files()
                     return None
 
         time.sleep(1)

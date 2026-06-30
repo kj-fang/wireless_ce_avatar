@@ -2003,7 +2003,7 @@
 
             const decoded = decodePath(fwPathEncoded);
             appendLog(`\n\n🚀 Starting FW Analysis: ${decoded}\n`);
-            openWppModal(`🔬 FW Parsing: ${decoded.split('\\').pop() || decoded.split('/').pop()}`);
+            openWppModal(`🔬 FW Parsing: ${getFilename(decoded)}`);
 
             fetch(`${FW_ETL_ANALYSIS_URL}?fw_path=${fwPathEncoded}`)
                 .then(res => res.json())
@@ -2014,7 +2014,9 @@
                             && window.pendingFwAnalysis.fwPathEncoded === fwPathEncoded
                         );
                         window.pendingFwAnalysis = null;
+                        window.pendingFwAnalyze = false;
                         resetFwButton(button);
+                        setFwActionButtonsBusy(false);
                         if (wasPending) {
                             const reason = data.error || 'precheck failed';
                             appendLog(`⚠️ FW analysis rejected: ${reason}\n`, 'red');
@@ -2030,8 +2032,10 @@
                 .catch(err => {
                     console.error(err);
                     window.pendingFwAnalysis = null;
+                    window.pendingFwAnalyze = false;
                     appendLog(`❌ FW analysis start failed: ${decoded}\n`, 'red');
                     resetFwButton(button);
+                    setFwActionButtonsBusy(false);
                     _closeFwModal(false, 'Request failed: ' + (err.message || 'unknown error'));
                 });
         });
@@ -2071,7 +2075,9 @@
 
         const { button, taskId, fwPathEncoded } = pending;
         window.pendingFwAnalysis = null;
+        window.pendingFwAnalyze = false;
         resetFwButton(button);
+        setFwActionButtonsBusy(false);
 
         const decoded = decodePath(fwPathEncoded);
         appendLog(`✅ FW analysis complete: ${decoded}\n`);
@@ -2894,7 +2900,9 @@
 
         const { button, fwPathEncoded } = pending;
         window.pendingFwAnalysis = null;
+        window.pendingFwAnalyze = false;
         resetFwButton(button);
+        setFwActionButtonsBusy(false);
 
         const decoded = decodePath(fwPathEncoded);
         appendLog(`⏹ FW analysis canceled: ${decoded}\n`, 'red');
@@ -2908,7 +2916,9 @@
 
         const { button, fwPathEncoded } = pending;
         window.pendingFwAnalysis = null;
+        window.pendingFwAnalyze = false;
         resetFwButton(button);
+        setFwActionButtonsBusy(false);
 
         const decoded = decodePath(fwPathEncoded);
         appendLog(`❌ FW analysis failed: ${decoded} (${msg.error || 'unknown error'})\n`, 'red');

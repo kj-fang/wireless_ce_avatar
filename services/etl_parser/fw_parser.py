@@ -228,12 +228,10 @@ def fw_wifi_analysis(fw_path: str, timeout: int = 30, cancel_event: Event | None
             errors='replace'
         )
 
-        _stdout_lines = []
         _stderr_lines = []
 
         def _drain_stdout():
             for line in proc.stdout:
-                _stdout_lines.append(line)
                 clean_line = (line or '').strip()
                 if clean_line:
                     _emit_viewer_log(on_log, clean_line)

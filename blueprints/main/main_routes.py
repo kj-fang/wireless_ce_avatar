@@ -266,7 +266,7 @@ def _resolve_download_path(case_context: CaseContext, is_bsod: bool) -> str:
         return ''
 
     case_folder = case_context.backend_id if "-" in str(case_context.backend_id) else case_context.case_nbr
-    return rf"{load_path_bsod}\{case_context.wifi_or_bt.upper()}\{case_folder}"
+    return rf"{load_path_bsod}\{case_folder}"
 
 #------------DOWNLOAD ATTACHMENT render -------------#
 

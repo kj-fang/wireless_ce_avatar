@@ -1478,10 +1478,11 @@ def record_helpful_skill(
 # ("this skill shouldn't have run") is inferred by the Reflector into
 # skill_selection_rules. So users never mark a skill `redundant` from the UI.
 SKILL_ASSESSMENT_VALUES = ("helpful", "wrong")
-# The Step lane offers a single merged-negative verdict ("wrong or redundant")
-# and defers the wrong-vs-redundant call to the Reflector, so it accepts an
-# extra `negative` value on top of the explicit ones (the explicit values are
-# kept for legacy rows and any future explicit step UI).
+# The Step lane emits an explicit per-step verdict — helpful / redundant /
+# wrong — chosen directly in the UI (three verdict buttons), so the
+# wrong-vs-redundant call is made by the user, not deferred to the Reflector.
+# The legacy `negative` value (a single merged down-vote from older clients or
+# saved drafts) is still accepted for back-compat.
 STEP_ASSESSMENT_VALUES = ("helpful", "redundant", "wrong", "negative")
 
 

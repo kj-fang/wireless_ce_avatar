@@ -77,24 +77,28 @@ def _extract_json(raw: str) -> dict:
 def _looks_like_junk(text: str) -> bool:
     """
     Cheap sanity gate for free-text ground-truth fields (e.g.
-    correct_root_cause). A real root cause is a phrase — multiple words or a
-    recognisable ALLCAPS_TAG. A short opaque single token like "ejwoi" is
-    almost certainly a test/placeholder value and must NOT be handed to the
-    Reflector as authoritative ground truth, or it pollutes the playbook.
+    correct_root_cause). A short opaque single token of pure lowercase
+    letters like "ejwoi" / "asdf" is almost certainly a test/placeholder
+    value and must NOT be handed to the Reflector as authoritative ground
+    truth, or it pollutes the playbook.
 
-    Returns True only for clearly-junk input; empty strings are "absent",
-    not junk, and return False so the caller can treat them as "no signal".
+    Deliberately conservative — it only fires on short, single-token,
+    all-lowercase-alphabetic input. Anything with a digit, hyphen, dot,
+    uppercase letter or whitespace (e.g. "DCR-1262", "WAKE_RESUME_DELAY",
+    "beacon loss") is treated as possibly-real and spared, because dropping
+    genuine feedback is worse than letting a borderline value through.
+    Empty strings are "absent", not junk, and return False.
     """
     t = (text or "").strip()
     if not t:
         return False
     if len(t) >= 12:            # long enough to plausibly be meaningful
         return False
-    if any(c.isspace() for c in t):   # multi-token -> looks like a real phrase
+    if not t.isalpha():         # has a digit / hyphen / dot -> likely a real code
         return False
-    if re.fullmatch(r"[A-Z][A-Z0-9_]{2,}", t):   # ALLCAPS_TAG style
+    if not t.islower():         # has an uppercase letter -> likely a tag/acronym
         return False
-    return True                 # short, single opaque token -> junk
+    return True                 # short, single all-lowercase token -> junk
 
 
 def _truncate_trace(
@@ -459,8 +463,13 @@ class Curator:
                 sk_tag = skill_tag_map.get(owning_skill)
                 if sk_tag == "wrong":
                     tag = "neutral"
-            target.increment_counter(bid, tag, weight=weight)
-            updates.append({"bullet_id": bid, "tag": tag, "weight": weight})
+            # `weight` scales only the `helpful` bump (increment_counter
+            # ignores it for harmful/neutral). Normalise to 1 for non-helpful
+            # tags so the emitted update payload doesn't misreport a weighted
+            # negative/neutral bump that never actually happened.
+            eff_weight = weight if tag == "helpful" else 1
+            target.increment_counter(bid, tag, weight=eff_weight)
+            updates.append({"bullet_id": bid, "tag": tag, "weight": eff_weight})
         return updates
 
     def _apply_op(self, op, workflow_pb, domain_pbs, turn_id) -> tuple[bool, str]:

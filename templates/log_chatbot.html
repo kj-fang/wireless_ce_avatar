@@ -5750,8 +5750,8 @@
                 <div class="fbd-skill-row-head">
                     <span class="fbd-skill-row-name">${safe}</span>
                     <div class="fbd-skill-verdict">
-                        <button type="button" class="fbd-verdict-btn" data-v="helpful" title="Helpful" onclick="setSkillVerdict(this,'helpful')">👍</button>
-                        <button type="button" class="fbd-verdict-btn" data-v="wrong" title="Not helpful" onclick="setSkillVerdict(this,'wrong')">👎</button>
+                        <button type="button" class="fbd-verdict-btn" data-v="helpful" title="Helpful" aria-label="Mark this skill helpful" onclick="setSkillVerdict(this,'helpful')">👍</button>
+                        <button type="button" class="fbd-verdict-btn" data-v="wrong" title="Not helpful" aria-label="Mark this skill not helpful" onclick="setSkillVerdict(this,'wrong')">👎</button>
                     </div>
                 </div>
                 <div class="fbd-skill-row-detail hidden-row">
@@ -5791,9 +5791,9 @@
                 <div class="fbd-skill-row-head">
                     <span class="fbd-skill-row-name">${safe}</span>
                     <div class="fbd-skill-verdict">
-                        <button type="button" class="fbd-verdict-btn" data-v="helpful" data-label="Good step" title="Good step" onmouseenter="showStepHint(this)" onmouseleave="resetStepHint(this)" onclick="setStepVerdict(this,'helpful')">👍</button>
-                        <button type="button" class="fbd-verdict-btn" data-v="redundant" data-label="Redundant / unnecessary step" title="Redundant / unnecessary step" onmouseenter="showStepHint(this)" onmouseleave="resetStepHint(this)" onclick="setStepVerdict(this,'redundant')">♻️</button>
-                        <button type="button" class="fbd-verdict-btn" data-v="wrong" data-label="Wrong step" title="Wrong step" onmouseenter="showStepHint(this)" onmouseleave="resetStepHint(this)" onclick="setStepVerdict(this,'wrong')">👎</button>
+                        <button type="button" class="fbd-verdict-btn" data-v="helpful" data-label="Good step" title="Good step" aria-label="Mark this step good" onmouseenter="showStepHint(this)" onmouseleave="resetStepHint(this)" onclick="setStepVerdict(this,'helpful')">👍</button>
+                        <button type="button" class="fbd-verdict-btn" data-v="redundant" data-label="Redundant / unnecessary step" title="Redundant / unnecessary step" aria-label="Mark this step redundant or unnecessary" onmouseenter="showStepHint(this)" onmouseleave="resetStepHint(this)" onclick="setStepVerdict(this,'redundant')">♻️</button>
+                        <button type="button" class="fbd-verdict-btn" data-v="wrong" data-label="Wrong step" title="Wrong step" aria-label="Mark this step wrong" onmouseenter="showStepHint(this)" onmouseleave="resetStepHint(this)" onclick="setStepVerdict(this,'wrong')">👎</button>
                     </div>
                 </div>
                 <div class="fbd-verdict-caption" aria-live="polite"></div>
@@ -5833,7 +5833,11 @@
         if (next) btn.classList.add('active');
         row.dataset.verdict = next;
         const detail = row.querySelector('.fbd-skill-row-detail');
-        if (detail) detail.classList.toggle('hidden-row', !next);
+        // Only reveal the correction panel for negative verdicts — a "helpful"
+        // step has nothing to correct, so showing the "why wrong" fields would
+        // be misleading.
+        const stepNeedsDetail = (next === 'wrong' || next === 'redundant');
+        if (detail) detail.classList.toggle('hidden-row', !stepNeedsDetail);
         _refreshStepCaption(row);
         updateSelectedCount('fbd-step-rows', 'fbd-step-count');
     }
@@ -5859,7 +5863,8 @@
         cap.textContent = active ? (active.dataset.label || '') : '';
     }
 
-    // Toggle a skill's verdict; either verdict reveals the same comment box.
+    // Toggle a skill's verdict. Only a "wrong" verdict reveals the correction
+    // box (it collects a correction, which doesn't apply to "helpful").
     // Clicking the active verdict again clears it.
     function setSkillVerdict(btn, verdict) {
         const row = btn.closest('.fbd-skill-row');
@@ -5870,7 +5875,9 @@
         if (next) btn.classList.add('active');
         row.dataset.verdict = next;   // '', 'helpful', or 'wrong'
         const detail = row.querySelector('.fbd-skill-row-detail');
-        if (detail) detail.classList.toggle('hidden-row', !next);
+        // Correction fields ("what went wrong" / "correct conclusion") only
+        // apply to a "wrong" verdict; keep them hidden for "helpful".
+        if (detail) detail.classList.toggle('hidden-row', next !== 'wrong');
         updateSelectedCount('fbd-skill-rows', 'fbd-skill-count');
     }
 
@@ -5975,7 +5982,7 @@
                 other:              'Other',
             },
             grpSkillTitle:   'Which skill was wrong?',
-            stepLaneHint:    'Per step: mark � Redundant (unnecessary) or 👎 Wrong (off-track), then add the correction. 👍 marks a good step.',
+            stepLaneHint:    'Per step: mark ♻️ Redundant (unnecessary) or 👎 Wrong (off-track), then add the correction. 👍 marks a good step.',
             skillLaneHint:   'Per skill: mark 👎 Wrong on any skill whose output was off and add the correction.',
             concLabel:       'Conclusion category',
             concFirstOpt:    '— Select if you know —',

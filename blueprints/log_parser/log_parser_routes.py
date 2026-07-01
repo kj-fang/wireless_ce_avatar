@@ -156,6 +156,7 @@ def _is_allowed_local_analysis_filename(filename: str) -> bool:
         or lower_name.endswith('.log')
         or lower_name.endswith('.hci.txt')
         or lower_name.endswith('.etl')
+        or bool(re.fullmatch(r"dddLog_\d+\.bin", clean_name))
         or lower_name.endswith('.dmp')
         or bool(re.search(r'\.etl\.\d+$', clean_name, re.IGNORECASE))
     )
@@ -353,7 +354,7 @@ def pick_local_analysis_file():
         selected_path = filedialog.askopenfilename(
             title='Select local analysis file',
             filetypes=[
-                ('Supported files', '*.zip *.7z *.rar *.log *.hci.txt *.etl *.etl.* *.dmp'),
+                ('Supported files', '*.zip *.7z *.rar *.log *.hci.txt *.etl *.etl.* dddLog_*.bin *.dmp'),
                 ('All files', '*.*'),
             ],
         )
@@ -366,7 +367,7 @@ def pick_local_analysis_file():
         if not _is_allowed_local_analysis_filename(selected_name):
             return jsonify({
                 'success': False,
-                'message': f'Invalid file type: {selected_name}. Only .zip, .7z, .rar, .etl, .hci.txt, .log, or .dmp are allowed.'
+                'message': f'Invalid file type: {selected_name}. Only .zip, .7z, .rar, .etl, ddd, .hci.txt, .log, or .dmp are allowed.'
             }), 400
 
         normalized_selected_path = os.path.normpath(os.path.abspath(selected_path))
@@ -419,7 +420,7 @@ def upload_local_analysis():
     if not _is_allowed_local_analysis_filename(original_name):
         return jsonify({
             'success': False,
-            'message': f'Invalid file type: {original_name}. Only .zip, .7z, .rar, .etl, .hci.txt, .log, or .dmp are allowed.'
+            'message': f'Invalid file type: {original_name}. Only .zip, .7z, .rar, .etl, ddd, .hci.txt, .log, or .dmp are allowed.'
         }), 400
 
     timestamp = datetime.datetime.now().strftime('%Y%m%d_%H%M%S')
@@ -456,7 +457,7 @@ def upload_local_analysis():
         resp['use_chatbot'] = True
         resp['is_bt'] = True
         resp['log_path'] = helpers.to_long_path(source_path + '.hci.txt')
-    elif source_lower.endswith('.etl') or bool(re.search(r'\.etl\.\d+$', source_lower)):
+    elif source_lower.endswith('.etl') or bool(re.search(r'\.etl\.\d+$', source_lower)) or bool(re.fullmatch(r"dddLog_\d+\.bin", os.path.basename(source_path))):  # Wi-Fi .etl(.N) or DDD dddLog_<n>.bin
         resp['use_chatbot'] = True
         resp['etl_path'] = helpers.to_long_path(source_path)
     return jsonify(resp)
@@ -490,7 +491,7 @@ def open_local_analysis():
         return redirect(url_for('main.index'))
 
     if not _is_allowed_local_analysis_filename(original_name):
-        flash(f'Invalid file type: {original_name}. Only .zip, .7z, .rar, .etl, .hci.txt, .log, or .dmp are allowed.', 'danger')
+        flash(f'Invalid file type: {original_name}. Only .zip, .7z, .rar, .etl, ddd, .hci.txt, .log, or .dmp are allowed.', 'danger')
         return redirect(url_for('main.index'))
 
     # Store validated path in session; actual processing starts after the

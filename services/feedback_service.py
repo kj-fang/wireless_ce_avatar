@@ -1118,7 +1118,7 @@ def record_detail(
             if not isinstance(stf, dict):
                 continue
             assess = (stf.get("assessment") or "").strip().lower()
-            if assess not in SKILL_ASSESSMENT_VALUES:
+            if assess not in STEP_ASSESSMENT_VALUES:
                 continue
             raw_idx = stf.get("step_index")
             try:
@@ -1148,9 +1148,10 @@ def record_detail(
             })
             if ev:
                 step_evidence.extend(ev)
-            # "wrong" step + a reason → a step-scoped issue row so the
-            # Reflector sees the per-step correction in free_text_issues.
-            if assess == "wrong" and what_wrong:
+            # A negative step (wrong OR redundant) + a reason → a step-scoped
+            # issue row so the Reflector sees the per-step correction in
+            # free_text_issues. The Reflector makes the wrong-vs-redundant call.
+            if assess in ("wrong", "negative") and what_wrong:
                 cleaned_issues.append({
                     "scope": "step", "skill_id": sid, "step_index": step_idx,
                     "step_label": step_label, "category": "wrong_conclusion",
@@ -1447,6 +1448,11 @@ def record_helpful_skill(
 
 
 SKILL_ASSESSMENT_VALUES = ("helpful", "redundant", "wrong")
+# The Step lane offers a single merged-negative verdict ("wrong or redundant")
+# and defers the wrong-vs-redundant call to the Reflector, so it accepts an
+# extra `negative` value on top of the explicit ones (the explicit values are
+# kept for legacy rows and any future explicit step UI).
+STEP_ASSESSMENT_VALUES = ("helpful", "redundant", "wrong", "negative")
 
 
 def record_skill_assessment(

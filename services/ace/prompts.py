@@ -200,18 +200,27 @@ Instructions:
  - `step_feedback` rows are AUTHORITATIVE per-step corrections from the user.
    Each row is `{{step_index, step_label, skill_id, assessment, what_wrong,
    evidence_lines}}`, pinned to one reasoning step via `step_index` /
-   `step_label`, and `assessment` is one of `helpful | redundant | wrong`:
-     * `wrong`  → that step went off-track. Route its `what_wrong` lesson into
+   `step_label`, and `assessment` is one of `helpful | negative | wrong |
+   redundant`:
+     * `negative` -> the user flagged this step as bad but did NOT commit to
+       WHY. YOU must classify it as either `wrong` or `redundant` (defined
+       below) from the trajectory, route it under that resolved verdict, AND
+       record the verdict you chose in `step_tags` so the reviewer sees the
+       call. Never leave a `negative` row as `negative` in the output.
+     * `wrong`  -> that step went off-track. Route its `what_wrong` lesson into
        the `workflow` playbook (how the agent should sequence / decide),
-       UNLESS the row names a `skill_id` whose own output was the problem —
+       UNLESS the row names a `skill_id` whose own output was the problem --
        then route it to that skill's domain playbook. Prefer the row's own
        `evidence_lines` over the global `evidence_log_lines` pool, and cite
        `step_label` in the lesson so it stays reproducible.
-     * `redundant` → that step was unnecessary (over-investigation / a loop).
+     * `redundant` -> that step was unnecessary (over-investigation / a loop).
        Route a `workflow` lesson into `termination_rules`, `loop_prevention`,
        or `phase_escalation` so the agent skips it next time.
-     * `helpful` → reinforces the step's approach; only emit a bullet when the
+     * `helpful` -> reinforces the step's approach; only emit a bullet when the
        lesson is reusable across cases, never on guesswork.
+   For EVERY step_feedback row, emit one `step_tags` entry echoing the FINAL
+   verdict you acted on (`wrong`, `redundant`, or `helpful`) so a `negative`
+   row surfaces as your resolved wrong-vs-redundant classification.
  - `free_text_issues` rows are the user's structured "what/where went wrong"
    notes, shaped `{{scope, skill_id, step_index, step_label, category,
    should_be, comment}}`. Use `category` to pick the section, `should_be` as the
@@ -315,6 +324,10 @@ Output ONLY a valid JSON object (no markdown, no code fences) with this shape:
   "skill_tags": [
     {{"skill_id": "Connectivity", "tag": "helpful|redundant|wrong",
       "rationale": "<one short sentence>"}}
+  ],
+  "step_tags": [
+    {{"step_index": 3, "tag": "helpful|redundant|wrong",
+      "rationale": "<one short sentence -- for a `negative` row this is YOUR resolved wrong-vs-redundant call>"}}
   ]
 }}
 """

@@ -36,12 +36,6 @@ DEDUP_RATIO = 0.85
 # are evicted by `refine()`.
 SECTION_SOFT_CAP = 30
 
-# Aging eviction: a bullet that has NEVER proved helpful and has been marked
-# neutral at least this many times is dead weight — refine() drops it so the
-# playbook self-prunes. Count-based (not wall-clock) so bursty issue volume
-# doesn't prematurely evict useful-but-idle bullets during quiet periods.
-NEUTRAL_EVICT_THRESHOLD = 5
-
 
 def _now() -> str:
     return datetime.now().astimezone().isoformat(timespec="seconds")
@@ -197,19 +191,21 @@ class Playbook:
         return None
 
     def increment_counter(self, bullet_id: str, tag: str, weight: int = 1) -> None:
-        """tag in {'helpful', 'harmful', 'neutral'}. `weight` scales the bump
-        so a detailed, high-confidence feedback submission moves the counter
-        more than a bare thumbs vote."""
+        """tag in {'helpful', 'harmful', 'neutral'}. `weight` scales ONLY the
+        `helpful` bump, so a detailed, high-confidence submission promotes a
+        useful bullet faster. The eviction-driving counters (`harmful`,
+        `neutral`) always step by 1, so a single weighted negative can never
+        delete a bullet on its own — removal must accrue across independent
+        votes."""
         b = self.get(bullet_id)
         if b is None:
             return
-        step = max(1, int(weight))
         if tag == "helpful":
-            b.helpful_count += step
+            b.helpful_count += max(1, int(weight))
         elif tag == "harmful":
-            b.harmful_count += step
+            b.harmful_count += 1
         elif tag == "neutral":
-            b.neutral_count += step
+            b.neutral_count += 1
         b.updated_at = _now()
 
     def _find_duplicate(self, section: str, content: str) -> Optional[Bullet]:
@@ -224,24 +220,17 @@ class Playbook:
     # ----- grow-and-refine -----
     def refine(self, soft_cap: int = SECTION_SOFT_CAP) -> int:
         """
-        Evict bullets that are dead weight:
-          - net_score <= -2  (repeatedly harmful), OR
-          - never helpful AND marked neutral >= NEUTRAL_EVICT_THRESHOLD times
-            (stale noise),
-        then cap each section to `soft_cap`, keeping the highest-net-score
-        bullets. Returns the number of bullets removed.
+        Evict bullets whose net_score is <= -2 OR whose section size exceeds
+        the soft cap (keep the highest-net-score bullets, drop the rest).
+        Returns the number of bullets removed.
         """
         with self._lock:
             removed = 0
 
-            # Drop net-negative and stale-neutral bullets first.
+            # Drop net-negative bullets first.
             keep: list[Bullet] = []
             for b in self.bullets:
                 if b.net_score <= -2:
-                    removed += 1
-                    continue
-                if (b.helpful_count == 0
-                        and b.neutral_count >= NEUTRAL_EVICT_THRESHOLD):
                     removed += 1
                     continue
                 keep.append(b)

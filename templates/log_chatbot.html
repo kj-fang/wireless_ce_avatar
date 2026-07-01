@@ -5867,8 +5867,8 @@
                 <div class="fbd-skill-row-head">
                     <span class="fbd-skill-row-name">${safe}</span>
                     <div class="fbd-skill-verdict">
-                        <button type="button" class="fbd-verdict-btn" data-v="helpful" title="Helpful" onclick="setStepVerdict(this,'helpful')">👍</button>
-                        <button type="button" class="fbd-verdict-btn" data-v="wrong" title="Not helpful" onclick="setStepVerdict(this,'wrong')">👎</button>
+                        <button type="button" class="fbd-verdict-btn" data-v="helpful" title="Good step" onclick="setStepVerdict(this,'helpful')">👍</button>
+                        <button type="button" class="fbd-verdict-btn" data-v="negative" title="Wrong or redundant step — AI decides which" onclick="setStepVerdict(this,'negative')">👎</button>
                     </div>
                 </div>
                 <div class="fbd-skill-row-detail hidden-row">
@@ -5982,7 +5982,10 @@
             const reason = (row.querySelector('.fbd-skill-reason')?.value || '').trim();
             const ev = (row.querySelector('.fbd-skill-evidence')?.value || '')
                 .split(/\r?\n/).map((s) => s.replace(/\s+$/, '')).filter((s) => s.length > 0);
-            if (v === 'wrong' || v === 'helpful') {
+            // Step lane sends a single merged-negative verdict (`negative`);
+            // the Reflector classifies it as wrong vs redundant. `wrong` is
+            // still accepted for backward-compat with any legacy row state.
+            if (v === 'negative' || v === 'wrong' || v === 'helpful') {
                 out.push({ step_index: idx, skill_id: sid, step_label: label,
                            assessment: v, what_wrong: reason, evidence_lines: ev });
             }
@@ -6022,7 +6025,7 @@
                 other:              'Other',
             },
             grpSkillTitle:   'Which skill was wrong?',
-            stepLaneHint:    'Per step: mark 👎 Wrong on any step that went off-track and add the correction.',
+            stepLaneHint:    'Per step: mark 👎 on any bad step — the AI decides if it was wrong or redundant — and add the correction.',
             skillLaneHint:   'Per skill: mark 👎 Wrong on any skill whose output was off and add the correction.',
             concLabel:       'Conclusion category',
             concFirstOpt:    '— Select if you know —',
@@ -6055,7 +6058,7 @@
                 other:              'Other',
             },
             grpSkillTitle:   'Which skill did well?',
-            stepLaneHint:    'Mark 👎 Wrong and write what to do differently. Mark 👍 on what was done especially well.',
+            stepLaneHint:    'Mark 👎 on a wrong or redundant step (AI decides which) and write what to do differently. Mark 👍 on what was done especially well.',
             skillLaneHint:   'Mark 👎 Wrong and write what to do differently. Mark 👍 on what was done especially well.',
             concLabel:       'Conclusion category the agent nailed (optional)',
             concFirstOpt:    '— Select if it matched —',

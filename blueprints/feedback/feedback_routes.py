@@ -131,8 +131,7 @@ def detail():
             "comment":    "..."
           },
           ...
-        ],
-        "general_comment": "..."
+        ]
       }
     """
     data = request.get_json(silent=True) or {}
@@ -180,10 +179,9 @@ def detail():
     else:
         log_path = ""
 
-    # New high-ACE-value structured fields (replace the old free-form
-    # `general_comment`). `general_comment` is still forwarded for
-    # back-compat with any older client that hasn't refreshed, but the
-    # new UI no longer surfaces it.
+    # New high-ACE-value structured fields carry all feedback signal; the
+    # old free-form `general_comment` / `expected_outcome` fields have been
+    # retired and are no longer accepted or forwarded.
     raw_evidence = data.get("evidence_log_lines")
     if isinstance(raw_evidence, str):
         # Accept legacy textarea-as-string payloads too.
@@ -219,14 +217,10 @@ def detail():
         correct_issue_time=(data.get("correct_issue_time") or "").strip(),
         used_issue_time=(data.get("used_issue_time") or "").strip(),
         log_has_date=bool(data.get("log_has_date", True)),
-        severity=data.get("severity"),
         yaml_modified=yaml_modified,
         log_path=log_path,
         attach_log=attach_log,
         domain=(data.get("domain") or "").strip(),
-        # Legacy free-form fields forwarded only for old-client back-compat.
-        expected_outcome=(data.get("expected_outcome") or "").strip(),
-        general_comment=(data.get("general_comment") or "").strip(),
     )
     if not ok:
         return jsonify({
@@ -317,6 +311,54 @@ def skill_helpful():
         turn_id=turn_id,
         skill_id=skill_id,
         domain=(data.get("domain") or "").strip(),
+    )
+    if not ok:
+        return jsonify({"success": False, "error": "failed to record"}), 500
+    return jsonify({"success": True})
+
+
+@feedback_bp.route("/skill_assessment", methods=["POST"])
+def skill_assessment():
+    """
+    Per-skill chip click from the in-line response view. Two states:
+    `helpful`, `wrong` (a KNOWLEDGE verdict on the skill's output). Sending
+    an empty assessment clears the chip. Each click overwrites any previous
+    assessment for the same (turn_id, skill_id) pair. Redundancy is judged
+    AI-side by the ACE pipeline, not marked by the user.
+
+    Request JSON:
+      { "conversation_id": "...", "turn_id": "...",
+        "skill_id": "Connection Flow",
+        "assessment": "helpful" | "wrong" | "" }
+    """
+    data = request.get_json(silent=True) or {}
+    conversation_id = (data.get("conversation_id") or "").strip()
+    turn_id = (data.get("turn_id") or "").strip()
+    skill_id = (data.get("skill_id") or "").strip()
+    assessment = (data.get("assessment") or "").strip().lower()
+
+    if not conversation_id or not turn_id or not skill_id:
+        return jsonify({
+            "success": False,
+            "error": "conversation_id, turn_id, and skill_id are required",
+        }), 400
+    if not _SAFE_ID_RE.match(conversation_id):
+        return _bad_id_response("conversation_id")
+    if not _SAFE_ID_RE.match(turn_id):
+        return _bad_id_response("turn_id")
+    if assessment and assessment not in feedback_service.SKILL_ASSESSMENT_VALUES:
+        return jsonify({
+            "success": False,
+            "error": f"assessment must be one of {feedback_service.SKILL_ASSESSMENT_VALUES} or empty",
+        }), 400
+
+    session_id = session.get("chatbot_session_id", "")
+    ok = feedback_service.record_skill_assessment(
+        session_id=session_id,
+        conversation_id=conversation_id,
+        turn_id=turn_id,
+        skill_id=skill_id,
+        assessment=assessment,
     )
     if not ok:
         return jsonify({"success": False, "error": "failed to record"}), 500

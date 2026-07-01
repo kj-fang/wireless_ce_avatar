@@ -93,6 +93,31 @@
             border-color: #2563eb;
             box-shadow: 0 0 0 2px rgba(37,99,235,0.15);
         }
+        .log-input-wrap { position: relative; flex: 1; display: flex; }
+        .log-input-wrap input { padding-right: 26px; }
+        .log-input-copy {
+            position: absolute;
+            top: 50%;
+            right: 4px;
+            transform: translateY(-50%);
+            width: 20px; height: 20px;
+            border: none;
+            background: transparent;
+            color: #999;
+            font-size: 0.78rem;
+            line-height: 1;
+            padding: 0;
+            cursor: pointer;
+            opacity: 0.55;
+            border-radius: 4px;
+            transition: opacity 0.15s, background 0.15s, color 0.15s;
+        }
+        .log-input-copy:hover { opacity: 1; color: #2563eb; }
+        .log-input-copy.copied {
+            opacity: 1;
+            color: #1a7a3e;
+            background: #e6f7ee;
+        }
         .btn-set-log {
             background: #2563eb;
             color: white;
@@ -1875,15 +1900,21 @@
             <h6>📂 Log File</h6>
             {% if suggested_log %}
             <div style="font-size:0.75rem;background:#1a3a1a;border:1px solid #2d6a2d;border-radius:5px;padding:5px 8px;margin-bottom:6px;color:#7ec87e;">
-                ✅ Log from last analysis pre-loaded — click <strong>Load</strong> to confirm.
+                ✅ Log from last analysis pre-loaded — press <strong>Enter</strong> or edit the path to confirm.
             </div>
             {% endif %}
             <div class="log-input-group">
-                <input id="log-path-input" type="text"
-                       placeholder="Full path to .log file…"
-                       value="{{ suggested_log | default('', true) }}">
-                <button class="btn-browse" onclick="browseLog()" title="Browse for file">📁</button>
-                <button class="btn-set-log" onclick="setLog()">Load</button>
+                <div class="log-input-wrap">
+                    <input id="log-path-input" type="text"
+                        placeholder="Full path to .log file…"
+                        value="{{ suggested_log | default('', true) }}"
+                        onkeydown="if(event.key==='Enter'){event.preventDefault();setLog();}"
+                        onchange="setLog()">
+                    <button type="button" class="log-input-copy"
+                        onclick="copyLogPath(this)" title="Copy log path"
+                        aria-label="Copy log path">📋</button>
+                </div> 
+                <button type="button" class="btn-browse" onclick="browseLog()" title="Browse for file">📁</button>
             </div>
             <div id="log-status" class="log-status"></div>
         </div>
@@ -3063,6 +3094,22 @@
         return String(s)
             .replace(/&/g, '&amp;').replace(/</g, '&lt;')
             .replace(/>/g, '&gt;').replace(/"/g, '&quot;');
+    }
+
+    // ── Copy log path to clipboard ──────────────────────────────────
+    async function copyLogPath(btn) {
+        const path = (document.getElementById('log-path-input') || {}).value || '';
+        if (!path.trim()) return;
+        try {
+            await navigator.clipboard.writeText(path);
+        } catch (_e) {
+            const inp = document.getElementById('log-path-input');
+            inp.select(); document.execCommand('copy');
+        }
+        if (btn) {
+            btn.classList.add('copied');
+            setTimeout(() => btn.classList.remove('copied'), 1200);
+        }
     }
 
     // ── Browse for log file (server-side native dialog) ────────────

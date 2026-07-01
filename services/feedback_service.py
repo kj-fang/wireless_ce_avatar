@@ -1053,14 +1053,15 @@ def record_detail(
         cleaned_evidence = cleaned_evidence[:50]
 
     # Per-skill feedback from the wizard's skill lane. Each row:
-    #   {skill_id, assessment in {helpful,redundant,wrong}, what_wrong,
-    #    evidence_lines: [..]}
+    #   {skill_id, assessment in {helpful,wrong}, what_wrong,
+    #    should_be, evidence_lines: [..]}
     # We fan it out into the channels ACE already consumes, so no Reflector
     # change is needed:
-    #   * assessment         → turns[].skill_assessments  (Reflector input)
-    #   * what_wrong (wrong) → an issues[] row scoped to that skill
-    #                          (becomes free_text_issues for the Reflector)
-    #   * evidence_lines     → aggregated into evidence_log_lines (grep-verified)
+    #   * assessment                 → turns[].skill_assessments  (Reflector input)
+    #   * what_wrong/should_be (wrong) → an issues[] row scoped to that skill
+    #                          (comment=what_wrong, should_be=should_be;
+    #                           becomes free_text_issues for the Reflector)
+    #   * evidence_lines             → aggregated into evidence_log_lines
     # The raw rows are also kept verbatim under `skill_feedback` so offline
     # training keeps per-skill attribution of the reason + evidence.
     cleaned_skill_feedback: list[dict] = []
@@ -1074,6 +1075,7 @@ def record_detail(
             if not sid or assess not in SKILL_ASSESSMENT_VALUES:
                 continue
             what_wrong = (sf.get("what_wrong") or "").strip()
+            should_be = (sf.get("should_be") or "").strip()
             ev: list[str] = []
             raw_ev = sf.get("evidence_lines")
             if isinstance(raw_ev, list):
@@ -1086,31 +1088,40 @@ def record_detail(
                 "skill_id": sid,
                 "assessment": assess,
                 "what_wrong": what_wrong or None,
+                "should_be": should_be or None,
                 "evidence_lines": ev or None,
             })
             skill_assessment_rows.append({"skill_id": sid, "assessment": assess})
             if ev:
                 cleaned_evidence.extend(ev)
-            # "wrong" skill + a reason → a skill-scoped issue row so the
-            # Reflector sees the per-skill correction in free_text_issues.
-            if assess == "wrong" and what_wrong:
+            # "wrong" skill + a correction → a skill-scoped issue row so the
+            # Reflector sees the per-skill KNOWLEDGE correction in
+            # free_text_issues: what_wrong → comment (rationale),
+            # should_be → the corrected reading/conclusion. We leave `category`
+            # empty so the Reflector routes this domain-knowledge fix to the
+            # best-fitting DOMAIN section by content (key_log_patterns /
+            # diagnostic_checklist / common_failure_modes /
+            # formulas_and_thresholds …) rather than pinning every skill
+            # correction to a single section.
+            if assess == "wrong" and (what_wrong or should_be):
                 cleaned_issues.append({
                     "scope": "skill", "skill_id": sid, "step_index": None,
-                    "step_label": None, "category": "wrong_conclusion",
-                    "should_be": None, "comment": what_wrong,
+                    "step_label": None, "category": None,
+                    "should_be": should_be or None, "comment": what_wrong or None,
                 })
         cleaned_evidence = cleaned_evidence[:80]
 
     # Per-step feedback from the wizard's Agent-workflow lane. Each row:
     #   {step_index, skill_id, step_label,
-    #    assessment in {helpful,redundant,wrong}, what_wrong,
-    #    evidence_lines: [..]}
+    #    assessment in {helpful,redundant,wrong,negative}, what_wrong,
+    #    should_be, evidence_lines: [..]}
     # Mirrors skill_feedback but pins the verdict to a specific reasoning
     # step. We fan it into the channels the Reflector already reads:
-    #   * what_wrong (wrong) → a step-scoped issues[] row (free_text_issues)
-    #   * evidence_lines     → aggregated into evidence_log_lines
+    #   * what_wrong/should_be → a step-scoped issues[] row (free_text_issues:
+    #                            comment=what_wrong, should_be=should_be)
+    #   * evidence_lines       → aggregated into evidence_log_lines
     # and keep the raw rows verbatim under `step_feedback` for offline
-    # training so per-step attribution of the reason + evidence survives.
+    # training so per-step attribution of the reason + correction survives.
     cleaned_step_feedback: list[dict] = []
     if isinstance(step_feedback, list):
         step_evidence: list[str] = []
@@ -1130,6 +1141,7 @@ def record_detail(
             sid = (stf.get("skill_id") or "").strip() or None
             step_label = (stf.get("step_label") or "").strip() or None
             what_wrong = (stf.get("what_wrong") or "").strip()
+            should_be = (stf.get("should_be") or "").strip()
             ev: list[str] = []
             raw_ev = stf.get("evidence_lines")
             if isinstance(raw_ev, list):
@@ -1144,18 +1156,25 @@ def record_detail(
                 "step_label": step_label,
                 "assessment": assess,
                 "what_wrong": what_wrong or None,
+                "should_be": should_be or None,
                 "evidence_lines": ev or None,
             })
             if ev:
                 step_evidence.extend(ev)
-            # A negative step (wrong OR redundant) + a reason → a step-scoped
+            # A negative step (wrong OR redundant) + a correction → a step-scoped
             # issue row so the Reflector sees the per-step correction in
-            # free_text_issues. The Reflector makes the wrong-vs-redundant call.
-            if assess in ("wrong", "negative") and what_wrong:
+            # free_text_issues. `category` stays empty: the user already told us
+            # the verdict (wrong vs redundant) via `assessment`, so the Reflector
+            # need not guess it; the exact workflow section (skill_selection_rules
+            # vs termination_rules vs loop_prevention …) is still best chosen by
+            # the Reflector from the correction content.
+            # what_wrong → comment (rationale), should_be → corrected target.
+            # ("negative" is kept for back-compat with any legacy merged rows.)
+            if assess in ("wrong", "redundant", "negative") and (what_wrong or should_be):
                 cleaned_issues.append({
                     "scope": "step", "skill_id": sid, "step_index": step_idx,
-                    "step_label": step_label, "category": "wrong_conclusion",
-                    "should_be": None, "comment": what_wrong,
+                    "step_label": step_label, "category": None,
+                    "should_be": should_be or None, "comment": what_wrong or None,
                 })
         if step_evidence:
             cleaned_evidence.extend(step_evidence)
@@ -1246,13 +1265,17 @@ def record_detail(
                     "issues": cleaned_issues,
                     "correct_root_cause":     record["correct_root_cause"],
                     "correct_conclusion_tag": record["correct_conclusion_tag"],
-                    "correct_skill":          record["correct_skill"],
-                    "correct_approach":       record["correct_approach"],
-                    "evidence_log_lines":     record["evidence_log_lines"],
                     "feedback_layer":         record["feedback_layer"],
                     "agent_workflow":         record["agent_workflow"],
                     "skill_feedback":         record["skill_feedback"],
                     "step_feedback":          record["step_feedback"],
+                    # Issue-time (analysis anchor) — carried so the ACE
+                    # Reflector can turn a wrong-time correction into a
+                    # workflow lesson about picking the evidence window.
+                    "issue_time_problem":     record["issue_time_problem"],
+                    "correct_issue_time":     record["correct_issue_time"],
+                    "used_issue_time":        record["used_issue_time"],
+                    "log_has_date":           record["log_has_date"],
                 }
                 t["feedback"] = fb
                 # Upsert per-skill verdicts into the turn's skill_assessments
@@ -1447,7 +1470,14 @@ def record_helpful_skill(
     return True
 
 
-SKILL_ASSESSMENT_VALUES = ("helpful", "redundant", "wrong")
+# The Skill lane is a USER-FACING KNOWLEDGE verdict: a skill's output is either
+# `helpful` (knowledge is sound) or `wrong` (knowledge is off / has gaps).
+# `redundant` is deliberately NOT a user verdict here — knowledge redundancy is
+# judged AI-side while ACE runs (add-time dedup via DEDUP_RATIO, the Curator's
+# REMOVE/UPDATE ops, and refine()'s soft-cap eviction), and workflow redundancy
+# ("this skill shouldn't have run") is inferred by the Reflector into
+# skill_selection_rules. So users never mark a skill `redundant` from the UI.
+SKILL_ASSESSMENT_VALUES = ("helpful", "wrong")
 # The Step lane offers a single merged-negative verdict ("wrong or redundant")
 # and defers the wrong-vs-redundant call to the Reflector, so it accepts an
 # extra `negative` value on top of the explicit ones (the explicit values are
@@ -1469,7 +1499,8 @@ def record_skill_assessment(
     snapshot's `turns[].skill_assessments[]`. Re-clicking the same chip
     updates the assessment; passing an empty/None assessment clears it.
 
-    assessment: one of "helpful" | "redundant" | "wrong", or "" to clear.
+    assessment: one of "helpful" | "wrong", or "" to clear. (Knowledge/workflow
+    redundancy is judged AI-side by the ACE pipeline, not marked by the user.)
     """
     if not conversation_id or not turn_id or not skill_id:
         return False

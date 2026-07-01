@@ -320,15 +320,16 @@ def skill_helpful():
 @feedback_bp.route("/skill_assessment", methods=["POST"])
 def skill_assessment():
     """
-    Per-skill chip click from the in-line response view. Three states:
-    `helpful`, `redundant`, `wrong`. Sending an empty assessment clears
-    the chip. Each click overwrites any previous assessment for the same
-    (turn_id, skill_id) pair.
+    Per-skill chip click from the in-line response view. Two states:
+    `helpful`, `wrong` (a KNOWLEDGE verdict on the skill's output). Sending
+    an empty assessment clears the chip. Each click overwrites any previous
+    assessment for the same (turn_id, skill_id) pair. Redundancy is judged
+    AI-side by the ACE pipeline, not marked by the user.
 
     Request JSON:
       { "conversation_id": "...", "turn_id": "...",
         "skill_id": "Connection Flow",
-        "assessment": "helpful" | "redundant" | "wrong" | "" }
+        "assessment": "helpful" | "wrong" | "" }
     """
     data = request.get_json(silent=True) or {}
     conversation_id = (data.get("conversation_id") or "").strip()

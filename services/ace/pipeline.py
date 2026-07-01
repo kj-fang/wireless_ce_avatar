@@ -313,8 +313,6 @@ class AceRunner:
                 _add(s.get("skill_id") or s.get("name"))
             elif isinstance(s, str):
                 _add(s)
-        details = (feedback or {}).get("details") or {}
-        _add(details.get("correct_skill"))
         if reflection:
             for ki in reflection.get("key_insights") or []:
                 _add(ki.get("target_skill"))

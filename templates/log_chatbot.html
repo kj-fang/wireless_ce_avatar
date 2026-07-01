@@ -944,46 +944,6 @@
         .feedback-more-link:hover { text-decoration: underline; }
         .feedback-more-link.submitted { color: #1a7f37; cursor: default; text-decoration: none; }
 
-        /* ── In-line per-skill assessment chips (helpful / redundant / wrong) ── */
-        .skill-assessments {
-            display: flex;
-            flex-wrap: wrap;
-            gap: 6px 10px;
-            margin-top: 6px;
-            opacity: 0.85;
-        }
-        .skill-assessments:hover { opacity: 1; }
-        .skill-chip-group {
-            display: inline-flex;
-            align-items: center;
-            gap: 4px;
-            background: #f5f7fa;
-            border: 1px solid #e3e7ee;
-            border-radius: 14px;
-            padding: 2px 6px 2px 10px;
-            font-size: 0.78rem;
-        }
-        .skill-chip-name {
-            color: #2d333a;
-            font-weight: 500;
-            margin-right: 4px;
-        }
-        .skill-chip-btn {
-            background: white;
-            border: 1px solid #d8dee5;
-            border-radius: 10px;
-            padding: 1px 6px;
-            font-size: 0.78rem;
-            cursor: pointer;
-            line-height: 1.2;
-            user-select: none;
-            transition: background 0.12s, border-color 0.12s;
-        }
-        .skill-chip-btn:hover:not(:disabled) { background: #eef4ff; border-color: #0071c5; }
-        .skill-chip-btn.active.helpful   { background: #e8f7ec; border-color: #2ea043; color: #1a7f37; }
-        .skill-chip-btn.active.redundant { background: #fff5e6; border-color: #d29922; color: #9a6700; }
-        .skill-chip-btn.active.wrong     { background: #fdecec; border-color: #cf222e; color: #b42318; }
-
         /* ── Sidebar: skill source badge + cloud/user toggle ─────────── */
         /* No outer panel frame — the badge already conveys state, and a
            frame here visually competes with the bordered card the whole
@@ -1454,6 +1414,18 @@
         }
         .fbd-sub-label:first-child,
         .fbd-group-title + .fbd-sub-label { margin-top: 0; }
+
+        /* Caption under a step's verdict buttons: reflects the hovered
+           button's meaning, then settles on the selected verdict. Reserve
+           a line so the row height doesn't jump when text appears. */
+        .fbd-verdict-caption {
+            min-height: 1.1em;
+            font-size: 0.72rem;
+            color: #57606a;
+            line-height: 1.4;
+            margin: 2px 0 0;
+        }
+        .fbd-verdict-caption:empty { margin-top: 0; }
 
         /* Inline help text under feedback-modal fields — kept tiny so it
            hints without competing with the actual input. */
@@ -5561,57 +5533,7 @@
                         onclick="submitFeedback('${turnId}', 1, this)">👍</button>
                 <button type="button" class="feedback-btn" title="Not helpful"
                         onclick="submitFeedback('${turnId}', -1, this)">👎</button>
-            </div>
-            ${renderSkillAssessmentChips(turnId)}`;
-    }
-
-    // ── In-line per-skill chips — REMOVED ─────────────────────────────
-    // Per-skill feedback (good / not-needed / wrong) now lives inside the
-    // "More feedback" modal's Skill lane, so the response area stays clean.
-    // Kept as a no-op so renderFeedbackWidget's call site is unchanged.
-    function renderSkillAssessmentChips(turnId) {
-        return '';
-    }
-
-    async function submitSkillAssessment(turnId, btnEl, state) {
-        const group = btnEl ? btnEl.closest('.skill-chip-group') : null;
-        if (!group) return;
-        const skillId = group.dataset.skillId || '';
-        if (!skillId) return;
-        // Toggle: clicking the active state again clears the assessment.
-        const wasActive = btnEl.classList.contains('active');
-        const nextState = wasActive ? '' : state;
-        const conversationId = window.__feedbackConversationId || '';
-        if (!conversationId) return;
-
-        group.querySelectorAll('.skill-chip-btn').forEach(b => b.disabled = true);
-        try {
-            const res = await fetch('/feedback/skill_assessment', {
-                method: 'POST',
-                headers: {'Content-Type': 'application/json'},
-                body: JSON.stringify({
-                    conversation_id: conversationId,
-                    turn_id: turnId,
-                    skill_id: skillId,
-                    assessment: nextState,
-                }),
-            });
-            const data = await res.json().catch(() => ({}));
-            if (data && data.success) {
-                group.querySelectorAll('.skill-chip-btn').forEach(b => {
-                    b.classList.remove('active', 'helpful', 'redundant', 'wrong');
-                });
-                if (nextState) {
-                    btnEl.classList.add('active', nextState);
-                }
-            } else {
-                console.warn('Skill assessment save failed:', data);
-            }
-        } catch (e) {
-            console.warn('Skill assessment network error:', e);
-        } finally {
-            group.querySelectorAll('.skill-chip-btn').forEach(b => b.disabled = false);
-        }
+            </div>`;
     }
 
     async function submitFeedback(turnId, vote, btnEl) {
@@ -5833,10 +5755,12 @@
                     </div>
                 </div>
                 <div class="fbd-skill-row-detail hidden-row">
-                    <input type="text" class="fbd-skill-reason"
-                           placeholder="Comment (optional)">
-                    <textarea class="fbd-skill-evidence"
-                              placeholder="Evidence log lines (optional)"></textarea>
+                    <label class="fbd-sub-label">What this skill got wrong</label>
+                    <textarea class="fbd-skill-reason" rows="2"
+                              placeholder="What it read or concluded incorrectly (optional)"></textarea>
+                    <label class="fbd-sub-label">Correct conclusion</label>
+                    <textarea class="fbd-skill-should" rows="2"
+                              placeholder="What the skill should have concluded (optional)"></textarea>
                 </div>`;
             list.appendChild(row);
         });
@@ -5867,15 +5791,19 @@
                 <div class="fbd-skill-row-head">
                     <span class="fbd-skill-row-name">${safe}</span>
                     <div class="fbd-skill-verdict">
-                        <button type="button" class="fbd-verdict-btn" data-v="helpful" title="Good step" onclick="setStepVerdict(this,'helpful')">👍</button>
-                        <button type="button" class="fbd-verdict-btn" data-v="negative" title="Wrong or redundant step — AI decides which" onclick="setStepVerdict(this,'negative')">👎</button>
+                        <button type="button" class="fbd-verdict-btn" data-v="helpful" data-label="Good step" title="Good step" onmouseenter="showStepHint(this)" onmouseleave="resetStepHint(this)" onclick="setStepVerdict(this,'helpful')">👍</button>
+                        <button type="button" class="fbd-verdict-btn" data-v="redundant" data-label="Redundant / unnecessary step" title="Redundant / unnecessary step" onmouseenter="showStepHint(this)" onmouseleave="resetStepHint(this)" onclick="setStepVerdict(this,'redundant')">♻️</button>
+                        <button type="button" class="fbd-verdict-btn" data-v="wrong" data-label="Wrong step" title="Wrong step" onmouseenter="showStepHint(this)" onmouseleave="resetStepHint(this)" onclick="setStepVerdict(this,'wrong')">👎</button>
                     </div>
                 </div>
+                <div class="fbd-verdict-caption" aria-live="polite"></div>
                 <div class="fbd-skill-row-detail hidden-row">
-                    <input type="text" class="fbd-skill-reason"
-                           placeholder="Comment (optional)">
-                    <textarea class="fbd-skill-evidence"
-                              placeholder="Evidence / what to do differently (optional)"></textarea>
+                    <label class="fbd-sub-label">Why this step was wrong</label>
+                    <textarea class="fbd-skill-reason" rows="2"
+                              placeholder="What went wrong — paste the log line(s) that show it, if you have them (optional)"></textarea>
+                    <label class="fbd-sub-label">What the agent should have done</label>
+                    <textarea class="fbd-skill-should" rows="2"
+                              placeholder="The correct action for this step (optional)"></textarea>
                 </div>`;
             list.appendChild(row);
         });
@@ -5906,7 +5834,29 @@
         row.dataset.verdict = next;
         const detail = row.querySelector('.fbd-skill-row-detail');
         if (detail) detail.classList.toggle('hidden-row', !next);
+        _refreshStepCaption(row);
         updateSelectedCount('fbd-step-rows', 'fbd-step-count');
+    }
+
+    // Show a verdict's meaning below the buttons while hovering.
+    function showStepHint(btn) {
+        const row = btn.closest('.fbd-skill-row');
+        if (!row) return;
+        const cap = row.querySelector('.fbd-verdict-caption');
+        if (cap) cap.textContent = btn.dataset.label || '';
+    }
+
+    // On mouse-out, fall back to the selected verdict's meaning (or clear).
+    function resetStepHint(btn) {
+        const row = btn.closest('.fbd-skill-row');
+        if (row) _refreshStepCaption(row);
+    }
+
+    function _refreshStepCaption(row) {
+        const cap = row.querySelector('.fbd-verdict-caption');
+        if (!cap) return;
+        const active = row.querySelector('.fbd-verdict-btn.active');
+        cap.textContent = active ? (active.dataset.label || '') : '';
     }
 
     // Toggle a skill's verdict; either verdict reveals the same comment box.
@@ -5956,11 +5906,11 @@
             const v = row.dataset.verdict || '';
             if (!sid || !v || v === 'none') return;
             const reason = (row.querySelector('.fbd-skill-reason')?.value || '').trim();
-            const ev = (row.querySelector('.fbd-skill-evidence')?.value || '')
-                .split(/\r?\n/).map((s) => s.replace(/\s+$/, '')).filter((s) => s.length > 0);
+            const should = (row.querySelector('.fbd-skill-should')?.value || '').trim();
             if (v === 'wrong' || v === 'helpful') {
                 bySkill[sid] = { skill_id: sid, assessment: v,
-                                 what_wrong: reason, evidence_lines: ev };
+                                 what_wrong: reason, should_be: should,
+                                 evidence_lines: [] };
             }
         });
         return Object.values(bySkill);
@@ -5980,14 +5930,14 @@
             const sid = row.dataset.skillId || null;
             const label = (row.querySelector('.fbd-skill-row-name')?.textContent || '').trim();
             const reason = (row.querySelector('.fbd-skill-reason')?.value || '').trim();
-            const ev = (row.querySelector('.fbd-skill-evidence')?.value || '')
-                .split(/\r?\n/).map((s) => s.replace(/\s+$/, '')).filter((s) => s.length > 0);
-            // Step lane sends a single merged-negative verdict (`negative`);
-            // the Reflector classifies it as wrong vs redundant. `wrong` is
-            // still accepted for backward-compat with any legacy row state.
-            if (v === 'negative' || v === 'wrong' || v === 'helpful') {
+            const should = (row.querySelector('.fbd-skill-should')?.value || '').trim();
+            // Step lane sends an explicit verdict the user chose:
+            //   👍 helpful | 🔁 redundant | 👎 wrong
+            // (`negative` still accepted for back-compat with legacy drafts.)
+            if (v === 'helpful' || v === 'redundant' || v === 'wrong' || v === 'negative') {
                 out.push({ step_index: idx, skill_id: sid, step_label: label,
-                           assessment: v, what_wrong: reason, evidence_lines: ev });
+                           assessment: v, what_wrong: reason, should_be: should,
+                           evidence_lines: [] });
             }
         });
         return out;
@@ -6025,7 +5975,7 @@
                 other:              'Other',
             },
             grpSkillTitle:   'Which skill was wrong?',
-            stepLaneHint:    'Per step: mark 👎 on any bad step — the AI decides if it was wrong or redundant — and add the correction.',
+            stepLaneHint:    'Per step: mark � Redundant (unnecessary) or 👎 Wrong (off-track), then add the correction. 👍 marks a good step.',
             skillLaneHint:   'Per skill: mark 👎 Wrong on any skill whose output was off and add the correction.',
             concLabel:       'Conclusion category',
             concFirstOpt:    '— Select if you know —',
@@ -6058,8 +6008,8 @@
                 other:              'Other',
             },
             grpSkillTitle:   'Which skill did well?',
-            stepLaneHint:    'Mark 👎 on a wrong or redundant step (AI decides which) and write what to do differently. Mark 👍 on what was done especially well.',
-            skillLaneHint:   'Mark 👎 Wrong and write what to do differently. Mark 👍 on what was done especially well.',
+            stepLaneHint:    '',
+            skillLaneHint:   'Mark 👍 knowledge is complete, 👎 knowledge is wrong or has gaps',
             concLabel:       'Conclusion category the agent nailed (optional)',
             concFirstOpt:    '— Select if it matched —',
             attachLogHint:   'Lets reviewers replay the same log the agent analysed — only attach if you want to share it.',
@@ -6340,24 +6290,24 @@
             const btn = row.querySelector(`.fbd-verdict-btn[data-v="${item.assessment}"]`);
             if (btn) setSkillVerdict(btn, item.assessment);
             const r = row.querySelector('.fbd-skill-reason');
-            const e = row.querySelector('.fbd-skill-evidence');
+            const e = row.querySelector('.fbd-skill-should');
             if (r && item.what_wrong) r.value = item.what_wrong;
-            if (e && Array.isArray(item.evidence_lines)) e.value = item.evidence_lines.join('\n');
+            if (e && item.should_be) e.value = item.should_be;
         });
 
         const stf = Array.isArray(d.stepFeedback) ? d.stepFeedback : [];
         stf.forEach((item) => {
             if (!item || item.step_index == null) return;
-            if (item.assessment !== 'wrong' && item.assessment !== 'helpful') return;
+            if (!['wrong', 'redundant', 'helpful'].includes(item.assessment)) return;
             const row = document.querySelector(
                 `#fbd-step-rows .fbd-skill-row[data-step-index="${item.step_index}"]`);
             if (!row) return;
             const btn = row.querySelector(`.fbd-verdict-btn[data-v="${item.assessment}"]`);
             if (btn) setStepVerdict(btn, item.assessment);
             const r = row.querySelector('.fbd-skill-reason');
-            const e = row.querySelector('.fbd-skill-evidence');
+            const e = row.querySelector('.fbd-skill-should');
             if (r && item.what_wrong) r.value = item.what_wrong;
-            if (e && Array.isArray(item.evidence_lines)) e.value = item.evidence_lines.join('\n');
+            if (e && item.should_be) e.value = item.should_be;
         });
 
         // Attachment checkbox picks up whatever the user last chose.

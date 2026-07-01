@@ -34,7 +34,7 @@ DEDUP_RATIO = 0.85
 
 # Soft cap on bullets per section. When exceeded, the lowest-net-score bullets
 # are evicted by `refine()`.
-SECTION_SOFT_CAP = 30
+SECTION_SOFT_CAP = 15
 
 
 def _now() -> str:

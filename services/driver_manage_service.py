@@ -25,6 +25,7 @@ class DriverManager:
     def __init__(self, downloads_dir):
         self.all_drivers = []
         self.shutdown_event = threading.Event()
+        self.download_cancel_event = threading.Event()
         self.main_driver = None
         self._driver_lock = threading.Lock()
         
@@ -400,6 +401,20 @@ class DriverManager:
             if "invalid session id" not in msg and "session deleted" not in msg:
                 print(f"⚠️ is_browser_closed check raised an exception: {e}")
             return True
+
+    def cancel_downloads(self):
+        """Cancel any in-progress file downloads without shutting down the app.
+
+        We ONLY set the cancel flag here. Each download worker thread checks
+        this flag and tears down its OWN chromedriver cleanly. We deliberately
+        do NOT call driver.quit() from this method: force-quitting a driver
+        while its worker is mid-command (driver.get / get_log / quit) makes
+        Selenium retry against a now-dead chromedriver, which produces the
+        WinError 10061 connection-retry warning storms and also blocks the
+        cancel response (delaying the redirect back to the previous page).
+        """
+        print("🛑 Received cancel-download request from client")
+        self.download_cancel_event.set()
 
     def shutdown(self):
         print("📴 Received shutdown from client")

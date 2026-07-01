@@ -13,9 +13,29 @@ def register_socketio_handlers(socketio):
     @socketio.on('start_download', namespace='/progress')
     def socketio_start_download():
         return handle_start_download(socketio)
+
+    @socketio.on('cancel_download', namespace='/progress')
+    def socketio_cancel_download():
+        return handle_cancel_download(socketio)
 #------------REGISTER SOCKETIO-------------#
 
+@download_bp.route('/cancel_download', methods=['POST'])
+def cancel_download_route():
+    """HTTP endpoint used when the user leaves the download page (e.g. presses
+    the browser Back button). Called via navigator.sendBeacon so the request
+    reliably fires during page unload. Stops downloads and removes partial files."""
+    app_config.driver_manager.cancel_downloads()
+    return ('', 204)
+
+def handle_cancel_download(socketio):
+    driver_manager = app_config.driver_manager
+    driver_manager.cancel_downloads()
+    socketio.emit('download_cancelled', {}, namespace='/progress')
+
 def handle_start_download(socketio):
+    driver_manager = app_config.driver_manager
+    driver_manager.download_cancel_event.clear()
+
     selected_files = session.get('selected_files', [])
     download_path = session.get('download_path', '')
     case_nbr = session.get('case_context')['case_nbr']
@@ -37,6 +57,11 @@ def handle_start_download(socketio):
                 ddd_dict[name] = ddd_files + evt_files
                 bt_dict[name] = bt_files
                 fw_dict[name] = fw_files
+
+        if driver_manager.download_cancel_event.is_set():
+            print("🛑 Download cancelled by user. Skipping result processing.")
+            attachment_download.cleanup_incomplete_downloads(download_path)
+            return
 
         if not is_bsod:
             

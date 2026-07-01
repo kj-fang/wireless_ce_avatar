@@ -34,7 +34,7 @@ DEDUP_RATIO = 0.85
 
 # Soft cap on bullets per section. When exceeded, the lowest-net-score bullets
 # are evicted by `refine()`.
-SECTION_SOFT_CAP = 30
+SECTION_SOFT_CAP = 15
 
 
 def _now() -> str:
@@ -190,13 +190,18 @@ class Playbook:
                 return b
         return None
 
-    def increment_counter(self, bullet_id: str, tag: str) -> None:
-        """tag in {'helpful', 'harmful', 'neutral'}"""
+    def increment_counter(self, bullet_id: str, tag: str, weight: int = 1) -> None:
+        """tag in {'helpful', 'harmful', 'neutral'}. `weight` scales ONLY the
+        `helpful` bump, so a detailed, high-confidence submission promotes a
+        useful bullet faster. The eviction-driving counters (`harmful`,
+        `neutral`) always step by 1, so a single weighted negative can never
+        delete a bullet on its own — removal must accrue across independent
+        votes."""
         b = self.get(bullet_id)
         if b is None:
             return
         if tag == "helpful":
-            b.helpful_count += 1
+            b.helpful_count += max(1, int(weight))
         elif tag == "harmful":
             b.harmful_count += 1
         elif tag == "neutral":

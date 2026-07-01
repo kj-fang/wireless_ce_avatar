@@ -74,28 +74,101 @@ def _extract_json(raw: str) -> dict:
     return json.loads(m.group(0))
 
 
-def _truncate_trace(steps: list[dict], max_chars: int = 6000) -> str:
+def _looks_like_junk(text: str) -> bool:
+    """
+    Cheap sanity gate for free-text ground-truth fields (e.g.
+    correct_root_cause). A short opaque single token of pure lowercase
+    letters like "ejwoi" / "asdf" is almost certainly a test/placeholder
+    value and must NOT be handed to the Reflector as authoritative ground
+    truth, or it pollutes the playbook.
+
+    Deliberately conservative — it only fires on short, single-token,
+    all-lowercase-alphabetic input. Anything with a digit, hyphen, dot,
+    uppercase letter or whitespace (e.g. "DCR-1262", "WAKE_RESUME_DELAY",
+    "beacon loss") is treated as possibly-real and spared, because dropping
+    genuine feedback is worse than letting a borderline value through.
+    Empty strings are "absent", not junk, and return False.
+    """
+    t = (text or "").strip()
+    if not t:
+        return False
+    if len(t) >= 12:            # long enough to plausibly be meaningful
+        return False
+    if not t.isalpha():         # has a digit / hyphen / dot -> likely a real code
+        return False
+    if not t.islower():         # has an uppercase letter -> likely a tag/acronym
+        return False
+    return True                 # short, single all-lowercase token -> junk
+
+
+def _truncate_trace(
+    steps: list[dict],
+    max_chars: int = 6000,
+    pinned: set[int] | None = None,
+) -> str:
     """
     Steps traces from log_chatbot_service can be huge (full log dumps). Cap
-    them so the Reflector prompt stays in the context window. We keep the
-    first N chars and a tail of M chars — heads have the skill choices, tails
-    have the conclusion.
+    them so the Reflector prompt stays in the context window.
+
+    Two robustness guarantees the naive head/tail slice did not give us:
+      * every row is prefixed with its `#index`, so the Reflector can anchor
+        a step_feedback `step_index` to the exact trajectory row (step_index
+        is the position into this same list — see
+        feedback_service._extract_skills_used), and
+      * any row whose index is in `pinned` (the steps the user actually rated)
+        is ALWAYS kept, capped per-row, even when it falls in the middle that
+        truncation would otherwise drop. Contiguous dropped runs collapse to a
+        `... [N steps omitted] ...` marker.
     """
     if not steps:
         return "(no trace)"
-    flat = []
-    for s in steps:
+
+    pinned = {i for i in (pinned or set()) if 0 <= i < len(steps)}
+
+    def _render(i: int, cap: int | None = None) -> str:
+        s = steps[i]
         role = (s.get("role") or "").strip()
         content = s.get("content") or ""
         if not isinstance(content, str):
             content = json.dumps(content, ensure_ascii=False)
-        flat.append(f"[{role}] {content}")
-    blob = "\n".join(flat)
+        if cap is not None and len(content) > cap:
+            content = content[:cap] + f" …[+{len(content) - cap} chars]"
+        return f"#{i} [{role}] {content}"
+
+    full_rows = [_render(i) for i in range(len(steps))]
+    blob = "\n".join(full_rows)
     if len(blob) <= max_chars:
         return blob
-    head = blob[: int(max_chars * 0.7)]
-    tail = blob[-int(max_chars * 0.3):]
-    return f"{head}\n... [truncated {len(blob) - max_chars} chars] ...\n{tail}"
+
+    # Over budget: reserve space for pinned rows first (capped so one giant
+    # log dump can't eat the whole budget), then fill head + tail context.
+    PIN_CAP = 1500
+    n = len(steps)
+    keep: dict[int, str] = {i: _render(i, cap=PIN_CAP) for i in pinned}
+    used = sum(len(v) + 1 for v in keep.values())
+    budget = max(0, max_chars - used)
+    head_budget = int(budget * 0.6)
+    tail_budget = budget - head_budget
+
+    h, hb = 0, 0
+    while h < n and hb + len(full_rows[h]) + 1 <= head_budget:
+        keep.setdefault(h, full_rows[h])
+        hb += len(full_rows[h]) + 1
+        h += 1
+    t, tb = n - 1, 0
+    while t >= h and tb + len(full_rows[t]) + 1 <= tail_budget:
+        keep.setdefault(t, full_rows[t])
+        tb += len(full_rows[t]) + 1
+        t -= 1
+
+    out: list[str] = []
+    prev: int | None = None
+    for i in sorted(keep):
+        if prev is not None and i > prev + 1:
+            out.append(f"... [{i - prev - 1} steps omitted] ...")
+        out.append(keep[i])
+        prev = i
+    return "\n".join(out)
 
 
 # ---------------------------------------------------------------------------
@@ -142,6 +215,38 @@ class Reflector:
         details = (feedback or {}).get("details") or {}
         vote = (feedback or {}).get("vote", 0)
         agent_workflow_tag = details.get("agent_workflow") or "appropriate"
+        # Submission weight and route gate how the Reflector writes: weight
+        # scales counter bumps; route is the user's workflow/skill/both choice.
+        weight = (feedback or {}).get("weight") or "low"
+        feedback_layer = details.get("feedback_layer") or ""
+        # The user-facing router emits "agent" for the workflow layer, but the
+        # Reflector prompt's SCOPE BY ROUTE rules (and the insight
+        # target_playbook it emits) speak "workflow". Normalise here so the
+        # scope directive actually matches — otherwise "agent" hits no rule
+        # and the workflow-only routing is silently ignored.
+        if feedback_layer == "agent":
+            feedback_layer = "workflow"
+
+        # Sanity-gate the free-text ground truth: a short opaque token like
+        # "ejwoi" is a test/placeholder value, not a real root cause. Blank it
+        # so the Reflector treats it as "absent" instead of writing nonsense
+        # into a playbook bullet as if it were authoritative.
+        correct_root_cause = details.get("correct_root_cause") or ""
+        if _looks_like_junk(correct_root_cause):
+            correct_root_cause = ""
+
+        # Pin the trajectory rows the user actually rated so truncation can
+        # never drop them (step_index is the position into steps_trace). This
+        # keeps step_feedback anchorable even for deep steps in a huge trace.
+        pinned_steps: set[int] = set()
+        for _row in (details.get("step_feedback") or []):
+            _idx = _row.get("step_index") if isinstance(_row, dict) else None
+            if isinstance(_idx, int):
+                pinned_steps.add(_idx)
+        for _row in (details.get("skill_feedback") or []):
+            _idx = _row.get("step_index") if isinstance(_row, dict) else None
+            if isinstance(_idx, int):
+                pinned_steps.add(_idx)
 
         # The agent's final structured report (root_cause, conclusion_tag, ...)
         # is stashed by record_turn() as `agent_response_full`.
@@ -149,21 +254,30 @@ class Reflector:
 
         prompt = prompts.fill_reflector_prompt(
             case_context=_safe_json_dump(case_context),
-            agent_trajectory=_truncate_trace(turn.get("steps_trace") or []),
+            agent_trajectory=_truncate_trace(
+                turn.get("steps_trace") or [], pinned=pinned_steps
+            ),
             agent_final_report=_safe_json_dump(final_report),
             vote=vote,
             agent_workflow_tag=agent_workflow_tag,
-            correct_root_cause=details.get("correct_root_cause") or "",
+            weight=weight,
+            feedback_layer=feedback_layer,
+            correct_root_cause=correct_root_cause,
             correct_conclusion_tag=details.get("correct_conclusion_tag") or "",
-            correct_skill=details.get("correct_skill") or "",
-            correct_approach=details.get("correct_approach") or "",
-            evidence_log_lines=_safe_json_dump(details.get("evidence_log_lines") or []),
             helpful_skills=_safe_json_dump(turn.get("helpful_skills") or []),
             step_votes=_safe_json_dump(turn.get("step_votes") or []),
             free_text_issues=_safe_json_dump(details.get("issues") or []),
             skill_assessments=_safe_json_dump(turn.get("skill_assessments") or []),
             skill_feedback=_safe_json_dump(details.get("skill_feedback") or []),
             step_feedback=_safe_json_dump(details.get("step_feedback") or []),
+            # Issue-time (analysis anchor) — a wrong time means the agent
+            # fetched the wrong log window and missed the real evidence. The
+            # Reflector turns issue_time_problem into a generalizable workflow
+            # lesson (used/correct are context only, never bulletized).
+            issue_time_problem=details.get("issue_time_problem") or "",
+            issue_time_used=details.get("used_issue_time") or "",
+            issue_time_correct=details.get("correct_issue_time") or "",
+            issue_time_has_date=("true" if details.get("log_has_date", True) else "false"),
             applied_bullets="\n".join(b.render() for b in applied_bullets) or "(none)",
             skill_definitions=_render_skill_definitions(skill_contexts),
         )
@@ -218,6 +332,7 @@ class Curator:
         domain_playbooks: dict[str, Playbook],
         skill_contexts: Optional[dict] = None,
         turn_id: str = "",
+        tag_weight: int = 1,
         progress=None,
     ) -> dict:
         """
@@ -247,6 +362,7 @@ class Curator:
             workflow_playbook,
             domain_playbooks,
             skill_tags=reflection.get("skill_tags") or [],
+            weight=tag_weight,
         )
         if counter_updates:
             _emit("counter_updates", updates=counter_updates)
@@ -306,11 +422,14 @@ class Curator:
         return seen
 
     def _apply_bullet_tags(self, tags, workflow_pb, domain_pbs,
-                            skill_tags: Optional[list] = None) -> list[dict]:
+                            skill_tags: Optional[list] = None,
+                            weight: int = 1) -> list[dict]:
         # Build {skill_id: tag} index from the reflection's skill_tags so we can
-        # downgrade any `helpful` bullet that belongs to a skill the user (or
-        # the reflector) flagged as `redundant` or `wrong`. Defense in depth —
-        # the prompt also instructs the LLM to do this.
+        # downgrade a `helpful` bullet whose skill the user (or reflector)
+        # flagged as `wrong` — i.e. the skill's OUTPUT was bad. A `redundant`
+        # verdict is a WORKFLOW judgment (the skill shouldn't have run this
+        # turn) and says nothing about the correctness of that skill's domain
+        # bullets, so it must NOT downgrade them.
         skill_tag_map: dict[str, str] = {}
         for st in skill_tags or []:
             sid = (st.get("skill_id") or "").strip()
@@ -336,14 +455,21 @@ class Curator:
                         break
             if target is None:
                 continue
-            # Downgrade rule: a bullet owned by a redundant/wrong skill cannot
-            # be `helpful`. Workflow bullets are skill-agnostic so they pass.
+            # Downgrade rule: a domain bullet owned by a skill whose OUTPUT was
+            # `wrong` cannot stay `helpful`. `redundant` skills are spared —
+            # their domain knowledge may still be correct. Workflow bullets are
+            # skill-agnostic so they always pass.
             if tag == "helpful" and owning_skill:
                 sk_tag = skill_tag_map.get(owning_skill)
-                if sk_tag in {"redundant", "wrong"}:
+                if sk_tag == "wrong":
                     tag = "neutral"
-            target.increment_counter(bid, tag)
-            updates.append({"bullet_id": bid, "tag": tag})
+            # `weight` scales only the `helpful` bump (increment_counter
+            # ignores it for harmful/neutral). Normalise to 1 for non-helpful
+            # tags so the emitted update payload doesn't misreport a weighted
+            # negative/neutral bump that never actually happened.
+            eff_weight = weight if tag == "helpful" else 1
+            target.increment_counter(bid, tag, weight=eff_weight)
+            updates.append({"bullet_id": bid, "tag": tag, "weight": eff_weight})
         return updates
 
     def _apply_op(self, op, workflow_pb, domain_pbs, turn_id) -> tuple[bool, str]:

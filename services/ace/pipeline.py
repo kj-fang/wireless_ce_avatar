@@ -212,12 +212,17 @@ class AceRunner:
         skill_contexts = self._collect_skill_contexts(turn, feedback, reflection)
 
         # 3. Curate
+        # High-weight feedback (a detailed modal submission) moves bullet
+        # counters faster than a bare thumbs vote, so important lessons rise
+        # and stale ones fall sooner during refine().
+        tag_weight = 2 if (feedback.get("weight") == "high") else 1
         curate_result = self.curator.curate(
             reflection=reflection,
             workflow_playbook=self.workflow_pb,
             domain_playbooks=self.domain_pbs,
             skill_contexts=skill_contexts,
             turn_id=turn_id,
+            tag_weight=tag_weight,
             progress=progress,
         )
 
@@ -308,8 +313,6 @@ class AceRunner:
                 _add(s.get("skill_id") or s.get("name"))
             elif isinstance(s, str):
                 _add(s)
-        details = (feedback or {}).get("details") or {}
-        _add(details.get("correct_skill"))
         if reflection:
             for ki in reflection.get("key_insights") or []:
                 _add(ki.get("target_skill"))

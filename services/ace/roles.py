@@ -142,9 +142,8 @@ class Reflector:
         details = (feedback or {}).get("details") or {}
         vote = (feedback or {}).get("vote", 0)
         agent_workflow_tag = details.get("agent_workflow") or "appropriate"
-        # Severity (1-5) and submission weight gate how much the Reflector may
-        # write; route is the user's explicit workflow/skill/both choice.
-        severity = details.get("severity")
+        # Submission weight and route gate how the Reflector writes: weight
+        # scales counter bumps; route is the user's workflow/skill/both choice.
         weight = (feedback or {}).get("weight") or "low"
         feedback_layer = details.get("feedback_layer") or ""
 
@@ -158,7 +157,6 @@ class Reflector:
             agent_final_report=_safe_json_dump(final_report),
             vote=vote,
             agent_workflow_tag=agent_workflow_tag,
-            severity="" if severity is None else severity,
             weight=weight,
             feedback_layer=feedback_layer,
             correct_root_cause=details.get("correct_root_cause") or "",

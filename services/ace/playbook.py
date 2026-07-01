@@ -33,33 +33,18 @@ from .prompts import WORKFLOW_SECTIONS, DOMAIN_SECTIONS
 DEDUP_RATIO = 0.85
 
 # Soft cap on bullets per section. When exceeded, the lowest-net-score bullets
-# are evicted by `refine()`. Kept tight so the Generator reads a compact,
-# high-signal playbook instead of a sprawling list.
-SECTION_SOFT_CAP = 15
+# are evicted by `refine()`.
+SECTION_SOFT_CAP = 30
 
-# Aging eviction: a bullet that has NEVER proved helpful, has been marked
-# neutral at least this many times, and has not changed in STALE_DAYS days is
-# dead weight — refine() drops it so the playbook self-prunes.
+# Aging eviction: a bullet that has NEVER proved helpful and has been marked
+# neutral at least this many times is dead weight — refine() drops it so the
+# playbook self-prunes. Count-based (not wall-clock) so bursty issue volume
+# doesn't prematurely evict useful-but-idle bullets during quiet periods.
 NEUTRAL_EVICT_THRESHOLD = 5
-STALE_DAYS = 30
 
 
 def _now() -> str:
     return datetime.now().astimezone().isoformat(timespec="seconds")
-
-
-def _age_days(ts: str) -> float:
-    """Days elapsed since an ISO timestamp; 0.0 when unparseable."""
-    if not ts:
-        return 0.0
-    try:
-        dt = datetime.fromisoformat(ts)
-    except Exception:
-        return 0.0
-    now = datetime.now().astimezone()
-    if dt.tzinfo is None:
-        dt = dt.astimezone()
-    return (now - dt).total_seconds() / 86400.0
 
 
 @dataclass
@@ -242,7 +227,7 @@ class Playbook:
         Evict bullets that are dead weight:
           - net_score <= -2  (repeatedly harmful), OR
           - never helpful AND marked neutral >= NEUTRAL_EVICT_THRESHOLD times
-            AND untouched for STALE_DAYS days (stale noise),
+            (stale noise),
         then cap each section to `soft_cap`, keeping the highest-net-score
         bullets. Returns the number of bullets removed.
         """
@@ -256,8 +241,7 @@ class Playbook:
                     removed += 1
                     continue
                 if (b.helpful_count == 0
-                        and b.neutral_count >= NEUTRAL_EVICT_THRESHOLD
-                        and _age_days(b.updated_at) >= STALE_DAYS):
+                        and b.neutral_count >= NEUTRAL_EVICT_THRESHOLD):
                     removed += 1
                     continue
                 keep.append(b)

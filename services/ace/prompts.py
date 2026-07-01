@@ -232,12 +232,6 @@ Instructions:
    you MUST return `key_insights: []` and default every `bullet_tags` entry to
    `neutral` unless the bullet demonstrably caused the answer. The user told you
    "good" without saying what was good — do NOT bloat the playbook on guesswork.
- - SEVERITY-AWARE BUDGET: `severity` (1-5, the user's impact rating) caps how
-   much you may write. sev<=2 or empty on a thumbs-down → emit AT MOST 1
-   key_insight, only for a concrete reusable lesson. sev=3 → at most 2. sev>=4
-   → at most 3, and ONLY sev>=4 lessons may target a strong section
-   (`hard_rules` in domain, or `termination_rules`/`loop_prevention` in
-   workflow). Never invent a severity the user did not provide.
  - SCOPE BY ROUTE: `feedback_layer` is the user's explicit routing choice.
    `workflow` → emit ONLY `workflow` insights; `skill` → emit ONLY `domain`
    insights; `both` or empty → either is allowed. Honour it over your own guess.
@@ -268,7 +262,6 @@ USER_VOTE: {vote}   (+1 thumbs-up, -1 thumbs-down, 0 unspecified)
 USER_AGENT_WORKFLOW_TAG: {agent_workflow_tag}
    (one of: appropriate | stopped_too_early | over_investigated
             | loop_or_stuck | wrong_direction | wrong_phase1_skill)
-USER_SEVERITY: {severity}      (1-5 impact rating; empty = not provided)
 FEEDBACK_WEIGHT: {weight}      (high = detailed submission, low = bare vote)
 FEEDBACK_ROUTE: {feedback_layer}   (workflow | skill | both | empty)
 
@@ -427,7 +420,6 @@ def fill_reflector_prompt(**fields):
     fields.setdefault("skill_assessments", "[]")
     fields.setdefault("skill_feedback", "[]")
     fields.setdefault("step_feedback", "[]")
-    fields.setdefault("severity", "")
     fields.setdefault("weight", "low")
     fields.setdefault("feedback_layer", "")
     return REFLECTOR_PROMPT.format(**fields)

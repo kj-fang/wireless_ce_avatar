@@ -59,8 +59,12 @@ from utils import helpers
 #         three time fields are time-only "HH:MM:SS" (e.g. DDD/tracefmt logs)
 #         rather than "MM/DD/YYYY-HH:MM:SS" — ACE can group/interpret them
 #         without ambiguity.
+#   v4  - Removed retired fields from detail records: `severity` (1-5 impact
+#         rating), and the legacy free-form `expected_outcome` /
+#         `general_comment`. None were surfaced by the current UI; readers
+#         should treat them as absent on v4+ records.
 # ---------------------------------------------------------------------------
-RECORD_SCHEMA_VERSION = 3
+RECORD_SCHEMA_VERSION = 4
 
 
 # --- Storage location ----------------------------------------------------
@@ -954,7 +958,6 @@ def record_detail(
     turn_id: str,
     vote: Optional[int] = None,
     issues: Optional[list] = None,
-    expected_outcome: str = "",
     correct_root_cause: str = "",
     correct_conclusion_tag: str = "",
     correct_skill: str = "",
@@ -968,11 +971,9 @@ def record_detail(
     correct_issue_time: str = "",
     used_issue_time: str = "",
     log_has_date: bool = True,
-    severity: Optional[int] = None,
     yaml_modified: bool = False,
     log_path: str = "",
     attach_log: bool = False,
-    general_comment: str = "",          # legacy, kept for back-compat
     domain: str = "",
 ) -> bool:
     """
@@ -997,21 +998,9 @@ def record_detail(
         return False
 
     cleaned_issues = _sanitise_issues(issues)
-    general_comment = (general_comment or "").strip()
-    expected_outcome = (expected_outcome or "").strip()
     correct_root_cause = (correct_root_cause or "").strip()
     correct_skill = (correct_skill or "").strip()
     correct_approach = (correct_approach or "").strip()
-
-    # Severity 1-5 (or None when the user skipped it).
-    severity_val: Optional[int] = None
-    if severity is not None and severity != "":
-        try:
-            s = int(severity)
-            if 1 <= s <= 5:
-                severity_val = s
-        except (TypeError, ValueError):
-            severity_val = None
 
     # Conclusion tag must come from the whitelisted set (or be empty).
     # Accept either domain's tags — the frontend only offers its own set.
@@ -1172,10 +1161,10 @@ def record_detail(
             cleaned_evidence = cleaned_evidence[:80]
 
     has_detail = bool(
-        cleaned_issues or general_comment or expected_outcome
+        cleaned_issues
         or correct_root_cause or correct_conclusion_tag
         or correct_skill or correct_approach or cleaned_evidence
-        or agent_workflow or severity_val is not None
+        or agent_workflow
         or issue_time_problem or correct_issue_time
         or cleaned_skill_feedback or cleaned_step_feedback
     )
@@ -1205,7 +1194,6 @@ def record_detail(
         # be filled.
         "correct_approach":       correct_approach or None,
         "evidence_log_lines":     cleaned_evidence or None,
-        "expected_outcome":       expected_outcome or None,
         # Auto-inferred dispatch hint (skill vs agent vs both).
         "feedback_layer":         feedback_layer or None,
         # Agent-prompt-layer ACE signal (maps to specific prompt sections).
@@ -1227,12 +1215,6 @@ def record_detail(
         # had no dates, so used/correct issue times are time-only "HH:MM:SS"
         # (e.g. DDD logs) — lets ACE group/interpret them without ambiguity.
         "log_has_date":           bool(log_has_date),
-        # Quantitative severity 1-5 — used to prioritise the ACE review queue.
-        "severity":               severity_val,
-        # Legacy free-form field; UI no longer surfaces it, but we keep
-        # accepting + persisting whatever older clients send so historic
-        # data already on disk stays consistent.
-        "general_comment":        general_comment or None,
         "weight": weight,
         "yaml_modified": bool(yaml_modified),
         "attached_log":  bool(attach_log and log_path),
@@ -1266,13 +1248,10 @@ def record_detail(
                     "correct_skill":          record["correct_skill"],
                     "correct_approach":       record["correct_approach"],
                     "evidence_log_lines":     record["evidence_log_lines"],
-                    "expected_outcome":       record["expected_outcome"],
                     "feedback_layer":         record["feedback_layer"],
                     "agent_workflow":         record["agent_workflow"],
                     "skill_feedback":         record["skill_feedback"],
                     "step_feedback":          record["step_feedback"],
-                    "severity":               record["severity"],
-                    "general_comment":        record["general_comment"],
                 }
                 t["feedback"] = fb
                 # Upsert per-skill verdicts into the turn's skill_assessments

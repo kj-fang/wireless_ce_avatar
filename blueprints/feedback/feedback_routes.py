@@ -131,8 +131,7 @@ def detail():
             "comment":    "..."
           },
           ...
-        ],
-        "general_comment": "..."
+        ]
       }
     """
     data = request.get_json(silent=True) or {}
@@ -180,10 +179,9 @@ def detail():
     else:
         log_path = ""
 
-    # New high-ACE-value structured fields (replace the old free-form
-    # `general_comment`). `general_comment` is still forwarded for
-    # back-compat with any older client that hasn't refreshed, but the
-    # new UI no longer surfaces it.
+    # New high-ACE-value structured fields carry all feedback signal; the
+    # old free-form `general_comment` / `expected_outcome` fields have been
+    # retired and are no longer accepted or forwarded.
     raw_evidence = data.get("evidence_log_lines")
     if isinstance(raw_evidence, str):
         # Accept legacy textarea-as-string payloads too.
@@ -219,14 +217,10 @@ def detail():
         correct_issue_time=(data.get("correct_issue_time") or "").strip(),
         used_issue_time=(data.get("used_issue_time") or "").strip(),
         log_has_date=bool(data.get("log_has_date", True)),
-        severity=data.get("severity"),
         yaml_modified=yaml_modified,
         log_path=log_path,
         attach_log=attach_log,
         domain=(data.get("domain") or "").strip(),
-        # Legacy free-form fields forwarded only for old-client back-compat.
-        expected_outcome=(data.get("expected_outcome") or "").strip(),
-        general_comment=(data.get("general_comment") or "").strip(),
     )
     if not ok:
         return jsonify({

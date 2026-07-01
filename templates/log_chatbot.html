@@ -5755,12 +5755,12 @@
                     </div>
                 </div>
                 <div class="fbd-skill-row-detail hidden-row">
-                    <label class="fbd-sub-label">What this skill got wrong</label>
+                    <label class="fbd-sub-label fbd-reason-label">Notes on this skill</label>
                     <textarea class="fbd-skill-reason" rows="2"
-                              placeholder="What it read or concluded incorrectly (optional)"></textarea>
-                    <label class="fbd-sub-label">Correct conclusion</label>
+                              placeholder="Anything it could have done better? (optional)"></textarea>
+                    <label class="fbd-sub-label">What it should have concluded</label>
                     <textarea class="fbd-skill-should" rows="2"
-                              placeholder="What the skill should have concluded (optional)"></textarea>
+                              placeholder="What it should have concluded, if different (optional)"></textarea>
                 </div>`;
             list.appendChild(row);
         });
@@ -5798,12 +5798,12 @@
                 </div>
                 <div class="fbd-verdict-caption" aria-live="polite"></div>
                 <div class="fbd-skill-row-detail hidden-row">
-                    <label class="fbd-sub-label">Why this step was wrong</label>
+                    <label class="fbd-sub-label fbd-reason-label">Notes on this step</label>
                     <textarea class="fbd-skill-reason" rows="2"
-                              placeholder="What went wrong — paste the log line(s) that show it, if you have them (optional)"></textarea>
+                              placeholder="Anything it could have done better? Paste any relevant log line(s) (optional)"></textarea>
                     <label class="fbd-sub-label">What the agent should have done</label>
                     <textarea class="fbd-skill-should" rows="2"
-                              placeholder="The correct action for this step (optional)"></textarea>
+                              placeholder="What the agent should have done, if different (optional)"></textarea>
                 </div>`;
             list.appendChild(row);
         });
@@ -5833,11 +5833,19 @@
         if (next) btn.classList.add('active');
         row.dataset.verdict = next;
         const detail = row.querySelector('.fbd-skill-row-detail');
-        // Only reveal the correction panel for negative verdicts — a "helpful"
-        // step has nothing to correct, so showing the "why wrong" fields would
-        // be misleading.
-        const stepNeedsDetail = (next === 'wrong' || next === 'redundant');
-        if (detail) detail.classList.toggle('hidden-row', !stepNeedsDetail);
+        // Reveal the notes panel for ANY verdict (including 👍 helpful) so a
+        // reviewer can leave an optional note; hide it only when the verdict
+        // is cleared. 👍 uses neutral copy; other verdicts use direct copy.
+        if (detail) {
+            detail.classList.toggle('hidden-row', !next);
+            const lbl = detail.querySelector('.fbd-reason-label');
+            const ta  = detail.querySelector('.fbd-skill-reason');
+            const pos = (next === 'helpful');
+            if (lbl) lbl.textContent = pos ? 'Notes on this step' : 'What went wrong';
+            if (ta)  ta.placeholder  = pos
+                ? 'Anything it could have done better? Paste any relevant log line(s) (optional)'
+                : 'Describe what went wrong — paste the relevant log line(s) if you have them (optional)';
+        }
         _refreshStepCaption(row);
         updateSelectedCount('fbd-step-rows', 'fbd-step-count');
     }
@@ -5863,9 +5871,9 @@
         cap.textContent = active ? (active.dataset.label || '') : '';
     }
 
-    // Toggle a skill's verdict. Only a "wrong" verdict reveals the correction
-    // box (it collects a correction, which doesn't apply to "helpful").
-    // Clicking the active verdict again clears it.
+    // Toggle a skill's verdict. Any verdict (including 👍 helpful) reveals the
+    // notes box so a reviewer can leave an optional note; clicking the active
+    // verdict again clears the verdict and hides the box.
     function setSkillVerdict(btn, verdict) {
         const row = btn.closest('.fbd-skill-row');
         if (!row) return;
@@ -5875,9 +5883,19 @@
         if (next) btn.classList.add('active');
         row.dataset.verdict = next;   // '', 'helpful', or 'wrong'
         const detail = row.querySelector('.fbd-skill-row-detail');
-        // Correction fields ("what went wrong" / "correct conclusion") only
-        // apply to a "wrong" verdict; keep them hidden for "helpful".
-        if (detail) detail.classList.toggle('hidden-row', next !== 'wrong');
+        // Reveal the notes panel for any verdict so a 👍 helpful skill can
+        // still carry an optional note; hide it only when the verdict is
+        // cleared. 👍 uses neutral copy; other verdicts use direct copy.
+        if (detail) {
+            detail.classList.toggle('hidden-row', !next);
+            const lbl = detail.querySelector('.fbd-reason-label');
+            const ta  = detail.querySelector('.fbd-skill-reason');
+            const pos = (next === 'helpful');
+            if (lbl) lbl.textContent = pos ? 'Notes on this skill' : 'What went wrong';
+            if (ta)  ta.placeholder  = pos
+                ? 'Anything it could have done better? (optional)'
+                : 'Describe what went wrong (optional)';
+        }
         updateSelectedCount('fbd-skill-rows', 'fbd-skill-count');
     }
 

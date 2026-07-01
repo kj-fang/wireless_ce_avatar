@@ -205,6 +205,15 @@ def create_app():
     app.config['SESSION_USE_SIGNER'] = True   # sign the session-ID cookie for integrity
     Session(app)
 
+    @app.context_processor
+    def inject_version():
+        return {
+            'app_version': __version__,
+            'app_build_date': BUILD_DATE,
+            'app_git_hash': GIT_HASH,
+            'app_git_branch': GIT_BRANCH,
+        }
+
     socketio = SocketIO(app, async_mode='threading', cors_allowed_origins="*")
 
     # Register blueprints

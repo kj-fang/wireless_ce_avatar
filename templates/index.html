@@ -663,6 +663,23 @@
                 background-position: 200% center;
             }
         }
+        .app-version-badge {
+            position: fixed;
+            right: 14px;
+            bottom: 10px;
+
+            font-size: 15px;
+            color: rgba(0, 0, 0, 0.6);
+
+            background: none;
+            padding: 0;
+            border-radius: 0;
+            box-shadow: none;
+
+            pointer-events: auto;
+            cursor: help;
+        }
+
 
     </style>
 </head>
@@ -1306,5 +1323,12 @@
         // document.getElementById('loading-box').style.display = 'block';
     </script>
 
+    <!-- Tool version badge -->
+    <div class="app-version-badge"
+        tabindex="0"
+        aria-label="Tool version v{{ app_version }} (Build {{ app_build_date }}, Branch {{ app_git_branch }}, Commit {{ app_git_hash }})"
+         title="Build: {{ app_build_date }}&#10;Branch: {{ app_git_branch }}&#10;Commit: {{ app_git_hash }}">
+        v{{ app_version }}
+    </div>
 </body>
 </html>

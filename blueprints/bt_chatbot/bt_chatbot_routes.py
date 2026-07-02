@@ -19,7 +19,7 @@ from utils.issue_time_utils import (
     resolve_issue_time,
     format_issue_time,
 )
-from utils.issue_time_ai import build_issue_time_suggestions, organize_issue_context, realign_times_to_log
+from utils.issue_time_ai import build_issue_time_suggestions, organize_issue_context, realign_times_to_log, find_nearest_event_error
 from services import feedback_service
 
 bt_chatbot_bp = Blueprint("bt_chatbot", __name__, url_prefix="/bt_chatbot")
@@ -29,6 +29,12 @@ _chatbot_instances: dict = {}
 
 # File names recognised as System Event logs (case-insensitive comparison)
 _EVT_FILENAMES = {"raweventviewersystemlogs.evt", "system.evtx"}
+
+# Upper bound on System-Event-Log rows pulled to anchor an AI issue-time
+# suggestion. build_event_log_digest keeps at most 40 rows (by severity) and
+# find_nearest_event_error only needs a representative pool, so this cap keeps
+# /suggest_issue_times fast and bounded even on very large .evtx captures.
+_EVENT_ANCHOR_MAX = 500
 
 
 def _find_evt_path_for_log(log_path: str) -> str:
@@ -381,9 +387,24 @@ def _get_or_create_agent(skip_prime: bool = False) -> WifiLogAgentSystem:
             model=base.model,
             skills=base.skills,   # reuse pre-loaded skills, no disk re-read
         )
-        # Auto-populate log path from last LogParser analysis if available
-        if app_config.last_analyzed_log_path:
-            agent.current_log_path = app_config.last_analyzed_log_path
+        # Auto-populate log path so a freshly-(re)created per-session agent
+        # still knows which log to use. Two sources, in order:
+        #   1. session["chatbot_log_path"] — set by set_log when the user
+        #      loads a BT log DIRECTLY (this is the only record for that flow;
+        #      set_log does NOT touch app_config.last_analyzed_log_path).
+        #   2. app_config.last_analyzed_log_path — the LogParser→chatbot
+        #      (Wi-Fi) hand-off path.
+        # Restoring from the session is what lets the agent survive an
+        # in-memory _chatbot_instances wipe (e.g. Flask debug auto-reload or
+        # a worker restart): without it a directly-loaded BT log produced
+        # "No log file loaded" on the next /chat even though the user had
+        # already set it. Wi-Fi didn't hit this because it had the app_config
+        # fallback.
+        restored_log = (session.get("chatbot_log_path")
+                        or app_config.last_analyzed_log_path or "")
+        if restored_log:
+            agent.current_log_path = restored_log
+
         # Prime with session issue context so every new session is context-aware
         # (skipped when caller will immediately call prime_with_context itself)
         if not skip_prime:
@@ -565,6 +586,11 @@ def suggest_issue_times():
     state in and jsonifies the result out."""
     data = request.get_json(silent=True) or {}
     text = (data.get("text") or "").strip()
+    # The page's event-log dropdowns are forwarded so the AI uses the SAME
+    # Warn+Err selection the user sees (level defaults to 'warning_error',
+    # source defaults to 'all' so we don't silently exclude the relevant bus).
+    source_filter = str(data.get("source_filter") or "all").strip() or "all"
+    level_filter = str(data.get("level_filter") or "warning_error").strip() or "warning_error"
     try:
         agent = _get_or_create_agent()
         log_path = agent.current_log_path or ""
@@ -577,6 +603,29 @@ def suggest_issue_times():
                 log_lines = agent._raw_log_cache or []
         except Exception:
             log_lines = []
+
+        # High-priority anchor: the loaded capture's System Event Log
+        # Warning/Error rows. On huge BT logs the rough raw-log browse alone
+        # is imprecise, so these pre-filtered fault entries strongly anchor
+        # the issue time. Best-effort — any failure just omits the section.
+        event_log_events = []
+        try:
+            evtx_path = _find_evt_path_for_log(log_path) if log_path else ""
+            if evtx_path:
+                from services import event_log_service
+                # Bound the pull so a huge .evtx can't balloon latency/memory:
+                # build_event_log_digest keeps at most 40 rows (picked by
+                # severity) and find_nearest_event_error only needs a
+                # representative pool, so a generous cap is plenty while
+                # staying safe on very large captures.
+                page = event_log_service.get_paged_events(
+                    evtx_path, offset=0, limit=_EVENT_ANCHOR_MAX,
+                    source_filter=source_filter, level_filter=level_filter,
+                )
+                event_log_events = page.get("events", []) if isinstance(page, dict) else []
+        except Exception as _evt_err:
+            print(f"⚠️ BT issue-time event-log anchor skipped: {_evt_err}")
+            event_log_events = []
 
         # An empty description is allowed — the AI can still infer the issue
         # time from the log alone (a description just improves accuracy). Only
@@ -592,7 +641,26 @@ def suggest_issue_times():
             last_ts=last_ts,
             llm_client=getattr(agent, "client", None),
             llm_model=getattr(agent, "model", None),
+            event_log_events=event_log_events,
         )
+
+        # Link the sidebar refine picker to the SAME events the AI used:
+        # attach the nearest Error/Critical event to each AI suggestion so the
+        # frontend can drive "Found a nearby system error" WITHOUT a second
+        # /parse_event_log fetch. Skipped for user-explicit times and undated
+        # (time-only) suggestions where a date-based distance is meaningless.
+        if (event_log_events and isinstance(payload, dict)
+                and not payload.get("user_explicit")):
+            for s in payload.get("suggestions", []) or []:
+                try:
+                    sdt, _ = parse_issue_time_string((s.get("issue_time") or "").strip())
+                    if sdt and sdt.year >= 2000:
+                        ne = find_nearest_event_error(event_log_events, sdt)
+                        if ne:
+                            s["nearest_error"] = ne
+                except Exception:
+                    pass
+
         return jsonify(payload), (200 if payload.get("success") else 503)
     except Exception as e:
         traceback.print_exc()

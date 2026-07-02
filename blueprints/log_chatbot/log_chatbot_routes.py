@@ -16,6 +16,7 @@ from utils.etl_utils import extract_time_from_description
 from utils.issue_time_utils import (
     parse_issue_time_string,
     read_log_time_range,
+    read_log_last_time_only,
     resolve_issue_time,
     format_issue_time,
 )
@@ -512,35 +513,22 @@ def set_log():
         # Log's last parseable timestamp — offered in the "no issue time" prompt
         # as a one-click anchor ("Use log's last time"). Two paths:
         #   * Dated logs: read_log_time_range (MM/DD/YYYY-HH:MM:SS.fff).
-        #   * Time-only logs (DDD/tracefmt): scan the agent's raw cache from
-        #     the tail backwards for the last HH:MM:SS occurrence; emit as
-        #     "HH:MM:SS.mmm" (no date). read_log_time_range's regex doesn't
-        #     match DDD, so without this fallback the button silently no-ops
-        #     for every DDD upload.
+        #   * Time-only logs (DDD/tracefmt): read_log_last_time_only scans the
+        #     file tail for the last HH:MM:SS and emits "HH:MM:SS.mmm" (no
+        #     date). read_log_time_range's regex doesn't match DDD, so without
+        #     this fallback the button silently no-ops for every DDD upload.
         log_last_time = ""
         try:
             _first_ts, _last_ts = read_log_time_range(log_path)
             if _last_ts:
                 log_last_time = format_issue_time(_last_ts)
             elif log_has_date is False:
-                cache = getattr(agent, "_raw_log_cache", None) or []
-                _time_re = re.compile(
-                    r'(?<!\d)(\d{1,2}):(\d{2}):(\d{2})(?:[:.](\d{1,6}))?(?!\d)'
-                )
-                for _line in reversed(cache):
-                    _m = _time_re.search(_line or "")
-                    if not _m:
-                        continue
-                    _hh, _mm, _ss = (int(_m.group(i)) for i in (1, 2, 3))
-                    if not (0 <= _hh <= 23 and 0 <= _mm <= 59 and 0 <= _ss <= 59):
-                        continue
-                    _raw_ms = _m.group(4)
-                    if _raw_ms:
-                        _ms = int(_raw_ms.ljust(6, "0")[:6]) // 1000
-                        log_last_time = f"{_hh:02d}:{_mm:02d}:{_ss:02d}.{_ms:03d}"
-                    else:
-                        log_last_time = f"{_hh:02d}:{_mm:02d}:{_ss:02d}"
-                    break
+                # Time-only (DDD/tracefmt) logs carry no date, so
+                # read_log_time_range's dated-only regex returns no last_ts.
+                # Fall back to a tail-only scan for the final HH:MM:SS — this
+                # keeps the lazy-load invariant (never pulls the whole file
+                # into the agent's analysis cache).
+                log_last_time = read_log_last_time_only(log_path)
         except Exception as _e:
             print(f"⚠️  log_last_time lookup failed: {_e}")
             log_last_time = ""

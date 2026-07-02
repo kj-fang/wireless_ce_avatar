@@ -140,6 +140,79 @@ def read_log_time_range(log_path: str) -> Tuple[Optional[datetime], Optional[dat
     return first_ts, last_ts
 
 
+# Time-of-day matcher for time-only (DDD / tracefmt) logs whose lines carry no
+# date, e.g. "17:07:24:599 ...". The negative look-arounds stop it latching
+# onto digits inside a longer number. Group 4 (optional) is fractional seconds
+# with either ':' or '.' as the separator.
+_TIME_ONLY_RE = re.compile(
+    r'(?<!\d)(\d{1,2}):(\d{2}):(\d{2})(?:[:.](\d{1,6}))?(?!\d)'
+)
+
+
+def _last_time_of_day_in(lines) -> str:
+    """Scan ``lines`` from the tail backwards for the last valid HH:MM:SS[.mmm]
+    time-of-day and return it as a string ("" when none matches)."""
+    for line in reversed(lines):
+        m = _TIME_ONLY_RE.search(line or "")
+        if not m:
+            continue
+        hh, mm, ss = (int(m.group(i)) for i in (1, 2, 3))
+        if not (0 <= hh <= 23 and 0 <= mm <= 59 and 0 <= ss <= 59):
+            continue
+        raw_ms = m.group(4)
+        if raw_ms:
+            ms = int(raw_ms.ljust(6, "0")[:6]) // 1000
+            return f"{hh:02d}:{mm:02d}:{ss:02d}.{ms:03d}"
+        return f"{hh:02d}:{mm:02d}:{ss:02d}"
+    return ""
+
+
+def read_log_last_time_only(log_path: str) -> str:
+    """Last HH:MM:SS[.mmm] time-of-day of a TIME-ONLY (DDD/tracefmt) log.
+
+    For DATED logs use ``read_log_time_range`` — its regex only matches lines
+    that carry a date, so it returns no last timestamp for DDD logs (whose
+    lines are just "HH:MM:SS:mmm ..."). This helper covers that gap: it reads
+    only the file's TAIL (never pulls the whole file into memory), mirroring
+    ``read_log_time_range``'s 64KB seek, and scans backwards for the final
+    time-of-day.
+
+    The tail window escalates (64KB → 1MB → …) only when the initial window
+    holds no parseable time (a single >64KB line, or a long run of
+    continuation lines with no leading time). Bounded and guaranteed to
+    terminate because the read size is capped at the file size. Returns ""
+    when no time-of-day can be found (or the file is missing/unreadable).
+    """
+    if not log_path or not os.path.exists(log_path):
+        return ""
+    try:
+        file_size = os.path.getsize(log_path)
+    except OSError:
+        return ""
+    if file_size <= 0:
+        return ""
+
+    win = 65536
+    try:
+        with open(log_path, "r", encoding="utf-8", errors="replace") as f:
+            while True:
+                read_size = min(file_size, win)
+                f.seek(file_size - read_size)
+                chunk = f.read()
+                lines = chunk.splitlines()
+                # Drop the first (possibly partial) line only when the seek
+                # started mid-file; a full read starts at a real line.
+                if read_size < file_size:
+                    lines = lines[1:]
+                found = _last_time_of_day_in(lines)
+                if found or read_size >= file_size:
+                    return found
+                win *= 16
+    except Exception as e:
+        print(f"[issue_time] read_log_last_time_only failed for {log_path}: {e}")
+        return ""
+
+
 def resolve_issue_time(raw_str: str, log_path: str = "") -> Tuple[Optional[datetime], str]:
     """Resolve a final issue-time datetime from whatever inputs are available.
 

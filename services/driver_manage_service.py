@@ -277,7 +277,7 @@ class DriverManager:
                     except Exception:
                         pass
                 shutil.rmtree(driver_dir, ignore_errors=True)
-            os.makedirs(driver_dir)
+            os.makedirs(driver_dir, exist_ok=True)
 
         os_type = self.get_windows_type()
 

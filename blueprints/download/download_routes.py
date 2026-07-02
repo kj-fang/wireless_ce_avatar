@@ -16,7 +16,7 @@ def register_socketio_handlers(socketio):
 
     @socketio.on('cancel_download', namespace='/progress')
     def socketio_cancel_download():
-        return handle_cancel_download(socketio)
+        return handle_cancel_download(socketio, request.sid)
 #------------REGISTER SOCKETIO-------------#
 
 @download_bp.route('/cancel_download', methods=['POST'])
@@ -27,10 +27,10 @@ def cancel_download_route():
     app_config.driver_manager.cancel_downloads()
     return ('', 204)
 
-def handle_cancel_download(socketio):
+def handle_cancel_download(socketio, client_sid):
     driver_manager = app_config.driver_manager
     driver_manager.cancel_downloads()
-    socketio.emit('download_cancelled', {}, namespace='/progress')
+    socketio.emit('download_cancelled', {}, namespace='/progress', to=client_sid)
 
 def handle_start_download(socketio):
     driver_manager = app_config.driver_manager

@@ -922,20 +922,33 @@ CORRECT_CONCLUSION_TAGS = {
 # above so each chatbot offers domain-appropriate options; BT submissions
 # land in the bt_-prefixed feedback streams regardless.
 BT_CONCLUSION_TAGS = {
-    "FW_FATAL_EXCEPTION",        # FATAL/SYSTEM EXCEPTION in controller (FW assert)
-    "FW_DOWNLOAD_FAILURE",       # FW image / SFI burst download failed
-    "HW_ERROR",                  # HardwareError / HW reset failure
-    "DEVICE_YELLOW_BANG",        # device lost / Code 43 / YB
-    "SURPRISE_REMOVAL",          # surprise removal / device disappeared
-    "RECOVERY_FAILURE",          # PLDR rejected / recovery disabled / no recovery
-    "POWER_STATE_ISSUE",         # D0/D3 power-state transition issue
-    "SIGNATURE_VERIFY_FAILURE",  # secure boot / signature verification failed
-    "TRANSPORT_ERROR",           # USB / PCIe transport-level error
-    "DRIVER_INIT_FAILURE",       # driver / adapter init failure (shared w/ WiFi)
-    "COEX_INTERFERENCE",         # BT/Wi-Fi coexistence / RF interference
-    "PAIRING_CONNECTION",        # pairing / connection / HCI command failure
-    "AUDIO_QUALITY",             # A2DP / audio streaming quality
+    # ── Current BT triage categories (offered by the frontend dropdown) ──
+    "DRIVER_INSTALLATION",       # driver installation problem
+    "FIRMWARE_CRASH",            # firmware crash (UMAC / LMAC)
+    "DRIVER_INIT_FAILURE",       # driver / device initialization failure
+    "LE_AUDIO_FAILURE",          # MIC & audio of LE Audio connection failure
+    "CLASSIC_AUDIO_FAILURE",     # MIC & audio of Classic Audio connection failure
+    "AUDIO_NOISE",               # audio noise
+    "WAKE_RESUME_DELAY",         # Sx wake / resume delay
+    "MSFT_AUDIO_BT",             # MSFT audio / Bluetooth problem
+    "BIOS_DSM_UEFI",             # BIOS DSM / UEFI configuration
+    "REGULATORY_SETTING",        # regulatory setting
+    "RF_SIGNAL_ISSUE",           # RF / signal issue
+    "HW_DESIGN_NOISE",           # HW design or noise problem
     "OTHER",
+    # ── Legacy values still accepted so older records keep validating ──
+    "FW_FATAL_EXCEPTION",
+    "FW_DOWNLOAD_FAILURE",
+    "HW_ERROR",
+    "DEVICE_YELLOW_BANG",
+    "SURPRISE_REMOVAL",
+    "RECOVERY_FAILURE",
+    "POWER_STATE_ISSUE",
+    "SIGNATURE_VERIFY_FAILURE",
+    "TRANSPORT_ERROR",
+    "COEX_INTERFERENCE",
+    "PAIRING_CONNECTION",
+    "AUDIO_QUALITY",
 }
 
 # Validation accepts EITHER domain's tags. Each frontend only ever offers
@@ -1070,6 +1083,17 @@ def record_detail(
                 continue
             what_wrong = (sf.get("what_wrong") or "").strip()
             should_be = (sf.get("should_be") or "").strip()
+            # A thumbs-up (helpful) skill's free text is a POSITIVE note, not a
+            # correction. Keep it OUT of what_wrong/should_be so the ACE
+            # Reflector - which reads those two as authoritative per-skill
+            # KNOWLEDGE corrections - never mistakes praise for a fix. The note
+            # is preserved verbatim under `note` for offline training only and
+            # is never turned into a free_text_issues / playbook edit.
+            note = ""
+            if assess == "helpful":
+                note = " ".join(x for x in (what_wrong, should_be) if x).strip()
+                what_wrong = ""
+                should_be = ""
             ev: list[str] = []
             raw_ev = sf.get("evidence_lines")
             if isinstance(raw_ev, list):
@@ -1083,6 +1107,7 @@ def record_detail(
                 "assessment": assess,
                 "what_wrong": what_wrong or None,
                 "should_be": should_be or None,
+                "note": note or None,
                 "evidence_lines": ev or None,
             })
             skill_assessment_rows.append({"skill_id": sid, "assessment": assess})
@@ -1136,6 +1161,15 @@ def record_detail(
             step_label = (stf.get("step_label") or "").strip() or None
             what_wrong = (stf.get("what_wrong") or "").strip()
             should_be = (stf.get("should_be") or "").strip()
+            # A thumbs-up (helpful) step's free text is positive reinforcement,
+            # not a correction. Keep it OUT of what_wrong/should_be so the
+            # Reflector never routes praise into the workflow playbook as a
+            # "fix". The note is preserved under `note` for offline training.
+            note = ""
+            if assess == "helpful":
+                note = " ".join(x for x in (what_wrong, should_be) if x).strip()
+                what_wrong = ""
+                should_be = ""
             ev: list[str] = []
             raw_ev = stf.get("evidence_lines")
             if isinstance(raw_ev, list):
@@ -1151,6 +1185,7 @@ def record_detail(
                 "assessment": assess,
                 "what_wrong": what_wrong or None,
                 "should_be": should_be or None,
+                "note": note or None,
                 "evidence_lines": ev or None,
             })
             if ev:

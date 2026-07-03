@@ -27,6 +27,9 @@ connection_flow:
     - "Best Candidate"
     - "WoWLAN is active!!!"
     - " ---------- SUSPEND FLOW FINISHED ----------"
+    - "host does not have the NIC ownership semaphore"
+    - "NIC ownership is at"
+    - "[msysAcquireOwnershipApi]"
     # - "Got Command"
   exclusive:
     - "SCAN_REQUEST"
@@ -51,32 +54,67 @@ connection_flow:
     WIFI driver connection flow are listed below along with the log examples.
     If firmware crash UMAC/LMAC//TCM errors are present in the failed log, prioritize those fields in Key evidence and include the full UMAC/TCM blocks as raw lines, including: driver, firmware version, legacy_alon_nic_identify, rtStatus, LOGPC, timestamp(s), and the full quoted UMAC/LMAC/TCM blocks.
 
-    1. Device Initialization (MAC/PHY and device ID lines).
+
+    1. Ownership check (ownership lines: host does not have the NIC ownership semaphore, NIC ownership is at, [msysAcquireOwnershipApi]). 
+    - If the log contains: "HOST owns NIC"
+      For example: 01/12/2026-07:59:03.398 [22] [MMACSYS] [SPECIAL] [msysAcquireOwnershipApi]:<< :(3429) - HOST owns NIC. skip acquireOwnership flow
+      Then conclude:
+        - Ownership = Host
+        - Host Owns NIC = Yes
+      Include the matching log line as evidence.
+    - If BOTH of the following are found:
+      a. "NIC ownership is at ME"
+      Example:
+      06/22/2026-20:09:21.540 [1] [AMT] [SPECIAL] [amtWimaAgentWakeMePeriodicPollApi]: NIC ownership is at ME - WAIT 11 seconds for ME to release ownership
+      b. "host does not have the NIC ownership semaphore"
+      Example:
+      06/22/2026-20:09:32.548 [7] [MMACSYS] [SPECIAL] [msysRunWakeMeApi]: host does not have the NIC ownership semaphore
+      Then conclude:
+      - Ownership = ME
+      - Host Owns NIC = No
+      Include both matching log lines as evidence.
+    - If neither of the above conditions is met:
+      - Ownership = Unknown
+      - Host Owns NIC = Unknown
+      Include any ownership-related log lines found as evidence.
+    - Priority:
+      - "HOST owns NIC" has the highest priority and overrides other ownership-related messages.
+      - Otherwise, if both "NIC ownership is at ME" and "host does not have the NIC ownership semaphore" are present, classify ownership as ME.
+      - Otherwise, classify ownership as Unknown.
+    - Output:
+      Ownership Check:
+      - Ownership: Host / ME / Unknown
+      - Host Owns NIC: Yes / No / Unknown
+      Evidence:
+      - <exact matching log line(s)>
+
+
+    2. Device Initialization (MAC/PHY and device ID lines).
     - The device hardware is identified and initialized with MAC and PHY configurations.
     - Log should contains the information below: `
       [ALON         ][12] [S] legacy_alon_nic_identify [186]: HW identification: macId = 0x47, phyId = 0x112, macStep = 0x2, phyStep = 0x2, phyDash = 0x0, phyFlavor = 0x0, isPhyCdb = 0x0, isPhyJacket = 0x0, deviceId = 0x272b
       [ALON         ][12] [S] legacy_alon_nic_identify Identified GALE_C
       [ALON         ][12] [S] legacy_alon_nic_identify GALE_C: MAC_ID: 0x47, MAC_STEP: MAC_STEP_C, PHY: FMP2 0x112, PHY_STEP: RADIO_STEP_C
 
-    2-1. OS issue to SCAN and driver determined MCC according to country info from APs' beacons. check skill "drs_mcc_analysis" for more details.
+    3-1. OS issue to SCAN and driver determined MCC according to country info from APs' beacons. check skill "drs_mcc_analysis" for more details.
       [prvLarStoreCurrentMcc]: : LarEnable: 1, CurrMCC: 0x5553 (US), UEFI exist: 0, bWfaPunctEnabledUSA: 0, set bEhtPuncturingRegulatoryValid 1
 
-    2-2. OS issue to Connect Request Configuration (CONNECT_REQ, AUTH[], CIPHER[]).
+    3-2. OS issue to Connect Request Configuration (CONNECT_REQ, AUTH[], CIPHER[]).
       [OSC]:Got Command (M1 Message) TASK_CONNECT[6][0x6] (p-0x0, BSS, TransId-63[0x3F])
 
-    3. AP Selection (candidate AP lines: band, channel, BW, mode, RSSI, tput, MAC addresses, grading metrics).
+    4. AP Selection (candidate AP lines: band, channel, BW, mode, RSSI, tput, MAC addresses, grading metrics).
     - Log should contains the information below:`
       [AP SELECTION ][BC 0]: grade:8506724 band:2, channel:37, BW:320MHz, mode:EHT, RSSI:-45, tput:6226560 Address = 08:BF:B8:8D:7C:79
       [AP SELECTION ][BC 1]: grade:3819795 band:1, channel:36, BW:160MHz, mode:EHT, RSSI:-44, tput:2882400 Address = BA:BF:B8:8D:7C:75
 
-    4. Attempting Connection (ATTEMPT_TO_CONNECT lines for each link).
+    5. Attempting Connection (ATTEMPT_TO_CONNECT lines for each link).
     - List all the ATTEMPT_TO_CONNECT for device to connect to the selected AP, first on the primary link (channel 37, band 2) and then on the secondary link (channel 36, band 1).
     - if there was only one ATTEMP_TO_CONNECT, this is single link WiFi7 connection. it would be multi links connection if there were over two ATTEMP_TO_CONNECT showed in logs
     - Log should contains the information below:
       [ATTEMPT_TO_CONNECT] to MLD:08:BF:B8:8D:7C:79 Ssid:ASUS_MLO band:2, Ch:37 Rssi:-45, assocLinkId: 0, Bssid:  Address = 08:BF:B8:8D:7C:79'
       [ATTEMPT_TO_CONNECT] to MLD:08:BF:B8:8D:7C:79 Ssid:ASUS_MLO band:1, Ch:36 Rssi:-44, assocLinkId: 1, Bssid:  Address = BA:BF:B8:8D:7C:75'
 
-    5. Authentication and Association (AUTH_REQ/AUTH_RSP, ASSOC_REQ/ASSOC_RSP, EAPOL messages, 4‑way handshake lines)
+    6. Authentication and Association (AUTH_REQ/AUTH_RSP, ASSOC_REQ/ASSOC_RSP, EAPOL messages, 4‑way handshake lines)
       - Log should contain the information below:`
         [CNCT_FLOW    ][12] [S] AUTH_REQ - sent to:        "ASUS_BE98_MLO" CC:28:AA:5B:1A:09, channel = 37, band = 6_7GHz
         [CNCT_FLOW    ][11] [S] AUTH_RSP - received  from:  "ASUS_BE98_MLO" CC:28:AA:5B:1A:09, channel = 37, band = 6_7GHz
@@ -86,8 +124,8 @@ connection_flow:
         [CNCT_FLOW    ][11] [S] EAPOL TRANSMIT
         [CNCT_FLOW    ][11] [S] EAPOL RECEIVED
         [CNCT_FLOW    ][12] [S] EAPOL TRANSMIT
-    6. Connection Establishment (WDI_IND_ASSOC_RESULT or similar success/failure lines).
-    7. Link and Resource Management (resource allocation and CCR_SM_* transitions).
+    7. Connection Establishment (WDI_IND_ASSOC_RESULT or similar success/failure lines).
+    8. Link and Resource Management (resource allocation and CCR_SM_* transitions).
 
 regulatory_country_code_determination:
   name: "Regulatory Country Code Determination"

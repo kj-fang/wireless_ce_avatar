@@ -202,14 +202,25 @@ class CaseService:
 
     @staticmethod
     def _finalize_case_context(case_context: CaseContext) -> None:
-        subcategory = case_context.subcategory or ""
-        case_context.wifi_or_bt = "wifi" if "wifi" in subcategory.lower() else "bt"
+        sub = (case_context.subcategory or "").lower()
+        has_wifi = "wifi" in sub
+        has_bt = "bt" in sub
+        if has_wifi and has_bt:
+            case_context.wifi_or_bt = "wifi_bt"
+        elif has_wifi:
+            case_context.wifi_or_bt = "wifi"
+        else:
+            case_context.wifi_or_bt = "bt"
     
 
     @staticmethod
     def load_case_summary_prompt(wifi_or_bt):
-
-        prompt_filename = f"prompt_{wifi_or_bt.lower()}.py"
+        # Mixed Wi-Fi + BT cases share the Wi-Fi summary prompt (no dedicated
+        # prompt_wifi_bt.py template ships with the repo).
+        key = (wifi_or_bt or "").lower()
+        if key == "wifi_bt":
+            key = "wifi"
+        prompt_filename = f"prompt_{key}.py"
         target_prompt = os.path.join(app_config.prompt_dir, prompt_filename)
 
         if not os.path.exists(target_prompt):

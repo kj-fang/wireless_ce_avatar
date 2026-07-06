@@ -166,8 +166,12 @@ def _is_bt_etl(file_path: str) -> bool:
     name = os.path.basename(file_path).lower()
     return name.startswith(('ibtpci-', 'ibtusb-')) and name.endswith('.etl')
 
-def _infer_local_upload_case_type(bt_files) -> str:
-    if bt_files:
+def _infer_local_upload_case_type(bt_files, wifi_files=None) -> str:
+    has_bt = bool(bt_files)
+    has_wifi = bool(wifi_files)
+    if has_bt and has_wifi:
+        return 'wifi_bt'
+    if has_bt:
         return 'bt'
     return 'wifi'
 
@@ -259,8 +263,11 @@ def _process_local_analysis(source_path: str, source_dir: str, file_path: str,
         _cb(60, f'Extraction complete. Found {total} file{"s" if total != 1 else ""}.')
 
         local_case_nbr = f'local_upload_{timestamp}'
-        # Only consider bt_files for case type inference since wifi_files may be present in both wifi and bt cases
-        local_case_type = _infer_local_upload_case_type(bt_files)
+        # Detect wifi-only, bt-only or mixed. The old comment claimed wifi_files
+        # can appear in bt cases so only bt_files should be trusted, but that
+        # collapsed genuinely mixed uploads (both wifi and bt present) to
+        # 'bt' and hid the wifi table on /download_result.
+        local_case_type = _infer_local_upload_case_type(bt_files, wifi_files)
 
         session['case_context'] = CaseContext(
             case_nbr=local_case_nbr,

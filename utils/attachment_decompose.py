@@ -127,7 +127,17 @@ def extract_archive(archive, extract_to, progress_cb=None, cancel_event=None):
             raise ExtractionCancelled()
 
         filename = member.filename.strip().replace('/', os.sep)
+        # Prevent zip-slip / absolute-path extraction
+        if os.path.isabs(filename) or filename.startswith('..' + os.sep) or ('..' + os.sep) in filename:
+            print(f"Skipping suspicious archive member path: {member.filename!r}")
+            continue
+
         dst_path = os.path.normpath(os.path.join(extract_to, filename))
+        extract_root = os.path.normcase(os.path.abspath(extract_to))
+        dst_abs = os.path.normcase(os.path.abspath(dst_path))
+        if not (dst_abs == extract_root or dst_abs.startswith(extract_root + os.sep)):
+            print(f"Skipping suspicious archive member path: {member.filename!r}")
+            continue
         dst_path = to_long_path(dst_path)
 
         # Fix a legacy typo in some autologger builds
@@ -135,7 +145,6 @@ def extract_archive(archive, extract_to, progress_cb=None, cancel_event=None):
             dst_path = dst_path.replace("AutoLoggParser", "AutoLogParser")
 
         dst_dir = os.path.dirname(dst_path)
-        wrote_any = False
         try:
             os.makedirs(dst_dir, exist_ok=True)
             with archive.open(member) as src, open(dst_path, 'wb') as dst:
@@ -146,11 +155,11 @@ def extract_archive(archive, extract_to, progress_cb=None, cancel_event=None):
                     if not chunk:
                         break
                     dst.write(chunk)
-                    wrote_any = True
         except ExtractionCancelled:
-            # Best-effort cleanup of the partial file we were streaming into
+            # open('wb') creates the file before any write, so a cancel between
+            # open and the first chunk still leaves a zero-byte file to clean up.
             try:
-                if wrote_any and os.path.exists(dst_path):
+                if os.path.exists(dst_path):
                     os.remove(dst_path)
             except OSError:
                 pass

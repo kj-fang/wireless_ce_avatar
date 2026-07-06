@@ -10,6 +10,12 @@ import threading
 
 from utils.helpers import to_long_path
 
+
+class ExtractionCancelled(Exception):
+    """Raised by extract_archive / unzip_file / process_single_zip when the
+    caller-supplied cancel_event is set. Callers should treat it as a
+    user-initiated cancellation, not a real error."""
+
 def find_compressed_files(directory):
     """Find all compressed files (.zip, .rar, .7z) in directory recursively."""
     compressed_files = []
@@ -98,51 +104,67 @@ def dedup_by_capture_signature(file_paths):
     return [chosen[sig] for sig in order]
         
 
-def extract_archive(archive, extract_to, progress_cb=None):
+def extract_archive(archive, extract_to, progress_cb=None, cancel_event=None):
     """Extract archive contents to target directory.
 
     progress_cb: optional callable(pct: int, basename: str) called after each
                  successfully extracted file, where pct is 0-100.
+    cancel_event: optional threading.Event; checked between files AND between
+                  1 MB chunks of each file, raises ExtractionCancelled when set.
+                  Partial output files are removed on cancel.
+
+    Streaming is used instead of archive.extract() so a single large member
+    (e.g. a multi-GB MEMORY.DMP inside a .zip) can still be cancelled without
+    waiting for zlib to finish it.
     """
+    _CHUNK = 1024 * 1024  # 1 MB
     members = [m for m in archive.infolist() if not m.is_dir()]
     total = max(len(members), 1)
     print(f"Extracting to {extract_to} ({total} items)")
-    
-    with tempfile.TemporaryDirectory() as temp_dir:
-        for i, member in enumerate(members):
-            filename = member.filename.strip().replace('/', os.sep)
-            
+
+    for i, member in enumerate(members):
+        if cancel_event is not None and cancel_event.is_set():
+            raise ExtractionCancelled()
+
+        filename = member.filename.strip().replace('/', os.sep)
+        dst_path = os.path.normpath(os.path.join(extract_to, filename))
+        dst_path = to_long_path(dst_path)
+
+        # Fix a legacy typo in some autologger builds
+        if "AutoLoggParser" in dst_path:
+            dst_path = dst_path.replace("AutoLoggParser", "AutoLogParser")
+
+        dst_dir = os.path.dirname(dst_path)
+        wrote_any = False
+        try:
+            os.makedirs(dst_dir, exist_ok=True)
+            with archive.open(member) as src, open(dst_path, 'wb') as dst:
+                while True:
+                    if cancel_event is not None and cancel_event.is_set():
+                        raise ExtractionCancelled()
+                    chunk = src.read(_CHUNK)
+                    if not chunk:
+                        break
+                    dst.write(chunk)
+                    wrote_any = True
+        except ExtractionCancelled:
+            # Best-effort cleanup of the partial file we were streaming into
             try:
-                archive.extract(member, path=temp_dir)
-                src_path = os.path.join(temp_dir, filename)
-                dst_path = os.path.normpath(os.path.join(extract_to, filename))
+                if wrote_any and os.path.exists(dst_path):
+                    os.remove(dst_path)
+            except OSError:
+                pass
+            raise
+        except Exception as e:
+            print(f"Error extracting {filename}: {e}")
+            continue
 
-                # Use the shared helper to apply the Windows extended-length path
-                # prefix, bypassing the 260-char MAX_PATH limit (handles UNC paths too).
-                dst_path = to_long_path(dst_path)
+        if progress_cb:
+            try:
+                progress_cb(int((i + 1) / total * 100), os.path.basename(filename))
+            except Exception:
+                pass  # progress updates are best-effort; never abort extraction
 
-                if not os.path.isfile(src_path):
-                    continue
-                    
-                dst_dir = os.path.dirname(dst_path)
-                os.makedirs(dst_dir, exist_ok=True)
-                
-                # Fix naming issue
-                if "AutoLoggParser" in dst_path:
-                    dst_path = dst_path.replace("AutoLoggParser", "AutoLogParser")
-                    
-                shutil.move(src_path, dst_path)
-                
-            except Exception as e:
-                print(f"Error extracting {filename}: {e}")
-                continue
-
-            if progress_cb:
-                try:
-                    progress_cb(int((i + 1) / total * 100), os.path.basename(filename))
-                except Exception:
-                    pass  # progress updates are best-effort; never abort extraction
-    
     return extract_to
 
 def _find_7zip_executable():
@@ -196,12 +218,14 @@ def _fake_progress_worker(progress_cb, stop_event):
                 break
 
 
-def unzip_file(file_path, extract_to, already_downloaded, progress_cb=None):
+def unzip_file(file_path, extract_to, already_downloaded, progress_cb=None, cancel_event=None):
     """Extract compressed file to destination.
 
     progress_cb: optional callable(pct: int, basename: str) – forwarded to
                  extract_archive for .zip/.rar; for .7z a single 100% call is
                  made after extractall completes.
+    cancel_event: optional threading.Event forwarded to extract_archive for
+                  per-file cancellation of .zip/.rar-fallback extraction.
     """
     if already_downloaded and len(os.listdir(extract_to)) > 0:
         return extract_to
@@ -216,7 +240,7 @@ def unzip_file(file_path, extract_to, already_downloaded, progress_cb=None):
     try:
         if lower_path.endswith('.zip'):
             with zipfile.ZipFile(file_path, 'r') as archive:
-                return extract_archive(archive, extract_to, progress_cb=progress_cb)
+                return extract_archive(archive, extract_to, progress_cb=progress_cb, cancel_event=cancel_event)
         elif lower_path.endswith('.rar'):
             # Prefer 7-Zip CLI for RAR (rarfile requires unrar binary which is often absent).
             stop_event = threading.Event()
@@ -239,11 +263,14 @@ def unzip_file(file_path, extract_to, already_downloaded, progress_cb=None):
                     except Exception:
                         pass
                 return extract_to
+            # If 7-Zip was killed by a cancel signal, don't try the rarfile fallback.
+            if cancel_event is not None and cancel_event.is_set():
+                raise ExtractionCancelled()
             # Fall back to rarfile if 7-Zip is not installed.
             print('7-Zip unavailable, trying rarfile (requires unrar).')
             try:
                 with rarfile.RarFile(file_path, 'r') as archive:
-                    return extract_archive(archive, extract_to, progress_cb=progress_cb)
+                    return extract_archive(archive, extract_to, progress_cb=progress_cb, cancel_event=cancel_event)
             except Exception as rar_err:
                 print(f'rarfile also failed: {rar_err}')
         elif lower_path.endswith('.7z'):
@@ -269,18 +296,23 @@ def unzip_file(file_path, extract_to, already_downloaded, progress_cb=None):
                     pass
             return extract_to
 
+    except ExtractionCancelled:
+        raise
     except Exception as e:
         print(f"Extraction failed for {file_path}: {e}")
         
     return extract_to
 
-def process_single_zip(zip_path, download_path_tmp, already_downloaded, progress_cb=None):
+def process_single_zip(zip_path, download_path_tmp, already_downloaded, progress_cb=None, cancel_event=None):
     """Process ZIP file and categorize extracted files.
 
     progress_cb: optional callable(pct: int, basename: str) – forwarded to
                  unzip_file for the main (first) archive only.  Nested archives
                  discovered inside it do not report per-file progress so the bar
                  never goes backwards.
+    cancel_event: optional threading.Event; checked between archives and
+                  forwarded down to per-file extraction. Raises
+                  ExtractionCancelled when set.
     """
     folder_name = os.path.splitext(os.path.basename(zip_path))[0].replace(" ", "_")
     download_path = os.path.join(download_path_tmp, folder_name)
@@ -293,6 +325,8 @@ def process_single_zip(zip_path, download_path_tmp, already_downloaded, progress
     is_first_archive = True
     
     while unzip_pending:
+        if cancel_event is not None and cancel_event.is_set():
+            raise ExtractionCancelled()
         file_to_unzip = unzip_pending.pop(0)
         
         if file_to_unzip in processed_files:
@@ -304,7 +338,9 @@ def process_single_zip(zip_path, download_path_tmp, already_downloaded, progress
         is_first_archive = False
             
         try:
-            extract_to = unzip_file(file_to_unzip, download_path, already_downloaded, progress_cb=cb)
+            extract_to = unzip_file(file_to_unzip, download_path, already_downloaded, progress_cb=cb, cancel_event=cancel_event)
+        except ExtractionCancelled:
+            raise
         except Exception:
             continue
             

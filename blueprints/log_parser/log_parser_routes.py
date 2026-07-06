@@ -6,6 +6,7 @@ import hmac
 import logging
 import re
 import shutil
+import stat
 import threading
 import time
 import traceback
@@ -40,6 +41,221 @@ file_manager_service = FileManagerService()
 _sendto_session_store: dict = {}   # token -> (inserted_at, session_dict)
 _sendto_session_lock  = threading.Lock()
 _SENDTO_TOKEN_TTL     = 300  # seconds – tokens expire after 5 minutes
+
+# ── Cooperative cancellation for /upload_local_analysis ──────────────────────
+# Maps upload_id -> {'cancel_event': threading.Event}. The event is polled at
+# stage boundaries inside _process_local_analysis. When cancel is signalled we
+# also terminate known parser subprocesses (tracefmt.exe, 7z.exe, DDDPlayer.exe,
+# ibtdrvlogparser.exe) spawned by this Python process, so blocking .wait() /
+# subprocess.run() calls return promptly and the worker thread reaches its
+# next checkpoint.
+_active_local_uploads: dict = {}
+_active_local_uploads_lock = threading.Lock()
+
+# Executable names (lowercase) that /cancel_local_analysis is allowed to kill.
+# Do NOT include chrome.exe or TextAnalysisTool.NET.exe — those are viewers
+# owned by the app, not part of the parse.
+_CANCELABLE_CHILD_NAMES = frozenset({
+    '7z.exe', '7za.exe',
+    'tracefmt.exe',
+    'dddplayer.exe',
+    'ibtdrvlogparser.exe',
+})
+
+
+class _LocalAnalysisCancelled(Exception):
+    """Raised inside _process_local_analysis when the user cancels the upload."""
+
+
+def _register_local_upload(upload_id: str) -> threading.Event:
+    ev = threading.Event()
+    with _active_local_uploads_lock:
+        _active_local_uploads[upload_id] = {'cancel_event': ev}
+    return ev
+
+
+def _unregister_local_upload(upload_id: str) -> None:
+    with _active_local_uploads_lock:
+        _active_local_uploads.pop(upload_id, None)
+
+
+def _signal_cancel_local_upload(upload_id: str) -> bool:
+    with _active_local_uploads_lock:
+        entry = _active_local_uploads.get(upload_id)
+    if not entry:
+        return False
+    entry['cancel_event'].set()
+    return True
+
+
+def _wait_for_cancel_children_to_exit(timeout: float = 10.0) -> None:
+    """Best-effort poll until no whitelisted parser subprocesses remain, so
+    Windows releases file handles before we delete the extraction folder.
+    Silently returns after `timeout` seconds regardless.
+    """
+    try:
+        import psutil
+    except ImportError:
+        return
+    try:
+        self_proc = psutil.Process(os.getpid())
+    except psutil.Error:
+        return
+    deadline = time.time() + timeout
+    while time.time() < deadline:
+        try:
+            still_alive = any(
+                c.name().lower() in _CANCELABLE_CHILD_NAMES
+                for c in self_proc.children(recursive=True)
+            )
+        except psutil.Error:
+            return
+        if not still_alive:
+            return
+        time.sleep(0.2)
+
+
+def _force_rmtree(path: str, retries: int = 6, delay: float = 0.5) -> bool:
+    """Aggressively delete a directory tree. Handles Windows extended-length
+    paths, read-only bits, and files whose handles are only just being
+    released. Returns True if the path is gone at the end. Never raises.
+
+    Strategy per pass:
+      1. shutil.rmtree with an onerror callback that clears the read-only bit.
+      2. If anything is left, manually walk bottom-up and unlink each entry
+         using the \\?\-prefixed path so deeply nested files past MAX_PATH
+         still get removed.
+    Retries the whole cycle a few times so late-releasing OS handles (AV
+    scanners, Explorer previews, indexers) get another shot.
+    """
+    def _on_error(func, target, _exc_info):
+        try:
+            os.chmod(target, stat.S_IWRITE)
+        except OSError:
+            pass
+        try:
+            func(target)
+        except OSError:
+            pass
+
+    def _manual_walk_delete(root: str) -> None:
+        # Bottom-up walk using long-path form so deep trees are reachable.
+        long_root = helpers.to_long_path(root)
+        for dirpath, dirnames, filenames in os.walk(long_root, topdown=False):
+            for name in filenames:
+                fp = os.path.join(dirpath, name)
+                try:
+                    os.chmod(fp, stat.S_IWRITE)
+                except OSError:
+                    pass
+                try:
+                    os.remove(fp)
+                except OSError:
+                    pass
+            for name in dirnames:
+                dp = os.path.join(dirpath, name)
+                try:
+                    os.rmdir(dp)
+                except OSError:
+                    pass
+        try:
+            os.rmdir(long_root)
+        except OSError:
+            pass
+
+    for _ in range(retries):
+        if not os.path.exists(path):
+            return True
+        long_path = helpers.to_long_path(path)
+        try:
+            shutil.rmtree(long_path, onerror=_on_error)
+        except OSError:
+            pass
+        if not os.path.exists(path):
+            return True
+        # rmtree left something behind — force a manual per-file pass.
+        _manual_walk_delete(path)
+        if not os.path.exists(path):
+            return True
+        time.sleep(delay)
+
+    # Last-resort silent pass so we never leak an exception on stuck files.
+    shutil.rmtree(helpers.to_long_path(path), ignore_errors=True)
+    return not os.path.exists(path)
+
+
+def _delete_cancel_cleanup_paths(cleanup_paths, upload_id: str) -> None:
+    """Force-delete every path registered during a cancelled upload. Runs as
+    the LAST step of the cancel flow, after subprocess kills have settled and
+    the registry entry has been removed. Deletes the whole registered folder
+    regardless of whether individual files inside were fully extracted.
+    """
+    for path in cleanup_paths:
+        if not path or not os.path.exists(path):
+            continue
+        try:
+            if os.path.isdir(path):
+                removed = _force_rmtree(path)
+                if removed:
+                    logging.info("[upload_local_analysis] force-removed %s on cancel (upload_id=%s)",
+                                 path, upload_id)
+                else:
+                    logging.warning("[upload_local_analysis] could not fully remove %s after retries (upload_id=%s)",
+                                    path, upload_id)
+            else:
+                try:
+                    os.chmod(path, stat.S_IWRITE)
+                except OSError:
+                    pass
+                os.remove(path)
+                logging.info("[upload_local_analysis] removed file %s on cancel (upload_id=%s)",
+                             path, upload_id)
+        except OSError as e:
+            logging.warning("[upload_local_analysis] failed to clean %s: %s", path, e)
+
+
+def _raise_if_cancelled(cancel_event) -> None:
+    if cancel_event is not None and cancel_event.is_set():
+        raise _LocalAnalysisCancelled()
+
+
+def _kill_local_analysis_children_until_done(upload_id: str) -> None:
+    """Terminate whitelisted parser subprocesses spawned by this app until the
+    worker thread for `upload_id` finishes (i.e. it removes itself from the
+    registry). Runs in its own daemon thread so /cancel_local_analysis can
+    return immediately.
+    """
+    try:
+        import psutil
+    except ImportError:
+        logging.warning("psutil not available; cannot force-terminate parser children.")
+        return
+
+    try:
+        self_proc = psutil.Process(os.getpid())
+    except psutil.Error as e:
+        logging.warning("Cannot open own process for child kill: %s", e)
+        return
+
+    deadline = time.time() + 60  # safety cap: stop polling after 60 s
+    while time.time() < deadline:
+        with _active_local_uploads_lock:
+            still_active = upload_id in _active_local_uploads
+        if not still_active:
+            return
+        try:
+            children = self_proc.children(recursive=True)
+        except psutil.Error:
+            return
+        for child in children:
+            try:
+                if child.name().lower() in _CANCELABLE_CHILD_NAMES:
+                    logging.info("[cancel_local_analysis] terminating %s (PID=%s)",
+                                 child.name(), child.pid)
+                    child.terminate()
+            except (psutil.NoSuchProcess, psutil.AccessDenied):
+                continue
+        time.sleep(0.3)
 
 
 @log_parser_bp.before_app_request
@@ -86,7 +302,7 @@ def _render_safe_markdown_html(text: str) -> str:
     )
 
 #------------Section for Local dmp file upload bar -------------#
-def _copy_file_with_console_progress(src_path: str, dst_path: str, chunk_size: int = 4 * 1024 * 1024) -> None:
+def _copy_file_with_console_progress(src_path: str, dst_path: str, chunk_size: int = 4 * 1024 * 1024, cancel_event=None) -> None:
     total_size = os.path.getsize(src_path)
 
     # Keep behavior predictable for empty files while still showing a completed upload line.
@@ -104,32 +320,48 @@ def _copy_file_with_console_progress(src_path: str, dst_path: str, chunk_size: i
     upload_name = os.path.basename(src_path)
     last_emit_percent = -1
 
-    with open(src_path, 'rb') as source, open(dst_path, 'wb') as destination:
-        while True:
-            chunk = source.read(chunk_size)
-            if not chunk:
-                break
-            destination.write(chunk)
-            copied += len(chunk)
-            ratio = min(copied / total_size, 1.0)
-            display_percent = round(ratio * 100, 2)
-            filled = min(bar_width, int(display_percent / percentage_per_block))
-            bar = '█' * filled + '░' * (bar_width - filled)
-            
-            current_percent = int(display_percent)
-            console_msg = (
-                f"\rUploading {upload_name} [{bar}] {display_percent:6.2f}% "
-                f"({copied}/{total_size} bytes)"
-            )
-            print(console_msg, end='', flush=True)
-            
-            # Emit socket.io update every 1% to provide more frequent feedback
-            if current_percent >= last_emit_percent + 1 or ratio >= 1.0:
-                formatted_size = _format_bytes(total_size)
-                formatted_copied = _format_bytes(copied)
-                socket_msg = f"Uploading {upload_name} [{bar}] {display_percent:6.2f}% ({formatted_copied}/{formatted_size})"
-                app_config.socketio.emit('wpp_log', {'data': socket_msg}, namespace='/progress')
-                last_emit_percent = current_percent
+    cancelled = False
+    try:
+        with open(src_path, 'rb') as source, open(dst_path, 'wb') as destination:
+            while True:
+                if cancel_event is not None and cancel_event.is_set():
+                    cancelled = True
+                    break
+                chunk = source.read(chunk_size)
+                if not chunk:
+                    break
+                destination.write(chunk)
+                copied += len(chunk)
+                ratio = min(copied / total_size, 1.0)
+                display_percent = round(ratio * 100, 2)
+                filled = min(bar_width, int(display_percent / percentage_per_block))
+                bar = '█' * filled + '░' * (bar_width - filled)
+
+                current_percent = int(display_percent)
+                console_msg = (
+                    f"\rUploading {upload_name} [{bar}] {display_percent:6.2f}% "
+                    f"({copied}/{total_size} bytes)"
+                )
+                print(console_msg, end='', flush=True)
+
+                # Emit socket.io update every 1% to provide more frequent feedback
+                if current_percent >= last_emit_percent + 1 or ratio >= 1.0:
+                    formatted_size = _format_bytes(total_size)
+                    formatted_copied = _format_bytes(copied)
+                    socket_msg = f"Uploading {upload_name} [{bar}] {display_percent:6.2f}% ({formatted_copied}/{formatted_size})"
+                    app_config.socketio.emit('wpp_log', {'data': socket_msg}, namespace='/progress')
+                    last_emit_percent = current_percent
+    finally:
+        if cancelled:
+            print()
+            try:
+                if os.path.exists(dst_path):
+                    os.remove(dst_path)
+            except OSError as e:
+                logging.warning("Failed to remove partial file %s: %s", dst_path, e)
+
+    if cancelled:
+        raise _LocalAnalysisCancelled()
 
     print()
     completion_msg = f"Upload complete: {upload_name}"
@@ -175,20 +407,33 @@ def _infer_local_upload_case_type(bt_files) -> str:
 def _process_local_analysis(source_path: str, source_dir: str, file_path: str,
                             original_name: str, timestamp: str,
                             is_bsod: bool = False,
-                            progress_cb=None) -> str:
+                            progress_cb=None,
+                            cancel_event=None,
+                            cleanup_paths=None) -> str:
     """Shared core logic for local analysis (used by both upload and SendTo flows).
 
     Sets up session state, extracts archives / parses ETL / handles .log/.dmp files.
     Returns the redirect URL on success.
     Raises ValueError for validation failures (e.g. no supported files found).
+    Raises _LocalAnalysisCancelled if cancel_event is set during processing.
 
     progress_cb: optional callable(pct: int, msg: str) – used by the SendTo flow
                  to stream progress to the browser.  Pass None for other callers.
+    cancel_event: optional threading.Event polled at stage boundaries.
+    cleanup_paths: optional list; any directories/files created during this
+                   call that should be removed if the upload is cancelled are
+                   appended here by the caller.
     """
     def _cb(pct: int, msg: str):
         if progress_cb:
             progress_cb(pct, msg)
             time.sleep(0.5)   # give the browser time to render each step
+
+    def _track_cleanup(path: str) -> None:
+        if cleanup_paths is not None and path:
+            cleanup_paths.append(path)
+
+    _raise_if_cancelled(cancel_event)
 
     session['download_path'] = source_dir
     session['uploaded_source_path'] = source_path
@@ -210,9 +455,10 @@ def _process_local_analysis(source_path: str, source_dir: str, file_path: str,
 
         shared_case_dir = os.path.join(load_path_bsod, local_case_nbr)
         os.makedirs(shared_case_dir, exist_ok=True)
+        _track_cleanup(shared_case_dir)
         shared_dmp_path = os.path.join(shared_case_dir, original_name)
         _cb(20, 'Copying dump file to shared folder…')
-        _copy_file_with_console_progress(file_path, shared_dmp_path)
+        _copy_file_with_console_progress(file_path, shared_dmp_path, cancel_event=cancel_event)
         _cb(90, 'Copy complete. Redirecting to BSOD submission page…')
 
         # Ensure downstream BSOD page/API submission uses shared folder path.
@@ -233,6 +479,15 @@ def _process_local_analysis(source_path: str, source_dir: str, file_path: str,
 
     elif file_path.lower().endswith('.zip') or file_path.lower().endswith('.7z') or file_path.lower().endswith('.rar'):
         print(f"📦 Extracting file: {file_path}")
+        # process_single_zip creates <source_dir>/<stem_with_underscores>/;
+        # register it so a cancel deletes the partial extraction.
+        _extract_folder_name = os.path.splitext(original_name)[0].replace(' ', '_')
+        _track_cleanup(os.path.join(source_dir, _extract_folder_name))
+        # CaseContext.to_session() (later in this branch) writes the heavy
+        # sidecar to <source_dir>/.case_context_session.json. Register it now
+        # so a cancel removes it too. Missing paths are skipped by the
+        # cleanup pass, so this is safe if extraction is cancelled early.
+        _track_cleanup(os.path.join(source_dir, CaseContext._SESSION_SIDECAR_NAME))
         _cb(20, 'Extracting archive contents…')
 
         # Stream per-file extraction progress (20 % → 60 %) when a progress_cb
@@ -248,7 +503,8 @@ def _process_local_analysis(source_path: str, source_dir: str, file_path: str,
 
         wifi_files, ddd_files, evt_files, bt_files, fw_files = attachment_decompose.process_single_zip(
             file_path, source_dir, already_downloaded=False,
-            progress_cb=_extract_progress if progress_cb else None
+            progress_cb=_extract_progress if progress_cb else None,
+            cancel_event=cancel_event,
         )
 
         extracted_files = wifi_files + ddd_files + evt_files + bt_files + fw_files
@@ -299,6 +555,7 @@ def _process_local_analysis(source_path: str, source_dir: str, file_path: str,
         _cb(20, 'Launching BT HCI decoder…')
         _cb(30, 'Decoding in progress (may take ~30 s)…')
         hci_path = bt_decode_hci_via_folder(source_dir, file_path)
+        _raise_if_cancelled(cancel_event)
         if not hci_path:
             raise ValueError(f'BT HCI decode failed or timed out for: {original_name}')
         _cb(90, 'BT HCI decode complete.')
@@ -309,6 +566,7 @@ def _process_local_analysis(source_path: str, source_dir: str, file_path: str,
     else:
         _cb(20, 'Starting WPP/DDD parser…')
         wpp_ddd_parser_run(file_path)
+        _raise_if_cancelled(cancel_event)
         _cb(90, 'Parser complete.')
         session['latest_etl_path'] = file_path
         app_config.last_analyzed_log_path = file_path + '.log'
@@ -427,16 +685,64 @@ def upload_local_analysis():
     source_dir = os.path.dirname(source_path) or os.getcwd()
     file_path = source_path
 
+    # Keys mutated by _process_local_analysis that must be cleared on cancellation
+    _cancelable_session_keys = (
+        'download_path', 'uploaded_source_path', 'local_in_place',
+        'classification', 'case_context', 'selected_files', 'bsod',
+        'latest_etl_llm', 'latest_etl_path',
+    )
+
+    upload_id = (request.form.get('upload_id') or '').strip()
+    cancel_event = _register_local_upload(upload_id) if upload_id else None
+    cleanup_paths: list = []
+
+    def _cancelled_response():
+        for k in _cancelable_session_keys:
+            session.pop(k, None)
+        logging.info("[upload_local_analysis] cancelled by user (upload_id=%s)", upload_id)
+        return jsonify({
+            'success': False,
+            'cancelled': True,
+            'message': 'Upload cancelled by user.'
+        }), 200
+
     try:
-        redirect_url = _process_local_analysis(
-            source_path, source_dir, file_path, original_name, timestamp,
-            is_bsod=request.form.get('is_bsod') == 'true'
-        )
-    except ValueError as e:
-        return jsonify({'success': False, 'message': str(e)}), 400
-    except Exception as e:
-        logging.exception("Failed local analysis flow for %s: %s", file_path, e)
-        return jsonify({'success': False, 'message': f'Failed local analysis flow: {str(e)}'}), 500
+        try:
+            redirect_url = _process_local_analysis(
+                source_path, source_dir, file_path, original_name, timestamp,
+                is_bsod=request.form.get('is_bsod') == 'true',
+                cancel_event=cancel_event,
+                cleanup_paths=cleanup_paths,
+            )
+        except (_LocalAnalysisCancelled, attachment_decompose.ExtractionCancelled):
+            return _cancelled_response()
+        except SystemExit:
+            # Parser helpers call sys.exit(0) on failure. If the failure was
+            # caused by our forced subprocess kill during cancel, treat it as
+            # cancelled; otherwise let it propagate.
+            if cancel_event is not None and cancel_event.is_set():
+                return _cancelled_response()
+            raise
+        except ValueError as e:
+            if cancel_event is not None and cancel_event.is_set():
+                return _cancelled_response()
+            return jsonify({'success': False, 'message': str(e)}), 400
+        except Exception as e:
+            if cancel_event is not None and cancel_event.is_set():
+                return _cancelled_response()
+            logging.exception("Failed local analysis flow for %s: %s", file_path, e)
+            return jsonify({'success': False, 'message': f'Failed local analysis flow: {str(e)}'}), 500
+    finally:
+        if upload_id:
+            _unregister_local_upload(upload_id)
+        # LAST step of cancellation: wait for any parser subprocess the killer
+        # thread is terminating to fully exit (so Windows releases file
+        # handles), then delete every path this upload created. Only runs on
+        # the cancel path — successful uploads leave cleanup_paths intact so
+        # downstream analysis can use the extracted folder.
+        if cleanup_paths and cancel_event is not None and cancel_event.is_set():
+            _wait_for_cancel_children_to_exit()
+            _delete_cancel_cleanup_paths(cleanup_paths, upload_id)
 
     resp = {
         'success': True,
@@ -461,6 +767,30 @@ def upload_local_analysis():
         resp['use_chatbot'] = True
         resp['etl_path'] = helpers.to_long_path(source_path)
     return jsonify(resp)
+
+
+@log_parser_bp.route('/cancel_local_analysis', methods=['POST'])
+def cancel_local_analysis():
+    """Signal a running /upload_local_analysis worker to abort. Sets the cancel
+    event AND terminates known parser child processes (tracefmt.exe, 7z.exe,
+    DDDPlayer.exe, ibtdrvlogparser.exe) so blocking subprocess calls return
+    promptly. Returns was_active=False if upload_id is unknown.
+    """
+    data = request.get_json(silent=True) or {}
+    upload_id = (data.get('upload_id') or request.form.get('upload_id') or '').strip()
+    if not upload_id:
+        return jsonify({'success': False, 'message': 'upload_id is required'}), 400
+    was_active = _signal_cancel_local_upload(upload_id)
+    logging.info("[cancel_local_analysis] upload_id=%s was_active=%s", upload_id, was_active)
+    if was_active:
+        threading.Thread(
+            target=_kill_local_analysis_children_until_done,
+            args=(upload_id,),
+            name=f'cancel-local-upload-{upload_id[:8]}',
+            daemon=True,
+        ).start()
+    return jsonify({'success': True, 'was_active': was_active})
+
 
 #------------ Section for SendTo file -------------#
 

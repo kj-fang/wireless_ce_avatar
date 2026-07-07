@@ -1,3 +1,5 @@
+from importlib.resources import path
+
 from flask import Blueprint, render_template, request, session, redirect, url_for, flash, Response, jsonify, copy_current_request_context
 import json
 import os 
@@ -163,25 +165,25 @@ def _force_rmtree(path: str, retries: int = 6, delay: float = 0.5) -> bool:
         except OSError:
             pass
 
+    long_path = helpers.to_long_path(path)
     for _ in range(retries):
-        if not os.path.exists(path):
+        if not os.path.exists(long_path):
             return True
-        long_path = helpers.to_long_path(path)
         try:
             shutil.rmtree(long_path, onerror=_on_error)
         except OSError:
             pass
-        if not os.path.exists(path):
+        if not os.path.exists(long_path):
             return True
         # rmtree left something behind — force a manual per-file pass.
         _manual_walk_delete(path)
-        if not os.path.exists(path):
+        if not os.path.exists(long_path):
             return True
         time.sleep(delay)
 
     # Last-resort silent pass so we never leak an exception on stuck files.
-    shutil.rmtree(helpers.to_long_path(path), ignore_errors=True)
-    return not os.path.exists(path)
+    shutil.rmtree(long_path, ignore_errors=True)
+    return not os.path.exists(long_path)
 
 
 def _delete_cancel_cleanup_paths(cleanup_paths, upload_id: str) -> None:
@@ -191,10 +193,13 @@ def _delete_cancel_cleanup_paths(cleanup_paths, upload_id: str) -> None:
     regardless of whether individual files inside were fully extracted.
     """
     for path in cleanup_paths:
-        if not path or not os.path.exists(path):
+        if not path:
+            continue
+        long_path = helpers.to_long_path(path)
+        if not os.path.exists(long_path):
             continue
         try:
-            if os.path.isdir(path):
+            if os.path.isdir(long_path):
                 removed = _force_rmtree(path)
                 if removed:
                     logging.info("[upload_local_analysis] force-removed %s on cancel (upload_id=%s)",
@@ -204,10 +209,10 @@ def _delete_cancel_cleanup_paths(cleanup_paths, upload_id: str) -> None:
                                     path, upload_id)
             else:
                 try:
-                    os.chmod(path, stat.S_IWRITE)
+                    os.chmod(long_path, stat.S_IWRITE)
                 except OSError:
                     pass
-                os.remove(path)
+                os.remove(long_path)
                 logging.info("[upload_local_analysis] removed file %s on cancel (upload_id=%s)",
                              path, upload_id)
         except OSError as e:
@@ -480,14 +485,16 @@ def _process_local_analysis(source_path: str, source_dir: str, file_path: str,
     elif file_path.lower().endswith('.zip') or file_path.lower().endswith('.7z') or file_path.lower().endswith('.rar'):
         print(f"📦 Extracting file: {file_path}")
         # process_single_zip creates <source_dir>/<stem_with_underscores>/;
-        # register it so a cancel deletes the partial extraction.
+        # only register it for cancel cleanup if it didn't already exist.
         _extract_folder_name = os.path.splitext(original_name)[0].replace(' ', '_')
-        _track_cleanup(os.path.join(source_dir, _extract_folder_name))
-        # CaseContext.to_session() (later in this branch) writes the heavy
-        # sidecar to <source_dir>/.case_context_session.json. Register it now
-        # so a cancel removes it too. Missing paths are skipped by the
-        # cleanup pass, so this is safe if extraction is cancelled early.
-        _track_cleanup(os.path.join(source_dir, CaseContext._SESSION_SIDECAR_NAME))
+        _extract_folder_path = os.path.join(source_dir, _extract_folder_name)
+        if not os.path.exists(_extract_folder_path):
+            _track_cleanup(_extract_folder_path)
+        # CaseContext.to_session() writes a sidecar JSON in <source_dir>;
+        # only delete it on cancel if it didn't exist before this run.
+        _sidecar_path = os.path.join(source_dir, CaseContext._SESSION_SIDECAR_NAME)
+        if not os.path.exists(_sidecar_path):
+            _track_cleanup(_sidecar_path)
         _cb(20, 'Extracting archive contents…')
 
         # Stream per-file extraction progress (20 % → 60 %) when a progress_cb

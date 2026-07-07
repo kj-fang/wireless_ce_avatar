@@ -118,7 +118,10 @@ def extract_archive(archive, extract_to, progress_cb=None, cancel_event=None):
     waiting for zlib to finish it.
     """
     _CHUNK = 1024 * 1024  # 1 MB
-    members = [m for m in archive.infolist() if not m.is_dir()]
+    members = []
+    for m in archive.infolist():
+        is_dir = m.is_dir() if hasattr(m, "is_dir") else (m.isdir() if hasattr(m, "isdir") else False)
+        if not is_dir: members.append(m)
     total = max(len(members), 1)
     print(f"Extracting to {extract_to} ({total} items)")
 
@@ -166,10 +169,10 @@ def extract_archive(archive, extract_to, progress_cb=None, cancel_event=None):
             raise
         except Exception as e:
             try:
-                 if os.path.exists(dst_path):
-                     os.remove(dst_path)
+                if os.path.exists(dst_path):
+                    os.remove(dst_path)
             except OSError:
-                 pass
+                pass
             print(f"Error extracting {filename}: {e}")
             continue
 

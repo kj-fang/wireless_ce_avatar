@@ -474,20 +474,6 @@ def render_download_result_form():
 
     result_data = app_config.get_download_results(case_context.case_nbr)
 
-    # Promote to mixed when the actual downloaded folder contains BOTH types —
-    # the IPS subcategory often lists only one keyword (e.g. "BT ...") even
-    # for cases whose attachment carries wifi + bt logs together, so trusting
-    # subcategory alone hides one side of the tables.
-    def _has_any(d):
-        return any(v for v in (d or {}).values())
-    _wifi_present = _has_any(result_data.get('wifi'))
-    _bt_present = _has_any(result_data.get('bt'))
-    if _wifi_present and _bt_present and case_context.wifi_or_bt != 'wifi_bt':
-        print(f"[download_result] both wifi & bt files present — "
-              f"promoting wifi_or_bt {case_context.wifi_or_bt!r} → 'wifi_bt'")
-        case_context.wifi_or_bt = 'wifi_bt'
-        session['case_context'] = case_context.to_session()
-
     wob = (case_context.wifi_or_bt or "").lower()
     show_wifi = session.get('debug_mode') or 'wifi' in wob
     show_bt = session.get('debug_mode') or 'bt' in wob

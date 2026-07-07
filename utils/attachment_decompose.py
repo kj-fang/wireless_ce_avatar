@@ -165,6 +165,11 @@ def extract_archive(archive, extract_to, progress_cb=None, cancel_event=None):
                 pass
             raise
         except Exception as e:
+            try:
+                 if os.path.exists(dst_path):
+                     os.remove(dst_path)
+            except OSError:
+                 pass
             print(f"Error extracting {filename}: {e}")
             continue
 

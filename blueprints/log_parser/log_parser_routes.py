@@ -775,20 +775,19 @@ def cancel_local_analysis():
     """
     # Match other local-only endpoints in this blueprint.
     if request.remote_addr not in ('127.0.0.1', '::1'):
-         return jsonify({'success': False, 'message': 'Access denied: localhost only'}), 403
+        return jsonify({'success': False, 'message': 'Access denied: localhost only'}), 403
     data = request.get_json(silent=True) or {}
     upload_id = (data.get('upload_id') or request.form.get('upload_id') or '').strip()
     if not upload_id:
         return jsonify({'success': False, 'message': 'upload_id is required'}), 400
+    
+    was_active = _signal_cancel_local_upload(upload_id)
     start_killer = False
     with _active_local_uploads_lock:
-         entry = _active_local_uploads.get(upload_id)
-         if entry:
-             entry['cancel_event'].set()
-             if not entry.get('killer_started'):
-                 entry['killer_started'] = True
-                 start_killer = True
-    was_active = entry is not None
+        entry = _active_local_uploads.get(upload_id)
+        if entry and not entry.get('killer_started'):
+            entry['killer_started'] = True
+            start_killer = True
     logging.info("[cancel_local_analysis] upload_id=%s was_active=%s", upload_id, was_active)
     if start_killer:
         threading.Thread(

@@ -61,7 +61,7 @@ def process_etl_path_fw():
 
     _wob = (case_context.wifi_or_bt or "").lower()
     if 'wifi' in _wob or 'bt' in _wob:
-        task_id, error_msg = fw_service.start_async(fw_path, case_context.wifi_or_bt)
+        task_id, error_msg = fw_service.start_async(fw_path, _wob)
         if not task_id:
             return jsonify({"ok": False, "error": error_msg}), 400
     else:

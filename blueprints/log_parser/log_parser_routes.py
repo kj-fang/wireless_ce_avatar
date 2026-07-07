@@ -733,16 +733,13 @@ def upload_local_analysis():
             logging.exception("Failed local analysis flow for %s: %s", file_path, e)
             return jsonify({'success': False, 'message': f'Failed local analysis flow: {str(e)}'}), 500
     finally:
-        if upload_id:
-            _unregister_local_upload(upload_id)
-        # LAST step of cancellation: wait for any parser subprocess the killer
-        # thread is terminating to fully exit (so Windows releases file
-        # handles), then delete every path this upload created. Only runs on
-        # the cancel path — successful uploads leave cleanup_paths intact so
-        # downstream analysis can use the extracted folder.
+        # Keep the upload_id registered until after cancel cleanup completes so
+        # the cancel thread can continue terminating child processes while we wait.
         if cleanup_paths and cancel_event is not None and cancel_event.is_set():
             _wait_for_cancel_children_to_exit()
             _delete_cancel_cleanup_paths(cleanup_paths, upload_id)
+        if upload_id:
+            _unregister_local_upload(upload_id)
 
     resp = {
         'success': True,

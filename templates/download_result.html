@@ -1646,7 +1646,7 @@
             const decoded = decodePath(etlPathEncoded);
             logBox.innerText += `🛠️ Parsing...\n`;
             logBox.scrollTop = logBox.scrollHeight;
-            if (typeof window.__wifiOrBt === 'string' && window.__wifiOrBt.includes('wifi')) {
+            if (window.__wifiOrBt === 'wifi') {
                 openWppModal(`🛠️ Parsing: ${decoded.split('\\').pop() || decoded.split('/').pop()}`);
             }
             console.log(`${ETL_ANALYSIS_URL}?etl_path=${etlPathEncoded}&mode=${mode}`)

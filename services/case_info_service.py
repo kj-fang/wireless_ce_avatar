@@ -204,10 +204,7 @@ class CaseService:
     def _finalize_case_context(case_context: CaseContext) -> None:
         sub = (case_context.subcategory or "").lower()
         has_wifi = "wifi" in sub
-        has_bt = "bt" in sub
-        if has_wifi and has_bt:
-            case_context.wifi_or_bt = "wifi_bt"
-        elif has_wifi:
+        if has_wifi:
             case_context.wifi_or_bt = "wifi"
         else:
             case_context.wifi_or_bt = "bt"

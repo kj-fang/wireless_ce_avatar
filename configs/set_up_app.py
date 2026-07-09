@@ -79,7 +79,14 @@ def set_up(socketio):
     llm_helper = LLM_helper()
 
     if key_path != None:
-        llm_helper.set_up( key.gnaigpt_token, key.gnaigpt_url, key.gnaigpt_model, CLASSIFY_PATH)
+        provider = getattr(key, "LLM_PROVIDER", "anthropic")
+        llm_helper.set_up(
+            getattr(key, f"{provider}_token"),
+            getattr(key, f"{provider}_url"),
+            getattr(key, f"{provider}_model"),
+            CLASSIFY_PATH,
+            provider=provider,
+        )
         #llm_helper.set_up( key.expertgpt_token, key.expertgpt_url, key.expertgpt_model, CLASSIFY_PATH)
 
     app_config.set_llm_helper(llm_helper)

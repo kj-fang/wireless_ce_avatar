@@ -213,14 +213,29 @@ class LLM_helper:
                                 "MLO", "Assert", "WRDS/WGDS/EWRD/SGOM", "TAS", "Roaming", 
                                 "P2P", "DSM", "VLP/UHB/AFC", "UATS", "Unclassified"]
 
-    def set_up(self, gpt_token, gpt_url, model="gpt-4.1", classifitation_path=None):
+    def set_up(self, gpt_token, gpt_url, model="gpt-4.1", classifitation_path=None, provider=None):
         if model.startswith("claude"):
-            self.client = AnthropicOpenAIAdapter(Anthropic(
-                base_url=gpt_url,
-                auth_token=gpt_token,
-                http_client=httpx.Client(proxy=None, verify=False, trust_env=False),
-            ))
+            if provider == "gnaigpt":
+                # GNAI gateway proxies Claude through its own OpenAI-compatible
+                # endpoint: internal network, no Intel egress proxy needed, and
+                # auth uses auth_token (not api_key) with TLS verification off.
+                client_kind = "Anthropic via GNAI gateway (auth_token, no proxy, verify=False)"
+                self.client = AnthropicOpenAIAdapter(Anthropic(
+                    base_url=gpt_url,
+                    auth_token=gpt_token,
+                    http_client=httpx.Client(proxy=None, verify=False, trust_env=False),
+                ))
+            else:
+                # Official Anthropic API: api_key auth, routed through the Intel
+                # proxy since api.anthropic.com is external.
+                client_kind = "Anthropic official API (api_key, via Intel proxy)"
+                self.client = AnthropicOpenAIAdapter(Anthropic(
+                    base_url=gpt_url,
+                    api_key=gpt_token,
+                    http_client=httpx.Client(proxy=self.proxies['https'], timeout=60),
+                ))
         else:
+            client_kind = "OpenAI-compatible (api_key, no proxy, verify=False)"
             self.client = openai.OpenAI(
                 api_key=gpt_token,
                 http_client=httpx.Client(proxy=None, verify=False, trust_env=False),
@@ -230,6 +245,7 @@ class LLM_helper:
         self.classifitation_path  = None
         if Path(classifitation_path).exists():
             self.classifitation_path = classifitation_path
+        print(f"🔌 LLM_helper.set_up: provider={provider!r} model={model!r} url={gpt_url!r} -> {client_kind}")
         print("classifitation_path", classifitation_path, self.classifitation_path)
 
     def load_skills(self, data_dir: str) -> None:

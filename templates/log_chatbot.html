@@ -7750,12 +7750,20 @@
         window.__draftByConv[key] = { text: text, issueTime: issueTime, logPath: logPath };
     }
 
-    // Load the saved draft for a conversation key into the chat box, Issue
-    // Time and log source (empty if none was saved). Returns true if a saved
-    // draft existed (so callers know whether the draft overrode the
-    // server-restored state). When the draft's log source differs from the
-    // currently loaded log, it is re-loaded server-side so follow-up questions
-    // target the right log.
+    // Load the saved UNSENT CHAT TEXT for a conversation key into the chat
+    // box (empty if none was saved). Returns true if a saved draft existed.
+    //
+    // IMPORTANT: this intentionally does NOT re-apply a draft's logPath or
+    // issueTime anymore. openHistoryConversation() already restores those
+    // AUTHORITATIVELY from the server's /history/load response right before
+    // calling this. Re-invoking setLog() here to "sync" a stale/leftover
+    // draft log path used to silently STEAL the conversation right back:
+    // /log_chatbot/set_log mints a brand-new conversation id on every single
+    // call (even a same-path one) and resets the agent's conversation, so an
+    // incidental setLog() call after opening a history item immediately
+    // rotated window.__feedbackConversationId away from the item the user
+    // just clicked — the history entry never appeared to "load" at all.
+    // Restoring only the chat-box text avoids ever re-invoking setLog() here.
     async function restoreDraftFor(key) {
         const inp = document.getElementById('user-input');
         const entry = window.__draftByConv[key || '__draft__'];
@@ -7765,32 +7773,6 @@
         if (inp) {
             inp.value = draft.text || '';
             if (typeof onUserInputChange === 'function') onUserInputChange(inp);
-        }
-        // Only touch the Issue Time / log source when a saved draft exists for
-        // this key, so a freshly-loaded conversation keeps the server-restored
-        // state.
-        if (hasEntry) {
-            // Whether this draft also carries its own Issue Time that we'll
-            // restore below. If so, tell setLog() to skip its async
-            // issue-time auto-fill so it can't clobber the draft time.
-            const managesIssueTime = Object.prototype.hasOwnProperty.call(draft, 'issueTime');
-            if (Object.prototype.hasOwnProperty.call(draft, 'logPath')) {
-                const logInp = document.getElementById('log-path-input');
-                const current = logInp ? (logInp.value || '') : '';
-                if (draft.logPath && draft.logPath !== current) {
-                    if (logInp) logInp.value = draft.logPath;
-                    if (typeof setLog === 'function') {
-                        try { await setLog({ skipIssueTimeAutofill: managesIssueTime }); } catch (e) { /* ignore */ }
-                    }
-                }
-            }
-            if (Object.prototype.hasOwnProperty.call(draft, 'issueTime')) {
-                if (draft.issueTime) {
-                    if (typeof setIssueTimeFromString === 'function') setIssueTimeFromString(draft.issueTime);
-                } else if (typeof clearAllIssueTimes === 'function') {
-                    clearAllIssueTimes();
-                }
-            }
         }
         return hasEntry;
     }
@@ -7809,11 +7791,22 @@
     // yet): it brings back the unsent log / issue time / chat-box draft. Once
     // the first message is sent, that working session becomes a real
     // conversation in history, so the button no longer applies.
+    // Show / hide the "Back to my session" button. Shown whenever an unsent
+    // live-session snapshot exists (the log / issue time / chat-box draft the
+    // user was preparing before they browsed history).
+    //
+    // IMPORTANT: this gates on the SNAPSHOT's existence, NOT the global
+    // `firstRoundSent`. The snapshot is only ever captured while the live
+    // session was still unsent (see openHistoryConversation), so its mere
+    // presence already means "there's an unsent draft to resume". Gating on
+    // `firstRoundSent` here was the bug: sending a FOLLOW-UP inside a SAVED
+    // conversation flips that global flag true, which used to wrongly hide
+    // this button and strand the still-unsent live draft.
     function _updateRestoreBtn() {
         const btn = document.getElementById('hist-restore-btn');
         if (!btn) return;
         const s = window.__liveSessionSnapshot;
-        const useful = !firstRoundSent && s && (s.logPath || s.issueTime || s.draft);
+        const useful = !!(s && (s.logPath || s.issueTime || s.draft));
         btn.style.display = useful ? 'block' : 'none';
     }
 
@@ -7935,12 +7928,21 @@
     // history. Only meaningful while the first question hasn't been sent yet.
     async function restoreLiveSession() {
         const snap = window.__liveSessionSnapshot;
-        if (!snap || firstRoundSent) return;
+        // Gate on the snapshot only — NOT firstRoundSent. A follow-up sent in a
+        // SAVED conversation flips firstRoundSent true, but the unsent live
+        // draft captured earlier must still be resumable.
+        if (!snap) return;
         if (typeof _abortActiveStream === 'function') _abortActiveStream();
         // Dismiss any blocking modal left open by the previous send so it
         // can't swallow input in the restored session.
         if (typeof closeConfirmModal === 'function') closeConfirmModal(false);
         if (typeof closeTimeCaptureModal === 'function') closeTimeCaptureModal();
+
+        // The restored live session is genuinely UNSENT again, so clear the
+        // global first-round flag: its next Send must re-apply the first-round
+        // gate (and any earlier saved-conversation follow-up that set it true
+        // must not leak into this fresh draft).
+        firstRoundSent = false;
 
         window.__feedbackConversationId = '';
         window.__turnContext = {};
@@ -8156,6 +8158,41 @@
     document.addEventListener('click', function (e) {
         if (!e.target.closest('.history-menu-wrap')) closeHistoryMenus();
     });
+
+    // ── Safety net: recover from a stuck/invisible modal overlay ─────────
+    // Existing comments elsewhere ("A stuck modal overlay would otherwise
+    // swallow clicks/typing... making the chat box look frozen") already
+    // acknowledge this failure mode — the no-issue-time confirm prompt / the
+    // time-capture popup / the AI-time-consent popup can be left open by an
+    // interrupted flow (e.g. an aborted stream, a fast double-click, or a
+    // race between two async paths), and each is a full-viewport
+    // `position:fixed` overlay. Previously the ONLY recovery was clicking
+    // "New session" / "Resume draft" (which call closeConfirmModal /
+    // closeTimeCaptureModal). This makes EVERY click on the page self-heal:
+    // if the click landed outside the modal's own dialog card, the modal is
+    // stuck/irrelevant to what the user is doing, so close it. A click that
+    // lands INSIDE the dialog card is untouched — the modal's own buttons
+    // already handle that, and its backdrop already closes on outside
+    // clicks, so this only extends that same behavior to clicks that hit
+    // some OTHER element instead of the backdrop.
+    document.addEventListener('click', function (e) {
+        if (!e.target.closest('.cm-dialog')) {
+            const cm = document.getElementById('confirm-modal');
+            if (cm && cm.style.display && cm.style.display !== 'none') {
+                closeConfirmModal(false);
+            }
+        }
+        if (!e.target.closest('.fbd-card')) {
+            const tcm = document.getElementById('time-capture-modal');
+            if (tcm && tcm.classList.contains('open') && typeof closeTimeCaptureModal === 'function') {
+                closeTimeCaptureModal();
+            }
+            const consent = document.getElementById('llm-time-consent-modal');
+            if (consent && consent.classList.contains('open') && typeof closeLlmTimeConsent === 'function') {
+                closeLlmTimeConsent();
+            }
+        }
+    }, true);   // capture phase: runs even if the click target is otherwise inert
 
     // 📌 Pin / Unpin a conversation.
     async function pinHistoryConversation(id, ev) {

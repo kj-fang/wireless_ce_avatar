@@ -1,7 +1,7 @@
 """
 Conversation History Service (local, per-user, Gemini / Claude style)
 
-Stores one JSON file per conversation under ``<avatarfiles_dir>/history/``.
+Stores one JSON file per conversation under ``<avatarfiles_dir>/<domain folder>/``.
 
 How this differs from ``feedback_service``:
   * feedback_service writes a SHARED, vote-gated, path-scrubbed training-data
@@ -18,6 +18,25 @@ Design goals (borrowed from feedback_service):
   * Per-file locks so concurrent SSE threads don't interleave writes.
   * Client-supplied conversation ids are sanitised before becoming path
     components (path-traversal hard-stop).
+
+Domain partitioning (WiFi log_chatbot vs. BT bt_chatbot)
+----------------------------------------------------------
+Every public function takes an optional ``domain`` kwarg (``""`` = WiFi /
+legacy default, ``"bt"`` = Bluetooth). This mirrors the domain partitioning
+already used by ``feedback_service``. Two independent safeguards keep the two
+bots' histories apart:
+
+  1. DIFFERENT ROOT FOLDERS — wifi -> ``<avatarfiles_dir>/history/`` (legacy,
+     unchanged), bt -> ``<avatarfiles_dir>/bt_history/``. Under normal
+     operation the two never even see each other's files.
+  2. FILENAME PREFIX — bt conversation files are additionally named
+     ``bt-<id>.json`` (wifi keeps its legacy bare ``<id>.json``). This means
+     that even in the freak case both roots end up pointing at the same
+     folder, telling the two apart is a plain filename ``startswith()``
+     check — no need to open + parse a single byte of JSON to know which bot
+     owns a file. ``list_conversations`` uses this for its glob pattern AND
+     defensively filters out foreign-prefixed files from the legacy (wifi)
+     domain's listing.
 """
 
 from __future__ import annotations
@@ -44,37 +63,67 @@ _LIST_LIMIT = 300
 _MAX_RESULT_CHARS = 200_000
 
 
+# --- Domain partitioning --------------------------------------------------
+# Canonical domain key -> (root folder name, filename prefix). "" (wifi) is
+# the legacy default: unchanged folder name and no filename prefix, so every
+# conversation file already on a user's machine keeps working untouched.
+_DOMAIN_FOLDERS = {"": "history", "bt": "bt_history"}
+_DOMAIN_PREFIXES = {"": "", "bt": "bt-"}
+
+
+def _norm_domain(domain: Any) -> str:
+    """Normalise a raw domain hint to a canonical key. '' = wifi/default."""
+    d = domain.strip().lower() if isinstance(domain, str) else ""
+    if d in ("bt", "bluetooth"):
+        return "bt"
+    return ""
+
+
+def _domain_folder(domain: Any) -> str:
+    return _DOMAIN_FOLDERS.get(_norm_domain(domain), "history")
+
+
+def _domain_prefix(domain: Any) -> str:
+    return _DOMAIN_PREFIXES.get(_norm_domain(domain), "")
+
+
 # --- Storage location ----------------------------------------------------
-_root_cache: Optional[Path] = None
+# One cached root Path per domain (wifi and bt resolve to different folders).
+_root_cache: dict[str, Path] = {}
 _root_lock = threading.Lock()
 
 
-def _resolve_root() -> Path:
+def _resolve_root(domain: str = "") -> Path:
     """
-    Resolve the local history root once and cache it.
+    Resolve the local history root for one domain and cache it.
 
-    Primary:  <avatarfiles_dir>/history   (same root the rest of the app uses
-              for case downloads — users find their history next to their logs)
-    Fallback: <cwd>/data/history          (avatarfiles_dir not set yet)
+    Primary:  <avatarfiles_dir>/<domain folder>   (same parent the rest of the
+              app uses for case downloads — users find their history next to
+              their logs). wifi -> "history" (legacy, unchanged), bt ->
+              "bt_history" (its own folder, never mixed with wifi's).
+    Fallback: <cwd>/data/<domain folder>          (avatarfiles_dir not set yet)
     """
-    global _root_cache
-    if _root_cache is not None:
-        return _root_cache
+    key = _norm_domain(domain)
+    cached = _root_cache.get(key)
+    if cached is not None:
+        return cached
     with _root_lock:
-        if _root_cache is not None:
-            return _root_cache
+        cached = _root_cache.get(key)
+        if cached is not None:
+            return cached
         base = getattr(app_config, "avatarfiles_dir", None)
-        root = Path(base) / "history" if base else Path.cwd() / "data" / "history"
+        folder = _domain_folder(key)
+        root = Path(base) / folder if base else Path.cwd() / "data" / folder
         try:
             root.mkdir(parents=True, exist_ok=True)
         except Exception as e:
             print(f"[history] could not create root {root}: {e}")
-        _root_cache = root
+        _root_cache[key] = root
         return root
 
 
-def _history_root() -> Path:
-    return _resolve_root()
+def _history_root(domain: str = "") -> Path:
+    return _resolve_root(domain)
 
 
 # --- Path-traversal hard-stop -------------------------------------------
@@ -90,11 +139,11 @@ def _safe_id(value: Any) -> str:
     return cleaned if _SAFE_ID_RE.match(cleaned) else ""
 
 
-def _conversation_path(conversation_id: str) -> Optional[Path]:
+def _conversation_path(conversation_id: str, domain: str = "") -> Optional[Path]:
     safe = _safe_id(conversation_id)
     if not safe:
         return None
-    return _history_root() / f"{safe}.json"
+    return _history_root(domain) / f"{_domain_prefix(domain)}{safe}.json"
 
 
 # --- Locks ---------------------------------------------------------------
@@ -196,13 +245,17 @@ def record_turn(
     issue: Optional[dict] = None,
     log_path: str = "",
     issue_time: str = "",
+    domain: str = "",
 ) -> None:
     """
     Append one turn to the conversation's history file, creating the file on
     the first turn. Persists immediately (local disk, no vote gate).
-    Never raises.
+
+    ``domain`` selects which bot's history store this turn belongs to
+    ("" = WiFi/legacy, "bt" = Bluetooth) — see the module docstring for the
+    folder + filename-prefix partitioning this drives. Never raises.
     """
-    path = _conversation_path(conversation_id)
+    path = _conversation_path(conversation_id, domain)
     if path is None or not turn_id:
         return
     try:
@@ -221,6 +274,7 @@ def record_turn(
                     "log_path": log_path or "",
                     "issue": issue or {},
                     "issue_time": issue_time or "",
+                    "domain": _norm_domain(domain) or "wifi",
                     "turns": [],
                 }
 
@@ -259,20 +313,32 @@ def record_turn(
         print(f"[history] record_turn failed (conv={conversation_id}): {e}")
 
 
-def list_conversations(limit: int = _LIST_LIMIT) -> list[dict]:
+def list_conversations(limit: int = _LIST_LIMIT, domain: str = "") -> list[dict]:
     """
-    Return lightweight summaries of stored conversations, newest first.
-    Each item: conversation_id, title, created_at, updated_at, turn_count,
-    log_path, case_nbr, issue_type. Conversations with no turns are skipped.
-    Never raises.
+    Return lightweight summaries of stored conversations for one domain,
+    newest first. Each item: conversation_id, title, created_at, updated_at,
+    turn_count, log_path, case_nbr, issue_type. Conversations with no turns
+    are skipped. Never raises.
     """
-    root = _history_root()
+    key = _norm_domain(domain)
+    prefix = _domain_prefix(key)
+    root = _history_root(key)
     out: list[dict] = []
     try:
-        files = list(root.glob("*.json"))
+        pattern = f"{prefix}*.json" if prefix else "*.json"
+        files = list(root.glob(pattern))
     except Exception as e:
         print(f"[history] list glob failed: {e}")
         return []
+
+    # Defense-in-depth for the legacy (wifi, no prefix) domain: if another
+    # domain's root ever collapsed into this same folder, a bare "*.json"
+    # glob would also match ITS prefixed files (e.g. "bt-<id>.json"). Exclude
+    # any filename carrying a KNOWN foreign prefix — a cheap startswith()
+    # check on the name already in hand, no JSON parsing required.
+    if not prefix:
+        foreign_prefixes = tuple(p for p in _DOMAIN_PREFIXES.values() if p)
+        files = [fp for fp in files if not fp.name.startswith(foreign_prefixes)]
 
     for fp in files:
         snap = _read_snapshot(fp)
@@ -304,17 +370,17 @@ def list_conversations(limit: int = _LIST_LIMIT) -> list[dict]:
     return out[: max(0, int(limit))]
 
 
-def get_conversation(conversation_id: str) -> Optional[dict]:
+def get_conversation(conversation_id: str, domain: str = "") -> Optional[dict]:
     """Return the full snapshot for one conversation, or None. Never raises."""
-    path = _conversation_path(conversation_id)
+    path = _conversation_path(conversation_id, domain)
     if path is None or not path.exists():
         return None
     return _read_snapshot(path)
 
 
-def delete_conversation(conversation_id: str) -> bool:
+def delete_conversation(conversation_id: str, domain: str = "") -> bool:
     """Delete one conversation file. Returns True if a file was removed."""
-    path = _conversation_path(conversation_id)
+    path = _conversation_path(conversation_id, domain)
     if path is None:
         return False
     try:
@@ -327,12 +393,12 @@ def delete_conversation(conversation_id: str) -> bool:
     return False
 
 
-def _update_snapshot(conversation_id: str, mutate) -> bool:
+def _update_snapshot(conversation_id: str, mutate, domain: str = "") -> bool:
     """
     Read the conversation snapshot, apply mutate(snapshot) in place, and write
     it back atomically. Returns True on success. Never raises.
     """
-    path = _conversation_path(conversation_id)
+    path = _conversation_path(conversation_id, domain)
     if path is None or not path.exists():
         return False
     try:
@@ -353,7 +419,7 @@ def _update_snapshot(conversation_id: str, mutate) -> bool:
         return False
 
 
-def rename_conversation(conversation_id: str, title: str) -> bool:
+def rename_conversation(conversation_id: str, title: str, domain: str = "") -> bool:
     """Set a custom title for one conversation. Returns True on success."""
     clean = (title or "").strip()
     if not clean:
@@ -363,12 +429,12 @@ def rename_conversation(conversation_id: str, title: str) -> bool:
     def _apply(snap: dict) -> None:
         snap["title"] = clean
 
-    return _update_snapshot(conversation_id, _apply)
+    return _update_snapshot(conversation_id, _apply, domain)
 
 
-def set_pinned(conversation_id: str, pinned: bool) -> bool:
+def set_pinned(conversation_id: str, pinned: bool, domain: str = "") -> bool:
     """Pin or unpin one conversation. Returns True on success."""
     def _apply(snap: dict) -> None:
         snap["pinned"] = bool(pinned)
 
-    return _update_snapshot(conversation_id, _apply)
+    return _update_snapshot(conversation_id, _apply, domain)

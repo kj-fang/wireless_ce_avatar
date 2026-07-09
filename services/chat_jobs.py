@@ -46,11 +46,11 @@ class ChatJob:
 
     __slots__ = (
         "conversation_id", "turn_id", "title", "status",
-        "steps", "result", "error", "agent",
+        "steps", "result", "error", "agent", "domain",
         "created_at", "updated_at", "_subscribers", "lock",
     )
 
-    def __init__(self, conversation_id: str, turn_id: str, title: str, agent: Any):
+    def __init__(self, conversation_id: str, turn_id: str, title: str, agent: Any, domain: str = ""):
         self.conversation_id = conversation_id
         self.turn_id = turn_id
         self.title = (title or "").strip()
@@ -59,6 +59,10 @@ class ChatJob:
         self.result: Any = None
         self.error: str = ""
         self.agent = agent               # detached per-conversation agent
+        # Which bot this job belongs to ("" = WiFi/legacy, "bt" = Bluetooth).
+        # Lets the History sidebar's active-job merge stay scoped to its own
+        # bot instead of surfacing another bot's in-flight analysis.
+        self.domain = domain or ""
         self.created_at = datetime.now()
         self.updated_at = self.created_at
         self._subscribers: set = set()   # set[queue.Queue]
@@ -72,6 +76,7 @@ class ChatJob:
             "status": self.status,
             "running": self.status == "running",
             "step_count": len(self.steps),
+            "domain": self.domain,
         }
 
 
@@ -100,9 +105,9 @@ def _prune_locked() -> None:
             _jobs.pop(j.conversation_id, None)
 
 
-def start_job(*, conversation_id: str, turn_id: str, title: str, agent: Any) -> ChatJob:
+def start_job(*, conversation_id: str, turn_id: str, title: str, agent: Any, domain: str = "") -> ChatJob:
     """Register a fresh job for a conversation, replacing any prior one."""
-    job = ChatJob(conversation_id, turn_id, title, agent)
+    job = ChatJob(conversation_id, turn_id, title, agent, domain=domain)
     with _registry_lock:
         _prune_locked()
         _jobs[conversation_id] = job
@@ -197,7 +202,17 @@ def unsubscribe(job: ChatJob, q) -> None:
         pass
 
 
-def active_summaries() -> list[dict]:
-    """Summaries of all currently-running jobs (for the History sidebar)."""
+def active_summaries(domain: Optional[str] = None) -> list[dict]:
+    """
+    Summaries of all currently-running jobs (for the History sidebar).
+
+    ``domain`` scopes the result to one bot ("" = WiFi/legacy, "bt" =
+    Bluetooth) so one bot's in-flight analysis never shows up as a synthetic
+    ⏳ entry in the other bot's History list. Pass ``None`` (default) to get
+    every running job regardless of domain.
+    """
     with _registry_lock:
-        return [j.summary() for j in _jobs.values() if j.status == "running"]
+        jobs = _jobs.values()
+        if domain is not None:
+            jobs = [j for j in jobs if j.domain == domain]
+        return [j.summary() for j in jobs if j.status == "running"]

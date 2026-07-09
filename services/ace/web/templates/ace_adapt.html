@@ -92,6 +92,7 @@
   <button data-tab="playbooks">Playbooks</button>
   <button data-tab="diff">Last-run Diff</button>
   <button data-tab="stats">Stats</button>
+  <button data-tab="history">History</button>
 </nav>
 
 <main>
@@ -125,7 +126,11 @@
           </div>
           <div class="controls" style="margin-top: 12px;">
             <button class="primary" id="run-btn" onclick="startAdapt()">▶ Run Adapt on selected</button>
+            <button class="primary" id="run-new-btn" onclick="runNewlyAdded()" title="Process every feedback event since the last ACE run">⚡ Run newly added</button>
+            <button class="ghost" id="nightly-on" onclick="startNightly()" title="Enable a daily 11:30 PM batch run (server local time)">🌙 Start Run nightly</button>
+            <button class="ghost" id="nightly-off" onclick="stopNightly()" style="display:none">⏹ Stop Run nightly</button>
             <span class="status-line" id="status-line">idle</span>
+            <span class="status-line" id="nightly-status" style="margin-left:auto;"></span>
           </div>
         </div>
       </div>
@@ -177,6 +182,38 @@
       </table>
     </div>
   </section>
+
+  <!-- HISTORY TAB -->
+  <section class="tab" id="tab-history">
+    <div class="row">
+      <div class="col" style="flex: 1.1;">
+        <div class="panel">
+          <h3>Reflections & Curations</h3>
+          <div class="controls">
+            <button class="ghost" onclick="loadHistory()">↻ Refresh</button>
+            <label style="font-size:12px;color:var(--muted);">
+              date:
+              <select id="hist-date" onchange="loadTurnsForSelectedDate()"></select>
+            </label>
+            <span class="status-line" id="hist-turns-status"></span>
+          </div>
+          <div id="hist-turn-list" style="max-height: 40vh; overflow: auto; border: 1px solid var(--border); border-radius: 4px;"></div>
+          <div id="hist-turn-detail" style="margin-top: 10px;"></div>
+        </div>
+      </div>
+      <div class="col" style="flex: 1;">
+        <div class="panel">
+          <h3>Playbook Snapshots</h3>
+          <div class="controls">
+            <button class="ghost" onclick="loadHistory()">↻ Refresh</button>
+            <span class="status-line" id="hist-snap-status"></span>
+          </div>
+          <div id="hist-snap-list" style="max-height: 40vh; overflow: auto;"></div>
+          <div id="hist-snap-detail" style="margin-top: 10px;"></div>
+        </div>
+      </div>
+    </div>
+  </section>
 </main>
 
 <script src="https://cdn.socket.io/4.7.5/socket.io.min.js"></script>
@@ -188,6 +225,10 @@
       document.querySelectorAll('.tab').forEach(s => s.classList.remove('active'));
       btn.classList.add('active');
       document.getElementById('tab-' + btn.dataset.tab).classList.add('active');
+      if (btn.dataset.tab === 'history' && !historyLoadedOnce) {
+        historyLoadedOnce = true;
+        loadHistory();
+      }
     });
   });
 
@@ -325,6 +366,12 @@
     statusLine.textContent = text;
     statusLine.className = 'status-line ' + (cls || '');
   }
+  function setRunButtonsDisabled(disabled) {
+    ['run-btn', 'run-new-btn'].forEach(id => {
+      const el = document.getElementById(id);
+      if (el) el.disabled = disabled;
+    });
+  }
   function logEntry(phase, ev, payload) {
     const el = document.createElement('div');
     el.className = 'log-entry ' + (phase || '');
@@ -348,8 +395,8 @@
   socket.on('adapt_started', (p) => {
     progressLog.innerHTML = '';
     logEntry('pipeline', 'started', p);
-    setStatus('running…', 'running');
-    document.getElementById('run-btn').disabled = true;
+    setStatus(p.mode === 'batch' ? 'running (batch)…' : 'running…', 'running');
+    setRunButtonsDisabled(true);
   });
   socket.on('adapt_progress', (p) => {
     logEntry(p.phase || 'pipeline', p.event || '?', p);
@@ -360,20 +407,23 @@
   socket.on('adapt_done', (p) => {
     logEntry('pipeline', 'done', { totals: p.totals });
     setStatus('done · ' + JSON.stringify(p.totals), 'done');
-    document.getElementById('run-btn').disabled = false;
+    setRunButtonsDisabled(false);
     renderDiff(p.overall_diff || {});
     loadPlaybooks();
+    refreshNightlyStatus();
+    if (historyLoadedOnce) loadHistory();
   });
   socket.on('adapt_error', (p) => {
     logEntry('error', 'job_failed', p);
     setStatus('error: ' + p.error, 'error');
-    document.getElementById('run-btn').disabled = false;
+    setRunButtonsDisabled(false);
+    refreshNightlyStatus();
   });
 
   async function startAdapt() {
     const cids = [...document.querySelectorAll('.conv-cb:checked')].map(cb => cb.dataset.cid);
     if (cids.length === 0) { alert('Pick at least one conversation.'); return; }
-    document.getElementById('run-btn').disabled = true;
+    setRunButtonsDisabled(true);
     const r = await fetch('/api/adapt', {
       method: 'POST',
       headers: {'Content-Type': 'application/json'},
@@ -382,8 +432,63 @@
     const j = await r.json();
     if (!j.ok) {
       alert('Failed to start: ' + (j.error || 'unknown'));
-      document.getElementById('run-btn').disabled = false;
+      setRunButtonsDisabled(false);
     }
+  }
+
+  async function runNewlyAdded() {
+    setRunButtonsDisabled(true);
+    const r = await fetch('/api/adapt/new', {
+      method: 'POST',
+      headers: {'Content-Type': 'application/json'},
+      body: JSON.stringify({}),
+    });
+    const j = await r.json();
+    if (!j.ok) {
+      alert('Failed to start: ' + (j.error || 'unknown'));
+      setRunButtonsDisabled(false);
+    }
+  }
+
+  async function startNightly() {
+    const r = await fetch('/api/nightly/start', {method: 'POST'});
+    const j = await r.json();
+    applyNightlyStatus(j);
+  }
+  async function stopNightly() {
+    const r = await fetch('/api/nightly/stop', {method: 'POST'});
+    const j = await r.json();
+    applyNightlyStatus(j);
+  }
+  async function refreshNightlyStatus() {
+    try {
+      const r = await fetch('/api/nightly');
+      applyNightlyStatus(await r.json());
+    } catch (e) {
+      // scheduler status is optional UI info; ignore transient errors.
+    }
+  }
+  function applyNightlyStatus(s) {
+    const on = document.getElementById('nightly-on');
+    const off = document.getElementById('nightly-off');
+    const line = document.getElementById('nightly-status');
+    if (s && s.enabled) {
+      on.style.display = 'none';
+      off.style.display = '';
+    } else {
+      on.style.display = '';
+      off.style.display = 'none';
+    }
+    const parts = [];
+    if (s && s.enabled && s.next_run_iso) {
+      parts.push('next: ' + new Date(s.next_run_iso).toLocaleString());
+    }
+    if (s && s.last_run_iso) {
+      let last = 'last: ' + new Date(s.last_run_iso).toLocaleString();
+      if (s.last_result && s.last_result.error) last += ' · ✖ ' + s.last_result.error;
+      parts.push(last);
+    }
+    line.textContent = parts.join(' · ');
   }
 
   // ---------- diff rendering ----------
@@ -412,6 +517,187 @@
     });
   }
 
+  // ---------- history ----------
+  let historyLoadedOnce = false;
+  let historyTurnDates = [];
+  let historyTurns = [];
+  let historySnapshots = [];
+
+  async function loadHistory() {
+    await Promise.all([loadTurnDates(), loadSnapshots()]);
+  }
+
+  async function loadTurnDates() {
+    const status = document.getElementById('hist-turns-status');
+    status.textContent = 'loading dates…';
+    try {
+      const r = await fetch('/api/history/turns');
+      const j = await r.json();
+      historyTurnDates = j.dates || [];
+      const sel = document.getElementById('hist-date');
+      const prev = sel.value;
+      sel.innerHTML = '';
+      historyTurnDates.forEach(d => {
+        const o = document.createElement('option');
+        o.value = d; o.textContent = d;
+        sel.appendChild(o);
+      });
+      if (historyTurnDates.includes(prev)) sel.value = prev;
+      status.textContent = historyTurnDates.length + ' day(s)';
+      if (historyTurnDates.length) {
+        await loadTurnsForSelectedDate();
+      } else {
+        document.getElementById('hist-turn-list').innerHTML =
+          '<div class="status-line">No turn history yet.</div>';
+      }
+    } catch (e) {
+      status.textContent = 'load failed: ' + e;
+    }
+  }
+
+  async function loadTurnsForSelectedDate() {
+    const date = document.getElementById('hist-date').value;
+    if (!date) return;
+    const status = document.getElementById('hist-turns-status');
+    status.textContent = 'loading ' + date + '…';
+    document.getElementById('hist-turn-detail').innerHTML = '';
+    try {
+      const r = await fetch('/api/history/turns/' + encodeURIComponent(date));
+      const j = await r.json();
+      historyTurns = j.items || [];
+      status.textContent = date + ' · ' + historyTurns.length + ' turn(s)';
+      renderTurnList();
+    } catch (e) {
+      status.textContent = 'load failed: ' + e;
+    }
+  }
+
+  function renderTurnList() {
+    const list = document.getElementById('hist-turn-list');
+    if (!historyTurns.length) {
+      list.innerHTML = '<div class="status-line">No turns recorded for this date.</div>';
+      return;
+    }
+    // Newest first
+    const rows = historyTurns.slice().reverse();
+    const html = rows.map((t, i) => {
+      const idx = historyTurns.length - 1 - i;
+      const ops = ((t.curate_result || {}).operations || []).length;
+      const src = t.run_source || 'cli';
+      const cid = (t.conversation_id || '').slice(0, 8);
+      const tid = (t.turn_id || '').slice(0, 8);
+      const ts = (t.ts || '').replace('T', ' ').slice(0, 19);
+      return `<div class="log-entry pipeline" style="cursor:pointer" onclick="showTurnDetail(${idx})">
+        <span class="ts">${escapeHtml(ts)}</span>
+        <span class="pill">${escapeHtml(src)}</span>
+        cid=<span class="cid">${escapeHtml(cid)}…</span>
+        tid=<span class="cid">${escapeHtml(tid)}…</span>
+        <span class="pill">${ops} ops</span>
+      </div>`;
+    }).join('');
+    list.innerHTML = html;
+  }
+
+  function showTurnDetail(idx) {
+    const t = historyTurns[idx];
+    if (!t) return;
+    const applied = t.applied_bullets || [];
+    const appliedText = applied.length
+      ? applied.map(b => `[${b.id}] (${b.section}) ${b.content}`).join('\n')
+      : '(none)';
+    const box = document.getElementById('hist-turn-detail');
+    box.innerHTML = `
+      <div class="diff-block">
+        <h4>Turn ${escapeHtml(t.turn_id || '')} · ${escapeHtml(t.run_source || '')} · run ${escapeHtml((t.run_id || '').slice(0,8))}…</h4>
+        <details open><summary>feedback</summary><pre>${escapeHtml(JSON.stringify(t.feedback || {}, null, 2))}</pre></details>
+        <details><summary>applied bullets (${applied.length})</summary><pre>${escapeHtml(appliedText)}</pre></details>
+        <details><summary>reflection</summary><pre>${escapeHtml(JSON.stringify(t.reflection || {}, null, 2))}</pre></details>
+        <details><summary>curate_result</summary><pre>${escapeHtml(JSON.stringify(t.curate_result || {}, null, 2))}</pre></details>
+      </div>
+    `;
+  }
+
+  async function loadSnapshots() {
+    const status = document.getElementById('hist-snap-status');
+    status.textContent = 'loading snapshots…';
+    try {
+      const r = await fetch('/api/history/snapshots');
+      const j = await r.json();
+      historySnapshots = j.items || [];
+      status.textContent = historySnapshots.length + ' snapshot(s)';
+      renderSnapshotList();
+    } catch (e) {
+      status.textContent = 'load failed: ' + e;
+    }
+  }
+
+  function renderSnapshotList() {
+    const root = document.getElementById('hist-snap-list');
+    document.getElementById('hist-snap-detail').innerHTML = '';
+    if (!historySnapshots.length) {
+      root.innerHTML = '<div class="status-line">No snapshots yet.</div>';
+      return;
+    }
+    // Group by date
+    const byDate = {};
+    historySnapshots.forEach(s => {
+      (byDate[s.date] = byDate[s.date] || []).push(s);
+    });
+    const dates = Object.keys(byDate).sort().reverse();
+    const parts = [];
+    dates.forEach(d => {
+      parts.push(`<div style="padding:6px 4px;color:var(--muted);font-weight:600;">${escapeHtml(d)}</div>`);
+      byDate[d].forEach(s => {
+        const runShort = (s.run_id || '').slice(0, 8);
+        const ts = (s.snapshot_at || '').replace('T', ' ').slice(11, 19);
+        const filesHtml = (s.files || []).map(f => {
+          const url = `/api/history/snapshots/${encodeURIComponent(s.date)}/${encodeURIComponent(s.run_dir)}/${encodeURIComponent(f)}`;
+          return `<a href="#" onclick="showSnapshotFile('${escapeAttr(s.date)}','${escapeAttr(s.run_dir)}','${escapeAttr(f)}');return false" class="pill" style="margin-right:4px;">${escapeHtml(f)}</a>`;
+        }).join('');
+        parts.push(`
+          <div class="log-entry" style="border-left-color: var(--good);">
+            <span class="ts">${escapeHtml(ts)}</span>
+            <span class="pill">${escapeHtml(s.source || '?')}</span>
+            <span class="cid">${escapeHtml(runShort)}…</span>
+            <div style="margin-top:4px;">${filesHtml || '(no files)'}</div>
+          </div>
+        `);
+      });
+    });
+    root.innerHTML = parts.join('');
+  }
+
+  async function showSnapshotFile(date, runDir, filename) {
+    const box = document.getElementById('hist-snap-detail');
+    box.innerHTML = '<div class="status-line">loading…</div>';
+    const viewUrl = `/api/history/snapshots/${encodeURIComponent(date)}/${encodeURIComponent(runDir)}/${encodeURIComponent(filename)}`;
+    const dlUrl = viewUrl + '?download=1';
+    try {
+      const r = await fetch(viewUrl);
+      if (!r.ok) {
+        box.innerHTML = '<div class="status-line error">fetch failed: ' + r.status + '</div>';
+        return;
+      }
+      const text = await r.text();
+      let pretty = text;
+      try { pretty = JSON.stringify(JSON.parse(text), null, 2); } catch (e) { /* leave raw */ }
+      box.innerHTML = `
+        <div class="diff-block">
+          <h4>${escapeHtml(date)} / ${escapeHtml(runDir)} / ${escapeHtml(filename)}
+            <a class="ghost" href="${dlUrl}" download="${escapeHtml(filename)}" style="float:right;text-decoration:none;">⬇ Download</a>
+          </h4>
+          <pre>${escapeHtml(pretty)}</pre>
+        </div>
+      `;
+    } catch (e) {
+      box.innerHTML = '<div class="status-line error">fetch failed: ' + e + '</div>';
+    }
+  }
+
+  function escapeAttr(s) {
+    return String(s == null ? '' : s).replace(/'/g, "\\'").replace(/"/g, '\\"');
+  }
+
   // ---------- helpers ----------
   function escapeHtml(s) {
     return String(s == null ? '' : s)
@@ -422,6 +708,7 @@
   // ---------- init ----------
   loadConversations();
   loadPlaybooks();
+  refreshNightlyStatus();
 </script>
 </body>
 </html>

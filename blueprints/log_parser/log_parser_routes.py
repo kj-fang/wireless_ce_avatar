@@ -435,7 +435,7 @@ def _detect_report_zip_artifacts(source_dir: str):
     for dirpath, dirnames, filenames in os.walk(source_dir):
         if report_txt is None:
             for fname in filenames:
-                if 'report' in fname.lower() and fname.lower().endswith('.txt'):
+                if 'report' in fname.lower() and (fname.lower().endswith('.txt') or fname.lower().endswith('.md')):
                     report_txt = os.path.join(dirpath, fname)
                     break
         if artifacts_dir is None and os.path.basename(dirpath).lower() == 'artifacts':

@@ -251,11 +251,13 @@ def _resolve_key_module(force: bool = False) -> object:
 def _build_llm(model: Optional[str] = None) -> LLM_helper:
     key = _resolve_key_module()
     llm = LLM_helper()
+    provider = getattr(key, "LLM_PROVIDER", "anthropic")
     llm.set_up(
-        gpt_token=key.gnaigpt_token,
-        gpt_url=key.gnaigpt_url,
-        model=model or key.gnaigpt_model,
+        gpt_token=getattr(key, f"{provider}_token"),
+        gpt_url=getattr(key, f"{provider}_url"),
+        model=model or getattr(key, f"{provider}_model"),
         classifitation_path=path_configs.CLASSIFY_PATH,
+        provider=provider,
     )
     return llm
 

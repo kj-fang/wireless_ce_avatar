@@ -69,11 +69,17 @@ def _build_llm(model: str | None) -> LLM_helper:
     key = helpers.load_module(key_path, "key_moudle")
     llm = LLM_helper()
     llm.set_up(
-        gpt_token=key.gnaigpt_token,
-        gpt_url=key.gnaigpt_url,
-        model=model or key.gnaigpt_model,
+        gpt_token=key.anthropic_token,
+        gpt_url=key.anthropic_url,
+        model=model or key.anthropic_model,
         classifitation_path=path_configs.CLASSIFY_PATH,
     )
+    # llm.set_up(
+    #     gpt_token=key.gnaigpt_token,
+    #     gpt_url=key.gnaigpt_url,
+    #     model=model or key.gnaigpt_model,
+    #     classifitation_path=path_configs.CLASSIFY_PATH,
+    # )
     return llm
 
 

@@ -21,6 +21,8 @@ from utils.issue_time_utils import (
 )
 from utils.issue_time_ai import build_issue_time_suggestions, organize_issue_context, realign_times_to_log, find_nearest_event_error
 from services import feedback_service
+from services import history_service
+from services import chat_jobs
 
 bt_chatbot_bp = Blueprint("bt_chatbot", __name__, url_prefix="/bt_chatbot")
 
@@ -419,6 +421,68 @@ def _get_or_create_agent(skip_prime: bool = False) -> WifiLogAgentSystem:
     return _chatbot_instances[sid]
 
 
+def _resume_agent_for(conversation_id: str):
+    """
+    Return the agent to use for ``conversation_id``.
+
+    A finished background analysis keeps its own (detached) agent, which holds
+    the full tool-grounded conversation history. When the user continues that
+    same conversation we adopt that agent — far higher fidelity than rebuilding
+    context from saved text. Running jobs are NOT adopted (their agent is busy
+    on a background thread); the caller falls back to a fresh session agent.
+    """
+    job = chat_jobs.get_job(conversation_id)
+    if job is not None and getattr(job, "agent", None) is not None and job.status != "running":
+        sid = session.get("chatbot_session_id")
+        if not sid:
+            sid = str(uuid.uuid4())
+            session["chatbot_session_id"] = sid
+        _chatbot_instances[sid] = job.agent
+        return job.agent
+    return _get_or_create_agent()
+
+
+def _terminal_sse(job, kind: str, payload) -> str:
+    """Format a job's terminal event (done / error) as one SSE frame."""
+    if kind == "done":
+        return ("data: " + json.dumps(
+            {"type": "done", "turn_id": job.turn_id,
+             "conversation_id": job.conversation_id, "result": payload},
+            ensure_ascii=False) + "\n\n")
+    return ("data: " + json.dumps(
+        {"type": "error", "content": payload}, ensure_ascii=False) + "\n\n")
+
+
+def _job_sse(job):
+    """
+    Shared SSE generator for a chat job: emit the steps buffered so far, then
+    follow live steps until the job reaches a terminal state. Used by both the
+    original /chat request and the /history/stream reconnect endpoint, so the
+    two render identically.
+    """
+    import queue as _q
+    q, replay, terminal = chat_jobs.subscribe(job)
+    try:
+        for step in replay:
+            yield "data: " + json.dumps({"type": "step", "step": step}, ensure_ascii=False) + "\n\n"
+        if terminal is not None:
+            yield _terminal_sse(job, terminal[0], terminal[1])
+            return
+        while True:
+            try:
+                kind, payload = q.get(timeout=120)
+            except _q.Empty:
+                yield "data: " + json.dumps({"type": "error", "content": "Chat timed out."}) + "\n\n"
+                return
+            if kind == "step":
+                yield "data: " + json.dumps({"type": "step", "step": payload}, ensure_ascii=False) + "\n\n"
+            else:
+                yield _terminal_sse(job, kind, payload)
+                return
+    finally:
+        chat_jobs.unsubscribe(job, q)
+
+
 # ------------------------------------------------------------------
 # Pages
 # ------------------------------------------------------------------
@@ -719,9 +783,24 @@ def chat():
             issue_time_window_minutes = None
 
     try:
-        agent = _get_or_create_agent()
+        # Resolve the conversation first so we can adopt a finished job's agent
+        # (full tool-grounded history) when the user continues a just-analysed
+        # thread WITHOUT going through the History sidebar's /history/load —
+        # otherwise the run_chat_with_tools background job detaches the agent
+        # from the session slot and a bare _get_or_create_agent() would hand
+        # the very next follow-up a brand-new, context-less agent.
+        conversation_id = _ensure_feedback_conversation_id()
+        agent = _resume_agent_for(conversation_id)
         if issue_time_window_minutes is not None:
             agent.issue_time_window_minutes = issue_time_window_minutes
+        # Backstop: if the resolved agent lost its log path (e.g. a fresh agent
+        # rebuilt on a browser-back re-run where prepare()/set_log() didn't
+        # run), recover it from the same sources _get_or_create_agent() uses.
+        if not agent.current_log_path:
+            agent.current_log_path = (
+                session.get("chatbot_log_path")
+                or app_config.last_analyzed_log_path or ""
+            )
         if not agent.current_log_path:
             def _no_log():
                 yield f"data: {json.dumps({'type': 'error', 'content': 'No log file loaded. Please set a log file first.'})}\n\n"
@@ -770,7 +849,6 @@ def chat():
         # invocations. Both IDs are anonymous (no auth).
         # ------------------------------------------------------------------
         session_id = session.get("chatbot_session_id", "")
-        conversation_id = _ensure_feedback_conversation_id()
         turn_id = str(uuid.uuid4())
         turn_started_at = datetime.now()
         try:
@@ -782,18 +860,31 @@ def chat():
         use_tools = bool(data.get("use_tools", False))
 
         if use_tools:
-            import queue as _queue
-            step_queue = _queue.Queue()
             collected_steps: list = []
 
+            # Register a background job that OWNS this analysis, then detach the
+            # agent from the session slot. The run keeps going — and stays
+            # uncorrupted — even if the user switches to another conversation
+            # mid-analysis (any later session use just creates a fresh agent).
+            # The job buffers every step so a reconnecting client can replay +
+            # follow it via /history/stream.
+            job = chat_jobs.start_job(
+                conversation_id=conversation_id,
+                turn_id=turn_id,
+                title=user_message,
+                agent=agent,
+                domain="bt",
+            )
+            if session_id:
+                _chatbot_instances.pop(session_id, None)
+
             def step_cb(step):
-                # Collect for snapshot, then forward to SSE stream.
                 try:
                     if isinstance(step, dict):
                         collected_steps.append(step)
                 except Exception:
                     pass
-                step_queue.put(("step", step))
+                chat_jobs.publish_step(job, step)
 
             @copy_current_request_context
             def run_chat_with_tools():
@@ -806,49 +897,48 @@ def chat():
                         max_tokens=max_tokens,
                         step_callback=step_cb,
                     )
-                    step_queue.put(("done", result))
+                    # Persist BEFORE signalling done so any subscriber that
+                    # refreshes its history list on 'done' already sees this
+                    # turn. feedback is vote-gated; history always persists.
+                    feedback_service.record_turn(
+                        session_id=session_id,
+                        conversation_id=conversation_id,
+                        turn_id=turn_id,
+                        user_message=user_message,
+                        agent_result=result,
+                        steps=collected_steps,
+                        mode="tools",
+                        duration_ms=int((datetime.now() - turn_started_at).total_seconds() * 1000),
+                        issue=_issue_ctx_for_snapshot,
+                        log_path=getattr(agent, "current_log_path", "") or "",
+                        parent_message_id=parent_message_id,
+                        domain="bt",
+                    )
+                    history_service.record_turn(
+                        conversation_id=conversation_id,
+                        session_id=session_id,
+                        turn_id=turn_id,
+                        user_message=user_message,
+                        agent_result=result,
+                        mode="tools",
+                        issue=_issue_ctx_for_snapshot,
+                        log_path=getattr(agent, "current_log_path", "") or "",
+                        issue_time=format_issue_time(agent.issue_time),
+                        domain="bt",
+                    )
+                    chat_jobs.finish_job(job, result)
                 except Exception as exc:
                     error_tb = traceback.format_exc()
                     print(f"❌ Chat-with-tools thread error:\n{error_tb}")
-                    step_queue.put(("error", str(exc)))
+                    chat_jobs.fail_job(job, str(exc))
 
             t = threading.Thread(target=run_chat_with_tools, daemon=True)
             t.start()
 
-            def event_stream():
-                while True:
-                    try:
-                        msg_type, payload = step_queue.get(timeout=120)
-                    except _queue.Empty:
-                        yield f"data: {json.dumps({'type': 'error', 'content': 'Chat timed out.'})}\n\n"
-                        break
-                    if msg_type == "step":
-                        yield f"data: {json.dumps({'type': 'step', 'step': payload}, ensure_ascii=False)}\n\n"
-                    elif msg_type == "done":
-                        # Sidecar: persist the turn before signalling done.
-                        # Failures here are swallowed inside feedback_service.
-                        feedback_service.record_turn(
-                            session_id=session_id,
-                            conversation_id=conversation_id,
-                            turn_id=turn_id,
-                            user_message=user_message,
-                            agent_result=payload,
-                            steps=collected_steps,
-                            mode="tools",
-                            duration_ms=int((datetime.now() - turn_started_at).total_seconds() * 1000),
-                            issue=_issue_ctx_for_snapshot,
-                            log_path=getattr(agent, "current_log_path", "") or "",
-                            parent_message_id=parent_message_id,
-                            domain="bt",
-                        )
-                        yield f"data: {json.dumps({'type': 'done', 'turn_id': turn_id, 'conversation_id': conversation_id, 'result': payload}, ensure_ascii=False)}\n\n"
-                        break
-                    elif msg_type == "error":
-                        yield f"data: {json.dumps({'type': 'error', 'content': payload})}\n\n"
-                        break
-
+            # The original request streams the job exactly like a reconnect
+            # would (replay buffered steps, then follow to done/error).
             return Response(
-                event_stream(),
+                _job_sse(job),
                 mimetype="text/event-stream",
                 headers={"Cache-Control": "no-cache", "X-Accel-Buffering": "no"},
             )
@@ -876,6 +966,21 @@ def chat():
                 parent_message_id=parent_message_id,
                 domain="bt",
             )
+            # Local browsable history (always persists, unlike feedback which
+            # is vote-gated). Stored under the "bt" domain — a different
+            # folder from the WiFi bot's history (see history_service).
+            history_service.record_turn(
+                conversation_id=conversation_id,
+                session_id=session_id,
+                turn_id=turn_id,
+                user_message=user_message,
+                agent_result=result,
+                mode="simple",
+                issue=_issue_ctx_for_snapshot,
+                log_path=getattr(agent, "current_log_path", "") or "",
+                issue_time=format_issue_time(agent.issue_time),
+                domain="bt",
+            )
 
             def generate():
                 yield f"data: {json.dumps({'type': 'done', 'turn_id': turn_id, 'conversation_id': conversation_id, 'result': result}, ensure_ascii=False)}\n\n"
@@ -901,6 +1006,288 @@ def reset():
         agent.reset_conversation()
         return jsonify({"success": True, "message": "Conversation reset."})
     except Exception as e:
+        return jsonify({"success": False, "error": str(e)}), 500
+
+
+# ------------------------------------------------------------------
+# API: local conversation history (Gemini / Claude style sidebar)
+#
+# Every chat turn is persisted to <avatarfiles_dir>/bt_history/bt-<id>.json
+# by history_service (domain="bt") — a DIFFERENT folder from the WiFi
+# chatbot's <avatarfiles_dir>/history/<id>.json, and additionally prefixed
+# so the two are still trivially distinguishable by filename alone even if
+# they ever ended up sharing a folder. These endpoints let the sidebar
+# list / load / delete BT conversations. All are read/written locally only.
+# ------------------------------------------------------------------
+@bt_chatbot_bp.route("/history/list", methods=["GET"])
+def history_list():
+    try:
+        conversations = history_service.list_conversations(domain="bt")
+        # Merge in-memory running jobs so the sidebar can show a ⏳ marker:
+        #   * a persisted conversation that's mid-analysis  -> running: True
+        #   * a brand-new first analysis not yet on disk     -> synthetic entry
+        # Scoped to domain="bt" so a WiFi analysis running at the same time
+        # never leaks into this list.
+        try:
+            running = {j["conversation_id"]: j for j in chat_jobs.active_summaries(domain="bt")}
+            if running:
+                seen = set()
+                for c in conversations:
+                    cid = c.get("conversation_id")
+                    seen.add(cid)
+                    if cid in running:
+                        c["running"] = True
+                for cid, j in running.items():
+                    if cid not in seen:
+                        conversations.append({
+                            "conversation_id": cid,
+                            "title": j.get("title") or "New conversation",
+                            "created_at": "",
+                            # Stamp "now" so a brand-new running conversation
+                            # sorts to the top of the running group.
+                            "updated_at": datetime.now().astimezone().isoformat(timespec="seconds"),
+                            "turn_count": j.get("step_count", 0),
+                            "log_path": "",
+                            "pinned": False,
+                            "running": True,
+                        })
+            # Final ordering (highest priority last in this stable-sort chain):
+            #   1. Pinned conversations at the very top.
+            #   2. Still-running conversations next (below pins, above the rest).
+            #   3. Everyone else — all newest-first within each group.
+            conversations.sort(key=lambda c: c.get("updated_at") or "", reverse=True)
+            conversations.sort(key=lambda c: bool(c.get("running")), reverse=True)
+            conversations.sort(key=lambda c: bool(c.get("pinned")), reverse=True)
+        except Exception:
+            pass
+        return jsonify({"success": True, "conversations": conversations})
+    except Exception as e:
+        return jsonify({"success": False, "error": str(e)}), 500
+
+
+@bt_chatbot_bp.route("/history/stream", methods=["GET"])
+def history_stream():
+    """
+    Re-attach to a conversation's live analysis (Server-Sent Events).
+
+    Replays the steps buffered so far, then follows new steps until the job
+    reaches done/error — so switching back to a running conversation shows its
+    progress catching up in real time. If there's no active/recent job for the
+    conversation, emits a single 'idle' event and closes (the client then just
+    renders the saved turns).
+    """
+    conversation_id = (request.args.get("conversation_id") or "").strip()
+    headers = {"Cache-Control": "no-cache", "X-Accel-Buffering": "no"}
+    job = chat_jobs.get_job(conversation_id) if conversation_id else None
+    # chat_jobs is a single registry shared by both bots (keyed by conversation_id
+    # only), so a WiFi job id handed to this BT endpoint would otherwise resolve
+    # and stream that WiFi job's steps/result here. Reject anything not tagged bt.
+    if job is None or getattr(job, "domain", "") != "bt":
+        def _idle():
+            yield "data: " + json.dumps({"type": "idle"}) + "\n\n"
+        return Response(_idle(), mimetype="text/event-stream", headers=headers)
+    return Response(_job_sse(job), mimetype="text/event-stream", headers=headers)
+
+
+@bt_chatbot_bp.route("/history/get", methods=["GET"])
+def history_get():
+    conversation_id = (request.args.get("conversation_id") or "").strip()
+    if not conversation_id:
+        return jsonify({"success": False, "error": "conversation_id is required"}), 400
+    conv = history_service.get_conversation(conversation_id, domain="bt")
+    if conv is None:
+        return jsonify({"success": False, "error": "Conversation not found"}), 404
+    return jsonify({"success": True, "conversation": conv})
+
+
+@bt_chatbot_bp.route("/history/delete", methods=["POST"])
+def history_delete():
+    data = request.get_json(silent=True) or {}
+    conversation_id = (data.get("conversation_id") or "").strip()
+    if not conversation_id:
+        return jsonify({"success": False, "error": "conversation_id is required"}), 400
+    removed = history_service.delete_conversation(conversation_id, domain="bt")
+    # If the deleted conversation is the one currently active, drop the
+    # session pointer so the next turn starts a brand-new conversation.
+    if removed and (session.get("feedback_conversation_id") or "") == conversation_id:
+        session.pop("feedback_conversation_id", None)
+    return jsonify({"success": bool(removed)})
+
+
+@bt_chatbot_bp.route("/history/rename", methods=["POST"])
+def history_rename():
+    data = request.get_json(silent=True) or {}
+    conversation_id = (data.get("conversation_id") or "").strip()
+    title = (data.get("title") or "").strip()
+    if not conversation_id:
+        return jsonify({"success": False, "error": "conversation_id is required"}), 400
+    if not title:
+        return jsonify({"success": False, "error": "title is required"}), 400
+    ok = history_service.rename_conversation(conversation_id, title, domain="bt")
+    return jsonify({"success": bool(ok)})
+
+
+@bt_chatbot_bp.route("/history/pin", methods=["POST"])
+def history_pin():
+    data = request.get_json(silent=True) or {}
+    conversation_id = (data.get("conversation_id") or "").strip()
+    pinned = bool(data.get("pinned"))
+    if not conversation_id:
+        return jsonify({"success": False, "error": "conversation_id is required"}), 400
+    ok = history_service.set_pinned(conversation_id, pinned, domain="bt")
+    return jsonify({"success": bool(ok), "pinned": pinned})
+
+
+@bt_chatbot_bp.route("/history/load", methods=["POST"])
+def history_load():
+    """
+    Resume a saved conversation: re-point the session at its id, restore the
+    log file + issue context into the per-session agent (so follow-up
+    questions keep working), rebuild the agent's textual conversation history,
+    and return the stored turns for the frontend to re-render.
+    """
+    data = request.get_json(silent=True) or {}
+    conversation_id = (data.get("conversation_id") or "").strip()
+    if not conversation_id:
+        return jsonify({"success": False, "error": "conversation_id is required"}), 400
+
+    # A first analysis still in flight has no disk file yet — fall back to its
+    # in-memory job so the sidebar's ⏳ entry is still openable. chat_jobs is a
+    # single registry shared by both bots, so reject anything not tagged bt —
+    # otherwise a WiFi conversation id would adopt a WiFi job/agent here.
+    job = chat_jobs.get_job(conversation_id)
+    if job is not None and getattr(job, "domain", "") != "bt":
+        job = None
+    conv = history_service.get_conversation(conversation_id, domain="bt")
+    if conv is None and job is None:
+        return jsonify({"success": False, "error": "Conversation not found"}), 404
+
+    try:
+        # Re-point BOTH sidecars at this conversation so new turns + feedback
+        # continue appending here instead of spawning a fresh conversation.
+        session["feedback_conversation_id"] = conversation_id
+
+        conv = conv or {}
+        running = bool(job is not None and job.status == "running")
+        issue = conv.get("issue") if isinstance(conv.get("issue"), dict) else {}
+        turns = conv.get("turns") or []
+
+        log_path = (conv.get("log_path") or "").strip()
+
+        # Prefer adopting the conversation's in-memory agent (it holds the full
+        # tool-grounded history) over rebuilding context from saved text.
+        adopted = False
+        if job is not None and getattr(job, "agent", None) is not None:
+            agent = job.agent
+            adopted = True
+            if not log_path:
+                log_path = (getattr(agent, "current_log_path", "") or "").strip()
+            # Don't pull a RUNNING job's agent into the session slot — it's busy
+            # on a background thread. Reinstate only finished ones for follow-ups.
+            if not running:
+                sid = session.get("chatbot_session_id")
+                if not sid:
+                    sid = str(uuid.uuid4())
+                    session["chatbot_session_id"] = sid
+                _chatbot_instances[sid] = agent
+        else:
+            agent = _get_or_create_agent(skip_prime=True)
+            agent.reset_conversation()
+
+        log_exists = bool(log_path) and os.path.exists(log_path)
+
+        skills = []
+        log_has_date = True
+        log_span_minutes = 0
+        if log_exists:
+            if not adopted:
+                agent.current_log_path = log_path
+                # Prime context (also resets conversation_history) BEFORE we
+                # rebuild the textual turn history below.
+                allowed = {"case_nbr", "subject", "description", "issue_type", "attachment_time"}
+                try:
+                    agent.prime_with_context(**{k: v for k, v in issue.items()
+                                                if k in allowed and isinstance(v, str)})
+                except Exception as _e:
+                    print(f"[history] prime_with_context skipped: {_e}")
+            # get_skill_descriptions() only reads self.skills (set once at
+            # construction, never reassigned mid-run) and get_log_span_minutes()
+            # does its own independent file read keyed off current_log_path —
+            # both are safe to call even while the job's background thread is
+            # still analysing.
+            try:
+                skills = agent.get_skill_descriptions()
+            except Exception:
+                skills = []
+            try:
+                log_span_minutes = agent.get_log_span_minutes()
+            except Exception:
+                log_span_minutes = 0
+            # _log_has_date() reads self._raw_log_cache / _raw_log_cache_path,
+            # which the background analysis thread actively mutates via
+            # _ensure_raw_log_cache() while running=True — skip it for a live
+            # job to avoid reading that pair mid-write; the cheap default (True)
+            # just means the sidebar briefly uses the original datetime
+            # windowing until the job finishes and the page is reloaded.
+            if not running:
+                try:
+                    log_has_date = agent._log_has_date()
+                except Exception:
+                    log_has_date = True
+
+        # Restore the issue time the conversation was anchored on.
+        issue_time_str = (conv.get("issue_time") or "").strip()
+        if adopted:
+            # The adopted agent already carries the right issue_time; just
+            # surface it to the client when the snapshot didn't record one.
+            if not issue_time_str:
+                try:
+                    issue_time_str = format_issue_time(agent.issue_time) or ""
+                except Exception:
+                    issue_time_str = ""
+        elif issue_time_str:
+            try:
+                parsed, is_time_only = parse_issue_time_string(issue_time_str)
+                agent.issue_time = parsed
+                agent._issue_time_time_only = is_time_only
+            except Exception:
+                pass
+
+        # Rebuild the agent's textual conversation history ONLY when we didn't
+        # adopt a live agent (which already holds the real history). Plain
+        # user/assistant text pairs — no tool_use blocks, so the tool loop's
+        # pairing invariants stay intact.
+        if not adopted:
+            for turn in turns:
+                um = (turn.get("user_message") or "").strip()
+                if um:
+                    agent.conversation_history.append({"role": "user", "content": um})
+                at = history_service.assistant_text_from_result(turn.get("result"))
+                if at:
+                    agent.conversation_history.append({"role": "assistant", "content": at})
+
+        if log_exists:
+            session["chatbot_log_path"] = log_path
+
+        return jsonify({
+            "success": True,
+            "conversation_id": conversation_id,
+            "title": conv.get("title") or (job.title if job else "") or "Conversation",
+            "turns": turns,
+            # Live-analysis hand-off: when running, the client renders these
+            # buffered steps and then opens /history/stream to follow the rest.
+            "running": running,
+            "running_user_message": (job.title if running else ""),
+            "steps": list(job.steps) if (job is not None and running) else [],
+            "log_path": log_path,
+            "log_exists": log_exists,
+            "issue_time": issue_time_str,
+            "log_has_date": log_has_date,
+            "log_span_minutes": log_span_minutes,
+            "skills": skills,
+        })
+    except Exception as e:
+        traceback.print_exc()
         return jsonify({"success": False, "error": str(e)}), 500
 
 

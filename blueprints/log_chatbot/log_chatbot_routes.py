@@ -810,6 +810,7 @@ def chat():
                 turn_id=turn_id,
                 title=user_message,
                 agent=agent,
+                domain="",
             )
             if session_id:
                 _chatbot_instances.pop(session_id, None)
@@ -954,7 +955,7 @@ def history_list():
         #   * a persisted conversation that's mid-analysis  -> running: True
         #   * a brand-new first analysis not yet on disk     -> synthetic entry
         try:
-            running = {j["conversation_id"]: j for j in chat_jobs.active_summaries()}
+            running = {j["conversation_id"]: j for j in chat_jobs.active_summaries(domain="")}
             if running:
                 seen = set()
                 for c in conversations:

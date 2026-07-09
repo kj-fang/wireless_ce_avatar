@@ -53,6 +53,9 @@ BT_SKILLS_YAML_DATED_TEMPLATE = "bt_skills_{date}.yaml"       # date = YYYY-MM-D
 FEEDBACK_DIR_prim = rf"\\infs089b.iil.intel.com\HOME\WirelessCE\Intel_WirelessCE_Avatar\feedback"
 FEEDBACK_DIR_bkup = rf"\\infs089.iil.intel.com\HOME\WirelessCE\Intel_WirelessCE_Avatar\feedback"
 
+# ACE Playbook — remote archive on shared folder.
+ACE_PLAYBOOK_DIR_remote = r"\\infs089b.iil.intel.com\HOME\WirelessCE\Intel_WirelessCE_Avatar\ace_playbook"
+
 # Gather — usage-analytics layer.
 # On the first Send of each chatbot session a tidy, DB-ingestion-friendly
 # record is written here (one JSON per conversation) capturing who used the

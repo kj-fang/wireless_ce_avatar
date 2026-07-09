@@ -48,6 +48,7 @@ from ..pipeline import AceRunner
 from ..playbook import Playbook
 from ..cli import _skill_context_provider as _ace_skill_context_provider
 from ..history import HistoryWriter
+from ..sync import launch_sync_background
 from .scheduler import NightlyScheduler
 
 
@@ -582,6 +583,7 @@ class JobManager:
 
             self._snapshot_after_run(job_id=job_id, source=source,
                                      started_at=started_at, totals=totals)
+            self._sync_to_remote(job_id)
 
             self._emit("adapt_done", {
                 "job_id": job_id,
@@ -630,6 +632,20 @@ class JobManager:
             self.history.prune()
         except Exception as e:
             print(f"[ace.web] history snapshot failed for {job_id}: {e}")
+
+    def _sync_to_remote(self, job_id: str) -> None:
+        """Fire-and-forget sync of playbooks + history to remote SMB share."""
+        def _emit_sync(event: str, payload: dict) -> None:
+            self._emit(event, {"job_id": job_id, **payload})
+        try:
+            launch_sync_background(
+                local_dir=_resolve_playbooks_dir(),
+                remote_root_raw=path_configs.ACE_PLAYBOOK_DIR_remote,
+                emit=_emit_sync,
+                job_id=job_id,
+            )
+        except Exception as e:
+            print(f"[ace.sync] failed to launch sync: {e}")
 
     def start_batch(self, model: Optional[str] = None, source: str = "batch") -> dict:
         """Kick off AceRunner.run_batch() on the resolved feedback root.
@@ -693,6 +709,7 @@ class JobManager:
             }
             self._snapshot_after_run(job_id=job_id, source=source,
                                      started_at=started_at, totals=totals)
+            self._sync_to_remote(job_id)
             self._emit("adapt_done", {
                 "job_id": job_id,
                 "mode": "batch",

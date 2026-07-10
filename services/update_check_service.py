@@ -169,11 +169,10 @@ def check_for_update() -> UpdateCheckResult:
 
     try:
         is_latest = not _is_newer(latest_version, __version__)
-    except Exception as err:  # fail-safe: never nag the user on a parse glitch
-        _logger.warning(
-            f'Version comparison failed ({__version__} vs {latest_version}): {err}'
-        )
-        is_latest = True
+    except Exception as err:
+        raise UpdateCheckError(
+            f'Unable to compare versions ({__version__} vs {latest_version}): {err}'
+        ) from err
 
     _logger.info(
         f'Update check | current={__version__} latest={latest_version} '

@@ -214,11 +214,16 @@ class TrayManager:
 
     def _check_for_updates(self):
         self.logger.info('[UPDATE] Check-for-updates requested')
-        threading.Thread(
+        thread = getattr(self, '_update_check_thread', None)
+        if thread and thread.is_alive():
+            self.logger.info('[UPDATE] Update check already running — ignoring request')
+            return
+        self._update_check_thread = threading.Thread(
             target=self._run_update_check,
             daemon=True,
             name='UpdateCheck',
-        ).start()
+        )
+        self._update_check_thread.start()
 
     def _run_update_check(self):
         try:

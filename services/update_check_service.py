@@ -97,6 +97,8 @@ def _normalize(version_str: str) -> tuple:
     for chunk in cleaned.split('.'):
         match = re.match(r'\d+', chunk)
         parts.append(int(match.group(0)) if match else 0)
+    while len(parts) > 1 and parts[-1] == 0:
+        parts.pop()
     return tuple(parts)
 
 

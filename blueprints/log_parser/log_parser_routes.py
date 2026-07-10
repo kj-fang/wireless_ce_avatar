@@ -403,7 +403,16 @@ def _is_bt_etl(file_path: str) -> bool:
     name = os.path.basename(file_path).lower()
     return name.startswith(('ibtpci-', 'ibtusb-')) and name.endswith('.etl')
 
-def _infer_local_upload_case_type(bt_files) -> str:
+def _infer_local_upload_case_type(wifi_files, bt_files) -> str:
+    """Classify a local-upload archive as 'wifi', 'bt', or 'wifi_bt' (coexistence).
+
+    'wifi_bt' is returned when the archive contains BOTH Wi-Fi and BT logs so
+    the download result page can list both sections side-by-side. The value
+    is chosen to remain substring-compatible with the ``'wifi' in wifi_or_bt``
+    and ``'bt' in wifi_or_bt`` checks elsewhere in the codebase.
+    """
+    if bt_files and wifi_files:
+        return 'wifi_bt'
     if bt_files:
         return 'bt'
     return 'wifi'
@@ -522,8 +531,11 @@ def _process_local_analysis(source_path: str, source_dir: str, file_path: str,
         _cb(60, f'Extraction complete. Found {total} file{"s" if total != 1 else ""}.')
 
         local_case_nbr = f'local_upload_{timestamp}'
-        # Only consider bt_files for case type inference since wifi_files may be present in both wifi and bt cases
-        local_case_type = _infer_local_upload_case_type(bt_files)
+        # Consider both wifi_files and bt_files: if both are present we treat
+        # this as a Wi-Fi / BT coexistence case ('wifi_bt') so the download
+        # result page shows both log sections. Otherwise fall back to the
+        # single-domain classification (bt_files → 'bt', else 'wifi').
+        local_case_type = _infer_local_upload_case_type(wifi_files, bt_files)
 
         session['case_context'] = CaseContext(
             case_nbr=local_case_nbr,

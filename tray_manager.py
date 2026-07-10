@@ -34,8 +34,6 @@ _IDYES = 6
 
 _logger = logging.getLogger('TrayManager')
 
-_logger = logging.getLogger('TrayManager')
-
 
 class _OpenCloseFileHandler(logging.Handler):
     """Open the log file on each emit and close it immediately after writing.
@@ -279,8 +277,11 @@ class TrayManager:
         if choice == _IDYES:
             target_url = result.download_url or result.release_url
             try:
-                webbrowser.open(target_url)
-                self.logger.info(f'[UPDATE] Opened download URL: {target_url}')
+                opened = webbrowser.open(target_url)
+                if opened:
+                    self.logger.info(f'[UPDATE] Opened download URL: {target_url}')
+                else:
+                    raise RuntimeError('webbrowser.open returned False')
             except Exception as error:
                 self.logger.error(f'[UPDATE] Failed to open browser: {error}')
                 self._show_message(

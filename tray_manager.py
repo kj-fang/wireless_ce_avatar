@@ -5,6 +5,7 @@ Runs as a separate persistent process (--tray-mode).
 Monitors running_avatar.json written by the app instance on startup.
 """
 
+import ctypes
 import json
 import logging
 import glob
@@ -14,11 +15,22 @@ import sys
 import threading
 import time
 import traceback
+import webbrowser
 import psutil
 import pystray
 from PIL import Image
 from utils.port_utils import get_user_data_dir, get_logs_dir
 from utils.instance_utils import is_intelavatar_process
+
+# Win32 MessageBoxW flags (used for the update-check prompt)
+_MB_OK = 0x00000000
+_MB_YESNO = 0x00000004
+_MB_ICONERROR = 0x00000010
+_MB_ICONWARNING = 0x00000030
+_MB_ICONINFORMATION = 0x00000040
+_MB_SETFOREGROUND = 0x00010000
+_MB_TOPMOST = 0x00040000
+_IDYES = 6
 
 _logger = logging.getLogger('TrayManager')
 
@@ -191,6 +203,87 @@ class TrayManager:
         except Exception as error:
             self.logger.error(f'Tool launch failed: {error}')
 
+    def _show_message(self, title: str, text: str, style: int) -> int:
+        try:
+            return ctypes.windll.user32.MessageBoxW(
+                0, text, title, style | _MB_SETFOREGROUND | _MB_TOPMOST
+            )
+        except Exception as error:
+            self.logger.warning(f'[UPDATE] MessageBox failed: {error}')
+            return 0
+
+    def _check_for_updates(self):
+        self.logger.info('[UPDATE] Check-for-updates requested')
+        threading.Thread(
+            target=self._run_update_check,
+            daemon=True,
+            name='UpdateCheck',
+        ).start()
+
+    def _run_update_check(self):
+        try:
+            from services.update_check_service import check_for_update, UpdateCheckError
+        except Exception as error:
+            self.logger.error(f'[UPDATE] Import failed: {error}')
+            self._show_message(
+                'IntelAvatar',
+                f'Update check failed to start:\n{error}',
+                _MB_OK | _MB_ICONERROR,
+            )
+            return
+
+        try:
+            result = check_for_update()
+        except UpdateCheckError as error:
+            self.logger.warning(f'[UPDATE] Check failed: {error}')
+            self._show_message(
+                'IntelAvatar',
+                f'Unable to check for updates:\n{error}',
+                _MB_OK | _MB_ICONWARNING,
+            )
+            return
+        except Exception as error:
+            self.logger.error(f'[UPDATE] Unexpected error: {error}')
+            self.logger.error(traceback.format_exc())
+            self._show_message(
+                'IntelAvatar',
+                f'Update check failed:\n{error}',
+                _MB_OK | _MB_ICONERROR,
+            )
+            return
+
+        if result.is_latest:
+            self._show_message(
+                'IntelAvatar',
+                f'You are on the latest version ({result.current_version}).',
+                _MB_OK | _MB_ICONINFORMATION,
+            )
+            return
+
+        prompt = (
+            'A new version of IntelAvatar is available.\n\n'
+            f'Current version: {result.current_version}\n'
+            f'Latest version:  {result.latest_version}\n\n'
+            'Download the latest release now?'
+        )
+        choice = self._show_message(
+            'IntelAvatar \u2014 Update available',
+            prompt,
+            _MB_YESNO | _MB_ICONINFORMATION,
+        )
+        if choice == _IDYES:
+            target_url = result.download_url or result.release_url
+            try:
+                webbrowser.open(target_url)
+                self.logger.info(f'[UPDATE] Opened download URL: {target_url}')
+            except Exception as error:
+                self.logger.error(f'[UPDATE] Failed to open browser: {error}')
+                self._show_message(
+                    'IntelAvatar',
+                    f'Failed to open browser. Please download manually:\n{target_url}',
+                    _MB_OK | _MB_ICONWARNING,
+                )
+
     def _current_instance(self):
         return self.instances[0] if self.instances else None
 
@@ -273,6 +366,11 @@ class TrayManager:
             pystray.MenuItem(
                 'Driver Download Tool',
                 lambda icon, item: self._launch_tool_exe(),
+                enabled=True
+            ),
+            pystray.MenuItem(
+                'Check for Updates',
+                lambda icon, item: self._check_for_updates(),
                 enabled=True
             ),
             pystray.Menu.SEPARATOR,

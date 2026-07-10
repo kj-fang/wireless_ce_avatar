@@ -20,6 +20,31 @@ bt_service = BTAnalysisService()
 fw_service = FWAnalysisService()
 
 
+def _is_bt_etl_file(file_path: str) -> bool:
+    """Return True when an .etl file was produced by the BT driver.
+
+    Matches the same naming rule used by ``utils/attachment_decompose.py`` to
+    classify BT ETLs during archive extraction (basename starts with
+    ``ibtusb-`` / ``ibtpci-`` and ends in ``.etl``). Kept local to the routes
+    module so it can be used to dispatch to the right analysis service for
+    Wi-Fi / BT coexistence cases where ``case_context.wifi_or_bt`` alone is
+    ambiguous.
+    """
+    name = os.path.basename(file_path or '').lower()
+    return name.startswith(('ibtusb-', 'ibtpci-')) and name.endswith('.etl')
+
+
+def _run_bt_analysis(etl_path: str, mode: str, case_context: CaseContext) -> None:
+    classification = session.get("classification", {})
+    issue_type = (classification or {}).get("issue_type")
+    bt_service.analyze(
+        etl_path,
+        mode=mode,
+        issue_type=issue_type,
+        wifi_or_bt=case_context.wifi_or_bt,
+    )
+
+
 @analysis_etl_bp.route('/process_etl_path')
 def process_etl_path():
     case_context = session["case_context"]
@@ -35,17 +60,25 @@ def process_etl_path():
     
     subprocess.run(['explorer', '/select,', etl_path])
 
-    if 'wifi' in case_context.wifi_or_bt:
+    wifi_or_bt = (case_context.wifi_or_bt or '').lower()
+    has_wifi = 'wifi' in wifi_or_bt
+    has_bt = 'bt' in wifi_or_bt
+
+    # For coexistence cases (both 'wifi' and 'bt' substrings, e.g. the
+    # 'wifi_bt' value emitted by the local-upload flow) the case-level tag
+    # can't tell us which parser to run — the substring check ``'wifi' in ...``
+    # would always win and misroute BT ETLs into the Wi-Fi service. Dispatch
+    # by the actual file name instead so each row on the download result
+    # page hits the correct analyser.
+    if has_wifi and has_bt:
+        if _is_bt_etl_file(etl_path):
+            _run_bt_analysis(etl_path, mode, case_context)
+        else:
+            wifi_service.analyze(etl_path)
+    elif has_wifi:
         wifi_service.analyze(etl_path)
-    elif 'bt' in case_context.wifi_or_bt:
-        classification = session.get("classification", {})
-        issue_type = (classification or {}).get("issue_type")
-        bt_service.analyze(
-            etl_path,
-            mode=mode,
-            issue_type=issue_type,
-            wifi_or_bt=case_context.wifi_or_bt,
-        )
+    elif has_bt:
+        _run_bt_analysis(etl_path, mode, case_context)
     else:
         return "❌ Unknown case subcategory", 400
     
@@ -59,8 +92,16 @@ def process_etl_path_fw():
 
     fw_path = unquote(request.args.get("fw_path", ""))
 
-    if case_context.wifi_or_bt in ['wifi', 'bt']:
-        task_id, error_msg = fw_service.start_async(fw_path, case_context.wifi_or_bt)
+    # Accept coexistence values (e.g. 'wifi_bt') in addition to the strict
+    # 'wifi' / 'bt'. FW ETLs from both technologies share the same ``wrt-fw``
+    # filename prefix, so we can't dispatch by file name; instead we forward
+    # the raw ``wifi_or_bt`` tag and let ``fw_service`` (which already uses
+    # substring checks internally) pick a branch. For 'wifi_bt' that defaults
+    # to the Wi-Fi FW path, matching the existing substring behaviour.
+    wifi_or_bt = (case_context.wifi_or_bt or '').lower()
+    is_coex = 'wifi' in wifi_or_bt and 'bt' in wifi_or_bt
+    if wifi_or_bt in ('wifi', 'bt') or is_coex:
+        task_id, error_msg = fw_service.start_async(fw_path, wifi_or_bt)
         if not task_id:
             return jsonify({"ok": False, "error": error_msg}), 400
     else:

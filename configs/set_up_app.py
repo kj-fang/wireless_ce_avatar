@@ -160,9 +160,13 @@ def set_up(socketio):
         # working without playbooks.
         try:
             from services.ace import AceRunner
+            from services.ace import sync_utils as ace_sync
             from services import feedback_service
-            base = getattr(app_config, "avatarfiles_dir", None)
-            playbooks_root = (Path(base) / "ace_playbooks") if base else (Path.cwd() / "data" / "ace_playbooks")
+            try:
+                ace_sync.sync_at_boot()
+            except Exception as e:
+                print(f"⚠️  ACE playbook cloud sync skipped: {e}")
+            playbooks_root = ace_sync.local_working_dir()
 
             def _skill_provider(sid: str):
                 # Look up the skill in the agent's already-loaded skills dict

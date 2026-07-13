@@ -29,6 +29,7 @@ from configs.global_configs import app_config
 from services.llm_service import LLM_helper
 from utils import helpers
 
+from . import sync_utils as ace_sync
 from .pipeline import AceRunner
 
 
@@ -55,10 +56,9 @@ def _resolve_feedback_root() -> Path:
 
 
 def _resolve_playbooks_dir() -> Path:
-    base = getattr(app_config, "avatarfiles_dir", None)
-    root = Path(base) / "ace_playbooks" if base else Path.cwd() / "data" / "ace_playbooks"
-    root.mkdir(parents=True, exist_ok=True)
-    return root
+    """Cheap — just resolves the local working dir. The (network-bound)
+    cloud sync itself runs once in main(), before any subcommand."""
+    return ace_sync.local_working_dir()
 
 
 def _build_llm(model: str | None) -> LLM_helper:
@@ -255,6 +255,10 @@ def main(argv=None):
 
     args = parser.parse_args(argv)
     _ensure_avatarfiles_dir()
+    try:
+        ace_sync.sync_at_boot()
+    except Exception as e:
+        print(f"[ace.cli] cloud sync skipped: {e}")
     print(f"[ace.cli] playbooks_dir = {_resolve_playbooks_dir()}")
     return args.func(args) or 0
 

@@ -44,6 +44,7 @@ from configs.global_configs import app_config
 from services.llm_service import LLM_helper
 from utils import helpers
 
+from .. import sync_utils as ace_sync
 from ..pipeline import AceRunner
 from ..playbook import Playbook
 from ..cli import _skill_context_provider as _ace_skill_context_provider
@@ -191,10 +192,9 @@ def _resolve_feedback_root() -> Path:
 
 
 def _resolve_playbooks_dir() -> Path:
-    base = getattr(app_config, "avatarfiles_dir", None)
-    root = Path(base) / "ace_playbooks" if base else Path.cwd() / "data" / "ace_playbooks"
-    root.mkdir(parents=True, exist_ok=True)
-    return root
+    """Cheap — just resolves the local working dir. The (network-bound)
+    cloud sync itself runs once at startup, see main()."""
+    return ace_sync.local_working_dir()
 
 
 def _build_llm(model: Optional[str] = None) -> LLM_helper:
@@ -679,6 +679,11 @@ def main(argv: Optional[list[str]] = None) -> int:
         global _FB_ROOT_OVERRIDE
         _FB_ROOT_OVERRIDE = Path(args.feedback_dir).expanduser().resolve()
         print(f"[ace.web] --feedback-dir override: {_FB_ROOT_OVERRIDE}")
+
+    try:
+        ace_sync.sync_at_boot()
+    except Exception as e:
+        print(f"[ace.web] cloud sync skipped: {e}")
 
     app, socketio, _jobs = create_app()
     print(f"[ace.web] serving on http://{args.host}:{args.port}")

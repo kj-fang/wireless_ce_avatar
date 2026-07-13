@@ -30,6 +30,7 @@ from datetime import datetime
 from pathlib import Path
 from typing import Callable, Iterable, Optional
 
+from . import sync_utils as ace_sync
 from .playbook import Playbook
 from .roles import Reflector, Curator
 
@@ -235,6 +236,13 @@ class AceRunner:
         self.workflow_pb.save()
         for pb in self.domain_pbs.values():
             pb.save()
+
+        # 6. Best-effort mirror this machine's updated playbooks back to the
+        # share (non-blocking — a slow/unreachable share never delays the
+        # response). See services/ace/sync_utils.py.
+        ace_sync.push_local_to_cloud_async(
+            [self.workflow_pb.path] + [pb.path for pb in self.domain_pbs.values()]
+        )
 
         result = {
             "status": "ok",

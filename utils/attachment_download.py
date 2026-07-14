@@ -3,6 +3,7 @@ from selenium.webdriver.chrome.service import Service
 #from webdriver_manager.chrome import ChromeDriverManager
 import time
 import os
+import re
 from concurrent.futures import ThreadPoolExecutor, as_completed
 from tqdm import tqdm
 import json
@@ -26,7 +27,7 @@ def run_dload_threads(att_list, download_path, socketio):
     with ThreadPoolExecutor(max_workers=15) as executor:
         futures = [executor.submit(download_file, name, url, download_path, driver_manager, socketio) for name, url, _ in att_list]
         for future in as_completed(futures):
-            if driver_manager.shutdown_event.is_set():
+            if driver_manager.shutdown_event.is_set() or driver_manager.download_cancel_event.is_set():
                 print("shutddown!!!", driver_manager.shutdown_event)
                 break
             result = future.result()
@@ -61,6 +62,61 @@ def extract_content_length(logs):
 
 STALL_TIMEOUT = 45   # If no progress for this many seconds, consider the download stalled
 
+def _remove_partial_download(temp_path, name):
+    """Delete the incomplete .crdownload file left behind when a download is
+    cancelled. Chrome may need a moment to release the file handle on Windows,
+    so retry a few times before giving up."""
+    for _ in range(5):
+        if not os.path.exists(temp_path):
+            return
+        try:
+            os.remove(temp_path)
+            print(f"🗑️ Removed partial download after cancel: {name}")
+            return
+        except OSError as e:
+            print(f"⚠️ Could not remove partial download for {name} yet: {e}")
+            time.sleep(0.5)
+
+# GUID-named buffer files Chrome's new headless mode writes while downloading,
+# e.g. "b318a460-f686-449b-bc72-ab4f6cc8d698.tmp".
+_GUID_TMP_RE = re.compile(
+    r'^[0-9a-fA-F]{8}-[0-9a-fA-F]{4}-[0-9a-fA-F]{4}-[0-9a-fA-F]{4}-[0-9a-fA-F]{12}\.tmp$'
+)
+
+def cleanup_incomplete_downloads(download_path):
+    """Remove leftover temporary download files after a cancelled session.
+
+    Only runs once every download worker has stopped, so nothing is legitimately
+    downloading anymore — any remaining Chrome temp files are orphans from the
+    interrupted downloads. We only delete the two temp patterns Chrome uses
+    (``<name>.crdownload`` and the GUID ``<uuid>.tmp`` buffer files); completed
+    files are never touched. A short retry covers the brief delay before Windows
+    releases the file handle after the driver quits.
+    """
+    if not download_path or not os.path.isdir(download_path):
+        return
+    for _ in range(5):
+        remaining = False
+        try:
+            entries = os.listdir(download_path)
+        except OSError:
+            return
+        for entry in entries:
+            if not (entry.endswith('.crdownload') or _GUID_TMP_RE.match(entry)):
+                continue
+            full = os.path.join(download_path, entry)
+            if not os.path.isfile(full):
+                continue
+            try:
+                os.remove(full)
+                print(f"🗑️ Removed leftover temp download: {entry}")
+            except OSError as e:
+                print(f"⚠️ Could not remove temp download {entry} yet: {e}")
+                remaining = True
+        if not remaining:
+            return
+        time.sleep(0.5)
+
 def download_file(name, url, download_path, driver_manager: DriverManager, socketio):
 
     os.makedirs(download_path, exist_ok=True)
@@ -80,7 +136,8 @@ def download_file(name, url, download_path, driver_manager: DriverManager, socke
 
     progress_data[name] = 0
     
-    while (retry < max_retry) and not driver_manager.shutdown_event.is_set():
+    while (retry < max_retry) and not driver_manager.shutdown_event.is_set() \
+            and not driver_manager.download_cancel_event.is_set():
         driver = None
         pbar = None
         if os.path.exists(temp_path):
@@ -88,8 +145,12 @@ def download_file(name, url, download_path, driver_manager: DriverManager, socke
             os.remove(temp_path)
         try:
             driver = driver_manager.create_download_driver(download_path, performance_logging=True)
+            if driver_manager.download_cancel_event.is_set():
+                return
             driver.get(url)
 
+            if driver_manager.download_cancel_event.is_set():
+                return
             time.sleep(5)
             logs = driver.get_log("performance")
             file_size_bytes = extract_content_length(logs)
@@ -107,8 +168,10 @@ def download_file(name, url, download_path, driver_manager: DriverManager, socke
             last_size = 0
             stall_elapsed = 0
             while True:
-                if driver_manager.shutdown_event.is_set():
+                if driver_manager.shutdown_event.is_set() or driver_manager.download_cancel_event.is_set():
                     pbar.close()
+                    if driver_manager.download_cancel_event.is_set():
+                        _remove_partial_download(temp_path, name)
                     return
                 
                 time.sleep(0.5)
@@ -156,6 +219,10 @@ def download_file(name, url, download_path, driver_manager: DriverManager, socke
                         raise TimeoutError(f"Download stalled (no file) for {name}")
                 
         except Exception as e:
+            if driver_manager.download_cancel_event.is_set():
+                # Cancelled mid-flight — don't treat as a retryable failure.
+                _remove_partial_download(temp_path, name)
+                return
             print(f"Download failed {e}")
             print(f"Retry download file: {name}")
             retry += 1

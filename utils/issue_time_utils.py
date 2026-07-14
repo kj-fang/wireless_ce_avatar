@@ -36,8 +36,62 @@ _TIME_ONLY_FORMATS = (
     "%I:%M:%S %p", "%I:%M %p", "%I:%M:%S%p", "%I:%M%p",
 )
 
-# MM/DD/YYYY-HH:MM:SS.mmm — canonical timestamp format inside a .log file.
-_LOG_TS_RE = re.compile(r"(\d{2}/\d{2}/\d{4}-\d{2}:\d{2}:\d{2}\.\d{3})")
+# Recognised in-log timestamp formats (tried per line; first/best match wins).
+# Each entry is (compiled-regex, tuple-of-strptime-formats-to-try).
+#   * Wi-Fi ETL : MM/DD/YYYY-HH:MM:SS.mmm    (date/time joined by '-')
+#   * BT HCI    : YYYY/MM/DD HH:MM:SS(.mmm)  (date/time space-separated, ms optional)
+# The Wi-Fi pattern is kept exactly as before so existing Wi-Fi cases are
+# unaffected; the HCI pattern is purely additive.
+_LOG_TS_SPECS = (
+    (re.compile(r"\d{2}/\d{2}/\d{4}-\d{2}:\d{2}:\d{2}\.\d{3}"),
+     ("%m/%d/%Y-%H:%M:%S.%f",)),
+    (re.compile(r"\d{4}/\d{2}/\d{2}\s\d{2}:\d{2}:\d{2}(?:\.\d{1,3})?"),
+     ("%Y/%m/%d %H:%M:%S.%f", "%Y/%m/%d %H:%M:%S")),
+)
+
+
+def _parse_log_ts_token(token: str, fmts: Tuple[str, ...]) -> Optional[datetime]:
+    """Parse a matched timestamp token against its candidate strptime formats."""
+    for fmt in fmts:
+        try:
+            return datetime.strptime(token, fmt)
+        except ValueError:
+            continue
+    return None
+
+
+def _first_log_ts(text: str) -> Optional[datetime]:
+    """Datetime of the EARLIEST-positioned in-log timestamp in ``text`` (any
+    recognised format), or None."""
+    best_pos: Optional[int] = None
+    best_dt: Optional[datetime] = None
+    for rx, fmts in _LOG_TS_SPECS:
+        m = rx.search(text)
+        if not m:
+            continue
+        if best_pos is None or m.start() < best_pos:
+            dt = _parse_log_ts_token(m.group(0), fmts)
+            if dt:
+                best_pos, best_dt = m.start(), dt
+    return best_dt
+
+
+def _last_log_ts(text: str) -> Optional[datetime]:
+    """Datetime of the LATEST-positioned in-log timestamp in ``text`` (any
+    recognised format), or None."""
+    best_pos: Optional[int] = None
+    best_dt: Optional[datetime] = None
+    for rx, fmts in _LOG_TS_SPECS:
+        last = None
+        for m in rx.finditer(text):
+            last = m
+        if last is None:
+            continue
+        if best_pos is None or last.start() > best_pos:
+            dt = _parse_log_ts_token(last.group(0), fmts)
+            if dt:
+                best_pos, best_dt = last.start(), dt
+    return best_dt
 
 
 def parse_issue_time_string(s: str) -> Tuple[Optional[datetime], bool]:
@@ -81,9 +135,9 @@ def read_log_time_range(log_path: str) -> Tuple[Optional[datetime], Optional[dat
             for i, line in enumerate(f):
                 if i > 200:
                     break
-                m = _LOG_TS_RE.search(line)
-                if m:
-                    first_ts = datetime.strptime(m.group(1), "%m/%d/%Y-%H:%M:%S.%f")
+                dt = _first_log_ts(line)
+                if dt:
+                    first_ts = dt
                     break
 
             f.seek(0, 2)
@@ -91,9 +145,7 @@ def read_log_time_range(log_path: str) -> Tuple[Optional[datetime], Optional[dat
             read_size = min(file_size, 65536)
             f.seek(file_size - read_size)
             tail = f.read()
-            matches = _LOG_TS_RE.findall(tail)
-            if matches:
-                last_ts = datetime.strptime(matches[-1], "%m/%d/%Y-%H:%M:%S.%f")
+            last_ts = _last_log_ts(tail) or last_ts
     except Exception as e:
         print(f"[issue_time] read_log_time_range failed for {log_path}: {e}")
     return first_ts, last_ts

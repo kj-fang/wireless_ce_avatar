@@ -202,6 +202,119 @@ def build_log_digest(
     return digest
 
 
+def build_event_log_digest(
+    events: Optional[List[dict]],
+    max_events: int = 40,
+    max_chars: int = 4000,
+) -> str:
+    """Format System-Event-Log Warning/Error rows into a compact, HIGH-SIGNAL
+    block the LLM can use as a strong anchor for the issue time.
+
+    Each ``event`` is the dict shape produced by
+    ``services.event_log_service.get_paged_events`` — keys: ``time`` (already
+    timezone-converted ``YYYY-MM-DD HH:MM:SS``), ``level``, ``source``,
+    ``event_id``, ``message``.
+
+    Unlike the rough raw-log browse (which only samples lines and is noisy on a
+    huge BT capture), these rows are pre-filtered by the page's Warn+Err drop-
+    down, so every line here is already a likely "something went wrong" moment.
+    We keep them chronological, cap the count/length, and trim each message so
+    the prompt stays small while still carrying the timestamp + symptom.
+
+    Returns "" when there are no usable events (caller then omits the section).
+    """
+    rows = [e for e in (events or []) if isinstance(e, dict) and e.get("time")]
+    if not rows:
+        return ""
+
+    # Chronological so the LLM reads them as a timeline. ``time`` is a sortable
+    # ISO-ish string already; fall back to original order on any odd value.
+    try:
+        rows.sort(key=lambda e: str(e.get("time") or ""))
+    except Exception:
+        pass
+
+    # Errors/Critical are stronger anchors than Warnings — if we have to drop
+    # rows to fit the cap, keep the most severe first, then re-sort by time.
+    _sev_rank = {"critical": 0, "error": 1, "warning": 2}
+    if len(rows) > max_events:
+        rows.sort(key=lambda e: _sev_rank.get(str(e.get("level", "")).lower(), 9))
+        rows = rows[:max_events]
+        try:
+            rows.sort(key=lambda e: str(e.get("time") or ""))
+        except Exception:
+            pass
+
+    lines = []
+    for e in rows:
+        msg = re.sub(r"\s+", " ", str(e.get("message", "") or "")).strip()[:160]
+        lines.append(
+            f"[{str(e.get('level', '')).upper()}] {e.get('time', '')} | "
+            f"{e.get('source', '')} | ID {e.get('event_id', '')} | {msg}"
+        )
+    digest = "\n".join(lines)
+    if len(digest) > max_chars:
+        digest = digest[:max_chars] + "\n…(truncated)"
+    return digest
+
+
+def find_nearest_event_error(
+    events: Optional[List[dict]],
+    target_dt: Optional[datetime],
+    max_diff_seconds: int = 600,
+    levels: Tuple[str, ...] = ("error", "critical"),
+) -> Optional[dict]:
+    """Find the System-Event-Log Error/Critical entry closest in time to
+    ``target_dt`` (an AI-suggested or current issue time).
+
+    Shared back-end for the sidebar "Found a nearby system error — which time
+    to use?" refine picker: the AI-suggest route already loads the capture's
+    Warning/Error rows to anchor the LLM, so we reuse THOSE same rows here to
+    compute the nearest fault — no second event-log scan / fetch needed.
+
+    ``events`` are the dicts produced by ``event_log_service.get_paged_events``
+    (``time`` already timezone-converted ``YYYY-MM-DD HH:MM:SS``). Returns a
+    dict shaped to match the frontend ``findClosestEventError`` contract
+    (``formatted_time`` as ``MM/DD/YYYY-HH:MM:SS``), or None when nothing
+    qualifies within ``max_diff_seconds``.
+    """
+    if not events or target_dt is None:
+        return None
+    best = None
+    best_diff = None
+    for e in events:
+        if not isinstance(e, dict):
+            continue
+        if str(e.get("level", "")).lower() not in levels:
+            continue
+        t = str(e.get("time") or "").strip()
+        if not t:
+            continue
+        edt = None
+        for fmt in ("%Y-%m-%d %H:%M:%S.%f", "%Y-%m-%d %H:%M:%S"):
+            try:
+                edt = datetime.strptime(t[:26], fmt)
+                break
+            except ValueError:
+                continue
+        if edt is None:
+            continue
+        diff = abs((edt - target_dt).total_seconds())
+        if best_diff is None or diff < best_diff:
+            best_diff, best = diff, (e, edt)
+    if best is None or best_diff > max_diff_seconds:
+        return None
+    e, edt = best
+    return {
+        "formatted_time": edt.strftime("%m/%d/%Y-%H:%M:%S"),
+        "diff_seconds": best_diff,
+        "source": str(e.get("source", "")),
+        "event_id": str(e.get("event_id", "")),
+        "level": str(e.get("level", "")),
+        "message": str(e.get("message", "")),
+    }
+
+
 def parse_json_loose(raw: str) -> dict:
     """Best-effort JSON extraction from an LLM reply (tolerates code fences /
     surrounding prose)."""
@@ -233,6 +346,7 @@ def llm_suggest(
     log_frame_first_ts: Optional[datetime] = None,
     log_frame_last_ts: Optional[datetime] = None,
     tz_label: str = "",
+    event_digest: Optional[str] = None,
 ) -> dict:
     """Ask the LLM to infer issue time(s) from the description + log sample.
 
@@ -254,6 +368,14 @@ def llm_suggest(
     use case) but defers to the user's description for the specific
     scenario, and deliberately does NOT enumerate event types so the model
     isn't primed away from the actual issue.
+
+    ``event_digest`` (optional) is a compact list of System-Event-Log
+    Warning/Error rows (see ``build_event_log_digest``). When present it is a
+    SECONDARY reference — NOT a forced anchor: the user's description plus the
+    raw-log sample remain the source of truth, and the model decides for itself
+    whether a nearby fault row is actually relevant before leaning on it. Their
+    timestamps are real dated clock times that correlate with the BT log's own
+    timeline, so they help cross-check / refine the inferred time.
     """
     if first_ts and last_ts:
         rng = f"The log spans {format_issue_time(first_ts)} to {format_issue_time(last_ts)}."
@@ -314,6 +436,19 @@ def llm_suggest(
     # analyses), but we deliberately don't enumerate event types or
     # vocabulary — the user's description carries the actual specifics
     # and the digest carries the actual log lines.
+    # When System-Event-Log Warn/Err rows are available, offer them as a
+    # SECONDARY reference only: the description + raw-log sample stay the
+    # source of truth, and the model itself decides whether a fault row is
+    # actually relevant before using it to refine the inferred time.
+    event_priority = (
+        " A list of System Event Log Warning/Error entries is also provided as "
+        "a SECONDARY reference (not a mandatory anchor). Judge the issue time "
+        "primarily from the user's description and the raw log sample; only if "
+        "a fault entry's timing and source genuinely match the scenario, use it "
+        "to cross-check or fine-tune the time. Do NOT force the time onto an "
+        "event-log row when the description and log point elsewhere. "
+        if event_digest else ""
+    )
     system = (
         "You determine the 'issue time' that anchors log analysis. Logs are "
         "typically Wi-Fi or Bluetooth, but the user's problem description "
@@ -323,6 +458,7 @@ def llm_suggest(
         "— use the description to decide which lines in the log are "
         "relevant, and pick the timestamp that sits next to one of those "
         "lines. "
+        f"{event_priority}"
         f"{rng}{tz_block} {format_rule}\n"
         "Reply with STRICT JSON only (no markdown, no prose) of the form:\n"
         '{"interpretation":"<one short sentence on what the user means>",'
@@ -340,10 +476,15 @@ def llm_suggest(
         '(none provided — pick the time of the most notable event you can '
         'identify in the log)'
     )
+    event_section = (
+        f"\n\n=== System Event Log (Warning/Error — secondary reference) ===\n{event_digest}"
+        if event_digest else ""
+    )
     user = (
         "User description:\n"
         f"{text or fallback_text}\n\n"
         f"=== Rough log sample ===\n{log_digest or '(no log loaded)'}"
+        f"{event_section}"
     )
     response = llm_client.chat.completions.create(
         model=llm_model,
@@ -367,6 +508,7 @@ def build_issue_time_suggestions(
     log_frame_first_ts: Optional[datetime] = None,
     log_frame_last_ts: Optional[datetime] = None,
     tz_label: str = "",
+    event_log_events: Optional[List[dict]] = None,
 ) -> dict:
     """Full orchestration. Returns a response payload dict ready to ``jsonify``.
 
@@ -379,6 +521,13 @@ def build_issue_time_suggestions(
     time-only log (DDD / tracefmt) yields suggestions WITHOUT a placeholder
     date (month/day/year = None, issue_time formatted as ``HH:MM:SS.mmm``).
     Default ``None`` keeps the original behaviour (treat as dated).
+
+    ``event_log_events`` (optional) is the list of System-Event-Log
+    Warning/Error rows (``get_paged_events`` shape) for the loaded capture.
+    When supplied they are turned into a SECONDARY-reference digest and fed
+    to the LLM alongside the raw-log sample — the model weighs them itself
+    rather than being forced onto a fault row. Omitting it (Wi-Fi /
+    log_chatbot) keeps the original behaviour.
     """
     no_date = log_has_date is False
 
@@ -429,6 +578,7 @@ def build_issue_time_suggestions(
         }
 
     log_digest = build_log_digest(log_lines or [])
+    event_digest = build_event_log_digest(event_log_events)
     # Wrap the LLM call so any network / parse / API-error failure degrades
     # gracefully into "no suggestions" instead of a 500 — the log-first
     # fallback below then still gives the user a usable anchor. Without
@@ -440,6 +590,7 @@ def build_issue_time_suggestions(
             log_frame_first_ts=log_frame_first_ts,
             log_frame_last_ts=log_frame_last_ts,
             tz_label=tz_label,
+            event_digest=event_digest,
         )
     except Exception as _e:
         print(f"[issue_time_ai] llm_suggest failed, deferring to fallback: {_e}")

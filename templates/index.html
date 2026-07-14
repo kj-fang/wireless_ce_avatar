@@ -514,6 +514,34 @@
         }
 
 
+        /* ===== Cancel Upload Button ===== */
+        .upload-cancel-btn {
+            margin-top: 14px;
+            padding: 8px 22px;
+            border-radius: 999px;
+            border: 1px solid #d94848;
+            background: #fff;
+            color: #d94848;
+            font-weight: 600;
+            font-size: 0.85em;
+            cursor: pointer;
+            transition: all 0.2s ease;
+        }
+
+        .upload-cancel-btn:hover {
+            background: #d94848;
+            color: #fff;
+            transform: translateY(-1px);
+            box-shadow: 0 6px 14px rgba(217, 72, 72, 0.25);
+        }
+
+        .upload-cancel-btn:disabled {
+            opacity: 0.5;
+            cursor: not-allowed;
+            transform: none;
+            box-shadow: none;
+        }
+
         /* ===== Disabled ===== */
 
         .upload-action-btn:disabled,
@@ -788,6 +816,9 @@
                 ">
                 Preparing local file upload...
             </div>
+            <button id="upload-cancel-btn" type="button" class="upload-cancel-btn" onclick="cancelLocalUpload()" disabled>
+                Cancel Upload
+            </button>
         </div>
     </div>
 
@@ -831,6 +862,8 @@
         let uploadSocket = null;
         let uploadProgressLine = null;
         let uploadPreparingTimeoutId = null;
+        let uploadAbortController = null;
+        let uploadCurrentId = null;
         
         const tabs = document.querySelectorAll('.tab');
         const container = document.querySelector('.tabs');
@@ -975,6 +1008,32 @@
                 uploadSocket = null;
             }
             clearUploadPreparingTimeout();
+        }
+
+        function cancelLocalUpload() {
+            if (!uploadAbortController) {
+                return;
+            }
+            const cancelBtn = document.getElementById('upload-cancel-btn');
+            if (cancelBtn) {
+                cancelBtn.disabled = true;
+                cancelBtn.textContent = 'Cancelling...';
+            }
+            // Ask the server to stop at the next stage boundary. Fire-and-forget
+            // — we don't block the UI on it; the fetch abort below returns control
+            // to the user immediately.
+            if (uploadCurrentId) {
+                fetch('/log_parser/cancel_local_analysis', {
+                    method: 'POST',
+                    headers: { 'Content-Type': 'application/json' },
+                    body: JSON.stringify({ upload_id: uploadCurrentId })
+                }).catch((e) => console.warn('Cancel request failed:', e));
+            }
+            try {
+                uploadAbortController.abort();
+            } catch (e) {
+                console.warn('Abort failed:', e);
+            }
         }
 
         // Handle form submission based on dropdown selection
@@ -1255,7 +1314,19 @@
             // Show local-upload specific loading and connect socket for real-time logs
             showLocalUploadLoading();
             connectUploadProgressSocket();
-            
+
+            // Reset cancel state and prepare AbortController for this upload
+            uploadAbortController = new AbortController();
+            uploadCurrentId = (window.crypto && typeof window.crypto.randomUUID === 'function')
+                ? window.crypto.randomUUID()
+                : ('u-' + Date.now() + '-' + Math.random().toString(16).slice(2));
+            formData.append('upload_id', uploadCurrentId);
+            const cancelBtn = document.getElementById('upload-cancel-btn');
+            if (cancelBtn) {
+                cancelBtn.disabled = false;
+                cancelBtn.textContent = 'Cancel Upload';
+            }
+
             if (document.getElementById('bsod-checkbox-input').checked) {
                 formData.append('is_bsod', 'true');
             }
@@ -1263,10 +1334,17 @@
             try {
                 const response = await fetch('/log_parser/upload_local_analysis', {
                     method: 'POST',
-                    body: formData
+                    body: formData,
+                    signal: uploadAbortController.signal
                 });
 
                 const result = await response.json();
+                if (result && result.cancelled) {
+                    disconnectUploadSocket();
+                    document.getElementById('tabs-container').style.display = 'block';
+                    hideAllLoadingBoxes();
+                    return;
+                }
                 if (!response.ok || !result.success) {
                     throw new Error(result.message || ('Upload failed with status: ' + response.status));
                 }
@@ -1309,9 +1387,19 @@
                 }
             } catch (error) {
                 disconnectUploadSocket();
-                alert('❌ Error occurred: ' + error.message);
+                if (error.name !== 'AbortError') {
+                    alert('❌ Error occurred: ' + error.message);
+                }
                 document.getElementById('tabs-container').style.display = 'block';
                 hideAllLoadingBoxes();
+            } finally {
+                uploadAbortController = null;
+                uploadCurrentId = null;
+                const cancelBtn = document.getElementById('upload-cancel-btn');
+                if (cancelBtn) {
+                    cancelBtn.disabled = true;
+                    cancelBtn.textContent = 'Cancel Upload';
+                }
             }
         }
     </script>

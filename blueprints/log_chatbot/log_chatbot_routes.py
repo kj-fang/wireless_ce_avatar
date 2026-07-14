@@ -466,7 +466,7 @@ def _job_sse(job):
 # ------------------------------------------------------------------
 def _extract_report_summary(report_path: str) -> tuple:
     """Extract Test Item, Test Result, SUMMARY section, and error time from a
-    structured validation report (.txt).
+    structured validation report (.txt or .md).
 
     Returns: (summary: str, issue_time: str)
       summary    — multi-part description for the LLM
@@ -482,37 +482,71 @@ def _extract_report_summary(report_path: str) -> tuple:
 
     parts = []
 
-    # Title / Test Item (first non-empty line after the top divider)
-    title_m = _re.search(r'={10,}\s*\n(.+?)\s*\n={10,}', content)
-    if title_m:
-        parts.append(title_m.group(1).strip())
+    if report_path.lower().endswith('.md'):
+        # ── Markdown report format ─────────────────────────────────────────
+        # Title: first level-1 heading  (# WiFi 6GHz Connection Test Report …)
+        title_m = _re.search(r'^#\s+(.+)', content, _re.MULTILINE)
+        if title_m:
+            parts.append(title_m.group(1).strip())
 
-    # Test Item details
-    item_m = _re.search(r'Test Item:\s*(.+?)(?=\nTest Result:|\n\n={5,})', content, _re.DOTALL)
-    if item_m:
-        item = ' '.join(item_m.group(1).split())
-        parts.append(f"Test: {item}")
+        # Test Item: **Test Item:** <value>
+        item_m = _re.search(r'\*\*Test Item:\*\*\s*(.+)', content)
+        if item_m:
+            item = ' '.join(item_m.group(1).split())
+            parts.append(f"Test: {item}")
 
-    # Test Result (PASSED / FAILED / BLOCKED …)
-    result_m = _re.search(r'Test Result:\s*(\S+)', content)
-    if result_m:
-        parts.append(f"Result: {result_m.group(1)}")
+        # Test Result: **Test Result:** ❌ **FAILED** / ✅ **PASSED** / plain word
+        result_m = _re.search(r'\*\*Test Result:\*\*\s*(.+)', content)
+        if result_m:
+            # Strip markdown bold markers and emoji, keep the first word (PASSED/FAILED/…)
+            raw_result = result_m.group(1).strip()
+            raw_result = _re.sub(r'\*+', '', raw_result)           # remove ** bold
+            raw_result = _re.sub(r'[^\x00-\x7F]', '', raw_result)  # strip non-ASCII (emoji)
+            raw_result = raw_result.strip()
+            first_word = raw_result.split()[0] if raw_result.split() else raw_result
+            parts.append(f"Result: {first_word}")
 
-    # SUMMARY section body (between the two === dividers that wrap it)
-    summary_m = _re.search(
-        r'={10,}\s*\nSUMMARY\s*\n={10,}\s*\n(.*?)(?=\n={10,})',
-        content, _re.DOTALL | _re.IGNORECASE
-    )
-    if summary_m:
-        parts.append(summary_m.group(1).strip())
+        # Summary section: content under "## Summary" up to the next "---" or "##"
+        summary_m = _re.search(
+            r'^##\s+Summary\s*\n(.*?)(?=\n---|\n##\s)',
+            content, _re.DOTALL | _re.MULTILINE | _re.IGNORECASE
+        )
+        if summary_m:
+            parts.append(summary_m.group(1).strip())
+
+    else:
+        # ── Plain-text (.txt) report format ───────────────────────────────
+        # Title / Test Item (first non-empty line after the top divider)
+        title_m = _re.search(r'={10,}\s*\n(.+?)\s*\n={10,}', content)
+        if title_m:
+            parts.append(title_m.group(1).strip())
+
+        # Test Item details
+        item_m = _re.search(r'Test Item:\s*(.+?)(?=\nTest Result:|\n\n={5,})', content, _re.DOTALL)
+        if item_m:
+            item = ' '.join(item_m.group(1).split())
+            parts.append(f"Test: {item}")
+
+        # Test Result (PASSED / FAILED / BLOCKED …)
+        result_m = _re.search(r'Test Result:\s*(\S+)', content)
+        if result_m:
+            parts.append(f"Result: {result_m.group(1)}")
+
+        # SUMMARY section body (between the two === dividers that wrap it)
+        summary_m = _re.search(
+            r'={10,}\s*\nSUMMARY\s*\n={10,}\s*\n(.*?)(?=\n={10,})',
+            content, _re.DOTALL | _re.IGNORECASE
+        )
+        if summary_m:
+            parts.append(summary_m.group(1).strip())
 
     summary = '\n\n'.join(p for p in parts if p)
 
-    # Test Error Happened Time: 2026-06-17 17:30:21
+    # Test Error Happened Time: 2026-06-17 17:30:21  (shared by both formats)
     # Convert YYYY-MM-DD HH:MM:SS → MM/DD/YYYY-HH:MM:SS (matches setIssueTimeFromString)
     issue_time = ""
     err_time_m = _re.search(
-        r'Test Error Happened Time:\s*(\d{4})-(\d{2})-(\d{2})\s+(\d{2}:\d{2}:\d{2})',
+        r'Test Error Happened Time:\*{0,2}\s*(\d{4})-(\d{2})-(\d{2})\s+(\d{2}:\d{2}:\d{2})',
         content
     )
     if err_time_m:
@@ -520,6 +554,7 @@ def _extract_report_summary(report_path: str) -> tuple:
         issue_time = f"{int(mm):02d}/{int(dd):02d}/{yyyy}-{hms}"
         print(f"📅 [report-summary] Extracted error time: {issue_time}")
 
+    print(f"📄 [report-summary] Extracted summary length [{issue_time}]: {summary} ({len(summary)})")
     return summary, issue_time
 
 

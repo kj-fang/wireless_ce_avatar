@@ -217,8 +217,8 @@ class LLM_helper:
         if model.startswith("claude"):
             self.client = AnthropicOpenAIAdapter(Anthropic(
                 base_url=gpt_url,
-                api_key=gpt_token,
-                http_client=httpx.Client(proxy=self.proxies['https'], timeout=60),
+                auth_token=gpt_token,
+                http_client=httpx.Client(proxy=None, verify=False, trust_env=False),
             ))
             # self.client = AnthropicOpenAIAdapter(Anthropic(
             #     base_url=gpt_url,

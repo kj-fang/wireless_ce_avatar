@@ -46,9 +46,14 @@ from utils import helpers
 
 from ..pipeline import AceRunner
 from ..playbook import Playbook
-from ..cli import _skill_context_provider as _ace_skill_context_provider
+from ..cli import (_skill_context_provider as _ace_skill_context_provider,
+                   _load_active_skills as _load_agent_skills)
 from ..history import HistoryWriter
 from ..sync import launch_sync_background
+from ..eval.cases import list_cases as _eval_list_cases
+from ..eval.golden import GoldenSet
+from ..eval.harness import EvalHarness, EvalConfig
+from ..eval.store import EvalStore
 from .scheduler import NightlyScheduler
 
 
@@ -200,24 +205,40 @@ def _resolve_playbooks_dir() -> Path:
     return root
 
 
+# Key module is cached at process scope: the file rarely moves, and the SMB
+# probe inside get_load_path() (~8s per share, sequential) was the main
+# reason "Start reflection" felt slow. Only the first job pays the probe.
+_KEY_CACHE: Optional[tuple[str, object]] = None
+_KEY_CACHE_LOCK = threading.Lock()
+
+
+def _resolve_key_module(force: bool = False) -> object:
+    global _KEY_CACHE
+    if not force and _KEY_CACHE is not None:
+        return _KEY_CACHE[1]
+    with _KEY_CACHE_LOCK:
+        if not force and _KEY_CACHE is not None:
+            return _KEY_CACHE[1]
+        key_path = helpers.get_load_path(
+            path_configs.KEY_PATH_prim,
+            path_configs.KEY_PATH_bkup,
+        )
+        if key_path is None:
+            raise RuntimeError("Could not resolve key share — VPN reachable?")
+        mod = helpers.load_module(key_path, "key_module")
+        _KEY_CACHE = (key_path, mod)
+        return mod
+
+
 def _build_llm(model: Optional[str] = None) -> LLM_helper:
-    key_path = helpers.get_load_path(path_configs.KEY_PATH_prim, path_configs.KEY_PATH_bkup)
-    if key_path is None:
-        raise RuntimeError("Could not resolve key share — VPN reachable?")
-    key = helpers.load_module(key_path, "key_moudle")
+    key = _resolve_key_module()
     llm = LLM_helper()
     llm.set_up(
-        gpt_token=key.anthropic_token,
-        gpt_url=key.anthropic_url,
-        model=model or key.anthropic_model,
+        gpt_token=key.gnaigpt_token,
+        gpt_url=key.gnaigpt_url,
+        model=model or key.gnaigpt_model,
         classifitation_path=path_configs.CLASSIFY_PATH,
     )
-    # llm.set_up(
-    #     gpt_token=key.gnaigpt_token,
-    #     gpt_url=key.gnaigpt_url,
-    #     model=model or key.gnaigpt_model,
-    #     classifitation_path=path_configs.CLASSIFY_PATH,
-    # )
     return llm
 
 
@@ -229,7 +250,9 @@ def _list_conversations(conv_dir: Path, source: str) -> list[dict]:
     out: list[dict] = []
     if not conv_dir.exists():
         return out
-    for f in sorted(conv_dir.glob("*.json"), key=lambda p: p.stat().st_mtime, reverse=True):
+    # Iterate unsorted (one stat per file instead of two on the SMB share);
+    # sort at the end by the mtime we already read.
+    for f in conv_dir.glob("*.json"):
         try:
             mtime = f.stat().st_mtime
         except Exception:
@@ -289,6 +312,7 @@ def _list_conversations(conv_dir: Path, source: str) -> list[dict]:
         item["source"] = source
         item["feedback_root"] = str(conv_dir.parent)
         out.append(item)
+    out.sort(key=lambda d: d.get("modified") or 0, reverse=True)
     return out
 
 
@@ -435,9 +459,11 @@ def _diff_bullets(before: dict, after: dict) -> dict:
 # ---------------------------------------------------------------------------
 
 class JobManager:
-    def __init__(self, socketio: SocketIO, history: Optional[HistoryWriter] = None):
+    def __init__(self, socketio: SocketIO, history: Optional[HistoryWriter] = None,
+                 eval_store: Optional[EvalStore] = None):
         self.socketio = socketio
         self.history = history
+        self.eval_store = eval_store
         self._lock = threading.Lock()
         self._thread: Optional[threading.Thread] = None
         self._state: dict = {"status": "idle"}
@@ -452,7 +478,9 @@ class JobManager:
             return self._state.get("status") == "running"
 
     def start(self, conversation_ids: list[str], model: Optional[str],
-              source: str = "manual-selected") -> dict:
+              source: str = "manual-selected",
+              validate_after: bool = False,
+              eval_overrides: Optional[dict] = None) -> dict:
         with self._lock:
             if self._state.get("status") == "running":
                 return {"ok": False, "error": "another adapt job is already running",
@@ -464,6 +492,7 @@ class JobManager:
                 "started_at": time.time(),
                 "conversation_ids": conversation_ids,
                 "source": source,
+                "validate_after": bool(validate_after),
             }
         # Resolve which feedback_root each conversation lives in BEFORE we hand
         # off to the worker, so the job can target remote vs local correctly.
@@ -471,11 +500,12 @@ class JobManager:
         roots_by_cid: dict[str, str] = {it["conversation_id"]: it["feedback_root"]
                                         for it in items if it.get("conversation_id")}
         t = threading.Thread(target=self._run,
-                             args=(job_id, conversation_ids, model, roots_by_cid, source),
+                             args=(job_id, conversation_ids, model, roots_by_cid,
+                                   source, validate_after, eval_overrides),
                              daemon=True)
         self._thread = t
         t.start()
-        return {"ok": True, "job_id": job_id}
+        return {"ok": True, "job_id": job_id, "validate_after": bool(validate_after)}
 
     def _emit(self, event: str, payload: dict) -> None:
         # `emit` here is called from the worker thread; flask-socketio handles
@@ -485,9 +515,38 @@ class JobManager:
         except Exception as e:
             print(f"[ace.web] emit({event}) failed: {e}")
 
+    def _pre_adapt_snapshot(self, job_id: str) -> Optional[str]:
+        """Snapshot the live playbooks BEFORE an adapt run so the chained
+        eval has a 'before' arm (and the gate a rollback target). Returns
+        the "YYYY-MM-DD/<run_dir>" ref, or None on failure."""
+        if self.history is None:
+            return None
+        try:
+            from datetime import datetime as _dt
+            run_dir = self.history.snapshot_playbooks(
+                _resolve_playbooks_dir(), run_id=job_id, source="pre-adapt",
+                meta={"reason": "validate-after-adapt baseline"},
+            )
+            if not run_dir:
+                return None
+            return f"{_dt.now().strftime('%Y-%m-%d')}/{run_dir}"
+        except Exception as e:
+            print(f"[ace.web] pre-adapt snapshot failed: {e}")
+            return None
+
     def _run(self, job_id: str, conversation_ids: list[str], model: Optional[str],
-             roots_by_cid: dict[str, str], source: str = "manual-selected") -> None:
+             roots_by_cid: dict[str, str], source: str = "manual-selected",
+             validate_after: bool = False,
+             eval_overrides: Optional[dict] = None) -> None:
         started_at = time.time()
+        before_ref = self._pre_adapt_snapshot(job_id) if validate_after else None
+        if validate_after and before_ref is None:
+            self._emit("adapt_progress", {
+                "job_id": job_id, "phase": "eval", "event": "warning",
+                "message": "pre-adapt snapshot failed — validation after adapt "
+                           "will be skipped",
+            })
+            validate_after = False
         self._emit("adapt_started", {
             "job_id": job_id,
             "conversation_ids": conversation_ids,
@@ -495,6 +554,7 @@ class JobManager:
             "feedback_root": str(_resolve_feedback_root()),
             "roots_by_cid": roots_by_cid,
             "source": source,
+            "validate_after": validate_after,
         })
         results: list[dict] = []
         totals = {"processed": 0, "ok": 0, "skipped": 0, "errors": 0}
@@ -596,7 +656,29 @@ class JobManager:
                 "results": results,
                 "totals": totals,
                 "overall_diff": overall_diff,
+                "validate_after": validate_after,
             })
+
+            if validate_after and before_ref:
+                # Chain the eval in the SAME worker thread: state stays
+                # "running" so no other job can slip in between adapt and
+                # its validation.
+                with self._lock:
+                    self._state = {
+                        "status": "running", "job_id": job_id,
+                        "mode": "eval", "chained_from": "adapt",
+                        "started_at": time.time(),
+                    }
+                cfg = {
+                    "before": before_ref,
+                    "conversation_ids": conversation_ids,
+                    "source": "post-adapt-gate",
+                    "gate": True,
+                    **(eval_overrides or {}),
+                }
+                self._run_eval_inner(job_id, cfg)
+                return
+
             with self._lock:
                 self._state = {
                     "status": "done",
@@ -653,7 +735,9 @@ class JobManager:
         except Exception as e:
             print(f"[ace.sync] failed to launch sync: {e}")
 
-    def start_batch(self, model: Optional[str] = None, source: str = "batch") -> dict:
+    def start_batch(self, model: Optional[str] = None, source: str = "batch",
+                    validate_after: bool = False,
+                    eval_overrides: Optional[dict] = None) -> dict:
         """Kick off AceRunner.run_batch() on the resolved feedback root.
         Uses the same one-job-at-a-time lock as start(). The cursor at
         <playbooks_dir>/.ace_cursor.json determines which feedback events
@@ -669,25 +753,38 @@ class JobManager:
                 "started_at": time.time(),
                 "mode": "batch",
                 "source": source,
+                "validate_after": bool(validate_after),
             }
         t = threading.Thread(target=self._run_batch,
-                             args=(job_id, model, source),
+                             args=(job_id, model, source, validate_after,
+                                   eval_overrides),
                              daemon=True)
         self._thread = t
         t.start()
-        return {"ok": True, "job_id": job_id, "mode": "batch"}
+        return {"ok": True, "job_id": job_id, "mode": "batch",
+                "validate_after": bool(validate_after)}
 
     def _run_batch(self, job_id: str, model: Optional[str],
-                   source: str = "batch") -> None:
+                   source: str = "batch", validate_after: bool = False,
+                   eval_overrides: Optional[dict] = None) -> None:
         started_at = time.time()
         playbooks_dir = _resolve_playbooks_dir()
         feedback_root = _resolve_feedback_root()
+        before_ref = self._pre_adapt_snapshot(job_id) if validate_after else None
+        if validate_after and before_ref is None:
+            self._emit("adapt_progress", {
+                "job_id": job_id, "phase": "eval", "event": "warning",
+                "message": "pre-adapt snapshot failed — validation after adapt "
+                           "will be skipped",
+            })
+            validate_after = False
         self._emit("adapt_started", {
             "job_id": job_id,
             "mode": "batch",
             "playbooks_dir": str(playbooks_dir),
             "feedback_root": str(feedback_root),
             "source": source,
+            "validate_after": validate_after,
         })
         try:
             llm = _build_llm(model)
@@ -722,7 +819,30 @@ class JobManager:
                 "results": results,
                 "totals": totals,
                 "overall_diff": overall_diff,
+                "validate_after": validate_after,
             })
+
+            if validate_after and before_ref:
+                adapted_cids = sorted({
+                    r.get("conversation_id") for r in results
+                    if r.get("status") == "ok" and r.get("conversation_id")
+                })
+                with self._lock:
+                    self._state = {
+                        "status": "running", "job_id": job_id,
+                        "mode": "eval", "chained_from": "batch",
+                        "started_at": time.time(),
+                    }
+                cfg = {
+                    "before": before_ref,
+                    "conversation_ids": adapted_cids,
+                    "source": "post-adapt-gate",
+                    "gate": True,
+                    **(eval_overrides or {}),
+                }
+                self._run_eval_inner(job_id, cfg)
+                return
+
             with self._lock:
                 self._state = {
                     "status": "done",
@@ -746,6 +866,90 @@ class JobManager:
                     "error": err,
                 }
 
+    # ---------- eval ----------
+    def start_eval(self, config: dict) -> dict:
+        """Kick off a standalone eval job (Evaluate tab). config keys match
+        EvalConfig fields (before, conversation_ids, max_cases, gate, ...)."""
+        with self._lock:
+            if self._state.get("status") == "running":
+                return {"ok": False, "error": "another job is already running",
+                        "job_id": self._state.get("job_id")}
+            job_id = str(uuid.uuid4())
+            self._state = {
+                "status": "running",
+                "job_id": job_id,
+                "started_at": time.time(),
+                "mode": "eval",
+                "source": config.get("source") or "manual-eval",
+            }
+        t = threading.Thread(target=self._run_eval_inner,
+                             args=(job_id, config), daemon=True)
+        self._thread = t
+        t.start()
+        return {"ok": True, "job_id": job_id, "mode": "eval"}
+
+    def _build_eval_harness(self, job_id: str) -> EvalHarness:
+        roots = [_resolve_feedback_root()]
+        local = _local_feedback_root()
+        if local.exists() and local.resolve() != Path(roots[0]).resolve():
+            roots.append(local)
+        return EvalHarness(
+            playbooks_dir=_resolve_playbooks_dir(),
+            feedback_roots=roots,
+            history=self.history,
+            store=self.eval_store,
+            llm_factory=_build_llm,
+            skills_loader=_load_agent_skills,
+            golden=GoldenSet(roots[0]),
+            emit=lambda ev, payload: self._emit(ev, {"job_id": job_id, **payload}),
+            sync_fn=self._sync_to_remote,
+        )
+
+    def _run_eval_inner(self, job_id: str, config: dict) -> None:
+        """Worker body for eval jobs (standalone or chained after adapt).
+        Owns the final state transition."""
+        try:
+            harness = self._build_eval_harness(job_id)
+            eval_config = EvalConfig(
+                max_cases=int(config.get("max_cases") or 6),
+                max_steps=int(config.get("max_steps") or 6),
+                gate=bool(config.get("gate", True)),
+                gate_min_cases=int(config.get("gate_min_cases") or 2),
+                gate_margin=int(config.get("gate_margin") or 1),
+                case_source=config.get("case_source") or config.get("source_mode") or "",
+                conversation_ids=list(config.get("conversation_ids") or []),
+                before=config.get("before") or "",
+                agent_model=config.get("model") or config.get("agent_model") or "",
+                judge_model=config.get("judge_model") or "",
+                run_id=job_id,
+                source=config.get("source") or "manual-eval",
+                adapt_job_id=job_id if config.get("source") == "post-adapt-gate" else "",
+            )
+            report = harness.run(eval_config)
+            with self._lock:
+                self._state = {
+                    "status": "error" if report.get("error") else "done",
+                    "job_id": job_id,
+                    "mode": "eval",
+                    "finished_at": time.time(),
+                    "summary": report.get("summary"),
+                    "gate": report.get("gate"),
+                    "error": report.get("error"),
+                }
+        except Exception as e:
+            import traceback
+            err = f"{type(e).__name__}: {e}"
+            print(f"[ace.web] eval job {job_id} failed:\n{traceback.format_exc()}")
+            self._emit("eval_error", {"job_id": job_id, "error": err})
+            with self._lock:
+                self._state = {
+                    "status": "error",
+                    "job_id": job_id,
+                    "mode": "eval",
+                    "finished_at": time.time(),
+                    "error": err,
+                }
+
 
 # ---------------------------------------------------------------------------
 # App factory
@@ -758,17 +962,30 @@ def create_app() -> tuple[Flask, SocketIO, JobManager, NightlyScheduler]:
     socketio = SocketIO(app, async_mode="threading")
 
     history = HistoryWriter(root=_resolve_playbooks_dir() / "history")
-    try:
-        history.prune()
-    except Exception as e:
-        print(f"[ace.web] history.prune() at boot failed: {e}")
+    eval_store = EvalStore(_resolve_playbooks_dir() / "history" / "evals")
+    # Warm slow caches off the boot path. Each thread is best-effort: if the
+    # warm fails (e.g. VPN off at boot), the first request/job still pays the
+    # wait like it did before, and correctness is unchanged.
+    def _safe(fn, label: str) -> None:
+        try:
+            fn()
+        except Exception as e:
+            print(f"[ace.web] warm {label} failed: {e}")
 
-    jobs = JobManager(socketio, history=history)
+    threading.Thread(target=lambda: _safe(history.prune, "history.prune"),
+                     daemon=True, name="ace-history-prune-boot").start()
+    threading.Thread(target=lambda: _safe(_resolve_feedback_root_full, "feedback-root"),
+                     daemon=True, name="ace-warm-feedback-root").start()
+    threading.Thread(target=lambda: _safe(_resolve_key_module, "key-cache"),
+                     daemon=True, name="ace-warm-key").start()
+
+    jobs = JobManager(socketio, history=history, eval_store=eval_store)
 
     def _nightly_run() -> None:
         # Fire-and-forget: JobManager owns the actual work + progress events;
         # NightlyScheduler just records last_run_iso + surfaces the trigger error.
-        r = jobs.start_batch(model=None, source="nightly")
+        r = jobs.start_batch(model=None, source="nightly",
+                             validate_after=nightly.validate)
         if not r.get("ok"):
             raise RuntimeError(r.get("error") or "start_batch refused")
 
@@ -820,13 +1037,21 @@ def create_app() -> tuple[Flask, SocketIO, JobManager, NightlyScheduler]:
         if not cids:
             return jsonify({"ok": False, "error": "no conversation_ids provided"}), 400
         model = body.get("model")
-        return jsonify(jobs.start(cids, model, source="manual-selected"))
+        return jsonify(jobs.start(
+            cids, model, source="manual-selected",
+            validate_after=bool(body.get("validate")),
+            eval_overrides=body.get("eval") or None,
+        ))
 
     @app.route("/api/adapt/new", methods=["POST"])
     def api_adapt_new():
         body = request.get_json(silent=True) or {}
         model = body.get("model")
-        return jsonify(jobs.start_batch(model))
+        return jsonify(jobs.start_batch(
+            model,
+            validate_after=bool(body.get("validate")),
+            eval_overrides=body.get("eval") or None,
+        ))
 
     @app.route("/api/job")
     def api_job():
@@ -838,11 +1063,71 @@ def create_app() -> tuple[Flask, SocketIO, JobManager, NightlyScheduler]:
 
     @app.route("/api/nightly/start", methods=["POST"])
     def api_nightly_start():
-        return jsonify(nightly.start())
+        body = request.get_json(silent=True) or {}
+        return jsonify(nightly.start(validate=body.get("validate")))
 
     @app.route("/api/nightly/stop", methods=["POST"])
     def api_nightly_stop():
         return jsonify(nightly.stop())
+
+    # ---------- eval ----------
+    def _eval_roots() -> list[Path]:
+        roots = [_resolve_feedback_root()]
+        local = _local_feedback_root()
+        if local.exists() and local.resolve() != Path(roots[0]).resolve():
+            roots.append(local)
+        return roots
+
+    @app.route("/api/eval/cases")
+    def api_eval_cases():
+        force = request.args.get("force", "").lower() in ("1", "true", "yes")
+        roots = _eval_roots()
+        golden = GoldenSet(roots[0])
+        cases = _eval_list_cases(roots, golden=golden, force=force)
+        rows = [c.summary() for c in cases]
+        return jsonify({
+            "items": rows,
+            "total": len(rows),
+            "replayable": sum(1 for r in rows if r["replayable"]),
+            "golden": sum(1 for r in rows if r["golden"]),
+            "feedback_roots": [str(r) for r in roots],
+        })
+
+    @app.route("/api/eval", methods=["POST"])
+    def api_eval_start():
+        body = request.get_json(silent=True) or {}
+        # Hard server-side cost cap regardless of what the client sends.
+        try:
+            body["max_cases"] = min(int(body.get("max_cases") or 6), 15)
+        except (TypeError, ValueError):
+            body["max_cases"] = 6
+        body.setdefault("source", "manual-eval")
+        return jsonify(jobs.start_eval(body))
+
+    @app.route("/api/eval/reports")
+    def api_eval_reports():
+        return jsonify({"items": eval_store.list_reports()})
+
+    @app.route("/api/eval/reports/<date>/<name>")
+    def api_eval_report_one(date: str, name: str):
+        rep = eval_store.read_report(date, name)
+        if rep is None:
+            return jsonify({"error": "not found"}), 404
+        return jsonify(rep)
+
+    @app.route("/api/eval/golden", methods=["POST", "DELETE"])
+    def api_eval_golden():
+        body = request.get_json(silent=True) or {}
+        cid = (body.get("conversation_id") or "").strip()
+        tid = (body.get("turn_id") or "").strip() or None
+        if not cid:
+            return jsonify({"ok": False, "error": "conversation_id required"}), 400
+        golden = GoldenSet(_eval_roots()[0])
+        if request.method == "POST":
+            res = golden.add(cid, tid, note=(body.get("note") or "").strip())
+            return jsonify({"ok": not res.get("error"), **res})
+        removed = golden.remove(cid, tid)
+        return jsonify({"ok": removed, "removed": removed})
 
     # ---------- history ----------
     @app.route("/api/history/snapshots")

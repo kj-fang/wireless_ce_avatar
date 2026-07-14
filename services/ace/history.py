@@ -116,6 +116,71 @@ class HistoryWriter:
 
         return run_dir_name
 
+    def restore_snapshot(self, date: str, run_dir: str,
+                         playbooks_dir: Path) -> dict:
+        """Mirror-restore playbook *.json from a snapshot into playbooks_dir.
+
+        - Copies every *.json in the snapshot except meta.json.
+        - Deletes live workflow.json / domain_*.json that are NOT present in
+          the snapshot (an adapt run may have created a new domain file that
+          the pre-adapt state didn't have).
+        - Never touches dotfiles (.ace_cursor.json, .ace_nightly.json) or
+          the history/ subtree.
+
+        Returns {"restored": [...], "deleted": [...], "errors": [...]}.
+        """
+        result = {"restored": [], "deleted": [], "errors": []}
+
+        # Same traversal guards as read_snapshot_file.
+        for part in (date, run_dir):
+            if "/" in part or "\\" in part or ".." in part:
+                result["errors"].append(f"invalid path component: {part!r}")
+                return result
+        src_dir = (self._snapshots_dir / date / run_dir)
+        try:
+            src_dir = src_dir.resolve()
+            if self._snapshots_dir.resolve() not in src_dir.parents:
+                result["errors"].append("snapshot path escapes history root")
+                return result
+        except Exception as e:
+            result["errors"].append(f"resolve failed: {e}")
+            return result
+        if not src_dir.is_dir():
+            result["errors"].append(f"snapshot not found: {date}/{run_dir}")
+            return result
+
+        playbooks_dir = Path(playbooks_dir)
+        snapshot_names = {f.name for f in src_dir.glob("*.json")
+                          if f.name != "meta.json"}
+
+        # 1. Copy snapshot files over the live dir.
+        for name in sorted(snapshot_names):
+            try:
+                shutil.copy2(src_dir / name, playbooks_dir / name)
+                result["restored"].append(name)
+            except Exception as e:
+                result["errors"].append(f"copy {name} failed: {e}")
+
+        # 2. Delete live playbook files the snapshot doesn't have.
+        try:
+            for live in playbooks_dir.glob("*.json"):
+                if live.name in _SNAPSHOT_SKIP_NAMES:
+                    continue
+                if live.name in snapshot_names:
+                    continue
+                if not (live.name == "workflow.json"
+                        or live.name.startswith("domain_")):
+                    continue   # unknown JSON — leave it alone
+                try:
+                    live.unlink()
+                    result["deleted"].append(live.name)
+                except Exception as e:
+                    result["errors"].append(f"delete {live.name} failed: {e}")
+        except Exception as e:
+            result["errors"].append(f"stale-file scan failed: {e}")
+
+        return result
+
     # ---------- pruning ----------
     def prune(self) -> dict:
         cutoff = datetime.now() - timedelta(days=self._retention_days)

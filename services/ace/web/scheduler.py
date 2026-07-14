@@ -34,6 +34,7 @@ class NightlyScheduler:
 
         # Persisted fields (loaded from state file if present):
         self._enabled: bool = False
+        self._validate: bool = False   # chain eval + gate after the nightly adapt
         self._last_run_iso: Optional[str] = None
         self._last_result: Optional[dict] = None
         self._load()
@@ -48,6 +49,7 @@ class NightlyScheduler:
             print(f"[ace.nightly] failed to read {self._state_path}: {e}")
             return
         self._enabled = bool(data.get("enabled", False))
+        self._validate = bool(data.get("validate", False))
         # Allow the state file to override the fire time (useful for dev).
         if "hour" in data:
             self._hour = int(data["hour"])
@@ -59,6 +61,7 @@ class NightlyScheduler:
     def _save(self) -> None:
         payload = {
             "enabled": self._enabled,
+            "validate": self._validate,
             "hour": self._hour,
             "minute": self._minute,
             "last_run_iso": self._last_run_iso,
@@ -72,9 +75,16 @@ class NightlyScheduler:
             print(f"[ace.nightly] failed to write {self._state_path}: {e}")
 
     # ---------- public API ----------
-    def start(self) -> dict:
+    @property
+    def validate(self) -> bool:
+        with self._lock:
+            return self._validate
+
+    def start(self, validate: Optional[bool] = None) -> dict:
         with self._lock:
             self._enabled = True
+            if validate is not None:
+                self._validate = bool(validate)
             self._save()
             self._cancel_timer_locked()
             self._arm_next_locked()
@@ -92,6 +102,7 @@ class NightlyScheduler:
         with self._lock:
             return {
                 "enabled": self._enabled,
+                "validate": self._validate,
                 "hour": self._hour,
                 "minute": self._minute,
                 "next_run_iso": self._next_run.isoformat() if self._next_run else None,

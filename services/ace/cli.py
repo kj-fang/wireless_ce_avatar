@@ -69,17 +69,11 @@ def _build_llm(model: str | None) -> LLM_helper:
     key = helpers.load_module(key_path, "key_moudle")
     llm = LLM_helper()
     llm.set_up(
-        gpt_token=key.anthropic_token,
-        gpt_url=key.anthropic_url,
-        model=model or key.anthropic_model,
+        gpt_token=key.gnaigpt_token,
+        gpt_url=key.gnaigpt_url,
+        model=model or key.gnaigpt_model,
         classifitation_path=path_configs.CLASSIFY_PATH,
     )
-    # llm.set_up(
-    #     gpt_token=key.gnaigpt_token,
-    #     gpt_url=key.gnaigpt_url,
-    #     model=model or key.gnaigpt_model,
-    #     classifitation_path=path_configs.CLASSIFY_PATH,
-    # )
     return llm
 
 
@@ -209,6 +203,150 @@ def cmd_show(args):
     print(pb.render())
 
 
+# -- eval / golden subcommands -------------------------------------------------
+
+def _eval_feedback_roots() -> list:
+    """Remote-resolved root first, local fallback second (dedup handled by
+    the case registry)."""
+    roots = [_resolve_feedback_root()]
+    base = getattr(app_config, "avatarfiles_dir", None)
+    local = Path(base) / "feedback" if base else Path.cwd() / "data" / "feedback"
+    if local.exists() and local.resolve() != Path(roots[0]).resolve():
+        roots.append(local)
+    return roots
+
+
+def _print_event(ev: str, payload: dict) -> None:
+    print(json.dumps({"event": ev, **payload}, default=str))
+
+
+def cmd_eval(args):
+    from .eval.cases import list_cases
+    from .eval.golden import GoldenSet
+    from .eval.harness import EvalHarness, EvalConfig
+    from .eval.store import EvalStore
+    from .history import HistoryWriter
+
+    if args.smoke:
+        from .eval.smoke import run_smoke
+        return run_smoke(cases=args.cases or 2, verbose=args.verbose)
+
+    roots = _eval_feedback_roots()
+    golden = GoldenSet(roots[0])
+
+    if args.list_cases:
+        cases = list_cases(roots, golden=golden)
+        rows = [c.summary() for c in cases]
+        print(json.dumps({
+            "total": len(rows),
+            "replayable": sum(1 for r in rows if r["replayable"]),
+            "golden": sum(1 for r in rows if r["golden"]),
+            "cases": rows,
+        }, indent=2, default=str))
+        return 0
+
+    pbs_dir = _resolve_playbooks_dir()
+    history = HistoryWriter(pbs_dir / "history")
+    store = EvalStore(pbs_dir / "history" / "evals")
+
+    def _sync(job_id: str):
+        try:
+            from .sync import launch_sync_background
+            launch_sync_background(
+                local_dir=pbs_dir,
+                remote_root_raw=path_configs.ACE_PLAYBOOK_DIR_remote,
+                job_id=job_id,
+            )
+        except Exception as e:
+            print(f"[ace.cli] rollback sync skipped: {e}")
+
+    harness = EvalHarness(
+        playbooks_dir=pbs_dir,
+        feedback_roots=roots,
+        history=history,
+        store=store,
+        llm_factory=_build_llm,
+        skills_loader=_load_active_skills,
+        golden=golden,
+        emit=_print_event,
+        sync_fn=_sync,
+    )
+    config = EvalConfig(
+        max_cases=args.cases,
+        max_steps=args.max_steps,
+        gate=args.gate,
+        gate_margin=args.gate_margin,
+        case_source=args.source or "",
+        conversation_ids=args.conversation or [],
+        before=args.before or "",
+        agent_model=args.model or "",
+        judge_model=args.judge_model or "",
+        source="cli",
+    )
+    report = harness.run(config)
+    if args.verbose:
+        print(json.dumps(report, indent=2, default=str))
+    else:
+        print(json.dumps({
+            "summary": report.get("summary"),
+            "gate": report.get("gate"),
+            "error": report.get("error"),
+        }, indent=2, default=str))
+    return 1 if report.get("error") else 0
+
+
+def cmd_eval_report(args):
+    from .eval.store import EvalStore
+    store = EvalStore(_resolve_playbooks_dir() / "history" / "evals")
+    if args.date and args.name:
+        rep = store.read_report(args.date, args.name)
+    else:
+        rep = store.latest()
+    if rep is None:
+        print(json.dumps({"error": "no eval report found"}))
+        return 1
+    print(json.dumps(rep, indent=2, default=str))
+    return 0
+
+
+def cmd_golden(args):
+    from .eval.golden import GoldenSet
+    from .eval.cases import list_cases
+    roots = _eval_feedback_roots()
+    golden = GoldenSet(roots[0])
+
+    if args.action == "list":
+        entries = golden.list()
+        # Enrich with replayability so the user sees at a glance which golden
+        # cases will actually run.
+        cases = {(c.conversation_id, c.turn_id): c for c in list_cases(roots)}
+        for e in entries:
+            match = None
+            for (cid, tid), c in cases.items():
+                if cid == e.get("conversation_id") and (
+                        e.get("turn_id") is None or tid == e.get("turn_id")):
+                    match = c
+                    break
+            e["replayable"] = bool(match and match.replayable)
+            e["subject"] = match.issue.get("subject", "") if match else ""
+        print(json.dumps({"count": len(entries), "entries": entries},
+                         indent=2, default=str))
+        return 0
+
+    if args.action == "add":
+        res = golden.add(args.conversation, args.turn or None, note=args.note or "")
+        print(json.dumps(res, indent=2, default=str))
+        return 1 if res.get("error") else 0
+
+    if args.action == "remove":
+        ok = golden.remove(args.conversation, args.turn or None)
+        print(json.dumps({"removed": ok}))
+        return 0 if ok else 1
+
+    print(f"unknown golden action: {args.action}")
+    return 1
+
+
 def cmd_stats(args):
     pbs_dir = _resolve_playbooks_dir()
     from .playbook import Playbook
@@ -257,7 +395,59 @@ def main(argv=None):
     p_stats = sub.add_parser("stats", help="Summary of every playbook on disk")
     p_stats.set_defaults(func=cmd_stats)
 
+    p_eval = sub.add_parser(
+        "eval",
+        help="Replay cases against before/after playbooks, score, and gate",
+    )
+    p_eval.add_argument("--cases", type=int, default=6,
+                        help="Max cases to replay (cost cap, default 6)")
+    p_eval.add_argument("--source", default=None,
+                        choices=["golden", "golden+affected", "auto"],
+                        help="Case selection (default: golden+affected when a "
+                             "golden set exists, else auto)")
+    p_eval.add_argument("--conversation", action="append",
+                        help="Restrict/prioritize to this conversation id (repeatable)")
+    p_eval.add_argument("--before", default=None,
+                        help='Before-snapshot ref "YYYY-MM-DD/<run_dir>" '
+                             "(default: newest snapshot)")
+    p_eval.add_argument("--gate", dest="gate", action="store_true", default=True,
+                        help="Enable auto-rollback on regression (default)")
+    p_eval.add_argument("--no-gate", dest="gate", action="store_false",
+                        help="Report only; never roll back")
+    p_eval.add_argument("--gate-margin", type=int, default=1,
+                        help="Rollback when regressed >= improved + N (default 1)")
+    p_eval.add_argument("--model", default=None, help="Agent replay model")
+    p_eval.add_argument("--judge-model", default=None,
+                        help="Judge model (defaults to the agent model)")
+    p_eval.add_argument("--max-steps", type=int, default=6,
+                        help="Agentic step cap per replay (default 6)")
+    p_eval.add_argument("--list-cases", action="store_true",
+                        help="Print the case registry (zero tokens) and exit")
+    p_eval.add_argument("--smoke", action="store_true",
+                        help="Run the zero-token end-to-end smoke test with fakes")
+    p_eval.add_argument("--verbose", action="store_true")
+    p_eval.set_defaults(func=cmd_eval)
+
+    p_eval_report = sub.add_parser("eval-report", help="Print a stored eval report")
+    p_eval_report.add_argument("--date", default=None, help="YYYY-MM-DD")
+    p_eval_report.add_argument("--name", default=None, help="Report filename")
+    p_eval_report.set_defaults(func=cmd_eval_report)
+
+    p_golden = sub.add_parser(
+        "golden", help="Manage the curated golden-case set for eval runs")
+    p_golden.add_argument("action", choices=["list", "add", "remove"])
+    p_golden.add_argument("--conversation", default=None,
+                          help="Conversation id (required for add/remove)")
+    p_golden.add_argument("--turn", default=None,
+                          help="Optional turn id (default: whole conversation)")
+    p_golden.add_argument("--note", default=None,
+                          help="Why this case is golden (add only)")
+    p_golden.set_defaults(func=cmd_golden)
+
     args = parser.parse_args(argv)
+    if getattr(args, "cmd", "") == "golden" and args.action in ("add", "remove") \
+            and not args.conversation:
+        parser.error("golden add/remove requires --conversation")
     _ensure_avatarfiles_dir()
     print(f"[ace.cli] playbooks_dir = {_resolve_playbooks_dir()}")
     return args.func(args) or 0

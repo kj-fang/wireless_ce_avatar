@@ -89,9 +89,11 @@
 
 <nav>
   <button data-tab="adapt" class="active">Adapt</button>
+  <button data-tab="eval">Evaluate</button>
   <button data-tab="playbooks">Playbooks</button>
   <button data-tab="diff">Last-run Diff</button>
   <button data-tab="stats">Stats</button>
+  <button data-tab="history">History</button>
 </nav>
 
 <main>
@@ -125,7 +127,16 @@
           </div>
           <div class="controls" style="margin-top: 12px;">
             <button class="primary" id="run-btn" onclick="startAdapt()">▶ Run Adapt on selected</button>
+            <button class="primary" id="run-new-btn" onclick="runNewlyAdded()" title="Process every feedback event since the last ACE run">⚡ Run newly added</button>
+            <label style="font-size:12px;color:var(--muted);"
+                   title="After the adapt run, auto-replay the affected + golden cases against the before/after playbooks and roll back automatically if quality regressed.">
+              <input type="checkbox" id="validate-after">
+              Validate after adapt (auto-rollback on regression)
+            </label>
+            <button class="ghost" id="nightly-on" onclick="startNightly()" title="Enable a daily 11:30 PM batch run (server local time)">🌙 Start Run nightly</button>
+            <button class="ghost" id="nightly-off" onclick="stopNightly()" style="display:none">⏹ Stop Run nightly</button>
             <span class="status-line" id="status-line">idle</span>
+            <span class="status-line" id="nightly-status" style="margin-left:auto;"></span>
           </div>
         </div>
       </div>
@@ -133,6 +144,95 @@
         <div class="panel">
           <h3>2. Live Reflector & Curator stream</h3>
           <div id="progress-log"></div>
+        </div>
+      </div>
+    </div>
+  </section>
+
+  <!-- EVALUATE TAB -->
+  <section class="tab" id="tab-eval">
+    <div class="row">
+      <div class="col" style="flex: 1.2;">
+        <div class="panel">
+          <h3>1. Eval cases (from voted conversations)</h3>
+          <div class="controls">
+            <button class="ghost" onclick="loadEvalCases()">↻ Refresh</button>
+            <input type="text" id="eval-filter" placeholder="filter by case_nbr / subject…"
+                   oninput="renderEvalCases()" style="flex:1;">
+            <label style="font-size:12px;color:var(--muted);">
+              <input type="checkbox" id="eval-only-golden" onchange="renderEvalCases()"> golden only
+            </label>
+            <label style="font-size:12px;color:var(--muted);">
+              <input type="checkbox" id="eval-only-replayable" checked onchange="renderEvalCases()"> only replayable
+            </label>
+          </div>
+          <div id="eval-cases-diag" class="status-line" style="margin-bottom:6px;">—</div>
+          <div style="max-height: 38vh; overflow: auto;">
+            <table id="eval-cases-table">
+              <thead>
+                <tr>
+                  <th title="Golden cases are the curated regression set every eval run replays">★</th>
+                  <th>Case</th><th>Subject</th><th>Vote</th>
+                  <th title="Structured ground truth the user supplied">Ground truth</th>
+                  <th>Log</th><th>Replayable</th>
+                </tr>
+              </thead>
+              <tbody></tbody>
+            </table>
+          </div>
+        </div>
+        <div class="panel">
+          <h3>2. Run evaluation</h3>
+          <div class="controls">
+            <label style="font-size:12px;color:var(--muted);">cases:
+              <select id="eval-source">
+                <option value="">auto (golden+affected when golden set exists)</option>
+                <option value="golden">Golden set only</option>
+                <option value="golden+affected">Golden + affected</option>
+                <option value="auto">Auto-select</option>
+              </select>
+            </label>
+            <label style="font-size:12px;color:var(--muted);">before:
+              <select id="eval-before" style="max-width:260px;"></select>
+            </label>
+            <label style="font-size:12px;color:var(--muted);">max cases:
+              <input type="text" id="eval-max-cases" value="6" style="width:44px;">
+            </label>
+          </div>
+          <div class="controls">
+            <label style="font-size:12px;color:var(--muted);">judge model:
+              <input type="text" id="eval-judge-model" placeholder="(same as agent)" style="width:180px;">
+            </label>
+            <label style="font-size:12px;color:var(--muted);"
+                   title="Roll the playbooks back to the before-snapshot when regressed cases outnumber improved ones">
+              <input type="checkbox" id="eval-gate" checked> gate (auto-rollback)
+            </label>
+            <label style="font-size:12px;color:var(--muted);">margin:
+              <input type="text" id="eval-gate-margin" value="1" style="width:32px;">
+            </label>
+          </div>
+          <div class="controls">
+            <button class="primary" id="eval-run-btn" onclick="startEval()">▶ Run Eval</button>
+            <span class="status-line" id="eval-cost-hint">each case = 2 agent replays (~50–100K tokens each) + 1 judge call</span>
+          </div>
+        </div>
+      </div>
+      <div class="col" style="flex: 1.3;">
+        <div class="panel">
+          <h3>3. Live progress & verdicts</h3>
+          <div id="eval-progress-log" style="max-height: 30vh; overflow: auto; padding: 8px; background: #0a0f15;
+               border: 1px solid var(--border); border-radius: 4px; font-family: Consolas, monospace; font-size: 12px;"></div>
+          <div id="eval-result-banner" class="status-line" style="margin-top:8px;">no eval run yet this session</div>
+          <table id="eval-verdict-table" style="margin-top:6px;">
+            <thead><tr><th>Case</th><th>Before → After</th><th>Verdict</th><th>Judge</th></tr></thead>
+            <tbody></tbody>
+          </table>
+        </div>
+        <div class="panel">
+          <h3>Past eval reports</h3>
+          <button class="ghost" onclick="loadEvalReports()" style="margin-bottom:8px;">↻ Refresh</button>
+          <div id="eval-report-list" style="max-height: 24vh; overflow: auto;"></div>
+          <div id="eval-report-detail" style="margin-top:8px;"></div>
         </div>
       </div>
     </div>
@@ -177,6 +277,38 @@
       </table>
     </div>
   </section>
+
+  <!-- HISTORY TAB -->
+  <section class="tab" id="tab-history">
+    <div class="row">
+      <div class="col" style="flex: 1.1;">
+        <div class="panel">
+          <h3>Reflections & Curations</h3>
+          <div class="controls">
+            <button class="ghost" onclick="loadHistory()">↻ Refresh</button>
+            <label style="font-size:12px;color:var(--muted);">
+              date:
+              <select id="hist-date" onchange="loadTurnsForSelectedDate()"></select>
+            </label>
+            <span class="status-line" id="hist-turns-status"></span>
+          </div>
+          <div id="hist-turn-list" style="max-height: 40vh; overflow: auto; border: 1px solid var(--border); border-radius: 4px;"></div>
+          <div id="hist-turn-detail" style="margin-top: 10px;"></div>
+        </div>
+      </div>
+      <div class="col" style="flex: 1;">
+        <div class="panel">
+          <h3>Playbook Snapshots</h3>
+          <div class="controls">
+            <button class="ghost" onclick="loadHistory()">↻ Refresh</button>
+            <span class="status-line" id="hist-snap-status"></span>
+          </div>
+          <div id="hist-snap-list" style="max-height: 40vh; overflow: auto;"></div>
+          <div id="hist-snap-detail" style="margin-top: 10px;"></div>
+        </div>
+      </div>
+    </div>
+  </section>
 </main>
 
 <script src="https://cdn.socket.io/4.7.5/socket.io.min.js"></script>
@@ -188,6 +320,16 @@
       document.querySelectorAll('.tab').forEach(s => s.classList.remove('active'));
       btn.classList.add('active');
       document.getElementById('tab-' + btn.dataset.tab).classList.add('active');
+      if (btn.dataset.tab === 'history' && !historyLoadedOnce) {
+        historyLoadedOnce = true;
+        loadHistory();
+      }
+      if (btn.dataset.tab === 'eval' && !evalLoadedOnce) {
+        evalLoadedOnce = true;
+        loadEvalCases();
+        loadEvalBeforeOptions();
+        loadEvalReports();
+      }
     });
   });
 
@@ -325,6 +467,12 @@
     statusLine.textContent = text;
     statusLine.className = 'status-line ' + (cls || '');
   }
+  function setRunButtonsDisabled(disabled) {
+    ['run-btn', 'run-new-btn'].forEach(id => {
+      const el = document.getElementById(id);
+      if (el) el.disabled = disabled;
+    });
+  }
   function logEntry(phase, ev, payload) {
     const el = document.createElement('div');
     el.className = 'log-entry ' + (phase || '');
@@ -348,8 +496,8 @@
   socket.on('adapt_started', (p) => {
     progressLog.innerHTML = '';
     logEntry('pipeline', 'started', p);
-    setStatus('running…', 'running');
-    document.getElementById('run-btn').disabled = true;
+    setStatus(p.mode === 'batch' ? 'running (batch)…' : 'running…', 'running');
+    setRunButtonsDisabled(true);
   });
   socket.on('adapt_progress', (p) => {
     logEntry(p.phase || 'pipeline', p.event || '?', p);
@@ -360,30 +508,323 @@
   socket.on('adapt_done', (p) => {
     logEntry('pipeline', 'done', { totals: p.totals });
     setStatus('done · ' + JSON.stringify(p.totals), 'done');
-    document.getElementById('run-btn').disabled = false;
+    setRunButtonsDisabled(false);
     renderDiff(p.overall_diff || {});
     loadPlaybooks();
+    refreshNightlyStatus();
+    if (historyLoadedOnce) loadHistory();
   });
   socket.on('adapt_error', (p) => {
     logEntry('error', 'job_failed', p);
     setStatus('error: ' + p.error, 'error');
-    document.getElementById('run-btn').disabled = false;
+    setRunButtonsDisabled(false);
+    refreshNightlyStatus();
   });
+
+  function validateChecked() {
+    const cb = document.getElementById('validate-after');
+    return !!(cb && cb.checked);
+  }
 
   async function startAdapt() {
     const cids = [...document.querySelectorAll('.conv-cb:checked')].map(cb => cb.dataset.cid);
     if (cids.length === 0) { alert('Pick at least one conversation.'); return; }
-    document.getElementById('run-btn').disabled = true;
+    setRunButtonsDisabled(true);
     const r = await fetch('/api/adapt', {
       method: 'POST',
       headers: {'Content-Type': 'application/json'},
-      body: JSON.stringify({conversation_ids: cids}),
+      body: JSON.stringify({conversation_ids: cids, validate: validateChecked()}),
     });
     const j = await r.json();
     if (!j.ok) {
       alert('Failed to start: ' + (j.error || 'unknown'));
-      document.getElementById('run-btn').disabled = false;
+      setRunButtonsDisabled(false);
     }
+  }
+
+  async function runNewlyAdded() {
+    setRunButtonsDisabled(true);
+    const r = await fetch('/api/adapt/new', {
+      method: 'POST',
+      headers: {'Content-Type': 'application/json'},
+      body: JSON.stringify({validate: validateChecked()}),
+    });
+    const j = await r.json();
+    if (!j.ok) {
+      alert('Failed to start: ' + (j.error || 'unknown'));
+      setRunButtonsDisabled(false);
+    }
+  }
+
+  async function startNightly() {
+    const r = await fetch('/api/nightly/start', {
+      method: 'POST',
+      headers: {'Content-Type': 'application/json'},
+      body: JSON.stringify({validate: validateChecked()}),
+    });
+    const j = await r.json();
+    applyNightlyStatus(j);
+  }
+  async function stopNightly() {
+    const r = await fetch('/api/nightly/stop', {method: 'POST'});
+    const j = await r.json();
+    applyNightlyStatus(j);
+  }
+  async function refreshNightlyStatus() {
+    try {
+      const r = await fetch('/api/nightly');
+      applyNightlyStatus(await r.json());
+    } catch (e) {
+      // scheduler status is optional UI info; ignore transient errors.
+    }
+  }
+  function applyNightlyStatus(s) {
+    const on = document.getElementById('nightly-on');
+    const off = document.getElementById('nightly-off');
+    const line = document.getElementById('nightly-status');
+    if (s && s.enabled) {
+      on.style.display = 'none';
+      off.style.display = '';
+    } else {
+      on.style.display = '';
+      off.style.display = 'none';
+    }
+    const parts = [];
+    if (s && s.enabled && s.next_run_iso) {
+      parts.push('next: ' + new Date(s.next_run_iso).toLocaleString());
+    }
+    if (s && s.last_run_iso) {
+      let last = 'last: ' + new Date(s.last_run_iso).toLocaleString();
+      if (s.last_result && s.last_result.error) last += ' · ✖ ' + s.last_result.error;
+      parts.push(last);
+    }
+    line.textContent = parts.join(' · ');
+  }
+
+  // ---------- evaluate tab ----------
+  let evalLoadedOnce = false;
+  let evalCases = [];
+
+  async function loadEvalCases(force) {
+    const diag = document.getElementById('eval-cases-diag');
+    diag.textContent = 'Loading cases… (first scan reads every conversation on the share; later scans are cached)';
+    try {
+      const r = await fetch('/api/eval/cases' + (force ? '?force=1' : ''));
+      const j = await r.json();
+      evalCases = j.items || [];
+      diag.textContent = `${j.total} case(s) · ${j.replayable} replayable · ${j.golden} golden`;
+      renderEvalCases();
+    } catch (e) {
+      diag.textContent = 'Failed to load cases: ' + e;
+    }
+  }
+
+  function renderEvalCases() {
+    const tbody = document.querySelector('#eval-cases-table tbody');
+    const filter = (document.getElementById('eval-filter').value || '').toLowerCase();
+    const onlyGolden = document.getElementById('eval-only-golden').checked;
+    const onlyReplayable = document.getElementById('eval-only-replayable').checked;
+    tbody.innerHTML = '';
+    evalCases.forEach(c => {
+      if (onlyGolden && !c.golden) return;
+      if (onlyReplayable && !c.replayable) return;
+      const hay = `${c.case_nbr} ${c.subject} ${c.conversation_id}`.toLowerCase();
+      if (filter && !hay.includes(filter)) return;
+      const gt = [];
+      if (c.conclusion_tag) gt.push(`<span class="pill good">${escapeHtml(c.conclusion_tag)}</span>`);
+      if (c.has_root_cause) gt.push('<span class="pill">root-cause</span>');
+      if (c.evidence_lines) gt.push(`<span class="pill">${c.evidence_lines} evid</span>`);
+      if (c.correct_skill) gt.push(`<span class="pill">${escapeHtml(c.correct_skill)}</span>`);
+      const votePill = c.vote > 0 ? '<span class="pill good">👍</span>'
+                     : c.vote < 0 ? '<span class="pill bad">👎</span>'
+                     : '<span class="pill">—</span>';
+      const replay = c.replayable
+        ? '<span class="pill good">✓</span>'
+        : `<span class="pill bad" title="${escapeAttr((c.reasons || []).join('; '))}">✗</span>`;
+      const star = c.golden ? '★' : '☆';
+      const starCls = c.golden ? 'style="color:var(--warn);cursor:pointer;"' : 'style="color:var(--muted);cursor:pointer;"';
+      const tr = document.createElement('tr');
+      tr.innerHTML =
+        `<td><span ${starCls} title="Toggle golden (pins the log so the case stays replayable)"
+              onclick="toggleGolden('${escapeAttr(c.conversation_id)}','${escapeAttr(c.turn_id)}', ${c.golden})">${star}</span></td>` +
+        `<td>${escapeHtml(c.case_nbr || '')}<div class="cid">${escapeHtml(c.conversation_id.slice(0, 12))}…</div></td>` +
+        `<td>${escapeHtml((c.subject || '').slice(0, 60))}</td>` +
+        `<td>${votePill}</td>` +
+        `<td>${gt.join(' ') || '<span class="pill">none</span>'}</td>` +
+        `<td><span class="pill">${escapeHtml(c.log_source)}</span></td>` +
+        `<td>${replay}</td>`;
+      tbody.appendChild(tr);
+    });
+  }
+
+  async function toggleGolden(cid, tid, isGolden) {
+    const r = await fetch('/api/eval/golden', {
+      method: isGolden ? 'DELETE' : 'POST',
+      headers: {'Content-Type': 'application/json'},
+      body: JSON.stringify({conversation_id: cid, turn_id: tid}),
+    });
+    const j = await r.json();
+    if (!j.ok) { alert('Golden toggle failed: ' + (j.error || 'unknown')); return; }
+    if (j.pinned_log) {
+      const diag = document.getElementById('eval-cases-diag');
+      diag.textContent = 'Log pinned to shared folder: ' + j.pinned_log;
+    }
+    // Force: a log pin changes a case's resolution without touching its
+    // snapshot file, so the mtime cache would serve the stale row.
+    loadEvalCases(true);
+  }
+
+  async function loadEvalBeforeOptions() {
+    const sel = document.getElementById('eval-before');
+    sel.innerHTML = '<option value="">(newest snapshot)</option>';
+    try {
+      const r = await fetch('/api/history/snapshots');
+      const j = await r.json();
+      (j.items || []).forEach(s => {
+        const opt = document.createElement('option');
+        opt.value = `${s.date}/${s.run_dir}`;
+        opt.textContent = `${s.date} · ${s.source || '?'} · ${(s.run_dir || '').slice(0, 25)}`;
+        sel.appendChild(opt);
+      });
+    } catch (e) { /* keep the default option */ }
+  }
+
+  const evalLog = document.getElementById('eval-progress-log');
+  function evalLogEntry(cls, text) {
+    const el = document.createElement('div');
+    el.className = 'log-entry ' + (cls || '');
+    el.innerHTML = '<span class="ts">' + new Date().toLocaleTimeString() + '</span>'
+                 + escapeHtml(text);
+    evalLog.appendChild(el);
+    while (evalLog.children.length > 200) evalLog.removeChild(evalLog.firstChild);
+    evalLog.scrollTop = evalLog.scrollHeight;
+  }
+
+  async function startEval() {
+    const btn = document.getElementById('eval-run-btn');
+    btn.disabled = true;
+    const body = {
+      case_source: document.getElementById('eval-source').value || '',
+      before: document.getElementById('eval-before').value || '',
+      max_cases: parseInt(document.getElementById('eval-max-cases').value || '6', 10),
+      gate: document.getElementById('eval-gate').checked,
+      gate_margin: parseInt(document.getElementById('eval-gate-margin').value || '1', 10),
+      judge_model: document.getElementById('eval-judge-model').value || '',
+      source: 'manual-eval',
+    };
+    const r = await fetch('/api/eval', {
+      method: 'POST',
+      headers: {'Content-Type': 'application/json'},
+      body: JSON.stringify(body),
+    });
+    const j = await r.json();
+    if (!j.ok) {
+      alert('Failed to start eval: ' + (j.error || 'unknown'));
+      btn.disabled = false;
+    }
+  }
+
+  socket.on('eval_started', (p) => {
+    evalLog.innerHTML = '';
+    document.querySelector('#eval-verdict-table tbody').innerHTML = '';
+    document.getElementById('eval-result-banner').textContent =
+      `running… ${ (p.case_keys || []).length } case(s), source=${p.case_source}, before=${p.before_ref}`;
+    document.getElementById('eval-result-banner').className = 'status-line running';
+    evalLogEntry('pipeline', `eval started: ${(p.case_keys || []).length} case(s), before=${p.before_ref}`);
+    document.getElementById('eval-run-btn').disabled = true;
+  });
+  socket.on('eval_case_started', (p) => {
+    evalLogEntry('reflector', `case ${p.case_key} (${p.case_nbr || '?'} · ${p.subject || ''}) started` + (p.golden ? ' ★' : ''));
+  });
+  socket.on('eval_replay_progress', (p) => {
+    if (p.role === 'agent' || p.role === 'error') {
+      evalLogEntry(p.label === 'before' ? 'pipeline' : 'curator',
+        `[${p.label}] ${(p.content || '').slice(0, 120)}`);
+    }
+  });
+  socket.on('eval_case_done', (p) => {
+    evalLogEntry(p.verdict === 'regressed' ? 'error' : 'curator',
+      `case ${p.case_key}: ${p.verdict} (${p.score_before} → ${p.score_after})`);
+    const tbody = document.querySelector('#eval-verdict-table tbody');
+    const cls = p.verdict === 'improved' ? 'good' : p.verdict === 'regressed' ? 'bad' : '';
+    const tr = document.createElement('tr');
+    tr.innerHTML =
+      `<td class="cid">${escapeHtml(p.case_key)}</td>` +
+      `<td>${p.score_before} → ${p.score_after}</td>` +
+      `<td><span class="pill ${cls}">${escapeHtml(p.verdict)}</span></td>` +
+      `<td>${escapeHtml(p.judge_winner || '')}` +
+      (p.judge_rationale
+        ? `<details><summary>rationale</summary><pre>${escapeHtml(p.judge_rationale)}</pre></details>` : '') +
+      `</td>`;
+    tbody.appendChild(tr);
+  });
+  socket.on('eval_gate', (p) => {
+    evalLogEntry(p.decision === 'rollback' ? 'error' : 'pipeline',
+      `GATE: ${p.decision} · ${JSON.stringify(p.summary)}`);
+  });
+  socket.on('eval_rollback', (p) => {
+    evalLogEntry('error', `ROLLED BACK to ${p.restored_from} (pre-rollback snapshot: ${p.pre_rollback_snapshot})`);
+    const b = document.getElementById('eval-result-banner');
+    b.textContent = `⚠ playbooks ROLLED BACK to ${p.restored_from} — see History tab`;
+    b.className = 'status-line error';
+    loadPlaybooks();
+  });
+  socket.on('eval_done', (p) => {
+    const s = p.summary || {};
+    const g = p.gate || {};
+    const banner = document.getElementById('eval-result-banner');
+    if (!g.rolled_back) {
+      banner.textContent =
+        `done · improved ${s.improved || 0} / regressed ${s.regressed || 0} / same ${s.same || 0}` +
+        ` — GATE: ${g.decision || 'n/a'}` + (p.error ? ` · error: ${p.error}` : '');
+      banner.className = 'status-line ' + (p.error ? 'error' : 'done');
+    }
+    evalLogEntry('pipeline', 'eval done');
+    document.getElementById('eval-run-btn').disabled = false;
+    loadEvalReports();
+  });
+  socket.on('eval_error', (p) => {
+    evalLogEntry('error', 'eval error: ' + p.error);
+    const b = document.getElementById('eval-result-banner');
+    b.textContent = 'error: ' + p.error;
+    b.className = 'status-line error';
+    document.getElementById('eval-run-btn').disabled = false;
+  });
+
+  async function loadEvalReports() {
+    const root = document.getElementById('eval-report-list');
+    try {
+      const r = await fetch('/api/eval/reports');
+      const j = await r.json();
+      const items = j.items || [];
+      if (!items.length) { root.innerHTML = '<div class="status-line">no reports yet</div>'; return; }
+      root.innerHTML = '';
+      items.forEach(it => {
+        const s = it.summary || {};
+        const g = it.gate || {};
+        const div = document.createElement('div');
+        div.className = 'log-entry' + (g.rolled_back ? ' error' : '');
+        div.style.cursor = 'pointer';
+        div.innerHTML =
+          `<span class="ts">${escapeHtml(it.date)}</span>` +
+          `<span class="ev">${escapeHtml(it.source || '')}</span>` +
+          `improved ${s.improved || 0} / regressed ${s.regressed || 0}` +
+          ` · gate: ${escapeHtml(g.decision || 'n/a')}${g.rolled_back ? ' (ROLLED BACK)' : ''}`;
+        div.onclick = () => showEvalReport(it.date, it.name);
+        root.appendChild(div);
+      });
+    } catch (e) {
+      root.innerHTML = '<div class="status-line error">failed: ' + escapeHtml(String(e)) + '</div>';
+    }
+  }
+
+  async function showEvalReport(date, name) {
+    const detail = document.getElementById('eval-report-detail');
+    detail.innerHTML = '<div class="status-line">loading…</div>';
+    const r = await fetch(`/api/eval/reports/${encodeURIComponent(date)}/${encodeURIComponent(name)}`);
+    if (!r.ok) { detail.innerHTML = '<div class="status-line error">not found</div>'; return; }
+    const j = await r.json();
+    detail.innerHTML = `<pre>${escapeHtml(JSON.stringify(j, null, 2))}</pre>`;
   }
 
   // ---------- diff rendering ----------
@@ -412,6 +853,187 @@
     });
   }
 
+  // ---------- history ----------
+  let historyLoadedOnce = false;
+  let historyTurnDates = [];
+  let historyTurns = [];
+  let historySnapshots = [];
+
+  async function loadHistory() {
+    await Promise.all([loadTurnDates(), loadSnapshots()]);
+  }
+
+  async function loadTurnDates() {
+    const status = document.getElementById('hist-turns-status');
+    status.textContent = 'loading dates…';
+    try {
+      const r = await fetch('/api/history/turns');
+      const j = await r.json();
+      historyTurnDates = j.dates || [];
+      const sel = document.getElementById('hist-date');
+      const prev = sel.value;
+      sel.innerHTML = '';
+      historyTurnDates.forEach(d => {
+        const o = document.createElement('option');
+        o.value = d; o.textContent = d;
+        sel.appendChild(o);
+      });
+      if (historyTurnDates.includes(prev)) sel.value = prev;
+      status.textContent = historyTurnDates.length + ' day(s)';
+      if (historyTurnDates.length) {
+        await loadTurnsForSelectedDate();
+      } else {
+        document.getElementById('hist-turn-list').innerHTML =
+          '<div class="status-line">No turn history yet.</div>';
+      }
+    } catch (e) {
+      status.textContent = 'load failed: ' + e;
+    }
+  }
+
+  async function loadTurnsForSelectedDate() {
+    const date = document.getElementById('hist-date').value;
+    if (!date) return;
+    const status = document.getElementById('hist-turns-status');
+    status.textContent = 'loading ' + date + '…';
+    document.getElementById('hist-turn-detail').innerHTML = '';
+    try {
+      const r = await fetch('/api/history/turns/' + encodeURIComponent(date));
+      const j = await r.json();
+      historyTurns = j.items || [];
+      status.textContent = date + ' · ' + historyTurns.length + ' turn(s)';
+      renderTurnList();
+    } catch (e) {
+      status.textContent = 'load failed: ' + e;
+    }
+  }
+
+  function renderTurnList() {
+    const list = document.getElementById('hist-turn-list');
+    if (!historyTurns.length) {
+      list.innerHTML = '<div class="status-line">No turns recorded for this date.</div>';
+      return;
+    }
+    // Newest first
+    const rows = historyTurns.slice().reverse();
+    const html = rows.map((t, i) => {
+      const idx = historyTurns.length - 1 - i;
+      const ops = ((t.curate_result || {}).operations || []).length;
+      const src = t.run_source || 'cli';
+      const cid = (t.conversation_id || '').slice(0, 8);
+      const tid = (t.turn_id || '').slice(0, 8);
+      const ts = (t.ts || '').replace('T', ' ').slice(0, 19);
+      return `<div class="log-entry pipeline" style="cursor:pointer" onclick="showTurnDetail(${idx})">
+        <span class="ts">${escapeHtml(ts)}</span>
+        <span class="pill">${escapeHtml(src)}</span>
+        cid=<span class="cid">${escapeHtml(cid)}…</span>
+        tid=<span class="cid">${escapeHtml(tid)}…</span>
+        <span class="pill">${ops} ops</span>
+      </div>`;
+    }).join('');
+    list.innerHTML = html;
+  }
+
+  function showTurnDetail(idx) {
+    const t = historyTurns[idx];
+    if (!t) return;
+    const applied = t.applied_bullets || [];
+    const appliedText = applied.length
+      ? applied.map(b => `[${b.id}] (${b.section}) ${b.content}`).join('\n')
+      : '(none)';
+    const box = document.getElementById('hist-turn-detail');
+    box.innerHTML = `
+      <div class="diff-block">
+        <h4>Turn ${escapeHtml(t.turn_id || '')} · ${escapeHtml(t.run_source || '')} · run ${escapeHtml((t.run_id || '').slice(0,8))}…</h4>
+        <details open><summary>feedback</summary><pre>${escapeHtml(JSON.stringify(t.feedback || {}, null, 2))}</pre></details>
+        <details><summary>applied bullets (${applied.length})</summary><pre>${escapeHtml(appliedText)}</pre></details>
+        <details><summary>reflection</summary><pre>${escapeHtml(JSON.stringify(t.reflection || {}, null, 2))}</pre></details>
+        <details><summary>curate_result</summary><pre>${escapeHtml(JSON.stringify(t.curate_result || {}, null, 2))}</pre></details>
+      </div>
+    `;
+  }
+
+  async function loadSnapshots() {
+    const status = document.getElementById('hist-snap-status');
+    status.textContent = 'loading snapshots…';
+    try {
+      const r = await fetch('/api/history/snapshots');
+      const j = await r.json();
+      historySnapshots = j.items || [];
+      status.textContent = historySnapshots.length + ' snapshot(s)';
+      renderSnapshotList();
+    } catch (e) {
+      status.textContent = 'load failed: ' + e;
+    }
+  }
+
+  function renderSnapshotList() {
+    const root = document.getElementById('hist-snap-list');
+    document.getElementById('hist-snap-detail').innerHTML = '';
+    if (!historySnapshots.length) {
+      root.innerHTML = '<div class="status-line">No snapshots yet.</div>';
+      return;
+    }
+    // Group by date
+    const byDate = {};
+    historySnapshots.forEach(s => {
+      (byDate[s.date] = byDate[s.date] || []).push(s);
+    });
+    const dates = Object.keys(byDate).sort().reverse();
+    const parts = [];
+    dates.forEach(d => {
+      parts.push(`<div style="padding:6px 4px;color:var(--muted);font-weight:600;">${escapeHtml(d)}</div>`);
+      byDate[d].forEach(s => {
+        const runShort = (s.run_id || '').slice(0, 8);
+        const ts = (s.snapshot_at || '').replace('T', ' ').slice(11, 19);
+        const filesHtml = (s.files || []).map(f => {
+          const url = `/api/history/snapshots/${encodeURIComponent(s.date)}/${encodeURIComponent(s.run_dir)}/${encodeURIComponent(f)}`;
+          return `<a href="#" onclick="showSnapshotFile('${escapeAttr(s.date)}','${escapeAttr(s.run_dir)}','${escapeAttr(f)}');return false" class="pill" style="margin-right:4px;">${escapeHtml(f)}</a>`;
+        }).join('');
+        parts.push(`
+          <div class="log-entry" style="border-left-color: var(--good);">
+            <span class="ts">${escapeHtml(ts)}</span>
+            <span class="pill">${escapeHtml(s.source || '?')}</span>
+            <span class="cid">${escapeHtml(runShort)}…</span>
+            <div style="margin-top:4px;">${filesHtml || '(no files)'}</div>
+          </div>
+        `);
+      });
+    });
+    root.innerHTML = parts.join('');
+  }
+
+  async function showSnapshotFile(date, runDir, filename) {
+    const box = document.getElementById('hist-snap-detail');
+    box.innerHTML = '<div class="status-line">loading…</div>';
+    const viewUrl = `/api/history/snapshots/${encodeURIComponent(date)}/${encodeURIComponent(runDir)}/${encodeURIComponent(filename)}`;
+    const dlUrl = viewUrl + '?download=1';
+    try {
+      const r = await fetch(viewUrl);
+      if (!r.ok) {
+        box.innerHTML = '<div class="status-line error">fetch failed: ' + r.status + '</div>';
+        return;
+      }
+      const text = await r.text();
+      let pretty = text;
+      try { pretty = JSON.stringify(JSON.parse(text), null, 2); } catch (e) { /* leave raw */ }
+      box.innerHTML = `
+        <div class="diff-block">
+          <h4>${escapeHtml(date)} / ${escapeHtml(runDir)} / ${escapeHtml(filename)}
+            <a class="ghost" href="${dlUrl}" download="${escapeHtml(filename)}" style="float:right;text-decoration:none;">⬇ Download</a>
+          </h4>
+          <pre>${escapeHtml(pretty)}</pre>
+        </div>
+      `;
+    } catch (e) {
+      box.innerHTML = '<div class="status-line error">fetch failed: ' + e + '</div>';
+    }
+  }
+
+  function escapeAttr(s) {
+    return String(s == null ? '' : s).replace(/'/g, "\\'").replace(/"/g, '\\"');
+  }
+
   // ---------- helpers ----------
   function escapeHtml(s) {
     return String(s == null ? '' : s)
@@ -422,6 +1044,7 @@
   // ---------- init ----------
   loadConversations();
   loadPlaybooks();
+  refreshNightlyStatus();
 </script>
 </body>
 </html>

@@ -152,10 +152,14 @@ def set_up(socketio):
         # updates from feedback. Safe to skip on failure — the agent keeps
         # working without playbooks.
         try:
-            from services.ace import AceRunner
+            from services.ace import AceRunner, HistoryWriter
+            from services.ace import sync_utils as ace_sync
             from services import feedback_service
-            base = getattr(app_config, "avatarfiles_dir", None)
-            playbooks_root = (Path(base) / "ace_playbooks") if base else (Path.cwd() / "data" / "ace_playbooks")
+            try:
+                ace_sync.sync_at_boot()
+            except Exception as e:
+                print(f"⚠️  ACE playbook cloud sync skipped: {e}")
+            playbooks_root = ace_sync.local_working_dir()
 
             def _skill_provider(sid: str):
                 # Look up the skill in the agent's already-loaded skills dict
@@ -174,12 +178,20 @@ def set_up(socketio):
                 except Exception:
                     return None
 
+            # Local-only turn history (retained/pruned, see services/ace/history.py).
+            # Pushing to the cloud share is NOT done here — that's the
+            # centrally-run adapt job's job (services/ace/web/server.py),
+            # so an ordinary user's live chat session never touches the SMB
+            # share directly.
+            ace_history = HistoryWriter(root=playbooks_root / "history")
+
             ace_runner = AceRunner(
                 llm=llm_helper,
                 playbooks_dir=playbooks_root,
                 feedback_root=feedback_service._feedback_root(),
                 skills=list(llm_helper.skills.keys()) if llm_helper.skills else None,
                 skill_context_provider=_skill_provider,
+                history=ace_history,
             )
             log_chatbot_agent.attach_ace(ace_runner)
         except Exception as e:
@@ -251,6 +263,56 @@ def set_up(socketio):
             skills=bt_skills if bt_skills else llm_helper.skills,
         )
         print(f"🔵 BT Chatbot Agent loaded (model={model}, markers=ibtpci)")
+
+        # Attach a BT-specific ACE adapter — same mechanism as the WiFi agent
+        # above, but pointed at the "bt" sync namespace so BT's reflected
+        # workflow/domain playbooks never mix with WiFi's (separate local
+        # dir ace_playbooks_bt/local/, separate share ace_playbook_bt/).
+        try:
+            from services.ace import AceRunner, HistoryWriter
+            from services.ace import sync_utils as ace_sync
+            from services import feedback_service
+            try:
+                ace_sync.sync_at_boot(namespace="bt")
+            except Exception as e:
+                print(f"⚠️  BT ACE playbook cloud sync skipped: {e}")
+            bt_playbooks_root = ace_sync.local_working_dir(namespace="bt")
+
+            def _bt_skill_provider(sid: str):
+                skills = bt_skills or getattr(llm_helper, "skills", None) or {}
+                sk = skills.get(sid)
+                if sk is None:
+                    return None
+                try:
+                    return {
+                        "description": getattr(sk, "description", "") or "",
+                        "expert_rules": getattr(sk, "expert_rules", "") or "",
+                        "keywords": list(getattr(sk, "keywords", []) or []),
+                    }
+                except Exception:
+                    return None
+
+            # Local-only turn history, isolated under ace_playbooks_bt/local/history/
+            # (never mixed with WiFi's). Cloud push is job-level, see the WiFi
+            # block above for why this stays out of the online per-turn path.
+            bt_ace_history = HistoryWriter(root=bt_playbooks_root / "history")
+
+            bt_ace_runner = AceRunner(
+                llm=llm_helper,
+                playbooks_dir=bt_playbooks_root,
+                feedback_root=feedback_service._feedback_root(),
+                skills=list((bt_skills or llm_helper.skills or {}).keys()) or None,
+                skill_context_provider=_bt_skill_provider,
+                history=bt_ace_history,
+                # BT feedback lives in its own bt_feedback*.jsonl /
+                # conversations/bt_<id>.json stream (see
+                # services/feedback_service.py's domain partitioning) —
+                # without this the runner would silently read WiFi's stream.
+                feedback_prefix=feedback_service._domain_prefix("bt"),
+            )
+            bt_chatbot_agent.attach_ace(bt_ace_runner)
+        except Exception as e:
+            print(f"⚠️  BT ACE attach skipped: {e}")
     else:
         bt_chatbot_agent = None
         print("⚠️  BT Chatbot Agent skipped — LLM client not configured (no API key).")

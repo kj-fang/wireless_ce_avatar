@@ -53,9 +53,6 @@ BT_SKILLS_YAML_DATED_TEMPLATE = "bt_skills_{date}.yaml"       # date = YYYY-MM-D
 FEEDBACK_DIR_prim = rf"\\infs089b.iil.intel.com\HOME\WirelessCE\Intel_WirelessCE_Avatar\feedback"
 FEEDBACK_DIR_bkup = rf"\\infs089.iil.intel.com\HOME\WirelessCE\Intel_WirelessCE_Avatar\feedback"
 
-# ACE Playbook — remote archive on shared folder.
-ACE_PLAYBOOK_DIR_remote = r"\\infs089b.iil.intel.com\HOME\WirelessCE\Intel_WirelessCE_Avatar\ace_playbook"
-
 # Gather — usage-analytics layer.
 # On the first Send of each chatbot session a tidy, DB-ingestion-friendly
 # record is written here (one JSON per conversation) capturing who used the
@@ -84,6 +81,33 @@ GATHER_DIR_prim = _os.environ.get("INTELAVATAR_GATHER_DIR") \
     or _sibling_share(FEEDBACK_DIR_prim, _GATHER_LEAF)
 GATHER_DIR_bkup = _os.environ.get("INTELAVATAR_GATHER_DIR_BKUP") \
     or _sibling_share(FEEDBACK_DIR_bkup, _GATHER_LEAF)
+
+# ACE playbook cloud sync (WiFi/general).
+#
+# Default users only READ the playbooks, so this share is treated as a simple
+# cache source: on every boot each machine pulls the latest playbook from here
+# into <avatarfiles_dir>/ace_playbooks/local/ (falling back to the last local
+# version when the share is unreachable). The rare machine that runs ACE
+# reflection best-effort pushes its updated copy back here, archiving the
+# previous version under ace_playbook/history/. See services/ace/sync_utils.py.
+_ACE_PLAYBOOK_LEAF = "ace_playbook"
+ACE_PLAYBOOK_DIR_prim = _os.environ.get("INTELAVATAR_ACE_PLAYBOOK_DIR") \
+    or _sibling_share(FEEDBACK_DIR_prim, _ACE_PLAYBOOK_LEAF)
+ACE_PLAYBOOK_DIR_bkup = _os.environ.get("INTELAVATAR_ACE_PLAYBOOK_DIR_BKUP") \
+    or _sibling_share(FEEDBACK_DIR_bkup, _ACE_PLAYBOOK_LEAF)
+
+# ACE playbook cloud sync (BT).
+#
+# Kept as a SEPARATE share leaf (not just a filename prefix like the BT
+# skills YAML) because playbooks accumulate bullets from live reflection —
+# mixing BT's and WiFi's log-analysis styles into one workflow.json/
+# domain_*.json set would let each domain's reflected bullets pollute the
+# other's playbook. Same pull/push cache semantics as the WiFi share above.
+_ACE_PLAYBOOK_BT_LEAF = "ace_playbook_bt"
+ACE_PLAYBOOK_BT_DIR_prim = _os.environ.get("INTELAVATAR_ACE_PLAYBOOK_BT_DIR") \
+    or _sibling_share(FEEDBACK_DIR_prim, _ACE_PLAYBOOK_BT_LEAF)
+ACE_PLAYBOOK_BT_DIR_bkup = _os.environ.get("INTELAVATAR_ACE_PLAYBOOK_BT_DIR_BKUP") \
+    or _sibling_share(FEEDBACK_DIR_bkup, _ACE_PLAYBOOK_BT_LEAF)
 
 # Local cache — prompt/ and filter/ are copied here from the remote on first run.
 # Using a path relative to this file so it works regardless of install location.

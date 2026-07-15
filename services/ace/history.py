@@ -38,16 +38,17 @@ _SNAPSHOT_SKIP_NAMES = {".ace_cursor.json", ".ace_nightly.json"}
 
 class HistoryWriter:
     def __init__(self, root: Path, retention_days: int = 30):
+        # No mkdir here — turns/ and snapshots/ are created lazily by
+        # record_turn()/snapshot_playbooks() the first time either actually
+        # writes something. Most HistoryWriter instances (e.g. the ones
+        # attached to a live chat agent's AceRunner) never see a single
+        # turn, so eagerly creating an empty turns/+snapshots/ pair on every
+        # boot just clutters ace_playbooks*/local/ with empty folders.
         self._root = Path(root)
         self._turns_dir = self._root / "turns"
         self._snapshots_dir = self._root / "snapshots"
         self._retention_days = int(retention_days)
         self._write_lock = threading.Lock()
-        try:
-            self._turns_dir.mkdir(parents=True, exist_ok=True)
-            self._snapshots_dir.mkdir(parents=True, exist_ok=True)
-        except Exception as e:
-            print(f"[ace.history] failed to create {self._root}: {e}")
 
     # ---------- writers ----------
     def record_turn(self, *, run_id: Optional[str], run_source: str,
@@ -203,8 +204,11 @@ class HistoryWriter:
         except Exception as e:
             print(f"[ace.history] prune (turns) failed: {e}")
 
-        # Snapshot day-dirs — by directory-name date.
+        # Snapshot day-dirs — by directory-name date. Nothing to prune (and
+        # nothing wrong) when snapshot_playbooks() has never run yet.
         try:
+            if not self._snapshots_dir.exists():
+                return stats
             for d in self._snapshots_dir.iterdir():
                 if not d.is_dir():
                     continue

@@ -33,6 +33,16 @@ from .cases import EvalCase, resolve_case_log, _domain_prefix
 _GOLDEN_FILENAME = "golden_cases.json"
 _LOCK = threading.Lock()
 
+# namespace -> golden-set filename, mirroring feedback_service's domain
+# partitioning (_domain_prefix). Kept here rather than computed via
+# f"{_domain_prefix(domain)}{_GOLDEN_FILENAME}" so the wifi filename stays
+# the exact literal "golden_cases.json" byte-for-byte (no accidental
+# reshuffle of the file every machine already has).
+_GOLDEN_FILENAMES = {
+    "wifi": _GOLDEN_FILENAME,
+    "bt": f"bt_{_GOLDEN_FILENAME}",
+}
+
 
 def _now_iso() -> str:
     return datetime.now().astimezone().isoformat(timespec="seconds")
@@ -47,11 +57,21 @@ def _current_user() -> str:
 
 
 class GoldenSet:
-    """Shared golden registry over one feedback root."""
+    """Shared golden registry over one feedback root.
 
-    def __init__(self, feedback_root: Path):
+    namespace: "wifi" (default) or "bt" — selects which golden-set file this
+    instance reads/writes (golden_cases.json vs bt_golden_cases.json), so a
+    BT golden case never lands in WiFi's regression-test basis or vice
+    versa. Not wired up anywhere yet (no BT golden cases exist as of
+    2026-07 — see EvalHarness/_build_eval_harness in web/server.py, which
+    still always builds this with the default "wifi"); this parameter is
+    the intended extension point for whenever that changes.
+    """
+
+    def __init__(self, feedback_root: Path, namespace: str = "wifi"):
         self.feedback_root = Path(feedback_root)
-        self.path = self.feedback_root / _GOLDEN_FILENAME
+        self.namespace = namespace if namespace in _GOLDEN_FILENAMES else "wifi"
+        self.path = self.feedback_root / _GOLDEN_FILENAMES[self.namespace]
         self._entries: list[dict] = []
         self._loaded_mtime: float = -1.0
         self._load()

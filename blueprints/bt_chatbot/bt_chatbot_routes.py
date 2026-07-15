@@ -389,6 +389,12 @@ def _get_or_create_agent(skip_prime: bool = False) -> WifiLogAgentSystem:
             model=base.model,
             skills=base.skills,   # reuse pre-loaded skills, no disk re-read
         )
+        # Inherit ACE runner from the boot-time base agent so playbook blocks
+        # are injected into per-session prompts (BT's own "bt" sync namespace —
+        # see configs/set_up_app.py).
+        ace_runner = getattr(base, "ace_runner", None)
+        if ace_runner is not None:
+            agent.attach_ace(ace_runner)
         # Auto-populate log path so a freshly-(re)created per-session agent
         # still knows which log to use. Two sources, in order:
         #   1. session["chatbot_log_path"] — set by set_log when the user

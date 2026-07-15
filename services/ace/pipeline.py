@@ -48,13 +48,16 @@ class AceRunner:
         max_refine_rounds: int = 1,
         skill_context_provider: Optional[SkillContextProvider] = None,
         history: Optional[HistoryWriter] = None,
+        feedback_prefix: str = "",
     ):
         """
         llm:            an LLM_helper instance (services.llm_service.LLM_helper).
         playbooks_dir:  directory holding JSON playbook files.
         feedback_root:  directory written by services.feedback_service
                         (contains feedback.jsonl, feedback_details.jsonl,
-                         conversations/<id>.json).
+                         conversations/<id>.json — or, for a non-default
+                         domain, the prefixed equivalents; see
+                         feedback_prefix below).
         skills:         skill names to maintain domain playbooks for. If None,
                         the runner lazily creates one whenever a turn references
                         a new skill.
@@ -68,6 +71,12 @@ class AceRunner:
                         These fields are injected into both prompts so newly
                         added bullets match the existing skill voice/style.
                         Return None when the skill is unknown.
+        feedback_prefix: filename prefix services.feedback_service uses to
+                        partition this domain's feedback stream from the
+                        default (wifi) one — "" for wifi, "bt_" for BT. Must
+                        match services.feedback_service._domain_prefix() for
+                        the same domain, or this runner will silently read
+                        (or write the cursor against) the wrong stream.
         """
         self.llm = llm
         self.playbooks_dir = Path(playbooks_dir)
@@ -75,6 +84,7 @@ class AceRunner:
         self.playbooks_dir.mkdir(parents=True, exist_ok=True)
         self.skill_context_provider = skill_context_provider
         self.history = history
+        self.feedback_prefix = feedback_prefix
 
         self.workflow_pb = Playbook("agent", self.playbooks_dir / "workflow.json")
         self.domain_pbs: dict[str, Playbook] = {}
@@ -95,7 +105,7 @@ class AceRunner:
 
     # ----- snapshot / feedback loaders -----
     def _load_snapshot(self, conversation_id: str) -> Optional[dict]:
-        path = self.feedback_root / "conversations" / f"{conversation_id}.json"
+        path = self.feedback_root / "conversations" / f"{self.feedback_prefix}{conversation_id}.json"
         if not path.exists():
             return None
         try:
@@ -113,7 +123,7 @@ class AceRunner:
         """
         events: list[dict] = []
         for fname in ("feedback.jsonl", "feedback_details.jsonl"):
-            path = self.feedback_root / fname
+            path = self.feedback_root / f"{self.feedback_prefix}{fname}"
             if not path.exists():
                 continue
             try:

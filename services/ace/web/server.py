@@ -44,17 +44,35 @@ from configs.global_configs import app_config
 from services.llm_service import LLM_helper
 from utils import helpers
 
+from functools import partial
+
 from ..pipeline import AceRunner
 from ..playbook import Playbook
 from ..cli import (_skill_context_provider as _ace_skill_context_provider,
                    _load_active_skills as _load_agent_skills)
 from ..history import HistoryWriter
+from .. import sync_utils as ace_sync
 from ..sync import launch_sync_background
 from ..eval.cases import list_cases as _eval_list_cases
 from ..eval.golden import GoldenSet
 from ..eval.harness import EvalHarness, EvalConfig
 from ..eval.store import EvalStore
 from .scheduler import NightlyScheduler
+
+_NAMESPACES = ("wifi", "bt")
+
+
+def _norm_namespace(value) -> str:
+    v = (value or "wifi").strip().lower()
+    return v if v in _NAMESPACES else "wifi"
+
+
+def _feedback_prefix(namespace: str) -> str:
+    """Filename prefix for this namespace's feedback stream (see
+    services/feedback_service.py's domain partitioning — "" for wifi,
+    "bt_" for bt)."""
+    from services import feedback_service
+    return feedback_service._domain_prefix(namespace)
 
 
 # ---------------------------------------------------------------------------
@@ -198,11 +216,11 @@ def _resolve_feedback_root() -> Path:
     return _resolve_feedback_root_full()[0]
 
 
-def _resolve_playbooks_dir() -> Path:
-    base = getattr(app_config, "avatarfiles_dir", None)
-    root = Path(base) / "ace_playbooks" if base else Path.cwd() / "data" / "ace_playbooks"
-    root.mkdir(parents=True, exist_ok=True)
-    return root
+def _resolve_playbooks_dir(namespace: str = "wifi") -> Path:
+    """Cheap — just resolves the local working dir for this namespace ("wifi"
+    or "bt"). The (network-bound) cloud sync itself runs once at startup for
+    both namespaces, see main()."""
+    return ace_sync.local_working_dir(namespace)
 
 
 # Key module is cached at process scope: the file rarely moves, and the SMB
@@ -246,13 +264,35 @@ def _build_llm(model: Optional[str] = None) -> LLM_helper:
 # Conversation listing
 # ---------------------------------------------------------------------------
 
-def _list_conversations(conv_dir: Path, source: str) -> list[dict]:
+def _belongs_to_namespace(filename: str, namespace: str) -> bool:
+    """True if `filename` is this namespace's conversation snapshot.
+
+    All domains' snapshots live in the same conversations/ folder,
+    distinguished only by filename prefix (see
+    services/feedback_service.py's domain partitioning, and
+    eval/cases.py's identical startswith("bt_") fallback). Without this a BT
+    conversation shows up in the WiFi picker (and vice versa) with no visual
+    distinction — selecting it silently no-ops downstream since AceRunner
+    looks up the prefixed filename, but it's confusing UX.
+    """
+    my_prefix = _feedback_prefix(namespace)
+    if my_prefix:
+        return filename.startswith(my_prefix)
+    # wifi/default has no prefix of its own — a file belongs to it as long
+    # as it doesn't carry some OTHER domain's prefix.
+    other_prefixes = [_feedback_prefix(ns) for ns in _NAMESPACES if ns != namespace]
+    return not any(p and filename.startswith(p) for p in other_prefixes)
+
+
+def _list_conversations(conv_dir: Path, source: str, namespace: str = "wifi") -> list[dict]:
     out: list[dict] = []
     if not conv_dir.exists():
         return out
     # Iterate unsorted (one stat per file instead of two on the SMB share);
     # sort at the end by the mtime we already read.
     for f in conv_dir.glob("*.json"):
+        if not _belongs_to_namespace(f.name, namespace):
+            continue
         try:
             mtime = f.stat().st_mtime
         except Exception:
@@ -316,12 +356,13 @@ def _list_conversations(conv_dir: Path, source: str) -> list[dict]:
     return out
 
 
-def _list_all_conversations(force: bool = False) -> tuple[list[dict], dict]:
+def _list_all_conversations(force: bool = False, namespace: str = "wifi") -> tuple[list[dict], dict]:
     """Merge conversations from the resolved remote root and the local fallback.
 
     Returns ``(items, diag)``. Items are deduped by ``conversation_id`` —
     when both roots contain the same id, the remote copy wins (canonical),
-    but the diag reports how many were found in each.
+    but the diag reports how many were found in each. Only conversations
+    belonging to `namespace` are included (see _belongs_to_namespace).
     """
     remote_root, source = _resolve_feedback_root_full(force=force)
     remote_dir = remote_root / "conversations"
@@ -334,9 +375,9 @@ def _list_all_conversations(force: bool = False) -> tuple[list[dict], dict]:
     same_root = remote_root.resolve() == local_root.resolve() if local_root.exists() else False
 
     if remote_dir.exists() and not same_root:
-        remote_items = _list_conversations(remote_dir, source)
+        remote_items = _list_conversations(remote_dir, source, namespace)
     if local_dir.exists():
-        local_items = _list_conversations(local_dir, "local-fallback" if not same_root else source)
+        local_items = _list_conversations(local_dir, "local-fallback" if not same_root else source, namespace)
 
     # Dedup by conversation_id: prefer remote (canonical).
     merged: dict[str, dict] = {}
@@ -367,8 +408,8 @@ def _list_all_conversations(force: bool = False) -> tuple[list[dict], dict]:
     return items, diag
 
 
-def _list_playbooks() -> list[dict]:
-    pbs_dir = _resolve_playbooks_dir()
+def _list_playbooks(namespace: str = "wifi") -> list[dict]:
+    pbs_dir = _resolve_playbooks_dir(namespace)
     out: list[dict] = []
     for f in sorted(pbs_dir.glob("*.json")):
         scope = "agent" if f.name == "workflow.json" else f.stem.removeprefix("domain_")
@@ -381,8 +422,8 @@ def _list_playbooks() -> list[dict]:
     return out
 
 
-def _render_playbook(name: str) -> dict:
-    pbs_dir = _resolve_playbooks_dir()
+def _render_playbook(name: str, namespace: str = "wifi") -> dict:
+    pbs_dir = _resolve_playbooks_dir(namespace)
     if name == "workflow":
         path = pbs_dir / "workflow.json"
         pb = _get_cached_playbook("agent", path)
@@ -404,12 +445,12 @@ def _render_playbook(name: str) -> dict:
 # Diff (before / after snapshot of every playbook on disk)
 # ---------------------------------------------------------------------------
 
-def _snapshot_bullets() -> dict[str, dict[str, dict]]:
+def _snapshot_bullets(namespace: str = "wifi") -> dict[str, dict[str, dict]]:
     """Return {playbook_name: {bullet_id: {content, helpful, harmful, ...}}}."""
     snap: dict[str, dict[str, dict]] = {}
-    for s in _list_playbooks():
+    for s in _list_playbooks(namespace):
         name = s["display_name"]
-        rendered = _render_playbook(name)
+        rendered = _render_playbook(name, namespace)
         snap[name] = {b["id"]: b for b in rendered["bullets"]}
     return snap
 
@@ -462,11 +503,22 @@ class JobManager:
     def __init__(self, socketio: SocketIO, history: Optional[HistoryWriter] = None,
                  eval_store: Optional[EvalStore] = None):
         self.socketio = socketio
-        self.history = history
+        self.history = history          # wifi's HistoryWriter (eval harness still assumes wifi)
         self.eval_store = eval_store
+        self._extra_history: dict[str, HistoryWriter] = {}   # other namespaces, lazy
         self._lock = threading.Lock()
         self._thread: Optional[threading.Thread] = None
         self._state: dict = {"status": "idle"}
+
+    def _history_for(self, namespace: str) -> Optional[HistoryWriter]:
+        namespace = _norm_namespace(namespace)
+        if namespace == "wifi":
+            return self.history
+        hw = self._extra_history.get(namespace)
+        if hw is None:
+            hw = HistoryWriter(root=_resolve_playbooks_dir(namespace) / "history")
+            self._extra_history[namespace] = hw
+        return hw
 
     @property
     def state(self) -> dict:
@@ -480,7 +532,9 @@ class JobManager:
     def start(self, conversation_ids: list[str], model: Optional[str],
               source: str = "manual-selected",
               validate_after: bool = False,
-              eval_overrides: Optional[dict] = None) -> dict:
+              eval_overrides: Optional[dict] = None,
+              namespace: str = "wifi") -> dict:
+        namespace = _norm_namespace(namespace)
         with self._lock:
             if self._state.get("status") == "running":
                 return {"ok": False, "error": "another adapt job is already running",
@@ -490,18 +544,19 @@ class JobManager:
                 "status": "running",
                 "job_id": job_id,
                 "started_at": time.time(),
+                "namespace": namespace,
                 "conversation_ids": conversation_ids,
                 "source": source,
                 "validate_after": bool(validate_after),
             }
         # Resolve which feedback_root each conversation lives in BEFORE we hand
         # off to the worker, so the job can target remote vs local correctly.
-        items, _diag = _list_all_conversations()
+        items, _diag = _list_all_conversations(namespace=namespace)
         roots_by_cid: dict[str, str] = {it["conversation_id"]: it["feedback_root"]
                                         for it in items if it.get("conversation_id")}
         t = threading.Thread(target=self._run,
                              args=(job_id, conversation_ids, model, roots_by_cid,
-                                   source, validate_after, eval_overrides),
+                                   source, validate_after, eval_overrides, namespace),
                              daemon=True)
         self._thread = t
         t.start()
@@ -515,16 +570,17 @@ class JobManager:
         except Exception as e:
             print(f"[ace.web] emit({event}) failed: {e}")
 
-    def _pre_adapt_snapshot(self, job_id: str) -> Optional[str]:
+    def _pre_adapt_snapshot(self, job_id: str, namespace: str = "wifi") -> Optional[str]:
         """Snapshot the live playbooks BEFORE an adapt run so the chained
         eval has a 'before' arm (and the gate a rollback target). Returns
         the "YYYY-MM-DD/<run_dir>" ref, or None on failure."""
-        if self.history is None:
+        history = self._history_for(namespace)
+        if history is None:
             return None
         try:
             from datetime import datetime as _dt
-            run_dir = self.history.snapshot_playbooks(
-                _resolve_playbooks_dir(), run_id=job_id, source="pre-adapt",
+            run_dir = history.snapshot_playbooks(
+                _resolve_playbooks_dir(namespace), run_id=job_id, source="pre-adapt",
                 meta={"reason": "validate-after-adapt baseline"},
             )
             if not run_dir:
@@ -537,9 +593,10 @@ class JobManager:
     def _run(self, job_id: str, conversation_ids: list[str], model: Optional[str],
              roots_by_cid: dict[str, str], source: str = "manual-selected",
              validate_after: bool = False,
-             eval_overrides: Optional[dict] = None) -> None:
+             eval_overrides: Optional[dict] = None,
+             namespace: str = "wifi") -> None:
         started_at = time.time()
-        before_ref = self._pre_adapt_snapshot(job_id) if validate_after else None
+        before_ref = self._pre_adapt_snapshot(job_id, namespace) if validate_after else None
         if validate_after and before_ref is None:
             self._emit("adapt_progress", {
                 "job_id": job_id, "phase": "eval", "event": "warning",
@@ -549,8 +606,9 @@ class JobManager:
             validate_after = False
         self._emit("adapt_started", {
             "job_id": job_id,
+            "namespace": namespace,
             "conversation_ids": conversation_ids,
-            "playbooks_dir": str(_resolve_playbooks_dir()),
+            "playbooks_dir": str(_resolve_playbooks_dir(namespace)),
             "feedback_root": str(_resolve_feedback_root()),
             "roots_by_cid": roots_by_cid,
             "source": source,
@@ -560,7 +618,7 @@ class JobManager:
         totals = {"processed": 0, "ok": 0, "skipped": 0, "errors": 0}
         try:
             llm = _build_llm(model)
-            playbooks_dir = _resolve_playbooks_dir()
+            playbooks_dir = _resolve_playbooks_dir(namespace)
             default_root = _resolve_feedback_root()
             # One AceRunner per distinct feedback_root so a job mixing remote +
             # local conversations still finds each snapshot on disk.
@@ -572,8 +630,9 @@ class JobManager:
                         llm=llm,
                         playbooks_dir=playbooks_dir,
                         feedback_root=Path(root_str),
-                        skill_context_provider=_ace_skill_context_provider,
-                        history=self.history,
+                        skill_context_provider=partial(_ace_skill_context_provider, namespace=namespace),
+                        history=self._history_for(namespace),
+                        feedback_prefix=_feedback_prefix(namespace),
                     )
                 return runners[root_str]
 
@@ -583,7 +642,7 @@ class JobManager:
             # One disk-walk snapshot at job start. After each turn we build
             # the new "after" state by overlaying the runner's in-memory
             # playbook bullets onto the previous snapshot — no disk re-reads.
-            overall_before = _snapshot_bullets()
+            overall_before = _snapshot_bullets(namespace)
             prev_snap: dict[str, dict[str, dict]] = overall_before
 
             def _overlay_runner_state(prev: dict, runner: AceRunner) -> dict:
@@ -596,7 +655,7 @@ class JobManager:
             for cid in conversation_ids:
                 root_str = roots_by_cid.get(cid) or str(default_root)
                 runner = _runner_for(root_str)
-                snap_path = runner.feedback_root / "conversations" / f"{cid}.json"
+                snap_path = runner.feedback_root / "conversations" / f"{runner.feedback_prefix}{cid}.json"
                 if not snap_path.exists():
                     self._emit("adapt_progress", {
                         "job_id": job_id, "phase": "pipeline", "event": "no_snapshot",
@@ -648,8 +707,9 @@ class JobManager:
             overall_diff = _diff_bullets(overall_before, overall_after)
 
             self._snapshot_after_run(job_id=job_id, source=source,
-                                     started_at=started_at, totals=totals)
-            self._sync_to_remote(job_id)
+                                     started_at=started_at, totals=totals,
+                                     namespace=namespace)
+            self._sync_to_remote(job_id, namespace)
 
             self._emit("adapt_done", {
                 "job_id": job_id,
@@ -702,33 +762,42 @@ class JobManager:
 
     # ---------- batch (newly-added-since-cursor) ----------
     def _snapshot_after_run(self, *, job_id: str, source: str,
-                            started_at: float, totals: dict) -> None:
+                            started_at: float, totals: dict,
+                            namespace: str = "wifi") -> None:
         """Copy every playbook JSON into history/snapshots/<date>/<ts>__<job>/
         and prune history older than the retention window. Best-effort: never
         raises."""
-        if self.history is None:
+        history = self._history_for(namespace)
+        if history is None:
             return
         try:
-            playbooks_dir = _resolve_playbooks_dir()
+            playbooks_dir = _resolve_playbooks_dir(namespace)
             meta = {
+                "namespace": namespace,
                 "totals": totals,
                 "started_at": started_at,
                 "finished_at": time.time(),
             }
-            self.history.snapshot_playbooks(playbooks_dir, run_id=job_id,
-                                            source=source, meta=meta)
-            self.history.prune()
+            history.snapshot_playbooks(playbooks_dir, run_id=job_id,
+                                       source=source, meta=meta)
+            history.prune()
         except Exception as e:
             print(f"[ace.web] history snapshot failed for {job_id}: {e}")
 
-    def _sync_to_remote(self, job_id: str) -> None:
-        """Fire-and-forget sync of playbooks + history to remote SMB share."""
+    def _sync_to_remote(self, job_id: str, namespace: str = "wifi") -> None:
+        """Fire-and-forget sync of playbooks + history to this namespace's
+        remote SMB share (ace_playbook for wifi, ace_playbook_bt for bt —
+        see services/ace/sync_utils.py's namespace table)."""
         def _emit_sync(event: str, payload: dict) -> None:
-            self._emit(event, {"job_id": job_id, **payload})
+            self._emit(event, {"job_id": job_id, "namespace": namespace, **payload})
+        share = ace_sync.resolve_cloud_playbook_dir(namespace)
+        if not share:
+            print(f"[ace.sync] push skipped — {namespace} share unreachable")
+            return
         try:
             launch_sync_background(
-                local_dir=_resolve_playbooks_dir(),
-                remote_root_raw=path_configs.ACE_PLAYBOOK_DIR_remote,
+                local_dir=_resolve_playbooks_dir(namespace),
+                remote_root_raw=share,
                 emit=_emit_sync,
                 job_id=job_id,
             )
@@ -737,11 +806,13 @@ class JobManager:
 
     def start_batch(self, model: Optional[str] = None, source: str = "batch",
                     validate_after: bool = False,
-                    eval_overrides: Optional[dict] = None) -> dict:
+                    eval_overrides: Optional[dict] = None,
+                    namespace: str = "wifi") -> dict:
         """Kick off AceRunner.run_batch() on the resolved feedback root.
         Uses the same one-job-at-a-time lock as start(). The cursor at
         <playbooks_dir>/.ace_cursor.json determines which feedback events
         count as 'newly added'."""
+        namespace = _norm_namespace(namespace)
         with self._lock:
             if self._state.get("status") == "running":
                 return {"ok": False, "error": "another adapt job is already running",
@@ -752,12 +823,13 @@ class JobManager:
                 "job_id": job_id,
                 "started_at": time.time(),
                 "mode": "batch",
+                "namespace": namespace,
                 "source": source,
                 "validate_after": bool(validate_after),
             }
         t = threading.Thread(target=self._run_batch,
                              args=(job_id, model, source, validate_after,
-                                   eval_overrides),
+                                   eval_overrides, namespace),
                              daemon=True)
         self._thread = t
         t.start()
@@ -766,11 +838,12 @@ class JobManager:
 
     def _run_batch(self, job_id: str, model: Optional[str],
                    source: str = "batch", validate_after: bool = False,
-                   eval_overrides: Optional[dict] = None) -> None:
+                   eval_overrides: Optional[dict] = None,
+                   namespace: str = "wifi") -> None:
         started_at = time.time()
-        playbooks_dir = _resolve_playbooks_dir()
+        playbooks_dir = _resolve_playbooks_dir(namespace)
         feedback_root = _resolve_feedback_root()
-        before_ref = self._pre_adapt_snapshot(job_id) if validate_after else None
+        before_ref = self._pre_adapt_snapshot(job_id, namespace) if validate_after else None
         if validate_after and before_ref is None:
             self._emit("adapt_progress", {
                 "job_id": job_id, "phase": "eval", "event": "warning",
@@ -781,6 +854,7 @@ class JobManager:
         self._emit("adapt_started", {
             "job_id": job_id,
             "mode": "batch",
+            "namespace": namespace,
             "playbooks_dir": str(playbooks_dir),
             "feedback_root": str(feedback_root),
             "source": source,
@@ -792,17 +866,18 @@ class JobManager:
                 llm=llm,
                 playbooks_dir=playbooks_dir,
                 feedback_root=feedback_root,
-                skill_context_provider=_ace_skill_context_provider,
-                history=self.history,
+                skill_context_provider=partial(_ace_skill_context_provider, namespace=namespace),
+                history=self._history_for(namespace),
+                feedback_prefix=_feedback_prefix(namespace),
             )
 
             def progress_cb(evt: dict) -> None:
                 self._emit("adapt_progress", {"job_id": job_id, **evt})
 
-            overall_before = _snapshot_bullets()
+            overall_before = _snapshot_bullets(namespace)
             results = runner.run_batch(progress=progress_cb,
                                         run_id=job_id, run_source=source)
-            overall_after = _snapshot_bullets()
+            overall_after = _snapshot_bullets(namespace)
             overall_diff = _diff_bullets(overall_before, overall_after)
 
             totals = {
@@ -811,8 +886,9 @@ class JobManager:
                 "skipped":   sum(1 for r in results if r.get("status") != "ok"),
             }
             self._snapshot_after_run(job_id=job_id, source=source,
-                                     started_at=started_at, totals=totals)
-            self._sync_to_remote(job_id)
+                                     started_at=started_at, totals=totals,
+                                     namespace=namespace)
+            self._sync_to_remote(job_id, namespace)
             self._emit("adapt_done", {
                 "job_id": job_id,
                 "mode": "batch",
@@ -889,6 +965,12 @@ class JobManager:
         return {"ok": True, "job_id": job_id, "mode": "eval"}
 
     def _build_eval_harness(self, job_id: str) -> EvalHarness:
+        # wifi-only for now — no BT golden cases exist yet to make a BT eval
+        # run meaningful. GoldenSet/EvalHarness both already accept a
+        # namespace/domain param (see eval/golden.py's GoldenSet docstring)
+        # for whenever that changes; this is the one place to thread it
+        # through (playbooks_dir/history/eval_store -> self._history_for(ns)
+        # + _resolve_playbooks_dir(ns), golden=GoldenSet(roots[0], ns)).
         roots = [_resolve_feedback_root()]
         local = _local_feedback_root()
         if local.exists() and local.resolve() != Path(roots[0]).resolve():
@@ -981,32 +1063,43 @@ def create_app() -> tuple[Flask, SocketIO, JobManager, NightlyScheduler]:
 
     jobs = JobManager(socketio, history=history, eval_store=eval_store)
 
-    def _nightly_run() -> None:
+    def _nightly_run(ns: str, sched: "NightlyScheduler") -> None:
         # Fire-and-forget: JobManager owns the actual work + progress events;
         # NightlyScheduler just records last_run_iso + surfaces the trigger error.
         r = jobs.start_batch(model=None, source="nightly",
-                             validate_after=nightly.validate)
+                             validate_after=sched.validate, namespace=ns)
         if not r.get("ok"):
             raise RuntimeError(r.get("error") or "start_batch refused")
 
-    nightly = NightlyScheduler(
-        state_path=_resolve_playbooks_dir() / ".ace_nightly.json",
-        run_fn=_nightly_run,
-    )
-    nightly.resume_if_enabled()
+    # One NightlyScheduler per namespace — each fires jobs.start_batch() for
+    # ITS OWN namespace so a BT nightly run never touches WiFi's playbooks
+    # (and vice versa). State (enabled / fire time / last result) persists
+    # per-namespace under that namespace's own local playbooks dir.
+    schedulers: dict[str, NightlyScheduler] = {}
+    for ns in _NAMESPACES:
+        sched = NightlyScheduler(
+            state_path=_resolve_playbooks_dir(ns) / ".ace_nightly.json",
+            run_fn=lambda ns=ns: _nightly_run(ns, schedulers[ns]),
+        )
+        schedulers[ns] = sched
+        sched.resume_if_enabled()
+    nightly = schedulers["wifi"]  # backward-compat alias for anything below expecting the old name
 
     @app.route("/")
     def index():
+        namespace = _norm_namespace(request.args.get("namespace"))
         return render_template(
             "ace_adapt.html",
-            playbooks_dir=str(_resolve_playbooks_dir()),
+            namespace=namespace,
+            playbooks_dir=str(_resolve_playbooks_dir(namespace)),
             feedback_root=str(_resolve_feedback_root()),
         )
 
     @app.route("/api/conversations")
     def api_conversations():
         force = request.args.get("force", "").lower() in ("1", "true", "yes")
-        items, diag = _list_all_conversations(force=force)
+        namespace = _norm_namespace(request.args.get("namespace"))
+        items, diag = _list_all_conversations(force=force, namespace=namespace)
         if not items:
             if not diag["remote_exists"] and not diag["local_exists"]:
                 diag["error"] = (
@@ -1019,16 +1112,19 @@ def create_app() -> tuple[Flask, SocketIO, JobManager, NightlyScheduler]:
                     f"remote: {diag['remote_file_count']} file(s)/{diag['remote_loaded']} loaded; "
                     f"local: {diag['local_file_count']} file(s)/{diag['local_loaded']} loaded."
                 )
-        return jsonify({"items": items, **diag})
+        return jsonify({"items": items, "namespace": namespace, **diag})
 
     @app.route("/api/playbooks")
     def api_playbooks():
-        return jsonify({"items": _list_playbooks(),
-                        "playbooks_dir": str(_resolve_playbooks_dir())})
+        namespace = _norm_namespace(request.args.get("namespace"))
+        return jsonify({"items": _list_playbooks(namespace),
+                        "namespace": namespace,
+                        "playbooks_dir": str(_resolve_playbooks_dir(namespace))})
 
     @app.route("/api/playbooks/<name>")
     def api_playbook_one(name: str):
-        return jsonify(_render_playbook(name))
+        namespace = _norm_namespace(request.args.get("namespace"))
+        return jsonify(_render_playbook(name, namespace))
 
     @app.route("/api/adapt", methods=["POST"])
     def api_adapt():
@@ -1037,20 +1133,24 @@ def create_app() -> tuple[Flask, SocketIO, JobManager, NightlyScheduler]:
         if not cids:
             return jsonify({"ok": False, "error": "no conversation_ids provided"}), 400
         model = body.get("model")
+        namespace = _norm_namespace(body.get("namespace"))
         return jsonify(jobs.start(
             cids, model, source="manual-selected",
             validate_after=bool(body.get("validate")),
             eval_overrides=body.get("eval") or None,
+            namespace=namespace,
         ))
 
     @app.route("/api/adapt/new", methods=["POST"])
     def api_adapt_new():
         body = request.get_json(silent=True) or {}
         model = body.get("model")
+        namespace = _norm_namespace(body.get("namespace"))
         return jsonify(jobs.start_batch(
             model,
             validate_after=bool(body.get("validate")),
             eval_overrides=body.get("eval") or None,
+            namespace=namespace,
         ))
 
     @app.route("/api/job")
@@ -1059,16 +1159,20 @@ def create_app() -> tuple[Flask, SocketIO, JobManager, NightlyScheduler]:
 
     @app.route("/api/nightly", methods=["GET"])
     def api_nightly_status():
-        return jsonify(nightly.status())
+        return jsonify({ns: schedulers[ns].status() for ns in _NAMESPACES})
 
     @app.route("/api/nightly/start", methods=["POST"])
     def api_nightly_start():
         body = request.get_json(silent=True) or {}
-        return jsonify(nightly.start(validate=body.get("validate")))
+        namespace = _norm_namespace(body.get("namespace"))
+        return jsonify({"namespace": namespace,
+                        **schedulers[namespace].start(validate=body.get("validate"))})
 
     @app.route("/api/nightly/stop", methods=["POST"])
     def api_nightly_stop():
-        return jsonify(nightly.stop())
+        body = request.get_json(silent=True) or {}
+        namespace = _norm_namespace(body.get("namespace"))
+        return jsonify({"namespace": namespace, **schedulers[namespace].stop()})
 
     # ---------- eval ----------
     def _eval_roots() -> list[Path]:
@@ -1186,9 +1290,16 @@ def main(argv: Optional[list[str]] = None) -> int:
         _FB_ROOT_OVERRIDE = Path(args.feedback_dir).expanduser().resolve()
         print(f"[ace.web] --feedback-dir override: {_FB_ROOT_OVERRIDE}")
 
+    for ns in _NAMESPACES:
+        try:
+            ace_sync.sync_at_boot(namespace=ns)
+        except Exception as e:
+            print(f"[ace.web] cloud sync skipped for {ns}: {e}")
+
     app, socketio, _jobs, _nightly = create_app()
     print(f"[ace.web] serving on http://{args.host}:{args.port}")
-    print(f"[ace.web] playbooks_dir = {_resolve_playbooks_dir()}")
+    for ns in _NAMESPACES:
+        print(f"[ace.web] {ns} playbooks_dir = {_resolve_playbooks_dir(ns)}")
     root, source = _resolve_feedback_root_full()
     print(f"[ace.web] feedback_root = {root} ({source})")
     # allow_unsafe_werkzeug=True keeps the dev server happy on flask-socketio>=5.

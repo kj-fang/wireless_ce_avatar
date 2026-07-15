@@ -22,6 +22,7 @@ from __future__ import annotations
 import argparse
 import json
 import sys
+from functools import partial
 from pathlib import Path
 
 from configs import path_configs
@@ -29,6 +30,9 @@ from configs.global_configs import app_config
 from services.llm_service import LLM_helper
 from utils import helpers
 
+from . import sync as ace_mirror_sync
+from . import sync_utils as ace_sync
+from .history import HistoryWriter
 from .pipeline import AceRunner
 
 
@@ -54,11 +58,32 @@ def _resolve_feedback_root() -> Path:
     return Path(base) / "feedback" if base else Path.cwd() / "data" / "feedback"
 
 
-def _resolve_playbooks_dir() -> Path:
-    base = getattr(app_config, "avatarfiles_dir", None)
-    root = Path(base) / "ace_playbooks" if base else Path.cwd() / "data" / "ace_playbooks"
-    root.mkdir(parents=True, exist_ok=True)
-    return root
+def _resolve_playbooks_dir(namespace: str = "wifi") -> Path:
+    """Cheap — just resolves the local working dir for this namespace ("wifi"
+    or "bt"). The (network-bound) cloud sync itself runs once in main(),
+    before any subcommand."""
+    return ace_sync.local_working_dir(namespace)
+
+
+def _feedback_prefix(namespace: str) -> str:
+    """Filename prefix for this namespace's feedback stream (see
+    services/feedback_service.py's domain partitioning — "" for wifi,
+    "bt_" for bt). Kept in sync with that module rather than hardcoded here."""
+    from services import feedback_service
+    return feedback_service._domain_prefix(namespace)
+
+
+def _push_now(namespace: str) -> None:
+    """Synchronous push (CLI process exits right after — a daemon thread
+    would just get killed before it finishes)."""
+    share = ace_sync.resolve_cloud_playbook_dir(namespace)
+    if not share:
+        print(f"[ace.cli] --push skipped — {namespace} share unreachable")
+        return
+    ace_mirror_sync.sync_playbooks_to_remote(
+        local_dir=_resolve_playbooks_dir(namespace),
+        remote_root_raw=share,
+    )
 
 
 def _build_llm(model: str | None) -> LLM_helper:
@@ -77,33 +102,37 @@ def _build_llm(model: str | None) -> LLM_helper:
     return llm
 
 
-_SKILLS_CACHE: dict | None = None
+_SKILLS_CACHE: dict[str, dict] = {}
 
 
-def _load_active_skills() -> dict:
-    """Best-effort load of the active skills YAML (same one the live agent uses)
-    so Reflector/Curator can see each skill's description + expert_rules. Cached.
-    Returns an empty dict on any failure — callers degrade gracefully."""
-    global _SKILLS_CACHE
-    if _SKILLS_CACHE is not None:
-        return _SKILLS_CACHE
+def _load_active_skills(namespace: str = "wifi") -> dict:
+    """Best-effort load of the active skills YAML for this namespace (same
+    one the live agent uses) so Reflector/Curator can see each skill's
+    description + expert_rules. Cached per namespace. Returns an empty dict
+    on any failure — callers degrade gracefully."""
+    if namespace in _SKILLS_CACHE:
+        return _SKILLS_CACHE[namespace]
     try:
-        from utils import skills_yaml_utils
+        if namespace == "bt":
+            from utils import bt_skills_yaml_utils as skills_yaml_utils
+        else:
+            from utils import skills_yaml_utils
         from services.log_chatbot_service import load_skills_from_yaml
         yaml_path, _date, _src = skills_yaml_utils.current_active_yaml()
         if not yaml_path:
-            _SKILLS_CACHE = {}
-            return _SKILLS_CACHE
-        _SKILLS_CACHE = load_skills_from_yaml(str(yaml_path)) or {}
-        print(f"[ace.cli] loaded {len(_SKILLS_CACHE)} skill definition(s) from {yaml_path}")
+            _SKILLS_CACHE[namespace] = {}
+            return _SKILLS_CACHE[namespace]
+        loaded = load_skills_from_yaml(str(yaml_path)) or {}
+        _SKILLS_CACHE[namespace] = loaded
+        print(f"[ace.cli] loaded {len(loaded)} {namespace} skill definition(s) from {yaml_path}")
     except Exception as e:
-        print(f"[ace.cli] skill YAML unavailable ({e}); Reflector/Curator will run without skill context")
-        _SKILLS_CACHE = {}
-    return _SKILLS_CACHE
+        print(f"[ace.cli] {namespace} skill YAML unavailable ({e}); Reflector/Curator will run without skill context")
+        _SKILLS_CACHE[namespace] = {}
+    return _SKILLS_CACHE[namespace]
 
 
-def _skill_context_provider(sid: str):
-    skills = _load_active_skills()
+def _skill_context_provider(sid: str, namespace: str = "wifi"):
+    skills = _load_active_skills(namespace)
     sk = skills.get(sid)
     if sk is None:
         return None
@@ -121,14 +150,18 @@ def _skill_context_provider(sid: str):
 
 def cmd_adapt(args):
     llm = _build_llm(args.model)
+    history = HistoryWriter(root=_resolve_playbooks_dir(args.namespace) / "history")
     runner = AceRunner(
         llm=llm,
-        playbooks_dir=_resolve_playbooks_dir(),
+        playbooks_dir=_resolve_playbooks_dir(args.namespace),
         feedback_root=_resolve_feedback_root(),
         skills=args.skill or None,
-        skill_context_provider=_skill_context_provider,
+        skill_context_provider=partial(_skill_context_provider, namespace=args.namespace),
+        history=history,
+        feedback_prefix=_feedback_prefix(args.namespace),
     )
-    results = runner.run_batch(since=args.since, max_turns=args.limit)
+    results = runner.run_batch(since=args.since, max_turns=args.limit,
+                               run_source=f"cli-adapt-{args.namespace}")
     summary = {
         "processed": len(results),
         "ok":        sum(1 for r in results if r.get("status") == "ok"),
@@ -138,6 +171,8 @@ def cmd_adapt(args):
     if args.verbose:
         for r in results:
             print(json.dumps(r, indent=2, default=str)[:2000])
+    if args.push:
+        _push_now(args.namespace)
 
 
 def cmd_adapt_one(args):
@@ -148,19 +183,22 @@ def cmd_adapt_one(args):
     cursor is left untouched so this command can be re-run safely.
     """
     llm = _build_llm(args.model)
+    history = HistoryWriter(root=_resolve_playbooks_dir(args.namespace) / "history")
     runner = AceRunner(
         llm=llm,
-        playbooks_dir=_resolve_playbooks_dir(),
+        playbooks_dir=_resolve_playbooks_dir(args.namespace),
         feedback_root=_resolve_feedback_root(),
         skills=args.skill or None,
-        skill_context_provider=_skill_context_provider,
+        skill_context_provider=partial(_skill_context_provider, namespace=args.namespace),
+        history=history,
+        feedback_prefix=_feedback_prefix(args.namespace),
     )
 
     cid = args.conversation
     if args.turn:
         turn_ids = [args.turn]
     else:
-        snap_path = runner.feedback_root / "conversations" / f"{cid}.json"
+        snap_path = runner.feedback_root / "conversations" / f"{runner.feedback_prefix}{cid}.json"
         if not snap_path.exists():
             print(json.dumps({"status": "no_snapshot", "conversation_id": cid}, indent=2))
             return 1
@@ -178,7 +216,8 @@ def cmd_adapt_one(args):
             print(json.dumps({"status": "no_feedback_turns", "conversation_id": cid}, indent=2))
             return 0
 
-    results = [runner.run_one(cid, tid) for tid in turn_ids]
+    results = [runner.run_one(cid, tid, run_source=f"cli-adapt-one-{args.namespace}")
+               for tid in turn_ids]
     summary = {
         "conversation_id": cid,
         "processed": len(results),
@@ -189,11 +228,13 @@ def cmd_adapt_one(args):
     if args.verbose:
         for r in results:
             print(json.dumps(r, indent=2, default=str)[:2000])
+    if args.push:
+        _push_now(args.namespace)
     return 0
 
 
 def cmd_show(args):
-    pbs_dir = _resolve_playbooks_dir()
+    pbs_dir = _resolve_playbooks_dir(args.namespace)
     from .playbook import Playbook
     if args.skill == "workflow":
         pb = Playbook("agent", pbs_dir / "workflow.json")
@@ -250,11 +291,17 @@ def cmd_eval(args):
     store = EvalStore(pbs_dir / "history" / "evals")
 
     def _sync(job_id: str):
+        # eval/golden are wifi-scoped for now (see cmd_adapt/cmd_show for the
+        # namespace-aware equivalents).
         try:
+            share = ace_sync.resolve_cloud_playbook_dir("wifi")
+            if not share:
+                print("[ace.cli] rollback sync skipped: share unreachable")
+                return
             from .sync import launch_sync_background
             launch_sync_background(
                 local_dir=pbs_dir,
-                remote_root_raw=path_configs.ACE_PLAYBOOK_DIR_remote,
+                remote_root_raw=share,
                 job_id=job_id,
             )
         except Exception as e:
@@ -348,7 +395,7 @@ def cmd_golden(args):
 
 
 def cmd_stats(args):
-    pbs_dir = _resolve_playbooks_dir()
+    pbs_dir = _resolve_playbooks_dir(args.namespace)
     from .playbook import Playbook
     files = sorted(pbs_dir.glob("*.json"))
     out = []
@@ -364,6 +411,8 @@ def main(argv=None):
     sub = parser.add_subparsers(dest="cmd", required=True)
 
     p_adapt = sub.add_parser("adapt", help="Walk new feedback events and update playbooks")
+    p_adapt.add_argument("--namespace", choices=("wifi", "bt"), default="wifi",
+                         help="Which playbook set to adapt: wifi (default) or bt")
     p_adapt.add_argument("--since", default=None,
                          help="ISO timestamp to start from (defaults to last cursor)")
     p_adapt.add_argument("--skill", action="append",
@@ -371,12 +420,16 @@ def main(argv=None):
     p_adapt.add_argument("--limit", type=int, default=None, help="Stop after N turns")
     p_adapt.add_argument("--model", default=None, help="Override model id")
     p_adapt.add_argument("--verbose", action="store_true")
+    p_adapt.add_argument("--push", action="store_true",
+                         help="After adapting, mirror-sync local playbooks + history to the cloud share")
     p_adapt.set_defaults(func=cmd_adapt)
 
     p_adapt_one = sub.add_parser(
         "adapt-one",
         help="Adapt playbooks from a single feedback session (one conversation)",
     )
+    p_adapt_one.add_argument("--namespace", choices=("wifi", "bt"), default="wifi",
+                             help="Which playbook set to adapt: wifi (default) or bt")
     p_adapt_one.add_argument("--conversation", required=True,
                              help="Conversation id (matches conversations/<id>.json)")
     p_adapt_one.add_argument("--turn", default=None,
@@ -385,14 +438,20 @@ def main(argv=None):
                              help="Pre-create a domain playbook for this skill (repeatable)")
     p_adapt_one.add_argument("--model", default=None, help="Override model id")
     p_adapt_one.add_argument("--verbose", action="store_true")
+    p_adapt_one.add_argument("--push", action="store_true",
+                             help="After adapting, mirror-sync local playbooks + history to the cloud share")
     p_adapt_one.set_defaults(func=cmd_adapt_one)
 
     p_show = sub.add_parser("show", help="Print a playbook")
+    p_show.add_argument("--namespace", choices=("wifi", "bt"), default="wifi",
+                        help="Which playbook set to read from: wifi (default) or bt")
     p_show.add_argument("--skill", required=True,
                         help='"workflow" or a skill name (e.g. Connectivity)')
     p_show.set_defaults(func=cmd_show)
 
     p_stats = sub.add_parser("stats", help="Summary of every playbook on disk")
+    p_stats.add_argument("--namespace", choices=("wifi", "bt"), default="wifi",
+                         help="Which playbook set to summarize: wifi (default) or bt")
     p_stats.set_defaults(func=cmd_stats)
 
     p_eval = sub.add_parser(
@@ -449,7 +508,13 @@ def main(argv=None):
             and not args.conversation:
         parser.error("golden add/remove requires --conversation")
     _ensure_avatarfiles_dir()
-    print(f"[ace.cli] playbooks_dir = {_resolve_playbooks_dir()}")
+    namespace = getattr(args, "namespace", "wifi")
+    try:
+        ace_sync.sync_at_boot(namespace=namespace)
+    except Exception as e:
+        print(f"[ace.cli] cloud sync skipped: {e}")
+    print(f"[ace.cli] namespace = {namespace}")
+    print(f"[ace.cli] playbooks_dir = {_resolve_playbooks_dir(namespace)}")
     return args.func(args) or 0
 
 

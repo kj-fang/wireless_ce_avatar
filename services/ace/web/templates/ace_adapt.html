@@ -533,7 +533,7 @@
     const r = await fetch('/api/adapt', {
       method: 'POST',
       headers: {'Content-Type': 'application/json'},
-      body: JSON.stringify({conversation_ids: cids, validate: validateChecked()}),
+      body: JSON.stringify({conversation_ids: cids, validate: validateChecked(), namespace: (new URLSearchParams(location.search).get('namespace') || '')}),
     });
     const j = await r.json();
     if (!j.ok) {
@@ -547,7 +547,7 @@
     const r = await fetch('/api/adapt/new', {
       method: 'POST',
       headers: {'Content-Type': 'application/json'},
-      body: JSON.stringify({validate: validateChecked()}),
+      body: JSON.stringify({validate: validateChecked(), namespace: (new URLSearchParams(location.search).get('namespace') || '')}),
     });
     const j = await r.json();
     if (!j.ok) {
@@ -560,19 +560,23 @@
     const r = await fetch('/api/nightly/start', {
       method: 'POST',
       headers: {'Content-Type': 'application/json'},
-      body: JSON.stringify({validate: validateChecked()}),
+      body: JSON.stringify({validate: validateChecked(), namespace: (new URLSearchParams(location.search).get('namespace') || '')}),
     });
     const j = await r.json();
     applyNightlyStatus(j);
   }
   async function stopNightly() {
-    const r = await fetch('/api/nightly/stop', {method: 'POST'});
+    const r = await fetch('/api/nightly/stop', {
+      method: 'POST',
+      headers: {'Content-Type': 'application/json'},
+      body: JSON.stringify({namespace: (new URLSearchParams(location.search).get('namespace') || '')}),
+    });
     const j = await r.json();
     applyNightlyStatus(j);
   }
   async function refreshNightlyStatus() {
     try {
-      const r = await fetch('/api/nightly');
+      const r = await fetch('/api/nightly?namespace=' + encodeURIComponent(new URLSearchParams(location.search).get('namespace') || ''));
       applyNightlyStatus(await r.json());
     } catch (e) {
       // scheduler status is optional UI info; ignore transient errors.

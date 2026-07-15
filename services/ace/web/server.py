@@ -1159,7 +1159,8 @@ def create_app() -> tuple[Flask, SocketIO, JobManager, NightlyScheduler]:
 
     @app.route("/api/nightly", methods=["GET"])
     def api_nightly_status():
-        return jsonify({ns: schedulers[ns].status() for ns in _NAMESPACES})
+        namespace = _norm_namespace(request.args.get("namespace"))
+        return jsonify({"namespace": namespace, **schedulers[namespace].status()})
 
     @app.route("/api/nightly/start", methods=["POST"])
     def api_nightly_start():
@@ -1249,7 +1250,8 @@ def create_app() -> tuple[Flask, SocketIO, JobManager, NightlyScheduler]:
         from flask import Response
         headers = {"Content-Type": "application/json; charset=utf-8"}
         if download:
-            headers["Content-Disposition"] = f'attachment; filename="{filename}"'
+            safe = (filename or "").replace("\r", "").replace("\n", "").replace('"', "")
+            headers["Content-Disposition"] = f'attachment; filename="{safe}"'
         return Response(text, headers=headers)
 
     @app.route("/api/history/turns")

@@ -84,7 +84,7 @@ class HistoryWriter:
         meta.json. Returns the run-directory name, or None on failure."""
         now = datetime.now()
         day_dir = self._snapshots_dir / now.strftime("%Y-%m-%d")
-        run_dir_name = f"{now.strftime('%Y%m%dT%H%M%SZ')}__{run_id}"
+        run_dir_name = f"{now.strftime('%Y%m%dT%H%M%S')}__{run_id}"
         run_dir = day_dir / run_dir_name
         try:
             run_dir.mkdir(parents=True, exist_ok=True)

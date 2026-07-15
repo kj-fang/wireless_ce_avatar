@@ -192,6 +192,11 @@ def set_up(socketio):
                 skills=list(llm_helper.skills.keys()) if llm_helper.skills else None,
                 skill_context_provider=_skill_provider,
                 history=ace_history,
+                # WiFi's prefix happens to be "" (legacy: filenames stayed
+                # bare when the BT stream was added later), but pass it
+                # explicitly to stay symmetric with the BT block below and
+                # keep intent obvious if AceRunner's default ever changes.
+                feedback_prefix=feedback_service._domain_prefix("wifi"),
             )
             log_chatbot_agent.attach_ace(ace_runner)
         except Exception as e:

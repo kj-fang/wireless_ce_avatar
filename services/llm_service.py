@@ -220,6 +220,11 @@ class LLM_helper:
                 auth_token=gpt_token,
                 http_client=httpx.Client(proxy=None, verify=False, trust_env=False),
             ))
+            # self.client = AnthropicOpenAIAdapter(Anthropic(
+            #     base_url=gpt_url,
+            #     auth_token=gpt_token,
+            #     http_client=httpx.Client(proxy=None, verify=False, trust_env=False),
+            # ))
         else:
             self.client = openai.OpenAI(
                 api_key=gpt_token,

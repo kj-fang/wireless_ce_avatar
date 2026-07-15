@@ -30,6 +30,7 @@ from datetime import datetime
 from pathlib import Path
 from typing import Callable, Iterable, Optional
 
+from .history import HistoryWriter
 from .playbook import Playbook
 from .roles import Reflector, Curator
 
@@ -46,6 +47,7 @@ class AceRunner:
         skills: Optional[Iterable[str]] = None,
         max_refine_rounds: int = 1,
         skill_context_provider: Optional[SkillContextProvider] = None,
+        history: Optional[HistoryWriter] = None,
     ):
         """
         llm:            an LLM_helper instance (services.llm_service.LLM_helper).
@@ -72,6 +74,7 @@ class AceRunner:
         self.feedback_root = Path(feedback_root)
         self.playbooks_dir.mkdir(parents=True, exist_ok=True)
         self.skill_context_provider = skill_context_provider
+        self.history = history
 
         self.workflow_pb = Playbook("agent", self.playbooks_dir / "workflow.json")
         self.domain_pbs: dict[str, Playbook] = {}
@@ -146,7 +149,9 @@ class AceRunner:
         )
 
     # ----- core: process one turn -----
-    def _process_turn(self, conversation_id: str, turn_id: str, progress=None) -> dict:
+    def _process_turn(self, conversation_id: str, turn_id: str, progress=None,
+                      run_id: Optional[str] = None,
+                      run_source: str = "cli") -> dict:
         def _emit(event, **payload):
             if progress is not None:
                 try:
@@ -231,6 +236,26 @@ class AceRunner:
         for pb in self.domain_pbs.values():
             pb.refine()
 
+        # 4b. History — record BEFORE persist so we archive the exact
+        # reflection/curator outputs even if save() blows up.
+        if self.history is not None:
+            try:
+                self.history.record_turn(
+                    run_id=run_id,
+                    run_source=run_source,
+                    conversation_id=conversation_id,
+                    turn_id=turn_id,
+                    feedback=feedback,
+                    applied_bullets=[
+                        {"id": b.id, "section": b.section, "content": b.content}
+                        for b in applied
+                    ],
+                    reflection=reflection,
+                    curate_result=curate_result,
+                )
+            except Exception as e:
+                print(f"[ace.pipeline] history.record_turn failed: {e}")
+
         # 5. Persist
         self.workflow_pb.save()
         for pb in self.domain_pbs.values():
@@ -247,11 +272,18 @@ class AceRunner:
         return result
 
     # ----- public entry points -----
-    def run_one(self, conversation_id: str, turn_id: str, progress=None) -> dict:
+    def run_one(self, conversation_id: str, turn_id: str, progress=None,
+                run_id: Optional[str] = None,
+                run_source: str = "cli") -> dict:
         with self._lock:
-            return self._process_turn(conversation_id, turn_id, progress=progress)
+            return self._process_turn(conversation_id, turn_id,
+                                      progress=progress,
+                                      run_id=run_id, run_source=run_source)
 
-    def run_batch(self, since: Optional[str] = None, max_turns: Optional[int] = None) -> list[dict]:
+    def run_batch(self, since: Optional[str] = None, max_turns: Optional[int] = None,
+                  progress=None,
+                  run_id: Optional[str] = None,
+                  run_source: str = "cli") -> list[dict]:
         with self._lock:
             since = since or self._load_cursor()
             seen_keys: set[tuple[str, str]] = set()
@@ -266,7 +298,9 @@ class AceRunner:
                 if key in seen_keys:
                     continue
                 seen_keys.add(key)
-                results.append(self._process_turn(cid, tid))
+                results.append(self._process_turn(cid, tid, progress=progress,
+                                                  run_id=run_id,
+                                                  run_source=run_source))
                 last_ts = ev.get("ts") or last_ts
                 if max_turns and len(results) >= max_turns:
                     break

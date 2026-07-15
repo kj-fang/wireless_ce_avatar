@@ -90,6 +90,16 @@ GATHER_DIR_bkup = _os.environ.get("INTELAVATAR_GATHER_DIR_BKUP") \
 from pathlib import Path as _Path
 LOCAL_LOG_PARSER_DATA_DIR = str(_Path(__file__).parent.parent / "data" / "log_parser_data")
 
+# Fixed "Downloads" base override.
+#
+# When set to a non-empty path, helpers.init_download_dir() uses this instead
+# of looking up the per-user "Downloads" shell folder from the registry. Use
+# this on a server / service account where the HKCU Downloads folder is
+# unreliable or points at the wrong profile, so <base>\IntelAvatar_files\...
+# (and therefore ace_playbooks) always lands in a predictable location.
+# Leave as "" to keep the original per-user registry behaviour.
+DOWNLOADS_DIR = r"C:\Users\admin\Downloads"
+
 # Local skill YAML cache.
 #
 # Primary location: <IntelAvatar_files>/skills_config/  — same root the rest of

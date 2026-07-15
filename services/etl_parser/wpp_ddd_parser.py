@@ -743,11 +743,15 @@ def parse_single_binary(parser: object) -> None:
     # run another formatter over the parsed file
     parser.run_external_formatter()
 
-    # open text analysis
-    parser.open_log_in_text_analysis()
+    # GUI conveniences for the interactive desktop flow. Skipped when the
+    # decode runs headlessly (Handsfree Replyer sets AVATAR_HEADLESS_DECODE=1)
+    # so no TextAnalysisTool / Explorer window pops on an unattended machine.
+    if os.environ.get("AVATAR_HEADLESS_DECODE") != "1":
+        # open text analysis
+        parser.open_log_in_text_analysis()
 
-    # open window with parsed logs inside
-    parser.open_workspace_window()
+        # open window with parsed logs inside
+        parser.open_workspace_window()
 
     # copy the parsed file to the original directory (if possible)
     parser.copy_parsed_log_to_orig_path()

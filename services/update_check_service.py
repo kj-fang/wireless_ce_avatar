@@ -1,11 +1,14 @@
 """Check GitHub for a newer released version of IntelAvatar.
 
-Talks to the public GitHub REST API (no auth required) and compares the
-`tag_name` of the latest stable release against `configs.version.__version__`.
+Reads the `Location` header of `github.com/<owner>/<repo>/releases/latest`
+(which redirects to `/releases/tag/<tag_name>`) and compares that tag against
+`configs.version.__version__`. This deliberately avoids `api.github.com` so
+the check is not affected by the 60-req/hour unauthenticated rate limit that
+is shared across all users behind the Intel corporate proxy.
+
 Uses only stdlib so it is safe to call from the tray-manager subprocess.
 """
 
-import json
 import logging
 import os
 import re
@@ -19,9 +22,6 @@ _logger = logging.getLogger('UpdateCheckService')
 
 GITHUB_OWNER = 'kj-fang'
 GITHUB_REPO = 'wireless_ce_avatar'
-LATEST_RELEASE_URL = (
-    f'https://api.github.com/repos/{GITHUB_OWNER}/{GITHUB_REPO}/releases/latest'
-)
 RELEASES_PAGE_URL = (
     f'https://github.com/{GITHUB_OWNER}/{GITHUB_REPO}/releases/latest'
 )
@@ -106,49 +106,77 @@ def _is_newer(latest: str, current: str) -> bool:
     return _normalize(latest) > _normalize(current)
 
 
-def _pick_download_url(assets: list, release_url: str) -> str:
-    """Prefer the first .exe asset, else the first asset, else release page."""
-    if not assets:
-        return release_url
-    exe_asset = next(
-        (a for a in assets if str(a.get('name', '')).lower().endswith('.exe')),
-        None,
+class _NoRedirect(urllib.request.HTTPRedirectHandler):
+    """Prevent urllib from following redirects so we can read the Location."""
+
+    def redirect_request(self, *_args, **_kwargs):
+        return None
+
+
+def _fetch_latest_tag(proxies: dict) -> str:
+    """Read the latest release tag from github.com's 302 redirect.
+
+    `https://github.com/<owner>/<repo>/releases/latest` redirects to
+    `/releases/tag/<tag_name>`. This uses the github.com web frontend (behind
+    Fastly/CDN) instead of api.github.com, so it is not affected by the 60/hr
+    unauthenticated API rate limit that our corporate proxy exhausts.
+    """
+    handlers = []
+    if proxies:
+        handlers.append(urllib.request.ProxyHandler(proxies))
+    handlers.append(
+        urllib.request.HTTPSHandler(context=ssl.create_default_context())
     )
-    chosen = exe_asset or assets[0]
-    return chosen.get('browser_download_url') or release_url
+    handlers.append(_NoRedirect())
+    opener = urllib.request.build_opener(*handlers)
+
+    request = urllib.request.Request(
+        RELEASES_PAGE_URL,
+        headers={'User-Agent': f'IntelAvatar/{__version__}'},
+        method='HEAD',
+    )
+
+    location = ''
+    try:
+        response = opener.open(request, timeout=REQUEST_TIMEOUT)
+    except urllib.error.HTTPError as err:
+        if err.code in (301, 302, 303, 307, 308):
+            location = err.headers.get('Location', '') or ''
+        else:
+            raise UpdateCheckError(
+                f'GitHub returned HTTP {err.code} for releases page'
+            ) from err
+    else:
+        try:
+            location = response.headers.get('Location', '') or response.geturl()
+        finally:
+            response.close()
+
+    match = re.search(r'/releases/tag/([^/?#\s]+)', location)
+    if not match:
+        raise UpdateCheckError(
+            f'Could not parse a version tag from redirect target: {location!r}'
+        )
+    return match.group(1)
 
 
 def check_for_update() -> UpdateCheckResult:
-    """Fetch the latest release from GitHub and compare against current version.
+    """Compare the latest GitHub release against the current version.
 
-    Raises UpdateCheckError on network / parsing failures so the caller can
-    show a friendly message instead of a stack trace.
+    Uses github.com's `/releases/latest` HTTP redirect (not api.github.com) so
+    the check is immune to the 60-req/hour unauthenticated API rate limit that
+    is shared across all users behind the Intel corporate proxy.
     """
-    request = urllib.request.Request(
-        LATEST_RELEASE_URL,
-        headers={
-            'Accept': 'application/vnd.github+json',
-            'User-Agent': f'IntelAvatar/{__version__}',
-        },
-    )
     proxies = _resolve_proxies()
     if proxies:
         _logger.info(f'Using proxy for update check: {proxies}')
-        opener = urllib.request.build_opener(
-            urllib.request.ProxyHandler(proxies),
-            urllib.request.HTTPSHandler(context=ssl.create_default_context()),
-        )
     else:
         _logger.info('No proxy configured — attempting direct connection')
-        opener = urllib.request.build_opener(
-            urllib.request.HTTPSHandler(context=ssl.create_default_context()),
-        )
 
     try:
-        with opener.open(request, timeout=REQUEST_TIMEOUT) as response:
-            payload = json.loads(response.read().decode('utf-8'))
-    except urllib.error.HTTPError as err:
-        raise UpdateCheckError(f'GitHub returned HTTP {err.code}') from err
+        tag = _fetch_latest_tag(proxies)
+    except UpdateCheckError:
+        raise
     except urllib.error.URLError as err:
         reason = getattr(err, 'reason', err)
         hint = ''
@@ -159,13 +187,11 @@ def check_for_update() -> UpdateCheckResult:
                 'or configure the system proxy in Windows Internet Options.'
             )
         raise UpdateCheckError(f'Network error: {reason}{hint}') from err
-    except (json.JSONDecodeError, ValueError) as err:
-        raise UpdateCheckError(f'Invalid response from GitHub: {err}') from err
 
-    tag = payload.get('tag_name') or ''
     latest_version = tag.lstrip('vV') or 'unknown'
-    release_url = payload.get('html_url') or RELEASES_PAGE_URL
-    download_url = _pick_download_url(payload.get('assets') or [], release_url)
+    release_url = f'https://github.com/{GITHUB_OWNER}/{GITHUB_REPO}/releases/tag/{tag}'
+    # No API => no assets list; direct users to the release page to download.
+    download_url = release_url
 
     try:
         is_latest = not _is_newer(latest_version, __version__)

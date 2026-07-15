@@ -42,9 +42,19 @@ def get_available_port(start=54000, end=60000, max_tries=20):
 
 
 def init_download_dir():
-    reg_key = winreg.OpenKey(winreg.HKEY_CURRENT_USER, r"Software\Microsoft\Windows\CurrentVersion\Explorer\Shell Folders")
-    downloads_dir = winreg.QueryValueEx(reg_key, "{374DE290-123F-4565-9164-39C4925E467B}")[0]
-    winreg.CloseKey(reg_key)
+    # Allow a fixed override (e.g. on a server / service account where the
+    # HKCU "Downloads" shell folder is unreliable or points at the wrong
+    # profile). Set DOWNLOADS_DIR in configs/path_configs.py to pin the base
+    # Downloads path; when empty we fall back to the per-user registry lookup
+    # as before.
+    from configs import path_configs
+    override = getattr(path_configs, "DOWNLOADS_DIR", "")
+    if override:
+        downloads_dir = override
+    else:
+        reg_key = winreg.OpenKey(winreg.HKEY_CURRENT_USER, r"Software\Microsoft\Windows\CurrentVersion\Explorer\Shell Folders")
+        downloads_dir = winreg.QueryValueEx(reg_key, "{374DE290-123F-4565-9164-39C4925E467B}")[0]
+        winreg.CloseKey(reg_key)
 
     downloads_dir = os.path.join(downloads_dir, "IntelAvatar_files")
     os.makedirs(downloads_dir, exist_ok=True)

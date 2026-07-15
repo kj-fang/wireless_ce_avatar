@@ -377,10 +377,6 @@ class WifiLogAgentSystem:
     # Additional hard limits for multi-step prompt growth control.
     MAX_TOOL_CONTENT_CHARS_IN_MESSAGES = 1200
     MAX_TOOL_RESULT_CHARS_IN_MESSAGES = 16000  # ~quality: 4000 tokens of evidence per tool call
-    MAX_QUERY_DETAIL_OUTPUT_CHARS = 1800
-    MAX_DETAIL_CONTEXT_SPAN = 50
-    DEFAULT_DETAIL_CONTEXT_SPAN = 20
-    MAX_DETAIL_HITS = 2
     # Convergence controls to finish within fixed max steps.
     MAX_TOOL_CALLS_PER_STEP = 3
     FORCE_CONCLUDE_LAST_N_STEPS = 2  # last 2 steps forces conclusion (5-step loop is tighter)
@@ -479,8 +475,6 @@ class WifiLogAgentSystem:
         self._raw_log_cache: List[str] = []
         self._raw_log_cache_path: str = ""
         self._filter_cache_by_skill: Dict[str, dict] = {}
-        self._detail_cache: Dict[str, str] = {}
-        self._detail_query_seen: set = set()
         self._chat_rules_injected_skills: set = set()
         # Cumulative assembled log store (timestamp-based, no line number persistence)
         self._assembled_entries_by_key: Dict[str, dict] = {}
@@ -550,8 +544,6 @@ class WifiLogAgentSystem:
             self._raw_log_cache_path = self.current_log_path
             # A different file means all derived caches are stale.
             self._filter_cache_by_skill = {}
-            self._detail_cache = {}
-            self._detail_query_seen = set()
             self._chat_rules_injected_skills = set()
             self._assembled_entries_by_key = {}
             self._assembled_entries_no_ts = {}
@@ -1306,14 +1298,6 @@ class WifiLogAgentSystem:
         lines = max(20, min(int(tail_lines or 120), 400))
         return self._get_assembled_log_tail(max_lines=lines)
 
-    def _resolve_context_span(self, anchor_text: str, requested_span: int) -> int:
-        """Auto-expand detail context for scan/connect style transactions."""
-        low = (anchor_text or "").lower()
-        span = requested_span if requested_span and requested_span > 0 else self.DEFAULT_DETAIL_CONTEXT_SPAN
-        if any(tok in low for tok in ("scan", "connect", "assoc", "roam", "auth", "oid", "wdi_task")):
-            span = max(span, 50)
-        return min(span, self.MAX_DETAIL_CONTEXT_SPAN)
-
     def _clip_for_prompt(self, text: str, limit: int = None) -> str:
         """Trim long text before appending into LLM messages."""
         if text is None:
@@ -1644,122 +1628,6 @@ class WifiLogAgentSystem:
         return self._analyze_with_skill_prompt(skill, filtered_lines)
 
     # ------------------------------------------------------------------
-    # Tool: query_log_detail — anchor-based context query on assembled log
-    # ------------------------------------------------------------------
-    def query_log_detail(self, anchor_text: str = "", anchor_timestamp: str = "",
-                         context_span: int = 20, max_hits: int = 3) -> str:
-        """
-        Query detailed assembled-log context by semantic anchors instead of line numbers.
-
-        Matching strategy:
-          - If anchor_timestamp is provided, match lines containing that timestamp
-            text (supports exact fragment match).
-          - If anchor_text is provided, match lines containing that text
-            (case-insensitive).
-          - If both are provided, both conditions must match.
-
-        Returns neighboring context around up to `max_hits` anchor matches.
-        Source is assembled log only (not raw log).
-        """
-        anchor_text = (anchor_text or "").strip()
-        anchor_timestamp = (anchor_timestamp or "").strip()
-        context_span = self._resolve_context_span(anchor_text, context_span)
-
-        if not anchor_text and not anchor_timestamp:
-            return "Error: Provide anchor_text and/or anchor_timestamp for detail query."
-
-        assembled_text = self._assembled_log_text or ""
-        if not assembled_text.strip():
-            return (
-                "No assembled log is available yet. "
-                "Call fetch_filtered_logs(skill_name) first."
-            )
-
-        assembled_sig = hashlib.md5(assembled_text.encode('utf-8')).hexdigest()[:12]
-        cache_key = (
-            f"text={anchor_text.lower()}|ts={anchor_timestamp}|"
-            f"span={context_span}|hits={max_hits}|assembled={assembled_sig}"
-        )
-        dedup_key = (
-            f"text={anchor_text.lower()}|ts={anchor_timestamp}|"
-            f"span={context_span}|hits={max_hits}|assembled={assembled_sig}"
-        )
-
-        if dedup_key in self._detail_query_seen and cache_key in self._detail_cache:
-            cached = self._detail_cache[cache_key]
-            first_line = cached.splitlines()[0] if cached else "(no detail)"
-            return (
-                "Duplicate query skipped: same anchor parameters were already queried on current assembled snapshot.\n"
-                f"Previous detail summary: {first_line}\n"
-                "Use a different anchor_text/anchor_timestamp or broader snapshot query for new evidence.\n\n"
-                "[Detail dedup cache hit]"
-            )
-
-        if cache_key in self._detail_cache:
-            return self._detail_cache[cache_key] + "\n\n[Detail cache hit]"
-
-        all_lines = assembled_text.splitlines()
-
-        matched_indices = []
-        lower_anchor = anchor_text.lower()
-        normalized_ts = anchor_timestamp.strip("<>").strip()
-        ts_token = f"<{normalized_ts}>" if normalized_ts else ""
-
-        for idx, raw in enumerate(all_lines):
-            line = str(raw)
-            line_lower = line.lower()
-            ts_ok = (
-                (not normalized_ts)
-                or (normalized_ts in line)
-                or (ts_token and ts_token in line)
-            )
-            txt_ok = (not lower_anchor) or (lower_anchor in line_lower)
-            if ts_ok and txt_ok:
-                matched_indices.append(idx)
-
-        # HEAD+TAIL sampling: always include earliest AND latest matches
-        # to prevent blindspot where only early errors are seen.
-        if len(matched_indices) > max_hits:
-            head_count = max(1, max_hits // 3)       # ~1/3 from beginning
-            tail_count = max_hits - head_count        # ~2/3 from end
-            matched_indices = (
-                matched_indices[:head_count]
-                + matched_indices[-tail_count:]
-            )
-        elif len(matched_indices) > 0:
-            pass  # use all matches as-is
-
-        if not matched_indices:
-            return (
-                "No matching anchor found in assembled log. "
-                f"anchor_text='{anchor_text}', anchor_timestamp='{anchor_timestamp}'."
-            )
-
-        sections = []
-        for hit_no, idx in enumerate(matched_indices, start=1):
-            start_idx = max(0, idx - context_span)
-            end_idx = min(len(all_lines), idx + context_span + 1)
-
-            block = []
-            for i in range(start_idx, end_idx):
-                marker = ">>>" if i == idx else "   "
-                block.append(f"{marker} {str(all_lines[i])}")
-
-            sections.append(
-                f"=== Detail Hit {hit_no}/{len(matched_indices)} ===\n" + "\n".join(block)
-            )
-
-        detail_text = "\n\n".join(sections)
-        if len(detail_text) > self.MAX_QUERY_DETAIL_OUTPUT_CHARS:
-            detail_text = (
-                detail_text[:self.MAX_QUERY_DETAIL_OUTPUT_CHARS]
-                + "\n... (detail truncated for token safety)"
-            )
-        self._detail_cache[cache_key] = detail_text
-        self._detail_query_seen.add(dedup_key)
-        return detail_text
-
-    # ------------------------------------------------------------------
     # Chat: Flexible conversation with optional agentic tools
     # RECOMMENDED for chatbot dialog boxes
     # ------------------------------------------------------------------
@@ -1803,7 +1671,7 @@ class WifiLogAgentSystem:
             ...     "Why does device disconnect?",
             ...     use_tools=True
             ... )
-            >>> # Agent may call fetch_filtered_logs, query_log_detail, etc.
+            >>> # Agent may call fetch_filtered_logs, submit_final_report, etc.
         """
         try:
             temperature = float(temperature)
@@ -2168,8 +2036,6 @@ class WifiLogAgentSystem:
 
         # Per-call tracking
         skill_call_counts: dict = {}
-        no_match_anchor_counts: dict = {}
-        detail_call_counts: dict = {}
         no_progress_rounds: int = 0
         step_token_usages: list = []
 
@@ -2489,38 +2355,11 @@ class WifiLogAgentSystem:
                         })
 
                     else:
-                        # Other tools: query_log_detail, get_assembled_log_snapshot, etc.
+                        # Other tools (e.g. lookup_assert_code, softAP_supported_channel).
                         skill_label = args.get("skill_name") or tool_call.function.name
-
-                        # Anti-loop for query_log_detail
-                        if tool_call.function.name == "query_log_detail":
-                            anchor_text = args.get("anchor_text", "")
-                            anchor_ts = args.get("anchor_timestamp", "")
-                            detail_sig = f"{anchor_text.lower()}|{anchor_ts}"
-                            detail_call_counts[detail_sig] = detail_call_counts.get(detail_sig, 0) + 1
 
                         _emit({"role": "agent", "content": f"🔍 **Invoking** `{skill_label}`..."})
                         tool_result = self._invoke_tool(tool_call.function.name, args)
-
-                        if tool_call.function.name == "query_log_detail":
-                            if "No matching anchor found" in tool_result:
-                                no_match_anchor_counts[detail_sig] = no_match_anchor_counts.get(detail_sig, 0) + 1
-                                if no_match_anchor_counts[detail_sig] >= 2:
-                                    pending_user_nudges.append({
-                                        "role": "user",
-                                        "content": (
-                                            "You repeated an anchor query with no matches. "
-                                            "Switch to a different anchor or synthesize from existing evidence."
-                                        ),
-                                    })
-                            if detail_call_counts.get(detail_sig, 0) >= 3:
-                                pending_user_nudges.append({
-                                    "role": "user",
-                                    "content": (
-                                        "Detail queries are repeating similar anchors. "
-                                        "Move from retrieval to judgment: reconcile timeline and conclude."
-                                    ),
-                                })
 
                         preview = tool_result[:400].replace('\n', ' ') + "..."
                         _emit({"role": "tool", "content": f"📄 **Result** (`{skill_label}`):\n```\n{preview}\n```"})
@@ -2901,26 +2740,10 @@ class WifiLogAgentSystem:
         if tool_name == "fetch_filtered_logs":
             return self.fetch_filtered_logs(args.get("skill_name", ""))
 
-        if tool_name == "query_log_detail":
-            anchor_text = args.get("anchor_text", "")
-            anchor_timestamp = args.get("anchor_timestamp", "")
-            context_span = self._resolve_context_span(
-                anchor_text,
-                args.get("context_span", self.DEFAULT_DETAIL_CONTEXT_SPAN),
-            )
-            max_hits = min(args.get("max_hits", 3), self.MAX_DETAIL_HITS)
-            return self.query_log_detail(
-                anchor_text=anchor_text,
-                anchor_timestamp=anchor_timestamp,
-                context_span=context_span,
-                max_hits=max_hits,
-            )
-
         if tool_name in ("get_assembled_log_snapshot", "get_final_state_snapshot"):
             return (
                 f"{tool_name} is disabled. "
-                "Use fetch_filtered_logs(skill_name) to retrieve skill-focused evidence "
-                "or query_log_detail(keyword) to search specific events."
+                "Use fetch_filtered_logs(skill_name) to retrieve skill-focused evidence."
             )
 
         if tool_name == "lookup_assert_code":
@@ -3117,65 +2940,6 @@ class WifiLogAgentSystem:
             self._clip_for_prompt(tool_result, limit=self.MAX_TOOL_RESULT_CHARS_IN_MESSAGES),
         )
 
-    def _handle_detail_tool_call(self, tool_call, args: dict, messages: list,
-                                 pending_user_nudges: list, no_match_anchor_counts: dict,
-                                 detail_call_counts: dict, emit_cb) -> None:
-        """Handle query_log_detail tool call and anti-loop nudges."""
-        anchor_text = args.get("anchor_text", "")
-        anchor_timestamp = args.get("anchor_timestamp", "")
-        detail_sig = f"{anchor_text.lower()}|{anchor_timestamp}"
-        detail_call_counts[detail_sig] = detail_call_counts.get(detail_sig, 0) + 1
-        context_span = self._resolve_context_span(anchor_text, args.get("context_span", self.DEFAULT_DETAIL_CONTEXT_SPAN))
-        max_hits = min(args.get("max_hits", 3), self.MAX_DETAIL_HITS)
-        emit_cb({
-            "role": "agent",
-            "content": (
-                " **Querying anchor context** "
-                f"(text='{anchor_text}', ts='{anchor_timestamp}')"
-            )
-        })
-
-        tool_result = self._invoke_tool(
-            "query_log_detail",
-            {
-                "anchor_text": anchor_text,
-                "anchor_timestamp": anchor_timestamp,
-                "context_span": context_span,
-                "max_hits": max_hits,
-            },
-        )
-
-        query_sig = f"{anchor_text.lower()}|{anchor_timestamp}"
-        if "No matching anchor found" in tool_result:
-            no_match_anchor_counts[query_sig] = no_match_anchor_counts.get(query_sig, 0) + 1
-            if no_match_anchor_counts[query_sig] >= 2:
-                pending_user_nudges.append({
-                    "role": "user",
-                    "content": (
-                        "You repeated an anchor query with no matches. "
-                        "Switch to a different anchor or synthesize conclusions from existing evidence; "
-                        "do not loop on the same missing anchor."
-                    ),
-                })
-        if detail_call_counts.get(detail_sig, 0) >= 3:
-            pending_user_nudges.append({
-                "role": "user",
-                "content": (
-                    "Detail queries are repeating similar anchors. "
-                    "Move from retrieval to judgment: reconcile timeline and contradictions, then conclude."
-                ),
-            })
-
-        emit_cb({
-            "role": "tool",
-            "content": f"📄 **Detail Loaded**:\n```\n{tool_result}\n```"
-        })
-        self._append_tool_message(
-            messages,
-            tool_call,
-            self._clip_for_prompt(tool_result, limit=self.MAX_TOOL_RESULT_CHARS_IN_MESSAGES),
-        )
-
     # ------------------------------------------------------------------
     # Inject analysis results into conversation_history for follow-up chat
     # ------------------------------------------------------------------
@@ -3252,8 +3016,6 @@ class WifiLogAgentSystem:
     # ------------------------------------------------------------------
     def reset_conversation(self):
         self.conversation_history = []
-        self._detail_cache = {}
-        self._detail_query_seen = set()
         self._chat_rules_injected_skills = set()
         self._filter_cache_by_skill = {}
         self._assembled_entries_by_key = {}
@@ -3296,8 +3058,6 @@ class WifiLogAgentSystem:
         asks the first question.
         """
         self.conversation_history = []
-        self._detail_cache = {}
-        self._detail_query_seen = set()
         self._chat_rules_injected_skills = set()
         self._filter_cache_by_skill = {}
         self._assembled_entries_by_key = {}

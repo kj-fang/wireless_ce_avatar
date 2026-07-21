@@ -39,6 +39,40 @@ MAX_AGENT_STEPS = 6
 # Cap captured trace rows per incident (for the review UI).
 _STEP_CONTENT_CAP = 300
 _MAX_STEPS_KEPT = 60
+# Every archive type attachment_decompose.extract_archive can open.
+_ARCHIVE_EXTS = (".zip", ".rar", ".7z")
+
+
+def _pick_latest_archive(attachment_list):
+    """Newest log archive by upload-timestamp metadata (generalizes
+    etl_utils.pick_latest_zip_attachment, which is .zip-only, to every
+    archive type the decomposer supports). Falls back to the first archive
+    when no timestamp parses."""
+    items = [it for it in (attachment_list or [])
+             if it and str(it[0]).lower().endswith(_ARCHIVE_EXTS)]
+    if not items:
+        return None
+
+    def _ts(item):
+        try:
+            meta = item[2] if len(item) > 2 else None
+            raw = str(meta[0]) if meta else ""
+        except Exception:
+            raw = ""
+        from datetime import datetime
+        for fmt in ("%m/%d/%Y %H:%M", "%m/%d/%Y %I:%M %p", "%m/%d/%Y",
+                    "%Y-%m-%d %H:%M", "%d-%m-%Y %H:%M"):
+            try:
+                return datetime.strptime(raw.strip(), fmt)
+            except Exception:
+                continue
+        return None
+
+    dated = [(it, t) for it in items if (t := _ts(it)) is not None]
+    if dated:
+        dated.sort(key=lambda p: p[1], reverse=True)
+        return dated[0][0]
+    return items[0]
 
 
 @dataclass
@@ -173,7 +207,8 @@ class HandsfreeRunner:
         if analysis.wifi_or_bt != "wifi":
             analysis.mode = "triage_only"
             analysis.ok = bool(analysis.triage)
-            analysis.error = "" if analysis.ok else "triage failed"
+            analysis.error = ("BT case — v1 runs description triage only"
+                              if analysis.ok else "triage failed")
             return analysis
 
         # -- 3. read the case history (description + comments, chronological) --
@@ -203,24 +238,26 @@ class HandsfreeRunner:
                     f"attachment={reader.get('attachment_name') or '(none)'} "
                     f"({reader.get('issue_time_source') or 'no source'})")
 
-        # -- 4. pick the ZIP attachment ----------------------------------------
-        # Reader's nomination first; newest-ZIP heuristic as fallback.
+        # -- 4. pick the log-archive attachment --------------------------------
+        # Reader's nomination first; newest-archive heuristic as fallback.
+        # Accept every archive type the decomposer can extract — OEMs upload
+        # .7z and .rar captures as often as .zip (case 00993799 was a .7z).
         zip_item = None
         with self._stage(analysis, "pick_zip"):
-            from utils.etl_utils import pick_latest_zip_attachment, extract_time_from_description
+            from utils.etl_utils import extract_time_from_description
             from .case_reader import find_attachment
             chosen_name = (analysis.case_reader or {}).get("attachment_name") or ""
             if chosen_name:
                 zip_item = find_attachment(case_ctx.attachment_list, chosen_name)
-                if zip_item is not None and not str(zip_item[0]).lower().endswith(".zip"):
+                if zip_item is not None and not str(zip_item[0]).lower().endswith(_ARCHIVE_EXTS):
                     self.progress("pick_zip",
-                                  f"reader chose non-zip '{zip_item[0]}' — falling back")
+                                  f"reader chose non-archive '{zip_item[0]}' — falling back")
                     zip_item = None
             if zip_item is None:
-                zip_item = pick_latest_zip_attachment(case_ctx.attachment_list)
+                zip_item = _pick_latest_archive(case_ctx.attachment_list)
                 if chosen_name and zip_item is not None:
                     self.progress("pick_zip",
-                                  f"fallback to newest ZIP: {zip_item[0]}")
+                                  f"fallback to newest archive: {zip_item[0]}")
             if zip_item is not None:
                 analysis.chosen_attachment = str(zip_item[0])
                 try:
@@ -231,7 +268,8 @@ class HandsfreeRunner:
         if zip_item is None:
             analysis.mode = "triage_only"
             analysis.ok = bool(analysis.triage)
-            analysis.error = "" if analysis.ok else "no ZIP attachment and triage failed"
+            analysis.error = ("no log archive (.zip/.rar/.7z) found in the case "
+                              "attachments — posted triage instead of log analysis")
             return analysis
 
         # -- 5. download -------------------------------------------------------

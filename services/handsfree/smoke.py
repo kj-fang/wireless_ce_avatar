@@ -88,6 +88,17 @@ def smoke_composer() -> None:
     check("S2.e triage questions present",
           "Please attach the driver log capture" in tri["plain"], tri["plain"][:300])
     check("S2.f triage has no confidence", tri["confidence"] is None)
+    # The triage LLM oscillates between 'Issue summary' and 'Issue_summary'
+    # (case 00993799 hit the underscore variant and rendered an empty draft).
+    a = _triage_analysis()
+    a.triage = {
+        "Issue_summary": {"Symptom": ["beacon miss during P2P GO session"]},
+        "Next_action": {"Recommendation": ["Confirm repro rate"]},
+    }
+    tri2 = compose(a)
+    check("S2.g underscore triage keys tolerated",
+          "beacon miss during P2P GO session" in tri2["plain"]
+          and "Confirm repro rate" in tri2["plain"], tri2["plain"][:300])
 
 
 # ---------------------------------------------------------------- S3
@@ -146,7 +157,7 @@ def smoke_runner(tmp: Path) -> None:
     # TWO zips: the reader must choose the OLDER one (repro_logs.zip) — the
     # newest-zip fallback would pick later_capture.zip, so a correct pick
     # proves the reader's choice drives pick_zip.
-    fake_zip = case_dir / "repro_logs.zip"
+    fake_zip = case_dir / "repro_logs.7z"
     fake_zip.write_bytes(b"PK\x05\x06" + b"\x00" * 18)
     decoy_zip = case_dir / "later_capture.zip"
     decoy_zip.write_bytes(b"PK\x05\x06" + b"\x00" * 18)
@@ -166,12 +177,12 @@ def smoke_runner(tmp: Path) -> None:
             [datetime(2026, 6, 19, 9, 0), "Partner",
              "Initial report: disconnect happens randomly."],
             [datetime(2026, 6, 20, 11, 0), "Partner",
-             "Reproduced today at 10:17:30. Uploaded repro_logs.zip covering it."],
+             "Reproduced today at 10:17:30. Uploaded repro_logs.7z (driver log) covering it."],
             [datetime(2026, 6, 21, 8, 0), "Partner",
              "Also uploaded later_capture.zip but device did NOT fail in that run."],
         ]
         case_ctx.attachment_list = [
-            ["repro_logs.zip", "https://esft/x?FileName=repro_logs.zip",
+            ["repro_logs.7z", "https://esft/x?FileName=repro_logs.7z",
              ["06/20/2026 10:20", "repro at 10:17:30"]],
             ["later_capture.zip", "https://esft/x?FileName=later_capture.zip",
              ["06/21/2026 08:00", "no failure in this run"]],
@@ -218,7 +229,7 @@ def smoke_runner(tmp: Path) -> None:
         "clean_description": "Device disconnects ~90s after association (reproduced 06/20).",
         "issue_times": ["06/20/2026-10:17:30"],
         "issue_time_source": "comment #2",
-        "attachment_name": "repro_logs.zip",
+        "attachment_name": "repro_logs.7z",
         "attachment_reason": "uploaded right after the 10:17:30 repro; later_capture.zip had no failure",
         "reasoning": "Comment #2 supersedes the vague description; comment #3 rules out the newer capture.",
     })
@@ -270,8 +281,8 @@ def smoke_runner(tmp: Path) -> None:
                "agent_analysis"} <= set(stage_names),
               str(stage_names))
         check("S4.g reader-chosen zip beats newest-zip fallback",
-              analysis.chosen_attachment == "repro_logs.zip",
-              f"chosen={analysis.chosen_attachment}")
+              analysis.chosen_attachment == "repro_logs.7z",
+              f"chosen={analysis.chosen_attachment}")  # .7z proves non-zip archives pass the pick stage
         check("S4.h Salesforce case id captured",
               analysis.case_id == "500FAKESFID000AAA")
 

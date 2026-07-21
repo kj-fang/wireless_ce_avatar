@@ -143,20 +143,39 @@ def smoke_runner(tmp: Path) -> None:
         "06/20/2026-10:17:30.600 [I] Connection terminated by AP",
     ]
     Path(str(etl) + ".log").write_text("\n".join(log_lines), encoding="utf-8")
-    fake_zip = case_dir / "logs.zip"
+    # TWO zips: the reader must choose the OLDER one (repro_logs.zip) — the
+    # newest-zip fallback would pick later_capture.zip, so a correct pick
+    # proves the reader's choice drives pick_zip.
+    fake_zip = case_dir / "repro_logs.zip"
     fake_zip.write_bytes(b"PK\x05\x06" + b"\x00" * 18)
+    decoy_zip = case_dir / "later_capture.zip"
+    decoy_zip.write_bytes(b"PK\x05\x06" + b"\x00" * 18)
 
-    # --- mock the fetch stage ---
+    # --- mock the fetch stage (with comments, chronological story) ---
     from services import case_info_service as cis
+    from datetime import datetime
     orig_process = cis.CaseService.process_case
 
     def _fake_process(case_ctx: CaseContext) -> CaseContext:
+        case_ctx.id = "500FAKESFID000AAA"
         case_ctx.subject = "Wi-Fi drops right after connecting"
-        case_ctx.description = "Device disconnects ~90s after association at 10:17:30."
+        case_ctx.description = "Device sometimes disconnects. First seen last week."
         case_ctx.wifi_or_bt = "wifi"
         case_ctx.case_download_dir = str(case_dir)
-        case_ctx.attachment_list = [["logs.zip", "https://esft/x?FileName=logs.zip",
-                                     ["06/20/2026 10:20", "issue at 10:17:30"]]]
+        case_ctx.comments = [
+            [datetime(2026, 6, 19, 9, 0), "Partner",
+             "Initial report: disconnect happens randomly."],
+            [datetime(2026, 6, 20, 11, 0), "Partner",
+             "Reproduced today at 10:17:30. Uploaded repro_logs.zip covering it."],
+            [datetime(2026, 6, 21, 8, 0), "Partner",
+             "Also uploaded later_capture.zip but device did NOT fail in that run."],
+        ]
+        case_ctx.attachment_list = [
+            ["repro_logs.zip", "https://esft/x?FileName=repro_logs.zip",
+             ["06/20/2026 10:20", "repro at 10:17:30"]],
+            ["later_capture.zip", "https://esft/x?FileName=later_capture.zip",
+             ["06/21/2026 08:00", "no failure in this run"]],
+        ]
         return case_ctx
 
     # --- mock download + decompose ---
@@ -165,7 +184,9 @@ def smoke_runner(tmp: Path) -> None:
     orig_dload, orig_zip = adl.run_dload_threads, adc.process_single_zip
 
     def _fake_dload(att_list, download_path, socketio):
-        yield [str(fake_zip), "logs.zip", True]
+        # Serve whichever zip the runner actually selected.
+        name = att_list[0][0]
+        yield [str(case_dir / name), name, True]
 
     def _fake_zip_proc(zip_path, download_path_tmp, already, progress_cb=None,
                        cancel_event=None):
@@ -190,6 +211,17 @@ def smoke_runner(tmp: Path) -> None:
         "markdown_summary": "# Executive Summary\nAP kicked the client.",
         "applied_bullet_ids": [], "flagged_bullet_ids": [],
     }
+    # Fake reader reply: chooses the OLDER repro_logs.zip (per comment #2)
+    # and the issue time stated in the comments — proving comment-aware
+    # selection beats the newest-zip fallback.
+    reader_reply = json.dumps({
+        "clean_description": "Device disconnects ~90s after association (reproduced 06/20).",
+        "issue_times": ["06/20/2026-10:17:30"],
+        "issue_time_source": "comment #2",
+        "attachment_name": "repro_logs.zip",
+        "attachment_reason": "uploaded right after the 10:17:30 repro; later_capture.zip had no failure",
+        "reasoning": "Comment #2 supersedes the vague description; comment #3 rules out the newer capture.",
+    })
     fake_llm = types.SimpleNamespace(
         client=FakeAgentClient(report, report),   # same report either way
         model="fake-model",
@@ -202,6 +234,7 @@ def smoke_runner(tmp: Path) -> None:
             "Next action": {"Recommendation": ["n/a"]},
             "Classification": {"issue_type": "Connectivity", "confidence": 0.9},
         },
+        chat=lambda messages, system_content=None: reader_reply,
     )
     orig_llm = getattr(app_config, "llm_helper", None)
     orig_agent = getattr(app_config, "log_chatbot_agent", None)
@@ -227,13 +260,20 @@ def smoke_runner(tmp: Path) -> None:
               analysis.best_incident is not None and
               analysis.best_incident.confidence == 90)
         check("S4.c log path resolved", analysis.log_path.endswith(".etl.001.log"))
-        check("S4.d issue time picked up",
-              analysis.issue_times == ["06/20/2026-10:17:30"])
+        check("S4.d issue time from comments (reader)",
+              analysis.issue_times == ["06/20/2026-10:17:30"]
+              and analysis.case_reader.get("issue_time_source") == "comment #2")
         stage_names = [s.name for s in analysis.stages]
         check("S4.e all stages recorded",
-              {"fetch_case", "triage", "pick_zip", "download", "decompose",
-               "issue_time", "pick_etl", "agent_analysis"} <= set(stage_names),
+              {"fetch_case", "triage", "read_case_history", "pick_zip",
+               "download", "decompose", "issue_time", "pick_etl",
+               "agent_analysis"} <= set(stage_names),
               str(stage_names))
+        check("S4.g reader-chosen zip beats newest-zip fallback",
+              analysis.chosen_attachment == "repro_logs.zip",
+              f"chosen={analysis.chosen_attachment}")
+        check("S4.h Salesforce case id captured",
+              analysis.case_id == "500FAKESFID000AAA")
 
         # queue integration: compose + enqueue like the orchestrator does
         store = HandsfreeStore(tmp / "handsfree_s4")

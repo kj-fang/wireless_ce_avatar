@@ -77,6 +77,14 @@
         {% if config.dry_run %} · <span class="pill warn">DRY RUN — posting disabled</span>{% endif %}
       </span>
     </div>
+    <div class="controls" style="border-top: 1px solid var(--border); padding-top: 10px;">
+      <label>…or analyze one specific case:
+        <input type="text" id="case-nbr" placeholder="IPS case number, e.g. 01009610"
+               style="width: 200px;" onkeydown="if(event.key==='Enter')runCase()">
+      </label>
+      <button class="primary" id="run-case-btn" onclick="runCase()"
+              title="Runs the full pipeline for this one case regardless of owner/date">▶ Analyze this case</button>
+    </div>
     <div id="run-log"></div>
   </div>
 
@@ -124,10 +132,16 @@
       c => ({'&':'&amp;','<':'&lt;','>':'&gt;','"':'&quot;',"'":'&#39;'}[c]));
   }
 
+  function setRunButtons(disabled) {
+    ['check-btn', 'run-case-btn'].forEach(id => {
+      const el = document.getElementById(id);
+      if (el) el.disabled = disabled;
+    });
+  }
+
   async function checkNow() {
     const owner = document.getElementById('owner-name').value.trim();
-    const btn = document.getElementById('check-btn');
-    btn.disabled = true;
+    setRunButtons(true);
     const r = await fetch('/handsfree/check_now', {
       method: 'POST', headers: {'Content-Type': 'application/json'},
       body: JSON.stringify({owner_name: owner}),
@@ -135,7 +149,24 @@
     const j = await r.json();
     if (!j.ok) {
       alert('Failed to start: ' + (j.error || 'unknown'));
-      btn.disabled = false;
+      setRunButtons(false);
+      return;
+    }
+    startPolling();
+  }
+
+  async function runCase() {
+    const caseNbr = document.getElementById('case-nbr').value.trim();
+    if (!caseNbr) { alert('Enter an IPS case number.'); return; }
+    setRunButtons(true);
+    const r = await fetch('/handsfree/run_case', {
+      method: 'POST', headers: {'Content-Type': 'application/json'},
+      body: JSON.stringify({case_nbr: caseNbr}),
+    });
+    const j = await r.json();
+    if (!j.ok) {
+      alert('Failed to start: ' + (j.error || 'unknown'));
+      setRunButtons(false);
       return;
     }
     startPolling();
@@ -160,7 +191,7 @@
       `<div class="log-line"><span class="ts">${esc(e.ts)}</span>${esc(e.message)}</div>`).join('');
     log.scrollTop = log.scrollHeight;
     if (s.status !== 'running') {
-      document.getElementById('check-btn').disabled = false;
+      setRunButtons(false);
       if (pollTimer && s.status !== 'idle') { clearInterval(pollTimer); pollTimer = null; }
       if (s.status === 'done') loadQueue();
     }

@@ -75,6 +75,31 @@ def start_check_now(owner_name: Optional[str] = None) -> dict:
     return {"ok": True, "owner": owner}
 
 
+def _analyze_and_enqueue(store: HandsfreeStore, case_nbr: str,
+                         case_id: str = "", subject: str = "") -> dict:
+    """Shared per-case body for check runs and manual single-case runs."""
+    def _progress(stage, detail, _c=case_nbr):
+        _log_event(f"[{_c}] {stage}: {detail}")
+
+    runner = HandsfreeRunner(progress_cb=_progress)
+    analysis = runner.analyze_case(case_nbr)
+    draft = compose(analysis)
+    rec = store.enqueue(
+        case_nbr=case_nbr,
+        case_id=case_id or analysis.case_id,
+        subject=subject or analysis.subject,
+        draft_plain=draft["plain"],
+        draft_html=draft["html"],
+        confidence=draft["confidence"],
+        mode=analysis.mode,
+        analysis=analysis.to_dict(),
+    )
+    _log_event(
+        f"[{case_nbr}] queued draft {rec['draft_id']} "
+        f"(mode={analysis.mode}, confidence={draft['confidence']})")
+    return rec
+
+
 def _run_check(owner: str, store: HandsfreeStore) -> None:
     try:
         cfg = store.load_config()
@@ -94,26 +119,8 @@ def _run_check(owner: str, store: HandsfreeStore) -> None:
 
         for ref in fresh:
             _log_event(f"analyzing case {ref.case_nbr} — {ref.subject[:60]}")
-
-            def _progress(stage, detail, _c=ref.case_nbr):
-                _log_event(f"[{_c}] {stage}: {detail}")
-
-            runner = HandsfreeRunner(progress_cb=_progress)
-            analysis = runner.analyze_case(ref.case_nbr)
-            draft = compose(analysis)
-            rec = store.enqueue(
-                case_nbr=ref.case_nbr,
-                case_id=ref.case_id,
-                subject=ref.subject or analysis.subject,
-                draft_plain=draft["plain"],
-                draft_html=draft["html"],
-                confidence=draft["confidence"],
-                mode=analysis.mode,
-                analysis=analysis.to_dict(),
-            )
-            _log_event(
-                f"[{ref.case_nbr}] queued draft {rec['draft_id']} "
-                f"(mode={analysis.mode}, confidence={draft['confidence']})")
+            _analyze_and_enqueue(store, ref.case_nbr,
+                                 case_id=ref.case_id, subject=ref.subject)
 
         _set_state(status="done", finished_at=time.time())
         _log_event("check run complete — review the queue below")
@@ -124,6 +131,45 @@ def _run_check(owner: str, store: HandsfreeStore) -> None:
         _log_event(f"check run FAILED: {e}")
     finally:
         _run_lock.release()
+
+
+def start_case_run(case_nbr: str) -> dict:
+    """Manual trigger: analyze ONE explicitly chosen case number.
+
+    Bypasses owner/today detection AND the processed-case ledger (an explicit
+    request means the user wants a fresh analysis even if the case was seen
+    before) — duplicate-POST protection still applies at approve time.
+    """
+    case_nbr = "".join(ch for ch in str(case_nbr or "").strip() if ch.isalnum())
+    if not case_nbr:
+        return {"ok": False, "error": "empty case number"}
+    if not _run_lock.acquire(blocking=False):
+        return {"ok": False, "error": "a run is already in progress"}
+
+    store = _store()
+    _set_state(status="running", owner=None, mode="single-case",
+               case_nbr=case_nbr, started_at=time.time(),
+               events=[], cases=[], error=None)
+    if store.is_processed(case_nbr):
+        _log_event(f"note: case {case_nbr} was analyzed before — re-running "
+                   "on explicit request (approve-time duplicate guard still active)")
+
+    def _run():
+        try:
+            _log_event(f"manual run: analyzing case {case_nbr}")
+            _analyze_and_enqueue(store, case_nbr)
+            _set_state(status="done", finished_at=time.time())
+            _log_event("manual run complete — review the queue below")
+        except Exception as e:
+            print(f"[handsfree] manual run failed:\n{traceback.format_exc()}")
+            _set_state(status="error", error=f"{type(e).__name__}: {e}",
+                       finished_at=time.time())
+            _log_event(f"manual run FAILED: {e}")
+        finally:
+            _run_lock.release()
+
+    threading.Thread(target=_run, daemon=True, name="handsfree-case").start()
+    return {"ok": True, "case_nbr": case_nbr}
 
 
 # ---------------------------------------------------------------------------

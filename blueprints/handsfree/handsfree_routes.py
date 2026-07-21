@@ -36,6 +36,13 @@ def check_now():
     return jsonify(orchestrator.start_check_now(body.get("owner_name")))
 
 
+@handsfree_bp.route("/run_case", methods=["POST"])
+def run_case():
+    """Manual trigger for one explicitly chosen IPS case number."""
+    body = request.get_json(silent=True) or {}
+    return jsonify(orchestrator.start_case_run(body.get("case_nbr")))
+
+
 @handsfree_bp.route("/status")
 def status():
     return jsonify(orchestrator.get_run_state())

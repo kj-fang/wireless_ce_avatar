@@ -70,6 +70,7 @@ class IncidentReport:
 @dataclass
 class CaseAnalysis:
     case_nbr: str
+    case_id: str = ""                # Salesforce 18-char id (for posting)
     ok: bool = False
     mode: str = ""                   # full | triage_only | error
     subject: str = ""
@@ -79,7 +80,9 @@ class CaseAnalysis:
     wifi_or_bt: str = ""
     triage: dict = field(default_factory=dict)       # analyze_desc output
     classification: dict = field(default_factory=dict)
+    case_reader: dict = field(default_factory=dict)  # comment-aware reader output
     attachment_time: str = ""
+    chosen_attachment: str = ""      # filename the reader picked (or fallback)
     issue_times: list[str] = field(default_factory=list)
     etl_path: str = ""
     log_path: str = ""
@@ -145,6 +148,7 @@ class HandsfreeRunner:
             from models.models import CaseContext
             from services.case_info_service import CaseService
             case_ctx = CaseService.process_case(CaseContext(case_nbr=str(case_nbr)))
+            analysis.case_id = case_ctx.id or ""
             analysis.subject = case_ctx.subject or ""
             analysis.description = case_ctx.description or ""
             analysis.wifi_or_bt = case_ctx.wifi_or_bt or "wifi"
@@ -172,12 +176,53 @@ class HandsfreeRunner:
             analysis.error = "" if analysis.ok else "triage failed"
             return analysis
 
-        # -- 3. pick newest ZIP attachment ------------------------------------
+        # -- 3. read the case history (description + comments, chronological) --
+        # The reader mirrors how an engineer works the case: description
+        # first, then comments oldest→newest (later comments supersede),
+        # extracting the issue time and nominating the attachment whose log
+        # most likely covers it.
+        with self._stage(analysis, "read_case_history"):
+            from .case_reader import read_case_history
+            llm = app_config.llm_helper
+            reader = read_case_history(
+                llm,
+                subject=analysis.subject,
+                description=analysis.description,
+                comments=case_ctx.comments,
+                attachment_list=case_ctx.attachment_list,
+            )
+            if reader:
+                analysis.case_reader = reader
+                if reader.get("clean_description"):
+                    analysis.clean_description = reader["clean_description"]
+                if reader.get("issue_times"):
+                    analysis.issue_times = reader["issue_times"][:max_incidents]
+                self.progress(
+                    "read_case_history",
+                    f"issue_times={reader.get('issue_times')} "
+                    f"attachment={reader.get('attachment_name') or '(none)'} "
+                    f"({reader.get('issue_time_source') or 'no source'})")
+
+        # -- 4. pick the ZIP attachment ----------------------------------------
+        # Reader's nomination first; newest-ZIP heuristic as fallback.
         zip_item = None
         with self._stage(analysis, "pick_zip"):
             from utils.etl_utils import pick_latest_zip_attachment, extract_time_from_description
-            zip_item = pick_latest_zip_attachment(case_ctx.attachment_list)
+            from .case_reader import find_attachment
+            chosen_name = (analysis.case_reader or {}).get("attachment_name") or ""
+            if chosen_name:
+                zip_item = find_attachment(case_ctx.attachment_list, chosen_name)
+                if zip_item is not None and not str(zip_item[0]).lower().endswith(".zip"):
+                    self.progress("pick_zip",
+                                  f"reader chose non-zip '{zip_item[0]}' — falling back")
+                    zip_item = None
+            if zip_item is None:
+                zip_item = pick_latest_zip_attachment(case_ctx.attachment_list)
+                if chosen_name and zip_item is not None:
+                    self.progress("pick_zip",
+                                  f"fallback to newest ZIP: {zip_item[0]}")
             if zip_item is not None:
+                analysis.chosen_attachment = str(zip_item[0])
                 try:
                     subtitle = (zip_item[2] or ["", ""])[1] if len(zip_item) > 2 else ""
                     analysis.attachment_time = extract_time_from_description(subtitle) or ""
@@ -189,7 +234,7 @@ class HandsfreeRunner:
             analysis.error = "" if analysis.ok else "no ZIP attachment and triage failed"
             return analysis
 
-        # -- 4. download -------------------------------------------------------
+        # -- 5. download -------------------------------------------------------
         downloaded = []   # [file_path, name, already_dload]
         with self._stage(analysis, "download"):
             from utils.attachment_download import run_dload_threads
@@ -202,7 +247,7 @@ class HandsfreeRunner:
             analysis.error = "attachment download failed"
             return analysis
 
-        # -- 5. decompose ------------------------------------------------------
+        # -- 6. decompose ------------------------------------------------------
         wifi_files: list = []
         ddd_files: list = []
         with self._stage(analysis, "decompose"):
@@ -216,25 +261,30 @@ class HandsfreeRunner:
             analysis.error = "no Wi-Fi/DDD ETL files found in the attachment"
             return analysis
 
-        # -- 6. organize issue times from the description ----------------------
+        # -- 7. issue times -----------------------------------------------------
+        # Primary source: the case-history reader (description + comments).
+        # Fallback: description-only AI organization, then attachment subtitle.
         with self._stage(analysis, "issue_time"):
-            from utils.issue_time_ai import organize_issue_context
-            llm = app_config.llm_helper
-            organized = organize_issue_context(
-                analysis.description,
-                llm_client=getattr(llm, "client", None),
-                llm_model=getattr(llm, "model", None),
-            ) or {}
-            analysis.clean_description = (organized.get("clean_description")
-                                          or analysis.description or "").strip()
-            times = [str(t).strip() for t in (organized.get("issue_times") or []) if str(t).strip()]
-            if not times and analysis.attachment_time:
-                times = [analysis.attachment_time]
-            analysis.issue_times = times[:max_incidents]
+            if not analysis.issue_times:
+                from utils.issue_time_ai import organize_issue_context
+                llm = app_config.llm_helper
+                organized = organize_issue_context(
+                    analysis.description,
+                    llm_client=getattr(llm, "client", None),
+                    llm_model=getattr(llm, "model", None),
+                ) or {}
+                if not analysis.clean_description:
+                    analysis.clean_description = (organized.get("clean_description")
+                                                  or "").strip()
+                times = [str(t).strip() for t in (organized.get("issue_times") or [])
+                         if str(t).strip()]
+                if not times and analysis.attachment_time:
+                    times = [analysis.attachment_time]
+                analysis.issue_times = times[:max_incidents]
         if not analysis.clean_description:
             analysis.clean_description = analysis.description or analysis.subject
 
-        # -- 7. pick the ETL ----------------------------------------------------
+        # -- 8. pick the ETL ----------------------------------------------------
         etl_path = None
         with self._stage(analysis, "pick_etl"):
             etl_path = self._pick_etl(wifi_files, ddd_files,
@@ -246,7 +296,7 @@ class HandsfreeRunner:
             analysis.error = "could not select an ETL file"
             return analysis
 
-        # -- 8. decode ETL -> .log ----------------------------------------------
+        # -- 9. decode ETL -> .log ----------------------------------------------
         log_path = etl_path + ".log"
         if not os.path.exists(log_path):
             with self._stage(analysis, "decode_etl"):
@@ -258,7 +308,7 @@ class HandsfreeRunner:
             return analysis
         analysis.log_path = log_path
 
-        # -- 9. agentic analysis (one run per incident time) --------------------
+        # -- 10. agentic analysis (one run per incident time) --------------------
         with self._stage(analysis, "agent_analysis"):
             self._run_agent(analysis, max_steps=max_steps)
 

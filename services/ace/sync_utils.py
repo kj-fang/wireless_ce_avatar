@@ -200,6 +200,20 @@ def sync_at_boot(namespace: str = "wifi") -> dict:
     unreachable — every step degrades to a no-op and local/ is left exactly
     as it was (the last version)."""
     migrated = migrate_legacy_flat_layout(namespace) if namespace == "wifi" else 0
+    # Trainer mode: a dedicated central training server is the SOLE writer of
+    # the playbook shares, so it must NOT pull at boot — a pull could overwrite
+    # its locally-trained, canonical playbooks with a staler share copy. Local
+    # migration above is still fine (it only reorganises this machine's files).
+    # Read the flag defensively so a missing constant just means "not a trainer".
+    if bool(getattr(path_configs, "ACE_TRAINER_MODE", False)):
+        print(f"[ace.sync:{namespace}] trainer mode — boot pull skipped (local is canonical)")
+        return {
+            "namespace": namespace,
+            "migrated": migrated,
+            "share_reachable": None,
+            "updated": 0,
+            "trainer_mode": True,
+        }
     updated, share = pull_latest_from_cloud(namespace)
     status = {
         "namespace": namespace,

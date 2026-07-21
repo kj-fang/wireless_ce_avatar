@@ -124,6 +124,16 @@ LOCAL_LOG_PARSER_DATA_DIR = str(_Path(__file__).parent.parent / "data" / "log_pa
 # Leave as "" to keep the original per-user registry behaviour.
 DOWNLOADS_DIR = r"C:\Users\admin\Downloads"
 
+# ACE trainer mode.
+#
+# True on a dedicated central ACE-training server: this machine is the SOLE
+# writer of the playbook shares, so it must NOT pull playbooks from the share
+# at boot (a pull could overwrite its locally-trained, canonical playbooks
+# with a staler copy). Pushing after an adapt/nightly run is unaffected.
+# Leave False on ordinary client installs, which pull the latest playbook at
+# every boot and never train. See services/ace/sync_utils.py:sync_at_boot.
+ACE_TRAINER_MODE = True
+
 # Local skill YAML cache.
 #
 # Primary location: <IntelAvatar_files>/skills_config/  — same root the rest of

@@ -49,6 +49,7 @@ class AceRunner:
         skill_context_provider: Optional[SkillContextProvider] = None,
         history: Optional[HistoryWriter] = None,
         feedback_prefix: str = "",
+        exclude_users: Optional[Iterable[str]] = None,
     ):
         """
         llm:            an LLM_helper instance (services.llm_service.LLM_helper).
@@ -77,6 +78,12 @@ class AceRunner:
                         match services.feedback_service._domain_prefix() for
                         the same domain, or this runner will silently read
                         (or write the cursor against) the wrong stream.
+        exclude_users:  optional collection of submitter identities (e.g.
+                        emails / UPNs) whose feedback should be IGNORED — any
+                        turn whose feedback.submitted_by (or the snapshot-level
+                        submitted_by) matches is skipped, so those users'
+                        votes never shape the playbook. Matched
+                        case-insensitively after stripping whitespace.
         """
         self.llm = llm
         self.playbooks_dir = Path(playbooks_dir)
@@ -85,6 +92,11 @@ class AceRunner:
         self.skill_context_provider = skill_context_provider
         self.history = history
         self.feedback_prefix = feedback_prefix
+        self.exclude_users = {
+            (u or "").strip().lower()
+            for u in (exclude_users or [])
+            if (u or "").strip()
+        }
 
         self.workflow_pb = Playbook("agent", self.playbooks_dir / "workflow.json")
         self.domain_pbs: dict[str, Playbook] = {}
@@ -187,6 +199,20 @@ class AceRunner:
             # Untagged turn — nothing for the Reflector to learn from.
             _emit("turn_end", status="no_feedback")
             return {"status": "no_feedback", "conversation_id": conversation_id, "turn_id": turn_id}
+
+        # User-level filter: skip feedback from excluded submitters (e.g. test
+        # accounts) so their votes never shape the playbook. Checks the
+        # per-turn submitter first, then the conversation-level one.
+        if self.exclude_users:
+            submitter = (
+                (feedback.get("submitted_by") or snap.get("submitted_by") or "")
+                .strip().lower()
+            )
+            if submitter in self.exclude_users:
+                _emit("turn_end", status="excluded_user", submitted_by=submitter)
+                return {"status": "excluded_user",
+                        "conversation_id": conversation_id, "turn_id": turn_id,
+                        "submitted_by": submitter}
 
         case_context = snap.get("issue") or {}
 

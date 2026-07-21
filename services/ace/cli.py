@@ -159,6 +159,7 @@ def cmd_adapt(args):
         skill_context_provider=partial(_skill_context_provider, namespace=args.namespace),
         history=history,
         feedback_prefix=_feedback_prefix(args.namespace),
+        exclude_users=args.exclude_user or None,
     )
     results = runner.run_batch(since=args.since, max_turns=args.limit,
                                run_source=f"cli-adapt-{args.namespace}")
@@ -166,6 +167,7 @@ def cmd_adapt(args):
         "processed": len(results),
         "ok":        sum(1 for r in results if r.get("status") == "ok"),
         "skipped":   sum(1 for r in results if r.get("status") != "ok"),
+        "excluded":  sum(1 for r in results if r.get("status") == "excluded_user"),
     }
     print(json.dumps(summary, indent=2))
     if args.verbose:
@@ -192,6 +194,7 @@ def cmd_adapt_one(args):
         skill_context_provider=partial(_skill_context_provider, namespace=args.namespace),
         history=history,
         feedback_prefix=_feedback_prefix(args.namespace),
+        exclude_users=args.exclude_user or None,
     )
 
     cid = args.conversation
@@ -223,6 +226,7 @@ def cmd_adapt_one(args):
         "processed": len(results),
         "ok":        sum(1 for r in results if r.get("status") == "ok"),
         "skipped":   sum(1 for r in results if r.get("status") != "ok"),
+        "excluded":  sum(1 for r in results if r.get("status") == "excluded_user"),
     }
     print(json.dumps(summary, indent=2))
     if args.verbose:
@@ -417,6 +421,9 @@ def main(argv=None):
                          help="ISO timestamp to start from (defaults to last cursor)")
     p_adapt.add_argument("--skill", action="append",
                          help="Pre-create a domain playbook for this skill (repeatable)")
+    p_adapt.add_argument("--exclude-user", action="append", metavar="SUBMITTER",
+                         help="Ignore feedback from this submitter (email/UPN); "
+                              "repeatable. Matched case-insensitively.")
     p_adapt.add_argument("--limit", type=int, default=None, help="Stop after N turns")
     p_adapt.add_argument("--model", default=None, help="Override model id")
     p_adapt.add_argument("--verbose", action="store_true")
@@ -436,6 +443,9 @@ def main(argv=None):
                              help="Optional turn id; if omitted, all feedback turns in the session are processed")
     p_adapt_one.add_argument("--skill", action="append",
                              help="Pre-create a domain playbook for this skill (repeatable)")
+    p_adapt_one.add_argument("--exclude-user", action="append", metavar="SUBMITTER",
+                             help="Ignore feedback from this submitter (email/UPN); "
+                                  "repeatable. Matched case-insensitively.")
     p_adapt_one.add_argument("--model", default=None, help="Override model id")
     p_adapt_one.add_argument("--verbose", action="store_true")
     p_adapt_one.add_argument("--push", action="store_true",

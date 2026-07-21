@@ -5,7 +5,7 @@ import threading
 
 from configs.global_configs import app_config
 from configs.path_configs import LOG_PARSER_DIR
-from services.etl_parser.bt_parser import bt_analysis_manualSelect_mode, bt_analysis_autoFile_mode, bt_analysis_autoFolder_mode, bt_decode_hci_via_folder
+from services.etl_parser.bt_parser import bt_analysis_manualSelect_mode, bt_analysis_autoFile_mode, bt_analysis_autoFolder_mode, bt_decode_hci_via_folder, bt_decode_via_cli
 
 
 class BTAnalysisService():
@@ -83,7 +83,8 @@ class BTAnalysisService():
         """背景執行 LLM 模式：用 AutoFolder tab decode HCI 後 emit bt_hci_ready 讓前端跳轉 log_parser"""
         self.emit_log(f"🔍 HCI decoding for LLM analysis (AutoFolder): {os.path.basename(file_path)}")
         etl_folder = os.path.dirname(file_path)
-        hci_path = bt_decode_hci_via_folder(etl_folder, file_path)
+        # hci_path = bt_decode_hci_via_folder(etl_folder, file_path)
+        hci_path = bt_decode_via_cli(etl_folder, file_path)
         if hci_path:
             self.emit_log(f"✅ HCI decode complete: {hci_path}")
             app_config.socketio.emit(

@@ -865,6 +865,152 @@ def bt_decode_hci_via_folder(log_folder_path: str, log_path: str, etl_txt_timeou
 
         time.sleep(1)
 
+
+def bt_decode_via_cli(
+    log_folder_path: str,
+    log_path: str,
+    decode_timeout: int = 180,
+) -> str | None:
+    """
+    Decode an ETL folder via CLI (ibtdrvlogparser_cli.exe) without any GUI automation.
+
+    A lighter alternative to bt_decode_hci_via_folder(): no pywinauto dependency,
+    no visible GUI window. The CLI tool runs synchronously and exits when the decode
+    is complete, so no polling loop is needed.
+
+    Commands used:
+        Split:  ibtdrvlogparser_cli.exe split <etl_path> -n <count>
+        Decode: ibtdrvlogparser_cli.exe decode <log_folder_path>
+
+    Args:
+        log_folder_path: Directory that contains the ETL file(s) to decode.
+        log_path:        Full path of the target ETL file (without .hci.txt suffix).
+                         The function looks for '<log_path>.hci.txt' after decode.
+        decode_timeout:  Max seconds to wait for the decode CLI process to finish.
+
+    Returns:
+        str path to the generated .hci.txt, or None on failure / timeout.
+    """
+    print(f"📂 bt_decode_via_cli: {log_path}")
+
+    # Skip decode if a complete set of output files already exists.
+    existing = find_ready_hci(log_path)
+    if existing:
+        txt_cfa = log_path + ".txt.cfa"
+        txt_pcap = log_path + ".txt.pcap"
+        if os.path.exists(txt_cfa) and os.path.exists(txt_pcap):
+            print(f"✅ HCI log already exists and decode is complete, skipping: {existing}")
+            return existing
+        print(f"⚠️ HCI log exists but sidecar files missing; re-decoding: {existing}")
+
+    # 1) Locate the CLI executable next to this script.
+    cli_exe = os.path.abspath(os.path.join(os.path.dirname(__file__), 'ibtdrvlogparser_cli.exe'))
+    if not os.path.exists(cli_exe):
+        print(f"❌ CLI executable not found: {cli_exe}")
+        return None
+
+    def _recover_rename_etl_files() -> None:
+        """Rename any .etl.skip back to .etl to restore original state."""
+        for file in os.listdir(log_folder_path):
+            if file.lower().endswith(".etl.skip"):
+                skip_path = os.path.join(log_folder_path, file)
+                original_path = skip_path[:-5]  # remove ".skip"
+                try:
+                    os.rename(skip_path, original_path)
+                    print(f"🔄 Restored skipped ETL: {skip_path} → {original_path}")
+                except Exception as e_restore:
+                    print(f"⚠️ Failed to restore skipped ETL {skip_path}: {e_restore}")
+
+    # 2) Split any oversized ETLs (>=1 GB) via CLI before decode.
+    split_target_map = {}
+    large_etls = _collect_large_etl_files(log_folder_path)
+    for file_info in large_etls:
+        etl_path = file_info["path"]
+        etl_size = file_info["size"]
+        split_count = math.ceil(etl_size / (512 * 1024 * 1024))
+        print(
+            f"📐 Splitting {os.path.basename(etl_path)} into {split_count} parts "
+            f"(size={etl_size / (1024 * 1024):.1f} MB)"
+        )
+        split_cmd = [cli_exe, "split", etl_path, "-n", str(split_count)]
+        try:
+            result = subprocess.run(split_cmd, capture_output=True, text=True, timeout=300)
+            for line in result.stdout.splitlines():
+                print(f"  [CLI] {line}")
+            if result.returncode != 0:
+                print(f"⚠️ Split CLI failed (rc={result.returncode}): {result.stderr}")
+            else:
+                print(f"✅ Split completed for: {etl_path}")
+                _rename_split_source(etl_path)
+                selected_split = _pick_last_split_part(etl_path)
+                if selected_split:
+                    split_target_map[etl_path] = selected_split
+                    print(f"✅ Selected chatbot input target: {selected_split}")
+                else:
+                    print(f"⚠️ Split succeeded but no split part found for: {etl_path}")
+        except subprocess.TimeoutExpired:
+            print(f"⚠️ Split CLI timed out (300s) for: {etl_path}")
+        except Exception as e:
+            print(f"⚠️ Failed to split {etl_path}: {e}")
+
+    # 3) Determine which ETL is the chatbot / analysis target.
+    chatbot_input_etl = split_target_map.get(log_path, log_path)
+    if chatbot_input_etl != log_path:
+        print(f"🎯 Chatbot input will use last split part: {chatbot_input_etl}")
+
+    # 4) Rename all non-target ETLs to .skip so decode focuses on chatbot_input_etl only.
+    normalized_target = os.path.normcase(os.path.abspath(chatbot_input_etl))
+    for etl_file in os.listdir(log_folder_path):
+        etl_file_path = os.path.join(log_folder_path, etl_file)
+        if (etl_file_path.lower().endswith(".etl")
+                and os.path.normcase(os.path.abspath(etl_file_path)) != normalized_target):
+            try:
+                renamed_path = etl_file_path + ".skip"
+                os.rename(etl_file_path, renamed_path)
+                print(f"📦 Renamed non-target ETL to avoid decode: {etl_file_path} → {renamed_path}")
+            except Exception as e_rename:
+                print(f"⚠️ Failed to rename {etl_file_path}: {e_rename}")
+
+    # 5) Run CLI decode on the folder (synchronous — blocks until tool exits).
+    decode_cmd = [cli_exe, "decode", log_folder_path]
+    print(f"🚀 Running CLI decode: {' '.join(decode_cmd)}")
+    try:
+        result = subprocess.run(
+            decode_cmd,
+            capture_output=True,
+            text=True,
+            timeout=decode_timeout,
+        )
+        # Print CLI output; WARNING lines are informational and do not affect the result.
+        for line in result.stdout.splitlines():
+            print(f"  [CLI] {line}")
+        if result.returncode != 0:
+            print(f"❌ Decode CLI failed (rc={result.returncode}): {result.stderr}")
+            _recover_rename_etl_files()
+            return None
+        print("✅ CLI decode process completed successfully.")
+    except subprocess.TimeoutExpired:
+        print(f"❌ Decode CLI timed out after {decode_timeout}s.")
+        _recover_rename_etl_files()
+        return None
+    except Exception as e:
+        print(f"❌ Failed to run decode CLI: {e}")
+        _recover_rename_etl_files()
+        return None
+
+    # 6) Locate the .hci.txt output and verify it is stable.
+    for p in candidate_hci_paths(chatbot_input_etl):
+        if os.path.exists(p) and is_file_ready(p):
+            print(f"✅ HCI log ready: {p}")
+            _recover_rename_etl_files()
+            return p
+
+    hci_txt = candidate_hci_paths(chatbot_input_etl)[0]
+    print(f"❌ HCI log not found after decode: {hci_txt}")
+    _recover_rename_etl_files()
+    return None
+
+
 # This function is not accessed.
 def bt_analysis_autoFile_mode(
     log_path: str,

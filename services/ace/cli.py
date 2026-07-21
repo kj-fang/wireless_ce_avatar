@@ -149,6 +149,35 @@ def _skill_context_provider(sid: str, namespace: str = "wifi"):
 # -- subcommands --------------------------------------------------------------
 
 def cmd_adapt(args):
+    if getattr(args, "dry_run", False):
+        # Preview only: no LLM, no writes, no cursor advance. Lists the turns
+        # a real run would process next (honouring --exclude-user).
+        runner = AceRunner(
+            llm=None,
+            playbooks_dir=_resolve_playbooks_dir(args.namespace),
+            feedback_root=_resolve_feedback_root(),
+            skill_context_provider=partial(_skill_context_provider, namespace=args.namespace),
+            feedback_prefix=_feedback_prefix(args.namespace),
+            exclude_users=args.exclude_user or None,
+        )
+        preview = runner.preview_batch(since=args.since, max_turns=args.limit)
+        counts: dict = {}
+        for p in preview:
+            counts[p["status"]] = counts.get(p["status"], 0) + 1
+        would = [p for p in preview if p["status"] == "would_run"]
+        excluded = [p for p in preview if p["status"] == "excluded_user"]
+        print(json.dumps({"dry_run": True, "namespace": args.namespace,
+                          "total_events": len(preview), "by_status": counts},
+                         indent=2))
+        print(f"\n-- WOULD RUN ({len(would)}) --")
+        for p in would:
+            print(f"  {p['conversation_id']}  turn={str(p['turn_id'])[:8]}  by={p.get('submitted_by','')}")
+        if excluded:
+            print(f"\n-- EXCLUDED ({len(excluded)}) --")
+            for p in excluded:
+                print(f"  {p['conversation_id']}  by={p.get('submitted_by','')}")
+        return 0
+
     llm = _build_llm(args.model)
     history = HistoryWriter(root=_resolve_playbooks_dir(args.namespace) / "history")
     runner = AceRunner(
@@ -424,6 +453,9 @@ def main(argv=None):
     p_adapt.add_argument("--exclude-user", action="append", metavar="SUBMITTER",
                          help="Ignore feedback from this submitter (email/UPN); "
                               "repeatable. Matched case-insensitively.")
+    p_adapt.add_argument("--dry-run", action="store_true",
+                         help="Preview which turns would run (and which are "
+                              "excluded) without calling the LLM or writing anything")
     p_adapt.add_argument("--limit", type=int, default=None, help="Stop after N turns")
     p_adapt.add_argument("--model", default=None, help="Override model id")
     p_adapt.add_argument("--verbose", action="store_true")

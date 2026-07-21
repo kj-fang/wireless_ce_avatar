@@ -308,6 +308,50 @@ class AceRunner:
         return result
 
     # ----- public entry points -----
+    def _preview_turn(self, conversation_id: str, turn_id: str) -> dict:
+        """Dry-run classification of a single turn: the status run_batch would
+        assign, WITHOUT running the Reflector/Curator or mutating anything.
+        Mirrors the early guards of _process_turn (feedback presence +
+        exclude_users)."""
+        snap = self._load_snapshot(conversation_id)
+        if snap is None:
+            return {"status": "no_snapshot"}
+        turn = next((t for t in snap.get("turns", []) if t.get("turn_id") == turn_id), None)
+        if turn is None:
+            return {"status": "no_turn"}
+        feedback = turn.get("feedback") or {}
+        if not feedback:
+            return {"status": "no_feedback"}
+        submitter = (feedback.get("submitted_by") or snap.get("submitted_by") or "").strip()
+        if self.exclude_users and submitter.lower() in self.exclude_users:
+            return {"status": "excluded_user", "submitted_by": submitter}
+        return {"status": "would_run", "submitted_by": submitter}
+
+    def preview_batch(self, since: Optional[str] = None,
+                      max_turns: Optional[int] = None) -> list[dict]:
+        """Dry run: list the turns run_batch WOULD process next — honouring the
+        cursor, dedup, feedback presence and exclude_users — WITHOUT calling
+        the LLM, writing playbooks, or advancing the cursor."""
+        with self._lock:
+            since = since or self._load_cursor()
+            seen_keys: set[tuple[str, str]] = set()
+            out: list[dict] = []
+            for ev in self._iter_feedback_events(since):
+                cid = ev.get("conversation_id")
+                tid = ev.get("turn_id")
+                if not cid or not tid:
+                    continue
+                key = (cid, tid)
+                if key in seen_keys:
+                    continue
+                seen_keys.add(key)
+                info = self._preview_turn(cid, tid)
+                info.update({"conversation_id": cid, "turn_id": tid, "ts": ev.get("ts")})
+                out.append(info)
+                if max_turns and len(out) >= max_turns:
+                    break
+            return out
+
     def run_one(self, conversation_id: str, turn_id: str, progress=None,
                 run_id: Optional[str] = None,
                 run_source: str = "cli") -> dict:

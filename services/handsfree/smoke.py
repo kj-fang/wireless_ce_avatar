@@ -44,6 +44,27 @@ def smoke_soql() -> None:
     except ValueError:
         check("S1.c bad since rejected", True)
 
+    # REST comment payload (verified field map for this org: the privacy
+    # field is Core_IPS_Public__c, a PUBLIC flag — private means False).
+    from .ips_client import IpsClient, PostUnsupported
+    fm = {"body_field": "Core_IPS_Rich_Comment__c",
+          "plain_field": "Core_IPS_Comment__c",
+          "private_field": "Core_IPS_Public__c",
+          "private_value": False}
+    p = IpsClient.build_comment_payload("500XYZ", "<p>rich</p>",
+                                        plain_body="plain", field_map=fm)
+    check("S1.d payload: both bodies + case lookup",
+          p["Core_IPS_Rich_Comment__c"] == "<p>rich</p>"
+          and p["Core_IPS_Comment__c"] == "plain"
+          and p["Core_IPS_Case__c"] == "500XYZ", str(p))
+    check("S1.e payload: private means Public=False",
+          p["Core_IPS_Public__c"] is False, str(p))
+    try:
+        IpsClient.build_comment_payload("500XYZ", "<p>x</p>", field_map=None)
+        check("S1.f unverified field map refused", False)
+    except PostUnsupported:
+        check("S1.f unverified field map refused", True)
+
 
 # ---------------------------------------------------------------- S2
 def _full_analysis():

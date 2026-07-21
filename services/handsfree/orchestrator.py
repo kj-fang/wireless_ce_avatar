@@ -222,6 +222,7 @@ def approve_and_post(draft_id: str, edited_plain: Optional[str] = None) -> dict:
     if backend in ("rest", "auto"):
         try:
             result = ips.post_comment(rec["case_id"], rec["draft_html"],
+                                      plain_body=rec.get("draft_plain") or "",
                                       field_map=cfg.get("rest_field_map"),
                                       private=True)
         except PostUnsupported as e:

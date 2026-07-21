@@ -170,9 +170,13 @@ class IpsClient:
         return out
 
     def get_case_comments(self, case_id: str) -> list[dict]:
-        """Existing comments on a case (used to detect our own prior post)."""
+        """Existing comments on a case. Used to (a) detect our own prior post
+        and (b) inspect how human-authored comments populate the visibility /
+        type picklists, so a REST-posted comment can mirror them."""
         soql = (
-            f"SELECT Id, CreatedDate, {self.FIELD_RICH_BODY} "
+            f"SELECT Id, CreatedDate, {self.FIELD_RICH_BODY}, "
+            "Core_IPS_Public__c, Core_IPS_Case_Comment_Type__c, "
+            "Core_IPS_Comment_Author_Type__c, Core_IPS_Case_Comment_Source__c "
             f"FROM {self.COMMENT_OBJECT} "
             f"WHERE {self.FIELD_CASE_LOOKUP}='{_soql_quote(case_id)}' "
             "ORDER BY CreatedDate DESC LIMIT 50"
@@ -223,23 +227,28 @@ class IpsClient:
             "body_candidates": body_candidates,
         }
 
-    def post_comment(self, case_id: str, rich_body: str, *,
-                     field_map: Optional[dict] = None,
-                     private: bool = True) -> PostResult:
-        """Insert a comment via REST.
+    @staticmethod
+    def build_comment_payload(case_id: str, rich_body: str, *,
+                              plain_body: str = "",
+                              field_map: Optional[dict] = None,
+                              private: bool = True) -> dict:
+        """Pure payload builder (unit-testable, no network).
 
         field_map (from orchestrator config, verified by a human once):
-            {"body_field": "Core_IPS_Rich_Comment__c",
-             "private_field": "<discovered>",     # optional
-             "private_value": true}               # value meaning Private-to-Intel
-        Raises PostUnsupported when the org denies the insert or no verified
-        field_map exists — callers then fall back to the Selenium UI poster.
+            {"body_field":    "Core_IPS_Rich_Comment__c",
+             "plain_field":   "Core_IPS_Comment__c",   # optional second body
+             "private_field": "Core_IPS_Public__c",
+             "private_value": false,     # value meaning Private-to-Intel —
+                                         # NOTE: Core_IPS_Public__c is a
+                                         # PUBLIC flag, so private == False
+             "extra_fields":  {"Core_IPS_Case_Comment_Source__c": "..."}}
         """
-        if not case_id or not rich_body.strip():
-            return PostResult(ok=False, backend="rest", error="empty case_id/body")
         fm = field_map or {}
-        body_field = fm.get("body_field") or self.FIELD_RICH_BODY
-        payload = {self.FIELD_CASE_LOOKUP: case_id, body_field: rich_body}
+        body_field = fm.get("body_field") or IpsClient.FIELD_RICH_BODY
+        payload = {IpsClient.FIELD_CASE_LOOKUP: case_id, body_field: rich_body}
+        plain_field = fm.get("plain_field")
+        if plain_field and plain_body:
+            payload[plain_field] = plain_body
         if private:
             private_field = fm.get("private_field")
             if not private_field:
@@ -248,6 +257,25 @@ class IpsClient:
                     "discovery (describe) and confirm the field before REST posting."
                 )
             payload[private_field] = fm.get("private_value", True)
+        extra = fm.get("extra_fields")
+        if isinstance(extra, dict):
+            for k, v in extra.items():
+                payload.setdefault(k, v)
+        return payload
+
+    def post_comment(self, case_id: str, rich_body: str, *,
+                     plain_body: str = "",
+                     field_map: Optional[dict] = None,
+                     private: bool = True) -> PostResult:
+        """Insert a comment via REST. See build_comment_payload for the
+        field_map contract. Raises PostUnsupported when the org denies the
+        insert or no verified field_map exists — callers then fall back to
+        the Selenium UI poster."""
+        if not case_id or not rich_body.strip():
+            return PostResult(ok=False, backend="rest", error="empty case_id/body")
+        payload = self.build_comment_payload(
+            case_id, rich_body, plain_body=plain_body,
+            field_map=field_map, private=private)
 
         resp = self._request(
             "POST", "/services/data/v{ver}/sobjects/" + self.COMMENT_OBJECT + "/",

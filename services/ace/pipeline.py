@@ -308,30 +308,19 @@ class AceRunner:
         return result
 
     # ----- public entry points -----
-    def _preview_turn(self, conversation_id: str, turn_id: str) -> dict:
-        """Dry-run classification of a single turn: the status run_batch would
-        assign, WITHOUT running the Reflector/Curator or mutating anything.
-        Mirrors the early guards of _process_turn (feedback presence +
-        exclude_users)."""
-        snap = self._load_snapshot(conversation_id)
-        if snap is None:
-            return {"status": "no_snapshot"}
-        turn = next((t for t in snap.get("turns", []) if t.get("turn_id") == turn_id), None)
-        if turn is None:
-            return {"status": "no_turn"}
-        feedback = turn.get("feedback") or {}
-        if not feedback:
-            return {"status": "no_feedback"}
-        submitter = (feedback.get("submitted_by") or snap.get("submitted_by") or "").strip()
-        if self.exclude_users and submitter.lower() in self.exclude_users:
-            return {"status": "excluded_user", "submitted_by": submitter}
-        return {"status": "would_run", "submitted_by": submitter}
-
     def preview_batch(self, since: Optional[str] = None,
                       max_turns: Optional[int] = None) -> list[dict]:
         """Dry run: list the turns run_batch WOULD process next — honouring the
-        cursor, dedup, feedback presence and exclude_users — WITHOUT calling
-        the LLM, writing playbooks, or advancing the cursor."""
+        cursor, dedup and exclude_users — WITHOUT calling the LLM, writing
+        playbooks, or advancing the cursor.
+
+        Fast by design: it classifies each unique turn from the feedback JSONL
+        EVENT alone (which already carries `submitted_by`), so it never opens
+        the per-turn conversation snapshot on the (possibly remote) share.
+        Trade-off: because it doesn't read the snapshot it cannot flag turns
+        whose snapshot is missing or carries no feedback — those are rare and a
+        real run would simply skip them, so the WOULD-RUN list is a close upper
+        bound on what actually runs."""
         with self._lock:
             since = since or self._load_cursor()
             seen_keys: set[tuple[str, str]] = set()
@@ -345,9 +334,13 @@ class AceRunner:
                 if key in seen_keys:
                     continue
                 seen_keys.add(key)
-                info = self._preview_turn(cid, tid)
-                info.update({"conversation_id": cid, "turn_id": tid, "ts": ev.get("ts")})
-                out.append(info)
+                submitter = (ev.get("submitted_by") or "").strip()
+                status = ("excluded_user"
+                          if self.exclude_users and submitter.lower() in self.exclude_users
+                          else "would_run")
+                out.append({"conversation_id": cid, "turn_id": tid,
+                            "submitted_by": submitter, "status": status,
+                            "ts": ev.get("ts")})
                 if max_turns and len(out) >= max_turns:
                     break
             return out

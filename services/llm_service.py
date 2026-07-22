@@ -523,8 +523,34 @@ class LLM_helper:
             print(f"[chat] usage: {response.usage}")
             print(f"[chat] finish_reason: {response.choices[0].finish_reason}")
 
+            # Accumulate token usage on this helper instance so callers (e.g.
+            # the ACE CLI, which uses a dedicated LLM_helper per run) can report
+            # how many tokens a whole run consumed. Lazily initialised; safe
+            # when the provider omits usage.
+            u = getattr(response, "usage", None)
+            if u is not None:
+                acc = getattr(self, "_ace_usage", None)
+                if acc is None:
+                    acc = {"prompt": 0, "completion": 0, "total": 0, "calls": 0}
+                    self._ace_usage = acc
+                acc["prompt"] += getattr(u, "prompt_tokens", 0) or 0
+                acc["completion"] += getattr(u, "completion_tokens", 0) or 0
+                acc["total"] += getattr(u, "total_tokens", 0) or 0
+                acc["calls"] += 1
+
             raw_output = response.choices[0].message.content
             return raw_output
         except Exception as e:
             print(f"[chat] Failed: {e}")
             raise
+
+    def get_usage(self) -> dict:
+        """Cumulative token usage of every chat() call on this instance.
+        Returns {"prompt", "completion", "total", "calls"}."""
+        return dict(getattr(self, "_ace_usage",
+                            {"prompt": 0, "completion": 0, "total": 0, "calls": 0}))
+
+    def reset_usage(self) -> None:
+        """Zero the cumulative token counters (call before a run to measure it
+        in isolation)."""
+        self._ace_usage = {"prompt": 0, "completion": 0, "total": 0, "calls": 0}

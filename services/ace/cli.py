@@ -179,6 +179,7 @@ def cmd_adapt(args):
         return 0
 
     llm = _build_llm(args.model)
+    llm.reset_usage()
     history = HistoryWriter(root=_resolve_playbooks_dir(args.namespace) / "history")
     runner = AceRunner(
         llm=llm,
@@ -197,6 +198,7 @@ def cmd_adapt(args):
         "ok":        sum(1 for r in results if r.get("status") == "ok"),
         "skipped":   sum(1 for r in results if r.get("status") != "ok"),
         "excluded":  sum(1 for r in results if r.get("status") == "excluded_user"),
+        "token_usage": llm.get_usage(),
     }
     print(json.dumps(summary, indent=2))
     if args.verbose:
@@ -214,6 +216,7 @@ def cmd_adapt_one(args):
     cursor is left untouched so this command can be re-run safely.
     """
     llm = _build_llm(args.model)
+    llm.reset_usage()
     history = HistoryWriter(root=_resolve_playbooks_dir(args.namespace) / "history")
     runner = AceRunner(
         llm=llm,
@@ -256,6 +259,7 @@ def cmd_adapt_one(args):
         "ok":        sum(1 for r in results if r.get("status") == "ok"),
         "skipped":   sum(1 for r in results if r.get("status") != "ok"),
         "excluded":  sum(1 for r in results if r.get("status") == "excluded_user"),
+        "token_usage": llm.get_usage(),
     }
     print(json.dumps(summary, indent=2))
     if args.verbose:

@@ -32,8 +32,15 @@ from . import judge as judge_mod
 
 
 PKG_DIR = Path(__file__).resolve().parent
-DEFAULT_CASES_DIR = PKG_DIR / "cases"
+DEFAULT_CASES_DIR = Path(r"\\infs089b.iil.intel.com\HOME\WirelessCE\Intel_WirelessCE_Avatar\golden_set")
 DEFAULT_RUNS_DIR = PKG_DIR / "runs"
+
+# Playbook JSONs used by the judge/eval live on the shared network folder.
+# Only the JSON files at this top level are consumed — the `history/`
+# subfolder underneath is intentionally ignored (glob is non-recursive).
+EVAL_PLAYBOOKS_DIR = Path(
+    r"\\infs089b.iil.intel.com\HOME\WirelessCE\Intel_WirelessCE_Avatar\ace_playbook"
+)
 
 
 # ---------------------------------------------------------------------------
@@ -74,7 +81,11 @@ def _playbook_fingerprint(playbooks_dir: Path) -> dict:
     h = hashlib.sha256()
     files: list[str] = []
     if playbooks_dir.exists():
+        # Non-recursive glob — deliberately skips the `history/` subfolder
+        # that lives under the shared ace_playbook directory.
         for p in sorted(playbooks_dir.glob("*.json")):
+            if not p.is_file():
+                continue
             try:
                 data = p.read_bytes()
             except Exception:
@@ -220,7 +231,10 @@ def evaluate(cases_dir: Path, runs_dir: Path,
             print(f"[eval] judge models     : {names} "
                   f"(one pass per model; --passes ignored)")
 
-    playbooks_dir = ace_cli._resolve_playbooks_dir()
+    playbooks_dir = EVAL_PLAYBOOKS_DIR
+    if not playbooks_dir.exists():
+        print(f"[eval] WARNING: playbook share not reachable: {playbooks_dir} "
+              f"— check VPN / network access")
     feedback_root = ace_cli._resolve_feedback_root()
     ace_runner = AceRunner(
         llm=llm,

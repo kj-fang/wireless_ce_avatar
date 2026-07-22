@@ -4,8 +4,8 @@ Post-Reflector regression double-check.
 After the Reflector updates the playbook and a fresh eval is run, this
 tool compares the new eval report against the previous one in the same
 folder and, for cases whose scores dropped meaningfully, asks an LLM
-to judge whether any bullets that were just modified today are likely
-responsible.
+to judge whether any bullets that were modified inside the touched-
+window (see TOUCHED_WINDOW below) are likely responsible.
 
 Output: a standalone JSON report `review_<ts>.json` next to the eval file.
 
@@ -24,7 +24,7 @@ import argparse
 import json
 import re
 import sys
-from datetime import date, datetime, timezone
+from datetime import datetime, timedelta, timezone
 from pathlib import Path
 
 from services.ace import cli as ace_cli
@@ -38,49 +38,87 @@ REVIEW_MAX_TOKENS        = 1500
 
 _FACETS = ("root_cause_match", "evidence_coverage")
 
+# Fixed baseline eval report: the review always compares the newest eval
+# against this file, never against the previous eval run.
+BASELINE_EVAL_FILENAME   = "baseline.json"
+
+# Playbook JSONs used by the review live on the shared network folder
+# (same source `services/ace/eval/runner.py` reads). Only the JSON files at
+# this top level are consumed — the `history/` subfolder underneath is
+# intentionally ignored (glob is non-recursive).
+PLAYBOOKS_DIR = Path(
+    r"\\infs089b.iil.intel.com\HOME\WirelessCE\Intel_WirelessCE_Avatar\ace_playbook"
+)
+
+# Per-playbook-file "touched" window: for each *.json in the playbook dir we
+# read the file-level `updated_at` and treat any bullet whose `updated_at`
+# falls within this many minutes BEFORE it as freshly touched. This makes
+# the window follow the Reflector run that actually wrote the file, rather
+# than a wall-clock "today" that drifts if the review runs the next day.
+TOUCHED_WINDOW = timedelta(hours=1)
+
 
 # --- baseline resolution -----------------------------------------------------
 def _find_baseline(current_path: Path) -> Path | None:
     """
-    Baseline = the newest `eval_*.json` in the same folder as `current_path`,
-    excluding `current_path` itself. Returns None if no other eval exists.
+    Baseline is a fixed file — `baseline.json` sitting next to `current_path`.
+    Returns None if it doesn't exist. Filesystem lookup is case-insensitive
+    on Windows so `Baseline.json` also matches.
     """
-    folder = current_path.parent
-    pat = re.compile(r"^eval_.*\.json$")
-    candidates = [
-        p for p in folder.iterdir()
-        if p.is_file() and pat.match(p.name) and p.resolve() != current_path.resolve()
-    ]
-    if not candidates:
-        return None
-    candidates.sort(key=lambda p: p.stat().st_mtime, reverse=True)
-    return candidates[0]
+    candidate = current_path.parent / BASELINE_EVAL_FILENAME
+    if candidate.is_file() and candidate.resolve() != current_path.resolve():
+        return candidate
+    return None
 
 
 # --- playbook scanning -------------------------------------------------------
-def _load_touched_bullets(playbooks_dir: Path, today: date) -> dict[str, dict]:
+def _load_touched_bullets(playbooks_dir: Path) -> dict[str, dict]:
     """
     Walk every `*.json` playbook file in `playbooks_dir` and return a map
-    `bullet_id -> {id, section, content, playbook_file}` for bullets whose
-    `updated_at` local date equals `today`.
+    `bullet_id -> {id, section, content, playbook_file, cutoff, pb_updated}`
+    for bullets recently touched.
+
+    "Recently touched" is defined *per playbook file* using the file-level
+    top-level `updated_at`:
+
+        cutoff       = <file.updated_at> - TOUCHED_WINDOW
+        bullet is touched  iff  cutoff <= bullet.updated_at <= file.updated_at
+
+    Files without a parseable file-level `updated_at` are skipped (nothing
+    in them is treated as touched).
+
+    The glob is intentionally non-recursive so the `history/` subfolder
+    under the shared playbook directory is skipped.
     """
     touched: dict[str, dict] = {}
     if not playbooks_dir.is_dir():
         return touched
     for pb_file in sorted(playbooks_dir.glob("*.json")):
+        if not pb_file.is_file():
+            continue
         try:
             data = json.loads(pb_file.read_text(encoding="utf-8"))
         except Exception as e:
             print(f"[review] WARN: could not parse {pb_file.name}: {e}",
                   file=sys.stderr)
             continue
+
+        pb_ts = (data or {}).get("updated_at") or ""
+        try:
+            pb_updated = datetime.fromisoformat(pb_ts)
+        except Exception:
+            print(f"[review] WARN: {pb_file.name} has no valid file-level "
+                  f"updated_at ({pb_ts!r}); skipping.", file=sys.stderr)
+            continue
+        cutoff = pb_updated - TOUCHED_WINDOW
+
         for b in (data.get("bullets") or []):
             ts = b.get("updated_at") or ""
             try:
-                bd = datetime.fromisoformat(ts).date()
+                bt = datetime.fromisoformat(ts)
             except Exception:
                 continue
-            if bd == today:
+            if cutoff <= bt:
                 bid = b.get("id")
                 if bid:
                     touched[bid] = {
@@ -88,25 +126,13 @@ def _load_touched_bullets(playbooks_dir: Path, today: date) -> dict[str, dict]:
                         "section": b.get("section", ""),
                         "content": b.get("content", ""),
                         "playbook_file": pb_file.name,
+                        "bullet_updated_at":   bt.isoformat(timespec="seconds"),
+                        "playbook_updated_at": pb_updated.isoformat(timespec="seconds"),
+                        "cutoff":              cutoff.isoformat(timespec="seconds"),
                     }
     return touched
 
 
-def _resolve_playbooks_dir_from_report(report: dict) -> Path | None:
-    """
-    Prefer the playbooks_dir recorded in the eval report (so we inspect the
-    exact folder the eval ran against). Fall back to `ace_cli` resolution.
-    """
-    pb = (report or {}).get("playbook") or {}
-    d = pb.get("playbooks_dir")
-    if d:
-        p = Path(d)
-        if p.is_dir():
-            return p
-    return None
-
-
-# --- case-level extraction ---------------------------------------------------
 def _extract_applied_and_flagged(case: dict) -> tuple[list[str], list[str]]:
     """
     Parse `case.agent.answer` (a JSON-encoded string) and return
@@ -335,10 +361,10 @@ def _auto_neutral_entries(
     touched_map: dict[str, dict],
 ) -> list[dict]:
     """
-    Auto-generate neutral verdicts for bullets that were modified today but
-    NOT cited by the agent. Rationale: if the agent never used a bullet, it
-    cannot have influenced this case's score. Kept in the report for
-    traceability without spending LLM tokens on them.
+    Auto-generate neutral verdicts for bullets that were modified inside
+    the touched window but NOT cited by the agent. Rationale: if the agent
+    never used a bullet, it cannot have influenced this case's score. Kept
+    in the report for traceability without spending LLM tokens on them.
     """
     touched_not_applied = set(touched_map.keys()) - applied_ids
     out: list[dict] = []
@@ -392,29 +418,34 @@ def review(current_eval_path: Path, model: str | None = None) -> dict:
 
     baseline_path = _find_baseline(current_eval_path)
     if baseline_path is None:
-        print(f"[review] no baseline eval found in {current_eval_path.parent} "
-              f"— every case will be skipped (baseline required for regression check).")
-    baseline_report = (
-        json.loads(baseline_path.read_text(encoding="utf-8"))
-        if baseline_path else None
-    )
+        raise FileNotFoundError(
+            f"[review] baseline eval not found: expected "
+            f"'{BASELINE_EVAL_FILENAME}' next to {current_eval_path.name} "
+            f"in {current_eval_path.parent}. Aborting."
+        )
+    baseline_report = json.loads(baseline_path.read_text(encoding="utf-8"))
     baseline_by_id = {
         c.get("case_id"): c
         for c in ((baseline_report or {}).get("cases") or [])
         if c.get("case_id")
     }
 
-    # Prefer the playbooks_dir the eval ran against.
-    playbooks_dir = _resolve_playbooks_dir_from_report(current_report) \
-        or ace_cli._resolve_playbooks_dir()
-    today = date.today()
-    touched_map = _load_touched_bullets(playbooks_dir, today)
+    # Playbook snapshot to scan for touched bullets: the shared network
+    # folder. `history/` under it is skipped (non-recursive glob).
+    playbooks_dir = PLAYBOOKS_DIR
+    if not playbooks_dir.is_dir():
+        print(f"[review] WARNING: playbook share not reachable: "
+              f"{playbooks_dir} — check VPN / network access. "
+              f"No bullets will be reviewed.")
+    touched_map = _load_touched_bullets(playbooks_dir)
     touched_ids = sorted(touched_map.keys())
 
-    print(f"[review] current   : {current_eval_path.name}")
-    print(f"[review] baseline  : {baseline_path.name if baseline_path else '(none)'}")
-    print(f"[review] playbooks : {playbooks_dir}")
-    print(f"[review] touched today ({today.isoformat()}): "
+    print(f"[review] current    : {current_eval_path.name}")
+    print(f"[review] baseline   : {baseline_path.name}")
+    print(f"[review] playbooks  : {playbooks_dir}")
+    print(f"[review] touched window: last {TOUCHED_WINDOW} before each "
+          f"playbook's file-level updated_at")
+    print(f"[review] touched bullets: "
           f"{touched_ids if touched_ids else '(none)'}")
 
     llm = None  # lazy — only build if a case actually needs review
@@ -495,7 +526,7 @@ def review(current_eval_path: Path, model: str | None = None) -> dict:
 
     report = {
         "ts_utc":               _now_utc_iso(),
-        "baseline_eval":        baseline_path.name if baseline_path else None,
+        "baseline_eval":        baseline_path.name,
         "current_eval":         current_eval_path.name,
         "playbooks_dir":        str(playbooks_dir),
         "touched_bullet_ids":   touched_ids,
@@ -528,7 +559,8 @@ def main(argv: list[str] | None = None) -> int:
         description=("Post-Reflector regression review. Compares the given "
                      "eval report against the previous eval in the same "
                      "folder, and asks an LLM to judge whether any bullets "
-                     "modified today caused the score drop."),
+                     "modified inside the touched window (per-playbook, "
+                     "see TOUCHED_WINDOW) caused the score drop."),
     )
     p.add_argument("current_eval", type=Path,
                    help="Path to the eval_*.json to be checked "

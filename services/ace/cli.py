@@ -21,6 +21,7 @@ from __future__ import annotations
 
 import argparse
 import json
+import os
 import sys
 from functools import partial
 from pathlib import Path
@@ -86,17 +87,68 @@ def _push_now(namespace: str) -> None:
     )
 
 
+def _read_env_file(path: Path) -> dict:
+    """Minimal .env parser (KEY=VALUE lines) — no external dependency."""
+    data: dict = {}
+    try:
+        for line in path.read_text(encoding="utf-8").splitlines():
+            line = line.strip()
+            if not line or line.startswith("#") or "=" not in line:
+                continue
+            k, v = line.split("=", 1)
+            data[k.strip()] = v.strip().strip('"').strip("'")
+    except Exception as e:
+        print(f"[ace.cli] .env.api_key read failed ({path}): {e}")
+    return data
+
+
+def _load_env_key() -> tuple:
+    """Return (token, url, model) for the LLM from a local .env (preferred) or
+    already-set process env vars. Looks for .env in the CWD and the repo root.
+    Any field the .env omits stays None so _build_llm falls back to the shared
+    keys.py for it."""
+    candidates = [Path.cwd() / ".env.api_key", Path(__file__).resolve().parents[1] / ".env.api_key",
+                  Path(__file__).resolve().parents[2] / ".env.api_key"]
+    data: dict = {}
+    for p in candidates:
+        if p.is_file():
+            data = _read_env_file(p)
+            print(f"[ace.cli] using local LLM key from {p}")
+            break
+
+    def pick(*names: str):
+        for n in names:
+            if data.get(n):
+                return data[n]
+            if os.environ.get(n):
+                return os.environ[n]
+        return None
+
+    return (pick("GNAIGPT_TOKEN", "GPT_TOKEN"),
+            pick("GNAIGPT_URL", "GPT_URL"),
+            pick("GNAIGPT_MODEL", "GPT_MODEL"))
+
+
 def _build_llm(model: str | None) -> LLM_helper:
-    """Mirror configs.set_up_app so Reflector / Curator share the main app's LLM."""
-    key_path = helpers.get_load_path(path_configs.KEY_PATH_prim, path_configs.KEY_PATH_bkup)
-    if key_path is None:
-        raise RuntimeError("Could not resolve key share — VPN reachable?")
-    key = helpers.load_module(key_path, "key_moudle")
+    """Build the LLM_helper the Reflector / Curator share. Prefers a local
+    .env (GNAIGPT_TOKEN / GNAIGPT_URL / GNAIGPT_MODEL) so a dedicated training
+    server needs no key share; falls back to the shared keys.py when the .env
+    is absent or incomplete."""
+    token, url, env_model = _load_env_key()
+    if not (token and url):
+        # .env missing/incomplete — fall back to the shared keys.py module.
+        key_path = helpers.get_load_path(path_configs.KEY_PATH_prim, path_configs.KEY_PATH_bkup)
+        if key_path is None:
+            raise RuntimeError("No local .env key and could not resolve key share — VPN reachable?")
+        key = helpers.load_module(key_path, "key_moudle")
+        token = token or key.gnaigpt_token
+        url = url or key.gnaigpt_url
+        env_model = env_model or key.gnaigpt_model
     llm = LLM_helper()
     llm.set_up(
-        gpt_token=key.gnaigpt_token,
-        gpt_url=key.gnaigpt_url,
-        model=model or key.gnaigpt_model,
+        gpt_token=token,
+        gpt_url=url,
+        model=model or env_model,
         classifitation_path=path_configs.CLASSIFY_PATH,
     )
     return llm

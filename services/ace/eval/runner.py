@@ -39,7 +39,8 @@ DEFAULT_RUNS_DIR = PKG_DIR / "runs"
 # Only the JSON files at this top level are consumed — the `history/`
 # subfolder underneath is intentionally ignored (glob is non-recursive).
 EVAL_PLAYBOOKS_DIR = Path(
-    r"\\infs089b.iil.intel.com\HOME\WirelessCE\Intel_WirelessCE_Avatar\ace_playbook"
+    r"C:\Users\admin\Downloads\IntelAvatar_files\ace_playbooks\local" # for server 
+    # r"\\infs089b.iil.intel.com\HOME\WirelessCE\Intel_WirelessCE_Avatar\ace_playbook"
 )
 
 

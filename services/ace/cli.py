@@ -7,6 +7,22 @@ Usage:
     python -m services.ace.cli show      --skill Connectivity
     python -m services.ace.cli stats
 
+Run ONLY the ACE training step (adapt playbooks from feedback), e.g. our
+usual nightly training command:
+
+    python -m services.ace.cli adapt --exclude-user "yuanyuan" --verbose
+    # add --push to publish the updated playbook to the cloud share
+    # add --namespace bt to train the Bluetooth playbook set instead of wifi
+
+Run the FULL pipeline in one command (adapt -> eval/judge -> review), with
+push deferred until the regression review PASSes:
+
+    python -m services.ace.cli run-all --exclude-user "yuanyuan" --push --verbose
+    # exit code 0 = review PASS, 2 = regression (nothing published)
+    # --no-eval    : only adapt (skip eval + review)
+    # --no-review  : adapt + eval, skip the regression review
+    # --namespace bt / --limit N / --passes N / --judge-model <m> also apply
+
 For an interactive web UI (pick conversations from a list, watch the
 Reflector/Curator stream live, view a diff of bullets added/removed/bumped):
 
@@ -333,156 +349,6 @@ def cmd_show(args):
     print(pb.render())
 
 
-# -- eval / golden subcommands -------------------------------------------------
-
-def _eval_feedback_roots() -> list:
-    """Remote-resolved root first, local fallback second (dedup handled by
-    the case registry)."""
-    roots = [_resolve_feedback_root()]
-    base = getattr(app_config, "avatarfiles_dir", None)
-    local = Path(base) / "feedback" if base else Path.cwd() / "data" / "feedback"
-    if local.exists() and local.resolve() != Path(roots[0]).resolve():
-        roots.append(local)
-    return roots
-
-
-def _print_event(ev: str, payload: dict) -> None:
-    print(json.dumps({"event": ev, **payload}, default=str))
-
-
-def cmd_eval(args):
-    from .eval.cases import list_cases
-    from .eval.golden import GoldenSet
-    from .eval.harness import EvalHarness, EvalConfig
-    from .eval.store import EvalStore
-    from .history import HistoryWriter
-
-    if args.smoke:
-        from .eval.smoke import run_smoke
-        return run_smoke(cases=args.cases or 2, verbose=args.verbose)
-
-    roots = _eval_feedback_roots()
-    golden = GoldenSet(roots[0])
-
-    if args.list_cases:
-        cases = list_cases(roots, golden=golden)
-        rows = [c.summary() for c in cases]
-        print(json.dumps({
-            "total": len(rows),
-            "replayable": sum(1 for r in rows if r["replayable"]),
-            "golden": sum(1 for r in rows if r["golden"]),
-            "cases": rows,
-        }, indent=2, default=str))
-        return 0
-
-    pbs_dir = _resolve_playbooks_dir()
-    history = HistoryWriter(pbs_dir / "history")
-    store = EvalStore(pbs_dir / "history" / "evals")
-
-    def _sync(job_id: str):
-        # eval/golden are wifi-scoped for now (see cmd_adapt/cmd_show for the
-        # namespace-aware equivalents).
-        try:
-            share = ace_sync.resolve_cloud_playbook_dir("wifi")
-            if not share:
-                print("[ace.cli] rollback sync skipped: share unreachable")
-                return
-            from .sync import launch_sync_background
-            launch_sync_background(
-                local_dir=pbs_dir,
-                remote_root_raw=share,
-                job_id=job_id,
-            )
-        except Exception as e:
-            print(f"[ace.cli] rollback sync skipped: {e}")
-
-    harness = EvalHarness(
-        playbooks_dir=pbs_dir,
-        feedback_roots=roots,
-        history=history,
-        store=store,
-        llm_factory=_build_llm,
-        skills_loader=_load_active_skills,
-        golden=golden,
-        emit=_print_event,
-        sync_fn=_sync,
-    )
-    config = EvalConfig(
-        max_cases=args.cases,
-        max_steps=args.max_steps,
-        gate=args.gate,
-        gate_margin=args.gate_margin,
-        case_source=args.source or "",
-        conversation_ids=args.conversation or [],
-        before=args.before or "",
-        agent_model=args.model or "",
-        judge_model=args.judge_model or "",
-        source="cli",
-    )
-    report = harness.run(config)
-    if args.verbose:
-        print(json.dumps(report, indent=2, default=str))
-    else:
-        print(json.dumps({
-            "summary": report.get("summary"),
-            "gate": report.get("gate"),
-            "error": report.get("error"),
-        }, indent=2, default=str))
-    return 1 if report.get("error") else 0
-
-
-def cmd_eval_report(args):
-    from .eval.store import EvalStore
-    store = EvalStore(_resolve_playbooks_dir() / "history" / "evals")
-    if args.date and args.name:
-        rep = store.read_report(args.date, args.name)
-    else:
-        rep = store.latest()
-    if rep is None:
-        print(json.dumps({"error": "no eval report found"}))
-        return 1
-    print(json.dumps(rep, indent=2, default=str))
-    return 0
-
-
-def cmd_golden(args):
-    from .eval.golden import GoldenSet
-    from .eval.cases import list_cases
-    roots = _eval_feedback_roots()
-    golden = GoldenSet(roots[0])
-
-    if args.action == "list":
-        entries = golden.list()
-        # Enrich with replayability so the user sees at a glance which golden
-        # cases will actually run.
-        cases = {(c.conversation_id, c.turn_id): c for c in list_cases(roots)}
-        for e in entries:
-            match = None
-            for (cid, tid), c in cases.items():
-                if cid == e.get("conversation_id") and (
-                        e.get("turn_id") is None or tid == e.get("turn_id")):
-                    match = c
-                    break
-            e["replayable"] = bool(match and match.replayable)
-            e["subject"] = match.issue.get("subject", "") if match else ""
-        print(json.dumps({"count": len(entries), "entries": entries},
-                         indent=2, default=str))
-        return 0
-
-    if args.action == "add":
-        res = golden.add(args.conversation, args.turn or None, note=args.note or "")
-        print(json.dumps(res, indent=2, default=str))
-        return 1 if res.get("error") else 0
-
-    if args.action == "remove":
-        ok = golden.remove(args.conversation, args.turn or None)
-        print(json.dumps({"removed": ok}))
-        return 0 if ok else 1
-
-    print(f"unknown golden action: {args.action}")
-    return 1
-
-
 def cmd_stats(args):
     pbs_dir = _resolve_playbooks_dir(args.namespace)
     from .playbook import Playbook
@@ -493,6 +359,84 @@ def cmd_stats(args):
         pb = Playbook(scope, f)
         out.append(pb.stats())
     print(json.dumps(out, indent=2))
+
+
+def cmd_pipeline(args):
+    """Full pipeline in one command: adapt → eval (judge) → review.
+
+    Reuses cmd_adapt for the training step (so --exclude-user / --push / the
+    local .env key etc. all apply), then replays the golden cases against the
+    freshly-updated playbook (eval/runner) and runs the regression review
+    (eval/review). Returns 0 when the review verdict is PASS, 2 on regression.
+    """
+    # 1. Adapt (train). Honours --namespace / --exclude-user / etc.
+    # NOTE: push is deliberately deferred to AFTER review passes (see step 4),
+    # so we suppress --push during the adapt step here. A regression (or, in the
+    # future, a manager who has not yet approved) must never reach the cloud.
+    want_push = bool(getattr(args, "push", False))
+    args.push = False
+    print("[pipeline] ===== STEP 1/3: adapt =====")
+    cmd_adapt(args)
+
+    if args.no_eval:
+        if want_push:
+            print("[pipeline] --no-eval set: push deferred (no eval/review gate); "
+                  "run `adapt --push` explicitly if you want to publish now.")
+        else:
+            print("[pipeline] --no-eval set: stopping after adapt.")
+        return 0
+
+    # 2. Eval / judge — replay golden cases against the updated playbook and
+    # score them. Lazy import: eval/runner imports this module, so a top-level
+    # import here would be circular.
+    print("[pipeline] ===== STEP 2/3: eval (judge) =====")
+    from .eval import runner as eval_runner
+    runs_dir = args.runs_dir or eval_runner.DEFAULT_RUNS_DIR
+    cases_dir = args.cases_dir or eval_runner.DEFAULT_CASES_DIR
+    report = eval_runner.evaluate(
+        cases_dir=cases_dir,
+        runs_dir=runs_dir,
+        case_id_filter=None,
+        passes=args.passes,
+        judge_temperature=0.2,
+        chat_temperature=0.0,
+        max_steps=args.max_steps,
+        use_tools=not args.no_tools,
+        model=args.model,
+        judge_model=args.judge_model,
+    )
+    # Rebuild the report path with the SAME formula runner uses for out_path.
+    stamp = report["ts_utc"].replace(":", "").replace("-", "")
+    out_path = Path(runs_dir) / f"eval_{stamp}.json"
+
+    if args.no_review:
+        if want_push:
+            print(f"[pipeline] --no-review set: push deferred (no review gate) "
+                  f"({out_path}).")
+        else:
+            print(f"[pipeline] --no-review set: stopping after eval ({out_path}).")
+        return 0
+
+    # 3. Review — regression check of this eval vs the previous one in runs/.
+    print("[pipeline] ===== STEP 3/3: review =====")
+    from .eval import review as eval_review
+    rreport = eval_review.review(out_path, model=args.model)
+    verdict = rreport.get("gate_verdict")
+    print(f"[pipeline] review verdict: {verdict}")
+
+    # 4. Publish — only a passing review is allowed to reach the cloud share.
+    # FUTURE: instead of pushing here, notify the manager (email) and wait for
+    # an explicit approval before calling _push_now(). For now push runs
+    # automatically on PASS when --push was requested.
+    if verdict == "PASS":
+        if want_push:
+            print("[pipeline] review PASSED — publishing playbook to cloud share.")
+            _push_now(args.namespace)
+    elif want_push:
+        print("[pipeline] review did NOT pass — push withheld (nothing published).")
+
+    # Mirror `python -m services.ace.eval.review`: 0 = PASS, 2 = regression.
+    return 0 if verdict == "PASS" else 2
 
 
 def main(argv=None):
@@ -552,59 +496,45 @@ def main(argv=None):
                          help="Which playbook set to summarize: wifi (default) or bt")
     p_stats.set_defaults(func=cmd_stats)
 
-    p_eval = sub.add_parser(
-        "eval",
-        help="Replay cases against before/after playbooks, score, and gate",
+    p_pipe = sub.add_parser(
+        "run-all",
+        help="Full pipeline in one command: adapt → eval (judge) → review",
     )
-    p_eval.add_argument("--cases", type=int, default=6,
-                        help="Max cases to replay (cost cap, default 6)")
-    p_eval.add_argument("--source", default=None,
-                        choices=["golden", "golden+affected", "auto"],
-                        help="Case selection (default: golden+affected when a "
-                             "golden set exists, else auto)")
-    p_eval.add_argument("--conversation", action="append",
-                        help="Restrict/prioritize to this conversation id (repeatable)")
-    p_eval.add_argument("--before", default=None,
-                        help='Before-snapshot ref "YYYY-MM-DD/<run_dir>" '
-                             "(default: newest snapshot)")
-    p_eval.add_argument("--gate", dest="gate", action="store_true", default=True,
-                        help="Enable auto-rollback on regression (default)")
-    p_eval.add_argument("--no-gate", dest="gate", action="store_false",
-                        help="Report only; never roll back")
-    p_eval.add_argument("--gate-margin", type=int, default=1,
-                        help="Rollback when regressed >= improved + N (default 1)")
-    p_eval.add_argument("--model", default=None, help="Agent replay model")
-    p_eval.add_argument("--judge-model", default=None,
-                        help="Judge model (defaults to the agent model)")
-    p_eval.add_argument("--max-steps", type=int, default=6,
-                        help="Agentic step cap per replay (default 6)")
-    p_eval.add_argument("--list-cases", action="store_true",
-                        help="Print the case registry (zero tokens) and exit")
-    p_eval.add_argument("--smoke", action="store_true",
-                        help="Run the zero-token end-to-end smoke test with fakes")
-    p_eval.add_argument("--verbose", action="store_true")
-    p_eval.set_defaults(func=cmd_eval)
-
-    p_eval_report = sub.add_parser("eval-report", help="Print a stored eval report")
-    p_eval_report.add_argument("--date", default=None, help="YYYY-MM-DD")
-    p_eval_report.add_argument("--name", default=None, help="Report filename")
-    p_eval_report.set_defaults(func=cmd_eval_report)
-
-    p_golden = sub.add_parser(
-        "golden", help="Manage the curated golden-case set for eval runs")
-    p_golden.add_argument("action", choices=["list", "add", "remove"])
-    p_golden.add_argument("--conversation", default=None,
-                          help="Conversation id (required for add/remove)")
-    p_golden.add_argument("--turn", default=None,
-                          help="Optional turn id (default: whole conversation)")
-    p_golden.add_argument("--note", default=None,
-                          help="Why this case is golden (add only)")
-    p_golden.set_defaults(func=cmd_golden)
+    # --- adapt options (same as `adapt`) ---
+    p_pipe.add_argument("--namespace", choices=("wifi", "bt"), default="wifi",
+                        help="Which playbook set to adapt: wifi (default) or bt")
+    p_pipe.add_argument("--since", default=None,
+                        help="ISO timestamp to start from (defaults to last cursor)")
+    p_pipe.add_argument("--limit", type=int, default=None, help="Stop after N turns")
+    p_pipe.add_argument("--skill", action="append",
+                        help="Pre-create a domain playbook for this skill (repeatable)")
+    p_pipe.add_argument("--exclude-user", action="append", metavar="SUBMITTER",
+                        help="Ignore feedback from this submitter (repeatable, case-insensitive)")
+    p_pipe.add_argument("--model", default=None, help="Override LLM model id")
+    p_pipe.add_argument("--push", action="store_true",
+                        help="After adapting, mirror-sync playbooks + history to the cloud share")
+    p_pipe.add_argument("--verbose", action="store_true")
+    # --- eval / judge options ---
+    p_pipe.add_argument("--cases-dir", type=Path, default=None,
+                        help="Golden cases dir (default: eval's built-in golden_set share)")
+    p_pipe.add_argument("--runs-dir", type=Path, default=None,
+                        help="Where eval reports are written (default: eval's runs/)")
+    p_pipe.add_argument("--passes", type=int, default=1,
+                        help="Judge passes per case (default 1)")
+    p_pipe.add_argument("--max-steps", type=int, default=6,
+                        help="Max chatbot tool steps per case (default 6)")
+    p_pipe.add_argument("--no-tools", action="store_true",
+                        help="Disable chatbot tool use during replay")
+    p_pipe.add_argument("--judge-model", nargs="+", default=None, metavar="MODEL",
+                        help="One or more judge model names")
+    # --- stage control ---
+    p_pipe.add_argument("--no-eval", action="store_true",
+                        help="Only adapt; skip eval + review")
+    p_pipe.add_argument("--no-review", action="store_true",
+                        help="Adapt + eval; skip the regression review")
+    p_pipe.set_defaults(func=cmd_pipeline)
 
     args = parser.parse_args(argv)
-    if getattr(args, "cmd", "") == "golden" and args.action in ("add", "remove") \
-            and not args.conversation:
-        parser.error("golden add/remove requires --conversation")
     _ensure_avatarfiles_dir()
     namespace = getattr(args, "namespace", "wifi")
     try:

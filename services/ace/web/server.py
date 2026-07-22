@@ -53,10 +53,27 @@ from ..cli import (_skill_context_provider as _ace_skill_context_provider,
 from ..history import HistoryWriter
 from .. import sync_utils as ace_sync
 from ..sync import launch_sync_background
-from ..eval.cases import list_cases as _eval_list_cases
-from ..eval.golden import GoldenSet
-from ..eval.harness import EvalHarness, EvalConfig
-from ..eval.store import EvalStore
+
+# The old Evaluate-tab machinery (cases/golden/harness/store submodules) was
+# retired when the eval package was refactored to the leaner judge.py/review.py
+# flow. Keep the imports optional so the web server still boots — the legacy
+# `/api/eval*` endpoints just return 503 when these are missing.
+try:
+    from ..eval.cases import list_cases as _eval_list_cases  # type: ignore
+    from ..eval.golden import GoldenSet  # type: ignore
+    from ..eval.harness import EvalHarness, EvalConfig  # type: ignore
+    from ..eval.store import EvalStore  # type: ignore
+    _EVAL_LEGACY_AVAILABLE = True
+except Exception as _eval_import_err:  # noqa: BLE001
+    print(f"[ace.web] legacy eval modules unavailable, /api/eval* disabled: "
+          f"{_eval_import_err}")
+    _eval_list_cases = None  # type: ignore
+    GoldenSet = None  # type: ignore
+    EvalHarness = None  # type: ignore
+    EvalConfig = None  # type: ignore
+    EvalStore = None  # type: ignore
+    _EVAL_LEGACY_AVAILABLE = False
+
 from .scheduler import NightlyScheduler
 
 _NAMESPACES = ("wifi", "bt")
@@ -946,6 +963,9 @@ class JobManager:
     def start_eval(self, config: dict) -> dict:
         """Kick off a standalone eval job (Evaluate tab). config keys match
         EvalConfig fields (before, conversation_ids, max_cases, gate, ...)."""
+        if not _EVAL_LEGACY_AVAILABLE or self.eval_store is None:
+            return {"ok": False,
+                    "error": "legacy eval harness is unavailable in this build"}
         with self._lock:
             if self._state.get("status") == "running":
                 return {"ok": False, "error": "another job is already running",
@@ -1044,7 +1064,8 @@ def create_app() -> tuple[Flask, SocketIO, JobManager, NightlyScheduler]:
     socketio = SocketIO(app, async_mode="threading")
 
     history = HistoryWriter(root=_resolve_playbooks_dir() / "history")
-    eval_store = EvalStore(_resolve_playbooks_dir() / "history" / "evals")
+    eval_store = (EvalStore(_resolve_playbooks_dir() / "history" / "evals")
+                  if _EVAL_LEGACY_AVAILABLE else None)
     # Warm slow caches off the boot path. Each thread is best-effort: if the
     # warm fails (e.g. VPN off at boot), the first request/job still pays the
     # wait like it did before, and correctness is unchanged.
@@ -1183,8 +1204,17 @@ def create_app() -> tuple[Flask, SocketIO, JobManager, NightlyScheduler]:
             roots.append(local)
         return roots
 
+    def _eval_unavailable_response():
+        return jsonify({
+            "ok": False,
+            "error": "legacy eval harness is unavailable in this build",
+            "items": [],
+        }), 503
+
     @app.route("/api/eval/cases")
     def api_eval_cases():
+        if not _EVAL_LEGACY_AVAILABLE:
+            return _eval_unavailable_response()
         force = request.args.get("force", "").lower() in ("1", "true", "yes")
         roots = _eval_roots()
         golden = GoldenSet(roots[0])
@@ -1200,6 +1230,8 @@ def create_app() -> tuple[Flask, SocketIO, JobManager, NightlyScheduler]:
 
     @app.route("/api/eval", methods=["POST"])
     def api_eval_start():
+        if not _EVAL_LEGACY_AVAILABLE:
+            return _eval_unavailable_response()
         body = request.get_json(silent=True) or {}
         # Hard server-side cost cap regardless of what the client sends.
         try:
@@ -1211,10 +1243,14 @@ def create_app() -> tuple[Flask, SocketIO, JobManager, NightlyScheduler]:
 
     @app.route("/api/eval/reports")
     def api_eval_reports():
+        if not _EVAL_LEGACY_AVAILABLE or eval_store is None:
+            return _eval_unavailable_response()
         return jsonify({"items": eval_store.list_reports()})
 
     @app.route("/api/eval/reports/<date>/<name>")
     def api_eval_report_one(date: str, name: str):
+        if not _EVAL_LEGACY_AVAILABLE or eval_store is None:
+            return _eval_unavailable_response()
         rep = eval_store.read_report(date, name)
         if rep is None:
             return jsonify({"error": "not found"}), 404
@@ -1222,6 +1258,8 @@ def create_app() -> tuple[Flask, SocketIO, JobManager, NightlyScheduler]:
 
     @app.route("/api/eval/golden", methods=["POST", "DELETE"])
     def api_eval_golden():
+        if not _EVAL_LEGACY_AVAILABLE:
+            return _eval_unavailable_response()
         body = request.get_json(silent=True) or {}
         cid = (body.get("conversation_id") or "").strip()
         tid = (body.get("turn_id") or "").strip() or None
@@ -1233,6 +1271,79 @@ def create_app() -> tuple[Flask, SocketIO, JobManager, NightlyScheduler]:
             return jsonify({"ok": not res.get("error"), **res})
         removed = golden.remove(cid, tid)
         return jsonify({"ok": removed, "removed": removed})
+
+    # ---------- judge & review (minimal UI-triggered endpoints) ----------
+    # These wrap `services.ace.eval.runner.evaluate` and
+    # `services.ace.eval.review.review` so the Judge & Review tab in the UI
+    # can kick them off with default settings. Both calls block the request
+    # thread for as long as the underlying job takes.
+    _judge_review_lock = threading.Lock()
+
+    def _latest_eval_report() -> Optional[Path]:
+        from ..eval.runner import DEFAULT_RUNS_DIR
+        if not DEFAULT_RUNS_DIR.exists():
+            return None
+        reports = sorted(
+            (p for p in DEFAULT_RUNS_DIR.glob("eval_*.json") if p.is_file()),
+            key=lambda p: p.stat().st_mtime,
+            reverse=True,
+        )
+        return reports[0] if reports else None
+
+    @app.route("/api/judge", methods=["POST"])
+    def api_judge():
+        if not _judge_review_lock.acquire(blocking=False):
+            return jsonify({"ok": False,
+                            "error": "another judge/review job is already running"}), 409
+        try:
+            from ..eval.runner import DEFAULT_CASES_DIR, DEFAULT_RUNS_DIR, evaluate
+            report = evaluate(
+                cases_dir=DEFAULT_CASES_DIR,
+                runs_dir=DEFAULT_RUNS_DIR,
+            )
+            latest = _latest_eval_report()
+            return jsonify({
+                "ok": True,
+                "report_file": str(latest) if latest else None,
+                "aggregate": (report or {}).get("aggregate"),
+                "cases": [
+                    {"case_id": c.get("case_id"),
+                     "judge": (c.get("judge") or {}).get("mean_scores"),
+                     "overall": (c.get("judge") or {}).get("mean_overall")}
+                    for c in (report or {}).get("cases", [])
+                ],
+            })
+        except Exception as e:
+            import traceback as _tb
+            print(f"[ace.web] /api/judge failed:\n{_tb.format_exc()}")
+            return jsonify({"ok": False, "error": f"{type(e).__name__}: {e}"}), 500
+        finally:
+            _judge_review_lock.release()
+
+    @app.route("/api/review", methods=["POST"])
+    def api_review():
+        if not _judge_review_lock.acquire(blocking=False):
+            return jsonify({"ok": False,
+                            "error": "another judge/review job is already running"}), 409
+        try:
+            from ..eval.review import review as _review_run
+            latest = _latest_eval_report()
+            if latest is None:
+                return jsonify({"ok": False,
+                                "error": "no eval_*.json report found — run Judge first"}), 400
+            report = _review_run(latest)
+            return jsonify({
+                "ok": True,
+                "current_eval": latest.name,
+                "gate_verdict": (report or {}).get("gate_verdict"),
+                "report": report,
+            })
+        except Exception as e:
+            import traceback as _tb
+            print(f"[ace.web] /api/review failed:\n{_tb.format_exc()}")
+            return jsonify({"ok": False, "error": f"{type(e).__name__}: {e}"}), 500
+        finally:
+            _judge_review_lock.release()
 
     # ---------- history ----------
     @app.route("/api/history/snapshots")

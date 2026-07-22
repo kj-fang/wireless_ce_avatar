@@ -1,17 +1,15 @@
 """
-ACE evaluation harness — automated before/after validation of playbook updates.
+ACE playbook quality evaluation service.
 
-Flow:  feedback snapshots (ground truth)  →  case registry (cases.py)
-       →  headless agent replay against before/after playbooks (replay.py)
-       →  deterministic scoring + LLM judge (scoring.py / judge.py)
-       →  gate: keep or auto-rollback (harness.py)
-       →  persisted eval reports (store.py)
+Independent, manually-triggered. Replays a fixed set of "golden" cases
+through the live `WifiLogAgentSystem` (with whatever playbook is currently
+on disk) and uses an LLM-as-judge to score how close each new answer is
+— in meaning, not wording — to the recorded correct answer.
 
-The curated golden set (golden.py) pins which cases the refine loop runs on,
-so recurring cost is bounded and runs are comparable over time.
+Entry point:
+    python -m services.ace.eval                  # run every case in cases/
+    python -m services.ace.eval --case <id>      # run a single case
+    python -m services.ace.eval --cases-dir <p>  # use a different folder
+
+This package never mutates the playbook or any existing service code.
 """
-
-from .cases import EvalCase, list_cases, select_cases
-from .golden import GoldenSet
-from .store import EvalStore
-from .harness import EvalHarness, EvalConfig

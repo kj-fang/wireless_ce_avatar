@@ -89,7 +89,7 @@
 
 <nav>
   <button data-tab="adapt" class="active">Adapt</button>
-  <button data-tab="eval">Evaluate</button>
+  <button data-tab="judge-review">Judge &amp; Review</button>
   <button data-tab="playbooks">Playbooks</button>
   <button data-tab="diff">Last-run Diff</button>
   <button data-tab="stats">Stats</button>
@@ -149,90 +149,33 @@
     </div>
   </section>
 
-  <!-- EVALUATE TAB -->
-  <section class="tab" id="tab-eval">
+  <!-- JUDGE & REVIEW TAB -->
+  <section class="tab" id="tab-judge-review">
+    <div class="panel">
+      <h3>Judge &amp; Review</h3>
+      <div class="controls">
+        <button class="primary" id="jr-judge-btn" onclick="runJudge()">⚖ Run Judge</button>
+        <button class="primary" id="jr-review-btn" onclick="runReview()">🔍 Run Review</button>
+        <span class="status-line" id="jr-status">idle</span>
+      </div>
+    </div>
     <div class="row">
-      <div class="col" style="flex: 1.2;">
+      <div class="col">
         <div class="panel">
-          <h3>1. Eval cases (from voted conversations)</h3>
-          <div class="controls">
-            <button class="ghost" onclick="loadEvalCases()">↻ Refresh</button>
-            <input type="text" id="eval-filter" placeholder="filter by case_nbr / subject…"
-                   oninput="renderEvalCases()" style="flex:1;">
-            <label style="font-size:12px;color:var(--muted);">
-              <input type="checkbox" id="eval-only-golden" onchange="renderEvalCases()"> golden only
-            </label>
-            <label style="font-size:12px;color:var(--muted);">
-              <input type="checkbox" id="eval-only-replayable" checked onchange="renderEvalCases()"> only replayable
-            </label>
-          </div>
-          <div id="eval-cases-diag" class="status-line" style="margin-bottom:6px;">—</div>
-          <div style="max-height: 38vh; overflow: auto;">
-            <table id="eval-cases-table">
-              <thead>
-                <tr>
-                  <th title="Golden cases are the curated regression set every eval run replays">★</th>
-                  <th>Case</th><th>Subject</th><th>Vote</th>
-                  <th title="Structured ground truth the user supplied">Ground truth</th>
-                  <th>Log</th><th>Replayable</th>
-                </tr>
-              </thead>
-              <tbody></tbody>
-            </table>
-          </div>
-        </div>
-        <div class="panel">
-          <h3>2. Run evaluation</h3>
-          <div class="controls">
-            <label style="font-size:12px;color:var(--muted);">cases:
-              <select id="eval-source">
-                <option value="">auto (golden+affected when golden set exists)</option>
-                <option value="golden">Golden set only</option>
-                <option value="golden+affected">Golden + affected</option>
-                <option value="auto">Auto-select</option>
-              </select>
-            </label>
-            <label style="font-size:12px;color:var(--muted);">before:
-              <select id="eval-before" style="max-width:260px;"></select>
-            </label>
-            <label style="font-size:12px;color:var(--muted);">max cases:
-              <input type="text" id="eval-max-cases" value="6" style="width:44px;">
-            </label>
-          </div>
-          <div class="controls">
-            <label style="font-size:12px;color:var(--muted);">judge model:
-              <input type="text" id="eval-judge-model" placeholder="(same as agent)" style="width:180px;">
-            </label>
-            <label style="font-size:12px;color:var(--muted);"
-                   title="Roll the playbooks back to the before-snapshot when regressed cases outnumber improved ones">
-              <input type="checkbox" id="eval-gate" checked> gate (auto-rollback)
-            </label>
-            <label style="font-size:12px;color:var(--muted);">margin:
-              <input type="text" id="eval-gate-margin" value="1" style="width:32px;">
-            </label>
-          </div>
-          <div class="controls">
-            <button class="primary" id="eval-run-btn" onclick="startEval()">▶ Run Eval</button>
-            <span class="status-line" id="eval-cost-hint">each case = 2 agent replays (~50–100K tokens each) + 1 judge call</span>
-          </div>
+          <h3>Process</h3>
+          <div id="jr-process-log" style="max-height: 45vh; overflow: auto; padding: 8px;
+               background: #0a0f15; border: 1px solid var(--border); border-radius: 4px;
+               font-family: Consolas, monospace; font-size: 12px;"></div>
         </div>
       </div>
-      <div class="col" style="flex: 1.3;">
+      <div class="col">
         <div class="panel">
-          <h3>3. Live progress & verdicts</h3>
-          <div id="eval-progress-log" style="max-height: 30vh; overflow: auto; padding: 8px; background: #0a0f15;
-               border: 1px solid var(--border); border-radius: 4px; font-family: Consolas, monospace; font-size: 12px;"></div>
-          <div id="eval-result-banner" class="status-line" style="margin-top:8px;">no eval run yet this session</div>
-          <table id="eval-verdict-table" style="margin-top:6px;">
-            <thead><tr><th>Case</th><th>Before → After</th><th>Verdict</th><th>Judge</th></tr></thead>
-            <tbody></tbody>
-          </table>
+          <h3>Harmful bullets (verdict = harmful)</h3>
+          <div id="jr-harmful" class="status-line">—</div>
         </div>
         <div class="panel">
-          <h3>Past eval reports</h3>
-          <button class="ghost" onclick="loadEvalReports()" style="margin-bottom:8px;">↻ Refresh</button>
-          <div id="eval-report-list" style="max-height: 24vh; overflow: auto;"></div>
-          <div id="eval-report-detail" style="margin-top:8px;"></div>
+          <h3>Result</h3>
+          <pre id="jr-result" style="max-height: 35vh;">—</pre>
         </div>
       </div>
     </div>
@@ -323,12 +266,6 @@
       if (btn.dataset.tab === 'history' && !historyLoadedOnce) {
         historyLoadedOnce = true;
         loadHistory();
-      }
-      if (btn.dataset.tab === 'eval' && !evalLoadedOnce) {
-        evalLoadedOnce = true;
-        loadEvalCases();
-        loadEvalBeforeOptions();
-        loadEvalReports();
       }
     });
   });
@@ -513,6 +450,9 @@
     loadPlaybooks();
     refreshNightlyStatus();
     if (historyLoadedOnce) loadHistory();
+    // Chain: after every adapt run, automatically run judge + review against
+    // the freshly-produced playbook so we can spot bullets that got worse.
+    autoRunJudgeThenReview('adapt');
   });
   socket.on('adapt_error', (p) => {
     logEntry('error', 'job_failed', p);
@@ -603,232 +543,6 @@
       parts.push(last);
     }
     line.textContent = parts.join(' · ');
-  }
-
-  // ---------- evaluate tab ----------
-  let evalLoadedOnce = false;
-  let evalCases = [];
-
-  async function loadEvalCases(force) {
-    const diag = document.getElementById('eval-cases-diag');
-    diag.textContent = 'Loading cases… (first scan reads every conversation on the share; later scans are cached)';
-    try {
-      const r = await fetch('/api/eval/cases' + (force ? '?force=1' : ''));
-      const j = await r.json();
-      evalCases = j.items || [];
-      diag.textContent = `${j.total} case(s) · ${j.replayable} replayable · ${j.golden} golden`;
-      renderEvalCases();
-    } catch (e) {
-      diag.textContent = 'Failed to load cases: ' + e;
-    }
-  }
-
-  function renderEvalCases() {
-    const tbody = document.querySelector('#eval-cases-table tbody');
-    const filter = (document.getElementById('eval-filter').value || '').toLowerCase();
-    const onlyGolden = document.getElementById('eval-only-golden').checked;
-    const onlyReplayable = document.getElementById('eval-only-replayable').checked;
-    tbody.innerHTML = '';
-    evalCases.forEach(c => {
-      if (onlyGolden && !c.golden) return;
-      if (onlyReplayable && !c.replayable) return;
-      const hay = `${c.case_nbr} ${c.subject} ${c.conversation_id}`.toLowerCase();
-      if (filter && !hay.includes(filter)) return;
-      const gt = [];
-      if (c.conclusion_tag) gt.push(`<span class="pill good">${escapeHtml(c.conclusion_tag)}</span>`);
-      if (c.has_root_cause) gt.push('<span class="pill">root-cause</span>');
-      if (c.evidence_lines) gt.push(`<span class="pill">${c.evidence_lines} evid</span>`);
-      if (c.correct_skill) gt.push(`<span class="pill">${escapeHtml(c.correct_skill)}</span>`);
-      const votePill = c.vote > 0 ? '<span class="pill good">👍</span>'
-                     : c.vote < 0 ? '<span class="pill bad">👎</span>'
-                     : '<span class="pill">—</span>';
-      const replay = c.replayable
-        ? '<span class="pill good">✓</span>'
-        : `<span class="pill bad" title="${escapeAttr((c.reasons || []).join('; '))}">✗</span>`;
-      const star = c.golden ? '★' : '☆';
-      const starCls = c.golden ? 'style="color:var(--warn);cursor:pointer;"' : 'style="color:var(--muted);cursor:pointer;"';
-      const tr = document.createElement('tr');
-      tr.innerHTML =
-        `<td><span ${starCls} title="Toggle golden (pins the log so the case stays replayable)"
-              onclick="toggleGolden('${escapeAttr(c.conversation_id)}','${escapeAttr(c.turn_id)}', ${c.golden})">${star}</span></td>` +
-        `<td>${escapeHtml(c.case_nbr || '')}<div class="cid">${escapeHtml(c.conversation_id.slice(0, 12))}…</div></td>` +
-        `<td>${escapeHtml((c.subject || '').slice(0, 60))}</td>` +
-        `<td>${votePill}</td>` +
-        `<td>${gt.join(' ') || '<span class="pill">none</span>'}</td>` +
-        `<td><span class="pill">${escapeHtml(c.log_source)}</span></td>` +
-        `<td>${replay}</td>`;
-      tbody.appendChild(tr);
-    });
-  }
-
-  async function toggleGolden(cid, tid, isGolden) {
-    const r = await fetch('/api/eval/golden', {
-      method: isGolden ? 'DELETE' : 'POST',
-      headers: {'Content-Type': 'application/json'},
-      body: JSON.stringify({conversation_id: cid, turn_id: tid}),
-    });
-    const j = await r.json();
-    if (!j.ok) { alert('Golden toggle failed: ' + (j.error || 'unknown')); return; }
-    if (j.pinned_log) {
-      const diag = document.getElementById('eval-cases-diag');
-      diag.textContent = 'Log pinned to shared folder: ' + j.pinned_log;
-    }
-    // Force: a log pin changes a case's resolution without touching its
-    // snapshot file, so the mtime cache would serve the stale row.
-    loadEvalCases(true);
-  }
-
-  async function loadEvalBeforeOptions() {
-    const sel = document.getElementById('eval-before');
-    sel.innerHTML = '<option value="">(newest snapshot)</option>';
-    try {
-      const r = await fetch('/api/history/snapshots');
-      const j = await r.json();
-      (j.items || []).forEach(s => {
-        const opt = document.createElement('option');
-        opt.value = `${s.date}/${s.run_dir}`;
-        opt.textContent = `${s.date} · ${s.source || '?'} · ${(s.run_dir || '').slice(0, 25)}`;
-        sel.appendChild(opt);
-      });
-    } catch (e) { /* keep the default option */ }
-  }
-
-  const evalLog = document.getElementById('eval-progress-log');
-  function evalLogEntry(cls, text) {
-    const el = document.createElement('div');
-    el.className = 'log-entry ' + (cls || '');
-    el.innerHTML = '<span class="ts">' + new Date().toLocaleTimeString() + '</span>'
-                 + escapeHtml(text);
-    evalLog.appendChild(el);
-    while (evalLog.children.length > 200) evalLog.removeChild(evalLog.firstChild);
-    evalLog.scrollTop = evalLog.scrollHeight;
-  }
-
-  async function startEval() {
-    const btn = document.getElementById('eval-run-btn');
-    btn.disabled = true;
-    const body = {
-      case_source: document.getElementById('eval-source').value || '',
-      before: document.getElementById('eval-before').value || '',
-      max_cases: parseInt(document.getElementById('eval-max-cases').value || '6', 10),
-      gate: document.getElementById('eval-gate').checked,
-      gate_margin: parseInt(document.getElementById('eval-gate-margin').value || '1', 10),
-      judge_model: document.getElementById('eval-judge-model').value || '',
-      source: 'manual-eval',
-    };
-    const r = await fetch('/api/eval', {
-      method: 'POST',
-      headers: {'Content-Type': 'application/json'},
-      body: JSON.stringify(body),
-    });
-    const j = await r.json();
-    if (!j.ok) {
-      alert('Failed to start eval: ' + (j.error || 'unknown'));
-      btn.disabled = false;
-    }
-  }
-
-  socket.on('eval_started', (p) => {
-    evalLog.innerHTML = '';
-    document.querySelector('#eval-verdict-table tbody').innerHTML = '';
-    document.getElementById('eval-result-banner').textContent =
-      `running… ${ (p.case_keys || []).length } case(s), source=${p.case_source}, before=${p.before_ref}`;
-    document.getElementById('eval-result-banner').className = 'status-line running';
-    evalLogEntry('pipeline', `eval started: ${(p.case_keys || []).length} case(s), before=${p.before_ref}`);
-    document.getElementById('eval-run-btn').disabled = true;
-  });
-  socket.on('eval_case_started', (p) => {
-    evalLogEntry('reflector', `case ${p.case_key} (${p.case_nbr || '?'} · ${p.subject || ''}) started` + (p.golden ? ' ★' : ''));
-  });
-  socket.on('eval_replay_progress', (p) => {
-    if (p.role === 'agent' || p.role === 'error') {
-      evalLogEntry(p.label === 'before' ? 'pipeline' : 'curator',
-        `[${p.label}] ${(p.content || '').slice(0, 120)}`);
-    }
-  });
-  socket.on('eval_case_done', (p) => {
-    evalLogEntry(p.verdict === 'regressed' ? 'error' : 'curator',
-      `case ${p.case_key}: ${p.verdict} (${p.score_before} → ${p.score_after})`);
-    const tbody = document.querySelector('#eval-verdict-table tbody');
-    const cls = p.verdict === 'improved' ? 'good' : p.verdict === 'regressed' ? 'bad' : '';
-    const tr = document.createElement('tr');
-    tr.innerHTML =
-      `<td class="cid">${escapeHtml(p.case_key)}</td>` +
-      `<td>${p.score_before} → ${p.score_after}</td>` +
-      `<td><span class="pill ${cls}">${escapeHtml(p.verdict)}</span></td>` +
-      `<td>${escapeHtml(p.judge_winner || '')}` +
-      (p.judge_rationale
-        ? `<details><summary>rationale</summary><pre>${escapeHtml(p.judge_rationale)}</pre></details>` : '') +
-      `</td>`;
-    tbody.appendChild(tr);
-  });
-  socket.on('eval_gate', (p) => {
-    evalLogEntry(p.decision === 'rollback' ? 'error' : 'pipeline',
-      `GATE: ${p.decision} · ${JSON.stringify(p.summary)}`);
-  });
-  socket.on('eval_rollback', (p) => {
-    evalLogEntry('error', `ROLLED BACK to ${p.restored_from} (pre-rollback snapshot: ${p.pre_rollback_snapshot})`);
-    const b = document.getElementById('eval-result-banner');
-    b.textContent = `⚠ playbooks ROLLED BACK to ${p.restored_from} — see History tab`;
-    b.className = 'status-line error';
-    loadPlaybooks();
-  });
-  socket.on('eval_done', (p) => {
-    const s = p.summary || {};
-    const g = p.gate || {};
-    const banner = document.getElementById('eval-result-banner');
-    if (!g.rolled_back) {
-      banner.textContent =
-        `done · improved ${s.improved || 0} / regressed ${s.regressed || 0} / same ${s.same || 0}` +
-        ` — GATE: ${g.decision || 'n/a'}` + (p.error ? ` · error: ${p.error}` : '');
-      banner.className = 'status-line ' + (p.error ? 'error' : 'done');
-    }
-    evalLogEntry('pipeline', 'eval done');
-    document.getElementById('eval-run-btn').disabled = false;
-    loadEvalReports();
-  });
-  socket.on('eval_error', (p) => {
-    evalLogEntry('error', 'eval error: ' + p.error);
-    const b = document.getElementById('eval-result-banner');
-    b.textContent = 'error: ' + p.error;
-    b.className = 'status-line error';
-    document.getElementById('eval-run-btn').disabled = false;
-  });
-
-  async function loadEvalReports() {
-    const root = document.getElementById('eval-report-list');
-    try {
-      const r = await fetch('/api/eval/reports');
-      const j = await r.json();
-      const items = j.items || [];
-      if (!items.length) { root.innerHTML = '<div class="status-line">no reports yet</div>'; return; }
-      root.innerHTML = '';
-      items.forEach(it => {
-        const s = it.summary || {};
-        const g = it.gate || {};
-        const div = document.createElement('div');
-        div.className = 'log-entry' + (g.rolled_back ? ' error' : '');
-        div.style.cursor = 'pointer';
-        div.innerHTML =
-          `<span class="ts">${escapeHtml(it.date)}</span>` +
-          `<span class="ev">${escapeHtml(it.source || '')}</span>` +
-          `improved ${s.improved || 0} / regressed ${s.regressed || 0}` +
-          ` · gate: ${escapeHtml(g.decision || 'n/a')}${g.rolled_back ? ' (ROLLED BACK)' : ''}`;
-        div.onclick = () => showEvalReport(it.date, it.name);
-        root.appendChild(div);
-      });
-    } catch (e) {
-      root.innerHTML = '<div class="status-line error">failed: ' + escapeHtml(String(e)) + '</div>';
-    }
-  }
-
-  async function showEvalReport(date, name) {
-    const detail = document.getElementById('eval-report-detail');
-    detail.innerHTML = '<div class="status-line">loading…</div>';
-    const r = await fetch(`/api/eval/reports/${encodeURIComponent(date)}/${encodeURIComponent(name)}`);
-    if (!r.ok) { detail.innerHTML = '<div class="status-line error">not found</div>'; return; }
-    const j = await r.json();
-    detail.innerHTML = `<pre>${escapeHtml(JSON.stringify(j, null, 2))}</pre>`;
   }
 
   // ---------- diff rendering ----------
@@ -1043,6 +757,167 @@
     return String(s == null ? '' : s)
       .replaceAll('&','&amp;').replaceAll('<','&lt;').replaceAll('>','&gt;')
       .replaceAll('"','&quot;').replaceAll("'",'&#39;');
+  }
+
+  // ---------- judge & review ----------
+  const jrLog = document.getElementById('jr-process-log');
+  const jrResult = document.getElementById('jr-result');
+  const jrStatus = document.getElementById('jr-status');
+  const jrHarmful = document.getElementById('jr-harmful');
+
+  function jrLogEntry(cls, text) {
+    const el = document.createElement('div');
+    el.className = 'log-entry ' + (cls || '');
+    el.innerHTML = '<span class="ts">' + new Date().toLocaleTimeString() + '</span>'
+                 + escapeHtml(text);
+    jrLog.appendChild(el);
+    while (jrLog.children.length > 200) jrLog.removeChild(jrLog.firstChild);
+    jrLog.scrollTop = jrLog.scrollHeight;
+  }
+
+  function jrSetStatus(text, cls) {
+    jrStatus.textContent = text;
+    jrStatus.className = 'status-line ' + (cls || '');
+  }
+
+  function jrSetButtonsDisabled(disabled) {
+    ['jr-judge-btn', 'jr-review-btn'].forEach(id => {
+      const el = document.getElementById(id);
+      if (el) el.disabled = disabled;
+    });
+  }
+
+  function jrRenderHarmful(reviewReport) {
+    // Extract every verdict==='harmful' entry across all cases and show
+    // only three columns: bullet id, case, why. When the same bullet is
+    // flagged in multiple cases, keep the one with highest confidence.
+    if (!reviewReport || !Array.isArray(reviewReport.cases)) {
+      jrHarmful.innerHTML = '<span class="status-line">no review report</span>';
+      return;
+    }
+    const byId = new Map();
+    reviewReport.cases.forEach(c => {
+      (c.reviewed_bullets || []).forEach(v => {
+        if (!v || v.verdict !== 'harmful') return;
+        const bid = v.bullet_id || '(unknown)';
+        const conf = typeof v.confidence === 'number' ? v.confidence : parseFloat(v.confidence) || 0;
+        const cur = byId.get(bid);
+        if (!cur || conf > cur.confidence) {
+          byId.set(bid, {
+            bullet_id: bid,
+            confidence: conf,
+            why: v.why || '',
+            case_id: c.case_id || '',
+          });
+        }
+      });
+    });
+    if (byId.size === 0) {
+      jrHarmful.innerHTML = '<span class="pill good">none</span> '
+        + '<span class="status-line">no bullets were flagged harmful.</span>';
+      return;
+    }
+    const rows = [...byId.values()]
+      .sort((a, b) => b.confidence - a.confidence)
+      .map(v => `<tr>
+          <td class="cid">${escapeHtml(v.bullet_id)}</td>
+          <td>${escapeHtml(v.case_id)}</td>
+          <td>${escapeHtml(v.why)}</td>
+        </tr>`).join('');
+    jrHarmful.innerHTML = `
+      <div class="status-line" style="margin-bottom:6px;">
+        <span class="pill bad">${byId.size}</span> harmful bullet(s):
+      </div>
+      <table>
+        <thead><tr>
+          <th>Bullet ID</th><th>Case</th><th>Why</th>
+        </tr></thead>
+        <tbody>${rows}</tbody>
+      </table>`;
+  }
+
+  async function runJudge() {
+    jrLog.innerHTML = '';
+    jrResult.textContent = '—';
+    jrHarmful.innerHTML = '<span class="status-line">—</span>';
+    jrSetStatus('running judge…', 'running');
+    jrSetButtonsDisabled(true);
+    jrLogEntry('pipeline', 'POST /api/judge (default model)');
+    try {
+      const r = await fetch('/api/judge', {
+        method: 'POST',
+        headers: {'Content-Type': 'application/json'},
+        body: JSON.stringify({}),
+      });
+      const j = await r.json();
+      if (!r.ok || j.ok === false) {
+        jrLogEntry('error', 'judge failed: ' + (j.error || r.statusText));
+        jrSetStatus('error', 'error');
+      } else {
+        jrLogEntry('curator', 'judge finished');
+        jrSetStatus('done', 'done');
+      }
+      jrResult.textContent = JSON.stringify(j, null, 2);
+    } catch (e) {
+      jrLogEntry('error', 'fetch failed: ' + e);
+      jrSetStatus('error', 'error');
+      jrResult.textContent = String(e);
+    } finally {
+      jrSetButtonsDisabled(false);
+    }
+  }
+
+  async function runReview() {
+    jrLog.innerHTML = '';
+    jrResult.textContent = '—';
+    jrHarmful.innerHTML = '<span class="status-line">running…</span>';
+    jrSetStatus('running review…', 'running');
+    jrSetButtonsDisabled(true);
+    jrLogEntry('pipeline', 'POST /api/review (uses latest eval report)');
+    try {
+      const r = await fetch('/api/review', {
+        method: 'POST',
+        headers: {'Content-Type': 'application/json'},
+        body: JSON.stringify({}),
+      });
+      const j = await r.json();
+      if (!r.ok || j.ok === false) {
+        jrLogEntry('error', 'review failed: ' + (j.error || r.statusText));
+        jrSetStatus('error', 'error');
+        jrHarmful.innerHTML = '<span class="status-line error">review failed</span>';
+      } else {
+        const verdict = (j.report && j.report.gate_verdict) || j.gate_verdict || '';
+        jrLogEntry(verdict === 'FAIL' ? 'error' : 'curator',
+          'review finished' + (verdict ? ' · verdict=' + verdict : ''));
+        jrSetStatus('done', 'done');
+        jrRenderHarmful(j.report || j);
+      }
+      jrResult.textContent = JSON.stringify(j, null, 2);
+    } catch (e) {
+      jrLogEntry('error', 'fetch failed: ' + e);
+      jrSetStatus('error', 'error');
+      jrResult.textContent = String(e);
+      jrHarmful.innerHTML = '<span class="status-line error">fetch failed</span>';
+    } finally {
+      jrSetButtonsDisabled(false);
+    }
+  }
+
+  // Fired from `socket.on('adapt_done', ...)` — auto-chains Judge → Review
+  // against the freshly-produced playbook. Switches to the Judge & Review
+  // tab so the user immediately sees the process log + harmful-bullet table.
+  async function autoRunJudgeThenReview(source) {
+    // Switch to the Judge & Review tab.
+    const navBtn = document.querySelector('nav button[data-tab="judge-review"]');
+    if (navBtn) navBtn.click();
+    jrLogEntry('pipeline', `auto-triggered by ${source || 'adapt'} — running Judge then Review…`);
+    await runJudge();
+    // Skip review if judge failed (no fresh eval report to review).
+    if ((jrStatus.className || '').includes('error')) {
+      jrLogEntry('error', 'auto-chain: judge failed, skipping review');
+      return;
+    }
+    await runReview();
   }
 
   // ---------- init ----------

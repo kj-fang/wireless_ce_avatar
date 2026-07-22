@@ -1,0 +1,288 @@
+<!doctype html>
+<html lang="en">
+<head>
+  <meta charset="utf-8" />
+  <title>Handsfree Replyer</title>
+  <style>
+    :root {
+      --bg: #0f1419; --panel: #1a1f29; --panel2: #232a36;
+      --fg: #e6edf3; --muted: #8b98a8; --accent: #4fc3f7;
+      --good: #50c878; --bad: #ff7676; --warn: #ffd96a; --border: #2d3543;
+    }
+    * { box-sizing: border-box; }
+    body { margin: 0; font-family: 'Segoe UI', system-ui, sans-serif;
+           background: var(--bg); color: var(--fg); font-size: 14px; }
+    header { background: var(--panel); padding: 10px 16px; border-bottom: 1px solid var(--border);
+             display: flex; align-items: center; gap: 16px; }
+    header h1 { margin: 0; font-size: 16px; }
+    header .sub { color: var(--muted); font-size: 12px; }
+    main { padding: 14px; max-width: 1300px; margin: 0 auto; }
+    .row { display: flex; gap: 14px; align-items: flex-start; }
+    .col { flex: 1; min-width: 0; }
+    .panel { background: var(--panel); border: 1px solid var(--border); border-radius: 6px;
+             padding: 12px; margin-bottom: 12px; }
+    .panel h3 { margin: 0 0 8px 0; font-size: 13px; color: var(--accent); }
+    button.primary { background: var(--accent); color: #04222d; border: none; padding: 7px 14px;
+                     border-radius: 4px; cursor: pointer; font-weight: 600; }
+    button.primary:disabled { opacity: 0.5; cursor: not-allowed; }
+    button.good { background: var(--good); color: #06280f; border: none; padding: 6px 12px;
+                  border-radius: 4px; cursor: pointer; font-weight: 600; }
+    button.ghost { background: transparent; color: var(--muted); border: 1px solid var(--border);
+                   padding: 6px 12px; border-radius: 4px; cursor: pointer; }
+    button.danger { background: transparent; color: var(--bad); border: 1px solid var(--bad);
+                    padding: 6px 12px; border-radius: 4px; cursor: pointer; }
+    input[type="text"], select, textarea { background: var(--panel2); color: var(--fg);
+        border: 1px solid var(--border); padding: 6px 8px; border-radius: 4px; font-size: 13px; }
+    textarea { width: 100%; font-family: Consolas, monospace; font-size: 12.5px; }
+    table { width: 100%; border-collapse: collapse; font-size: 12.5px; }
+    th, td { padding: 6px 8px; border-bottom: 1px solid var(--border); text-align: left; vertical-align: top; }
+    th { color: var(--muted); font-weight: 600; }
+    tr:hover { background: rgba(79,195,247,0.05); cursor: pointer; }
+    .pill { display: inline-block; padding: 1px 7px; border-radius: 999px; font-size: 11px;
+            background: var(--panel2); color: var(--muted); }
+    .pill.good { background: rgba(80,200,120,0.15); color: var(--good); }
+    .pill.bad  { background: rgba(255,118,118,0.15); color: var(--bad); }
+    .pill.warn { background: rgba(255,217,106,0.15); color: var(--warn); }
+    #run-log { max-height: 30vh; overflow: auto; background: #0a0f15; border: 1px solid var(--border);
+               border-radius: 4px; padding: 8px; font-family: Consolas, monospace; font-size: 12px; }
+    .log-line { padding: 2px 4px; }
+    .log-line .ts { color: var(--muted); margin-right: 8px; }
+    .status-line { font-size: 12px; color: var(--muted); }
+    .status-line.running { color: var(--warn); }
+    .status-line.done { color: var(--good); }
+    .status-line.error { color: var(--bad); }
+    .controls { display: flex; gap: 8px; align-items: center; flex-wrap: wrap; margin-bottom: 10px; }
+    pre { background: #0a0f15; border: 1px solid var(--border); border-radius: 4px; padding: 10px;
+          max-height: 300px; overflow: auto; font-size: 12px; white-space: pre-wrap; word-break: break-word; }
+  </style>
+</head>
+<body>
+<header>
+  <h1>🤖 Handsfree Replyer</h1>
+  <div class="sub">Detect newly assigned IPS cases → auto-analyze → review → post Private-to-Intel comment</div>
+</header>
+
+<main>
+  <div class="panel">
+    <h3>1. Check for new cases</h3>
+    <div class="controls">
+      <label>Case Owner:
+        <input type="text" id="owner-name" value="{{ config.owner_name or '' }}"
+               placeholder="e.g. Charles P Chu" style="width: 220px;">
+      </label>
+      <button class="primary" id="check-btn" onclick="checkNow()">▶ Check for new cases now</button>
+      <span class="status-line" id="run-status">idle</span>
+      <span class="status-line" style="margin-left:auto;">
+        posting backend: <b>{{ config.post_backend }}</b>
+        {% if config.dry_run %} · <span class="pill warn">DRY RUN — posting disabled</span>{% endif %}
+      </span>
+    </div>
+    <div class="controls" style="border-top: 1px solid var(--border); padding-top: 10px;">
+      <label>…or analyze one specific case:
+        <input type="text" id="case-nbr" placeholder="IPS case number, e.g. 01009610"
+               style="width: 200px;" onkeydown="if(event.key==='Enter')runCase()">
+      </label>
+      <button class="primary" id="run-case-btn" onclick="runCase()"
+              title="Runs the full pipeline for this one case regardless of owner/date">▶ Analyze this case</button>
+    </div>
+    <div id="run-log"></div>
+  </div>
+
+  <div class="panel">
+    <h3>2. Review queue <button class="ghost" onclick="loadQueue()" style="margin-left:8px;">↻ Refresh</button>
+      <label style="font-size:12px;color:var(--muted);margin-left:8px;">
+        <input type="checkbox" id="show-closed" onchange="loadQueue()"> show posted/rejected
+      </label>
+    </h3>
+    <table id="queue-table">
+      <thead><tr>
+        <th>Case</th><th>Subject</th><th>Mode</th><th>Confidence</th>
+        <th>Status</th><th>Created</th>
+      </tr></thead>
+      <tbody></tbody>
+    </table>
+  </div>
+
+  <div class="panel" id="draft-panel" style="display:none;">
+    <h3>3. Draft review — <span id="draft-title"></span></h3>
+    <div class="controls">
+      <span class="status-line" id="draft-status"></span>
+    </div>
+    <textarea id="draft-text" rows="18"></textarea>
+    <div class="controls" style="margin-top:8px;">
+      <button class="good" id="approve-btn" onclick="approveDraft()"
+              title="Posts this text to IPS as a Private-to-Intel comment">✔ Approve &amp; Post to IPS</button>
+      <button class="ghost" onclick="saveDraft()">💾 Save edits</button>
+      <button class="danger" onclick="rejectDraft()">✖ Reject</button>
+      <span class="status-line" id="post-status"></span>
+    </div>
+    <details style="margin-top:10px;">
+      <summary style="color:var(--muted);cursor:pointer;">Analysis details (stages, incidents, agent trace)</summary>
+      <pre id="draft-analysis">—</pre>
+    </details>
+  </div>
+</main>
+
+<script>
+  let currentDraftId = null;
+  let pollTimer = null;
+
+  function esc(s) {
+    return String(s ?? '').replace(/[&<>"']/g,
+      c => ({'&':'&amp;','<':'&lt;','>':'&gt;','"':'&quot;',"'":'&#39;'}[c]));
+  }
+
+  function setRunButtons(disabled) {
+    ['check-btn', 'run-case-btn'].forEach(id => {
+      const el = document.getElementById(id);
+      if (el) el.disabled = disabled;
+    });
+  }
+
+  async function checkNow() {
+    const owner = document.getElementById('owner-name').value.trim();
+    setRunButtons(true);
+    const r = await fetch('/handsfree/check_now', {
+      method: 'POST', headers: {'Content-Type': 'application/json'},
+      body: JSON.stringify({owner_name: owner}),
+    });
+    const j = await r.json();
+    if (!j.ok) {
+      alert('Failed to start: ' + (j.error || 'unknown'));
+      setRunButtons(false);
+      return;
+    }
+    startPolling();
+  }
+
+  async function runCase() {
+    const caseNbr = document.getElementById('case-nbr').value.trim();
+    if (!caseNbr) { alert('Enter an IPS case number.'); return; }
+    setRunButtons(true);
+    const r = await fetch('/handsfree/run_case', {
+      method: 'POST', headers: {'Content-Type': 'application/json'},
+      body: JSON.stringify({case_nbr: caseNbr}),
+    });
+    const j = await r.json();
+    if (!j.ok) {
+      alert('Failed to start: ' + (j.error || 'unknown'));
+      setRunButtons(false);
+      return;
+    }
+    startPolling();
+  }
+
+  function startPolling() {
+    if (pollTimer) clearInterval(pollTimer);
+    pollTimer = setInterval(refreshStatus, 2000);
+    refreshStatus();
+  }
+
+  async function refreshStatus() {
+    const r = await fetch('/handsfree/status');
+    const s = await r.json();
+    const line = document.getElementById('run-status');
+    line.textContent = s.status + (s.error ? ' · ' + s.error : '');
+    line.className = 'status-line ' + (s.status === 'running' ? 'running'
+                    : s.status === 'done' ? 'done'
+                    : s.status === 'error' ? 'error' : '');
+    const log = document.getElementById('run-log');
+    log.innerHTML = (s.events || []).map(e =>
+      `<div class="log-line"><span class="ts">${esc(e.ts)}</span>${esc(e.message)}</div>`).join('');
+    log.scrollTop = log.scrollHeight;
+    if (s.status !== 'running') {
+      setRunButtons(false);
+      if (pollTimer && s.status !== 'idle') { clearInterval(pollTimer); pollTimer = null; }
+      if (s.status === 'done') loadQueue();
+    }
+  }
+
+  async function loadQueue() {
+    const showClosed = document.getElementById('show-closed').checked;
+    const r = await fetch('/handsfree/queue' + (showClosed ? '?all=1' : ''));
+    const j = await r.json();
+    const tbody = document.querySelector('#queue-table tbody');
+    tbody.innerHTML = '';
+    (j.items || []).forEach(it => {
+      const statusCls = it.status === 'posted' ? 'good'
+                      : it.status === 'post_failed' ? 'bad'
+                      : it.status === 'rejected' ? 'bad'
+                      : it.status === 'pending_review' ? 'warn' : '';
+      const tr = document.createElement('tr');
+      tr.innerHTML =
+        `<td>${esc(it.case_nbr)}</td>` +
+        `<td>${esc((it.subject || '').slice(0, 70))}</td>` +
+        `<td><span class="pill">${esc(it.mode || '')}</span></td>` +
+        `<td>${it.confidence != null ? it.confidence + '/100' : '—'}</td>` +
+        `<td><span class="pill ${statusCls}">${esc(it.status)}</span></td>` +
+        `<td>${esc((it.created_at || '').slice(0, 16))}</td>`;
+      tr.onclick = () => openDraft(it.draft_id);
+      tbody.appendChild(tr);
+    });
+    if (!(j.items || []).length) {
+      tbody.innerHTML = '<tr><td colspan="6" style="color:var(--muted);">queue is empty — run a check above</td></tr>';
+    }
+  }
+
+  async function openDraft(draftId) {
+    const r = await fetch('/handsfree/queue/' + encodeURIComponent(draftId));
+    if (!r.ok) { alert('draft not found'); return; }
+    const d = await r.json();
+    currentDraftId = d.draft_id;
+    document.getElementById('draft-panel').style.display = '';
+    document.getElementById('draft-title').textContent =
+      `case ${d.case_nbr} · ${d.mode} · ${d.status}`;
+    document.getElementById('draft-status').textContent =
+      d.post_result && d.post_result.error ? ('last post attempt: ' + d.post_result.error) : '';
+    document.getElementById('draft-text').value = d.draft_plain || '';
+    document.getElementById('draft-analysis').textContent =
+      JSON.stringify(d.analysis || {}, null, 2);
+    document.getElementById('approve-btn').disabled =
+      (d.status === 'posted' || d.status === 'rejected');
+    document.getElementById('post-status').textContent = '';
+    document.getElementById('draft-panel').scrollIntoView({behavior: 'smooth'});
+  }
+
+  async function saveDraft() {
+    if (!currentDraftId) return;
+    const r = await fetch('/handsfree/queue/' + encodeURIComponent(currentDraftId), {
+      method: 'PUT', headers: {'Content-Type': 'application/json'},
+      body: JSON.stringify({draft_plain: document.getElementById('draft-text').value}),
+    });
+    const j = await r.json();
+    document.getElementById('post-status').textContent = j.ok ? 'draft saved' : ('save failed: ' + j.error);
+  }
+
+  async function approveDraft() {
+    if (!currentDraftId) return;
+    if (!confirm('Post this comment to IPS as Private to Intel?')) return;
+    const btn = document.getElementById('approve-btn');
+    btn.disabled = true;
+    document.getElementById('post-status').textContent = 'posting…';
+    const r = await fetch('/handsfree/queue/' + encodeURIComponent(currentDraftId) + '/approve', {
+      method: 'POST', headers: {'Content-Type': 'application/json'},
+      body: JSON.stringify({draft_plain: document.getElementById('draft-text').value}),
+    });
+    const j = await r.json();
+    document.getElementById('post-status').textContent =
+      j.ok ? '✔ posted to IPS' : ('post failed: ' + (j.error || 'unknown'));
+    if (!j.ok) btn.disabled = false;
+    loadQueue();
+  }
+
+  async function rejectDraft() {
+    if (!currentDraftId) return;
+    const reason = prompt('Reject reason (optional):') || '';
+    await fetch('/handsfree/queue/' + encodeURIComponent(currentDraftId) + '/reject', {
+      method: 'POST', headers: {'Content-Type': 'application/json'},
+      body: JSON.stringify({reason}),
+    });
+    document.getElementById('draft-panel').style.display = 'none';
+    loadQueue();
+  }
+
+  loadQueue();
+  refreshStatus();
+</script>
+</body>
+</html>

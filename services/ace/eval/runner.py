@@ -114,6 +114,37 @@ def _fresh_agent(llm) -> WifiLogAgentSystem:
     )
 
 
+def _resolve_case_log_path(log_path: str, case: dict) -> str:
+    """Resolve a case's log file.
+
+    An absolute path is used as-is. A relative path is resolved against the
+    folder the case JSON was loaded from (e.g. the shared golden_set folder),
+    so the log is pulled from the SAME place as the case — not the process CWD.
+    We try, in order, the log next to the case file (by basename), then the
+    relative path preserved under that folder, and finally fall back to CWD
+    (legacy behaviour for a local repo-relative layout). The first path that
+    exists wins; if none exist we return the share-based candidate so the
+    downstream error message points at the shared location.
+    """
+    p = Path(log_path)
+    if p.is_absolute():
+        return str(p)
+
+    src = case.get("__source_path")
+    case_dir = Path(src).parent if src else None
+
+    candidates: list[Path] = []
+    if case_dir is not None:
+        candidates.append(case_dir / p.name)   # log next to the case json (share)
+        candidates.append(case_dir / p)        # relative path kept under the share
+    candidates.append((Path.cwd() / p))        # legacy: repo-relative from CWD
+
+    for c in candidates:
+        if c.exists():
+            return str(c.resolve())
+    return str(candidates[0].resolve() if candidates else p)
+
+
 def run_case(llm, ace_runner: AceRunner, case: dict,
              use_tools: bool = True, max_steps: int = 6,
              temperature: float = 0.0) -> dict:
@@ -123,10 +154,7 @@ def run_case(llm, ace_runner: AceRunner, case: dict,
 
     log_path = case.get("log_path") or ""
     if log_path:
-        # Allow workspace-relative paths in the case file.
-        if not Path(log_path).is_absolute():
-            log_path = str((Path.cwd() / log_path).resolve())
-        agent.current_log_path = log_path
+        agent.current_log_path = _resolve_case_log_path(log_path, case)
 
     issue_ctx = case.get("issue_context") or {}
     if issue_ctx:

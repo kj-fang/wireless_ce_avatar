@@ -25,6 +25,7 @@ The runner also maintains a tiny cursor file so batch runs are idempotent.
 from __future__ import annotations
 
 import json
+import re
 import threading
 from datetime import datetime
 from pathlib import Path
@@ -109,7 +110,26 @@ class AceRunner:
         self._lock = threading.Lock()
 
     # ----- domain playbook bookkeeping -----
-    def _ensure_domain_playbook(self, skill: str) -> Playbook:
+    @staticmethod
+    def _is_plausible_skill_id(skill: str) -> bool:
+        """Guard against malformed skill ids. Some feedback snapshots stored an
+        entire injected playbook block as `skill_id`; a real skill id is a
+        short filename-safe token like 'connection_flow'. Reject anything with
+        newlines/control chars or absurd length so it never becomes a bogus
+        domain_*.json filename (which crashes save() with OSError 22)."""
+        skill = (skill or "").strip()
+        if not skill or len(skill) > 64:
+            return False
+        if any(c in skill for c in "\r\n\t"):
+            return False
+        return re.match(r"^[\w./+\- ]+$", skill) is not None
+
+    def _ensure_domain_playbook(self, skill: str) -> Optional[Playbook]:
+        skill = (skill or "").strip()
+        if not self._is_plausible_skill_id(skill):
+            print(f"[ace.pipeline] skipping implausible skill id "
+                  f"(len={len(skill)}): {skill[:48]!r}\u2026")
+            return None
         if skill not in self.domain_pbs:
             safe = skill.replace("/", "_").replace(" ", "_")
             self.domain_pbs[skill] = Playbook(skill, self.playbooks_dir / f"domain_{safe}.json")

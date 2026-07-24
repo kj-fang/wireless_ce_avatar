@@ -2891,9 +2891,22 @@ class WifiLogAgentSystem:
                         "  - T+0s: Physical Failure begins\n"
                         "  - T+Ns: Final Termination\n\n"
                         "  ## Recommendations\n"
+                        "  CONFIDENCE THRESHOLD: Only list recommendations you are AT LEAST 90% confident in.\n"
+                        "  - For each recommendation, internally estimate confidence (0-100%) based on evidence strength.\n"
+                        "  - OMIT any recommendation below 90% confidence — do not list it, do not mention it.\n"
+                        "  - If a priority tier has no ≥90% confident items, write `(none)` for that tier.\n"
+                        "  - If ALL tiers are empty, write: `Please work with CFE and file a Jira ticket`\n"
                         "  **P0 (Urgent):** ...\n"
                         "  **P1 (Important):** ...\n"
-                        "  **P2 (Nice-to-have):** ..."                
+                        "  **P2 (Nice-to-have):** ...\n\n"
+                        "  ## Additional Logs Needed from Customer\n"
+                        "  STRICT GATE — do NOT dump a wish-list. Only include a request if ALL are true:\n"
+                        "  (1) You are ≥90% confident this specific log/trace is directly related to the observed issue.\n"
+                        "  (2) You can name the exact uncertainty it will resolve or the specific hypothesis it will confirm/refute.\n"
+                        "  (3) Current logs are genuinely insufficient — the answer is NOT already in the assembled evidence.\n"
+                        "  Hard cap: at most 3 items. Prefer 1 targeted request over 3 generic ones. Never list generic 'more logs' / 'full trace' / 'system dump' as filler.\n"
+                        "  Format per item: `- <WHAT (specific log/trace)> — needed to <WHY (concrete gap it closes)>` (add HOW only if collection is non-obvious).\n"
+                        "  If nothing meets the gate, write exactly: `(none — current logs are sufficient for the stated confidence)`."
         )
 
     def _invoke_tool(self, tool_name: str, args: dict) -> str:

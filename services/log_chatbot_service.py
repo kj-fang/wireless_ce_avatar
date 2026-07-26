@@ -2183,19 +2183,36 @@ class WifiLogAgentSystem:
         no_progress_rounds: int = 0
         step_token_usages: list = []
 
+        # Sonnet pricing: $3.00/MTok input, $15.00/MTok output
+        _INPUT_COST_PER_TOKEN  = 3.00  / 1_000_000
+        _OUTPUT_COST_PER_TOKEN = 15.00 / 1_000_000
+
         def _emit_token_report():
             if not step_token_usages:
                 return
             rows = [
-                "📊 **Token Usage Report**\n",
-                "| Step | Prompt | Completion | Total |",
-                "|------|--------|------------|-------|",
+                "📊 **Token Usage & Cost Report** *(Standard Sonnet — $3.00/MTok in · $15.00/MTok out)*\n",
+                "| Step | Input(tok) | Output(tok) | Total(tok) | Input Cost ($) | Output Cost ($) | Step Cost ($) |",
+                "|------|--------|------------|-------|----------------|-----------------|---------------|",
             ]
             total_p = total_c = total_t = 0
+            total_cost_in = total_cost_out = 0.0
             for s in step_token_usages:
-                rows.append(f"| {s['step']} | {s['prompt']:,} | {s['completion']:,} | {s['total']:,} |")
+                cost_in  = s["prompt"]     * _INPUT_COST_PER_TOKEN
+                cost_out = s["completion"] * _OUTPUT_COST_PER_TOKEN
+                cost_step = cost_in + cost_out
+                rows.append(
+                    f"| {s['step']} | {s['prompt']:,} | {s['completion']:,} | {s['total']:,} "
+                    f"| {cost_in:.4f} | {cost_out:.4f} | {cost_step:.4f} |"
+                )
                 total_p += s["prompt"]; total_c += s["completion"]; total_t += s["total"]
-            rows.append(f"| **Total** | **{total_p:,}** | **{total_c:,}** | **{total_t:,}** |")
+                total_cost_in += cost_in; total_cost_out += cost_out
+            total_cost = total_cost_in + total_cost_out
+            rows.append(
+                f"| **Total** | **{total_p:,}** | **{total_c:,}** | **{total_t:,}** "
+                f"| **{total_cost_in:.4f}** | **{total_cost_out:.4f}** | **{total_cost:.4f}** |"
+            )
+            rows.append(f"\n💰 **Estimated total cost: ${total_cost:.4f}**")
             _emit({"role": "token_usage", "content": "\n".join(rows)})
 
         for step_idx in range(max_steps):

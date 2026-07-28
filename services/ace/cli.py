@@ -424,6 +424,22 @@ def cmd_pipeline(args):
     verdict = rreport.get("gate_verdict")
     print(f"[pipeline] review verdict: {verdict}")
 
+    # 4a. Triage — when the review FAILed, optionally act on the bullets it
+    # flagged as harmful (revert to snapshot / remove). Opt-in via --triage
+    # because it mutates the LIVE local playbook. Non-interactive in the
+    # pipeline: decisions come from --triage-yes-revert / --triage-yes-remove.
+    if verdict != "PASS" and getattr(args, "triage", False):
+        review_stamp = (rreport.get("ts_utc") or "").replace(":", "").replace("-", "")
+        review_path = Path(runs_dir) / f"review_{review_stamp}.json"
+        print("[pipeline] ===== STEP 4: corrupted-bullet triage =====")
+        from .eval import corrupted_bullet as eval_triage
+        eval_triage.process(
+            review_path,
+            auto_revert=(True if args.triage_yes_revert else None),
+            auto_remove=(True if args.triage_yes_remove else None),
+            namespace=args.namespace,
+        )
+
     # 4. Publish — only a passing review is allowed to reach the cloud share.
     # FUTURE: instead of pushing here, notify the manager (email) and wait for
     # an explicit approval before calling _push_now(). For now push runs
@@ -532,6 +548,17 @@ def main(argv=None):
                         help="Only adapt; skip eval + review")
     p_pipe.add_argument("--no-review", action="store_true",
                         help="Adapt + eval; skip the regression review")
+    # --- post-review triage (only runs when review FAILs) ---
+    p_pipe.add_argument("--triage", action="store_true",
+                        help="On a FAILed review, act on the harmful bullets it "
+                             "flagged (revert to snapshot / remove). Mutates the "
+                             "LIVE local playbook.")
+    p_pipe.add_argument("--triage-yes-revert", action="store_true",
+                        help="Non-interactive triage: revert every flagged bullet "
+                             "that has a previous version.")
+    p_pipe.add_argument("--triage-yes-remove", action="store_true",
+                        help="Non-interactive triage: remove every flagged bullet "
+                             "that has no previous version.")
     p_pipe.set_defaults(func=cmd_pipeline)
 
     args = parser.parse_args(argv)

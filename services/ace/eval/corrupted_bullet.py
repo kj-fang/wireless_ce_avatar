@@ -12,13 +12,14 @@ interactive CLI choice:
   * If no previous version exists, ask whether to REMOVE the corrupted
     bullet from the live playbook or KEEP it as-is.
 
-Only the *live* playbook files under `LIVE_PLAYBOOKS_DIR` are ever
-modified. Snapshots are read-only reference material.
+Only the *live* playbook files (resolved per namespace, same as the CLI)
+are ever modified. Snapshots are read-only reference material.
 
 Usage:
     python -m services.ace.eval.corrupted_bullet <path/to/review_*.json>
     python -m services.ace.eval.corrupted_bullet review_20260722T085140+0000.json
     python -m services.ace.eval.corrupted_bullet <review.json> --yes-revert
+    python -m services.ace.eval.corrupted_bullet <review.json> --namespace bt
 """
 
 from __future__ import annotations
@@ -30,11 +31,18 @@ from pathlib import Path
 
 
 # --- config -----------------------------------------------------------------
-# Local playbook directory that this tool is allowed to modify. The shared
-# network copy under `\\infs089b...\ace_playbook` is NEVER touched here.
-LIVE_PLAYBOOKS_DIR = Path(
-    r"C:\Users\lchienx\Downloads\IntelAvatar_files\ace_playbooks\local"
-)
+# Live playbook directory this tool is allowed to modify. Resolved
+# dynamically (per machine/user + namespace) via the same helper the CLI
+# uses — never a hard-coded path. The shared network copy under
+# `\\infs089b...\ace_playbook` is NEVER touched here.
+def _resolve_live_dir(namespace: str = "wifi") -> Path:
+    """Local live playbook dir for `namespace` ("wifi"/"bt"), resolved the
+    same way `services.ace.cli` resolves it so this follows whatever machine
+    the trainer runs on. Lazy import avoids a circular import at load time."""
+    from services.ace.cli import _resolve_playbooks_dir, _ensure_avatarfiles_dir
+    _ensure_avatarfiles_dir()
+    return _resolve_playbooks_dir(namespace)
+
 
 # Snapshot root: `<repo>/services/ace/eval/snapshots/<YYYY-MM-DD>/<ts>__<uuid>/`.
 SNAPSHOTS_DIR = Path(__file__).resolve().parent / "snapshots"
@@ -271,14 +279,18 @@ def process(
     review_path: Path,
     auto_revert: bool | None = None,
     auto_remove: bool | None = None,
+    live_dir: Path | None = None,
+    namespace: str = "wifi",
 ) -> dict:
+    if live_dir is None:
+        live_dir = _resolve_live_dir(namespace)
     review_path = _resolve_review_path(review_path)
     report = json.loads(review_path.read_text(encoding="utf-8"))
     corrupted_ids = _extract_corrupted_ids(report)
 
     print(f"[corrupted] review    : {review_path.name}")
-    print(f"[corrupted] live dir  : {LIVE_PLAYBOOKS_DIR}")
-    if not LIVE_PLAYBOOKS_DIR.is_dir():
+    print(f"[corrupted] live dir  : {live_dir}")
+    if not live_dir.is_dir():
         print(f"[corrupted] ERROR: live playbook dir does not exist. "
               f"Aborting.", file=sys.stderr)
         return {"error": "live_dir_missing"}
@@ -304,9 +316,9 @@ def process(
         print("\n" + "=" * 72)
         print(f"[corrupted] bullet: {bid}")
 
-        hit = _find_bullet_in_live(bid, LIVE_PLAYBOOKS_DIR)
+        hit = _find_bullet_in_live(bid, live_dir)
         if hit is None:
-            print(f"  not found in any live playbook under {LIVE_PLAYBOOKS_DIR}"
+            print(f"  not found in any live playbook under {live_dir}"
                   f" — skipping.")
             results.append({"bullet_id": bid, "action": "skipped_not_in_live"})
             continue
@@ -398,6 +410,8 @@ def main(argv: list[str] | None = None) -> int:
                    help="Path to a review_*.json produced by "
                         "services.ace.eval.review (bare filename is "
                         "resolved against services/ace/eval/runs/).")
+    p.add_argument("--namespace", choices=("wifi", "bt"), default="wifi",
+                   help="Which live playbook set to triage (default wifi).")
     p.add_argument("--yes-revert", action="store_true",
                    help="Non-interactive: revert every bullet that has a "
                         "previous version, without prompting.")
@@ -429,7 +443,8 @@ def main(argv: list[str] | None = None) -> int:
     elif args.no_remove:
         auto_remove = False
 
-    process(args.review, auto_revert=auto_revert, auto_remove=auto_remove)
+    process(args.review, auto_revert=auto_revert, auto_remove=auto_remove,
+            namespace=args.namespace)
     return 0
 
 

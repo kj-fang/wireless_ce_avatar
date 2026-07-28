@@ -7,6 +7,8 @@ Run manually:
     python -m services.ace.eval --case <case_id>      # one case
     python -m services.ace.eval --passes 5            # noise control
     python -m services.ace.eval --cases-dir <path>    # custom cases folder
+    python -m services.ace.eval --review              # chain eval -> review
+    python -m services.ace.eval --auto-fix            # chain eval -> review -> corrupted_bullet -y
 
 Reuses the same plumbing as `services.ace.cli` (LLM_helper construction,
 playbooks dir resolution, skill context provider) without modifying any
@@ -154,7 +156,18 @@ def run_case(llm, ace_runner: AceRunner, case: dict,
 
     log_path = case.get("log_path") or ""
     if log_path:
-        agent.current_log_path = _resolve_case_log_path(log_path, case)
+        # Resolve relative paths against the case JSON's own directory first
+        # (so `"log_path": "Connectivity_1.log"` picks up the sibling file in
+        # the cases folder), then fall back to CWD for backwards compatibility.
+        if not Path(log_path).is_absolute():
+            src = case.get("__source_path")
+            candidates = []
+            if src:
+                candidates.append((Path(src).parent / log_path).resolve())
+            candidates.append((Path.cwd() / log_path).resolve())
+            resolved = next((c for c in candidates if c.exists()), candidates[0])
+            log_path = str(resolved)
+        agent.current_log_path = log_path
 
     issue_ctx = case.get("issue_context") or {}
     if issue_ctx:
@@ -468,13 +481,67 @@ def _build_parser() -> argparse.ArgumentParser:
                         "multiple are given, each model judges every case "
                         "exactly once and --passes is ignored. Defaults to "
                         "--model / the app's LLM.")
+    p.add_argument("--review", action="store_true",
+                   help="After the eval finishes, run services.ace.eval.review "
+                        "on the eval report that was just written.")
+    p.add_argument("--auto-fix", action="store_true",
+                   help="After --review, run services.ace.eval.corrupted_bullet "
+                        "with -y to auto-revert (or remove if no snapshot "
+                        "exists) every bullet the reviewer flagged as "
+                        "harmful. Implies --review.")
     return p
+
+
+def _chain_review_and_fix(
+    report: dict,
+    runs_dir: Path,
+    model: Optional[str],
+    do_review: bool,
+    do_auto_fix: bool,
+) -> int:
+    """
+    Optionally chain `services.ace.eval.review` and
+    `services.ace.eval.corrupted_bullet -y` after the eval finishes.
+    Returns a process exit code (0 = ok, non-zero = failure or review FAIL).
+    """
+    if not (do_review or do_auto_fix):
+        return 0
+    if report.get("status") == "no_cases" or "ts_utc" not in report:
+        print("[eval] skipping --review/--auto-fix: no eval report produced.")
+        return 0
+
+    # Reconstruct the eval file path from the same stamp evaluate() used.
+    stamp = report["ts_utc"].replace(":", "").replace("-", "")
+    eval_path = runs_dir / f"eval_{stamp}.json"
+    if not eval_path.is_file():
+        print(f"[eval] cannot chain --review: eval file missing: {eval_path}",
+              file=sys.stderr)
+        return 1
+
+    from . import review as review_mod
+    print("\n[eval] ---- chaining review ----")
+    review_report = review_mod.review(eval_path, model=model)
+
+    if not do_auto_fix:
+        return 0 if review_report.get("gate_verdict") == "PASS" else 2
+
+    r_stamp = review_report["ts_utc"].replace(":", "").replace("-", "")
+    review_path = eval_path.parent / f"review_{r_stamp}.json"
+    if not review_path.is_file():
+        print(f"[eval] cannot chain --auto-fix: review file missing: "
+              f"{review_path}", file=sys.stderr)
+        return 1
+
+    from . import corrupted_bullet as cb_mod
+    print("\n[eval] ---- chaining corrupted-bullet triage (auto, -y) ----")
+    cb_mod.process(review_path, auto_revert=True, auto_remove=True)
+    return 0
 
 
 def main(argv: Optional[list[str]] = None) -> int:
     args = _build_parser().parse_args(argv)
     try:
-        evaluate(
+        report = evaluate(
             cases_dir=args.cases_dir,
             runs_dir=args.runs_dir,
             case_id_filter=args.case_id,
@@ -486,11 +553,17 @@ def main(argv: Optional[list[str]] = None) -> int:
             model=args.model,
             judge_model=args.judge_model,
         )
+        return _chain_review_and_fix(
+            report,
+            runs_dir=args.runs_dir,
+            model=args.model,
+            do_review=args.review,
+            do_auto_fix=args.auto_fix,
+        )
     except Exception as e:
         print(f"[eval] fatal: {type(e).__name__}: {e}", file=sys.stderr)
         traceback.print_exc()
         return 1
-    return 0
 
 
 if __name__ == "__main__":

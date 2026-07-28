@@ -20,6 +20,7 @@ Usage:
     python -m services.ace.eval.corrupted_bullet review_20260722T085140+0000.json
     python -m services.ace.eval.corrupted_bullet <review.json> --yes-revert
     python -m services.ace.eval.corrupted_bullet <review.json> --namespace bt
+    python -m services.ace.eval.corrupted_bullet <review.json> -y   # revert-if-possible-else-remove, no prompts
 """
 
 from __future__ import annotations
@@ -412,6 +413,11 @@ def main(argv: list[str] | None = None) -> int:
                         "resolved against services/ace/eval/runs/).")
     p.add_argument("--namespace", choices=("wifi", "bt"), default="wifi",
                    help="Which live playbook set to triage (default wifi).")
+    p.add_argument("-y", "--yes", action="store_true",
+                   help="Non-interactive shortcut: for every corrupted "
+                        "bullet, revert to the snapshot version if one "
+                        "exists, otherwise remove it. Equivalent to "
+                        "passing both --yes-revert and --yes-remove.")
     p.add_argument("--yes-revert", action="store_true",
                    help="Non-interactive: revert every bullet that has a "
                         "previous version, without prompting.")
@@ -425,6 +431,14 @@ def main(argv: list[str] | None = None) -> int:
                    help="Non-interactive: keep every corrupted bullet that "
                         "has no previous version (do not remove).")
     args = p.parse_args(argv)
+
+    # `--yes` is a shorthand for "revert if possible, else remove". Fold it
+    # into the existing --yes-revert / --yes-remove flags before validating.
+    if args.yes:
+        if args.no_revert or args.no_remove:
+            p.error("--yes cannot be combined with --no-revert or --no-remove")
+        args.yes_revert = True
+        args.yes_remove = True
 
     if args.yes_revert and args.no_revert:
         p.error("--yes-revert and --no-revert are mutually exclusive")

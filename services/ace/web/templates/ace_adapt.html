@@ -154,8 +154,14 @@
     <div class="panel">
       <h3>Judge &amp; Review</h3>
       <div class="controls">
-        <button class="primary" id="jr-judge-btn" onclick="runJudge()">⚖ Run Judge</button>
-        <button class="primary" id="jr-review-btn" onclick="runReview()">🔍 Run Review</button>
+        <button class="primary" id="jr-judge-btn" onclick="runJudge()">Run Judge</button>
+        <button class="primary" id="jr-review-btn" onclick="runReview()">Run Review</button>
+        <button class="primary" id="jr-load-btn" onclick="document.getElementById('jr-load-file').click()"
+                title="Load an existing review_*.json and jump straight to the corrupted-bullet triage table.">
+          Load review file
+        </button>
+        <input type="file" id="jr-load-file" accept=".json,application/json"
+               style="display:none;" onchange="loadReviewFile(this)">
         <span class="status-line" id="jr-status">idle</span>
       </div>
     </div>
@@ -781,7 +787,7 @@
   }
 
   function jrSetButtonsDisabled(disabled) {
-    ['jr-judge-btn', 'jr-review-btn'].forEach(id => {
+    ['jr-judge-btn', 'jr-review-btn', 'jr-load-btn'].forEach(id => {
       const el = document.getElementById(id);
       if (el) el.disabled = disabled;
     });
@@ -789,8 +795,12 @@
 
   function jrRenderHarmful(reviewReport) {
     // Extract every verdict==='harmful' entry across all cases and show
-    // only three columns: bullet id, case, why. When the same bullet is
+    // four columns: bullet id, case, why, actions. When the same bullet is
     // flagged in multiple cases, keep the one with highest confidence.
+    // Actions are populated asynchronously via /api/corrupted/lookup:
+    //   - previous version exists → [🔙 Revert] + [⏭ Keep]
+    //   - no previous version     → [✕ Remove] + [⏭ Keep]
+    //   - bullet not in live dir  → status text, no buttons
     if (!reviewReport || !Array.isArray(reviewReport.cases)) {
       jrHarmful.innerHTML = '<span class="status-line">no review report</span>';
       return;
@@ -819,21 +829,181 @@
     }
     const rows = [...byId.values()]
       .sort((a, b) => b.confidence - a.confidence)
-      .map(v => `<tr>
-          <td class="cid">${escapeHtml(v.bullet_id)}</td>
-          <td>${escapeHtml(v.case_id)}</td>
-          <td>${escapeHtml(v.why)}</td>
-        </tr>`).join('');
+      .map(v => {
+        const rid = 'jr-harm-' + v.bullet_id.replace(/[^a-zA-Z0-9_-]/g, '_');
+        return `<tr id="${rid}" data-bullet-id="${escapeAttr(v.bullet_id)}">
+            <td class="cid">${escapeHtml(v.bullet_id)}</td>
+            <td>${escapeHtml(v.case_id)}</td>
+            <td>${escapeHtml(v.why)}</td>
+            <td class="jr-actions" style="white-space:nowrap;">
+              <span class="status-line">loading…</span>
+            </td>
+          </tr>
+          <tr id="${rid}-preview" class="jr-preview-row" style="display:none;">
+            <td colspan="4" style="background:#0a0f15;">
+              <div class="jr-preview-body status-line">—</div>
+            </td>
+          </tr>`;
+      }).join('');
     jrHarmful.innerHTML = `
       <div class="status-line" style="margin-bottom:6px;">
         <span class="pill bad">${byId.size}</span> harmful bullet(s):
       </div>
       <table>
         <thead><tr>
-          <th>Bullet ID</th><th>Case</th><th>Why</th>
+          <th>Bullet ID</th><th>Case</th><th>Why</th><th>Actions</th>
         </tr></thead>
         <tbody>${rows}</tbody>
       </table>`;
+    // Kick off per-bullet lookups to decide which two buttons to show.
+    [...byId.values()].forEach(v => jrLookupCorrupted(v.bullet_id));
+  }
+
+  // Look up the live playbook + previous-snapshot version for a single
+  // bullet, then render the appropriate two-button pair into its row.
+  async function jrLookupCorrupted(bulletId) {
+    const rid = 'jr-harm-' + bulletId.replace(/[^a-zA-Z0-9_-]/g, '_');
+    const row = document.getElementById(rid);
+    if (!row) return;
+    const cell = row.querySelector('.jr-actions');
+    try {
+      const ns = new URLSearchParams(location.search).get('namespace') || '';
+      const r = await fetch('/api/corrupted/lookup', {
+        method: 'POST',
+        headers: {'Content-Type': 'application/json'},
+        body: JSON.stringify({bullet_id: bulletId, namespace: ns}),
+      });
+      const j = await r.json();
+      if (!r.ok || j.ok === false) {
+        cell.innerHTML = '<span class="status-line error">'
+          + escapeHtml(j.error || r.statusText) + '</span>';
+        return;
+      }
+      // Stash the lookup payload on the row for the preview toggle.
+      row.dataset.playbookFile = j.playbook_file || '';
+      row._jrLookup = j;
+      if (!j.in_live) {
+        cell.innerHTML = '<span class="pill warn">not in live</span>';
+        return;
+      }
+      const hasPrev = !!j.previous;
+      const previewBtn = `<button class="ghost" style="padding:3px 8px;"
+          onclick="jrTogglePreview('${escapeAttr(bulletId)}')">👁 preview</button>`;
+      if (hasPrev) {
+        cell.innerHTML = `
+          <button class="primary" style="padding:3px 10px;margin-right:4px;"
+            onclick="jrDoAction('${escapeAttr(bulletId)}','revert', this)">🔙 Revert</button>
+          <button class="ghost" style="padding:3px 10px;margin-right:4px;"
+            onclick="jrDoAction('${escapeAttr(bulletId)}','keep', this)">⏭ Keep</button>
+          ${previewBtn}`;
+      } else {
+        cell.innerHTML = `
+          <button class="primary" style="padding:3px 10px;margin-right:4px;background:var(--bad);color:#fff;"
+            onclick="jrDoAction('${escapeAttr(bulletId)}','remove', this)">✕ Remove</button>
+          <button class="ghost" style="padding:3px 10px;margin-right:4px;"
+            onclick="jrDoAction('${escapeAttr(bulletId)}','keep', this)">⏭ Keep</button>
+          ${previewBtn}`;
+      }
+    } catch (e) {
+      cell.innerHTML = '<span class="status-line error">lookup failed: '
+        + escapeHtml(String(e)) + '</span>';
+    }
+  }
+
+  // Toggle a details row showing CURRENT (+ PREVIOUS if it exists) so the
+  // user can inspect before clicking Revert / Remove.
+  function jrTogglePreview(bulletId) {
+    const rid = 'jr-harm-' + bulletId.replace(/[^a-zA-Z0-9_-]/g, '_');
+    const row = document.getElementById(rid);
+    const prev = document.getElementById(rid + '-preview');
+    if (!row || !prev) return;
+    if (prev.style.display !== 'none') {
+      prev.style.display = 'none';
+      return;
+    }
+    const j = row._jrLookup;
+    const body = prev.querySelector('.jr-preview-body');
+    if (!j) {
+      body.innerHTML = '<span class="status-line">not loaded yet.</span>';
+    } else {
+      const curJson = JSON.stringify(j.current, null, 2);
+      const prevJson = j.previous ? JSON.stringify(j.previous, null, 2) : null;
+      body.innerHTML = `
+        <div style="display:flex;gap:10px;">
+          <div style="flex:1;min-width:0;">
+            <div style="color:var(--bad);font-weight:600;margin-bottom:4px;">
+              CURRENT (corrupted) · ${escapeHtml(j.playbook_file || '')}
+            </div>
+            <pre style="max-height:280px;">${escapeHtml(curJson)}</pre>
+          </div>
+          ${prevJson ? `
+          <div style="flex:1;min-width:0;">
+            <div style="color:var(--good);font-weight:600;margin-bottom:4px;">
+              PREVIOUS (snapshot ${escapeHtml(j.snapshot_dir || '')})
+            </div>
+            <pre style="max-height:280px;">${escapeHtml(prevJson)}</pre>
+          </div>` : `
+          <div style="flex:1;min-width:0;">
+            <div style="color:var(--muted);font-weight:600;margin-bottom:4px;">
+              PREVIOUS
+            </div>
+            <div class="status-line">No previous version in newest snapshot.</div>
+          </div>`}
+        </div>`;
+    }
+    prev.style.display = '';
+  }
+
+  // Run a revert / remove / keep on a single bullet row. "keep" is
+  // client-only (just marks the row as skipped and disables buttons).
+  async function jrDoAction(bulletId, action, btnEl) {
+    const rid = 'jr-harm-' + bulletId.replace(/[^a-zA-Z0-9_-]/g, '_');
+    const row = document.getElementById(rid);
+    if (!row) return;
+    const cell = row.querySelector('.jr-actions');
+    if (action === 'keep') {
+      cell.innerHTML = '<span class="pill">kept</span>';
+      return;
+    }
+    if (action === 'remove') {
+      const pb = row.dataset.playbookFile || 'the live playbook';
+      if (!confirm(`Remove ${bulletId} from ${pb}? This edits the live playbook.`)) {
+        return;
+      }
+    }
+    // Disable both buttons while the request is in flight.
+    cell.querySelectorAll('button').forEach(b => b.disabled = true);
+    const orig = cell.innerHTML;
+    cell.insertAdjacentHTML('afterbegin',
+      '<span class="status-line running">running…</span>');
+    try {
+      const ns = new URLSearchParams(location.search).get('namespace') || '';
+      const r = await fetch('/api/corrupted/action', {
+        method: 'POST',
+        headers: {'Content-Type': 'application/json'},
+        body: JSON.stringify({bullet_id: bulletId, action, namespace: ns}),
+      });
+      const j = await r.json();
+      if (!r.ok || j.ok === false) {
+        cell.innerHTML = orig
+          + `<div class="status-line error">${escapeHtml(j.error || r.statusText)}</div>`;
+        cell.querySelectorAll('button').forEach(b => b.disabled = false);
+        return;
+      }
+      if (action === 'revert') {
+        cell.innerHTML = `<span class="pill good">reverted</span>
+          <span class="cid">${escapeHtml(j.playbook_file || '')}</span>`;
+      } else {
+        cell.innerHTML = `<span class="pill good">removed</span>
+          <span class="cid">${escapeHtml(j.playbook_file || '')}</span>`;
+      }
+      jrLogEntry('curator',
+        `${action} ${bulletId} in ${j.playbook_file || '?'}`);
+    } catch (e) {
+      cell.innerHTML = orig
+        + `<div class="status-line error">fetch failed: ${escapeHtml(String(e))}</div>`;
+      cell.querySelectorAll('button').forEach(b => b.disabled = false);
+    }
   }
 
   async function runJudge() {
@@ -898,6 +1068,55 @@
       jrSetStatus('error', 'error');
       jrResult.textContent = String(e);
       jrHarmful.innerHTML = '<span class="status-line error">fetch failed</span>';
+    } finally {
+      jrSetButtonsDisabled(false);
+    }
+  }
+
+  // Skip the LLM review and hydrate the harmful-bullet table straight from
+  // an existing review_*.json the user picks from disk. Same behavior as a
+  // completed runReview() — the per-row lookups against /api/corrupted/*
+  // are fired automatically by jrRenderHarmful().
+  async function loadReviewFile(inputEl) {
+    const file = inputEl && inputEl.files && inputEl.files[0];
+    // Reset the input so re-picking the same file still fires `onchange`.
+    if (inputEl) inputEl.value = '';
+    if (!file) return;
+    jrLog.innerHTML = '';
+    jrResult.textContent = '—';
+    jrHarmful.innerHTML = '<span class="status-line">loading '
+      + escapeHtml(file.name) + '…</span>';
+    jrSetStatus('loading review file…', 'running');
+    jrSetButtonsDisabled(true);
+    jrLogEntry('pipeline', 'loading review file: ' + file.name);
+    try {
+      const text = await file.text();
+      let report;
+      try {
+        report = JSON.parse(text);
+      } catch (e) {
+        throw new Error('not valid JSON: ' + e.message);
+      }
+      if (!report || !Array.isArray(report.cases)) {
+        throw new Error('missing "cases" array — not a review_*.json report');
+      }
+      const verdict = report.gate_verdict || '';
+      jrLogEntry(verdict === 'FAIL' ? 'error' : 'curator',
+        'loaded ' + file.name + (verdict ? ' · verdict=' + verdict : ''));
+      jrSetStatus('loaded · ' + file.name, 'done');
+      jrRenderHarmful(report);
+      jrResult.textContent = JSON.stringify({
+        ok: true,
+        loaded_from: file.name,
+        gate_verdict: verdict,
+        report,
+      }, null, 2);
+    } catch (e) {
+      jrLogEntry('error', 'load failed: ' + (e && e.message ? e.message : e));
+      jrSetStatus('error', 'error');
+      jrHarmful.innerHTML = '<span class="status-line error">load failed: '
+        + escapeHtml(String(e && e.message || e)) + '</span>';
+      jrResult.textContent = String(e && e.message || e);
     } finally {
       jrSetButtonsDisabled(false);
     }

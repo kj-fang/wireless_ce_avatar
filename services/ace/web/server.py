@@ -1345,6 +1345,110 @@ def create_app() -> tuple[Flask, SocketIO, JobManager, NightlyScheduler]:
         finally:
             _judge_review_lock.release()
 
+    # ---------- corrupted-bullet triage (post-review revert/remove) ----------
+    # Bridges the interactive `services.ace.eval.corrupted_bullet` CLI into
+    # the Judge & Review tab. The UI renders one row per harmful bullet with
+    # two action buttons; those buttons hit the endpoints below to look up
+    # the previous version and mutate the LIVE playbook dir (never the
+    # shared network share).
+    from ..eval.corrupted_bullet import (
+        SNAPSHOTS_DIR as _CORRUPTED_SNAPSHOTS_DIR,
+        _newest_snapshot_dir as _corrupted_newest_snapshot,
+        _find_bullet_in_live as _corrupted_find_in_live,
+        _lookup_previous_bullet as _corrupted_lookup_previous,
+        _revert_bullet_in_place as _corrupted_revert,
+        _remove_bullet_in_place as _corrupted_remove,
+    )
+
+    @app.route("/api/corrupted/lookup", methods=["POST"])
+    def api_corrupted_lookup():
+        body = request.get_json(silent=True) or {}
+        bullet_id = (body.get("bullet_id") or "").strip()
+        if not bullet_id:
+            return jsonify({"ok": False, "error": "bullet_id required"}), 400
+        ns = _norm_namespace(body.get("namespace"))
+        live_dir = _resolve_playbooks_dir(ns)
+
+        hit = _corrupted_find_in_live(bullet_id, live_dir)
+        if hit is None:
+            # Bullet not present in the live playbook set (already removed,
+            # or namespace mismatch). UI shows "not in live" and hides both
+            # action buttons for this row.
+            return jsonify({
+                "ok": True,
+                "bullet_id":     bullet_id,
+                "in_live":       False,
+                "playbook_file": None,
+                "current":       None,
+                "previous":      None,
+                "snapshot_dir":  None,
+            })
+        pb_path, live_bullet, _bullets, _idx = hit
+
+        snap_dir = _corrupted_newest_snapshot(_CORRUPTED_SNAPSHOTS_DIR)
+        prev = (_corrupted_lookup_previous(bullet_id, pb_path.name, snap_dir)
+                if snap_dir else None)
+        return jsonify({
+            "ok":            True,
+            "bullet_id":     bullet_id,
+            "in_live":       True,
+            "playbook_file": pb_path.name,
+            "current":       live_bullet,
+            "previous":      prev,
+            "snapshot_dir":  (str(snap_dir.relative_to(_CORRUPTED_SNAPSHOTS_DIR))
+                              if snap_dir else None),
+        })
+
+    @app.route("/api/corrupted/action", methods=["POST"])
+    def api_corrupted_action():
+        body = request.get_json(silent=True) or {}
+        bullet_id = (body.get("bullet_id") or "").strip()
+        action = (body.get("action") or "").strip().lower()
+        if not bullet_id:
+            return jsonify({"ok": False, "error": "bullet_id required"}), 400
+        if action not in ("revert", "remove"):
+            return jsonify({"ok": False,
+                            "error": "action must be 'revert' or 'remove'"}), 400
+        ns = _norm_namespace(body.get("namespace"))
+        live_dir = _resolve_playbooks_dir(ns)
+
+        hit = _corrupted_find_in_live(bullet_id, live_dir)
+        if hit is None:
+            return jsonify({"ok": False,
+                            "error": f"{bullet_id} not found in live playbook "
+                                     f"dir {live_dir}"}), 404
+        pb_path, _live_bullet, _bullets, _idx = hit
+
+        if action == "revert":
+            snap_dir = _corrupted_newest_snapshot(_CORRUPTED_SNAPSHOTS_DIR)
+            if snap_dir is None:
+                return jsonify({"ok": False,
+                                "error": "no snapshot directory found"}), 400
+            prev = _corrupted_lookup_previous(bullet_id, pb_path.name, snap_dir)
+            if prev is None:
+                return jsonify({"ok": False,
+                                "error": f"{bullet_id} has no previous version "
+                                         f"in newest snapshot for "
+                                         f"{pb_path.name}"}), 400
+            if not _corrupted_revert(pb_path, bullet_id, prev):
+                return jsonify({"ok": False, "error": "revert failed"}), 500
+            return jsonify({
+                "ok":            True,
+                "action":        "revert",
+                "bullet_id":     bullet_id,
+                "playbook_file": pb_path.name,
+            })
+
+        # action == "remove"
+        if not _corrupted_remove(pb_path, bullet_id):
+            return jsonify({"ok": False, "error": "remove failed"}), 500
+        return jsonify({
+            "ok":            True,
+            "action":        "remove",
+            "bullet_id":     bullet_id,
+            "playbook_file": pb_path.name,
+        })
+
     # ---------- history ----------
     @app.route("/api/history/snapshots")
     def api_history_snapshots():

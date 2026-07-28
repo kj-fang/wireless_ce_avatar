@@ -1,0 +1,437 @@
+"""
+Post-Review corrupted-bullet triage.
+
+After `services.ace.eval.review` produces a `review_*.json` report, this
+tool walks every bullet the reviewer flagged as `harmful` + `revert`
+(above the confidence gate) and, for each one, offers the user an
+interactive CLI choice:
+
+  * If a previous version of the bullet exists in the newest playbook
+    snapshot on disk (under `services/ace/eval/snapshots/`), show it and
+    ask whether to REVERT the live bullet to that previous version.
+  * If no previous version exists, ask whether to REMOVE the corrupted
+    bullet from the live playbook or KEEP it as-is.
+
+Only the *live* playbook files under `LIVE_PLAYBOOKS_DIR` are ever
+modified. Snapshots are read-only reference material.
+
+Usage:
+    python -m services.ace.eval.corrupted_bullet <path/to/review_*.json>
+    python -m services.ace.eval.corrupted_bullet review_20260722T085140+0000.json
+    python -m services.ace.eval.corrupted_bullet <review.json> --yes-revert
+"""
+
+from __future__ import annotations
+
+import argparse
+import json
+import sys
+from pathlib import Path
+
+
+# --- config -----------------------------------------------------------------
+# Local playbook directory that this tool is allowed to modify. The shared
+# network copy under `\\infs089b...\ace_playbook` is NEVER touched here.
+LIVE_PLAYBOOKS_DIR = Path(
+    r"C:\Users\lchienx\Downloads\IntelAvatar_files\ace_playbooks\local"
+)
+
+# Snapshot root: `<repo>/services/ace/eval/snapshots/<YYYY-MM-DD>/<ts>__<uuid>/`.
+SNAPSHOTS_DIR = Path(__file__).resolve().parent / "snapshots"
+
+# Reviewer verdict qualifies as "corrupted" only when confidence >= this.
+# Matches `review.CONFIDENCE_GATE` so what we act on aligns with what
+# triggered the FAIL verdict upstream.
+CONFIDENCE_GATE = 0.7
+
+# Default folder to resolve bare review filenames against (matches
+# `review.DEFAULT_RUNS_DIR`).
+DEFAULT_RUNS_DIR = Path(__file__).resolve().parent / "runs"
+
+
+# --- review-report parsing --------------------------------------------------
+def _resolve_review_path(review_path: Path) -> Path:
+    p = Path(review_path)
+    if p.is_file():
+        return p.resolve()
+    fallback = DEFAULT_RUNS_DIR / p.name
+    if fallback.is_file():
+        return fallback.resolve()
+    raise FileNotFoundError(
+        f"review report not found: {review_path} (also tried {fallback})"
+    )
+
+
+def _extract_corrupted_ids(report: dict) -> list[str]:
+    """
+    Deduplicated, order-preserving list of bullet ids that the reviewer
+    marked as `harmful` + `revert` with confidence >= CONFIDENCE_GATE.
+    Multiple cases can flag the same bullet — we surface it once.
+    """
+    seen: set[str] = set()
+    out: list[str] = []
+    for case in (report.get("cases") or []):
+        for v in (case.get("reviewed_bullets") or []):
+            if not isinstance(v, dict):
+                continue
+            if v.get("verdict") != "harmful":
+                continue
+            if v.get("recommended_action") != "revert":
+                continue
+            try:
+                conf = float(v.get("confidence") or 0)
+            except (TypeError, ValueError):
+                conf = 0.0
+            if conf < CONFIDENCE_GATE:
+                continue
+            bid = v.get("bullet_id")
+            if not bid or bid in seen:
+                continue
+            seen.add(bid)
+            out.append(bid)
+    return out
+
+
+# --- live playbook lookup ---------------------------------------------------
+def _find_bullet_in_live(
+    bullet_id: str,
+    live_dir: Path,
+) -> tuple[Path, dict, list, int] | None:
+    """
+    Locate `bullet_id` across every `*.json` in `live_dir`.
+
+    Returns `(playbook_path, bullet_obj, bullets_list, index)` on hit, or
+    `None` if the id isn't present in any live playbook file. The list
+    and index are returned so callers can splice/replace without re-loading.
+    """
+    if not live_dir.is_dir():
+        return None
+    for pb_file in sorted(live_dir.glob("*.json")):
+        try:
+            data = json.loads(pb_file.read_text(encoding="utf-8"))
+        except Exception as e:
+            print(f"[corrupted] WARN: cannot parse {pb_file.name}: {e}",
+                  file=sys.stderr)
+            continue
+        bullets = data.get("bullets") if isinstance(data, dict) else None
+        if not isinstance(bullets, list):
+            continue
+        for i, b in enumerate(bullets):
+            if isinstance(b, dict) and b.get("id") == bullet_id:
+                return pb_file, b, bullets, i
+    return None
+
+
+# --- snapshot resolution ----------------------------------------------------
+def _newest_snapshot_dir(snapshots_root: Path) -> Path | None:
+    """
+    Newest snapshot folder on disk, regardless of timing:
+        snapshots/<YYYY-MM-DD>/<timestampT...__uuid>/
+    Picks the lexicographically-largest date folder, then the
+    lexicographically-largest timestamped subfolder inside it. ISO-8601
+    date prefixes make lex order == chronological order.
+    """
+    if not snapshots_root.is_dir():
+        return None
+    date_dirs = sorted(
+        [p for p in snapshots_root.iterdir() if p.is_dir()],
+        key=lambda p: p.name,
+    )
+    if not date_dirs:
+        return None
+    newest_date = date_dirs[-1]
+    snap_dirs = sorted(
+        [p for p in newest_date.iterdir() if p.is_dir()],
+        key=lambda p: p.name,
+    )
+    if not snap_dirs:
+        return None
+    return snap_dirs[-1]
+
+
+def _lookup_previous_bullet(
+    bullet_id: str,
+    playbook_filename: str,
+    snapshot_dir: Path,
+) -> dict | None:
+    """
+    Open `<snapshot_dir>/<playbook_filename>` and return the bullet dict
+    whose id matches. Returns None if the file is missing/unreadable or
+    the bullet isn't present.
+    """
+    snap_file = snapshot_dir / playbook_filename
+    if not snap_file.is_file():
+        return None
+    try:
+        data = json.loads(snap_file.read_text(encoding="utf-8"))
+    except Exception as e:
+        print(f"[corrupted] WARN: cannot parse snapshot {snap_file}: {e}",
+              file=sys.stderr)
+        return None
+    for b in (data.get("bullets") or []):
+        if isinstance(b, dict) and b.get("id") == bullet_id:
+            return b
+    return None
+
+
+# --- live playbook mutation -------------------------------------------------
+def _write_playbook(pb_path: Path, data: dict) -> None:
+    """Rewrite the live playbook JSON, preserving formatting conventions
+    used elsewhere in the repo (indent=2, ensure_ascii=False)."""
+    pb_path.write_text(
+        json.dumps(data, indent=2, ensure_ascii=False) + "\n",
+        encoding="utf-8",
+    )
+
+
+def _revert_bullet_in_place(
+    pb_path: Path,
+    bullet_id: str,
+    replacement: dict,
+) -> bool:
+    """Load the live playbook, replace the matching bullet with
+    `replacement`, and write it back. Returns True on success."""
+    try:
+        data = json.loads(pb_path.read_text(encoding="utf-8"))
+    except Exception as e:
+        print(f"[corrupted] ERROR: cannot reload {pb_path.name}: {e}",
+              file=sys.stderr)
+        return False
+    bullets = data.get("bullets")
+    if not isinstance(bullets, list):
+        print(f"[corrupted] ERROR: {pb_path.name} has no bullets array",
+              file=sys.stderr)
+        return False
+    for i, b in enumerate(bullets):
+        if isinstance(b, dict) and b.get("id") == bullet_id:
+            bullets[i] = replacement
+            _write_playbook(pb_path, data)
+            return True
+    print(f"[corrupted] ERROR: bullet {bullet_id} vanished from "
+          f"{pb_path.name} before revert.", file=sys.stderr)
+    return False
+
+
+def _remove_bullet_in_place(pb_path: Path, bullet_id: str) -> bool:
+    """Load the live playbook, drop the matching bullet, and write back."""
+    try:
+        data = json.loads(pb_path.read_text(encoding="utf-8"))
+    except Exception as e:
+        print(f"[corrupted] ERROR: cannot reload {pb_path.name}: {e}",
+              file=sys.stderr)
+        return False
+    bullets = data.get("bullets")
+    if not isinstance(bullets, list):
+        print(f"[corrupted] ERROR: {pb_path.name} has no bullets array",
+              file=sys.stderr)
+        return False
+    new_bullets = [b for b in bullets
+                   if not (isinstance(b, dict) and b.get("id") == bullet_id)]
+    if len(new_bullets) == len(bullets):
+        print(f"[corrupted] ERROR: bullet {bullet_id} vanished from "
+              f"{pb_path.name} before remove.", file=sys.stderr)
+        return False
+    data["bullets"] = new_bullets
+    _write_playbook(pb_path, data)
+    return True
+
+
+# --- interactive prompts ----------------------------------------------------
+def _prompt_yes_no(question: str, default: bool, auto: bool | None) -> bool:
+    """Prompt for a y/n answer. `auto` bypasses input() when set."""
+    if auto is not None:
+        return auto
+    suffix = " [Y/n] " if default else " [y/N] "
+    try:
+        raw = input(question + suffix).strip().lower()
+    except EOFError:
+        return default
+    if not raw:
+        return default
+    return raw in ("y", "yes")
+
+
+def _prompt_remove_or_keep(question: str, auto_remove: bool | None) -> bool:
+    """Return True to remove, False to keep. Default is keep."""
+    if auto_remove is not None:
+        return auto_remove
+    try:
+        raw = input(question + " [r=remove, K=keep] ").strip().lower()
+    except EOFError:
+        return False
+    return raw in ("r", "remove")
+
+
+def _pretty(obj: dict) -> str:
+    return json.dumps(obj, indent=2, ensure_ascii=False)
+
+
+# --- main flow --------------------------------------------------------------
+def process(
+    review_path: Path,
+    auto_revert: bool | None = None,
+    auto_remove: bool | None = None,
+) -> dict:
+    review_path = _resolve_review_path(review_path)
+    report = json.loads(review_path.read_text(encoding="utf-8"))
+    corrupted_ids = _extract_corrupted_ids(report)
+
+    print(f"[corrupted] review    : {review_path.name}")
+    print(f"[corrupted] live dir  : {LIVE_PLAYBOOKS_DIR}")
+    if not LIVE_PLAYBOOKS_DIR.is_dir():
+        print(f"[corrupted] ERROR: live playbook dir does not exist. "
+              f"Aborting.", file=sys.stderr)
+        return {"error": "live_dir_missing"}
+
+    snapshot_dir = _newest_snapshot_dir(SNAPSHOTS_DIR)
+    if snapshot_dir is None:
+        print(f"[corrupted] WARN: no snapshots found under {SNAPSHOTS_DIR}. "
+              f"All bullets will be treated as 'no previous version'.")
+    else:
+        print(f"[corrupted] snapshot : {snapshot_dir.relative_to(SNAPSHOTS_DIR)}")
+
+    print(f"[corrupted] corrupted : "
+          f"{corrupted_ids if corrupted_ids else '(none)'}")
+    if not corrupted_ids:
+        return {
+            "review": review_path.name,
+            "snapshot": str(snapshot_dir) if snapshot_dir else None,
+            "results": [],
+        }
+
+    results: list[dict] = []
+    for bid in corrupted_ids:
+        print("\n" + "=" * 72)
+        print(f"[corrupted] bullet: {bid}")
+
+        hit = _find_bullet_in_live(bid, LIVE_PLAYBOOKS_DIR)
+        if hit is None:
+            print(f"  not found in any live playbook under {LIVE_PLAYBOOKS_DIR}"
+                  f" — skipping.")
+            results.append({"bullet_id": bid, "action": "skipped_not_in_live"})
+            continue
+        pb_path, live_bullet, _live_bullets, _idx = hit
+        pb_name = pb_path.name
+        live_updated = live_bullet.get("updated_at", "")
+        print(f"  playbook_file : {pb_name}")
+        print(f"  updated_at    : {live_updated}")
+
+        prev_bullet = None
+        if snapshot_dir is not None:
+            prev_bullet = _lookup_previous_bullet(bid, pb_name, snapshot_dir)
+
+        if prev_bullet is not None:
+            print("\n  --- CURRENT (corrupted) ---")
+            print(_pretty(live_bullet))
+            print("\n  --- PREVIOUS (from snapshot) ---")
+            print(_pretty(prev_bullet))
+            if _prompt_yes_no(
+                f"\n  Revert {bid} in {pb_name} to the previous version?",
+                default=True,
+                auto=auto_revert,
+            ):
+                ok = _revert_bullet_in_place(pb_path, bid, prev_bullet)
+                results.append({
+                    "bullet_id": bid,
+                    "playbook_file": pb_name,
+                    "action": "reverted" if ok else "revert_failed",
+                })
+                if ok:
+                    print(f"  → reverted {bid} in {pb_name}")
+            else:
+                results.append({
+                    "bullet_id": bid,
+                    "playbook_file": pb_name,
+                    "action": "kept_corrupted",
+                })
+                print(f"  → kept corrupted version in {pb_name}")
+        else:
+            print(f"\n  No previous version of {bid} in snapshot "
+                  f"(file: {pb_name}).")
+            print("  --- CURRENT (corrupted) ---")
+            print(_pretty(live_bullet))
+            if _prompt_remove_or_keep(
+                f"\n  Remove {bid} from {pb_name}, or keep it?",
+                auto_remove=auto_remove,
+            ):
+                ok = _remove_bullet_in_place(pb_path, bid)
+                results.append({
+                    "bullet_id": bid,
+                    "playbook_file": pb_name,
+                    "action": "removed" if ok else "remove_failed",
+                })
+                if ok:
+                    print(f"  → removed {bid} from {pb_name}")
+            else:
+                results.append({
+                    "bullet_id": bid,
+                    "playbook_file": pb_name,
+                    "action": "kept_no_previous",
+                })
+                print(f"  → kept corrupted version in {pb_name}")
+
+    # Summary
+    print("\n" + "=" * 72)
+    tally: dict[str, int] = {}
+    for r in results:
+        tally[r["action"]] = tally.get(r["action"], 0) + 1
+    print(f"[corrupted] done. {len(results)} bullet(s) processed:")
+    for action, n in sorted(tally.items()):
+        print(f"    {action:<24} {n}")
+
+    return {
+        "review": review_path.name,
+        "snapshot": str(snapshot_dir) if snapshot_dir else None,
+        "results": results,
+    }
+
+
+def main(argv: list[str] | None = None) -> int:
+    p = argparse.ArgumentParser(
+        prog="python -m services.ace.eval.corrupted_bullet",
+        description=("Interactively triage bullets flagged as harmful+revert "
+                     "by services.ace.eval.review. For each such bullet, "
+                     "either revert to the newest snapshot's version or "
+                     "remove/keep it if no previous version exists."),
+    )
+    p.add_argument("review", type=Path,
+                   help="Path to a review_*.json produced by "
+                        "services.ace.eval.review (bare filename is "
+                        "resolved against services/ace/eval/runs/).")
+    p.add_argument("--yes-revert", action="store_true",
+                   help="Non-interactive: revert every bullet that has a "
+                        "previous version, without prompting.")
+    p.add_argument("--no-revert", action="store_true",
+                   help="Non-interactive: keep every corrupted bullet that "
+                        "has a previous version (do not revert).")
+    p.add_argument("--yes-remove", action="store_true",
+                   help="Non-interactive: remove every corrupted bullet "
+                        "that has no previous version.")
+    p.add_argument("--no-remove", action="store_true",
+                   help="Non-interactive: keep every corrupted bullet that "
+                        "has no previous version (do not remove).")
+    args = p.parse_args(argv)
+
+    if args.yes_revert and args.no_revert:
+        p.error("--yes-revert and --no-revert are mutually exclusive")
+    if args.yes_remove and args.no_remove:
+        p.error("--yes-remove and --no-remove are mutually exclusive")
+
+    auto_revert: bool | None = None
+    if args.yes_revert:
+        auto_revert = True
+    elif args.no_revert:
+        auto_revert = False
+
+    auto_remove: bool | None = None
+    if args.yes_remove:
+        auto_remove = True
+    elif args.no_remove:
+        auto_remove = False
+
+    process(args.review, auto_revert=auto_revert, auto_remove=auto_remove)
+    return 0
+
+
+if __name__ == "__main__":
+    sys.exit(main())

@@ -1016,6 +1016,29 @@ def reset():
 
 
 # ------------------------------------------------------------------
+# API: stop the in-flight tools-mode analysis
+#
+# Signals the running background job's agent (via its cancel_event) to bail
+# out at the next reasoning-step boundary. The job then finishes normally and
+# its SSE stream emits a terminal "done" with a "stopped" notice. Idempotent:
+# a no-op when nothing is running. Scoped to the "bt" domain so it never
+# cancels another bot's analysis.
+# ------------------------------------------------------------------
+@bt_chatbot_bp.route("/chat/stop", methods=["POST"])
+def chat_stop():
+    try:
+        data = request.get_json(silent=True) or {}
+        conversation_id = (data.get("conversation_id") or "").strip()
+        if conversation_id:
+            stopped = chat_jobs.request_cancel(conversation_id)
+        else:
+            stopped = chat_jobs.cancel_active(domain="bt") > 0
+        return jsonify({"success": True, "stopped": bool(stopped)})
+    except Exception as e:
+        return jsonify({"success": False, "error": str(e)}), 500
+
+
+# ------------------------------------------------------------------
 # API: local conversation history (Gemini / Claude style sidebar)
 #
 # Every chat turn is persisted to <avatarfiles_dir>/bt_history/bt-<id>.json

@@ -121,6 +121,46 @@ def get_job(conversation_id: str) -> Optional[ChatJob]:
         return _jobs.get(conversation_id)
 
 
+def _signal_cancel(job: Optional[ChatJob]) -> bool:
+    """Set the owning agent's cancel_event so its tools loop bails out early.
+
+    The job is NOT force-terminated here: the worker thread finishes the
+    current reasoning step, the agent returns a "stopped" result, and the
+    normal finish_job path fires the terminal event to every subscriber. That
+    keeps the SSE stream and the job buffer consistent with a natural finish.
+    """
+    if job is None or job.status != "running":
+        return False
+    try:
+        agent = getattr(job, "agent", None)
+        ev = getattr(agent, "cancel_event", None)
+        if ev is not None:
+            ev.set()
+            return True
+    except Exception:
+        pass
+    return False
+
+
+def request_cancel(conversation_id: str) -> bool:
+    """Signal the running job for this conversation to stop. Returns True if a
+    running job was found and signalled."""
+    return _signal_cancel(get_job(conversation_id))
+
+
+def cancel_active(domain: Optional[str] = None) -> int:
+    """Signal every currently-running job (optionally scoped to a bot domain)
+    to stop. Returns the number of jobs signalled. Used by the Stop button when
+    the frontend doesn't yet know the conversation id (there is at most one
+    in-flight analysis per bot)."""
+    with _registry_lock:
+        jobs = [
+            j for j in _jobs.values()
+            if j.status == "running" and (domain is None or j.domain == domain)
+        ]
+    return sum(1 for j in jobs if _signal_cancel(j))
+
+
 def publish_step(job: ChatJob, step: Any) -> None:
     """Append a step to the buffer and fan it out to live subscribers."""
     if job is None:

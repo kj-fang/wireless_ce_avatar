@@ -1021,18 +1021,21 @@ def reset():
 # Signals the running background job's agent (via its cancel_event) to bail
 # out at the next reasoning-step boundary. The job then finishes normally and
 # its SSE stream emits a terminal "done" with a "stopped" notice. Idempotent:
-# a no-op when nothing is running. Scoped to the "bt" domain so it never
-# cancels another bot's analysis.
+# a no-op when nothing is running.
+#
+# The target conversation is resolved from the caller's OWN session (the
+# frontend only learns conversation_id on the terminal 'done' event, so a Stop
+# clicked mid-stream usually sends an empty id). This scopes cancellation to
+# this session's job only — never other tabs'/users' running analyses.
 # ------------------------------------------------------------------
 @bt_chatbot_bp.route("/chat/stop", methods=["POST"])
 def chat_stop():
     try:
         data = request.get_json(silent=True) or {}
         conversation_id = (data.get("conversation_id") or "").strip()
-        if conversation_id:
-            stopped = chat_jobs.request_cancel(conversation_id)
-        else:
-            stopped = chat_jobs.cancel_active(domain="bt") > 0
+        if not conversation_id:
+            conversation_id = (session.get("feedback_conversation_id") or "").strip()
+        stopped = chat_jobs.request_cancel(conversation_id) if conversation_id else False
         return jsonify({"success": True, "stopped": bool(stopped)})
     except Exception as e:
         return jsonify({"success": False, "error": str(e)}), 500

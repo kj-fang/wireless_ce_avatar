@@ -148,19 +148,6 @@ def request_cancel(conversation_id: str) -> bool:
     return _signal_cancel(get_job(conversation_id))
 
 
-def cancel_active(domain: Optional[str] = None) -> int:
-    """Signal every currently-running job (optionally scoped to a bot domain)
-    to stop. Returns the number of jobs signalled. Used by the Stop button when
-    the frontend doesn't yet know the conversation id (there is at most one
-    in-flight analysis per bot)."""
-    with _registry_lock:
-        jobs = [
-            j for j in _jobs.values()
-            if j.status == "running" and (domain is None or j.domain == domain)
-        ]
-    return sum(1 for j in jobs if _signal_cancel(j))
-
-
 def publish_step(job: ChatJob, step: Any) -> None:
     """Append a step to the buffer and fan it out to live subscribers."""
     if job is None:

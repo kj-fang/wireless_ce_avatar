@@ -427,12 +427,13 @@ def cmd_pipeline(args):
     # 4a. Triage — when the review FAILs, auto-fix flagged harmful bullets
     # by default (revert if snapshot exists, else remove). Use --no-triage
     # to skip this mutation step.
+    triage_report = None
     if verdict != "PASS" and not getattr(args, "no_triage", False):
         review_stamp = (rreport.get("ts_utc") or "").replace(":", "").replace("-", "")
         review_path = Path(runs_dir) / f"review_{review_stamp}.json"
         print("[pipeline] ===== STEP 4: corrupted-bullet triage =====")
         from .eval import corrupted_bullet as eval_triage
-        eval_triage.process(
+        triage_report = eval_triage.process(
             review_path,
             auto_revert=True,
             auto_remove=True,
@@ -449,6 +450,21 @@ def cmd_pipeline(args):
             _push_now(args.namespace)
     elif want_push:
         print("[pipeline] review did NOT pass — push withheld (nothing published).")
+
+    # 5. Notification (optional) — enabled only when ACE_NOTIFY_TO is set.
+    # Uses SMTP relay/auth settings from environment variables.
+    try:
+        from .eval import notify_email as eval_notify
+        if eval_notify.notify_from_env(
+            namespace=args.namespace,
+            review_report=rreport,
+            triage_report=triage_report,
+        ):
+            print("[pipeline] notification email sent.")
+        else:
+            print("[pipeline] notification skipped (ACE_NOTIFY_TO not set).")
+    except Exception as exc:
+        print(f"[pipeline] WARN: notification failed: {exc}")
 
     # Mirror `python -m services.ace.eval.review`: 0 = PASS, 2 = regression.
     return 0 if verdict == "PASS" else 2

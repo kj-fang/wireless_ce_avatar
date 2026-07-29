@@ -470,6 +470,30 @@ def cmd_pipeline(args):
     return 0 if verdict == "PASS" else 2
 
 
+def cmd_notify_test(args):
+    """Send a standalone SMTP test email using ACE_* env configuration."""
+    from .eval import notify_email as eval_notify
+
+    try:
+        sent = eval_notify.send_test_from_env(
+            namespace=args.namespace,
+            note=args.note or "",
+            to_override=args.to,
+            cc_override=args.cc,
+        )
+    except Exception as exc:
+        print(f"[notify-test] FAILED: {exc}")
+        return 1
+
+    if not sent:
+        print("[notify-test] skipped: recipient list is empty. "
+              "Set ACE_NOTIFY_TO in notify_email.py or pass --to.")
+        return 2
+
+    print("[notify-test] test email sent.")
+    return 0
+
+
 def main(argv=None):
     parser = argparse.ArgumentParser(description="ACE adaptation CLI")
     sub = parser.add_subparsers(dest="cmd", required=True)
@@ -569,6 +593,22 @@ def main(argv=None):
                              "Default behavior on FAIL is auto-revert (or "
                              "remove when no snapshot version exists).")
     p_pipe.set_defaults(func=cmd_pipeline)
+
+    p_notify = sub.add_parser(
+        "notify-test",
+        help="Send a standalone SMTP test email using ACE_* environment variables",
+    )
+    p_notify.add_argument("--namespace", choices=("wifi", "bt"), default="wifi",
+                          help="Tag used in the email subject (default wifi)")
+    p_notify.add_argument("--to", default=None,
+                          help="Override recipient list for this run only "
+                               "(comma/semicolon separated)")
+    p_notify.add_argument("--cc", default=None,
+                          help="Override CC list for this run only "
+                               "(comma/semicolon separated)")
+    p_notify.add_argument("--note", default="",
+                          help="Optional test note shown in the email body")
+    p_notify.set_defaults(func=cmd_notify_test)
 
     args = parser.parse_args(argv)
     _ensure_avatarfiles_dir()

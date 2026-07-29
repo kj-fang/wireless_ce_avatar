@@ -670,6 +670,11 @@
         }
         #send-btn:hover { background: #005a9e; }
         #send-btn:disabled { opacity: 0.5; cursor: not-allowed; }
+        /* Stop mode: while an analysis is streaming the Send button turns into
+           a red Stop button (always clickable so the user can abort). */
+        #send-btn.stopping { background: #dc2626; }
+        #send-btn.stopping:hover { background: #b91c1c; }
+        #send-btn.stopping:disabled { opacity: 1; cursor: pointer; }
 
         /* Scrollbar */
         #chat-window::-webkit-scrollbar { width: 5px; }
@@ -2388,7 +2393,7 @@
         </div>
         <div class="input-row">
             <textarea id="user-input" rows="1" placeholder="Describe the issue (e.g. '6G Weak Signal disconnected'). Pick the issue time on the left." onkeydown="handleEnter(event)" oninput="onUserInputChange(this)"></textarea>
-            <button id="send-btn" onclick="sendMessage()">Send ↑</button>
+            <button id="send-btn" onclick="onSendBtnClick()">Send ↑</button>
         </div>
     </div>
 
@@ -2455,7 +2460,7 @@
     function handleEnter(e) {
         if (e.key === 'Enter' && !e.shiftKey) {
             e.preventDefault();
-            sendMessage();
+            onSendBtnClick();
         }
     }
 
@@ -3850,6 +3855,57 @@
         updateAnalyzeBtn();
     }
 
+    // ── Stop / abort support ───────────────────────────────────────
+    // While a tools-mode analysis streams, the Send button becomes a red
+    // Stop button. Clicking it aborts the SSE stream locally (reusing the
+    // existing __streamCtl controller) AND asks the backend to halt the
+    // running analysis (its agent loop bails out at the next reasoning-step
+    // boundary).
+    let __wifiStreaming = false;
+
+    function setSendBtnStopMode() {
+        __wifiStreaming = true;
+        const btn = document.getElementById('send-btn');
+        if (!btn) return;
+        btn.disabled = false;
+        btn.classList.add('stopping');
+        btn.textContent = 'Stop ■';
+    }
+
+    function setSendBtnSendMode() {
+        __wifiStreaming = false;
+        const btn = document.getElementById('send-btn');
+        if (!btn) return;
+        btn.classList.remove('stopping');
+        btn.textContent = 'Send ↑';
+        if (typeof validateUserInput === 'function') validateUserInput(false);
+        else btn.disabled = false;
+    }
+
+    // Single click entry point for the Send/Stop button (and Enter key).
+    function onSendBtnClick() {
+        if (__wifiStreaming) { stopChat(); return; }
+        sendMessage();
+    }
+
+    async function stopChat() {
+        // Stop rendering immediately by aborting the active stream.
+        if (window.__streamCtl) { try { window.__streamCtl.abort(); } catch (e) {} }
+        // Drop any queued multi-incident continuations so the chain ends here.
+        window.__multiTimeContext = null;
+        // Ask the backend to halt the running analysis (cooperative cancel).
+        try {
+            await fetch('/log_chatbot/chat/stop', {
+                method: 'POST',
+                headers: {'Content-Type': 'application/json'},
+                body: JSON.stringify({ conversation_id: window.__feedbackConversationId || '' }),
+            });
+        } catch (e) { /* best-effort */ }
+        removeTyping();
+        appendAssistantText('⏹️ Analysis stopped by user.');
+        setSendBtnSendMode();
+    }
+
     // ── Send chat message ──────────────────────────────────────────
     async function sendMessage() {
         const input = document.getElementById('user-input');
@@ -3975,6 +4031,8 @@
             clearIssueTime();
         }
         document.getElementById('send-btn').disabled = true;
+        // Flip the Send button into its red Stop state for this stream.
+        setSendBtnStopMode();
         // Only show the user's typed message ONCE — at the start of the
         // very first iteration. Continuations re-use the same message.
         if (!isContinuation) appendUserMsg(text);
@@ -4234,7 +4292,7 @@
                     clearIssueTime();
                     clearAllExtraIssueTimes();
                 }
-                document.getElementById('send-btn').disabled = false;
+                setSendBtnSendMode();
             }
         }
     }

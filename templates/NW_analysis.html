@@ -366,6 +366,11 @@
         }
         #send-btn:hover { background: #005a9e; }
         #send-btn:disabled { opacity: 0.5; cursor: not-allowed; }
+        /* Stop mode: while an analysis is streaming the Send button turns into
+           a red Stop button (always clickable so the user can abort). */
+        #send-btn.stopping { background: #dc2626; }
+        #send-btn.stopping:hover { background: #b91c1c; }
+        #send-btn.stopping:disabled { opacity: 1; cursor: pointer; }
 
         /* Scrollbar */
         #chat-window::-webkit-scrollbar { width: 5px; }
@@ -566,7 +571,7 @@
 
         <div class="input-row">
             <textarea id="user-input" rows="1" placeholder="Ask a question about the log…" onkeydown="handleEnter(event)" oninput="autoResize(this)"></textarea>
-            <button id="send-btn" onclick="sendMessage()">Send ↑</button>
+            <button id="send-btn" onclick="onSendBtnClick()">Send ↑</button>
         </div>
     </div>
 
@@ -602,7 +607,7 @@
     function handleEnter(e) {
         if (e.key === 'Enter' && !e.shiftKey) {
             e.preventDefault();
-            sendMessage();
+            onSendBtnClick();
         }
     }
 
@@ -1164,6 +1169,55 @@
     }
 
     // ── Send chat message ──────────────────────────────────────────
+    // ── Stop / abort support ───────────────────────────────────────
+    // While a tools-mode analysis streams, the Send button becomes a red
+    // Stop button. Clicking it aborts the SSE stream locally AND asks the
+    // backend to halt the running analysis (its agent loop bails out at the
+    // next reasoning-step boundary).
+    let __nwStreaming = false;
+    let __nwChatCtl = null;
+
+    function setSendBtnStopMode() {
+        __nwStreaming = true;
+        const btn = document.getElementById('send-btn');
+        if (!btn) return;
+        btn.disabled = false;
+        btn.classList.add('stopping');
+        btn.textContent = 'Stop ■';
+    }
+
+    function setSendBtnSendMode() {
+        __nwStreaming = false;
+        __nwChatCtl = null;
+        const btn = document.getElementById('send-btn');
+        if (!btn) return;
+        btn.classList.remove('stopping');
+        btn.textContent = 'Send ↑';
+        btn.disabled = false;
+    }
+
+    // Single click entry point for the Send/Stop button (and Enter key).
+    function onSendBtnClick() {
+        if (__nwStreaming) { stopChat(); return; }
+        sendMessage();
+    }
+
+    async function stopChat() {
+        // Stop rendering immediately by aborting the fetch stream.
+        if (__nwChatCtl) { try { __nwChatCtl.abort(); } catch (e) {} }
+        // Ask the backend to halt the running analysis (cooperative cancel).
+        try {
+            await fetch('/nw_analysis/chat/stop', {
+                method: 'POST',
+                headers: {'Content-Type': 'application/json'},
+                body: JSON.stringify({}),
+            });
+        } catch (e) { /* best-effort */ }
+        removeTyping();
+        appendAssistantText('⏹️ Analysis stopped by user.');
+        setSendBtnSendMode();
+    }
+
     async function sendMessage() {
         const input = document.getElementById('user-input');
         const text = input.value.trim();
@@ -1172,8 +1226,11 @@
         input.value = '';
         input.style.height = 'auto';
         document.getElementById('send-btn').disabled = true;
+        // Flip the Send button into its red Stop state for this stream.
+        setSendBtnStopMode();
         appendUserMsg(text);
         const typingRow = appendTyping();
+        let __nwAborted = false;   // set true when the user clicks Stop
 
         const steps = [];
         let agentCardBodyEl = null;   // live step list container created on first step
@@ -1222,9 +1279,11 @@
         }
 
         try {
+            __nwChatCtl = new AbortController();
             const res = await fetch('/nw_analysis/chat', {
                 method: 'POST',
                 headers: {'Content-Type': 'application/json'},
+                signal: __nwChatCtl.signal,
                 body: JSON.stringify({message: text, use_tools: agenticMode})
             });
 
@@ -1272,11 +1331,17 @@
             if (buffer) processLine(buffer);
 
         } catch (e) {
-            removeTyping();
-            appendAssistantText('❌ Network error: ' + e.message);
+            if (e.name === 'AbortError') {
+                // User clicked Stop — stopChat() already rendered the notice
+                // and the backend is halting. Nothing more to show here.
+                __nwAborted = true;
+            } else {
+                removeTyping();
+                appendAssistantText('❌ Network error: ' + e.message);
+            }
         } finally {
             removeTyping();
-            document.getElementById('send-btn').disabled = false;
+            setSendBtnSendMode();
         }
     }
 

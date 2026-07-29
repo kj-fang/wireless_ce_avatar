@@ -6,7 +6,7 @@ available. Defaults match the validated Intel relay setup:
   host=smtp.intel.com, port=25, no auth, no TLS.
 
 Environment variables:
-    (Recipients are configured by module globals below, not env vars.)
+  (Recipients are configured by module globals below, not env vars.)
   ACE_SMTP_FROM         Optional; defaults to current UPN or no-reply value.
   ACE_SMTP_HOST         Optional; default smtp.intel.com.
   ACE_SMTP_PORT         Optional; default 25.
@@ -23,6 +23,8 @@ from datetime import datetime
 from email.mime.multipart import MIMEMultipart
 from email.mime.text import MIMEText
 from html import escape
+
+from .email_templates import build_review_triage_email
 
 
 # --- recipient configuration (edit these directly) -------------------------
@@ -58,6 +60,7 @@ def _default_sender() -> str:
     # Keep this dependency local; eval package is also used headless.
     try:
         from utils import helpers
+
         upn = (helpers.detect_user_email() or "").strip()
         if upn and "@" in upn:
             return upn
@@ -105,62 +108,6 @@ def smtp_send_html(
         client.sendmail(sender_addr, recipients, msg.as_string())
 
 
-def _tally_actions(results: list[dict]) -> dict[str, int]:
-    tally: dict[str, int] = {}
-    for row in results:
-        action = str(row.get("action") or "unknown")
-        tally[action] = tally.get(action, 0) + 1
-    return tally
-
-
-def build_review_triage_email(
-    *,
-    namespace: str,
-    review_report: dict,
-    triage_report: dict | None,
-) -> tuple[str, str]:
-    """Build (subject, html) for manager notification."""
-    verdict = str(review_report.get("gate_verdict") or "UNKNOWN")
-    review_ts = str(review_report.get("ts_utc") or "")
-
-    triage_results = (triage_report or {}).get("results") or []
-    triage_tally = _tally_actions(triage_results)
-    triage_rows = "".join(
-        f"<tr><td>{escape(k)}</td><td>{v}</td></tr>"
-        for k, v in sorted(triage_tally.items())
-    ) or "<tr><td>(none)</td><td>0</td></tr>"
-
-    subject = (
-        f"[ACE {namespace}] Review {verdict} - "
-        f"{datetime.now().strftime('%Y-%m-%d %H:%M:%S')}"
-    )
-
-    html = f"""
-<html><body>
-  <p><strong>ACE pipeline notification</strong></p>
-  <p>Namespace: <strong>{escape(namespace)}</strong></p>
-  <p>Review verdict: <strong>{escape(verdict)}</strong></p>
-  <p>Review timestamp (UTC): <strong>{escape(review_ts)}</strong></p>
-
-  <hr>
-  <p><strong>Corrupted-bullet triage summary</strong></p>
-  <table border="1" cellspacing="0" cellpadding="6">
-    <tr><th>Action</th><th>Count</th></tr>
-    {triage_rows}
-  </table>
-
-  <p style="margin-top:14px;"><strong>Per-bullet actions</strong></p>
-  <ul>
-    {''.join(f'<li>{escape(str(r.get("bullet_id") or "?"))}: {escape(str(r.get("action") or "unknown"))}</li>' for r in triage_results) or '<li>(none)</li>'}
-  </ul>
-
-  <hr>
-  <p>This is an automatically generated email from ACE eval pipeline.</p>
-</body></html>
-"""
-    return subject, html
-
-
 def _resolve_smtp_settings(
     *,
     to_override: str | None = None,
@@ -171,12 +118,16 @@ def _resolve_smtp_settings(
     Recipients come from module globals unless one-shot overrides are passed.
     SMTP transport settings remain env-driven.
     """
-    to_list = (_parse_recipients(to_override)
-               if to_override is not None
-               else _clean_recipients(ACE_NOTIFY_TO))
-    cc_list = (_parse_recipients(cc_override)
-               if cc_override is not None
-               else _clean_recipients(ACE_NOTIFY_CC))
+    to_list = (
+        _parse_recipients(to_override)
+        if to_override is not None
+        else _clean_recipients(ACE_NOTIFY_TO)
+    )
+    cc_list = (
+        _parse_recipients(cc_override)
+        if cc_override is not None
+        else _clean_recipients(ACE_NOTIFY_CC)
+    )
     smtp_host = (os.getenv("ACE_SMTP_HOST") or "smtp.intel.com").strip()
     smtp_port = int((os.getenv("ACE_SMTP_PORT") or "25").strip())
     sender = (os.getenv("ACE_SMTP_FROM") or "").strip() or None
@@ -205,7 +156,7 @@ def send_test_from_env(
     """
     Send a standalone SMTP test email using ACE_* environment variables.
 
-    Returns True when sent, False when ACE_NOTIFY_TO is missing.
+    Returns True when sent, False when recipient list is missing.
     """
     cfg = _resolve_smtp_settings(to_override=to_override, cc_override=cc_override)
     to_list = cfg["to_list"]
@@ -249,7 +200,7 @@ def send_test_from_env(
 
 def notify_from_env(*, namespace: str, review_report: dict, triage_report: dict | None) -> bool:
     """
-    Send review/triage notification using env var configuration.
+    Send review/triage notification using module recipients + env SMTP.
 
     Returns True when email was sent, False when skipped due to missing
     recipient configuration.

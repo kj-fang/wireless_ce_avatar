@@ -1,0 +1,71 @@
+<html>
+  <body>
+    <div style="font-family:Segoe UI,Arial,sans-serif;color:#1f2937;max-width:920px;">
+      <h2 style="margin:0 0 10px 0;">ACE Pipeline Notification</h2>
+      <p style="margin:0 0 12px 0;">Namespace: <strong>{{ namespace }}</strong></p>
+      <div style="display:inline-block;padding:6px 10px;border-radius:999px;background:{{ badge_bg }};color:{{ badge_fg }};font-weight:700;">
+        Review Verdict: {{ verdict_upper }}
+      </div>
+      <p style="margin:10px 0 0 0;">{{ verdict_hint }}</p>
+      <p style="margin:6px 0 0 0;color:#475569;">Review timestamp (UTC): <strong>{{ review_ts }}</strong></p>
+
+      <div style="margin-top:16px;border:1px solid #d9e2ec;border-radius:8px;padding:12px;">
+        <p style="margin:0 0 8px 0;font-weight:700;">Triage KPI</p>
+        <table style="border-collapse:collapse;width:100%;font-size:13px;">
+          <tr>
+            <td style="padding:6px 8px;border:1px solid #d9e2ec;">Total flagged bullets</td>
+            <td style="padding:6px 8px;border:1px solid #d9e2ec;text-align:right;">{{ total_count }}</td>
+            <td style="padding:6px 8px;border:1px solid #d9e2ec;">Reverted</td>
+            <td style="padding:6px 8px;border:1px solid #d9e2ec;text-align:right;">{{ reverted_count }}</td>
+          </tr>
+          <tr>
+            <td style="padding:6px 8px;border:1px solid #d9e2ec;">Removed</td>
+            <td style="padding:6px 8px;border:1px solid #d9e2ec;text-align:right;">{{ removed_count }}</td>
+            <td style="padding:6px 8px;border:1px solid #d9e2ec;">Kept</td>
+            <td style="padding:6px 8px;border:1px solid #d9e2ec;text-align:right;">{{ kept_count }}</td>
+          </tr>
+          <tr>
+            <td style="padding:6px 8px;border:1px solid #d9e2ec;">Failed actions</td>
+            <td style="padding:6px 8px;border:1px solid #d9e2ec;text-align:right;">{{ failed_count }}</td>
+            <td style="padding:6px 8px;border:1px solid #d9e2ec;">Review source</td>
+            <td style="padding:6px 8px;border:1px solid #d9e2ec;">{{ review_source }}</td>
+          </tr>
+        </table>
+      </div>
+
+      <h3 style="margin:20px 0 8px 0;">Action Summary</h3>
+      <table style="border-collapse:collapse;font-size:13px;min-width:360px;">
+        <tr>
+          <th style="padding:8px 10px;border:1px solid #d9e2ec;background:#f8fafc;text-align:left;">Action</th>
+          <th style="padding:8px 10px;border:1px solid #d9e2ec;background:#f8fafc;text-align:right;">Count</th>
+        </tr>
+        {% for row in action_rows %}
+        <tr>
+          <td style="padding:8px 10px;border:1px solid #d9e2ec;">{{ row.action }}</td>
+          <td style="padding:8px 10px;border:1px solid #d9e2ec;text-align:right;">{{ row.count }}</td>
+        </tr>
+        {% endfor %}
+      </table>
+
+      <h3 style="margin:20px 0 8px 0;">Per-Bullet Detail</h3>
+      <table style="border-collapse:collapse;width:100%;font-size:13px;">
+        <tr>
+          <th style="padding:8px 10px;border:1px solid #d9e2ec;background:#f8fafc;text-align:left;">Bullet ID</th>
+          <th style="padding:8px 10px;border:1px solid #d9e2ec;background:#f8fafc;text-align:left;">Playbook File</th>
+          <th style="padding:8px 10px;border:1px solid #d9e2ec;background:#f8fafc;text-align:left;">Action</th>
+        </tr>
+        {% for row in detail_rows %}
+        <tr>
+          <td style="padding:8px 10px;border:1px solid #d9e2ec;">{{ row.bullet_id }}</td>
+          <td style="padding:8px 10px;border:1px solid #d9e2ec;">{{ row.playbook_file }}</td>
+          <td style="padding:8px 10px;border:1px solid #d9e2ec;">{{ row.action }}</td>
+        </tr>
+        {% endfor %}
+      </table>
+
+      <p style="margin-top:18px;color:#64748b;font-size:12px;">
+        This is an automatically generated email from ACE eval pipeline.
+      </p>
+    </div>
+  </body>
+</html>

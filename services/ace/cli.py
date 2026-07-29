@@ -216,6 +216,41 @@ def _skill_context_provider(sid: str, namespace: str = "wifi"):
 
 # -- subcommands --------------------------------------------------------------
 
+def _run_adapt_batch(args, *, allow_push: bool = True) -> list[dict]:
+    """Run one adapt batch and return per-turn results."""
+    llm = _build_llm(args.model)
+    llm.reset_usage()
+    history = HistoryWriter(root=_resolve_playbooks_dir(args.namespace) / "history")
+    runner = AceRunner(
+        llm=llm,
+        playbooks_dir=_resolve_playbooks_dir(args.namespace),
+        feedback_root=_resolve_feedback_root(),
+        skills=args.skill or None,
+        skill_context_provider=partial(_skill_context_provider, namespace=args.namespace),
+        history=history,
+        feedback_prefix=_feedback_prefix(args.namespace),
+        exclude_users=args.exclude_user or None,
+    )
+    results = runner.run_batch(
+        since=args.since,
+        max_turns=args.limit,
+        run_source=f"cli-adapt-{args.namespace}",
+    )
+    summary = {
+        "processed": len(results),
+        "ok": sum(1 for r in results if r.get("status") == "ok"),
+        "skipped": sum(1 for r in results if r.get("status") != "ok"),
+        "excluded": sum(1 for r in results if r.get("status") == "excluded_user"),
+        "token_usage": llm.get_usage(),
+    }
+    print(json.dumps(summary, indent=2))
+    if args.verbose:
+        for r in results:
+            print(json.dumps(r, indent=2, default=str)[:2000])
+    if allow_push and args.push:
+        _push_now(args.namespace)
+    return results
+
 def cmd_adapt(args):
     if getattr(args, "dry_run", False):
         # Preview only: no LLM, no writes, no cursor advance. Lists the turns
@@ -246,34 +281,8 @@ def cmd_adapt(args):
                 print(f"  {p['conversation_id']}  by={p.get('submitted_by','')}")
         return 0
 
-    llm = _build_llm(args.model)
-    llm.reset_usage()
-    history = HistoryWriter(root=_resolve_playbooks_dir(args.namespace) / "history")
-    runner = AceRunner(
-        llm=llm,
-        playbooks_dir=_resolve_playbooks_dir(args.namespace),
-        feedback_root=_resolve_feedback_root(),
-        skills=args.skill or None,
-        skill_context_provider=partial(_skill_context_provider, namespace=args.namespace),
-        history=history,
-        feedback_prefix=_feedback_prefix(args.namespace),
-        exclude_users=args.exclude_user or None,
-    )
-    results = runner.run_batch(since=args.since, max_turns=args.limit,
-                               run_source=f"cli-adapt-{args.namespace}")
-    summary = {
-        "processed": len(results),
-        "ok":        sum(1 for r in results if r.get("status") == "ok"),
-        "skipped":   sum(1 for r in results if r.get("status") != "ok"),
-        "excluded":  sum(1 for r in results if r.get("status") == "excluded_user"),
-        "token_usage": llm.get_usage(),
-    }
-    print(json.dumps(summary, indent=2))
-    if args.verbose:
-        for r in results:
-            print(json.dumps(r, indent=2, default=str)[:2000])
-    if args.push:
-        _push_now(args.namespace)
+    _run_adapt_batch(args, allow_push=True)
+    return 0
 
 
 def cmd_adapt_one(args):
@@ -361,6 +370,67 @@ def cmd_stats(args):
     print(json.dumps(out, indent=2))
 
 
+def _capture_playbook_bullet_state(playbooks_dir: Path) -> dict[str, dict]:
+    """Snapshot all bullets keyed by id from workflow/domain JSONs."""
+    state: dict[str, dict] = {}
+    for f in sorted(playbooks_dir.glob("*.json")):
+        if not (f.name == "workflow.json" or f.name.startswith("domain_")):
+            continue
+        try:
+            data = json.loads(f.read_text(encoding="utf-8"))
+        except Exception:
+            continue
+        bullets = data.get("bullets") if isinstance(data, dict) else None
+        if not isinstance(bullets, list):
+            continue
+        for b in bullets:
+            if not isinstance(b, dict):
+                continue
+            bid = str(b.get("id") or "").strip()
+            if not bid:
+                continue
+            state[bid] = {
+                "playbook_file": f.name,
+                "bullet": b,
+            }
+    return state
+
+
+def _diff_playbook_bullet_state(before: dict[str, dict], after: dict[str, dict]) -> list[dict]:
+    """Return per-bullet before/after diff rows for email reporting."""
+    out: list[dict] = []
+    for bid in sorted(set(before) | set(after)):
+        old = before.get(bid)
+        new = after.get(bid)
+
+        if old is None and new is not None:
+            change_type = "added"
+        elif old is not None and new is None:
+            change_type = "removed"
+        else:
+            old_blob = json.dumps(old["bullet"], ensure_ascii=False, sort_keys=True)
+            new_blob = json.dumps(new["bullet"], ensure_ascii=False, sort_keys=True)
+            same_file = old.get("playbook_file") == new.get("playbook_file")
+            if old_blob == new_blob and same_file:
+                continue
+            change_type = "updated"
+
+        old_file = old.get("playbook_file") if old else "-"
+        new_file = new.get("playbook_file") if new else "-"
+        playbook_label = old_file if old_file == new_file else f"{old_file} -> {new_file}"
+
+        out.append({
+            "bullet_id": bid,
+            "change_type": change_type,
+            "playbook_label": playbook_label,
+            "before_text": (json.dumps(old["bullet"], indent=2, ensure_ascii=False)
+                            if old else "(none)"),
+            "after_text": (json.dumps(new["bullet"], indent=2, ensure_ascii=False)
+                           if new else "(none)"),
+        })
+    return out
+
+
 def cmd_pipeline(args):
     """Full pipeline in one command: adapt → eval (judge) → review.
 
@@ -374,9 +444,16 @@ def cmd_pipeline(args):
     # so we suppress --push during the adapt step here. A regression (or, in the
     # future, a manager who has not yet approved) must never reach the cloud.
     want_push = bool(getattr(args, "push", False))
+    playbooks_dir = _resolve_playbooks_dir(args.namespace)
+    bullets_before = _capture_playbook_bullet_state(playbooks_dir)
     args.push = False
     print("[pipeline] ===== STEP 1/3: adapt =====")
-    cmd_adapt(args)
+    adapt_results = _run_adapt_batch(args, allow_push=False)
+    used_submitters = sorted({
+        str(r.get("submitted_by") or "").strip()
+        for r in adapt_results
+        if r.get("status") == "ok" and str(r.get("submitted_by") or "").strip()
+    })
 
     if args.no_eval:
         if want_push:
@@ -451,7 +528,14 @@ def cmd_pipeline(args):
     elif want_push:
         print("[pipeline] review did NOT pass — push withheld (nothing published).")
 
-    # 5. Notification (optional) — enabled only when ACE_NOTIFY_TO is set.
+    bullets_after = _capture_playbook_bullet_state(playbooks_dir)
+    rreport["_playbook_changes"] = _diff_playbook_bullet_state(
+        bullets_before,
+        bullets_after,
+    )
+    rreport["_feedback_submitters"] = used_submitters
+
+    # 5. Notification (optional) — sent when notify_email recipient list is set.
     # Uses SMTP relay/auth settings from environment variables.
     try:
         from .eval import notify_email as eval_notify
@@ -462,7 +546,7 @@ def cmd_pipeline(args):
         ):
             print("[pipeline] notification email sent.")
         else:
-            print("[pipeline] notification skipped (ACE_NOTIFY_TO not set).")
+            print("[pipeline] notification skipped (recipient list not set).")
     except Exception as exc:
         print(f"[pipeline] WARN: notification failed: {exc}")
 

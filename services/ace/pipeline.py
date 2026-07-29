@@ -220,15 +220,14 @@ class AceRunner:
             _emit("turn_end", status="no_feedback")
             return {"status": "no_feedback", "conversation_id": conversation_id, "turn_id": turn_id}
 
+        submitter = (feedback.get("submitted_by") or snap.get("submitted_by") or "").strip()
+
         # User-level filter: skip feedback from excluded submitters (e.g. test
         # accounts) so their votes never shape the playbook. Checks the
         # per-turn submitter first, then the conversation-level one.
         if self.exclude_users:
-            submitter = (
-                (feedback.get("submitted_by") or snap.get("submitted_by") or "")
-                .strip().lower()
-            )
-            if submitter in self.exclude_users:
+            submitter_lc = submitter.lower()
+            if submitter_lc in self.exclude_users:
                 _emit("turn_end", status="excluded_user", submitted_by=submitter)
                 return {"status": "excluded_user",
                         "conversation_id": conversation_id, "turn_id": turn_id,
@@ -321,6 +320,7 @@ class AceRunner:
             "status": "ok",
             "conversation_id": conversation_id,
             "turn_id": turn_id,
+            "submitted_by": submitter,
             "reflection": reflection,
             "curate_result": curate_result,
         }

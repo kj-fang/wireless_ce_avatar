@@ -21,6 +21,10 @@ Usage:
     python -m services.ace.eval.corrupted_bullet <review.json> --yes-revert
     python -m services.ace.eval.corrupted_bullet <review.json> --namespace bt
     python -m services.ace.eval.corrupted_bullet <review.json> -y   # revert-if-possible-else-remove, no prompts
+
+When the review report is referenced by bare filename, it is resolved by
+searching `services/ace/eval/runs/` recursively and choosing the newest
+matching stamp folder.
 """
 
 from __future__ import annotations
@@ -66,6 +70,10 @@ def _resolve_review_path(review_path: Path) -> Path:
     fallback = DEFAULT_RUNS_DIR / p.name
     if fallback.is_file():
         return fallback.resolve()
+    if DEFAULT_RUNS_DIR.is_dir():
+        hits = sorted(DEFAULT_RUNS_DIR.rglob(p.name))
+        if hits:
+            return hits[-1].resolve()
     raise FileNotFoundError(
         f"review report not found: {review_path} (also tried {fallback})"
     )

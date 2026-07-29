@@ -8,10 +8,16 @@ to judge whether any bullets that were modified inside the touched-
 window (see TOUCHED_WINDOW below) are likely responsible.
 
 Output: a standalone JSON report `review_<ts>.json` next to the eval file.
+When the eval file lives under `runs/<stamp>/`, the review report is written
+to the same stamp folder.
 
 Usage:
     python -m services.ace.eval.review <path/to/eval_YYYYMMDDTHHMMSS+0000.json>
     python -m services.ace.eval.review <eval.json> --model <optional-override>
+
+Resolution:
+    Bare filenames are resolved recursively under `services/ace/eval/runs/`,
+    so `review` works with both flat and stamp-folder layouts.
 
 This module is intentionally self-contained — it only imports helpers from
 `services.ace.cli` to reuse LLM / playbooks_dir wiring. No production code
@@ -68,6 +74,9 @@ def _find_baseline(current_path: Path) -> Path | None:
     candidate = current_path.parent / BASELINE_EVAL_FILENAME
     if candidate.is_file() and candidate.resolve() != current_path.resolve():
         return candidate
+    fallback = DEFAULT_RUNS_DIR / BASELINE_EVAL_FILENAME
+    if fallback.is_file() and fallback.resolve() != current_path.resolve():
+        return fallback
     return None
 
 
@@ -404,6 +413,10 @@ def _resolve_eval_path(current_eval_path: Path) -> Path:
     fallback = DEFAULT_RUNS_DIR / p.name
     if fallback.is_file():
         return fallback.resolve()
+    if DEFAULT_RUNS_DIR.is_dir():
+        hits = sorted(DEFAULT_RUNS_DIR.rglob(p.name))
+        if hits:
+            return hits[-1].resolve()
     raise FileNotFoundError(
         f"current eval not found: {current_eval_path} "
         f"(also tried {fallback})"

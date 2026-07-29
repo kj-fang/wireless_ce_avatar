@@ -10,6 +10,16 @@ Entry point:
     python -m services.ace.eval                  # run every case in cases/
     python -m services.ace.eval --case <id>      # run a single case
     python -m services.ace.eval --cases-dir <p>  # use a different folder
+    python -m services.ace.eval --review         # chain eval -> review
+    python -m services.ace.eval --auto-fix       # chain eval -> review -> corrupted_bullet -y
+
+Output layout:
+    runs/<stamp>/eval_<stamp>.json
+    runs/<stamp>/answers_<stamp>.json
+    runs/<stamp>/review_<stamp>.json
+
+When a bare filename is passed to review/corrupted_bullet, the tools look
+under runs/ recursively and resolve the newest matching stamp directory.
 
 This package never mutates the playbook or any existing service code.
 """

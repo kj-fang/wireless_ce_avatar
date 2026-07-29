@@ -10,6 +10,14 @@ Run manually:
     python -m services.ace.eval --review              # chain eval -> review
     python -m services.ace.eval --auto-fix            # chain eval -> review -> corrupted_bullet -y
 
+Output layout:
+    runs/<stamp>/eval_<stamp>.json
+    runs/<stamp>/answers_<stamp>.json
+    runs/<stamp>/review_<stamp>.json
+
+Each invocation creates a fresh stamp folder under runs/ so the judge,
+review, and auto-fix artifacts stay grouped by run.
+
 Reuses the same plumbing as `services.ace.cli` (LLM_helper construction,
 playbooks dir resolution, skill context provider) without modifying any
 existing source.
@@ -102,6 +110,10 @@ def _playbook_fingerprint(playbooks_dir: Path) -> dict:
         "files": files,
         "sha256": h.hexdigest(),
     }
+
+
+def _run_stamp_dir(runs_dir: Path, stamp: str) -> Path:
+    return runs_dir / stamp
 
 
 # ---------------------------------------------------------------------------
@@ -384,22 +396,20 @@ def evaluate(cases_dir: Path, runs_dir: Path,
         "cases": per_case,
     }
 
-    runs_dir.mkdir(parents=True, exist_ok=True)
     stamp = report["ts_utc"].replace(":", "").replace("-", "")
-    out_path = runs_dir / f"eval_{stamp}.json"
+    run_dir = _run_stamp_dir(runs_dir, stamp)
+    run_dir.mkdir(parents=True, exist_ok=True)
+    out_path = run_dir / f"eval_{stamp}.json"
     out_path.write_text(
         json.dumps(report, indent=2, ensure_ascii=False),
         encoding="utf-8",
     )
 
-    # Also dump each case's raw LLM analyzed result to its own JSON file so
-    # it can be inspected / diffed without wading through the aggregate report.
-    answers_dir = runs_dir / f"answers_{stamp}"
-    answers_dir.mkdir(parents=True, exist_ok=True)
+    # Consolidated per-case answer file, stored alongside the eval report.
+    answers_path = run_dir / f"answers_{stamp}.json"
+    answers_records: list[dict] = []
     for c in per_case:
         cid = c.get("case_id") or "unknown"
-        safe_cid = "".join(ch if ch.isalnum() or ch in ("-", "_") else "_"
-                           for ch in str(cid))
         agent_info = c.get("agent") or {}
         raw_answer = agent_info.get("answer", "")
         # If the agent returned a JSON-serialized dict, keep it as structured
@@ -421,10 +431,25 @@ def evaluate(cases_dir: Path, runs_dir: Path,
         }
         if agent_info.get("error"):
             answer_record["error"] = agent_info["error"]
-        (answers_dir / f"{safe_cid}.json").write_text(
-            json.dumps(answer_record, indent=2, ensure_ascii=False),
-            encoding="utf-8",
-        )
+        answers_records.append(answer_record)
+
+    answers_report = {
+        "ts_utc": report["ts_utc"],
+        "eval_path": str(out_path),
+        "cases": answers_records,
+    }
+    answers_path.write_text(
+        json.dumps(answers_report, indent=2, ensure_ascii=False),
+        encoding="utf-8",
+    )
+
+    report["run_dir"] = str(run_dir)
+    report["eval_path"] = str(out_path)
+    report["answers_path"] = str(answers_path)
+    out_path.write_text(
+        json.dumps(report, indent=2, ensure_ascii=False),
+        encoding="utf-8",
+    )
 
     print("\n========== EVAL SUMMARY ==========")
     print(f"playbook sha256 : {pb_fingerprint['sha256'][:12]}")
@@ -446,7 +471,7 @@ def evaluate(cases_dir: Path, runs_dir: Path,
             line = f"  - {c['case_id']:30s} SKIPPED ({j.get('skipped') or 'unknown'})"
         print(line)
     print(f"\nreport written  : {out_path}")
-    print(f"answers written : {answers_dir}")
+    print(f"answers written : {answers_path}")
     print("==================================")
     return report
 
@@ -510,9 +535,13 @@ def _chain_review_and_fix(
         print("[eval] skipping --review/--auto-fix: no eval report produced.")
         return 0
 
-    # Reconstruct the eval file path from the same stamp evaluate() used.
-    stamp = report["ts_utc"].replace(":", "").replace("-", "")
-    eval_path = runs_dir / f"eval_{stamp}.json"
+    eval_path_raw = report.get("eval_path")
+    if eval_path_raw:
+        eval_path = Path(eval_path_raw)
+    else:
+        run_dir = Path(report.get("run_dir") or runs_dir)
+        stamp = report["ts_utc"].replace(":", "").replace("-", "")
+        eval_path = run_dir / stamp / f"eval_{stamp}.json"
     if not eval_path.is_file():
         print(f"[eval] cannot chain --review: eval file missing: {eval_path}",
               file=sys.stderr)

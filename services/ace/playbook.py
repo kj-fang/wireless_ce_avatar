@@ -252,13 +252,34 @@ class Playbook:
             return removed
 
     # ----- rendering for the Generator -----
-    def render(self, section_filter: Optional[Iterable[str]] = None) -> str:
+    def render(
+        self,
+        section_filter: Optional[Iterable[str]] = None,
+        sort_globally_by_score: bool = False,
+    ) -> str:
         """
         Format the playbook as a multi-section block. Empty sections are
         skipped (the Generator's context shouldn't be padded with headers).
         """
         with self._lock:
             allowed = list(section_filter) if section_filter else self._allowed_sections()
+
+            if sort_globally_by_score:
+                items = [
+                    b for b in self.bullets
+                    if b.section in allowed
+                ]
+                items.sort(
+                    key=lambda b: (b.net_score, b.helpful_count, -b.harmful_count, b.id),
+                    reverse=True,
+                )
+                if not items:
+                    return "(empty playbook)"
+                lines = ["## ranked_by_net_score"]
+                for b in items:
+                    lines.append(f"  - [{b.section}] {b.render()}")
+                return "\n".join(lines)
+
             lines: list[str] = []
             for section in allowed:
                 items = [b for b in self.bullets if b.section == section]

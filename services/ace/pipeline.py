@@ -466,12 +466,17 @@ class AceRunner:
                 contexts[sid] = ctx
         return contexts
 
-    def render_workflow(self) -> str:
+    def render_workflow(self, ranked_for_prompt: bool = False) -> str:
         """Workflow playbook text for injection at the top of the agent system prompt."""
         self.workflow_pb.reload_if_changed()
-        return self.workflow_pb.render()
+        return self.workflow_pb.render(sort_globally_by_score=ranked_for_prompt)
 
-    def render_domain(self, skill: str, ensure: bool = True) -> str:
+    def render_domain(
+        self,
+        skill: str,
+        ensure: bool = True,
+        ranked_for_prompt: bool = False,
+    ) -> str:
         """
         Domain playbook text for ONE skill. When `ensure=True`, an empty
         playbook is created on first reference so future Curator writes have
@@ -483,7 +488,7 @@ class AceRunner:
         if pb is None:
             return ""
         pb.reload_if_changed()
-        return pb.render()
+        return pb.render(sort_globally_by_score=ranked_for_prompt)
 
     # ----- internal helpers -----
     def _extract_applied_bullet_ids(self, turn: dict) -> list[str]:

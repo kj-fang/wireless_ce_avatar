@@ -2063,7 +2063,7 @@ class WifiLogAgentSystem:
             # steering the agent on this turn.
             if self.ace_runner is not None:
                 try:
-                    _wf_text = self.ace_runner.render_workflow()
+                    _wf_text = self.ace_runner.render_workflow(ranked_for_prompt=True)
                 except Exception as _e:
                     _wf_text = ""
                     print(f"[ace] render_workflow (ui emit) failed: {_e}")
@@ -2805,7 +2805,7 @@ class WifiLogAgentSystem:
             print("[ace] workflow block skipped: no AceRunner attached")
             return ""
         try:
-            text = self.ace_runner.render_workflow()
+            text = self.ace_runner.render_workflow(ranked_for_prompt=True)
         except Exception as e:
             print(f"[ace] render_workflow failed: {e}")
             return ""
@@ -2837,7 +2837,11 @@ class WifiLogAgentSystem:
                 print(f"[ace] domain block skipped ({skill_name!r}): no AceRunner attached")
             return ""
         try:
-            text = self.ace_runner.render_domain(skill_name, ensure=True)
+            text = self.ace_runner.render_domain(
+                skill_name,
+                ensure=True,
+                ranked_for_prompt=True,
+            )
         except Exception as e:
             print(f"[ace] render_domain({skill_name}) failed: {e}")
             return ""

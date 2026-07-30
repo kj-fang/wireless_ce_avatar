@@ -46,7 +46,6 @@ from utils.instance_utils import (
     ensure_sendto_shortcut,
 )
 
-from services.driver_manage_service import DriverManager
 from configs.set_up_app import set_up
 from configs.global_configs import app_config
 from configs.version import __version__, BUILD_DATE, GIT_HASH, GIT_BRANCH
@@ -349,8 +348,7 @@ if __name__ == "__main__":
     print()
     
     app, socketio = create_app()
-    set_up(socketio)
-    app_config.set_driver_manager(DriverManager(app_config.avatarfiles_dir))
+    set_up(socketio)  # set_up() already initializes driver_manager; don't re-create it here (was causing double ChromeDriver setup / dir-lock races)
 
     # =========================================================================
     # Rebuild startup_path using THIS instance's token (app_config.sendto_token).

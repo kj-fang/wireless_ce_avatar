@@ -403,7 +403,13 @@
                 noTimeHint.style.display = 'none';
             }
         }
-        if (sendBtn) sendBtn.disabled = !valid;
+        // While an analysis streams the Send button is acting as Stop, and it
+        // must stay clickable no matter what the user types in the meantime —
+        // a disabled button swallows the click even though the .stopping style
+        // still renders it as active. core.js re-derives the real disabled
+        // state from this function once the stream ends.
+        const streaming = typeof isChatStreaming === 'function' && isChatStreaming();
+        if (sendBtn && !streaming) sendBtn.disabled = !valid;
         return valid;
     };
 

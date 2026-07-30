@@ -15,6 +15,7 @@ import re
 import json
 import hashlib
 import shutil
+import threading
 from bisect import bisect_left, bisect_right
 import importlib.util
 import xml.etree.ElementTree as ET
@@ -472,6 +473,12 @@ class WifiLogAgentSystem(
         self.model  = model
         self.current_log_path: str = ""
         self.conversation_history: List[dict] = []
+        # Cooperative cancellation. A background chat job (see
+        # services/chatbot/job_runtime.py) sets this event when the user clicks
+        # "Stop"; the agentic tools loop polls it between reasoning steps and
+        # bails out early. Cleared at the start of every chat turn so a prior
+        # stop can't cancel the next one.
+        self.cancel_event: threading.Event = threading.Event()
         self.issue_context: dict = {}  # populated by prime_with_context()
         self.issue_time: Optional[datetime] = None  # populated by prime_with_context() or _chat_with_tools()
         self._issue_time_time_only: bool = False

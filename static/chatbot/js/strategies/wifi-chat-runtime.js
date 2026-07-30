@@ -272,6 +272,8 @@
             clearIssueTime();
         }
         document.getElementById('send-btn').disabled = true;
+        // Flip the Send button into its red Stop state for this stream.
+        setSendBtnStopMode();
         // Only show the user's typed message ONCE — at the start of the
         // very first iteration. Continuations re-use the same message.
         if (!isContinuation) appendUserMsg(text);
@@ -531,7 +533,7 @@
                     clearIssueTime();
                     clearAllExtraIssueTimes();
                 }
-                document.getElementById('send-btn').disabled = false;
+                setSendBtnSendMode();
             }
         }
     };

@@ -330,6 +330,8 @@
         input.value = '';
         input.style.height = 'auto';
         document.getElementById('send-btn').disabled = true;
+        // Flip the Send button into its red Stop state for this stream.
+        setSendBtnStopMode();
         appendUserMsg(text);
         appendTyping();
 
@@ -380,9 +382,16 @@
         }
 
         try {
+            // Register this stream so the Stop button (core.js) can abort its
+            // rendering. The server-side analysis is halted separately via
+            // ${CHATBOT_API}/chat/stop.
+            if (window.__streamCtl) { try { window.__streamCtl.abort(); } catch (e) {} }
+            const __chatCtl = new AbortController();
+            window.__streamCtl = __chatCtl;
             const res = await fetch(`${CHATBOT_API}/chat`, {
                 method: 'POST',
                 headers: {'Content-Type': 'application/json'},
+                signal: __chatCtl.signal,
                 body: JSON.stringify({message: text, use_tools: agenticMode})
             });
 
@@ -430,11 +439,15 @@
             if (buffer) processLine(buffer);
 
         } catch (e) {
-            removeTyping();
-            appendAssistantText('❌ Network error: ' + e.message);
+            if (e.name !== 'AbortError') {
+                // AbortError means the user clicked Stop — stopChat() already
+                // rendered the notice and reset the button.
+                removeTyping();
+                appendAssistantText('❌ Network error: ' + e.message);
+            }
         } finally {
             removeTyping();
-            document.getElementById('send-btn').disabled = false;
+            setSendBtnSendMode();
         }
     }
 

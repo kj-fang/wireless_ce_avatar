@@ -25,8 +25,67 @@
     function handleEnter(e) {
         if (e.key === 'Enter' && !e.shiftKey) {
             e.preventDefault();
-            sendMessage();
+            onSendBtnClick();
         }
+    }
+
+    // ── Stop / abort support ───────────────────────────────────────
+    // While a tools-mode analysis streams, the Send button becomes a red Stop
+    // button. Clicking it aborts the SSE stream locally (via the shared
+    // window.__streamCtl AbortController that each chat runtime installs) AND
+    // asks the backend to halt the running analysis — its agent loop bails out
+    // at the next reasoning-step boundary.
+    //
+    // Lives here rather than in each profile because only the endpoint differs,
+    // and that already comes from CHATBOT_API.
+    let __chatStreaming = false;
+
+    function isChatStreaming() { return __chatStreaming; }
+
+    function setSendBtnStopMode() {
+        __chatStreaming = true;
+        const btn = document.getElementById('send-btn');
+        if (!btn) return;
+        btn.disabled = false;
+        btn.classList.add('stopping');
+        btn.textContent = 'Stop ■';
+    }
+
+    function setSendBtnSendMode() {
+        __chatStreaming = false;
+        window.__streamCtl = null;
+        const btn = document.getElementById('send-btn');
+        if (!btn) return;
+        btn.classList.remove('stopping');
+        btn.textContent = 'Send ↑';
+        // Re-derive the disabled state from the current input validity on the
+        // profiles that gate Send (BT / Wi-Fi); plain enable elsewhere (NW).
+        if (typeof window.validateUserInput === 'function') window.validateUserInput(false);
+        else btn.disabled = false;
+    }
+
+    // Single click entry point for the Send/Stop button (and the Enter key).
+    function onSendBtnClick() {
+        if (__chatStreaming) { stopChat(); return; }
+        sendMessage();
+    }
+
+    async function stopChat() {
+        // Stop rendering immediately by aborting the active stream.
+        if (window.__streamCtl) { try { window.__streamCtl.abort(); } catch (e) {} }
+        // Drop any queued multi-incident continuations so the chain ends here.
+        window.__multiTimeContext = null;
+        // Ask the backend to halt the running analysis (cooperative cancel).
+        try {
+            await fetch(`${CHATBOT_API}/chat/stop`, {
+                method: 'POST',
+                headers: {'Content-Type': 'application/json'},
+                body: JSON.stringify({ conversation_id: window.__feedbackConversationId || '' }),
+            });
+        } catch (e) { /* best-effort */ }
+        removeTyping();
+        appendAssistantText('⏹️ Analysis stopped by user.');
+        setSendBtnSendMode();
     }
 
     function scrollBottom() {

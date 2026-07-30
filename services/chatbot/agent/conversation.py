@@ -62,6 +62,10 @@ class ConversationMixin:
             max_tokens = 4000
         max_tokens = max(256, min(8000, max_tokens))
 
+        # Fresh turn — discard any stop signal left over from a previous turn
+        # so the user's new message is never pre-cancelled.
+        self.cancel_event.clear()
+
         # Delegate to appropriate implementation
         if use_tools:
             return self._chat_with_tools(user_message, max_steps, temperature=temperature, step_callback=step_callback)
@@ -435,6 +439,15 @@ class ConversationMixin:
 
         for step_idx in range(max_steps):
             pending_user_nudges: list = []
+
+            # Cooperative stop: the user clicked "Stop" and job_runtime set our
+            # cancel_event. Bail out cleanly BEFORE spending another LLM call —
+            # emit the token report and return a short notice.
+            if self.cancel_event.is_set():
+                _emit({"role": "agent", "content": "⏹️ **Stopped by user.** Analysis halted before completion."})
+                _emit_token_report()
+                return {"type": "text", "data": "⏹️ Analysis stopped by user."}
+
             _emit({"role": "agent", "content": f"💭 **Reasoning Step {step_idx + 1}/{max_steps}** — Thinking..."})
 
             # Force-conclude pressure in final steps

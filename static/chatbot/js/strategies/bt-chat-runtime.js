@@ -267,6 +267,8 @@
             clearIssueTime();
         }
         document.getElementById('send-btn').disabled = true;
+        // Flip the Send button into its red Stop state for this stream.
+        setSendBtnStopMode();
         // Only show the user's typed message ONCE — at the start of the
         // very first iteration. Continuations re-use the same message.
         if (!isContinuation) appendUserMsg(text);
@@ -395,10 +397,19 @@
             scrollBottom();
         }
 
+        let __btAborted = false;      // set true when the user clicks Stop
+
         try {
+            // Register this stream so the Stop button (core.js) can abort its
+            // rendering. The server-side analysis is halted separately via
+            // /bt_chatbot/chat/stop.
+            if (window.__streamCtl) { try { window.__streamCtl.abort(); } catch (e) {} }
+            const __chatCtl = new AbortController();
+            window.__streamCtl = __chatCtl;
             const res = await fetch('/bt_chatbot/chat', {
                 method: 'POST',
                 headers: {'Content-Type': 'application/json'},
+                signal: __chatCtl.signal,
                 body: JSON.stringify({
                     message: text,
                     use_tools: agenticMode,
@@ -467,10 +478,24 @@
             if (buffer) processLine(buffer);
 
         } catch (e) {
-            removeTyping();
-            appendAssistantText('❌ Network error: ' + e.message);
+            if (e.name === 'AbortError') {
+                // User clicked Stop — stopChat() already rendered the notice
+                // and the backend is halting. Nothing more to show here.
+                __btAborted = true;
+            } else {
+                removeTyping();
+                appendAssistantText('❌ Network error: ' + e.message);
+            }
         } finally {
             removeTyping();
+            // A user Stop cancels the whole (possibly multi-incident) send:
+            // don't schedule the next iteration and make sure the button is
+            // back in Send mode.
+            if (__btAborted) {
+                window.__multiTimeContext = null;
+                setSendBtnSendMode();
+                return;
+            }
             // ── Multi-time chain: if the queue still has unprocessed
             // issue times, schedule the next iteration AND keep Send
             // disabled. Re-enabling Send between iterations lets the
@@ -493,7 +518,7 @@
                     clearIssueTime();
                     clearAllExtraIssueTimes();
                 }
-                document.getElementById('send-btn').disabled = false;
+                setSendBtnSendMode();
             }
         }
     };

@@ -508,6 +508,28 @@ def chat():
 # API: reset conversation
 # ------------------------------------------------------------------
 # ------------------------------------------------------------------
+# API: stop the in-flight tools-mode analysis
+#
+# NW analysis runs its tools loop on a per-request background thread using the
+# per-session agent (no chat_jobs registry). Setting that agent's cancel_event
+# makes the loop bail out at the next reasoning-step boundary; the stream then
+# emits its terminal "done" with a "stopped" notice. Idempotent no-op when
+# nothing is running.
+# ------------------------------------------------------------------
+def chat_stop():
+    try:
+        sid = session.get("chatbot_session_id", "")
+        agent = _chatbot_instances.get(sid) if sid else None
+        stopped = False
+        if agent is not None and hasattr(agent, "cancel_event"):
+            agent.cancel_event.set()
+            stopped = True
+        return jsonify({"success": True, "stopped": stopped})
+    except Exception as e:
+        return jsonify({"success": False, "error": str(e)}), 500
+
+
+# ------------------------------------------------------------------
 # API: prepare chatbot from download_result (set log path + case context)
 # ------------------------------------------------------------------
 def prepare():

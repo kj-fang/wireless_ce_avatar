@@ -78,7 +78,7 @@
         <div class="input-row">
             <textarea id="user-input" rows="1" placeholder="{{ ui.input_placeholder }}"
                       onkeydown="handleEnter(event)" oninput="onChatInput(this)"></textarea>
-            <button id="send-btn" onclick="sendMessage()">Send ↑</button>
+            <button id="send-btn" onclick="onSendBtnClick()">Send ↑</button>
         </div>
         {% endblock %}
     </div>

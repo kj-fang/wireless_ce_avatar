@@ -32,6 +32,7 @@ ROUTE_SPECS: tuple[RouteSpec, ...] = (
     RouteSpec("/browse", "browse", ("GET",)),
     RouteSpec("/set_log", "set_log", ("POST",)),
     RouteSpec("/chat", "chat", ("POST",)),
+    RouteSpec("/chat/stop", "chat_stop", ("POST",)),
     RouteSpec("/reset", "reset", ("POST",)),
     RouteSpec("/prepare", "prepare", ("POST",)),
     RouteSpec("/browse_dir", "browse_dir", ("GET",)),

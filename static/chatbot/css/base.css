@@ -440,6 +440,12 @@
         opacity: 0.5; cursor: not-allowed;
     }
 
+    /* Stop mode: while an analysis is streaming the Send button turns into
+       a red Stop button (always clickable so the user can abort). */
+    #send-btn.stopping { background: #dc2626; }
+    #send-btn.stopping:hover { background: #b91c1c; }
+    #send-btn.stopping:disabled { opacity: 1; cursor: pointer; }
+
     /* Scrollbar */
     #chat-window::-webkit-scrollbar {
         width: 5px;

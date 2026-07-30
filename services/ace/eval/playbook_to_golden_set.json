@@ -1,0 +1,29 @@
+{
+  "_description": "Lookup table mapping playbook domain -> golden-set category (or 'all').",
+  "_notes": [
+    "Keys and values are all lowercase. Match against playbook filename stem / golden-set category using case-insensitive comparison.",
+    "Values: list of golden-set category names, OR the string 'all' meaning every category.",
+    "Golden-set case JSONs are grouped by category via their filename prefix or 'skill' field (e.g. 'connectivity_1.json' -> category 'connectivity')."
+  ],
+  "categories": ["connectivity", "bios", "softap", "tas", "yb", "p2p"],
+  "mapping": {
+    "domain_connection_flow":                        ["connectivity"],
+    "domain_regulatory_country_code_determination":  ["connectivity"],
+    "domain_bios_dsm_configuration":                 ["bios"],
+    "domain_disconnection_analysis":                 ["connectivity"],
+    "domain_resume_connection_setup_time_analysis":  ["connectivity"],
+    "domain_assert_code_analysis":                   ["yb"],
+    "domain_wfd_p2p_flow":                           ["p2p"],
+    "domain_softap_supported_channels":              ["softap"],
+    "domain_tas_settings_check":                     ["tas"],
+    "domain_softap_flow":                            ["softap"],
+    "domain_get_final_state_snapshot":               "all",
+    "workflow":                                      "all",
+    "domain_connection":                             ["connectivity"],
+    "domain_connectivity":                           ["connectivity"],
+    "domain_get_assembled_log_snapshot":             "all",
+    "domain_lookup_assert_code":                     "all",
+    "domain_roaming":                                ["connectivity"],
+    "domain_softap_supported_channel":               ["softap"]
+  }
+}

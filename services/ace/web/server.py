@@ -1280,11 +1280,21 @@ def create_app() -> tuple[Flask, SocketIO, JobManager, NightlyScheduler]:
     _judge_review_lock = threading.Lock()
 
     def _latest_eval_report() -> Optional[Path]:
+        """
+        Newest `eval_*.json` under DEFAULT_RUNS_DIR, searched recursively.
+
+        The runner writes to `runs/<stamp>/eval_<stamp>.json`, so a flat
+        `glob("eval_*.json")` would miss everything and the Review button
+        would report "no eval_*.json report found" even right after a
+        Judge run finished. `rglob` walks into every stamp folder; picking
+        by mtime keeps the newest on top regardless of filename format
+        (dated stamps, `baseline.json`, etc.).
+        """
         from ..eval.runner import DEFAULT_RUNS_DIR
         if not DEFAULT_RUNS_DIR.exists():
             return None
         reports = sorted(
-            (p for p in DEFAULT_RUNS_DIR.glob("eval_*.json") if p.is_file()),
+            (p for p in DEFAULT_RUNS_DIR.rglob("eval_*.json") if p.is_file()),
             key=lambda p: p.stat().st_mtime,
             reverse=True,
         )
@@ -1296,9 +1306,9 @@ def create_app() -> tuple[Flask, SocketIO, JobManager, NightlyScheduler]:
             return jsonify({"ok": False,
                             "error": "another judge/review job is already running"}), 409
         try:
-            from ..eval.runner import DEFAULT_CASES_DIR, DEFAULT_RUNS_DIR, evaluate
+            from ..eval.runner import _default_cases_dir, DEFAULT_RUNS_DIR, evaluate
             report = evaluate(
-                cases_dir=DEFAULT_CASES_DIR,
+                cases_dir=_default_cases_dir(),
                 runs_dir=DEFAULT_RUNS_DIR,
             )
             latest = _latest_eval_report()

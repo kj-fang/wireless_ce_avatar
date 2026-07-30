@@ -41,16 +41,37 @@ from pathlib import Path
 # uses — never a hard-coded path. The shared network copy under
 # `\\infs089b...\ace_playbook` is NEVER touched here.
 def _resolve_live_dir(namespace: str = "wifi") -> Path:
-    """Local live playbook dir for `namespace` ("wifi"/"bt"), resolved the
-    same way `services.ace.cli` resolves it so this follows whatever machine
-    the trainer runs on. Lazy import avoids a circular import at load time."""
+    """Local live playbook dir for `namespace`.
+
+    Bypasses `path_configs.DOWNLOADS_DIR` (pinned to the trainer server's
+    `C:\\Users\\admin`) for the "wifi" namespace by reusing
+    `runner._default_playbooks_dir()`, which reads the CURRENT user's
+    Downloads folder from the registry. On any dev box this lands in
+    `<Downloads>\\IntelAvatar_files\\ace_playbooks\\local\\` — a folder the
+    logged-in account actually has write access to.
+
+    For "bt" the eval package doesn't have a dedicated helper, so we fall
+    back to `services.ace.cli._resolve_playbooks_dir` — matching the
+    pre-existing behaviour.
+    """
+    if namespace == "wifi":
+        from .runner import _default_playbooks_dir
+        return _default_playbooks_dir()
     from services.ace.cli import _resolve_playbooks_dir, _ensure_avatarfiles_dir
     _ensure_avatarfiles_dir()
     return _resolve_playbooks_dir(namespace)
 
 
-# Snapshot root: `<repo>/services/ace/eval/snapshots/<YYYY-MM-DD>/<ts>__<uuid>/`.
-SNAPSHOTS_DIR = Path(__file__).resolve().parent / "snapshots"
+# Snapshot root on the shared server — READ-ONLY reference for reverts.
+# Layout on disk:
+#     \\infs089b...\history\snapshots\<YYYY-MM-DD>\<timestampT...__uuid>\
+#         domain_*.json
+#         workflow.json
+# Wrapped as Path so downstream `.is_dir()` / `relative_to()` calls stay
+# consistent instead of mixing str and Path.
+SNAPSHOTS_DIR = Path(
+    r"\\infs089b.iil.intel.com\HOME\WirelessCE\Intel_WirelessCE_Avatar\history\snapshots"
+)
 
 # Reviewer verdict qualifies as "corrupted" only when confidence >= this.
 # Matches `review.CONFIDENCE_GATE` so what we act on aligns with what
@@ -62,20 +83,63 @@ CONFIDENCE_GATE = 0.7
 DEFAULT_RUNS_DIR = Path(__file__).resolve().parent / "runs"
 
 
+def _pick_review_in_stamp_dir(stamp_dir: Path) -> Path | None:
+    """Return the newest `review_*.json` inside a stamp folder, if any."""
+    matches = [m for m in stamp_dir.glob("review_*.json") if m.is_file()]
+    if not matches:
+        return None
+    matches.sort(key=lambda x: x.stat().st_mtime)
+    return matches[-1]
+
+
 # --- review-report parsing --------------------------------------------------
 def _resolve_review_path(review_path: Path) -> Path:
+    """
+    Locate a review report under the `runs/<stamp>/review_<stamp>.json`
+    layout. Accepted inputs (checked in order):
+
+      1. Path to an existing review file.
+      2. Path to a stamp folder — returns its newest `review_*.json`.
+      3. Bare filename — searched flat under `DEFAULT_RUNS_DIR`, then
+         recursively through every stamp folder (files only). Ties broken
+         by mtime so the newest wins.
+      4. Bare stamp name (e.g. `20260729T075201+0000`) — returns the
+         newest `review_*.json` inside `DEFAULT_RUNS_DIR/<stamp>/`.
+    """
     p = Path(review_path)
+
+    # (1) Exact file.
     if p.is_file():
         return p.resolve()
+
+    # (2) Stamp folder anywhere.
+    if p.is_dir():
+        picked = _pick_review_in_stamp_dir(p)
+        if picked is not None:
+            return picked.resolve()
+
+    # (3) Bare filename at flat layout.
     fallback = DEFAULT_RUNS_DIR / p.name
     if fallback.is_file():
         return fallback.resolve()
+
     if DEFAULT_RUNS_DIR.is_dir():
-        hits = sorted(DEFAULT_RUNS_DIR.rglob(p.name))
+        # (3 cont.) Filename inside a stamp folder — drop directory matches.
+        hits = [h for h in DEFAULT_RUNS_DIR.rglob(p.name) if h.is_file()]
         if hits:
+            hits.sort(key=lambda x: x.stat().st_mtime)
             return hits[-1].resolve()
+
+        # (4) Bare stamp name → look for review_*.json inside the stamp dir.
+        stamp_dir = DEFAULT_RUNS_DIR / p.name
+        if stamp_dir.is_dir():
+            picked = _pick_review_in_stamp_dir(stamp_dir)
+            if picked is not None:
+                return picked.resolve()
+
     raise FileNotFoundError(
-        f"review report not found: {review_path} (also tried {fallback})"
+        f"review report not found: {review_path} "
+        f"(also tried {fallback} and stamp-folder lookup under {DEFAULT_RUNS_DIR})"
     )
 
 
@@ -306,8 +370,18 @@ def process(
 
     snapshot_dir = _newest_snapshot_dir(SNAPSHOTS_DIR)
     if snapshot_dir is None:
-        print(f"[corrupted] WARN: no snapshots found under {SNAPSHOTS_DIR}. "
-              f"All bullets will be treated as 'no previous version'.")
+        # Distinguish "share unreachable" from "share reachable but empty" —
+        # the difference matters because unreachable means auto-y would
+        # aggressively REMOVE every corrupted bullet instead of reverting.
+        if not SNAPSHOTS_DIR.is_dir():
+            print(f"[corrupted] WARN: snapshot share unreachable: "
+                  f"{SNAPSHOTS_DIR} — check VPN. Every corrupted bullet "
+                  f"will be treated as 'no previous version' (i.e. removed "
+                  f"under --yes / -y).")
+        else:
+            print(f"[corrupted] WARN: no snapshots found under "
+                  f"{SNAPSHOTS_DIR}. All bullets will be treated as "
+                  f"'no previous version'.")
     else:
         print(f"[corrupted] snapshot : {snapshot_dir.relative_to(SNAPSHOTS_DIR)}")
 

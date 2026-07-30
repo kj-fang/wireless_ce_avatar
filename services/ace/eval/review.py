@@ -32,7 +32,7 @@ import re
 import sys
 from datetime import datetime, timedelta, timezone
 from pathlib import Path
-
+from services.ace.eval.runner import _default_playbooks_dir
 from services.ace import cli as ace_cli
 
 
@@ -52,9 +52,7 @@ BASELINE_EVAL_FILENAME   = "baseline.json"
 # (same source `services/ace/eval/runner.py` reads). Only the JSON files at
 # this top level are consumed — the `history/` subfolder underneath is
 # intentionally ignored (glob is non-recursive).
-PLAYBOOKS_DIR = Path(
-    r"\\infs089b.iil.intel.com\HOME\WirelessCE\Intel_WirelessCE_Avatar\ace_playbook"
-)
+PLAYBOOKS_DIR = _default_playbooks_dir()
 
 # Per-playbook-file "touched" window: for each *.json in the playbook dir we
 # read the file-level `updated_at` and treat any bullet whose `updated_at`
@@ -71,10 +69,10 @@ def _find_baseline(current_path: Path) -> Path | None:
     Returns None if it doesn't exist. Filesystem lookup is case-insensitive
     on Windows so `Baseline.json` also matches.
     """
-    candidate = current_path.parent / BASELINE_EVAL_FILENAME
+    candidate = current_path.parent / "baseline" / BASELINE_EVAL_FILENAME
     if candidate.is_file() and candidate.resolve() != current_path.resolve():
         return candidate
-    fallback = DEFAULT_RUNS_DIR / BASELINE_EVAL_FILENAME
+    fallback = DEFAULT_RUNS_DIR / "baseline" / BASELINE_EVAL_FILENAME
     if fallback.is_file() and fallback.resolve() != current_path.resolve():
         return fallback
     return None
@@ -401,25 +399,77 @@ def _now_utc_iso() -> str:
 DEFAULT_RUNS_DIR = Path(__file__).resolve().parent / "runs"
 
 
+def _pick_eval_in_stamp_dir(stamp_dir: Path) -> Path | None:
+    """
+    Given a `runs/<stamp>/` folder, return the eval report inside.
+
+    Prefers the canonical `eval_<stamp>.json` (folder name reused as the
+    file stamp — the layout `runner.py` writes today). Falls back to
+    picking the newest `eval_*.json` in the folder so legacy or renamed
+    files still resolve.
+    """
+    canonical = stamp_dir / f"eval_{stamp_dir.name}.json"
+    if canonical.is_file():
+        return canonical
+    matches = [m for m in stamp_dir.glob("eval_*.json") if m.is_file()]
+    if not matches:
+        return None
+    matches.sort(key=lambda x: x.stat().st_mtime)
+    return matches[-1]
+
+
 def _resolve_eval_path(current_eval_path: Path) -> Path:
     """
-    Locate an eval report. If `current_eval_path` doesn't exist as given,
-    fall back to `DEFAULT_RUNS_DIR / <name>` so callers can pass just the
-    filename (e.g. `eval_20260716T075201+0000.json`).
+    Locate an eval report under the new `runs/<stamp>/eval_<stamp>.json`
+    layout. Accepted inputs (checked in order):
+
+      1. Path to an existing eval file (absolute or relative).
+      2. Path to a stamp folder — returns the `eval_<stamp>.json` inside.
+      3. Bare filename (e.g. `eval_20260729T....json`) — searched under
+         `DEFAULT_RUNS_DIR` at the flat level first, then recursively
+         through every stamp folder (files only, dirs filtered out).
+         Ties broken by mtime so the newest wins.
+      4. Bare stamp name (e.g. `20260729T075201+0000`) — resolved to
+         `DEFAULT_RUNS_DIR/<stamp>/eval_<stamp>.json`.
     """
     p = Path(current_eval_path)
+
+    # (1) Exact file.
     if p.is_file():
         return p.resolve()
+
+    # (2) Exact stamp folder anywhere on disk.
+    if p.is_dir():
+        picked = _pick_eval_in_stamp_dir(p)
+        if picked is not None:
+            return picked.resolve()
+
+    # (3) Bare filename living directly under runs/ (legacy flat layout).
     fallback = DEFAULT_RUNS_DIR / p.name
     if fallback.is_file():
         return fallback.resolve()
+
     if DEFAULT_RUNS_DIR.is_dir():
-        hits = sorted(DEFAULT_RUNS_DIR.rglob(p.name))
+        # (3 cont.) Bare filename inside a stamp folder. rglob may also
+        # return directories that happen to match — drop them.
+        hits = [h for h in DEFAULT_RUNS_DIR.rglob(p.name) if h.is_file()]
         if hits:
+            # Sort by mtime so we always pick the newest hit, even for
+            # filenames that don't embed a sortable stamp (e.g. baseline.json).
+            hits.sort(key=lambda x: x.stat().st_mtime)
             return hits[-1].resolve()
+
+        # (4) User passed just a stamp — look up the standard eval file
+        # inside runs/<stamp>/.
+        stamp_dir = DEFAULT_RUNS_DIR / p.name
+        if stamp_dir.is_dir():
+            picked = _pick_eval_in_stamp_dir(stamp_dir)
+            if picked is not None:
+                return picked.resolve()
+
     raise FileNotFoundError(
         f"current eval not found: {current_eval_path} "
-        f"(also tried {fallback})"
+        f"(also tried {fallback} and stamp-folder lookup under {DEFAULT_RUNS_DIR})"
     )
 
 

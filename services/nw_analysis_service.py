@@ -337,7 +337,7 @@ class WifiLogAgentSystem:
     #   High volume (10x/day): max_steps=4,  MAX_TOOL_RESULT=3000,  MAX_TOKENS_PER_STEP=15000 → ~50K/analysis
     #   Balanced   (5-7x/day): max_steps=5,  MAX_TOOL_RESULT=6000,  MAX_TOKENS_PER_STEP=25000 → ~70-90K/analysis
     #   Quality    (3-5x/day): max_steps=5,  MAX_TOOL_RESULT=16000, MAX_TOKENS_PER_STEP=40000 → ~100K/analysis
-    MAX_TOKENS_PER_STEP = 40000          # 3 tools × 16K evidence = ~12K tokens/step; headroom for rules + prompt history
+    MAX_TOKENS_PER_STEP = 75000          # 3 tools × 16K evidence = ~12K tokens/step; headroom for rules + prompt history
     # Keep per-tool evidence compact so multi-step prompts do not explode.
     # These are sized to match MAX_TOOL_RESULT_CHARS_IN_MESSAGES (16000):
     #   ~50 chars/line → 16000 ÷ 50 = 320 lines before char limit fires anyway.
@@ -360,7 +360,7 @@ class WifiLogAgentSystem:
     # Convergence controls to finish within fixed max steps.
     MAX_TOOL_CALLS_PER_STEP = 3
     FORCE_CONCLUDE_LAST_N_STEPS = 2  # last 2 steps forces conclusion (5-step loop is tighter)
-    MAX_SKILL_FETCHES = 4             # max distinct skills the agent may fetch per analysis
+    MAX_SKILL_FETCHES = 6             # max distinct skills the agent may fetch per analysis
     REPORT_MARKDOWN_TEMPLATE = (
         "Your `markdown_summary` format (REQUIRED):\n"
         "  # Executive Summary\n  (1-2 sentences that directly answer the user question)\n\n"
@@ -1502,6 +1502,8 @@ class WifiLogAgentSystem:
             (isinstance(m, dict) and m.get("role") == "user")
             for m in self.conversation_history
         )
+        if not _first_user_turn:
+            max_steps = min(max_steps, 4)
 
         if _first_user_turn:
             # First user turn — rebuild system prompt for agentic mode

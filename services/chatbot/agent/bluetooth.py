@@ -17,7 +17,7 @@ Future BT-specific overrides (timestamp regex for ``<HH:MM:SS.mmm>``-style
 HCI logs, custom continuation-line detection, etc.) live here too.
 """
 
-from services.log_chatbot_service import (
+from services.chatbot.agent.system import (
     WifiLogAgentSystem,
     Skill,
     SKILL_FILE_MAP,

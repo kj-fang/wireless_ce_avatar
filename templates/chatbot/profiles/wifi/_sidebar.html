@@ -1,0 +1,290 @@
+        <!-- View switcher (Claude-style segmented control): flip the left
+             column between the live controls and the saved-conversation
+             history without leaving the page. -->
+        <div class="sidebar-switcher">
+            <button type="button" id="tab-controls" class="sb-tab active"
+                    onclick="switchSidebarView('controls')">⚙️ Controls</button>
+            <button type="button" id="tab-history" class="sb-tab"
+                    onclick="switchSidebarView('history')">🕘 History</button>
+        </div>
+
+        <!-- View 1: live controls (Log File / Issue Time / Skills / …) -->
+        <div id="sidebar-controls-view">
+
+        <!-- Log file -->
+        <div class="sidebar-section">
+            <h6>📂 Log File</h6>
+            <div class="log-input-group">
+                <div class="log-input-wrap">
+                    <input id="log-path-input" type="text"
+                           placeholder="Full path to .log file…"
+                           value="{{ suggested_log | default('', true) }}"
+                           onkeydown="if(event.key==='Enter'){event.preventDefault();setLog();}"
+                           onchange="setLog()">
+                    <button type="button" class="log-input-copy"
+                            onclick="copyLogPath(this)" title="Copy log path"
+                            aria-label="Copy log path">📋</button>
+                </div>
+                <button type="button" class="btn-browse" onclick="browseLog()" title="Browse for file">📁</button>
+            </div>
+            <div id="log-status" class="log-status"></div>
+        </div>
+
+        <!-- Issue Time -->
+        <div class="sidebar-section">
+            <h6 style="display:flex;align-items:center;justify-content:space-between;">
+                <span>⏰ Issue Time</span>
+                <button type="button" class="it-clear-top" onclick="clearAllIssueTimes()"
+                        title="Clear the issue time (and any extra rows)">
+                    🗑️<span class="it-clear-top-label">Clear</span>
+                </button>
+            </h6>
+            <div style="font-size:0.72rem;color:#666;margin-bottom:10px;line-height:1.4;">
+                When did the issue happen?
+            </div>
+
+            <!-- Customer wall clock — the human-facing value (what the customer
+                 saw on their OWN clock). Shown ABOVE the editable fields, which
+                 hold the decode-host/log-frame value. Populated by
+                 populateCustomerAnnotation(); hidden until a tz is detected. -->
+            <div id="issue-time-customer-annotation"
+                 style="display:none;margin-bottom:12px;padding:9px 11px;
+                        background:linear-gradient(135deg,#eaf3ff 0%,#f4f9ff 100%);
+                        border:1px solid #cfe0fa;border-left:3px solid #0071c5;
+                        border-radius:10px;box-shadow:0 1px 2px rgba(0,113,197,0.06);">
+                <div style="display:flex;align-items:center;gap:5px;margin-bottom:3px;">
+                    <span style="font-size:0.9rem;line-height:1;">👤</span>
+                    <span style="font-size:0.64rem;font-weight:700;letter-spacing:0.05em;
+                                 text-transform:uppercase;color:#0071c5;">Customer time</span>
+                </div>
+                <div id="issue-time-customer-value"
+                     style="font-size:1.04rem;font-weight:700;color:#0b2e4f;line-height:1.2;
+                            font-family:'SFMono-Regular',Consolas,monospace;"></div>
+                <div id="issue-time-customer-tz"
+                     style="font-size:0.64rem;color:#7c93ad;margin-top:2px;"></div>
+            </div>
+
+            <!-- The editable fields below hold the issue time in the ETL
+                 DECODE-HOST clock (GMT+8) — the same frame the decoded .log
+                 content is written in and what the agent scans (PreScan ±5 min).
+                 The customer-time card above is that same instant on the
+                 customer's wall clock. -->
+            <div style="font-size:0.66rem;color:#475569;margin-bottom:6px;line-height:1.45;">
+                🖥 <strong>ETL decode-host time</strong> (GMT+8)
+                <span style="display:block;color:#9aa3ad;margin-top:1px;">Format: MM / DD / YYYY &nbsp; HH:MM:SS.mmm</span>
+            </div>
+
+            <!-- Hidden native datetime-local for the calendar popup -->
+            <input id="issue-time-picker" type="datetime-local" step="1"
+                   style="position:absolute;opacity:0;width:0;height:0;pointer-events:none;"
+                   onchange="onCalendarPicked()">
+
+            <!-- Shown when the loaded log has no dates (e.g. DDD): date fields
+                 stay visible but get greyed out + disabled, so the row still
+                 reads as "an issue time has these three parts" without inviting
+                 input that the agent would silently discard. -->
+            <div id="it-nodate-hint" style="display:none;font-size:0.7rem;color:#92400e;background:#fff7ed;border:1px solid #fdba74;border-radius:6px;padding:5px 8px;margin-bottom:8px;line-height:1.3;">
+                ⏱ Time-only log — capturing <strong>H/M/S</strong> only.
+                <span id="it-nodate-lasttime-wrap" style="display:none;">
+                    Log ends at
+                    <a href="#" id="it-nodate-lasttime" onclick="useLogLastTimeFromHint(event)"
+                       title="Use the log's last event time as the issue time"
+                       style="color:#1d4ed8;text-decoration:underline;cursor:pointer;font-weight:600;font-family:'SFMono-Regular',Consolas,monospace;"></a>
+                </span>
+            </div>
+
+            <!-- Date row: Month / Day / Year. Greyed and disabled when the
+                 loaded log is time-only (DDD/tracefmt) — the layout stays
+                 identical to the dated case for visual consistency. -->
+            <div class="it-row" id="it-date-row">
+                <div class="it-field">
+                    <label class="it-label">Month</label>
+                    <input id="it-month" class="it-input" type="number" min="1" max="12"
+                           inputmode="numeric" placeholder="MM"
+                           oninput="onPartChange('it-month', 12, 'it-day')">
+                </div>
+                <span class="it-sep">/</span>
+                <div class="it-field">
+                    <label class="it-label">Day</label>
+                    <input id="it-day" class="it-input" type="number" min="1" max="31"
+                           inputmode="numeric" placeholder="DD"
+                           oninput="onPartChange('it-day', 31, 'it-year')">
+                </div>
+                <span class="it-sep">/</span>
+                <div class="it-field it-field-wide">
+                    <label class="it-label">Year</label>
+                    <input id="it-year" class="it-input" type="number" min="1970" max="2999"
+                           inputmode="numeric" placeholder="YYYY"
+                           oninput="onPartChange('it-year', null, 'it-hour')">
+                </div>
+            </div>
+
+            <!-- Time row: Hour : Minute : Second . Millisecond -->
+            <div class="it-row">
+                <div class="it-field">
+                    <label class="it-label">Hour</label>
+                    <input id="it-hour" class="it-input" type="number" min="0" max="23"
+                           inputmode="numeric" placeholder="HH"
+                           oninput="onPartChange('it-hour', 23, 'it-min')">
+                </div>
+                <span class="it-sep">:</span>
+                <div class="it-field">
+                    <label class="it-label">Minute</label>
+                    <input id="it-min" class="it-input" type="number" min="0" max="59"
+                           inputmode="numeric" placeholder="MM"
+                           oninput="onPartChange('it-min', 59, 'it-sec')">
+                </div>
+                <span class="it-sep">:</span>
+                <div class="it-field">
+                    <label class="it-label">Second</label>
+                    <input id="it-sec" class="it-input" type="number" min="0" max="59"
+                           inputmode="numeric" placeholder="SS"
+                           oninput="onPartChange('it-sec', 59, 'it-ms')">
+                </div>
+                <span class="it-sep">.</span>
+                <div class="it-field it-field-ms">
+                    <label class="it-label">ms</label>
+                    <input id="it-ms" class="it-input" type="number" min="0" max="999"
+                           inputmode="numeric" placeholder="mmm"
+                           oninput="onPartChange('it-ms', 999, null)">
+                </div>
+            </div>
+
+            <!-- Hidden legacy field kept so other code referencing it doesn't break -->
+            <input id="issue-time-ms" type="hidden">
+
+            <div id="issue-time-error"
+                 style="display:none;font-size:0.7rem;color:#c62828;margin-top:4px;"></div>
+
+            <!-- Issue-time actions (below the picker). Clear now lives as a
+                 trash icon in the section header (top-right). -->
+            <div style="margin-top:14px;border-top:1px solid #eef1f4;padding-top:12px;">
+
+                <!-- AI issue-time assistant: infers issue time(s) from the chat
+                     description + a rough browse of the log, into the capture popup. -->
+                <button type="button" class="it-quick-btn" id="ai-time-btn"
+                        style="display:flex;align-items:center;justify-content:center;gap:6px;width:100%;margin-bottom:6px;background:#eef4ff;border-color:#bcd3f5;"
+                        onclick="suggestIssueTimesWithAI()"
+                        title="Analyze your description + the loaded log with AI to suggest the issue time">
+                    🪄 AI suggest issue time
+                </button>
+                <!-- Non-blocking hint when AI suggest is used with an empty chat box. -->
+                <div id="ai-time-nodesc" style="display:none;font-size:0.7rem;color:#92400e;margin-bottom:6px;line-height:1.35;">
+                    ℹ No description — AI will infer from the log only. Add a problem description in the chat box for better accuracy.
+                </div>
+
+                <!-- Shown when no issue time could be auto-detected. -->
+                <div id="it-unknown-warn" style="display:none;font-size:0.7rem;color:#92400e;background:#fff7ed;border:1px solid #fdba74;border-radius:6px;padding:5px 8px;line-height:1.3;">
+                    ⚠️ <strong>Unknown time.</strong> Couldn't auto-detect the issue time — please fill it in above.
+                </div>
+            </div>
+
+            <!-- Master toggle: hide additional issue times unless the user
+                 opts in. AI auto-fill / popup-apply may add extras into
+                 the DOM, but they only appear (and only count) once
+                 this is ticked. The most-likely time stays in the primary
+                 picker above. -->
+            <label class="sidebar-multi-toggle" for="use-multi-issue"
+                   title="By default only the most-likely issue time is used. Tick to also use the additional times below.">
+                <input type="checkbox" id="use-multi-issue"
+                       onchange="_onSidebarMultiToggle(this)">
+                <span>
+                    <strong>Use multiple issue times</strong>
+                    <span class="smt-sub">Off — only the most-likely time. Tick to add more.</span>
+                </span>
+            </label>
+
+            <!-- Extras list: additional issue times beyond the primary
+                 picker above. Each row is a compact MM/DD/YYYY HH:MM:SS.mmm
+                 strip with its own ✕ remove button. Multi-time analysis
+                 runs one agent pass per filled row. -->
+            <div id="extra-issue-times" style="display:none;"></div>
+            <button type="button" class="eit-add-btn" id="add-extra-issue-btn"
+                    style="display:none;"
+                    onclick="addExtraIssueTimeRow()">
+                ＋ Add another issue time
+            </button>
+
+            <!-- Issue-time capture window: how many minutes before/after
+                 the issue time the log slice (Segment2) is taken. -->
+            <div class="itw-row">
+                <label class="itw-label" for="it-window-min">
+                    ⏱ Capture window
+                </label>
+                <div class="itw-control">
+                    <button type="button" class="itw-step" onclick="stepIssueWindow(-1)" title="Less">−</button>
+                    <input id="it-window-min" class="itw-input" type="number"
+                           min="0" max="120" step="1" value="5"
+                           inputmode="numeric"
+                           oninput="onIssueWindowChange()">
+                    <button type="button" class="itw-step" onclick="stepIssueWindow(1)" title="More">＋</button>
+                    <span class="itw-unit">min ± around issue time</span>
+                </div>
+            </div>
+        </div>
+
+        <!-- Skills -->
+        <div class="sidebar-section">
+            <h6>🛠 Available Skills</h6>
+            <div id="skill-source-panel" class="skill-source-panel">
+                <div class="skill-source-row">
+                    <span id="skill-source-badge" class="skill-source-badge cloud">Cloud baseline</span>
+                    <span id="skill-source-file"  class="skill-source-file"></span>
+                </div>
+                <div id="skill-source-actions" class="skill-source-actions"></div>
+            </div>
+            <div id="skills-list">
+                <div style="font-size:0.78rem;color:#aaa;">Load a log file to see skills.</div>
+            </div>
+            <button class="btn-set-log" style="width:100%;margin-top:8px;"
+                    onclick="openSkillEditor()" id="skill-editor-btn"
+                    title="Edit the local skill configuration"
+                    >✏️ Edit Skills Configuration</button>
+            <div id="skill-editor-status" class="log-status"></div>
+        </div>
+
+        <!-- Reload skills from directory -->
+        <div class="sidebar-section">
+            <h6>🛠 Reload Skills</h6>
+            <div class="log-input-group">
+                <input id="skills-dir-input" type="text" placeholder="Skills data directory…">
+                <button type="button" class="btn-browse" onclick="browseSkillsDir()" title="Browse for directory">📁</button>
+            </div>
+            <button class="btn-set-log" style="width:100%;margin-top:6px;" onclick="reloadSkills()">🔄 Reload Skills</button>
+            <div id="skills-reload-status" class="log-status"></div>
+        </div>
+
+        {% include 'chatbot/_quick_questions.html' %}
+
+        </div><!-- /#sidebar-controls-view -->
+
+        <!-- View 2: conversation history -->
+        <div id="sidebar-history-view" style="display:none;">
+            <div class="sidebar-section">
+                <!-- Start a brand-new, empty session (like first entering the
+                     agent) or jump back to the working session the user
+                     arrived with before browsing history. -->
+                <div class="hist-actions">
+                    <button type="button" class="hist-action-btn"
+                            onclick="startNewConversation()"
+                            title="Start a new, empty conversation (clears the log path, issue time and chat)">
+                        ➕ New session
+                    </button>
+                    <button type="button" id="hist-restore-btn"
+                            class="hist-action-btn hist-action-secondary" style="display:none;"
+                            onclick="restoreLiveSession()"
+                            title="Restore the unsent draft you were preparing before browsing history (log path, issue time and chat-box text)">
+                        ↩ Resume draft
+                    </button>
+                </div>
+                <div style="display:flex;align-items:center;justify-content:space-between;margin-bottom:10px;">
+                    <h6 style="margin:0;">🕘 RECENT</h6>
+                    <button type="button" class="hist-refresh" title="Refresh"
+                            onclick="loadHistoryList()">⟳</button>
+                </div>
+                <div id="history-empty" style="display:none;font-size:0.78rem;color:#888;padding:8px 2px;">
+                    No saved conversations yet.<br>Ask a question to start one.
+                </div>
+                <div id="history-list"></div>
+            </div>
+        </div>

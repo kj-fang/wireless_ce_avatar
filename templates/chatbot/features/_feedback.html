@@ -1,0 +1,128 @@
+<!-- ===== Feedback detail modal (Layer 2 — "More feedback") ============= -->
+<!-- Top-of-page toast stack (auto-reset notifications, etc.) -->
+<div id="toast-stack" class="toast-stack"></div>
+
+<div id="feedback-detail-modal" class="fbd-modal fbd-modal--drawer" aria-hidden="true">
+    <!-- Backdrop kept in DOM but hidden by .fbd-modal--drawer so the
+         page stays interactive while the drawer is open. -->
+    <div class="fbd-backdrop"></div>
+    <div class="fbd-card" role="dialog" aria-modal="false">
+        <div class="fbd-header">
+            <h3>More feedback</h3>
+            <span id="fbd-vote-badge" class="fbd-vote-badge"></span>
+            <span class="fbd-draft-hint" id="fbd-draft-hint">draft auto-saved</span>
+            <button type="button" class="fbd-close" onclick="closeFeedbackModal()" aria-label="Close">×</button>
+        </div>
+        <div class="fbd-body">
+            <!-- ===== PAGE 1 — problem type ONLY (pick one → new screen) === -->
+            <div id="fbd-page-1" class="fbd-page">
+                <div class="fbd-section-label" id="fbd-route-label">What kind of problem?</div>
+                <div class="fbd-route-cards" id="fbd-route-cards">
+                    <button type="button" class="fbd-route-card" data-route="workflow" onclick="selectFeedbackRoute('workflow')">
+                        <span class="fbd-route-title" data-route-title="workflow">How it investigated</span>
+                        <span class="fbd-route-desc" data-route-desc="workflow">The steps it took — repeated itself, ran checks it didn't need, stopped too early, or went in the wrong order.</span>
+                    </button>
+                    <button type="button" class="fbd-route-card" data-route="skill" onclick="selectFeedbackRoute('skill')">
+                        <span class="fbd-route-title" data-route-title="skill">What it knew</span>
+                        <span class="fbd-route-desc" data-route-desc="skill">Its knowledge was off — it misread the logs, reasoned wrongly, or used a wrong rule.</span>
+                    </button>
+                    <button type="button" class="fbd-route-card" data-route="both" onclick="selectFeedbackRoute('both')">
+                        <span class="fbd-route-title" data-route-title="both">Both</span>
+                        <span class="fbd-route-desc" data-route-desc="both">Both how it investigated and what it knew need fixing.</span>
+                    </button>
+                </div>
+            </div>
+
+            <!-- ===== PAGE 2 — the chosen route's full interface ========= -->
+            <div id="fbd-page-2" class="fbd-page hidden-row">
+                <!-- ─── Category (ACE label) — top of every route ─── -->
+                <div class="fbd-group" id="fbd-category-block">
+                    <label class="fbd-sub-label" id="fbd-conc-label">Category</label>
+                    <select id="fbd-correct-conclusion-tag">
+                        <option value="">— Select if you know —</option>
+                        {% for value, label in ui.feedback_conclusions %}
+                        <option value="{{ value }}">{{ label }}</option>
+                        {% endfor %}
+                        <option value="OTHER">Other</option>
+                    </select>
+                </div>
+
+                <!-- ─── Workflow menu (shown for workflow / both) ─── -->
+                <div class="fbd-group hidden-row" id="fbd-workflow-menu">
+                    <div class="fbd-group-title" id="fbd-grp-flow-title">
+                        <span>Agent workflow</span>
+                        <span class="fbd-selected-count" id="fbd-step-count">selected 0/0</span>
+                    </div>
+
+                    <select id="fbd-agent-workflow">
+                        <option value="">— Pick the main issue —</option>
+                        <option value="missed_evidence">Missed key log evidence</option>
+                        <option value="wrong_conclusion">Wrong root cause / conclusion</option>
+                        <option value="hallucinated">Cited a log line that doesn't exist</option>
+                        <option value="stopped_too_early">Stopped too early / incomplete</option>
+                        <option value="over_investigated">Over-investigated unnecessarily</option>
+                        <option value="loop_or_stuck">Loop / stuck / repeated the same fetch</option>
+                        <option value="wrong_direction">Wrong direction — followed the wrong path</option>
+                        <option value="bad_output">Output unclear or misleading</option>
+                        <option value="other">Other</option>
+                    </select>
+
+                    <label class="fbd-sub-label" id="fbd-rootcause-label">Real root cause</label>
+                    <textarea id="fbd-correct-root-cause" rows="2"
+                              placeholder="e.g. Stopped after first empty fetch — should widen time window before concluding"></textarea>
+
+                    <div class="fbd-field-hint" id="fbd-step-lane-hint"></div>
+                    <div id="fbd-step-rows" class="fbd-skill-rows"></div>
+                </div>
+
+                <!-- ─── Skill menu (shown for skill / both) ─── -->
+                <div class="fbd-group hidden-row" id="fbd-skill-menu">
+                    <div class="fbd-group-title" id="fbd-grp-skill-title">
+                        <span>Which skill was wrong?</span>
+                        <span class="fbd-selected-count" id="fbd-skill-count">selected 0/0</span>
+                    </div>
+                    <div class="fbd-field-hint" id="fbd-skill-lane-hint"></div>
+                    <div id="fbd-skill-rows" class="fbd-skill-rows"></div>
+                </div>
+
+                <!-- ─── Issue Time — collapsed by default; tick to expand ─── -->
+                <div class="fbd-group">
+                    <label class="fbd-attach-row" title="Tick to say what it should have been.">
+                        <input type="checkbox" id="fbd-issue-time-flag" onchange="onIssueTimeFlagToggle()">
+                        <span>
+                            ⏱ The issue time (or its capture window) was a problem.
+                        </span>
+                    </label>
+                    <div id="fbd-issue-time-detail" class="hidden-row" style="margin-top:8px;">
+                        <label class="fbd-sub-label" id="fbd-issuetime-label">What was wrong with the issue time?</label>
+                        <input type="text" id="fbd-issue-time-problem"
+                               placeholder='Describe it — e.g. "anchored ~10 min too late", "window too narrow, missed the disconnect", "should have used multiple times"'>
+
+                        <label class="fbd-sub-label" id="fbd-correct-issuetime-label">Correct issue time(s)</label>
+                        <input type="text" id="fbd-correct-issue-time"
+                               placeholder='What it should have been — e.g. "04/28/2026-23:17:09" or "23:17:09; 23:16:00"'>
+                        <div class="fbd-field-hint" id="fbd-issuetime-hint">The issue time actually used in this turn is recorded automatically, so reviewers can compare.</div>
+                    </div>
+                </div>
+
+                <!-- ─── Attachments ─── -->
+                <div class="fbd-group">
+                    <div class="fbd-group-title">Attachments</div>
+                    <label class="fbd-attach-row" id="fbd-attach-log-row"
+                           title="Lets reviewers replay the exact log you analysed. Recommended when reporting a wrong answer.">
+                        <input type="checkbox" id="fbd-attach-log">
+                        <span>Attach the current session log for diagnosis.</span>
+                    </label>
+                </div>
+            </div>
+        </div>
+        <div class="fbd-footer">
+            <button type="button" class="fbd-btn" id="fbd-back-btn" onclick="feedbackWizardBack()" style="display:none;">← Back</button>
+            <span class="fbd-footer-spacer"></span>
+            <button type="button" class="fbd-btn" id="fbd-cancel-btn" onclick="closeFeedbackModal()">Cancel</button>
+            <button type="button" class="fbd-btn primary" id="fbd-submit-btn" onclick="submitFeedbackDetail()" style="display:none;">Submit</button>
+        </div>
+    </div>
+</div>
+
+<script src="/static/chatbot/js/features/feedback.js"></script>

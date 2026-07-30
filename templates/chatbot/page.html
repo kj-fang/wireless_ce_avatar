@@ -1,0 +1,20 @@
+{% extends 'chatbot/base.html' %}
+
+{# One page composition root for every chatbot profile. The profile selects
+   cohesive view fragments; capability flags select reusable features. #}
+
+{% block sidebar %}
+{% if ui.template_parts.sidebar %}
+{% include ui.template_parts.sidebar %}
+{% endif %}
+{% endblock %}
+
+{% block scripts %}
+{% if ui.template_parts.runtime %}
+{% include ui.template_parts.runtime %}
+{% endif %}
+<script src="{{ ui.profile_script }}"></script>
+{% if ui.features.feedback %}{% include 'chatbot/features/_feedback.html' %}{% endif %}
+{% if ui.features.skill_editor %}{% include 'chatbot/features/_skill_editor.html' %}{% endif %}
+{% if ui.features.history %}{% include 'chatbot/features/_history.html' %}{% endif %}
+{% endblock %}

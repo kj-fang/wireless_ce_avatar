@@ -1,0 +1,175 @@
+<!-- ── Modal: confirm sending without an Issue Time ── -->
+<div id="confirm-modal" class="cm-overlay" style="display:none;" onclick="onConfirmModalBackdrop(event)">
+    <div class="cm-dialog" role="dialog" aria-modal="true" aria-labelledby="cm-title">
+        <div class="cm-header">
+            <span class="cm-icon">⚠</span>
+            <h3 id="cm-title">Send without Issue Time?</h3>
+        </div>
+        <div class="cm-body">
+            <p>You haven't picked an <strong>Issue Time</strong> in the sidebar.</p>
+            <p>Without a timestamp, the agent will analyse the entire log instead of focusing on the moment the issue occurred. This may take longer and produce less precise results.</p>
+            <p>Let <strong>AI suggest a time</strong> from your description and the log, or anchor on the <strong>log's last timestamp</strong>.</p>
+        </div>
+        <div class="cm-actions">
+            <button class="cm-btn cm-btn-secondary" onclick="closeConfirmModal(false)">Cancel</button>
+            <button class="cm-btn cm-btn-ai" onclick="chooseAiSuggestFromConfirm()" title="Infer the issue time from your description + a rough browse of the log">🪄 AI suggest a time</button>
+            <button class="cm-btn cm-btn-primary" id="cm-confirm-btn" onclick="useLogLastTimeAndSend()" title="Set the issue time to the log's last timestamp, then analyse">Use log's last time</button>
+        </div>
+    </div>
+</div>
+
+
+
+<!-- ── JavaScript ── -->
+
+
+<!-- ===== Time-capture popup ============================================
+     Pops up when the user's message contains time tokens like
+     "17:36:13" or "1.17:36:13". Each detected token is rendered as a
+     full MM/DD/YYYY HH:MM:SS.mmm row matching the sidebar format. The
+     user can edit, add (+) or remove (×) rows, then choose whether to
+     REPLACE or APPEND to the sidebar Issue Time list. ================ -->
+<div id="time-capture-modal" class="fbd-modal" aria-hidden="true">
+    <div class="fbd-backdrop" onclick="closeTimeCaptureModal()"></div>
+    <div class="fbd-card" role="dialog" aria-modal="true">
+        <div class="fbd-header">
+            <h3 id="tc-title">Detected issue time(s) in your message</h3>
+            <button type="button" class="fbd-close" onclick="closeTimeCaptureModal()" aria-label="Close">×</button>
+        </div>
+        <div class="fbd-body">
+            <div class="tc-hint" id="tc-summary">
+                Found 0 time(s). Edit any field, add more with “+ Add another time”,
+                or remove any you don’t want.
+            </div>
+            <div id="time-capture-list"></div>
+            <button type="button" class="eit-add-btn" style="margin-top:6px;"
+                    onclick="addTimeCaptureRow()">
+                ＋ Add another time
+            </button>
+
+            <div class="tc-hint" style="margin-top:14px;font-weight:600;color:#374151;">
+                What should happen to the sidebar Issue Time list?
+            </div>
+            <div class="tc-mode-row">
+                <label><input type="radio" name="tc-mode" value="replace" checked> Replace existing</label>
+                <label><input type="radio" name="tc-mode" value="append"> Append to existing</label>
+            </div>
+        </div>
+        <div class="fbd-footer">
+            <button type="button" class="fbd-btn" onclick="closeTimeCaptureModal()">Cancel</button>
+            <button type="button" class="fbd-btn" id="tc-confirm-btn" onclick="applyTimeCapture(false)"
+                    title="Put these time(s) into the sidebar Issue Time list — don't send yet">✓ Confirm time(s)</button>
+            <button type="button" class="fbd-btn primary" id="tc-apply-btn" onclick="applyTimeCapture(true)"
+                    title="Apply the time(s) and send your description to the agent for analysis now">Apply &amp; send to agent</button>
+        </div>
+    </div>
+</div>
+
+<!-- ===== LLM consent gate ============================================
+     Shown when the user clicks "🪄 AI suggest issue time". Nothing is
+     sent to the LLM until the user explicitly allows it here. Previews
+     the exact description that will be sent + whether a log is loaded. -->
+<div id="llm-time-consent-modal" class="fbd-modal" aria-hidden="true">
+    <div class="fbd-backdrop" onclick="closeLlmTimeConsent()"></div>
+    <div class="fbd-card" role="dialog" aria-modal="true">
+        <div class="fbd-header">
+            <h3>Send this to the AI for time analysis?</h3>
+            <button type="button" class="fbd-close" onclick="closeLlmTimeConsent()" aria-label="Close">×</button>
+        </div>
+        <div class="fbd-body">
+            <div class="tc-hint">
+                The assistant will read the description below plus a rough sample
+                of the loaded log to suggest issue time(s). Nothing is sent until
+                you allow it.
+            </div>
+            <div id="llm-consent-text"
+                 style="margin-top:10px;padding:8px 10px;background:#f9fafb;border:1px solid #e5e7eb;border-radius:6px;font-size:0.8rem;white-space:pre-wrap;word-break:break-word;max-height:180px;overflow:auto;"></div>
+            <div class="tc-hint" id="llm-consent-loghint" style="margin-top:8px;"></div>
+        </div>
+        <div class="fbd-footer">
+            <button type="button" class="fbd-btn" onclick="closeLlmTimeConsent()">Cancel</button>
+            <button type="button" class="fbd-btn primary" id="llm-consent-allow" onclick="confirmLlmTimeConsent()">Allow &amp; analyze</button>
+        </div>
+    </div>
+</div>
+
+<!-- Compact one-row template used INSIDE the time-capture popup.
+     Same .eit-month / .eit-day / ... hook classes so the shared JS
+     helpers (_populateEitRow, _readEitRow) work unchanged. -->
+<template id="eit-row-template-compact">
+    <div class="eit-row eit-row-compact">
+        <button type="button" class="eit-remove" onclick="removeEitRow(this)" aria-label="Remove">×</button>
+        <div class="eit-fields">
+            <input type="number" class="eit-month" min="1"  max="12"  placeholder="MM"   inputmode="numeric">
+            <span class="eit-sep">/</span>
+            <input type="number" class="eit-day"   min="1"  max="31"  placeholder="DD"   inputmode="numeric">
+            <span class="eit-sep">/</span>
+            <input type="number" class="eit-year"  min="1970" max="2999" placeholder="YYYY" inputmode="numeric">
+            <span class="eit-gap"></span>
+            <input type="number" class="eit-hour"  min="0"  max="23"  placeholder="HH"   inputmode="numeric">
+            <span class="eit-sep">:</span>
+            <input type="number" class="eit-min"   min="0"  max="59"  placeholder="MM"   inputmode="numeric">
+            <span class="eit-sep">:</span>
+            <input type="number" class="eit-sec"   min="0"  max="59"  placeholder="SS"   inputmode="numeric">
+            <span class="eit-sep">.</span>
+            <input type="number" class="eit-ms"    min="0"  max="999" placeholder="mmm"  inputmode="numeric">
+        </div>
+    </div>
+</template>
+
+<!-- Verbose two-row template used by the SIDEBAR extras list. Mirrors
+     the primary Issue Time picker layout (Date row + Time row, with
+     MONTH / DAY / YEAR / HOUR / MINUTE / SECOND / MS labels) so the
+     extras look identical to the first. -->
+<template id="eit-row-template">
+    <div class="eit-row">
+        <button type="button" class="eit-remove" onclick="removeEitRow(this)" aria-label="Remove">×</button>
+        <!-- Date row -->
+        <div class="it-row">
+            <div class="it-field">
+                <label class="it-label">Month</label>
+                <input type="number" class="it-input eit-month"
+                       min="1" max="12" placeholder="MM" inputmode="numeric">
+            </div>
+            <span class="it-sep">/</span>
+            <div class="it-field">
+                <label class="it-label">Day</label>
+                <input type="number" class="it-input eit-day"
+                       min="1" max="31" placeholder="DD" inputmode="numeric">
+            </div>
+            <span class="it-sep">/</span>
+            <div class="it-field it-field-wide">
+                <label class="it-label">Year</label>
+                <input type="number" class="it-input eit-year"
+                       min="1970" max="2999" placeholder="YYYY" inputmode="numeric">
+            </div>
+        </div>
+        <!-- Time row -->
+        <div class="it-row">
+            <div class="it-field">
+                <label class="it-label">Hour</label>
+                <input type="number" class="it-input eit-hour"
+                       min="0" max="23" placeholder="HH" inputmode="numeric">
+            </div>
+            <span class="it-sep">:</span>
+            <div class="it-field">
+                <label class="it-label">Minute</label>
+                <input type="number" class="it-input eit-min"
+                       min="0" max="59" placeholder="MM" inputmode="numeric">
+            </div>
+            <span class="it-sep">:</span>
+            <div class="it-field">
+                <label class="it-label">Second</label>
+                <input type="number" class="it-input eit-sec"
+                       min="0" max="59" placeholder="SS" inputmode="numeric">
+            </div>
+            <span class="it-sep">.</span>
+            <div class="it-field it-field-ms">
+                <label class="it-label">ms</label>
+                <input type="number" class="it-input eit-ms"
+                       min="0" max="999" placeholder="mmm" inputmode="numeric">
+            </div>
+        </div>
+    </div>
+</template>
+

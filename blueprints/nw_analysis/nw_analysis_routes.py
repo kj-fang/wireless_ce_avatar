@@ -1,4 +1,10 @@
-from flask import Blueprint, render_template, request, session, jsonify, Response, copy_current_request_context
+from flask import render_template, request, session, jsonify, Response, copy_current_request_context
+from services.chatbot.issue_context import extract_disconnect_time as _extract_disconnect_time
+from services.chatbot.factory import (
+    ChatbotBlueprintConfig,
+    create_chatbot_blueprint,
+    handler_map,
+)
 import json
 import re
 import traceback
@@ -9,13 +15,14 @@ from datetime import datetime
 import tkinter as tk
 from tkinter import filedialog
 
+from configs.chatbot_ui import WIFI_UI
 from configs.global_configs import app_config
 from models.models import CaseContext
 from services.nw_analysis_service import WifiLogAgentSystem, load_skills_from_data_dir, get_builtin_skills, build_skill_file_map, load_skills_from_yaml
 from services.sleepstudy_analyzer import analyze_sleepstudy_stream
 from utils.etl_utils import extract_time_from_description
+from utils.event_log_utils import find_event_log_for_log
 
-nw_analysis_bp = Blueprint("nw_analysis", __name__, url_prefix="/nw_analysis")
 
 # Server-side store: session_id -> WifiLogAgentSystem instance
 _chatbot_instances: dict = {}
@@ -125,30 +132,6 @@ def _extract_issue_context() -> dict:
     }
 
 
-def _extract_disconnect_time(*text_sources: str) -> str:
-    """
-    Search multiple text sources for the most precise disconnect/event
-    timestamp.  Returns a string like ' at around 10/28/2025-11:25:49'
-    or '' if nothing found.
-
-    Tries several common formats:
-      MM/DD/YYYY-HH:MM:SS(.mmm)
-      MM/DD/YYYY HH:MM:SS
-      YYYY-MM-DD HH:MM:SS
-      YYYY/MM/DD HH:MM:SS
-    """
-    patterns = [
-        r'(\d{1,2}/\d{1,2}/\d{4}[\s-]\d{1,2}:\d{2}:\d{2}(?:\.\d{1,3})?)',
-        r'(\d{4}[-/]\d{1,2}[-/]\d{1,2}[\sT]\d{1,2}:\d{2}:\d{2})',
-    ]
-    for src in text_sources:
-        if not src:
-            continue
-        for pat in patterns:
-            m = re.search(pat, src)
-            if m:
-                return f" at around {m.group(1)}"
-    return ""
 
 
 def _compose_concise_description() -> str:
@@ -236,7 +219,6 @@ def _get_or_create_agent() -> WifiLogAgentSystem:
 # ------------------------------------------------------------------
 # Pages
 # ------------------------------------------------------------------
-@nw_analysis_bp.route("/", methods=["GET"])
 def index():
     suggested_log = app_config.last_analyzed_log_path or ""
     issue_desc = ""
@@ -245,13 +227,17 @@ def index():
         issue_desc = ctx.get("description", "")
     except Exception:
         pass
-    return render_template("NW_analysis.html", suggested_log=suggested_log, issue_description=issue_desc)
+    return render_template(
+        "chatbot/page.html",
+        ui=WIFI_UI,
+        suggested_log=suggested_log,
+        issue_description=issue_desc,
+    )
 
 
 # ------------------------------------------------------------------
 # API: open native file browser and return selected path
 # ------------------------------------------------------------------
-@nw_analysis_bp.route("/browse", methods=["GET"])
 def browse():
     """Open a native Windows file dialog and return the selected .log path."""
     result = {"path": ""}
@@ -280,7 +266,6 @@ def browse():
 # ------------------------------------------------------------------
 # API: set log file path
 # ------------------------------------------------------------------
-@nw_analysis_bp.route("/set_log", methods=["POST"])
 def set_log():
     data = request.get_json(silent=True) or {}
     log_path = data.get("log_path", "").strip()
@@ -296,10 +281,15 @@ def set_log():
             agent.prime_with_context(**ctx)
 
         session["chatbot_log_path"] = log_path
+        try:
+            event_log_path = find_event_log_for_log(log_path)
+        except Exception:
+            event_log_path = ""
         return jsonify({
             "success": True,
             "message": f"Log file set: {log_path}",
             "skills": agent.get_skill_descriptions(),
+            "evtx_path": event_log_path,
         })
     except Exception as e:
         return jsonify({"success": False, "error": str(e)}), 500
@@ -309,7 +299,6 @@ def set_log():
 # API: set sleepstudy file path (same as set_log but no session write
 # and no skills payload in response)
 # ------------------------------------------------------------------
-@nw_analysis_bp.route("/set_log_sleepstudy", methods=["POST"])
 def set_log_sleepstudy():
     data = request.get_json(silent=True) or {}
     log_path = data.get("log_path", "").strip()
@@ -335,7 +324,6 @@ def set_log_sleepstudy():
 # ------------------------------------------------------------------
 # API: analyze sleepstudy via the script (SSE stream)
 # ------------------------------------------------------------------
-@nw_analysis_bp.route("/analyze_sleepstudy", methods=["POST"])
 def analyze_sleepstudy():
     """
     Run the sleepstudy_analyzer.py pipeline against the given .html report
@@ -407,7 +395,6 @@ def analyze_sleepstudy():
 # ------------------------------------------------------------------
 # API: chat
 # ------------------------------------------------------------------
-@nw_analysis_bp.route("/chat", methods=["POST"])
 def chat():
     data = request.get_json(silent=True) or {}
     user_message = (data.get("message") or "").strip()
@@ -520,20 +507,9 @@ def chat():
 # ------------------------------------------------------------------
 # API: reset conversation
 # ------------------------------------------------------------------
-@nw_analysis_bp.route("/reset", methods=["POST"])
-def reset():
-    try:
-        agent = _get_or_create_agent()
-        agent.reset_conversation()
-        return jsonify({"success": True, "message": "Conversation reset."})
-    except Exception as e:
-        return jsonify({"success": False, "error": str(e)}), 500
-
-
 # ------------------------------------------------------------------
 # API: prepare chatbot from download_result (set log path + case context)
 # ------------------------------------------------------------------
-@nw_analysis_bp.route("/prepare", methods=["POST"])
 def prepare():
     """
     Called from download_result when user clicks "Chatbot Analysis".
@@ -573,30 +549,11 @@ def prepare():
 # ------------------------------------------------------------------
 # API: open native directory browser and return selected path
 # ------------------------------------------------------------------
-@nw_analysis_bp.route("/browse_dir", methods=["GET"])
-def browse_dir():
-    """Open a native Windows folder dialog and return the selected directory path."""
-    result = {"path": ""}
-
-    def _open_dialog():
-        root = tk.Tk()
-        root.withdraw()
-        root.wm_attributes("-topmost", True)
-        path = filedialog.askdirectory(title="Select skills data directory")
-        root.destroy()
-        result["path"] = path or ""
-
-    t = threading.Thread(target=_open_dialog)
-    t.start()
-    t.join(timeout=60)
-
-    return jsonify({"success": True, "path": result["path"]})
 
 
 # ------------------------------------------------------------------
 # API: reload skills from a directory and apply to current agent
 # ------------------------------------------------------------------
-@nw_analysis_bp.route("/reload_skills", methods=["POST"])
 def reload_skills():
     """
     Reload skills from the given data_dir (must contain prompt/ and filter/
@@ -644,33 +601,11 @@ def reload_skills():
 # ------------------------------------------------------------------
 # API: browse for a YAML file (native file dialog)
 # ------------------------------------------------------------------
-@nw_analysis_bp.route("/browse_yaml", methods=["GET"])
-def browse_yaml():
-    """Open a native file dialog to select a skills .yaml file."""
-    result = {"path": ""}
-
-    def _open_dialog():
-        root = tk.Tk()
-        root.withdraw()
-        root.wm_attributes("-topmost", True)
-        path = filedialog.askopenfilename(
-            title="Select skills YAML file",
-            filetypes=[("YAML files", "*.yaml *.yml"), ("All files", "*.*")],
-        )
-        root.destroy()
-        result["path"] = path or ""
-
-    t = threading.Thread(target=_open_dialog)
-    t.start()
-    t.join(timeout=60)
-
-    return jsonify({"success": True, "path": result["path"]})
 
 
 # ------------------------------------------------------------------
 # API: load skills from a YAML file (standalone, no prompt/filter dirs)
 # ------------------------------------------------------------------
-@nw_analysis_bp.route("/load_skills_yaml", methods=["POST"])
 def load_skills_yaml_route():
     """
     Load skills directly from a .yaml file.
@@ -708,7 +643,6 @@ def load_skills_yaml_route():
 # ------------------------------------------------------------------
 # API: Reload skills from shared folder (auto-discovery)
 # ------------------------------------------------------------------
-@nw_analysis_bp.route("/reload_from_shared", methods=["POST"])
 def reload_from_shared():
     """
     Reload skills from the shared YAML location.
@@ -757,19 +691,6 @@ def reload_from_shared():
 # ------------------------------------------------------------------
 # API: get available skills
 # ------------------------------------------------------------------
-@nw_analysis_bp.route("/skills", methods=["GET"])
-def get_skills():
-    try:
-        agent = _get_or_create_agent()
-        return jsonify({
-            "success": True,
-            "skills": agent.get_skill_descriptions(),
-        })
-    except Exception as e:
-        return jsonify({"success": False, "error": str(e)}), 500
-
-
-@nw_analysis_bp.route("/get_issue_context", methods=["GET"])
 def get_issue_context():
     # Use _compose_concise_description() instead to get a cleaned and concise title/description.
     concise_desc = _compose_concise_description()
@@ -784,7 +705,6 @@ def get_issue_context():
 # ------------------------------------------------------------------
 # API: find best matching log by reading actual file timestamps
 # ------------------------------------------------------------------
-@nw_analysis_bp.route("/find_best_log", methods=["POST"])
 def find_best_log():
     """
     Given a list of ETL paths and an issue time string, read the first/last
@@ -923,3 +843,18 @@ def _parse_issue_time(time_str: str):
             except ValueError:
                 continue
     return None
+
+# The module above is now a domain adapter: its functions retain BT/Wi-Fi/NW
+# policy, while the factory owns the public route table and shared use cases.
+_NW_ANALYSIS_CAPABILITIES = {
+    key for key, enabled in WIFI_UI["features"].items() if enabled
+}
+_NW_ANALYSIS_HANDLERS = handler_map(globals(), _NW_ANALYSIS_CAPABILITIES)
+nw_analysis_bp = create_chatbot_blueprint(ChatbotBlueprintConfig(
+    name="nw_analysis",
+    import_name=__name__,
+    url_prefix="/nw_analysis",
+    capabilities=_NW_ANALYSIS_CAPABILITIES,
+    get_agent=_get_or_create_agent,
+    handlers=_NW_ANALYSIS_HANDLERS,
+))

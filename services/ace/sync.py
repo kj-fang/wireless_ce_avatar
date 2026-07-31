@@ -2,18 +2,20 @@
 
 Two-mode sync:
   1. Top-level playbook JSONs → mirror (copy changed, delete stale remote).
-  2. history/ subtree → additive only (copy new, never delete from remote).
+  2. history/ subtree → additive copy, then prune remote entries older than
+     `retention_days` (default 30) so the share doesn't grow forever.
 
 All IO is best-effort: failures log a warning and return without raising.
 The ACE run itself must never be blocked by a sync error.
 """
 
 from __future__ import annotations
-
+ 
 import os
 import shutil
 import threading
 import time
+from datetime import datetime, timedelta
 from pathlib import Path
 from typing import Callable, Optional
 
@@ -24,6 +26,8 @@ _TAG = "[ace.sync]"
 _PROBE_TIMEOUT_SEC = 10.0
 
 _SKIP_NAMES = {".ace_cursor.json", ".ace_nightly.json"}
+
+_DEFAULT_RETENTION_DAYS = 30
 
 
 def _probe_remote(remote_root: str, timeout_sec: float = _PROBE_TIMEOUT_SEC) -> bool:
@@ -123,14 +127,72 @@ def _sync_history_additive(local_history: Path, remote_history: Path) -> dict:
     return stats
 
 
+def _prune_remote_history_by_age(remote_history: Path, retention_days: int) -> dict:
+    """Delete remote history entries older than `retention_days`.
+
+    Same rules as HistoryWriter.prune(): decide by the DATE encoded in the
+    filename / dir-name, not by mtime (which additive copies can bump).
+
+      remote_history/turns/YYYY-MM-DD.jsonl   -> unlink
+      remote_history/snapshots/YYYY-MM-DD/    -> rmtree (whole day dir)
+    """
+    stats = {"turns_removed": 0, "snapshot_dirs_removed": 0}
+    if retention_days <= 0 or not remote_history.exists():
+        return stats
+    cutoff = datetime.now() - timedelta(days=retention_days)
+
+    turns_dir = remote_history / "turns"
+    if turns_dir.exists():
+        try:
+            for f in turns_dir.glob("*.jsonl"):
+                try:
+                    d = datetime.strptime(f.stem, "%Y-%m-%d")
+                except ValueError:
+                    continue
+                if d < cutoff:
+                    try:
+                        f.unlink()
+                        stats["turns_removed"] += 1
+                    except OSError as e:
+                        print(f"{_TAG} prune: failed to remove remote {f}: {e}")
+        except OSError as e:
+            print(f"{_TAG} prune (remote turns) failed: {e}")
+
+    snaps_dir = remote_history / "snapshots"
+    if snaps_dir.exists():
+        try:
+            for d in snaps_dir.iterdir():
+                if not d.is_dir():
+                    continue
+                try:
+                    day = datetime.strptime(d.name, "%Y-%m-%d")
+                except ValueError:
+                    continue
+                if day < cutoff:
+                    try:
+                        shutil.rmtree(str(d))
+                        stats["snapshot_dirs_removed"] += 1
+                    except OSError as e:
+                        print(f"{_TAG} prune: failed to rmtree remote {d}: {e}")
+        except OSError as e:
+            print(f"{_TAG} prune (remote snapshots) failed: {e}")
+
+    return stats
+
+
 def sync_playbooks_to_remote(
     local_dir: Path,
     remote_root_raw: str,
     *,
     emit: Optional[Callable[[str, dict], None]] = None,
     job_id: str = "",
+    retention_days: int = _DEFAULT_RETENTION_DAYS,
 ) -> None:
-    """Sync local playbooks + history to the remote SMB share. Best-effort."""
+    """Sync local playbooks + history to the remote SMB share. Best-effort.
+
+    After the additive history copy, any remote history entry whose encoded
+    date is older than `retention_days` is deleted from the share.
+    """
     started = time.time()
 
     if not _probe_remote(remote_root_raw):
@@ -159,9 +221,10 @@ def sync_playbooks_to_remote(
         print(f"{_TAG} mirror phase failed: {e}")
 
     history_stats: dict = {"copied": 0, "skipped_existing": 0}
+    prune_stats: dict = {"turns_removed": 0, "snapshot_dirs_removed": 0}
     local_history = local_dir / "history"
+    remote_history = remote_root / "history"
     if local_history.exists():
-        remote_history = remote_root / "history"
         try:
             remote_history.mkdir(parents=True, exist_ok=True)
             history_stats = _sync_history_additive(local_history, remote_history)
@@ -169,13 +232,23 @@ def sync_playbooks_to_remote(
             history_stats = {"error": str(e)}
             print(f"{_TAG} history sync failed: {e}")
 
+    # Prune old remote history even if local/history is empty — the share may
+    # still have day-dirs from previous pushes that should now be expired.
+    try:
+        prune_stats = _prune_remote_history_by_age(remote_history, retention_days)
+    except Exception as e:
+        prune_stats = {"error": str(e)}
+        print(f"{_TAG} history prune failed: {e}")
+
     elapsed = time.time() - started
     print(f"{_TAG} sync complete in {elapsed:.1f}s — "
-          f"mirror: {mirror_stats}, history: {history_stats}")
+          f"mirror: {mirror_stats}, history: {history_stats}, prune: {prune_stats}")
     if emit:
         emit("sync_done", {
             "mirror": mirror_stats,
             "history": history_stats,
+            "history_prune": prune_stats,
+            "retention_days": retention_days,
             "elapsed_sec": round(elapsed, 1),
         })
 
@@ -186,12 +259,13 @@ def launch_sync_background(
     *,
     emit: Optional[Callable[[str, dict], None]] = None,
     job_id: str = "",
+    retention_days: int = _DEFAULT_RETENTION_DAYS,
 ) -> None:
     """Fire-and-forget: spawns sync in a daemon thread."""
     t = threading.Thread(
         target=sync_playbooks_to_remote,
         args=(local_dir, remote_root_raw),
-        kwargs={"emit": emit, "job_id": job_id},
+        kwargs={"emit": emit, "job_id": job_id, "retention_days": retention_days},
         daemon=True,
         name=f"ace-sync-{job_id[:8]}",
     )

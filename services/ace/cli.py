@@ -39,6 +39,7 @@ import argparse
 import json
 import os
 import sys
+from datetime import datetime, timezone
 from functools import partial
 from pathlib import Path
 
@@ -216,15 +217,68 @@ def _skill_context_provider(sid: str, namespace: str = "wifi"):
 
 # -- subcommands --------------------------------------------------------------
 
+def _write_adapt_artifact(
+    *,
+    namespace: str,
+    playbooks_dir: Path,
+    feedback_root: Path,
+    mode: str,
+    results: list[dict],
+    summary: dict,
+    bullets_before: dict[str, dict],
+    bullets_after: dict[str, dict],
+    since: str | None = None,
+    limit: int | None = None,
+    conversation_id: str | None = None,
+    turn_ids: list[str] | None = None,
+) -> Path:
+    from .eval import runner as eval_runner
+
+    ts_utc = datetime.now(timezone.utc).isoformat(timespec="seconds")
+    stamp = ts_utc.replace(":", "").replace("-", "")
+    run_dir = Path(eval_runner.DEFAULT_RUNS_DIR) / stamp
+    run_dir.mkdir(parents=True, exist_ok=True)
+
+    changed_bullets = _diff_playbook_bullet_state(bullets_before, bullets_after)
+    submitters = sorted({
+        str(r.get("submitted_by") or "").strip()
+        for r in results
+        if str(r.get("submitted_by") or "").strip()
+    })
+
+    payload = {
+        "ts_utc": ts_utc,
+        "namespace": namespace,
+        "mode": mode,
+        "playbooks_dir": str(playbooks_dir),
+        "feedback_root": str(feedback_root),
+        "since": since,
+        "limit": limit,
+        "conversation_id": conversation_id,
+        "turn_ids": turn_ids or [],
+        "summary": summary,
+        "submitters": submitters,
+        "playbook_changes": changed_bullets,
+        "results": results,
+    }
+
+    out_path = run_dir / f"adapt_{stamp}.json"
+    out_path.write_text(json.dumps(payload, indent=2, ensure_ascii=False), encoding="utf-8")
+    print(f"[ace.cli] adapt artifact written: {out_path}")
+    return out_path
+
 def _run_adapt_batch(args, *, allow_push: bool = True) -> list[dict]:
     """Run one adapt batch and return per-turn results."""
+    playbooks_dir = _resolve_playbooks_dir(args.namespace)
+    feedback_root = _resolve_feedback_root()
+    bullets_before = _capture_playbook_bullet_state(playbooks_dir)
     llm = _build_llm(args.model)
     llm.reset_usage()
-    history = HistoryWriter(root=_resolve_playbooks_dir(args.namespace) / "history")
+    history = HistoryWriter(root=playbooks_dir / "history")
     runner = AceRunner(
         llm=llm,
-        playbooks_dir=_resolve_playbooks_dir(args.namespace),
-        feedback_root=_resolve_feedback_root(),
+        playbooks_dir=playbooks_dir,
+        feedback_root=feedback_root,
         skills=args.skill or None,
         skill_context_provider=partial(_skill_context_provider, namespace=args.namespace),
         history=history,
@@ -243,6 +297,19 @@ def _run_adapt_batch(args, *, allow_push: bool = True) -> list[dict]:
         "excluded": sum(1 for r in results if r.get("status") == "excluded_user"),
         "token_usage": llm.get_usage(),
     }
+    bullets_after = _capture_playbook_bullet_state(playbooks_dir)
+    _write_adapt_artifact(
+        namespace=args.namespace,
+        playbooks_dir=playbooks_dir,
+        feedback_root=feedback_root,
+        mode="adapt",
+        results=results,
+        summary=summary,
+        bullets_before=bullets_before,
+        bullets_after=bullets_after,
+        since=args.since,
+        limit=args.limit,
+    )
     print(json.dumps(summary, indent=2))
     if args.verbose:
         for r in results:
@@ -292,13 +359,16 @@ def cmd_adapt_one(args):
     in the snapshot that carries feedback is processed in order. The batch
     cursor is left untouched so this command can be re-run safely.
     """
+    playbooks_dir = _resolve_playbooks_dir(args.namespace)
+    feedback_root = _resolve_feedback_root()
+    bullets_before = _capture_playbook_bullet_state(playbooks_dir)
     llm = _build_llm(args.model)
     llm.reset_usage()
-    history = HistoryWriter(root=_resolve_playbooks_dir(args.namespace) / "history")
+    history = HistoryWriter(root=playbooks_dir / "history")
     runner = AceRunner(
         llm=llm,
-        playbooks_dir=_resolve_playbooks_dir(args.namespace),
-        feedback_root=_resolve_feedback_root(),
+        playbooks_dir=playbooks_dir,
+        feedback_root=feedback_root,
         skills=args.skill or None,
         skill_context_provider=partial(_skill_context_provider, namespace=args.namespace),
         history=history,
@@ -338,6 +408,19 @@ def cmd_adapt_one(args):
         "excluded":  sum(1 for r in results if r.get("status") == "excluded_user"),
         "token_usage": llm.get_usage(),
     }
+    bullets_after = _capture_playbook_bullet_state(playbooks_dir)
+    _write_adapt_artifact(
+        namespace=args.namespace,
+        playbooks_dir=playbooks_dir,
+        feedback_root=feedback_root,
+        mode="adapt-one",
+        results=results,
+        summary=summary,
+        bullets_before=bullets_before,
+        bullets_after=bullets_after,
+        conversation_id=cid,
+        turn_ids=[str(tid) for tid in turn_ids],
+    )
     print(json.dumps(summary, indent=2))
     if args.verbose:
         for r in results:
@@ -469,7 +552,7 @@ def cmd_pipeline(args):
     print("[pipeline] ===== STEP 2/3: eval (judge) =====")
     from .eval import runner as eval_runner
     runs_dir = args.runs_dir or eval_runner.DEFAULT_RUNS_DIR
-    cases_dir = args.cases_dir or eval_runner.DEFAULT_CASES_DIR
+    cases_dir = args.cases_dir or eval_runner._default_cases_dir()
     report = eval_runner.evaluate(
         cases_dir=cases_dir,
         runs_dir=runs_dir,

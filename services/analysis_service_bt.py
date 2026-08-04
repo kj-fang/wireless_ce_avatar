@@ -5,7 +5,7 @@ import threading
 
 from configs.global_configs import app_config
 from configs.path_configs import LOG_PARSER_DIR
-from services.etl_parser.bt_parser import bt_analysis_manualSelect_mode, bt_analysis_autoFile_mode, bt_analysis_autoFolder_mode, bt_decode_hci_via_folder, bt_decode_via_cli
+from services.etl_parser.bt_parser import bt_analysis_manualSelect_mode, bt_analysis_autoFile_mode, bt_analysis_autoFolder_mode, bt_decode_hci_via_folder, bt_decode_via_cli, open_with_text_analysis_tool
 
 
 class BTAnalysisService():
@@ -83,7 +83,6 @@ class BTAnalysisService():
         """背景執行 LLM 模式：用 AutoFolder tab decode HCI 後 emit bt_hci_ready 讓前端跳轉 log_parser"""
         self.emit_log(f"🔍 HCI decoding for LLM analysis (AutoFolder): {os.path.basename(file_path)}")
         etl_folder = os.path.dirname(file_path)
-        # hci_path = bt_decode_hci_via_folder(etl_folder, file_path)
         hci_path = bt_decode_via_cli(etl_folder, file_path)
         if hci_path:
             self.emit_log(f"✅ HCI decode complete: {hci_path}")
@@ -107,25 +106,34 @@ class BTAnalysisService():
         self._finish_analysis(file_path, pid, 'Manual')
 
     def _run_autofolder_analysis(self, file_path: str, filter_path: str = None):
-        """背景執行 AutoFolder 模式的 BT 分析"""
+        """背景執行 AutoFolder 模式的 BT 分析（CLI 版本）"""
         etl_folder = os.path.dirname(file_path)
-        # Debug
         print(f"Starting AutoFolder analysis for: {etl_folder}")
-        # Debug
-        
+
         # should_stop callable: returns True if this operation was superseded
         def should_stop():
             with self._monitor_lock:
                 return self._active_file_path != file_path
-        
-        pid = bt_analysis_autoFolder_mode(
-            etl_folder,
-            file_path,
-            should_stop=should_stop,
-            filter_path=filter_path,
-        )
-        self.emit_log("BT tool - AutoFolder launched.")
-        self._finish_analysis(file_path, pid, 'AutoFolder')
+
+        self.emit_log(f"🔍 Decoding ETL (CLI): {os.path.basename(file_path)}")
+        hci_path = bt_decode_via_cli(etl_folder, file_path, skip_non_target=False)
+
+        # CLI decode 無法中途打斷，但完成後需確認是否已被取代
+        if should_stop():
+            self.emit_log("⚠️ AutoFolder operation superseded, discarding result.")
+            return
+
+        with self._monitor_lock:
+            self._active_file_path = None
+            self._active_mode = None
+
+        if hci_path:
+            self.emit_log(f"✅ Decode complete: {os.path.basename(hci_path)}")
+            open_with_text_analysis_tool(hci_path, filter_path=filter_path)
+        else:
+            self.emit_log("❌ AutoFolder decode failed or timed out.")
+
+        app_config.socketio.emit('autofolder_complete', {'etl_path': file_path}, namespace='/progress')
 
     def _finish_analysis(self, file_path: str, pid, mode: str):
         """完成分析後的通用處理：檢查 PID 並啟動 monitor"""

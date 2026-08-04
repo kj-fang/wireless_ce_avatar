@@ -80,7 +80,7 @@ BT_UI = {
     "profile_script": "/static/chatbot/js/profiles/bt.js",
     "template_parts": {
         "sidebar": "chatbot/profiles/bt/_sidebar.html",
-        "runtime": "chatbot/profiles/bt/_runtime.html",
+        "runtime": "chatbot/features/_issue_time_runtime.html",
     },
     "issue_time": {
         "strategy_script": "/static/chatbot/js/strategies/bt-issue-time.js",
@@ -88,6 +88,12 @@ BT_UI = {
         "customer_timezone": False,
         "event_refinement": True,
         "multi_select": False,
+        "prompt_title": "Send without Issue Time?",
+        "prompt_body": (
+            "Without a timestamp, the agent will analyse the entire log "
+            "instead of focusing on the moment the issue occurred. This may "
+            "take longer and produce less precise results."
+        ),
     },
     "features": {
         **_COMMON_FEATURES,
@@ -131,7 +137,7 @@ LOG_CHATBOT_UI = {
     "profile_script": "/static/chatbot/js/profiles/wifi.js",
     "template_parts": {
         "sidebar": "chatbot/profiles/wifi/_sidebar.html",
-        "runtime": "chatbot/profiles/wifi/_runtime.html",
+        "runtime": "chatbot/features/_issue_time_runtime.html",
     },
     "issue_time": {
         "strategy_script": "/static/chatbot/js/strategies/wifi-issue-time.js",
@@ -139,6 +145,15 @@ LOG_CHATBOT_UI = {
         "customer_timezone": True,
         "event_refinement": False,
         "multi_select": True,
+        # Wi-Fi requires a time anchor: log-scoped Segment2 is the only
+        # supported analysis mode, so the copy asks for one rather than
+        # offering to analyse the whole file.
+        "prompt_title": "Issue Time needed",
+        "prompt_body": (
+            "An issue-time anchor lets the agent scope the analysis to a "
+            "narrow window of log lines around the event, instead of scanning "
+            "the entire file — faster turns and more focused answers."
+        ),
     },
     "features": {
         **_COMMON_FEATURES,
@@ -182,11 +197,16 @@ WIFI_UI = {
         "runtime": "",
     },
     "issue_time": {
+        # NW has no issue-time picker (features.issue_time is False and
+        # template_parts.runtime is empty); the block is kept so every profile
+        # exposes the same shape.
         "strategy_script": "",
         "allow_time_only": False,
         "customer_timezone": False,
         "event_refinement": False,
         "multi_select": False,
+        "prompt_title": "",
+        "prompt_body": "",
     },
     "features": {
         **_COMMON_FEATURES,

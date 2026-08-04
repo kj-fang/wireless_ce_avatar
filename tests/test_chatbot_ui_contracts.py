@@ -48,6 +48,8 @@ def test_profile_has_complete_shared_shell_contract(profile: str) -> None:
         "customer_timezone",
         "event_refinement",
         "multi_select",
+        "prompt_title",
+        "prompt_body",
     }
     assert set(ui["template_parts"]) == {
         "sidebar",

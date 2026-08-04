@@ -565,9 +565,20 @@ def cmd_pipeline(args):
         model=args.model,
         judge_model=args.judge_model,
     )
-    # Rebuild the report path with the SAME formula runner uses for out_path.
-    stamp = report["ts_utc"].replace(":", "").replace("-", "")
-    out_path = Path(runs_dir) / f"eval_{stamp}.json"
+    # Resolve eval report path from the runner output when available.
+    eval_path_raw = report.get("eval_path") if isinstance(report, dict) else None
+    if eval_path_raw:
+        out_path = Path(eval_path_raw)
+    elif isinstance(report, dict) and report.get("ts_utc"):
+        # Fallback for older runner outputs that didn't include eval_path.
+        stamp = str(report["ts_utc"]).replace(":", "").replace("-", "")
+        out_path = Path(runs_dir) / stamp / f"eval_{stamp}.json"
+    else:
+        status = str((report or {}).get("status") or "unknown")
+        print(f"[pipeline] eval produced no reviewable report (status={status}).")
+        if status in ("no_cases", "no_cases_triggered"):
+            return 0
+        return 1
 
     if args.no_review:
         if want_push:

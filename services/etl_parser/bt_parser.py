@@ -13,7 +13,8 @@ import re
 # instead of launching a new GUI process every time.
 active_bt_pid = None
 
-SPLIT_SIZE_THRESHOLD_BYTES = 1024 * 1024 * 1024  
+# Temporary threshold large enough to disable split processing.
+SPLIT_SIZE_THRESHOLD_BYTES = 1024 * 1024 * 1024 * 1024
 
 
 def _get_true_file_size(path: str) -> int:

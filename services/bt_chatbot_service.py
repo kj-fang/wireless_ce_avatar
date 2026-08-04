@@ -29,8 +29,7 @@ from services.log_chatbot_service import (
     load_skills_from_yaml,
     get_builtin_skills,
 )
-from datetime import datetime
-from utils.issue_time_utils import resolve_issue_time, parse_issue_time_string, format_issue_time
+from utils.issue_time_utils import resolve_issue_time
 
 
 class BtLogAgentSystem(WifiLogAgentSystem):
@@ -110,9 +109,9 @@ class BtLogAgentSystem(WifiLogAgentSystem):
             log_snippet = ""
             if self.current_log_path:
                 try:
-                    from utils.helpers import read_log_file
-                    lines = read_log_file(self.current_log_path)
-                    log_snippet = "\n".join(str(l) for l in lines[:500])
+                    from itertools import islice
+                    with open(self.current_log_path, "r", encoding="utf-8", errors="replace") as f:
+                        log_snippet = "".join(islice(f, 500))
                 except Exception:
                     log_snippet = "(unable to read log file)"
 

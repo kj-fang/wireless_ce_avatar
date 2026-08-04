@@ -2493,6 +2493,7 @@ def skills_yaml_status():
             agent = _get_or_create_agent(skip_prime=True)
             payload["skills"] = agent.get_skill_descriptions()
         except Exception:
+            traceback.print_exc()
             payload["skills"] = []
         return jsonify({"success": True, **payload})
     except Exception as e:

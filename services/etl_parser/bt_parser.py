@@ -871,6 +871,7 @@ def bt_decode_via_cli(
     log_path: str,
     etl_txt_timeout: int = 180,
     hci_txt_timeout: int = 15,
+    skip_non_target: bool = True,
 ) -> str | None:
     """
     Decode an ETL folder via CLI (ibtdrvlogparser_cli.exe) without any GUI automation.
@@ -927,122 +928,123 @@ def bt_decode_via_cli(
 
     # 2) Split any oversized ETLs (>=1 GB) via CLI before decode.
     split_target_map = {}
-    large_etls = _collect_large_etl_files(log_folder_path)
-    for file_info in large_etls:
-        etl_path = file_info["path"]
-        etl_size = file_info["size"]
-        split_count = math.ceil(etl_size / (512 * 1024 * 1024))
-        print(
-            f"📐 Splitting {os.path.basename(etl_path)} into {split_count} parts "
-            f"(size={etl_size / (1024 * 1024):.1f} MB)"
-        )
-        split_cmd = [cli_exe, "split", etl_path, "-n", str(split_count)]
-        split_proc = None
-
-        try:
-            split_proc = subprocess.Popen(
-                split_cmd,
-                stdout=subprocess.PIPE,
-                stderr=subprocess.PIPE,
-                text=True,
+    if skip_non_target:
+        large_etls = _collect_large_etl_files(log_folder_path)
+        for file_info in large_etls:
+            etl_path = file_info["path"]
+            etl_size = file_info["size"]
+            split_count = math.ceil(etl_size / (512 * 1024 * 1024))
+            print(
+                f"📐 Splitting {os.path.basename(etl_path)} into {split_count} parts "
+                f"(size={etl_size / (1024 * 1024):.1f} MB)"
             )
-            split_dir = os.path.dirname(etl_path)
-            base_name = os.path.splitext(os.path.basename(etl_path))[0]
-            split_wait_start = time.monotonic()
-            prev_parts_signature = None
-            stable_start = None
-            split_stable_seconds = 15
-            split_wait_timeout = 300
-            split_success = False
+            split_cmd = [cli_exe, "split", etl_path, "-n", str(split_count)]
+            split_proc = None
 
-            while time.monotonic() - split_wait_start < split_wait_timeout:
-                ret = split_proc.poll()
+            try:
+                split_proc = subprocess.Popen(
+                    split_cmd,
+                    stdout=subprocess.PIPE,
+                    stderr=subprocess.PIPE,
+                    text=True,
+                )
+                split_dir = os.path.dirname(etl_path)
+                base_name = os.path.splitext(os.path.basename(etl_path))[0]
+                split_wait_start = time.monotonic()
+                prev_parts_signature = None
+                stable_start = None
+                split_stable_seconds = 15
+                split_wait_timeout = 300
+                split_success = False
 
-                parts = sorted(glob.glob(os.path.join(split_dir, f"{base_name}_split*.etl")))
-                parts_signature = tuple((p, _get_true_file_size(p)) for p in parts)
+                while time.monotonic() - split_wait_start < split_wait_timeout:
+                    ret = split_proc.poll()
 
-                if parts_signature != prev_parts_signature:
-                    prev_parts_signature = parts_signature
-                    stable_start = time.monotonic()
-                    if parts:
-                        print(
-                            f"\r⏳ Splitting in progress: {len(parts)}/{split_count} part(s), "
-                            f"sizes={[s for _, s in parts_signature]}\033[K",
-                            end='', flush=True,
-                        )
-                else:
-                    if stable_start is None:
+                    parts = sorted(glob.glob(os.path.join(split_dir, f"{base_name}_split*.etl")))
+                    parts_signature = tuple((p, _get_true_file_size(p)) for p in parts)
+
+                    if parts_signature != prev_parts_signature:
+                        prev_parts_signature = parts_signature
                         stable_start = time.monotonic()
-                    if time.monotonic() - stable_start >= split_stable_seconds:
-                        if len(parts) >= split_count:
+                        if parts:
                             print(
-                                f"\n✅ Split complete: {len(parts)} part(s) stable for "
-                                f"{split_stable_seconds}s for {etl_path}"
-                            )
-                            split_success = True
-                            if split_proc.poll() is None:
-                                split_proc.kill()
-                                split_proc.wait()
-                            break
-                        elif split_proc.poll() is not None:
-                            # Process has already exited and parts are still incomplete → genuine failure
-                            print(
-                                f"\n⚠️ Split stopped but incomplete: {len(parts)}/{split_count} "
-                                f"part(s) stable for {split_stable_seconds}s (process exited)"
-                            )
-                            break
-                        else:
-                            # Process is still running — it may be preparing the next part;
-                            # reset stable_start and keep waiting.
-                            print(
-                                f"\r⏳ Split parts stable for {split_stable_seconds}s but process "
-                                f"still running ({len(parts)}/{split_count}); waiting...\033[K",
+                                f"\r⏳ Splitting in progress: {len(parts)}/{split_count} part(s), "
+                                f"sizes={[s for _, s in parts_signature]}\033[K",
                                 end='', flush=True,
                             )
-                            stable_start = time.monotonic()
-
-                if ret is not None:
-                    # Process exited naturally; read buffered output and do a final scan.
-                    stdout_data, stderr_data = split_proc.communicate()
-                    for line in stdout_data.splitlines():
-                        print(f"  [CLI] {line}")
-                    if ret != 0:
-                        print(f"\n⚠️ Split CLI exited with rc={ret}: {stderr_data.strip()}")
                     else:
-                        parts = sorted(glob.glob(os.path.join(split_dir, f"{base_name}_split*.etl")))
-                        if len(parts) >= split_count:
-                            print(f"\n✅ Split completed (process exited cleanly) for: {etl_path}")
-                            split_success = True
+                        if stable_start is None:
+                            stable_start = time.monotonic()
+                        if time.monotonic() - stable_start >= split_stable_seconds:
+                            if len(parts) >= split_count:
+                                print(
+                                    f"\n✅ Split complete: {len(parts)} part(s) stable for "
+                                    f"{split_stable_seconds}s for {etl_path}"
+                                )
+                                split_success = True
+                                if split_proc.poll() is None:
+                                    split_proc.kill()
+                                    split_proc.wait()
+                                break
+                            elif split_proc.poll() is not None:
+                                # Process has already exited and parts are still incomplete → genuine failure
+                                print(
+                                    f"\n⚠️ Split stopped but incomplete: {len(parts)}/{split_count} "
+                                    f"part(s) stable for {split_stable_seconds}s (process exited)"
+                                )
+                                break
+                            else:
+                                # Process is still running — it may be preparing the next part;
+                                # reset stable_start and keep waiting.
+                                print(
+                                    f"\r⏳ Split parts stable for {split_stable_seconds}s but process "
+                                    f"still running ({len(parts)}/{split_count}); waiting...\033[K",
+                                    end='', flush=True,
+                                )
+                                stable_start = time.monotonic()
+
+                    if ret is not None:
+                        # Process exited naturally; read buffered output and do a final scan.
+                        stdout_data, stderr_data = split_proc.communicate()
+                        for line in stdout_data.splitlines():
+                            print(f"  [CLI] {line}")
+                        if ret != 0:
+                            print(f"\n⚠️ Split CLI exited with rc={ret}: {stderr_data.strip()}")
                         else:
-                            print(
-                                f"\n⚠️ Split process exited but only "
-                                f"{len(parts)}/{split_count} parts found"
-                            )
-                    break
+                            parts = sorted(glob.glob(os.path.join(split_dir, f"{base_name}_split*.etl")))
+                            if len(parts) >= split_count:
+                                print(f"\n✅ Split completed (process exited cleanly) for: {etl_path}")
+                                split_success = True
+                            else:
+                                print(
+                                    f"\n⚠️ Split process exited but only "
+                                    f"{len(parts)}/{split_count} parts found"
+                                )
+                        break
 
-                time.sleep(2)
-            else:
-                print(f"\n⚠️ Split timed out after {split_wait_timeout}s for: {etl_path}")
-                if split_proc.poll() is None:
-                    split_proc.kill()
-                    split_proc.wait()
-
-            if split_success:
-                _rename_split_source(etl_path)
-                selected_split = _pick_last_split_part(etl_path)
-                if selected_split:
-                    split_target_map[etl_path] = selected_split
-                    print(f"✅ Selected chatbot input target: {selected_split}")
+                    time.sleep(2)
                 else:
-                    print(f"⚠️ Split succeeded but no split part found for: {etl_path}")
+                    print(f"\n⚠️ Split timed out after {split_wait_timeout}s for: {etl_path}")
+                    if split_proc.poll() is None:
+                        split_proc.kill()
+                        split_proc.wait()
 
-        except Exception as e:
-            print(f"⚠️ Failed to split {etl_path}: {e}")
-            if split_proc and split_proc.poll() is None:
-                try:
-                    split_proc.kill()
-                except Exception:
-                    pass
+                if split_success:
+                    _rename_split_source(etl_path)
+                    selected_split = _pick_last_split_part(etl_path)
+                    if selected_split:
+                        split_target_map[etl_path] = selected_split
+                        print(f"✅ Selected chatbot input target: {selected_split}")
+                    else:
+                        print(f"⚠️ Split succeeded but no split part found for: {etl_path}")
+
+            except Exception as e:
+                print(f"⚠️ Failed to split {etl_path}: {e}")
+                if split_proc and split_proc.poll() is None:
+                    try:
+                        split_proc.kill()
+                    except Exception:
+                        pass
 
     # 3) Determine which ETL is the chatbot / analysis target.
     chatbot_input_etl = split_target_map.get(log_path, log_path)
@@ -1050,17 +1052,18 @@ def bt_decode_via_cli(
         print(f"🎯 Chatbot input will use last split part: {chatbot_input_etl}")
 
     # 4) Rename all non-target ETLs to .skip so decode focuses on chatbot_input_etl only.
-    normalized_target = os.path.normcase(os.path.abspath(chatbot_input_etl))
-    for etl_file in os.listdir(log_folder_path):
-        etl_file_path = os.path.join(log_folder_path, etl_file)
-        if (etl_file_path.lower().endswith(".etl")
-                and os.path.normcase(os.path.abspath(etl_file_path)) != normalized_target):
-            try:
-                renamed_path = etl_file_path + ".skip"
-                os.rename(etl_file_path, renamed_path)
-                print(f"📦 Renamed non-target ETL to avoid decode: {etl_file_path} → {renamed_path}")
-            except Exception as e_rename:
-                print(f"⚠️ Failed to rename {etl_file_path}: {e_rename}")
+    if skip_non_target:
+        normalized_target = os.path.normcase(os.path.abspath(chatbot_input_etl))
+        for etl_file in os.listdir(log_folder_path):
+            etl_file_path = os.path.join(log_folder_path, etl_file)
+            if (etl_file_path.lower().endswith(".etl")
+                    and os.path.normcase(os.path.abspath(etl_file_path)) != normalized_target):
+                try:
+                    renamed_path = etl_file_path + ".skip"
+                    os.rename(etl_file_path, renamed_path)
+                    print(f"📦 Renamed non-target ETL to avoid decode: {etl_file_path} → {renamed_path}")
+                except Exception as e_rename:
+                    print(f"⚠️ Failed to rename {etl_file_path}: {e_rename}")
 
     # 5) Run CLI decode on the folder (Popen — file-size idle-based timeout).
     # Uses Popen instead of subprocess.run so we can monitor .hci.txt size while

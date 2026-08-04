@@ -7,7 +7,9 @@ from configs.path_configs import (
     LOCAL_LOG_PARSER_DATA_DIR,
     SKILLS_CONFIG_DIR_prim, SKILLS_CONFIG_DIR_bkup, SKILLS_YAML_FILENAME,
     BT_SKILLS_YAML_FILENAME,
+    SLEEPSTUDY_SKILLS_YAML_FILENAME,
     LOCAL_SKILLS_YAML,
+    LOCAL_SLEEPSTUDY_SKILLS_YAML,
 )
 from utils import helpers
 from utils.skills_yaml_utils import (
@@ -19,6 +21,11 @@ from utils.bt_skills_yaml_utils import (
     current_active_yaml as bt_current_active_yaml,
     refresh_local_cloud_baseline as bt_refresh_local_cloud_baseline,
     set_active_source as bt_set_active_source,
+)
+from utils.sleepstudy_skills_yaml_utils import (
+    current_active_yaml as sleepstudy_current_active_yaml,
+    refresh_local_cloud_baseline as sleepstudy_refresh_local_cloud_baseline,
+    set_active_source as sleepstudy_set_active_source,
 )
 from services.llm_service import LLM_helper
 from services.log_chatbot_service import WifiLogAgentSystem, sync_to_local, load_skills_from_yaml
@@ -189,13 +196,46 @@ def set_up(socketio):
         print("⚠️  Log Chatbot Agent skipped — LLM client not configured (no API key).")
     app_config.set_log_chatbot_agent(log_chatbot_agent)
 
+    # ------------------------------------------------------------------
+    # Sleepstudy Skills — separate skill domain for nw_analysis_agent
+    # ------------------------------------------------------------------
+    # Sleepstudy skills follow the SAME user/cloud lifecycle as WiFi/BT
+    # (mirrored on share → local cloud/ at startup, user/ for hand edits)
+    # but file names carry a `sleepstudy_skills_` prefix so all three domains
+    # coexist in the same skills_config sub-folders without collision.
+    #
+    # Loading sequence mirrors the WiFi and BT blocks above.
+    sleepstudy_skills = None
+    sleepstudy_set_active_source("cloud")
+    try:
+        sleepstudy_refreshed_path, sleepstudy_refreshed_date = sleepstudy_refresh_local_cloud_baseline()
+        if sleepstudy_refreshed_path is not None:
+            print(f"📥 Refreshed local Sleepstudy cloud baseline → {sleepstudy_refreshed_path} "
+                  f"(date={sleepstudy_refreshed_date})")
+        else:
+            print("ℹ️  Sleepstudy cloud baseline refresh skipped — share folder unreachable.")
+    except Exception as e:
+        print(f"⚠️  Sleepstudy cloud baseline refresh failed: {e}")
+
+    sleepstudy_chosen_yaml, sleepstudy_chosen_date, sleepstudy_chosen_source = sleepstudy_current_active_yaml()
+    if sleepstudy_chosen_yaml is not None and sleepstudy_chosen_yaml.exists():
+        try:
+            sleepstudy_skills = load_skills_from_yaml(str(sleepstudy_chosen_yaml))
+            print(f"✅  {len(sleepstudy_skills)} Sleepstudy skills loaded from "
+                  f"{sleepstudy_chosen_source} YAML: {sleepstudy_chosen_yaml} (date={sleepstudy_chosen_date})")
+        except Exception as e:
+            print(f"⚠️  Failed to load Sleepstudy skills from YAML ({e}); NW Analysis will reuse WiFi skills.")
+    else:
+        print("ℹ️  No Sleepstudy skills YAML found (cloud/user/share all empty) — "
+              "NW Analysis will reuse WiFi skills.")
+
     # NW Analysis Agent — separate backend instance (own copy of WifiLogAgentSystem)
     if llm_helper.client is not None:
         model = getattr(llm_helper, 'model', 'gpt-4.1')
         nw_analysis_agent = NwAnalysisAgentSystem(
             client=llm_helper.client,
             model=model,
-            skills=llm_helper.skills,   # reuse, no second disk read
+            skills=sleepstudy_skills if sleepstudy_skills else llm_helper.skills,
         )
         print(f"🌐 NW Analysis Agent loaded (model={model})")
     else:

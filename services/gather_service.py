@@ -534,6 +534,9 @@ def _do_record_attachment_declaration(
     source: str,
     issue: Optional[dict],
     domain: str,
+    confidence: str = "",
+    evidence: str = "",
+    conflict: bool = False,
 ) -> None:
     user = _current_user()
     try:
@@ -543,6 +546,13 @@ def _do_record_attachment_declaration(
             audit = record.get("attachment_audit") if isinstance(record.get("attachment_audit"), dict) else {}
             audit["issue_declared_attached"] = declared if isinstance(declared, bool) else None
             audit["declaration_source"] = str(source or "")[:80]
+            # Keep how the verdict was reached, not just the verdict. A None
+            # from "the summary never said" and a None from "two statements
+            # disagreed" need different follow-up, and the raw sentence lets a
+            # bad classification be found without re-running the LLM.
+            audit["declaration_confidence"] = str(confidence or "none")[:40]
+            audit["declaration_evidence"] = str(evidence or "")[:600]
+            audit["declaration_conflict"] = bool(conflict)
             _reconcile_attachment_audit(audit)
             record["attachment_audit"] = audit
             _write_workflow(path, record)
@@ -553,71 +563,166 @@ def _do_record_attachment_declaration(
 
 
 def record_attachment_declaration(
-    *, workflow_id: str, declared: Optional[bool], source: str = "ai_summary",
+    *, workflow_id: str, declared: Optional[bool] = None, source: str = "ai_summary",
     issue: Optional[dict] = None, domain: str = "",
+    ai_analysis: Any = None,
 ) -> None:
+    """Record what the issue text claims about attachments.
+
+    Prefer passing ``ai_analysis`` — the classification then happens here and the
+    confidence and the sentence it came from are stored alongside the verdict.
+    ``declared`` remains accepted for callers that already classified.
+    """
     if not workflow_id or not getattr(sys, "frozen", False):
         return
+    confidence, evidence, conflict = "", "", False
+    if ai_analysis is not None:
+        try:
+            d = infer_declared_attachments_detail(ai_analysis)
+            declared = d["declared"]
+            confidence, evidence, conflict = d["confidence"], d["evidence"], d["conflict"]
+        except Exception:
+            pass
     try:
         threading.Thread(
             target=_do_record_attachment_declaration,
-            args=(workflow_id, declared, source, issue, domain), daemon=True,
+            args=(workflow_id, declared, source, issue, domain,
+                  confidence, evidence, conflict), daemon=True,
         ).start()
     except Exception as e:
         print(f"[gather] attachment declaration dispatch failed: {e}")
 
 
-def infer_declared_attachments(ai_analysis: Any) -> Optional[bool]:
-    """Best-effort extraction of the issue's attachment claim from AI JSON.
+# ── Attachment-claim parsing ────────────────────────────────────────────────
+# The claim is written by an LLM, so the wording is never guaranteed. These
+# rules are ordered most-explicit first and are applied to ONE statement at a
+# time (see _iter_statements) rather than to the whole summary joined together.
+#
+# Evaluating a joined blob is what made the earlier defect possible: a negation
+# in one sentence and the word "attached" in another combined into a false
+# positive. Per-statement evaluation removes that whole class of error instead
+# of patching individual phrasings.
+_DECL_NOUN = r"(?:log|dump|attachment|file|capture|trace)s?"
+_DECL_COPULA = r"(?:files?\s+)?(?:(?:is|are|was|were|been)\s+)?"
+_DECL_NEG_WORD = r"(?:no|not|none|never|without|n't|n/a|na)"
 
-    This value is evidence about what the issue *says*.  Actual discovery and
-    download success always come from attachment_list and the transfer worker.
+_DECL_RULES: tuple[tuple[str, str, Optional[bool]], ...] = (
+    # 1. Explicit field with an explicit value — the shape the prompt asks for.
+    #    Separator is deliberately loose: ':' '=' '-' en/em dash, or '(...)'.
+    ("explicit_field", rf"{_DECL_NOUN}\s+(?:files?\s+)?attached\s*[:=\-–—(\[]*\s*"
+                       r"\b(yes|no|true|false|none|n/?a)\b", None),
+    ("explicit_field", r"(?:attachments?|logs?|dumps?)[_ ]present\s*[:=\-–—]*\s*"
+                       r"\b(yes|no|true|false|none|n/?a)\b", None),
+    ("explicit_field", r"new case attachment uploaded\s*[:=\-–—]*\s*"
+                       r"\b(yes|no|true|false|none|n/?a)\b", None),
+    # 2. A bare field whose value is an absence word: "Attachments: none".
+    ("explicit_field", rf"(?:attachments?|log files?|logs?)\s*[:=–—]\s*"
+                       rf"\b(?:{_DECL_NEG_WORD}|not\s+(?:provided|available|attached|uploaded))\b", False),
+    # 3. Explicit negation in prose, in either word order.
+    ("sentence", rf"\b(?:no|without)\s+{_DECL_NOUN}\s+{_DECL_COPULA}attached\b", False),
+    ("sentence", rf"\b{_DECL_NOUN}\s+{_DECL_COPULA}(?:not|never)\s+attached\b", False),
+    ("sentence", rf"\b(?:did\s+not|didn't|has\s+not|hasn't|have\s+not|haven't)\s+"
+                 rf"(?:\w+\s+){{0,3}}(?:attach|upload|provide|share)(?:ed)?\b", False),
+    ("sentence", rf"\bno\s+{_DECL_NOUN}\s+(?:\w+\s+){{0,3}}(?:uploaded|provided|shared|available)\b", False),
+    # 4. Explicit affirmation. Runs last so any negation above wins.
+    ("sentence", rf"\b{_DECL_NOUN}\s+{_DECL_COPULA}attached\b", True),
+    ("sentence", rf"\battached\s+{_DECL_NOUN}\b", True),
+    ("sentence", rf"\b{_DECL_NOUN}\s+(?:\w+\s+){{0,2}}(?:uploaded|provided|shared)\b", True),
+)
+
+_DECL_TRUE_TOKENS = {"yes", "true"}
+_DECL_FALSE_TOKENS = {"no", "false", "none", "na", "n/a"}
+
+
+def _iter_statements(value: Any) -> Iterator[str]:
+    """Yield each leaf string of the AI JSON, split into single statements.
+
+    Keeping statements separate is what makes the rules safe: a rule can only
+    ever see one claim at a time, so wording elsewhere in the summary cannot
+    flip the verdict.
     """
-    chunks: list[str] = []
+    if isinstance(value, dict):
+        for k, v in value.items():
+            # Keys carry meaning too ("Log files attached": "Yes").
+            if isinstance(v, (str, int, float, bool)) or v is None:
+                yield f"{k}: {v}"
+            else:
+                yield str(k)
+                yield from _iter_statements(v)
+    elif isinstance(value, (list, tuple)):
+        for v in value:
+            yield from _iter_statements(v)
+    elif value is not None:
+        text = str(value)
+        # Normalise the separators an LLM varies freely, then split on hard
+        # boundaries only — never on '.', which would shred version strings
+        # such as "10.7.2.1_93286".
+        text = text.replace("—", " - ").replace("–", " - ")
+        for part in re.split(r"[\r\n;•]+", text):
+            part = re.sub(r"\s+", " ", part).strip()
+            if part:
+                yield part
 
-    def _walk(value: Any) -> None:
-        if isinstance(value, dict):
-            for k, v in value.items():
-                chunks.append(str(k))
-                _walk(v)
-        elif isinstance(value, (list, tuple)):
-            for v in value:
-                _walk(v)
-        elif value is not None:
-            chunks.append(str(value))
 
-    _walk(ai_analysis)
-    text = "\n".join(chunks)
-    patterns = (
-        r"(?:log|dump|attachment|file)s?\s+(?:files?\s+)?(?:are\s+)?attached\s*[:=-]?\s*(yes|no|true|false)",
-        r"(?:attachments?|logs?|dumps?)_present\s*[:=-]?\s*(yes|no|true|false)",
-        r"(?:new case attachment uploaded)\s*[:=-]?\s*(yes|no|true|false)",
-    )
-    for pattern in patterns:
-        m = re.search(pattern, text, re.IGNORECASE)
-        if m:
-            return m.group(1).lower() in ("yes", "true")
-    # A concise affirmative/negative sentence is common in the prompt output.
-    #
-    # The optional middle noun must accept a plural ("no log FILES attached").
-    # With a singular-only `(?:file\s+)?` the negative pattern misses that
-    # wording, while the affirmative one still matches the inner substring
-    # "files attached" via its own `s?` — so "No log files attached" was read
-    # as True and inflated declared_yes. Both patterns now allow `files?`.
-    # `\s+` must apply to every copula, not just the last alternative:
-    # `(?:is|are|were\s+)?` binds the space to `were` only, so "logs are
-    # attached" never matched. Group the alternation before the space.
-    _NOUN = r"(?:log|dump|attachment|file)s?"
-    _MID = r"(?:files?\s+)?(?:(?:is|are|were)\s+)?"
-    if re.search(rf"\b(?:no|without)\s+{_NOUN}\s+{_MID}attached\b", text, re.IGNORECASE):
-        return False
-    # Guard the affirmative form too: a negation anywhere immediately before the
-    # phrase ("... were not attached") must not read as a positive claim.
-    if re.search(rf"\b(?:not|never|n't)\s+(?:\w+\s+){{0,2}}attached\b", text, re.IGNORECASE):
-        return False
-    if re.search(rf"\b{_NOUN}\s+{_MID}attached\b", text, re.IGNORECASE):
-        return True
-    return None
+def infer_declared_attachments_detail(ai_analysis: Any) -> dict:
+    """Classify the issue's attachment claim, with the evidence behind it.
+
+    Returns a dict shaped for the warehouse:
+        declared    True / False / None (None = the summary never says)
+        confidence  "explicit_field" | "sentence" | "none"
+        evidence    the statement the verdict came from (truncated)
+        conflict    True when statements of equal confidence disagree
+
+    The value is evidence about what the issue *says*. What was actually found
+    and downloaded always comes from attachment_list and the transfer worker.
+    """
+    verdicts: list[tuple[str, bool, str]] = []   # (confidence, declared, evidence)
+
+    for statement in _iter_statements(ai_analysis):
+        for confidence, pattern, fixed in _DECL_RULES:
+            m = re.search(pattern, statement, re.IGNORECASE)
+            if not m:
+                continue
+            if fixed is None:
+                token = (m.group(1) or "").lower().replace("/", "")
+                if token in _DECL_TRUE_TOKENS:
+                    declared = True
+                elif token in _DECL_FALSE_TOKENS:
+                    declared = False
+                else:
+                    continue
+            else:
+                declared = fixed
+            verdicts.append((confidence, declared, statement[:300]))
+            break  # first (most explicit) rule wins for this statement
+
+    if not verdicts:
+        return {"declared": None, "confidence": "none", "evidence": "", "conflict": False}
+
+    explicit = [v for v in verdicts if v[0] == "explicit_field"]
+    chosen_pool = explicit or verdicts
+    values = {v[1] for v in chosen_pool}
+    conflict = len(values) > 1
+    if conflict:
+        # Disagreement at the same confidence is not something to guess at —
+        # report unknown and keep the evidence so it can be reviewed.
+        return {
+            "declared": None,
+            "confidence": chosen_pool[0][0],
+            "evidence": " | ".join(v[2] for v in chosen_pool[:3])[:600],
+            "conflict": True,
+        }
+    return {
+        "declared": chosen_pool[0][1],
+        "confidence": chosen_pool[0][0],
+        "evidence": chosen_pool[0][2],
+        "conflict": False,
+    }
+
+
+def infer_declared_attachments(ai_analysis: Any) -> Optional[bool]:
+    """Back-compatible wrapper: just the True/False/None verdict."""
+    return infer_declared_attachments_detail(ai_analysis)["declared"]
 
 
 def _do_record_attachment_download_result(
@@ -831,8 +936,38 @@ def _do_record(
             print(f"[gather] write failed (conv={conversation_id}): {e}")
             return
 
+    # Back-link the conversation onto its workflow. Without this the workflow's
+    # conversation_ids only listed conversations that happened to trigger a
+    # feature invocation, leaving a field that looks authoritative but is not.
+    # Only the first Send of a conversation writes, so this costs one extra
+    # small write per conversation, not per turn.
+    if workflow_id:
+        _link_conversation_to_workflow(workflow_id, conversation_id, issue, domain)
+
     # Refresh silver aggregates in the background (debounced).
     _maybe_rebuild_aggregates_async()
+
+
+def _link_conversation_to_workflow(
+    workflow_id: str, conversation_id: str, issue: Optional[dict], domain: str,
+) -> None:
+    """Add conversation_id to the workflow's list if it is not already there."""
+    user = _current_user()
+    try:
+        wpath = _workflow_path(workflow_id, user)
+        with _lock_for(wpath):
+            wrecord = _load_or_new_workflow(wpath, workflow_id, user, issue, domain)
+            ids = wrecord.get("conversation_ids")
+            if not isinstance(ids, list):
+                ids = []
+            safe = _safe_id(conversation_id)
+            if safe in ids:
+                return          # already linked — skip the write entirely
+            ids.append(safe)
+            wrecord["conversation_ids"] = ids[-200:]
+            _write_workflow(wpath, wrecord)
+    except Exception as e:
+        print(f"[gather] conversation link failed (workflow={workflow_id}): {e}")
 
 
 def record_send(

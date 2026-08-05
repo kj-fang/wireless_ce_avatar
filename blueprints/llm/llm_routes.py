@@ -64,7 +64,9 @@ def get_llm_analysis():
                 )
                 gather_service.record_attachment_declaration(
                     workflow_id=session.get("gather_workflow_id", ""),
-                    declared=gather_service.infer_declared_attachments(ai_analysis),
+                    # Hand over the raw summary so the classification, its
+                    # confidence, and the sentence behind it are all recorded.
+                    ai_analysis=ai_analysis,
                     source="select_attachments_ai_summary",
                     issue=_ctx_full,
                     domain=str(_ctx_full.get("wifi_or_bt") or "wifi"),

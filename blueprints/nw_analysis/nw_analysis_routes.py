@@ -13,12 +13,31 @@ from configs.global_configs import app_config
 from models.models import CaseContext
 from services.nw_analysis_service import WifiLogAgentSystem, load_skills_from_data_dir, get_builtin_skills, build_skill_file_map, load_skills_from_yaml
 from services.sleepstudy_analyzer import analyze_sleepstudy_stream
+from services import gather_service
 from utils.etl_utils import extract_time_from_description
 
 nw_analysis_bp = Blueprint("nw_analysis", __name__, url_prefix="/nw_analysis")
 
 # Server-side store: session_id -> WifiLogAgentSystem instance
 _chatbot_instances: dict = {}
+
+# Gather analytics domain for this blueprint. Kept as a constant so the NW
+# records stay distinguishable from the wifi ones even though both are driven
+# by a class named WifiLogAgentSystem.
+GATHER_DOMAIN = "nw"
+
+
+def _ensure_nw_conversation_id(*, rotate: bool = False) -> str:
+    """
+    Return the current NW conversation_id, creating one if missing.
+
+    Every Send in one conversation shares this id, so the Gather session
+    record accumulates turns instead of fragmenting into one record per
+    message. Rotated by /reset, which starts a genuinely new conversation.
+    """
+    if rotate or not session.get("nw_conversation_id"):
+        session["nw_conversation_id"] = str(uuid.uuid4())
+    return session["nw_conversation_id"]
 
 
 def _extract_issue_context() -> dict:
@@ -363,6 +382,12 @@ def analyze_sleepstudy():
         llm_client = getattr(llm_helper, "client", None) if llm_helper else None
         llm_model  = getattr(llm_helper, "model", "gpt-4.1") if llm_helper else "gpt-4.1"
 
+        # This route drives the LLM through a local closure rather than the
+        # agent, so it keeps its own counters. One analysis makes many calls.
+        spend = {"llm_calls": 0, "input_tokens": 0, "cache_read_tokens": 0,
+                 "cache_write_tokens": 0, "output_tokens": 0, "total_tokens": 0}
+        started = datetime.now()
+
         if llm_client is None:
             llm_call = None
         else:
@@ -376,8 +401,27 @@ def analyze_sleepstudy():
                     temperature=0.2,
                     max_tokens=1500,
                 )
+                try:
+                    u = getattr(resp, "usage", None)
+                    if u is not None:
+                        def _n(name: str) -> int:
+                            try:
+                                return max(0, int(getattr(u, name, 0) or 0))
+                            except (TypeError, ValueError):
+                                return 0
+                        prompt_t, out_t = _n("prompt_tokens"), _n("completion_tokens")
+                        cr, cw = _n("cache_read_input_tokens"), _n("cache_creation_input_tokens")
+                        spend["llm_calls"] += 1
+                        spend["input_tokens"] += prompt_t
+                        spend["output_tokens"] += out_t
+                        spend["cache_read_tokens"] += cr
+                        spend["cache_write_tokens"] += cw
+                        spend["total_tokens"] += prompt_t + out_t + cr + cw
+                except Exception:
+                    pass
                 return resp.choices[0].message.content or ""
 
+        status, error_code = "success", ""
         try:
             for event in analyze_sleepstudy_stream(sleep_path, llm_call=llm_call):
                 kind = event["type"]
@@ -387,6 +431,7 @@ def analyze_sleepstudy():
                     sse = {"type": "done", "result": {"type": "text", "data": event["data"]}}
                 elif kind == "error":
                     sse = {"type": "error", "content": event["content"]}
+                    status, error_code = "failed", "analyzer_error"
                 else:
                     continue
                 yield f"data: {json.dumps(sse, ensure_ascii=False)}\n\n"
@@ -394,8 +439,26 @@ def analyze_sleepstudy():
         except Exception as exc:
             tb = traceback.format_exc()
             print(f"analyze_sleepstudy error:\n{tb}")
+            status, error_code = "failed", type(exc).__name__
             err_payload = {"type": "error", "content": str(exc)}
             yield f"data: {json.dumps(err_payload, ensure_ascii=False)}\n\n"
+        finally:
+            # Book the spend regardless of outcome — the tokens were billed.
+            try:
+                gather_service.record_feature_usage(
+                    workflow_id=session.get("gather_workflow_id", ""),
+                    feature_code="sleepstudy_analysis",
+                    model=llm_model,
+                    usage=spend,
+                    issue=_extract_issue_context(),
+                    domain=GATHER_DOMAIN,
+                    trigger="click_ai",
+                    status=status,
+                    latency_ms=int((datetime.now() - started).total_seconds() * 1000),
+                    error_code=error_code,
+                )
+            except Exception:
+                pass
 
     return Response(
         event_stream(),
@@ -443,6 +506,49 @@ def chat():
                 yield f"data: {json.dumps({'type': 'error', 'content': 'No log file loaded. Please set a log file first.'})}\n\n"
             return Response(_no_log(), mimetype="text/event-stream")
 
+        conversation_id = _ensure_nw_conversation_id()
+        turn_id = str(uuid.uuid4())
+        turn_started_at = datetime.now()
+        try:
+            _issue_ctx_for_snapshot = _extract_issue_context()
+        except Exception:
+            _issue_ctx_for_snapshot = {}
+
+        # Usage analytics: on every Send, capture the entry session (user name,
+        # date, CASE NUMBER + case summary) and the asked question into the
+        # shared Gather folder for later DB ingestion. Non-blocking; never
+        # raises, so it can't affect the chat path.
+        try:
+            gather_service.record_send(
+                conversation_id=conversation_id,
+                workflow_id=session.get("gather_workflow_id", ""),
+                session_id=session.get("session_id", "") or "",
+                user_message=user_message,
+                issue=_issue_ctx_for_snapshot,
+                log_path=getattr(agent, "current_log_path", "") or "",
+                issue_time="",
+                issue_time_window_minutes=None,
+                domain=GATHER_DOMAIN,
+            )
+        except Exception:
+            pass
+
+        def _record_turn_cost() -> None:
+            """Settle this turn's tokens + USD. Never raises."""
+            try:
+                gather_service.record_usage(
+                    conversation_id=conversation_id,
+                    workflow_id=session.get("gather_workflow_id", ""),
+                    model=getattr(agent, "model", "") or "",
+                    usage=getattr(agent, "last_turn_usage", None),
+                    issue=_issue_ctx_for_snapshot,
+                    domain=GATHER_DOMAIN,
+                    turn_id=turn_id,
+                    latency_ms=int((datetime.now() - turn_started_at).total_seconds() * 1000),
+                )
+            except Exception:
+                pass
+
         # Use the mode flag sent by the frontend toggle.
         use_tools = bool(data.get("use_tools", False))
 
@@ -469,6 +575,10 @@ def chat():
                     error_tb = traceback.format_exc()
                     print(f"❌ Chat-with-tools thread error:\n{error_tb}")
                     step_queue.put(("error", str(exc)))
+                finally:
+                    # Book the spend even when the turn errored or was
+                    # cancelled — those tokens were still billed.
+                    _record_turn_cost()
 
             t = threading.Thread(target=run_chat_with_tools, daemon=True)
             t.start()
@@ -502,6 +612,8 @@ def chat():
                 temperature=temperature,
                 max_tokens=max_tokens,
             )
+            # Cost accounting — see the tools branch above.
+            _record_turn_cost()
 
             def generate():
                 yield f"data: {json.dumps({'type': 'done', 'result': result}, ensure_ascii=False)}\n\n"
@@ -525,6 +637,9 @@ def reset():
     try:
         agent = _get_or_create_agent()
         agent.reset_conversation()
+        # A reset starts a genuinely new conversation, so the analytics
+        # records must not keep accumulating into the previous one.
+        _ensure_nw_conversation_id(rotate=True)
         return jsonify({"success": True, "message": "Conversation reset."})
     except Exception as e:
         return jsonify({"success": False, "error": str(e)}), 500

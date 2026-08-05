@@ -172,6 +172,47 @@ def _resolve_smtp_settings(
     }
 
 
+def resolve_transport() -> dict:
+    """SMTP transport settings only (recipients resolved by the caller)."""
+    return {
+        "smtp_host": (os.getenv("ACE_SMTP_HOST") or "smtp.intel.com").strip(),
+        "smtp_port": int((os.getenv("ACE_SMTP_PORT") or "25").strip()),
+        "sender": (os.getenv("ACE_SMTP_FROM") or "").strip() or None,
+        "use_tls": _env_bool("ACE_SMTP_USE_TLS", default=False),
+        "username": (os.getenv("ACE_SMTP_USERNAME") or "").strip() or None,
+        "password": os.getenv("ACE_SMTP_PASSWORD"),
+    }
+
+
+def send_html_to(
+    *,
+    to_list: list[str],
+    subject: str,
+    html_body: str,
+    cc_list: list[str] | None = None,
+    attachments: list[tuple[str, bytes, str]] | None = None,
+) -> bool:
+    """Send an HTML email to an explicit recipient list using env transport
+    settings. Returns False when to_list is empty."""
+    if not to_list:
+        return False
+    t = resolve_transport()
+    smtp_send_html(
+        subject=subject,
+        html_body=html_body,
+        to_list=to_list,
+        cc_list=cc_list,
+        attachments=attachments,
+        smtp_host=t["smtp_host"],
+        smtp_port=t["smtp_port"],
+        sender=t["sender"],
+        use_tls=t["use_tls"],
+        username=t["username"],
+        password=t["password"],
+    )
+    return True
+
+
 def send_test_from_env(
     *,
     namespace: str = "wifi",

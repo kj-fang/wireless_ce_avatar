@@ -38,7 +38,9 @@ from __future__ import annotations
 import argparse
 import json
 import os
+import shutil
 import sys
+import tempfile
 from datetime import datetime, timezone
 from functools import partial
 from pathlib import Path
@@ -52,6 +54,51 @@ from . import sync as ace_mirror_sync
 from . import sync_utils as ace_sync
 from .history import HistoryWriter
 from .pipeline import AceRunner
+
+
+# --- Run-output capture --------------------------------------------------
+# All stdout/stderr for a run is teed to a temp file, then copied into that
+# run's `runs/<stamp>/run.log` once a command resolves its stamp folder.
+_RUN_LOG_DEST: Path | None = None
+
+
+def set_run_log_dest(stamp_dir) -> None:
+    """Point the run logger at this run's stamp folder (a run.log lands here)."""
+    global _RUN_LOG_DEST
+    try:
+        d = Path(stamp_dir)
+        d.mkdir(parents=True, exist_ok=True)
+        _RUN_LOG_DEST = d
+    except Exception as e:
+        print(f"[ace.cli] could not set run log dest {stamp_dir}: {e}")
+
+
+class _Tee:
+    """Write to the real stream AND a capture file, so console + log match."""
+
+    def __init__(self, stream, fh):
+        self._stream = stream
+        self._fh = fh
+
+    def write(self, data):
+        self._stream.write(data)
+        try:
+            self._fh.write(data)
+        except Exception:
+            pass
+        return len(data)
+
+    def flush(self):
+        try:
+            self._stream.flush()
+        finally:
+            try:
+                self._fh.flush()
+            except Exception:
+                pass
+
+    def __getattr__(self, name):
+        return getattr(self._stream, name)
 
 
 def _ensure_avatarfiles_dir() -> None:
@@ -542,6 +589,7 @@ def cmd_pipeline(args):
     want_push = bool(getattr(args, "push", False))
     runs_dir = Path(args.runs_dir or eval_runner.DEFAULT_RUNS_DIR)
     pipeline_stamp = datetime.now(timezone.utc).isoformat(timespec="seconds").replace(":", "").replace("-", "")
+    set_run_log_dest(runs_dir / pipeline_stamp)
     playbooks_dir = _resolve_playbooks_dir(args.namespace)
     bullets_before = _capture_playbook_bullet_state(playbooks_dir)
     args.push = False
@@ -755,6 +803,7 @@ def cmd_reverify_notify(args):
         print(f"[reverify-notify] using manifests: {[str(m) for m in manifests]}")
 
     run_stamp = _dt.now(timezone.utc).isoformat(timespec="seconds").replace(":", "").replace("-", "")
+    set_run_log_dest(runs_dir / run_stamp)
     eval_reverify.reverify_and_notify(
         manifests=manifests,
         runs_dir=runs_dir,
@@ -906,15 +955,42 @@ def main(argv=None):
     p_reverify.set_defaults(func=cmd_reverify_notify)
 
     args = parser.parse_args(argv)
-    _ensure_avatarfiles_dir()
-    namespace = getattr(args, "namespace", "wifi")
+
+    # Tee all console output to a temp file for the duration of the run; once
+    # a command resolves its stamp folder (via set_run_log_dest) the captured
+    # log is copied there as run.log for later debugging.
+    boot_stamp = datetime.now(timezone.utc).isoformat(timespec="seconds").replace(":", "").replace("-", "")
+    tmp_log = Path(tempfile.gettempdir()) / f"ace_run_{boot_stamp}.log"
+    _old_out, _old_err = sys.stdout, sys.stderr
+    _fh = open(tmp_log, "w", encoding="utf-8")
+    sys.stdout = _Tee(_old_out, _fh)
+    sys.stderr = _Tee(_old_err, _fh)
     try:
-        ace_sync.sync_at_boot(namespace=namespace)
-    except Exception as e:
-        print(f"[ace.cli] cloud sync skipped: {e}")
-    print(f"[ace.cli] namespace = {namespace}")
-    print(f"[ace.cli] playbooks_dir = {_resolve_playbooks_dir(namespace)}")
-    return args.func(args) or 0
+        _ensure_avatarfiles_dir()
+        namespace = getattr(args, "namespace", "wifi")
+        try:
+            ace_sync.sync_at_boot(namespace=namespace)
+        except Exception as e:
+            print(f"[ace.cli] cloud sync skipped: {e}")
+        print(f"[ace.cli] namespace = {namespace}")
+        print(f"[ace.cli] playbooks_dir = {_resolve_playbooks_dir(namespace)}")
+        return args.func(args) or 0
+    finally:
+        sys.stdout, sys.stderr = _old_out, _old_err
+        try:
+            _fh.flush()
+            _fh.close()
+        except Exception:
+            pass
+        if _RUN_LOG_DEST is not None:
+            try:
+                dest = _RUN_LOG_DEST / "run.log"
+                shutil.copy2(tmp_log, dest)
+                print(f"[ace.cli] run log saved: {dest}")
+            except Exception as e:
+                print(f"[ace.cli] run log copy failed ({tmp_log} -> {_RUN_LOG_DEST}): {e}")
+        else:
+            print(f"[ace.cli] run log (no stamp folder): {tmp_log}")
 
 
 if __name__ == "__main__":

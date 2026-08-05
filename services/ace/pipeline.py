@@ -388,15 +388,25 @@ class AceRunner:
                 if not cid or not tid:
                     continue
                 key = (cid, tid)
+                ts = ev.get("ts") or ""
                 if key in seen_keys:
+                    # Duplicate event for an already-processed turn (a vote plus
+                    # one or more detail submissions share the same turn_id).
+                    # Advance the cursor past it so a later run doesn't
+                    # reprocess — and re-email — the same turn.
+                    if ts:
+                        last_ts = ts
                     continue
+                if max_turns and len(results) >= max_turns:
+                    # Stop BEFORE consuming a new turn so its events remain for
+                    # the next run; the cursor stays at the last processed ts.
+                    break
                 seen_keys.add(key)
                 results.append(self._process_turn(cid, tid, progress=progress,
                                                   run_id=run_id,
                                                   run_source=run_source))
-                last_ts = ev.get("ts") or last_ts
-                if max_turns and len(results) >= max_turns:
-                    break
+                if ts:
+                    last_ts = ts
             if last_ts:
                 self._save_cursor(last_ts)
             return results

@@ -558,6 +558,24 @@ def cmd_pipeline(args):
         if r.get("status") == "ok" and str(r.get("submitted_by") or "").strip()
     })
 
+    # Collect vote==-1 cases from this adapt batch now (adapt phase). The
+    # re-answer + per-user email is deferred until AFTER review PASSes; the
+    # manifest is written here so it exists even if review later fails.
+    from .eval import reverify as eval_reverify
+    feedback_root = _resolve_feedback_root()
+    try:
+        eval_reverify.build_downvote_manifest(
+            namespace=args.namespace,
+            feedback_root=feedback_root,
+            playbooks_dir=playbooks_dir,
+            adapt_results=adapt_results,
+            playbook_changes=[],
+            run_stamp=pipeline_stamp,
+            runs_dir=runs_dir,
+        )
+    except Exception as exc:
+        print(f"[pipeline] WARN: downvote manifest build failed: {exc}")
+
     if args.no_eval:
         if want_push:
             print("[pipeline] --no-eval set: push deferred (no eval/review gate); "
@@ -663,6 +681,33 @@ def cmd_pipeline(args):
     except Exception as exc:
         print(f"[pipeline] WARN: notification failed: {exc}")
 
+    # 6. Re-answer + down-voter notification (optional) — only on PASS, when
+    # --reanswer-notify is set. Rebuilds the manifest with the real bullet
+    # before/after so each down-voter's email shows what their feedback
+    # changed, then re-runs the agent on their case with the updated playbook.
+    if verdict == "PASS" and getattr(args, "reanswer_notify", False):
+        print("[pipeline] ===== STEP 6: re-answer + down-voter notify =====")
+        try:
+            manifest_path = eval_reverify.build_downvote_manifest(
+                namespace=args.namespace,
+                feedback_root=feedback_root,
+                playbooks_dir=playbooks_dir,
+                adapt_results=adapt_results,
+                playbook_changes=rreport["_playbook_changes"],
+                run_stamp=pipeline_stamp,
+                runs_dir=runs_dir,
+            )
+            if manifest_path is not None:
+                eval_reverify.reverify_and_notify(
+                    manifests=[manifest_path],
+                    runs_dir=runs_dir,
+                    run_stamp=pipeline_stamp,
+                    dry_run=bool(getattr(args, "dry_run", False)),
+                    max_steps=args.max_steps,
+                )
+        except Exception as exc:
+            print(f"[pipeline] WARN: re-answer notification failed: {exc}")
+
     # Mirror `python -m services.ace.eval.review`: 0 = PASS, 2 = regression.
     return 0 if verdict == "PASS" else 2
 
@@ -688,6 +733,35 @@ def cmd_notify_test(args):
         return 2
 
     print("[notify-test] test email sent.")
+    return 0
+
+
+def cmd_reverify_notify(args):
+    """Re-answer down-voted cases with the updated playbook and email each
+    down-voter one combined HTML replay. Consumes downvote manifests written
+    by run-all's adapt phase (wifi + bt), combining per person."""
+    from datetime import datetime as _dt
+    from .eval import reverify as eval_reverify
+    from .eval import runner as eval_runner
+
+    runs_dir = Path(args.runs_dir or eval_runner.DEFAULT_RUNS_DIR)
+    if args.manifest:
+        manifests = [Path(m) for m in args.manifest]
+    else:
+        manifests = eval_reverify.find_latest_manifests(runs_dir)
+        if not manifests:
+            print(f"[reverify-notify] no downvote manifests found under {runs_dir}")
+            return 0
+        print(f"[reverify-notify] using manifests: {[str(m) for m in manifests]}")
+
+    run_stamp = _dt.now(timezone.utc).isoformat(timespec="seconds").replace(":", "").replace("-", "")
+    eval_reverify.reverify_and_notify(
+        manifests=manifests,
+        runs_dir=runs_dir,
+        run_stamp=run_stamp,
+        dry_run=bool(args.dry_run),
+        max_steps=args.max_steps,
+    )
     return 0
 
 
@@ -789,6 +863,14 @@ def main(argv=None):
                         help="Skip post-review auto-fix of harmful bullets. "
                              "Default behavior on FAIL is auto-revert (or "
                              "remove when no snapshot version exists).")
+    # --- re-answer + down-voter notify (only on PASS) ---
+    p_pipe.add_argument("--reanswer-notify", action="store_true",
+                        help="On review PASS, re-run the agent on this "
+                             "namespace's down-voted cases with the updated "
+                             "playbook and email each down-voter a replay HTML.")
+    p_pipe.add_argument("--dry-run", action="store_true",
+                        help="With --reanswer-notify: build the replay HTML but "
+                             "do not send any email.")
     p_pipe.set_defaults(func=cmd_pipeline)
 
     p_notify = sub.add_parser(
@@ -806,6 +888,22 @@ def main(argv=None):
     p_notify.add_argument("--note", default="",
                           help="Optional test note shown in the email body")
     p_notify.set_defaults(func=cmd_notify_test)
+
+    p_reverify = sub.add_parser(
+        "reverify-notify",
+        help="Re-answer down-voted cases with the updated playbook and email "
+             "each down-voter a combined HTML replay (combines wifi + bt).",
+    )
+    p_reverify.add_argument("--manifest", action="append", metavar="PATH",
+                            help="Downvote manifest path (repeatable). Default: "
+                                 "newest downvotes_*.json per namespace under runs/.")
+    p_reverify.add_argument("--runs-dir", type=Path, default=None,
+                            help="Where run artifacts live (default: eval's runs/)")
+    p_reverify.add_argument("--max-steps", type=int, default=6,
+                            help="Max chatbot tool steps per case (default 6)")
+    p_reverify.add_argument("--dry-run", action="store_true",
+                            help="Build the replay HTML but do not send email.")
+    p_reverify.set_defaults(func=cmd_reverify_notify)
 
     args = parser.parse_args(argv)
     _ensure_avatarfiles_dir()

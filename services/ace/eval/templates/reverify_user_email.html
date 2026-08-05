@@ -1,0 +1,82 @@
+<!DOCTYPE html>
+<html lang="en">
+<head>
+  <meta charset="UTF-8">
+  <style>
+    body { font-family: 'Segoe UI', Arial, sans-serif; color: #1f2937; font-size: 14px; }
+    .container { max-width: 720px; margin: 0 auto; }
+    h2 { color: #0071c5; font-size: 18px; margin-bottom: 4px; }
+    .muted { color: #6b7280; font-size: 12px; }
+    .intro { background: #f5fafe; border: 1px solid #cfe3f5; border-radius: 8px; padding: 12px 14px; margin: 14px 0; }
+    table { border-collapse: collapse; width: 100%; margin: 10px 0; }
+    th, td { border: 1px solid #e5e7eb; padding: 6px 10px; text-align: left; font-size: 13px; }
+    th { background: #f3f4f6; }
+    .tag { font-size: 11px; font-weight: 700; padding: 1px 6px; border-radius: 10px; }
+    .tag.wifi { background: #e6f0fa; color: #0071c5; }
+    .tag.bt { background: #eae6fa; color: #5b3ec5; }
+    .ok { color: #176b3a; font-weight: 600; }
+    .no { color: #9a3412; font-weight: 600; }
+    .sec-title { font-weight: 700; margin: 18px 0 6px; }
+    .change { border: 1px solid #e5e7eb; border-radius: 8px; margin: 8px 0; overflow: hidden; }
+    .change .ch-head { background: #f9fafb; padding: 6px 10px; font-size: 12px; font-weight: 700; }
+    .ch-head .added { color: #176b3a; }
+    .ch-head .removed { color: #9a3412; }
+    .ch-head .updated { color: #92600e; }
+    pre { background: #0f172a; color: #e2e8f0; padding: 10px; border-radius: 6px; overflow-x: auto; font-size: 11.5px; margin: 0; }
+    .ba { display: flex; gap: 8px; padding: 8px; }
+    .ba > div { flex: 1; }
+    .ba .lbl { font-size: 11px; color: #6b7280; margin-bottom: 3px; }
+    .foot { color: #9ca3af; font-size: 11px; margin-top: 22px; }
+  </style>
+</head>
+<body>
+  <div class="container">
+    <h2>你的回饋已讓 Agent 重新回答</h2>
+    <div class="muted">{{ person_email }} · {{ generated_at }}</div>
+
+    <div class="intro">
+      你先前對以下 case 給了 👎（不滿意原本的回答）。我們已用你的回饋更新了 Agent 的
+      playbook，並讓 Agent <b>用更新後的知識重新回答了同一批 case</b>。<br><br>
+      請開啟附件 <b>{{ attachment_name }}</b>，它呈現的內容與 chatbot 頁面完全相同，
+      你可以直接檢視 Agent 這次重新分析的完整過程與結論，確認是否因為你的回饋而變得更好。
+    </div>
+
+    <div class="sec-title">本次重新回答的 case（{{ cases | length }}）</div>
+    <table>
+      <thead><tr><th>Domain</th><th>Case</th><th>重新驗證</th></tr></thead>
+      <tbody>
+        {% for c in cases %}
+        <tr>
+          <td><span class="tag {{ 'bt' if c.domain == 'bt' else 'wifi' }}">{{ 'BT' if c.domain == 'bt' else 'Wi-Fi' }}</span></td>
+          <td>{{ c.title }}</td>
+          <td>{% if c.reanswered %}<span class="ok">✔ 已重新回答</span>{% else %}<span class="no">— 因無 log 無法重新驗證</span>{% endif %}</td>
+        </tr>
+        {% endfor %}
+      </tbody>
+    </table>
+
+    {% for ns in namespace_changes %}
+      {% if ns.changes %}
+      <div class="sec-title">Playbook 變更（{{ 'BT' if ns.namespace == 'bt' else 'Wi-Fi' }}）— 你的回饋造成的 bullet before/after</div>
+      {% for ch in ns.changes %}
+        <div class="change">
+          <div class="ch-head">
+            <span class="{{ ch.change_type }}">{{ ch.change_type | upper }}</span>
+            · {{ ch.bullet_id }} · {{ ch.playbook_label }}
+          </div>
+          <div class="ba">
+            <div><div class="lbl">Before</div><pre>{{ ch.before_text }}</pre></div>
+            <div><div class="lbl">After</div><pre>{{ ch.after_text }}</pre></div>
+          </div>
+        </div>
+      {% endfor %}
+      {% endif %}
+    {% endfor %}
+
+    <div class="foot">
+      此信由 IntelAvatar ACE 夜間流程自動寄出（僅在 review 通過、playbook 更新後）。
+      若有疑問請直接回覆。
+    </div>
+  </div>
+</body>
+</html>

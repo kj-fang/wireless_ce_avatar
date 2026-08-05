@@ -20,6 +20,7 @@ from __future__ import annotations
 import os
 import smtplib
 from datetime import datetime
+from email.mime.application import MIMEApplication
 from email.mime.multipart import MIMEMultipart
 from email.mime.text import MIMEText
 from html import escape
@@ -32,6 +33,14 @@ from .email_templates import build_review_triage_email
 # Example:
 # ACE_NOTIFY_TO = ["alice@intel.com", "bob@intel.com"]
 # ACE_NOTIFY_CC = ["team@intel.com"]
+# ACE_NOTIFY_TO: list[str] = ["wei-ling.chi@intel.com", 
+#                             "yuan-yuan.tu@intel.com", 
+#                             "kj.fang@intel.com", 
+#                             "lydiax.chien@intel.com", 
+#                             "nicolas.wong@intel.com"]
+
+# ACE_NOTIFY_CC: list[str] = ["jonathan.tsao@intel.com"]
+
 ACE_NOTIFY_TO: list[str] = ["wei-ling.chi@intel.com"]
 ACE_NOTIFY_CC: list[str] = []
 
@@ -82,21 +91,38 @@ def smtp_send_html(
     username: str | None = None,
     password: str | None = None,
     timeout_sec: int = 20,
+    attachments: list[tuple[str, bytes, str]] | None = None,
 ) -> None:
-    """Send one HTML email via SMTP relay/auth SMTP."""
+    """Send one HTML email via SMTP relay/auth SMTP.
+
+    attachments: optional list of (filename, raw_bytes, mime_subtype), e.g.
+    ("reverify.html", b"...", "html"). When present the message is built as
+    a mixed multipart (HTML body + attachment parts).
+    """
     if not to_list:
         raise ValueError("to_list is empty")
 
     cc = cc_list or []
     sender_addr = sender or _default_sender()
 
-    msg = MIMEMultipart("alternative")
+    body = MIMEMultipart("alternative")
+    body.attach(MIMEText(html_body, "html", "utf-8"))
+
+    if attachments:
+        msg: MIMEMultipart = MIMEMultipart("mixed")
+        msg.attach(body)
+        for fname, raw, subtype in attachments:
+            part = MIMEApplication(raw, _subtype=subtype or "octet-stream")
+            part.add_header("Content-Disposition", "attachment", filename=fname)
+            msg.attach(part)
+    else:
+        msg = body
+
     msg["Subject"] = subject
     msg["From"] = sender_addr
     msg["To"] = "; ".join(to_list)
     if cc:
         msg["Cc"] = "; ".join(cc)
-    msg.attach(MIMEText(html_body, "html", "utf-8"))
 
     recipients = list(to_list) + list(cc)
 

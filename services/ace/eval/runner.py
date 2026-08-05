@@ -369,6 +369,75 @@ def run_case(llm, ace_runner: AceRunner, case: dict,
     }
 
 
+def run_case_capture(llm, ace_runner: AceRunner, case: dict,
+                     use_tools: bool = True, max_steps: int = 6,
+                     temperature: float = 0.0) -> dict:
+    """Like run_case, but also captures every streamed step so the reverify
+    replay can render the chat exactly as the chatbot page shows it."""
+    agent = _fresh_agent(llm)
+    agent.attach_ace(ace_runner)
+
+    log_path = case.get("log_path") or ""
+    if log_path:
+        if not Path(log_path).is_absolute():
+            log_path = _resolve_case_log_path(log_path, case)
+        agent.current_log_path = log_path
+
+    issue_ctx = case.get("issue_context") or {}
+    if issue_ctx:
+        agent.prime_with_context(
+            case_nbr=str(issue_ctx.get("case_nbr") or ""),
+            subject=str(issue_ctx.get("subject") or ""),
+            description=str(issue_ctx.get("description") or ""),
+            issue_type=str(issue_ctx.get("issue_type") or ""),
+            attachment_time=str(issue_ctx.get("attachment_time") or ""),
+        )
+
+    steps: list[dict] = []
+
+    def _capture(step):
+        if isinstance(step, dict):
+            steps.append({
+                "role": str(step.get("role") or ""),
+                "content": step.get("content") if isinstance(step.get("content"), str)
+                else json.dumps(step.get("content"), ensure_ascii=False),
+            })
+
+    user_q = case.get("user_question") or "Please analyze the log and report the root cause."
+    try:
+        result = agent.chat(
+            user_q,
+            use_tools=use_tools,
+            max_steps=int(max_steps),
+            temperature=float(temperature),
+            step_callback=_capture,
+        )
+    except Exception as e:
+        return {
+            "status": "agent_error",
+            "error": f"{type(e).__name__}: {e}",
+            "traceback": traceback.format_exc(),
+            "answer": "",
+            "steps": steps,
+            "user_question": user_q,
+        }
+
+    answer = result.get("data") if isinstance(result, dict) else str(result)
+    if isinstance(answer, dict):
+        answer_text = json.dumps(answer, indent=2, ensure_ascii=False)
+    else:
+        answer_text = str(answer or "")
+
+    return {
+        "status": "ok",
+        "result_type": (result or {}).get("type") if isinstance(result, dict) else "raw",
+        "answer": answer_text,
+        "final_result": result,
+        "steps": steps,
+        "user_question": user_q,
+    }
+
+
 # ---------------------------------------------------------------------------
 # Main loop
 # ---------------------------------------------------------------------------

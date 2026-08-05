@@ -1,0 +1,194 @@
+<!DOCTYPE html>
+<html lang="en">
+<head>
+  <meta charset="UTF-8">
+  <meta name="viewport" content="width=device-width, initial-scale=1">
+  <title>Agent Re-answer Replay</title>
+  <link href="https://fonts.googleapis.com/css2?family=Inter:wght@400;500;600;700&display=swap" rel="stylesheet">
+  <script src="https://cdn.jsdelivr.net/npm/marked/marked.min.js"></script>
+  <style>
+    * { font-family: 'Inter', sans-serif; box-sizing: border-box; }
+    body { background: #f0f2f5; margin: 0; color: #1f2937; }
+    .top-bar {
+      background: linear-gradient(135deg, #0071c5 0%, #00a3e0 100%);
+      color: #fff; padding: 16px 24px;
+    }
+    .top-bar h1 { font-size: 1.2rem; margin: 0 0 4px; font-weight: 700; }
+    .top-bar .sub { font-size: 0.8rem; opacity: 0.9; }
+    .wrap { max-width: 900px; margin: 0 auto; padding: 20px 16px 60px; }
+
+    .case-card {
+      background: #fff; border: 1px solid #e5e7eb; border-radius: 12px;
+      margin-bottom: 26px; overflow: hidden;
+      box-shadow: 0 1px 4px rgba(0,0,0,0.05);
+    }
+    .case-head {
+      padding: 14px 18px; border-bottom: 1px solid #f0f0f0;
+      display: flex; align-items: center; gap: 10px; flex-wrap: wrap;
+    }
+    .case-head h2 { font-size: 1rem; margin: 0; font-weight: 700; }
+    .domain-tag {
+      font-size: 0.68rem; font-weight: 700; text-transform: uppercase;
+      letter-spacing: 0.04em; padding: 2px 8px; border-radius: 12px;
+    }
+    .domain-tag.wifi { background: #e6f0fa; color: #0071c5; }
+    .domain-tag.bt   { background: #eae6fa; color: #5b3ec5; }
+    .fb-note {
+      background: #fff7ed; border: 1px solid #fed7aa; color: #9a3412;
+      border-radius: 8px; padding: 10px 12px; margin: 12px 18px;
+      font-size: 0.82rem;
+    }
+    .fb-note b { color: #7c2d12; }
+    .nolog-note {
+      background: #f8fafc; border: 1px dashed #cbd5e1; color: #475569;
+      border-radius: 8px; padding: 14px 16px; margin: 14px 18px;
+      font-size: 0.85rem;
+    }
+
+    .chat { padding: 16px 18px 22px; }
+    .msg-row { display: flex; gap: 10px; margin-bottom: 14px; max-width: 92%; }
+    .msg-row.user { margin-left: auto; flex-direction: row-reverse; }
+    .msg-row.assistant { margin-right: auto; }
+    .avatar-icon {
+      width: 30px; height: 30px; border-radius: 50%; flex: 0 0 30px;
+      display: flex; align-items: center; justify-content: center;
+      font-size: 0.85rem; font-weight: 700;
+    }
+    .msg-row.user .avatar-icon { background: #0071c5; color: #fff; }
+    .msg-row.assistant .avatar-icon { background: #e6f0fa; color: #0071c5; }
+    .msg-bubble {
+      background: #fff; border: 1px solid #e5e7eb; border-radius: 12px;
+      padding: 10px 14px; font-size: 0.86rem; line-height: 1.5;
+      word-break: break-word; overflow-wrap: anywhere;
+    }
+    .msg-row.user .msg-bubble { background: #0071c5; color: #fff; border-color: #0071c5; }
+    .msg-row.assistant.tool .msg-bubble { background: #f8fafc; }
+    .msg-row.assistant.error .msg-bubble { background: #fdeaea; border-color: #f5c2c2; }
+    .msg-row.assistant.meta .msg-bubble { background: #f3f4f6; color: #6b7280; font-size: 0.78rem; }
+
+    .markdown-section { font-size: 0.86rem; line-height: 1.55; }
+    .markdown-section h1, .markdown-section h2, .markdown-section h3 { font-size: 0.98rem; font-weight: 700; margin: 8px 0 4px; }
+    .markdown-section p { margin: 4px 0; }
+    .markdown-section code { background: #f1f5f9; padding: 1px 5px; border-radius: 4px; font-size: 0.82em; }
+    .markdown-section pre { background: #0f172a; color: #e2e8f0; padding: 12px; border-radius: 8px; overflow-x: auto; }
+    .markdown-section pre code { background: transparent; color: inherit; padding: 0; }
+    .markdown-section ul { padding-left: 18px; margin: 4px 0; }
+    .markdown-section table { border-collapse: collapse; font-size: 0.8rem; }
+    .markdown-section th, .markdown-section td { border: 1px solid #e5e7eb; padding: 4px 8px; }
+
+    .report-card {
+      border: 1px solid #cfe3f5; background: #f5fafe; border-radius: 12px;
+      padding: 14px 16px; margin-top: 6px;
+    }
+    .report-card .rc-title { font-weight: 700; color: #0071c5; margin-bottom: 6px; }
+    .foot { text-align: center; color: #9ca3af; font-size: 0.75rem; margin-top: 30px; }
+  </style>
+</head>
+<body>
+  <div class="top-bar">
+    <h1>Agent Re-answer Replay</h1>
+    <div class="sub">Recipient: {{ person_email }} &nbsp;·&nbsp; Generated: {{ generated_at }}</div>
+  </div>
+  <div class="wrap" id="root"></div>
+  <div class="foot">IntelAvatar · ACE re-answer with the updated playbook</div>
+
+  <script id="replay-data" type="application/json">{{ data_json | safe }}</script>
+  <script>
+    const DATA = JSON.parse(document.getElementById('replay-data').textContent);
+    marked.setOptions({ breaks: true, gfm: true });
+
+    function md(text) { try { return marked.parse(text || ''); } catch (e) { return (text || ''); } }
+
+    function bubble(roleClass, avatar, innerHTML, extraClass) {
+      const row = document.createElement('div');
+      row.className = 'msg-row ' + roleClass + (extraClass ? ' ' + extraClass : '');
+      const av = document.createElement('div');
+      av.className = 'avatar-icon';
+      av.textContent = avatar;
+      const b = document.createElement('div');
+      b.className = 'msg-bubble';
+      const m = document.createElement('div');
+      m.className = 'markdown-section';
+      m.innerHTML = innerHTML;
+      b.appendChild(m);
+      row.appendChild(av);
+      row.appendChild(b);
+      return row;
+    }
+
+    function stepClass(role) {
+      const r = (role || '').toLowerCase();
+      if (r === 'user' || r === 'you') return { side: 'user', extra: '', avatar: 'U' };
+      if (r === 'tool') return { side: 'assistant', extra: 'tool', avatar: '🛠' };
+      if (r === 'error') return { side: 'assistant', extra: 'error', avatar: '!' };
+      if (r === 'token_usage') return { side: 'assistant', extra: 'meta', avatar: '·' };
+      return { side: 'assistant', extra: '', avatar: 'AI' };
+    }
+
+    function renderFinal(container, final) {
+      if (!final) return;
+      const data = final.data;
+      const type = final.type || '';
+      if ((type === 'report' || type === 'partial_report') && data && typeof data === 'object') {
+        const card = document.createElement('div');
+        card.className = 'report-card';
+        let html = '<div class="rc-title">📋 Final Report</div>';
+        if (data.root_cause_summary) html += '<div class="markdown-section"><b>Root cause:</b> ' + md(String(data.root_cause_summary)) + '</div>';
+        if (data.confidence_score !== undefined && data.confidence_score !== null) html += '<div class="markdown-section"><b>Confidence:</b> ' + data.confidence_score + '</div>';
+        if (data.markdown_summary) html += '<div class="markdown-section">' + md(String(data.markdown_summary)) + '</div>';
+        card.innerHTML = html;
+        container.appendChild(card);
+      } else if (type === 'text' && typeof data === 'string') {
+        container.appendChild(bubble('assistant', 'AI', md(data)));
+      } else if (data !== undefined && data !== null) {
+        container.appendChild(bubble('assistant', 'AI', md('```json\n' + JSON.stringify(data, null, 2) + '\n```')));
+      }
+    }
+
+    function renderCase(sec) {
+      const card = document.createElement('div');
+      card.className = 'case-card';
+
+      const head = document.createElement('div');
+      head.className = 'case-head';
+      const tag = document.createElement('span');
+      tag.className = 'domain-tag ' + (sec.domain === 'bt' ? 'bt' : 'wifi');
+      tag.textContent = sec.domain === 'bt' ? 'BT' : 'Wi-Fi';
+      const h2 = document.createElement('h2');
+      h2.textContent = sec.title;
+      head.appendChild(tag);
+      head.appendChild(h2);
+      card.appendChild(head);
+
+      if (sec.feedback_detail) {
+        const fn = document.createElement('div');
+        fn.className = 'fb-note';
+        fn.innerHTML = '<b>👎 Your original feedback:</b><br>' + md(String(sec.feedback_detail));
+        card.appendChild(fn);
+      }
+
+      if (!sec.reanswered) {
+        const nn = document.createElement('div');
+        nn.className = 'nolog-note';
+        nn.innerHTML = sec.note || '因無 log 無法重新驗證（this case had no attached log, so the agent could not be re-run）。';
+        card.appendChild(nn);
+        return card;
+      }
+
+      const chat = document.createElement('div');
+      chat.className = 'chat';
+      if (sec.user_question) chat.appendChild(bubble('user', 'U', md(String(sec.user_question))));
+      (sec.steps || []).forEach(function (st) {
+        const c = stepClass(st.role);
+        chat.appendChild(bubble(c.side, c.avatar, md(String(st.content || '')), c.extra));
+      });
+      renderFinal(chat, sec.final);
+      card.appendChild(chat);
+      return card;
+    }
+
+    const root = document.getElementById('root');
+    (DATA.sections || []).forEach(function (sec) { root.appendChild(renderCase(sec)); });
+  </script>
+</body>
+</html>

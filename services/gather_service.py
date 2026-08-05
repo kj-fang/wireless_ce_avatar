@@ -598,9 +598,24 @@ def infer_declared_attachments(ai_analysis: Any) -> Optional[bool]:
         if m:
             return m.group(1).lower() in ("yes", "true")
     # A concise affirmative/negative sentence is common in the prompt output.
-    if re.search(r"\b(?:no|without)\s+(?:log|dump|attachment|file)s?\s+(?:file\s+)?(?:is|are|were\s+)?attached\b", text, re.IGNORECASE):
+    #
+    # The optional middle noun must accept a plural ("no log FILES attached").
+    # With a singular-only `(?:file\s+)?` the negative pattern misses that
+    # wording, while the affirmative one still matches the inner substring
+    # "files attached" via its own `s?` — so "No log files attached" was read
+    # as True and inflated declared_yes. Both patterns now allow `files?`.
+    # `\s+` must apply to every copula, not just the last alternative:
+    # `(?:is|are|were\s+)?` binds the space to `were` only, so "logs are
+    # attached" never matched. Group the alternation before the space.
+    _NOUN = r"(?:log|dump|attachment|file)s?"
+    _MID = r"(?:files?\s+)?(?:(?:is|are|were)\s+)?"
+    if re.search(rf"\b(?:no|without)\s+{_NOUN}\s+{_MID}attached\b", text, re.IGNORECASE):
         return False
-    if re.search(r"\b(?:log|dump|attachment|file)s?\s+(?:file\s+)?(?:is|are|were\s+)?attached\b", text, re.IGNORECASE):
+    # Guard the affirmative form too: a negation anywhere immediately before the
+    # phrase ("... were not attached") must not read as a positive claim.
+    if re.search(rf"\b(?:not|never|n't)\s+(?:\w+\s+){{0,2}}attached\b", text, re.IGNORECASE):
+        return False
+    if re.search(rf"\b{_NOUN}\s+{_MID}attached\b", text, re.IGNORECASE):
         return True
     return None
 

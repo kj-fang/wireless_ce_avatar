@@ -2486,7 +2486,16 @@ def skills_yaml_status():
       }
     """
     try:
-        return jsonify({"success": True, **_skills_yaml_status_payload()})
+        payload = _skills_yaml_status_payload()
+        # Include the current skill list so the frontend can render the
+        # "Available Skills" panel on page load without waiting for set_log.
+        try:
+            agent = _get_or_create_agent(skip_prime=True)
+            payload["skills"] = agent.get_skill_descriptions()
+        except Exception:
+            traceback.print_exc()
+            payload["skills"] = []
+        return jsonify({"success": True, **payload})
     except Exception as e:
         traceback.print_exc()
         return jsonify({"success": False, "error": str(e)}), 500

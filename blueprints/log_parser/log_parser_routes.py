@@ -27,7 +27,7 @@ from utils.log_parser_preprocess import extract_all_keywords_from_filter_file
 from services.log_parser_file_manage_service import FileManagerService
 from services.log_parser_service import LogParserService
 from services.etl_parser.wpp_ddd_parser import wpp_ddd_parser_run
-from services.etl_parser.bt_parser import bt_decode_hci_via_folder
+from services.etl_parser.bt_parser import bt_decode_via_cli
 
 log_parser_bp = Blueprint("log_parser", __name__, url_prefix="/log_parser")
 
@@ -561,7 +561,7 @@ def _process_local_analysis(source_path: str, source_dir: str, file_path: str,
     elif _is_bt_etl(file_path):
         _cb(20, 'Launching BT HCI decoder…')
         _cb(30, 'Decoding in progress (may take ~30 s)…')
-        hci_path = bt_decode_hci_via_folder(source_dir, file_path)
+        hci_path = bt_decode_via_cli(source_dir, file_path)
         _raise_if_cancelled(cancel_event)
         if not hci_path:
             raise ValueError(f'BT HCI decode failed or timed out for: {original_name}')

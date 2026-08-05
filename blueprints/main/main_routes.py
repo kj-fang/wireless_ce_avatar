@@ -1,5 +1,6 @@
 from flask import Blueprint, render_template, request, session, redirect, url_for, flash, jsonify
 import os
+import glob
 import subprocess
 from datetime import datetime
 
@@ -757,6 +758,23 @@ def render_download_result_form():
     bt_table_rows = _build_bt_table_rows(file_dicts['bt_dict'], download_path=download_path)
     event_table_rows = _build_event_table_rows(file_dicts['ddd_dict'], download_path=download_path)
     fw_table_rows = _build_fw_table_rows(file_dicts['fw_dict'], download_path=download_path)
+
+    # Expand any .etl that was split: original renamed to .etl.split → show _split*.etl parts instead.
+    # This handles the case where the user returns to download_result after Bluetooth Analysis Agent
+    # already ran a split; the original file is gone but the split parts still exist.
+    for zip_name, bt_paths in list((file_dicts.get('bt_dict') or {}).items()):
+        expanded = []
+        for bp in (bt_paths or []):
+            if not os.path.isfile(bp) and os.path.isfile(bp + '.split'):
+                split_dir = os.path.dirname(bp)
+                base_name = os.path.splitext(os.path.basename(bp))[0]
+                parts = sorted(glob.glob(os.path.join(split_dir, f"{base_name}_split*.etl")))
+                if parts:
+                    expanded.extend(parts)
+                    print(f"[download_result] {os.path.basename(bp)} was split; replacing with {[os.path.basename(p) for p in parts]}")
+                    continue
+            expanded.append(bp)
+        file_dicts['bt_dict'][zip_name] = expanded
 
     # Compute BT file sizes for display and auto-select filtering
     bt_file_sizes = {}

@@ -382,7 +382,8 @@ def evaluate(cases_dir: Path, runs_dir: Path,
              model: Optional[str] = None,
              judge_model: Optional[list[str] | str] = None,
              sync_golden_set: bool = True,
-             run_all: bool = False) -> dict:
+             run_all: bool = False,
+             run_stamp: Optional[str] = None) -> dict:
     # Pin `app_config.avatarfiles_dir` to the CURRENT user's IntelAvatar_files
     # folder BEFORE any ACE helper reads it. `ace_cli._ensure_avatarfiles_dir`
     # would otherwise defer to `helpers.init_download_dir()`, which honors
@@ -656,7 +657,7 @@ def evaluate(cases_dir: Path, runs_dir: Path,
         "cases": per_case,
     }
 
-    stamp = report["ts_utc"].replace(":", "").replace("-", "")
+    stamp = run_stamp or report["ts_utc"].replace(":", "").replace("-", "")
     run_dir = _run_stamp_dir(runs_dir, stamp)
     run_dir.mkdir(parents=True, exist_ok=True)
     out_path = run_dir / f"eval_{stamp}.json"

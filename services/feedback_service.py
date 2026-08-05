@@ -23,6 +23,7 @@ import getpass
 import json
 import os
 import re
+import subprocess
 import threading
 from datetime import datetime
 from pathlib import Path
@@ -63,8 +64,10 @@ from utils import helpers
 #         rating), and the legacy free-form `expected_outcome` /
 #         `general_comment`. None were surfaced by the current UI; readers
 #         should treat them as absent on v4+ records.
+#   v5  - Added `submitted_by_email` (best-effort UPN/email attribution) on
+#         snapshot roots and all JSONL feedback events.
 # ---------------------------------------------------------------------------
-RECORD_SCHEMA_VERSION = 4
+RECORD_SCHEMA_VERSION = 5
 
 
 # --- Storage location ----------------------------------------------------
@@ -97,6 +100,54 @@ def _current_user() -> str:
     # Folder-safe — strip anything other than alphanum / dash / underscore.
     safe = re.sub(r"[^A-Za-z0-9_.-]+", "_", u).strip("._-") or "anon"
     return safe
+
+
+_EMAIL_RE = re.compile(r"^[^\s@]+@[^\s@]+\.[^\s@]+$")
+
+
+def _normalize_email(value: Any) -> str:
+    """Normalize a raw email/UPN string; returns empty when invalid."""
+    if not isinstance(value, str):
+        return ""
+    out = value.strip().lower()
+    if not out:
+        return ""
+    return out if _EMAIL_RE.match(out) else ""
+
+
+def _current_user_email() -> str:
+    """
+    Best-effort user email attribution.
+
+    Resolution order:
+      1) Common env vars (USEREMAIL/EMAIL/MAIL/UPN)
+      2) `whoami /upn` output on Windows domain-joined machines
+      3) empty string when unavailable
+    """
+    # Fast path: environments that already expose a mail/UPN variable.
+    for key in ("USEREMAIL", "EMAIL", "MAIL", "UPN"):
+        e = _normalize_email(os.environ.get(key, ""))
+        if e:
+            return e
+
+    # Windows fallback: UPN is usually user@domain and good enough as email.
+    try:
+        proc = subprocess.run(
+            ["whoami", "/upn"],
+            capture_output=True,
+            text=True,
+            check=False,
+            timeout=2,
+        )
+        if proc.returncode == 0:
+            lines = (proc.stdout or "").splitlines()
+            if lines:
+                e = _normalize_email(lines[0])
+                if e:
+                    return e
+    except Exception:
+        pass
+    return ""
 
 
 def _resolve_root() -> Path:
@@ -605,6 +656,7 @@ def _new_snapshot(conversation_id: str, session_id: str,
         "conversation_id": conversation_id,
         "session_id": session_id or "",
         "submitted_by": _current_user(),
+        "submitted_by_email": _current_user_email() or None,
         # Human-readable analysis domain on disk ("wifi" | "bt").
         "domain": norm or "wifi",
         # Internal routing key (""/"bt") — stripped before the file is
@@ -799,6 +851,7 @@ def record_vote(
         "ts": _now_iso(),
         "session_id": session_id or "",
         "submitted_by": _current_user(),
+        "submitted_by_email": _current_user_email() or None,
         "domain": eff_domain or "wifi",
         "conversation_id": conversation_id,
         "turn_id": turn_id,
@@ -1235,6 +1288,7 @@ def record_detail(
         "ts": _now_iso(),
         "session_id": session_id or "",
         "submitted_by": _current_user(),
+        "submitted_by_email": _current_user_email() or None,
         "domain": eff_domain or "wifi",
         "conversation_id": conversation_id,
         "turn_id": turn_id,
@@ -1420,6 +1474,7 @@ def record_step_vote(
         "ts": _now_iso(),
         "session_id": session_id or "",
         "submitted_by": _current_user(),
+        "submitted_by_email": _current_user_email() or None,
         "domain": eff_domain or "wifi",
         "conversation_id": conversation_id,
         "turn_id": turn_id,
@@ -1482,6 +1537,7 @@ def record_helpful_skill(
         "ts": _now_iso(),
         "session_id": session_id or "",
         "submitted_by": _current_user(),
+        "submitted_by_email": _current_user_email() or None,
         "domain": eff_domain or "wifi",
         "conversation_id": conversation_id,
         "turn_id": turn_id,
@@ -1554,6 +1610,7 @@ def record_skill_assessment(
         "ts": _now_iso(),
         "session_id": session_id or "",
         "submitted_by": _current_user(),
+        "submitted_by_email": _current_user_email() or None,
         "domain": eff_domain or "wifi",
         "conversation_id": conversation_id,
         "turn_id": turn_id,

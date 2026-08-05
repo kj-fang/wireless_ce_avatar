@@ -231,12 +231,15 @@ def _write_adapt_artifact(
     limit: int | None = None,
     conversation_id: str | None = None,
     turn_ids: list[str] | None = None,
+    run_stamp: str | None = None,
+    runs_dir_root: Path | None = None,
 ) -> Path:
     from .eval import runner as eval_runner
 
     ts_utc = datetime.now(timezone.utc).isoformat(timespec="seconds")
-    stamp = ts_utc.replace(":", "").replace("-", "")
-    run_dir = Path(eval_runner.DEFAULT_RUNS_DIR) / stamp
+    stamp = run_stamp or ts_utc.replace(":", "").replace("-", "")
+    runs_root = Path(runs_dir_root) if runs_dir_root is not None else Path(eval_runner.DEFAULT_RUNS_DIR)
+    run_dir = runs_root / stamp
     run_dir.mkdir(parents=True, exist_ok=True)
 
     changed_bullets = _diff_playbook_bullet_state(bullets_before, bullets_after)
@@ -267,7 +270,13 @@ def _write_adapt_artifact(
     print(f"[ace.cli] adapt artifact written: {out_path}")
     return out_path
 
-def _run_adapt_batch(args, *, allow_push: bool = True) -> list[dict]:
+def _run_adapt_batch(
+    args,
+    *,
+    allow_push: bool = True,
+    artifact_run_stamp: str | None = None,
+    artifact_runs_dir: Path | None = None,
+) -> list[dict]:
     """Run one adapt batch and return per-turn results."""
     playbooks_dir = _resolve_playbooks_dir(args.namespace)
     feedback_root = _resolve_feedback_root()
@@ -309,6 +318,8 @@ def _run_adapt_batch(args, *, allow_push: bool = True) -> list[dict]:
         bullets_after=bullets_after,
         since=args.since,
         limit=args.limit,
+        run_stamp=artifact_run_stamp,
+        runs_dir_root=artifact_runs_dir,
     )
     print(json.dumps(summary, indent=2))
     if args.verbose:
@@ -526,12 +537,21 @@ def cmd_pipeline(args):
     # NOTE: push is deliberately deferred to AFTER review passes (see step 4),
     # so we suppress --push during the adapt step here. A regression (or, in the
     # future, a manager who has not yet approved) must never reach the cloud.
+    from .eval import runner as eval_runner
+
     want_push = bool(getattr(args, "push", False))
+    runs_dir = Path(args.runs_dir or eval_runner.DEFAULT_RUNS_DIR)
+    pipeline_stamp = datetime.now(timezone.utc).isoformat(timespec="seconds").replace(":", "").replace("-", "")
     playbooks_dir = _resolve_playbooks_dir(args.namespace)
     bullets_before = _capture_playbook_bullet_state(playbooks_dir)
     args.push = False
     print("[pipeline] ===== STEP 1/3: adapt =====")
-    adapt_results = _run_adapt_batch(args, allow_push=False)
+    adapt_results = _run_adapt_batch(
+        args,
+        allow_push=False,
+        artifact_run_stamp=pipeline_stamp,
+        artifact_runs_dir=runs_dir,
+    )
     used_submitters = sorted({
         str(r.get("submitted_by") or "").strip()
         for r in adapt_results
@@ -550,12 +570,11 @@ def cmd_pipeline(args):
     # score them. Lazy import: eval/runner imports this module, so a top-level
     # import here would be circular.
     print("[pipeline] ===== STEP 2/3: eval (judge) =====")
-    from .eval import runner as eval_runner
-    runs_dir = args.runs_dir or eval_runner.DEFAULT_RUNS_DIR
     cases_dir = args.cases_dir or eval_runner._default_cases_dir()
     report = eval_runner.evaluate(
         cases_dir=cases_dir,
         runs_dir=runs_dir,
+        run_stamp=pipeline_stamp,
         case_id_filter=None,
         passes=args.passes,
         judge_temperature=0.2,

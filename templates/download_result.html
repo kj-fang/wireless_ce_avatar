@@ -679,9 +679,6 @@
                         <button id="bt-action-autofolder" class="btn btn-primary btn-sm" data-mode="AutoFolder" style="border-radius: 30px; color:white; font-size: 1.15rem; padding: 0.5rem 1rem;" disabled onclick="runSelectedBtAction(this, 'AutoFolder')">
                             AutoFolder
                         </button>
-                        <!-- <button id="bt-action-manual" class="btn btn-primary btn-sm" data-mode="Manual" style="border-radius: 30px; color:white; font-size: 1.15rem; padding: 0.5rem 1rem;" disabled onclick="runSelectedBtAction(this, 'Manual')">
-                            Manual
-                        </button> -->
                         <button id="bt-action-chatbot" class="btn btn-info btn-sm" data-mode="CHATBOT" style="border-radius: 30px; color:white; font-size: 1.15rem; padding: 0.5rem 1rem;" disabled onclick="runSelectedBtAction(this, 'CHATBOT')">
                             <i class="fab fa-bluetooth-b"></i> Bluetooth Analysis Agent
                         </button>
@@ -966,10 +963,6 @@
                                 AutoFolder
                             </button>
 
-                            <button class="btn btn-success btn-sm mb-2" data-path="{{ row.bt_path | urlencode }}" data-mode="Manual" onclick="startAnalysis(this, '{{ row.bt_path | urlencode }}', 'Manual')">
-                                Manual
-                            </button>
-
                             <button class="btn btn-warning btn-sm" data-path="{{ row.bt_path | urlencode }}" data-mode="LLM" onclick="startBtLogParser(this, '{{ row.bt_path | urlencode }}')">
                                 Analyze with LLM
                             </button>
@@ -1049,7 +1042,6 @@
             socket.on("wpp_complete", handleWppComplete);
             socket.on("bt_hci_ready", handleBtHciReady);
             socket.on("bt_hci_failed", handleBtHciFailed);
-            socket.on("manual_complete", handleManualComplete);
             socket.on("autofolder_complete", handleAutofolderComplete);
             socket.on("fw_analysis_complete", handleFwAnalysisComplete);
             socket.on("fw_analysis_cancelled", handleFwAnalysisCancelled);
@@ -1954,13 +1946,6 @@
 
     window.pendingFwAnalysis = null;
 
-    function handleManualComplete(msg) {
-        console.log("Manual analysis complete for:", msg.etl_path);
-        restoreButton(msg.etl_path, 'Manual');
-        window.pendingBtAnalyze = false;
-        setBtActionButtonsBusy(false);
-    }
-
     function handleAutofolderComplete(msg) {
         console.log("AutoFolder analysis complete for:", msg.etl_path);
         restoreButton(msg.etl_path, 'AutoFolder');
@@ -2839,20 +2824,17 @@
     function updateBtActionButtons() {
         const selectedEncoded = getSelectedBtEncoded();
         const autoFolderBtn = document.getElementById('bt-action-autofolder');
-        const manualBtn = document.getElementById('bt-action-manual');
         const chatbotBtn = document.getElementById('bt-action-chatbot');
 
         if (window.btActionsBusy) {
             if (chatbotBtn) chatbotBtn.disabled = true;
             if (autoFolderBtn) autoFolderBtn.disabled = true;
-            if (manualBtn) manualBtn.disabled = true;
             return;
         }
 
         const hasSelection = !!selectedEncoded;
         if (chatbotBtn) chatbotBtn.disabled = !hasSelection;
         if (autoFolderBtn) autoFolderBtn.disabled = !hasSelection;
-        if (manualBtn) manualBtn.disabled = !hasSelection;
     }
 
     function runSelectedBtAction(button, mode) {
@@ -2880,9 +2862,8 @@
             // The other labels are plain text — innerHTML treats them identically.
             'bt-action-chatbot': BT_CHATBOT_BUTTON_HTML,
             'bt-action-autofolder': 'AutoFolder',
-            'bt-action-manual': 'Manual'
         };
-        const buttonIds = ['bt-action-chatbot', 'bt-action-autofolder', 'bt-action-manual'];
+        const buttonIds = ['bt-action-chatbot', 'bt-action-autofolder'];
         buttonIds.forEach(id => {
             const btn = document.getElementById(id);
             if (!btn) return;

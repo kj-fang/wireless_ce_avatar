@@ -14,7 +14,7 @@ from services.driver_manage_service import DriverManager
 # data for progress bar
 progress_data = {}
 
-def run_dload_threads(att_list, download_path, socketio):
+def run_dload_threads(att_list, download_path, socketio, result_callback=None):
     print("start run_dload_threads")
 
     global progress_data
@@ -25,7 +25,13 @@ def run_dload_threads(att_list, download_path, socketio):
     print("download_path:", download_path)
     
     with ThreadPoolExecutor(max_workers=15) as executor:
-        futures = [executor.submit(download_file, name, url, download_path, driver_manager, socketio) for name, url, _ in att_list]
+        futures = [
+            executor.submit(
+                download_file, name, url, download_path, driver_manager,
+                socketio, result_callback
+            )
+            for name, url, _ in att_list
+        ]
         for future in as_completed(futures):
             if driver_manager.shutdown_event.is_set() or driver_manager.download_cancel_event.is_set():
                 print("shutddown!!!", driver_manager.shutdown_event)
@@ -117,7 +123,29 @@ def cleanup_incomplete_downloads(download_path):
             return
         time.sleep(0.5)
 
-def download_file(name, url, download_path, driver_manager: DriverManager, socketio):
+def download_file(
+    name, url, download_path, driver_manager: DriverManager, socketio,
+    result_callback=None,
+):
+    started_at = time.perf_counter()
+    notified = False
+
+    def _notify(status, *, byte_count=None, attempt_count=0, error_code=""):
+        nonlocal notified
+        if notified or result_callback is None:
+            return
+        notified = True
+        try:
+            result_callback({
+                "name": name,
+                "status": status,
+                "bytes": byte_count,
+                "latency_ms": int((time.perf_counter() - started_at) * 1000),
+                "attempt_count": int(attempt_count or 0),
+                "error_code": str(error_code or ""),
+            })
+        except Exception as callback_error:
+            print(f"Attachment telemetry callback failed for {name}: {callback_error}")
 
     os.makedirs(download_path, exist_ok=True)
     already_dload = False
@@ -126,6 +154,11 @@ def download_file(name, url, download_path, driver_manager: DriverManager, socke
     if (os.path.exists(file_path)):
         print(f"file exist: {file_path}")
         already_dload = True
+        try:
+            existing_bytes = os.path.getsize(file_path)
+        except OSError:
+            existing_bytes = None
+        _notify("already_exists", byte_count=existing_bytes, attempt_count=0)
         return [file_path, name, already_dload]
     if os.path.exists(temp_path):
         print("⚠️ Last download failed. Removing.")
@@ -133,6 +166,7 @@ def download_file(name, url, download_path, driver_manager: DriverManager, socke
 
     max_retry = 3
     retry = 0
+    last_error_code = ""
 
     progress_data[name] = 0
     
@@ -146,10 +180,12 @@ def download_file(name, url, download_path, driver_manager: DriverManager, socke
         try:
             driver = driver_manager.create_download_driver(download_path, performance_logging=True)
             if driver_manager.download_cancel_event.is_set():
+                _notify("cancelled", attempt_count=retry + 1, error_code="user_cancelled")
                 return
             driver.get(url)
 
             if driver_manager.download_cancel_event.is_set():
+                _notify("cancelled", attempt_count=retry + 1, error_code="user_cancelled")
                 return
             time.sleep(5)
             logs = driver.get_log("performance")
@@ -172,6 +208,9 @@ def download_file(name, url, download_path, driver_manager: DriverManager, socke
                     pbar.close()
                     if driver_manager.download_cancel_event.is_set():
                         _remove_partial_download(temp_path, name)
+                        _notify("cancelled", attempt_count=retry + 1, error_code="user_cancelled")
+                    else:
+                        _notify("cancelled", attempt_count=retry + 1, error_code="app_shutdown")
                     return
                 
                 time.sleep(0.5)
@@ -211,6 +250,11 @@ def download_file(name, url, download_path, driver_manager: DriverManager, socke
                             'progress': progress_data[name],
                             'eta': int(eta_seconds) if eta_seconds is not None else None
                         }, namespace='/progress')
+                    try:
+                        completed_bytes = os.path.getsize(file_path)
+                    except OSError:
+                        completed_bytes = file_size_bytes
+                    _notify("success", byte_count=completed_bytes, attempt_count=retry + 1)
                     return [file_path, name, already_dload]
 
                 else:
@@ -222,10 +266,17 @@ def download_file(name, url, download_path, driver_manager: DriverManager, socke
             if driver_manager.download_cancel_event.is_set():
                 # Cancelled mid-flight — don't treat as a retryable failure.
                 _remove_partial_download(temp_path, name)
+                _notify("cancelled", attempt_count=retry + 1, error_code="user_cancelled")
                 return
             print(f"Download failed {e}")
             print(f"Retry download file: {name}")
             retry += 1
+            if isinstance(e, TimeoutError):
+                last_error_code = "stall_timeout"
+            elif isinstance(e, ValueError):
+                last_error_code = "missing_content_length"
+            else:
+                last_error_code = type(e).__name__ or "unexpected_error"
             if socketio and retry < max_retry:
                 if isinstance(e, TimeoutError):
                     retry_reason = 'stall_timeout'
@@ -254,8 +305,16 @@ def download_file(name, url, download_path, driver_manager: DriverManager, socke
                         driver_manager.all_drivers.remove(driver)
             print("done")
 
+    if driver_manager.download_cancel_event.is_set() or driver_manager.shutdown_event.is_set():
+        _notify(
+            "cancelled", attempt_count=retry,
+            error_code="user_cancelled" if driver_manager.download_cancel_event.is_set() else "app_shutdown",
+        )
+        return [None, name, already_dload]
+
     print(f"❌ All retries failed for {name}")
     if socketio:
         socketio.emit('file_download_failed', {'name': name}, namespace='/progress')
+    _notify("failed", attempt_count=retry, error_code=last_error_code or "max_retries_exhausted")
     return [None, name, already_dload]
 

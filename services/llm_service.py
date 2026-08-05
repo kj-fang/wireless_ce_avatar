@@ -49,6 +49,17 @@ class _AnthropicUsageAdapter:
         self.prompt_tokens = usage.input_tokens
         self.completion_tokens = usage.output_tokens
         self.total_tokens = usage.input_tokens + usage.output_tokens
+        # Cached tokens are billed at different rates (read ~0.1x, write ~1.25x
+        # of the input rate) and are NOT included in input_tokens — Anthropic
+        # reports the uncached remainder there. Surface them separately so cost
+        # accounting can price each bucket correctly.
+        #
+        # Deliberately kept OUT of prompt_tokens/total_tokens: those feed the
+        # MAX_TOKENS_PER_STEP throttle, and folding cache counts in would change
+        # when that trips. Prompt caching is currently off (no cache_control is
+        # set anywhere), so these read 0 until it is enabled.
+        self.cache_read_input_tokens = getattr(usage, "cache_read_input_tokens", 0) or 0
+        self.cache_creation_input_tokens = getattr(usage, "cache_creation_input_tokens", 0) or 0
 
 
 class _AnthropicChoiceAdapter:
@@ -213,6 +224,48 @@ class LLM_helper:
                                 "MLO", "Assert", "WRDS/WGDS/EWRD/SGOM", "TAS", "Roaming", 
                                 "P2P", "DSM", "VLP/UHB/AFC", "UATS", "Unclassified"]
 
+    @staticmethod
+    def empty_usage() -> dict:
+        return {
+            "llm_calls": 0,
+            "input_tokens": 0,
+            "cache_read_tokens": 0,
+            "cache_write_tokens": 0,
+            "output_tokens": 0,
+            "total_tokens": 0,
+        }
+
+    @staticmethod
+    def accumulate_usage(target: dict, usage) -> dict:
+        """Add one provider response usage object to a plain v5 usage dict."""
+        if not isinstance(target, dict) or usage is None:
+            return target
+
+        def _get(name: str) -> int:
+            try:
+                if isinstance(usage, dict):
+                    value = usage.get(name)
+                else:
+                    value = getattr(usage, name, 0)
+                return max(0, int(value or 0))
+            except (TypeError, ValueError):
+                return 0
+
+        prompt = _get("prompt_tokens") or _get("input_tokens")
+        output = _get("completion_tokens") or _get("output_tokens")
+        cache_read = _get("cache_read_input_tokens") or _get("cache_read_tokens")
+        cache_write = _get("cache_creation_input_tokens") or _get("cache_write_tokens")
+        target["llm_calls"] = int(target.get("llm_calls") or 0) + 1
+        target["input_tokens"] = int(target.get("input_tokens") or 0) + prompt
+        target["cache_read_tokens"] = int(target.get("cache_read_tokens") or 0) + cache_read
+        target["cache_write_tokens"] = int(target.get("cache_write_tokens") or 0) + cache_write
+        target["output_tokens"] = int(target.get("output_tokens") or 0) + output
+        target["total_tokens"] = (
+            int(target.get("total_tokens") or 0)
+            + prompt + cache_read + cache_write + output
+        )
+        return target
+
     def set_up(self, gpt_token, gpt_url, model="gpt-4.1", classifitation_path=None):
         if model.startswith("claude"):
             self.client = AnthropicOpenAIAdapter(Anthropic(
@@ -247,7 +300,7 @@ class LLM_helper:
             self.skills = get_builtin_skills()
     
     
-    def classify_issue(self, case_context: dict):
+    def classify_issue(self, case_context: dict, usage_accumulator: dict = None):
         classify_prompt = "Analyze the content and classify into the most appropriate category based on the primary issue described:"
         # debug only:shared folder failed
         # if self.classifitation_path is not None:
@@ -326,6 +379,8 @@ class LLM_helper:
                 temperature=0.1,
                 max_tokens=300
             )
+            if isinstance(usage_accumulator, dict):
+                self.accumulate_usage(usage_accumulator, getattr(response, "usage", None))
 
             print("user_content", user_content)
             
@@ -346,7 +401,7 @@ class LLM_helper:
                 "keywords_found": []
             }
 
-    def analyze_desc(self, prompt_path, case_context: dict):
+    def analyze_desc(self, prompt_path, case_context: dict, return_usage: bool = False):
         
         prompt = helpers.load_module(prompt_path,"analyze_prompt_module" )
         
@@ -358,7 +413,8 @@ class LLM_helper:
         )
         print("client:", self.client)
 
-        classification_result = self.classify_issue(case_context)
+        operation_usage = self.empty_usage()
+        classification_result = self.classify_issue(case_context, usage_accumulator=operation_usage)
         print("classification_result", classification_result)
         try:
             response = self.client.chat.completions.create(
@@ -380,6 +436,7 @@ class LLM_helper:
                 max_tokens=1500,
                 #stop=None
             )
+            self.accumulate_usage(operation_usage, getattr(response, "usage", None))
             
             raw_output = response.choices[0].message.content
             print("raw_output:", raw_output)
@@ -396,13 +453,14 @@ class LLM_helper:
                         "keywords_found": []
                     }
                 print("json output:",type(result), result)
-                return result
+                output = result
             else:
                 print("raw output:", raw_output)
-                return raw_output
-        except (requests.exceptions.RequestException, urllib3.exceptions.HTTPError, httpx.HTTPError, openai.OpenAIError) as e:
+                output = raw_output
+        except Exception as e:
             print(f"Failed to make inference request: {e}")
-            return {}
+            output = {}
+        return (output, operation_usage) if return_usage else output
     
     def analyze_log(self, system_content, log=None, case_description=None):
 

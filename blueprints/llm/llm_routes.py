@@ -1,9 +1,11 @@
 from flask import Blueprint, render_template, request, session, redirect, url_for, flash, Response, jsonify
 import json
+import time
 import traceback
 
 from services.llm_service import LLM_helper
 from configs.global_configs import app_config
+from services import gather_service
 
 llm_bp = Blueprint("llm", __name__, url_prefix="/llm")
 
@@ -16,6 +18,9 @@ def get_llm_analysis():
                 "confidence": 0,
                 "keywords_found": []
             }
+    started = time.perf_counter()
+    operation_usage = LLM_helper.empty_usage()
+    _ctx_full = {}
     try:
         llm_helper: LLM_helper = app_config.llm_helper
         if llm_helper != None:
@@ -26,9 +31,10 @@ def get_llm_analysis():
             _ctx_full = _CaseContextLocal.from_session(
                 session.get("case_context") or {}
             ).to_dict()
-            ai_analysis = llm_helper.analyze_desc(
+            ai_analysis, operation_usage = llm_helper.analyze_desc(
                 prompt_path = session['prompt_file_path'],
-                case_context = _ctx_full
+                case_context = _ctx_full,
+                return_usage = True,
             )
             if type(ai_analysis) == dict:
                 session['classification'] = ai_analysis["Classification"]
@@ -41,11 +47,51 @@ def get_llm_analysis():
         }
         print("session['classification'] ", session['classification'])
         session['ai_ips_analysis'] = ai_analysis
+        if llm_helper is not None:
+            try:
+                feature_status = "success" if ai_analysis else "failed"
+                gather_service.record_feature_usage(
+                    workflow_id=session.get("gather_workflow_id", ""),
+                    feature_code="select_attachments_ai_summary",
+                    model=getattr(llm_helper, "model", "") or "",
+                    usage=operation_usage,
+                    issue=_ctx_full,
+                    domain=str(_ctx_full.get("wifi_or_bt") or "wifi"),
+                    trigger="click_ai",
+                    status=feature_status,
+                    latency_ms=int((time.perf_counter() - started) * 1000),
+                    error_code="" if feature_status == "success" else "empty_result",
+                )
+                gather_service.record_attachment_declaration(
+                    workflow_id=session.get("gather_workflow_id", ""),
+                    declared=gather_service.infer_declared_attachments(ai_analysis),
+                    source="select_attachments_ai_summary",
+                    issue=_ctx_full,
+                    domain=str(_ctx_full.get("wifi_or_bt") or "wifi"),
+                )
+            except Exception:
+                pass
         return Response(
             json.dumps(response_data, ensure_ascii=False, indent=2),
             mimetype='application/json'
         )
     except Exception as e:
+        try:
+            llm_helper = app_config.llm_helper
+            gather_service.record_feature_usage(
+                workflow_id=session.get("gather_workflow_id", ""),
+                feature_code="select_attachments_ai_summary",
+                model=getattr(llm_helper, "model", "") if llm_helper else "",
+                usage=operation_usage,
+                issue=_ctx_full,
+                domain=str(_ctx_full.get("wifi_or_bt") or "wifi"),
+                trigger="click_ai",
+                status="failed",
+                latency_ms=int((time.perf_counter() - started) * 1000),
+                error_code=type(e).__name__,
+            )
+        except Exception:
+            pass
         error_traceback = traceback.format_exc()
         print(f"❌ Full traceback:\n{error_traceback}")
         return jsonify({

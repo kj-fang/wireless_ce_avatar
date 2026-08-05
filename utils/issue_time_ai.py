@@ -830,7 +830,8 @@ def organize_issue_context(
     last_ts: Optional[datetime] = None,
     llm_client: Any = None,
     llm_model: Optional[str] = None,
-) -> dict:
+    return_usage: bool = False,
+):
     """
     LLM-organize a raw case "Issue Description" into a clean problem statement
     plus the issue time point(s) it mentions — there may be SEVERAL (e.g.
@@ -850,6 +851,38 @@ def organize_issue_context(
     """
     description = (description or "").strip()
     ref = last_ts or first_ts
+    operation_usage = {
+        "llm_calls": 0, "input_tokens": 0, "cache_read_tokens": 0,
+        "cache_write_tokens": 0, "output_tokens": 0, "total_tokens": 0,
+    }
+
+    def _finish(data: dict):
+        return (data, operation_usage) if return_usage else data
+
+    def _capture_usage(usage) -> None:
+        if usage is None:
+            return
+
+        def _n(*names: str) -> int:
+            for name in names:
+                try:
+                    value = usage.get(name) if isinstance(usage, dict) else getattr(usage, name, None)
+                    if value is not None:
+                        return max(0, int(value or 0))
+                except (TypeError, ValueError):
+                    pass
+            return 0
+
+        prompt = _n("prompt_tokens", "input_tokens")
+        output = _n("completion_tokens", "output_tokens")
+        cache_read = _n("cache_read_input_tokens", "cache_read_tokens")
+        cache_write = _n("cache_creation_input_tokens", "cache_write_tokens")
+        operation_usage["llm_calls"] += 1
+        operation_usage["input_tokens"] += prompt
+        operation_usage["cache_read_tokens"] += cache_read
+        operation_usage["cache_write_tokens"] += cache_write
+        operation_usage["output_tokens"] += output
+        operation_usage["total_tokens"] += prompt + cache_read + cache_write + output
 
     def _fallback() -> dict:
         # Deterministic backstop: pull explicit clock/full tokens, keep the
@@ -862,9 +895,9 @@ def organize_issue_context(
         }
 
     if not description:
-        return {"clean_description": "", "issue_times": [], "interpretation": ""}
+        return _finish({"clean_description": "", "issue_times": [], "interpretation": ""})
     if llm_client is None or not llm_model:
-        return _fallback()
+        return _finish(_fallback())
 
     if first_ts and last_ts:
         rng = f"The related log spans {format_issue_time(first_ts)} to {format_issue_time(last_ts)}."
@@ -907,10 +940,11 @@ def organize_issue_context(
             temperature=0.1,
             max_tokens=700,
         )
+        _capture_usage(getattr(response, "usage", None))
         data = parse_json_loose(response.choices[0].message.content or "")
     except Exception as e:  # noqa: BLE001 - network/LLM errors must not break the page
         print(f"[issue_time_ai] organize_issue_context LLM call failed: {e}")
-        return _fallback()
+        return _finish(_fallback())
 
     times = []
     for raw in (data.get("issue_times") or [])[:5]:
@@ -926,11 +960,11 @@ def organize_issue_context(
         # deterministic extractor as a backstop for the time(s).
         times = _fallback()["issue_times"]
     clean = str(data.get("clean_description") or "").strip() or description
-    return {
+    return _finish({
         "clean_description": clean,
         "issue_times": times,
         "interpretation": str(data.get("interpretation") or ""),
-    }
+    })
 
 
 # ---------------------------------------------------------------------------

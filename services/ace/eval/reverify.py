@@ -376,7 +376,7 @@ def reverify_and_notify(
             namespace_changes=namespace_changes,
             attachment_name=attachment_name,
         )
-        subject = f"[ACE] 你的回饋已讓 Agent 重新回答 ({len(sections)} case)"
+        subject = f"Avatar Feedback Reverify - {datetime.now().strftime('%Y-%m-%d')} ({len(sections)} case)"
         to_list = (list(REVERIFY_REDIRECT_TO) if REVERIFY_REDIRECT_TO
                    else ([bundle["recipient"]] if bundle["recipient"] else []))
         if not to_list:

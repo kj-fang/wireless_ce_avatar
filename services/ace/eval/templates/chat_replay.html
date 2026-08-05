@@ -1,194 +1,363 @@
 <!DOCTYPE html>
 <html lang="en">
 <head>
-  <meta charset="UTF-8">
-  <meta name="viewport" content="width=device-width, initial-scale=1">
-  <title>Agent Re-answer Replay</title>
-  <link href="https://fonts.googleapis.com/css2?family=Inter:wght@400;500;600;700&display=swap" rel="stylesheet">
-  <script src="https://cdn.jsdelivr.net/npm/marked/marked.min.js"></script>
-  <style>
-    * { font-family: 'Inter', sans-serif; box-sizing: border-box; }
-    body { background: #f0f2f5; margin: 0; color: #1f2937; }
-    .top-bar {
-      background: linear-gradient(135deg, #0071c5 0%, #00a3e0 100%);
-      color: #fff; padding: 16px 24px;
-    }
-    .top-bar h1 { font-size: 1.2rem; margin: 0 0 4px; font-weight: 700; }
-    .top-bar .sub { font-size: 0.8rem; opacity: 0.9; }
-    .wrap { max-width: 900px; margin: 0 auto; padding: 20px 16px 60px; }
-
-    .case-card {
-      background: #fff; border: 1px solid #e5e7eb; border-radius: 12px;
-      margin-bottom: 26px; overflow: hidden;
-      box-shadow: 0 1px 4px rgba(0,0,0,0.05);
-    }
-    .case-head {
-      padding: 14px 18px; border-bottom: 1px solid #f0f0f0;
-      display: flex; align-items: center; gap: 10px; flex-wrap: wrap;
-    }
-    .case-head h2 { font-size: 1rem; margin: 0; font-weight: 700; }
-    .domain-tag {
-      font-size: 0.68rem; font-weight: 700; text-transform: uppercase;
-      letter-spacing: 0.04em; padding: 2px 8px; border-radius: 12px;
-    }
-    .domain-tag.wifi { background: #e6f0fa; color: #0071c5; }
-    .domain-tag.bt   { background: #eae6fa; color: #5b3ec5; }
-    .fb-note {
-      background: #fff7ed; border: 1px solid #fed7aa; color: #9a3412;
-      border-radius: 8px; padding: 10px 12px; margin: 12px 18px;
-      font-size: 0.82rem;
-    }
-    .fb-note b { color: #7c2d12; }
-    .nolog-note {
-      background: #f8fafc; border: 1px dashed #cbd5e1; color: #475569;
-      border-radius: 8px; padding: 14px 16px; margin: 14px 18px;
-      font-size: 0.85rem;
-    }
-
-    .chat { padding: 16px 18px 22px; }
-    .msg-row { display: flex; gap: 10px; margin-bottom: 14px; max-width: 92%; }
-    .msg-row.user { margin-left: auto; flex-direction: row-reverse; }
-    .msg-row.assistant { margin-right: auto; }
-    .avatar-icon {
-      width: 30px; height: 30px; border-radius: 50%; flex: 0 0 30px;
-      display: flex; align-items: center; justify-content: center;
-      font-size: 0.85rem; font-weight: 700;
-    }
-    .msg-row.user .avatar-icon { background: #0071c5; color: #fff; }
-    .msg-row.assistant .avatar-icon { background: #e6f0fa; color: #0071c5; }
-    .msg-bubble {
-      background: #fff; border: 1px solid #e5e7eb; border-radius: 12px;
-      padding: 10px 14px; font-size: 0.86rem; line-height: 1.5;
-      word-break: break-word; overflow-wrap: anywhere;
-    }
-    .msg-row.user .msg-bubble { background: #0071c5; color: #fff; border-color: #0071c5; }
-    .msg-row.assistant.tool .msg-bubble { background: #f8fafc; }
-    .msg-row.assistant.error .msg-bubble { background: #fdeaea; border-color: #f5c2c2; }
-    .msg-row.assistant.meta .msg-bubble { background: #f3f4f6; color: #6b7280; font-size: 0.78rem; }
-
-    .markdown-section { font-size: 0.86rem; line-height: 1.55; }
-    .markdown-section h1, .markdown-section h2, .markdown-section h3 { font-size: 0.98rem; font-weight: 700; margin: 8px 0 4px; }
-    .markdown-section p { margin: 4px 0; }
-    .markdown-section code { background: #f1f5f9; padding: 1px 5px; border-radius: 4px; font-size: 0.82em; }
-    .markdown-section pre { background: #0f172a; color: #e2e8f0; padding: 12px; border-radius: 8px; overflow-x: auto; }
-    .markdown-section pre code { background: transparent; color: inherit; padding: 0; }
-    .markdown-section ul { padding-left: 18px; margin: 4px 0; }
-    .markdown-section table { border-collapse: collapse; font-size: 0.8rem; }
-    .markdown-section th, .markdown-section td { border: 1px solid #e5e7eb; padding: 4px 8px; }
-
-    .report-card {
-      border: 1px solid #cfe3f5; background: #f5fafe; border-radius: 12px;
-      padding: 14px 16px; margin-top: 6px;
-    }
-    .report-card .rc-title { font-weight: 700; color: #0071c5; margin-bottom: 6px; }
-    .foot { text-align: center; color: #9ca3af; font-size: 0.75rem; margin-top: 30px; }
-  </style>
+    <meta charset="UTF-8">
+    <meta name="viewport" content="width=device-width, initial-scale=1">
+    <title>Agent Re-answer Replay</title>
+    <link href="https://fonts.googleapis.com/css2?family=Inter:wght@400;500;600;700&display=swap" rel="stylesheet">
+    <link href="https://stackpath.bootstrapcdn.com/bootstrap/4.5.2/css/bootstrap.min.css" rel="stylesheet">
+    <script src="https://cdn.jsdelivr.net/npm/marked/marked.min.js"></script>
+    <!-- The live chatbot page's real <style> block, injected verbatim so the
+         chat area is pixel-identical to what users see. -->
+    <style>{{ chatbot_css | safe }}</style>
+    <!-- Standalone-replay overrides only: undo the app's full-viewport flex
+         lock so the document scrolls, and add per-case section chrome. None
+         of these touch the chat bubble / step / report classes above. -->
+    <style>
+        html, body { height: auto !important; overflow: visible !important; display: block !important; }
+        .replay-wrap { max-width: 1000px; margin: 0 auto; padding: 18px 16px 60px; }
+        .case-block {
+            background: #fff; border: 1px solid #e5e7eb; border-radius: 12px;
+            margin-bottom: 26px; overflow: hidden; box-shadow: 0 1px 4px rgba(0,0,0,0.05);
+        }
+        .case-head {
+            padding: 14px 18px; border-bottom: 1px solid #f0f0f0;
+            display: flex; align-items: center; gap: 10px; flex-wrap: wrap;
+        }
+        .case-head h2 { font-size: 1rem; margin: 0; font-weight: 700; }
+        .domain-tag {
+            font-size: 0.68rem; font-weight: 700; text-transform: uppercase;
+            letter-spacing: 0.04em; padding: 2px 8px; border-radius: 12px;
+        }
+        .domain-tag.wifi { background: #e6f0fa; color: #0071c5; }
+        .domain-tag.bt   { background: #eae6fa; color: #5b3ec5; }
+        .fb-note {
+            background: #fff7ed; border: 1px solid #fed7aa; color: #9a3412;
+            border-radius: 8px; padding: 10px 12px; margin: 12px 18px; font-size: 0.82rem;
+        }
+        .nolog-note {
+            background: #f8fafc; border: 1px dashed #cbd5e1; color: #475569;
+            border-radius: 8px; padding: 14px 16px; margin: 14px 18px; font-size: 0.85rem;
+        }
+        /* Same look as #chat-window but height auto so the whole page scrolls
+           naturally instead of an inner scroll region. */
+        .chat-window-replay {
+            padding: 20px; display: flex; flex-direction: column; gap: 14px; background: #f5f5f5;
+        }
+        .replay-foot { text-align: center; color: #9ca3af; font-size: 0.75rem; margin-top: 30px; }
+    </style>
 </head>
 <body>
-  <div class="top-bar">
-    <h1>Agent Re-answer Replay</h1>
-    <div class="sub">Recipient: {{ person_email }} &nbsp;·&nbsp; Generated: {{ generated_at }}</div>
-  </div>
-  <div class="wrap" id="root"></div>
-  <div class="foot">IntelAvatar · ACE re-answer with the updated playbook</div>
 
-  <script id="replay-data" type="application/json">{{ data_json | safe }}</script>
-  <script>
+<div class="top-bar">
+    <span style="font-size:1.4rem;">📡</span>
+    <h1>Avatar Feedback Reverify</h1>
+    <span class="badge-model">Agent re-answer · updated playbook</span>
+    <span style="margin-left:auto;font-size:0.8rem;color:rgba(255,255,255,0.85);">{{ person_email }} · {{ generated_at }}</span>
+</div>
+
+<div class="replay-wrap"><div id="replay-root"></div></div>
+<div class="replay-foot">IntelAvatar · ACE re-answer with the updated playbook</div>
+
+<script id="replay-data" type="application/json">{{ data_json | safe }}</script>
+<script>
     const DATA = JSON.parse(document.getElementById('replay-data').textContent);
     marked.setOptions({ breaks: true, gfm: true });
+    let __uid = 0;
 
-    function md(text) { try { return marked.parse(text || ''); } catch (e) { return (text || ''); } }
+    // ── Verbatim helpers from log_chatbot.html ───────────────────────
+    function escapeHtml(s) {
+        return String(s)
+            .replace(/&/g, '&amp;').replace(/</g, '&lt;')
+            .replace(/>/g, '&gt;').replace(/"/g, '&quot;');
+    }
+    // No typing indicator / welcome message in a static replay.
+    function removeTyping() {}
+    function hideWelcome() {}
 
-    function bubble(roleClass, avatar, innerHTML, extraClass) {
-      const row = document.createElement('div');
-      row.className = 'msg-row ' + roleClass + (extraClass ? ' ' + extraClass : '');
-      const av = document.createElement('div');
-      av.className = 'avatar-icon';
-      av.textContent = avatar;
-      const b = document.createElement('div');
-      b.className = 'msg-bubble';
-      const m = document.createElement('div');
-      m.className = 'markdown-section';
-      m.innerHTML = innerHTML;
-      b.appendChild(m);
-      row.appendChild(av);
-      row.appendChild(b);
-      return row;
+    function toggleReportDetails(toggleBtnId, detailsId) {
+        const details = document.getElementById(detailsId);
+        const btn = document.getElementById(toggleBtnId);
+        if (!details || !btn) return;
+        const isHidden = btn.dataset.state === 'hidden';
+        if (isHidden) {
+            details.classList.remove('hidden');
+            btn.dataset.state = 'shown';
+            btn.textContent = '\u25b2 Hide Details';
+        } else {
+            details.classList.add('hidden');
+            btn.dataset.state = 'hidden';
+            btn.textContent = '\u25bc Show Details';
+        }
     }
 
-    function stepClass(role) {
-      const r = (role || '').toLowerCase();
-      if (r === 'user' || r === 'you') return { side: 'user', extra: '', avatar: 'U' };
-      if (r === 'tool') return { side: 'assistant', extra: 'tool', avatar: '🛠' };
-      if (r === 'error') return { side: 'assistant', extra: 'error', avatar: '!' };
-      if (r === 'token_usage') return { side: 'assistant', extra: 'meta', avatar: '·' };
-      return { side: 'assistant', extra: '', avatar: 'AI' };
+    function collapseAgentProcessCard(cardId) {
+        const body = document.getElementById(cardId);
+        if (!body) return;
+        const card = body.closest('.agent-process-card');
+        const header = card ? card.querySelector('.agent-process-header') : null;
+        if (header && !header.classList.contains('collapsed')) {
+            header.classList.add('collapsed');
+            body.classList.add('hidden');
+            const toggleIcon = header.querySelector('.toggle-icon');
+            if (toggleIcon) toggleIcon.textContent = '\u25bc';
+        }
     }
 
-    function renderFinal(container, final) {
-      if (!final) return;
-      const data = final.data;
-      const type = final.type || '';
-      if ((type === 'report' || type === 'partial_report') && data && typeof data === 'object') {
-        const card = document.createElement('div');
-        card.className = 'report-card';
-        let html = '<div class="rc-title">📋 Final Report</div>';
-        if (data.root_cause_summary) html += '<div class="markdown-section"><b>Root cause:</b> ' + md(String(data.root_cause_summary)) + '</div>';
-        if (data.confidence_score !== undefined && data.confidence_score !== null) html += '<div class="markdown-section"><b>Confidence:</b> ' + data.confidence_score + '</div>';
-        if (data.markdown_summary) html += '<div class="markdown-section">' + md(String(data.markdown_summary)) + '</div>';
-        card.innerHTML = html;
-        container.appendChild(card);
-      } else if (type === 'text' && typeof data === 'string') {
-        container.appendChild(bubble('assistant', 'AI', md(data)));
-      } else if (data !== undefined && data !== null) {
-        container.appendChild(bubble('assistant', 'AI', md('```json\n' + JSON.stringify(data, null, 2) + '\n```')));
-      }
+    // User bubble — identical markup to appendUserMsg().
+    function appendUserMsg(text, cw) {
+        const row = document.createElement('div');
+        row.className = 'msg-row user';
+        row.innerHTML = `
+            <div class="avatar-icon">👤</div>
+            <div class="msg-bubble">${escapeHtml(text)}</div>
+        `;
+        cw.appendChild(row);
     }
 
-    function renderCase(sec) {
-      const card = document.createElement('div');
-      card.className = 'case-card';
-
-      const head = document.createElement('div');
-      head.className = 'case-head';
-      const tag = document.createElement('span');
-      tag.className = 'domain-tag ' + (sec.domain === 'bt' ? 'bt' : 'wifi');
-      tag.textContent = sec.domain === 'bt' ? 'BT' : 'Wi-Fi';
-      const h2 = document.createElement('h2');
-      h2.textContent = sec.title;
-      head.appendChild(tag);
-      head.appendChild(h2);
-      card.appendChild(head);
-
-      if (sec.feedback_detail) {
-        const fn = document.createElement('div');
-        fn.className = 'fb-note';
-        fn.innerHTML = '<b>👎 Your original feedback:</b><br>' + md(String(sec.feedback_detail));
-        card.appendChild(fn);
-      }
-
-      if (!sec.reanswered) {
-        const nn = document.createElement('div');
-        nn.className = 'nolog-note';
-        nn.innerHTML = sec.note || '因無 log 無法重新驗證（this case had no attached log, so the agent could not be re-run）。';
-        card.appendChild(nn);
-        return card;
-      }
-
-      const chat = document.createElement('div');
-      chat.className = 'chat';
-      if (sec.user_question) chat.appendChild(bubble('user', 'U', md(String(sec.user_question))));
-      (sec.steps || []).forEach(function (st) {
-        const c = stepClass(st.role);
-        chat.appendChild(bubble(c.side, c.avatar, md(String(st.content || '')), c.extra));
-      });
-      renderFinal(chat, sec.final);
-      card.appendChild(chat);
-      return card;
+    // Assistant free-text bubble — identical markup to appendAssistantText().
+    function appendAssistantText(text, turnId, cw) {
+        const row = document.createElement('div');
+        row.className = 'msg-row assistant';
+        row.innerHTML = `
+            <div class="avatar-icon">🤖</div>
+            <div style="flex:1;min-width:0;">
+                <div class="msg-bubble">${marked.parse(text)}</div>
+                ${turnId ? renderFeedbackWidget(turnId) : ''}
+            </div>
+        `;
+        cw.appendChild(row);
     }
 
-    const root = document.getElementById('root');
-    (DATA.sections || []).forEach(function (sec) { root.appendChild(renderCase(sec)); });
-  </script>
+    // Report card — body copied verbatim from appendReport() (ids made unique
+    // via __uid instead of Date.now() so multiple cases don't collide).
+    function appendReport(data, header = '📊 Analysis Report', eventTime = null, turnId = null, cw) {
+        removeTyping();
+        hideWelcome();
+
+        const actions = (data.recommended_actions || []).map(a => `<li>${escapeHtml(a)}</li>`).join('');
+        const skills  = (data.involved_skills || data.skill_findings ? Object.keys(data.skill_findings || {}) : [])
+                         .map(s => `<span class="skills-badge">${s}</span>`).join(' ');
+        const score   = data.confidence_score || 0;
+        const barWidth = Math.max(0, Math.min(100, score));
+
+        const findings = data.skill_findings
+            ? Object.entries(data.skill_findings).map(([k, v]) =>
+                `<div style="margin-bottom:8px;"><strong style="font-size:0.78rem;color:#0071c5;">${k}</strong><div style="font-size:0.78rem;color:#444;white-space:pre-wrap;">${escapeHtml(String(v).substring(0,500))}${String(v).length>500?'…':''}</div></div>`
+              ).join('')
+            : '';
+
+        const ts = 'r' + (++__uid);
+        const detailsId = 'report-details-' + ts;
+        const toggleId = 'toggle-' + ts;
+
+        const mainHtml = `
+            ${eventTime ? `
+            <div class="report-row">
+                <div class="report-label">Event Time</div>
+                <div style="font-weight:600;color:#d97706;">${escapeHtml(eventTime)}</div>
+            </div>` : ''}
+            ${data.root_cause_summary ? `
+            <div class="report-row">
+                <div class="report-label">Root Cause</div>
+                <div style="font-weight:600;color:#222;">${escapeHtml(data.root_cause_summary)}</div>
+            </div>` : ''}
+            ${score ? `
+            <div class="report-row">
+                <div class="report-label">Confidence</div>
+                <div>
+                    <strong>${score}%</strong>
+                    <span class="confidence-bar" style="width:${barWidth}px;"></span>
+                </div>
+            </div>` : ''}
+            ${actions ? `
+            <div class="report-row">
+                <div class="report-label">Recommendations</div>
+                <ul style="margin:0;padding-left:16px;font-size:0.8rem;">${actions}</ul>
+            </div>` : ''}`;
+
+        const detailsHtml = `
+            ${skills ? `
+            <div class="report-row">
+                <div class="report-label">Skills Used</div>
+                <div>${skills}</div>
+            </div>` : ''}
+            ${findings ? `
+            <div class="report-row" style="flex-direction:column;">
+                <div class="report-label" style="margin-bottom:6px;">Per-Skill Findings</div>
+                ${findings}
+            </div>` : ''}
+            ${data.markdown_summary ? `
+            <div class="markdown-section">${marked.parse(data.markdown_summary)}</div>` : ''}`;
+
+        const html = `
+        <div class="report-card">
+            <div class="report-header">${escapeHtml(header)}</div>
+            <div class="report-body">
+                ${mainHtml}
+            </div>
+            ${detailsHtml ? `
+            <div class="report-toggle" id="${toggleId}" data-state="shown"
+                 onclick="toggleReportDetails('${toggleId}', '${detailsId}')"
+                 style="cursor:pointer;padding:10px 16px;text-align:center;border-top:1px solid #e0e0e0;color:#0071c5;font-weight:600;font-size:0.85rem;user-select:none;"
+            >\u25b2 Hide Details</div>
+            <div id="${detailsId}" class="report-details" style="
+                padding: 16px;
+                border-top: 1px solid #f0f0f0;
+                background: #fafafa;
+            ">
+                <div class="report-body">
+                    ${detailsHtml}
+                </div>
+            </div>` : ''}
+        </div>`;
+
+        const wrapper = document.createElement('div');
+        wrapper.className = 'msg-row assistant';
+        wrapper.style.maxWidth = '95%';
+        wrapper.innerHTML = `<div class="avatar-icon">🤖</div><div style="flex:1;">${html}${turnId ? renderFeedbackWidget(turnId) : ''}</div>`;
+        cw.appendChild(wrapper);
+
+        if (detailsHtml) {
+            setTimeout(() => toggleReportDetails(toggleId, detailsId), 600);
+        }
+    }
+
+    // Step classification — mirrors appendLiveStep() so each captured step
+    // gets the same coloured left-border + label the user saw while streaming.
+    // (No elapsed-time badge: per-step timing isn't captured for a replay.)
+    function _classifyStep(content, role) {
+        let stepClass = 'step-info', label = '', isStepDivider = false, stepNum = null;
+        if (role === 'token_usage') { stepClass = 'step-token'; label = '📊 Tokens'; }
+        else if (role === 'error') { stepClass = 'step-error'; label = '⛔ Error'; }
+        else if (/Reasoning Step (\d+)/.test(content)) {
+            const m = content.match(/Reasoning Step (\d+)/);
+            stepNum = m ? m[1] : ''; isStepDivider = true;
+        }
+        else if (/🧠.*Thinking/i.test(content)) { stepClass = 'step-thinking'; label = '🧠 Thinking'; }
+        else if (/Invoking skill|fetch_filtered_logs/i.test(content)) { stepClass = 'step-skill'; label = '🔬 Skill'; }
+        else if (/Tool call|Tool cap|🧭/i.test(content)) { stepClass = 'step-tool'; label = '🧭 Tools'; }
+        else if (/Conclusion reached|submit_final_report|✅/i.test(content)) { stepClass = 'step-done'; label = '✅ Done'; }
+        else { stepClass = 'step-info'; label = 'ℹ️'; }
+        return { stepClass, label, isStepDivider, stepNum };
+    }
+
+    // "Agent Processing Steps" card — same header/body markup as
+    // ensureAgentCard(), populated with the classified steps, then collapsed
+    // exactly like a finished live turn.
+    function renderStepsCard(steps, cw) {
+        if (!steps || !steps.length) return;
+        const cardId = 'agent-process-' + (++__uid);
+        const html = `
+        <div class="agent-process-card">
+            <div class="agent-process-header" onclick="
+                this.classList.toggle('collapsed');
+                document.getElementById('${cardId}').classList.toggle('hidden');
+                const icon = this.querySelector('.toggle-icon');
+                icon.textContent = this.classList.contains('collapsed') ? '\u25bc' : '\u25b2';
+            ">
+                Agent Processing Steps
+                <span id="${cardId}-summary" style="font-weight:400;font-size:0.75rem;opacity:0.75;margin-left:8px;"></span>
+                <span class="toggle-icon">\u25b2</span>
+            </div>
+            <div class="agent-process-body" id="${cardId}"></div>
+        </div>`;
+        const wrapper = document.createElement('div');
+        wrapper.className = 'msg-row assistant';
+        wrapper.style.maxWidth = '95%';
+        wrapper.innerHTML = `<div class="avatar-icon">🤖</div><div style="flex:1;">${html}</div>`;
+        cw.appendChild(wrapper);
+
+        const bodyEl = document.getElementById(cardId);
+        const skillsUsed = [];
+        steps.forEach((step) => {
+            const content = step.content || '';
+            const role = step.role || 'agent';
+            const c = _classifyStep(content, role);
+            let h;
+            if (c.isStepDivider) {
+                h = `<div class="agent-step-divider"><span class="step-num">${c.stepNum}</span>Reasoning Step ${c.stepNum}</div>`;
+            } else {
+                h = `<div class="agent-step ${c.stepClass}">
+                    <span class="step-label">${c.label}</span>
+                    <div class="agent-step-content">${marked.parse(content)}</div>
+                </div>`;
+            }
+            bodyEl.insertAdjacentHTML('beforeend', h);
+            if (content.includes('Invoking skill')) {
+                const m = content.match(/`([^`]+)`/);
+                if (m) skillsUsed.push(m[1]);
+            }
+        });
+        const summaryEl = document.getElementById(cardId + '-summary');
+        if (summaryEl) {
+            summaryEl.textContent = `${steps.length} steps` +
+                (skillsUsed.length ? ` · Skills: ${skillsUsed.join(', ')}` : '');
+        }
+        collapseAgentProcessCard(cardId);
+    }
+
+    function renderFinal(cw, final) {
+        if (!final) return;
+        const data = final.data;
+        const type = final.type || '';
+        if ((type === 'report' || type === 'partial_report') && data && typeof data === 'object') {
+            appendReport(
+                data,
+                type === 'report' ? '📊 Analysis Report' : '⚠️ Partial Analysis (Step Limit)',
+                data.issue_time || null, null, cw);
+        } else if (type === 'text' && typeof data === 'string') {
+            appendAssistantText(data, null, cw);
+        } else if (data !== undefined && data !== null) {
+            appendAssistantText('```json\n' + JSON.stringify(data, null, 2) + '\n```', null, cw);
+        }
+    }
+
+    function renderCase(sec, root) {
+        const block = document.createElement('div');
+        block.className = 'case-block';
+
+        const head = document.createElement('div');
+        head.className = 'case-head';
+        const tag = document.createElement('span');
+        tag.className = 'domain-tag ' + (sec.domain === 'bt' ? 'bt' : 'wifi');
+        tag.textContent = sec.domain === 'bt' ? 'BT' : 'Wi-Fi';
+        const h2 = document.createElement('h2');
+        h2.textContent = sec.title;
+        head.appendChild(tag);
+        head.appendChild(h2);
+        block.appendChild(head);
+
+        if (sec.feedback_detail) {
+            const fn = document.createElement('div');
+            fn.className = 'fb-note';
+            fn.innerHTML = '<b>👎 原始回饋：</b><br>' + marked.parse(String(sec.feedback_detail));
+            block.appendChild(fn);
+        }
+
+        // Attach to the document BEFORE rendering chat so the copied render
+        // helpers (which look elements up by id) can find them.
+        root.appendChild(block);
+
+        if (!sec.reanswered) {
+            const nn = document.createElement('div');
+            nn.className = 'nolog-note';
+            nn.innerHTML = sec.note || '因無 log 無法重新驗證。';
+            block.appendChild(nn);
+            return;
+        }
+
+        const cw = document.createElement('div');
+        cw.className = 'chat-window-replay';
+        block.appendChild(cw);
+
+        if (sec.user_question) appendUserMsg(sec.user_question, cw);
+        renderStepsCard(sec.steps || [], cw);
+        renderFinal(cw, sec.final);
+    }
+
+    const root = document.getElementById('replay-root');
+    (DATA.sections || []).forEach((sec) => renderCase(sec, root));
+</script>
 </body>
 </html>

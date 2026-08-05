@@ -1,82 +1,67 @@
-<!DOCTYPE html>
-<html lang="en">
-<head>
-  <meta charset="UTF-8">
-  <style>
-    body { font-family: 'Segoe UI', Arial, sans-serif; color: #1f2937; font-size: 14px; }
-    .container { max-width: 720px; margin: 0 auto; }
-    h2 { color: #0071c5; font-size: 18px; margin-bottom: 4px; }
-    .muted { color: #6b7280; font-size: 12px; }
-    .intro { background: #f5fafe; border: 1px solid #cfe3f5; border-radius: 8px; padding: 12px 14px; margin: 14px 0; }
-    table { border-collapse: collapse; width: 100%; margin: 10px 0; }
-    th, td { border: 1px solid #e5e7eb; padding: 6px 10px; text-align: left; font-size: 13px; }
-    th { background: #f3f4f6; }
-    .tag { font-size: 11px; font-weight: 700; padding: 1px 6px; border-radius: 10px; }
-    .tag.wifi { background: #e6f0fa; color: #0071c5; }
-    .tag.bt { background: #eae6fa; color: #5b3ec5; }
-    .ok { color: #176b3a; font-weight: 600; }
-    .no { color: #9a3412; font-weight: 600; }
-    .sec-title { font-weight: 700; margin: 18px 0 6px; }
-    .change { border: 1px solid #e5e7eb; border-radius: 8px; margin: 8px 0; overflow: hidden; }
-    .change .ch-head { background: #f9fafb; padding: 6px 10px; font-size: 12px; font-weight: 700; }
-    .ch-head .added { color: #176b3a; }
-    .ch-head .removed { color: #9a3412; }
-    .ch-head .updated { color: #92600e; }
-    pre { background: #0f172a; color: #e2e8f0; padding: 10px; border-radius: 6px; overflow-x: auto; font-size: 11.5px; margin: 0; }
-    .ba { display: flex; gap: 8px; padding: 8px; }
-    .ba > div { flex: 1; }
-    .ba .lbl { font-size: 11px; color: #6b7280; margin-bottom: 3px; }
-    .foot { color: #9ca3af; font-size: 11px; margin-top: 22px; }
-  </style>
-</head>
-<body>
-  <div class="container">
-    <h2>你的回饋已讓 Agent 重新回答</h2>
-    <div class="muted">{{ person_email }} · {{ generated_at }}</div>
+<html>
+  <body>
+    <div style="font-family:Segoe UI,Arial,sans-serif;color:#1f2937;max-width:920px;">
+      <h2 style="margin:0 0 10px 0;">Avatar Feedback Reverify — {{ date }}</h2>
 
-    <div class="intro">
-      你先前對以下 case 給了 👎（不滿意原本的回答）。我們已用你的回饋更新了 Agent 的
-      playbook，並讓 Agent <b>用更新後的知識重新回答了同一批 case</b>。<br><br>
-      請開啟附件 <b>{{ attachment_name }}</b>，它呈現的內容與 chatbot 頁面完全相同，
-      你可以直接檢視 Agent 這次重新分析的完整過程與結論，確認是否因為你的回饋而變得更好。
-    </div>
-
-    <div class="sec-title">本次重新回答的 case（{{ cases | length }}）</div>
-    <table>
-      <thead><tr><th>Domain</th><th>Case</th><th>重新驗證</th></tr></thead>
-      <tbody>
+      <h3 style="margin:16px 0 8px 0;">Case(s)</h3>
+      <table style="border-collapse:collapse;font-size:13px;min-width:420px;">
+        <tr>
+          <th style="padding:8px 10px;border:1px solid #d9e2ec;background:#f8fafc;text-align:left;">Case</th>
+          <th style="padding:8px 10px;border:1px solid #d9e2ec;background:#f8fafc;text-align:left;">Domain</th>
+        </tr>
         {% for c in cases %}
         <tr>
-          <td><span class="tag {{ 'bt' if c.domain == 'bt' else 'wifi' }}">{{ 'BT' if c.domain == 'bt' else 'Wi-Fi' }}</span></td>
-          <td>{{ c.title }}</td>
-          <td>{% if c.reanswered %}<span class="ok">✔ 已重新回答</span>{% else %}<span class="no">— 因無 log 無法重新驗證</span>{% endif %}</td>
+          <td style="padding:8px 10px;border:1px solid #d9e2ec;vertical-align:top;">{{ c.title }}</td>
+          <td style="padding:8px 10px;border:1px solid #d9e2ec;vertical-align:top;">{{ 'BT' if c.domain == 'bt' else 'Wi-Fi' }}</td>
         </tr>
         {% endfor %}
-      </tbody>
-    </table>
+      </table>
 
-    {% for ns in namespace_changes %}
-      {% if ns.changes %}
-      <div class="sec-title">Playbook 變更（{{ 'BT' if ns.namespace == 'bt' else 'Wi-Fi' }}）— 你的回饋造成的 bullet before/after</div>
-      {% for ch in ns.changes %}
-        <div class="change">
-          <div class="ch-head">
-            <span class="{{ ch.change_type }}">{{ ch.change_type | upper }}</span>
-            · {{ ch.bullet_id }} · {{ ch.playbook_label }}
-          </div>
-          <div class="ba">
-            <div><div class="lbl">Before</div><pre>{{ ch.before_text }}</pre></div>
-            <div><div class="lbl">After</div><pre>{{ ch.after_text }}</pre></div>
-          </div>
-        </div>
-      {% endfor %}
+      <div style="margin-top:12px;border:1px solid #d9e2ec;border-radius:8px;padding:12px;background:#f8fafc;">
+        <p style="margin:0 0 8px 0;">
+          The attached file <strong>{{ attachment_name }}</strong> shows the Agent re-analyzing the same case you gave
+          feedback on, using the <strong>updated playbooks</strong> — the full reasoning process
+          and its conclusion.
+        </p>
+        <p style="margin:0;">
+          Please open the attachment to review and confirm whether your feedback made the analysis
+          of this case more precise.
+        </p>
+      </div>
+
+      <h3 style="margin:20px 0 8px 0;">Playbook Bullet Changes (Before -&gt; After)</h3>
+      {% if changed_bullet_rows %}
+      <table style="border-collapse:collapse;width:100%;font-size:13px;">
+        <tr>
+          <th style="padding:8px 10px;border:1px solid #d9e2ec;background:#f8fafc;text-align:left;">Bullet ID</th>
+          <th style="padding:8px 10px;border:1px solid #d9e2ec;background:#f8fafc;text-align:left;">Change</th>
+          <th style="padding:8px 10px;border:1px solid #d9e2ec;background:#f8fafc;text-align:left;">Playbook</th>
+          <th style="padding:8px 10px;border:1px solid #d9e2ec;background:#f8fafc;text-align:left;">Before</th>
+          <th style="padding:8px 10px;border:1px solid #d9e2ec;background:#f8fafc;text-align:left;">After</th>
+        </tr>
+        {% for row in changed_bullet_rows %}
+        <tr>
+          <td style="padding:8px 10px;border:1px solid #d9e2ec;vertical-align:top;">{{ row.bullet_id }}</td>
+          <td style="padding:8px 10px;border:1px solid #d9e2ec;vertical-align:top;">{{ row.change_type }}</td>
+          <td style="padding:8px 10px;border:1px solid #d9e2ec;vertical-align:top;">{{ row.playbook_label }}</td>
+          <td style="padding:8px 10px;border:1px solid #d9e2ec;vertical-align:top;">
+            <pre style="margin:0;white-space:pre-wrap;font-family:Consolas,monospace;font-size:12px;">{{ row.before_text }}</pre>
+          </td>
+          <td style="padding:8px 10px;border:1px solid #d9e2ec;vertical-align:top;">
+            <pre style="margin:0;white-space:pre-wrap;font-family:Consolas,monospace;font-size:12px;">{{ row.after_text }}</pre>
+          </td>
+        </tr>
+        {% endfor %}
+      </table>
+      {% else %}
+      <div style="border:1px solid #d9e2ec;border-radius:8px;padding:12px;background:#f8fafc;">
+        <strong>No playbook bullet changes were recorded for this run.</strong>
+      </div>
       {% endif %}
-    {% endfor %}
 
-    <div class="foot">
-      此信由 IntelAvatar ACE 夜間流程自動寄出（僅在 review 通過、playbook 更新後）。
-      若有疑問請直接回覆。
+      <p style="margin-top:18px;color:#64748b;font-size:12px;">
+        This is an automatically generated email from ACE eval pipeline.
+      </p>
     </div>
-  </div>
-</body>
+  </body>
 </html>

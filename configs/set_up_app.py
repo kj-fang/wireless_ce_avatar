@@ -22,7 +22,7 @@ from utils.bt_skills_yaml_utils import (
 )
 from services.llm_service import LLM_helper
 from services.chatbot.agent.system import WifiLogAgentSystem, sync_to_local, load_skills_from_yaml
-from services.nw_analysis_service import WifiLogAgentSystem as NwAnalysisAgentSystem
+from services.chatbot.agent.network_experience import NwAnalysisAgentSystem
 from services.chatbot.agent.bluetooth import BtLogAgentSystem
 
 from configs.global_configs import app_config

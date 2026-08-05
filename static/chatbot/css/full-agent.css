@@ -71,7 +71,7 @@
         .it-input:focus {
             outline: none;
             border-color: var(--accent);
-            box-shadow: 0 0 0 2px rgba(0,113,197,0.18);
+            box-shadow: 0 0 0 2px rgba(var(--accent-rgb),0.18);
         }
         .it-input.it-invalid {
             border-color: #e53935;
@@ -106,7 +106,7 @@
         }
         .sidebar-multi-toggle input[type="checkbox"] {
             margin-top: 1px;
-            accent-color: #2563eb;
+            accent-color: var(--accent);
             cursor: pointer;
             flex-shrink: 0;
         }
@@ -174,7 +174,7 @@
         .itw-input:focus {
             outline: none;
             border-color: var(--accent);
-            box-shadow: 0 0 0 2px rgba(0,113,197,0.18);
+            box-shadow: 0 0 0 2px rgba(var(--accent-rgb),0.18);
         }
         .itw-unit { font-size: 0.7rem; color: #6b7280; }
         .itw-hint {
@@ -364,8 +364,8 @@
 
         /* ── Tool / Skill call ── */
         .agent-step.step-tool {
-            background: #eff6ff;
-            border-left-color: #3b82f6;
+            background: var(--accent-soft);
+            border-left-color: var(--accent-light);
         }
         .agent-step.step-tool .step-label {
             color: #1d4ed8;
@@ -724,7 +724,7 @@
             background: #fff;
             min-height: 38px;
         }
-        .chip-box.focused { border-color: var(--accent); box-shadow: 0 0 0 2px rgba(0,113,197,0.15); }
+        .chip-box.focused { border-color: var(--accent); box-shadow: 0 0 0 2px rgba(var(--accent-rgb),0.15); }
         .chip {
             display: inline-flex; align-items: center; gap: 6px;
             padding: 3px 4px 3px 8px;
@@ -1207,7 +1207,7 @@
         .fbd-body select:focus {
             outline: none;
             border-color: var(--accent);
-            box-shadow: 0 0 0 2px rgba(0,113,197,0.12);
+            box-shadow: 0 0 0 2px rgba(var(--accent-rgb),0.12);
         }
 
         /* Shared dashed-outline "add" button (used by the skill editor's
@@ -1339,7 +1339,7 @@
             width: 100%;
             justify-content: center;
         }
-        .eit-add-btn:hover { background: #eff6ff; }
+        .eit-add-btn:hover { background: var(--accent-soft); }
 
         /* ── Pick checkbox + "most likely" highlight (capture popup) ──
            Inside the popup, each row carries a checkbox. Only ticked
@@ -1351,7 +1351,7 @@
             height: 16px;
             margin-right: 6px;
             cursor: pointer;
-            accent-color: #2563eb;
+            accent-color: var(--accent);
             flex-shrink: 0;
         }
         .eit-row.eit-row-picked {
@@ -1393,7 +1393,7 @@
         }
         .tc-multi-row input[type="checkbox"] {
             margin-top: 2px;
-            accent-color: #2563eb;
+            accent-color: var(--accent);
             cursor: pointer;
             flex-shrink: 0;
         }
@@ -1429,7 +1429,7 @@
         /* ── Per-incident report wrapper (multi-time analysis) ────── */
         .incident-tag {
             display: inline-block;
-            background: #eff6ff;
+            background: var(--accent-soft);
             border: 1px solid #93c5fd;
             color: #1d4ed8;
             font-size: 0.72rem;
@@ -1551,3 +1551,69 @@
         0%, 100% { opacity: 1; transform: scale(1); }
         50% { opacity: 0.35; transform: scale(0.7); }
     }
+
+/* Bluetooth-only deltas.  Keeping these domain-scoped in the full-agent
+   bundle avoids a second tiny request without leaking BT styling to Wi-Fi. */
+body[data-domain="bt"] .itw-step,
+body[data-domain="bt"] .it-quick-btn { background: #f2f5ff; }
+body[data-domain="bt"] .cm-btn-ai { background: #e8edff; border-color: #bac8ff; }
+body[data-domain="bt"] .chip { border-color: #c7d2fe; }
+body[data-domain="bt"] .feedback-btn:hover:not(:disabled),
+body[data-domain="bt"] .fbd-add-row:hover { background: #f5f7ff; }
+body[data-domain="bt"] .skill-edit-row .field-hint code,
+body[data-domain="bt"] .fbd-field-hint code { background: #eef1ff; }
+body[data-domain="bt"] .hist-refresh:hover { color: #1d4ed8; }
+body[data-domain="bt"] .history-item:hover,
+body[data-domain="bt"] .history-item.active { background: #eaf0ff; }
+body[data-domain="bt"] .history-item.running { background: #eff6ff; }
+body[data-domain="bt"] .toast { border-left-color: #60a5fa; }
+body[data-domain="bt"] .toast .toast-btn { border-color: #60a5fa; color: #60a5fa; }
+body[data-domain="bt"] .fbd-draft-hint { color: #1a7f37; }
+body[data-domain="bt"] .fbd-body input.fbd-approach-input { margin-top: 6px; }
+
+body[data-domain="bt"] .fbd-issue-row {
+    position: relative;
+    background: #fff;
+    border: 1px solid #e5e7eb;
+    border-radius: 6px;
+    padding: 10px 36px 10px 10px;
+    margin: 6px 0;
+}
+
+body[data-domain="bt"] .fbd-row-grid {
+    display: grid;
+    grid-template-columns: 1fr 1fr;
+    gap: 8px;
+    margin-bottom: 6px;
+}
+
+body[data-domain="bt"] .fbd-row-extra { margin-bottom: 6px; }
+body[data-domain="bt"] .fbd-issue-row .fbd-note { margin-top: 4px; }
+body[data-domain="bt"] .fbd-issue-row select option:disabled {
+    color: #b0b6c0;
+    font-style: italic;
+}
+
+body[data-domain="bt"] .fbd-remove {
+    position: absolute;
+    top: 8px;
+    right: 8px;
+    width: 22px;
+    height: 22px;
+    border-radius: 50%;
+    background: #fff;
+    border: 1px solid #e5e7eb;
+    color: #cf222e;
+    cursor: pointer;
+    font-size: 0.9rem;
+    line-height: 1;
+    padding: 0;
+    display: flex;
+    align-items: center;
+    justify-content: center;
+}
+
+body[data-domain="bt"] .fbd-remove:hover {
+    background: #fdecec;
+    border-color: #cf222e;
+}

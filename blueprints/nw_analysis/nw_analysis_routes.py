@@ -1,5 +1,6 @@
 from flask import render_template, request, session, jsonify, Response, copy_current_request_context
 from services.chatbot.issue_context import extract_disconnect_time as _extract_disconnect_time
+from services.chatbot.shared_routes import leave_chatbot as _leave_chatbot
 from services.chatbot.factory import (
     ChatbotBlueprintConfig,
     create_chatbot_blueprint,
@@ -18,13 +19,14 @@ from tkinter import filedialog
 from configs.chatbot_ui import WIFI_UI
 from configs.global_configs import app_config
 from models.models import CaseContext
-from services.nw_analysis_service import WifiLogAgentSystem, load_skills_from_data_dir, get_builtin_skills, build_skill_file_map, load_skills_from_yaml
+from services.chatbot.agent.network_experience import NwAnalysisAgentSystem
+from services.chatbot.agent.system import load_skills_from_yaml
 from services.sleepstudy_analyzer import analyze_sleepstudy_stream
 from utils.etl_utils import extract_time_from_description
 from utils.event_log_utils import find_event_log_for_log
 
 
-# Server-side store: session_id -> WifiLogAgentSystem instance
+# Server-side store: session_id -> NwAnalysisAgentSystem instance
 _chatbot_instances: dict = {}
 
 
@@ -169,9 +171,9 @@ def _compose_concise_description() -> str:
     return "Perform full multi-skill log analysis"
 
 
-def _get_or_create_agent() -> WifiLogAgentSystem:
+def _get_or_create_agent() -> NwAnalysisAgentSystem:
     """
-    Return a per-session WifiLogAgentSystem.
+    Return a per-session NwAnalysisAgentSystem.
     Borrows client/model from app_config.nw_analysis_agent which is
     initialised at app startup (set_up_app.py -> set_up()).
     """
@@ -190,13 +192,13 @@ def _get_or_create_agent() -> WifiLogAgentSystem:
                     "Log Chatbot Agent is not available. "
                     "The app may not have an API key configured."
                 )
-            base = WifiLogAgentSystem(
+            base = NwAnalysisAgentSystem(
                 client=llm_helper.client,
                 model=getattr(llm_helper, "model", "gpt-4.1"),
                 skills=getattr(llm_helper, "skills", None),
             )
         # Create a fresh per-session instance sharing the same client + skills
-        agent = WifiLogAgentSystem(
+        agent = NwAnalysisAgentSystem(
             client=base.client,
             model=base.model,
             skills=base.skills,   # reuse pre-loaded skills, no disk re-read
@@ -574,53 +576,6 @@ def prepare():
 
 
 # ------------------------------------------------------------------
-# API: reload skills from a directory and apply to current agent
-# ------------------------------------------------------------------
-def reload_skills():
-    """
-    Reload skills from the given data_dir (must contain prompt/ and filter/
-    sub-folders) and apply them to the current session agent.
-    If data_dir is omitted or invalid the builtin fallback skills are used.
-    """
-    data = request.get_json(silent=True) or {}
-    data_dir = data.get("data_dir", "").strip()
-
-    try:
-        from pathlib import Path
-        warning = None
-        if data_dir and Path(data_dir).exists():
-            skill_map = build_skill_file_map(data_dir)
-            if skill_map is None:
-                skills = get_builtin_skills()
-                warning = f"No prompt/filter files found in '{data_dir}'. Using built-in skills."
-            else:
-                skills = load_skills_from_data_dir(data_dir)
-        elif data_dir:
-            skills = get_builtin_skills()
-            warning = f"Directory '{data_dir}' not found. Using built-in skills."
-        else:
-            skills = get_builtin_skills()
-            warning = f"No directory specified. Using built-in skills."
-
-        agent = _get_or_create_agent()
-        agent.skills = skills
-        # Also update the app-level agent so future sessions share the new skills
-        if app_config.nw_analysis_agent:
-            app_config.nw_analysis_agent.skills = skills
-        if app_config.llm_helper:
-            app_config.llm_helper.skills = skills
-
-        return jsonify({
-            "success": True,
-            "message": f"{len(skills)} skills loaded from {data_dir}",
-            "warning": warning,
-            "skills": agent.get_skill_descriptions(),
-        })
-    except Exception as e:
-        return jsonify({"success": False, "error": str(e)}), 500
-
-
-# ------------------------------------------------------------------
 # API: browse for a YAML file (native file dialog)
 # ------------------------------------------------------------------
 
@@ -865,6 +820,10 @@ def _parse_issue_time(time_str: str):
             except ValueError:
                 continue
     return None
+
+def back_to_avatar():
+    return _leave_chatbot(_chatbot_instances)
+
 
 # The module above is now a domain adapter: its functions retain BT/Wi-Fi/NW
 # policy, while the factory owns the public route table and shared use cases.

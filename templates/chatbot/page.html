@@ -1,20 +1,134 @@
-{% extends 'chatbot/base.html' %}
+{# Single page composition root for every chatbot profile.
 
-{# One page composition root for every chatbot profile. The profile selects
-   cohesive view fragments; capability flags select reusable features. #}
+   All three chatbots (BT, Wi-Fi, NW) are the same product with different log
+   domains, so the shell — head, top bar, layout, chat window, input row, core
+   scripts — lives here exactly once. The profile selects cohesive view
+   fragments via `ui.template_parts`; capability flags select reusable features.
 
-{% block sidebar %}
-{% if ui.template_parts.sidebar %}
-{% include ui.template_parts.sidebar %}
+   The `ui` dict comes from configs.chatbot_ui and carries the API prefix,
+   labels, accent colours and feature flags. #}
+<!DOCTYPE html>
+<html lang="en">
+<head>
+    <meta charset="UTF-8">
+    <title>{{ ui.title }}</title>
+    <link href="https://fonts.googleapis.com/css2?family=Inter:wght@400;500;600;700&display=swap" rel="stylesheet">
+    <link href="https://stackpath.bootstrapcdn.com/bootstrap/4.5.2/css/bootstrap.min.css" rel="stylesheet">
+    <link href="/static/chatbot/css/base.css" rel="stylesheet">
+    <link href="/static/chatbot/css/components.css" rel="stylesheet">
+    {% for stylesheet in ui.stylesheets %}
+    <link href="{{ stylesheet }}" rel="stylesheet">
+    {% endfor %}
+    <script src="https://cdn.jsdelivr.net/npm/marked/marked.min.js"></script>
+    <style>
+        :root {
+            --accent: {{ ui.accent }};
+            --accent-dark: {{ ui.accent_dark }};
+            --accent-light: {{ ui.accent_light }};
+            --accent-soft: {{ ui.accent_soft }};
+            --accent-border: {{ ui.accent_border }};
+            --accent-hover: {{ ui.accent_hover }};
+            --accent-rgb: {{ ui.accent_rgb }};
+        }
+    </style>
+</head>
+<body data-domain="{{ ui.domain }}"
+      class="chatbot-page{% if ui.features.sleepstudy %} has-sleepstudy{% endif %}">
+
+<div class="top-bar">
+    {% if ui.features.sidebar_toggle %}
+    <button type="button" class="sidebar-toggle" onclick="toggleSidebar()"
+            title="Show / hide sidebar" aria-label="Toggle sidebar">☰</button>
+    {% endif %}
+    <span style="font-size:1.4rem;">📡</span>
+    <h1>{{ ui.title }}</h1>
+    <span class="badge-model">Avatar · Multi-Skill Agent</span>
+    <a href="{{ ui.back_url }}" class="ml-auto"
+       style="color:rgba(255,255,255,0.75);font-size:0.8rem;text-decoration:none;">← Back to Avatar</a>
+</div>
+
+<div class="main-layout">
+
+    <div class="sidebar">
+        {% if ui.template_parts.sidebar %}
+        {% include ui.template_parts.sidebar %}
+        {% endif %}
+    </div>
+
+    <div class="chat-area">
+        <div id="chat-window">
+            <div class="welcome-msg" id="welcome-msg">
+                <div class="big-icon">🤖</div>
+                <strong>{{ ui.title }}</strong><br>
+                Load a log file on the left, then ask me anything about it.<br>
+                I will apply the relevant skill filter and analyse the logs for you.
+            </div>
+        </div>
+
+        {% if ui.features.issue_time %}
+        <div id="no-log-hint" style="display:none; padding: 8px 20px; background:#ede7f6; border-top:1px solid #b39ddb; color:#311b92; font-size:0.8rem;">
+            <strong>📁 Please load a log file first.</strong>
+            Enter the log path on the left sidebar and click <strong>Load</strong> before sending the first question.
+        </div>
+        <div id="no-desc-hint" style="display:none; padding: 8px 20px; background:#fce8e8; border-top:1px solid #f5c0c0; color:#7a0000; font-size:0.8rem;">
+            <strong>✏️ Please describe the issue.</strong>
+            Type a brief problem description (e.g. <em>"6G Weak Signal disconnected"</em>) before sending.
+        </div>
+        <div id="no-time-hint" style="display:none; padding: 8px 20px; background:#fff3e0; border-top:1px solid #ffcc80; color:#7a4700; font-size:0.8rem;">
+            <strong>⏰ Issue Time is missing or incomplete.</strong>
+            For best results, fill in every field on the left (Month / Day / Year / Hour / Minute / Second). You can still send without a time — you'll be asked to confirm.
+        </div>
+        <div id="time-hint" style="display:none; padding: 8px 20px; background:#fff8e1; border-top:1px solid #ffe082; color:#8a6d00; font-size:0.8rem;">
+            <strong>⚠ Invalid time format.</strong>
+            Please use one of:
+            <code>MM/DD/YYYY-HH:MM:SS</code>,
+            <code>MM/DD/YYYY HH:MM:SS</code>,
+            <code>YYYY-MM-DD HH:MM:SS</code>, or
+            <code>YYYY/MM/DD HH:MM:SS</code>
+            (optional <code>.mmm</code> milliseconds).
+        </div>
+        <div id="prefill-hint" style="display:none; padding: 8px 20px; background:#e8f4fd; border-top:1px solid #b6dcf6; color:#1e3a8a; font-size:0.8rem;">
+            ✏️ Auto-extracted issue context is pre-filled below. Review or edit the time/text, then click <strong>Send ↑</strong> to start the analysis.
+        </div>
+        {% endif %}
+
+        <div class="input-row">
+            <textarea id="user-input" rows="1" placeholder="{{ ui.input_placeholder }}"
+                      onkeydown="handleEnter(event)" oninput="onChatInput(this)"></textarea>
+            <button id="send-btn" onclick="onSendBtnClick()">Send ↑</button>
+        </div>
+    </div>
+
+</div>
+
+<script>
+    // Domain configuration consumed by the static chatbot scripts.
+    window.CHATBOT = {{ ui | tojson }};
+</script>
+<script src="/static/chatbot/js/core.js"></script>
+{% if ui.runtime_strategy_script %}
+<script src="/static/chatbot/js/strategies/chat-runtime-base.js"></script>
+<script src="{{ ui.runtime_strategy_script }}"></script>
 {% endif %}
-{% endblock %}
-
-{% block scripts %}
+{% if ui.features.issue_time %}
+{% if ui.issue_time.strategy_script %}
+<script src="/static/chatbot/js/strategies/issue-time-base.js"></script>
+<script src="{{ ui.issue_time.strategy_script }}"></script>
+{% endif %}
+<script src="/static/chatbot/js/features/issue-time-controller.js"></script>
+{% endif %}
 {% if ui.template_parts.runtime %}
 {% include ui.template_parts.runtime %}
 {% endif %}
 <script src="{{ ui.profile_script }}"></script>
 {% if ui.features.feedback %}{% include 'chatbot/features/_feedback.html' %}{% endif %}
 {% if ui.features.skill_editor %}{% include 'chatbot/features/_skill_editor.html' %}{% endif %}
-{% if ui.features.history %}{% include 'chatbot/features/_history.html' %}{% endif %}
-{% endblock %}
+{% if ui.features.history %}
+{# Conversation history (Gemini / Claude style left-sidebar panel): list / load
+   / delete saved conversations. Every turn is persisted server-side by
+   history_service under its own domain folder. #}
+<script src="/static/chatbot/js/features/history.js"></script>
+{% endif %}
+
+</body>
+</html>

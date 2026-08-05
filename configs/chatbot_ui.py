@@ -1,6 +1,6 @@
 """UI configuration for the BT and Wi-Fi log chatbots.
 
-Both agents render the same shell (templates/chatbot/base.html); everything that
+Both agents render the same shell (templates/chatbot/page.html); everything that
 legitimately differs between them is data, not duplicated markup. Keeping it here
 means a route only has to say which domain it is rendering.
 """
@@ -74,7 +74,6 @@ BT_UI = {
     "history_reset_before_set_log": False,
     "stylesheets": [
         "/static/chatbot/css/full-agent.css",
-        "/static/chatbot/css/bt-overrides.css",
     ],
     "runtime_strategy_script": "/static/chatbot/js/strategies/bt-chat-runtime.js",
     "profile_script": "/static/chatbot/js/profiles/bt.js",
@@ -112,7 +111,9 @@ LOG_CHATBOT_UI = {
     "domain": "wifi",
     "api": "/log_chatbot",
     "title": "Wi-Fi Analysis Agent",
-    "back_url": "/",
+    # Route through the teardown endpoint, not straight to "/": reloading the
+    # chatbot after leaving must not show the previous run's log, chat or context.
+    "back_url": "/log_chatbot/back_to_avatar",
     "input_placeholder": "Describe the issue and ask a question about the log.",
     "accent": "#0071c5",
     "accent_dark": "#005a9e",
@@ -169,7 +170,7 @@ WIFI_UI = {
     "domain": "wifi",
     "api": "/nw_analysis",
     "title": "Wi-Fi Log Chatbot",
-    "back_url": "/",
+    "back_url": "/nw_analysis/back_to_avatar",
     "input_placeholder": "Ask a question about the log…",
     "accent": "#0071c5",
     "accent_dark": "#005a9e",
@@ -189,8 +190,10 @@ WIFI_UI = {
     "feedback_conclusions": WIFI_FEEDBACK_CONCLUSIONS,
     "allow_modified_yaml_upload": False,
     "history_reset_before_set_log": True,
-    "stylesheets": [],
-    "runtime_strategy_script": "",
+    # Shares the full agent's chat-step / log-input styling so the NW page
+    # renders processing steps exactly like the Wi-Fi and BT agents.
+    "stylesheets": ["/static/chatbot/css/full-agent.css"],
+    "runtime_strategy_script": "/static/chatbot/js/strategies/nw-chat-runtime.js",
     "profile_script": "/static/chatbot/js/profiles/nw.js",
     "template_parts": {
         "sidebar": "chatbot/profiles/nw/_sidebar.html",

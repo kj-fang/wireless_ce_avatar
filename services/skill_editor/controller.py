@@ -3,6 +3,7 @@
 from __future__ import annotations
 
 import os
+import threading
 import traceback
 from dataclasses import dataclass
 from functools import partial
@@ -330,6 +331,86 @@ def upload_modified_yaml(context: SkillEditorContext):
     except Exception as e:
         traceback.print_exc()
         return jsonify({"success": False, "error": str(e)}), 500
+
+def build_profile_yaml_helpers(
+    *,
+    user_local_dir: Callable[[], Any],
+    today_yaml_filename: Callable[[], str],
+    user_yaml_prefix: str,
+    latest_cloud_baseline: Callable[..., Any],
+    latest_user_yaml: Callable[..., Any],
+    write_yaml_file: Callable[..., Any],
+    load_skills_from_yaml: Callable[[str], Any],
+    get_agent: Callable[..., Any],
+    agent_config_attr: str,
+) -> dict[str, Callable[..., Any]]:
+    """Build the four YAML helpers a chatbot profile needs.
+
+    The BT and Wi-Fi blueprints carried identical copies of these; the only
+    real differences are the dated filename prefix each profile writes into
+    ``user/`` and which ``app_config`` attribute holds its app-level agent.
+    """
+    from configs.global_configs import app_config
+    from services.skill_editor.yaml_service import gather_disabled_comments
+
+    write_lock = threading.Lock()
+
+    def gather_disabled(active_data: dict) -> dict:
+        return gather_disabled_comments(
+            active_data,
+            latest_cloud_baseline=latest_cloud_baseline,
+            latest_user_yaml=latest_user_yaml,
+        )
+
+    def persist_user_yaml_snapshot(data: dict) -> object:
+        """Persist the current user-edited YAML under today's dated filename.
+
+        The file name is date-based, so repeated saves on the same day target
+        the same path. Writes are serialised in-process so overlapping
+        save/delete requests do not race on the same target and temp file.
+        """
+        with write_lock:
+            target_dir = user_local_dir()
+            target = target_dir / today_yaml_filename()
+            write_yaml_file(target, data, gather_disabled(data))
+
+            # Keep only today's active revision in the user/ dir so lookup
+            # stays unambiguous.
+            for entry in target_dir.iterdir():
+                if entry.is_file() and entry.name != target.name \
+                        and entry.name.startswith(user_yaml_prefix) and entry.suffix == ".yaml":
+                    try:
+                        entry.unlink()
+                    except OSError:
+                        pass
+
+            return target
+
+    def refresh_loaded_skills(yaml_path: str) -> dict:
+        """Re-load skills from `yaml_path` into the live agent and llm_helper."""
+        skills = load_skills_from_yaml(yaml_path)
+        agent = get_agent()
+        # Keep history; clear rule/filter caches so the reloaded skills apply.
+        agent.apply_updated_skills(skills)
+        app_agent = getattr(app_config, agent_config_attr, None)
+        if app_agent:
+            app_agent.skills = skills
+        if app_config.llm_helper:
+            app_config.llm_helper.skills = skills
+        return skills
+
+    def activate_yaml(path) -> dict:
+        """Re-load skills from `path` and return the chatbot's descriptions."""
+        refresh_loaded_skills(str(path))
+        return get_agent().get_skill_descriptions()
+
+    return {
+        "gather_disabled_comments": gather_disabled,
+        "persist_user_yaml_snapshot": persist_user_yaml_snapshot,
+        "refresh_loaded_skills": refresh_loaded_skills,
+        "activate_yaml": activate_yaml,
+    }
+
 
 def build_skill_editor_handlers(
     context: SkillEditorContext,

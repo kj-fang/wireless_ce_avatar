@@ -7,9 +7,9 @@ from typing import Any, Callable, Collection, Mapping
 
 from flask import Blueprint, jsonify
 
-from services.chatbot.use_cases import ChatbotUseCases, UseCaseResult
-from services.chatbot.adapters.local_dialog import (
-    choose_skills_directory,
+from services.chatbot.session import (
+    ChatbotUseCases,
+    UseCaseResult,
     choose_skills_yaml,
 )
 
@@ -35,8 +35,6 @@ ROUTE_SPECS: tuple[RouteSpec, ...] = (
     RouteSpec("/chat/stop", "chat_stop", ("POST",)),
     RouteSpec("/reset", "reset", ("POST",)),
     RouteSpec("/prepare", "prepare", ("POST",)),
-    RouteSpec("/browse_dir", "browse_dir", ("GET",)),
-    RouteSpec("/reload_skills", "reload_skills", ("POST",)),
     RouteSpec("/browse_yaml", "browse_yaml", ("GET",)),
     RouteSpec("/load_skills_yaml", "load_skills_yaml_route", ("POST",)),
     RouteSpec("/reload_from_shared", "reload_from_shared", ("POST",)),
@@ -56,12 +54,9 @@ ROUTE_SPECS: tuple[RouteSpec, ...] = (
     RouteSpec("/history/rename", "history_rename", ("POST",), "history"),
     RouteSpec("/history/pin", "history_pin", ("POST",), "history"),
     RouteSpec("/history/load", "history_load", ("POST",), "history"),
-    RouteSpec(
-        "/back_to_avatar",
-        "back_to_avatar",
-        ("GET",),
-        "history",
-    ),
+    # Session teardown, not a history feature: every profile needs it so a
+    # page reloaded after "Back to Avatar" starts clean.
+    RouteSpec("/back_to_avatar", "back_to_avatar", ("GET",)),
     RouteSpec(
         "/skills_yaml_status",
         "skills_yaml_status",
@@ -162,7 +157,6 @@ def handler_map(
     shared_endpoints = {
         "reset",
         "get_skills",
-        "browse_dir",
         "browse_yaml",
     }
     required = {
@@ -199,12 +193,6 @@ def create_chatbot_blueprint(config: ChatbotBlueprintConfig) -> Blueprint:
     def get_skills():
         return _json_result(use_cases.get_skills())
 
-    def browse_dir():
-        return jsonify({
-            "success": True,
-            "path": choose_skills_directory(),
-        })
-
     def browse_yaml():
         return jsonify({
             "success": True,
@@ -214,7 +202,6 @@ def create_chatbot_blueprint(config: ChatbotBlueprintConfig) -> Blueprint:
     shared_handlers: dict[str, ViewHandler] = {
         "reset": reset,
         "get_skills": get_skills,
-        "browse_dir": browse_dir,
         "browse_yaml": browse_yaml,
     }
 

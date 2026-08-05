@@ -1,6 +1,7 @@
 from flask import render_template, request, session, jsonify, Response, copy_current_request_context, redirect, url_for
 from services.skill_editor.controller import (
     SkillEditorContext,
+    build_profile_yaml_helpers,
     build_skill_editor_handlers,
 )
 from services.skill_editor.yaml_service import (
@@ -13,7 +14,7 @@ from services.chatbot.job_runtime import (
     job_sse as _job_sse,
     terminal_sse as _terminal_sse,
 )
-from services.chatbot.web_session import (
+from services.chatbot.session import (
     ensure_feedback_conversation_id as _shared_feedback_conversation_id,
     resume_agent_for as _shared_resume_agent_for,
 )
@@ -21,12 +22,18 @@ from services.chatbot.issue_context import (
     compose_concise_description as _compose_concise_description,
     extract_disconnect_time as _extract_disconnect_time,
     extract_issue_context as _extract_issue_context,
+    organized_issue_context as _organized_issue_context,
     resolved_issue_time_for as _resolved_issue_time_for,
 )
 from services.chatbot.factory import (
     ChatbotBlueprintConfig,
     create_chatbot_blueprint,
     handler_map,
+)
+from services.chatbot.shared_routes import (
+    SharedRouteContext,
+    build_shared_handlers,
+    llm_client_model as _llm_client_model,
 )
 import json
 import re
@@ -35,13 +42,11 @@ import uuid
 import os
 import threading
 from datetime import datetime
-import tkinter as tk
-from tkinter import filedialog
 
 from configs.chatbot_ui import BT_UI
 from configs.global_configs import app_config
 from models.models import CaseContext
-from services.chatbot.agent.bluetooth import BtLogAgentSystem, WifiLogAgentSystem, load_skills_from_data_dir, get_builtin_skills, build_skill_file_map, load_skills_from_yaml
+from services.chatbot.agent.bluetooth import BtLogAgentSystem, WifiLogAgentSystem, load_skills_from_yaml
 from utils.etl_utils import extract_time_from_description
 from utils.issue_time_utils import (
     parse_issue_time_string,
@@ -49,7 +54,7 @@ from utils.issue_time_utils import (
     resolve_issue_time,
     format_issue_time,
 )
-from utils.issue_time_ai import build_issue_time_suggestions, organize_issue_context, realign_times_to_log, find_nearest_event_error
+from utils.issue_time_ai import build_issue_time_suggestions, find_nearest_event_error
 from utils.event_log_utils import find_event_log_for_log
 from services import feedback_service
 from services import history_service
@@ -219,34 +224,6 @@ def index():
         suggested_log=suggested_log,
         issue_description=issue_desc,
     )
-
-
-# ------------------------------------------------------------------
-# API: open native file browser and return selected path
-# ------------------------------------------------------------------
-def browse():
-    """Open a native Windows file dialog and return the selected .hci.txt path."""
-    result = {"path": ""}
-
-    def _open_dialog():
-        root = tk.Tk()
-        root.withdraw()
-        root.wm_attributes("-topmost", True)
-        path = filedialog.askopenfilename(
-            title="Select log file",
-            filetypes=[("hci.txt files", "*.hci.txt"), ("All files", "*.*")],
-        )
-        root.destroy()
-        result["path"] = path or ""
-
-    # tkinter must run on the main thread on Windows;
-    # since Flask dev server is single-threaded this is fine,
-    # but we guard with a threading.Event to make it safe.
-    t = threading.Thread(target=_open_dialog)
-    t.start()
-    t.join(timeout=60)
-
-    return jsonify({"success": True, "path": result["path"]})
 
 
 # ------------------------------------------------------------------
@@ -698,152 +675,10 @@ def chat():
 # ------------------------------------------------------------------
 # API: reset conversation
 # ------------------------------------------------------------------
-# ------------------------------------------------------------------
-# API: stop the in-flight tools-mode analysis
-#
-# Signals the running background job's agent (via its cancel_event) to bail
-# out at the next reasoning-step boundary. The job then finishes normally and
-# its SSE stream emits a terminal "done" with a "stopped" notice. Idempotent:
-# a no-op when nothing is running.
-#
-# The target conversation is resolved from the caller's OWN session (the
-# frontend only learns conversation_id on the terminal 'done' event, so a Stop
-# clicked mid-stream usually sends an empty id). This scopes cancellation to
-# this session's job only — never other tabs'/users' running analyses.
-# ------------------------------------------------------------------
-def chat_stop():
-    try:
-        data = request.get_json(silent=True) or {}
-        conversation_id = (data.get("conversation_id") or "").strip()
-        if not conversation_id:
-            conversation_id = (session.get("feedback_conversation_id") or "").strip()
-        stopped = chat_jobs.request_cancel(conversation_id) if conversation_id else False
-        return jsonify({"success": True, "stopped": bool(stopped)})
-    except Exception as e:
-        return jsonify({"success": False, "error": str(e)}), 500
-
-
-# ------------------------------------------------------------------
-# API: local conversation history (Gemini / Claude style sidebar)
-#
-# Every chat turn is persisted to <avatarfiles_dir>/bt_history/bt-<id>.json
-# by history_service (domain="bt") — a DIFFERENT folder from the WiFi
-# chatbot's <avatarfiles_dir>/history/<id>.json, and additionally prefixed
-# so the two are still trivially distinguishable by filename alone even if
-# they ever ended up sharing a folder. These endpoints let the sidebar
-# list / load / delete BT conversations. All are read/written locally only.
-# ------------------------------------------------------------------
-def history_list():
-    try:
-        conversations = history_service.list_conversations(domain="bt")
-        # Merge in-memory running jobs so the sidebar can show a ⏳ marker:
-        #   * a persisted conversation that's mid-analysis  -> running: True
-        #   * a brand-new first analysis not yet on disk     -> synthetic entry
-        # Scoped to domain="bt" so a WiFi analysis running at the same time
-        # never leaks into this list.
-        try:
-            running = {j["conversation_id"]: j for j in chat_jobs.active_summaries(domain="bt")}
-            if running:
-                seen = set()
-                for c in conversations:
-                    cid = c.get("conversation_id")
-                    seen.add(cid)
-                    if cid in running:
-                        c["running"] = True
-                for cid, j in running.items():
-                    if cid not in seen:
-                        conversations.append({
-                            "conversation_id": cid,
-                            "title": j.get("title") or "New conversation",
-                            "created_at": "",
-                            # Stamp "now" so a brand-new running conversation
-                            # sorts to the top of the running group.
-                            "updated_at": datetime.now().astimezone().isoformat(timespec="seconds"),
-                            "turn_count": j.get("step_count", 0),
-                            "log_path": "",
-                            "pinned": False,
-                            "running": True,
-                        })
-            # Final ordering (highest priority last in this stable-sort chain):
-            #   1. Pinned conversations at the very top.
-            #   2. Still-running conversations next (below pins, above the rest).
-            #   3. Everyone else — all newest-first within each group.
-            conversations.sort(key=lambda c: c.get("updated_at") or "", reverse=True)
-            conversations.sort(key=lambda c: bool(c.get("running")), reverse=True)
-            conversations.sort(key=lambda c: bool(c.get("pinned")), reverse=True)
-        except Exception:
-            pass
-        return jsonify({"success": True, "conversations": conversations})
-    except Exception as e:
-        return jsonify({"success": False, "error": str(e)}), 500
-
-
-def history_stream():
-    """
-    Re-attach to a conversation's live analysis (Server-Sent Events).
-
-    Replays the steps buffered so far, then follows new steps until the job
-    reaches done/error — so switching back to a running conversation shows its
-    progress catching up in real time. If there's no active/recent job for the
-    conversation, emits a single 'idle' event and closes (the client then just
-    renders the saved turns).
-    """
-    conversation_id = (request.args.get("conversation_id") or "").strip()
-    headers = {"Cache-Control": "no-cache", "X-Accel-Buffering": "no"}
-    job = chat_jobs.get_job(conversation_id) if conversation_id else None
-    # chat_jobs is a single registry shared by both bots (keyed by conversation_id
-    # only), so a WiFi job id handed to this BT endpoint would otherwise resolve
-    # and stream that WiFi job's steps/result here. Reject anything not tagged bt.
-    if job is None or getattr(job, "domain", "") != "bt":
-        def _idle():
-            yield "data: " + json.dumps({"type": "idle"}) + "\n\n"
-        return Response(_idle(), mimetype="text/event-stream", headers=headers)
-    return Response(_job_sse(job), mimetype="text/event-stream", headers=headers)
-
-
-def history_get():
-    conversation_id = (request.args.get("conversation_id") or "").strip()
-    if not conversation_id:
-        return jsonify({"success": False, "error": "conversation_id is required"}), 400
-    conv = history_service.get_conversation(conversation_id, domain="bt")
-    if conv is None:
-        return jsonify({"success": False, "error": "Conversation not found"}), 404
-    return jsonify({"success": True, "conversation": conv})
-
-
-def history_delete():
-    data = request.get_json(silent=True) or {}
-    conversation_id = (data.get("conversation_id") or "").strip()
-    if not conversation_id:
-        return jsonify({"success": False, "error": "conversation_id is required"}), 400
-    removed = history_service.delete_conversation(conversation_id, domain="bt")
-    # If the deleted conversation is the one currently active, drop the
-    # session pointer so the next turn starts a brand-new conversation.
-    if removed and (session.get("feedback_conversation_id") or "") == conversation_id:
-        session.pop("feedback_conversation_id", None)
-    return jsonify({"success": bool(removed)})
-
-
-def history_rename():
-    data = request.get_json(silent=True) or {}
-    conversation_id = (data.get("conversation_id") or "").strip()
-    title = (data.get("title") or "").strip()
-    if not conversation_id:
-        return jsonify({"success": False, "error": "conversation_id is required"}), 400
-    if not title:
-        return jsonify({"success": False, "error": "title is required"}), 400
-    ok = history_service.rename_conversation(conversation_id, title, domain="bt")
-    return jsonify({"success": bool(ok)})
-
-
-def history_pin():
-    data = request.get_json(silent=True) or {}
-    conversation_id = (data.get("conversation_id") or "").strip()
-    pinned = bool(data.get("pinned"))
-    if not conversation_id:
-        return jsonify({"success": False, "error": "conversation_id is required"}), 400
-    ok = history_service.set_pinned(conversation_id, pinned, domain="bt")
-    return jsonify({"success": bool(ok), "pinned": pinned})
+# chat_stop and the history list/stream/get/delete/rename/pin endpoints are
+# built from services.chatbot.shared_routes (see _SHARED_HANDLERS below) —
+# they only differed from the Wi-Fi bot by the history domain key. history_load
+# stays here because the BT resume path is domain-specific.
 
 
 def history_load():
@@ -1002,45 +837,6 @@ def history_load():
 # Back to Avatar: drop the chatbot session entirely so the next visit
 # to /bt_chatbot/ starts with a fresh conversation (no prior analysis).
 # ------------------------------------------------------------------
-def back_to_avatar():
-    # 1) Discard the per-session WifiLogAgentSystem instance (chat history,
-    #    skill cache, primed context, issue_time, etc.).
-    sid = session.pop("chatbot_session_id", None)
-    if sid and sid in _chatbot_instances:
-        try:
-            _chatbot_instances.pop(sid, None)
-        except Exception:
-            pass
-
-    # 2) Drop every Flask-session key that would otherwise re-seed a new
-    #    agent via prime_with_context() the next time /bt_chatbot/ is
-    #    visited (case context, AI analysis, classification, selected
-    #    attachments, cached log path, etc.).
-    for key in (
-        "chatbot_log_path",
-        "case_context",
-        "ai_ips_analysis",
-        "classification",
-        "selected_files",
-        "attachment_list",
-        "issue_time",
-        "_attachment_time_cache",
-        "_resolved_issue_time_cache",
-        "_issue_ai_quick",            # LLM-organized description + issue times
-        "feedback_conversation_id",   # next /bt_chatbot/ visit starts a fresh conversation
-    ):
-        session.pop(key, None)
-
-    # 3) Clear the global "last analyzed log" hint so the chatbot page
-    #    doesn't pre-fill the previous run's log path.
-    try:
-        app_config.last_analyzed_log_path = ""
-    except Exception:
-        pass
-
-    return redirect(url_for("main.index"))
-
-
 # ------------------------------------------------------------------
 # API: prepare chatbot from download_result (set log path + case context)
 # ------------------------------------------------------------------
@@ -1116,185 +912,23 @@ def prepare():
 
 
 # ------------------------------------------------------------------
-# API: reload skills from a directory and apply to current agent
+# API: load_skills_yaml_route / reload_from_shared and the
+# YAML-browse dialog are built from services.chatbot.shared_routes (see
+# _SHARED_HANDLERS below) — they only differed from the Wi-Fi bot by which
+# app_config attribute holds the app-level agent.
 # ------------------------------------------------------------------
-def reload_skills():
-    """
-    Reload skills from the given data_dir (must contain prompt/ and filter/
-    sub-folders) and apply them to the current session agent.
-    If data_dir is omitted or invalid the builtin fallback skills are used.
-    """
-    data = request.get_json(silent=True) or {}
-    data_dir = data.get("data_dir", "").strip()
-
-    try:
-        from pathlib import Path
-        warning = None
-        if data_dir and Path(data_dir).exists():
-            skill_map = build_skill_file_map(data_dir)
-            if skill_map is None:
-                skills = get_builtin_skills()
-                warning = f"No prompt/filter files found in '{data_dir}'. Using built-in skills."
-            else:
-                skills = load_skills_from_data_dir(data_dir)
-        elif data_dir:
-            skills = get_builtin_skills()
-            warning = f"Directory '{data_dir}' not found. Using built-in skills."
-        else:
-            skills = get_builtin_skills()
-            warning = f"No directory specified. Using built-in skills."
-
-        agent = _get_or_create_agent()
-        # Mid-conversation skill edit: swap skills AND clear the rule/filter
-        # caches so the edit actually takes effect, while keeping history.
-        agent.apply_updated_skills(skills)
-        # Also update the app-level agent so future sessions share the new skills
-        if app_config.bt_chatbot_agent:
-            app_config.bt_chatbot_agent.skills = skills
-        if app_config.llm_helper:
-            app_config.llm_helper.skills = skills
-
-        return jsonify({
-            "success": True,
-            "message": f"{len(skills)} skills loaded from {data_dir}",
-            "warning": warning,
-            "skills": agent.get_skill_descriptions(),
-        })
-    except Exception as e:
-        return jsonify({"success": False, "error": str(e)}), 500
-
-
-# ------------------------------------------------------------------
-# API: browse for a YAML file (native file dialog)
-# ------------------------------------------------------------------
-
-
-# ------------------------------------------------------------------
-# API: load skills from a YAML file (standalone, no prompt/filter dirs)
-# ------------------------------------------------------------------
-def load_skills_yaml_route():
-    """
-    Load skills directly from a .yaml file.
-    Request JSON: { "yaml_path": "/path/to/skills.yaml" }
-    """
-    data = request.get_json(silent=True) or {}
-    yaml_path = data.get("yaml_path", "").strip()
-
-    if not yaml_path:
-        return jsonify({"success": False, "error": "yaml_path is required."}), 400
-
-    try:
-        skills = load_skills_from_yaml(yaml_path)
-
-        agent = _get_or_create_agent()
-        # Mid-conversation skill edit: swap skills AND clear the rule/filter
-        # caches so the edit actually takes effect, while keeping history.
-        agent.apply_updated_skills(skills)
-        # Also update app-level so future sessions share the new skills
-        if app_config.bt_chatbot_agent:
-            app_config.bt_chatbot_agent.skills = skills
-        if app_config.llm_helper:
-            app_config.llm_helper.skills = skills
-
-        return jsonify({
-            "success": True,
-            "message": f"{len(skills)} skills loaded from YAML",
-            "source": yaml_path,
-            "skills": agent.get_skill_descriptions(),
-        })
-    except Exception as e:
-        import traceback
-        traceback.print_exc()
-        return jsonify({"success": False, "error": str(e)}), 500
-
-
-# ------------------------------------------------------------------
-# API: Reload skills from shared folder (auto-discovery)
-# ------------------------------------------------------------------
-def reload_from_shared():
-    """
-    Reload skills from the shared YAML location.
-    Used for development/testing without restarting the app.
-    """
-    from configs.path_configs import SKILLS_CONFIG_DIR_prim, SKILLS_CONFIG_DIR_bkup, SKILLS_YAML_FILENAME
-    from pathlib import Path
-    from utils import helpers as _helpers
-    
-    try:
-        # Try to find shared YAML location
-        yaml_shared = _helpers.get_load_path(
-            str(Path(SKILLS_CONFIG_DIR_prim) / SKILLS_YAML_FILENAME),
-            str(Path(SKILLS_CONFIG_DIR_bkup) / SKILLS_YAML_FILENAME)
-        )
-        
-        if not yaml_shared or not Path(yaml_shared).exists():
-            return jsonify({
-                "success": False,
-                "error": f"Shared YAML not found at {SKILLS_CONFIG_DIR_prim} or {SKILLS_CONFIG_DIR_bkup}"
-            }), 400
-        
-        # Load skills from shared YAML
-        skills = load_skills_from_yaml(yaml_shared)
-        
-        # Update all instances
-        agent = _get_or_create_agent()
-        # Mid-conversation skill edit: swap skills AND clear the rule/filter
-        # caches so the edit actually takes effect, while keeping history.
-        agent.apply_updated_skills(skills)
-        if app_config.bt_chatbot_agent:
-            app_config.bt_chatbot_agent.skills = skills
-        if app_config.llm_helper:
-            app_config.llm_helper.skills = skills
-        
-        return jsonify({
-            "success": True,
-            "message": f"{len(skills)} skills reloaded from shared folder",
-            "source": yaml_shared,
-            "skills": agent.get_skill_descriptions(),
-        })
-    except Exception as e:
-        import traceback
-        traceback.print_exc()
-        return jsonify({"success": False, "error": str(e)}), 500
 
 
 # ------------------------------------------------------------------
 # API: get available skills
 # ------------------------------------------------------------------
 def _get_llm_client_model():
-    """Return (client, model) for one-shot LLM calls, borrowing from the
-    pre-initialised chatbot agent or the llm_helper. (None, None) when the app
-    has no API key configured — callers then fall back to deterministic logic."""
-    base = getattr(app_config, "bt_chatbot_agent", None)
-    if base is not None and getattr(base, "client", None) is not None:
-        return base.client, getattr(base, "model", None)
-    helper = getattr(app_config, "llm_helper", None)
-    if helper is not None and getattr(helper, "client", None) is not None:
-        return helper.client, getattr(helper, "model", "gpt-4.1")
-    return None, None
+    return _llm_client_model("bt_chatbot_agent")
 
 
-def _issue_context_organized(raw_desc: str, first_ts, last_ts) -> dict:
-    """Return the organized issue context (clean description + issue time list).
-
-    Prefers the quick pre-pass cached at the select-attachments step
-    (``_issue_ai_quick``) so the whole flow makes a SINGLE LLM call — its
-    (possibly undated) times are just re-aligned to the loaded log's date here.
-    Falls back to organizing now (e.g. direct chatbot entry with no prior step).
-    """
-    quick = session.get("_issue_ai_quick")
-    if isinstance(quick, dict) and isinstance(quick.get("data"), dict):
-        d = quick["data"]
-    else:
-        client, model = _get_llm_client_model()
-        d = organize_issue_context(raw_desc, first_ts=first_ts, last_ts=last_ts,
-                                   llm_client=client, llm_model=model)
-        session["_issue_ai_quick"] = {"data": d}
-    return {
-        "clean_description": d.get("clean_description") or raw_desc,
-        "issue_times": realign_times_to_log(d.get("issue_times") or [], first_ts, last_ts),
-        "interpretation": d.get("interpretation", ""),
-    }
+def _issue_context_organized(raw_desc: str, first_ts, last_ts, log_path: str = "") -> dict:
+    return _organized_issue_context(raw_desc, first_ts, last_ts, log_path,
+                                    llm_client_model=_get_llm_client_model)
 
 
 def get_issue_context():
@@ -1689,30 +1323,21 @@ _USER_YAML_WRITE_LOCK = threading.Lock()
 
 
 
-def _persist_user_yaml_snapshot(data: dict) -> object:
-    """
-    Persist the current user-edited YAML under today's dated filename.
-
-    The file name is date-based, so repeated saves on the same day target the
-    same path. Serialise writes in-process so overlapping save/delete requests
-    do not race on the same target and temp file.
-    """
-    with _USER_YAML_WRITE_LOCK:
-        target_dir = _user_local_dir()
-        target = target_dir / _today_yaml_filename()
-        _write_yaml_file(target, data, _gather_disabled_comments(data))
-
-        # Keep only today's active revision in the user/ dir so lookup stays
-        # unambiguous.
-        for entry in target_dir.iterdir():
-            if entry.is_file() and entry.name != target.name \
-                    and entry.name.startswith("bt_skills_") and entry.suffix == ".yaml":
-                try:
-                    entry.unlink()
-                except OSError:
-                    pass
-
-        return target
+_YAML_HELPERS = build_profile_yaml_helpers(
+    user_local_dir=_user_local_dir,
+    today_yaml_filename=_today_yaml_filename,
+    user_yaml_prefix="bt_skills_",
+    latest_cloud_baseline=_latest_cloud_baseline,
+    latest_user_yaml=_latest_user_yaml,
+    write_yaml_file=_write_yaml_file,
+    load_skills_from_yaml=load_skills_from_yaml,
+    get_agent=_get_or_create_agent,
+    agent_config_attr="bt_chatbot_agent",
+)
+_gather_disabled_comments = _YAML_HELPERS["gather_disabled_comments"]
+_persist_user_yaml_snapshot = _YAML_HELPERS["persist_user_yaml_snapshot"]
+_refresh_loaded_skills = _YAML_HELPERS["refresh_loaded_skills"]
+_activate_yaml = _YAML_HELPERS["activate_yaml"]
 
 
 # ---- Disabled-comment scanning + injection -------------------------------
@@ -1746,100 +1371,6 @@ def _persist_user_yaml_snapshot(data: dict) -> object:
 
 
 
-def _gather_disabled_comments(active_data: dict) -> dict:
-    """
-    Build the `disabled_comments` map for the save path: scan the cloud
-    baseline and the current user file (whichever exist) for commented
-    `# - "..."` keyword / exclusive entries, MERGE them per skill +
-    list-key, and strip any entry that the editor is about to write as an
-    ACTIVE keyword (so re-enabling something through the UI doesn't leave
-    a phantom commented duplicate behind).
-    """
-    merged: dict = {}
-
-    def _absorb(path):
-        if not path:
-            return
-        try:
-            text = path.read_text(encoding="utf-8")
-        except Exception:
-            return
-        for skill_key, blocks in _scan_disabled_comments(text).items():
-            for list_key, vals in blocks.items():
-                bucket = merged.setdefault(skill_key, {}).setdefault(list_key, [])
-                for v in vals:
-                    if v not in bucket:
-                        bucket.append(v)
-
-    try:
-        cloud_path, _ = _latest_cloud_baseline()
-        _absorb(cloud_path)
-    except Exception:
-        pass
-    try:
-        user_path, _ = _latest_user_yaml()
-        _absorb(user_path)
-    except Exception:
-        pass
-
-    # Drop entries that are now active in the about-to-be-saved data.
-    if isinstance(active_data, dict):
-        for skill_key, blocks in list(merged.items()):
-            skill_row = active_data.get(skill_key)
-            if not isinstance(skill_row, dict):
-                continue
-            for list_key in ("keywords", "exclusive"):
-                if list_key not in blocks:
-                    continue
-                active_vals = set(skill_row.get(list_key) or [])
-                blocks[list_key] = [
-                    v for v in blocks[list_key] if v not in active_vals
-                ]
-                if not blocks[list_key]:
-                    blocks.pop(list_key, None)
-            if not blocks:
-                merged.pop(skill_key, None)
-
-    return merged
-
-
-def _refresh_loaded_skills(yaml_path: str) -> dict:
-    """Re-load skills from `yaml_path` into the live agent and llm_helper."""
-    skills = load_skills_from_yaml(yaml_path)
-    agent = _get_or_create_agent()
-    # Keep history; clear rule/filter caches so the reloaded skills apply.
-    agent.apply_updated_skills(skills)
-    if app_config.bt_chatbot_agent:
-        app_config.bt_chatbot_agent.skills = skills
-    if app_config.llm_helper:
-        app_config.llm_helper.skills = skills
-    return skills
-
-
-def _activate_yaml(path) -> dict:
-    """Re-load skills from `path` and return the chatbot's descriptions."""
-    _refresh_loaded_skills(str(path))
-    agent = _get_or_create_agent()
-    return agent.get_skill_descriptions()
-
-
-
-
-
-
-
-
-
-
-
-
-
-
-
-
-
-
-
 # The module above is now a domain adapter: its functions retain BT/Wi-Fi/NW
 # policy, while the factory owns the public route table and shared use cases.
 _BT_CHATBOT_CAPABILITIES = {
@@ -1859,7 +1390,15 @@ _SKILL_EDITOR_HANDLERS = build_skill_editor_handlers(SkillEditorContext(
     set_active_source=_set_active_source,
     skills_yaml_status_payload=_skills_yaml_status_payload,
 ))
-_CHATBOT_ADAPTER_NAMESPACE = {**globals(), **_SKILL_EDITOR_HANDLERS}
+_SHARED_HANDLERS = build_shared_handlers(SharedRouteContext(
+    domain="bt",
+    agent_config_attr="bt_chatbot_agent",
+    get_agent=_get_or_create_agent,
+    session_agents=_chatbot_instances,
+    browse_filetypes=(("hci.txt files", "*.hci.txt"), ("All files", "*.*")),
+    load_skills_from_yaml=load_skills_from_yaml,
+))
+_CHATBOT_ADAPTER_NAMESPACE = {**globals(), **_SHARED_HANDLERS, **_SKILL_EDITOR_HANDLERS}
 _BT_CHATBOT_HANDLERS = handler_map(_CHATBOT_ADAPTER_NAMESPACE, _BT_CHATBOT_CAPABILITIES)
 bt_chatbot_bp = create_chatbot_blueprint(ChatbotBlueprintConfig(
     name="bt_chatbot",

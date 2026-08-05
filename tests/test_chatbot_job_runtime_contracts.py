@@ -6,7 +6,7 @@ import uuid
 from flask import Flask, session
 
 from services.chatbot import job_runtime
-from services.chatbot.web_session import resume_agent_for
+from services.chatbot.session import resume_agent_for
 
 
 def _decode_sse(frame: str) -> dict:

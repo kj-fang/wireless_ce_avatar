@@ -18,6 +18,7 @@ HCI logs, custom continuation-line detection, etc.) live here too.
 """
 
 from services.chatbot.agent.system import (
+    BT_AGENT_POLICY,
     WifiLogAgentSystem,
     Skill,
     SKILL_FILE_MAP,
@@ -70,18 +71,7 @@ class BtLogAgentSystem(WifiLogAgentSystem):
     # BT has no reliable init/reset lifecycle to bookend a context block, so
     # never let scoping fall through to empty.
     SCOPE_FULL_LOG_WHEN_EMPTY = True
-
-    # Wi-Fi-only tools that BT logs never need.
-    _WIFI_ONLY_TOOLS = {"lookup_assert_code", "softAP_supported_channel"}
-
-    def _build_tools(self) -> list:
-        return [t for t in super()._build_tools()
-                if t["function"]["name"] not in self._WIFI_ONLY_TOOLS]
-
-    def _invoke_tool(self, tool_name: str, args: dict) -> str:
-        if tool_name in self._WIFI_ONLY_TOOLS:
-            return f"{tool_name} is not available for Bluetooth log analysis."
-        return super()._invoke_tool(tool_name, args)
+    CAPABILITY_POLICY = BT_AGENT_POLICY
 
 
 __all__ = [

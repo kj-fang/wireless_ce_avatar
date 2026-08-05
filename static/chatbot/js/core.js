@@ -241,54 +241,6 @@
         }
     }
 
-    // ── Browse for skills data directory ──────────────────────────
-    async function browseSkillsDir() {
-        const btn = document.querySelector('#skills-dir-input + .btn-browse');
-        btn.textContent = '⏳';
-        btn.disabled = true;
-        try {
-            const res = await fetch(`${CHATBOT_API}/browse_dir`);
-            const data = await res.json();
-            if (data.path) {
-                document.getElementById('skills-dir-input').value = data.path;
-            }
-        } catch (e) {
-            console.error('Browse dir failed:', e);
-        } finally {
-            btn.textContent = '📁';
-            btn.disabled = false;
-        }
-    }
-
-    // ── Reload skills from directory ───────────────────────────────
-    async function reloadSkills() {
-        const dir = document.getElementById('skills-dir-input').value.trim();
-        const statusEl = document.getElementById('skills-reload-status');
-        statusEl.textContent = 'Reloading…';
-        statusEl.className = 'log-status';
-        statusEl.style.display = 'block';
-        try {
-            const res = await fetch(`${CHATBOT_API}/reload_skills`, {
-                method: 'POST',
-                headers: {'Content-Type': 'application/json'},
-                body: JSON.stringify({data_dir: dir})
-            });
-            const data = await res.json();
-            if (data.success) {
-                if (data.warning) {
-                    showStatus(statusEl, '⚠ ' + data.warning, 'warn');
-                } else {
-                    showStatus(statusEl, '✔ ' + data.message, 'ok');
-                }
-                renderSkills(data.skills);
-            } else {
-                showStatus(statusEl, '✘ ' + data.error, 'err');
-            }
-        } catch (e) {
-            showStatus(statusEl, '✘ Network error: ' + e.message, 'err');
-        }
-    }
-
     // ── Reload skills from shared folder ────────────────────────────
     async function reloadFromShared() {
         const statusEl = document.getElementById('reload-shared-status');
@@ -363,6 +315,122 @@
             const toggleIcon = header.querySelector('.toggle-icon');
             if (toggleIcon) toggleIcon.textContent = '▼';
         }
+    }
+
+    /** Format an elapsed milliseconds value as a human-friendly badge. */
+    function fmtElapsed(ms) {
+        if (ms < 1000) return `${ms}ms`;
+        if (ms < 60000) return `${(ms / 1000).toFixed(1)}s`;
+        const m = Math.floor(ms / 60000);
+        const s = Math.floor((ms % 60000) / 1000);
+        return `${m}m${String(s).padStart(2, '0')}s`;
+    }
+
+    // Classify a streamed step by role + content keywords into the CSS class
+    // and gutter label that give the process card its colour coding.
+    function classifyAgentStep(role, content) {
+        if (role === 'token_usage') return { cls: 'step-token', label: '📊 Tokens' };
+        if (role === 'error')       return { cls: 'step-error', label: '⛔ Error' };
+        if (/Reasoning Step (\d+)/.test(content)) {
+            const m = content.match(/Reasoning Step (\d+)/);
+            return { divider: true, stepNum: m ? m[1] : null };
+        }
+        if (/🧠.*Thinking/i.test(content))                     return { cls: 'step-thinking', label: '🧠 Thinking' };
+        if (/Invoking skill|fetch_filtered_logs/i.test(content)) return { cls: 'step-skill', label: '🔬 Skill' };
+        if (/Tool call|Tool cap|🧭/i.test(content))             return { cls: 'step-tool', label: '🧭 Tools' };
+        if (/Conclusion reached|submit_final_report|✅/i.test(content)) return { cls: 'step-done', label: '✅ Done' };
+        return { cls: 'step-info', label: 'ℹ️' };
+    }
+
+    // Live "Agent Processing Steps" card shared by every profile's streaming
+    // loop. The card is created lazily on the first step so a turn that never
+    // streams one leaves no empty shell behind.
+    function createAgentStepRenderer(options) {
+        const opts = options || {};
+        const title = opts.title || 'Agent Processing Steps';
+        const avatar = opts.avatar || '🤖';
+        const startTs = Date.now();
+        let lastStepTs = startTs;
+        let bodyEl = null;
+        let cardId = null;
+        const steps = [];
+
+        function buildTimeBadge(elapsedMs, deltaMs) {
+            const delta = (deltaMs >= 50)
+                ? `<span class="step-time-delta">Δ${fmtElapsed(deltaMs)}</span>`
+                : '';
+            return `<span class="step-time" title="Elapsed since start · delta from previous step">` +
+                   `+${fmtElapsed(elapsedMs)}${delta}</span>`;
+        }
+
+        function ensureCard() {
+            if (bodyEl) return;
+            removeTyping();
+            hideWelcome();
+            cardId = 'agent-process-' + Date.now();
+            const html = `
+            <div class="agent-process-card">
+                <div class="agent-process-header" onclick="
+                    this.classList.toggle('collapsed');
+                    document.getElementById('${cardId}').classList.toggle('hidden');
+                    const icon = this.querySelector('.toggle-icon');
+                    icon.textContent = this.classList.contains('collapsed') ? '▼' : '▲';
+                ">
+                    ${escapeHtml(title)}
+                    <span id="${cardId}-summary" style="font-weight:400;font-size:0.75rem;opacity:0.75;margin-left:8px;"></span>
+                    <span class="toggle-icon">▲</span>
+                </div>
+                <div class="agent-process-body" id="${cardId}"></div>
+            </div>`;
+            const wrapper = document.createElement('div');
+            wrapper.className = 'msg-row assistant';
+            wrapper.style.maxWidth = '95%';
+            wrapper.innerHTML = `<div class="avatar-icon">${avatar}</div><div style="flex:1;">${html}</div>`;
+            document.getElementById('chat-window').appendChild(wrapper);
+            bodyEl = document.getElementById(cardId);
+            scrollBottom();
+        }
+
+        function append(step) {
+            ensureCard();
+            steps.push(step);
+            const content = (step && step.content) || '';
+            const kind = classifyAgentStep((step && step.role) || 'agent', content);
+
+            const now = Date.now();
+            const elapsedMs = now - startTs;
+            const deltaMs = now - lastStepTs;
+            lastStepTs = now;
+            const timeBadge = buildTimeBadge(elapsedMs, deltaMs);
+
+            const stepNum = kind.divider ? (kind.stepNum || steps.length) : null;
+            bodyEl.insertAdjacentHTML('beforeend', kind.divider
+                ? `<div class="agent-step-divider"><span class="step-num">${stepNum}</span>Reasoning Step ${stepNum}${timeBadge}</div>`
+                : `<div class="agent-step ${kind.cls}">
+                    <span class="step-label">${kind.label}</span>
+                    <div class="agent-step-content">${marked.parse(content)}</div>
+                    ${timeBadge}
+                </div>`);
+
+            const skillsUsed = steps
+                .filter(s => s && s.content && s.content.includes('Invoking skill'))
+                .map(s => { const m = s.content.match(/`([^`]+)`/); return m ? m[1] : ''; })
+                .filter(Boolean);
+            const summaryEl = document.getElementById(cardId + '-summary');
+            if (summaryEl) {
+                summaryEl.textContent =
+                    `${steps.length} steps · ${fmtElapsed(elapsedMs)}` +
+                    (skillsUsed.length ? ` · Skills: ${skillsUsed.join(', ')}` : '');
+            }
+            scrollBottom();
+        }
+
+        return {
+            append,
+            steps,
+            get cardId() { return cardId; },
+            collapse() { if (cardId) collapseAgentProcessCard(cardId); },
+        };
     }
 
     let lazyMdObserver = null;
@@ -459,3 +527,17 @@
             }
         });
     }
+
+// ---- Chat runtime shims -------------------------------------------------
+// Inline `onclick=` handlers call these as free globals. The profile strategy
+// script loads AFTER core.js, so resolve (and memoize) it on first call.
+if ((window.CHATBOT || {}).runtime_strategy_script) {
+    const _chatRuntime = () => (
+        window.__chatRuntime ||
+        (window.__chatRuntime = window.createChatRuntimeStrategy(window.CHATBOT || {}))
+    );
+    for (const name of ['browseLog', 'copyLogPath', 'setLog', 'sendMessage',
+                        'appendReport', 'appendIncidentTag', 'tryAutoAnalyzeOnLoad']) {
+        window[name] = (...args) => _chatRuntime()[name](...args);
+    }
+}

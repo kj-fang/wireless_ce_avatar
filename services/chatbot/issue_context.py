@@ -13,6 +13,38 @@ from utils.issue_time_utils import (
     resolve_issue_time,
 )
 
+def organized_issue_context(raw_desc: str, first_ts, last_ts, log_path: str = "",
+                            *, llm_client_model) -> dict:
+    """Return the organized issue context (clean description + issue time list).
+
+    Prefers the quick pre-pass cached at the select-attachments step
+    (``_issue_ai_quick``) so the whole flow makes a SINGLE LLM call — its
+    (possibly undated) times are just re-aligned to the loaded log's date here.
+    Falls back to organizing now (e.g. direct chatbot entry with no prior step).
+
+    ``llm_client_model`` is the profile's zero-arg accessor returning
+    ``(client, model)``; ``log_path`` is optional because only the profiles that
+    resolve time-only logs against the capture file pass it.
+    """
+    # Imported lazily: utils.issue_time_ai pulls in the LLM stack, which the
+    # cheap context helpers above must not drag in at import time.
+    from utils.issue_time_ai import organize_issue_context, realign_times_to_log
+
+    quick = session.get("_issue_ai_quick")
+    if isinstance(quick, dict) and isinstance(quick.get("data"), dict):
+        d = quick["data"]
+    else:
+        client, model = llm_client_model()
+        d = organize_issue_context(raw_desc, first_ts=first_ts, last_ts=last_ts,
+                                   llm_client=client, llm_model=model)
+        session["_issue_ai_quick"] = {"data": d}
+    return {
+        "clean_description": d.get("clean_description") or raw_desc,
+        "issue_times": realign_times_to_log(d.get("issue_times") or [], first_ts, last_ts, log_path),
+        "interpretation": d.get("interpretation", ""),
+    }
+
+
 def extract_issue_context() -> dict:
     """
     Consolidate issue context from session into a single dict with keys:

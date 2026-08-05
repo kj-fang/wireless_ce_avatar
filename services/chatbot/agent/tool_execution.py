@@ -2,6 +2,7 @@
 
 from __future__ import annotations
 
+import re
 from typing import Optional
 
 from utils.assert_code_utils import lookup_assert_code
@@ -53,6 +54,9 @@ class ToolExecutionMixin:
 
     def _invoke_tool(self, tool_name: str, args: dict) -> str:
         """Centralized tool dispatch used by both chat and analyze flows."""
+        if tool_name in self.capabilities.disabled_tools:
+            return f"{tool_name} is not available for {self.capabilities.profile} log analysis."
+
         if tool_name == "fetch_filtered_logs":
             return self.fetch_filtered_logs(args.get("skill_name", ""))
 
@@ -135,6 +139,22 @@ class ToolExecutionMixin:
 
         self._append_tool_message(messages, tool_call, "Final report accepted.")
         emit_cb({"role": "agent", "content": " **Conclusion Reached!** Generating report."})
+        # Models occasionally violate the array schema.  Keep the report
+        # contract stable for every profile before it reaches the frontend.
+        for key in ("recommended_actions", "involved_skills"):
+            value = args.get(key)
+            if value is None:
+                args[key] = []
+            elif isinstance(value, str):
+                parts = [part.strip("- *•\t ").strip()
+                         for part in re.split(r"[\n;]+", value) if part.strip()]
+                args[key] = parts or [value]
+            elif isinstance(value, dict):
+                args[key] = [str(item) for item in value.values()]
+            elif not isinstance(value, list):
+                args[key] = [str(value)]
+            else:
+                args[key] = [str(item) for item in value]
         self._inject_analysis_into_history(issue_description, steps, args)
         return {
             "type": "report",
@@ -172,6 +192,11 @@ class ToolExecutionMixin:
 
         line_count = tool_result.count('\n')
         preview = tool_result[:500].replace('\n', ' ') + "..."
+        if self.capabilities.emit_fetch_previews:
+            emit_cb({
+                "role": "tool",
+                "content": f" **Logs Loaded** (`{skill_name}`, ~{line_count} lines):\n```\n{preview}\n```",
+            })
         # emit_cb({
         #     "role": "tool",
         #     "content": f" **Logs Loaded** (`{skill_name}`, ~{line_count} lines):\n```\n{preview}\n```"
@@ -400,7 +425,7 @@ class ToolExecutionMixin:
         ]
 
     def _build_tools(self) -> list:
-        return [
+        tools = [
             {
                 "type": "function",
                 "function": {
@@ -574,3 +599,16 @@ class ToolExecutionMixin:
                 }
             }
         ]
+        tools = [
+            tool for tool in tools
+            if tool["function"]["name"] not in self.capabilities.disabled_tools
+        ]
+        if not self.capabilities.ace_playbooks:
+            report = next(
+                tool["function"] for tool in tools
+                if tool["function"]["name"] == "submit_final_report"
+            )
+            properties = report["parameters"]["properties"]
+            properties.pop("applied_bullet_ids", None)
+            properties.pop("flagged_bullet_ids", None)
+        return tools

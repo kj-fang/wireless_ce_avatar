@@ -215,6 +215,73 @@ def scan_disabled_comments(text: str) -> dict:
                       .append(m.group("val"))
     return result
 
+
+def gather_disabled_comments(
+    active_data: dict,
+    *,
+    latest_cloud_baseline,
+    latest_user_yaml,
+) -> dict:
+    """
+    Build the `disabled_comments` map for the save path: scan the cloud
+    baseline and the current user file (whichever exist) for commented
+    `# - "..."` keyword / exclusive entries, MERGE them per skill +
+    list-key, and strip any entry that the editor is about to write as an
+    ACTIVE keyword (so re-enabling something through the UI doesn't leave
+    a phantom commented duplicate behind).
+
+    ``latest_cloud_baseline`` / ``latest_user_yaml`` are the profile's own
+    ``(path, meta)`` lookups — the Wi-Fi and BT editors keep their YAML in
+    different folders.
+    """
+    merged: dict = {}
+
+    def _absorb(path):
+        if not path:
+            return
+        try:
+            text = path.read_text(encoding="utf-8")
+        except Exception:
+            return
+        for skill_key, blocks in scan_disabled_comments(text).items():
+            for list_key, vals in blocks.items():
+                bucket = merged.setdefault(skill_key, {}).setdefault(list_key, [])
+                for v in vals:
+                    if v not in bucket:
+                        bucket.append(v)
+
+    try:
+        cloud_path, _ = latest_cloud_baseline()
+        _absorb(cloud_path)
+    except Exception:
+        pass
+    try:
+        user_path, _ = latest_user_yaml()
+        _absorb(user_path)
+    except Exception:
+        pass
+
+    # Drop entries that are now active in the about-to-be-saved data.
+    if isinstance(active_data, dict):
+        for skill_key, blocks in list(merged.items()):
+            skill_row = active_data.get(skill_key)
+            if not isinstance(skill_row, dict):
+                continue
+            for list_key in ("keywords", "exclusive"):
+                if list_key not in blocks:
+                    continue
+                active_vals = set(skill_row.get(list_key) or [])
+                blocks[list_key] = [
+                    v for v in blocks[list_key] if v not in active_vals
+                ]
+                if not blocks[list_key]:
+                    blocks.pop(list_key, None)
+            if not blocks:
+                merged.pop(skill_key, None)
+
+    return merged
+
+
 def inject_disabled_comments(content: str, disabled: dict) -> str:
     """
     Walk the freshly-rendered YAML text and append ``# - "..."`` comment

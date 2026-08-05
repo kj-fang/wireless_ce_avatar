@@ -19,6 +19,7 @@ import threading
 from bisect import bisect_left, bisect_right
 import importlib.util
 import xml.etree.ElementTree as ET
+from dataclasses import dataclass
 from pathlib import Path
 from datetime import datetime, timedelta
 from typing import Dict, List, Optional, Tuple
@@ -133,6 +134,60 @@ class Skill(BaseModel):
     exclusive: List[str] = Field(default_factory=list)  # lines containing these terms are removed post-filter
     tat_path: Optional[str]      # path to original .tat file (preferred for filtering)
     expert_rules: str
+
+
+@dataclass(frozen=True)
+class AgentCapabilityPolicy:
+    """Behavior switches for one chatbot profile.
+
+    The shared engine owns the algorithms; profiles describe which optional
+    behavior is active.  This prevents a second copy of the 300-570 line
+    preprocessing/tool-loop methods from drifting out of sync.
+    """
+
+    profile: str = "wifi"
+    disabled_tools: frozenset[str] = frozenset()
+    ace_playbooks: bool = True
+    cooperative_cancellation: bool = True
+    repair_tool_history: bool = True
+    recover_invalid_tool_arguments: bool = True
+    emit_step_token_usage: bool = False
+    emit_fetch_previews: bool = False
+    context_issue_time_fallbacks: tuple[str, ...] = ()
+    primed_issue_time_source: str = "primed"
+    compact_issue_time_notice: bool = False
+    show_customer_issue_time: bool = True
+    diagnose_history_on_llm_error: bool = True
+    merge_wrapped_time_only_logs: bool = True
+    scope_time_only_logs: bool = True
+    configurable_issue_window: bool = True
+    full_scope_for_undated_logs: bool = True
+
+
+WIFI_AGENT_POLICY = AgentCapabilityPolicy()
+NW_AGENT_POLICY = AgentCapabilityPolicy(
+    profile="nw",
+    disabled_tools=frozenset({"softAP_supported_channel"}),
+    ace_playbooks=False,
+    cooperative_cancellation=False,
+    repair_tool_history=False,
+    recover_invalid_tool_arguments=False,
+    emit_step_token_usage=True,
+    emit_fetch_previews=True,
+    context_issue_time_fallbacks=("description", "subject"),
+    primed_issue_time_source="attachment_time",
+    compact_issue_time_notice=True,
+    show_customer_issue_time=False,
+    diagnose_history_on_llm_error=False,
+    merge_wrapped_time_only_logs=False,
+    scope_time_only_logs=False,
+    configurable_issue_window=False,
+    full_scope_for_undated_logs=False,
+)
+BT_AGENT_POLICY = AgentCapabilityPolicy(
+    profile="bt",
+    disabled_tools=frozenset({"lookup_assert_code", "softAP_supported_channel"}),
+)
 
 
 # ---------------------------------------------------------
@@ -428,6 +483,7 @@ class WifiLogAgentSystem(
     # candidates lowercase.
     DRIVER_ADD_MARKER = "os issued driver device add"
     RESET_MARKER = "got command (m1 message) task_dot11_reset"
+    CAPABILITY_POLICY = WIFI_AGENT_POLICY
 
     @staticmethod
     def _normalize_markers(value) -> List[str]:
@@ -471,6 +527,7 @@ class WifiLogAgentSystem(
                  skills: Optional[Dict[str, "Skill"]] = None):
         self.client = client
         self.model  = model
+        self.capabilities = self.CAPABILITY_POLICY
         self.current_log_path: str = ""
         self.conversation_history: List[dict] = []
         # Cooperative cancellation. A background chat job (see

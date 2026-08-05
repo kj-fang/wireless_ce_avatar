@@ -1,3 +1,4 @@
+{% import 'chatbot/profiles/_sidebar_parts.html' as sb with context %}
 <!-- Log file -->
 <div class="sidebar-section">
     <h6>📂 Log File</h6>
@@ -18,19 +19,7 @@
 
     <!-- Wi-Fi log panel -->
     <div id="logpanel-wifi">
-        {% if suggested_log %}
-        <div style="font-size:0.75rem;background:#1a3a1a;border:1px solid #2d6a2d;border-radius:5px;padding:5px 8px;margin-bottom:6px;color:#7ec87e;">
-            ✅ Log from last analysis pre-loaded — click <strong>Load</strong> to confirm.
-        </div>
-        {% endif %}
-        <div class="log-input-group">
-            <input id="log-path-input" type="text"
-                   placeholder="Full path to .log file…"
-                   value="{{ suggested_log | default('', true) }}">
-            <button class="btn-browse" onclick="browseLog()" title="Browse for file">📁</button>
-            <button class="btn-set-log" onclick="setLog()">Load</button>
-        </div>
-        <div id="log-status" class="log-status"></div>
+{{ sb.log_input() }}
     </div>
 
     <!-- Sleepstudy panel -->
@@ -45,7 +34,7 @@
     </div>
 </div>
 
-{% include 'chatbot/_event_log.html' %}
+{{ sb.event_log() }}
 
 <!-- Skills -->
 <div class="sidebar-section">
@@ -55,15 +44,4 @@
     </div>
 </div>
 
-<!-- Reload skills from directory -->
-<div class="sidebar-section">
-    <h6>🛠 Reload Skills</h6>
-    <div class="log-input-group">
-        <input id="skills-dir-input" type="text" placeholder="Skills data directory…">
-        <button class="btn-browse" onclick="browseSkillsDir()" title="Browse for directory">📁</button>
-    </div>
-    <button class="btn-set-log" style="width:100%;margin-top:6px;" onclick="reloadSkills()">🔄 Reload Skills</button>
-    <div id="skills-reload-status" class="log-status"></div>
-</div>
-
-{% include 'chatbot/_quick_questions.html' %}
+{{ sb.quick_questions() }}

@@ -6,6 +6,7 @@ import pytest
 from jinja2 import Environment, FileSystemLoader, select_autoescape
 
 from configs.chatbot_ui import BT_UI, LOG_CHATBOT_UI, WIFI_UI
+from services.chatbot.factory import route_contract
 
 
 PROJECT_ROOT = Path(__file__).resolve().parents[1]
@@ -87,7 +88,6 @@ def test_bt_uses_bt_strategies_and_full_capabilities(
     assert "/static/chatbot/js/strategies/bt-issue-time.js" in html
     assert "/static/chatbot/js/strategies/bt-chat-runtime.js" in html
     assert "/static/chatbot/js/features/issue-time-controller.js" in html
-    assert "/static/chatbot/js/controllers.js" in html
     assert 'id="sleepstudy-path-input"' not in html
 
 
@@ -99,19 +99,21 @@ def test_full_wifi_uses_wifi_strategies_and_full_capabilities(
     assert "/static/chatbot/js/strategies/wifi-issue-time.js" in html
     assert "/static/chatbot/js/strategies/wifi-chat-runtime.js" in html
     assert "/static/chatbot/js/features/issue-time-controller.js" in html
-    assert "/static/chatbot/js/controllers.js" in html
     assert 'id="sleepstudy-path-input"' not in html
 
 
-def test_nw_exposes_sleepstudy_without_full_agent_controllers(
+def test_nw_exposes_sleepstudy_without_issue_time(
     jinja_environment: Environment,
 ) -> None:
     html = jinja_environment.get_template("chatbot/page.html").render(ui=WIFI_UI)
 
     assert 'id="sleepstudy-path-input"' in html
     assert "/static/chatbot/js/features/issue-time-controller.js" not in html
-    assert "/static/chatbot/js/controllers.js" not in html
-    assert "/static/chatbot/js/strategies/" not in html
+    assert "/static/chatbot/js/strategies/issue-time-base.js" not in html
+    # NW shares the chat runtime base but supplies its own (issue-time-free)
+    # subclass.
+    assert "/static/chatbot/js/strategies/chat-runtime-base.js" in html
+    assert "/static/chatbot/js/strategies/nw-chat-runtime.js" in html
 
 
 def test_feature_partials_do_not_branch_on_domain_name() -> None:
@@ -129,3 +131,18 @@ def test_legacy_domain_page_templates_are_removed() -> None:
     assert not (TEMPLATE_ROOT / "bt_chatbot.html").exists()
     assert not (TEMPLATE_ROOT / "log_chatbot.html").exists()
     assert not (TEMPLATE_ROOT / "NW_analysis.html").exists()
+
+
+@pytest.mark.parametrize("profile", ["bt", "wifi", "nw"])
+def test_back_to_avatar_link_runs_the_teardown_endpoint(profile: str) -> None:
+    """"Back to Avatar" must clear the session, not just navigate home.
+
+    Pointing back_url straight at "/" leaves chatbot_session_id, the cached log
+    path and the case context in the Flask session, so re-entering the chatbot
+    shows the previous run's log and chat instead of a clean page.
+    """
+    ui = PROFILES[profile]
+    assert ui["back_url"] == f"{ui['api']}/back_to_avatar"
+
+    capabilities = {key for key, enabled in ui["features"].items() if enabled}
+    assert "/back_to_avatar" in route_contract(capabilities)

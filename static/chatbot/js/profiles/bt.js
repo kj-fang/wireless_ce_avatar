@@ -13,8 +13,6 @@
     //   YYYY/MM/DD HH:MM:SS
 
 
-    /** Pad number to 2 digits */
-
     // Field id -> [min, max] valid range
 
     // Which Issue Time fields are REQUIRED. For a loaded log that has no date
@@ -23,71 +21,8 @@
     // Reflect the date-optional state in the UI when the loaded log has no date.
 
 
-    /** Auto-advance focus when a field reaches its expected length / max. */
-
-    /**
-     * Apply context-aware clamping to the Issue Time fields. Called after
-     * the user finishes typing into a field. Currently:
-     *   - Year is capped at the current calendar year (issues can't be in
-     *     the future).
-     *   - Day is capped at the real number of days in the chosen
-     *     month/year (e.g. 2/31 → 2/28 or 2/29 on leap years; 4/31 → 4/30).
-     */
-
-    /** Days in a given month (1-12), accounting for leap years. */
-
-
-    /**
-     * Run all semantic checks on the Issue Time fields. Returns:
-     *   { complete, valid, message, invalidIds:Set, anyFilled }
-     * `valid` requires complete + consistent (real calendar day,
-     * not in the future).
-     */
-
-    /**
-     * Read all sidebar Issue Time fields and return a canonical
-     * "MM/DD/YYYY-HH:MM:SS(.mmm)" string. Returns '' if the fields are
-     * incomplete OR fail any semantic check (calendar day, future time).
-     */
-
-    /**
-     * Parse a "MM/DD/YYYY-HH:MM:SS(.mmm)" or "YYYY-MM-DD HH:MM:SS"
-     * style string and populate the sidebar fields.
-     */
-
-
     // "🗑️ Clear" button: wipe EVERYTHING in one click — the primary picker
     // AND every extra issue-time row.
-
-
-    /** Open the hidden native datetime-local picker (calendar popup). */
-
-    /** Called when the user picks a date/time from the native calendar. */
-
-
-    /**
-     * Strip any timestamp fragments from the description so the sidebar
-     * Issue Time field is the single source of truth for the time.
-     */
-
-    /**
-     * Strip a leading "at around" / "at" / "around" / "on" connector
-     * (and surrounding whitespace/punctuation) from the description so
-     * that auto-prefilled text doesn't leave a trailing "at around".
-     */
-
-    /**
-     * Validate the inputs.  Returns true if the message can be sent.
-     * Time validation now lives entirely in the sidebar Issue Time
-     * picker.  The chat textarea only carries the problem description.
-     *
-     * @param {boolean} submitting - true when called from an explicit
-     *   send/submit attempt. Only then do we surface the red
-     *   "Please describe the issue" banner; otherwise the empty-desc
-     *   state silently keeps the Send button disabled without nagging
-     *   the user while they are still composing or just clicked into
-     *   the page.
-     */
 
 
     // ── Auto-filled issue-time confirmation gate ─────────────────────
@@ -139,11 +74,6 @@
     // === Auto-load log and trigger first Analyze-All on page load ===
 
 
-    /**
-     * Show a two-button picker letting the user choose between the original
-     * issue time and the closest Error/Critical event time from the system
-     * event log.  Called after the issue time is set during auto-analyze.
-     */
     // Stash used by pickRefineOption() to know the two candidate times.
     let _refineOriginalTime = '';
     let _refineErrorTime   = '';

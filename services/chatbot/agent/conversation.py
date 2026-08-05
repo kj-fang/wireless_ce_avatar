@@ -64,7 +64,8 @@ class ConversationMixin:
 
         # Fresh turn — discard any stop signal left over from a previous turn
         # so the user's new message is never pre-cancelled.
-        self.cancel_event.clear()
+        if self.capabilities.cooperative_cancellation:
+            self.cancel_event.clear()
 
         # Delegate to appropriate implementation
         if use_tools:
@@ -272,7 +273,8 @@ class ConversationMixin:
         # prior aborted turn (LLM error, tool-arg JSON parse failure, per-step
         # token-limit bail-out, etc.) so the API can't 400 on it. Keeps valid
         # context — unlike a full conversation reset.
-        self._repair_tool_use_consistency()
+        if self.capabilities.repair_tool_history:
+            self._repair_tool_use_consistency()
 
         # Detect first user turn: prime_with_context may have added a system
         # message but no user message yet — treat that as first turn so full
@@ -310,7 +312,7 @@ class ConversationMixin:
             # Surface the ACE workflow playbook that was injected into the
             # system prompt, so users can see exactly which learned rules are
             # steering the agent on this turn.
-            if self.ace_runner is not None:
+            if self.capabilities.ace_playbooks and self.ace_runner is not None:
                 try:
                     _wf_text = self.ace_runner.render_workflow()
                 except Exception as _e:
@@ -336,10 +338,19 @@ class ConversationMixin:
             # Only run the LLM-based extractor if everything upstream came
             # back empty — and try the user's message first.
             if self.issue_time:
-                time_source = "primed"
+                time_source = self.capabilities.primed_issue_time_source
             else:
                 self.issue_time = self._extract_issue_time(user_message)
                 time_source = "user_message"
+
+            if not self.issue_time:
+                for context_key in self.capabilities.context_issue_time_fallbacks:
+                    context_value = self.issue_context.get(context_key)
+                    if context_value:
+                        self.issue_time = self._extract_issue_time(context_value)
+                        time_source = f"issue_context.{context_key}"
+                    if self.issue_time:
+                        break
 
             if self.issue_time:
                 # Add a "customer wall clock" annotation when the issue time
@@ -350,9 +361,16 @@ class ConversationMixin:
                 customer_dt = getattr(self, "issue_time_customer", None)
                 customer_tz = (getattr(self, "issue_time_tz", "") or "").strip()
                 extracted = self.issue_time.strftime('%m/%d/%Y %H:%M:%S')
-                has_customer = bool(customer_dt and customer_tz
+                has_customer = bool(self.capabilities.show_customer_issue_time
+                                    and customer_dt and customer_tz
                                     and customer_dt != self.issue_time)
-                if has_customer:
+                if self.capabilities.compact_issue_time_notice:
+                    content = (
+                        f"Issue Time Extracted: `{extracted}`\n"
+                        f"(source: {time_source})\n"
+                        "Agent will look for events around this timestamp in filtered logs."
+                    )
+                elif has_customer:
                     # Two clean lines, no nested parentheses: the log-frame
                     # value (what we scan) on top, the customer wall clock below.
                     content = (
@@ -443,7 +461,8 @@ class ConversationMixin:
             # Cooperative stop: the user clicked "Stop" and job_runtime set our
             # cancel_event. Bail out cleanly BEFORE spending another LLM call —
             # emit the token report and return a short notice.
-            if self.cancel_event.is_set():
+            if (self.capabilities.cooperative_cancellation
+                    and self.cancel_event.is_set()):
                 _emit({"role": "agent", "content": "⏹️ **Stopped by user.** Analysis halted before completion."})
                 _emit_token_report()
                 return {"type": "text", "data": "⏹️ Analysis stopped by user."}
@@ -464,7 +483,8 @@ class ConversationMixin:
             # Guarantee the request never carries an orphan tool_use/tool_result
             # (created this turn or a prior one) — the #1 cause of the API's
             # "tool_use ids ... without tool_result blocks" 400.
-            self._repair_tool_use_consistency()
+            if self.capabilities.repair_tool_history:
+                self._repair_tool_use_consistency()
             try:
                 response = self.client.chat.completions.create(
                     model=self.model,
@@ -479,8 +499,9 @@ class ConversationMixin:
                 print(f"[ERROR] {error_msg}")
                 # Dump the role + tool-id skeleton so a tool_use/tool_result
                 # mismatch can be pinpointed by message index + id.
-                print(f"[chat] 🧬 conversation_history skeleton at failure "
-                      f"({len(self.conversation_history)} msgs):\n{self._history_skeleton()}")
+                if self.capabilities.diagnose_history_on_llm_error:
+                    print(f"[chat] conversation_history skeleton at failure "
+                          f"({len(self.conversation_history)} msgs):\n{self._history_skeleton()}")
                 return {"type": "error", "data": error_msg}
 
             message = response.choices[0].message
@@ -495,6 +516,16 @@ class ConversationMixin:
                     f"completion={usage.completion_tokens} "
                     f"total={usage.total_tokens}"
                 )
+                if self.capabilities.emit_step_token_usage:
+                    _emit({
+                        "role": "token_usage",
+                        "content": (
+                            f"Token Usage (Step {step_idx + 1}): "
+                            f"Prompt: {usage.prompt_tokens} | "
+                            f"Completion: {usage.completion_tokens} | "
+                            f"Total: {usage.total_tokens}"
+                        ),
+                    })
                 # _emit({
                 #     "role": "token_usage",
                 #     "content": (
@@ -613,13 +644,14 @@ class ConversationMixin:
                         # response would leave an orphan tool_use and 400
                         # the very next API call. Reply with an error so
                         # the model can retry / recover.
-                        self.conversation_history.append({
-                            "role": "tool",
-                            "tool_call_id": tool_call.id,
-                            "name": getattr(tool_call.function, "name", "unknown"),
-                            "content": f"Error: could not parse tool arguments as JSON ({e}). "
-                                       f"Please re-issue the call with valid JSON arguments.",
-                        })
+                        if self.capabilities.recover_invalid_tool_arguments:
+                            self.conversation_history.append({
+                                "role": "tool",
+                                "tool_call_id": tool_call.id,
+                                "name": getattr(tool_call.function, "name", "unknown"),
+                                "content": f"Error: could not parse tool arguments as JSON ({e}). "
+                                           f"Please re-issue the call with valid JSON arguments.",
+                            })
                         continue
 
                     if tool_call.function.name == "submit_final_report":
@@ -655,6 +687,11 @@ class ConversationMixin:
                         _emit({"role": "agent", "content": f"🔍 **Fetching filtered logs** for `{skill_label}`..."})
                         tool_result = self._invoke_tool("fetch_filtered_logs", {"skill_name": skill_label})
                         preview = tool_result[:400].replace('\n', ' ') + "..."
+                        if self.capabilities.emit_fetch_previews:
+                            _emit({
+                                "role": "tool",
+                                "content": f"Logs loaded (`{skill_label}`):\n```\n{preview}\n```",
+                            })
                         # _emit({"role": "tool", "content": f"📄 **Logs loaded** (`{skill_label}`):\n```\n{preview}\n```"})
 
                         # No-progress detection
@@ -695,7 +732,10 @@ class ConversationMixin:
                                     "For each important claim, map each rule clue to concrete log evidence\n"
                                     "and decide: supported, refuted, or uncertain.\n\n"
                                 )
-                                ace_domain_block = self._build_ace_domain_block(skill_label)
+                                ace_domain_block = (
+                                    self._build_ace_domain_block(skill_label)
+                                    if self.capabilities.ace_playbooks else ""
+                                )
                                 if ace_domain_block:
                                     _emit({
                                         "role": "agent",
@@ -722,7 +762,8 @@ class ConversationMixin:
                             # playbook isn't silently dropped on cold skills.
                             ace_block = (
                                 self._build_ace_domain_block(skill_label)
-                                if skill_label not in self._chat_rules_injected_skills
+                                if (self.capabilities.ace_playbooks
+                                    and skill_label not in self._chat_rules_injected_skills)
                                 else ""
                             )
                             if ace_block:

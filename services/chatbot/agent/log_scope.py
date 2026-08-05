@@ -198,7 +198,8 @@ class LogScopeMixin:
         # Time-only logs (e.g. DDD) may wrap one entry across extra lines —
         # merge those back first so segments/scoping see whole entries. No-op
         # for dated logs and for logs that don't wrap.
-        self._merge_wrapped_lines_if_needed()
+        if self.capabilities.merge_wrapped_time_only_logs:
+            self._merge_wrapped_lines_if_needed()
 
         total_lines = len(self._raw_log_cache)
 
@@ -281,11 +282,15 @@ class LogScopeMixin:
         seg2_start_idx: int = -1
         seg2_end_idx:   int = -1
 
-        if self.issue_time and not self._log_has_date():
+        if (self.issue_time and self.capabilities.scope_time_only_logs
+                and not self._log_has_date()):
             # --- 2A (TIME-ONLY logs, e.g. DDD/tracefmt with no date) ---
             # The log carries no date, so match the issue_time's TIME-OF-DAY
             # only (seconds-of-day). issue_time's date part (if any) is ignored.
-            _raw_win = self.issue_time_window_minutes
+            _raw_win = (
+                self.issue_time_window_minutes
+                if self.capabilities.configurable_issue_window else 5
+            )
             _win = _raw_win if isinstance(_raw_win, int) and _raw_win >= 0 else 5
             issue_sod = (self.issue_time.hour * 3600 + self.issue_time.minute * 60
                          + self.issue_time.second)
@@ -347,7 +352,10 @@ class LogScopeMixin:
             # --- 2A: issue_time ±N min (timestamp indices + contiguous slice) ---
             # 0 is allowed (capture only the exact issue instant); a None /
             # negative falls back to the default 5.
-            _raw_win = self.issue_time_window_minutes
+            _raw_win = (
+                self.issue_time_window_minutes
+                if self.capabilities.configurable_issue_window else 5
+            )
             _win = _raw_win if isinstance(_raw_win, int) and _raw_win >= 0 else 5
             window_start = self.issue_time - timedelta(minutes=_win)
             window_end   = self.issue_time + timedelta(minutes=_win)
@@ -443,7 +451,11 @@ class LogScopeMixin:
         #     into SCOPE_FULL_LOG_WHEN_EMPTY (e.g. the BT agent).
         # The downstream skill keyword filter trims the full scope back down,
         # so scoping everything is a safe fallback rather than a cost blow-up.
-        if not seg2_lines and total_lines and (self.SCOPE_FULL_LOG_WHEN_EMPTY or not self._log_has_date()):
+        expand_undated = (
+            self.capabilities.full_scope_for_undated_logs
+            and not self._log_has_date()
+        )
+        if not seg2_lines and total_lines and (self.SCOPE_FULL_LOG_WHEN_EMPTY or expand_undated):
             seg2_lines = list(self._raw_log_cache)
             seg2_start_idx = 0
             seg2_end_idx = total_lines - 1

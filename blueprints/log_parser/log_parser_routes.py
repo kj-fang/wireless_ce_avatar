@@ -49,7 +49,7 @@ _SENDTO_TOKEN_TTL     = 300  # seconds – tokens expire after 5 minutes
 # Maps upload_id -> {'cancel_event': threading.Event}. The event is polled at
 # stage boundaries inside _process_local_analysis. When cancel is signalled we
 # also terminate known parser subprocesses (tracefmt.exe, 7z.exe, DDDPlayer.exe,
-# ibtdrvlogparser.exe) spawned by this Python process, so blocking .wait() /
+# ibtdrvlogparser_cli.exe) spawned by this Python process, so blocking .wait() /
 # subprocess.run() calls return promptly and the worker thread reaches its
 # next checkpoint.
 _active_local_uploads: dict = {}
@@ -62,6 +62,10 @@ _CANCELABLE_CHILD_NAMES = frozenset({
     '7z.exe', '7za.exe',
     'tracefmt.exe',
     'dddplayer.exe',
+    # BT decoding now runs the CLI build, which bt_decode_via_cli() spawns via
+    # subprocess.Popen. The old GUI-automation name is kept so a cancel still
+    # reaches any stale process left behind by a pre-CLI build.
+    'ibtdrvlogparser_cli.exe',
     'ibtdrvlogparser.exe',
 })
 

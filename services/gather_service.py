@@ -1165,8 +1165,27 @@ def record_usage(
     """
     if not conversation_id or not isinstance(usage, dict):
         return
+
     # Nothing was actually spent — don't append an empty turn.
-    if not any(int(usage.get(k) or 0) for k in ("llm_calls", "input_tokens", "output_tokens")):
+    #
+    # Cache buckets count towards "spent": once prompt caching is enabled a
+    # turn can be billed almost entirely as cache reads, with input/output at
+    # or near zero. Leaving them out would drop exactly the turns caching is
+    # meant to make cheap.
+    #
+    # The coercion is guarded because `usage` is whatever the caller handed
+    # over, and this function documents that it never raises — an unguarded
+    # int() on a non-numeric value would break that contract in the chat path.
+    def _spent(key: str) -> int:
+        try:
+            return max(0, int(usage.get(key) or 0))
+        except (TypeError, ValueError):
+            return 0
+
+    if not any(_spent(k) for k in (
+        "llm_calls", "input_tokens", "output_tokens",
+        "cache_read_tokens", "cache_write_tokens",
+    )):
         return
     # Mirrors record_send: only the packaged release build writes analytics, so
     # developer runs don't pollute the shared share-folder statistics.

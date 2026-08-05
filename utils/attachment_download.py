@@ -181,12 +181,12 @@ def download_file(
             driver = driver_manager.create_download_driver(download_path, performance_logging=True)
             if driver_manager.download_cancel_event.is_set():
                 _notify("cancelled", attempt_count=retry + 1, error_code="user_cancelled")
-                return
+                return [None, name, already_dload]
             driver.get(url)
 
             if driver_manager.download_cancel_event.is_set():
                 _notify("cancelled", attempt_count=retry + 1, error_code="user_cancelled")
-                return
+                return [None, name, already_dload]
             time.sleep(5)
             logs = driver.get_log("performance")
             file_size_bytes = extract_content_length(logs)
@@ -211,7 +211,7 @@ def download_file(
                         _notify("cancelled", attempt_count=retry + 1, error_code="user_cancelled")
                     else:
                         _notify("cancelled", attempt_count=retry + 1, error_code="app_shutdown")
-                    return
+                    return [None, name, already_dload]
                 
                 time.sleep(0.5)
 
@@ -267,7 +267,7 @@ def download_file(
                 # Cancelled mid-flight — don't treat as a retryable failure.
                 _remove_partial_download(temp_path, name)
                 _notify("cancelled", attempt_count=retry + 1, error_code="user_cancelled")
-                return
+                return [None, name, already_dload]
             print(f"Download failed {e}")
             print(f"Retry download file: {name}")
             retry += 1

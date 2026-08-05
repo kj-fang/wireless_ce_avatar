@@ -882,18 +882,24 @@ def _do_record(
 
     with _lock_for(path):
         record = None
-        existed = path.exists()
-        if existed:
+        if path.exists():
             try:
                 record = json.loads(path.read_text(encoding="utf-8"))
             except Exception:
                 record = None
-        first_send = not isinstance(record, dict)
-        if first_send:
+        if not isinstance(record, dict):
             record = _new_record(
                 conversation_id, workflow_id, session_id, user, issue, log_path,
                 issue_time, issue_time_window_minutes, domain
             )
+        # "Have we captured the question yet?" — deliberately NOT "did the file
+        # exist?". _do_record_usage may have created the record first (the two
+        # workers are unordered), and that skeleton carries no message. Keying
+        # off the file's existence would drop the user's question in that case.
+        needs_question = not record.get("messages")
+        # session_id is only known here; backfill it onto a usage-made skeleton.
+        if session_id and not record.get("session_id"):
+            record["session_id"] = session_id
 
         # Refresh latest context (the user may have loaded a log / set a time
         # after the conversation started).
@@ -911,7 +917,7 @@ def _do_record(
 
         # Only the FIRST Send of a conversation records the question — later
         # sends just refresh context (no message accumulation).
-        if first_send:
+        if needs_question:
             msg = str(user_message or "").strip()
             if msg:
                 if len(msg) > _MAX_MSG_CHARS:
@@ -1018,7 +1024,14 @@ def record_send(
         print(f"[gather] record_send dispatch failed: {e}")
 
 
-def _do_record_usage(conversation_id: str, workflow_id: str, model: str, usage: dict) -> None:
+def _do_record_usage(
+    conversation_id: str,
+    workflow_id: str,
+    model: str,
+    usage: dict,
+    issue: Optional[dict] = None,
+    domain: str = "",
+) -> None:
     """Worker-side: merge one finished turn's tokens + cost into the record."""
     user = _current_user()
     try:
@@ -1028,16 +1041,24 @@ def _do_record_usage(conversation_id: str, workflow_id: str, model: str, usage: 
         return
 
     with _lock_for(path):
-        # record_send() created this file at the start of the turn. If it is
-        # missing the turn was not recorded (e.g. dev build) — nothing to do.
-        if not path.exists():
-            return
-        try:
-            record = json.loads(path.read_text(encoding="utf-8"))
-        except Exception:
-            return
+        # record_send() normally creates this file at the start of the turn,
+        # but both run on their own background threads and nothing orders
+        # them. Waiting for the other thread is not an option either — it may
+        # have failed outright. So create the record here when it is missing
+        # and let _do_record fill in the context it owns; it preserves every
+        # field it does not itself set. Bailing out instead would silently
+        # discard the turn together with its settled cost.
+        record = None
+        if path.exists():
+            try:
+                record = json.loads(path.read_text(encoding="utf-8"))
+            except Exception:
+                record = None
         if not isinstance(record, dict):
-            return
+            record = _new_record(
+                conversation_id, workflow_id, "", user, issue,
+                "", "", None, domain,
+            )
 
         def _n(src: dict, key: str) -> int:
             try:
@@ -1154,7 +1175,11 @@ def record_usage(
     try:
         t = threading.Thread(
             target=_do_record_usage,
-            args=(conversation_id, workflow_id, str(model or ""), dict(usage)),
+            # issue/domain are forwarded so the worker can still build a valid
+            # record if it happens to reach the file before record_send's own
+            # worker does — the two threads have no ordering guarantee.
+            args=(conversation_id, workflow_id, str(model or ""), dict(usage),
+                  issue, domain),
             daemon=True,
         )
         t.start()

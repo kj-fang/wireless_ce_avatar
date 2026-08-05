@@ -320,33 +320,47 @@ def reverify_and_notify(
         ns_changes.setdefault(ns, [])
         ns_changes[ns].extend(man.get("playbook_changes") or [])
 
-    # Group entries by recipient email (across namespaces).
+    # Group entries by recipient email (across namespaces). When a redirect
+    # override is active (testing), entries whose snapshot predates the
+    # submitted_by_email field are still processed under their submitter name
+    # since the mail goes to the override inbox anyway.
     people: dict[str, dict] = {}
     skipped_no_email = 0
     for man in loaded:
         for entry in man.get("entries") or []:
             email = _norm_email(entry.get("submitted_by_email"))
-            if not email:
+            if email:
+                key = email
+                recipient = email
+                display = email
+            elif REVERIFY_REDIRECT_TO:
+                display = (entry.get("submitted_by") or "unknown").strip() or "unknown"
+                key = f"noemail:{display}"
+                recipient = None
+            else:
                 skipped_no_email += 1
                 print(f"[reverify] skip (no email): conv={entry.get('conversation_id')} "
                       f"case={entry.get('case_nbr')}")
                 continue
-            people.setdefault(email, {"sections": [], "namespaces": set()})
+            bundle = people.setdefault(
+                key, {"sections": [], "namespaces": set(),
+                      "display": display, "recipient": recipient})
             section = _build_section(entry, max_steps=max_steps)
-            people[email]["sections"].append(section)
-            people[email]["namespaces"].add(entry.get("namespace") or "wifi")
+            bundle["sections"].append(section)
+            bundle["namespaces"].add(entry.get("namespace") or "wifi")
 
     out_dir = Path(runs_dir) / run_stamp / "reverify"
     out_dir.mkdir(parents=True, exist_ok=True)
 
     sent = 0
     written = 0
-    for email, bundle in people.items():
+    for key, bundle in people.items():
         sections = bundle["sections"]
+        display = bundle["display"]
         cases = [{"title": s["title"], "domain": s["domain"],
                   "reanswered": s["reanswered"]} for s in sections]
-        html = replay_html.render_replay_html(person_email=email, sections=sections)
-        safe = _safe_email_filename(email)
+        html = replay_html.render_replay_html(person_email=display, sections=sections)
+        safe = _safe_email_filename(display)
         html_path = out_dir / f"{safe}.html"
         html_path.write_text(html, encoding="utf-8")
         written += 1
@@ -357,13 +371,17 @@ def reverify_and_notify(
         ]
         attachment_name = f"agent_reanswer_{safe}.html"
         body = replay_html.render_user_email(
-            person_email=email,
+            person_email=display,
             cases=cases,
             namespace_changes=namespace_changes,
             attachment_name=attachment_name,
         )
         subject = f"[ACE] 你的回饋已讓 Agent 重新回答 ({len(sections)} case)"
-        to_list = list(REVERIFY_REDIRECT_TO) if REVERIFY_REDIRECT_TO else [email]
+        to_list = (list(REVERIFY_REDIRECT_TO) if REVERIFY_REDIRECT_TO
+                   else ([bundle["recipient"]] if bundle["recipient"] else []))
+        if not to_list:
+            print(f"[reverify] skip send (no recipient): {display}")
+            continue
 
         if dry_run:
             print(f"[reverify] DRY-RUN would email {to_list} — {len(sections)} case(s); "

@@ -414,7 +414,13 @@ def _load_or_new_workflow(
         record = _new_workflow_record(workflow_id, user, issue, domain, attachment_list)
     if issue:
         record["case"] = _clean_case(issue)
-    if domain:
+    # Write-once. record_workflow_start runs first, on case load, and sets the
+    # CASE's technology (wifi/bt). Everything after it — feature usage, the
+    # conversation link — passes the domain of whichever AGENT is running, and
+    # that is a different thing: a wifi case analysed with Network Experience
+    # would otherwise have its case technology rewritten to "nw". The agent is
+    # recorded separately in `agents_used`.
+    if domain and not record.get("domain"):
         record["domain"] = str(domain).strip().lower()
     record["schema_version"] = GATHER_SCHEMA_VERSION
     record["updated_at"] = _now_iso()
@@ -957,7 +963,24 @@ def _do_record(
 def _link_conversation_to_workflow(
     workflow_id: str, conversation_id: str, issue: Optional[dict], domain: str,
 ) -> None:
-    """Add conversation_id to the workflow's list if it is not already there."""
+    """
+    Link a conversation to its workflow and record which agent it ran on.
+
+    Two different things are being tracked, and conflating them loses data:
+
+      workflow["domain"]      the CASE's technology, from Salesforce when the
+                              case loads. Only ever "wifi" or "bt" — the field
+                              behind it (`wifi_or_bt`) has no third value.
+      workflow["agents_used"] which of the three agents on the main page the
+                              user actually opened: wifi, nw or bt.
+
+    "nw" is a tool, not a case type, so it can never appear in `domain`. And
+    the attachment claim is classified on the select-attachments page, before
+    any agent has been chosen, so it cannot be attributed to one at the time
+    it is written. `agents_used` is what makes the per-agent split possible
+    after the fact: it lives on the same workflow as `attachment_audit`, so
+    the two join with no extra lookup.
+    """
     user = _current_user()
     try:
         wpath = _workflow_path(workflow_id, user)
@@ -966,11 +989,23 @@ def _link_conversation_to_workflow(
             ids = wrecord.get("conversation_ids")
             if not isinstance(ids, list):
                 ids = []
+            agents = wrecord.get("agents_used")
+            if not isinstance(agents, list):
+                agents = []
+
             safe = _safe_id(conversation_id)
-            if safe in ids:
-                return          # already linked — skip the write entirely
-            ids.append(safe)
-            wrecord["conversation_ids"] = ids[-200:]
+            agent = str(domain or "").strip().lower()
+            new_conversation = safe not in ids
+            new_agent = bool(agent) and agent not in agents
+            if not new_conversation and not new_agent:
+                return          # nothing changed — skip the write entirely
+
+            if new_conversation:
+                ids.append(safe)
+                wrecord["conversation_ids"] = ids[-200:]
+            if new_agent:
+                agents.append(agent)
+                wrecord["agents_used"] = sorted(agents)
             _write_workflow(wpath, wrecord)
     except Exception as e:
         print(f"[gather] conversation link failed (workflow={workflow_id}): {e}")
@@ -1437,6 +1472,17 @@ def compute_aggregates() -> dict:
         "download_succeeded_files": 0,
         "download_failed_files": 0,
         "reconciliation_status": Counter(),
+        # Same shape again, keyed by the agent the workflow was analysed with.
+        "by_agent": defaultdict(lambda: {
+            "workflows": 0,
+            "declared_yes": 0,
+            "declared_no": 0,
+            "declared_unknown": 0,
+            "discovered_files": 0,
+            "selected_files": 0,
+            "download_succeeded_files": 0,
+            "download_failed_files": 0,
+        }),
     }
     for workflow in iter_workflows():
         dom = str(workflow.get("domain") or "wifi")
@@ -1473,9 +1519,25 @@ def compute_aggregates() -> dict:
             continue
         attachment_stats["workflows"] += 1
         declared = audit.get("issue_declared_attached")
-        attachment_stats[
-            "declared_yes" if declared is True else "declared_no" if declared is False else "declared_unknown"
-        ] += 1
+        declared_key = (
+            "declared_yes" if declared is True
+            else "declared_no" if declared is False
+            else "declared_unknown"
+        )
+        attachment_stats[declared_key] += 1
+
+        # The claim is classified before an agent is chosen, so it carries the
+        # case technology (wifi/bt) and never "nw". Split it by the agents the
+        # workflow actually ran instead — that is the wifi/nw/bt distinction
+        # the three buttons on the main page make. A workflow analysed with
+        # two agents counts under both; "none" means no agent was opened.
+        agents = workflow.get("agents_used")
+        agents = [a for a in agents if a] if isinstance(agents, list) else []
+        for agent in (agents or ["none"]):
+            ab = attachment_stats["by_agent"][str(agent)]
+            ab["workflows"] += 1
+            ab[declared_key] += 1
+
         for src, dst in (
             ("discovered_count", "discovered_files"),
             ("selected_count", "selected_files"),
@@ -1483,9 +1545,13 @@ def compute_aggregates() -> dict:
             ("download_failed_count", "download_failed_files"),
         ):
             try:
-                attachment_stats[dst] += max(0, int(audit.get(src) or 0))
+                value = max(0, int(audit.get(src) or 0))
             except (TypeError, ValueError):
-                pass
+                continue
+            attachment_stats[dst] += value
+            for agent in (agents or ["none"]):
+                attachment_stats["by_agent"][str(agent)][dst] += value
+
         attachment_stats["reconciliation_status"][str(audit.get("reconciliation_status") or "NONE")] += 1
 
     feature_spend_out = {
@@ -1493,6 +1559,10 @@ def compute_aggregates() -> dict:
         for feature, data in sorted(feature_spend.items())
     }
     attachment_stats["reconciliation_status"] = dict(attachment_stats["reconciliation_status"])
+    attachment_stats["by_agent"] = {
+        agent: dict(data)
+        for agent, data in sorted(attachment_stats["by_agent"].items())
+    }
 
     users_out = {
         u: {

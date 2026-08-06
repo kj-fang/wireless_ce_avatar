@@ -46,7 +46,7 @@ try {
         # ---- NIGHTLY build: on main branch ----
         # Patch = commits since the version anchor tag (e.g. v99.1.0).
         # Tag resets patch to 0 on each minor bump.
-        $anchorTag = "v$NightlyMajor.$NightlyMinor.0"
+        $anchorTag = "v{0}.{1}.0" -f $NightlyMajor, $NightlyMinor
         try {
             $patchCount = git rev-list --count "${anchorTag}..HEAD" 2>$null
             if ($LASTEXITCODE -ne 0 -or -not $patchCount) { throw "tag not found" }
@@ -54,7 +54,7 @@ try {
             Write-Host "⚠️  Tag '$anchorTag' not found — falling back to global commit count" -ForegroundColor Yellow
             $patchCount = git rev-list --count $Branch
         }
-        $version = "$NightlyMajor.$NightlyMinor.$patchCount"
+        $version = "{0}.{1}.{2}" -f $NightlyMajor, $NightlyMinor, $patchCount
         $buildType = "NIGHTLY"
     } elseif ($currentBranch -match '^release/(\d+\.\d+)$') {
         # ---- RELEASE build: on a release/X.Y branch ----
@@ -72,7 +72,7 @@ try {
             $patchCount = git rev-list --count HEAD
             Write-Host "⚠️  Could not compute branch-point patch count — falling back to global count" -ForegroundColor Yellow
         }
-        $version   = "$releaseMajor.$releaseMinor.$patchCount"
+        $version   = "{0}.{1}.{2}" -f $releaseMajor, $releaseMinor, $patchCount
         $buildType = "RELEASE"
     } else {
         # ---- DEV build: on a feature/fix branch ----
@@ -82,7 +82,7 @@ try {
         try {
             $mergeBase = git merge-base HEAD $Branch 2>$null
             if ($LASTEXITCODE -ne 0 -or -not $mergeBase) { throw "merge-base failed" }
-            $anchorTag = "v$NightlyMajor.$NightlyMinor.0"
+            $anchorTag = "v{0}.{1}.0" -f $NightlyMajor, $NightlyMinor
             $baseCommitCount = git rev-list --count "${anchorTag}..${mergeBase}" 2>$null
             if ($LASTEXITCODE -ne 0 -or $null -eq $baseCommitCount) { throw "tag not found" }
         } catch {
@@ -90,7 +90,7 @@ try {
             $baseCommitCount = git rev-list --count $Branch
             Write-Host "⚠️  Could not determine branch point — using tip of '$Branch' as fallback (version may be approximate)" -ForegroundColor Yellow
         }
-        $version = "$NightlyMajor.$NightlyMinor.$baseCommitCount-dev.$gitHash"
+        $version = "{0}.{1}.{2}-dev.{3}" -f $NightlyMajor, $NightlyMinor, $baseCommitCount, $gitHash
         $buildType = "DEV"
     }
 
@@ -102,7 +102,7 @@ try {
 
 } catch {
     Write-Host "Error getting git information. Using defaults." -ForegroundColor Red
-    $version = "$NightlyMajor.$NightlyMinor.0-dev.unknown"
+    $version = "{0}.{1}.0-dev.unknown" -f $NightlyMajor, $NightlyMinor
     $gitHash = "unknown"
     $currentBranch = "unknown"
     $buildDate = Get-Date -Format "yyyy-MM-dd HH:mm:ss"
@@ -171,12 +171,12 @@ VSVersionInfo(
         u'040904B0',
         [StringStruct(u'CompanyName', u'Intel Corporation'),
         StringStruct(u'FileDescription', u'IntelAvatar - Wireless CE Log Analysis Tool'),
-        StringStruct(u'FileVersion', u'$version.0'),
+        StringStruct(u'FileVersion', u'${version}.0'),
         StringStruct(u'InternalName', u'IntelAvatar'),
         StringStruct(u'LegalCopyright', u'Copyright `u00a9 2026 Intel Corporation'),
         StringStruct(u'OriginalFilename', u'IntelAvatar.exe'),
         StringStruct(u'ProductName', u'IntelAvatar'),
-        StringStruct(u'ProductVersion', u'$version.0'),
+        StringStruct(u'ProductVersion', u'${version}.0'),
         StringStruct(u'Comments', u'Git: $gitHash | Build: $buildDate')])
       ]), 
     VarFileInfo([VarStruct(u'Translation', [1033, 1200])])

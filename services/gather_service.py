@@ -84,6 +84,12 @@ from utils import helpers
 #        v4 fields and gain workflow_id for a backwards-compatible join.
 GATHER_SCHEMA_VERSION = 5
 
+# Bucket for records that carry no domain, rather than assuming the busiest
+# one. Defaulting these to "wifi" made real wifi traffic indistinguishable
+# from "we don't know" — every pre-v4 record on the share has no domain, so
+# they were silently inflating the wifi numbers.
+UNKNOWN_DOMAIN = "unknown"
+
 _MAX_DESC_CHARS = 2000        # keep the case summary compact for the DB
 _MAX_MSG_CHARS = 4000         # cap the stored first question
 _MAX_TURNS = 200              # cap turns[] so a long conversation can't bloat the file
@@ -230,7 +236,7 @@ def _new_record(
         "date": _today(),                   # required local date (YYYY-MM-DD)
         "created_at": now,
         "updated_at": now,
-        "domain": domain or "wifi",
+        "domain": domain or UNKNOWN_DOMAIN,
         "case": _clean_case(issue),
         "log_path": log_path or "",
         "issue_time": issue_time or "",
@@ -388,7 +394,7 @@ def _new_workflow_record(
         "date": _today(),
         "created_at": now,
         "updated_at": now,
-        "domain": str(domain or "wifi").strip().lower() or "wifi",
+        "domain": str(domain or UNKNOWN_DOMAIN).strip().lower() or UNKNOWN_DOMAIN,
         "case": _clean_case(issue),
         "conversation_ids": [],
         "ai_invocations": [],
@@ -819,7 +825,7 @@ def _do_record_feature_usage(
                 "ts": _now_iso(),
                 "feature_code": str(feature_code or "unknown")[:80],
                 "trigger": str(trigger or "")[:80],
-                "domain": str(domain or record.get("domain") or "wifi"),
+                "domain": str(domain or record.get("domain") or UNKNOWN_DOMAIN),
                 "conversation_id": _safe_id(conversation_id) if conversation_id else "",
                 "turn_id": _safe_id(turn_id) if turn_id else "",
                 "model": str(model or ""),
@@ -1379,7 +1385,7 @@ def compute_aggregates() -> dict:
         updated = rec.get("updated_at") or created
         # v1-v3 records predate cost accounting; treat them as zero spend
         # rather than skipping them, so usage counts stay comparable.
-        dom = str(rec.get("domain") or "").strip() or "wifi"
+        dom = str(rec.get("domain") or "").strip() or UNKNOWN_DOMAIN
         usage_rec = rec.get("usage") if isinstance(rec.get("usage"), dict) else {}
         cost_rec = rec.get("cost_usd") if isinstance(rec.get("cost_usd"), dict) else {}
         try:
@@ -1485,7 +1491,7 @@ def compute_aggregates() -> dict:
         }),
     }
     for workflow in iter_workflows():
-        dom = str(workflow.get("domain") or "wifi")
+        dom = str(workflow.get("domain") or UNKNOWN_DOMAIN)
         for inv in workflow.get("ai_invocations") or []:
             if not isinstance(inv, dict):
                 continue

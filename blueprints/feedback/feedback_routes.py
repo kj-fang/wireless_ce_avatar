@@ -7,10 +7,12 @@ affect chat behaviour.
 """
 
 import re
+import uuid
 
 from flask import Blueprint, request, jsonify, session
 
-from services import feedback_service
+from models.models import CaseContext
+from services import feedback_service, gather_service
 
 feedback_bp = Blueprint("feedback", __name__, url_prefix="/feedback")
 
@@ -156,6 +158,10 @@ def detail():
         vote_val = None
 
     session_id = session.get("chatbot_session_id", "")
+    feedback_event_id = str(uuid.uuid4())
+    # The legacy Wi-Fi frontend sends an empty domain; make the v6
+    # agent_domain explicit while preserving feedback_service behaviour.
+    agent_domain = (data.get("domain") or "wifi").strip().lower()
 
     # Skill-config attachment was removed from the feedback flow. We keep
     # the `yaml_modified` session flag only as a priority signal (it bumps
@@ -220,14 +226,28 @@ def detail():
         yaml_modified=yaml_modified,
         log_path=log_path,
         attach_log=attach_log,
-        domain=(data.get("domain") or "").strip(),
+        domain=agent_domain,
+        feedback_event_id=feedback_event_id,
     )
     if not ok:
         return jsonify({
             "success": False,
             "error": "nothing to record (all fields empty)",
         }), 400
-    return jsonify({"success": True})
+    try:
+        issue = CaseContext.from_session(session.get("case_context") or {}).to_dict()
+    except Exception:
+        issue = {}
+    gather_service.record_feedback_submit(
+        feedback_event_id=feedback_event_id,
+        conversation_id=conversation_id,
+        turn_id=turn_id,
+        workflow_id=session.get("gather_workflow_id", ""),
+        session_id=session_id,
+        issue=issue,
+        domain=agent_domain,
+    )
+    return jsonify({"success": True, "feedback_event_id": feedback_event_id})
 
 
 @feedback_bp.route("/step_vote", methods=["POST"])

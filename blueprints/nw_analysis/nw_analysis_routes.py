@@ -508,6 +508,8 @@ def chat():
 
         conversation_id = _ensure_nw_conversation_id()
         turn_id = str(uuid.uuid4())
+        session["nw_active_conversation_id"] = conversation_id
+        session["nw_active_turn_id"] = turn_id
         turn_started_at = datetime.now()
         try:
             _issue_ctx_for_snapshot = _extract_issue_context()
@@ -522,18 +524,21 @@ def chat():
             gather_service.record_send(
                 conversation_id=conversation_id,
                 workflow_id=session.get("gather_workflow_id", ""),
-                session_id=session.get("session_id", "") or "",
+                # _get_or_create_agent() stores the NW runtime identifier under
+                # chatbot_session_id, matching the Wi-Fi and BT chatbots.
+                session_id=session.get("chatbot_session_id", "") or "",
                 user_message=user_message,
                 issue=_issue_ctx_for_snapshot,
                 log_path=getattr(agent, "current_log_path", "") or "",
                 issue_time="",
                 issue_time_window_minutes=None,
                 domain=GATHER_DOMAIN,
+                turn_id=turn_id,
             )
         except Exception:
             pass
 
-        def _record_turn_cost() -> None:
+        def _record_turn_cost(status: str = "completed", error_code: str = "") -> None:
             """Settle this turn's tokens + USD. Never raises."""
             try:
                 gather_service.record_usage(
@@ -545,6 +550,8 @@ def chat():
                     domain=GATHER_DOMAIN,
                     turn_id=turn_id,
                     latency_ms=int((datetime.now() - turn_started_at).total_seconds() * 1000),
+                    status=status,
+                    error_code=error_code,
                 )
             except Exception:
                 pass
@@ -561,6 +568,8 @@ def chat():
 
             @copy_current_request_context
             def run_chat_with_tools():
+                turn_status = "completed"
+                error_code = ""
                 try:
                     result = agent.chat(
                         user_message,
@@ -572,13 +581,15 @@ def chat():
                     )
                     step_queue.put(("done", result))
                 except Exception as exc:
+                    turn_status = "failed"
+                    error_code = type(exc).__name__
                     error_tb = traceback.format_exc()
                     print(f"❌ Chat-with-tools thread error:\n{error_tb}")
                     step_queue.put(("error", str(exc)))
                 finally:
                     # Book the spend even when the turn errored or was
                     # cancelled — those tokens were still billed.
-                    _record_turn_cost()
+                    _record_turn_cost(turn_status, error_code)
 
             t = threading.Thread(target=run_chat_with_tools, daemon=True)
             t.start()
@@ -622,6 +633,19 @@ def chat():
     except Exception as e:
         error_traceback = traceback.format_exc()
         print(f"❌ Chatbot error:\n{error_traceback}")
+        try:
+            if conversation_id and turn_id:
+                gather_service.record_turn_status(
+                    conversation_id=conversation_id,
+                    turn_id=turn_id,
+                    status="failed",
+                    workflow_id=session.get("gather_workflow_id", ""),
+                    issue=locals().get("_issue_ctx_for_snapshot") or {},
+                    domain=GATHER_DOMAIN,
+                    error_code=type(e).__name__,
+                )
+        except Exception:
+            pass
 
         def generate_error():
             yield f"data: {json.dumps({'type': 'error', 'content': str(e)}, ensure_ascii=False)}\n\n"
@@ -663,6 +687,18 @@ def chat_stop():
         if agent is not None and hasattr(agent, "cancel_event"):
             agent.cancel_event.set()
             stopped = True
+        if stopped:
+            try:
+                gather_service.record_turn_status(
+                    conversation_id=session.get("nw_active_conversation_id", ""),
+                    turn_id=session.get("nw_active_turn_id", ""),
+                    status="cancelled",
+                    workflow_id=session.get("gather_workflow_id", ""),
+                    issue=_extract_issue_context(),
+                    domain=GATHER_DOMAIN,
+                )
+            except Exception:
+                pass
         return jsonify({"success": True, "stopped": stopped})
     except Exception as e:
         return jsonify({"success": False, "error": str(e)}), 500

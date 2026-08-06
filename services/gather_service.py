@@ -61,6 +61,7 @@ from typing import Any, Iterator, Optional
 from configs.global_configs import app_config
 from configs.llm_pricing import cost_for
 from configs.path_configs import GATHER_DIR_prim, GATHER_DIR_bkup
+from configs.version import __version__ as APP_VERSION
 from utils import helpers
 
 
@@ -82,7 +83,10 @@ from utils import helpers
 #        issue_time_prepass) plus case-linked attachment inventory, selection,
 #        and per-file download outcomes.  Chatbot session files retain their
 #        v4 fields and gain workflow_id for a backwards-compatible join.
-GATHER_SCHEMA_VERSION = 5
+#   v6 - Split the overloaded legacy `domain` into case_domain (wifi/bt) and
+#        agent_domain (wifi/nw/bt), added packaged app_version, durable turn
+#        lifecycle status, and minimal feedback_submission linkage events.
+GATHER_SCHEMA_VERSION = 6
 
 # Bucket for records that carry no domain, rather than assuming the busiest
 # one. Defaulting these to "wifi" made real wifi traffic indistinguishable
@@ -99,9 +103,32 @@ _MAX_ATTACHMENT_FILES = 1000  # defensive cap for unusually large cases
 # Minimum seconds between async aggregate rebuilds (per process). Each write
 # schedules a rebuild but only one runs per cooldown window, so a burst of
 # Sends doesn't fan out into a burst of full-scan rebuilds.
-_AGG_COOLDOWN_SEC = 60
+#
+# The cooldown is per process, so the load on the share scales with the number
+# of concurrent EXEs: N users means up to N full scans per window. A rebuild
+# reads every session, workflow and feedback event over SMB, so keep this
+# generous — the aggregates are a convenience rollup, not a live dashboard,
+# and every consumer can also call rebuild_aggregates() on demand. Only
+# coarse events (a finished turn, a case starting) schedule one; lifecycle and
+# feedback writes deliberately do not.
+_AGG_COOLDOWN_SEC = 600
+
+# Record kinds that live under the root, one file per id, per user.
+_RECORD_DIRS = ("sessions", "workflows", "feedback_submissions")
+
+# How long to keep buffering locally before re-probing an unreachable share.
+# Probing costs up to 8 s per candidate path, and it only ever runs on a
+# background writer thread, so this trades a little staleness for not paying
+# that cost on every single write while the share is down.
+_ROOT_REPROBE_SEC = 300
 
 _root_cache: Optional[Path] = None
+# Set only when *we* fell back to local buffering. While this is non-None the
+# share gets re-probed periodically and the local records are drained up on
+# the first success. Callers that pin _root_cache directly (tests) leave it
+# None and keep the old resolve-once behaviour.
+_outbox_root: Optional[Path] = None
+_root_probed_at: float = 0.0
 _root_lock = threading.Lock()
 
 _locks_guard = threading.Lock()
@@ -146,34 +173,104 @@ def _safe_id(value: Any) -> str:
     return s[:128] or "unknown"
 
 
+def _ensure_layout(root: Path) -> Path:
+    for sub in _RECORD_DIRS:
+        (root / sub).mkdir(parents=True, exist_ok=True)
+    return root
+
+
+def _local_root() -> Path:
+    base = getattr(app_config, "avatarfiles_dir", None)
+    return Path(base) / "Gather" if base else Path.cwd() / "data" / "Gather"
+
+
+def _record_stamp(path: Path) -> str:
+    """Last-written marker of a record file, for outbox collision resolution."""
+    try:
+        rec = json.loads(path.read_text(encoding="utf-8"))
+        return str(rec.get("updated_at") or rec.get("submitted_at") or "")
+    except Exception:
+        return ""
+
+
+def _drain_outbox(local: Path, share: Path) -> None:
+    """Move records buffered while the share was down onto the share.
+
+    Every record is a whole-file snapshot under ``<kind>/<user>/<id>.json``,
+    so moving one is idempotent and needs no transaction. Each machine only
+    ever writes its own user folder, so a collision means the same machine
+    reached the share between two writes of the same record; the later
+    snapshot wins because a record is always rewritten in full.
+    """
+    if local == share or not local.exists():
+        return
+    moved = stale = failed = 0
+    for kind in _RECORD_DIRS:
+        src_dir = local / kind
+        if not src_dir.is_dir():
+            continue
+        for user_dir in src_dir.iterdir():
+            if not user_dir.is_dir():
+                continue
+            for f in user_dir.glob("*.json"):
+                dst = share / kind / user_dir.name / f.name
+                try:
+                    if dst.exists() and _record_stamp(f) <= _record_stamp(dst):
+                        f.unlink()
+                        stale += 1
+                        continue
+                    dst.parent.mkdir(parents=True, exist_ok=True)
+                    tmp = dst.with_suffix(dst.suffix + ".tmp")
+                    tmp.write_bytes(f.read_bytes())
+                    tmp.replace(dst)
+                    f.unlink()
+                    moved += 1
+                except Exception:
+                    failed += 1
+    if moved or stale or failed:
+        print(f"[gather] outbox drained: {moved} uploaded, {stale} already current, "
+              f"{failed} left for the next attempt")
+
+
 def _resolve_root() -> Path:
-    """Resolve the Gather root once and cache it (8 s share probe per path)."""
-    global _root_cache
-    if _root_cache is not None:
+    """Resolve the Gather root, preferring the share and retrying if it's down.
+
+    A share that was unreachable at startup used to strand every record of
+    that run in a local folder with no path back — silently, since a write
+    that lands somewhere still looks like a success. The local folder is now
+    an outbox: the share is re-probed every ``_ROOT_REPROBE_SEC`` and anything
+    buffered locally is moved up on the first success.
+    """
+    global _root_cache, _outbox_root, _root_probed_at
+    if _root_cache is not None and _outbox_root is None:
         return _root_cache
     with _root_lock:
-        if _root_cache is not None:
+        if _root_cache is not None and _outbox_root is None:
             return _root_cache
+        now = time.time()
+        if _root_cache is not None and now - _root_probed_at < _ROOT_REPROBE_SEC:
+            return _root_cache          # share was down recently — keep buffering
+        _root_probed_at = now
 
         share = helpers.get_load_path(GATHER_DIR_prim, GATHER_DIR_bkup)
         if share:
             try:
-                root = Path(share)
-                (root / "sessions").mkdir(parents=True, exist_ok=True)
-                (root / "workflows").mkdir(parents=True, exist_ok=True)
+                root = _ensure_layout(Path(share))
+                if _outbox_root is not None:
+                    _drain_outbox(_outbox_root, root)
+                    _outbox_root = None
                 _root_cache = root
                 print(f"[gather] using shared root: {_redact_path(root)}")
                 return root
             except Exception as e:
-                print(f"[gather] shared root unwritable ({_redact_path(share)}): {e} — falling back to local")
+                print(f"[gather] shared root unwritable ({_redact_path(share)}): {e}")
 
-        base = getattr(app_config, "avatarfiles_dir", None)
-        root = Path(base) / "Gather" if base else Path.cwd() / "data" / "Gather"
-        (root / "sessions").mkdir(parents=True, exist_ok=True)
-        (root / "workflows").mkdir(parents=True, exist_ok=True)
-        _root_cache = root
-        print(f"[gather] using local root: {_redact_path(root)}")
-        return root
+        if _root_cache is None:
+            _outbox_root = _ensure_layout(_local_root())
+            _root_cache = _outbox_root
+            print(f"[gather] share unavailable — buffering locally at "
+                  f"{_redact_path(_root_cache)}, will retry every {_ROOT_REPROBE_SEC}s")
+        return _root_cache
 
 
 def _lock_for(path: Path) -> threading.Lock:
@@ -198,6 +295,24 @@ def _workflow_path(workflow_id: str, user: str) -> Path:
     user_dir = root / "workflows" / _safe_id(user)
     user_dir.mkdir(parents=True, exist_ok=True)
     return user_dir / f"{_safe_id(workflow_id)}.json"
+
+
+def _feedback_submission_path(feedback_event_id: str, user: str) -> Path:
+    root = _resolve_root()
+    user_dir = root / "feedback_submissions" / _safe_id(user)
+    user_dir.mkdir(parents=True, exist_ok=True)
+    return user_dir / f"{_safe_id(feedback_event_id)}.json"
+
+
+def _agent_domain(value: Any) -> str:
+    value = str(value or "").strip().lower()
+    return value if value in {"wifi", "nw", "bt"} else UNKNOWN_DOMAIN
+
+
+def _case_domain(issue: Optional[dict], explicit: str = "") -> str:
+    issue = issue if isinstance(issue, dict) else {}
+    value = str(issue.get("wifi_or_bt") or explicit or "").strip().lower()
+    return value if value in {"wifi", "bt"} else UNKNOWN_DOMAIN
 
 
 def _clean_case(issue: Optional[dict]) -> dict:
@@ -236,7 +351,11 @@ def _new_record(
         "date": _today(),                   # required local date (YYYY-MM-DD)
         "created_at": now,
         "updated_at": now,
+        "app_version": APP_VERSION,
+        # `domain` remains the pre-v6 agent-domain field for existing ETL.
         "domain": domain or UNKNOWN_DOMAIN,
+        "agent_domain": _agent_domain(domain),
+        "case_domain": _case_domain(issue),
         "case": _clean_case(issue),
         "log_path": log_path or "",
         "issue_time": issue_time or "",
@@ -279,6 +398,87 @@ def _empty_cost() -> dict:
         "rate_input_per_mtok": None,
         "rate_output_per_mtok": None,
     }
+
+
+_TURN_TERMINAL_STATUSES = {"completed", "failed", "cancelled"}
+
+# A turn is written by two unordered threads: the route reports the outcome it
+# saw, and the usage worker settles tokens milliseconds later with its own
+# default of "completed". Rank the states so the more specific outcome wins
+# regardless of arrival order — a late success must never erase a Stop or an
+# exception, while a late failure may still overwrite an assumed success.
+_TURN_STATUS_RANK = {"started": 0, "completed": 1, "failed": 2, "cancelled": 3}
+
+
+def _upsert_turn(
+    record: dict,
+    *,
+    turn_id: str,
+    status: str,
+    model: str = "",
+    usage: Optional[dict] = None,
+    cost_usd: Optional[float] = None,
+    latency_ms: Optional[int] = None,
+    error_code: str = "",
+) -> dict:
+    """Create/update one v6 turn without letting late success erase cancel."""
+    safe_turn_id = _safe_id(turn_id) if turn_id else ""
+    turns = record.get("turns") if isinstance(record.get("turns"), list) else []
+    turn = next(
+        (item for item in turns if isinstance(item, dict)
+         and safe_turn_id and item.get("turn_id") == safe_turn_id),
+        None,
+    )
+    now = _now_iso()
+    if turn is None:
+        turn = {
+            "turn_id": safe_turn_id,
+            "ts": now,
+            "started_at": now,
+            "completed_at": None,
+            "status": "started",
+            "error_code": "",
+            "latency_ms": None,
+            "model": "",
+            "llm_calls": 0,
+            "input_tokens": 0,
+            "cache_read_tokens": 0,
+            "cache_write_tokens": 0,
+            "output_tokens": 0,
+            "cost_usd": None,
+        }
+        turns.append(turn)
+
+    wanted = "completed" if status == "success" else status
+    wanted = wanted if wanted in ({"started"} | _TURN_TERMINAL_STATUSES) else "started"
+    current = str(turn.get("status") or "started")
+    # Stop and exceptions are authoritative for the user-visible turn. A usage
+    # worker may finish milliseconds later and still books tokens/cost, but it
+    # must not relabel that turn successful.
+    if _TURN_STATUS_RANK.get(wanted, 0) >= _TURN_STATUS_RANK.get(current, 0):
+        turn["status"] = wanted
+    if wanted in _TURN_TERMINAL_STATUSES:
+        turn["completed_at"] = turn.get("completed_at") or now
+    if model:
+        turn["model"] = str(model)
+    if isinstance(usage, dict):
+        normalised = _normalise_usage(usage)
+        for key in (
+            "llm_calls", "input_tokens", "cache_read_tokens",
+            "cache_write_tokens", "output_tokens",
+        ):
+            turn[key] = normalised[key]
+    if cost_usd is not None:
+        turn["cost_usd"] = cost_usd
+    if latency_ms is not None:
+        try:
+            turn["latency_ms"] = max(0, int(latency_ms))
+        except (TypeError, ValueError):
+            pass
+    if error_code:
+        turn["error_code"] = str(error_code)[:120]
+    record["turns"] = turns[-_MAX_TURNS:]
+    return turn
 
 
 def new_workflow_id() -> str:
@@ -394,7 +594,12 @@ def _new_workflow_record(
         "date": _today(),
         "created_at": now,
         "updated_at": now,
+        "app_version": APP_VERSION,
+        # `domain` remains the pre-v6 case-domain field for existing ETL.
         "domain": str(domain or UNKNOWN_DOMAIN).strip().lower() or UNKNOWN_DOMAIN,
+        "case_domain": _case_domain(issue, domain),
+        # A workflow can use multiple agents; agents_used is authoritative.
+        "agent_domain": None,
         "case": _clean_case(issue),
         "conversation_ids": [],
         "ai_invocations": [],
@@ -428,6 +633,9 @@ def _load_or_new_workflow(
     # recorded separately in `agents_used`.
     if domain and not record.get("domain"):
         record["domain"] = str(domain).strip().lower()
+    record["case_domain"] = _case_domain(issue, record.get("case_domain") or record.get("domain"))
+    record["agent_domain"] = None
+    record["app_version"] = APP_VERSION
     record["schema_version"] = GATHER_SCHEMA_VERSION
     record["updated_at"] = _now_iso()
     return record
@@ -823,9 +1031,13 @@ def _do_record_feature_usage(
             invocations.append({
                 "invocation_id": str(uuid.uuid4()),
                 "ts": _now_iso(),
+                "app_version": APP_VERSION,
                 "feature_code": str(feature_code or "unknown")[:80],
                 "trigger": str(trigger or "")[:80],
+                # `domain` is retained as the pre-v6 agent-domain alias.
                 "domain": str(domain or record.get("domain") or UNKNOWN_DOMAIN),
+                "agent_domain": _agent_domain(domain),
+                "case_domain": str(record.get("case_domain") or _case_domain(issue)),
                 "conversation_id": _safe_id(conversation_id) if conversation_id else "",
                 "turn_id": _safe_id(turn_id) if turn_id else "",
                 "model": str(model or ""),
@@ -883,6 +1095,7 @@ def _do_record(
     issue_time: str,
     issue_time_window_minutes: Optional[int],
     domain: str,
+    turn_id: str = "",
 ) -> None:
     """Worker-side: create or update the per-conversation usage record."""
     user = _current_user()
@@ -925,6 +1138,14 @@ def _do_record(
             record["issue_time_window_minutes"] = issue_time_window_minutes
         if workflow_id:
             record["workflow_id"] = _safe_id(workflow_id)
+        # v6 forward-fill. The legacy session `domain` continues to mean the
+        # selected agent, while case_domain is derived independently.
+        record["domain"] = str(record.get("domain") or domain or UNKNOWN_DOMAIN)
+        record["agent_domain"] = _agent_domain(domain or record.get("agent_domain") or record.get("domain"))
+        case_dom = _case_domain(issue)
+        if case_dom != UNKNOWN_DOMAIN or not record.get("case_domain"):
+            record["case_domain"] = case_dom
+        record["app_version"] = APP_VERSION
         record["updated_at"] = _now_iso()
 
         # Only the FIRST Send of a conversation records the question — later
@@ -940,6 +1161,8 @@ def _do_record(
         # Send counter increments on every call so aggregates can distinguish
         # "how many conversations" from "how many questions sent".
         record["send_count"] = int(record.get("send_count") or 0) + 1
+        if turn_id:
+            _upsert_turn(record, turn_id=turn_id, status="started")
         # Forward-fill schema_version on existing v1 records we touch.
         record["schema_version"] = GATHER_SCHEMA_VERSION
 
@@ -1028,6 +1251,7 @@ def record_send(
     issue_time: str = "",
     issue_time_window_minutes: Optional[int] = None,
     domain: str = "",
+    turn_id: str = "",
 ) -> None:
     """
     Record one Send into the shared Gather folder for usage analytics.
@@ -1057,7 +1281,7 @@ def record_send(
         t = threading.Thread(
             target=_do_record,
             args=(conversation_id, workflow_id, session_id, user_message, issue, log_path,
-                  issue_time, window, domain),
+                  issue_time, window, domain, turn_id),
             daemon=True,
         )
         t.start()
@@ -1072,6 +1296,10 @@ def _do_record_usage(
     usage: dict,
     issue: Optional[dict] = None,
     domain: str = "",
+    turn_id: str = "",
+    latency_ms: Optional[int] = None,
+    status: str = "completed",
+    error_code: str = "",
 ) -> None:
     """Worker-side: merge one finished turn's tokens + cost into the record."""
     user = _current_user()
@@ -1146,26 +1374,29 @@ def _do_record_usage(
             prior["unpriced_model"] = model or "(unset)"
             record["cost_usd"] = prior
 
-        # ---- per-turn breakdown (bounded)
-        turns = record.get("turns")
-        if not isinstance(turns, list):
-            turns = []
-        turns.append({
-            "ts": _now_iso(),
-            "model": model or "",
-            "llm_calls": _n(usage, "llm_calls"),
-            "input_tokens": _n(usage, "input_tokens"),
-            "cache_read_tokens": _n(usage, "cache_read_tokens"),
-            "cache_write_tokens": _n(usage, "cache_write_tokens"),
-            "output_tokens": _n(usage, "output_tokens"),
-            "cost_usd": turn_cost["total"] if turn_cost else None,
-        })
-        record["turns"] = turns[-_MAX_TURNS:]
+        # ---- per-turn breakdown (bounded). v6 updates the `started` row made
+        # by record_send; legacy callers with no turn_id still get one row.
+        _upsert_turn(
+            record,
+            turn_id=turn_id,
+            status=status,
+            model=model,
+            usage=usage,
+            cost_usd=turn_cost["total"] if turn_cost else None,
+            latency_ms=latency_ms,
+            error_code=error_code,
+        )
 
         if model:
             record["model"] = model
         if workflow_id:
             record["workflow_id"] = _safe_id(workflow_id)
+        record["domain"] = str(record.get("domain") or domain or UNKNOWN_DOMAIN)
+        record["agent_domain"] = _agent_domain(domain or record.get("agent_domain") or record.get("domain"))
+        case_dom = _case_domain(issue)
+        if case_dom != UNKNOWN_DOMAIN or not record.get("case_domain"):
+            record["case_domain"] = case_dom
+        record["app_version"] = APP_VERSION
         record["updated_at"] = _now_iso()
         record["schema_version"] = GATHER_SCHEMA_VERSION
 
@@ -1193,6 +1424,8 @@ def record_usage(
     domain: str = "",
     turn_id: str = "",
     latency_ms: Optional[int] = None,
+    status: str = "completed",
+    error_code: str = "",
 ) -> None:
     """
     Record one finished turn's token usage + USD cost.
@@ -1204,8 +1437,11 @@ def record_usage(
     Same contract as record_send: background thread, never raises, and a no-op
     outside the packaged (frozen) build.
     """
-    if not conversation_id or not isinstance(usage, dict):
+    if not conversation_id:
         return
+    # A turn can finish before the provider reports usage (or without making
+    # an LLM call). It still needs a terminal lifecycle state in schema v6.
+    usage = usage if isinstance(usage, dict) else {}
 
     # Nothing was actually spent — don't append an empty turn.
     #
@@ -1223,14 +1459,26 @@ def record_usage(
         except (TypeError, ValueError):
             return 0
 
-    if not any(_spent(k) for k in (
+    has_spend = any(_spent(k) for k in (
         "llm_calls", "input_tokens", "output_tokens",
         "cache_read_tokens", "cache_write_tokens",
-    )):
-        return
+    ))
     # Mirrors record_send: only the packaged release build writes analytics, so
     # developer runs don't pollute the shared share-folder statistics.
     if not getattr(sys, "frozen", False):
+        return
+    if not has_spend:
+        # Lifecycle state is useful even for a zero-token cancellation/failure.
+        record_turn_status(
+            conversation_id=conversation_id,
+            turn_id=turn_id,
+            status=status,
+            workflow_id=workflow_id,
+            issue=issue,
+            domain=domain,
+            latency_ms=latency_ms,
+            error_code=error_code,
+        )
         return
     try:
         t = threading.Thread(
@@ -1239,7 +1487,7 @@ def record_usage(
             # record if it happens to reach the file before record_send's own
             # worker does — the two threads have no ordering guarantee.
             args=(conversation_id, workflow_id, str(model or ""), dict(usage),
-                  issue, domain),
+                  issue, domain, turn_id, latency_ms, status, error_code),
             daemon=True,
         )
         t.start()
@@ -1256,11 +1504,155 @@ def record_usage(
                 conversation_id=conversation_id,
                 turn_id=turn_id,
                 trigger="chat_send",
-                status="success",
+                status="success" if status == "completed" else status,
                 latency_ms=latency_ms,
+                error_code=error_code,
             )
     except Exception as e:
         print(f"[gather] record_usage dispatch failed: {e}")
+
+
+def _do_record_turn_status(
+    conversation_id: str,
+    workflow_id: str,
+    turn_id: str,
+    status: str,
+    issue: Optional[dict],
+    domain: str,
+    latency_ms: Optional[int],
+    error_code: str,
+) -> None:
+    user = _current_user()
+    try:
+        path = _conversation_path(conversation_id, user)
+        with _lock_for(path):
+            record = None
+            if path.exists():
+                try:
+                    record = json.loads(path.read_text(encoding="utf-8"))
+                except Exception:
+                    record = None
+            if not isinstance(record, dict):
+                record = _new_record(
+                    conversation_id, workflow_id, "", user, issue,
+                    "", "", None, domain,
+                )
+            _upsert_turn(
+                record,
+                turn_id=turn_id,
+                status=status,
+                latency_ms=latency_ms,
+                error_code=error_code,
+            )
+            record["app_version"] = APP_VERSION
+            record["schema_version"] = GATHER_SCHEMA_VERSION
+            record["updated_at"] = _now_iso()
+            tmp = path.with_suffix(".json.tmp")
+            tmp.write_text(json.dumps(record, ensure_ascii=False, indent=2), encoding="utf-8")
+            tmp.replace(path)
+    except Exception as e:
+        print(f"[gather] turn status failed (conv={conversation_id}, turn={turn_id}): {e}")
+    # No aggregate rebuild: a lifecycle transition changes no rolled-up number,
+    # and the record_usage that settles the same turn schedules one anyway.
+
+
+def record_turn_status(
+    *,
+    conversation_id: str,
+    turn_id: str,
+    status: str,
+    workflow_id: str = "",
+    issue: Optional[dict] = None,
+    domain: str = "",
+    latency_ms: Optional[int] = None,
+    error_code: str = "",
+) -> None:
+    """Persist a turn lifecycle transition; never changes workflow status."""
+    if (
+        not conversation_id
+        or not turn_id
+        or status not in ({"started"} | _TURN_TERMINAL_STATUSES)
+        or not getattr(sys, "frozen", False)
+    ):
+        return
+    try:
+        threading.Thread(
+            target=_do_record_turn_status,
+            args=(conversation_id, workflow_id, turn_id, status, issue, domain,
+                  latency_ms, error_code),
+            daemon=True,
+        ).start()
+    except Exception as e:
+        print(f"[gather] turn status dispatch failed: {e}")
+
+
+def _do_record_feedback_submit(
+    feedback_event_id: str,
+    conversation_id: str,
+    workflow_id: str,
+    session_id: str,
+    turn_id: str,
+    issue: Optional[dict],
+    domain: str,
+) -> None:
+    """Write one minimal, idempotent feedback-to-case linkage event."""
+    user = _current_user()
+    try:
+        path = _feedback_submission_path(feedback_event_id, user)
+        case = _clean_case(issue)
+        event = {
+            "schema_version": GATHER_SCHEMA_VERSION,
+            "record_type": "feedback_submission",
+            "feedback_event_id": _safe_id(feedback_event_id),
+            "submitted_at": _now_iso(),
+            "date": _today(),
+            "user_name": user,
+            "case_nbr": case.get("case_nbr") or "",
+            "workflow_id": _safe_id(workflow_id) if workflow_id else "",
+            "conversation_id": _safe_id(conversation_id) if conversation_id else "",
+            "session_id": session_id or "",
+            "turn_id": _safe_id(turn_id) if turn_id else "",
+            "app_version": APP_VERSION,
+            # `domain` stays as the pre-v6 agent-domain alias.
+            "domain": _agent_domain(domain),
+            "agent_domain": _agent_domain(domain),
+            "case_domain": _case_domain(issue),
+        }
+        with _lock_for(path):
+            _write_json_atomic(path, event)
+    except Exception as e:
+        print(f"[gather] feedback submit failed (event={feedback_event_id}): {e}")
+    # No aggregate rebuild: feedback_stats is a counter nobody reads in real
+    # time, and Submit lands right after a turn that already scheduled one.
+
+
+def record_feedback_submit(
+    *,
+    feedback_event_id: str,
+    conversation_id: str,
+    turn_id: str,
+    workflow_id: str = "",
+    session_id: str = "",
+    issue: Optional[dict] = None,
+    domain: str = "",
+) -> None:
+    """Count a detailed Feedback Submit and retain only its join keys."""
+    if (
+        not feedback_event_id
+        or not conversation_id
+        or not turn_id
+        or not getattr(sys, "frozen", False)
+    ):
+        return
+    try:
+        threading.Thread(
+            target=_do_record_feedback_submit,
+            args=(feedback_event_id, conversation_id, workflow_id, session_id,
+                  turn_id, issue, domain),
+            daemon=True,
+        ).start()
+    except Exception as e:
+        print(f"[gather] feedback submit dispatch failed: {e}")
 
 
 # ---------------------------------------------------------------------------
@@ -1312,6 +1704,27 @@ def iter_workflows() -> Iterator[dict]:
                 yield rec
 
 
+def iter_feedback_submissions() -> Iterator[dict]:
+    """Yield v6 detailed-feedback submission linkage events."""
+    try:
+        root = _resolve_root()
+    except Exception:
+        return
+    event_dir = root / "feedback_submissions"
+    if not event_dir.exists():
+        return
+    for user_dir in event_dir.iterdir():
+        if not user_dir.is_dir():
+            continue
+        for f in user_dir.glob("*.json"):
+            try:
+                rec = json.loads(f.read_text(encoding="utf-8"))
+            except Exception:
+                continue
+            if isinstance(rec, dict):
+                yield rec
+
+
 def _min_iso(a: Optional[str], b: Optional[str]) -> Optional[str]:
     if not a:
         return b
@@ -1341,7 +1754,16 @@ def compute_aggregates() -> dict:
         "cases": Counter(),     # case_nbr -> session count
         "spend": _zero_spend(),
     })
+    # Two independent rollups of the same sessions: which agent ran (wifi /
+    # nw / bt) and which technology the case is (wifi / bt). A wifi case
+    # analysed by the NW agent lands in agent "nw" and case "wifi".
     domains: dict[str, dict] = defaultdict(lambda: {
+        "sessions": 0,
+        "sends": 0,
+        "users": set(),
+        "spend": _zero_spend(),
+    })
+    case_domains: dict[str, dict] = defaultdict(lambda: {
         "sessions": 0,
         "sends": 0,
         "users": set(),
@@ -1385,7 +1807,14 @@ def compute_aggregates() -> dict:
         updated = rec.get("updated_at") or created
         # v1-v3 records predate cost accounting; treat them as zero spend
         # rather than skipping them, so usage counts stay comparable.
-        dom = str(rec.get("domain") or "").strip() or UNKNOWN_DOMAIN
+        dom = str(rec.get("agent_domain") or rec.get("domain") or "").strip() or UNKNOWN_DOMAIN
+        # Pre-v6 records have no case_domain. Their legacy `domain` was the
+        # agent, but wifi_chatbot and bt_chatbot only ever ran on their own
+        # technology, so for those two the agent identifies the case as well.
+        # Only "nw" is genuinely ambiguous and stays unknown.
+        case_dom = str(rec.get("case_domain") or "").strip()
+        if not case_dom:
+            case_dom = dom if dom in ("wifi", "bt") else UNKNOWN_DOMAIN
         usage_rec = rec.get("usage") if isinstance(rec.get("usage"), dict) else {}
         cost_rec = rec.get("cost_usd") if isinstance(rec.get("cost_usd"), dict) else {}
         try:
@@ -1421,11 +1850,11 @@ def compute_aggregates() -> dict:
         grand_spend["cost_usd"] = round(grand_spend["cost_usd"] + rec_cost, 6)
         grand_spend["llm_calls"] += rec_calls
 
-        db_dom = domains[dom]
-        db_dom["sessions"] += 1
-        db_dom["sends"] += sends
-        db_dom["users"].add(u)
-        _add_spend(db_dom)
+        for bucket in (domains[dom], case_domains[case_dom]):
+            bucket["sessions"] += 1
+            bucket["sends"] += sends
+            bucket["users"].add(u)
+            _add_spend(bucket)
 
         ub = users[u]
         ub["sessions"] += 1
@@ -1466,7 +1895,10 @@ def compute_aggregates() -> dict:
         "tokens": 0,
         "cost_usd": 0.0,
         "unpriced_invocations": 0,
+        # by_domain is the legacy case-domain rollup retained for consumers.
         "by_domain": defaultdict(lambda: {"invocations": 0, "tokens": 0, "cost_usd": 0.0}),
+        "by_case_domain": defaultdict(lambda: {"invocations": 0, "tokens": 0, "cost_usd": 0.0}),
+        "by_agent_domain": defaultdict(lambda: {"invocations": 0, "tokens": 0, "cost_usd": 0.0}),
     })
     attachment_stats = {
         "workflows": 0,
@@ -1491,7 +1923,7 @@ def compute_aggregates() -> dict:
         }),
     }
     for workflow in iter_workflows():
-        dom = str(workflow.get("domain") or UNKNOWN_DOMAIN)
+        case_dom = str(workflow.get("case_domain") or workflow.get("domain") or UNKNOWN_DOMAIN)
         for inv in workflow.get("ai_invocations") or []:
             if not isinstance(inv, dict):
                 continue
@@ -1515,10 +1947,16 @@ def compute_aggregates() -> dict:
             bucket["cost_usd"] = round(bucket["cost_usd"] + usd, 6)
             if tokens and raw_cost is None:
                 bucket["unpriced_invocations"] += 1
-            db = bucket["by_domain"][dom]
-            db["invocations"] += 1
-            db["tokens"] += tokens
-            db["cost_usd"] = round(db["cost_usd"] + usd, 6)
+            agent_dom = str(inv.get("agent_domain") or inv.get("domain") or UNKNOWN_DOMAIN)
+            for dimension in ("by_domain", "by_case_domain"):
+                db = bucket[dimension][case_dom]
+                db["invocations"] += 1
+                db["tokens"] += tokens
+                db["cost_usd"] = round(db["cost_usd"] + usd, 6)
+            adb = bucket["by_agent_domain"][agent_dom]
+            adb["invocations"] += 1
+            adb["tokens"] += tokens
+            adb["cost_usd"] = round(adb["cost_usd"] + usd, 6)
 
         audit = workflow.get("attachment_audit")
         if not isinstance(audit, dict):
@@ -1560,8 +1998,54 @@ def compute_aggregates() -> dict:
 
         attachment_stats["reconciliation_status"][str(audit.get("reconciliation_status") or "NONE")] += 1
 
+    # v6 feedback submission facts deliberately carry no feedback text. They
+    # answer only: how many detailed submits did each user make, and which
+    # Case Numbers can those events be joined to in the feedback store?
+    feedback_users: dict[str, dict] = defaultdict(
+        lambda: {"submissions": 0, "case_numbers": set()}
+    )
+    feedback_cases: dict[str, dict] = defaultdict(
+        lambda: {"submissions": 0, "users": set()}
+    )
+    feedback_total = 0
+    for event in iter_feedback_submissions():
+        feedback_total += 1
+        user_name = str(event.get("user_name") or "anon").strip() or "anon"
+        case_nbr = str(event.get("case_nbr") or "").strip()
+        feedback_users[user_name]["submissions"] += 1
+        if case_nbr:
+            feedback_users[user_name]["case_numbers"].add(case_nbr)
+            feedback_cases[case_nbr]["submissions"] += 1
+            feedback_cases[case_nbr]["users"].add(user_name)
+    feedback_stats = {
+        "total_submissions": feedback_total,
+        "distinct_users": len(feedback_users),
+        "distinct_cases": len(feedback_cases),
+        "by_user": {
+            user_name: {
+                "submissions": data["submissions"],
+                "distinct_cases": len(data["case_numbers"]),
+                "case_numbers": sorted(data["case_numbers"]),
+            }
+            for user_name, data in sorted(feedback_users.items())
+        },
+        "by_case": {
+            case_nbr: {
+                "submissions": data["submissions"],
+                "distinct_users": len(data["users"]),
+                "users": sorted(data["users"]),
+            }
+            for case_nbr, data in sorted(feedback_cases.items())
+        },
+    }
+
     feature_spend_out = {
-        feature: {**data, "by_domain": dict(data["by_domain"])}
+        feature: {
+            **data,
+            "by_domain": dict(data["by_domain"]),
+            "by_case_domain": dict(data["by_case_domain"]),
+            "by_agent_domain": dict(data["by_agent_domain"]),
+        }
         for feature, data in sorted(feature_spend.items())
     }
     attachment_stats["reconciliation_status"] = dict(attachment_stats["reconciliation_status"])
@@ -1582,15 +2066,19 @@ def compute_aggregates() -> dict:
         }
         for u, v in users.items()
     }
-    domains_out = {
-        d: {
-            "sessions": v["sessions"],
-            "sends": v["sends"],
-            "distinct_users": len(v["users"]),
-            "spend": v["spend"],
+    def _domains_out(source: dict[str, dict]) -> dict:
+        return {
+            d: {
+                "sessions": v["sessions"],
+                "sends": v["sends"],
+                "distinct_users": len(v["users"]),
+                "spend": v["spend"],
+            }
+            for d, v in sorted(source.items())
         }
-        for d, v in sorted(domains.items())
-    }
+
+    domains_out = _domains_out(domains)
+    case_domains_out = _domains_out(case_domains)
     cases_out = {
         c: {
             "sessions": v["sessions"],
@@ -1648,9 +2136,14 @@ def compute_aggregates() -> dict:
         # Sessions that burned tokens but could not be priced (model missing
         # from configs/llm_pricing.py). Non-zero means total cost is understated.
         "unpriced_sessions": unpriced_sessions,
+        # by_domain is the pre-v6 name for the agent rollup; kept for existing
+        # consumers. by_case_domain is the new, independent technology split.
         "by_domain": domains_out,
+        "by_agent_domain": domains_out,
+        "by_case_domain": case_domains_out,
         "feature_spend": feature_spend_out,
         "attachment_stats": attachment_stats,
+        "feedback_stats": feedback_stats,
         "top_users": top_users,
         "top_cases": top_cases,
     }
@@ -1660,8 +2153,11 @@ def compute_aggregates() -> dict:
         "cases": cases_out,
         "daily": daily_out,
         "domains": domains_out,
+        "agent_domains": domains_out,
+        "case_domains": case_domains_out,
         "feature_spend": feature_spend_out,
         "attachment_stats": attachment_stats,
+        "feedback_stats": feedback_stats,
     }
 
 
@@ -1695,6 +2191,11 @@ def rebuild_aggregates() -> dict:
 def _maybe_rebuild_aggregates_async() -> None:
     """Schedule a background aggregate rebuild, debounced by ``_AGG_COOLDOWN_SEC``."""
     global _last_agg_at
+    if _outbox_root is not None:
+        # Buffering locally: the only records visible are this machine's
+        # undelivered ones, so a rollup built now would be a wrong answer
+        # written to a folder nobody reads. It rebuilds after the drain.
+        return
     now = time.time()
     with _agg_lock:
         if now - _last_agg_at < _AGG_COOLDOWN_SEC:

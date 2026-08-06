@@ -878,6 +878,7 @@ def chat():
                 issue_time=format_issue_time(agent.issue_time),
                 issue_time_window_minutes=getattr(agent, "issue_time_window_minutes", None),
                 domain="bt",
+                turn_id=turn_id,
             )
         except Exception:
             pass
@@ -972,6 +973,19 @@ def chat():
                 except Exception as exc:
                     error_tb = traceback.format_exc()
                     print(f"❌ Chat-with-tools thread error:\n{error_tb}")
+                    try:
+                        gather_service.record_turn_status(
+                            conversation_id=conversation_id,
+                            turn_id=turn_id,
+                            status="failed",
+                            workflow_id=session.get("gather_workflow_id", ""),
+                            issue=_issue_ctx_for_snapshot,
+                            domain="bt",
+                            latency_ms=int((datetime.now() - turn_started_at).total_seconds() * 1000),
+                            error_code=type(exc).__name__,
+                        )
+                    except Exception:
+                        pass
                     chat_jobs.fail_job(job, str(exc))
 
             t = threading.Thread(target=run_chat_with_tools, daemon=True)
@@ -1045,6 +1059,19 @@ def chat():
     except Exception as e:
         error_traceback = traceback.format_exc()
         print(f"❌ Chatbot error:\n{error_traceback}")
+        try:
+            if conversation_id and turn_id:
+                gather_service.record_turn_status(
+                    conversation_id=conversation_id,
+                    turn_id=turn_id,
+                    status="failed",
+                    workflow_id=session.get("gather_workflow_id", ""),
+                    issue=locals().get("_issue_ctx_for_snapshot") or {},
+                    domain="bt",
+                    error_code=type(e).__name__,
+                )
+        except Exception:
+            pass
 
         def generate_error():
             yield f"data: {json.dumps({'type': 'error', 'content': str(e)}, ensure_ascii=False)}\n\n"
@@ -1085,7 +1112,20 @@ def chat_stop():
         conversation_id = (data.get("conversation_id") or "").strip()
         if not conversation_id:
             conversation_id = (session.get("feedback_conversation_id") or "").strip()
+        job = chat_jobs.get_job(conversation_id) if conversation_id else None
         stopped = chat_jobs.request_cancel(conversation_id) if conversation_id else False
+        if stopped and job is not None:
+            try:
+                gather_service.record_turn_status(
+                    conversation_id=conversation_id,
+                    turn_id=getattr(job, "turn_id", ""),
+                    status="cancelled",
+                    workflow_id=session.get("gather_workflow_id", ""),
+                    issue=_extract_issue_context(),
+                    domain="bt",
+                )
+            except Exception:
+                pass
         return jsonify({"success": True, "stopped": bool(stopped)})
     except Exception as e:
         return jsonify({"success": False, "error": str(e)}), 500

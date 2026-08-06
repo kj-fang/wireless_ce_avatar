@@ -1335,7 +1335,13 @@ def _do_record_usage(
             except (TypeError, ValueError):
                 return 0
 
-        # ---- accumulate token totals across every Send in this conversation
+        # ---- accumulate token totals across every Send in this conversation.
+        # Normalise first: a caller that supplies the buckets but not
+        # total_tokens would otherwise leave the conversation total at 0 while
+        # every other number on the record was right — a silent zero in the
+        # by-domain token rollups, with the cost beside it looking correct.
+        # The feature ledger already normalises; this keeps the two agreeing.
+        usage = _normalise_usage(usage)
         totals = record.get("usage")
         if not isinstance(totals, dict):
             totals = _empty_usage()

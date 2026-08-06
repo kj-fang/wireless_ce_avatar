@@ -1358,6 +1358,18 @@ def _do_record_usage(
         if not isinstance(prior, dict):
             prior = _empty_cost()
 
+        # Once a conversation has hit a model with no rate, its total is a
+        # floor and stays one however many priced turns follow. The priced
+        # branch below rebuilds cost_usd from scratch, so the marker has to be
+        # read before it and re-applied after — otherwise the next Send that
+        # happens to be priced silently clears it and the session reads as
+        # fully accounted for.
+        unpriced_model = prior.get("unpriced_model")
+        try:
+            unpriced_turns = max(0, int(prior.get("unpriced_turns") or 0))
+        except (TypeError, ValueError):
+            unpriced_turns = 0
+
         if turn_cost is not None:
             def _f(src: dict, key: str) -> float:
                 try:
@@ -1375,10 +1387,21 @@ def _do_record_usage(
                 "rate_output_per_mtok": turn_cost["rate_output_per_mtok"],
             }
         else:
-            # Unknown model: keep the token counts, leave cost unpriced rather
-            # than guessing a rate. `unpriced_model` tells the ETL why.
-            prior["unpriced_model"] = model or "(unset)"
+            # Unknown model: keep the token counts, and keep whatever earlier
+            # turns did settle to, rather than guessing a rate or throwing away
+            # money we already know about. `total` stays None only while
+            # nothing at all has been priced.
+            unpriced_model = model or "(unset)"
+            unpriced_turns += 1
             record["cost_usd"] = prior
+
+        # `unpriced_model` names the last model with no rate; `unpriced_turns`
+        # says how much of the conversation is missing from `total`, which is
+        # what separates one stray turn from a figure that means almost
+        # nothing. Both are sticky for the life of the conversation.
+        if unpriced_model:
+            record["cost_usd"]["unpriced_model"] = unpriced_model
+            record["cost_usd"]["unpriced_turns"] = unpriced_turns
 
         # ---- per-turn breakdown (bounded). v6 updates the `started` row made
         # by record_send; legacy callers with no turn_id still get one row.
@@ -1838,7 +1861,10 @@ def compute_aggregates() -> dict:
             rec_cost = 0.0
         # Tokens spent but nothing priced => unknown model. Surface the count so
         # a missing rate shows up as a gap instead of looking like $0 spend.
-        if rec_tokens and rec_cost_raw is None:
+        # A conversation that priced some turns and not others carries a
+        # numeric total *and* the marker: that total is a floor, not the bill,
+        # so it belongs in this count too.
+        if rec_tokens and (rec_cost_raw is None or cost_rec.get("unpriced_model")):
             unpriced_sessions += 1
 
         def _add_spend(bucket: dict) -> None:
@@ -1901,7 +1927,10 @@ def compute_aggregates() -> dict:
         "tokens": 0,
         "cost_usd": 0.0,
         "unpriced_invocations": 0,
-        # by_domain is the legacy case-domain rollup retained for consumers.
+        # by_domain is the pre-v6 alias for the agent rollup — the same meaning
+        # it carries in the session summary, and the same one the per-invocation
+        # `domain` field carries. Keying it by case technology instead would
+        # make one name mean two things inside a single summary.json.
         "by_domain": defaultdict(lambda: {"invocations": 0, "tokens": 0, "cost_usd": 0.0}),
         "by_case_domain": defaultdict(lambda: {"invocations": 0, "tokens": 0, "cost_usd": 0.0}),
         "by_agent_domain": defaultdict(lambda: {"invocations": 0, "tokens": 0, "cost_usd": 0.0}),
@@ -1954,15 +1983,15 @@ def compute_aggregates() -> dict:
             if tokens and raw_cost is None:
                 bucket["unpriced_invocations"] += 1
             agent_dom = str(inv.get("agent_domain") or inv.get("domain") or UNKNOWN_DOMAIN)
-            for dimension in ("by_domain", "by_case_domain"):
-                db = bucket[dimension][case_dom]
+            for dimension in ("by_domain", "by_agent_domain"):
+                db = bucket[dimension][agent_dom]
                 db["invocations"] += 1
                 db["tokens"] += tokens
                 db["cost_usd"] = round(db["cost_usd"] + usd, 6)
-            adb = bucket["by_agent_domain"][agent_dom]
-            adb["invocations"] += 1
-            adb["tokens"] += tokens
-            adb["cost_usd"] = round(adb["cost_usd"] + usd, 6)
+            cdb = bucket["by_case_domain"][case_dom]
+            cdb["invocations"] += 1
+            cdb["tokens"] += tokens
+            cdb["cost_usd"] = round(cdb["cost_usd"] + usd, 6)
 
         audit = workflow.get("attachment_audit")
         if not isinstance(audit, dict):

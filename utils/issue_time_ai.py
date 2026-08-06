@@ -17,7 +17,7 @@ model name) so the logic is unit-testable in isolation.
 import json
 import re
 from datetime import datetime, timedelta
-from typing import Any, List, Optional, Tuple
+from typing import Any, List, Optional, Tuple, Union
 
 from utils.issue_time_utils import parse_issue_time_string, format_issue_time
 
@@ -831,7 +831,7 @@ def organize_issue_context(
     llm_client: Any = None,
     llm_model: Optional[str] = None,
     return_usage: bool = False,
-):
+) -> Union[dict, Tuple[dict, dict]]:
     """
     LLM-organize a raw case "Issue Description" into a clean problem statement
     plus the issue time point(s) it mentions — there may be SEVERAL (e.g.
@@ -848,6 +848,14 @@ def organize_issue_context(
         "issue_times": [str, ...],   # canonical MM/DD/YYYY-HH:MM:SS.mmm, best-first
         "interpretation": str,
       }
+
+    With ``return_usage=True`` the return is instead a ``(data, usage)`` tuple,
+    where ``data`` is the dict above and ``usage`` carries the token counts of
+    every LLM call this function made — ``llm_calls``, ``input_tokens``,
+    ``cache_read_tokens``, ``cache_write_tokens``, ``output_tokens``,
+    ``total_tokens``. It is all zeros on the deterministic fallback path, which
+    makes no calls. Callers that only want the data must leave the flag off;
+    unpacking a two-item tuple from the default shape will not work.
     """
     description = (description or "").strip()
     ref = last_ts or first_ts

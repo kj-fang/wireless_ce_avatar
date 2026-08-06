@@ -2,6 +2,7 @@ from flask import Blueprint, render_template, request, session, redirect, url_fo
 import os
 import glob
 import subprocess
+import time
 from datetime import datetime
 
 from utils import helpers
@@ -10,10 +11,33 @@ from utils.fw_utils import load_fw_system_info
 from services.case_info_service import CaseService
 from models.models import CaseContext
 from services.llm_service import LLM_helper
+from services import gather_service
 from configs.global_configs import app_config
 
 
 main_bp = Blueprint("main", __name__, url_prefix="/")
+
+
+def _start_gather_workflow(case_context: CaseContext, selected_files=None) -> str:
+    """Create the case-scoped v5 ID before any pre-chat AI can run."""
+    workflow_id = gather_service.new_workflow_id()
+    session["gather_workflow_id"] = workflow_id
+    issue = case_context.to_dict()
+    domain = case_context.wifi_or_bt or "wifi"
+    gather_service.record_workflow_start(
+        workflow_id=workflow_id,
+        issue=issue,
+        domain=domain,
+        attachment_list=case_context.attachment_list or [],
+    )
+    if selected_files:
+        gather_service.record_attachment_selection(
+            workflow_id=workflow_id,
+            selected_files=selected_files,
+            issue=issue,
+            domain=domain,
+        )
+    return workflow_id
 
 #------------ALL ROUTE-------------#
 
@@ -90,6 +114,7 @@ def handle_case_submission():
         session['bsod'] = False
         session['latest_etl_llm'] = False
         session['debug_mode'] = False
+        _start_gather_workflow(case_context)
 
         return redirect(url_for('main.select_attachments'))
 
@@ -126,6 +151,7 @@ def start_latest_etl_llm():
         session['selected_files'] = [selected_latest]
         session['bsod'] = False
         session['latest_etl_llm'] = True
+        _start_gather_workflow(case_context, [selected_latest])
 
         session['classification'] = {
             "issue_type": "Unclassified",
@@ -134,13 +160,16 @@ def start_latest_etl_llm():
         }
 
         llm_helper: LLM_helper = app_config.llm_helper
+        prepass_usage = llm_helper.empty_usage() if llm_helper is not None else None
         if llm_helper is not None:
             try:
                 # Pass the rehydrated dict (heavy fields included) so
                 # the LLM classifier sees the full context — comments
                 # can be a strong signal for category routing.
                 _full_ctx = CaseContext.from_session(session.get("case_context") or {}).to_dict()
-                classification = llm_helper.classify_issue(_full_ctx)
+                classification = llm_helper.classify_issue(
+                    _full_ctx, usage_accumulator=prepass_usage
+                )
                 
                 if isinstance(classification, dict):
                      session['classification'] = classification
@@ -157,7 +186,7 @@ def start_latest_etl_llm():
         # doesn't render and pick_etl_by_ai_time has nothing to compare.
         # Best-effort: failures here must not block the auto-launch.
         try:
-            _prime_issue_ai_cache(case_context)
+            _prime_issue_ai_cache(case_context, initial_usage=prepass_usage)
         except Exception as _e:
             print(f"⚠️ issue-AI pre-pass skipped in start_latest_etl_llm: {_e}")
 
@@ -208,6 +237,15 @@ def handle_select_attachments_submission():
     
     selected_files = [item for item in case_context.attachment_list if item[0] in selected_names]
     session['selected_files'] = selected_files
+    try:
+        gather_service.record_attachment_selection(
+            workflow_id=session.get("gather_workflow_id", ""),
+            selected_files=selected_files,
+            issue=case_context.to_dict(),
+            domain=case_context.wifi_or_bt or "wifi",
+        )
+    except Exception:
+        pass
 
     # Quick LLM pre-pass: organize the Issue Description into a clean problem
     # statement + issue time(s) now, so download_result can auto-match a log and
@@ -237,7 +275,7 @@ def handle_select_attachments_submission():
     return redirect(url_for('main.download_attachments'))
 
 
-def _prime_issue_ai_cache(case_context):
+def _prime_issue_ai_cache(case_context, initial_usage=None):
     """Run the (token-frugal) LLM organize on the case Issue Description and
     stash {clean_description, issue_times, interpretation} in the session under
     ``_issue_ai_quick``. No log exists yet, so times come back clock-only; they
@@ -257,6 +295,29 @@ def _prime_issue_ai_cache(case_context):
          renders.
     """
     from utils.issue_time_ai import organize_issue_context
+    started = time.perf_counter()
+    helper = app_config.llm_helper
+    client = getattr(helper, "client", None) if helper else None
+    model = getattr(helper, "model", "gpt-4.1") if helper else None
+
+    def _record_prepass_usage(usage):
+        if int((usage or {}).get("llm_calls") or 0) <= 0:
+            return
+        try:
+            gather_service.record_feature_usage(
+                workflow_id=session.get("gather_workflow_id", ""),
+                feature_code="issue_time_prepass",
+                model=model or "",
+                usage=usage,
+                issue=case_context.to_dict(),
+                domain=case_context.wifi_or_bt or "wifi",
+                trigger="run_analysis_prepass",
+                status="success",
+                latency_ms=int((time.perf_counter() - started) * 1000),
+            )
+        except Exception:
+            pass
+
     desc = (getattr(case_context, "description", "") or "").strip()
     print(f"[_prime_issue_ai_cache] entry — case_nbr={getattr(case_context, 'case_nbr', '?')!r}  "
           f"description empty? {not desc}")
@@ -283,16 +344,22 @@ def _prime_issue_ai_cache(case_context):
             print(f"[_prime_issue_ai_cache] attachment fallback failed: {_e}")
     if not desc:
         print(f"[_prime_issue_ai_cache] STILL empty after attachment fallback — bailing")
+        _record_prepass_usage(initial_usage or {})
         return
     print(f"[_prime_issue_ai_cache] description ({len(desc)} chars): {desc[:200]!r}")
-    helper = app_config.llm_helper
-    client = getattr(helper, "client", None) if helper else None
-    model = getattr(helper, "model", "gpt-4.1") if helper else None
-    data = organize_issue_context(desc, first_ts=None, last_ts=None,
-                                  llm_client=client, llm_model=model)
+    data, own_usage = organize_issue_context(
+        desc, first_ts=None, last_ts=None,
+        llm_client=client, llm_model=model, return_usage=True,
+    )
+    operation_usage = dict(initial_usage or LLM_helper.empty_usage())
+    for key in LLM_helper.empty_usage():
+        operation_usage[key] = int(operation_usage.get(key) or 0) + int(own_usage.get(key) or 0)
     print(f"[_prime_issue_ai_cache] organize_issue_context returned: "
           f"issue_times={data.get('issue_times')!r}")
     session["_issue_ai_quick"] = {"data": data}
+    # Deterministic explicit-time extraction costs nothing and is intentionally
+    # omitted.  Record only when at least one provider call actually happened.
+    _record_prepass_usage(operation_usage)
 
 def _resolve_download_path(case_context: CaseContext, is_bsod: bool) -> str:
     if not case_context:

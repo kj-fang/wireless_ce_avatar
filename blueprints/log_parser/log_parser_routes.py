@@ -26,6 +26,7 @@ from utils.log_parser_preprocess import extract_all_keywords_from_filter_file
 
 from services.log_parser_file_manage_service import FileManagerService
 from services.log_parser_service import LogParserService
+from services import gather_service
 from services.etl_parser.wpp_ddd_parser import wpp_ddd_parser_run
 from services.etl_parser.bt_parser import bt_decode_via_cli
 
@@ -48,7 +49,7 @@ _SENDTO_TOKEN_TTL     = 300  # seconds – tokens expire after 5 minutes
 # Maps upload_id -> {'cancel_event': threading.Event}. The event is polled at
 # stage boundaries inside _process_local_analysis. When cancel is signalled we
 # also terminate known parser subprocesses (tracefmt.exe, 7z.exe, DDDPlayer.exe,
-# ibtdrvlogparser.exe) spawned by this Python process, so blocking .wait() /
+# ibtdrvlogparser_cli.exe) spawned by this Python process, so blocking .wait() /
 # subprocess.run() calls return promptly and the worker thread reaches its
 # next checkpoint.
 _active_local_uploads: dict = {}
@@ -61,6 +62,10 @@ _CANCELABLE_CHILD_NAMES = frozenset({
     '7z.exe', '7za.exe',
     'tracefmt.exe',
     'dddplayer.exe',
+    # BT decoding now runs the CLI build, which bt_decode_via_cli() spawns via
+    # subprocess.Popen. The old GUI-automation name is kept so a cancel still
+    # reaches any stale process left behind by a pre-CLI build.
+    'ibtdrvlogparser_cli.exe',
     'ibtdrvlogparser.exe',
 })
 
@@ -470,13 +475,33 @@ def _process_local_analysis(source_path: str, source_dir: str, file_path: str,
         session['download_path'] = shared_case_dir
         
         # Build a minimal case context so BSOD submission page can render in local-upload mode.
-        session['case_context'] = CaseContext(
+        local_context = CaseContext(
             case_nbr=local_case_nbr,
             backend_id=local_case_nbr,
             wifi_or_bt='wifi',
             case_download_dir=shared_case_dir,
-        ).to_session()
+        )
+        session['case_context'] = local_context.to_session()
         session['selected_files'] = [(original_name, original_name, None)]
+        workflow_id = gather_service.new_workflow_id()
+        session['gather_workflow_id'] = workflow_id
+        gather_service.record_workflow_start(
+            workflow_id=workflow_id, issue=local_context.to_dict(), domain='wifi',
+            attachment_list=session['selected_files'],
+        )
+        gather_service.record_attachment_selection(
+            workflow_id=workflow_id, selected_files=session['selected_files'],
+            issue=local_context.to_dict(), domain='wifi',
+        )
+        try:
+            local_bytes = os.path.getsize(shared_dmp_path)
+        except OSError:
+            local_bytes = None
+        gather_service.record_attachment_download_result(
+            workflow_id=workflow_id, name=original_name, status='already_exists',
+            byte_count=local_bytes, latency_ms=0, attempt_count=0,
+            issue=local_context.to_dict(), domain='wifi',
+        )
         session['bsod'] = True
         session['latest_etl_llm'] = False
         session['latest_etl_path'] = None
@@ -525,12 +550,33 @@ def _process_local_analysis(source_path: str, source_dir: str, file_path: str,
         # Only consider bt_files for case type inference since wifi_files may be present in both wifi and bt cases
         local_case_type = _infer_local_upload_case_type(bt_files)
 
-        session['case_context'] = CaseContext(
+        local_context = CaseContext(
             case_nbr=local_case_nbr,
             wifi_or_bt=local_case_type,
             case_download_dir=source_dir
-        ).to_session()
+        )
+        session['case_context'] = local_context.to_session()
         session['selected_files'] = []
+        workflow_id = gather_service.new_workflow_id()
+        session['gather_workflow_id'] = workflow_id
+        local_attachment = [(original_name, original_name, None)]
+        gather_service.record_workflow_start(
+            workflow_id=workflow_id, issue=local_context.to_dict(),
+            domain=local_case_type, attachment_list=local_attachment,
+        )
+        gather_service.record_attachment_selection(
+            workflow_id=workflow_id, selected_files=local_attachment,
+            issue=local_context.to_dict(), domain=local_case_type,
+        )
+        try:
+            local_bytes = os.path.getsize(file_path)
+        except OSError:
+            local_bytes = None
+        gather_service.record_attachment_download_result(
+            workflow_id=workflow_id, name=original_name, status='already_exists',
+            byte_count=local_bytes, latency_ms=0, attempt_count=0,
+            issue=local_context.to_dict(), domain=local_case_type,
+        )
         session['bsod'] = False
         session['latest_etl_llm'] = False
 
@@ -696,7 +742,7 @@ def upload_local_analysis():
     _cancelable_session_keys = (
         'download_path', 'uploaded_source_path', 'local_in_place',
         'classification', 'case_context', 'selected_files', 'bsod',
-        'latest_etl_llm', 'latest_etl_path',
+        'latest_etl_llm', 'latest_etl_path', 'gather_workflow_id',
     )
 
     upload_id = (request.form.get('upload_id') or '').strip()

@@ -5,79 +5,211 @@
   <title>Handsfree Replyer</title>
   <style>
     :root {
-      --bg: #0f1419; --panel: #1a1f29; --panel2: #232a36;
-      --fg: #e6edf3; --muted: #8b98a8; --accent: #4fc3f7;
-      --good: #50c878; --bad: #ff7676; --warn: #ffd96a; --border: #2d3543;
+      --bg: #0a0d12;
+      --panel: #10141b;
+      --panel2: #171d26;
+      --field: #0c1016;
+      --border: #1e2632;
+      --border-strong: #2b3544;
+      --fg: #e2e8f0;
+      --muted: #8494a7;
+      --faint: #5d6b7e;
+      --accent: #45b8f0;
+      --accent-strong: #7ed0ff;
+      --good: #3ecf8e;
+      --warn: #e5b048;
+      --bad: #f07178;
+      --mono: 'Cascadia Code', Consolas, 'SF Mono', monospace;
+      --r: 10px;
+      --ease: cubic-bezier(0.25, 0.6, 0.3, 1);
     }
     * { box-sizing: border-box; }
-    body { margin: 0; font-family: 'Segoe UI', system-ui, sans-serif;
-           background: var(--bg); color: var(--fg); font-size: 14px; }
-    header { background: var(--panel); padding: 10px 16px; border-bottom: 1px solid var(--border);
-             display: flex; align-items: center; gap: 16px; }
-    header h1 { margin: 0; font-size: 16px; }
-    header .sub { color: var(--muted); font-size: 12px; }
-    main { padding: 14px; max-width: 1300px; margin: 0 auto; }
-    .row { display: flex; gap: 14px; align-items: flex-start; }
+    ::selection { background: rgba(69,184,240,0.25); }
+    html { scrollbar-color: #2b3544 transparent; }
+    ::-webkit-scrollbar { width: 10px; height: 10px; }
+    ::-webkit-scrollbar-thumb { background: #232c39; border-radius: 5px;
+                                border: 2px solid var(--bg); }
+    ::-webkit-scrollbar-track { background: transparent; }
+    body { margin: 0; color: var(--fg); font-size: 13.5px; line-height: 1.5;
+           font-family: 'Segoe UI Variable Text', 'Segoe UI', system-ui, sans-serif;
+           background: var(--bg);
+           background-image: radial-gradient(1100px 420px at 18% -8%, rgba(69,184,240,0.055), transparent 60%);
+           background-repeat: no-repeat; }
+
+    /* ---------- header ---------- */
+    header { padding: 18px 28px 16px; border-bottom: 1px solid var(--border);
+             display: flex; align-items: baseline; gap: 14px;
+             max-width: 1160px; margin: 0 auto; }
+    header .mark { align-self: center; color: var(--accent); display: flex; }
+    header h1 { margin: 0; font-size: 17px; font-weight: 650; letter-spacing: -0.01em;
+                font-family: 'Segoe UI Variable Display', 'Segoe UI', system-ui, sans-serif; }
+    header .sub { color: var(--faint); font-size: 12px; }
+
+    main { padding: 28px; max-width: 1160px; margin: 0 auto; }
+
+    /* ---------- panels ---------- */
+    .row { display: flex; gap: 16px; align-items: flex-start; }
     .col { flex: 1; min-width: 0; }
-    .panel { background: var(--panel); border: 1px solid var(--border); border-radius: 6px;
-             padding: 12px; margin-bottom: 12px; }
-    .panel h3 { margin: 0 0 8px 0; font-size: 13px; color: var(--accent); }
-    button.primary { background: var(--accent); color: #04222d; border: none; padding: 7px 14px;
-                     border-radius: 4px; cursor: pointer; font-weight: 600; }
-    button.primary:disabled { opacity: 0.5; cursor: not-allowed; }
-    button.good { background: var(--good); color: #06280f; border: none; padding: 6px 12px;
-                  border-radius: 4px; cursor: pointer; font-weight: 600; }
-    button.ghost { background: transparent; color: var(--muted); border: 1px solid var(--border);
-                   padding: 6px 12px; border-radius: 4px; cursor: pointer; }
-    button.danger { background: transparent; color: var(--bad); border: 1px solid var(--bad);
-                    padding: 6px 12px; border-radius: 4px; cursor: pointer; }
-    input[type="text"], input[type="number"], select, textarea { background: var(--panel2); color: var(--fg);
-        border: 1px solid var(--border); padding: 6px 8px; border-radius: 4px; font-size: 13px; }
-    textarea { width: 100%; font-family: Consolas, monospace; font-size: 12.5px; }
-    table { width: 100%; border-collapse: collapse; font-size: 12.5px; }
-    th, td { padding: 6px 8px; border-bottom: 1px solid var(--border); text-align: left; vertical-align: top; }
-    th { color: var(--muted); font-weight: 600; }
-    #queue-table tbody tr:hover { background: rgba(79,195,247,0.05); cursor: pointer; }
-    .pill { display: inline-block; padding: 1px 7px; border-radius: 999px; font-size: 11px;
-            background: var(--panel2); color: var(--muted); }
-    .pill.good { background: rgba(80,200,120,0.15); color: var(--good); }
-    .pill.bad  { background: rgba(255,118,118,0.15); color: var(--bad); }
-    .pill.warn { background: rgba(255,217,106,0.15); color: var(--warn); }
-    #run-log { max-height: 34vh; overflow: auto; background: #0a0f15; border: 1px solid var(--border);
-               border-radius: 4px; padding: 8px; font-family: Consolas, monospace; font-size: 12px; }
-    #progress-row { margin-top: 10px; }
-    #progress-row .log-col { flex: 1.2; }
+    .panel { background: var(--panel); border: 1px solid var(--border); border-radius: var(--r);
+             padding: 20px 22px; margin-bottom: 20px;
+             box-shadow: 0 1px 2px rgba(0,0,0,0.35), 0 12px 32px -20px rgba(0,0,0,0.6); }
+    .eyebrow { font-size: 11px; font-weight: 650; letter-spacing: 0.1em; text-transform: uppercase;
+               color: var(--faint); margin-bottom: 2px; }
+    .panel h3 { margin: 0 0 14px 0; font-size: 15px; font-weight: 650; color: var(--fg);
+                letter-spacing: -0.005em; display: flex; align-items: center; gap: 8px;
+                font-family: 'Segoe UI Variable Display', 'Segoe UI', system-ui, sans-serif; }
+
+    /* ---------- buttons ---------- */
+    button { font: inherit; }
+    button.primary, button.good, button.ghost, button.danger {
+      display: inline-flex; align-items: center; gap: 7px; height: 34px; padding: 0 15px;
+      border-radius: 8px; cursor: pointer; font-size: 13px; font-weight: 600;
+      transition: background 200ms var(--ease), color 200ms var(--ease),
+                  border-color 200ms var(--ease), transform 200ms var(--ease); }
+    button.primary { background: var(--accent); color: #051d2c; border: none; }
+    button.primary:hover:not(:disabled) { background: var(--accent-strong); }
+    button.primary:disabled { opacity: 0.45; cursor: not-allowed; }
+    button.good { background: var(--good); color: #052617; border: none; }
+    button.good:hover:not(:disabled) { background: #5adfa4; }
+    button.good:disabled { opacity: 0.45; cursor: not-allowed; }
+    button.ghost { background: transparent; color: var(--muted); border: 1px solid var(--border-strong); }
+    button.ghost:hover:not(:disabled) { color: var(--fg); border-color: #3d4a5c; }
+    button.danger { background: transparent; color: var(--bad); border: 1px solid rgba(240,113,120,0.4); }
+    button.danger:hover { border-color: var(--bad); background: rgba(240,113,120,0.08); }
+    button:active:not(:disabled) { transform: translateY(1px); }
+    button:focus-visible, input:focus-visible, select:focus-visible, textarea:focus-visible, summary:focus-visible {
+      outline: none; box-shadow: 0 0 0 2px var(--bg), 0 0 0 4px rgba(69,184,240,0.55); }
+    button svg { flex: none; }
+
+    /* ---------- fields ---------- */
+    label { color: var(--muted); font-size: 13px; display: inline-flex;
+            align-items: center; gap: 8px; }
+    input[type="text"], input[type="number"], select {
+      background: var(--field); color: var(--fg); border: 1px solid var(--border-strong);
+      height: 34px; padding: 0 11px; border-radius: 8px; font-size: 13px;
+      transition: border-color 200ms var(--ease), box-shadow 200ms var(--ease); }
+    input[type="checkbox"] { accent-color: var(--accent); width: 15px; height: 15px; }
+    textarea { background: var(--field); color: var(--fg); border: 1px solid var(--border-strong);
+               width: 100%; padding: 12px 14px; border-radius: 8px;
+               font-family: var(--mono); font-size: 12.5px; line-height: 1.6; resize: vertical;
+               transition: border-color 200ms var(--ease), box-shadow 200ms var(--ease); }
+    input:hover, select:hover, textarea:hover { border-color: #374457; }
+    input:focus, select:focus, textarea:focus { border-color: var(--accent); }
+    input::placeholder, textarea::placeholder { color: var(--faint); }
+
+    /* ---------- tables ---------- */
+    table { width: 100%; border-collapse: collapse; font-size: 13px; }
+    th { color: var(--faint); font-weight: 650; font-size: 11px; text-transform: uppercase;
+         letter-spacing: 0.07em; }
+    th, td { padding: 9px 10px; border-bottom: 1px solid var(--border); text-align: left;
+             vertical-align: top; }
+    tbody tr:last-child td { border-bottom: none; }
+    #queue-table tbody tr { transition: background 200ms var(--ease); }
+    #queue-table tbody tr:hover { background: rgba(69,184,240,0.06); cursor: pointer; }
+    td.case-nbr { font-family: var(--mono); font-size: 12.5px; }
+
+    /* ---------- pills ---------- */
+    .pill { display: inline-flex; align-items: center; gap: 6px; padding: 2px 9px;
+            border-radius: 999px; font-size: 11.5px; font-weight: 600;
+            background: var(--panel2); color: var(--muted);
+            border: 1px solid transparent; }
+    .pill.good { background: rgba(62,207,142,0.12); color: var(--good); }
+    .pill.bad  { background: rgba(240,113,120,0.12); color: var(--bad); }
+    .pill.warn { background: rgba(229,176,72,0.13); color: var(--warn); }
+    .pill.dot::before { content: ''; width: 6px; height: 6px; border-radius: 50%;
+                        background: currentColor; flex: none; }
+    .pill.live::before { animation: breathe 1.8s var(--ease) infinite; }
+    @keyframes breathe { 0%, 100% { opacity: 1; } 50% { opacity: 0.25; } }
+
+    /* ---------- run log + stage table ---------- */
+    #run-log { max-height: 34vh; min-height: 60px; overflow: auto; background: var(--field);
+               border: 1px solid var(--border); border-radius: 8px; padding: 10px 12px;
+               font-family: var(--mono); font-size: 12px; line-height: 1.65; }
+    #run-log:empty::before { content: 'run output appears here'; color: var(--faint); }
+    .log-line { white-space: pre-wrap; word-break: break-word; color: var(--muted); }
+    .log-line .ts { color: var(--faint); margin-right: 10px; }
+    .log-line.err { color: var(--bad); }
+    #progress-row { margin-top: 14px; }
+    #progress-row .log-col { flex: 1.25; }
     #progress-row .stage-col { flex: 1; }
-    #stage-table td, #stage-table th { padding: 4px 8px; }
-    #settings-panel h3 { cursor: pointer; user-select: none; }
-    #settings-panel h3 .caret { display: inline-block; transition: transform 0.15s; color: var(--muted); }
-    #settings-panel.open h3 .caret { transform: rotate(90deg); }
-    #settings-body { display: none; border-top: 1px solid var(--border); padding-top: 10px; }
-    #settings-panel.open #settings-body { display: block; }
-    .field-map-note { font-size: 12px; color: var(--muted); }
-    #draft-chips { display: none; flex-wrap: wrap; gap: 6px; align-items: center; margin-bottom: 8px; }
-    #draft-chips .pill { font-size: 12px; padding: 3px 10px; }
-    #draft-chips .chip-label { font-size: 11px; color: var(--muted); margin-right: -2px; }
-    .log-line { padding: 2px 4px; }
-    .log-line .ts { color: var(--muted); margin-right: 8px; }
-    .status-line { font-size: 12px; color: var(--muted); }
+    #stage-table { font-size: 12.5px; }
+    #stage-table td, #stage-table th { padding: 5px 10px; }
+    #stage-table td:first-child { font-family: var(--mono); font-size: 12px; color: var(--muted); }
+    #stage-table td:last-child { font-family: var(--mono); font-size: 12px; color: var(--faint);
+                                 text-align: right; }
+    #stage-table th:last-child { text-align: right; }
+
+    .status-line { font-size: 12.5px; color: var(--muted); }
     .status-line.running { color: var(--warn); }
     .status-line.done { color: var(--good); }
     .status-line.error { color: var(--bad); }
-    .controls { display: flex; gap: 8px; align-items: center; flex-wrap: wrap; margin-bottom: 10px; }
-    pre { background: #0a0f15; border: 1px solid var(--border); border-radius: 4px; padding: 10px;
-          max-height: 300px; overflow: auto; font-size: 12px; white-space: pre-wrap; word-break: break-word; }
+    .controls { display: flex; gap: 10px; align-items: center; flex-wrap: wrap; margin-bottom: 12px; }
+    .controls.tight { margin-bottom: 0; }
+    .divider { border-top: 1px solid var(--border); padding-top: 14px; }
+
+    /* ---------- settings ---------- */
+    #settings-panel { padding-top: 15px; padding-bottom: 15px; }
+    #settings-panel h3 { cursor: pointer; user-select: none; margin-bottom: 0; color: var(--muted);
+                         transition: color 200ms var(--ease); }
+    #settings-panel h3:hover { color: var(--fg); }
+    #settings-panel h3 .caret { display: inline-flex; transition: transform 200ms var(--ease);
+                                color: var(--faint); }
+    #settings-panel.open h3 .caret { transform: rotate(90deg); }
+    #settings-panel.open h3 { color: var(--fg); margin-bottom: 16px; }
+    #settings-body { display: none; border-top: 1px solid var(--border); padding-top: 16px; }
+    #settings-panel.open #settings-body { display: block; }
+    .field-map-note { font-size: 12px; color: var(--faint); max-width: 620px; line-height: 1.55; }
+    .field-map-note code { font-family: var(--mono); font-size: 11px; color: var(--muted);
+                           background: var(--panel2); padding: 1px 5px; border-radius: 4px; }
+
+    /* ---------- draft review ---------- */
+    #draft-chips { display: none; flex-wrap: wrap; gap: 6px 10px; align-items: center;
+                   margin-bottom: 12px; padding: 12px 14px; background: var(--panel2);
+                   border: 1px solid var(--border); border-radius: 8px; }
+    #draft-chips .pill { background: var(--field); font-size: 12px; padding: 3px 10px; }
+    #draft-chips .chip-label { font-size: 10.5px; font-weight: 650; letter-spacing: 0.08em;
+                               text-transform: uppercase; color: var(--faint); margin-right: -3px; }
+    details { margin-top: 14px; }
+    summary { color: var(--faint); cursor: pointer; font-size: 12.5px; user-select: none;
+              transition: color 200ms var(--ease); border-radius: 6px; }
+    summary:hover { color: var(--muted); }
+
+    pre { background: var(--field); border: 1px solid var(--border); border-radius: 8px;
+          padding: 12px 14px; max-height: 300px; overflow: auto; font-family: var(--mono);
+          font-size: 12px; line-height: 1.6; white-space: pre-wrap; word-break: break-word;
+          color: var(--muted); }
+
+    @media (max-width: 880px) {
+      main { padding: 18px; }
+      #progress-row { flex-direction: column; }
+      #progress-row .col { width: 100%; }
+    }
   </style>
 </head>
 <body>
 <header>
-  <h1>🤖 Handsfree Replyer</h1>
-  <div class="sub">Detect newly assigned IPS cases → auto-analyze → review → post Private-to-Intel comment</div>
+  <span class="mark" aria-hidden="true">
+    <svg width="20" height="20" viewBox="0 0 24 24" fill="none" stroke="currentColor"
+         stroke-width="1.8" stroke-linecap="round">
+      <path d="M4.5 10.5a11 11 0 0 1 15 0" />
+      <path d="M7.5 13.8a7 7 0 0 1 9 0" />
+      <circle cx="12" cy="17.6" r="1.6" fill="currentColor" stroke="none" />
+    </svg>
+  </span>
+  <h1>Handsfree Replyer</h1>
+  <div class="sub">Detect newly assigned IPS cases → analyze → review → post Private-to-Intel</div>
 </header>
 
 <main>
   <div class="panel" id="settings-panel">
-    <h3 onclick="toggleSettings()"><span class="caret">▶</span> ⚙ Settings</h3>
+    <h3 onclick="toggleSettings()">
+      <span class="caret" aria-hidden="true">
+        <svg width="13" height="13" viewBox="0 0 24 24" fill="none" stroke="currentColor"
+             stroke-width="2.4" stroke-linecap="round" stroke-linejoin="round">
+          <path d="M9 5l8 7-8 7" />
+        </svg>
+      </span>
+      Settings</h3>
     <div id="settings-body">
       <div class="controls">
         <label>Case owner:
@@ -96,7 +228,7 @@
             <option value="auto">auto</option>
           </select>
         </label>
-        <button class="primary" onclick="saveConfig()">💾 Save settings</button>
+        <button class="primary" onclick="saveConfig()">Save settings</button>
         <span class="status-line" id="cfg-status"></span>
       </div>
       <div style="margin-top: 12px;">
@@ -104,7 +236,7 @@
           <span class="field-map-note">rest_field_map (read-only — saving it still requires the DevTools
             <code>POST /handsfree/config</code> call, so the verified privacy mapping can't be
             overwritten from this page)</span>
-          <button class="ghost" id="discover-btn" onclick="discoverFields()">🔍 Discover fields</button>
+          <button class="ghost" id="discover-btn" onclick="discoverFields()">Discover fields</button>
         </div>
         <pre id="cfg-field-map">—</pre>
         <pre id="discover-result" style="display:none;"></pre>
@@ -113,13 +245,17 @@
   </div>
 
   <div class="panel">
-    <h3>1. Check for new cases</h3>
+    <div class="eyebrow">Step 1 · Detect &amp; analyze</div>
+    <h3>Check for new cases</h3>
     <div class="controls">
-      <label>Case Owner:
+      <label>Case owner:
         <input type="text" id="owner-name" value="{{ config.owner_name or '' }}"
                placeholder="e.g. Charles P Chu" style="width: 220px;">
       </label>
-      <button class="primary" id="check-btn" onclick="checkNow()">▶ Check for new cases now</button>
+      <button class="primary" id="check-btn" onclick="checkNow()">
+        <svg width="11" height="11" viewBox="0 0 24 24" fill="currentColor" aria-hidden="true">
+          <path d="M6 4.5l14 7.5-14 7.5z" /></svg>
+        Check for new cases</button>
       <span class="status-line" id="run-status">idle</span>
       <span class="status-line" style="margin-left:auto;">
         posting backend: <b id="backend-name">{{ config.post_backend }}</b>
@@ -127,13 +263,17 @@
               {% if not config.dry_run %}style="display:none;"{% endif %}>DRY RUN — posting disabled</span>
       </span>
     </div>
-    <div class="controls" style="border-top: 1px solid var(--border); padding-top: 10px;">
+    <div class="controls divider">
       <label>…or analyze one specific case:
         <input type="text" id="case-nbr" placeholder="IPS case number, e.g. 01009610"
-               style="width: 200px;" onkeydown="if(event.key==='Enter')runCase()">
+               style="width: 210px; font-family: var(--mono); font-size: 12.5px;"
+               onkeydown="if(event.key==='Enter')runCase()">
       </label>
       <button class="primary" id="run-case-btn" onclick="runCase()"
-              title="Runs the full pipeline for this one case regardless of owner/date">▶ Analyze this case</button>
+              title="Runs the full pipeline for this one case regardless of owner/date">
+        <svg width="11" height="11" viewBox="0 0 24 24" fill="currentColor" aria-hidden="true">
+          <path d="M6 4.5l14 7.5-14 7.5z" /></svg>
+        Analyze this case</button>
     </div>
     <div class="row" id="progress-row">
       <div class="col log-col">
@@ -147,15 +287,21 @@
         </div>
         <table id="stage-table">
           <thead><tr><th>Stage</th><th>Status</th><th>Duration</th></tr></thead>
-          <tbody><tr><td colspan="3" style="color:var(--muted);">no case in flight</td></tr></tbody>
+          <tbody><tr><td colspan="3" style="color:var(--faint);text-align:left;font-family:inherit;">no case in flight</td></tr></tbody>
         </table>
       </div>
     </div>
   </div>
 
   <div class="panel">
-    <h3>2. Review queue <button class="ghost" onclick="loadQueue()" style="margin-left:8px;">↻ Refresh</button>
-      <label style="font-size:12px;color:var(--muted);margin-left:8px;">
+    <div class="eyebrow">Step 2 · Review</div>
+    <h3>Review queue
+      <button class="ghost" onclick="loadQueue()" style="margin-left: 6px; height: 28px; padding: 0 11px; font-size: 12px;">
+        <svg width="12" height="12" viewBox="0 0 24 24" fill="none" stroke="currentColor"
+             stroke-width="2.2" stroke-linecap="round" aria-hidden="true">
+          <path d="M20 11a8 8 0 1 0-2.3 6.3" /><path d="M20 4v7h-7" /></svg>
+        Refresh</button>
+      <label style="font-size: 12px; margin-left: 4px; font-weight: 400;">
         <input type="checkbox" id="show-closed" onchange="loadQueue()"> show posted/rejected
       </label>
     </h3>
@@ -169,7 +315,8 @@
   </div>
 
   <div class="panel" id="draft-panel" style="display:none;">
-    <h3>3. Draft review — <span id="draft-title"></span></h3>
+    <div class="eyebrow">Step 3 · Approve</div>
+    <h3>Draft review — <span id="draft-title" style="color: var(--muted); font-weight: 500;"></span></h3>
     <div class="controls">
       <span class="status-line" id="draft-status"></span>
     </div>
@@ -177,9 +324,13 @@
     <textarea id="draft-text" rows="18"></textarea>
     <div class="controls" style="margin-top:8px;">
       <button class="good" id="approve-btn" onclick="approveDraft()"
-              title="Posts this text to IPS as a Private-to-Intel comment">✔ Approve &amp; Post to IPS</button>
-      <button class="ghost" onclick="saveDraft()">💾 Save edits</button>
-      <button class="danger" onclick="rejectDraft()">✖ Reject</button>
+              title="Posts this text to IPS as a Private-to-Intel comment">
+        <svg width="13" height="13" viewBox="0 0 24 24" fill="none" stroke="currentColor"
+             stroke-width="2.6" stroke-linecap="round" stroke-linejoin="round" aria-hidden="true">
+          <path d="M4.5 12.5l5 5 10-11" /></svg>
+        Approve &amp; post to IPS</button>
+      <button class="ghost" onclick="saveDraft()">Save edits</button>
+      <button class="danger" onclick="rejectDraft()">Reject</button>
       <span class="status-line" id="post-status"></span>
     </div>
     <details style="margin-top:10px;">
@@ -246,7 +397,7 @@
       });
       const cfg = await r.json();
       fillConfigForm(cfg);
-      status.textContent = '✔ saved';
+      status.textContent = 'saved';
       status.className = 'status-line done';
     } catch (e) {
       status.textContent = 'save failed: ' + e;
@@ -384,7 +535,7 @@
     const {order, byCase} = parseStageEvents(events || []);
     if (!order.length) {
       controls.style.display = 'none';
-      tbody.innerHTML = '<tr><td colspan="3" style="color:var(--muted);">no case in flight</td></tr>';
+      tbody.innerHTML = '<tr><td colspan="3" style="color:var(--faint);text-align:left;font-family:inherit;">no case in flight</td></tr>';
       return;
     }
     const running = [...order].reverse().find(c =>
@@ -399,12 +550,10 @@
     tbody.innerHTML = STAGES.map(name => {
       const st = (byCase[selected] || {})[name] || {};
       const status = st.status || 'pending';
-      const cls = status === 'done' ? 'good' : status === 'failed' ? 'bad'
-                : status === 'running' ? 'warn' : '';
-      const label = status === 'done' ? '✓ done' : status === 'failed' ? '✖ failed'
-                  : status === 'running' ? '⟳ running' : 'pending';
+      const cls = status === 'done' ? 'dot good' : status === 'failed' ? 'dot bad'
+                : status === 'running' ? 'dot warn live' : '';
       return `<tr><td>${esc(name)}</td>` +
-        `<td><span class="pill ${cls}" title="${esc(st.detail || '')}">${label}</span></td>` +
+        `<td><span class="pill ${cls}" title="${esc(st.detail || '')}">${status}</span></td>` +
         `<td>${status === 'done' || status === 'failed' ? stageDuration(st) : '—'}</td></tr>`;
     }).join('');
   }
@@ -418,8 +567,10 @@
                     : s.status === 'done' ? 'done'
                     : s.status === 'error' ? 'error' : '');
     const log = document.getElementById('run-log');
-    log.innerHTML = (s.events || []).map(e =>
-      `<div class="log-line"><span class="ts">${esc(e.ts)}</span>${esc(e.message)}</div>`).join('');
+    log.innerHTML = (s.events || []).map(e => {
+      const err = /(?:^|\s)(?:failed:|FAILED)/.test(e.message || '');
+      return `<div class="log-line${err ? ' err' : ''}"><span class="ts">${esc(e.ts)}</span>${esc(e.message)}</div>`;
+    }).join('');
     log.scrollTop = log.scrollHeight;
     renderStageTable(s.events);
     if (s.status !== 'running') {
@@ -442,11 +593,11 @@
                       : it.status === 'pending_review' ? 'warn' : '';
       const tr = document.createElement('tr');
       tr.innerHTML =
-        `<td>${esc(it.case_nbr)}</td>` +
+        `<td class="case-nbr">${esc(it.case_nbr)}</td>` +
         `<td>${esc((it.subject || '').slice(0, 70))}</td>` +
         `<td><span class="pill">${esc(it.mode || '')}</span></td>` +
         `<td>${it.confidence != null ? it.confidence + '/100' : '—'}</td>` +
-        `<td><span class="pill ${statusCls}">${esc(it.status)}</span></td>` +
+        `<td><span class="pill dot ${statusCls}">${esc(it.status)}</span></td>` +
         `<td>${esc((it.created_at || '').slice(0, 16))}</td>`;
       tr.onclick = () => openDraft(it.draft_id);
       tbody.appendChild(tr);
@@ -475,11 +626,11 @@
     const times = (cr.issue_times && cr.issue_times.length)
       ? cr.issue_times : (analysis.issue_times || []);
     if (times.length) {
-      chips.push({label: 'issue time', text: '🕑 ' + times.join(' · '),
+      chips.push({label: 'issue time', text: times.join(' · '),
                   title: cr.issue_time_source || ''});
     }
     if (analysis.chosen_attachment) {
-      chips.push({label: 'log', text: '📦 ' + analysis.chosen_attachment,
+      chips.push({label: 'log', text: analysis.chosen_attachment,
                   title: cr.attachment_reason || ''});
     }
     const best = bestIncident(analysis);
@@ -545,7 +696,7 @@
     });
     const j = await r.json();
     document.getElementById('post-status').textContent =
-      j.ok ? '✔ posted to IPS' : ('post failed: ' + (j.error || 'unknown'));
+      j.ok ? 'posted to IPS' : ('post failed: ' + (j.error || 'unknown'));
     if (!j.ok) btn.disabled = false;
     loadQueue();
   }

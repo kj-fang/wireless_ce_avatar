@@ -342,6 +342,7 @@
 
 <script>
   let currentDraftId = null;
+  let currentDraftMode = null;
   let pollTimer = null;
 
   function esc(s) {
@@ -479,8 +480,9 @@
 
   // ---------- per-case stage table ----------
 
-  const STAGES = ['fetch_case', 'triage', 'read_case_history', 'pick_zip', 'download',
-                  'decompose', 'issue_time', 'pick_etl', 'decode_etl', 'agent_analysis'];
+  const STAGES = ['fetch_case', 'triage', 'read_case_history', 'check_wrt_log',
+                  'pick_zip', 'download', 'decompose', 'issue_time', 'pick_etl',
+                  'decode_etl', 'agent_analysis'];
   let stageCasePinned = null;   // user-selected case; null = follow the running one
 
   function pinStageCase(caseNbr) {
@@ -623,6 +625,10 @@
     const el = document.getElementById('draft-chips');
     const chips = [];
     const cr = analysis.case_reader || {};
+    if (analysis.mode === 'request_logs') {
+      chips.push({label: 'visibility', text: 'public reply to customer', cls: 'warn',
+                  title: 'Approving posts this as a customer-visible comment (not Private to Intel)'});
+    }
     const times = (cr.issue_times && cr.issue_times.length)
       ? cr.issue_times : (analysis.issue_times || []);
     if (times.length) {
@@ -659,6 +665,7 @@
     if (!r.ok) { alert('draft not found'); return; }
     const d = await r.json();
     currentDraftId = d.draft_id;
+    currentDraftMode = d.mode || null;
     document.getElementById('draft-panel').style.display = '';
     document.getElementById('draft-title').textContent =
       `case ${d.case_nbr} · ${d.mode} · ${d.status}`;
@@ -686,7 +693,10 @@
 
   async function approveDraft() {
     if (!currentDraftId) return;
-    if (!confirm('Post this comment to IPS as Private to Intel?')) return;
+    const msg = currentDraftMode === 'request_logs'
+      ? 'Post this reply to IPS as a PUBLIC comment visible to the customer?'
+      : 'Post this comment to IPS as Private to Intel?';
+    if (!confirm(msg)) return;
     const btn = document.getElementById('approve-btn');
     btn.disabled = true;
     document.getElementById('post-status').textContent = 'posting…';

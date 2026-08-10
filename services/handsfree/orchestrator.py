@@ -219,21 +219,33 @@ def approve_and_post(draft_id: str, edited_plain: Optional[str] = None) -> dict:
     backend = (cfg.get("post_backend") or "auto").lower()
     result = None
 
+    # request_logs drafts are customer-facing: post PUBLIC (visible to the
+    # customer). Everything else stays Private-to-Intel.
+    is_public_reply = (rec.get("mode") == "request_logs")
+
     if backend in ("rest", "auto"):
         try:
             result = ips.post_comment(rec["case_id"], rec["draft_html"],
                                       plain_body=rec.get("draft_plain") or "",
                                       field_map=cfg.get("rest_field_map"),
-                                      private=True)
+                                      private=not is_public_reply)
         except PostUnsupported as e:
             print(f"[handsfree] REST posting unsupported: {e}")
-            if backend == "rest":
+            if backend == "rest" or is_public_reply:
                 store.update(draft_id, status="post_failed",
                              post_result={"ok": False, "backend": "rest", "error": str(e)})
                 return {"ok": False, "error": str(e), "draft": store.get(draft_id)}
             result = None   # fall through to UI
 
     if result is None or (not result.ok and backend == "auto"):
+        if is_public_reply:
+            # The Selenium fallback drives the Private-to-Intel UI flow — it
+            # cannot post a public reply. REST-only for customer-facing posts.
+            err = (result.error if result else
+                   "REST backend unavailable — public replies post via REST only")
+            store.update(draft_id, status="post_failed",
+                         post_result={"ok": False, "backend": "rest", "error": err})
+            return {"ok": False, "error": err, "draft": store.get(draft_id)}
         from .ui_commenter import UiCommenter
         ui = UiCommenter(locators=cfg.get("ui_locators"))
         result = ui.post_comment(rec["case_id"], rec["draft_plain"])

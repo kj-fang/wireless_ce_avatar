@@ -80,9 +80,40 @@ def _incident_lines(inc: IncidentReport) -> list[str]:
     return lines
 
 
+def _request_logs_lines(analysis: CaseAnalysis) -> list[str]:
+    """Customer-facing reply asking for the missing WRT logs. Deliberately a
+    fixed template (no LLM text): this draft posts PUBLICLY once approved."""
+    return [
+        "Hello,",
+        "",
+        "Thank you for reporting this issue"
+        + (f" ({analysis.subject})" if analysis.subject else "") + ".",
+        "",
+        "To root-cause it we need the Intel wireless driver WRT logs covering "
+        "the failure — they are critical for the analysis, and we could not "
+        "find a log archive attached to this case.",
+        "",
+        "Could you please:",
+        "  1. Reproduce the issue and note the exact failure time,",
+        "  2. Collect the WRT logs from the affected system,",
+        "  3. Attach the resulting archive (.zip/.7z/.rar) to this case "
+        "along with the failure timestamp.",
+        "",
+        "We will start the analysis as soon as the logs are available. "
+        "Thank you!",
+    ]
+
+
 def compose_plain(analysis: CaseAnalysis) -> str:
     """Plain-text draft (editable in the review UI)."""
     parts: list[str] = [AI_MARKER, ""]
+
+    if analysis.mode == "request_logs":
+        parts.extend(_request_logs_lines(analysis))
+        text = "\n".join(parts)
+        while "\n\n\n" in text:
+            text = text.replace("\n\n\n", "\n\n")
+        return text.strip() + "\n"
 
     if analysis.mode == "full" and analysis.incidents:
         parts.append(f"Automated log analysis for case {analysis.case_nbr}"

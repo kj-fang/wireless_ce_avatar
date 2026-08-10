@@ -65,6 +65,25 @@ def smoke_soql() -> None:
     except PostUnsupported:
         check("S1.f unverified field map refused", True)
 
+    # Public (customer-visible) payload — used by request_logs replies.
+    fm_pub = dict(fm, extra_fields={
+        "Core_IPS_Case_Comment_Type__c": "Private to Intel",
+        "Core_IPS_Comment_Author_Type__c": "Agent"})
+    p = IpsClient.build_comment_payload("500XYZ", "<p>r</p>",
+                                        field_map=fm_pub, private=False)
+    check("S1.g public payload: Public=True explicitly",
+          p["Core_IPS_Public__c"] is True, str(p))
+    check("S1.h public payload drops private-flavored extras",
+          "Core_IPS_Case_Comment_Type__c" not in p
+          and p.get("Core_IPS_Comment_Author_Type__c") == "Agent", str(p))
+    try:
+        IpsClient.build_comment_payload("500XYZ", "<p>r</p>",
+                                        field_map={"body_field": "B__c"},
+                                        private=False)
+        check("S1.i public refused without verified privacy field", False)
+    except PostUnsupported:
+        check("S1.i public refused without verified privacy field", True)
+
 
 # ---------------------------------------------------------------- S2
 def _full_analysis():
@@ -297,8 +316,8 @@ def smoke_runner(tmp: Path) -> None:
               and analysis.case_reader.get("issue_time_source") == "comment #2")
         stage_names = [s.name for s in analysis.stages]
         check("S4.e all stages recorded",
-              {"fetch_case", "triage", "read_case_history", "pick_zip",
-               "download", "decompose", "issue_time", "pick_etl",
+              {"fetch_case", "triage", "read_case_history", "check_wrt_log",
+               "pick_zip", "download", "decompose", "issue_time", "pick_etl",
                "agent_analysis"} <= set(stage_names),
               str(stage_names))
         check("S4.g reader-chosen zip beats newest-zip fallback",
@@ -317,6 +336,25 @@ def smoke_runner(tmp: Path) -> None:
                             analysis=analysis.to_dict())
         check("S4.f draft queued pending_review",
               rec["status"] == "pending_review" and "AP-initiated" in rec["draft_plain"])
+
+        # --- request-logs path: same case, but no attachments at all --------
+        def _fake_process_no_logs(case_ctx: CaseContext) -> CaseContext:
+            case_ctx = _fake_process(case_ctx)
+            case_ctx.attachment_list = []
+            return case_ctx
+        cis.CaseService.process_case = staticmethod(_fake_process_no_logs)
+        analysis2 = r.analyze_case("01234567")
+        check("S4.i no-WRT-log case -> request_logs mode",
+              analysis2.mode == "request_logs" and analysis2.ok,
+              f"mode={analysis2.mode} err={analysis2.error}")
+        stage_names2 = [s.name for s in analysis2.stages]
+        check("S4.j check_wrt_log recorded, pipeline stopped before pick_zip",
+              "check_wrt_log" in stage_names2 and "pick_zip" not in stage_names2,
+              str(stage_names2))
+        draft2 = compose(analysis2)
+        check("S4.k request-logs draft asks for WRT logs",
+              "WRT logs" in draft2["plain"] and draft2["confidence"] is None,
+              draft2["plain"][:200])
     finally:
         cis.CaseService.process_case = orig_process
         adl.run_dload_threads = orig_dload

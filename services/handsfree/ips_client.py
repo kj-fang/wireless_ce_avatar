@@ -249,17 +249,38 @@ class IpsClient:
         plain_field = fm.get("plain_field")
         if plain_field and plain_body:
             payload[plain_field] = plain_body
+        private_field = fm.get("private_field")
         if private:
-            private_field = fm.get("private_field")
             if not private_field:
                 raise PostUnsupported(
                     "No verified 'Private to Intel' field in config — run field "
                     "discovery (describe) and confirm the field before REST posting."
                 )
             payload[private_field] = fm.get("private_value", True)
+        else:
+            # Public (customer-visible) comment: the flag must be set
+            # EXPLICITLY to the inverse of the verified private value —
+            # omitting it could silently post with the org default.
+            private_value = fm.get("private_value", True)
+            if not private_field or not isinstance(private_value, bool):
+                raise PostUnsupported(
+                    "Cannot guarantee public visibility — no verified boolean "
+                    "privacy field in config; refusing to post a customer reply."
+                )
+            payload[private_field] = not private_value
+            # Optional verified overrides for public posts (e.g. the org's
+            # public comment-type picklist value).
+            pub_extra = fm.get("public_extra_fields")
+            if isinstance(pub_extra, dict):
+                for k, v in pub_extra.items():
+                    payload.setdefault(k, v)
         extra = fm.get("extra_fields")
         if isinstance(extra, dict):
             for k, v in extra.items():
+                # Never stamp private-flavored metadata (e.g. comment type
+                # 'Private to Intel') onto a public customer reply.
+                if not private and isinstance(v, str) and "private" in v.lower():
+                    continue
                 payload.setdefault(k, v)
         return payload
 

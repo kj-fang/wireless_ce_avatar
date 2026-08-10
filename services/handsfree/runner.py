@@ -238,6 +238,25 @@ class HandsfreeRunner:
                     f"attachment={reader.get('attachment_name') or '(none)'} "
                     f"({reader.get('issue_time_source') or 'no source'})")
 
+        # -- 3b. WRT-log presence gate -----------------------------------------
+        # Driver WRT logs are critical to the analysis. If the case has no log
+        # archive attached at all, don't run the (pointless) log pipeline —
+        # compose a request-logs reply to the customer instead. The reply is a
+        # normal queue draft (mode "request_logs"): a human still approves it,
+        # and posting flips to a PUBLIC comment so the customer can see it.
+        has_wrt_log = False
+        with self._stage(analysis, "check_wrt_log"):
+            has_wrt_log = _pick_latest_archive(case_ctx.attachment_list) is not None
+            self.progress("check_wrt_log",
+                          "WRT log archive present" if has_wrt_log
+                          else "no WRT log archive in attachments")
+        if not has_wrt_log:
+            analysis.mode = "request_logs"
+            analysis.ok = True
+            analysis.error = ("no WRT log archive (.zip/.rar/.7z) attached — "
+                              "drafted a request-logs reply to the customer")
+            return analysis
+
         # -- 4. pick the log-archive attachment --------------------------------
         # Reader's nomination first; newest-archive heuristic as fallback.
         # Accept every archive type the decomposer can extract — OEMs upload

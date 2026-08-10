@@ -24,7 +24,7 @@ if '--tray-mode' not in sys.argv:
         print(f"📝 Log file: {_log_path}")
 
 from urllib.parse import quote
-from urllib.request import Request, urlopen
+from urllib.request import ProxyHandler, Request, build_opener
 
 from utils.port_utils import (
     is_port_in_use,
@@ -160,8 +160,12 @@ def _navigate_existing_browser(instance_url, startup_path):
     payload = json.dumps({'startup_path': startup_path}).encode('utf-8')
     request = Request(endpoint, data=payload, headers={'Content-Type': 'application/json'}, method='POST')
 
+    # Empty ProxyHandler: without it urlopen honours HTTP_PROXY and sends this
+    # loopback call to the corporate proxy, which rejects it with 403.
+    opener = build_opener(ProxyHandler({}))
+
     try:
-        with urlopen(request, timeout=5) as response:
+        with opener.open(request, timeout=5) as response:
             return 200 <= response.status < 300
     except Exception as error:
         print(f"⚠️ Failed to reuse existing browser: {error}")

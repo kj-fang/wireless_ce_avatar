@@ -21,6 +21,7 @@ from utils.issue_time_utils import (
 )
 from utils.issue_time_ai import build_issue_time_suggestions, organize_issue_context, realign_times_to_log, find_nearest_event_error
 from services import feedback_service
+from services import gather_service
 from services import history_service
 from services import chat_jobs
 
@@ -862,6 +863,26 @@ def chat():
         except Exception:
             _issue_ctx_for_snapshot = {}
 
+        # Usage analytics: on every Send, capture the entry session (user name,
+        # date, CASE NUMBER + case summary) and the asked question into the
+        # shared Gather folder for later DB ingestion. Non-blocking; never
+        # raises, so it can't affect the chat path.
+        try:
+            gather_service.record_send(
+                conversation_id=conversation_id,
+                workflow_id=session.get("gather_workflow_id", ""),
+                session_id=session_id,
+                user_message=user_message,
+                issue=_issue_ctx_for_snapshot,
+                log_path=getattr(agent, "current_log_path", "") or "",
+                issue_time=format_issue_time(agent.issue_time),
+                issue_time_window_minutes=getattr(agent, "issue_time_window_minutes", None),
+                domain="bt",
+                turn_id=turn_id,
+            )
+        except Exception:
+            pass
+
         # Use the mode flag sent by the frontend toggle.
         use_tools = bool(data.get("use_tools", False))
 
@@ -903,6 +924,22 @@ def chat():
                         max_tokens=max_tokens,
                         step_callback=step_cb,
                     )
+                    # Cost accounting: token counts only exist once the LLM has
+                    # finished, so this is a second Gather write on top of the
+                    # record_send() that opened this turn.
+                    try:
+                        gather_service.record_usage(
+                            conversation_id=conversation_id,
+                            workflow_id=session.get("gather_workflow_id", ""),
+                            model=getattr(agent, "model", "") or "",
+                            usage=getattr(agent, "last_turn_usage", None),
+                            issue=_issue_ctx_for_snapshot,
+                            domain="bt",
+                            turn_id=turn_id,
+                            latency_ms=int((datetime.now() - turn_started_at).total_seconds() * 1000),
+                        )
+                    except Exception:
+                        pass
                     # Persist BEFORE signalling done so any subscriber that
                     # refreshes its history list on 'done' already sees this
                     # turn. feedback is vote-gated; history always persists.
@@ -936,6 +973,19 @@ def chat():
                 except Exception as exc:
                     error_tb = traceback.format_exc()
                     print(f"❌ Chat-with-tools thread error:\n{error_tb}")
+                    try:
+                        gather_service.record_turn_status(
+                            conversation_id=conversation_id,
+                            turn_id=turn_id,
+                            status="failed",
+                            workflow_id=session.get("gather_workflow_id", ""),
+                            issue=_issue_ctx_for_snapshot,
+                            domain="bt",
+                            latency_ms=int((datetime.now() - turn_started_at).total_seconds() * 1000),
+                            error_code=type(exc).__name__,
+                        )
+                    except Exception:
+                        pass
                     chat_jobs.fail_job(job, str(exc))
 
             t = threading.Thread(target=run_chat_with_tools, daemon=True)
@@ -956,6 +1006,20 @@ def chat():
                 temperature=temperature,
                 max_tokens=max_tokens,
             )
+            # Cost accounting — see the tools branch above.
+            try:
+                gather_service.record_usage(
+                    conversation_id=conversation_id,
+                    workflow_id=session.get("gather_workflow_id", ""),
+                    model=getattr(agent, "model", "") or "",
+                    usage=getattr(agent, "last_turn_usage", None),
+                    issue=_issue_ctx_for_snapshot,
+                    domain="bt",
+                    turn_id=turn_id,
+                    latency_ms=int((datetime.now() - turn_started_at).total_seconds() * 1000),
+                )
+            except Exception:
+                pass
 
             # Sidecar: persist the turn (no step trace in simple mode).
             feedback_service.record_turn(
@@ -995,6 +1059,19 @@ def chat():
     except Exception as e:
         error_traceback = traceback.format_exc()
         print(f"❌ Chatbot error:\n{error_traceback}")
+        try:
+            if conversation_id and turn_id:
+                gather_service.record_turn_status(
+                    conversation_id=conversation_id,
+                    turn_id=turn_id,
+                    status="failed",
+                    workflow_id=session.get("gather_workflow_id", ""),
+                    issue=locals().get("_issue_ctx_for_snapshot") or {},
+                    domain="bt",
+                    error_code=type(e).__name__,
+                )
+        except Exception:
+            pass
 
         def generate_error():
             yield f"data: {json.dumps({'type': 'error', 'content': str(e)}, ensure_ascii=False)}\n\n"
@@ -1011,6 +1088,45 @@ def reset():
         agent = _get_or_create_agent()
         agent.reset_conversation()
         return jsonify({"success": True, "message": "Conversation reset."})
+    except Exception as e:
+        return jsonify({"success": False, "error": str(e)}), 500
+
+
+# ------------------------------------------------------------------
+# API: stop the in-flight tools-mode analysis
+#
+# Signals the running background job's agent (via its cancel_event) to bail
+# out at the next reasoning-step boundary. The job then finishes normally and
+# its SSE stream emits a terminal "done" with a "stopped" notice. Idempotent:
+# a no-op when nothing is running.
+#
+# The target conversation is resolved from the caller's OWN session (the
+# frontend only learns conversation_id on the terminal 'done' event, so a Stop
+# clicked mid-stream usually sends an empty id). This scopes cancellation to
+# this session's job only — never other tabs'/users' running analyses.
+# ------------------------------------------------------------------
+@bt_chatbot_bp.route("/chat/stop", methods=["POST"])
+def chat_stop():
+    try:
+        data = request.get_json(silent=True) or {}
+        conversation_id = (data.get("conversation_id") or "").strip()
+        if not conversation_id:
+            conversation_id = (session.get("feedback_conversation_id") or "").strip()
+        job = chat_jobs.get_job(conversation_id) if conversation_id else None
+        stopped = chat_jobs.request_cancel(conversation_id) if conversation_id else False
+        if stopped and job is not None:
+            try:
+                gather_service.record_turn_status(
+                    conversation_id=conversation_id,
+                    turn_id=getattr(job, "turn_id", ""),
+                    status="cancelled",
+                    workflow_id=session.get("gather_workflow_id", ""),
+                    issue=_extract_issue_context(),
+                    domain="bt",
+                )
+            except Exception:
+                pass
+        return jsonify({"success": True, "stopped": bool(stopped)})
     except Exception as e:
         return jsonify({"success": False, "error": str(e)}), 500
 
@@ -1328,6 +1444,7 @@ def back_to_avatar():
         "_resolved_issue_time_cache",
         "_issue_ai_quick",            # LLM-organized description + issue times
         "feedback_conversation_id",   # next /bt_chatbot/ visit starts a fresh conversation
+        "gather_workflow_id",         # next case starts a fresh v5 workflow
     ):
         session.pop(key, None)
 
@@ -1642,9 +1759,24 @@ def _issue_context_organized(raw_desc: str, first_ts, last_ts) -> dict:
         d = quick["data"]
     else:
         client, model = _get_llm_client_model()
-        d = organize_issue_context(raw_desc, first_ts=first_ts, last_ts=last_ts,
-                                   llm_client=client, llm_model=model)
+        started_at = datetime.now()
+        d, usage = organize_issue_context(
+            raw_desc, first_ts=first_ts, last_ts=last_ts,
+            llm_client=client, llm_model=model, return_usage=True,
+        )
         session["_issue_ai_quick"] = {"data": d}
+        if int(usage.get("llm_calls") or 0) > 0:
+            try:
+                issue = CaseContext.from_session(session.get("case_context") or {}).to_dict()
+                gather_service.record_feature_usage(
+                    workflow_id=session.get("gather_workflow_id", ""),
+                    feature_code="issue_time_prepass",
+                    model=model or "", usage=usage, issue=issue, domain="bt",
+                    trigger="direct_chatbot_context",
+                    latency_ms=int((datetime.now() - started_at).total_seconds() * 1000),
+                )
+            except Exception:
+                pass
     return {
         "clean_description": d.get("clean_description") or raw_desc,
         "issue_times": realign_times_to_log(d.get("issue_times") or [], first_ts, last_ts),
@@ -2460,7 +2592,16 @@ def skills_yaml_status():
       }
     """
     try:
-        return jsonify({"success": True, **_skills_yaml_status_payload()})
+        payload = _skills_yaml_status_payload()
+        # Include the current skill list so the frontend can render the
+        # "Available Skills" panel on page load without waiting for set_log.
+        try:
+            agent = _get_or_create_agent(skip_prime=True)
+            payload["skills"] = agent.get_skill_descriptions()
+        except Exception:
+            traceback.print_exc()
+            payload["skills"] = []
+        return jsonify({"success": True, **payload})
     except Exception as e:
         traceback.print_exc()
         return jsonify({"success": False, "error": str(e)}), 500

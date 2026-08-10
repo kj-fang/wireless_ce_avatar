@@ -612,6 +612,11 @@
         }
         #send-btn:hover { background: #1e40af; }
         #send-btn:disabled { opacity: 0.5; cursor: not-allowed; }
+        /* Stop mode: while an analysis is streaming the Send button turns into
+           a red Stop button (always clickable so the user can abort). */
+        #send-btn.stopping { background: #dc2626; }
+        #send-btn.stopping:hover { background: #b91c1c; }
+        #send-btn.stopping:disabled { opacity: 1; cursor: pointer; }
 
         /* Scrollbar */
         #chat-window::-webkit-scrollbar { width: 5px; }
@@ -2450,7 +2455,7 @@
         </div>
         <div class="input-row">
             <textarea id="user-input" rows="1" placeholder="Describe the issue (e.g. '6G Weak Signal disconnected'). Pick the issue time on the left." onkeydown="handleEnter(event)" oninput="onUserInputChange(this)"></textarea>
-            <button id="send-btn" onclick="sendMessage()">Send ↑</button>
+            <button id="send-btn" onclick="onSendBtnClick()">Send ↑</button>
         </div>
     </div>
 
@@ -2515,7 +2520,7 @@
     function handleEnter(e) {
         if (e.key === 'Enter' && !e.shiftKey) {
             e.preventDefault();
-            sendMessage();
+            onSendBtnClick();
         }
     }
 
@@ -3689,6 +3694,59 @@
     }
 
     // ── Send chat message ──────────────────────────────────────────
+    // ── Stop / abort support ───────────────────────────────────────
+    // While a tools-mode analysis streams, the Send button becomes a red
+    // Stop button. Clicking it aborts the SSE stream locally AND asks the
+    // backend to halt the running analysis (its agent loop bails out at the
+    // next reasoning-step boundary).
+    let __btStreaming = false;
+    let __btChatCtl = null;
+
+    function setSendBtnStopMode() {
+        __btStreaming = true;
+        const btn = document.getElementById('send-btn');
+        if (!btn) return;
+        btn.disabled = false;
+        btn.classList.add('stopping');
+        btn.textContent = 'Stop ■';
+    }
+
+    function setSendBtnSendMode() {
+        __btStreaming = false;
+        __btChatCtl = null;
+        const btn = document.getElementById('send-btn');
+        if (!btn) return;
+        btn.classList.remove('stopping');
+        btn.textContent = 'Send ↑';
+        // Re-derive the disabled state from the current input validity.
+        if (typeof validateUserInput === 'function') validateUserInput(false);
+        else btn.disabled = false;
+    }
+
+    // Single click entry point for the Send/Stop button (and Enter key).
+    function onSendBtnClick() {
+        if (__btStreaming) { stopChat(); return; }
+        sendMessage();
+    }
+
+    async function stopChat() {
+        // Stop rendering immediately by aborting the fetch stream.
+        if (__btChatCtl) { try { __btChatCtl.abort(); } catch (e) {} }
+        // Drop any queued multi-incident continuations so the chain ends here.
+        window.__multiTimeContext = null;
+        // Ask the backend to halt the running analysis (cooperative cancel).
+        try {
+            await fetch('/bt_chatbot/chat/stop', {
+                method: 'POST',
+                headers: {'Content-Type': 'application/json'},
+                body: JSON.stringify({ conversation_id: window.__feedbackConversationId || '' }),
+            });
+        } catch (e) { /* best-effort */ }
+        removeTyping();
+        appendAssistantText('⏹️ Analysis stopped by user.');
+        setSendBtnSendMode();
+    }
+
     async function sendMessage() {
         const input = document.getElementById('user-input');
         let desc = input.value.trim();
@@ -3808,6 +3866,8 @@
             clearIssueTime();
         }
         document.getElementById('send-btn').disabled = true;
+        // Flip the Send button into its red Stop state for this stream.
+        setSendBtnStopMode();
         // Only show the user's typed message ONCE — at the start of the
         // very first iteration. Continuations re-use the same message.
         if (!isContinuation) appendUserMsg(text);
@@ -3816,6 +3876,7 @@
         const steps = [];
         let agentCardBodyEl = null;   // live step list container created on first step
         let agentCardId = null;
+        let __btAborted = false;      // set true when the user clicks Stop
         const streamStartTs = Date.now();
         let lastStepTs = streamStartTs;
 
@@ -3937,9 +3998,11 @@
         }
 
         try {
+            __btChatCtl = new AbortController();
             const res = await fetch('/bt_chatbot/chat', {
                 method: 'POST',
                 headers: {'Content-Type': 'application/json'},
+                signal: __btChatCtl.signal,
                 body: JSON.stringify({
                     message: text,
                     use_tools: agenticMode,
@@ -4008,10 +4071,24 @@
             if (buffer) processLine(buffer);
 
         } catch (e) {
-            removeTyping();
-            appendAssistantText('❌ Network error: ' + e.message);
+            if (e.name === 'AbortError') {
+                // User clicked Stop — stopChat() already rendered the notice
+                // and the backend is halting. Nothing more to show here.
+                __btAborted = true;
+            } else {
+                removeTyping();
+                appendAssistantText('❌ Network error: ' + e.message);
+            }
         } finally {
             removeTyping();
+            // A user Stop cancels the whole (possibly multi-incident) send:
+            // don't schedule the next iteration and make sure the button is
+            // back in Send mode.
+            if (__btAborted) {
+                window.__multiTimeContext = null;
+                setSendBtnSendMode();
+                return;
+            }
             // ── Multi-time chain: if the queue still has unprocessed
             // issue times, schedule the next iteration AND keep Send
             // disabled. Re-enabling Send between iterations lets the
@@ -4034,7 +4111,7 @@
                     clearIssueTime();
                     clearAllExtraIssueTimes();
                 }
-                document.getElementById('send-btn').disabled = false;
+                setSendBtnSendMode();
             }
         }
     }
@@ -6537,6 +6614,11 @@
             // editor (or a server-echoed yaml_modified=true) does.
             window.__usingUserYaml = (data.effective_source === 'user');
             renderSkillSourcePanel(data);
+            // Populate the Available Skills list on page load so it
+            // doesn't stay empty when setLog hasn't been called yet.
+            if (data.skills && data.skills.length > 0) {
+                renderSkills(data.skills);
+            }
             return data;
         } catch (e) {
             console.warn('skills_yaml_status fetch failed:', e);

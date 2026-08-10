@@ -53,21 +53,6 @@ def _connect(passwd, use_privatelink):
     return snowflake.connector.connect(**kwargs)
 
 
-def _apply_proxy_env():
-    """Re-assert proxy/OCSP env vars before every Snowflake request.
-
-    The Selenium driver manager pops HTTP_PROXY/HTTPS_PROXY/NO_PROXY from os.environ,
-    and snowflake.connector resolves the proxy lazily per request (not at connect time),
-    so a reused connection would otherwise go direct and hit a connect timeout.
-    """
-    os.environ["HTTP_PROXY"] = "http://proxy-dmz.intel.com:911"
-    os.environ["HTTPS_PROXY"] = "http://proxy-dmz.intel.com:912"
-    os.environ["NO_PROXY"] = "xd14286-ecdw.privatelink.snowflakecomputing.com"
-    # Disable OCSP cache server lookup — ocsp.snowflakecomputing.com is unreachable
-    # on this corporate network and each failed attempt adds ~5s timeout delay.
-    os.environ["SF_OCSP_RESPONSE_CACHE_SERVER_ENABLED"] = "false"
-
-
 def _get_connection(passwd):
     """Return a cached Snowflake connection, reconnecting only when necessary.
 
@@ -78,7 +63,6 @@ def _get_connection(passwd):
     """
     global _snowflake_conn, _snowflake_passwd, _snowflake_conn_mode
     with _snowflake_lock:
-        _apply_proxy_env()
         if (
             _snowflake_conn is None
             or _snowflake_passwd != passwd

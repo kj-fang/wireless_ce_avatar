@@ -238,25 +238,6 @@ class HandsfreeRunner:
                     f"attachment={reader.get('attachment_name') or '(none)'} "
                     f"({reader.get('issue_time_source') or 'no source'})")
 
-        # -- 3b. WRT-log presence gate -----------------------------------------
-        # Driver WRT logs are critical to the analysis. If the case has no log
-        # archive attached at all, don't run the (pointless) log pipeline —
-        # compose a request-logs reply to the customer instead. The reply is a
-        # normal queue draft (mode "request_logs"): a human still approves it,
-        # and posting flips to a PUBLIC comment so the customer can see it.
-        has_wrt_log = False
-        with self._stage(analysis, "check_wrt_log"):
-            has_wrt_log = _pick_latest_archive(case_ctx.attachment_list) is not None
-            self.progress("check_wrt_log",
-                          "WRT log archive present" if has_wrt_log
-                          else "no WRT log archive in attachments")
-        if not has_wrt_log:
-            analysis.mode = "request_logs"
-            analysis.ok = True
-            analysis.error = ("no WRT log archive (.zip/.rar/.7z) attached — "
-                              "drafted a request-logs reply to the customer")
-            return analysis
-
         # -- 4. pick the log-archive attachment --------------------------------
         # Reader's nomination first; newest-archive heuristic as fallback.
         # Accept every archive type the decomposer can extract — OEMs upload
@@ -285,10 +266,17 @@ class HandsfreeRunner:
                 except Exception:
                     pass
         if zip_item is None:
-            analysis.mode = "triage_only"
-            analysis.ok = bool(analysis.triage)
-            analysis.error = ("no log archive (.zip/.rar/.7z) found in the case "
-                              "attachments — posted triage instead of log analysis")
+            # No archive at all — certainly no WRT logs. Record the check
+            # stage explicitly so the stage table tells the story, then draft
+            # a request-logs reply (mode "request_logs": human-approved,
+            # posted as a PUBLIC comment so the customer sees it).
+            with self._stage(analysis, "check_wrt_log"):
+                self.progress("check_wrt_log",
+                              "no log archive attached — WRT logs missing")
+            analysis.mode = "request_logs"
+            analysis.ok = True
+            analysis.error = ("no WRT log archive (.zip/.rar/.7z) attached — "
+                              "drafted a request-logs reply to the customer")
             return analysis
 
         # -- 5. download -------------------------------------------------------
@@ -312,10 +300,24 @@ class HandsfreeRunner:
             file_path, _name, already = downloaded[0]
             wifi_files, ddd_files, _evt, _bt, _fw = process_single_zip(
                 file_path, case_ctx.case_download_dir, already)
+        # -- 6b. confirm WRT logs exist in the unzipped archive ----------------
+        # The archive downloaded and decomposed — now verify it actually
+        # contains driver ETL traces (WRT wifi ETLs / DDD). An archive of
+        # screenshots or dmesg dumps is not analyzable: ask for WRT logs.
+        with self._stage(analysis, "check_wrt_log"):
+            if wifi_files or ddd_files:
+                self.progress("check_wrt_log",
+                              f"ETLs found — wifi(WRT): {len(wifi_files)}, "
+                              f"DDD: {len(ddd_files)}")
+            else:
+                self.progress("check_wrt_log",
+                              f"'{analysis.chosen_attachment}' contains no "
+                              "WRT/DDD ETL logs")
         if not wifi_files and not ddd_files:
-            analysis.mode = "triage_only"
-            analysis.ok = bool(analysis.triage)
-            analysis.error = "no Wi-Fi/DDD ETL files found in the attachment"
+            analysis.mode = "request_logs"
+            analysis.ok = True
+            analysis.error = (f"attachment '{analysis.chosen_attachment}' contains "
+                              "no WRT ETL logs — drafted a request-logs reply")
             return analysis
 
         # -- 7. issue times -----------------------------------------------------

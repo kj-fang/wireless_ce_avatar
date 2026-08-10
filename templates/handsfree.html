@@ -480,9 +480,9 @@
 
   // ---------- per-case stage table ----------
 
-  const STAGES = ['fetch_case', 'triage', 'read_case_history', 'check_wrt_log',
-                  'pick_zip', 'download', 'decompose', 'issue_time', 'pick_etl',
-                  'decode_etl', 'agent_analysis'];
+  const STAGES = ['fetch_case', 'triage', 'read_case_history', 'pick_zip',
+                  'download', 'decompose', 'check_wrt_log', 'issue_time',
+                  'pick_etl', 'decode_etl', 'agent_analysis'];
   let stageCasePinned = null;   // user-selected case; null = follow the running one
 
   function pinStageCase(caseNbr) {

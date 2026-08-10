@@ -83,6 +83,13 @@ def _incident_lines(inc: IncidentReport) -> list[str]:
 def _request_logs_lines(analysis: CaseAnalysis) -> list[str]:
     """Customer-facing reply asking for the missing WRT logs. Deliberately a
     fixed template (no LLM text): this draft posts PUBLICLY once approved."""
+    if analysis.chosen_attachment:
+        # An archive was attached, but after extraction it held no WRT ETLs.
+        missing = (f"we checked the attached archive "
+                   f"({analysis.chosen_attachment}) but could not find WRT "
+                   "logs inside it")
+    else:
+        missing = "we could not find a WRT log archive attached to this case"
     return [
         "Hello,",
         "",
@@ -90,8 +97,7 @@ def _request_logs_lines(analysis: CaseAnalysis) -> list[str]:
         + (f" ({analysis.subject})" if analysis.subject else "") + ".",
         "",
         "To root-cause it we need the Intel wireless driver WRT logs covering "
-        "the failure — they are critical for the analysis, and we could not "
-        "find a log archive attached to this case.",
+        f"the failure — they are critical for the analysis, and {missing}.",
         "",
         "Could you please:",
         "  1. Reproduce the issue and note the exact failure time,",

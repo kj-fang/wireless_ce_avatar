@@ -337,24 +337,39 @@ def smoke_runner(tmp: Path) -> None:
         check("S4.f draft queued pending_review",
               rec["status"] == "pending_review" and "AP-initiated" in rec["draft_plain"])
 
-        # --- request-logs path: same case, but no attachments at all --------
+        # --- request-logs path A: no archive attached at all ----------------
         def _fake_process_no_logs(case_ctx: CaseContext) -> CaseContext:
             case_ctx = _fake_process(case_ctx)
             case_ctx.attachment_list = []
             return case_ctx
         cis.CaseService.process_case = staticmethod(_fake_process_no_logs)
         analysis2 = r.analyze_case("01234567")
-        check("S4.i no-WRT-log case -> request_logs mode",
+        check("S4.i no archive -> request_logs mode",
               analysis2.mode == "request_logs" and analysis2.ok,
               f"mode={analysis2.mode} err={analysis2.error}")
         stage_names2 = [s.name for s in analysis2.stages]
-        check("S4.j check_wrt_log recorded, pipeline stopped before pick_zip",
-              "check_wrt_log" in stage_names2 and "pick_zip" not in stage_names2,
+        check("S4.j check_wrt_log recorded, stopped before download",
+              "check_wrt_log" in stage_names2 and "download" not in stage_names2,
               str(stage_names2))
         draft2 = compose(analysis2)
         check("S4.k request-logs draft asks for WRT logs",
               "WRT logs" in draft2["plain"] and draft2["confidence"] is None,
               draft2["plain"][:200])
+
+        # --- request-logs path B: archive unzips to no WRT/DDD ETLs ---------
+        cis.CaseService.process_case = staticmethod(_fake_process)
+        adc.process_single_zip = lambda *a, **k: ([], [], [], [], [])
+        analysis3 = r.analyze_case("01234567")
+        stage_names3 = [s.name for s in analysis3.stages]
+        check("S4.l empty archive -> request_logs after decompose",
+              analysis3.mode == "request_logs"
+              and "decompose" in stage_names3
+              and "check_wrt_log" in stage_names3,
+              f"mode={analysis3.mode} err={analysis3.error} stages={stage_names3}")
+        draft3 = compose(analysis3)
+        check("S4.m reply names the checked archive",
+              "repro_logs.7z" in draft3["plain"] and "WRT" in draft3["plain"],
+              draft3["plain"][:250])
     finally:
         cis.CaseService.process_case = orig_process
         adl.run_dload_threads = orig_dload

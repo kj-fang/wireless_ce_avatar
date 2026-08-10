@@ -37,6 +37,11 @@ def _get_connection(passwd):
                 warehouse="WH_SMG_CONSUMPTION",
                 database="SALES_MARKETING",
                 insecure_mode=True,  # skip OCSP checks — ocsp.digicert.com unreachable on this network
+                # Bound retries so a network blip can't hang callers forever
+                # (observed: handsfree fetch_case stuck 20+ min in the
+                # connector's unbounded query-request retry loop).
+                login_timeout=30,    # fresh connection attempt: fail after 30s
+                network_timeout=180, # established-connection requests: fail after ~3 min
             )
             _snowflake_passwd = passwd
             print(f"  [Snowflake] New connection established: {time.time() - t_conn:.2f}s")

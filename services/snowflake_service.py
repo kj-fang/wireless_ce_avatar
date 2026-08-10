@@ -17,13 +17,6 @@ def _get_connection(passwd):
             or _snowflake_passwd != passwd
             or _snowflake_conn.is_closed()
         ):
-            # Set proxy/OCSP env vars immediately before connecting.
-            # Done here (not at import time) so they are always in effect even if
-            # other code (e.g. the Selenium driver manager) has mutated os.environ
-            # in the meantime.
-            os.environ["HTTP_PROXY"] = "http://proxy-dmz.intel.com:911"
-            os.environ["HTTPS_PROXY"] = "http://proxy-dmz.intel.com:912"
-            os.environ["NO_PROXY"] = "xd14286-ecdw.privatelink.snowflakecomputing.com"
             # Disable OCSP cache server lookup — ocsp.snowflakecomputing.com is unreachable
             # on this corporate network and each failed attempt adds ~5s timeout delay.
             os.environ["SF_OCSP_RESPONSE_CACHE_SERVER_ENABLED"] = "false"
@@ -36,6 +29,16 @@ def _get_connection(passwd):
                 account="XD14286-ECDWPROD",
                 warehouse="WH_SMG_CONSUMPTION",
                 database="SALES_MARKETING",
+                # Proxy passed as connection params, NOT env vars: the Selenium
+                # driver manager pops HTTP(S)_PROXY from os.environ at arbitrary
+                # times (create_download_driver / open_browser), and requests
+                # re-resolves env proxies on every request — env-based proxying
+                # therefore races with Chrome startup and dies mid-query with
+                # connect timeouts. Params live inside the connector's session
+                # manager and are immune to os.environ mutation (verified: no
+                # env writes, works with all proxy env vars removed).
+                proxy_host="proxy-dmz.intel.com",
+                proxy_port=912,
                 insecure_mode=True,  # skip OCSP checks — ocsp.digicert.com unreachable on this network
                 # Bound retries so a network blip can't hang callers forever
                 # (observed: handsfree fetch_case stuck 20+ min in the

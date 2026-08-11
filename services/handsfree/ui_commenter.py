@@ -82,9 +82,8 @@ class UiCommenter:
             tab.click()
             time.sleep(1.5)
 
-            # Private to Intel — click the labeled option if present; some
-            # layouts default to private, so a missing locator is non-fatal
-            # ONLY when configured as optional.
+            # Private to Intel — must be explicitly selected. If we cannot find
+            # the control, abort to avoid posting a possibly-public comment.
             try:
                 private = WebDriverWait(driver, 10).until(
                     EC.element_to_be_clickable((By.XPATH, loc["private_option"])))

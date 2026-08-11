@@ -202,7 +202,7 @@
 
 <main>
   <div class="panel" id="settings-panel">
-    <h3 onclick="toggleSettings()">
+    <h3 role="button" tabindex="0" onclick="toggleSettings()" onkeydown="if(event.key==='Enter'||event.key===' '){event.preventDefault();toggleSettings();}">
       <span class="caret" aria-hidden="true">
         <svg width="13" height="13" viewBox="0 0 24 24" fill="none" stroke="currentColor"
              stroke-width="2.4" stroke-linecap="round" stroke-linejoin="round">

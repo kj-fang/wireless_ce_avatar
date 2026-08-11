@@ -362,7 +362,7 @@ class WifiLogAgentSystem:
     #   High volume (10x/day): max_steps=4,  MAX_TOOL_RESULT=3000,  MAX_TOKENS_PER_STEP=15000 → ~50K/analysis
     #   Balanced   (5-7x/day): max_steps=5,  MAX_TOOL_RESULT=6000,  MAX_TOKENS_PER_STEP=25000 → ~70-90K/analysis
     #   Quality    (3-5x/day): max_steps=5,  MAX_TOOL_RESULT=16000, MAX_TOKENS_PER_STEP=40000 → ~100K/analysis
-    MAX_TOKENS_PER_STEP = 40000          # 3 tools × 16K evidence = ~12K tokens/step; headroom for rules + prompt history
+    MAX_TOKENS_PER_STEP = 75000           # 3 tools × 16K evidence = ~12K tokens/step; headroom for rules + prompt history
     # Keep per-tool evidence compact so multi-step prompts do not explode.
     # These are sized to match MAX_TOOL_RESULT_CHARS_IN_MESSAGES (16000):
     #   ~50 chars/line → 16000 ÷ 50 = 320 lines before char limit fires anyway.
@@ -385,7 +385,7 @@ class WifiLogAgentSystem:
     # Convergence controls to finish within fixed max steps.
     MAX_TOOL_CALLS_PER_STEP = 3
     FORCE_CONCLUDE_LAST_N_STEPS = 2  # last 2 steps forces conclusion (5-step loop is tighter)
-    MAX_SKILL_FETCHES = 4             # max distinct skills the agent may fetch per analysis
+    MAX_SKILL_FETCHES = 6             # max distinct skills the agent may fetch per analysis
 
     # Segment1 (driver/init context block) is an OPTIONAL part of scoping.
     # The domain-agnostic scoping is the issue-time window (Segment2); the
@@ -2101,6 +2101,8 @@ class WifiLogAgentSystem:
             (isinstance(m, dict) and m.get("role") == "user")
             for m in self.conversation_history
         )
+        if not _first_user_turn:
+            max_steps = min(max_steps, 4)
 
         if _first_user_turn:
             # First user turn — rebuild system prompt for agentic mode
@@ -2241,19 +2243,36 @@ class WifiLogAgentSystem:
         no_progress_rounds: int = 0
         step_token_usages: list = []
 
+        # Sonnet pricing: $3.00/MTok input, $15.00/MTok output
+        _INPUT_COST_PER_TOKEN  = 3.00  / 1_000_000
+        _OUTPUT_COST_PER_TOKEN = 15.00 / 1_000_000
+
         def _emit_token_report():
             if not step_token_usages:
                 return
             rows = [
-                "📊 **Token Usage Report**\n",
-                "| Step | Prompt | Completion | Total |",
-                "|------|--------|------------|-------|",
+                "📊 **Token Usage & Cost Report** *(Standard Sonnet — $3.00/MTok in · $15.00/MTok out)*\n",
+                "| Step | Input(tok) | Output(tok) | Total(tok) | Input Cost ($) | Output Cost ($) | Step Cost ($) |",
+                "|------|--------|------------|-------|----------------|-----------------|---------------|",
             ]
             total_p = total_c = total_t = 0
+            total_cost_in = total_cost_out = 0.0
             for s in step_token_usages:
-                rows.append(f"| {s['step']} | {s['prompt']:,} | {s['completion']:,} | {s['total']:,} |")
+                cost_in  = s["prompt"]     * _INPUT_COST_PER_TOKEN
+                cost_out = s["completion"] * _OUTPUT_COST_PER_TOKEN
+                cost_step = cost_in + cost_out
+                rows.append(
+                    f"| {s['step']} | {s['prompt']:,} | {s['completion']:,} | {s['total']:,} "
+                    f"| {cost_in:.4f} | {cost_out:.4f} | {cost_step:.4f} |"
+                )
                 total_p += s["prompt"]; total_c += s["completion"]; total_t += s["total"]
-            rows.append(f"| **Total** | **{total_p:,}** | **{total_c:,}** | **{total_t:,}** |")
+                total_cost_in += cost_in; total_cost_out += cost_out
+            total_cost = total_cost_in + total_cost_out
+            rows.append(
+                f"| **Total** | **{total_p:,}** | **{total_c:,}** | **{total_t:,}** "
+                f"| **{total_cost_in:.4f}** | **{total_cost_out:.4f}** | **{total_cost:.4f}** |"
+            )
+            rows.append(f"\n💰 **Estimated total cost: ${total_cost:.4f}**")
             _emit({"role": "token_usage", "content": "\n".join(rows)})
 
         for step_idx in range(max_steps):

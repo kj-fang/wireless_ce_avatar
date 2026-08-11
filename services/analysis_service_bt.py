@@ -80,7 +80,7 @@ class BTAnalysisService():
         return "BT analysis started successfully"
 
     def _run_llm_decode(self, file_path: str):
-        """背景執行 LLM 模式：用 AutoFolder tab decode HCI 後 emit bt_hci_ready 讓前端跳轉 log_parser"""
+        """Background LLM mode: decode HCI via the AutoFolder tab, then emit bt_hci_ready so the frontend redirects to log_parser."""
         self.emit_log(f"🔍 HCI decoding for LLM analysis (AutoFolder): {os.path.basename(file_path)}")
         etl_folder = os.path.dirname(file_path)
         hci_path = bt_decode_hci_via_folder(etl_folder, file_path)
@@ -100,13 +100,13 @@ class BTAnalysisService():
             )
 
     def _run_manual_analysis(self, file_path: str):
-        """背景執行 Manual 模式的 BT 分析"""
+        """Run BT analysis in Manual mode in the background."""
         pid = bt_analysis_manualSelect_mode(file_path)
         self.emit_log("BT tool - Manual launched.")
         self._finish_analysis(file_path, pid, 'Manual')
 
     def _run_autofolder_analysis(self, file_path: str, filter_path: str = None):
-        """背景執行 AutoFolder 模式的 BT 分析"""
+        """Run BT analysis in AutoFolder mode in the background."""
         etl_folder = os.path.dirname(file_path)
         # Debug
         print(f"Starting AutoFolder analysis for: {etl_folder}")
@@ -127,11 +127,11 @@ class BTAnalysisService():
         self._finish_analysis(file_path, pid, 'AutoFolder')
 
     def _finish_analysis(self, file_path: str, pid, mode: str):
-        """完成分析後的通用處理：檢查 PID 並啟動 monitor"""
+        """Shared post-analysis handling: verify the PID and start the monitor."""
         event_name = 'manual_complete' if mode == 'Manual' else 'autofolder_complete'
 
         with self._monitor_lock:
-            # 如果已經被另一個操作取代，就不用繼續
+            # Superseded by another operation — stop here.
             if self._active_file_path != file_path:
                 return
 
@@ -144,7 +144,7 @@ class BTAnalysisService():
 
             self._active_pid = pid
 
-            # 只有新 PID 才需要新的 monitor thread
+            # Only a new PID needs a new monitor thread.
             need_monitor = (self._monitored_pid != pid)
             if need_monitor:
                 self._monitored_pid = pid

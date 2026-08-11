@@ -164,7 +164,7 @@ def list_decoder_controls(verbose=True, max_depth=3):
 
         print(f"✅ Debug: Using window '{target.window_text()}' (handle={target.handle}, pid={target.process_id()})")
 
-        # 直接 connect 到這個 handle
+        # Connect directly to this handle
         app = Application(backend="uia").connect(handle=target.handle, timeout=10)
         main_win = app.window(handle=target.handle)
         main_win.set_focus()

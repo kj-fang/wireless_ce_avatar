@@ -461,10 +461,10 @@ class LLM_helper:
             #response = self.client.chat.completions.create(**params)
 
             print(f"usage: {response.usage}")
-            print(f"輸入 tokens: {response.usage.prompt_tokens}")
-            print(f"輸出 tokens: {response.usage.completion_tokens}")
-            print(f"總計 tokens: {response.usage.total_tokens}")
-            print(f"是否被截斷: {response.choices[0].finish_reason}")
+            print(f"prompt tokens: {response.usage.prompt_tokens}")
+            print(f"completion tokens: {response.usage.completion_tokens}")
+            print(f"total tokens: {response.usage.total_tokens}")
+            print(f"finish reason: {response.choices[0].finish_reason}")
 
             print(f"response: {response}")
             raw_output = response.choices[0].message.content

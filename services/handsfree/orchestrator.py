@@ -180,9 +180,22 @@ def start_case_run(case_nbr: str) -> dict:
 # posting
 # ---------------------------------------------------------------------------
 
+_post_lock = threading.Lock()
+
+
 def approve_and_post(draft_id: str, edited_plain: Optional[str] = None) -> dict:
-    """Human clicked Approve. Post the (possibly edited) draft to IPS as a
-    Private-to-Intel comment. Returns the updated draft record + result."""
+    """Human clicked Approve. Post the (possibly edited) draft to IPS.
+    Returns the updated draft record + result.
+
+    Serialized by _post_lock: the duplicate guard below is check-then-act
+    (scan existing comments, then insert), so two near-simultaneous approvals
+    interleaving could both pass the scan and double-post. Posting is a
+    human-click-rate operation — a coarse lock costs nothing."""
+    with _post_lock:
+        return _approve_and_post_locked(draft_id, edited_plain)
+
+
+def _approve_and_post_locked(draft_id: str, edited_plain: Optional[str]) -> dict:
     store = _store()
     cfg = store.load_config()
     rec = store.get(draft_id)
@@ -204,7 +217,10 @@ def approve_and_post(draft_id: str, edited_plain: Optional[str] = None) -> dict:
 
     ips = IpsClient()
 
-    # Never double-comment: scan existing comments for our marker.
+    # Never double-comment: scan existing comments for our marker. A failed
+    # scan ABORTS the post — posting blind could duplicate an AI comment we
+    # simply couldn't see. The draft stays pending_review; approve again once
+    # IPS is reachable.
     try:
         for c in ips.get_case_comments(rec["case_id"]):
             body = str(c.get(IpsClient.FIELD_RICH_BODY) or "")
@@ -218,7 +234,10 @@ def approve_and_post(draft_id: str, edited_plain: Optional[str] = None) -> dict:
                                  "marked as posted to avoid a duplicate",
                         "draft": store.get(draft_id)}
     except Exception as e:
-        print(f"[handsfree] prior-comment scan failed (continuing): {e}")
+        msg = (f"duplicate-comment scan failed ({type(e).__name__}: {e}) — "
+               "post aborted; draft left in the review queue, approve again to retry")
+        print(f"[handsfree] {msg}")
+        return {"ok": False, "error": msg, "draft": rec}
 
     backend = (cfg.get("post_backend") or "auto").lower()
     result = None

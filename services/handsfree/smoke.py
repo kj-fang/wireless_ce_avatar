@@ -370,6 +370,18 @@ def smoke_runner(tmp: Path) -> None:
         check("S4.m reply names the checked archive",
               "repro_logs.7z" in draft3["plain"] and "WRT" in draft3["plain"],
               draft3["plain"][:250])
+
+        # --- decompose CRASH must NOT ask the customer for logs -------------
+        # (_stage swallows the exception; empty lists must only mean
+        # "no logs" when decompose actually succeeded)
+        def _boom(*a, **k):
+            raise RuntimeError("corrupt archive")
+        adc.process_single_zip = _boom
+        analysis4 = r.analyze_case("01234567")
+        check("S4.n decompose crash -> triage_only, not request_logs",
+              analysis4.mode == "triage_only"
+              and analysis4.error == "attachment decompose failed",
+              f"mode={analysis4.mode} err={analysis4.error}")
     finally:
         cis.CaseService.process_case = orig_process
         adl.run_dload_threads = orig_dload
@@ -381,6 +393,52 @@ def smoke_runner(tmp: Path) -> None:
             app_config.avatarfiles_dir = orig_files_dir
 
 
+# ---------------------------------------------------------------- S5
+def smoke_orchestrator(tmp: Path) -> None:
+    print("[S5] Approve/post guards (scan failure aborts; marker dedups)")
+    from . import orchestrator as orch
+    from .composer import AI_MARKER
+    from .queue import HandsfreeStore
+
+    store = HandsfreeStore(tmp / "handsfree_s5")
+    rec = store.enqueue(case_nbr="09999999", case_id="500S5FAKE", subject="s5",
+                        draft_plain=AI_MARKER + "\n\nbody", draft_html="<p>b</p>",
+                        confidence=None, mode="full", analysis={})
+    draft_id = rec["draft_id"]
+
+    class _ScanBoom:
+        FIELD_RICH_BODY = "Core_IPS_Rich_Comment__c"
+        def get_case_comments(self, case_id):
+            raise RuntimeError("IPS unreachable")
+
+    class _HasMarker:
+        FIELD_RICH_BODY = "Core_IPS_Rich_Comment__c"
+        def get_case_comments(self, case_id):
+            return [{"Id": "C1",
+                     "Core_IPS_Rich_Comment__c": AI_MARKER + " posted earlier"}]
+
+    orig_store_fn, orig_ips = orch._store, orch.IpsClient
+    try:
+        orch._store = lambda: store
+        orch.IpsClient = _ScanBoom
+        res = orch.approve_and_post(draft_id)
+        check("S5.a scan failure aborts the post",
+              res["ok"] is False and "scan failed" in res["error"], str(res))
+        check("S5.b draft still pending_review after abort (retryable)",
+              store.get(draft_id)["status"] == "pending_review")
+
+        orch.IpsClient = _HasMarker
+        res2 = orch.approve_and_post(draft_id)
+        check("S5.c existing AI comment -> refuse + mark posted",
+              res2["ok"] is False and store.get(draft_id)["status"] == "posted",
+              str(res2))
+        check("S5.d second approve of posted draft refused",
+              orch.approve_and_post(draft_id)["error"] == "draft already posted")
+    finally:
+        orch._store = orig_store_fn
+        orch.IpsClient = orig_ips
+
+
 def run_smoke() -> int:
     tmp = Path(tempfile.mkdtemp(prefix="handsfree_smoke_"))
     try:
@@ -388,6 +446,7 @@ def run_smoke() -> int:
         smoke_composer()
         smoke_queue(tmp)
         smoke_runner(tmp)
+        smoke_orchestrator(tmp)
     finally:
         shutil.rmtree(tmp, ignore_errors=True)
     print(f"\nsmoke result: {'ALL PASS' if not PASS_FAIL else 'FAILURES: ' + ', '.join(PASS_FAIL)}")

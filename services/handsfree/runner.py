@@ -243,6 +243,7 @@ class HandsfreeRunner:
         # Accept every archive type the decomposer can extract — OEMs upload
         # .7z and .rar captures as often as .zip (case 00993799 was a .7z).
         zip_item = None
+        pick_ok = False   # distinguishes "no archive found" from "stage crashed"
         with self._stage(analysis, "pick_zip"):
             from utils.etl_utils import extract_time_from_description
             from .case_reader import find_attachment
@@ -265,6 +266,15 @@ class HandsfreeRunner:
                     analysis.attachment_time = extract_time_from_description(subtitle) or ""
                 except Exception:
                     pass
+            pick_ok = True
+        if not pick_ok:
+            # pick_zip CRASHED (_stage swallowed the exception) — we don't
+            # actually know whether logs are attached, so never ask the
+            # customer for them. Triage fallback instead.
+            analysis.mode = "triage_only"
+            analysis.ok = bool(analysis.triage)
+            analysis.error = "archive selection failed"
+            return analysis
         if zip_item is None:
             # No archive at all — certainly no WRT logs. Record the check
             # stage explicitly so the stage table tells the story, then draft
@@ -295,11 +305,22 @@ class HandsfreeRunner:
         # -- 6. decompose ------------------------------------------------------
         wifi_files: list = []
         ddd_files: list = []
+        decompose_ok = False
         with self._stage(analysis, "decompose"):
             from utils.attachment_decompose import process_single_zip
             file_path, _name, already = downloaded[0]
             wifi_files, ddd_files, _evt, _bt, _fw = process_single_zip(
                 file_path, case_ctx.case_download_dir, already)
+            decompose_ok = True
+        if not decompose_ok:
+            # decompose CRASHED (_stage swallowed the exception): the archive
+            # may well contain WRT logs we simply failed to extract — asking
+            # the customer to re-upload would be wrong AND public. Empty file
+            # lists mean "no logs" ONLY when decompose itself succeeded.
+            analysis.mode = "triage_only"
+            analysis.ok = bool(analysis.triage)
+            analysis.error = "attachment decompose failed"
+            return analysis
         # -- 6b. confirm WRT logs exist in the unzipped archive ----------------
         # The archive downloaded and decomposed — now verify it actually
         # contains driver ETL traces (WRT wifi ETLs / DDD). An archive of

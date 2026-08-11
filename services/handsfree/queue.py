@@ -6,8 +6,8 @@ Layout under <avatarfiles_dir>/handsfree/:
     ledger.json                    {case_nbr: {analyzed_at, posted_at, draft_id}}
     queue/<case_nbr>__<ts>.json    one draft per analyzed case
 
-Draft lifecycle:  pending_review → approved → posted
-                              ↘ rejected          ↘ post_failed
+Draft lifecycle:  pending_review → posted
+                              ↘ rejected  ↘ post_failed
 
 Same write style as the rest of the app's sidecar stores: per-process lock,
 atomic replace, swallow-and-log on the read path.

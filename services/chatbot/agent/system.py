@@ -429,7 +429,7 @@ class WifiLogAgentSystem(
     #   High volume (10x/day): max_steps=4,  MAX_TOOL_RESULT=3000,  MAX_TOKENS_PER_STEP=15000 → ~50K/analysis
     #   Balanced   (5-7x/day): max_steps=5,  MAX_TOOL_RESULT=6000,  MAX_TOKENS_PER_STEP=25000 → ~70-90K/analysis
     #   Quality    (3-5x/day): max_steps=5,  MAX_TOOL_RESULT=16000, MAX_TOKENS_PER_STEP=40000 → ~100K/analysis
-    MAX_TOKENS_PER_STEP = 40000          # 3 tools × 16K evidence = ~12K tokens/step; headroom for rules + prompt history
+    MAX_TOKENS_PER_STEP = 75000          # 3 tools × 16K evidence = ~12K tokens/step; headroom for rules + prompt history
     # Keep per-tool evidence compact so multi-step prompts do not explode.
     # These are sized to match MAX_TOOL_RESULT_CHARS_IN_MESSAGES (16000):
     #   ~50 chars/line → 16000 ÷ 50 = 320 lines before char limit fires anyway.
@@ -452,7 +452,7 @@ class WifiLogAgentSystem(
     # Convergence controls to finish within fixed max steps.
     MAX_TOOL_CALLS_PER_STEP = 3
     FORCE_CONCLUDE_LAST_N_STEPS = 2  # last 2 steps forces conclusion (5-step loop is tighter)
-    MAX_SKILL_FETCHES = 4             # max distinct skills the agent may fetch per analysis
+    MAX_SKILL_FETCHES = 6             # max distinct skills the agent may fetch per analysis
 
     # Segment1 (driver/init context block) is an OPTIONAL part of scoping.
     # The domain-agnostic scoping is the issue-time window (Segment2); the
@@ -536,6 +536,11 @@ class WifiLogAgentSystem(
         # bails out early. Cleared at the start of every chat turn so a prior
         # stop can't cancel the next one.
         self.cancel_event: threading.Event = threading.Event()
+        # Token usage for the CURRENT turn, accumulated across every LLM call
+        # (agentic loops make many). Reset at the top of each chat() so it only
+        # ever describes one turn; read by the routes after chat() returns and
+        # handed to gather_service for cost accounting.
+        self.last_turn_usage: dict = self._empty_turn_usage()
         self.issue_context: dict = {}  # populated by prime_with_context()
         self.issue_time: Optional[datetime] = None  # populated by prime_with_context() or _chat_with_tools()
         self._issue_time_time_only: bool = False
@@ -586,6 +591,57 @@ class WifiLogAgentSystem(
         # playbooks into its prompts at generation time, and can also drive
         # post-feedback Reflector/Curator updates. Unattached -> no-op.
         self.ace_runner = None
+
+    # ------------------------------------------------------------------
+    # Per-turn token accounting
+    # ------------------------------------------------------------------
+    @staticmethod
+    def _empty_turn_usage() -> dict:
+        return {
+            "llm_calls": 0,
+            "input_tokens": 0,        # uncached prompt tokens
+            "cache_read_tokens": 0,
+            "cache_write_tokens": 0,
+            "output_tokens": 0,
+            "total_tokens": 0,
+        }
+
+    def _reset_turn_usage(self) -> None:
+        self.last_turn_usage = self._empty_turn_usage()
+
+    def _accumulate_turn_usage(self, usage) -> None:
+        """Fold one LLM response's usage into this turn's running total.
+
+        Tolerates a missing/partial usage object — accounting must never be the
+        thing that breaks a chat turn, so anything unreadable is counted as 0.
+        """
+        if usage is None:
+            return
+        try:
+            u = self.last_turn_usage
+            if not isinstance(u, dict):
+                u = self.last_turn_usage = self._empty_turn_usage()
+
+            def _n(name: str) -> int:
+                try:
+                    return max(0, int(getattr(usage, name, 0) or 0))
+                except (TypeError, ValueError):
+                    return 0
+
+            prompt = _n("prompt_tokens")
+            completion = _n("completion_tokens")
+            # Anthropic naming on our adapter; OpenAI responses simply lack these.
+            cache_read = _n("cache_read_input_tokens")
+            cache_write = _n("cache_creation_input_tokens")
+
+            u["llm_calls"] += 1
+            u["input_tokens"] += prompt
+            u["output_tokens"] += completion
+            u["cache_read_tokens"] += cache_read
+            u["cache_write_tokens"] += cache_write
+            u["total_tokens"] += prompt + completion + cache_read + cache_write
+        except Exception as e:
+            print(f"[TOKEN] usage accumulation skipped: {e}")
 
     def attach_ace(self, runner) -> None:
         """Wire an AceRunner into this agent so it reads/writes playbooks."""

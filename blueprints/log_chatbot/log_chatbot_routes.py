@@ -563,6 +563,7 @@ def chat():
         try:
             gather_service.record_send(
                 conversation_id=conversation_id,
+                workflow_id=session.get("gather_workflow_id", ""),
                 session_id=session_id,
                 user_message=user_message,
                 issue=_issue_ctx_for_snapshot,
@@ -570,6 +571,7 @@ def chat():
                 issue_time=format_issue_time(agent.issue_time),
                 issue_time_window_minutes=getattr(agent, "issue_time_window_minutes", None),
                 domain="wifi",
+                turn_id=turn_id,
             )
         except Exception:
             pass
@@ -615,6 +617,22 @@ def chat():
                         max_tokens=max_tokens,
                         step_callback=step_cb,
                     )
+                    # Cost accounting: token counts only exist once the LLM has
+                    # finished, so this is a second Gather write on top of the
+                    # record_send() that opened this turn.
+                    try:
+                        gather_service.record_usage(
+                            conversation_id=conversation_id,
+                            workflow_id=session.get("gather_workflow_id", ""),
+                            model=getattr(agent, "model", "") or "",
+                            usage=getattr(agent, "last_turn_usage", None),
+                            issue=_issue_ctx_for_snapshot,
+                            domain="wifi",
+                            turn_id=turn_id,
+                            latency_ms=int((datetime.now() - turn_started_at).total_seconds() * 1000),
+                        )
+                    except Exception:
+                        pass
                     # Persist BEFORE signalling done so any subscriber that
                     # refreshes its history list on 'done' already sees this
                     # turn. feedback is vote-gated; history always persists.
@@ -646,6 +664,19 @@ def chat():
                 except Exception as exc:
                     error_tb = traceback.format_exc()
                     print(f"❌ Chat-with-tools thread error:\n{error_tb}")
+                    try:
+                        gather_service.record_turn_status(
+                            conversation_id=conversation_id,
+                            turn_id=turn_id,
+                            status="failed",
+                            workflow_id=session.get("gather_workflow_id", ""),
+                            issue=_issue_ctx_for_snapshot,
+                            domain="wifi",
+                            latency_ms=int((datetime.now() - turn_started_at).total_seconds() * 1000),
+                            error_code=type(exc).__name__,
+                        )
+                    except Exception:
+                        pass
                     chat_jobs.fail_job(job, str(exc))
 
             t = threading.Thread(target=run_chat_with_tools, daemon=True)
@@ -666,6 +697,20 @@ def chat():
                 temperature=temperature,
                 max_tokens=max_tokens,
             )
+            # Cost accounting — see the tools branch above.
+            try:
+                gather_service.record_usage(
+                    conversation_id=conversation_id,
+                    workflow_id=session.get("gather_workflow_id", ""),
+                    model=getattr(agent, "model", "") or "",
+                    usage=getattr(agent, "last_turn_usage", None),
+                    issue=_issue_ctx_for_snapshot,
+                    domain="wifi",
+                    turn_id=turn_id,
+                    latency_ms=int((datetime.now() - turn_started_at).total_seconds() * 1000),
+                )
+            except Exception:
+                pass
 
             # Sidecar: persist the turn (no step trace in simple mode).
             feedback_service.record_turn(
@@ -701,6 +746,19 @@ def chat():
     except Exception as e:
         error_traceback = traceback.format_exc()
         print(f"❌ Chatbot error:\n{error_traceback}")
+        try:
+            if conversation_id and turn_id:
+                gather_service.record_turn_status(
+                    conversation_id=conversation_id,
+                    turn_id=turn_id,
+                    status="failed",
+                    workflow_id=session.get("gather_workflow_id", ""),
+                    issue=locals().get("_issue_ctx_for_snapshot") or {},
+                    domain="wifi",
+                    error_code=type(e).__name__,
+                )
+        except Exception:
+            pass
 
         def generate_error():
             yield f"data: {json.dumps({'type': 'error', 'content': str(e)}, ensure_ascii=False)}\n\n"
@@ -947,7 +1005,8 @@ def _get_llm_client_model():
 
 def _issue_context_organized(raw_desc: str, first_ts, last_ts, log_path: str = "") -> dict:
     return _organized_issue_context(raw_desc, first_ts, last_ts, log_path,
-                                    llm_client_model=_get_llm_client_model)
+                                    llm_client_model=_get_llm_client_model,
+                                    domain="wifi")
 
 
 def get_issue_context():

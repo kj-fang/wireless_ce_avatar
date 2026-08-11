@@ -67,6 +67,9 @@ class ConversationMixin:
         if self.capabilities.cooperative_cancellation:
             self.cancel_event.clear()
 
+        # Fresh turn — token counters describe THIS turn only.
+        self._reset_turn_usage()
+
         # Delegate to appropriate implementation
         if use_tools:
             return self._chat_with_tools(user_message, max_steps, temperature=temperature, step_callback=step_callback)
@@ -136,8 +139,9 @@ class ConversationMixin:
                 temperature=temperature,
                 max_tokens=max_tokens,
             )
+            self._accumulate_turn_usage(getattr(response, "usage", None))
             content = response.choices[0].message.content or ""
-            
+
             # Add assistant response to history
             self.conversation_history.append({"role": "assistant", "content": content})
             
@@ -509,6 +513,7 @@ class ConversationMixin:
 
             # Token usage accounting
             usage = getattr(response, 'usage', None)
+            self._accumulate_turn_usage(usage)
             if usage:
                 print(
                     f"[TOKEN] Chat step {step_idx + 1}: "

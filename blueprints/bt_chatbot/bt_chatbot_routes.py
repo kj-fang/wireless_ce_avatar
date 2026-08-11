@@ -57,6 +57,7 @@ from utils.issue_time_utils import (
 from utils.issue_time_ai import build_issue_time_suggestions, find_nearest_event_error
 from utils.event_log_utils import find_event_log_for_log
 from services import feedback_service
+from services import gather_service
 from services import history_service
 from services.chatbot import job_runtime as chat_jobs
 
@@ -532,6 +533,26 @@ def chat():
         except Exception:
             _issue_ctx_for_snapshot = {}
 
+        # Usage analytics: on every Send, capture the entry session (user name,
+        # date, CASE NUMBER + case summary) and the asked question into the
+        # shared Gather folder for later DB ingestion. Non-blocking; never
+        # raises, so it can't affect the chat path.
+        try:
+            gather_service.record_send(
+                conversation_id=conversation_id,
+                workflow_id=session.get("gather_workflow_id", ""),
+                session_id=session_id,
+                user_message=user_message,
+                issue=_issue_ctx_for_snapshot,
+                log_path=getattr(agent, "current_log_path", "") or "",
+                issue_time=format_issue_time(agent.issue_time),
+                issue_time_window_minutes=getattr(agent, "issue_time_window_minutes", None),
+                domain="bt",
+                turn_id=turn_id,
+            )
+        except Exception:
+            pass
+
         # Use the mode flag sent by the frontend toggle.
         use_tools = bool(data.get("use_tools", False))
 
@@ -573,6 +594,22 @@ def chat():
                         max_tokens=max_tokens,
                         step_callback=step_cb,
                     )
+                    # Cost accounting: token counts only exist once the LLM has
+                    # finished, so this is a second Gather write on top of the
+                    # record_send() that opened this turn.
+                    try:
+                        gather_service.record_usage(
+                            conversation_id=conversation_id,
+                            workflow_id=session.get("gather_workflow_id", ""),
+                            model=getattr(agent, "model", "") or "",
+                            usage=getattr(agent, "last_turn_usage", None),
+                            issue=_issue_ctx_for_snapshot,
+                            domain="bt",
+                            turn_id=turn_id,
+                            latency_ms=int((datetime.now() - turn_started_at).total_seconds() * 1000),
+                        )
+                    except Exception:
+                        pass
                     # Persist BEFORE signalling done so any subscriber that
                     # refreshes its history list on 'done' already sees this
                     # turn. feedback is vote-gated; history always persists.
@@ -606,6 +643,19 @@ def chat():
                 except Exception as exc:
                     error_tb = traceback.format_exc()
                     print(f"❌ Chat-with-tools thread error:\n{error_tb}")
+                    try:
+                        gather_service.record_turn_status(
+                            conversation_id=conversation_id,
+                            turn_id=turn_id,
+                            status="failed",
+                            workflow_id=session.get("gather_workflow_id", ""),
+                            issue=_issue_ctx_for_snapshot,
+                            domain="bt",
+                            latency_ms=int((datetime.now() - turn_started_at).total_seconds() * 1000),
+                            error_code=type(exc).__name__,
+                        )
+                    except Exception:
+                        pass
                     chat_jobs.fail_job(job, str(exc))
 
             t = threading.Thread(target=run_chat_with_tools, daemon=True)
@@ -626,6 +676,20 @@ def chat():
                 temperature=temperature,
                 max_tokens=max_tokens,
             )
+            # Cost accounting — see the tools branch above.
+            try:
+                gather_service.record_usage(
+                    conversation_id=conversation_id,
+                    workflow_id=session.get("gather_workflow_id", ""),
+                    model=getattr(agent, "model", "") or "",
+                    usage=getattr(agent, "last_turn_usage", None),
+                    issue=_issue_ctx_for_snapshot,
+                    domain="bt",
+                    turn_id=turn_id,
+                    latency_ms=int((datetime.now() - turn_started_at).total_seconds() * 1000),
+                )
+            except Exception:
+                pass
 
             # Sidecar: persist the turn (no step trace in simple mode).
             feedback_service.record_turn(
@@ -665,6 +729,19 @@ def chat():
     except Exception as e:
         error_traceback = traceback.format_exc()
         print(f"❌ Chatbot error:\n{error_traceback}")
+        try:
+            if conversation_id and turn_id:
+                gather_service.record_turn_status(
+                    conversation_id=conversation_id,
+                    turn_id=turn_id,
+                    status="failed",
+                    workflow_id=session.get("gather_workflow_id", ""),
+                    issue=locals().get("_issue_ctx_for_snapshot") or {},
+                    domain="bt",
+                    error_code=type(e).__name__,
+                )
+        except Exception:
+            pass
 
         def generate_error():
             yield f"data: {json.dumps({'type': 'error', 'content': str(e)}, ensure_ascii=False)}\n\n"
@@ -928,7 +1005,8 @@ def _get_llm_client_model():
 
 def _issue_context_organized(raw_desc: str, first_ts, last_ts, log_path: str = "") -> dict:
     return _organized_issue_context(raw_desc, first_ts, last_ts, log_path,
-                                    llm_client_model=_get_llm_client_model)
+                                    llm_client_model=_get_llm_client_model,
+                                    domain="bt")
 
 
 def get_issue_context():

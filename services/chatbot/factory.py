@@ -128,6 +128,8 @@ class ChatbotBlueprintConfig:
     capabilities: Collection[str]
     get_agent: Callable[[], Any]
     handlers: Mapping[str, ViewHandler]
+    #: Optional side effect to run before the shared /reset use case.
+    on_reset: Callable[[], Any] | None = None
 
 
 def enabled_route_specs(capabilities: Collection[str]) -> tuple[RouteSpec, ...]:
@@ -188,6 +190,11 @@ def create_chatbot_blueprint(config: ChatbotBlueprintConfig) -> Blueprint:
     use_cases = ChatbotUseCases(config.get_agent)
 
     def reset():
+        # A reset starts a genuinely new conversation. Profiles that key
+        # analytics off a conversation id (NW's Gather records) rotate theirs
+        # here so turns stop accumulating into the previous one.
+        if config.on_reset is not None:
+            config.on_reset()
         return _json_result(use_cases.reset_conversation())
 
     def get_skills():

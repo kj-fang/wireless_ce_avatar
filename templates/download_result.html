@@ -327,9 +327,36 @@
             white-space: normal;
             word-break: break-all;
         }
+        /* Rows whose folder path matches app_config.etl_exclude_keywords are
+           always rendered so the "Show excluded" toggle can reveal them
+           client-side; hidden by default via the body-level class. */
+        body.hide-excluded .excluded-row { display: none !important; }
+        .excluded-badge {
+            display: inline-block;
+            font-size: 0.7rem;
+            padding: 2px 8px;
+            background-color: #e9ecef;
+            color: #495057;
+            border: 1px solid #ced4da;
+            border-radius: 10px;
+            margin-left: 6px;
+            font-weight: 500;
+            vertical-align: middle;
+        }
+        /* Tabs whose only content is excluded rows behave like the existing
+           `tab-unavailable` state while hide-excluded is on; JS strips the
+           disabled classes when the user toggles Show excluded. */
+        body.hide-excluded #analysisTabs .excluded-only-tab {
+            background-color: #e9ecef;
+            color: #9aa0a6;
+            cursor: not-allowed;
+            border-bottom-color: transparent;
+            transform: none;
+            pointer-events: none;
+        }
     </style>
 </head>
-<body data-latest-evt-path="{{ latest_evt_path | e if latest_evt_path else '' }}">
+<body class="hide-excluded" data-latest-evt-path="{{ latest_evt_path | e if latest_evt_path else '' }}">
     <div class="form-container mb-4 p-0 overflow-hidden" 
         style="border-radius: 0; margin-top: -20px; margin-left: -20px; margin-right: -20px; position: relative;">
         <img src="{{ url_for('static', filename='nav_bar.svg') }}" 
@@ -386,9 +413,28 @@
     <div class="d-flex align-items-center mb-3">
         <span class="mr-2"><strong>Download Path:</strong> {{ case_path }}</span>
         <button id="open-btn" data-path="{{ case_path|e }}" type="button" class="btn btn-sm btn-outline-primary ml-2" onclick="openDownloadPath()">Open</button>
+        {# `has_any_excluded` is set further below once all five tab loops have run. #}
+        {% set _excl_probe = namespace(v=false) %}
+        {% for _d in [wifi_dict, bt_dict, ddd_dict, fw_dict] %}
+            {% for _n, _lst in (_d or {}).items() %}
+                {% for _p in (_lst or []) %}
+                    {% if not _excl_probe.v and exclude_keywords %}
+                        {% for kw in exclude_keywords %}
+                            {% if kw.lower() in _p.lower() %}{% set _excl_probe.v = true %}{% endif %}
+                        {% endfor %}
+                    {% endif %}
+                {% endfor %}
+            {% endfor %}
+        {% endfor %}
+        {% if _excl_probe.v %}
+        <button id="toggle-excluded-btn" type="button" class="btn btn-sm btn-outline-secondary ml-2" onclick="toggleExcludedFiles()"
+                title="Also show ETL files from folders normally hidden (e.g. Autologger, Dump_failed, PldrComplete, AutoDump).">
+            Show excluded
+        </button>
+        {% endif %}
     </div>
 
-    {% set wifi_ns = namespace(has_items=false) %}
+    {% set wifi_ns = namespace(has_items=false, has_items_including_excluded=false, has_excluded=false) %}
     {% for name, etl_list in wifi_dict.items() %}
         {% for etl_path in etl_list %}
             {% set ns = namespace(skip=false) %}
@@ -399,13 +445,18 @@
                     {% endif %}
                 {% endfor %}
             {% endif %}
-            {% if not etl_path.endswith('.log') and not ns.skip %}
-                {% set wifi_ns.has_items = true %}
+            {% if not etl_path.endswith('.log') %}
+                {% set wifi_ns.has_items_including_excluded = true %}
+                {% if ns.skip %}
+                    {% set wifi_ns.has_excluded = true %}
+                {% else %}
+                    {% set wifi_ns.has_items = true %}
+                {% endif %}
             {% endif %}
         {% endfor %}
     {% endfor %}
 
-    {% set bt_ns = namespace(has_items=false) %}
+    {% set bt_ns = namespace(has_items=false, has_items_including_excluded=false, has_excluded=false) %}
     {% for name, bt_list in bt_dict.items() %}
         {% for bt_path in bt_list %}
             {% set ns = namespace(skip=false) %}
@@ -416,14 +467,17 @@
                     {% endif %}
                 {% endfor %}
             {% endif %}
-            {% if not ns.skip %}
+            {% set bt_ns.has_items_including_excluded = true %}
+            {% if ns.skip %}
+                {% set bt_ns.has_excluded = true %}
+            {% else %}
                 {% set bt_ns.has_items = true %}
             {% endif %}
         {% endfor %}
     {% endfor %}
 
     <!-- DDD files -->
-    {% set ddd_ns = namespace(has_items=false) %}
+    {% set ddd_ns = namespace(has_items=false, has_items_including_excluded=false, has_excluded=false) %}
     {% for name, ddd_list in ddd_dict.items() %}
         {% for ddd_path in ddd_list %}
             {% set ns = namespace(skip=false) %}
@@ -434,14 +488,19 @@
                     {% endif %}
                 {% endfor %}
             {% endif %}
-            {% if not ns.skip and ddd_path.lower().endswith('.bin') %}
-                {% set ddd_ns.has_items = true %}
+            {% if ddd_path.lower().endswith('.bin') %}
+                {% set ddd_ns.has_items_including_excluded = true %}
+                {% if ns.skip %}
+                    {% set ddd_ns.has_excluded = true %}
+                {% else %}
+                    {% set ddd_ns.has_items = true %}
+                {% endif %}
             {% endif %}
         {% endfor %}
     {% endfor %}
 
     <!-- System event files (non-DDD) -->
-    {% set system_event_ns = namespace(has_items=false) %}
+    {% set system_event_ns = namespace(has_items=false, has_items_including_excluded=false, has_excluded=false) %}
     {% for name, ddd_list in ddd_dict.items() %}
         {% for ddd_path in ddd_list %}
             {% set ns = namespace(skip=false) %}
@@ -452,13 +511,18 @@
                     {% endif %}
                 {% endfor %}
             {% endif %}
-            {% if not ns.skip and not ddd_path.lower().endswith('.bin') %}
-                {% set system_event_ns.has_items = true %}
+            {% if not ddd_path.lower().endswith('.bin') %}
+                {% set system_event_ns.has_items_including_excluded = true %}
+                {% if ns.skip %}
+                    {% set system_event_ns.has_excluded = true %}
+                {% else %}
+                    {% set system_event_ns.has_items = true %}
+                {% endif %}
             {% endif %}
         {% endfor %}
     {% endfor %}
 
-    {% set fw_ns = namespace(has_items=false) %}
+    {% set fw_ns = namespace(has_items=false, has_items_including_excluded=false, has_excluded=false) %}
     {% for name, fw_list in fw_dict.items() %}
         {% for fw_path in fw_list %}
             {% set ns = namespace(skip=false) %}
@@ -469,11 +533,16 @@
                     {% endif %}
                 {% endfor %}
             {% endif %}
-            {% if not ns.skip %}
+            {% set fw_ns.has_items_including_excluded = true %}
+            {% if ns.skip %}
+                {% set fw_ns.has_excluded = true %}
+            {% else %}
                 {% set fw_ns.has_items = true %}
             {% endif %}
         {% endfor %}
     {% endfor %}
+
+    {% set has_any_excluded = wifi_ns.has_excluded or bt_ns.has_excluded or ddd_ns.has_excluded or system_event_ns.has_excluded or fw_ns.has_excluded %}
     
     <!-- System Info -->
     {% set sys_info_ns = namespace(has_items=false) %}
@@ -577,6 +646,10 @@
                 <div class="no-logs-sub">
                     The selected download path does not contain any WiFi ETL, BT, DDD or FW logs
                     that this tool can process.
+                    {% if has_any_excluded %}
+                    <br><strong>Some folders were auto-excluded</strong> (e.g. Autologger / Dump_failed / PldrComplete / AutoDump).
+                    Click <em>Show excluded</em> above to view them.
+                    {% endif %}
                 </div>
             </div>
         </div>
@@ -587,19 +660,19 @@
         <div id="analysisTabs-wrapper">
             <ul class="nav nav-tabs" id="analysisTabs" role="tablist" style="font-family: 'Inter'; border-bottom: none;">
                 <li class="nav-item">
-                    <a class="nav-link {% if active_tab == 'wifi' %}active{% endif %} {% if not wifi_ns.has_items %}disabled tab-unavailable{% endif %}" id="wifi-tab" {% if wifi_ns.has_items %}data-toggle="tab" href="#wifi-panel"{% else %}href="#" tabindex="-1" aria-disabled="true"{% endif %} role="tab" aria-controls="wifi-panel" aria-selected="{{ 'true' if active_tab == 'wifi' else 'false' }}">WiFi</a>
+                    <a class="nav-link {% if active_tab == 'wifi' %}active{% endif %} {% if not wifi_ns.has_items_including_excluded %}disabled tab-unavailable{% endif %} {% if wifi_ns.has_excluded and not wifi_ns.has_items %}excluded-only-tab{% endif %}" id="wifi-tab" {% if wifi_ns.has_items_including_excluded %}data-toggle="tab" href="#wifi-panel"{% else %}href="#" tabindex="-1" aria-disabled="true"{% endif %} role="tab" aria-controls="wifi-panel" aria-selected="{{ 'true' if active_tab == 'wifi' else 'false' }}">WiFi</a>
                 </li>
                 <li class="nav-item">
-                    <a class="nav-link {% if active_tab == 'ddd' %}active{% endif %} {% if not ddd_ns.has_items %}disabled tab-unavailable{% endif %}" id="ddd-tab" {% if ddd_ns.has_items %}data-toggle="tab" href="#ddd-panel"{% else %}href="#" tabindex="-1" aria-disabled="true"{% endif %} role="tab" aria-controls="ddd-panel" aria-selected="{{ 'true' if active_tab == 'ddd' else 'false' }}">DDD</a>
+                    <a class="nav-link {% if active_tab == 'ddd' %}active{% endif %} {% if not ddd_ns.has_items_including_excluded %}disabled tab-unavailable{% endif %} {% if ddd_ns.has_excluded and not ddd_ns.has_items %}excluded-only-tab{% endif %}" id="ddd-tab" {% if ddd_ns.has_items_including_excluded %}data-toggle="tab" href="#ddd-panel"{% else %}href="#" tabindex="-1" aria-disabled="true"{% endif %} role="tab" aria-controls="ddd-panel" aria-selected="{{ 'true' if active_tab == 'ddd' else 'false' }}">DDD</a>
                 </li>
                 <li class="nav-item">
-                    <a class="nav-link {% if active_tab == 'bt' %}active{% endif %} {% if not bt_ns.has_items %}disabled tab-unavailable{% endif %}" id="bt-tab" {% if bt_ns.has_items %}data-toggle="tab" href="#bt-panel"{% else %}href="#" tabindex="-1" aria-disabled="true"{% endif %} role="tab" aria-controls="bt-panel" aria-selected="{{ 'true' if active_tab == 'bt' else 'false' }}">BT</a>
+                    <a class="nav-link {% if active_tab == 'bt' %}active{% endif %} {% if not bt_ns.has_items_including_excluded %}disabled tab-unavailable{% endif %} {% if bt_ns.has_excluded and not bt_ns.has_items %}excluded-only-tab{% endif %}" id="bt-tab" {% if bt_ns.has_items_including_excluded %}data-toggle="tab" href="#bt-panel"{% else %}href="#" tabindex="-1" aria-disabled="true"{% endif %} role="tab" aria-controls="bt-panel" aria-selected="{{ 'true' if active_tab == 'bt' else 'false' }}">BT</a>
                 </li>
                  <li class="nav-item">
-                    <a class="nav-link {% if active_tab == 'fw' %}active{% endif %} {% if not fw_ns.has_items %}disabled tab-unavailable{% endif %}" id="fw-tab" {% if fw_ns.has_items %}data-toggle="tab" href="#fw-panel"{% else %}href="#" tabindex="-1" aria-disabled="true"{% endif %} role="tab" aria-controls="fw-panel" aria-selected="{{ 'true' if active_tab == 'fw' else 'false' }}">FW</a>
+                    <a class="nav-link {% if active_tab == 'fw' %}active{% endif %} {% if not fw_ns.has_items_including_excluded %}disabled tab-unavailable{% endif %} {% if fw_ns.has_excluded and not fw_ns.has_items %}excluded-only-tab{% endif %}" id="fw-tab" {% if fw_ns.has_items_including_excluded %}data-toggle="tab" href="#fw-panel"{% else %}href="#" tabindex="-1" aria-disabled="true"{% endif %} role="tab" aria-controls="fw-panel" aria-selected="{{ 'true' if active_tab == 'fw' else 'false' }}">FW</a>
                 </li>
                 <li class="nav-item">
-                    <a class="nav-link {% if active_tab == 'system_event' %}active{% endif %} {% if not system_event_ns.has_items %}disabled tab-unavailable{% endif %}" id="system_event-tab" {% if system_event_ns.has_items %}data-toggle="tab" href="#system_event-panel"{% else %}href="#" tabindex="-1" aria-disabled="true"{% endif %} role="tab" aria-controls="system_event-panel" aria-selected="{{ 'true' if active_tab == 'system_event' else 'false' }}">SystemEvent</a>
+                    <a class="nav-link {% if active_tab == 'system_event' %}active{% endif %} {% if not system_event_ns.has_items_including_excluded %}disabled tab-unavailable{% endif %} {% if system_event_ns.has_excluded and not system_event_ns.has_items %}excluded-only-tab{% endif %}" id="system_event-tab" {% if system_event_ns.has_items_including_excluded %}data-toggle="tab" href="#system_event-panel"{% else %}href="#" tabindex="-1" aria-disabled="true"{% endif %} role="tab" aria-controls="system_event-panel" aria-selected="{{ 'true' if active_tab == 'system_event' else 'false' }}">SystemEvent</a>
                 </li>
                 <li class="nav-item">
                     <a class="nav-link {% if active_tab == 'sys_info' %}active{% endif %} {% if not sys_info_ns.has_items %}disabled tab-unavailable{% endif %}" id="sys_info-tab" {% if sys_info_ns.has_items %}data-toggle="tab" href="#sys_info-panel"{% else %}href="#" tabindex="-1" aria-disabled="true"{% endif %} role="tab" aria-controls="sys_info-panel" aria-selected="{{ 'true' if active_tab == 'sys_info' else 'false' }}">SystemInfo</a>
@@ -629,18 +702,22 @@
                     <div class="mb-3">
                         {% for name, etl_list in wifi_dict.items() %}
                             {% for etl_path in etl_list %}
-                                {# determine if etl_path should be skipped based on exclude_keywords #}
-                                {% set ns = namespace(skip=false) %}
+                                {# Determine if etl_path is in an excluded folder; still render but mark it so the "Show excluded" toggle can reveal it. #}
+                                {% set ns = namespace(skip=false, matched_kw='') %}
                                 {% if exclude_keywords %}
                                     {% for kw in exclude_keywords %}
-                                        {% if kw.lower() in etl_path.lower() %}
+                                        {% if kw.lower() in etl_path.lower() and not ns.skip %}
                                             {% set ns.skip = true %}
+                                            {% set ns.matched_kw = kw %}
                                         {% endif %}
                                     {% endfor %}
                                 {% endif %}
-                                {% if not etl_path.endswith('.log') and not ns.skip %}
-                                <div class="wifi-file-item" data-etl-encoded="{{ etl_path | urlencode }}" onclick="selectWifiEtlRow(this)">
-                                    <p class="text-muted mb-0 small analysis-file-name">{{ etl_path.replace('\\', '/').split('/')[-1] }}</p>
+                                {% if not etl_path.endswith('.log') %}
+                                <div class="wifi-file-item{% if ns.skip %} excluded-row{% endif %}" data-etl-encoded="{{ etl_path | urlencode }}" onclick="selectWifiEtlRow(this)">
+                                    <p class="text-muted mb-0 small analysis-file-name">
+                                        {{ etl_path.replace('\\', '/').split('/')[-1] }}
+                                        {% if ns.skip %}<span class="excluded-badge">Excluded: {{ ns.matched_kw }}</span>{% endif %}
+                                    </p>
                                     <p class="analysis-file-path mb-0">Path: {{ etl_path }}</p>
                                 </div>
                                 {% endif %}
@@ -653,34 +730,31 @@
                     <div class="mb-3">
                         {% for name, bt_list in bt_dict.items() %}
                             {% for bt_path in bt_list %}
-                                {# determine if bt_path should be skipped based on exclude_keywords #}
-                                {% set ns = namespace(skip=false) %}
+                                {# Determine excluded state; always render so "Show excluded" can reveal it. #}
+                                {% set ns = namespace(skip=false, matched_kw='') %}
                                 {% if exclude_keywords %}
                                     {% for kw in exclude_keywords %}
-                                        {% if kw.lower() in bt_path.lower() %}
+                                        {% if kw.lower() in bt_path.lower() and not ns.skip %}
                                             {% set ns.skip = true %}
+                                            {% set ns.matched_kw = kw %}
                                         {% endif %}
                                     {% endfor %}
                                 {% endif %}
-                                {% if not ns.skip %}
                                 {% set file_size_bytes = bt_file_sizes.get(bt_path, 0) if bt_file_sizes is defined else 0 %}
-                                <div class="bt-file-item" data-bt-encoded="{{ bt_path | urlencode }}" data-file-size="{{ file_size_bytes }}" onclick="selectBtRow(this)">
+                                <div class="bt-file-item{% if ns.skip %} excluded-row{% endif %}" data-bt-encoded="{{ bt_path | urlencode }}" data-file-size="{{ file_size_bytes }}" onclick="selectBtRow(this)">
                                     <p class="text-muted mb-0 small analysis-file-name">
                                         {{ bt_path.replace('\\', '/').split('/')[-1] }}
                                         <span class="badge ml-2" style="font-size: 0.75rem; background-color: {% if file_size_bytes >= 96 * 1024 %}#ff8c00{% else %}#6c757d{% endif %}; color: white;">{{ '%.1f' | format(file_size_bytes / 1048576) }} MB</span>
+                                        {% if ns.skip %}<span class="excluded-badge">Excluded: {{ ns.matched_kw }}</span>{% endif %}
                                     </p>
                                     <p class="analysis-file-path mb-0">Path: {{ bt_path }}</p>
                                 </div>
-                                {% endif %}
                             {% endfor %}
                         {% endfor %}
                     </div>
                     <div class="d-flex flex-wrap justify-content-center align-items-center mt-3 p-3" style="background: #f8f9fa; border: 1px solid #ddd; border-radius: 8px; gap: 8px;">
                         <button id="bt-action-autofolder" class="btn btn-primary btn-sm" data-mode="AutoFolder" style="border-radius: 30px; color:white; font-size: 1.15rem; padding: 0.5rem 1rem;" disabled onclick="runSelectedBtAction(this, 'AutoFolder')">
                             AutoFolder
-                        </button>
-                        <button id="bt-action-manual" class="btn btn-primary btn-sm" data-mode="Manual" style="border-radius: 30px; color:white; font-size: 1.15rem; padding: 0.5rem 1rem;" disabled onclick="runSelectedBtAction(this, 'Manual')">
-                            Manual
                         </button>
                         <button id="bt-action-chatbot" class="btn btn-info btn-sm" data-mode="CHATBOT" style="border-radius: 30px; color:white; font-size: 1.15rem; padding: 0.5rem 1rem;" disabled onclick="runSelectedBtAction(this, 'CHATBOT')">
                             <i class="fab fa-bluetooth-b"></i> Bluetooth Analysis Agent
@@ -702,18 +776,22 @@
                     <div class="mb-3">
                         {% for name, ddd_list in ddd_dict.items() %}
                         {% for ddd_path in ddd_list %}
-                                    {# determine if ddd_path should be skipped based on exclude_keywords #}
-                                    {% set ns = namespace(skip=false) %}
+                                    {# Determine excluded state; still render so "Show excluded" can reveal it. #}
+                                    {% set ns = namespace(skip=false, matched_kw='') %}
                                     {% if exclude_keywords %}
                                         {% for kw in exclude_keywords %}
-                                            {% if kw.lower() in ddd_path.lower() %}
+                                            {% if kw.lower() in ddd_path.lower() and not ns.skip %}
                                                 {% set ns.skip = true %}
+                                                {% set ns.matched_kw = kw %}
                                             {% endif %}
                                         {% endfor %}
                                     {% endif %}
-                                    {% if not ns.skip and ddd_path.lower().endswith('.bin') %}
-                                <div class="ddd-file-item" data-ddd-encoded="{{ ddd_path | urlencode }}" onclick="selectDddRow(this)">
-                                    <p class="text-muted mb-0 small analysis-file-name">{{ ddd_path.replace('\\', '/').split('/')[-1] }}</p>
+                                    {% if ddd_path.lower().endswith('.bin') %}
+                                <div class="ddd-file-item{% if ns.skip %} excluded-row{% endif %}" data-ddd-encoded="{{ ddd_path | urlencode }}" onclick="selectDddRow(this)">
+                                    <p class="text-muted mb-0 small analysis-file-name">
+                                        {{ ddd_path.replace('\\', '/').split('/')[-1] }}
+                                        {% if ns.skip %}<span class="excluded-badge">Excluded: {{ ns.matched_kw }}</span>{% endif %}
+                                    </p>
                                     <p class="analysis-file-path mb-0">Path: {{ ddd_path }}</p>
                                 </div>
                                 {% endif %}
@@ -755,18 +833,22 @@
                     <div class="mb-3">
                         {% for name, _list in ddd_dict.items() %}
                         {% for ddd_path in _list %}
-                                    {# determine if ddd_path should be skipped based on exclude_keywords #}
-                                    {% set ns = namespace(skip=false) %}
+                                    {# Determine excluded state; still render so "Show excluded" can reveal it. #}
+                                    {% set ns = namespace(skip=false, matched_kw='') %}
                                     {% if exclude_keywords %}
                                         {% for kw in exclude_keywords %}
-                                            {% if kw.lower() in ddd_path.lower() %}
+                                            {% if kw.lower() in ddd_path.lower() and not ns.skip %}
                                                 {% set ns.skip = true %}
+                                                {% set ns.matched_kw = kw %}
                                             {% endif %}
                                         {% endfor %}
                                     {% endif %}
-                                    {% if not ns.skip and not ddd_path.lower().endswith('.bin') %}
-                                <div class="event-file-item" data-event-encoded="{{ ddd_path | urlencode }}" onclick="selectEventRow(this)">
-                                    <p class="text-muted mb-0 small analysis-file-name">{{ ddd_path.replace('\\', '/').split('/')[-1] }}</p>
+                                    {% if not ddd_path.lower().endswith('.bin') %}
+                                <div class="event-file-item{% if ns.skip %} excluded-row{% endif %}" data-event-encoded="{{ ddd_path | urlencode }}" onclick="selectEventRow(this)">
+                                    <p class="text-muted mb-0 small analysis-file-name">
+                                        {{ ddd_path.replace('\\', '/').split('/')[-1] }}
+                                        {% if ns.skip %}<span class="excluded-badge">Excluded: {{ ns.matched_kw }}</span>{% endif %}
+                                    </p>
                                     <p class="analysis-file-path mb-0">Path: {{ ddd_path }}</p>
                                 </div>
                                 {% endif %}
@@ -784,21 +866,23 @@
                     <div class="mb-3">
                         {% for name, fw_list in fw_dict.items() %}
                                 {% for fw_path in fw_list %}
-                                    {# determine if fw_path should be skipped based on exclude_keywords #}
-                                    {% set ns = namespace(skip=false) %}
+                                    {# Determine excluded state; still render so "Show excluded" can reveal it. #}
+                                    {% set ns = namespace(skip=false, matched_kw='') %}
                                     {% if exclude_keywords %}
                                         {% for kw in exclude_keywords %}
-                                            {% if kw.lower() in fw_path.lower() %}
+                                            {% if kw.lower() in fw_path.lower() and not ns.skip %}
                                                 {% set ns.skip = true %}
+                                                {% set ns.matched_kw = kw %}
                                             {% endif %}
                                         {% endfor %}
                                     {% endif %}
-                                    {% if not ns.skip %}
-                                <div class="fw-file-item" data-fw-encoded="{{ fw_path | urlencode }}" onclick="selectFwRow(this)">
-                                    <p class="text-muted mb-0 small analysis-file-name">{{ fw_path.replace('\\', '/').split('/')[-1] }}</p>
+                                <div class="fw-file-item{% if ns.skip %} excluded-row{% endif %}" data-fw-encoded="{{ fw_path | urlencode }}" onclick="selectFwRow(this)">
+                                    <p class="text-muted mb-0 small analysis-file-name">
+                                        {{ fw_path.replace('\\', '/').split('/')[-1] }}
+                                        {% if ns.skip %}<span class="excluded-badge">Excluded: {{ ns.matched_kw }}</span>{% endif %}
+                                    </p>
                                     <p class="analysis-file-path mb-0">Path: {{ fw_path }}</p>
                                 </div>
-                                {% endif %}
                             {% endfor %}
                         {% endfor %}
                     </div>
@@ -966,10 +1050,6 @@
                                 AutoFolder
                             </button>
 
-                            <button class="btn btn-success btn-sm mb-2" data-path="{{ row.bt_path | urlencode }}" data-mode="Manual" onclick="startAnalysis(this, '{{ row.bt_path | urlencode }}', 'Manual')">
-                                Manual
-                            </button>
-
                             <button class="btn btn-warning btn-sm" data-path="{{ row.bt_path | urlencode }}" data-mode="LLM" onclick="startBtLogParser(this, '{{ row.bt_path | urlencode }}')">
                                 Analyze with LLM
                             </button>
@@ -1049,7 +1129,6 @@
             socket.on("wpp_complete", handleWppComplete);
             socket.on("bt_hci_ready", handleBtHciReady);
             socket.on("bt_hci_failed", handleBtHciFailed);
-            socket.on("manual_complete", handleManualComplete);
             socket.on("autofolder_complete", handleAutofolderComplete);
             socket.on("fw_analysis_complete", handleFwAnalysisComplete);
             socket.on("fw_analysis_cancelled", handleFwAnalysisCancelled);
@@ -1311,6 +1390,32 @@
                     console.log('Path opened successfully');
                 } else {
                     console.error('Failed to open path');
+                }
+            });
+        }
+
+        // Toggle rendering of ETL rows whose folder matches
+        // app_config.etl_exclude_keywords. Excluded rows are always emitted
+        // with class `excluded-row`; the body-level `hide-excluded` class
+        // gates their visibility. Tabs whose ONLY content is excluded rows
+        // carry `excluded-only-tab` so we can also re-enable/disable them
+        // (and switch away if the active tab just got hidden).
+        function toggleExcludedFiles() {
+            const body = document.body;
+            const btn = document.getElementById('toggle-excluded-btn');
+            if (!btn) return;
+            const nowHidden = body.classList.toggle('hide-excluded');
+            btn.textContent = nowHidden ? 'Show excluded' : 'Hide excluded';
+            document.querySelectorAll('#analysisTabs .excluded-only-tab').forEach(a => {
+                if (nowHidden) {
+                    a.classList.add('disabled', 'tab-unavailable');
+                    if (a.classList.contains('active')) {
+                        const other = document.querySelector(
+                            '#analysisTabs .nav-link:not(.disabled):not(.tab-unavailable):not(.excluded-only-tab)');
+                        if (other && window.jQuery) window.jQuery(other).tab('show');
+                    }
+                } else {
+                    a.classList.remove('disabled', 'tab-unavailable');
                 }
             });
         }
@@ -1954,13 +2059,6 @@
 
     window.pendingFwAnalysis = null;
 
-    function handleManualComplete(msg) {
-        console.log("Manual analysis complete for:", msg.etl_path);
-        restoreButton(msg.etl_path, 'Manual');
-        window.pendingBtAnalyze = false;
-        setBtActionButtonsBusy(false);
-    }
-
     function handleAutofolderComplete(msg) {
         console.log("AutoFolder analysis complete for:", msg.etl_path);
         restoreButton(msg.etl_path, 'AutoFolder');
@@ -2295,7 +2393,12 @@
         if (!it) return false;
         const order = _detectDateOrder();   // one fixed date order for the whole page
         const cand = [];
-        document.querySelectorAll('#wifi-panel .wifi-file-item').forEach(el => {
+        // Follow the current Show/Hide-excluded state: when excluded rows are
+        // hidden, they must not be candidates for auto-pick either.
+        const rowSel = document.body.classList.contains('hide-excluded')
+            ? '#wifi-panel .wifi-file-item:not(.excluded-row)'
+            : '#wifi-panel .wifi-file-item';
+        document.querySelectorAll(rowSel).forEach(el => {
             const name = decodePath(el.dataset.etlEncoded || '');
             const ft = _parseFileTimestamp(name, order);
             if (ft) cand.push({ el, key: it.hasDate ? ft.ms : ft.sod });
@@ -2340,7 +2443,10 @@
     const BT_MIN_SIZE_BYTES = 96 * 1024; // 96 KB
 
     async function autoSelectNewestBtLog() {
-        const allRows = Array.from(document.querySelectorAll('#bt-panel .bt-file-item'));
+        const btRowSel = document.body.classList.contains('hide-excluded')
+            ? '#bt-panel .bt-file-item:not(.excluded-row)'
+            : '#bt-panel .bt-file-item';
+        const allRows = Array.from(document.querySelectorAll(btRowSel));
         if (allRows.length <= 1) return;
         // Filter to only rows with file size >= 96 KB
         const rows = allRows.filter(el => {
@@ -2371,7 +2477,10 @@
     }
 
     async function autoSelectBtLogByIssueTime() {
-        const rows = Array.from(document.querySelectorAll('#bt-panel .bt-file-item'));
+        const btRowSel = document.body.classList.contains('hide-excluded')
+            ? '#bt-panel .bt-file-item:not(.excluded-row)'
+            : '#bt-panel .bt-file-item';
+        const rows = Array.from(document.querySelectorAll(btRowSel));
         if (rows.length === 0) return false;
         // One row → nothing to choose; just select it.
         if (rows.length === 1) { selectBtRow(rows[0]); return true; }
@@ -2839,20 +2948,17 @@
     function updateBtActionButtons() {
         const selectedEncoded = getSelectedBtEncoded();
         const autoFolderBtn = document.getElementById('bt-action-autofolder');
-        const manualBtn = document.getElementById('bt-action-manual');
         const chatbotBtn = document.getElementById('bt-action-chatbot');
 
         if (window.btActionsBusy) {
             if (chatbotBtn) chatbotBtn.disabled = true;
             if (autoFolderBtn) autoFolderBtn.disabled = true;
-            if (manualBtn) manualBtn.disabled = true;
             return;
         }
 
         const hasSelection = !!selectedEncoded;
         if (chatbotBtn) chatbotBtn.disabled = !hasSelection;
         if (autoFolderBtn) autoFolderBtn.disabled = !hasSelection;
-        if (manualBtn) manualBtn.disabled = !hasSelection;
     }
 
     function runSelectedBtAction(button, mode) {
@@ -2880,9 +2986,8 @@
             // The other labels are plain text — innerHTML treats them identically.
             'bt-action-chatbot': BT_CHATBOT_BUTTON_HTML,
             'bt-action-autofolder': 'AutoFolder',
-            'bt-action-manual': 'Manual'
         };
-        const buttonIds = ['bt-action-chatbot', 'bt-action-autofolder', 'bt-action-manual'];
+        const buttonIds = ['bt-action-chatbot', 'bt-action-autofolder'];
         buttonIds.forEach(id => {
             const btn = document.getElementById(id);
             if (!btn) return;

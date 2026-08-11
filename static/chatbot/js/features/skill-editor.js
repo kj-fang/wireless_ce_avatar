@@ -42,6 +42,11 @@
             // editor (or a server-echoed yaml_modified=true) does.
             window.__usingUserYaml = (data.effective_source === 'user');
             renderSkillSourcePanel(data);
+            // Populate the Available Skills list on page load so it doesn't
+            // stay empty until the user loads a log.
+            if (data.skills && data.skills.length > 0) {
+                renderSkills(data.skills);
+            }
             return data;
         } catch (e) {
             console.warn('skills_yaml_status fetch failed:', e);

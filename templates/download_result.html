@@ -1688,7 +1688,8 @@
             if (statusEl) statusEl.textContent = statusText || (isSuccess ? 'Done.' : 'An error occurred.');
             if (closeBtn) closeBtn.style.display = '';
             if (window._parseSafetyTimer) { clearTimeout(window._parseSafetyTimer); window._parseSafetyTimer = null; }
-            // if (isSuccess) setTimeout(() => $('#parseProgressModal').modal('hide'), 3000);  // DEBUG: auto-close disabled
+            if (window._parseAutoHideTimer) { clearTimeout(window._parseAutoHideTimer); window._parseAutoHideTimer = null; }
+            if (isSuccess) window._parseAutoHideTimer = setTimeout(() => $('#parseProgressModal').modal('hide'), 3000);
         }
 
         function startAnalysis(button, etlPathEncoded, mode) {
@@ -1769,9 +1770,16 @@
     }
 
     function handleWppComplete(msg) {
+        // When a prepare flow consumes this event, skip the bottom _closeParseModal so
+        // the modal stays locked (in-progress blue) while prepare is running. The prepare
+        // fetch will call _closeParseModal(false) on failure; on success the page navigates
+        // away and the modal disappears naturally.
+        let skipModalClose = false;
+
         if (window.pendingLogParser) {
             const { etlPathEncoded, button } = window.pendingLogParser;
             if (msg.status === 'done') {
+                skipModalClose = true;
                 logBox.innerText += ` ETL done — preparing Agent environment...\n`;
                 logBox.scrollTop = logBox.scrollHeight;
                 setWifiActionButtonsBusy(false);
@@ -1785,7 +1793,7 @@
                 .then(res => res.json())
                 .then(data => {
                     if (data.success) {
-                        logBox.innerText += `✅ Ready — opening Agent Chatbot...\n`;
+                        logBox.innerText += `✅ Ready — opening Wi-Fi Analysis Agent...\n`;
                         logBox.scrollTop = logBox.scrollHeight;
                         window.location.href = `${CHATBOT_URL}?auto_run=analyze_all`;
                     } else {
@@ -1793,6 +1801,7 @@
                         button.innerText = 'Analyze with LLM';
                         logBox.innerText += `❌ Agent prepare failed: ${data.error}\n`;
                         logBox.scrollTop = logBox.scrollHeight;
+                        _closeParseModal(false, '❌ Agent Prepare Failed', `Prepare failed: ${data.error}`);
                         setAnalysisCardLocked(false);
                     }
                 })
@@ -1801,6 +1810,7 @@
                     button.innerText = 'Analyze with LLM';
                     logBox.innerText += `❌ Error: ${err}\n`;
                     logBox.scrollTop = logBox.scrollHeight;
+                    _closeParseModal(false, '❌ Agent Prepare Failed', `Prepare error: ${err}`);
                     setAnalysisCardLocked(false);
                 });
             } else {
@@ -1816,6 +1826,7 @@
             window.pendingChatbot = null;
 
             if (msg.status === 'done') {
+                skipModalClose = true;
                 logBox.innerText += `✅ ETL done — preparing Agent environment...\n`;
                 logBox.scrollTop = logBox.scrollHeight;
                 button.innerText = '⏳ Preparing UI...';
@@ -1837,12 +1848,14 @@
                         const targetUrl = isAnalyzeAll
                             ? `${CHATBOT_URL}?auto_run=analyze_all`
                             : CHATBOT_URL;
+                        _closeParseModal(true, '✅ Agent Ready!', 'Opening Wi-Fi Analysis Agent...');
                         window.location.href = targetUrl;
                     } else {
                         button.classList.remove('disabled');
                         button.innerText = isAnalyzeAll ? '⏱️ Skills-Agent Analysis' : '🤖 Wi-Fi Analysis Agent';
                         logBox.innerText += `❌ Agent prepare failed: ${data.error}\n`;
                         logBox.scrollTop = logBox.scrollHeight;
+                        _closeParseModal(false, '❌ Agent Prepare Failed', `Prepare failed: ${data.error}`);
                         setWifiActionButtonsBusy(false);
                     }
                 })
@@ -1851,6 +1864,7 @@
                     button.innerText = isAnalyzeAll ? '⏱️ Skills-Agent Analysis' : '🤖 Wi-Fi Analysis Agent';
                     logBox.innerText += `❌ Error: ${err}\n`;
                     logBox.scrollTop = logBox.scrollHeight;
+                    _closeParseModal(false, '❌ Agent Prepare Failed', `Prepare error: ${err}`);
                     setWifiActionButtonsBusy(false);
                 });
             }
@@ -1874,14 +1888,18 @@
             setBtActionButtonsBusy(false);
         }
 
-        // wpp_complete received — update modal state if still open
-        const isSuccess = msg.status === 'done';
-        _closeParseModal(
-            isSuccess,
-            isSuccess ? '✅ Parsing Complete!' : '❌ Parsing Failed',
-            isSuccess ? 'Done — TextAnalysisTool should have opened automatically.'
-                      : 'An error occurred — please check the log above.'
-        );
+        // wpp_complete received — update modal state if still open.
+        // Skip when a prepare flow is in-flight (skipModalClose=true): the modal stays
+        // locked in blue until prepare resolves, then calls _closeParseModal itself.
+        if (!skipModalClose) {
+            const isSuccess = msg.status === 'done';
+            _closeParseModal(
+                isSuccess,
+                isSuccess ? '✅ Parsing Complete!' : '❌ Parsing Failed',
+                isSuccess ? 'Done — TextAnalysisTool should have opened automatically.'
+                          : 'An error occurred — please check the log above.'
+            );
+        }
     };
 
     // -------------------- BT LLM Analysis --------------------
@@ -1938,7 +1956,6 @@
         // decoded HCI path; bt_chatbot.prepare appends ".log" internally —
         // same convention the (now-removed) log_parser redirect used.
         appendLog(`✅ HCI decode done — preparing Bluetooth Analysis Agent...\n`);
-        _closeParseModal(true, '✅ Decode Complete!', 'HCI decode done — opening Bluetooth Analysis Agent...');
         button.innerText = '⏳ Preparing UI...';
 
         fetch(BT_CHATBOT_PREPARE_URL, {
@@ -1952,9 +1969,11 @@
                 appendLog(`✅ Ready — opening Bluetooth Analysis Agent...\n`);
                 window.pendingBtLogParser = null;
                 window.pendingBtAnalyze = false;
+                _closeParseModal(true, '✅ Agent Ready!', 'Opening Bluetooth Analysis Agent...');
                 window.location.href = BT_CHATBOT_URL;
             } else {
                 appendLog(`❌ BT Agent prepare failed: ${data.error}\n`, 'red');
+                _closeParseModal(false, '❌ Agent Prepare Failed', `BT Agent prepare failed: ${data.error}`);
                 button.classList.remove('disabled');
                 button.innerHTML = BT_CHATBOT_BUTTON_HTML;
                 window.pendingBtLogParser = null;
@@ -1964,6 +1983,7 @@
         })
         .catch(err => {
             appendLog(`❌ BT Agent prepare error: ${err}\n`, 'red');
+            _closeParseModal(false, '❌ Agent Prepare Failed', `BT Agent prepare error: ${err}`);
             button.classList.remove('disabled');
             button.innerHTML = BT_CHATBOT_BUTTON_HTML;
             window.pendingBtLogParser = null;

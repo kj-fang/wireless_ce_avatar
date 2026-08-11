@@ -3,6 +3,8 @@ from threading import Thread
 
 from utils import attachment_decompose, attachment_download
 from configs.global_configs import app_config
+from models.models import CaseContext
+from services import gather_service
 
 
 
@@ -38,8 +40,12 @@ def handle_start_download(socketio):
 
     selected_files = session.get('selected_files', [])
     download_path = session.get('download_path', '')
-    case_nbr = session.get('case_context')['case_nbr']
+    case_context = CaseContext.from_session(session.get('case_context') or {})
+    case_nbr = case_context.case_nbr
     is_bsod = session.get('bsod')
+    workflow_id = session.get('gather_workflow_id', '')
+    issue_snapshot = case_context.to_dict()
+    domain = case_context.wifi_or_bt or 'wifi'
     
     def background_download(selected_files, download_path):
         wifi_dict = {}
@@ -47,8 +53,27 @@ def handle_start_download(socketio):
         bt_dict = {}       
         fw_dict = {}
         file_path = None  
+
+        def record_download_result(result):
+            try:
+                gather_service.record_attachment_download_result(
+                    workflow_id=workflow_id,
+                    name=str(result.get('name') or ''),
+                    status=str(result.get('status') or 'failed'),
+                    byte_count=result.get('bytes'),
+                    latency_ms=result.get('latency_ms'),
+                    attempt_count=result.get('attempt_count') or 0,
+                    error_code=str(result.get('error_code') or ''),
+                    issue=issue_snapshot,
+                    domain=domain,
+                )
+            except Exception:
+                pass
         
-        for file_path, name, already_dload in attachment_download.run_dload_threads(selected_files, download_path, socketio):
+        for file_path, name, already_dload in attachment_download.run_dload_threads(
+            selected_files, download_path, socketio,
+            result_callback=record_download_result,
+        ):
             print("Downloaded:", file_path, name)
             if not is_bsod:
                 wifi_files, ddd_files, evt_files, bt_files, fw_files = attachment_decompose.process_single_zip(file_path, download_path, already_dload) #####0806

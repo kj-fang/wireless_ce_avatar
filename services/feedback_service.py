@@ -30,6 +30,7 @@ from typing import Any, Iterable, Optional
 
 from configs.global_configs import app_config
 from configs.path_configs import FEEDBACK_DIR_prim, FEEDBACK_DIR_bkup
+from configs.version import __version__ as APP_VERSION
 from utils import helpers
 
 
@@ -63,8 +64,10 @@ from utils import helpers
 #         rating), and the legacy free-form `expected_outcome` /
 #         `general_comment`. None were surfaced by the current UI; readers
 #         should treat them as absent on v4+ records.
+#   v5  - Added feedback_event_id for joining detailed submits to Gather v6
+#         counters, plus the packaged app_version that emitted the record.
 # ---------------------------------------------------------------------------
-RECORD_SCHEMA_VERSION = 4
+RECORD_SCHEMA_VERSION = 5
 
 
 # --- Storage location ----------------------------------------------------
@@ -988,6 +991,7 @@ def record_detail(
     log_path: str = "",
     attach_log: bool = False,
     domain: str = "",
+    feedback_event_id: str = "",
 ) -> bool:
     """
     Append a structured detailed feedback record. Used by the "More feedback"
@@ -1233,6 +1237,8 @@ def record_detail(
     record = {
         "schema_version": RECORD_SCHEMA_VERSION,
         "ts": _now_iso(),
+        "feedback_event_id": _safe_id(feedback_event_id) if feedback_event_id else "",
+        "app_version": APP_VERSION,
         "session_id": session_id or "",
         "submitted_by": _current_user(),
         "domain": eff_domain or "wifi",

@@ -466,6 +466,11 @@ class WifiLogAgentSystem:
         # it between reasoning steps and bails out early. Cleared at the start
         # of every chat turn so a prior stop can't cancel the next one.
         self.cancel_event: threading.Event = threading.Event()
+        # Token usage for the CURRENT turn, accumulated across every LLM call
+        # (agentic loops make many). Reset at the top of each chat() so it only
+        # ever describes one turn; read by the routes after chat() returns and
+        # handed to gather_service for cost accounting. See _reset_turn_usage.
+        self.last_turn_usage: dict = self._empty_turn_usage()
         self.issue_context: dict = {}  # populated by prime_with_context()
         self.issue_time: Optional[datetime] = None  # populated by prime_with_context() or _chat_with_tools()
         self._issue_time_time_only: bool = False
@@ -1476,6 +1481,7 @@ class WifiLogAgentSystem:
                 temperature=0.1,
                 max_tokens=2000,
             )
+            self._accumulate_turn_usage(getattr(response, "usage", None))
             return response.choices[0].message.content or ""
         except Exception as e:
             return f"Skill analysis error: {e}"
@@ -1826,12 +1832,63 @@ class WifiLogAgentSystem:
         # Fresh turn — discard any stop signal left over from a previous turn
         # so the user's new message is never pre-cancelled.
         self.cancel_event.clear()
+        # Fresh turn — token counters describe THIS turn only.
+        self._reset_turn_usage()
 
         # Delegate to appropriate implementation
         if use_tools:
             return self._chat_with_tools(user_message, max_steps, temperature=temperature, step_callback=step_callback)
         else:
             return self._chat_simple(user_message, temperature=temperature, max_tokens=max_tokens)
+
+    @staticmethod
+    def _empty_turn_usage() -> dict:
+        return {
+            "llm_calls": 0,
+            "input_tokens": 0,        # uncached prompt tokens
+            "cache_read_tokens": 0,
+            "cache_write_tokens": 0,
+            "output_tokens": 0,
+            "total_tokens": 0,
+        }
+
+    def _reset_turn_usage(self) -> None:
+        self.last_turn_usage = self._empty_turn_usage()
+
+    def _accumulate_turn_usage(self, usage) -> None:
+        """
+        Fold one LLM response's usage into this turn's running total.
+
+        Tolerates a missing/partial usage object — accounting must never be the
+        thing that breaks a chat turn, so anything unreadable is counted as 0.
+        """
+        if usage is None:
+            return
+        try:
+            u = self.last_turn_usage
+            if not isinstance(u, dict):
+                u = self.last_turn_usage = self._empty_turn_usage()
+
+            def _n(name: str) -> int:
+                try:
+                    return max(0, int(getattr(usage, name, 0) or 0))
+                except (TypeError, ValueError):
+                    return 0
+
+            prompt = _n("prompt_tokens")
+            completion = _n("completion_tokens")
+            # Anthropic naming on our adapter; OpenAI responses simply lack these.
+            cache_read = _n("cache_read_input_tokens")
+            cache_write = _n("cache_creation_input_tokens")
+
+            u["llm_calls"] += 1
+            u["input_tokens"] += prompt
+            u["output_tokens"] += completion
+            u["cache_read_tokens"] += cache_read
+            u["cache_write_tokens"] += cache_write
+            u["total_tokens"] += prompt + completion + cache_read + cache_write
+        except Exception as e:
+            print(f"[TOKEN] usage accumulation skipped: {e}")
 
     def _chat_simple(self, user_message: str, temperature: float = 0.2,
                      max_tokens: int = 4000) -> dict:
@@ -1896,11 +1953,12 @@ class WifiLogAgentSystem:
                 temperature=temperature,
                 max_tokens=max_tokens,
             )
+            self._accumulate_turn_usage(getattr(response, "usage", None))
             content = response.choices[0].message.content or ""
-            
+
             # Add assistant response to history
             self.conversation_history.append({"role": "assistant", "content": content})
-            
+
             return {"type": "text", "data": content}
         except Exception as e:
             error_msg = f"Chat error: {str(e)}"
@@ -2270,6 +2328,7 @@ class WifiLogAgentSystem:
                     "completion": usage.completion_tokens,
                     "total": usage.total_tokens,
                 })
+                self._accumulate_turn_usage(usage)
                 if usage.total_tokens > self.MAX_TOKENS_PER_STEP:
                     _emit({
                         "role": "error",
@@ -2634,6 +2693,7 @@ class WifiLogAgentSystem:
                 messages=[{"role": "user", "content": prompt}],
                 temperature=0
             )
+            self._accumulate_turn_usage(getattr(response, "usage", None))
             time_str = response.choices[0].message.content.strip()
             if time_str != "NONE":
                 return datetime.strptime(f"{time_str}.000", "%m/%d/%Y-%H:%M:%S.%f")
@@ -2740,6 +2800,7 @@ class WifiLogAgentSystem:
                 temperature=0,
                 max_tokens=400,
             )
+            self._accumulate_turn_usage(getattr(response, "usage", None))
             raw = (response.choices[0].message.content or "").strip()
             parsed = None
             try:

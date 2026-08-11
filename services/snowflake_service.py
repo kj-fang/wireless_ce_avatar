@@ -41,14 +41,12 @@ def _get_connection(passwd):
                 account="XD14286-ECDWPROD",
                 warehouse="WH_SMG_CONSUMPTION",
                 database="SALES_MARKETING",
-                # Proxy passed as connection params, NOT env vars: the Selenium
-                # driver manager pops HTTP(S)_PROXY from os.environ at arbitrary
-                # times (create_download_driver / open_browser), and requests
-                # re-resolves env proxies on every request — env-based proxying
-                # therefore races with Chrome startup and dies mid-query with
-                # connect timeouts. Params live inside the connector's session
-                # manager and are immune to os.environ mutation (verified: no
-                # env writes, works with all proxy env vars removed).
+                # Proxy is passed as connection params (proxy_host/proxy_port) so
+                # Snowflake does not depend on HTTP(S)_PROXY/NO_PROXY staying stable
+                # in os.environ (DriverManager clears those vars during Chrome startup).
+                # Note: _apply_proxy_env() still mutates env vars today; if we keep that
+                # for non-proxy Snowflake knobs (e.g. OCSP settings), avoid claiming
+                # "no env writes" here to prevent confusion.
                 proxy_host="proxy-dmz.intel.com",
                 proxy_port=912,
                 insecure_mode=True,  # skip OCSP checks — ocsp.digicert.com unreachable on this network

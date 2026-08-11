@@ -36,8 +36,12 @@ _state_lock = threading.Lock()
 
 def get_run_state() -> dict:
     with _state_lock:
-        return dict(_run_state)
-
+        s = dict(_run_state)
+        if isinstance(s.get("events"), list):
+            s["events"] = [dict(e) for e in s["events"]]
+        if isinstance(s.get("cases"), list):
+            s["cases"] = [dict(c) for c in s["cases"]]
+        return s
 
 def _set_state(**fields) -> None:
     with _state_lock:

@@ -1035,6 +1035,7 @@
 
         function bindProgressSocketHandlers() {
             socket.on("wpp_log", handleWppLog);
+            socket.on("bt_log", handleBtLog);
             socket.on("fw_log", handleFwLog);
             socket.on("fw_tool_log", handleFwToolLog);
             socket.on("fw_tool_closed", handleFwToolClosed);
@@ -1137,23 +1138,77 @@
               keywords: ['open text analysis', 'copying parsed log file'] },
         ];
         window.wppCurrentStage = -1;
-                const FW_STAGES = [
-                        { pct: 10, label: 'Step 1 / 7 — Loading ETL',
-                            keywords: ['Parsing file:', 'Processing ETL file:'] },
-                        { pct: 25, label: 'Step 2 / 7 — Enumerating dumps',
-                            keywords: ['Found dump file from ETL:', 'Processing dump file:'] },
-                        { pct: 40, label: 'Step 3 / 7 — Running LST flow',
-                            keywords: ['Running lst flow', 'Lst flow completed'] },
-                        { pct: 65, label: 'Step 4 / 7 — Running Sysmon flow',
-                            keywords: ['Download path', 'Running sysmon flow', 'Sysmon flow completed'] },
-                        { pct: 80, label: 'Step 5 / 7 — BT supplemental parsing',
-                            keywords: ['BT parsing started...', 'Warning: BT dev trace not found, skipping BT parsing.'] },
-                        { pct: 92, label: 'Step 6 / 7 — Generating GDB scripts',
-                            keywords: ['Writing GDB batch:', 'Writing GDB bash script:', 'GDB batch files created.'] },
-                        { pct: 100, label: 'Step 7 / 7 — Parse complete',
-                            keywords: ['Parsing completed successfully'] },
-                ];
-                window.fwCurrentStage = -1;
+
+        const FW_STAGES = [
+                { pct: 10, label: 'Step 1 / 7 — Loading ETL',
+                    keywords: ['Parsing file:', 'Processing ETL file:', '[DEV_TRACE] sha1'] },
+                { pct: 25, label: 'Step 2 / 7 — Enumerating dumps',
+                    keywords: ['Found dump file from ETL:', 'Processing dump file:', 'Attempting to download devTrace', 'found in already fetched devtrace database'] },
+                { pct: 40, label: 'Step 3 / 7 — Running LST flow',
+                    keywords: ['Running lst flow', 'Lst flow completed'] },
+                { pct: 55, label: 'Step 4 / 7 — Processing & decoding',
+                    keywords: ['Processing:', 'Running sysmon flow', 'Sysmon flow completed'] },
+                { pct: 80, label: 'Step 5 / 7 — BT supplemental parsing',
+                    keywords: ['BT parsing started...', 'Warning: BT dev trace not found, skipping BT parsing.'] },
+                { pct: 92, label: 'Step 6 / 7 — Generating GDB scripts',
+                    keywords: ['Writing GDB batch:', 'Writing GDB bash script:', 'GDB batch files created.'] },
+                { pct: 100, label: 'Step 7 / 7 — Parse complete',
+                    keywords: ['Parsing completed successfully', 'Decoding completed', 'Decode Successful'] },
+        ];
+        window.fwCurrentStage = -1;
+
+        const BT_STAGES = [
+            { pct: 15, label: 'Step 1 / 4 — Preparing decode',
+              keywords: ['Starting BT decode', 'HCI log already exists', 'HCI decoding'] },
+            { pct: 35, label: 'Step 2 / 4 — Splitting / Launching CLI',
+              keywords: ['Splitting large ETL', 'Running CLI decode'] },
+            { pct: 60, label: 'Step 3 / 4 — Decoding ETL',
+              keywords: ['Intermediate pass', 'Building HCI log'] },
+            { pct: 90, label: 'Step 4 / 4 — Finalizing output',
+              keywords: ['Sidecar files confirmed', 'CLI decode process completed', 'HCI decode complete'] },
+        ];
+        window.btCurrentStage = -1;
+
+        function advanceBtStage(text) {
+            for (let i = window.btCurrentStage + 1; i < BT_STAGES.length; i++) {
+                const stage = BT_STAGES[i];
+                if (stage.keywords.some(k => text.includes(k))) {
+                    window.btCurrentStage = i;
+                    const bar = document.getElementById('parseModalProgressBar');
+                    if (bar) bar.style.width = stage.pct + '%';
+                    const pctLabel = document.getElementById('parseModalPctLabel');
+                    if (pctLabel) pctLabel.textContent = stage.pct + '%';
+                    const stageLabel = document.getElementById('parseModalStageLabel');
+                    if (stageLabel) stageLabel.textContent = stage.label;
+                    break;
+                }
+            }
+        }
+
+        // Shared helper: append one log line to the parse modal log area and
+        // update the footer status text. Color-codes ❌ / ✅ / ⚠️ prefixes.
+        function _appendParseModalLog(text) {
+            const modalLog = document.getElementById('parseModalLog');
+            if (modalLog) {
+                const line = document.createElement('span');
+                if (text.startsWith('❌')) line.style.color = '#f48771';
+                else if (text.startsWith('✅')) line.style.color = '#89d185';
+                else if (text.startsWith('⚠️')) line.style.color = '#d7ba7d';
+                line.textContent = text + '\n';
+                const isNearBottom = modalLog.scrollHeight - modalLog.scrollTop - modalLog.clientHeight <= 60;
+                modalLog.appendChild(line);
+                if (isNearBottom) modalLog.scrollTop = modalLog.scrollHeight;
+            }
+            const statusEl = document.getElementById('parseModalStatusText');
+            if (statusEl) statusEl.textContent = text.slice(0, 90);
+        }
+
+        function handleBtLog(msg) {
+            const text = msg.data || '';
+            appendLog(text + "\n");
+            advanceBtStage(text);
+            _appendParseModalLog(text);
+        }
 
         function advanceWppStage(text) {
             for (let i = window.wppCurrentStage + 1; i < WPP_STAGES.length; i++) {
@@ -1161,11 +1216,11 @@
                 if (stage.keywords.some(k => text.includes(k))) {
                     window.wppCurrentStage = i;
                     const pct = stage.pct;
-                    const bar = document.getElementById('wppModalProgressBar');
+                    const bar = document.getElementById('parseModalProgressBar');
                     if (bar) bar.style.width = pct + '%';
-                    const pctLabel = document.getElementById('wppModalPctLabel');
+                    const pctLabel = document.getElementById('parseModalPctLabel');
                     if (pctLabel) pctLabel.textContent = pct + '%';
-                    const stageLabel = document.getElementById('wppModalStageLabel');
+                    const stageLabel = document.getElementById('parseModalStageLabel');
                     if (stageLabel) stageLabel.textContent = stage.label;
                     break;
                 }
@@ -1178,11 +1233,11 @@
                 if (stage.keywords.some(k => text.includes(k))) {
                     window.fwCurrentStage = i;
                     const pct = stage.pct;
-                    const bar = document.getElementById('wppModalProgressBar');
+                    const bar = document.getElementById('parseModalProgressBar');
                     if (bar) bar.style.width = pct + '%';
-                    const pctLabel = document.getElementById('wppModalPctLabel');
+                    const pctLabel = document.getElementById('parseModalPctLabel');
                     if (pctLabel) pctLabel.textContent = pct + '%';
-                    const stageLabel = document.getElementById('wppModalStageLabel');
+                    const stageLabel = document.getElementById('parseModalStageLabel');
                     if (stageLabel) stageLabel.textContent = stage.label;
                     break;
                 }
@@ -1193,21 +1248,8 @@
             console.log("wpp_log:", msg);
             const text = msg.data || '';
             appendLog(text + "\n");
-            // Advance stage-based progress bar
             advanceWppStage(text);
-            // Append line to modal log
-            const modalLog = document.getElementById('wppModalLog');
-            if (modalLog) {
-                const line = document.createElement('span');
-                if (text.startsWith('❌')) line.style.color = '#f48771';
-                else if (text.startsWith('✅')) line.style.color = '#89d185';
-                line.textContent = text + '\n';
-                const isNearBottom = modalLog.scrollHeight - modalLog.scrollTop - modalLog.clientHeight <= 60;
-                modalLog.appendChild(line);
-                if (isNearBottom) modalLog.scrollTop = modalLog.scrollHeight;
-            }
-            const statusEl = document.getElementById('wppModalStatusText');
-            if (statusEl) statusEl.textContent = text.slice(0, 90);
+            _appendParseModalLog(text);
         }
 
         function handleFwLog(msg) {
@@ -1215,20 +1257,7 @@
             const text = msg.data || '';
             appendLog(text + "\n");
             advanceFwStage(text);
-
-            const modalLog = document.getElementById('wppModalLog');
-            if (modalLog) {
-                const line = document.createElement('span');
-                if (text.startsWith('❌')) line.style.color = '#f48771';
-                else if (text.startsWith('✅')) line.style.color = '#89d185';
-                line.textContent = text + '\n';
-                const isNearBottom = modalLog.scrollHeight - modalLog.scrollTop - modalLog.clientHeight <= 60;
-                modalLog.appendChild(line);
-                if (isNearBottom) modalLog.scrollTop = modalLog.scrollHeight;
-            }
-
-            const statusEl = document.getElementById('wppModalStatusText');
-            if (statusEl) statusEl.textContent = text.slice(0, 90);
+            _appendParseModalLog(text);
         }
 
         function handleFwToolLog(msg) {
@@ -1588,42 +1617,78 @@
 
         
 
-        function openWppModal(title) {
+        function openParseModal(title) {
             window.wppCurrentStage = -1;
-            const modalLog = document.getElementById('wppModalLog');
+            window.btCurrentStage = -1;
+            window.fwCurrentStage = -1;
+            const modalLog = document.getElementById('parseModalLog');
             if (modalLog) modalLog.innerHTML = '';
-            const statusEl = document.getElementById('wppModalStatusText');
+            const statusEl = document.getElementById('parseModalStatusText');
             if (statusEl) statusEl.textContent = 'Waiting for output...';
-            const stageLabel = document.getElementById('wppModalStageLabel');
+            const stageLabel = document.getElementById('parseModalStageLabel');
             if (stageLabel) stageLabel.textContent = 'Waiting to start...';
-            const pctLabel = document.getElementById('wppModalPctLabel');
+            const pctLabel = document.getElementById('parseModalPctLabel');
             if (pctLabel) pctLabel.textContent = '0%';
-            const header = document.getElementById('wppModalHeader');
+            const header = document.getElementById('parseModalHeader');
             if (header) header.style.background = '#0b4a78';
-            const spinner = document.getElementById('wppModalSpinner');
+            const spinner = document.getElementById('parseModalSpinner');
             if (spinner) spinner.style.display = '';
-            const progressBar = document.getElementById('wppModalProgressBar');
+            const progressBar = document.getElementById('parseModalProgressBar');
             if (progressBar) {
                 progressBar.classList.add('progress-bar-striped', 'progress-bar-animated');
                 progressBar.classList.remove('bg-success', 'bg-danger');
                 progressBar.classList.add('bg-info');
                 progressBar.style.width = '0%';
             }
-            const labelEl = document.getElementById('wppProgressModalLabel');
-            if (labelEl) labelEl.textContent = title || '🛠️ WPP Parsing in Progress...';
-            const closeBtn = document.getElementById('wppModalCloseBtn');
+            const labelEl = document.getElementById('parseProgressModalLabel');
+            if (labelEl) labelEl.textContent = title || '🛠️ Parsing in Progress...';
+            const closeBtn = document.getElementById('parseModalCloseBtn');
             if (closeBtn) closeBtn.style.display = 'none';
-            // Safety escape hatch: show Close after 5 min in case backend never emits wpp_complete
-            if (window._wppSafetyTimer) clearTimeout(window._wppSafetyTimer);
-            window._wppSafetyTimer = setTimeout(() => {
-                const btn = document.getElementById('wppModalCloseBtn');
+            if (window._parseSafetyTimer) clearTimeout(window._parseSafetyTimer);
+            window._parseSafetyTimer = setTimeout(() => {
+                const btn = document.getElementById('parseModalCloseBtn');
                 if (btn && btn.style.display === 'none') {
                     btn.style.display = '';
-                    const st = document.getElementById('wppModalStatusText');
+                    const st = document.getElementById('parseModalStatusText');
                     if (st) st.textContent = 'Taking longer than expected — you may close this window.';
                 }
             }, 5 * 60 * 1000);
-            $('#wppProgressModal').modal('show');
+            $('#parseProgressModal').modal('show');
+        }
+
+        // Alias kept for backward compatibility with any call sites not yet updated
+        const openWppModal = openParseModal;
+
+        // Unified modal close — shared by BT / FW / WiFi WPP flows.
+        // isSuccess: colours header green/red and fills progress bar to 100%.
+        // title:     header text (e.g. '✅ Decode Complete!').
+        // statusText: footer status line.
+        // On success the modal auto-hides after 3 s.
+        function _closeParseModal(isSuccess, title, statusText) {
+            const modal = document.getElementById('parseProgressModal');
+            if (!modal || !$(modal).hasClass('show')) return;
+            const header = document.getElementById('parseModalHeader');
+            const spinner = document.getElementById('parseModalSpinner');
+            const labelEl = document.getElementById('parseProgressModalLabel');
+            const progressBar = document.getElementById('parseModalProgressBar');
+            const pctLabel = document.getElementById('parseModalPctLabel');
+            const stageLabel = document.getElementById('parseModalStageLabel');
+            const statusEl = document.getElementById('parseModalStatusText');
+            const closeBtn = document.getElementById('parseModalCloseBtn');
+            if (header) header.style.background = isSuccess ? '#155724' : '#721c24';
+            if (spinner) spinner.style.display = 'none';
+            if (labelEl) labelEl.textContent = title;
+            if (progressBar) {
+                progressBar.classList.remove('progress-bar-striped', 'progress-bar-animated', 'bg-info');
+                progressBar.classList.add(isSuccess ? 'bg-success' : 'bg-danger');
+                if (isSuccess) progressBar.style.width = '100%';
+            }
+            if (pctLabel) pctLabel.textContent = isSuccess ? '100%' : '';
+            if (stageLabel) stageLabel.textContent = isSuccess ? 'All steps completed.' : 'An error occurred.';
+            if (statusEl) statusEl.textContent = statusText || (isSuccess ? 'Done.' : 'An error occurred.');
+            if (closeBtn) closeBtn.style.display = '';
+            if (window._parseSafetyTimer) { clearTimeout(window._parseSafetyTimer); window._parseSafetyTimer = null; }
+            // if (isSuccess) setTimeout(() => $('#parseProgressModal').modal('hide'), 3000);  // DEBUG: auto-close disabled
         }
 
         function startAnalysis(button, etlPathEncoded, mode) {
@@ -1639,7 +1704,9 @@
             logBox.innerText += `🛠️ Parsing...\n`;
             logBox.scrollTop = logBox.scrollHeight;
             if (window.__wifiOrBt === 'wifi') {
-                openWppModal(`🛠️ Parsing: ${decoded.split('\\').pop() || decoded.split('/').pop()}`);
+                openWppModal(`🛠️ Wi-Fi Parsing: ${decoded.split('\\').pop() || decoded.split('/').pop()}`);
+            } else if (window.__wifiOrBt === 'bt') {
+                openParseModal(`🔵 BT Decoding: ${decoded.split('\\').pop() || decoded.split('/').pop()}`);
             }
             console.log(`${ETL_ANALYSIS_URL}?etl_path=${etlPathEncoded}&mode=${mode}`)
             fetch(`${ETL_ANALYSIS_URL}?etl_path=${etlPathEncoded}&mode=${mode}`)
@@ -1653,12 +1720,15 @@
                     logBox.scrollTop = logBox.scrollHeight;
                     if (window.pendingWifiAnalyze) {
                         window.pendingWifiAnalyze = false;
+                        _closeParseModal(false, '❌ Wi-Fi Parsing Failed', 'Request failed — see log for details.');
                     }
                     if (window.pendingDddAnalyze) {
                         window.pendingDddAnalyze = false;
+                        _closeParseModal(false, '❌ DDD Parsing Failed', 'Request failed — see log for details.');
                     }
                     if (window.pendingBtAnalyze) {
                         window.pendingBtAnalyze = false;
+                        _closeParseModal(false, '❌ BT Decoding Failed', 'Request failed — see log for details.');
                     }
                     setWifiActionButtonsBusy(false);
                     setDddActionButtonsBusy(false);
@@ -1805,40 +1875,13 @@
         }
 
         // wpp_complete received — update modal state if still open
-        const wppModal = document.getElementById('wppProgressModal');
-        if (wppModal && $(wppModal).hasClass('show')) {
-            const isSuccess = msg.status === 'done';
-            const header = document.getElementById('wppModalHeader');
-            const spinner = document.getElementById('wppModalSpinner');
-            const labelEl = document.getElementById('wppProgressModalLabel');
-            const progressBar = document.getElementById('wppModalProgressBar');
-            const statusEl = document.getElementById('wppModalStatusText');
-            const closeBtn = document.getElementById('wppModalCloseBtn');
-
-            if (header) header.style.background = isSuccess ? '#155724' : '#721c24';
-            if (spinner) spinner.style.display = 'none';
-            if (labelEl) labelEl.textContent = isSuccess ? '✅ Parsing Complete!' : '❌ Parsing Failed';
-            if (progressBar) {
-                progressBar.classList.remove('progress-bar-striped', 'progress-bar-animated', 'bg-info');
-                progressBar.classList.add(isSuccess ? 'bg-success' : 'bg-danger');
-                if (isSuccess) progressBar.style.width = '100%';
-            }
-            const pctLabel = document.getElementById('wppModalPctLabel');
-            if (pctLabel) pctLabel.textContent = isSuccess ? '100%' : '';
-            const stageLabel = document.getElementById('wppModalStageLabel');
-            if (stageLabel) stageLabel.textContent = isSuccess ? 'All steps completed.' : 'An error occurred.';
-            if (statusEl) statusEl.textContent = isSuccess
-                ? 'Done — TextAnalysisTool should have opened automatically.'
-                : 'An error occurred — please check the log above.';
-            if (closeBtn) closeBtn.style.display = '';
-            // wpp_complete received — cancel the safety timer
-            if (window._wppSafetyTimer) { clearTimeout(window._wppSafetyTimer); window._wppSafetyTimer = null; }
-
-            // Non chatbot/LLM flow → auto-close after 3 s
-            if (!window.pendingLogParser && !window.pendingChatbot) {
-                setTimeout(() => $('#wppProgressModal').modal('hide'), 3000);
-            }
-        }
+        const isSuccess = msg.status === 'done';
+        _closeParseModal(
+            isSuccess,
+            isSuccess ? '✅ Parsing Complete!' : '❌ Parsing Failed',
+            isSuccess ? 'Done — TextAnalysisTool should have opened automatically.'
+                      : 'An error occurred — please check the log above.'
+        );
     };
 
     // -------------------- BT LLM Analysis --------------------
@@ -1857,10 +1900,12 @@
 
         reconnectProgressSocket();
 
+        const decoded = decodePath(btPathEncoded);
+        openParseModal(`🔵 BT Decode: ${decoded.split('\\').pop() || decoded.split('/').pop()}`);
+
         button.classList.add('disabled');
         button.innerText = 'Decoding HCI...';
 
-        const decoded = decodePath(btPathEncoded);
         appendLog(`\n\n🚀 Starting Bluetooth Analysis Agent: ${decoded}\n`);
         appendLog(`🔍 Step 1: Decoding HCI log (this may take ~1-2 min)...\n`);
 
@@ -1893,6 +1938,7 @@
         // decoded HCI path; bt_chatbot.prepare appends ".log" internally —
         // same convention the (now-removed) log_parser redirect used.
         appendLog(`✅ HCI decode done — preparing Bluetooth Analysis Agent...\n`);
+        _closeParseModal(true, '✅ Decode Complete!', 'HCI decode done — opening Bluetooth Analysis Agent...');
         button.innerText = '⏳ Preparing UI...';
 
         fetch(BT_CHATBOT_PREPARE_URL, {
@@ -1931,6 +1977,7 @@
         const { button } = window.pendingBtLogParser;
 
         appendLog(`❌ BT HCI decode failed or timed out.\n`, 'red');
+        _closeParseModal(false, '❌ Decode Failed', 'HCI decode failed or timed out.');
 
         button.classList.remove('disabled');
         button.innerHTML = BT_CHATBOT_BUTTON_HTML;
@@ -1948,6 +1995,7 @@
 
     function handleAutofolderComplete(msg) {
         console.log("AutoFolder analysis complete for:", msg.etl_path);
+        _closeParseModal(true, '✅ Decode Complete!', 'Done — TextAnalysisTool should have opened automatically.');
         restoreButton(msg.etl_path, 'AutoFolder');
         window.pendingBtAnalyze = false;
         setBtActionButtonsBusy(false);
@@ -2092,7 +2140,7 @@
                         if (wasPending) {
                             const reason = data.error || 'precheck failed';
                             appendLog(`⚠️ FW analysis rejected: ${reason}\n`, 'red');
-                            _closeFwModal(false, `Rejected: ${reason}`);
+                            _closeParseModal(false, '❌ FW Parse Failed', `Rejected: ${reason}`);
                         }
                         return;
                     }
@@ -2108,37 +2156,12 @@
                     appendLog(`❌ FW analysis start failed: ${decoded}\n`, 'red');
                     resetFwButton(button);
                     setFwActionButtonsBusy(false);
-                    _closeFwModal(false, 'Request failed: ' + (err.message || 'unknown error'));
+                    _closeParseModal(false, '❌ FW Parse Failed', 'Request failed: ' + (err.message || 'unknown error'));
                 });
         });
     }
 
-    function _closeFwModal(isSuccess, statusText) {
-        const wppModal = document.getElementById('wppProgressModal');
-        if (!wppModal) return;
-        const header   = document.getElementById('wppModalHeader');
-        const spinner  = document.getElementById('wppModalSpinner');
-        const labelEl  = document.getElementById('wppProgressModalLabel');
-        const bar      = document.getElementById('wppModalProgressBar');
-        const pctLabel = document.getElementById('wppModalPctLabel');
-        const stageLbl = document.getElementById('wppModalStageLabel');
-        const statusEl = document.getElementById('wppModalStatusText');
-        const closeBtn = document.getElementById('wppModalCloseBtn');
-        if (header)   header.style.background = isSuccess ? '#155724' : '#721c24';
-        if (spinner)  spinner.style.display = 'none';
-        if (labelEl)  labelEl.textContent = isSuccess ? '✅ FW Parse Complete!' : '❌ FW Parse Failed';
-        if (bar) {
-            bar.classList.remove('progress-bar-striped', 'progress-bar-animated', 'bg-info');
-            bar.classList.add(isSuccess ? 'bg-success' : 'bg-danger');
-            if (isSuccess) bar.style.width = '100%';
-        }
-        if (pctLabel)  pctLabel.textContent  = isSuccess ? '100%' : '';
-        if (stageLbl)  stageLbl.textContent  = isSuccess ? 'All steps completed.' : 'An error occurred.';
-        if (statusEl)  statusEl.textContent  = statusText;
-        if (closeBtn)  closeBtn.style.display = '';
-        if (window._wppSafetyTimer) { clearTimeout(window._wppSafetyTimer); window._wppSafetyTimer = null; }
-        if (isSuccess) setTimeout(() => $('#wppProgressModal').modal('hide'), 3000);
-    }
+
 
     function handleFwAnalysisComplete(msg) {
         const pending = window.pendingFwAnalysis;
@@ -2153,7 +2176,7 @@
 
         const decoded = decodePath(fwPathEncoded);
         appendLog(`✅ FW analysis complete: ${decoded}\n`);
-        _closeFwModal(true, 'Done — output files have been generated.');
+        _closeParseModal(true, '✅ FW Parse Complete!', 'Done — output files have been generated.');
 
         // window.location.href = `${FW_RESULT_URL}?task_id=${encodeURIComponent(taskId)}`;
     }
@@ -2974,7 +2997,7 @@
 
         const decoded = decodePath(fwPathEncoded);
         appendLog(`⏹ FW analysis canceled: ${decoded}\n`, 'red');
-        _closeFwModal(false, 'Analysis was canceled.');
+        _closeParseModal(false, '❌ FW Parse Failed', 'Analysis was canceled.');
     }
 
     function handleFwAnalysisFailed(msg) {
@@ -2990,7 +3013,7 @@
 
         const decoded = decodePath(fwPathEncoded);
         appendLog(`❌ FW analysis failed: ${decoded} (${msg.error || 'unknown error'})\n`, 'red');
-        _closeFwModal(false, msg.error || 'An error occurred — please check the log above.');
+        _closeParseModal(false, '❌ FW Parse Failed', msg.error || 'An error occurred — please check the log above.');
     }
 
     function handleFwAnalysisWarning(msg) {
@@ -3075,23 +3098,23 @@
 
     </script>
 
-<!-- ===== WPP Parsing Progress Modal ===== -->
-<div class="modal fade" id="wppProgressModal" tabindex="-1" role="dialog"
-     aria-labelledby="wppProgressModalLabel" aria-hidden="true"
+<!-- ===== Parse Progress Modal (shared: WiFi WPP / BT Decode / FW Parse) ===== -->
+<div class="modal fade" id="parseProgressModal" tabindex="-1" role="dialog"
+     aria-labelledby="parseProgressModalLabel" aria-hidden="true"
      data-backdrop="static" data-keyboard="false">
   <div class="modal-dialog modal-lg modal-dialog-centered" role="document">
     <div class="modal-content" style="border-radius:10px; overflow:hidden;">
 
       <!-- Header -->
-      <div class="modal-header" id="wppModalHeader"
+      <div class="modal-header" id="parseModalHeader"
            style="background:#0b4a78; color:white; padding:12px 20px;">
         <div style="display:flex; align-items:center; gap:10px; width:100%;">
-          <span id="wppModalSpinner"
+          <span id="parseModalSpinner"
                 class="spinner-border spinner-border-sm"
                 role="status" aria-hidden="true"
                 style="flex-shrink:0;"></span>
-          <h6 class="modal-title mb-0" id="wppProgressModalLabel" style="font-size:1rem;">
-            🛠️ WPP Parsing in Progress...
+          <h6 class="modal-title mb-0" id="parseProgressModalLabel" style="font-size:1rem;">
+            🛠️ Parsing in Progress...
           </h6>
         </div>
       </div>
@@ -3099,11 +3122,11 @@
       <!-- Stage label + progress bar -->
       <div style="background:#1a3a5c; padding:6px 16px 4px;">
         <div style="display:flex; justify-content:space-between; align-items:center; margin-bottom:4px;">
-          <small id="wppModalStageLabel" style="color:#a8d4f5; font-size:0.75rem;">Waiting to start...</small>
-          <small id="wppModalPctLabel"  style="color:#a8d4f5; font-size:0.75rem;">0%</small>
+          <small id="parseModalStageLabel" style="color:#a8d4f5; font-size:0.75rem;">Waiting to start...</small>
+          <small id="parseModalPctLabel"  style="color:#a8d4f5; font-size:0.75rem;">0%</small>
         </div>
         <div class="progress" style="height:8px; border-radius:4px; background:#0b2d4a;">
-          <div id="wppModalProgressBar"
+          <div id="parseModalProgressBar"
                class="progress-bar progress-bar-striped progress-bar-animated bg-info"
                role="progressbar"
                style="width:0%; transition:width 0.5s ease;"></div>
@@ -3112,7 +3135,7 @@
 
       <!-- Log area -->
       <div class="modal-body" style="padding:12px 16px; background:#1e1e1e;">
-        <pre id="wppModalLog"
+        <pre id="parseModalLog"
              style="color:#d4d4d4; font-size:0.78rem; height:340px;
                     overflow-y:scroll; margin:0; white-space:pre-wrap;
                     word-break:break-all; font-family:'Consolas','Courier New',monospace;
@@ -3122,10 +3145,10 @@
 
       <!-- Footer -->
       <div class="modal-footer" style="padding:8px 16px; background:#f8f9fa; justify-content:space-between; align-items:center;">
-        <small id="wppModalStatusText" class="text-muted">Waiting for output...</small>
+        <small id="parseModalStatusText" class="text-muted">Waiting for output...</small>
         <button type="button" class="btn btn-sm btn-secondary"
-                id="wppModalCloseBtn"
-                onclick="$('#wppProgressModal').modal('hide')"
+                id="parseModalCloseBtn"
+                onclick="$('#parseProgressModal').modal('hide')"
                 style="display:none;">
           Close
         </button>
@@ -3134,7 +3157,7 @@
     </div>
   </div>
 </div>
-<!-- ===== /WPP Parsing Progress Modal ===== -->
+<!-- ===== /Parse Progress Modal ===== -->
 
 </body>
 </html>

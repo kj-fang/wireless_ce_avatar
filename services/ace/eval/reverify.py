@@ -55,15 +55,48 @@ def _is_local_case(case_nbr: str) -> bool:
     return (not cn) or cn.startswith("local_")
 
 
+def _parse_iso_ts(value: str) -> Optional[datetime]:
+    if not value:
+        return None
+    text = str(value).strip()
+    if not text:
+        return None
+    try:
+        return datetime.fromisoformat(text.replace("Z", "+00:00"))
+    except Exception:
+        return None
+
+
+def _feedback_ts_suffix(value: str) -> str:
+    dt = _parse_iso_ts(value)
+    if dt is None:
+        return "unknown-time"
+    return dt.strftime("%Y%m%d_%H%M%S")
+
+
+def _feedback_ts_label(value: str) -> str:
+    dt = _parse_iso_ts(value)
+    if dt is None:
+        return "unknown time"
+    return dt.strftime("%Y-%m-%d %H:%M:%S")
+
+
 def _case_title(entry: dict) -> str:
     case_nbr = str(entry.get("case_nbr") or "").strip()
+    ts_label = _feedback_ts_label(str(entry.get("feedback_ts") or ""))
     if _is_local_case(case_nbr):
-        return f"Local upload ({entry.get('log_path') or 'unknown log'})"
-    return case_nbr
+        return f"Local upload ({entry.get('log_path') or 'unknown log'}) [{ts_label}]"
+    base = case_nbr or "unknown case"
+    return f"{base} [{ts_label}]"
 
 
 def _safe_email_filename(email: str) -> str:
     return re.sub(r"[^A-Za-z0-9_.-]+", "_", email).strip("._-") or "user"
+
+
+def _safe_filename_stem(value: str, *, fallback: str = "case") -> str:
+    safe = re.sub(r"[^A-Za-z0-9_.-]+", "_", (value or "").strip()).strip("._-")
+    return safe or fallback
 
 
 # ---------------------------------------------------------------------------
@@ -147,6 +180,19 @@ def build_downvote_manifest(
         fb = turn.get("feedback") or {}
         if fb.get("vote") != -1:
             continue
+        # Use schema-defined timestamps only, in priority order:
+        # 1) feedback.details.ts  (detail-submit event time)
+        # 2) feedback.ts          (vote event time)
+        # 3) turn.ts              (turn creation time)
+        # Stored as `feedback_ts` in the manifest as an internal derived field.
+        details = fb.get("details") or {}
+        feedback_ts = ""
+        if isinstance(details, dict):
+            feedback_ts = str(details.get("ts") or "")
+        if not feedback_ts:
+            feedback_ts = str(fb.get("ts") or "")
+        if not feedback_ts:
+            feedback_ts = str(turn.get("ts") or "")
 
         email = _norm_email(snap.get("submitted_by_email"))
         issue = snap.get("issue") or {}
@@ -162,6 +208,7 @@ def build_downvote_manifest(
             "log_path": log_path,
             "issue": issue,
             "user_message": turn.get("user_message") or "",
+            "feedback_ts": feedback_ts,
             "feedback_detail": _feedback_detail_text(fb),
             "has_log": bool(attached),
             "attached_log_path": attached,
@@ -255,6 +302,7 @@ def _build_section(entry: dict, *, max_steps: int) -> dict:
     section = {
         "title": _case_title(entry),
         "domain": domain,
+        "feedback_ts": entry.get("feedback_ts") or "",
         "feedback_detail": entry.get("feedback_detail") or "",
         "reanswered": False,
         "note": "",
@@ -360,20 +408,40 @@ def reverify_and_notify(
         replay_sections = [s for s in sections if s.get("reanswered")]
         no_log_case_count = sum(1 for s in sections if not s.get("reanswered"))
         cases = [{"title": s["title"], "domain": s["domain"],
-                  "reanswered": s["reanswered"]} for s in sections]
+                  "reanswered": s["reanswered"], "attachment_name": None}
+                 for s in sections]
         has_attachment = bool(replay_sections)
-        html = ""
         safe = _safe_email_filename(display)
-        html_path = None
-        attachment_name = None
+        attachment_names: list[str] = []
         attachments = None
         if has_attachment:
-            html = replay_html.render_replay_html(person_email=display, sections=replay_sections)
-            html_path = out_dir / f"{safe}.html"
-            html_path.write_text(html, encoding="utf-8")
-            written += 1
-            attachment_name = f"agent_reanswer_{safe}.html"
-            attachments = [(attachment_name, html.encode("utf-8"), "html")]
+            attachments = []
+            used_names: set[str] = set()
+            case_idx = 0
+            for i, section in enumerate(sections):
+                if not section.get("reanswered"):
+                    continue
+                case_idx += 1
+                html = replay_html.render_replay_html(
+                    person_email=display,
+                    sections=[section],
+                )
+                ts_suffix = _feedback_ts_suffix(str(section.get("feedback_ts") or ""))
+                stem = _safe_filename_stem(str(section.get("title") or ""), fallback=f"case_{case_idx}")
+                base_name = f"agent_reanswer_{safe}_{stem}_{ts_suffix}.html"
+                attachment_name = base_name
+                if attachment_name in used_names:
+                    attachment_name = (
+                        f"agent_reanswer_{safe}_{stem}_{ts_suffix}_{case_idx}.html"
+                    )
+                used_names.add(attachment_name)
+
+                html_path = out_dir / attachment_name
+                html_path.write_text(html, encoding="utf-8")
+                written += 1
+                attachments.append((attachment_name, html.encode("utf-8"), "html"))
+                attachment_names.append(attachment_name)
+                cases[i]["attachment_name"] = attachment_name
 
         namespace_changes = [
             {"namespace": ns, "changes": ns_changes.get(ns, [])}
@@ -383,7 +451,7 @@ def reverify_and_notify(
             person_email=display,
             cases=cases,
             namespace_changes=namespace_changes,
-            attachment_name=attachment_name,
+            attachment_names=attachment_names,
             has_attachment=has_attachment,
             no_log_case_count=no_log_case_count,
         )
@@ -397,7 +465,7 @@ def reverify_and_notify(
         if dry_run:
             if has_attachment:
                 print(f"[reverify] DRY-RUN would email {to_list} — {len(sections)} case(s); "
-                      f"HTML: {html_path}")
+                      f"attachments: {len(attachment_names)}")
             else:
                 print(f"[reverify] DRY-RUN would email {to_list} — {len(sections)} case(s); "
                       "no replay attachment (no attached logs).")

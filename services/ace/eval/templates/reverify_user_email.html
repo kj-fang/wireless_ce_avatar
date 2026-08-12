@@ -8,11 +8,19 @@
         <tr>
           <th style="padding:8px 10px;border:1px solid #d9e2ec;background:#f8fafc;text-align:left;">Case</th>
           <th style="padding:8px 10px;border:1px solid #d9e2ec;background:#f8fafc;text-align:left;">Domain</th>
+          <th style="padding:8px 10px;border:1px solid #d9e2ec;background:#f8fafc;text-align:left;">Replay Attachment</th>
         </tr>
         {% for c in cases %}
         <tr>
           <td style="padding:8px 10px;border:1px solid #d9e2ec;vertical-align:top;">{{ c.title }}</td>
           <td style="padding:8px 10px;border:1px solid #d9e2ec;vertical-align:top;">{{ 'BT' if c.domain == 'bt' else 'Wi-Fi' }}</td>
+          <td style="padding:8px 10px;border:1px solid #d9e2ec;vertical-align:top;">
+            {% if c.attachment_name %}
+            <strong>{{ c.attachment_name }}</strong>
+            {% else %}
+            N/A (no attached log)
+            {% endif %}
+          </td>
         </tr>
         {% endfor %}
       </table>
@@ -22,9 +30,18 @@
         <p style="margin:0 0 6px 0;">
           Reverify is complete for your feedback case(s).
         </p>
+        {% if attachment_names|length == 1 %}
         <p style="margin:0;">
-          Please open <strong>{{ attachment_name }}</strong> to review the updated re-analysis result.
+          Please open <strong>{{ attachment_names[0] }}</strong> to review the updated re-analysis result.
         </p>
+        {% else %}
+        <p style="margin:0 0 6px 0;">Replay attachments are included per case:</p>
+        <ul style="margin:0;padding-left:18px;">
+          {% for name in attachment_names %}
+          <li><strong>{{ name }}</strong></li>
+          {% endfor %}
+        </ul>
+        {% endif %}
         {% else %}
         <p style="margin:0 0 6px 0;">
           No replay attachment is included for this email.

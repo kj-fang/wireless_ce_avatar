@@ -265,7 +265,13 @@ def send_test_from_env(
     return True
 
 
-def notify_from_env(*, namespace: str, review_report: dict, triage_report: dict | None) -> bool:
+def notify_from_env(
+    *,
+    namespace: str,
+    review_report: dict,
+    triage_report: dict | None,
+    killer_report: dict | None = None,
+) -> bool:
     """
     Send review/triage notification using module recipients + env SMTP.
 
@@ -281,6 +287,7 @@ def notify_from_env(*, namespace: str, review_report: dict, triage_report: dict 
         namespace=namespace,
         review_report=review_report,
         triage_report=triage_report,
+        killer_report=killer_report,
     )
     smtp_send_html(
         subject=subject,

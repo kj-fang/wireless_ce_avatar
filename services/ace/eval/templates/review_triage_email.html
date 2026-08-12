@@ -12,19 +12,26 @@
       <h3 style="margin:20px 0 8px 0;">Feedback Submitters Used In This Run</h3>
       <table style="border-collapse:collapse;font-size:13px;min-width:420px;">
         <tr>
+          <th style="padding:8px 10px;border:1px solid #d9e2ec;background:#f8fafc;text-align:left;">Submitter</th>
           <th style="padding:8px 10px;border:1px solid #d9e2ec;background:#f8fafc;text-align:left;">Count</th>
-          <th style="padding:8px 10px;border:1px solid #d9e2ec;background:#f8fafc;text-align:left;">Submitters</th>
         </tr>
+        {% if feedback_submitter_rows %}
+        {% for row in feedback_submitter_rows %}
         <tr>
-          <td style="padding:8px 10px;border:1px solid #d9e2ec;vertical-align:top;">{{ feedback_submitter_count }}</td>
-          <td style="padding:8px 10px;border:1px solid #d9e2ec;vertical-align:top;">
-            {% if feedback_submitters %}
-              {{ feedback_submitters | join(', ') }}
-            {% else %}
-              (none)
-            {% endif %}
-          </td>
+          <td style="padding:8px 10px;border:1px solid #d9e2ec;vertical-align:top;">{{ row.submitter }}</td>
+          <td style="padding:8px 10px;border:1px solid #d9e2ec;vertical-align:top;text-align:right;">{{ row.count }}</td>
         </tr>
+        {% endfor %}
+        <tr>
+          <td style="padding:8px 10px;border:1px solid #d9e2ec;vertical-align:top;font-weight:700;background:#f8fafc;">Total</td>
+          <td style="padding:8px 10px;border:1px solid #d9e2ec;vertical-align:top;text-align:right;font-weight:700;background:#f8fafc;">{{ feedback_submitter_total }}</td>
+        </tr>
+        {% else %}
+        <tr>
+          <td style="padding:8px 10px;border:1px solid #d9e2ec;vertical-align:top;">(none)</td>
+          <td style="padding:8px 10px;border:1px solid #d9e2ec;vertical-align:top;text-align:right;">0</td>
+        </tr>
+        {% endif %}
       </table>
 
       {% if has_triage %}
@@ -87,26 +94,44 @@
       </div>
       {% endif %}
 
+      {% if show_killer_section %}
+      <h3 style="margin:20px 0 8px 0;">Why Eval Failed (Corrupted Bullet Owner Trace)</h3>
+      <table style="border-collapse:collapse;width:100%;font-size:13px;">
+        <tr>
+          <th style="padding:8px 10px;border:1px solid #d9e2ec;background:#f8fafc;text-align:left;">Bullet ID</th>
+          <th style="padding:8px 10px;border:1px solid #d9e2ec;background:#f8fafc;text-align:left;">Culprit Submitter</th>
+          <th style="padding:8px 10px;border:1px solid #d9e2ec;background:#f8fafc;text-align:left;">Status</th>
+          <th style="padding:8px 10px;border:1px solid #d9e2ec;background:#f8fafc;text-align:right;">Confidence</th>
+        </tr>
+        {% if killer_rows %}
+        {% for row in killer_rows %}
+        <tr>
+          <td style="padding:8px 10px;border:1px solid #d9e2ec;vertical-align:top;">{{ row.bullet_id }}</td>
+          <td style="padding:8px 10px;border:1px solid #d9e2ec;vertical-align:top;">{{ row.culprit }}</td>
+          <td style="padding:8px 10px;border:1px solid #d9e2ec;vertical-align:top;color:#b42318;font-weight:700;">{{ row.status }}</td>
+          <td style="padding:8px 10px;border:1px solid #d9e2ec;vertical-align:top;text-align:right;color:#b42318;font-weight:700;">{{ row.confidence }}</td>
+        </tr>
+        {% endfor %}
+        {% else %}
+        <tr>
+          <td colspan="4" style="padding:8px 10px;border:1px solid #d9e2ec;vertical-align:top;">No culprit trace rows were generated.</td>
+        </tr>
+        {% endif %}
+      </table>
+      {% endif %}
+
       <h3 style="margin:20px 0 8px 0;">Playbook Bullet Changes (Before -&gt; After)</h3>
       <table style="border-collapse:collapse;width:100%;font-size:13px;">
         <tr>
           <th style="padding:8px 10px;border:1px solid #d9e2ec;background:#f8fafc;text-align:left;">Bullet ID</th>
           <th style="padding:8px 10px;border:1px solid #d9e2ec;background:#f8fafc;text-align:left;">Change</th>
           <th style="padding:8px 10px;border:1px solid #d9e2ec;background:#f8fafc;text-align:left;">Playbook</th>
-          <th style="padding:8px 10px;border:1px solid #d9e2ec;background:#f8fafc;text-align:left;">Before</th>
-          <th style="padding:8px 10px;border:1px solid #d9e2ec;background:#f8fafc;text-align:left;">After</th>
         </tr>
         {% for row in changed_bullet_rows %}
         <tr>
           <td style="padding:8px 10px;border:1px solid #d9e2ec;vertical-align:top;">{{ row.bullet_id }}</td>
           <td style="padding:8px 10px;border:1px solid #d9e2ec;vertical-align:top;">{{ row.change_type }}</td>
           <td style="padding:8px 10px;border:1px solid #d9e2ec;vertical-align:top;">{{ row.playbook_label }}</td>
-          <td style="padding:8px 10px;border:1px solid #d9e2ec;vertical-align:top;">
-            <pre style="margin:0;white-space:pre-wrap;font-family:Consolas,monospace;font-size:12px;">{{ row.before_text }}</pre>
-          </td>
-          <td style="padding:8px 10px;border:1px solid #d9e2ec;vertical-align:top;">
-            <pre style="margin:0;white-space:pre-wrap;font-family:Consolas,monospace;font-size:12px;">{{ row.after_text }}</pre>
-          </td>
         </tr>
         {% endfor %}
       </table>

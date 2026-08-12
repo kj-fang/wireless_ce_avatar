@@ -61,7 +61,10 @@ def render_replay_html(*, person_email: str, sections: list[dict],
 
 
 def render_user_email(*, person_email: str, cases: list[dict],
-                      namespace_changes: list[dict], attachment_name: str,
+                      namespace_changes: list[dict],
+                      attachment_name: str | None = None,
+                      has_attachment: bool = True,
+                      no_log_case_count: int = 0,
                       generated_at: str | None = None) -> str:
     generated_at = generated_at or datetime.now().strftime("%Y-%m-%d %H:%M:%S")
     date = generated_at.split(" ")[0]
@@ -74,6 +77,8 @@ def render_user_email(*, person_email: str, cases: list[dict],
         date=date,
         cases=cases or [],
         attachment_name=attachment_name,
+        has_attachment=bool(has_attachment),
+        no_log_case_count=int(no_log_case_count or 0),
         changed_bullet_rows=changed_bullet_rows,
         generated_at=generated_at,
     )

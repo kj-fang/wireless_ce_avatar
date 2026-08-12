@@ -631,11 +631,21 @@ def cmd_pipeline(args):
         artifact_run_stamp=pipeline_stamp,
         artifact_runs_dir=runs_dir,
     )
-    used_submitters = sorted({
-        str(r.get("submitted_by") or "").strip()
-        for r in adapt_results
-        if r.get("status") == "ok" and str(r.get("submitted_by") or "").strip()
-    })
+    submitter_counts: dict[str, int] = {}
+    for r in adapt_results:
+        if r.get("status") != "ok":
+            continue
+        submitter = str(r.get("submitted_by") or "").strip()
+        if not submitter:
+            continue
+        submitter_counts[submitter] = submitter_counts.get(submitter, 0) + 1
+
+    used_submitter_rows = [
+        {"submitter": name, "count": cnt}
+        for name, cnt in sorted(submitter_counts.items(), key=lambda kv: (-kv[1], kv[0].lower()))
+    ]
+    used_submitters = [row["submitter"] for row in used_submitter_rows]
+    used_submitter_total = sum(row["count"] for row in used_submitter_rows)
 
     # Collect vote==-1 cases from this adapt batch now (adapt phase). The
     # re-answer + per-user email is deferred until AFTER review PASSes; the
@@ -712,12 +722,13 @@ def cmd_pipeline(args):
     # trace the offending feedback turn. Runs BEFORE triage so we read the
     # still-corrupted live bullet (with post-corruption updated_at /
     # source_turn_ids) rather than the post-triage state.
+    killer_report = None
     from .eval import find_the_killer as eval_killer
     if not getattr(args, "no_find_killer", False) and \
             eval_killer._extract_corrupted_bullets(rreport):
         print("[pipeline] ===== STEP 4: find the killer =====")
         try:
-            eval_killer.process(
+            killer_report = eval_killer.process(
                 review_path,
                 namespace=args.namespace,
                 model=args.model,
@@ -755,6 +766,8 @@ def cmd_pipeline(args):
         bullets_before,
         bullets_after,
     )
+    rreport["_feedback_submitter_rows"] = used_submitter_rows
+    rreport["_feedback_submitter_total"] = used_submitter_total
     rreport["_feedback_submitters"] = used_submitters
 
     # 7. Notification (optional) — sent when notify_email recipient list is set.
@@ -765,6 +778,7 @@ def cmd_pipeline(args):
             namespace=args.namespace,
             review_report=rreport,
             triage_report=triage_report,
+            killer_report=killer_report,
         ):
             print("[pipeline] notification email sent.")
         else:

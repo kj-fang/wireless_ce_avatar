@@ -357,24 +357,35 @@ def reverify_and_notify(
     for key, bundle in people.items():
         sections = bundle["sections"]
         display = bundle["display"]
+        replay_sections = [s for s in sections if s.get("reanswered")]
+        no_log_case_count = sum(1 for s in sections if not s.get("reanswered"))
         cases = [{"title": s["title"], "domain": s["domain"],
                   "reanswered": s["reanswered"]} for s in sections]
-        html = replay_html.render_replay_html(person_email=display, sections=sections)
+        has_attachment = bool(replay_sections)
+        html = ""
         safe = _safe_email_filename(display)
-        html_path = out_dir / f"{safe}.html"
-        html_path.write_text(html, encoding="utf-8")
-        written += 1
+        html_path = None
+        attachment_name = None
+        attachments = None
+        if has_attachment:
+            html = replay_html.render_replay_html(person_email=display, sections=replay_sections)
+            html_path = out_dir / f"{safe}.html"
+            html_path.write_text(html, encoding="utf-8")
+            written += 1
+            attachment_name = f"agent_reanswer_{safe}.html"
+            attachments = [(attachment_name, html.encode("utf-8"), "html")]
 
         namespace_changes = [
             {"namespace": ns, "changes": ns_changes.get(ns, [])}
             for ns in sorted(bundle["namespaces"])
         ]
-        attachment_name = f"agent_reanswer_{safe}.html"
         body = replay_html.render_user_email(
             person_email=display,
             cases=cases,
             namespace_changes=namespace_changes,
             attachment_name=attachment_name,
+            has_attachment=has_attachment,
+            no_log_case_count=no_log_case_count,
         )
         subject = f"Avatar Feedback Reverify - {datetime.now().strftime('%Y-%m-%d')} ({len(sections)} case)"
         to_list = (list(REVERIFY_REDIRECT_TO) if REVERIFY_REDIRECT_TO
@@ -384,18 +395,25 @@ def reverify_and_notify(
             continue
 
         if dry_run:
-            print(f"[reverify] DRY-RUN would email {to_list} — {len(sections)} case(s); "
-                  f"HTML: {html_path}")
+            if has_attachment:
+                print(f"[reverify] DRY-RUN would email {to_list} — {len(sections)} case(s); "
+                      f"HTML: {html_path}")
+            else:
+                print(f"[reverify] DRY-RUN would email {to_list} — {len(sections)} case(s); "
+                      "no replay attachment (no attached logs).")
             continue
         try:
             notify_email.send_html_to(
                 to_list=to_list,
                 subject=subject,
                 html_body=body,
-                attachments=[(attachment_name, html.encode("utf-8"), "html")],
+                attachments=attachments,
             )
             sent += 1
-            print(f"[reverify] emailed {to_list} — {len(sections)} case(s)")
+            if has_attachment:
+                print(f"[reverify] emailed {to_list} — {len(sections)} case(s) with replay attachment")
+            else:
+                print(f"[reverify] emailed {to_list} — {len(sections)} case(s), no replay attachment")
         except Exception as e:
             print(f"[reverify] email FAILED for {to_list}: {e}")
 

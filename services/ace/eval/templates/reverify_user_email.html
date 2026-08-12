@@ -18,46 +18,25 @@
       </table>
 
       <div style="margin-top:12px;border:1px solid #d9e2ec;border-radius:8px;padding:12px;background:#f8fafc;">
-        <p style="margin:0 0 8px 0;">
-          The attached file <strong>{{ attachment_name }}</strong> shows the Agent re-analyzing the same case you gave
-          feedback on, using the <strong>updated playbooks</strong> — the full reasoning process
-          and its conclusion.
+        {% if has_attachment %}
+        <p style="margin:0 0 6px 0;">
+          Reverify is complete for your feedback case(s).
         </p>
         <p style="margin:0;">
-          Please open the attachment to review and confirm whether your feedback made the analysis
-          of this case more precise.
+          Please open <strong>{{ attachment_name }}</strong> to review the updated re-analysis result.
         </p>
+        {% else %}
+        <p style="margin:0 0 6px 0;">
+          No replay attachment is included for this email.
+        </p>
+        <p style="margin:0;">
+          The feedback case(s) were submitted without an attached log, so the server could not re-run the analysis.
+          {% if no_log_case_count > 0 %}
+          Affected case count: <strong>{{ no_log_case_count }}</strong>.
+          {% endif %}
+        </p>
+        {% endif %}
       </div>
-
-      <h3 style="margin:20px 0 8px 0;">Playbook Bullet Changes (Before -&gt; After)</h3>
-      {% if changed_bullet_rows %}
-      <table style="border-collapse:collapse;width:100%;font-size:13px;">
-        <tr>
-          <th style="padding:8px 10px;border:1px solid #d9e2ec;background:#f8fafc;text-align:left;">Bullet ID</th>
-          <th style="padding:8px 10px;border:1px solid #d9e2ec;background:#f8fafc;text-align:left;">Change</th>
-          <th style="padding:8px 10px;border:1px solid #d9e2ec;background:#f8fafc;text-align:left;">Playbook</th>
-          <th style="padding:8px 10px;border:1px solid #d9e2ec;background:#f8fafc;text-align:left;">Before</th>
-          <th style="padding:8px 10px;border:1px solid #d9e2ec;background:#f8fafc;text-align:left;">After</th>
-        </tr>
-        {% for row in changed_bullet_rows %}
-        <tr>
-          <td style="padding:8px 10px;border:1px solid #d9e2ec;vertical-align:top;">{{ row.bullet_id }}</td>
-          <td style="padding:8px 10px;border:1px solid #d9e2ec;vertical-align:top;">{{ row.change_type }}</td>
-          <td style="padding:8px 10px;border:1px solid #d9e2ec;vertical-align:top;">{{ row.playbook_label }}</td>
-          <td style="padding:8px 10px;border:1px solid #d9e2ec;vertical-align:top;">
-            <pre style="margin:0;white-space:pre-wrap;font-family:Consolas,monospace;font-size:12px;">{{ row.before_text }}</pre>
-          </td>
-          <td style="padding:8px 10px;border:1px solid #d9e2ec;vertical-align:top;">
-            <pre style="margin:0;white-space:pre-wrap;font-family:Consolas,monospace;font-size:12px;">{{ row.after_text }}</pre>
-          </td>
-        </tr>
-        {% endfor %}
-      </table>
-      {% else %}
-      <div style="border:1px solid #d9e2ec;border-radius:8px;padding:12px;background:#f8fafc;">
-        <strong>No playbook bullet changes were recorded for this run.</strong>
-      </div>
-      {% endif %}
 
       <p style="margin-top:18px;color:#64748b;font-size:12px;">
         This is an automatically generated email from ACE eval pipeline.

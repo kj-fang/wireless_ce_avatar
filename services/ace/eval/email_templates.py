@@ -29,6 +29,7 @@ def build_review_triage_email(
     namespace: str,
     review_report: dict,
     triage_report: dict | None,
+    killer_report: dict | None = None,
 ) -> tuple[str, str]:
     """Build (subject, html) for manager notification."""
     verdict = str(review_report.get("gate_verdict") or "UNKNOWN")
@@ -88,24 +89,59 @@ def build_review_triage_email(
             "bullet_id": str(row.get("bullet_id") or "?"),
             "change_type": str(row.get("change_type") or "updated"),
             "playbook_label": str(row.get("playbook_label") or "-"),
-            "before_text": str(row.get("before_text") or "(none)"),
-            "after_text": str(row.get("after_text") or "(none)"),
         })
     if not changed_bullet_rows:
         changed_bullet_rows = [{
             "bullet_id": "(none)",
             "change_type": "none",
-            "playbook_label": "-",
-            "before_text": "(none)",
-            "after_text": "(none)",
+            "playbook_label": "-"
         }]
 
-    feedback_submitters = [
-        str(s).strip()
-        for s in (review_report.get("_feedback_submitters") or [])
-        if str(s).strip()
+    submitter_rows = [
+        {
+            "submitter": str(row.get("submitter") or "").strip(),
+            "count": int(row.get("count") or 0),
+        }
+        for row in (review_report.get("_feedback_submitter_rows") or [])
+        if str(row.get("submitter") or "").strip()
     ]
-    feedback_submitter_count = len(feedback_submitters)
+    # Backward compatibility: older review reports only carry a submitter list.
+    if not submitter_rows:
+        submitter_rows = [
+            {"submitter": s, "count": 1}
+            for s in [
+                str(v).strip()
+                for v in (review_report.get("_feedback_submitters") or [])
+                if str(v).strip()
+            ]
+        ]
+    feedback_submitter_total = int(
+        review_report.get("_feedback_submitter_total")
+        or sum(row["count"] for row in submitter_rows)
+    )
+
+    killer_rows: list[dict] = []
+    if verdict_upper == "FAIL":
+        for row in (killer_report or {}).get("results") or []:
+            bullet_id = str(row.get("bullet_id") or "?")
+            verdict_obj = row.get("verdict") or {}
+            status = str(verdict_obj.get("status") or "unknown")
+            main = verdict_obj.get("main_suspect") if isinstance(verdict_obj.get("main_suspect"), dict) else {}
+            culprit = str((main or {}).get("submitted_by") or "").strip() or "(unknown)"
+            conf_raw = (main or {}).get("confidence")
+            try:
+                confidence = f"{float(conf_raw):.3f}"
+            except (TypeError, ValueError):
+                confidence = "-"
+            killer_rows.append(
+                {
+                    "bullet_id": bullet_id,
+                    "culprit": culprit,
+                    "status": status,
+                    "confidence": confidence,
+                }
+            )
+        killer_rows.sort(key=lambda r: r["bullet_id"])
 
     subject = (
         f"[ACE {namespace}] Review {verdict_upper} | "
@@ -129,7 +165,9 @@ def build_review_triage_email(
         detail_rows=detail_rows,
         has_triage=has_triage,
         changed_bullet_rows=changed_bullet_rows,
-        feedback_submitters=feedback_submitters,
-        feedback_submitter_count=feedback_submitter_count,
+        feedback_submitter_rows=submitter_rows,
+        feedback_submitter_total=feedback_submitter_total,
+        show_killer_section=(verdict_upper == "FAIL"),
+        killer_rows=killer_rows,
     )
     return subject, html

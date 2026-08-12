@@ -612,6 +612,7 @@ def bt_decode_via_cli(
     etl_txt_timeout: int = 180,
     hci_txt_timeout: int = 15,
     skip_non_target: bool = True,
+    emit_callback=None,
 ) -> str | None:
     """
     Decode an ETL folder via CLI (ibtdrvlogparser_cli.exe) without any GUI automation.
@@ -638,6 +639,7 @@ def bt_decode_via_cli(
         str path to the generated .hci.txt, or None on failure / timeout.
     """
     print(f"📂 bt_decode_via_cli: {log_path}")
+    if emit_callback: emit_callback("📂 Starting BT decode...")
 
     # Skip decode if a complete set of output files already exists.
     existing = find_ready_hci(log_path)
@@ -646,6 +648,7 @@ def bt_decode_via_cli(
         txt_pcap = log_path + ".txt.pcap"
         if os.path.exists(txt_cfa) and os.path.exists(txt_pcap):
             print(f"✅ HCI log already exists and decode is complete, skipping: {existing}")
+            if emit_callback: emit_callback("✅ HCI log already exists — skipping decode")
             return existing
         print(f"⚠️ HCI log exists but sidecar files missing; re-decoding: {existing}")
 
@@ -679,6 +682,7 @@ def bt_decode_via_cli(
                 f"📐 Splitting {os.path.basename(etl_path)} into {split_count} parts "
                 f"(size={etl_size / (1024 * 1024):.1f} MB)"
             )
+            if emit_callback: emit_callback(f"📐 Splitting large ETL file ({etl_size / (1024 * 1024):.0f} MB)...")
             split_cmd = [cli_exe, "split", etl_path, "-n", str(split_count)]
             split_proc = None
 
@@ -695,8 +699,9 @@ def bt_decode_via_cli(
                 prev_parts_signature = None
                 stable_start = None
                 split_stable_seconds = 15
-                split_wait_timeout = 300
+                split_wait_timeout = 360
                 split_success = False
+                last_emitted_part_count = -1  # emit to modal only when part count changes
 
                 while time.monotonic() - split_wait_start < split_wait_timeout:
                     ret = split_proc.poll()
@@ -708,20 +713,25 @@ def bt_decode_via_cli(
                         prev_parts_signature = parts_signature
                         stable_start = time.monotonic()
                         if parts:
+                            total_mb = sum(s for _, s in parts_signature if s > 0) / (1024 * 1024)
+                            # Terminal: overwrite same line — shows size detail without flooding
                             print(
-                                f"\r⏳ Splitting in progress: {len(parts)}/{split_count} part(s), "
-                                f"sizes={[s for _, s in parts_signature]}\033[K",
+                                f"\r⏳ Splitting large ETL: {len(parts)}/{split_count} part(s), "
+                                f"{total_mb:.0f} MB written\033[K",
                                 end='', flush=True,
                             )
+                            # Modal: only emit when part count increases (not on every size change)
+                            if emit_callback and len(parts) != last_emitted_part_count:
+                                last_emitted_part_count = len(parts)
+                                emit_callback(f"⏳ Splitting large ETL: {len(parts)}/{split_count} part(s) written")
                     else:
                         if stable_start is None:
                             stable_start = time.monotonic()
                         if time.monotonic() - stable_start >= split_stable_seconds:
                             if len(parts) >= split_count:
-                                print(
-                                    f"\n✅ Split complete: {len(parts)} part(s) stable for "
-                                    f"{split_stable_seconds}s for {etl_path}"
-                                )
+                                msg = f"✅ Split complete: {len(parts)} part(s) stable for {split_stable_seconds}s"
+                                print(msg)
+                                if emit_callback: emit_callback(msg)
                                 split_success = True
                                 if split_proc.poll() is None:
                                     split_proc.kill()
@@ -729,19 +739,16 @@ def bt_decode_via_cli(
                                 break
                             elif split_proc.poll() is not None:
                                 # Process has already exited and parts are still incomplete → genuine failure
-                                print(
-                                    f"\n⚠️ Split stopped but incomplete: {len(parts)}/{split_count} "
-                                    f"part(s) stable for {split_stable_seconds}s (process exited)"
-                                )
+                                msg = f"⚠️ Split stopped but incomplete: {len(parts)}/{split_count} part(s) (process exited)"
+                                print(msg)
+                                if emit_callback: emit_callback(msg)
                                 break
                             else:
                                 # Process is still running — it may be preparing the next part;
                                 # reset stable_start and keep waiting.
-                                print(
-                                    f"\r⏳ Split parts stable for {split_stable_seconds}s but process "
-                                    f"still running ({len(parts)}/{split_count}); waiting...\033[K",
-                                    end='', flush=True,
-                                )
+                                msg = f"⏳ Splitting large ETL: {len(parts)}/{split_count} part(s), still running..."
+                                print(msg)
+                                if emit_callback: emit_callback(msg)
                                 stable_start = time.monotonic()
 
                     if ret is not None:
@@ -750,27 +757,33 @@ def bt_decode_via_cli(
                         for line in stdout_data.splitlines():
                             print(f"  [CLI] {line}")
                         if ret != 0:
-                            print(f"\n⚠️ Split CLI exited with rc={ret}: {stderr_data.strip()}")
+                            msg = f"⚠️ Split CLI exited with rc={ret}: {stderr_data.strip()}"
+                            print(msg)
+                            if emit_callback: emit_callback(msg)
                         else:
                             parts = sorted(glob.glob(os.path.join(split_dir, f"{base_name}_split*.etl")))
                             if len(parts) >= split_count:
-                                print(f"\n✅ Split completed (process exited cleanly) for: {etl_path}")
+                                msg = f"✅ Split completed (process exited cleanly)"
+                                print(msg)
+                                if emit_callback: emit_callback(msg)
                                 split_success = True
                             else:
-                                print(
-                                    f"\n⚠️ Split process exited but only "
-                                    f"{len(parts)}/{split_count} parts found"
-                                )
+                                msg = f"⚠️ Split process exited but only {len(parts)}/{split_count} parts found"
+                                print(msg)
+                                if emit_callback: emit_callback(msg)
                         break
 
                     time.sleep(2)
                 else:
-                    print(f"\n⚠️ Split timed out after {split_wait_timeout}s for: {etl_path}")
+                    msg = f"⚠️ Split timed out after {split_wait_timeout}s"
+                    print(msg)
+                    if emit_callback: emit_callback(msg)
                     if split_proc.poll() is None:
                         split_proc.kill()
                         split_proc.wait()
 
                 if split_success:
+                    if emit_callback: emit_callback("✅ Split complete")
                     _rename_split_source(etl_path)
                     selected_split = _pick_last_split_part(etl_path)
                     if selected_split:
@@ -812,6 +825,7 @@ def bt_decode_via_cli(
     # not grown for `decode_timeout` seconds; the process is then killed.
     decode_cmd = [cli_exe, "decode", log_folder_path]
     print(f"🚀 Running CLI decode: {' '.join(decode_cmd)}")
+    if emit_callback: emit_callback("🚀 Running CLI decode...")
     hci_txt_expected = candidate_hci_paths(chatbot_input_etl)[0]
     etl_txt_expected = chatbot_input_etl + ".txt"
     txt_cfa_expected = chatbot_input_etl + ".txt.cfa"
@@ -829,6 +843,7 @@ def bt_decode_via_cli(
         last_etl_txt_size = -1     # tracker for intermediate .etl.txt size
         etl_txt_idle_start = None  # timer: .etl.txt stopped changing
         no_file_start = time.monotonic()  # fallback: neither file appears
+        last_progress_emit = 0.0   # throttle: emit at most every 8 s
 
         while True:
             ret = proc.poll()
@@ -839,9 +854,11 @@ def bt_decode_via_cli(
                     print(f"  [CLI] {line}")
                 if ret != 0:
                     print(f"❌ Decode CLI failed (rc={ret}): {stderr.strip()}")
+                    if emit_callback: emit_callback(f"❌ Decode CLI failed (rc={ret})")
                     _recover_rename_etl_files()
                     return None
                 print("✅ CLI decode process completed successfully.")
+                if emit_callback: emit_callback("✅ CLI decode process completed")
                 break
 
             if os.path.exists(hci_txt_expected):
@@ -853,17 +870,23 @@ def bt_decode_via_cli(
                     last_size = current_size
                     idle_start = time.monotonic()
                     print(f"\r📝 Decoding... size={current_size} bytes\033[K", end='', flush=True)
+                    _now = time.monotonic()
+                    if emit_callback and _now - last_progress_emit >= 8:
+                        last_progress_emit = _now
+                        emit_callback(f"📝 Building HCI log: {current_size:,} bytes")
                 else:
                     if idle_start is None:
                         idle_start = time.monotonic()
                     if is_file_ready(hci_txt_expected) and os.path.exists(txt_cfa_expected) and os.path.exists(txt_pcap_expected):
                         print(f"\n✅ Detected .txt.cfa and .txt.pcap alongside .hci.txt; decode complete.")
+                        if emit_callback: emit_callback("✅ Sidecar files confirmed — decode done")
                         if proc.poll() is None:
                             proc.kill()
                             proc.wait()
                         break
                     if time.monotonic() - idle_start >= hci_txt_timeout:
                         print(f"\n⚠️ Decode idle for {hci_txt_timeout}s (file size unchanged). Killing process.")
+                        if emit_callback: emit_callback(f"❌ Decode stalled — no output change for {hci_txt_timeout}s")
                         proc.kill()
                         proc.wait()
                         _recover_rename_etl_files()
@@ -876,11 +899,16 @@ def bt_decode_via_cli(
                     last_etl_txt_size = etl_txt_size
                     etl_txt_idle_start = time.monotonic()
                     print(f"\r⏳ File .etl.txt writing... size={etl_txt_size} bytes\033[K", end='', flush=True)
+                    _now = time.monotonic()
+                    if emit_callback and _now - last_progress_emit >= 8:
+                        last_progress_emit = _now
+                        emit_callback(f"⏳ Decoding .etl.txt: {etl_txt_size:,} bytes")
                 else:
                     if etl_txt_idle_start is None:
                         etl_txt_idle_start = time.monotonic()
                     if time.monotonic() - etl_txt_idle_start >= etl_txt_timeout:
                         print(f"\n⚠️ File .etl.txt idle for {etl_txt_timeout}s, .hci.txt never appeared. Killing process.")
+                        if emit_callback: emit_callback(f"❌ Timeout: .hci.txt never appeared after {etl_txt_timeout}s")
                         proc.kill()
                         proc.wait()
                         _recover_rename_etl_files()
@@ -894,6 +922,7 @@ def bt_decode_via_cli(
                     no_file_start = time.monotonic()
                 if time.monotonic() - no_file_start >= etl_txt_timeout:
                     print(f"\n⚠️ Neither .etl.txt nor .hci.txt appeared after {etl_txt_timeout}s. Killing process.")
+                    if emit_callback: emit_callback(f"❌ Timeout: no output files appeared after {etl_txt_timeout}s")
                     proc.kill()
                     proc.wait()
                     _recover_rename_etl_files()

@@ -326,6 +326,7 @@ def fw_bt_analysis(fw_path, use_cli=True, cancel_event: Event | None = None, on_
             def _drain_stdout():
                 for line in result_proc.stdout:
                     _stdout_lines.append(line)
+                    _log(line.rstrip())  # Forward stdout lines to frontend in real-time
             _drain_thread = Thread(target=_drain_stdout, daemon=True)
             _drain_thread.start()
 

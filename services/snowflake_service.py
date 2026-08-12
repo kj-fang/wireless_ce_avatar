@@ -35,6 +35,7 @@ def _get_connection(passwd):
                 role="ROLE_CDA_SALES_SUPPORT_PREMIER_ANALYSIS_READER",
                 account="XD14286-ECDWPROD",
                 warehouse="WH_SMG_CONSUMPTION",
+                host="xd14286-ecdw.privatelink.snowflakecomputing.com",
                 database="SALES_MARKETING",
                 insecure_mode=True,  # skip OCSP checks — ocsp.digicert.com unreachable on this network
             )

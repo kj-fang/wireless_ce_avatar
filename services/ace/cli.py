@@ -341,11 +341,38 @@ def _run_adapt_batch(
         feedback_prefix=_feedback_prefix(args.namespace),
         exclude_users=args.exclude_user or None,
     )
-    results = runner.run_batch(
-        since=args.since,
-        max_turns=args.limit,
-        run_source=f"cli-adapt-{args.namespace}",
-    )
+    pinned_convs = getattr(args, "conversation", None) or []
+    if pinned_convs:
+        # Cursor-safe: use run_one per conversation so the batch cursor is not
+        # advanced and nightly runs still process these conversations normally.
+        print(f"[ace.cli] --conversation filter: {pinned_convs}")
+        results = []
+        prefix = _feedback_prefix(args.namespace)
+        for cid in pinned_convs:
+            snap_path = feedback_root / "conversations" / f"{prefix}{cid}.json"
+            if not snap_path.exists():
+                print(f"[ace.cli] snapshot not found, skipping: {snap_path}")
+                results.append({"status": "no_snapshot", "conversation_id": cid})
+                continue
+            try:
+                snap = json.loads(snap_path.read_text(encoding="utf-8"))
+            except Exception as e:
+                results.append({"status": "snapshot_read_error", "conversation_id": cid, "error": str(e)})
+                continue
+            turn_ids = [t.get("turn_id") for t in snap.get("turns", [])
+                        if t.get("turn_id") and t.get("feedback")]
+            if not turn_ids:
+                print(f"[ace.cli] no feedback turns in {cid}, skipping")
+                results.append({"status": "no_feedback_turns", "conversation_id": cid})
+                continue
+            for tid in turn_ids:
+                results.append(runner.run_one(cid, tid, run_source=f"cli-adapt-pinned-{args.namespace}"))
+    else:
+        results = runner.run_batch(
+            since=args.since,
+            max_turns=args.limit,
+            run_source=f"cli-adapt-{args.namespace}",
+        )
     summary = {
         "processed": len(results),
         "ok": sum(1 for r in results if r.get("status") == "ok"),
@@ -834,6 +861,8 @@ def main(argv=None):
     p_adapt.add_argument("--limit", type=int, default=None, help="Stop after N turns")
     p_adapt.add_argument("--model", default=None, help="Override model id")
     p_adapt.add_argument("--verbose", action="store_true")
+    p_adapt.add_argument("--conversation", action="append", metavar="CID",
+                         help="Only adapt this conversation id (repeatable); cursor is NOT advanced")
     p_adapt.add_argument("--push", action="store_true",
                          help="After adapting, mirror-sync local playbooks + history to the cloud share")
     p_adapt.set_defaults(func=cmd_adapt)
@@ -886,6 +915,8 @@ def main(argv=None):
     p_pipe.add_argument("--exclude-user", action="append", metavar="SUBMITTER",
                         help="Ignore feedback from this submitter (repeatable, case-insensitive)")
     p_pipe.add_argument("--model", default=None, help="Override LLM model id")
+    p_pipe.add_argument("--conversation", action="append", metavar="CID",
+                        help="Only adapt this conversation id (repeatable); cursor is NOT advanced")
     p_pipe.add_argument("--push", action="store_true",
                         help="After adapting, mirror-sync playbooks + history to the cloud share")
     p_pipe.add_argument("--verbose", action="store_true")

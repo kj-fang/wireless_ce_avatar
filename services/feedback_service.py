@@ -23,7 +23,6 @@ import getpass
 import json
 import os
 import re
-import subprocess
 import threading
 from datetime import datetime
 from pathlib import Path
@@ -130,21 +129,11 @@ def _current_user_email() -> str:
         if e:
             return e
 
-    # Windows fallback: UPN is usually user@domain and good enough as email.
+    # Windows fallback: reuse shared helper that wraps `whoami /upn`.
     try:
-        proc = subprocess.run(
-            ["whoami", "/upn"],
-            capture_output=True,
-            text=True,
-            check=False,
-            timeout=2,
-        )
-        if proc.returncode == 0:
-            lines = (proc.stdout or "").splitlines()
-            if lines:
-                e = _normalize_email(lines[0])
-                if e:
-                    return e
+        e = _normalize_email(helpers.detect_user_email())
+        if e:
+            return e
     except Exception:
         pass
     return ""

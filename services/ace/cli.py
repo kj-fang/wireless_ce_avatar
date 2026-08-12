@@ -19,8 +19,12 @@ push deferred until the regression review PASSes:
 
     python -m services.ace.cli run-all --exclude-user "yuanyuan" --push --verbose
     # exit code 0 = review PASS, 2 = regression (nothing published)
-    # --no-eval    : only adapt (skip eval + review)
-    # --no-review  : adapt + eval, skip the regression review
+    # --no-eval        : only adapt (skip eval + review)
+    # --no-review      : adapt + eval, skip the regression review
+    # --no-find-killer : skip the post-review whodunit that traces harmful
+    #                    bullets back to the offending feedback turn
+    # --no-triage      : skip the post-review auto-revert / auto-remove of
+    #                    harmful bullets
     # --namespace bt / --limit N / --passes N / --judge-model <m> also apply
 
 For an interactive web UI (pick conversations from a list, watch the
@@ -608,7 +612,7 @@ def cmd_pipeline(args):
     (eval/review). Returns 0 when the review verdict is PASS, 2 on regression.
     """
     # 1. Adapt (train). Honours --namespace / --exclude-user / etc.
-    # NOTE: push is deliberately deferred to AFTER review passes (see step 4),
+    # NOTE: push is deliberately deferred to AFTER review passes (see step 6),
     # so we suppress --push during the adapt step here. A regression (or, in the
     # future, a manager who has not yet approved) must never reach the cloud.
     from .eval import runner as eval_runner
@@ -692,14 +696,6 @@ def cmd_pipeline(args):
             return 0
         return 1
 
-    if args.no_review:
-        if want_push:
-            print(f"[pipeline] --no-review set: push deferred (no review gate) "
-                  f"({out_path}).")
-        else:
-            print(f"[pipeline] --no-review set: stopping after eval ({out_path}).")
-        return 0
-
     # 3. Review — regression check of this eval vs the previous one in runs/.
     print("[pipeline] ===== STEP 3/3: review =====")
     from .eval import review as eval_review
@@ -707,14 +703,34 @@ def cmd_pipeline(args):
     verdict = rreport.get("gate_verdict")
     print(f"[pipeline] review verdict: {verdict}")
 
-    # 4a. Triage — when the review FAILs, auto-fix flagged harmful bullets
+    # Path to the review_*.json review() just wrote — shared by both
+    # find-the-killer (forensics) and triage (mutation).
+    review_stamp = (rreport.get("ts_utc") or "").replace(":", "").replace("-", "")
+    review_path = Path(runs_dir) / f"review_{review_stamp}.json"
+
+    # 4. Find the killer — for every harmful+revert bullet the reviewer named,
+    # trace the offending feedback turn. Runs BEFORE triage so we read the
+    # still-corrupted live bullet (with post-corruption updated_at /
+    # source_turn_ids) rather than the post-triage state.
+    from .eval import find_the_killer as eval_killer
+    if not getattr(args, "no_find_killer", False) and \
+            eval_killer._extract_corrupted_bullets(rreport):
+        print("[pipeline] ===== STEP 4: find the killer =====")
+        try:
+            eval_killer.process(
+                review_path,
+                namespace=args.namespace,
+                model=args.model,
+            )
+        except Exception as exc:
+            print(f"[pipeline] WARN: find_the_killer failed: {exc}")
+
+    # 5. Triage — when the review FAILs, auto-fix flagged harmful bullets
     # by default (revert if snapshot exists, else remove). Use --no-triage
     # to skip this mutation step.
     triage_report = None
     if verdict != "PASS" and not getattr(args, "no_triage", False):
-        review_stamp = (rreport.get("ts_utc") or "").replace(":", "").replace("-", "")
-        review_path = Path(runs_dir) / f"review_{review_stamp}.json"
-        print("[pipeline] ===== STEP 4: corrupted-bullet triage =====")
+        print("[pipeline] ===== STEP 5: corrupted-bullet triage =====")
         from .eval import corrupted_bullet as eval_triage
         triage_report = eval_triage.process(
             review_path,
@@ -723,7 +739,7 @@ def cmd_pipeline(args):
             namespace=args.namespace,
         )
 
-    # 4. Publish — only a passing review is allowed to reach the cloud share.
+    # 6. Publish — only a passing review is allowed to reach the cloud share.
     # FUTURE: instead of pushing here, notify the manager (email) and wait for
     # an explicit approval before calling _push_now(). For now push runs
     # automatically on PASS when --push was requested.
@@ -741,7 +757,7 @@ def cmd_pipeline(args):
     )
     rreport["_feedback_submitters"] = used_submitters
 
-    # 5. Notification (optional) — sent when notify_email recipient list is set.
+    # 7. Notification (optional) — sent when notify_email recipient list is set.
     # Uses SMTP relay/auth settings from environment variables.
     try:
         from .eval import notify_email as eval_notify
@@ -938,6 +954,12 @@ def main(argv=None):
                         help="Only adapt; skip eval + review")
     p_pipe.add_argument("--no-review", action="store_true",
                         help="Adapt + eval; skip the regression review")
+    # --- post-review forensics (runs by default when review flagged bullets) ---
+    p_pipe.add_argument("--no-find-killer", action="store_true",
+                        help="Skip the post-review whodunit that traces "
+                             "harmful+revert bullets back to the offending "
+                             "feedback turn. Default is to run when the "
+                             "review flagged any corrupted bullets.")
     # --- post-review triage (runs by default when review FAILs) ---
     p_pipe.add_argument("--no-triage", action="store_true",
                         help="Skip post-review auto-fix of harmful bullets. "

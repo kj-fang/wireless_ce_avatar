@@ -230,6 +230,44 @@ def _newest_snapshot_dir(snapshots_root: Path) -> Path | None:
     return snap_dirs[-1]
 
 
+def _newest_pre_adapt_snapshot_dir(snapshots_root: Path) -> Path | None:
+    """
+    Newest snapshot folder whose `meta.json` has `source == "pre-adapt"`.
+
+    The unqualified newest snapshot is a post-adapt copy (mirrors live),
+    so reverting to it is a no-op. Pre-adapt snapshots are the "state
+    right before this run" and are what we want as revert targets.
+
+    Walks date folders newest -> oldest, and timestamped subfolders
+    newest -> oldest within each. First `source == "pre-adapt"` wins.
+    Returns None if none exist / share is unreachable.
+    """
+    if not snapshots_root.is_dir():
+        return None
+    date_dirs = sorted(
+        [p for p in snapshots_root.iterdir() if p.is_dir()],
+        key=lambda p: p.name,
+        reverse=True,
+    )
+    for date_dir in date_dirs:
+        snap_dirs = sorted(
+            [p for p in date_dir.iterdir() if p.is_dir()],
+            key=lambda p: p.name,
+            reverse=True,
+        )
+        for snap_dir in snap_dirs:
+            meta_path = snap_dir / "meta.json"
+            if not meta_path.is_file():
+                continue
+            try:
+                meta = json.loads(meta_path.read_text(encoding="utf-8"))
+            except Exception:
+                continue
+            if isinstance(meta, dict) and meta.get("source") == "pre-adapt":
+                return snap_dir
+    return None
+
+
 def _lookup_previous_bullet(
     bullet_id: str,
     playbook_filename: str,
@@ -368,18 +406,19 @@ def process(
               f"Aborting.", file=sys.stderr)
         return {"error": "live_dir_missing"}
 
-    snapshot_dir = _newest_snapshot_dir(SNAPSHOTS_DIR)
+    snapshot_dir = _newest_pre_adapt_snapshot_dir(SNAPSHOTS_DIR)
     if snapshot_dir is None:
-        # Distinguish "share unreachable" from "share reachable but empty" —
-        # the difference matters because unreachable means auto-y would
-        # aggressively REMOVE every corrupted bullet instead of reverting.
+        # Distinguish "share unreachable" from "share reachable but no
+        # pre-adapt snapshot exists" — the difference matters because
+        # unreachable means auto-y would aggressively REMOVE every corrupted
+        # bullet instead of reverting.
         if not SNAPSHOTS_DIR.is_dir():
             print(f"[corrupted] WARN: snapshot share unreachable: "
                   f"{SNAPSHOTS_DIR} — check VPN. Every corrupted bullet "
                   f"will be treated as 'no previous version' (i.e. removed "
                   f"under --yes / -y).")
         else:
-            print(f"[corrupted] WARN: no snapshots found under "
+            print(f"[corrupted] WARN: no pre-adapt snapshot found under "
                   f"{SNAPSHOTS_DIR}. All bullets will be treated as "
                   f"'no previous version'.")
     else:

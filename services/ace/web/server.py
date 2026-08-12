@@ -613,7 +613,9 @@ class JobManager:
              eval_overrides: Optional[dict] = None,
              namespace: str = "wifi") -> None:
         started_at = time.time()
-        before_ref = self._pre_adapt_snapshot(job_id, namespace) if validate_after else None
+        # Always snapshot pre-adapt so corrupted_bullet.py has a revert target,
+        # regardless of whether validate_after was requested.
+        before_ref = self._pre_adapt_snapshot(job_id, namespace)
         if validate_after and before_ref is None:
             self._emit("adapt_progress", {
                 "job_id": job_id, "phase": "eval", "event": "warning",
@@ -860,7 +862,9 @@ class JobManager:
         started_at = time.time()
         playbooks_dir = _resolve_playbooks_dir(namespace)
         feedback_root = _resolve_feedback_root()
-        before_ref = self._pre_adapt_snapshot(job_id, namespace) if validate_after else None
+        # Always snapshot pre-adapt so corrupted_bullet.py has a revert target,
+        # regardless of whether validate_after was requested.
+        before_ref = self._pre_adapt_snapshot(job_id, namespace)
         if validate_after and before_ref is None:
             self._emit("adapt_progress", {
                 "job_id": job_id, "phase": "eval", "event": "warning",

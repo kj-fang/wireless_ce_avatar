@@ -63,10 +63,12 @@ from utils import helpers
 #         rating), and the legacy free-form `expected_outcome` /
 #         `general_comment`. None were surfaced by the current UI; readers
 #         should treat them as absent on v4+ records.
-#   v5  - Added `submitted_by_email` (best-effort UPN/email attribution) on
+#   v5  - Added feedback_event_id for joining detailed submits to Gather v6
+#         counters, plus the packaged app_version that emitted the record.
+#   v6  - Added `submitted_by_email` (best-effort UPN/email attribution) on
 #         snapshot roots and all JSONL feedback events.
 # ---------------------------------------------------------------------------
-RECORD_SCHEMA_VERSION = 5
+RECORD_SCHEMA_VERSION = 6
 
 
 # --- Storage location ----------------------------------------------------
@@ -120,16 +122,14 @@ def _current_user_email() -> str:
 
     Resolution order:
       1) Common env vars (USEREMAIL/EMAIL/MAIL/UPN)
-      2) `whoami /upn` output on Windows domain-joined machines
+      2) helpers.detect_user_email() (whoami /upn wrapper)
       3) empty string when unavailable
     """
-    # Fast path: environments that already expose a mail/UPN variable.
     for key in ("USEREMAIL", "EMAIL", "MAIL", "UPN"):
         e = _normalize_email(os.environ.get(key, ""))
         if e:
             return e
 
-    # Windows fallback: reuse shared helper that wraps `whoami /upn`.
     try:
         e = _normalize_email(helpers.detect_user_email())
         if e:

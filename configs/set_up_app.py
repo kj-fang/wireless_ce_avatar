@@ -79,7 +79,10 @@ def set_up(socketio):
     llm_helper = LLM_helper()
 
     if key_path != None:
-        llm_helper.set_up( key.gnaigpt_token, key.gnaigpt_url, key.gnaigpt_model, CLASSIFY_PATH)
+        llm_helper.set_up(
+            key.gnaigpt_token_r, key.gnaigpt_url, key.gnaigpt_model, CLASSIFY_PATH,
+            token_pool=getattr(key, "gnaigpt_tokens", None),
+        )
 
     app_config.set_llm_helper(llm_helper)
 

@@ -39,7 +39,7 @@ def _connect(passwd, use_privatelink):
     _apply_proxy_env(use_privatelink)
     kwargs = dict(
         user="SYS_ECDW_WCS_WIRELESSBUGS_DSA_PROD",
-        ******
+        password=passwd,
         role="ROLE_CDA_SALES_SUPPORT_PREMIER_ANALYSIS_READER",
         account="XD14286-ECDWPROD",
         warehouse="WH_SMG_CONSUMPTION",

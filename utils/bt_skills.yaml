@@ -1,15 +1,13 @@
-# Ref: https://resources.anthropic.com/hubfs/The-Complete-Guide-to-Building-Skill-for-Claude.pdf
 # skill features:
 #   name: skill name
 #   description: a brief description of the skill
-#   [What it does] + [When to use it] + Include specific trigger phrases. [specific tasks users might say]
 #   keywords: use "-" to represent each keyword
 #   expert_rules: use "|" to start a multi-line string
 
 Bluetooth_device_abnormal_disconnected:
   name: "Bluetooth_device_abnormal_disconnected"
   description: "Analyze any unexpected Bluetooth disconnections with possible error information. When we have Bluetooth abnormal disconnection while using LE HID, Classic headset, LE Audio headset or any accessory connected. No matter it's caused by Environment, Accessory problem, Laptop problem or user decline"
-  keywords: 
+  keywords:
     - "[CMD DEC]Disconnect"
     - "[CMD DEC]RejectConnectionReq"
     - "[CMD DEC]RejectSyncConnectionReq"
@@ -107,13 +105,11 @@ Bluetooth_device_abnormal_disconnected:
     - "Directed Advertising Timeout"
     - "Connection Terminated Due To MIC Failure"
     - "Connection Failed To Be Established"
-
   expert_rules: |
     Carefully analyze the timeline of events immediately when there is disconnection behavior. Categorize the root cause into one of the following three scenarios based on the log pattern:
     1. If there is UserConfirmationReqNegReply, UserPasskeyReqNegReply or RemoteOOBDataReqNegReply. This indicates the user did not acknowledge or accept the connection. Conclude this is a user behavior to reject the connection.
     2. Sometimes we will observe firmware error which will lead disconnection behavior. It will represent Intel Fatal Exception, Intel System Exception or Hardware Failure.
     3. In the latest disconnection log behavior, try to analyze the possible reason and timing. We will be able to utilize the problem reason and error timing, then clarify the needs through additional Bluetooth snoop or OTA log.
-
 
 BREDR_and_LE_create_Connection:
   name: "BREDR_and_LE_create_Connection"
@@ -174,7 +170,7 @@ BREDR_and_LE_create_Connection:
     - "SyncConnectionCompl"
     - "[EVT DEC]Status:               0x00 (OK)"
   expert_rules: |
-    1. Clarify the latest connection info includes CreateConnection over BREDR connection or LE_CreateConnection over LE connection. 
+    1. Clarify the latest connection info includes CreateConnection over BREDR connection or LE_CreateConnection over LE connection.
     2. In Bluetooth LE Audio connection usage, we will observe the flow with below items.
         [CMD DEC]LE_ExtendedCreateConnection
         [CMD DEC]OpCode:               0x2043
@@ -233,7 +229,6 @@ Bluetooth_device_YB_Lost:
     - "CSR_F2D_MBX_1: 0xBADBAD"
     - "[CSR_F2D_MBX_1]: 0x01BADBAD"
     - "[CSR_F2D_MBX_1]: 0x02BADBAD"
-    - "Error! Received unexpected alive interrupt"
     - "Error! DMA failed."
     - "FdoEvtDeviceReleaseHardware"
     - "BtPdoEvtDeviceReleaseHardware"
@@ -262,7 +257,6 @@ Bluetooth_device_YB_Lost:
     - "STATUS_TIMEOUT"
     - "BtPciPerformErrorRecovery"
     - "STATUS_IO_TIMEOUT"
-    - "Entering device state D3 Final"
     - "USBD_STATUS_XACT_ERROR"
     - "Failed to validate Secure Send Result event"
     - "DownloadAllFwImages failed"
@@ -273,3 +267,88 @@ Bluetooth_device_YB_Lost:
     1. If the design pass schematic review and layout review, we also need to confirm the problem is not single or specific unit. This indicates it is low risk on HW design related.
     2. We would expect proper PLDR, FLR and product reset without problem. It will guarantee the fundamental function for error recovery.
     3. Match the latest error timing and analyze the possible problem information to disclose the finding.
+
+Bluetooth_BIOS_DSM:
+  name: "Bluetooth_BIOS_DSM"
+  description: "Ensure Bluetooth BIOS, DSM, and ACPI configurations are correctly configured."
+  keywords:
+    - "CallBiosMethod"
+    - "BtCommonConfigureBiosUsingDsmMethod"
+    - "BthFdQueryBiosConfigFromMethod"
+    - "IoCallDriver"
+    - "DriverEntry"
+  expert_rules: |
+    1. CallBiosMethod failed with status 0xC0000034, BthFdQueryBiosConfigFromMethod failed with status 0xC0000034, and IoCallDriver failed with status 0xC0000034, indicating that the required DSM entries were not found. The customer BIOS does not appear to include the required Bluetooth DSM method implementation, and next action item is for the OEM/ODM BIOS team to review the Bluetooth BIOS integration.
+    2. DriverEntry log show this log have bluetooth reboot , driver entry log , which able to check platform bluetooth init config. if this log do not present DriverEntry log, it means this log do not have platform init config information.
+
+Bluetooth_PLDR:
+  name: "Bluetooth_PLDR"
+  description: "Check Platform Bluetooth PLDR , Bluetooth Error Recovery , PLDR DSM status"
+  keywords:
+    - "BtCommonQueryDevicePLDRSupport"
+    - "BtCommonConfigureBiosUsingDsmMethod"
+    - "DriverEntry"
+    - "PLDR Duration"
+    - "EvtWdfWorkitemPldrRegistryUpdate"
+    - "ibtPciUpdatePldrRegistry"
+    - "ibtPciWorkItemUpdatePldrRegistry"
+    - "BtCommonQueryAndConfigurePldrDurationValue"
+    - "UpdateBiosRecoveryType"
+    - "BtCommonCheckAndConfigurePldr"
+    - "PLDR is"
+    - "supported in this platform"
+    - "PLDR Support"
+    - "Core Reset"
+    - "product reset"
+    - "PLDR retries"
+    - "Recovery is already in progress"
+    - "Handle PLDR triggered by Wifi"
+  expert_rules: |
+    1. BthFdConfigureBiosUsingDsmMethod failed with status 0xC0000034, and iBtPciQueryAndConfigurePldrDurationValue failed with status 0xC0000034, indicating that the required PLDR DSM entries were not found. The customer BIOS does not appear to include the required Bluetooth DSM method implementation, and next action item is for the OEM/ODM BIOS team to review the Bluetooth BIOS integration.
+    2. DriverEntry log show this log have bluetooth reboot , driver entry log , which able to check platform bluetooth init config. if this log do not present DriverEntry log, it means this log do not have platform init config information.
+    3. Log show "PLDR is supported in this platform" or "BT Internal PLDR supported on this platform" means PLDR is supported.
+    4. Log show "PLDR is not supported in this platform" means PLDR is not config correctly to support bluetooth error recovery.
+    5. "Warning!! Handle PLDR triggered by Wifi" means WIFI trigger product and bluetooth is await for reload.
+    6. "Recovery is already in progress" means PLDR had been triggered by others mechanism.
+    7. "Error!! Product reset rejected" means BT PLDR had rejected by WIFI , there will be status code and reason code , reason code definition
+    IBTWLAN_RESET_REJECT_REASON_IRRELEVANT = 0,
+    IBTWLAN_RESET_REJECT_REASON_PRODUCT_RESET_NOT_SUPPORTED =1,
+    IBTWLAN_RESET_REJECT_REASON_POWER_TRANISITION =2,
+    IBTWLAN_RESET_REJECT_REASON_WIMA_NACK_RESPONSE=3,
+    IBTWLAN_RESET_REJECT_REASON_WIFI_MAX_PLDR_ATTEMPTS=4, and status code definition     IBTWLAN_RESET_STATUS_PRODUCT_RESET_STARTED = 0, IBTWLAN_RESET_STATUS_PRODUCT_RESET_REJECTED = 1,
+    8. "Error: BT SHR Failed, As this is Product reset.. no mitigation" means BT SHR (share reset) failed, and no mitigation on this case.
+
+Bluetooth_Audio:
+  name: "Bluetooth_Audio"
+  description: "Review Bluetooth Audio , Audio offload config , Discrete offload , and platform audio config correctness."
+  keywords:
+    - "DriverEntry"
+    - "audio offload"
+    - "EnableLEAudioBroadcast"
+    - "IbtPciSelectAudioInterfaceCmd"
+    - "ibtPciQueryIntelExtendedAudioOffloadFeatureSupport"
+    - "Hf offload"
+    - "A2dp Offload"
+    - "IbtpciBthFdQueryAcpiAudOffloadConfig"
+    - "AOLD"
+    - "IoCallDriver failed"
+    - "NHLT"
+    - "AUD_OFF_ACPI"
+    - "[BthFdQueryAcpiAudOffloadConfig]Method[0]"
+    - "[BthFdQueryAcpiAudOffloadConfig]Method[1]"
+    - "[BthFdQueryAcpiAudOffloadConfig]Method[2]"
+    - "DLOA"
+    - "BtFdReadUefiAudioConfig"
+  expert_rules: |
+    1. DriverEntry log show this log have bluetooth reboot , driver entry log , which able to check platform bluetooth init config. if this log do not present DriverEntry log, it means this log do not have platform init config information.
+    2. "Hf offload support is available in firmware" and "A2dp Offload support is available in firmware" only means bluetooth firmware audio offload capability available , it does not means the audio offload feature get enabled.
+    3. IoCallDriver failed with status 0xC0000034, and BthFdQueryBiosConfigFromDsmMethod failed with status 0xC0000034, indicating that the required audio offload DSM entries were not found. The customer BIOS does not appear to include the required Bluetooth DSM method implementation, and next action item is for the OEM/ODM BIOS team to review the Bluetooth BIOS integration.
+    4. "Audio offload configuration is NOT supported" , "Audio offload registry key value set to 0" , or "Audio offload configuration is NOT present" means driver was not able to enable on audio offload.
+    5. Audio NHLT BT role is 0x0 means BT offload is disable in NHLT config (NHLT_BT_OFFLOAD_DISABLED) , Audio NHLT BT role is 0x1 means NHLT BT is I2S Master Role (NHLT_BT_I2S_MASTER_ROLE) , Audio NHLT BT role is 0x2 means NHLT BT is Slave Role (NHLT_BT_I2S_SLAVE_ROLE). BT I2S role is a BIOS Config of BT role of I2S clock.
+    6. [BthFdQueryAcpiAudOffloadConfig]Method[0] and [UtilHCIDump][AUD_OFF_ACPI] 00 00 00 00 , means Revision = 0 , this information is from acpi method AOLD/DLOA.
+    7. [BthFdQueryAcpiAudOffloadConfig]Method[1] and [UtilHCIDump][AUD_OFF_ACPI] 12 00 00 00 , it means Domain Type = 0x12（Bluetooth）, this information is from acpi method AOLD/DLOA.
+    8. [BthFdQueryAcpiAudOffloadConfig]Method[2] and [UtilHCIDump][AUD_OFF_ACPI] 03 00 00 00 , it means  BT Audio Offload Sel = 0x03（Audio offload enabled I2S）, this information is from acpi method AOLD/DLOA.
+    9. Bluetooth audio offload , AOLD UEFI name is UefiCnvBtAOLD , and AOLD UUID is 42780DD5-9A7D-404C-80E4-7F7094360394
+    10. Bluetooth audio offload , BT NHLT UEFI name is NhltBtConfigurationVariable , and UUID is B2364F9C-B817-4750-A5D2-37A0D1DAF8DD
+
+    11. [BtFdReadUefiAudioConfig]Failed to read uefi config means driver can not read correct BT audio UEFI uuid 42780DD5-9A7D-404C-80E4-7F7094360394

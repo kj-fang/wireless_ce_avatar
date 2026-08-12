@@ -1,0 +1,275 @@
+# Ref: https://resources.anthropic.com/hubfs/The-Complete-Guide-to-Building-Skill-for-Claude.pdf
+# skill features:
+#   name: skill name
+#   description: a brief description of the skill
+#   [What it does] + [When to use it] + Include specific trigger phrases. [specific tasks users might say]
+#   keywords: use "-" to represent each keyword
+#   expert_rules: use "|" to start a multi-line string
+
+Bluetooth_device_abnormal_disconnected:
+  name: "Bluetooth_device_abnormal_disconnected"
+  description: "Analyze any unexpected Bluetooth disconnections with possible error information. When we have Bluetooth abnormal disconnection while using LE HID, Classic headset, LE Audio headset or any accessory connected. No matter it's caused by Environment, Accessory problem, Laptop problem or user decline"
+  keywords: 
+    - "[CMD DEC]Disconnect"
+    - "[CMD DEC]RejectConnectionReq"
+    - "[CMD DEC]RejectSyncConnectionReq"
+    - "[CMD DEC]UserConfirmationReqNegReply"
+    - "[CMD DEC]UserPasskeyReqNegReply"
+    - "[CMD DEC]RemoteOOBDataReqNegReply"
+    - "[EVT DEC]DisconnectionCompl"
+    - "HardwareError"
+    - "Intel Fatal Exception"
+    - "Intel Other Core Fatal Exception"
+    - "Intel System Exception"
+    - "Fatal Exception"
+    - "Watchdog Reset Occurred"
+    - "Sync connection rejected by LM"
+    - "AuthPayloadTimeoutExpired"
+    - "LE_LongTermKeyReqNegReply"
+    - "LE_RemoteConnParamReqNegRply"
+    - "LE_RemoveCig"
+    - "[CMD DEC]OpCode:               0x2065"
+    - "LE_RejectCisRequest"
+    - "[CMD DEC]OpCode:               0x2067"
+    - "LE_Remove_ISO_Data_Path"
+    - "[CMD DEC]OpCode:               0x206F"
+    - "LE_Terminate_BIG"
+    - "[CMD DEC]OpCode:               0x206A"
+    - "LE_BIG_Terminate_Sync"
+    - "[CMD DEC]OpCode:               0x206C"
+    - "LE_PeriodicAdvSyncLost"
+    - "LE_AdvertisingSetTerminated"
+    - "ConnectionlessSlaveBroadcastTimeout"
+    - "SlavePageResponseTimeout"
+    - "RejectSyncConnectionReq"
+    - "Unknown HCI Command"
+    - "Unknown Connection Identifier"
+    - "Hardware Failure"
+    - "Page Timeout"
+    - "Authentication Failure"
+    - "PIN Missing"
+    - "Memory Capacity Exceeded"
+    - "Connection Timeout"
+    - "Connection Limit Exceeded"
+    - "Synchronous Connection Limit To A Device Exceeded"
+    - "ACL Connection Already Exists"
+    - "Command Disallowed"
+    - "Connection Rejected due to Limited Resources"
+    - "Connection Rejected Due To Security Reasons"
+    - "Connection Rejected due to Unacceptable BD_ADDR"
+    - "Connection Accept Timeout Exceeded"
+    - "Unsupported Feature or Parameter Value"
+    - "Invalid HCI Command Parameters"
+    - "Remote User Terminated Connection"
+    - "Remote Device Terminated Connection due to Low Resources"
+    - "Remote Device Terminated Connection due to Power Off"
+    - "Connection Terminated By Local Host"
+    - "Repeated Attempts"
+    - "Pairing Not Allowed"
+    - "Unknown LMP PDU"
+    - "Unsupported Remote Feature"
+    - "SCO Offset Rejected"
+    - "SCO Interval Rejected"
+    - "SCO Air Mode Rejected"
+    - "Invalid LMP Parameters"
+    - "Unspecified Error"
+    - "Unsupported LMP Parameter Value"
+    - "Role Change Not Allowed"
+    - "LMP/LL Response Timeout"
+    - "LMP Response Timeout / LL Response Timeout"
+    - "LMP Error Transaction Collision"
+    - "LMP Error Transaction Collision / LL Procedure Collision"
+    - "LMP PDU Not Allowed"
+    - "Encryption Mode Not Acceptable"
+    - "Link Key Can Not be Changed"
+    - "Requested QoS Is Not Supported"
+    - "Instant Passed"
+    - "Pairing With Unit Key Not Supported"
+    - "Different Transaction Collision"
+    - "Insufficient Resources To Accept Scatter Mode Request"
+    - "QoS Unacceptable Parameter"
+    - "Unacceptable Connection Parameters"
+    - "QoS Rejected"
+    - "Channel Classification Not Supported"
+    - "Insufficient Security"
+    - "Parameter Out Of Mandatory Range"
+    - "Scatter Mode No Longer Required"
+    - "Role Switch Pending"
+    - "Scatter Mode Parameter Change Pending"
+    - "Reserved Slot Violation"
+    - "Role Switch Failed"
+    - "Inquiry Response Data too large for FEC encoding"
+    - "Simple Pairing Not Supported By Host"
+    - "Host Busy-Pairing"
+    - "Connection Rejected due to No Suitable Channel Found"
+    - "Controller Busy"
+    - "Unacceptable Connection Interval"
+    - "Directed Advertising Timeout"
+    - "Connection Terminated Due To MIC Failure"
+    - "Connection Failed To Be Established"
+
+  expert_rules: |
+    Carefully analyze the timeline of events immediately when there is disconnection behavior. Categorize the root cause into one of the following three scenarios based on the log pattern:
+    1. If there is UserConfirmationReqNegReply, UserPasskeyReqNegReply or RemoteOOBDataReqNegReply. This indicates the user did not acknowledge or accept the connection. Conclude this is a user behavior to reject the connection.
+    2. Sometimes we will observe firmware error which will lead disconnection behavior. It will represent Intel Fatal Exception, Intel System Exception or Hardware Failure.
+    3. In the latest disconnection log behavior, try to analyze the possible reason and timing. We will be able to utilize the problem reason and error timing, then clarify the needs through additional Bluetooth snoop or OTA log.
+
+
+BREDR_and_LE_create_Connection:
+  name: "BREDR_and_LE_create_Connection"
+  description: "Check the outgoing or incoming connection behavior."
+  keywords:
+    - "[CMD DEC]CreateConnection"
+    - "[CMD DEC]OpCode:               0x0405"
+    - "[CMD DEC]AddSCOConnection"
+    - "[CMD DEC]OpCode:               0x0407"
+    - "SetupSyncConnection"
+    - "[CMD DEC]OpCode:               0x0428"
+    - "AcceptSyncConnectionReq"
+    - "[CMD DEC]OpCode:               0x0429"
+    - "EnhancedSetupSyncConnection"
+    - "[CMD DEC]OpCode:               0x043D"
+    - "EnhancedAcceptSyncConnection"
+    - "[CMD DEC]OpCode:               0x043E"
+    - "[CMD DEC]AcceptConnectionReq"
+    - "[CMD DEC]OpCode:               0x2049"
+    - "[CMD DEC]LE_ExtendedCreateConnection"
+    - "[CMD DEC]OpCode:               0x2043"
+    - "[CMD DEC]LE_CreateConnection"
+    - "[CMD DEC]OpCode:               0x200D"
+    - "[CMD DEC]LE_RemDevFromWhiteList"
+    - "[CMD DEC]OpCode:               0x2012"
+    - "LE_LongTermKeyReqReply"
+    - "[CMD DEC]OpCode:               0x201A"
+    - "[CMD DEC]LE_SetExtAdvParam"
+    - "[CMD DEC]OpCode:               0x2036"
+    - "LE_SetPeriodicAdvParam"
+    - "[CMD DEC]OpCode:               0x203E"
+    - "LE_SetExtAdvData"
+    - "[CMD DEC]OpCode:               0x2037"
+    - "LE_SetExtAdvEnable"
+    - "[CMD DEC]OpCode:               0x2039"
+    - "LE_SetPeriodicAdvData"
+    - "[CMD DEC]OpCode:               0x203F"
+    - "LE_SetPeriodicAdvEnable"
+    - "[CMD DEC]OpCode:               0x2040"
+    - "LE_SetCigParameters"
+    - "[CMD DEC]OpCode:               0x2062"
+    - "LE_CreateCis"
+    - "[CMD DEC]OpCode:               0x2064"
+    - "LE_AcceptCisRequest"
+    - "[CMD DEC]OpCode:               0x2066"
+    - "LE_Create_BIG"
+    - "[CMD DEC]OpCode:               0x2068"
+    - "LE_BIG_Create_Sync"
+    - "[CMD DEC]OpCode:               0x206B"
+    - "LE_Setup_ISO_Data_Path"
+    - "[CMD DEC]OpCode:               0x206E"
+    - "ReadLocalSupportedCodecs"
+    - "[EVT DEC]ConnectionCompl"
+    - "ConnectionReq"
+    - "LE_ConnComplete"
+    - "LE_EnhancedConnComplete"
+    - "LE_CIS_Established"
+    - "SyncConnectionCompl"
+    - "[EVT DEC]Status:               0x00 (OK)"
+  expert_rules: |
+    1. Clarify the latest connection info includes CreateConnection over BREDR connection or LE_CreateConnection over LE connection. 
+    2. In Bluetooth LE Audio connection usage, we will observe the flow with below items.
+        [CMD DEC]LE_ExtendedCreateConnection
+        [CMD DEC]OpCode:               0x2043
+        [EVT DEC]LE_EnhancedConnComplete
+        [EVT DEC]Status:               0x00 (OK)
+        [CMD DEC]CreateConnection
+        [CMD DEC]OpCode:               0x0405
+        [EVT DEC]ConnectionCompl
+        [EVT DEC]Status:               0x00 (OK)
+        ReadLocalSupportedCodecs
+        LE_SetCigParameters
+        [CMD DEC]OpCode:               0x2062
+        LE_CreateCis
+        [CMD DEC]OpCode:               0x2064
+        LE_Setup_ISO_Data_Path
+        [CMD DEC]OpCode:               0x206E
+    3. In Bluetooth LE Audio Auracast or "Shared Audio" usage, we will observe the flow with below items.
+        [CMD DEC]LE_SetExtAdvParam
+        [CMD DEC]OpCode:               0x2036
+        LE_SetPeriodicAdvParam
+        [CMD DEC]OpCode:               0x203E
+        LE_SetExtAdvData
+        [CMD DEC]OpCode:               0x2037
+        LE_SetPeriodicAdvData
+        [CMD DEC]OpCode:               0x203F
+        LE_SetPeriodicAdvEnable
+        [CMD DEC]OpCode:               0x2040
+        LE_SetExtAdvEnable
+        [CMD DEC]OpCode:               0x2039
+        LE_Create_BIG
+        [CMD DEC]OpCode:               0x2068
+        LE_Setup_ISO_Data_Path
+        [CMD DEC]OpCode:               0x206E
+    4. In Bluetooth LE HID connection usage, we will observe the flow with below items.
+        [CMD DEC]LE_ExtendedCreateConnection
+        [EVT DEC]LE_EnhancedConnComplete
+    5. In device is removed by end user, we will have below information.
+        [EVT DEC]LE_RemDevFromWhiteList
+    6. In Bluetooth Classic headset connection usage, we will observe the flow with below items.
+        [CMD DEC]CreateConnection
+        [EVT DEC]ConnectionCompl
+        [EVT DEC]Status:               0x00 (OK)
+
+Bluetooth_device_YB_Lost:
+  name: "Bluetooth_device_YB_Lost"
+  description: "Analyze any unexpected driver or FW error which leads Bluetooth device crash in OS mode"
+  keywords:
+    - "SYSTEM EXCEPTION Occurred in Controller"
+    - "FATAL EXCEPTION Occurred in Controller"
+    - "Error!! Wifi  rejected PLDR request, Transitioning to YB!"
+    - "Entering device state D3 Final"
+    - "Error! Received unexpected alive interrupt"
+    - "HardwareError"
+    - "HW Error detected"
+    - "Force Recovery from D0"
+    - "CSR_F2D_MBX_1: 0xBADBAD"
+    - "[CSR_F2D_MBX_1]: 0x01BADBAD"
+    - "[CSR_F2D_MBX_1]: 0x02BADBAD"
+    - "Error! Received unexpected alive interrupt"
+    - "Error! DMA failed."
+    - "FdoEvtDeviceReleaseHardware"
+    - "BtPdoEvtDeviceReleaseHardware"
+    - "Signature Verification Failed"
+    - "Error: BT Shared Hw Reset fail."
+    - "WdfDmaEnblerCreate failed"
+    - "FwDownloadSFIBurst failed"
+    - "Error! Received unexpected HW Rfkill Ack (GP2) interrupt"
+    - "Report YB"
+    - "Recovery is disabled in registry"
+    - "Nothing to do since Reset/Surprise removal is pending or Recovery is performed"
+    - "BtFdEvtDeviceSurpriseRemoval"
+    - "Do not report USB errors"
+    - "DriverUnload"
+    - "STATUS_NO_SUCH_DEVICE"
+    - "Transitioning to YB"
+    - "Force to YB"
+    - "Device is YB"
+    - "Reporting YB"
+    - "Transition to YB"
+    - "let it YB"
+    - "Inform Upper driver stack and YB"
+    - "Forcerecovery:"
+    - "IBtPciHandleHwErrorEvent"
+    - "HandleFwException Failed"
+    - "STATUS_TIMEOUT"
+    - "BtPciPerformErrorRecovery"
+    - "STATUS_IO_TIMEOUT"
+    - "Entering device state D3 Final"
+    - "USBD_STATUS_XACT_ERROR"
+    - "Failed to validate Secure Send Result event"
+    - "DownloadAllFwImages failed"
+    - "PerformSharedHwReset failed"
+    - "Error: BT Shared Hw Reset fail"
+    - "Error: BT SHR Failed in InitializeAdapter"
+  expert_rules: |
+    1. If the design pass schematic review and layout review, we also need to confirm the problem is not single or specific unit. This indicates it is low risk on HW design related.
+    2. We would expect proper PLDR, FLR and product reset without problem. It will guarantee the fundamental function for error recovery.
+    3. Match the latest error timing and analyze the possible problem information to disclose the finding.

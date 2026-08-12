@@ -439,6 +439,32 @@ def smoke_orchestrator(tmp: Path) -> None:
         orch.IpsClient = orig_ips
 
 
+# ---------------------------------------------------------------- S6
+def smoke_ui_commenter() -> None:
+    print("[S6] UI commenter privacy-state detection")
+    from .ui_commenter import _control_is_checked
+
+    class _El:
+        def __init__(self, tag="span", selected=False, attrs=None):
+            self.tag_name = tag
+            self._selected = selected
+            self._attrs = attrs or {}
+        def is_selected(self):
+            return self._selected
+        def get_attribute(self, name):
+            return self._attrs.get(name)
+
+    check("S6.a native checkbox: is_selected wins",
+          _control_is_checked(_El("input", selected=True))
+          and not _control_is_checked(_El("input", selected=False)))
+    check("S6.b aria-checked respected",
+          _control_is_checked(_El(attrs={"aria-checked": "true"}))
+          and not _control_is_checked(_El(attrs={"aria-checked": "false"})))
+    check("S6.c class-marked label detected",
+          _control_is_checked(_El(attrs={"class": "slds-checkbox is-selected"}))
+          and not _control_is_checked(_El(attrs={"class": "slds-checkbox"})))
+
+
 def run_smoke() -> int:
     tmp = Path(tempfile.mkdtemp(prefix="handsfree_smoke_"))
     try:
@@ -447,6 +473,7 @@ def run_smoke() -> int:
         smoke_queue(tmp)
         smoke_runner(tmp)
         smoke_orchestrator(tmp)
+        smoke_ui_commenter()
     finally:
         shutil.rmtree(tmp, ignore_errors=True)
     print(f"\nsmoke result: {'ALL PASS' if not PASS_FAIL else 'FAILURES: ' + ', '.join(PASS_FAIL)}")

@@ -35,6 +35,23 @@ DEFAULT_LOCATORS = {
 }
 
 
+def _control_is_checked(el) -> bool:
+    """Best-effort 'is this toggle/checkbox selected?' across the DOM shapes
+    Lightning renders: native inputs, ARIA toggles, and class-marked labels."""
+    try:
+        if (el.tag_name or "").lower() == "input":
+            return bool(el.is_selected())
+    except Exception:
+        pass
+    for attr in ("aria-checked", "aria-pressed", "aria-selected"):
+        val = el.get_attribute(attr)
+        if val is not None:
+            return val.strip().lower() == "true"
+    cls = (el.get_attribute("class") or "").split()
+    return any(c in cls for c in
+               ("selected", "is-selected", "is-checked", "checked"))
+
+
 class UiCommenter:
     def __init__(self, locators: Optional[dict] = None):
         self.locators = {**DEFAULT_LOCATORS, **(locators or {})}
@@ -82,18 +99,29 @@ class UiCommenter:
             tab.click()
             time.sleep(1.5)
 
-            # Private to Intel — must be explicitly selected. If we cannot find
-            # the control, abort to avoid posting a possibly-public comment.
+            # Private to Intel — must END UP selected. Clicking an already-
+            # selected control would TOGGLE privacy off, so read the state
+            # first and click only when unselected; then verify the final
+            # state. Any doubt (control missing, unverifiable, toggled off)
+            # aborts rather than posting a possibly-public comment.
             try:
                 private = WebDriverWait(driver, 10).until(
                     EC.element_to_be_clickable((By.XPATH, loc["private_option"])))
-                private.click()
-            except Exception:
+                if not _control_is_checked(private):
+                    private.click()
+                    time.sleep(0.5)
+                    # Lightning may re-render the control on toggle — re-locate.
+                    private = driver.find_element(By.XPATH, loc["private_option"])
+                if not _control_is_checked(private):
+                    raise RuntimeError(
+                        "'Private to Intel' is not selected after clicking")
+            except Exception as e:
                 snap = self._snapshot_failure(driver, "private_option")
                 return PostResult(
                     ok=False, backend="ui",
-                    error="could not locate the 'Private to Intel' option — "
-                          f"refusing to post a possibly-public comment (screenshot: {snap})")
+                    error=f"'Private to Intel' verification failed: {e} — "
+                          f"refusing to post a possibly-public comment "
+                          f"(screenshot: {snap})")
 
             body = wait.until(EC.presence_of_element_located(
                 (By.XPATH, loc["body_textarea"])))

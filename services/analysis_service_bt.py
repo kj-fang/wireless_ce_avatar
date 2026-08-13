@@ -68,7 +68,7 @@ class BTAnalysisService():
         """Background thread: decode HCI via CLI and emit bt_hci_ready for the LLM log_parser flow."""
         self.emit_log(f"🔍 HCI decoding for LLM analysis (AutoFolder): {os.path.basename(file_path)}")
         etl_folder = os.path.dirname(file_path)
-        hci_path = bt_decode_via_cli(etl_folder, file_path)
+        hci_path = bt_decode_via_cli(etl_folder, file_path, emit_callback=self.emit_log)
         if hci_path:
             self.emit_log(f"✅ HCI decode complete: {hci_path}")
             app_config.socketio.emit(
@@ -95,7 +95,7 @@ class BTAnalysisService():
                 return self._active_file_path != file_path
 
         self.emit_log(f"🔍 Decoding ETL (CLI): {os.path.basename(file_path)}")
-        hci_path = bt_decode_via_cli(etl_folder, file_path, skip_non_target=False)
+        hci_path = bt_decode_via_cli(etl_folder, file_path, skip_non_target=False, emit_callback=self.emit_log)
 
         # CLI decode cannot be cancelled mid-run; check for supersession after it returns.
         # Normally, the frontend will disable the button while running the decode. 
@@ -117,4 +117,4 @@ class BTAnalysisService():
         app_config.socketio.emit('autofolder_complete', {'etl_path': file_path}, namespace='/progress')
 
     def emit_log(self, msg):
-        app_config.socketio.emit('wpp_log', {'data': msg}, namespace='/progress')  # Ensure the correct namespace is used
+        app_config.socketio.emit('bt_log', {'data': msg}, namespace='/progress')

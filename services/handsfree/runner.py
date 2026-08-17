@@ -400,14 +400,33 @@ class HandsfreeRunner:
         # root cause. Echo being down never affects the pipeline: failures are
         # recorded per-insight, and _stage() contains anything unexpected.
         with self._stage(analysis, "echo_kb"):
-            from .echo_client import find_assert_evidence, collect_echo_insights
+            from .echo_client import (EchoUnavailable, ask_echo_kb,
+                                      collect_echo_insights, find_assert_evidence)
             evidence = find_assert_evidence(analysis)
             if evidence["assert_codes"] or evidence["yellow_bang"]:
                 self.progress(
                     "echo_kb",
                     f"asking Echo KB — asserts: {evidence['assert_codes'] or 'none'}, "
                     f"yellow bang: {evidence['yellow_bang']}")
-                analysis.echo_insights = collect_echo_insights(analysis)
+
+                def _clip(text: object, limit: int) -> str:
+                    s = str(text).strip()
+                    return s if len(s) <= limit else s[:limit] + " …[truncated]"
+
+                def _ask_logged(question: str) -> str:
+                    # Surface the exchange in the run log (full text stays in
+                    # analysis.echo_insights → draft's Analysis details).
+                    self.progress("echo_kb", "Q → Echo:\n" + _clip(question, 700))
+                    try:
+                        answer = ask_echo_kb(question)
+                    except EchoUnavailable as e:
+                        self.progress("echo_kb", f"Echo unavailable: {_clip(e, 300)}")
+                        raise
+                    self.progress("echo_kb", "A ← Echo:\n" + _clip(answer, 900))
+                    return answer
+
+                analysis.echo_insights = collect_echo_insights(analysis,
+                                                               ask=_ask_logged)
                 answered = sum(1 for i in analysis.echo_insights if i.get("answer"))
                 self.progress(
                     "echo_kb",

@@ -237,9 +237,15 @@ class AnthropicOpenAIAdapter:
     def _rebuild_underlying(self, new_token):
         if self._client_factory is None:
             raise RuntimeError("client_factory required to rotate tokens")
+        old_client = self._client
         # Concurrent rotations may briefly build two clients; the loser is GC'd.
         self._client = self._client_factory(new_token)
-
+        close = getattr(old_client, "close", None)
+        if callable(close):
+            try:
+                close()
+            except Exception:
+                pass
 
 # ---------------------------------------------------------------------------
 # Token pool for gnaigpt daily-cost-limit failover.

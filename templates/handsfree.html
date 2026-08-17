@@ -482,7 +482,7 @@
 
   const STAGES = ['fetch_case', 'triage', 'read_case_history', 'pick_zip',
                   'download', 'decompose', 'check_wrt_log', 'issue_time',
-                  'pick_etl', 'decode_etl', 'agent_analysis'];
+                  'pick_etl', 'decode_etl', 'agent_analysis', 'echo_kb'];
   let stageCasePinned = null;   // user-selected case; null = follow the running one
 
   function pinStageCase(caseNbr) {
@@ -652,6 +652,12 @@
       const okN = stages.filter(s => s.ok).length;
       chips.push({label: 'stages', text: okN + '/' + stages.length + ' OK',
                   cls: okN === stages.length ? 'good' : 'warn'});
+    }
+    const echo = (analysis.echo_insights || []).filter(i => i && i.answer);
+    if (echo.length) {
+      chips.push({label: 'echo kb', text: echo.length + ' root-cause insight' + (echo.length > 1 ? 's' : ''),
+                  cls: 'good',
+                  title: echo.map(i => i.kind === 'assert' ? 'assert ' + i.code : 'yellow bang').join(' · ')});
     }
     el.innerHTML = chips.map(c =>
       (c.label ? `<span class="chip-label">${esc(c.label)}</span>` : '') +

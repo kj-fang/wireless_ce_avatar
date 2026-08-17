@@ -151,6 +151,20 @@ def compose_plain(analysis: CaseAnalysis) -> str:
             parts.extend(f"  - {ln}" for ln in lines)
             parts.append("")
 
+    # Echo knowledge-base insights (assert / yellow-bang root causes).
+    answered = [i for i in (analysis.echo_insights or [])
+                if isinstance(i, dict) and i.get("answer")]
+    if answered:
+        parts.append("Knowledge base insights (Echo):")
+        for ins in answered:
+            head = (f"Assert {ins.get('code')}" if ins.get("kind") == "assert"
+                    else "Yellow bang")
+            answer = str(ins["answer"]).strip()
+            if len(answer) > 1500:
+                answer = answer[:1500] + " …[truncated — full text in analysis details]"
+            parts.append(f"[{head}] {answer}")
+            parts.append("")
+
     parts.append(_FOOTER)
     # Collapse accidental double blank lines.
     text = "\n".join(parts)

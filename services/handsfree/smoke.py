@@ -318,8 +318,10 @@ def smoke_runner(tmp: Path) -> None:
         check("S4.e all stages recorded",
               {"fetch_case", "triage", "read_case_history", "check_wrt_log",
                "pick_zip", "download", "decompose", "issue_time", "pick_etl",
-               "agent_analysis"} <= set(stage_names),
+               "agent_analysis", "echo_kb"} <= set(stage_names),
               str(stage_names))
+        check("S4.e2 no assert evidence -> Echo never queried",
+              analysis.echo_insights == [], str(analysis.echo_insights))
         check("S4.g reader-chosen zip beats newest-zip fallback",
               analysis.chosen_attachment == "repro_logs.7z",
               f"chosen={analysis.chosen_attachment}")  # .7z proves non-zip archives pass the pick stage
@@ -465,6 +467,67 @@ def smoke_ui_commenter() -> None:
           and not _control_is_checked(_El(attrs={"class": "slds-checkbox"})))
 
 
+# ---------------------------------------------------------------- S7
+def smoke_echo_kb() -> None:
+    print("[S7] Echo KB client (detection + insights, no network)")
+    from .runner import CaseAnalysis, IncidentReport
+    from .composer import compose_plain
+    from .echo_client import (EchoUnavailable, find_assert_evidence,
+                              collect_echo_insights)
+
+    a = CaseAnalysis(case_nbr="01234567", mode="full", ok=True,
+                     clean_description="WiFi dies during roam")
+    a.incidents.append(IncidentReport(
+        report_text="Firmware hit ASSERT with code 0x02001234 during scan.",
+        steps=[{"role": "tool",
+                "content": "=== Assert Code Lookup: 0x02001234 ===\nName: FOO"},
+               {"role": "assistant", "content": "assert 0X02001234 again"}]))
+    ev = find_assert_evidence(a)
+    check("S7.a assert code detected + deduped case-insensitively",
+          ev["assert_codes"] == ["0x02001234"] and not ev["yellow_bang"],
+          str(ev))
+
+    asked: list[str] = []
+    def _fake_ask(q):
+        asked.append(q)
+        return "Echo says: known race in scan abort path."
+    insights = collect_echo_insights(a, ask=_fake_ask)
+    check("S7.b insight collected with lookup-grounded question",
+          len(insights) == 1 and insights[0]["kind"] == "assert"
+          and insights[0]["answer"].startswith("Echo says")
+          and "Assert Code Lookup" in asked[0] and "0x02001234" in asked[0],
+          str(insights)[:300])
+
+    def _down(q):
+        raise EchoUnavailable("backend down")
+    insights2 = collect_echo_insights(a, ask=_down)
+    check("S7.c Echo outage recorded per-insight, never raises",
+          insights2[0]["answer"] is None and "down" in insights2[0]["error"])
+
+    yb = CaseAnalysis(case_nbr="01234568", mode="triage_only", ok=True,
+                      issue_type="Yellow Bang (YB)")
+    ev_yb = find_assert_evidence(yb)
+    ins_yb = collect_echo_insights(yb, ask=_fake_ask)
+    check("S7.d yellow bang without assert -> one yellow_bang insight",
+          ev_yb["yellow_bang"] and not ev_yb["assert_codes"]
+          and len(ins_yb) == 1 and ins_yb[0]["kind"] == "yellow_bang")
+
+    a.echo_insights = [
+        {"kind": "assert", "code": "0x02001234",
+         "answer": "Known race in scan abort path.", "error": None},
+        {"kind": "assert", "code": "0xDEAD", "answer": None,
+         "error": "backend down"},
+    ]
+    a.incidents[0].report = {"root_cause_summary": "assert during scan",
+                             "confidence_score": 80}
+    plain = compose_plain(a)
+    check("S7.e answered insights composed into draft, failures omitted",
+          "Knowledge base insights (Echo):" in plain
+          and "Known race in scan abort path." in plain
+          and "backend down" not in plain,
+          plain[:400])
+
+
 def run_smoke() -> int:
     tmp = Path(tempfile.mkdtemp(prefix="handsfree_smoke_"))
     try:
@@ -474,6 +537,7 @@ def run_smoke() -> int:
         smoke_runner(tmp)
         smoke_orchestrator(tmp)
         smoke_ui_commenter()
+        smoke_echo_kb()
     finally:
         shutil.rmtree(tmp, ignore_errors=True)
     print(f"\nsmoke result: {'ALL PASS' if not PASS_FAIL else 'FAILURES: ' + ', '.join(PASS_FAIL)}")

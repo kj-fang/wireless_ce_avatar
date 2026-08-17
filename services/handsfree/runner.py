@@ -122,6 +122,7 @@ class CaseAnalysis:
     log_path: str = ""
     incidents: list[IncidentReport] = field(default_factory=list)
     stages: list[StageStatus] = field(default_factory=list)
+    echo_insights: list = field(default_factory=list)  # Echo KB root-cause answers
     error: str = ""
 
     @property
@@ -391,6 +392,28 @@ class HandsfreeRunner:
         # -- 10. agentic analysis (one run per incident time) --------------------
         with self._stage(analysis, "agent_analysis"):
             self._run_agent(analysis, max_steps=max_steps)
+
+        # -- 11. Echo knowledge base: assert / yellow-bang root cause ------------
+        # When the agent surfaced a firmware assert (or yellow-bang evidence),
+        # resolve the assert to its driver-header entry and ask the Echo
+        # knowledge base (MCP, KB-only mode — no credentials) for the known
+        # root cause. Echo being down never affects the pipeline: failures are
+        # recorded per-insight, and _stage() contains anything unexpected.
+        with self._stage(analysis, "echo_kb"):
+            from .echo_client import find_assert_evidence, collect_echo_insights
+            evidence = find_assert_evidence(analysis)
+            if evidence["assert_codes"] or evidence["yellow_bang"]:
+                self.progress(
+                    "echo_kb",
+                    f"asking Echo KB — asserts: {evidence['assert_codes'] or 'none'}, "
+                    f"yellow bang: {evidence['yellow_bang']}")
+                analysis.echo_insights = collect_echo_insights(analysis)
+                answered = sum(1 for i in analysis.echo_insights if i.get("answer"))
+                self.progress(
+                    "echo_kb",
+                    f"{answered}/{len(analysis.echo_insights)} insight(s) answered")
+            else:
+                self.progress("echo_kb", "no assert / yellow-bang evidence — skipped")
 
         got_report = any(i.report for i in analysis.incidents)
         analysis.mode = "full" if got_report else "triage_only"

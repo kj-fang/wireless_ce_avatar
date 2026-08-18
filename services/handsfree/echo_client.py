@@ -42,11 +42,48 @@ def echo_url() -> str:
     return os.environ.get("ECHO_MCP_URL") or DEFAULT_ECHO_SSE_URL
 
 
+def _make_httpx_client_factory():
+    """httpx client factory for the MCP transport, hardened for this network:
+
+    * trust_env=False — Echo is an INTRANET host. The corporate proxy
+      (proxy-dmz) answers 403 for internal destinations, and inside the app
+      process the proxy env vars are unreliable anyway: snowflake_service
+      re-asserts NO_PROXY to the Snowflake host only (dropping intel.com) and
+      DriverManager wipes HTTP(S)_PROXY around Chrome startup. Verified from
+      the app venv: direct -> 200, via proxy-dmz -> 403.
+    * verify=truststore — the Echo cert chains to Intel's corporate CA which
+      lives in the Windows cert store, not in certifi. truststore uses the
+      OS store (this is also what mcp's vendored httpx2 does by default).
+    """
+    import ssl
+    try:
+        import truststore
+        verify = truststore.SSLContext(ssl.PROTOCOL_TLS_CLIENT)
+    except Exception:
+        verify = True   # fall back to certifi (may fail on corp CA)
+
+    def factory(headers=None, timeout=None, auth=None):
+        # mcp passes its own vendored httpx module's Timeout/Auth objects;
+        # build the client from that same module so the types match.
+        from mcp.shared import _httpx_utils as u
+        hx = u.httpx2 if hasattr(u, "httpx2") else __import__("httpx")
+        kwargs = {"follow_redirects": True, "trust_env": False, "verify": verify}
+        kwargs["timeout"] = timeout if timeout is not None else hx.Timeout(30.0, read=300.0)
+        if headers:
+            kwargs["headers"] = headers
+        if auth is not None:
+            kwargs["auth"] = auth
+        return hx.AsyncClient(**kwargs)
+
+    return factory
+
+
 async def _ask_async(question: str, url: str, timeout: float, box: dict) -> None:
     from mcp import ClientSession
     from mcp.client.sse import sse_client
 
-    async with sse_client(url, timeout=15, sse_read_timeout=timeout) as (read, write):
+    async with sse_client(url, timeout=15, sse_read_timeout=timeout,
+                          httpx_client_factory=_make_httpx_client_factory()) as (read, write):
         async with ClientSession(read, write) as session:
             await session.initialize()
             tools = await session.list_tools()

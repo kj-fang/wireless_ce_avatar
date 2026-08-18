@@ -561,6 +561,32 @@ def smoke_echo_kb() -> None:
           and "backend down" not in plain,
           plain[:400])
 
+    # Transport hardening: Echo is intranet -> must bypass proxy env
+    # (proxy-dmz answers 403 for internal hosts) and verify TLS against the
+    # OS store (Intel corp CA is not in certifi).
+    from .echo_client import _make_httpx_client_factory
+    import os as _os
+    prev = {k: _os.environ.get(k) for k in ("HTTPS_PROXY", "HTTP_PROXY", "NO_PROXY")}
+    try:
+        _os.environ["HTTPS_PROXY"] = "http://proxy-dmz.intel.com:912"
+        _os.environ["NO_PROXY"] = "only.snowflake.host"
+        client = _make_httpx_client_factory()()
+        mounts_have_proxy = any(
+            getattr(getattr(t, "_pool", None), "_proxy_url", None) is not None
+            for t in getattr(client, "_mounts", {}).values())
+        check("S7.f MCP httpx client ignores proxy env (trust_env=False)",
+              client.trust_env is False and not mounts_have_proxy)
+        ctx = getattr(getattr(client._transport, "_pool", None), "_ssl_context", None)
+        check("S7.g MCP httpx client verifies TLS via OS trust store",
+              ctx is not None and "truststore" in type(ctx).__module__,
+              str(type(ctx)))
+    finally:
+        for k, v in prev.items():
+            if v is None:
+                _os.environ.pop(k, None)
+            else:
+                _os.environ[k] = v
+
 
 def run_smoke() -> int:
     tmp = Path(tempfile.mkdtemp(prefix="handsfree_smoke_"))

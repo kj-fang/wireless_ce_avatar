@@ -22,9 +22,27 @@
 -- turn.total_tokens and ai_invocation.total_tokens.
 -- =============================================================================
 
-CREATE SCHEMA IF NOT EXISTS bronze;
-CREATE SCHEMA IF NOT EXISTS silver;
-CREATE SCHEMA IF NOT EXISTS gold;
+-- Create the three schemas only if they are genuinely missing.
+--
+-- Written as a conditional EXECUTE rather than CREATE SCHEMA IF NOT EXISTS so
+-- that a role WITHOUT database-level CREATE can still run this file, provided
+-- a DBA has pre-created the schemas (see 000_bootstrap_schemas.sql). Plain
+-- CREATE SCHEMA IF NOT EXISTS is not reliably a no-op for permission purposes:
+-- whether PostgreSQL short-circuits on existence before or after the ACL check
+-- is a version-dependent detail this file should not depend on. Skipping the
+-- statement outright removes the question.
+DO $$
+BEGIN
+    IF NOT EXISTS (SELECT 1 FROM pg_namespace WHERE nspname = 'bronze') THEN
+        EXECUTE 'CREATE SCHEMA bronze';
+    END IF;
+    IF NOT EXISTS (SELECT 1 FROM pg_namespace WHERE nspname = 'silver') THEN
+        EXECUTE 'CREATE SCHEMA silver';
+    END IF;
+    IF NOT EXISTS (SELECT 1 FROM pg_namespace WHERE nspname = 'gold') THEN
+        EXECUTE 'CREATE SCHEMA gold';
+    END IF;
+END $$;
 
 
 -- =============================================================================

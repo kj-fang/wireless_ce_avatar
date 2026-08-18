@@ -32,7 +32,9 @@ sharding, and a warehouse tier; see §7 for what *not* to add.
 ## 2. What to create
 
 ```bash
-psql "$DSN" -f db/001_initial_schema.sql
+python -m db.check_postgres       # read-only connection/size/privilege check
+python -m db.apply_schema         # read-only schema preflight
+python -m db.apply_schema --apply # initialise in one transaction
 ```
 
 One file, idempotent at the schema level (`CREATE SCHEMA IF NOT EXISTS`), but
@@ -122,7 +124,8 @@ Two paths, both already written. Only the first is needed to start.
 
 ```bash
 pip install -r db/requirements.txt
-python -m db.sync_share --dsn "postgresql+psycopg://avatar_ingest@host/db"
+# Copy db/.env.example to db/.env and add the password on the worker.
+python -m db.sync_share
 ```
 
 Reads the SMB share and lands everything. Run it nightly (Windows Task
@@ -247,8 +250,8 @@ cannot drift apart.
 Rows already stored are settled by replaying the usage bronze already holds:
 
 ```bash
-python -m db.reprice --dsn "postgresql+psycopg://..." --dry-run   # report only
-python -m db.reprice --dsn "postgresql+psycopg://..."             # apply
+python -m db.reprice --dry-run   # report only
+python -m db.reprice             # apply
 ```
 
 **It only fills NULLs. A settled figure is never recomputed** — every statement

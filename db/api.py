@@ -33,6 +33,7 @@ from pydantic import BaseModel, Field, field_validator
 
 from db.ingest import EVENT_TYPES
 from db.sinks import EventSink, MemorySink
+from db.config import database_url
 
 log = logging.getLogger("telemetry.api")
 
@@ -85,9 +86,7 @@ def _build_sink() -> EventSink:
     if kind == "memory":
         log.warning("TELEMETRY_SINK=memory — events are held in RAM and lost on exit")
         return MemorySink()
-    dsn = os.environ.get("TELEMETRY_DSN", "")
-    if not dsn:
-        raise RuntimeError("TELEMETRY_DSN is required unless TELEMETRY_SINK=memory")
+    dsn = database_url()
     from sqlalchemy import create_engine
     from db.sinks import PostgresSink
     # pool_pre_ping: a pooled connection that died while idle should be

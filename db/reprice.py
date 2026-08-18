@@ -1,8 +1,9 @@
 """
 Replay bronze.raw_event to settle rows that were never priced.
 
-    python -m db.reprice --dsn postgresql+psycopg://... --dry-run
-    python -m db.reprice --dsn postgresql+psycopg://...
+    python -m db.reprice --dry-run                           # db/.env
+    python -m db.reprice                                     # apply
+    python -m db.reprice --dsn postgresql+psycopg://...      # override
 
 Why this exists
 ---------------
@@ -37,6 +38,7 @@ from typing import Optional
 from sqlalchemy import text
 
 from configs.llm_pricing import PRICING_VERSION, cost_for
+from db.config import DatabaseConfigError, database_url
 
 # Event types that carry billable usage, and where each lands in silver.
 _TARGETS = {
@@ -136,12 +138,19 @@ def reprice(conn, *, dry_run: bool = False) -> dict:
 
 def main() -> int:
     ap = argparse.ArgumentParser(description=__doc__)
-    ap.add_argument("--dsn", required=True)
+    ap.add_argument("--dsn", default=None,
+                    help="override db/.env / TELEMETRY_DSN")
     ap.add_argument("--dry-run", action="store_true")
     args = ap.parse_args()
 
+    try:
+        dsn = database_url(args.dsn)
+    except DatabaseConfigError as exc:
+        print(f"configuration error: {exc}", file=sys.stderr)
+        return 2
+
     from sqlalchemy import create_engine
-    engine = create_engine(args.dsn, future=True)
+    engine = create_engine(dsn, pool_pre_ping=True, future=True)
     with engine.begin() as conn:
         s = reprice(conn, dry_run=args.dry_run)
         if args.dry_run:

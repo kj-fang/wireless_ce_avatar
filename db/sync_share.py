@@ -1,7 +1,8 @@
 """
 Scheduled sync: the Gather SMB share -> bronze + silver in PostgreSQL.
 
-    python -m db.sync_share --dsn postgresql+psycopg://... [--full]
+    python -m db.sync_share [--full]                         # db/.env
+    python -m db.sync_share --dsn postgresql+psycopg://...  # override
     python -m db.sync_share --dry-run                       # no database needed
 
 Replaces the one-shot backfill. A full run and an incremental run are the same
@@ -47,6 +48,7 @@ import time
 from datetime import datetime, timedelta, timezone
 from typing import Iterator, Optional
 
+from db.config import DatabaseConfigError, database_url, gather_source
 from db.ingest import derive_event_id, ingest_batch
 
 RECORD_KINDS = ("sessions", "workflows", "feedback_submissions")
@@ -329,14 +331,15 @@ def _write_watermark(conn, root: str, started: datetime, stats: dict) -> None:
 def main() -> int:
     ap = argparse.ArgumentParser(description=__doc__)
     ap.add_argument("--source", default=None, help="Gather share root")
-    ap.add_argument("--dsn", default=None)
+    ap.add_argument("--dsn", default=None,
+                    help="override db/.env / TELEMETRY_DSN")
     ap.add_argument("--full", action="store_true",
                     help="ignore the watermark and re-read everything")
     ap.add_argument("--dry-run", action="store_true")
     ap.add_argument("--batch", type=int, default=200)
     args = ap.parse_args()
 
-    root = args.source
+    root = gather_source(args.source)
     if not root:
         from configs.path_configs import GATHER_DIR_prim
         root = GATHER_DIR_prim
@@ -348,12 +351,14 @@ def main() -> int:
         print("dry run — nothing written")
         return 0
 
-    if not args.dsn:
-        print("error: --dsn is required unless --dry-run", file=sys.stderr)
+    try:
+        dsn = database_url(args.dsn)
+    except DatabaseConfigError as exc:
+        print(f"configuration error: {exc}", file=sys.stderr)
         return 2
 
     from sqlalchemy import create_engine
-    engine = create_engine(args.dsn, future=True)
+    engine = create_engine(dsn, pool_pre_ping=True, future=True)
     with engine.begin() as conn:
         since = None if args.full else _read_watermark(conn, root)
         if since:

@@ -39,6 +39,11 @@ from . import notify_email
 # None to send to each down-voter's real address.
 REVERIFY_REDIRECT_TO: Optional[list[str]] = ["wei-ling.chi@intel.com"]
 
+# Production fallback for a missing/invalid captured email or a failed direct
+# SMTP submission. Unlike REVERIFY_REDIRECT_TO, this does not override valid
+# down-voter addresses. Set REVERIFY_REDIRECT_TO to None before production use.
+FALLBACK_REDIRECT_TO: Optional[list[str]] = ["wei-ling.chi@intel.com"]
+
 
 _EMAIL_RE = re.compile(r"^[^\s@]+@[^\s@]+\.[^\s@]+$")
 
@@ -48,6 +53,16 @@ def _norm_email(value) -> str:
         return ""
     out = value.strip().lower()
     return out if _EMAIL_RE.match(out) else ""
+
+
+def _configured_recipients(value: Optional[list[str]]) -> list[str]:
+    """Return valid, de-duplicated configured recipient addresses."""
+    recipients: list[str] = []
+    for item in value or []:
+        email = _norm_email(item)
+        if email and email not in recipients:
+            recipients.append(email)
+    return recipients
 
 
 def _is_local_case(case_nbr: str) -> bool:
@@ -368,12 +383,13 @@ def reverify_and_notify(
         ns_changes.setdefault(ns, [])
         ns_changes[ns].extend(man.get("playbook_changes") or [])
 
-    # Group entries by recipient email (across namespaces). When a redirect
-    # override is active (testing), entries whose snapshot predates the
-    # submitted_by_email field are still processed under their submitter name
-    # since the mail goes to the override inbox anyway.
+    # Group entries by recipient email (across namespaces). Missing/invalid
+    # captured email addresses are retained for FALLBACK_REDIRECT_TO instead of
+    # silently losing a reverify notification.
     people: dict[str, dict] = {}
-    skipped_no_email = 0
+    fallback_no_email = 0
+    redirect_to = _configured_recipients(REVERIFY_REDIRECT_TO)
+    fallback_to = _configured_recipients(FALLBACK_REDIRECT_TO)
     for man in loaded:
         for entry in man.get("entries") or []:
             email = _norm_email(entry.get("submitted_by_email"))
@@ -381,14 +397,13 @@ def reverify_and_notify(
                 key = email
                 recipient = email
                 display = email
-            elif REVERIFY_REDIRECT_TO:
+            elif redirect_to or fallback_to:
                 display = (entry.get("submitted_by") or "unknown").strip() or "unknown"
                 key = f"noemail:{display}"
                 recipient = None
             else:
-                skipped_no_email += 1
                 print(f"[reverify] skip (no email): conv={entry.get('conversation_id')} "
-                      f"case={entry.get('case_nbr')}")
+                      f"case={entry.get('case_nbr')}; FALLBACK_REDIRECT_TO is not configured")
                 continue
             bundle = people.setdefault(
                 key, {"sections": [], "namespaces": set(),
@@ -402,6 +417,8 @@ def reverify_and_notify(
 
     sent = 0
     written = 0
+    fallback_sent = 0
+    fallback_after_failure = 0
     for key, bundle in people.items():
         sections = bundle["sections"]
         display = bundle["display"]
@@ -456,11 +473,15 @@ def reverify_and_notify(
             no_log_case_count=no_log_case_count,
         )
         subject = f"Avatar Feedback Reverify - {datetime.now().strftime('%Y-%m-%d')} ({len(sections)} case)"
-        to_list = (list(REVERIFY_REDIRECT_TO) if REVERIFY_REDIRECT_TO
-                   else ([bundle["recipient"]] if bundle["recipient"] else []))
+        using_fallback = not bundle["recipient"] and not redirect_to
+        to_list = (redirect_to if redirect_to
+                   else ([bundle["recipient"]] if bundle["recipient"] else fallback_to))
         if not to_list:
             print(f"[reverify] skip send (no recipient): {display}")
             continue
+
+        if using_fallback:
+            fallback_no_email += 1
 
         if dry_run:
             if has_attachment:
@@ -484,12 +505,32 @@ def reverify_and_notify(
                 print(f"[reverify] emailed {to_list} — {len(sections)} case(s), no replay attachment")
         except Exception as e:
             print(f"[reverify] email FAILED for {to_list}: {e}")
+            # A redirect is already an explicit operator override, so only
+            # retry a real user's failed direct delivery through the fallback.
+            if redirect_to or not bundle["recipient"] or not fallback_to or to_list == fallback_to:
+                continue
+            try:
+                notify_email.send_html_to(
+                    to_list=fallback_to,
+                    subject=subject,
+                    html_body=body,
+                    attachments=attachments,
+                )
+                sent += 1
+                fallback_sent += 1
+                fallback_after_failure += 1
+                print(f"[reverify] fallback emailed {fallback_to} after failure for "
+                      f"{bundle['recipient']}")
+            except Exception as fallback_error:
+                print(f"[reverify] fallback email FAILED for {fallback_to}: {fallback_error}")
 
     summary = {
         "people": len(people),
         "emails_sent": sent,
+        "fallback_sent": fallback_sent,
+        "fallback_no_email": fallback_no_email,
+        "fallback_after_failure": fallback_after_failure,
         "html_written": written,
-        "skipped_no_email": skipped_no_email,
         "dry_run": dry_run,
         "out_dir": str(out_dir),
     }

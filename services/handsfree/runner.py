@@ -404,10 +404,13 @@ class HandsfreeRunner:
                                       collect_echo_insights, find_assert_evidence)
             evidence = find_assert_evidence(analysis)
             if evidence["assert_codes"] or evidence["yellow_bang"]:
+                src = {"wrt_log": "from WRT log", "agent_text": "from agent text",
+                       None: ""}.get(evidence.get("source"), "")
                 self.progress(
                     "echo_kb",
-                    f"asking Echo KB — asserts: {evidence['assert_codes'] or 'none'}, "
-                    f"yellow bang: {evidence['yellow_bang']}")
+                    f"asking Echo KB — asserts: {evidence['assert_codes'] or 'none'}"
+                    + (f" ({src})" if src else "")
+                    + f", yellow bang: {evidence['yellow_bang']}")
 
                 def _clip(text: object, limit: int) -> str:
                     s = str(text).strip()

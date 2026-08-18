@@ -104,12 +104,68 @@ def ask_echo_kb(question: str, *, url: Optional[str] = None,
 # Evidence detection over a CaseAnalysis
 # ---------------------------------------------------------------------------
 
-# "ASSERT ... 0x02001234" style — code within 120 chars after an assert word.
-_ASSERT_CODE_RE = re.compile(r"(?i)\bassert\w*\b[^\n]{0,120}?(0x[0-9A-Fa-f]{4,10})")
+# --- PRIMARY: the driver's own assert line in the decoded WRT .log ----------
+# e.g. "...FATAL_ERROR: uCode ASSERT(UMAC, rtStatus = 0x2000008A, log is
+#       valid. data1 = 0x158f8cca, data2 = 0xfe10fe1)"
+# rtStatus is THE firmware assert code lookup_assert_code expects (raw, with
+# the 0x20000000 UMAC CPU flag still on — the tool strips it itself).
+_WRT_ASSERT_RE = re.compile(
+    r"(?i)uCode\s+ASSERT\s*\(\s*(?P<cpu>\w+)\s*,\s*rtStatus\s*=\s*(?P<code>0x[0-9A-Fa-f]{2,10})"
+    r"(?P<rest>[^\n]{0,200})")
+# Real logs use both "data1 = 0x…" (UMAC) and "data1:0x…" (LMAC) spellings.
+_DATA_FIELD_RE = re.compile(r"(?i)\bdata(?P<n>[123])\s*[:=]\s*(?P<val>0x[0-9A-Fa-f]+)")
+_MAX_LOG_SCAN_BYTES = 64 * 1024 * 1024   # decoded WRT logs can be huge
+
+# --- FALLBACK: assert codes mentioned in the agent's write-up --------------
+# Real firmware assert codes are 6+ hex digits in known namespaces
+# (0x20…/0x10…/0x40…/0x50…/0x00…). Requiring 6+ digits keeps Windows event
+# IDs (5002/5005/5010 = "adapter reset" events, NOT firmware asserts) out.
+_ASSERT_CODE_RE = re.compile(r"(?i)\bassert\w*\b[^\n]{0,120}?(0x[0-9A-Fa-f]{6,10})")
 # lookup_assert_code() tool output already captured in the agent steps.
-_LOOKUP_BLOCK_RE = re.compile(r"=== Assert Code Lookup: (0x[0-9A-Fa-f]+)")
+_LOOKUP_BLOCK_RE = re.compile(r"=== Assert Code Lookup: (0x[0-9A-Fa-f]{6,10})")
+_WINDOWS_EVENT_IDS = {"5002", "5005", "5007", "5010", "5032", "5033", "5060", "5061"}
 _YELLOW_BANG_RE = re.compile(
     r"(?i)yellow[ _-]?bang|\bYB\b|device (?:lost|drop)|\bCode 10\b")
+
+
+def _is_windows_event_id(code: str) -> bool:
+    return code.lower().removeprefix("0x").lstrip("0") in _WINDOWS_EVENT_IDS
+
+
+def scan_wrt_log_for_asserts(log_path: str, limit: int = MAX_ASSERTS_PER_CASE) -> list[dict]:
+    """Scan the decoded WRT log for the driver's uCode ASSERT lines.
+
+    Returns [{"code", "cpu", "data": {"data1": ..}, "line"}], deduped by
+    code (first occurrence kept), capped at `limit`. Missing/unreadable log
+    -> [] (never raises).
+    """
+    if not log_path or not os.path.isfile(log_path):
+        return []
+    found: list[dict] = []
+    seen: set = set()
+    try:
+        with open(log_path, "r", encoding="utf-8", errors="replace") as fh:
+            read = 0
+            for line in fh:
+                read += len(line)
+                if read > _MAX_LOG_SCAN_BYTES:
+                    break
+                m = _WRT_ASSERT_RE.search(line)
+                if not m:
+                    continue
+                code = m.group("code")
+                if code.lower() in seen:
+                    continue
+                seen.add(code.lower())
+                data = {f"data{d.group('n')}": d.group("val")
+                        for d in _DATA_FIELD_RE.finditer(m.group("rest"))}
+                found.append({"code": code, "cpu": m.group("cpu").upper(),
+                              "data": data, "line": line.strip()[:400]})
+                if len(found) >= limit:
+                    break
+    except Exception:
+        return found
+    return found
 
 
 def _analysis_text_blob(analysis) -> str:
@@ -126,31 +182,57 @@ def _analysis_text_blob(analysis) -> str:
 
 
 def find_assert_evidence(analysis) -> dict:
-    """Scan the analysis for firmware assert codes and yellow-bang evidence.
+    """Find firmware assert codes and yellow-bang evidence for a case.
 
-    Returns {"assert_codes": [str, ...], "yellow_bang": bool}; codes are
-    deduped case-insensitively, order preserved, capped at
-    MAX_ASSERTS_PER_CASE.
+    Source priority:
+      1. the decoded WRT log (analysis.log_path) — the driver's own
+         "uCode ASSERT(<CPU>, rtStatus = 0x…)" lines. Authoritative.
+      2. fallback: assert codes mentioned in the agent's write-up
+         (6+ hex digits; Windows event IDs like 5002 rejected).
+
+    Returns {"assert_codes": [str], "asserts": [{code, cpu, data, line,
+    source}], "yellow_bang": bool, "source": "wrt_log"|"agent_text"|None}.
     """
+    asserts = [dict(a, source="wrt_log")
+               for a in scan_wrt_log_for_asserts(getattr(analysis, "log_path", "") or "")]
+    source = "wrt_log" if asserts else None
+
     blob = _analysis_text_blob(analysis)
-    codes: list[str] = []
-    for regex in (_ASSERT_CODE_RE, _LOOKUP_BLOCK_RE):
-        codes.extend(m.group(1) for m in regex.finditer(blob))
-    seen: set = set()
-    uniq: list[str] = []
-    for c in codes:
-        if c.lower() not in seen:
-            seen.add(c.lower())
-            uniq.append(c)
+    if not asserts:
+        seen: set = set()
+        for regex in (_ASSERT_CODE_RE, _LOOKUP_BLOCK_RE):
+            for m in regex.finditer(blob):
+                code = m.group(1)
+                if code.lower() in seen or _is_windows_event_id(code):
+                    continue
+                seen.add(code.lower())
+                asserts.append({"code": code, "cpu": "", "data": {}, "line": "",
+                                "source": "agent_text"})
+                if len(asserts) >= MAX_ASSERTS_PER_CASE:
+                    break
+            if len(asserts) >= MAX_ASSERTS_PER_CASE:
+                break
+        source = "agent_text" if asserts else None
+
     yellow = bool(_YELLOW_BANG_RE.search(blob)
                   or _YELLOW_BANG_RE.search(str(getattr(analysis, "issue_type", "") or "")))
-    return {"assert_codes": uniq[:MAX_ASSERTS_PER_CASE], "yellow_bang": yellow}
+    return {"assert_codes": [a["code"] for a in asserts],
+            "asserts": asserts, "yellow_bang": yellow, "source": source}
 
 
-def build_assert_question(code: str, lookup_text: str, context: str = "") -> str:
-    parts = [
-        "A WiFi firmware assert was hit in an Intel wireless driver customer "
-        f"case (IPS). Assert code: {code}.",
+def build_assert_question(code: str, lookup_text: str, context: str = "",
+                          cpu: str = "", data: Optional[dict] = None,
+                          log_line: str = "") -> str:
+    head = ("A WiFi firmware assert was hit in an Intel wireless driver customer "
+            f"case (IPS). Assert code (rtStatus): {code}"
+            + (f", CPU: {cpu}" if cpu else "") + ".")
+    parts = [head]
+    if data:
+        parts.append("Assert data fields: "
+                     + ", ".join(f"{k} = {v}" for k, v in sorted(data.items())))
+    if log_line:
+        parts += ["", "Driver log line:", log_line.strip()[:400]]
+    parts += [
         "",
         "Assert entry resolved from the driver headers "
         "(assertLmac.h / assertUmac.h):",
@@ -194,11 +276,17 @@ def collect_echo_insights(analysis,
     context = str(getattr(analysis, "clean_description", "") or "")
     insights: list[dict] = []
 
-    for code in evidence["assert_codes"]:
+    for a in evidence["asserts"]:
+        code = a["code"]
         lookup = lookup_assert_code(code)
-        question = build_assert_question(code, lookup, context)
-        entry = {"kind": "assert", "code": code, "lookup": lookup,
-                 "question": question, "answer": None, "error": None}
+        question = build_assert_question(code, lookup, context,
+                                         cpu=a.get("cpu", ""),
+                                         data=a.get("data") or {},
+                                         log_line=a.get("line", ""))
+        entry = {"kind": "assert", "code": code, "cpu": a.get("cpu", ""),
+                 "data": a.get("data") or {}, "source": a.get("source"),
+                 "lookup": lookup, "question": question,
+                 "answer": None, "error": None}
         try:
             entry["answer"] = ask(question)
         except EchoUnavailable as e:

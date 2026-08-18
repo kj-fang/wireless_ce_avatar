@@ -483,9 +483,43 @@ def smoke_echo_kb() -> None:
                 "content": "=== Assert Code Lookup: 0x02001234 ===\nName: FOO"},
                {"role": "assistant", "content": "assert 0X02001234 again"}]))
     ev = find_assert_evidence(a)
-    check("S7.a assert code detected + deduped case-insensitively",
-          ev["assert_codes"] == ["0x02001234"] and not ev["yellow_bang"],
-          str(ev))
+    check("S7.a agent-text fallback: code detected + deduped case-insensitively",
+          ev["assert_codes"] == ["0x02001234"] and ev["source"] == "agent_text"
+          and not ev["yellow_bang"], str(ev))
+
+    # Windows event-log ID (5002 = adapter reset) is NOT a firmware assert.
+    e = CaseAnalysis(case_nbr="01234570", mode="full", ok=True)
+    e.incidents.append(IncidentReport(
+        report_text="Event log shows assert event 0x5002 (adapter reset) twice."))
+    check("S7.a2 Windows event ID 5002 rejected as assert code",
+          find_assert_evidence(e)["assert_codes"] == [],
+          str(find_assert_evidence(e)))
+
+    # WRT-log scan is authoritative and beats agent-text mentions.
+    import tempfile as _tf
+    wrt = Path(_tf.mkdtemp(prefix="hf_s7_")) / "x.etl.log"
+    wrt.write_text(
+        "81242 07/09/2026-00:26:19.480 [1] [NIC_DEBUG] [INFO] scan start\n"
+        "81243 07/09/2026-00:26:19.481 [1] [NIC_DEBUG] [ERROR] "
+        "[prvNicDbgHandleUmacErrLog]:FATAL_ERROR: uCode ASSERT(UMAC, "
+        "rtStatus = 0x2000008A, log is  valid. data1 = 0x158f8cca, data2 = 0xfe10fe1)\n"
+        "81244 07/09/2026-00:26:19.482 [1] [NIC_DEBUG] [ERROR] "
+        "FATAL_ERROR: uCode ASSERT(UMAC, rtStatus = 0x2000008A, repeated)\n",
+        encoding="utf-8")
+    w = CaseAnalysis(case_nbr="01234571", mode="full", ok=True, log_path=str(wrt))
+    w.incidents.append(IncidentReport(report_text="assert 0x5002 in event log"))
+    evw = find_assert_evidence(w)
+    check("S7.a3 WRT log assert wins: rtStatus code + CPU + data fields, deduped",
+          evw["source"] == "wrt_log" and evw["assert_codes"] == ["0x2000008A"]
+          and evw["asserts"][0]["cpu"] == "UMAC"
+          and evw["asserts"][0]["data"] == {"data1": "0x158f8cca", "data2": "0xfe10fe1"},
+          str(evw))
+    q_asked: list[str] = []
+    collect_echo_insights(w, ask=lambda q: (q_asked.append(q) or "ok"))
+    check("S7.a4 question carries rtStatus, CPU, data fields and the log line",
+          "0x2000008A" in q_asked[0] and "CPU: UMAC" in q_asked[0]
+          and "data1 = 0x158f8cca" in q_asked[0] and "uCode ASSERT" in q_asked[0],
+          q_asked[0][:400])
 
     asked: list[str] = []
     def _fake_ask(q):

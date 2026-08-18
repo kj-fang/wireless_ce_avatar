@@ -1,0 +1,5 @@
+# Server-side only. Deliberately NOT in the root requirements.txt: IntelAvatar.spec
+# bundles services/ into the EXE, and the client must never carry a DB driver.
+SQLAlchemy>=2.0
+psycopg[binary]>=3.1
+alembic>=1.13

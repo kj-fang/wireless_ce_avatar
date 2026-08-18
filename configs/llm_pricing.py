@@ -28,6 +28,11 @@ from __future__ import annotations
 from typing import Any, Optional
 
 # Bump on every rate change (stored alongside each computed cost).
+#
+# Deliberately NOT bumped when MODEL_ALIASES changed on 2026-08-18: no rate
+# moved, only the set of names that resolve to one. Bumping would imply the
+# numbers were produced by a different rate table and make a re-priced record
+# look inconsistent with one priced correctly the first time.
 PRICING_VERSION = "2026-08-04"
 
 # Multipliers applied to the INPUT rate for cached tokens. Anthropic bills a
@@ -51,9 +56,50 @@ RATES_PER_MTOK: dict[str, dict[str, float]] = {
 }
 
 
+# Alternate spellings that must resolve to the same rates. Add irregular ones
+# here; the regular family/version transposition is derived automatically below.
+#
+# This is not cosmetic. The gateway in production reports
+# "claude-4-6-sonnet" while the table is keyed "claude-sonnet-4-6", and the
+# mismatch left 481,001 tokens across 26 invocations unpriced between the v6
+# rollout and 2026-08-18. `unpriced_model` made that visible rather than
+# reporting the spend as zero, but the right fix is for the name to resolve.
+MODEL_ALIASES: dict[str, str] = {}
+
+
+def _transposed(key: str) -> Optional[str]:
+    """``claude-sonnet-4-6`` -> ``claude-4-6-sonnet``, or None if not that shape."""
+    parts = key.split("-")
+    if len(parts) >= 4 and parts[0] == "claude":
+        return "-".join(["claude", *parts[2:], parts[1]])
+    return None
+
+
+def _build_aliases() -> dict[str, str]:
+    """Derive aliases from the rate table so the two can never drift apart.
+
+    Deriving beats a hand-written second table: adding a model to
+    RATES_PER_MTOK gives it the transposed spelling for free, and a rate change
+    is still a single edit in one place.
+    """
+    out = dict(MODEL_ALIASES)
+    for canonical in RATES_PER_MTOK:
+        alt = _transposed(canonical)
+        if alt and alt not in RATES_PER_MTOK:
+            out.setdefault(alt, canonical)
+    return out
+
+
+_ALIASES = _build_aliases()
+
+
 def resolve_rates(model: str) -> Optional[dict[str, float]]:
     """
     Return ``{"input": x, "output": y}`` per 1M tokens for ``model``.
+
+    Matching is case-insensitive: exact, then alias, then longest-prefix over
+    both, so a gateway that transposes the family name or appends a suffix
+    ("claude-4-6-sonnet-20260514") still resolves.
 
     Returns None for an unknown model — callers must then record the token
     counts but leave cost unset. Guessing a rate would put a wrong number in
@@ -64,12 +110,16 @@ def resolve_rates(model: str) -> Optional[dict[str, float]]:
         return None
     if key in RATES_PER_MTOK:
         return RATES_PER_MTOK[key]
+    if key in _ALIASES:
+        return RATES_PER_MTOK[_ALIASES[key]]
     # Longest-prefix match so the most specific entry wins.
     best: Optional[str] = None
-    for known in RATES_PER_MTOK:
+    for known in (*RATES_PER_MTOK, *_ALIASES):
         if key.startswith(known) and (best is None or len(known) > len(best)):
             best = known
-    return RATES_PER_MTOK[best] if best else None
+    if best is None:
+        return None
+    return RATES_PER_MTOK[_ALIASES.get(best, best)]
 
 
 def cost_for(model: str, usage: Any) -> Optional[dict]:

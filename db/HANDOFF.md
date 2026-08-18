@@ -231,16 +231,32 @@ the source of truth.
 
 ---
 
-## 9. Known issue in the incoming data
+## 9. Unpriced rows, and settling them later
 
-Not a database problem, but it will be visible immediately and it is better to
-expect it: the deployed client reports its model as **`claude-4-6-sonnet`**,
-while the pricing table keys on `claude-sonnet-4-6`. Every AI invocation
-currently arrives **unpriced** — 481,001 tokens across 26 invocations with no
-cost, as of 2026-08-18.
+`cost_usd IS NULL` means the model name was not in the rate table, so the
+tokens were recorded and no figure was guessed. `gold.v_conversation_spend`
+exposes `unpriced_turns` alongside the total, so a partial total is never
+mistaken for a complete bill.
 
-The schema handles this correctly: those rows land with `cost_usd IS NULL` and
-`unpriced_model = 'claude-4-6-sonnet'`, and `gold.v_conversation_spend` exposes
-`unpriced_turns` so a total is never mistaken for a complete bill. A fix on the
-application side is in progress; historical rows can be re-priced later by
-replaying from `bronze.raw_event`.
+This was live: the deployed client reported its model as `claude-4-6-sonnet`
+while the table was keyed `claude-sonnet-4-6`, leaving 481,001 tokens across 26
+invocations unpriced. `configs/llm_pricing.py` now derives the transposed
+spelling from the rate table itself, so new records price correctly and the two
+cannot drift apart.
+
+Rows already stored are settled by replaying the usage bronze already holds:
+
+```bash
+python -m db.reprice --dsn "postgresql+psycopg://..." --dry-run   # report only
+python -m db.reprice --dsn "postgresql+psycopg://..."             # apply
+```
+
+**It only fills NULLs. A settled figure is never recomputed** — every statement
+carries `WHERE cost_usd IS NULL`. That distinction matters: filling a gap is
+not the same as restating spend that has already been quoted, and this tool
+must never become a "recalculate everything at today's rates" button. Running
+it twice is a no-op.
+
+Expect it to report roughly **$1.90 across 26 invocations** on the first run
+against the current share contents. Anything it cannot price is listed by model
+name so the rate table can be extended.

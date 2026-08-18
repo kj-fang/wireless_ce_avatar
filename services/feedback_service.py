@@ -91,6 +91,8 @@ RECORD_SCHEMA_VERSION = 6
 
 _root_cache: Optional[Path] = None
 _root_lock = threading.Lock()
+_user_email_cache: Optional[str] = None
+_user_email_lock = threading.Lock()
 
 
 def _current_user() -> str:
@@ -104,7 +106,9 @@ def _current_user() -> str:
     return safe
 
 
-_EMAIL_RE = re.compile(r"^[^\s@]+@[^\s@]+\.[^\s@]+$")
+# Windows UPNs may use a single-label AD domain (for example `user@DOMAIN`),
+# so do not require a dot in the domain portion.
+_EMAIL_RE = re.compile(r"^[^\s@]+@[^\s@]+$")
 
 
 def _normalize_email(value: Any) -> str:
@@ -119,25 +123,39 @@ def _normalize_email(value: Any) -> str:
 
 def _current_user_email() -> str:
     """
-    Best-effort user email attribution.
+    Return the process-cached best-effort user email attribution.
 
     Resolution order:
       1) Common env vars (USEREMAIL/EMAIL/MAIL/UPN)
       2) helpers.detect_user_email() (whoami /upn wrapper)
       3) empty string when unavailable
-    """
-    for key in ("USEREMAIL", "EMAIL", "MAIL", "UPN"):
-        e = _normalize_email(os.environ.get(key, ""))
-        if e:
-            return e
 
-    try:
-        e = _normalize_email(helpers.detect_user_email())
-        if e:
-            return e
-    except Exception:
-        pass
-    return ""
+    An empty result is cached too: repeatedly spawning `whoami /upn` for
+    every feedback event would otherwise add avoidable latency on machines
+    where no UPN can be resolved.
+    """
+    global _user_email_cache
+    if _user_email_cache is not None:
+        return _user_email_cache
+
+    with _user_email_lock:
+        if _user_email_cache is not None:
+            return _user_email_cache
+
+        resolved = ""
+        for key in ("USEREMAIL", "EMAIL", "MAIL", "UPN"):
+            resolved = _normalize_email(os.environ.get(key, ""))
+            if resolved:
+                break
+
+        if not resolved:
+            try:
+                resolved = _normalize_email(helpers.detect_user_email())
+            except Exception:
+                pass
+
+        _user_email_cache = resolved
+        return resolved
 
 
 def _resolve_root() -> Path:

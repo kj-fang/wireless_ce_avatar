@@ -66,8 +66,10 @@ from utils import helpers
 #         should treat them as absent on v4+ records.
 #   v5  - Added feedback_event_id for joining detailed submits to Gather v6
 #         counters, plus the packaged app_version that emitted the record.
+#   v6  - Added `submitted_by_email` (best-effort UPN/email attribution) on
+#         snapshot roots and all JSONL feedback events.
 # ---------------------------------------------------------------------------
-RECORD_SCHEMA_VERSION = 5
+RECORD_SCHEMA_VERSION = 6
 
 
 # --- Storage location ----------------------------------------------------
@@ -89,6 +91,8 @@ RECORD_SCHEMA_VERSION = 5
 
 _root_cache: Optional[Path] = None
 _root_lock = threading.Lock()
+_user_email_cache: Optional[str] = None
+_user_email_lock = threading.Lock()
 
 
 def _current_user() -> str:
@@ -100,6 +104,58 @@ def _current_user() -> str:
     # Folder-safe — strip anything other than alphanum / dash / underscore.
     safe = re.sub(r"[^A-Za-z0-9_.-]+", "_", u).strip("._-") or "anon"
     return safe
+
+
+# Windows UPNs may use a single-label AD domain (for example `user@DOMAIN`),
+# so do not require a dot in the domain portion.
+_EMAIL_RE = re.compile(r"^[^\s@]+@[^\s@]+$")
+
+
+def _normalize_email(value: Any) -> str:
+    """Normalize a raw email/UPN string; returns empty when invalid."""
+    if not isinstance(value, str):
+        return ""
+    out = value.strip().lower()
+    if not out:
+        return ""
+    return out if _EMAIL_RE.match(out) else ""
+
+
+def _current_user_email() -> str:
+    """
+    Return the process-cached best-effort user email attribution.
+
+    Resolution order:
+      1) Common env vars (USEREMAIL/EMAIL/MAIL/UPN)
+      2) helpers.detect_user_email() (whoami /upn wrapper)
+      3) empty string when unavailable
+
+    An empty result is cached too: repeatedly spawning `whoami /upn` for
+    every feedback event would otherwise add avoidable latency on machines
+    where no UPN can be resolved.
+    """
+    global _user_email_cache
+    if _user_email_cache is not None:
+        return _user_email_cache
+
+    with _user_email_lock:
+        if _user_email_cache is not None:
+            return _user_email_cache
+
+        resolved = ""
+        for key in ("USEREMAIL", "EMAIL", "MAIL", "UPN"):
+            resolved = _normalize_email(os.environ.get(key, ""))
+            if resolved:
+                break
+
+        if not resolved:
+            try:
+                resolved = _normalize_email(helpers.detect_user_email())
+            except Exception:
+                pass
+
+        _user_email_cache = resolved
+        return resolved
 
 
 def _resolve_root() -> Path:
@@ -608,6 +664,7 @@ def _new_snapshot(conversation_id: str, session_id: str,
         "conversation_id": conversation_id,
         "session_id": session_id or "",
         "submitted_by": _current_user(),
+        "submitted_by_email": _current_user_email() or None,
         # Human-readable analysis domain on disk ("wifi" | "bt").
         "domain": norm or "wifi",
         # Internal routing key (""/"bt") — stripped before the file is
@@ -802,6 +859,7 @@ def record_vote(
         "ts": _now_iso(),
         "session_id": session_id or "",
         "submitted_by": _current_user(),
+        "submitted_by_email": _current_user_email() or None,
         "domain": eff_domain or "wifi",
         "conversation_id": conversation_id,
         "turn_id": turn_id,
@@ -1241,6 +1299,7 @@ def record_detail(
         "app_version": APP_VERSION,
         "session_id": session_id or "",
         "submitted_by": _current_user(),
+        "submitted_by_email": _current_user_email() or None,
         "domain": eff_domain or "wifi",
         "conversation_id": conversation_id,
         "turn_id": turn_id,
@@ -1426,6 +1485,7 @@ def record_step_vote(
         "ts": _now_iso(),
         "session_id": session_id or "",
         "submitted_by": _current_user(),
+        "submitted_by_email": _current_user_email() or None,
         "domain": eff_domain or "wifi",
         "conversation_id": conversation_id,
         "turn_id": turn_id,
@@ -1488,6 +1548,7 @@ def record_helpful_skill(
         "ts": _now_iso(),
         "session_id": session_id or "",
         "submitted_by": _current_user(),
+        "submitted_by_email": _current_user_email() or None,
         "domain": eff_domain or "wifi",
         "conversation_id": conversation_id,
         "turn_id": turn_id,
@@ -1560,6 +1621,7 @@ def record_skill_assessment(
         "ts": _now_iso(),
         "session_id": session_id or "",
         "submitted_by": _current_user(),
+        "submitted_by_email": _current_user_email() or None,
         "domain": eff_domain or "wifi",
         "conversation_id": conversation_id,
         "turn_id": turn_id,

@@ -21,7 +21,13 @@ from sqlalchemy.dialects.postgresql import JSONB, UUID
 
 metadata = MetaData()
 
-ENVIRONMENTS = ("production", "sim", "format_check", "dev")
+# Split by 004: `environment` says where the data belongs, `record_kind` says
+# how it came to exist, and `execution_mode` says how the program was running.
+# One column used to answer all three, which made "a format check produced by a
+# developer build" unrepresentable.
+ENVIRONMENTS = ("production", "dev")
+RECORD_KINDS = ("real", "sim", "format_check")
+EXECUTION_MODES = ("exe", "developer")
 
 # Kept in sync with avatar_silver_turn_status. Ranked because two unordered threads
 # write a turn: the route reports the outcome it saw, the usage worker settles
@@ -42,6 +48,8 @@ raw_event = Table(
     Column("app_version", Text, nullable=False, server_default=""),
     Column("payload", JSONB, nullable=False),
     Column("source_ref", Text, nullable=False, server_default=""),
+    Column("execution_mode", Text, nullable=False, server_default="exe"),
+    Column("record_kind", Text, nullable=False, server_default="real"),
 )
 
 
@@ -129,6 +137,8 @@ workflow = Table(
     Column("app_version", Text, nullable=False, server_default=""),
     Column("started_at", DateTime(timezone=True), nullable=False),
     Column("updated_at", DateTime(timezone=True), nullable=False),
+    Column("execution_mode", Text, nullable=False, server_default="exe"),
+    Column("record_kind", Text, nullable=False, server_default="real"),
     # The attachment claim and its provenance. An empty declaration_source
     # means the attachment AI never ran for this workflow — distinct from it
     # running and being unable to decide, which leaves a source but a NULL
@@ -138,6 +148,9 @@ workflow = Table(
     Column("declaration_confidence", Text, nullable=False, server_default=""),
     Column("declaration_conflict", Boolean, nullable=False, server_default="false"),
     CheckConstraint(f"environment IN {ENVIRONMENTS}", name="workflow_environment_ck"),
+    CheckConstraint(f"record_kind IN {RECORD_KINDS}", name="workflow_record_kind_ck"),
+    CheckConstraint(f"execution_mode IN {EXECUTION_MODES}",
+                    name="workflow_execution_mode_ck"),
     CheckConstraint("declared_attached IS NULL OR declaration_source <> ''",
                     name="workflow_declaration_ck"),
 )
@@ -163,6 +176,8 @@ conversation = Table(
     Column("updated_at", DateTime(timezone=True), nullable=False),
     Column("issue_time", DateTime(timezone=True)),
     Column("issue_window_minutes", SmallInteger),
+    Column("execution_mode", Text, nullable=False, server_default="exe"),
+    Column("record_kind", Text, nullable=False, server_default="real"),
     Column("primary_file_id", BigInteger, ForeignKey("avatar_silver_log_file.file_id")),
     CheckConstraint("case_ref_source IN ('explicit','derived_from_path','absent')",
                     name="conversation_case_ref_ck"),
@@ -251,5 +266,7 @@ feedback_event = Table(
     Column("user_id", Integer, ForeignKey("avatar_silver_app_user.user_id"),
            nullable=False),
     Column("environment", Text, nullable=False),
+    Column("execution_mode", Text, nullable=False, server_default="exe"),
+    Column("record_kind", Text, nullable=False, server_default="real"),
     Column("submitted_at", DateTime(timezone=True), nullable=False),
 )

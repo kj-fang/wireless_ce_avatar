@@ -327,6 +327,7 @@ def _upsert_workflow(conn: Connection, cache: _DimCache, ev: dict) -> None:
     stmt = pg_insert(m.workflow).values(
         workflow_id=_as_uuid(p["workflow_id"]), user_id=uid, case_id=cid,
         technology_id=tech, environment=ev["environment"],
+        execution_mode=str(ev.get("execution_mode") or "exe"), record_kind=str(ev.get("record_kind") or "real"), 
         app_version=ev.get("app_version", ""), started_at=at, updated_at=at,
     ).on_conflict_do_update(
         index_elements=[m.workflow.c.workflow_id],
@@ -362,6 +363,7 @@ def _upsert_conversation(conn: Connection, cache: _DimCache, ev: dict) -> None:
         user_id=uid, case_id=cid, case_ref_source=src,
         agent_id=ag, technology_id=tech,
         environment=ev["environment"], app_version=ev.get("app_version", ""),
+        execution_mode=str(ev.get("execution_mode") or "exe"), record_kind=str(ev.get("record_kind") or "real"), 
         started_at=at, updated_at=at,
         issue_time=_as_dt(p.get("issue_time")),
         issue_window_minutes=p.get("issue_time_window_minutes"),
@@ -576,6 +578,7 @@ def _upsert_feedback(conn: Connection, cache: _DimCache, ev: dict) -> None:
         workflow_id=_parent_id(conn, m.workflow.c.workflow_id,
                                _as_uuid(p.get("workflow_id"))),
         case_id=cid, user_id=uid, environment=ev["environment"],
+        execution_mode=str(ev.get("execution_mode") or "exe"), record_kind=str(ev.get("record_kind") or "real"), 
         submitted_at=at,
     ).on_conflict_do_nothing(
         index_elements=[m.feedback_event.c.feedback_event_id])
@@ -621,6 +624,7 @@ def ingest_batch(conn: Connection, events: Iterable[dict]) -> IngestResult:
                         event_id=_as_uuid(eid), event_type=etype,
                         schema_version=int(ev.get("schema_version") or 1),
                         environment=str(ev.get("environment") or "production"),
+                        execution_mode=str(ev.get("execution_mode") or "exe"), record_kind=str(ev.get("record_kind") or "real"), 
                         occurred_at=occurred,
                         received_at=datetime.now(timezone.utc),
                         user_name=str(ev.get("user_name") or ""),

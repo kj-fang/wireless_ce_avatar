@@ -69,36 +69,104 @@ _CASE_IN_PATH = re.compile(r"[\\/](0[01]\d{6})[\\/]")
 _SIM_PREFIX = "SIM-"
 
 
+# Where each execution mode writes, relative to the share root. The legacy
+# root is scanned as `exe` because before this split Developer mode never wrote
+# to the share at all — so that is a statement of fact about existing files,
+# not a guess about them.
+SOURCE_ROOTS: tuple[tuple[str, str], ...] = (
+    ("", "exe"),            # legacy layout: Gather/<kind>/<user>/*.json
+    ("exe", "exe"),         # Gather/exe/<kind>/<user>/*.json
+    ("developer", "developer"),
+)
+
+
 # ------------------------------------------------------------------ scan --
-def scan(root: str, since: Optional[datetime] = None) -> list[tuple[str, str, str, float]]:
-    """Return (kind, path, file_name, mtime) for files newer than ``since``."""
+def scan(root: str, since: Optional[datetime] = None
+         ) -> list[tuple[str, str, str, float, str]]:
+    """
+    Return (kind, path, file_name, mtime, execution_mode) for changed files.
+
+    A directory that does not exist is skipped rather than reported: the exe/
+    and developer/ subtrees only appear once a client writes to them, and their
+    absence is the normal state until then.
+    """
     cut = since.timestamp() if since else 0.0
-    out: list[tuple[str, str, str, float]] = []
-    for kind in RECORD_KINDS:
-        base = os.path.join(root, kind)
-        if not os.path.isdir(base):
-            continue
-        for user_dir in os.scandir(base):
-            if not user_dir.is_dir():
+    out: list[tuple[str, str, str, float, str]] = []
+    seen: set[str] = set()
+    for prefix, mode in SOURCE_ROOTS:
+        for kind in RECORD_KINDS:
+            base = os.path.join(root, prefix, kind) if prefix else os.path.join(root, kind)
+            if not os.path.isdir(base):
                 continue
-            for entry in os.scandir(user_dir.path):
-                if not entry.name.endswith(".json"):
+            for user_dir in os.scandir(base):
+                if not user_dir.is_dir():
                     continue
-                mt = entry.stat().st_mtime      # cached by the listing
-                if mt > cut:
-                    out.append((kind, entry.path, entry.name, mt))
+                for entry in os.scandir(user_dir.path):
+                    if not entry.name.endswith(".json"):
+                        continue
+                    # The legacy root's own listing would otherwise walk into
+                    # exe/ and developer/, which are its children, and claim
+                    # their records as legacy.
+                    if entry.path in seen:
+                        continue
+                    seen.add(entry.path)
+                    mt = entry.stat().st_mtime      # cached by the listing
+                    if mt > cut:
+                        out.append((kind, entry.path, entry.name, mt, mode))
     return out
 
 
 # ------------------------------------------------- record -> event mapping --
-def _environment(rec: dict, file_name: str) -> str:
+def _record_kind(rec: dict, file_name: str) -> str:
+    """
+    Whether this record describes real work, a simulation, or a format probe.
+
+    Split out of `environment`, which used to answer this question and "where
+    does the data belong" with one value. A format-check produced by a
+    developer build is both, and one column could not say so.
+    """
     ids = (file_name, str(rec.get("conversation_id", "")),
            str(rec.get("workflow_id", "")), str(rec.get("feedback_event_id", "")))
     if any(i.startswith(_SIM_PREFIX) for i in ids):
         return "sim"
     if "format_check" in file_name:
         return "format_check"
+    return "real"
+
+
+def _environment(rec: dict, file_name: str, execution_mode: str) -> str:
+    """
+    Where the data belongs: production reporting, or development.
+
+    Anything a developer build produced, and anything that is a simulation or a
+    format probe, is development data regardless of which directory it came
+    from. An explicit `environment` on the record wins when it is one of the
+    two accepted values — a future client that knows it is running a test build
+    should be able to say so.
+    """
+    stated = str(rec.get("environment") or "").strip().lower()
+    if stated in ("production", "dev"):
+        return stated
+    if execution_mode == "developer":
+        return "dev"
+    if _record_kind(rec, file_name) != "real":
+        return "dev"
     return "production"
+
+
+def _execution_mode(rec: dict, from_path: str) -> str:
+    """
+    How the program was running when it wrote this record.
+
+    The directory decides unless the record states otherwise, and a stated
+    value must be one we recognise: an unknown string is treated as `exe`
+    rather than being passed through, so a typo in a future client cannot
+    invent a third mode that every downstream filter then misses.
+    """
+    stated = str(rec.get("execution_mode") or "").strip().lower()
+    if stated in ("exe", "developer"):
+        return stated
+    return from_path if from_path in ("exe", "developer") else "exe"
 
 
 def _case_ref(rec: dict) -> tuple[str, str]:
@@ -202,12 +270,16 @@ def _redact_filename(name: str) -> str:
     return f"{digest}{ext}"
 
 
-def _base(rec: dict, file_name: str, etype: str, eid, occurred) -> dict:
+def _base(rec: dict, file_name: str, etype: str, eid, occurred,
+          mode: str = "exe") -> dict:
+    execution_mode = _execution_mode(rec, mode)
     return {
         "event_id": str(eid),
         "event_type": etype,
         "schema_version": int(rec.get("schema_version") or 1),
-        "environment": _environment(rec, file_name),
+        "execution_mode": execution_mode,
+        "record_kind": _record_kind(rec, file_name),
+        "environment": _environment(rec, file_name, execution_mode),
         "occurred_at": occurred,
         "user_name": str(rec.get("user_name") or ""),
         "app_version": str(rec.get("app_version") or ""),
@@ -216,7 +288,7 @@ def _base(rec: dict, file_name: str, etype: str, eid, occurred) -> dict:
     }
 
 
-def session_events(rec: dict, file_name: str) -> Iterator[dict]:
+def session_events(rec: dict, file_name: str, mode: str = "exe") -> Iterator[dict]:
     conv = str(rec.get("conversation_id") or "").strip()
     if not conv:
         return
@@ -227,7 +299,7 @@ def session_events(rec: dict, file_name: str) -> Iterator[dict]:
     domain = rec.get("domain")
 
     ev = _base(rec, file_name, "conversation.started",
-               derive_event_id("legacy", "chatbot_session", conv, updated), created)
+               derive_event_id("legacy", "chatbot_session", conv, updated), created, mode)
     ev["payload"] = {
         "conversation_id": conv,
         "session_id": rec.get("session_id") or "",
@@ -258,7 +330,7 @@ def session_events(rec: dict, file_name: str) -> Iterator[dict]:
         tid = str(t.get("turn_id") or f"{conv}#{i}")
         tev = _base(rec, file_name, "turn.recorded",
                     derive_event_id("legacy", "turn", conv, tid),
-                    t.get("started_at") or created)
+                    t.get("started_at") or created, mode)
         tev["payload"] = {
             "turn_id": tid,
             "conversation_id": conv,
@@ -276,7 +348,7 @@ def session_events(rec: dict, file_name: str) -> Iterator[dict]:
         yield tev
 
 
-def workflow_events(rec: dict, file_name: str) -> Iterator[dict]:
+def workflow_events(rec: dict, file_name: str, mode: str = "exe") -> Iterator[dict]:
     wid = str(rec.get("workflow_id") or "").strip()
     if not wid:
         return
@@ -285,7 +357,7 @@ def workflow_events(rec: dict, file_name: str) -> Iterator[dict]:
     case = rec.get("case") or {}
 
     ev = _base(rec, file_name, "workflow.started",
-               derive_event_id("legacy", "workflow", wid, updated), created)
+               derive_event_id("legacy", "workflow", wid, updated), created, mode)
     ev["payload"] = {
         "workflow_id": wid,
         "case_nbr": str(case.get("case_nbr") or ""),
@@ -305,7 +377,7 @@ def workflow_events(rec: dict, file_name: str) -> Iterator[dict]:
         cost = inv.get("cost_usd") or {}
         iev = _base(rec, file_name, "invocation.recorded",
                     derive_event_id("legacy", "invocation", iid),
-                    inv.get("ts") or created)
+                    inv.get("ts") or created, mode)
         iev["payload"] = {
             "invocation_id": iid,
             "workflow_id": wid,
@@ -326,7 +398,7 @@ def workflow_events(rec: dict, file_name: str) -> Iterator[dict]:
     audit = rec.get("attachment_audit")
     if isinstance(audit, dict):
         aev = _base(rec, file_name, "attachment.audited",
-                    derive_event_id("legacy", "audit", wid, updated), created)
+                    derive_event_id("legacy", "audit", wid, updated), created, mode)
         aev["payload"] = {
             "workflow_id": wid,
             "declared_attached": audit.get("issue_declared_attached"),
@@ -354,13 +426,13 @@ def workflow_events(rec: dict, file_name: str) -> Iterator[dict]:
         yield aev
 
 
-def feedback_events(rec: dict, file_name: str) -> Iterator[dict]:
+def feedback_events(rec: dict, file_name: str, mode: str = "exe") -> Iterator[dict]:
     fid = str(rec.get("feedback_event_id") or "").strip()
     if not fid:
         return
     submitted = rec.get("submitted_at") or rec.get("date") or ""
     ev = _base(rec, file_name, "feedback.submitted",
-               derive_event_id("legacy", "feedback", fid), submitted)
+               derive_event_id("legacy", "feedback", fid), submitted, mode)
     ev["payload"] = {
         "feedback_event_id": fid,
         "conversation_id": rec.get("conversation_id") or None,
@@ -412,13 +484,13 @@ def build_events(root: str, since: Optional[datetime] = None) -> tuple[list[dict
     t_scan = time.time() - t0
     events, unread = [], 0
     t1 = time.time()
-    for kind, path, name, _mt in files:
+    for kind, path, name, _mt, mode in files:
         rec = _read_record(path, name)
         if rec is None:
             unread += 1
             continue
         if isinstance(rec, dict):
-            events.extend(_EXPANDERS[kind](rec, name))
+            events.extend(_EXPANDERS[kind](rec, name, mode))
     # Parents before children. Records live in one directory per kind and the
     # scan walks sessions first, so without this a conversation is offered
     # before the workflow it references and the foreign key fails. Sorting by

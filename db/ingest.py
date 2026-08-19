@@ -421,11 +421,21 @@ def _upsert_turn(conn: Connection, cache: _DimCache, ev: dict) -> None:
 
     # Rank comparison against the row already stored. The more specific outcome
     # wins whichever thread lands second.
-    rank_new = select(m.turn_status.c.rank).where(
-        m.turn_status.c.status == ins.excluded.status).scalar_subquery()
-    rank_old = select(m.turn_status.c.rank).where(
-        m.turn_status.c.status == m.turn.c.status).scalar_subquery()
-    keeps_new = rank_new >= rank_old
+    #
+    # The ranks are inlined as a CASE rather than looked up from turn_status
+    # with a scalar subquery. A subquery referencing `excluded` cannot work
+    # here: `excluded` is the ON CONFLICT pseudo-relation, and SQLAlchemy has
+    # nothing to correlate it to inside a nested SELECT, so it emits
+    # `FROM turn_status, avatar_silver_turn AS excluded` — a cross join over
+    # the whole turn table. That returns one row per existing turn and
+    # PostgreSQL raises CardinalityViolation, which means every update to an
+    # already-stored turn fails. It went unnoticed because the first load saw
+    # each turn exactly once and never entered this branch.
+    def _rank(col):
+        return case(*[(col == s, r) for s, r in m.TURN_STATUS_RANK.items()],
+                    else_=0)
+
+    keeps_new = _rank(ins.excluded.status) >= _rank(m.turn.c.status)
 
     stmt = ins.on_conflict_do_update(
         index_elements=[m.turn.c.turn_id],

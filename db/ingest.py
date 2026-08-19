@@ -1,5 +1,5 @@
 """
-Idempotent ingestion: telemetry events -> bronze.raw_event + silver entities.
+Idempotent ingestion: telemetry events -> avatar_bronze_raw_event + silver entities.
 
 Contract
 --------
@@ -443,8 +443,12 @@ def _upsert_attachment(conn: Connection, cache: _DimCache, ev: dict) -> None:
         ins = pg_insert(m.attachment_event).values(
             attachment_event_id=aid, workflow_id=wf,
             declared_name=str(item.get("name") or ""),
+            log_family=str(item.get("log_family") or ""),
             was_selected=bool(item.get("selected")),
             download_status=str(item.get("status") or "not_attempted"),
+            byte_size=item.get("bytes"),
+            latency_ms=item.get("latency_ms"),
+            attempt_count=item.get("attempt_count"),
             error_code=str(item.get("error_code") or ""),
             occurred_at=at,
         )
@@ -456,6 +460,13 @@ def _upsert_attachment(conn: Connection, cache: _DimCache, ev: dict) -> None:
                 "was_selected": m.attachment_event.c.was_selected
                                 | ins.excluded.was_selected,
                 "download_status": ins.excluded.download_status,
+                "log_family": ins.excluded.log_family,
+                "byte_size": func.coalesce(ins.excluded.byte_size,
+                                             m.attachment_event.c.byte_size),
+                "latency_ms": func.coalesce(ins.excluded.latency_ms,
+                                              m.attachment_event.c.latency_ms),
+                "attempt_count": func.coalesce(ins.excluded.attempt_count,
+                                                 m.attachment_event.c.attempt_count),
                 "error_code": ins.excluded.error_code,
             },
         ))

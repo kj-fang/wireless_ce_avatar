@@ -37,20 +37,17 @@ def inspect(conn) -> dict:
                has_schema_privilege(current_user, 'public', 'CREATE')
     """)).one()
 
-    schemas = conn.execute(text("""
-        SELECT wanted.schema_name,
-               EXISTS (SELECT 1 FROM pg_namespace n
-                       WHERE n.nspname = wanted.schema_name) AS exists,
-               COALESCE((
-                   SELECT SUM(pg_total_relation_size(c.oid))::bigint
-                   FROM pg_class c
-                   JOIN pg_namespace n ON n.oid = c.relnamespace
-                   WHERE n.nspname = wanted.schema_name
-                     AND c.relkind IN ('r', 'm')
-               ), 0) AS bytes
-        FROM (VALUES ('bronze'), ('silver'), ('gold')) AS wanted(schema_name)
-        ORDER BY wanted.schema_name
-    """)).all()
+    objects = conn.execute(text("""
+        SELECT count(*) FILTER (WHERE c.relkind IN ('r', 'p')) AS tables,
+               count(*) FILTER (WHERE c.relkind = 'v') AS views,
+               count(*) FILTER (WHERE c.relkind = 'i') AS indexes,
+               COALESCE(sum(pg_total_relation_size(c.oid))
+                        FILTER (WHERE c.relkind IN ('r', 'p', 'm')), 0)::bigint
+                        AS bytes
+        FROM pg_class c
+        JOIN pg_namespace n ON n.oid = c.relnamespace
+        WHERE n.nspname = 'public' AND c.relname LIKE 'avatar\\_%' ESCAPE '\\'
+    """)).one()
 
     tables = conn.execute(text("""
         SELECT schemaname, relname,
@@ -58,12 +55,36 @@ def inspect(conn) -> dict:
                    format('%I.%I', schemaname, relname)::regclass
                )::bigint AS bytes
         FROM pg_stat_user_tables
-        WHERE schemaname IN ('bronze', 'silver', 'gold')
+        WHERE schemaname = 'public' AND relname LIKE 'avatar\\_%' ESCAPE '\\'
         ORDER BY bytes DESC
         LIMIT 15
     """)).all()
 
-    return {"server": server, "schemas": schemas, "tables": tables}
+    attachment_columns = conn.execute(text("""
+        SELECT column_name
+        FROM information_schema.columns
+        WHERE table_schema = 'public'
+          AND table_name = 'avatar_silver_attachment_event'
+        ORDER BY ordinal_position
+    """)).scalars().all()
+
+    core_counts = {}
+    for table in (
+        "avatar_bronze_raw_event", "avatar_silver_workflow",
+        "avatar_silver_conversation", "avatar_silver_turn",
+        "avatar_silver_ai_invocation", "avatar_silver_attachment_event",
+        "avatar_silver_feedback_event",
+    ):
+        if conn.execute(text("SELECT to_regclass(:name)"),
+                        {"name": f"public.{table}"}).scalar_one() is not None:
+            # Names come from the constant tuple above, never from user input.
+            core_counts[table] = conn.execute(
+                text(f"SELECT count(*) FROM {table}")
+            ).scalar_one()
+
+    return {"server": server, "objects": objects, "tables": tables,
+            "attachment_columns": attachment_columns,
+            "core_counts": core_counts}
 
 
 def main() -> int:
@@ -103,16 +124,22 @@ def main() -> int:
         print("ERROR: telemetry schema requires PostgreSQL 12+", file=sys.stderr)
         return 1
 
-    print("telemetry schemas:")
-    for name, exists, size in result["schemas"]:
-        state = "exists" if exists else "missing"
-        print(f"  {name:<8} {state:<7} {_pretty_bytes(size)}")
+    objects = result["objects"]
+    print("telemetry objects in public:")
+    print(f"  tables={objects[0]} views={objects[1]} indexes={objects[2]} "
+          f"size={_pretty_bytes(objects[3])}")
     if result["tables"]:
         print("largest telemetry tables:")
         for schema, table, size in result["tables"]:
             print(f"  {schema}.{table}: {_pretty_bytes(size)}")
     else:
         print("largest telemetry tables: none (schema not initialized)")
+    if result["attachment_columns"]:
+        print("attachment columns: " + ", ".join(result["attachment_columns"]))
+    if result["core_counts"]:
+        print("core row counts:")
+        for table, count in result["core_counts"].items():
+            print(f"  {table}: {count}")
     return 0
 
 

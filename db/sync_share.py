@@ -40,6 +40,7 @@ no-op.
 from __future__ import annotations
 
 import argparse
+import hashlib
 import json
 import os
 import re
@@ -115,6 +116,85 @@ def _issue_time(raw) -> Optional[str]:
     return None
 
 
+# Log families we recognise. Anything else is reported as "other" rather than
+# passed through, so an unexpected filename can never leak a machine name.
+_LOG_FAMILIES = (
+    "wifidriverihvsession", "bthdriverihvsession", "sleepstudy", "wifilog",
+    "netsh", "wlan", "connectivity", "bugcheck", "sysinfo", "dxdiag", "cbs",
+)
+
+
+def _log_family(raw_name: str) -> str:
+    """Return a bounded category without retaining the original name."""
+    base = re.split(r"[\\/]", str(raw_name or ""))[-1].lower()
+    if not base:
+        return ""
+    return next((family for family in _LOG_FAMILIES if family in base), "other")
+
+
+def _log_facts(raw_path: str) -> dict:
+    """
+    Reduce a log path to what analysis actually uses, and nothing more.
+
+    The raw string is never stored. Measured on the live share, 147 paths carry
+    30 machine names (BOOK-K4OUJ458MK, KTOP-248M6NH, ...) and 19 home-directory
+    account names inside them, none of which any chart has ever needed. What the
+    charts do use is derived here instead:
+
+      origin  auto-downloaded from the case vs. a path the user supplied by
+              hand — the split that showed the tool has two distinct usage
+              modes that barely overlap.
+      family  which log type was analysed.
+      sha256  stable identity, so "the same file was analysed N times" stays
+              answerable without disclosing which file it was.
+
+    Anything that later needs the real path can read it from the share, which
+    remains the source of truth.
+    """
+    p = str(raw_path or "")
+    if not p:
+        return {"log_origin": "absent", "log_family": "", "log_path_sha256": ""}
+
+    low = p.lower()
+    if "\\downloads\\intelavatar_files" in low or "/downloads/intelavatar_files" in low:
+        origin = "auto_download"
+    elif p.startswith("\\\\") or p.startswith("//"):
+        origin = "network_share"
+    else:
+        origin = "manual_path"
+
+    return {
+        "log_origin": origin,
+        "log_family": _log_family(p),
+        "log_path_sha256": hashlib.sha256(p.encode("utf-8", "replace")).hexdigest(),
+    }
+
+
+def _redact_filename(name: str) -> str:
+    """
+    Reduce an attachment filename to `<sha256>.<ext>`.
+
+    Attachments are uploaded by customers and the filenames carry their machine
+    names — measured on the live share, 38 of them look like
+    ``DESKTOP-US0NBMR_wrt_2025-10-28-15-2-33.zip``. The extension is what the
+    audit actually groups by; the rest is somebody's hostname.
+
+    The full hash keeps "how many distinct files" and "the same file again"
+    answerable, keeps the derived attachment_event_id stable, and avoids making
+    a collision/privacy trade-off merely for display convenience.
+    """
+    n = str(name or "").strip()
+    if not n:
+        return ""
+    digest = hashlib.sha256(n.encode("utf-8", "replace")).hexdigest()
+    ext = ""
+    if "." in n:
+        tail = n.rsplit(".", 1)[-1].lower()
+        if tail.isalnum() and len(tail) <= 8:
+            ext = f".{tail}"
+    return f"{digest}{ext}"
+
+
 def _base(rec: dict, file_name: str, etype: str, eid, occurred) -> dict:
     return {
         "event_id": str(eid),
@@ -158,7 +238,9 @@ def session_events(rec: dict, file_name: str) -> Iterator[dict]:
         "issue_type": case.get("issue_type") or "",
         "issue_time": _issue_time(rec.get("issue_time")),
         "issue_time_window_minutes": rec.get("issue_time_window_minutes"),
-        "log_path": rec.get("log_path") or "",
+        # Derived facts only — the raw path is deliberately not stored. See
+        # _log_facts() for what it carries and why.
+        **_log_facts(rec.get("log_path")),
     }
     yield ev
 
@@ -242,11 +324,15 @@ def workflow_events(rec: dict, file_name: str) -> Iterator[dict]:
             "workflow_id": wid,
             "declared_attached": audit.get("issue_declared_attached"),
             "files": [
-                {"name": f.get("name") or f.get("file_name") or "",
-                 "selected": bool(f.get("selected")),
-                 "status": f.get("status") or f.get("download_status")
-                           or "not_attempted",
-                 "error_code": f.get("error_code") or ""}
+                 {"name": _redact_filename(f.get("name") or f.get("file_name")),
+                  "log_family": _log_family(f.get("name") or f.get("file_name")),
+                  "selected": bool(f.get("selected")),
+                  "status": f.get("status") or f.get("download_status")
+                            or "not_attempted",
+                  "bytes": f.get("bytes"),
+                  "latency_ms": f.get("latency_ms"),
+                  "attempt_count": f.get("attempt_count"),
+                  "error_code": f.get("error_code") or ""}
                 for f in (audit.get("files") or []) if isinstance(f, dict)
             ],
         }
@@ -306,7 +392,7 @@ def build_events(root: str, since: Optional[datetime] = None) -> tuple[list[dict
 def _read_watermark(conn, root: str) -> Optional[datetime]:
     from sqlalchemy import text
     row = conn.execute(
-        text("SELECT last_run_started_at FROM bronze.sync_state WHERE source_root = :r"),
+        text("SELECT last_run_started_at FROM avatar_bronze_sync_state WHERE source_root = :r"),
         {"r": root},
     ).fetchone()
     return row[0] if row else None
@@ -315,7 +401,7 @@ def _read_watermark(conn, root: str) -> Optional[datetime]:
 def _write_watermark(conn, root: str, started: datetime, stats: dict) -> None:
     from sqlalchemy import text
     conn.execute(text("""
-        INSERT INTO bronze.sync_state
+        INSERT INTO avatar_bronze_sync_state
             (source_root, last_run_started_at, last_run_finished_at,
              files_seen, events_emitted)
         VALUES (:r, :s, now(), :f, :e)

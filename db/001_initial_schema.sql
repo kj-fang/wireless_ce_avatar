@@ -1,6 +1,23 @@
 -- =============================================================================
 -- IntelAvatar telemetry — PostgreSQL schema
 --
+-- OBJECT NAMING
+-- -------------
+-- Everything is created in `public` with an `avatar_<layer>_` prefix, because
+-- the role has CREATE in `public` but not at database level and so cannot
+-- create schemas. `public` on this database is NOT empty — it already holds 60
+-- objects belonging to an unrelated CROS/JIRA tracking system owned by the same
+-- role — so a bare `workflow` or `agent` table would be indistinguishable from
+-- someone else's, and one of ours (`sleep_study`) would have collided outright.
+--
+-- The layer stays in the name rather than being flattened away: bronze is the
+-- replayable source of truth and gold is disposable derived output. Retention
+-- and rebuild policy differ by layer, so that distinction has to survive.
+--
+-- If a DBA later grants the three schemas (see 000_bootstrap_schemas.sql), the
+-- schema-per-layer version of this file is the commit immediately before the
+-- one that introduced these prefixes; `git revert` restores it.
+--
 -- Layering
 --   bronze : raw_event      immutable JSONB, the replay source
 --   silver : normalised entities with real constraints (this file's bulk)
@@ -22,34 +39,15 @@
 -- turn.total_tokens and ai_invocation.total_tokens.
 -- =============================================================================
 
--- Create the three schemas only if they are genuinely missing.
---
--- Written as a conditional EXECUTE rather than CREATE SCHEMA IF NOT EXISTS so
--- that a role WITHOUT database-level CREATE can still run this file, provided
--- a DBA has pre-created the schemas (see 000_bootstrap_schemas.sql). Plain
--- CREATE SCHEMA IF NOT EXISTS is not reliably a no-op for permission purposes:
--- whether PostgreSQL short-circuits on existence before or after the ACL check
--- is a version-dependent detail this file should not depend on. Skipping the
--- statement outright removes the question.
-DO $$
-BEGIN
-    IF NOT EXISTS (SELECT 1 FROM pg_namespace WHERE nspname = 'bronze') THEN
-        EXECUTE 'CREATE SCHEMA bronze';
-    END IF;
-    IF NOT EXISTS (SELECT 1 FROM pg_namespace WHERE nspname = 'silver') THEN
-        EXECUTE 'CREATE SCHEMA silver';
-    END IF;
-    IF NOT EXISTS (SELECT 1 FROM pg_namespace WHERE nspname = 'gold') THEN
-        EXECUTE 'CREATE SCHEMA gold';
-    END IF;
-END $$;
+-- No CREATE SCHEMA. Everything lands in the role's default schema, normally
+-- `public`, which is where this role already has CREATE.
 
 
 -- =============================================================================
 -- BRONZE — every event exactly as the client sent it
 -- =============================================================================
 
-CREATE TABLE bronze.raw_event (
+CREATE TABLE avatar_bronze_raw_event (
     event_id        uuid        PRIMARY KEY,
     event_type      text        NOT NULL,
     schema_version  smallint    NOT NULL,
@@ -63,11 +61,11 @@ CREATE TABLE bronze.raw_event (
     app_version     text        NOT NULL DEFAULT '',
     payload         jsonb       NOT NULL,
     source_ref      text        NOT NULL DEFAULT '',   -- legacy file path or checksum
-    CONSTRAINT raw_event_environment_ck
+    CONSTRAINT avatar_bronze_raw_event_environment_ck
         CHECK (environment IN ('production', 'sim', 'format_check', 'dev'))
 );
 
-COMMENT ON TABLE bronze.raw_event IS
+COMMENT ON TABLE avatar_bronze_raw_event IS
 'Append-only. The ingestion API writes here and to silver in ONE transaction,
 so silver can never contain a row whose source event is missing. Safe to drop
 rows older than the retention window once silver is trusted; that is the only
@@ -76,7 +74,7 @@ deletion this table should ever see.';
 -- Watermark for the share sync job. One row per source root. Written in the
 -- same transaction as the events it covers, so a crash re-reads the window
 -- rather than skipping it.
-CREATE TABLE bronze.sync_state (
+CREATE TABLE avatar_bronze_sync_state (
     source_root          text        PRIMARY KEY,
     last_run_started_at  timestamptz NOT NULL,
     last_run_finished_at timestamptz NOT NULL,
@@ -84,8 +82,8 @@ CREATE TABLE bronze.sync_state (
     events_emitted       integer     NOT NULL DEFAULT 0
 );
 
-CREATE INDEX raw_event_received_idx ON bronze.raw_event (received_at);
-CREATE INDEX raw_event_type_idx     ON bronze.raw_event (event_type, received_at);
+CREATE INDEX avatar_bronze_raw_event_received_idx ON avatar_bronze_raw_event (received_at);
+CREATE INDEX avatar_bronze_raw_event_type_idx     ON avatar_bronze_raw_event (event_type, received_at);
 -- No GIN on payload. Add one only when a real query needs it — it roughly
 -- doubles write cost and the payload is not queried today.
 
@@ -95,12 +93,12 @@ CREATE INDEX raw_event_type_idx     ON bronze.raw_event (event_type, received_at
 -- =============================================================================
 
 -- The case technology. Two values, ever.
-CREATE TABLE silver.technology (
+CREATE TABLE avatar_silver_technology (
     technology_id   smallint    PRIMARY KEY,
     code            text        NOT NULL UNIQUE,
     label           text        NOT NULL
 );
-INSERT INTO silver.technology VALUES
+INSERT INTO avatar_silver_technology VALUES
     (1, 'wifi', 'Wi-Fi'),
     (2, 'bt',   'Bluetooth'),
     (0, 'unknown', 'Unknown');
@@ -109,18 +107,18 @@ INSERT INTO silver.technology VALUES
 -- third agent but not a third technology — this FK is what keeps the two
 -- questions ("what tech was the case?" / "which agent ran?") separable while
 -- still reconciling to the same totals.
-CREATE TABLE silver.agent (
+CREATE TABLE avatar_silver_agent (
     agent_id        smallint    PRIMARY KEY,
     code            text        NOT NULL UNIQUE,
-    technology_id   smallint    NOT NULL REFERENCES silver.technology
+    technology_id   smallint    NOT NULL REFERENCES avatar_silver_technology
 );
-INSERT INTO silver.agent VALUES
+INSERT INTO avatar_silver_agent VALUES
     (1, 'wifi', 1),
     (2, 'bt',   2),
     (3, 'nw',   1),          -- NW analyses Wi-Fi cases
     (0, 'unknown', 0);
 
-CREATE TABLE silver.app_user (
+CREATE TABLE avatar_silver_app_user (
     user_id     int         GENERATED ALWAYS AS IDENTITY PRIMARY KEY,
     user_name   text        NOT NULL UNIQUE,
     first_seen  timestamptz NOT NULL,
@@ -130,17 +128,17 @@ CREATE TABLE silver.app_user (
 -- case_nbr is absent on roughly half of real traffic (people analyse a log
 -- without opening a case). That is a legitimate state, not missing data, so
 -- the reference from a conversation is NULLABLE and carries its own source.
-CREATE TABLE silver.support_case (
+CREATE TABLE avatar_silver_support_case (
     case_id     int         GENERATED ALWAYS AS IDENTITY PRIMARY KEY,
     case_nbr    text        NOT NULL UNIQUE,
     subject     text        NOT NULL DEFAULT '',
     issue_type  text        NOT NULL DEFAULT '',
-    technology_id smallint  NOT NULL DEFAULT 0 REFERENCES silver.technology,
+    technology_id smallint  NOT NULL DEFAULT 0 REFERENCES avatar_silver_technology,
     first_seen  timestamptz NOT NULL,
     last_seen   timestamptz NOT NULL
 );
 
-CREATE TABLE silver.llm_model (
+CREATE TABLE avatar_silver_llm_model (
     model_id            int      GENERATED ALWAYS AS IDENTITY PRIMARY KEY,
     model_name          text     NOT NULL UNIQUE,
     -- Rates live here for reference only. The rate actually charged is copied
@@ -151,12 +149,12 @@ CREATE TABLE silver.llm_model (
     pricing_version     text     NOT NULL DEFAULT ''
 );
 
-CREATE TABLE silver.feature (
+CREATE TABLE avatar_silver_feature (
     feature_id  smallint    GENERATED ALWAYS AS IDENTITY PRIMARY KEY,
     code        text        NOT NULL UNIQUE,
     label       text        NOT NULL DEFAULT ''
 );
-INSERT INTO silver.feature (code, label) VALUES
+INSERT INTO avatar_silver_feature (code, label) VALUES
     ('chatbot_turn',                  'Chat turn'),
     ('select_attachments_ai_summary', 'Attachment click-AI'),
     ('issue_time_prepass',            'Issue-time extraction'),
@@ -166,17 +164,17 @@ INSERT INTO silver.feature (code, label) VALUES
 -- reports the outcome it saw, the usage worker settles tokens milliseconds
 -- later with its own default. The more specific outcome must win regardless of
 -- arrival order, and the DB is the last place that can still enforce it.
-CREATE TABLE silver.turn_status (
+CREATE TABLE avatar_silver_turn_status (
     status  text        PRIMARY KEY,
     rank    smallint    NOT NULL UNIQUE
 );
-INSERT INTO silver.turn_status VALUES
+INSERT INTO avatar_silver_turn_status VALUES
     ('started', 0), ('completed', 1), ('failed', 2), ('cancelled', 3);
 
 -- Files are identified by content hash, never by name. Two users download the
 -- same attachment to different paths; the same path is reused for different
 -- content across runs.
-CREATE TABLE silver.log_file (
+CREATE TABLE avatar_silver_log_file (
     file_id     bigint      GENERATED ALWAYS AS IDENTITY PRIMARY KEY,
     sha256      bytea       NOT NULL UNIQUE,
     byte_size   bigint,
@@ -196,16 +194,16 @@ CREATE TABLE silver.log_file (
 -- it is globally unique, stable across retries, and is exactly what idempotent
 -- ingestion has to upsert on anyway. A surrogate would add a lookup per insert
 -- and buy nothing at this volume.
-CREATE TABLE silver.workflow (
+CREATE TABLE avatar_silver_workflow (
     workflow_id     uuid        PRIMARY KEY,
-    user_id         int         NOT NULL REFERENCES silver.app_user,
-    case_id         int             NULL REFERENCES silver.support_case,
-    technology_id   smallint    NOT NULL DEFAULT 0 REFERENCES silver.technology,
+    user_id         int         NOT NULL REFERENCES avatar_silver_app_user,
+    case_id         int             NULL REFERENCES avatar_silver_support_case,
+    technology_id   smallint    NOT NULL DEFAULT 0 REFERENCES avatar_silver_technology,
     environment     text        NOT NULL,
     app_version     text        NOT NULL DEFAULT '',
     started_at      timestamptz NOT NULL,
     updated_at      timestamptz NOT NULL,
-    CONSTRAINT workflow_environment_ck
+    CONSTRAINT avatar_silver_workflow_environment_ck
         CHECK (environment IN ('production', 'sim', 'format_check', 'dev'))
 );
 
@@ -213,32 +211,32 @@ CREATE TABLE silver.workflow (
 -- currently 1:1 (131 of each), but session_id is the Flask session — it starts
 -- spanning conversations the moment someone opens two chats in one browser
 -- session. Modelled 1:N from the start so that day changes nothing.
-CREATE TABLE silver.conversation (
+CREATE TABLE avatar_silver_conversation (
     conversation_id uuid        PRIMARY KEY,
-    workflow_id     uuid            NULL REFERENCES silver.workflow,
+    workflow_id     uuid            NULL REFERENCES avatar_silver_workflow,
     http_session_id text        NOT NULL DEFAULT '',
-    user_id         int         NOT NULL REFERENCES silver.app_user,
-    case_id         int             NULL REFERENCES silver.support_case,
+    user_id         int         NOT NULL REFERENCES avatar_silver_app_user,
+    case_id         int             NULL REFERENCES avatar_silver_support_case,
     -- Whether the case number was stated or guessed. Without this a value
     -- derived from a folder name is indistinguishable from one the user gave,
     -- and only 15 of 64 case-less sessions can be recovered from the path at
     -- all — the rest genuinely have no case.
     case_ref_source text        NOT NULL DEFAULT 'absent',
-    agent_id        smallint    NOT NULL DEFAULT 0 REFERENCES silver.agent,
-    technology_id   smallint    NOT NULL DEFAULT 0 REFERENCES silver.technology,
+    agent_id        smallint    NOT NULL DEFAULT 0 REFERENCES avatar_silver_agent,
+    technology_id   smallint    NOT NULL DEFAULT 0 REFERENCES avatar_silver_technology,
     environment     text        NOT NULL,
     app_version     text        NOT NULL DEFAULT '',
     started_at      timestamptz NOT NULL,
     updated_at      timestamptz NOT NULL,
     issue_time      timestamptz     NULL,
     issue_window_minutes smallint   NULL,
-    primary_file_id bigint          NULL REFERENCES silver.log_file,
-    CONSTRAINT conversation_case_ref_ck
+    primary_file_id bigint          NULL REFERENCES avatar_silver_log_file,
+    CONSTRAINT avatar_silver_conversation_case_ref_ck
         CHECK (case_ref_source IN ('explicit', 'derived_from_path', 'absent')),
-    CONSTRAINT conversation_environment_ck
+    CONSTRAINT avatar_silver_conversation_environment_ck
         CHECK (environment IN ('production', 'sim', 'format_check', 'dev')),
     -- A derived or explicit source must actually have a case attached.
-    CONSTRAINT conversation_case_consistency_ck
+    CONSTRAINT avatar_silver_conversation_case_consistency_ck
         CHECK ((case_ref_source = 'absent') = (case_id IS NULL))
 );
 
@@ -246,14 +244,14 @@ CREATE TABLE silver.conversation (
 -- this table. That removes an entire bug class: the app previously accumulated
 -- tokens and cost in place on the conversation record, which is what made a
 -- late-arriving write able to corrupt an earlier settled figure.
-CREATE TABLE silver.turn (
+CREATE TABLE avatar_silver_turn (
     turn_id         uuid        PRIMARY KEY,
-    conversation_id uuid        NOT NULL REFERENCES silver.conversation
+    conversation_id uuid        NOT NULL REFERENCES avatar_silver_conversation
                                     ON DELETE CASCADE,
     seq             int             NULL,
-    status          text        NOT NULL REFERENCES silver.turn_status,
+    status          text        NOT NULL REFERENCES avatar_silver_turn_status,
     error_code      text        NOT NULL DEFAULT '',
-    model_id        int             NULL REFERENCES silver.llm_model,
+    model_id        int             NULL REFERENCES avatar_silver_llm_model,
     input_tokens        bigint  NOT NULL DEFAULT 0,
     cache_read_tokens   bigint  NOT NULL DEFAULT 0,
     cache_write_tokens  bigint  NOT NULL DEFAULT 0,
@@ -273,31 +271,31 @@ CREATE TABLE silver.turn (
     latency_ms      int             NULL,
     started_at      timestamptz NOT NULL,
     settled_at      timestamptz     NULL,
-    CONSTRAINT turn_tokens_nonneg_ck CHECK (
+    CONSTRAINT avatar_silver_turn_tokens_nonneg_ck CHECK (
         input_tokens >= 0 AND cache_read_tokens >= 0
         AND cache_write_tokens >= 0 AND output_tokens >= 0),
-    CONSTRAINT turn_cost_nonneg_ck CHECK (cost_usd IS NULL OR cost_usd >= 0),
+    CONSTRAINT avatar_silver_turn_cost_nonneg_ck CHECK (cost_usd IS NULL OR cost_usd >= 0),
     -- An unpriced turn must say which model it could not price, and a priced
     -- one must not claim it was unpriced.
-    CONSTRAINT turn_unpriced_ck CHECK (
+    CONSTRAINT avatar_silver_turn_unpriced_ck CHECK (
         (cost_usd IS NULL) = (unpriced_model <> ''))
 );
 
-CREATE INDEX turn_conversation_idx ON silver.turn (conversation_id);
-CREATE INDEX turn_started_idx      ON silver.turn (started_at);
-CREATE INDEX turn_model_idx        ON silver.turn (model_id) WHERE model_id IS NOT NULL;
+CREATE INDEX avatar_silver_turn_conversation_idx ON avatar_silver_turn (conversation_id);
+CREATE INDEX avatar_silver_turn_started_idx      ON avatar_silver_turn (started_at);
+CREATE INDEX avatar_silver_turn_model_idx        ON avatar_silver_turn (model_id) WHERE model_id IS NOT NULL;
 
 -- Every AI call made outside a chat turn: attachment click-AI, issue-time
 -- prepass, sleep-study. Same shape as a turn but hangs off the workflow,
 -- because these happen before an agent has even been chosen.
-CREATE TABLE silver.ai_invocation (
+CREATE TABLE avatar_silver_ai_invocation (
     invocation_id   uuid        PRIMARY KEY,
-    workflow_id     uuid        NOT NULL REFERENCES silver.workflow
+    workflow_id     uuid        NOT NULL REFERENCES avatar_silver_workflow
                                     ON DELETE CASCADE,
-    conversation_id uuid            NULL REFERENCES silver.conversation,
-    feature_id      smallint    NOT NULL REFERENCES silver.feature,
-    agent_id        smallint    NOT NULL DEFAULT 0 REFERENCES silver.agent,
-    model_id        int             NULL REFERENCES silver.llm_model,
+    conversation_id uuid            NULL REFERENCES avatar_silver_conversation,
+    feature_id      smallint    NOT NULL REFERENCES avatar_silver_feature,
+    agent_id        smallint    NOT NULL DEFAULT 0 REFERENCES avatar_silver_agent,
+    model_id        int             NULL REFERENCES avatar_silver_llm_model,
     input_tokens        bigint  NOT NULL DEFAULT 0,
     cache_read_tokens   bigint  NOT NULL DEFAULT 0,
     cache_write_tokens  bigint  NOT NULL DEFAULT 0,
@@ -312,47 +310,56 @@ CREATE TABLE silver.ai_invocation (
     error_code      text        NOT NULL DEFAULT '',
     latency_ms      int             NULL,
     occurred_at     timestamptz NOT NULL,
-    CONSTRAINT invocation_unpriced_ck CHECK (
+    CONSTRAINT avatar_silver_invocation_unpriced_ck CHECK (
         (cost_usd IS NULL) = (unpriced_model <> ''))
 );
 
-CREATE INDEX invocation_workflow_idx ON silver.ai_invocation (workflow_id);
-CREATE INDEX invocation_feature_idx  ON silver.ai_invocation (feature_id, occurred_at);
+CREATE INDEX avatar_silver_invocation_workflow_idx ON avatar_silver_ai_invocation (workflow_id);
+CREATE INDEX avatar_silver_invocation_feature_idx  ON avatar_silver_ai_invocation (feature_id, occurred_at);
 
 -- One row per file the tool discovered for a case, with what happened to it.
 -- The claim ("Log files attached: Yes") is on the workflow; the reality is
 -- these rows. The gap between them is the whole point of the audit.
-CREATE TABLE silver.attachment_event (
+CREATE TABLE avatar_silver_attachment_event (
     attachment_event_id uuid    PRIMARY KEY,
-    workflow_id     uuid        NOT NULL REFERENCES silver.workflow
+    workflow_id     uuid        NOT NULL REFERENCES avatar_silver_workflow
                                     ON DELETE CASCADE,
-    file_id         bigint          NULL REFERENCES silver.log_file,
+    file_id         bigint          NULL REFERENCES avatar_silver_log_file,
+    -- Pseudonymous SHA-256 key plus safe suffix; raw name remains in SMB.
     declared_name   text        NOT NULL DEFAULT '',
+    log_family      text        NOT NULL DEFAULT '',
     was_selected    boolean     NOT NULL DEFAULT false,
     download_status text        NOT NULL DEFAULT 'not_attempted',
+    byte_size       bigint          NULL,
+    latency_ms      int             NULL,
+    attempt_count   int             NULL,
     error_code      text        NOT NULL DEFAULT '',
     occurred_at     timestamptz NOT NULL,
-    CONSTRAINT attachment_status_ck CHECK (download_status IN
-        ('not_attempted', 'succeeded', 'failed', 'cancelled', 'already_present'))
+    CONSTRAINT avatar_silver_attachment_status_ck CHECK (download_status IN
+        ('not_attempted', 'succeeded', 'failed', 'cancelled', 'already_present')),
+    CONSTRAINT avatar_silver_attachment_metrics_ck CHECK (
+        (byte_size IS NULL OR byte_size >= 0)
+        AND (latency_ms IS NULL OR latency_ms >= 0)
+        AND (attempt_count IS NULL OR attempt_count >= 0))
 );
 
-CREATE INDEX attachment_workflow_idx ON silver.attachment_event (workflow_id);
+CREATE INDEX avatar_silver_attachment_workflow_idx ON avatar_silver_attachment_event (workflow_id);
 
 -- Join keys only. The feedback text itself stays in the feedback store; this
 -- table exists so the two can be joined later without telemetry ever holding
 -- free-form user writing.
-CREATE TABLE silver.feedback_event (
+CREATE TABLE avatar_silver_feedback_event (
     feedback_event_id uuid      PRIMARY KEY,
-    conversation_id uuid            NULL REFERENCES silver.conversation,
-    turn_id         uuid            NULL REFERENCES silver.turn,
-    workflow_id     uuid            NULL REFERENCES silver.workflow,
-    case_id         int             NULL REFERENCES silver.support_case,
-    user_id         int         NOT NULL REFERENCES silver.app_user,
+    conversation_id uuid            NULL REFERENCES avatar_silver_conversation,
+    turn_id         uuid            NULL REFERENCES avatar_silver_turn,
+    workflow_id     uuid            NULL REFERENCES avatar_silver_workflow,
+    case_id         int             NULL REFERENCES avatar_silver_support_case,
+    user_id         int         NOT NULL REFERENCES avatar_silver_app_user,
     environment     text        NOT NULL,
     submitted_at    timestamptz NOT NULL
 );
 
-CREATE INDEX feedback_turn_idx ON silver.feedback_event (turn_id)
+CREATE INDEX avatar_silver_feedback_turn_idx ON avatar_silver_feedback_event (turn_id)
     WHERE turn_id IS NOT NULL;
 
 
@@ -366,7 +373,7 @@ CREATE INDEX feedback_turn_idx ON silver.feedback_event (turn_id)
 -- Bronze: the first line of defence. If this says DO NOTHING and reports 0
 -- rows, the event was already processed and silver must not be touched.
 --
---   INSERT INTO bronze.raw_event (event_id, event_type, ...)
+--   INSERT INTO avatar_bronze_raw_event (event_id, event_type, ...)
 --   VALUES (...)
 --   ON CONFLICT (event_id) DO NOTHING
 --   RETURNING event_id;
@@ -374,12 +381,12 @@ CREATE INDEX feedback_turn_idx ON silver.feedback_event (turn_id)
 -- Turn: the one upsert that is not a plain overwrite. A late usage write must
 -- never downgrade a status that a route already reported, so the rank decides.
 --
---   INSERT INTO silver.turn AS t (turn_id, conversation_id, status, ...)
+--   INSERT INTO avatar_silver_turn AS t (turn_id, conversation_id, status, ...)
 --   VALUES (...)
 --   ON CONFLICT (turn_id) DO UPDATE SET
 --       status = CASE
---           WHEN (SELECT rank FROM silver.turn_status WHERE status = EXCLUDED.status)
---              >= (SELECT rank FROM silver.turn_status WHERE status = t.status)
+--           WHEN (SELECT rank FROM avatar_silver_turn_status WHERE status = EXCLUDED.status)
+--              >= (SELECT rank FROM avatar_silver_turn_status WHERE status = t.status)
 --           THEN EXCLUDED.status ELSE t.status END,
 --       -- token and cost columns are last-write-wins: they are settled once by
 --       -- the usage worker and never revised
@@ -399,7 +406,7 @@ CREATE INDEX feedback_turn_idx ON silver.feedback_event (turn_id)
 -- GOLD — analytics views. Every one filters to production.
 -- =============================================================================
 
-CREATE VIEW gold.v_conversation_spend AS
+CREATE VIEW avatar_gold_conversation_spend AS
 SELECT c.conversation_id,
        c.user_id, c.case_id, c.agent_id, c.technology_id,
        c.started_at::date            AS activity_date,
@@ -411,43 +418,43 @@ SELECT c.conversation_id,
        -- A conversation with any unpriced turn has a cost that is a floor,
        -- not a bill. Reporting must be able to say so.
        count(*) FILTER (WHERE t.cost_usd IS NULL)     AS unpriced_turns
-FROM silver.conversation c
-LEFT JOIN silver.turn t USING (conversation_id)
+FROM avatar_silver_conversation c
+LEFT JOIN avatar_silver_turn t USING (conversation_id)
 WHERE c.environment = 'production'
 GROUP BY c.conversation_id, c.user_id, c.case_id, c.agent_id,
          c.technology_id, c.started_at;
 
 -- The two-dimension reconciliation: agent-side and technology-side totals must
 -- match, because they partition the same spend two different ways.
-CREATE VIEW gold.v_spend_by_agent AS
+CREATE VIEW avatar_gold_spend_by_agent AS
 SELECT a.code AS agent, count(*) AS conversations,
        sum(s.total_tokens) AS tokens, sum(s.cost_usd) AS cost_usd
-FROM gold.v_conversation_spend s JOIN silver.agent a USING (agent_id)
+FROM avatar_gold_conversation_spend s JOIN avatar_silver_agent a USING (agent_id)
 GROUP BY a.code;
 
-CREATE VIEW gold.v_spend_by_technology AS
+CREATE VIEW avatar_gold_spend_by_technology AS
 SELECT tech.code AS technology, count(*) AS conversations,
        sum(s.total_tokens) AS tokens, sum(s.cost_usd) AS cost_usd
-FROM gold.v_conversation_spend s JOIN silver.technology tech USING (technology_id)
+FROM avatar_gold_conversation_spend s JOIN avatar_silver_technology tech USING (technology_id)
 GROUP BY tech.code;
 
-CREATE VIEW gold.v_feature_spend AS
+CREATE VIEW avatar_gold_feature_spend AS
 SELECT f.code AS feature, a.code AS agent,
        count(*) AS invocations,
        sum(i.total_tokens) AS tokens,
        sum(i.cost_usd) AS cost_usd,
        count(*) FILTER (WHERE i.cost_usd IS NULL) AS unpriced_invocations
-FROM silver.ai_invocation i
-JOIN silver.feature f USING (feature_id)
-JOIN silver.agent   a USING (agent_id)
-JOIN silver.workflow w USING (workflow_id)
+FROM avatar_silver_ai_invocation i
+JOIN avatar_silver_feature f USING (feature_id)
+JOIN avatar_silver_agent   a USING (agent_id)
+JOIN avatar_silver_workflow w USING (workflow_id)
 WHERE w.environment = 'production'
 GROUP BY f.code, a.code;
 
 -- Fortnightly buckets anchored on one fixed Monday and counted in days.
 -- Deriving parity from the ISO week number instead would flip the bucket
 -- boundary at every year that has 53 weeks.
-CREATE VIEW gold.v_fortnightly_usage AS
+CREATE VIEW avatar_gold_fortnightly_usage AS
 SELECT DATE '2026-06-22'
          + (floor((c.started_at::date - DATE '2026-06-22') / 14.0)::int * 14)
                                             AS fortnight_start,
@@ -456,12 +463,12 @@ SELECT DATE '2026-06-22'
        count(DISTINCT c.case_id)            AS cases_touched,
        count(*) FILTER (WHERE c.case_id IS NULL) AS conversations_without_case,
        count(*) FILTER (WHERE c.issue_time IS NOT NULL) AS with_issue_time
-FROM silver.conversation c
+FROM avatar_silver_conversation c
 WHERE c.environment = 'production'
 GROUP BY 1 ORDER BY 1;
 
 -- The data-quality KPI, as a query rather than a spreadsheet someone maintains.
-CREATE VIEW gold.v_data_quality AS
+CREATE VIEW avatar_gold_data_quality AS
 SELECT date_trunc('month', c.started_at) AS month,
        count(*) AS conversations,
        round(100.0 * count(*) FILTER (WHERE c.case_id IS NOT NULL) / count(*), 1)
@@ -473,9 +480,9 @@ SELECT date_trunc('month', c.started_at) AS month,
        round(100.0 * count(*) FILTER (WHERE c.app_version <> '') / count(*), 1)
                                                         AS pct_with_app_version,
        round(100.0 * count(*) FILTER (WHERE EXISTS (
-             SELECT 1 FROM silver.turn t
+             SELECT 1 FROM avatar_silver_turn t
              WHERE t.conversation_id = c.conversation_id AND t.cost_usd IS NULL))
              / count(*), 1)                             AS pct_with_unpriced_turn
-FROM silver.conversation c
+FROM avatar_silver_conversation c
 WHERE c.environment = 'production'
 GROUP BY 1 ORDER BY 1;

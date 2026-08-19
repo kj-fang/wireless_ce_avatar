@@ -1,5 +1,5 @@
 """
-Replay bronze.raw_event to settle rows that were never priced.
+Replay avatar_bronze_raw_event to settle rows that were never priced.
 
     python -m db.reprice --dry-run                           # db/.env
     python -m db.reprice                                     # apply
@@ -43,13 +43,13 @@ from db.config import DatabaseConfigError, database_url
 # Event types that carry billable usage, and where each lands in silver.
 _TARGETS = {
     "turn.recorded": {
-        "table": "silver.turn",
+        "table": "avatar_silver_turn",
         "pk": "turn_id",
         "payload_id": "turn_id",
         "has_rate_columns": True,
     },
     "invocation.recorded": {
-        "table": "silver.ai_invocation",
+        "table": "avatar_silver_ai_invocation",
         "pk": "invocation_id",
         "payload_id": "invocation_id",
         "has_rate_columns": False,
@@ -69,7 +69,7 @@ def _plan(conn, event_type: str) -> list[tuple[str, str, dict]]:
     rows = conn.execute(text(f"""
         SELECT e.payload ->> :pid   AS row_id,
                e.payload            AS payload
-        FROM bronze.raw_event e
+        FROM avatar_bronze_raw_event e
         JOIN {t['table']} s ON s.{t['pk']} = (e.payload ->> :pid)::uuid
         WHERE e.event_type = :etype
           AND s.cost_usd IS NULL

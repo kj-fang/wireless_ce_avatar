@@ -50,6 +50,52 @@ EVENT_TYPES = (
     "feedback.submitted",
 )
 
+# Silver rows must be written parents-first. A batch that arrives in file order
+# puts a conversation before the workflow it references and the foreign key
+# fails, so a producer that cannot guarantee order sorts by this instead.
+EVENT_ORDER = {t: i for i, t in enumerate(EVENT_TYPES)}
+
+# Download outcomes as the client has spelled them across versions. Records on
+# the share carry `already_exists` and `success`, which the column CHECK does
+# not accept; the canonical spellings are `already_present` and `succeeded`.
+# Mapping happens here rather than in the writer so that historical JSON on the
+# share is never rewritten.
+_ATTACHMENT_STATUS = {
+    "": "not_attempted",
+    "not_attempted": "not_attempted",
+    "pending": "not_attempted",
+    "skipped": "not_attempted",
+    "succeeded": "succeeded",
+    "success": "succeeded",
+    "ok": "succeeded",
+    "downloaded": "succeeded",
+    "already_present": "already_present",
+    "already_exists": "already_present",
+    "exists": "already_present",
+    "failed": "failed",
+    "failure": "failed",
+    "error": "failed",
+    "cancelled": "cancelled",
+    "canceled": "cancelled",
+}
+
+
+def normalise_attachment_status(raw: Any) -> str:
+    """
+    Translate a client download outcome to the vocabulary the column accepts.
+
+    An unrecognised word raises rather than defaulting. Folding it into
+    "not_attempted" would record a file that was in fact downloaded as one that
+    was never tried, which is worse than a visible rejection: the rejection is
+    retried on the next run once the word is added here, the silent mislabel is
+    never noticed.
+    """
+    s = str(raw or "").strip().lower()
+    try:
+        return _ATTACHMENT_STATUS[s]
+    except KeyError:
+        raise ValueError(f"unknown attachment download_status: {s!r}") from None
+
 
 @dataclass
 class IngestResult:
@@ -226,6 +272,22 @@ def _lookup_id(conn: Connection, cache: dict[str, int], table, code_col,
     return val
 
 
+def _parent_id(conn: Connection, pk_col, value: Optional[uuid.UUID]):
+    """
+    Return ``value`` only if that parent row already exists, else None.
+
+    Every one of these references is nullable by design, and an incremental run
+    routinely sees a child whose parent file fell outside the scan window —
+    a session touched today whose workflow was written three weeks ago. Losing
+    the whole event over a link that the schema says is optional trades a
+    complete row for no row at all. A later run that does carry the parent fills
+    the link in, because the upserts coalesce it.
+    """
+    if value is None:
+        return None
+    return conn.execute(select(pk_col).where(pk_col == value)).scalar()
+
+
 def _agent_id(conn, cache, code):
     return _lookup_id(conn, cache.agent, m.agent, m.agent.c.code,
                       m.agent.c.agent_id, code)
@@ -292,9 +354,10 @@ def _upsert_conversation(conn: Connection, cache: _DimCache, ev: dict) -> None:
     src = p.get("case_ref_source") or ("explicit" if cid else "absent")
     if cid is None:
         src = "absent"        # the CHECK constraint enforces this pairing
+    wf = _parent_id(conn, m.workflow.c.workflow_id, _as_uuid(p.get("workflow_id")))
     stmt = pg_insert(m.conversation).values(
         conversation_id=_as_uuid(p["conversation_id"]),
-        workflow_id=_as_uuid(p.get("workflow_id")),
+        workflow_id=wf,
         http_session_id=str(p.get("session_id") or ""),
         user_id=uid, case_id=cid, case_ref_source=src,
         agent_id=ag, technology_id=tech,
@@ -307,8 +370,7 @@ def _upsert_conversation(conn: Connection, cache: _DimCache, ev: dict) -> None:
         set_={
             "updated_at": func.greatest(m.conversation.c.updated_at, at),
             "started_at": func.least(m.conversation.c.started_at, at),
-            "workflow_id": func.coalesce(m.conversation.c.workflow_id,
-                                         _as_uuid(p.get("workflow_id"))),
+            "workflow_id": func.coalesce(m.conversation.c.workflow_id, wf),
             "issue_time": func.coalesce(m.conversation.c.issue_time,
                                         _as_dt(p.get("issue_time"))),
             "agent_id": case((m.conversation.c.agent_id == 0, ag),
@@ -413,7 +475,8 @@ def _upsert_invocation(conn: Connection, cache: _DimCache, ev: dict) -> None:
     stmt = pg_insert(m.ai_invocation).values(
         invocation_id=_as_uuid(p["invocation_id"]),
         workflow_id=_as_uuid(p["workflow_id"]),
-        conversation_id=_as_uuid(p.get("conversation_id")),
+        conversation_id=_parent_id(conn, m.conversation.c.conversation_id,
+                                   _as_uuid(p.get("conversation_id"))),
         feature_id=_feature_id(conn, cache, p.get("feature_code", "unknown")),
         agent_id=_agent_id(conn, cache, p.get("agent_domain") or p.get("domain")),
         model_id=_get_model_id(conn, cache, p.get("model", "")),
@@ -436,6 +499,24 @@ def _upsert_attachment(conn: Connection, cache: _DimCache, ev: dict) -> None:
     p = ev["payload"]
     at = _as_dt(ev["occurred_at"]) or datetime.now(timezone.utc)
     wf = _as_uuid(p["workflow_id"])
+
+    # The claim is a property of the workflow, not of any one file, so it lands
+    # on the workflow row. Only write it when this event actually carries a
+    # source: a re-audit that never re-ran the AI would otherwise blank out a
+    # verdict an earlier run had established.
+    source = str(p.get("declaration_source") or "")
+    if source:
+        conn.execute(
+            m.workflow.update()
+            .where(m.workflow.c.workflow_id == wf)
+            .values(
+                declared_attached=p.get("declared_attached"),
+                declaration_source=source,
+                declaration_confidence=str(p.get("declaration_confidence") or ""),
+                declaration_conflict=bool(p.get("declaration_conflict") or False),
+            )
+        )
+
     for item in p.get("files") or []:
         # Deterministic per (workflow, file) so replaying the audit does not
         # duplicate rows.
@@ -445,7 +526,7 @@ def _upsert_attachment(conn: Connection, cache: _DimCache, ev: dict) -> None:
             declared_name=str(item.get("name") or ""),
             log_family=str(item.get("log_family") or ""),
             was_selected=bool(item.get("selected")),
-            download_status=str(item.get("status") or "not_attempted"),
+            download_status=normalise_attachment_status(item.get("status")),
             byte_size=item.get("bytes"),
             latency_ms=item.get("latency_ms"),
             attempt_count=item.get("attempt_count"),
@@ -479,9 +560,11 @@ def _upsert_feedback(conn: Connection, cache: _DimCache, ev: dict) -> None:
     cid = _get_case_id(conn, cache, p.get("case_nbr", ""), at)
     stmt = pg_insert(m.feedback_event).values(
         feedback_event_id=_as_uuid(p["feedback_event_id"]),
-        conversation_id=_as_uuid(p.get("conversation_id")),
-        turn_id=_as_uuid(p.get("turn_id")),
-        workflow_id=_as_uuid(p.get("workflow_id")),
+        conversation_id=_parent_id(conn, m.conversation.c.conversation_id,
+                                   _as_uuid(p.get("conversation_id"))),
+        turn_id=_parent_id(conn, m.turn.c.turn_id, _as_uuid(p.get("turn_id"))),
+        workflow_id=_parent_id(conn, m.workflow.c.workflow_id,
+                               _as_uuid(p.get("workflow_id"))),
         case_id=cid, user_id=uid, environment=ev["environment"],
         submitted_at=at,
     ).on_conflict_do_nothing(

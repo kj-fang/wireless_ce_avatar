@@ -50,13 +50,20 @@ from datetime import datetime, timedelta, timezone
 from typing import Iterator, Optional
 
 from db.config import DatabaseConfigError, database_url, gather_source
-from db.ingest import derive_event_id, ingest_batch
+from db.ingest import EVENT_ORDER, derive_event_id, ingest_batch
 
+# Scan order only. It is not the ingestion order — see build_events, which sorts
+# parents-first regardless of which directory a record was found in.
 RECORD_KINDS = ("sessions", "workflows", "feedback_submissions")
 
 # Re-read this far back beyond the last run. Cheap because ingestion is
 # idempotent, and it absorbs both mid-scan writes and laptop clock skew.
 OVERLAP = timedelta(hours=6)
+
+# A read that fails on this share is far more often a dropped session than a
+# deleted file, so it is worth asking again before writing the record off.
+_READ_ATTEMPTS = 3
+_READ_BACKOFF = 1.0
 
 _CASE_IN_PATH = re.compile(r"[\\/](0[01]\d{6})[\\/]")
 _SIM_PREFIX = "SIM-"
@@ -323,6 +330,14 @@ def workflow_events(rec: dict, file_name: str) -> Iterator[dict]:
         aev["payload"] = {
             "workflow_id": wid,
             "declared_attached": audit.get("issue_declared_attached"),
+            # Carry how the verdict was reached, not just the verdict. An
+            # absent source key means the attachment AI never ran, which is a
+            # different fact from it running and finding nothing — and once
+            # these are dropped the two are indistinguishable downstream.
+            # Pre-v6 records predate the writer entirely, hence the defaults.
+            "declaration_source": str(audit.get("declaration_source") or ""),
+            "declaration_confidence": str(audit.get("declaration_confidence") or ""),
+            "declaration_conflict": bool(audit.get("declaration_conflict") or False),
             "files": [
                  {"name": _redact_filename(f.get("name") or f.get("file_name")),
                   "log_family": _log_family(f.get("name") or f.get("file_name")),
@@ -363,6 +378,34 @@ _EXPANDERS = {
 }
 
 
+def _read_record(path: str, name: str) -> Optional[dict]:
+    """
+    Read one record, retrying a failure to reach the file.
+
+    A long scan outlives its SMB session. Measured on the live share, a full
+    read takes four minutes and the connection drops part way through: 66 of
+    188 files came back ENOENT in one run — every workflow and every feedback
+    record — even though ``os.scandir`` had just listed them. Those are not
+    missing files, they are a dead session, and the first read after it
+    reconnects. A malformed JSON document is not retried: re-reading it will
+    fail identically.
+    """
+    last: Optional[Exception] = None
+    for attempt in range(_READ_ATTEMPTS):
+        try:
+            with open(path, encoding="utf-8") as fh:
+                return json.loads(fh.read())
+        except json.JSONDecodeError as e:
+            print(f"  [skip] {name}: {e}", file=sys.stderr)
+            return None
+        except OSError as e:
+            last = e
+            if attempt + 1 < _READ_ATTEMPTS:
+                time.sleep(_READ_BACKOFF * (attempt + 1))
+    print(f"  [unread] {name}: {last}", file=sys.stderr)
+    return None
+
+
 def build_events(root: str, since: Optional[datetime] = None) -> tuple[list[dict], dict]:
     t0 = time.time()
     files = scan(root, since)
@@ -370,14 +413,18 @@ def build_events(root: str, since: Optional[datetime] = None) -> tuple[list[dict
     events, unread = [], 0
     t1 = time.time()
     for kind, path, name, _mt in files:
-        try:
-            rec = json.loads(open(path, encoding="utf-8").read())
-        except Exception as e:
-            print(f"  [skip] {name}: {e}", file=sys.stderr)
+        rec = _read_record(path, name)
+        if rec is None:
             unread += 1
             continue
         if isinstance(rec, dict):
             events.extend(_EXPANDERS[kind](rec, name))
+    # Parents before children. Records live in one directory per kind and the
+    # scan walks sessions first, so without this a conversation is offered
+    # before the workflow it references and the foreign key fails. Sorting by
+    # event type is stable, so turns still follow their own conversation and the
+    # batch boundaries below can never split a parent from its child.
+    events.sort(key=lambda e: EVENT_ORDER.get(e["event_type"], len(EVENT_ORDER)))
     stats = {
         "files_seen": len(files),
         "files_unreadable": unread,
@@ -398,8 +445,22 @@ def _read_watermark(conn, root: str) -> Optional[datetime]:
     return row[0] if row else None
 
 
-def _write_watermark(conn, root: str, started: datetime, stats: dict) -> None:
+def _write_watermark(conn, root: str, started: datetime, stats: dict,
+                     advance: bool = True) -> None:
     from sqlalchemy import text
+    if not advance:
+        # Something in this window was rejected. Recording that the run happened
+        # is useful for staleness monitoring, but moving last_run_started_at
+        # forward would hide the rejected records behind the next watermark and
+        # they would never be offered again.
+        conn.execute(text("""
+            UPDATE avatar_bronze_sync_state
+               SET last_run_finished_at = now(),
+                   files_seen           = :f,
+                   events_emitted       = :e
+             WHERE source_root = :r
+        """), {"r": root, "f": stats["files_seen"], "e": stats["events"]})
+        return
     conn.execute(text("""
         INSERT INTO avatar_bronze_sync_state
             (source_root, last_run_started_at, last_run_finished_at,
@@ -462,12 +523,20 @@ def main() -> int:
             for eid, why in res.rejected.items():
                 print(f"  [reject] {eid}: {why}", file=sys.stderr)
         # Only advance the watermark inside the same transaction that stored
-        # the events. A crash here re-reads the window instead of skipping it.
-        _write_watermark(conn, root, started, stats)
+        # the events, and only if the window was read completely. A rejected
+        # event or a file the share would not hand over means this window is
+        # not fully in the database yet; advancing past it would retire those
+        # records permanently, because the next run never looks at them again.
+        complete = totals["rejected"] == 0 and stats["files_unreadable"] == 0
+        _write_watermark(conn, root, started, stats, advance=complete)
 
+    if not complete:
+        print(f"watermark NOT advanced: rejected={totals['rejected']} "
+              f"unreadable={stats['files_unreadable']} — re-run to retry",
+              file=sys.stderr)
     print(f"accepted={totals['accepted']} duplicate={totals['duplicate']} "
           f"rejected={totals['rejected']}")
-    return 1 if totals["rejected"] else 0
+    return 0 if complete else 1
 
 
 def _summarise(events: list[dict], stats: dict) -> None:

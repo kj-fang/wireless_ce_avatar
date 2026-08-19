@@ -129,7 +129,17 @@ workflow = Table(
     Column("app_version", Text, nullable=False, server_default=""),
     Column("started_at", DateTime(timezone=True), nullable=False),
     Column("updated_at", DateTime(timezone=True), nullable=False),
+    # The attachment claim and its provenance. An empty declaration_source
+    # means the attachment AI never ran for this workflow — distinct from it
+    # running and being unable to decide, which leaves a source but a NULL
+    # verdict. See db/003_attachment_declaration.sql.
+    Column("declared_attached", Boolean),
+    Column("declaration_source", Text, nullable=False, server_default=""),
+    Column("declaration_confidence", Text, nullable=False, server_default=""),
+    Column("declaration_conflict", Boolean, nullable=False, server_default="false"),
     CheckConstraint(f"environment IN {ENVIRONMENTS}", name="workflow_environment_ck"),
+    CheckConstraint("declared_attached IS NULL OR declaration_source <> ''",
+                    name="workflow_declaration_ck"),
 )
 
 conversation = Table(

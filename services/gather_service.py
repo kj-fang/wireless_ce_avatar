@@ -179,6 +179,10 @@ _path_locks: dict[str, threading.Lock] = {}
 _agg_lock = threading.Lock()
 _last_agg_at: float = 0.0
 
+# One-shot guard for the developer-run collection notice below.
+_dev_notice_lock = threading.Lock()
+_dev_notice_shown = False
+
 
 def _redact_path(p: Any) -> str:
     """Hide the full SMB UNC in any log line: keep just ``\\<host>\\…\\<leaf>``."""
@@ -238,6 +242,25 @@ def _collection_enabled() -> bool:
     if _execution_mode() == EXE_MODE:
         return True
     return os.environ.get(_DEV_COLLECT_ENV, "").strip().lower() not in _DEV_COLLECT_OFF
+
+
+def _announce_developer_collection() -> None:
+    """Print once that a source run is collecting, and how to stop it.
+
+    The packaged EXE has always collected and stays silent about it. A source
+    run did NOT collect before this change, so starting to do so must not be
+    silent: whoever launched the app should see it happen, and see the opt-out,
+    without having to read the repository or remember a pull request.
+    """
+    global _dev_notice_shown
+    if _dev_notice_shown or _execution_mode() == EXE_MODE:
+        return
+    with _dev_notice_lock:
+        if _dev_notice_shown:
+            return
+        _dev_notice_shown = True
+    print(f"[gather] source run — usage telemetry is being collected into "
+          f"{DEVELOPER_MODE}/ (set {_DEV_COLLECT_ENV}=0 to opt out)")
 
 
 def _root_for_mode(root: Path, mode: str) -> Path:
@@ -352,6 +375,9 @@ def _resolve_root() -> Path:
     buffered locally is moved up on the first success.
     """
     global _root_cache, _outbox_root, _root_probed_at
+    # Reached only from a write path, so this fires the first time this process
+    # actually records something — not merely because the app started.
+    _announce_developer_collection()
     if _root_cache is not None and _outbox_root is None:
         return _root_cache
     with _root_lock:

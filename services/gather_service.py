@@ -37,11 +37,17 @@ Storage resolution order (cached for the process lifetime):
 The shared UNCs are not written out in this file or logged in full — see
 path_configs and ``_redact_path`` below.
 
-Layout:  <root>/<execution_mode>/sessions/<user>/<conversation_id>.json
-``execution_mode`` is ``exe`` for the packaged build and ``developer`` for a
-source checkout, so cost and adoption reporting can count real support traffic
-without developer runs quietly inflating it. Records written before the split
-sit directly under <root>; they stay where they are and are read as ``exe``.
+Layout:  <root>/sessions/<user>/<conversation_id>.json            (exe)
+         <root>/developer/sessions/<user>/<conversation_id>.json  (developer)
+The flat root IS the exe location, exactly as before the split, so that cost
+and adoption reporting can count real support traffic without developer runs
+quietly inflating it. Only developer records move, and to a SIBLING folder
+rather than a child: EXEs already deployed in the field keep writing to the
+flat root, so every exe record — old build and new — stays in one place, and
+the aggregate readers below (which list <root>/sessions without recursing)
+keep finding exe records while naturally excluding developer ones. Every
+record also states its own ``execution_mode``, so a file still describes
+itself if it is ever moved.
 A per-user subfolder makes "how many distinct people" a simple folder count,
 while attribution also travels inside every record (user_name field, and now
 execution_mode) so a flat DB load can ignore the folder structure entirely.
@@ -98,10 +104,10 @@ from utils import helpers
 #        agent_domain (wifi/nw/bt), added packaged app_version, durable turn
 #        lifecycle status, and minimal feedback_submission linkage events.
 #
-# The exe/ | developer/ split (`execution_mode`, below) deliberately does NOT
-# bump this: it adds one optional field and one directory level, and changes
-# the meaning of no existing field. The collector accepts records with and
-# without execution_mode, and reads the pre-split flat layout as "exe".
+# The developer/ split (`execution_mode`, below) deliberately does NOT bump
+# this: it adds one optional field, and one directory level for developer runs
+# only, and changes the meaning of no existing field. The collector accepts
+# records with and without execution_mode, and reads the flat root as "exe".
 GATHER_SCHEMA_VERSION = 6
 
 # Bucket for records that carry no domain, rather than assuming the busiest
@@ -134,7 +140,8 @@ _RECORD_DIRS = ("sessions", "workflows", "feedback_submissions")
 
 # Which build produced a record. Reporting has to tell support traffic from
 # developer traffic and a flat tree cannot: both landed in the same folders.
-# Every record now lives under one of these and carries the same value in its
+# Exe records stay in the flat root and developer records move beside it (see
+# `_root_for_mode`); either way the record carries its mode in its own
 # `execution_mode` field, so a file still describes itself if it is moved.
 EXE_MODE = "exe"
 DEVELOPER_MODE = "developer"
@@ -224,9 +231,22 @@ def _collection_enabled() -> bool:
     return os.environ.get(_DEV_COLLECT_ENV, "").strip() == "1"
 
 
+def _root_for_mode(root: Path, mode: str) -> Path:
+    """Where records of ``mode`` live under ``root``.
+
+    ``exe`` resolves to the flat root itself, not to an ``exe/`` folder. Field
+    EXEs already write there and will keep doing so for as long as people run
+    them, so anchoring new exe records to the same place keeps every exe
+    record in one tree instead of splitting it across two for years. It also
+    leaves the aggregate readers working unchanged: they list <root>/sessions
+    without recursing, and ``developer/`` is a sibling of it, not a child.
+    """
+    return root if mode == EXE_MODE else root / mode
+
+
 def _mode_root(root: Path) -> Path:
-    """This process's sub-root: ``<root>/exe`` or ``<root>/developer``."""
-    return root / _execution_mode()
+    """This process's sub-root: the flat root, or ``<root>/developer``."""
+    return _root_for_mode(root, _execution_mode())
 
 
 def _ensure_layout(root: Path) -> Path:
@@ -280,25 +300,28 @@ def _drain_kind(src_dir: Path, dst_dir: Path) -> tuple[int, int, int]:
 def _drain_outbox(local: Path, share: Path) -> None:
     """Move records buffered while the share was down onto the share.
 
-    Every record is a whole-file snapshot under
-    ``<mode>/<kind>/<user>/<id>.json``, so moving one is idempotent and needs
-    no transaction. Each machine only ever writes its own user folder, so a
-    collision means the same machine reached the share between two writes of
-    the same record; the later snapshot wins because a record is always
-    rewritten in full.
+    Every record is a whole-file snapshot at ``<kind>/<user>/<id>.json`` under
+    its mode's root, so moving one is idempotent and needs no transaction.
+    Each machine only ever writes its own user folder, so a collision means
+    the same machine reached the share between two writes of the same record;
+    the later snapshot wins because a record is always rewritten in full.
 
     Every mode is drained, not only this process's own: whichever run reaches
-    the share first should deliver everything the machine has buffered, and a
-    record keeps its mode by landing in the folder of the same name.
+    the share first should deliver everything the machine has buffered. Both
+    sides of every pair come from `_root_for_mode`, so the local outbox and
+    the share can never disagree about where a mode lives — and a record
+    buffered before the split, which sits in the flat local root, is simply
+    the exe case.
     """
     if local == share or not local.exists():
         return
-    pairs = [(local / mode / kind, share / mode / kind)
+    pairs = [(_root_for_mode(local, mode) / kind, _root_for_mode(share, mode) / kind)
              for mode in _EXECUTION_MODES for kind in _RECORD_DIRS]
-    # Anything buffered before the split can only have come from an EXE run —
-    # that was the only build allowed to write — so it goes up as "exe"
-    # instead of being stranded locally with no path to the share.
-    pairs += [(local / kind, share / EXE_MODE / kind) for kind in _RECORD_DIRS]
+    # Transitional: an earlier revision of this change buffered exe records
+    # under local/exe/. Only a machine that ran that revision can have such a
+    # folder, so drain it rather than strand it, and drop this once none do.
+    pairs += [(local / EXE_MODE / kind, _root_for_mode(share, EXE_MODE) / kind)
+              for kind in _RECORD_DIRS]
     moved = stale = failed = 0
     for src_dir, dst_dir in pairs:
         kind_moved, kind_stale, kind_failed = _drain_kind(src_dir, dst_dir)

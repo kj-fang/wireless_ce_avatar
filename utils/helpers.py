@@ -3,7 +3,11 @@ import random
 import winreg
 import os, re
 import subprocess
-import importlib
+# load_module() below uses importlib.util, which is a submodule: importing the
+# package alone does not bind it. It has worked only because something else
+# imported importlib.util first and left it bound as a side effect; on an
+# interpreter where nothing does, load_module() raises AttributeError.
+import importlib.util
 import pyperclip
 import threading
 from pathlib import Path

@@ -37,6 +37,27 @@ bots' histories apart:
      owns a file. ``list_conversations`` uses this for its glob pattern AND
      defensively filters out foreign-prefixed files from the legacy (wifi)
      domain's listing.
+
+The reasoning trace lives beside the conversation, not inside it
+----------------------------------------------------------------
+A tools-mode turn emits dozens of step events (thinking, skill invocations,
+tool results). Those are worth keeping — reopening a conversation should show
+HOW the agent got there, not just what it concluded — but they are one to two
+orders of magnitude bigger than the turn itself, and ``list_conversations``
+parses every conversation file in full on every sidebar refresh. Storing them
+inline would make listing pay for data the sidebar never shows.
+
+So each conversation's steps go to a sidecar:
+
+    <root>/<id>.json            the conversation  (shape UNCHANGED)
+    <root>/steps/<id>.json      its reasoning trace, keyed by turn_id
+
+``steps/`` is a subfolder, and the listing globs ``*.json`` without recursing,
+so the sidecar is invisible to it — new listings stay exactly as fast as they
+are today, and an older Avatar build never sees the folder at all. Conversation
+files keep their existing keys, so an older build reads them unchanged; a
+conversation with no sidecar (every file written before this) simply has no
+trace, and the UI renders it exactly as it always did.
 """
 
 from __future__ import annotations
@@ -53,7 +74,13 @@ from configs.global_configs import app_config
 
 
 # Bump when the on-disk shape changes so a future reader knows the rules.
-HISTORY_SCHEMA_VERSION = 1
+#   v1 - conversation snapshot with turns[] (turn_id, ts, user_message,
+#        result, mode).
+#   v2 - the same conversation shape, plus an optional reasoning-trace sidecar
+#        at <root>/steps/<id>.json. The conversation file itself did not
+#        change, so a v1 reader handles a v2 file unchanged; the version says
+#        "a sidecar may exist for this conversation".
+HISTORY_SCHEMA_VERSION = 2
 
 # Hard cap on how many conversations the list endpoint returns / scans.
 _LIST_LIMIT = 300
@@ -61,6 +88,18 @@ _LIST_LIMIT = 300
 # Trim very large stored results so a single huge report can't bloat a file
 # without bound. 200k chars is far above any real report.
 _MAX_RESULT_CHARS = 200_000
+
+# --- Reasoning-trace sidecar ---------------------------------------------
+# Subfolder (NOT a file in the root) so the conversation listing's
+# non-recursive "*.json" glob never sees it — see the module docstring.
+_STEPS_SUBDIR = "steps"
+
+# Per-turn bounds on the stored trace. The live buffer allows 1000 steps and
+# the agent already truncates tool output to a ~400 char preview before it
+# emits, so these only ever bite on a pathological run. They exist so one
+# runaway turn cannot turn a 9 KB conversation into an unopenable file.
+_MAX_STEPS_PER_TURN = 300
+_MAX_STEP_CHARS = 8_000
 
 
 # --- Domain partitioning --------------------------------------------------
@@ -146,6 +185,19 @@ def _conversation_path(conversation_id: str, domain: str = "") -> Optional[Path]
     return _history_root(domain) / f"{_domain_prefix(domain)}{safe}.json"
 
 
+def _steps_path(conversation_id: str, domain: str = "") -> Optional[Path]:
+    """Sidecar holding this conversation's reasoning trace, or None.
+
+    Same name as the conversation file, one folder down. Sharing the name (and
+    the bt- prefix) keeps the pairing obvious to anyone browsing the folder.
+    """
+    safe = _safe_id(conversation_id)
+    if not safe:
+        return None
+    return (_history_root(domain) / _STEPS_SUBDIR
+            / f"{_domain_prefix(domain)}{safe}.json")
+
+
 # --- Locks ---------------------------------------------------------------
 _locks_guard = threading.Lock()
 _path_locks: dict[str, threading.Lock] = {}
@@ -223,6 +275,31 @@ def _trim_result(result: Any) -> Any:
     return {"type": "text", "data": assistant_text_from_result(result)[:_MAX_RESULT_CHARS]}
 
 
+def _serialise_steps(steps: Any) -> list[dict]:
+    """Coerce raw step events into bounded, JSON-safe rows.
+
+    The agent emits ``{"role": ..., "content": ...}``; the chat route may add
+    ``ts_ms``, the millisecond offset from the start of the turn, so a replay
+    can show the timing the run actually had instead of the timing of the
+    replay. Everything else is dropped — the trace is for reading, not for
+    feeding back into the model.
+    """
+    out: list[dict] = []
+    for step in list(steps or [])[:_MAX_STEPS_PER_TURN]:
+        if not isinstance(step, dict):
+            continue
+        content = step.get("content")
+        content = content if isinstance(content, str) else str(content or "")
+        if len(content) > _MAX_STEP_CHARS:
+            content = content[:_MAX_STEP_CHARS] + "…"
+        row = {"role": str(step.get("role") or "agent"), "content": content}
+        ts_ms = step.get("ts_ms")
+        if isinstance(ts_ms, (int, float)) and ts_ms >= 0:
+            row["ts_ms"] = int(ts_ms)
+        out.append(row)
+    return out
+
+
 def _read_snapshot(path: Path) -> Optional[dict]:
     try:
         with path.open("r", encoding="utf-8") as f:
@@ -246,6 +323,7 @@ def record_turn(
     log_path: str = "",
     issue_time: str = "",
     domain: str = "",
+    steps: Optional[list] = None,
 ) -> None:
     """
     Append one turn to the conversation's history file, creating the file on
@@ -254,6 +332,11 @@ def record_turn(
     ``domain`` selects which bot's history store this turn belongs to
     ("" = WiFi/legacy, "bt" = Bluetooth) — see the module docstring for the
     folder + filename-prefix partitioning this drives. Never raises.
+
+    ``steps`` is the turn's reasoning trace (the step events the UI streamed
+    while it ran). It is written to the sidecar, never into the conversation
+    file, and only after the turn itself is safely on disk — a trace is a
+    nice-to-have, the turn is not.
     """
     path = _conversation_path(conversation_id, domain)
     if path is None or not turn_id:
@@ -311,6 +394,82 @@ def record_turn(
             tmp.replace(path)
     except Exception as e:
         print(f"[history] record_turn failed (conv={conversation_id}): {e}")
+        return
+
+    if steps:
+        _record_steps(
+            conversation_id=conversation_id,
+            turn_id=turn_id,
+            steps=steps,
+            domain=domain,
+        )
+
+
+def _record_steps(*, conversation_id: str, turn_id: str,
+                  steps: Any, domain: str = "") -> None:
+    """Merge one turn's reasoning trace into the conversation's sidecar.
+
+    Keyed by turn_id, so re-recording a turn replaces its trace instead of
+    appending a second copy. Never raises: the conversation file is already
+    written by the time this runs, and losing a trace must not look like
+    losing the turn.
+    """
+    path = _steps_path(conversation_id, domain)
+    if path is None or not turn_id:
+        return
+    rows = _serialise_steps(steps)
+    if not rows:
+        return
+    try:
+        with _lock_for(path):
+            path.parent.mkdir(parents=True, exist_ok=True)
+            sidecar = _read_snapshot(path) if path.exists() else None
+            if not isinstance(sidecar, dict):
+                sidecar = {
+                    "schema_version": HISTORY_SCHEMA_VERSION,
+                    "conversation_id": _safe_id(conversation_id),
+                    "domain": _norm_domain(domain) or "wifi",
+                    "created_at": _now_iso(),
+                    "turns": {},
+                }
+            turns = sidecar.get("turns")
+            if not isinstance(turns, dict):
+                turns = {}
+            turns[turn_id] = {
+                "ts": _now_iso(),
+                "step_count": len(rows),
+                # True when the run emitted more steps than we keep, so a
+                # reader can say "trace shortened" instead of quietly showing
+                # a partial trace as if it were the whole thing.
+                "truncated": len(list(steps)) > len(rows),
+                "steps": rows,
+            }
+            sidecar["turns"] = turns
+            sidecar["updated_at"] = _now_iso()
+            tmp = path.with_suffix(".json.tmp")
+            tmp.write_text(
+                json.dumps(sidecar, ensure_ascii=False, indent=2),
+                encoding="utf-8",
+            )
+            tmp.replace(path)
+    except Exception as e:
+        print(f"[history] step trace failed (conv={conversation_id}, turn={turn_id}): {e}")
+
+
+def _load_steps(conversation_id: str, domain: str = "") -> dict:
+    """Return ``{turn_id: [step, …]}`` for one conversation; {} when none."""
+    path = _steps_path(conversation_id, domain)
+    if path is None or not path.exists():
+        return {}
+    sidecar = _read_snapshot(path)
+    turns = sidecar.get("turns") if isinstance(sidecar, dict) else None
+    if not isinstance(turns, dict):
+        return {}
+    out: dict[str, list] = {}
+    for turn_id, entry in turns.items():
+        if isinstance(entry, dict) and isinstance(entry.get("steps"), list):
+            out[str(turn_id)] = entry["steps"]
+    return out
 
 
 def list_conversations(limit: int = _LIST_LIMIT, domain: str = "") -> list[dict]:
@@ -370,27 +529,63 @@ def list_conversations(limit: int = _LIST_LIMIT, domain: str = "") -> list[dict]
     return out[: max(0, int(limit))]
 
 
-def get_conversation(conversation_id: str, domain: str = "") -> Optional[dict]:
-    """Return the full snapshot for one conversation, or None. Never raises."""
+def get_conversation(conversation_id: str, domain: str = "",
+                     with_steps: bool = False) -> Optional[dict]:
+    """Return the full snapshot for one conversation, or None. Never raises.
+
+    ``with_steps`` attaches each turn's stored reasoning trace as ``steps`` on
+    the returned dict — in memory only, the file on disk keeps its v1 shape.
+    Turns recorded before the sidecar existed simply carry no ``steps`` key,
+    which is what the UI keys off to decide whether to draw the trace card.
+    """
     path = _conversation_path(conversation_id, domain)
     if path is None or not path.exists():
         return None
-    return _read_snapshot(path)
+    snapshot = _read_snapshot(path)
+    if snapshot is None or not with_steps:
+        return snapshot
+    try:
+        by_turn = _load_steps(conversation_id, domain)
+        if by_turn:
+            for turn in snapshot.get("turns") or []:
+                if not isinstance(turn, dict):
+                    continue
+                steps = by_turn.get(str(turn.get("turn_id") or ""))
+                if steps:
+                    turn["steps"] = steps
+    except Exception as e:
+        print(f"[history] step merge failed (conv={conversation_id}): {e}")
+    return snapshot
 
 
 def delete_conversation(conversation_id: str, domain: str = "") -> bool:
-    """Delete one conversation file. Returns True if a file was removed."""
+    """Delete one conversation, and its reasoning trace if it has one.
+
+    Returns True if the conversation file was removed. The sidecar is deleted
+    on a best-effort basis: an orphaned trace is invisible to every reader
+    (nothing lists that folder), so failing to remove it must not report the
+    conversation as still present.
+    """
     path = _conversation_path(conversation_id, domain)
     if path is None:
         return False
+    removed = False
     try:
         with _lock_for(path):
             if path.exists():
                 path.unlink()
-                return True
+                removed = True
     except Exception as e:
         print(f"[history] delete failed (conv={conversation_id}): {e}")
-    return False
+    steps_path = _steps_path(conversation_id, domain)
+    if steps_path is not None:
+        try:
+            with _lock_for(steps_path):
+                if steps_path.exists():
+                    steps_path.unlink()
+        except Exception as e:
+            print(f"[history] step trace delete failed (conv={conversation_id}): {e}")
+    return removed
 
 
 def _update_snapshot(conversation_id: str, mutate, domain: str = "") -> bool:

@@ -908,7 +908,14 @@ def chat():
             def step_cb(step):
                 try:
                     if isinstance(step, dict):
-                        collected_steps.append(step)
+                        # Stamp how far into the turn this step arrived. The
+                        # live card times itself from the browser clock; a
+                        # replay months later cannot, so the offset travels
+                        # with the step into history. The copy keeps the
+                        # object published to live subscribers untouched.
+                        elapsed_ms = int(
+                            (datetime.now() - turn_started_at).total_seconds() * 1000)
+                        collected_steps.append({**step, "ts_ms": elapsed_ms})
                 except Exception:
                     pass
                 chat_jobs.publish_step(job, step)
@@ -968,6 +975,10 @@ def chat():
                         log_path=getattr(agent, "current_log_path", "") or "",
                         issue_time=format_issue_time(agent.issue_time),
                         domain="bt",
+                        # Keep the reasoning trace too, so reopening this
+                        # conversation shows how the answer was reached and
+                        # not only what it was.
+                        steps=collected_steps,
                     )
                     chat_jobs.finish_job(job, result)
                 except Exception as exc:
@@ -1216,7 +1227,7 @@ def history_get():
     conversation_id = (request.args.get("conversation_id") or "").strip()
     if not conversation_id:
         return jsonify({"success": False, "error": "conversation_id is required"}), 400
-    conv = history_service.get_conversation(conversation_id, domain="bt")
+    conv = history_service.get_conversation(conversation_id, domain="bt", with_steps=True)
     if conv is None:
         return jsonify({"success": False, "error": "Conversation not found"}), 404
     return jsonify({"success": True, "conversation": conv})
@@ -1280,7 +1291,9 @@ def history_load():
     job = chat_jobs.get_job(conversation_id)
     if job is not None and getattr(job, "domain", "") != "bt":
         job = None
-    conv = history_service.get_conversation(conversation_id, domain="bt")
+    # with_steps: the client re-renders each saved turn's reasoning trace, the
+    # same card the live stream drew while the turn was running.
+    conv = history_service.get_conversation(conversation_id, domain="bt", with_steps=True)
     if conv is None and job is None:
         return jsonify({"success": False, "error": "Conversation not found"}), 404
 

@@ -37,10 +37,21 @@ Storage resolution order (cached for the process lifetime):
 The shared UNCs are not written out in this file or logged in full — see
 path_configs and ``_redact_path`` below.
 
-Layout:  <root>/sessions/<user>/<conversation_id>.json
+Layout:  <root>/<execution_mode>/sessions/<user>/<conversation_id>.json
+``execution_mode`` is ``exe`` for the packaged build and ``developer`` for a
+source checkout, so cost and adoption reporting can count real support traffic
+without developer runs quietly inflating it. Records written before the split
+sit directly under <root>; they stay where they are and are read as ``exe``.
 A per-user subfolder makes "how many distinct people" a simple folder count,
-while attribution also travels inside every record (user_name field) so a flat
-DB load can ignore the folder structure entirely.
+while attribution also travels inside every record (user_name field, and now
+execution_mode) so a flat DB load can ignore the folder structure entirely.
+
+Who writes
+----------
+The packaged EXE always records, exactly as it always has. A source checkout
+records only when ``INTELAVATAR_COLLECT_DEV=1`` is set on that machine, and
+then into its own ``developer/`` tree; without it a developer run writes
+nothing at all. See ``_collection_enabled``.
 """
 
 from __future__ import annotations
@@ -86,6 +97,11 @@ from utils import helpers
 #   v6 - Split the overloaded legacy `domain` into case_domain (wifi/bt) and
 #        agent_domain (wifi/nw/bt), added packaged app_version, durable turn
 #        lifecycle status, and minimal feedback_submission linkage events.
+#
+# The exe/ | developer/ split (`execution_mode`, below) deliberately does NOT
+# bump this: it adds one optional field and one directory level, and changes
+# the meaning of no existing field. The collector accepts records with and
+# without execution_mode, and reads the pre-split flat layout as "exe".
 GATHER_SCHEMA_VERSION = 6
 
 # Bucket for records that carry no domain, rather than assuming the busiest
@@ -113,8 +129,22 @@ _MAX_ATTACHMENT_FILES = 1000  # defensive cap for unusually large cases
 # feedback writes deliberately do not.
 _AGG_COOLDOWN_SEC = 600
 
-# Record kinds that live under the root, one file per id, per user.
+# Record kinds that live under the mode sub-root, one file per id, per user.
 _RECORD_DIRS = ("sessions", "workflows", "feedback_submissions")
+
+# Which build produced a record. Reporting has to tell support traffic from
+# developer traffic and a flat tree cannot: both landed in the same folders.
+# Every record now lives under one of these and carries the same value in its
+# `execution_mode` field, so a file still describes itself if it is moved.
+EXE_MODE = "exe"
+DEVELOPER_MODE = "developer"
+_EXECUTION_MODES = (EXE_MODE, DEVELOPER_MODE)
+
+# Opt-in that lets a source checkout collect at all. Unset — or set to
+# anything other than "1" — means a developer run writes nothing, which is
+# what it did before the split. An environment variable rather than a config
+# file, so the opt-in is per machine and leaves no trace in the repository.
+_DEV_COLLECT_ENV = "INTELAVATAR_COLLECT_DEV"
 
 # How long to keep buffering locally before re-probing an unreachable share.
 # Probing costs up to 8 s per candidate path, and it only ever runs on a
@@ -173,9 +203,37 @@ def _safe_id(value: Any) -> str:
     return s[:128] or "unknown"
 
 
+def _execution_mode() -> str:
+    """Which build is running: ``exe`` (packaged) or ``developer`` (source).
+
+    Single source of truth for both the directory level on the share and the
+    `execution_mode` field inside every record, so the two cannot disagree.
+    """
+    return EXE_MODE if getattr(sys, "frozen", False) else DEVELOPER_MODE
+
+
+def _collection_enabled() -> bool:
+    """Whether this process may write Gather records at all.
+
+    The packaged EXE always collects, exactly as before. A source checkout
+    collects only when the opt-in environment variable is set on that machine,
+    so a developer machine still never ships data just by running the app.
+    """
+    if _execution_mode() == EXE_MODE:
+        return True
+    return os.environ.get(_DEV_COLLECT_ENV, "").strip() == "1"
+
+
+def _mode_root(root: Path) -> Path:
+    """This process's sub-root: ``<root>/exe`` or ``<root>/developer``."""
+    return root / _execution_mode()
+
+
 def _ensure_layout(root: Path) -> Path:
+    """Create this process's record folders; returns the unchanged root."""
+    mode_root = _mode_root(root)
     for sub in _RECORD_DIRS:
-        (root / sub).mkdir(parents=True, exist_ok=True)
+        (mode_root / sub).mkdir(parents=True, exist_ok=True)
     return root
 
 
@@ -193,40 +251,60 @@ def _record_stamp(path: Path) -> str:
         return ""
 
 
+def _drain_kind(src_dir: Path, dst_dir: Path) -> tuple[int, int, int]:
+    """Move one buffered ``<kind>`` folder up to its place on the share."""
+    moved = stale = failed = 0
+    if not src_dir.is_dir():
+        return moved, stale, failed
+    for user_dir in src_dir.iterdir():
+        if not user_dir.is_dir():
+            continue
+        for f in user_dir.glob("*.json"):
+            dst = dst_dir / user_dir.name / f.name
+            try:
+                if dst.exists() and _record_stamp(f) <= _record_stamp(dst):
+                    f.unlink()
+                    stale += 1
+                    continue
+                dst.parent.mkdir(parents=True, exist_ok=True)
+                tmp = dst.with_suffix(dst.suffix + ".tmp")
+                tmp.write_bytes(f.read_bytes())
+                tmp.replace(dst)
+                f.unlink()
+                moved += 1
+            except Exception:
+                failed += 1
+    return moved, stale, failed
+
+
 def _drain_outbox(local: Path, share: Path) -> None:
     """Move records buffered while the share was down onto the share.
 
-    Every record is a whole-file snapshot under ``<kind>/<user>/<id>.json``,
-    so moving one is idempotent and needs no transaction. Each machine only
-    ever writes its own user folder, so a collision means the same machine
-    reached the share between two writes of the same record; the later
-    snapshot wins because a record is always rewritten in full.
+    Every record is a whole-file snapshot under
+    ``<mode>/<kind>/<user>/<id>.json``, so moving one is idempotent and needs
+    no transaction. Each machine only ever writes its own user folder, so a
+    collision means the same machine reached the share between two writes of
+    the same record; the later snapshot wins because a record is always
+    rewritten in full.
+
+    Every mode is drained, not only this process's own: whichever run reaches
+    the share first should deliver everything the machine has buffered, and a
+    record keeps its mode by landing in the folder of the same name.
     """
     if local == share or not local.exists():
         return
+    pairs = [(local / mode / kind, share / mode / kind)
+             for mode in _EXECUTION_MODES for kind in _RECORD_DIRS]
+    # Anything buffered before the split can only have come from an EXE run —
+    # that was the only build allowed to write — so it goes up as "exe"
+    # instead of being stranded locally with no path to the share.
+    pairs += [(local / kind, share / EXE_MODE / kind) for kind in _RECORD_DIRS]
     moved = stale = failed = 0
-    for kind in _RECORD_DIRS:
-        src_dir = local / kind
-        if not src_dir.is_dir():
-            continue
-        for user_dir in src_dir.iterdir():
-            if not user_dir.is_dir():
-                continue
-            for f in user_dir.glob("*.json"):
-                dst = share / kind / user_dir.name / f.name
-                try:
-                    if dst.exists() and _record_stamp(f) <= _record_stamp(dst):
-                        f.unlink()
-                        stale += 1
-                        continue
-                    dst.parent.mkdir(parents=True, exist_ok=True)
-                    tmp = dst.with_suffix(dst.suffix + ".tmp")
-                    tmp.write_bytes(f.read_bytes())
-                    tmp.replace(dst)
-                    f.unlink()
-                    moved += 1
-                except Exception:
-                    failed += 1
+    for src_dir, dst_dir in pairs:
+        kind_moved, kind_stale, kind_failed = _drain_kind(src_dir, dst_dir)
+        moved += kind_moved
+        stale += kind_stale
+        failed += kind_failed
     if moved or stale or failed:
         print(f"[gather] outbox drained: {moved} uploaded, {stale} already current, "
               f"{failed} left for the next attempt")
@@ -284,21 +362,21 @@ def _lock_for(path: Path) -> threading.Lock:
 
 
 def _conversation_path(conversation_id: str, user: str) -> Path:
-    root = _resolve_root()
+    root = _mode_root(_resolve_root())
     user_dir = root / "sessions" / _safe_id(user)
     user_dir.mkdir(parents=True, exist_ok=True)
     return user_dir / f"{_safe_id(conversation_id)}.json"
 
 
 def _workflow_path(workflow_id: str, user: str) -> Path:
-    root = _resolve_root()
+    root = _mode_root(_resolve_root())
     user_dir = root / "workflows" / _safe_id(user)
     user_dir.mkdir(parents=True, exist_ok=True)
     return user_dir / f"{_safe_id(workflow_id)}.json"
 
 
 def _feedback_submission_path(feedback_event_id: str, user: str) -> Path:
-    root = _resolve_root()
+    root = _mode_root(_resolve_root())
     user_dir = root / "feedback_submissions" / _safe_id(user)
     user_dir.mkdir(parents=True, exist_ok=True)
     return user_dir / f"{_safe_id(feedback_event_id)}.json"
@@ -352,6 +430,7 @@ def _new_record(
         "created_at": now,
         "updated_at": now,
         "app_version": APP_VERSION,
+        "execution_mode": _execution_mode(),
         # `domain` remains the pre-v6 agent-domain field for existing ETL.
         "domain": domain or UNKNOWN_DOMAIN,
         "agent_domain": _agent_domain(domain),
@@ -595,6 +674,7 @@ def _new_workflow_record(
         "created_at": now,
         "updated_at": now,
         "app_version": APP_VERSION,
+        "execution_mode": _execution_mode(),
         # `domain` remains the pre-v6 case-domain field for existing ETL.
         "domain": str(domain or UNKNOWN_DOMAIN).strip().lower() or UNKNOWN_DOMAIN,
         "case_domain": _case_domain(issue, domain),
@@ -636,6 +716,7 @@ def _load_or_new_workflow(
     record["case_domain"] = _case_domain(issue, record.get("case_domain") or record.get("domain"))
     record["agent_domain"] = None
     record["app_version"] = APP_VERSION
+    record["execution_mode"] = _execution_mode()
     record["schema_version"] = GATHER_SCHEMA_VERSION
     record["updated_at"] = _now_iso()
     return record
@@ -686,7 +767,7 @@ def record_workflow_start(
     attachment_list: Optional[list] = None,
 ) -> None:
     """Create the v5 workflow as soon as a case is loaded (before Click AI)."""
-    if not workflow_id or not getattr(sys, "frozen", False):
+    if not workflow_id or not _collection_enabled():
         return
     try:
         threading.Thread(
@@ -736,7 +817,7 @@ def record_attachment_selection(
     *, workflow_id: str, selected_files: Optional[list] = None,
     issue: Optional[dict] = None, domain: str = "",
 ) -> None:
-    if not workflow_id or not getattr(sys, "frozen", False):
+    if not workflow_id or not _collection_enabled():
         return
     names = [_attachment_name(item) for item in (selected_files or [])]
     try:
@@ -793,7 +874,7 @@ def record_attachment_declaration(
     confidence and the sentence it came from are stored alongside the verdict.
     ``declared`` remains accepted for callers that already classified.
     """
-    if not workflow_id or not getattr(sys, "frozen", False):
+    if not workflow_id or not _collection_enabled():
         return
     confidence, evidence, conflict = "", "", False
     if ai_analysis is not None:
@@ -993,7 +1074,7 @@ def record_attachment_download_result(
     attempt_count: int = 0, error_code: str = "",
     issue: Optional[dict] = None, domain: str = "",
 ) -> None:
-    if not workflow_id or not name or not getattr(sys, "frozen", False):
+    if not workflow_id or not name or not _collection_enabled():
         return
     try:
         threading.Thread(
@@ -1071,7 +1152,7 @@ def record_feature_usage(
     latency_ms: Optional[int] = None, error_code: str = "",
 ) -> None:
     """Append one warehouse-ready FACT_AI_INVOCATION-shaped event."""
-    if not workflow_id or not feature_code or not getattr(sys, "frozen", False):
+    if not workflow_id or not feature_code or not _collection_enabled():
         return
     try:
         threading.Thread(
@@ -1146,6 +1227,7 @@ def _do_record(
         if case_dom != UNKNOWN_DOMAIN or not record.get("case_domain"):
             record["case_domain"] = case_dom
         record["app_version"] = APP_VERSION
+        record["execution_mode"] = _execution_mode()
         record["updated_at"] = _now_iso()
 
         # Only the FIRST Send of a conversation records the question — later
@@ -1265,11 +1347,10 @@ def record_send(
     """
     if not conversation_id:
         return
-    # Only the FROZEN (packaged release) build records usage analytics. In
-    # DEVELOP mode (running from source, sys.frozen is False) we skip the
-    # Gather write entirely so developer testing doesn't pollute the shared
-    # stats on the network share.
-    if not getattr(sys, "frozen", False):
+    # The packaged EXE always records. A source checkout records only if the
+    # machine opted in (INTELAVATAR_COLLECT_DEV=1), and then under developer/,
+    # so developer testing never lands in the support numbers either way.
+    if not _collection_enabled():
         return
     # Normalise the window to a plain int (or None) so the stored record is
     # JSON-clean regardless of what the caller passed.
@@ -1426,6 +1507,7 @@ def _do_record_usage(
         if case_dom != UNKNOWN_DOMAIN or not record.get("case_domain"):
             record["case_domain"] = case_dom
         record["app_version"] = APP_VERSION
+        record["execution_mode"] = _execution_mode()
         record["updated_at"] = _now_iso()
         record["schema_version"] = GATHER_SCHEMA_VERSION
 
@@ -1464,7 +1546,8 @@ def record_usage(
     agent's ``last_turn_usage`` dict straight through.
 
     Same contract as record_send: background thread, never raises, and a no-op
-    outside the packaged (frozen) build.
+    outside the packaged build unless the machine opted into developer
+    collection.
     """
     if not conversation_id:
         return
@@ -1492,9 +1575,9 @@ def record_usage(
         "llm_calls", "input_tokens", "output_tokens",
         "cache_read_tokens", "cache_write_tokens",
     ))
-    # Mirrors record_send: only the packaged release build writes analytics, so
-    # developer runs don't pollute the shared share-folder statistics.
-    if not getattr(sys, "frozen", False):
+    # Mirrors record_send: the packaged build always writes, a source checkout
+    # only when opted in, and then into its own developer/ tree.
+    if not _collection_enabled():
         return
     if not has_spend:
         # Lifecycle state is useful even for a zero-token cancellation/failure.
@@ -1574,6 +1657,7 @@ def _do_record_turn_status(
                 error_code=error_code,
             )
             record["app_version"] = APP_VERSION
+            record["execution_mode"] = _execution_mode()
             record["schema_version"] = GATHER_SCHEMA_VERSION
             record["updated_at"] = _now_iso()
             tmp = path.with_suffix(".json.tmp")
@@ -1601,7 +1685,7 @@ def record_turn_status(
         not conversation_id
         or not turn_id
         or status not in ({"started"} | _TURN_TERMINAL_STATUSES)
-        or not getattr(sys, "frozen", False)
+        or not _collection_enabled()
     ):
         return
     try:
@@ -1642,6 +1726,7 @@ def _do_record_feedback_submit(
             "session_id": session_id or "",
             "turn_id": _safe_id(turn_id) if turn_id else "",
             "app_version": APP_VERSION,
+            "execution_mode": _execution_mode(),
             # `domain` stays as the pre-v6 agent-domain alias.
             "domain": _agent_domain(domain),
             "agent_domain": _agent_domain(domain),
@@ -1670,7 +1755,7 @@ def record_feedback_submit(
         not feedback_event_id
         or not conversation_id
         or not turn_id
-        or not getattr(sys, "frozen", False)
+        or not _collection_enabled()
     ):
         return
     try:

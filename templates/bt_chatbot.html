@@ -3901,7 +3901,7 @@
             if (agentCardBodyEl) return;
             removeTyping();
             hideWelcome();
-            agentCardId = 'agent-process-' + Date.now();
+            agentCardId = __nextAgentCardId();
             const html = `
             <div class="agent-process-card">
                 <div class="agent-process-header" onclick="
@@ -4197,7 +4197,7 @@
         hideWelcome();
         removeTyping();
 
-        const cardId = 'agent-process-' + Date.now();
+        const cardId = __nextAgentCardId();
         const skillsUsed = steps
             .filter(s => s.content && s.content.includes('Invoking skill'))
             .map(s => { const m = s.content.match(/`([^`]+)`/); return m ? m[1] : ''; })
@@ -8450,6 +8450,15 @@
 
     // Self-contained "Agent Processing Steps" card + step renderer, mirroring
     // the live send path so a reconnected stream renders identically.
+    // Unique id for one "Agent Processing Steps" card. A timestamp alone is
+    // not enough: history replay builds cards synchronously in a loop, so two
+    // can land in the same millisecond, and getElementById would then hand the
+    // second card's steps — and its collapse toggle — to the first one.
+    function __nextAgentCardId() {
+        window.__agentProcessCardSeq = (window.__agentProcessCardSeq || 0) + 1;
+        return 'agent-process-' + Date.now() + '-' + window.__agentProcessCardSeq;
+    }
+
     function __makeStepCard(opts) {
         // {collapsed:true} starts the card folded — used when replaying a
         // saved trace, where the answer matters more than the steps.
@@ -8474,11 +8483,7 @@
             if (bodyEl) return;
             removeTyping();
             hideWelcome();
-            // History replay can create several cards synchronously; Date.now()
-            // alone can repeat within the same millisecond and make the second
-            // card append its steps into the first card's duplicate id.
-            window.__agentProcessCardSeq = (window.__agentProcessCardSeq || 0) + 1;
-            cardId = 'agent-process-' + Date.now() + '-' + window.__agentProcessCardSeq;
+            cardId = __nextAgentCardId();
             const html =
                 '<div class="agent-process-card">' +
                   '<div class="agent-process-header' + (collapsed ? ' collapsed' : '') + '" onclick="' +

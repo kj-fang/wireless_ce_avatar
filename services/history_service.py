@@ -303,7 +303,7 @@ def _trim_result(result: Any) -> Any:
     return {"type": "text", "data": assistant_text_from_result(result)[:_MAX_RESULT_CHARS]}
 
 
-def _serialise_steps(steps: Any) -> list[dict]:
+def _serialise_steps(steps: Any) -> tuple[list[dict], bool]:
     """Coerce raw step events into bounded, JSON-safe rows.
 
     The agent emits ``{"role": ..., "content": ...}``; the chat route may add
@@ -311,21 +311,33 @@ def _serialise_steps(steps: Any) -> list[dict]:
     can show the timing the run actually had instead of the timing of the
     replay. Everything else is dropped — the trace is for reading, not for
     feeding back into the model.
+
+    Returns the rows and whether anything was left out: steps past the count
+    cap, entries that were not usable, or content past the per-step cap. One
+    flag covers all three because a reader only needs to know that what it is
+    about to show is not the whole trace — and content clipped by
+    ``_MAX_STEP_CHARS`` is exactly as partial as a step that never made it in.
+
+    ``steps`` is materialised once, so a caller may hand over any iterable
+    without it being consumed before the count is taken.
     """
+    source = list(steps or [])
     out: list[dict] = []
-    for step in list(steps or [])[:_MAX_STEPS_PER_TURN]:
+    clipped = False
+    for step in source[:_MAX_STEPS_PER_TURN]:
         if not isinstance(step, dict):
             continue
         content = step.get("content")
         content = content if isinstance(content, str) else str(content or "")
         if len(content) > _MAX_STEP_CHARS:
             content = content[:_MAX_STEP_CHARS] + "…"
+            clipped = True
         row = {"role": str(step.get("role") or "agent"), "content": content}
         ts_ms = step.get("ts_ms")
         if isinstance(ts_ms, (int, float)) and ts_ms >= 0:
             row["ts_ms"] = int(ts_ms)
         out.append(row)
-    return out
+    return out, clipped or len(out) < len(source)
 
 
 def _read_snapshot(path: Path) -> Optional[dict]:
@@ -453,7 +465,7 @@ def _record_steps(*, conversation_id: str, turn_id: str,
     path = _steps_path(conversation_id, domain)
     if path is None or not turn_id:
         return
-    rows = _serialise_steps(steps)
+    rows, shortened = _serialise_steps(steps)
     if not rows:
         return
     try:
@@ -474,10 +486,11 @@ def _record_steps(*, conversation_id: str, turn_id: str,
             turns[turn_id] = {
                 "ts": _now_iso(),
                 "step_count": len(rows),
-                # True when the run emitted more steps than we keep, so a
-                # reader can say "trace shortened" instead of quietly showing
-                # a partial trace as if it were the whole thing.
-                "truncated": len(list(steps)) > len(rows),
+                # True when this trace is not the whole one — steps dropped or
+                # content clipped — so a reader can say "trace shortened"
+                # instead of quietly showing a partial trace as if it were
+                # everything. See _serialise_steps for what counts.
+                "truncated": shortened,
                 "steps": rows,
             }
             sidecar["turns"] = turns

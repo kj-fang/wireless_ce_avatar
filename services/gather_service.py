@@ -54,10 +54,13 @@ execution_mode) so a flat DB load can ignore the folder structure entirely.
 
 Who writes
 ----------
-The packaged EXE always records, exactly as it always has. A source checkout
-records only when ``INTELAVATAR_COLLECT_DEV=1`` is set on that machine, and
-then into its own ``developer/`` tree; without it a developer run writes
-nothing at all. See ``_collection_enabled``.
+Both builds record, and they record the same events: clicking AI on a case,
+a chatbot Send, a feedback Submit. The packaged EXE writes to the flat root
+as it always has, and a source checkout writes to ``developer/``. Separating
+developer traffic by directory and by ``execution_mode`` is what keeps it out
+of the support numbers, so a source run no longer has to stay silent to avoid
+distorting them. A machine that must not collect at all sets
+``INTELAVATAR_COLLECT_DEV=0``. See ``_collection_enabled``.
 """
 
 from __future__ import annotations
@@ -147,11 +150,13 @@ EXE_MODE = "exe"
 DEVELOPER_MODE = "developer"
 _EXECUTION_MODES = (EXE_MODE, DEVELOPER_MODE)
 
-# Opt-in that lets a source checkout collect at all. Unset — or set to
-# anything other than "1" — means a developer run writes nothing, which is
-# what it did before the split. An environment variable rather than a config
-# file, so the opt-in is per machine and leaves no trace in the repository.
+# Escape hatch for a source checkout that must not collect at all. Collection
+# is ON by default for both builds; setting this to one of the "off" values
+# turns it off for source runs only, since the packaged EXE that support runs
+# on is not optional. An environment variable rather than a config file, so
+# the choice is per machine and leaves no trace in the repository.
 _DEV_COLLECT_ENV = "INTELAVATAR_COLLECT_DEV"
+_DEV_COLLECT_OFF = {"0", "false", "no", "off"}
 
 # How long to keep buffering locally before re-probing an unreachable share.
 # Probing costs up to 8 s per candidate path, and it only ever runs on a
@@ -222,13 +227,17 @@ def _execution_mode() -> str:
 def _collection_enabled() -> bool:
     """Whether this process may write Gather records at all.
 
-    The packaged EXE always collects, exactly as before. A source checkout
-    collects only when the opt-in environment variable is set on that machine,
-    so a developer machine still never ships data just by running the app.
+    Both builds collect. The packaged EXE always has; a source checkout now
+    does too, so running from source produces the same telemetry as the EXE —
+    which is the point of the mode split: developer traffic is kept out of the
+    support numbers by living in ``developer/`` and by saying so in
+    `execution_mode`, not by being thrown away. A machine that must not
+    collect sets INTELAVATAR_COLLECT_DEV to one of `_DEV_COLLECT_OFF`; the
+    packaged EXE ignores it.
     """
     if _execution_mode() == EXE_MODE:
         return True
-    return os.environ.get(_DEV_COLLECT_ENV, "").strip() == "1"
+    return os.environ.get(_DEV_COLLECT_ENV, "").strip().lower() not in _DEV_COLLECT_OFF
 
 
 def _root_for_mode(root: Path, mode: str) -> Path:
@@ -1370,9 +1379,9 @@ def record_send(
     """
     if not conversation_id:
         return
-    # The packaged EXE always records. A source checkout records only if the
-    # machine opted in (INTELAVATAR_COLLECT_DEV=1), and then under developer/,
-    # so developer testing never lands in the support numbers either way.
+    # Both builds record; a source checkout writes under developer/, so its
+    # traffic is separated from the support numbers rather than dropped. Only
+    # a machine that set INTELAVATAR_COLLECT_DEV=0 writes nothing.
     if not _collection_enabled():
         return
     # Normalise the window to a plain int (or None) so the stored record is
@@ -1569,8 +1578,7 @@ def record_usage(
     agent's ``last_turn_usage`` dict straight through.
 
     Same contract as record_send: background thread, never raises, and a no-op
-    outside the packaged build unless the machine opted into developer
-    collection.
+    only on a machine that opted out of collection.
     """
     if not conversation_id:
         return
@@ -1598,8 +1606,8 @@ def record_usage(
         "llm_calls", "input_tokens", "output_tokens",
         "cache_read_tokens", "cache_write_tokens",
     ))
-    # Mirrors record_send: the packaged build always writes, a source checkout
-    # only when opted in, and then into its own developer/ tree.
+    # Mirrors record_send: both builds write, the source checkout into its own
+    # developer/ tree, unless the machine opted out.
     if not _collection_enabled():
         return
     if not has_spend:

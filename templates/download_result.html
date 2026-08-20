@@ -208,6 +208,52 @@
             filter: grayscale(100%);
             opacity: 0.55;
         }
+        /* ── Coex: per-row FW BT/WiFi picker (modern, subtle) ─────────────── */
+        .fw-type-picker {
+            display: inline-flex;
+            align-items: center;
+            gap: 8px;
+            margin-top: 10px;
+            font-size: 0.85rem;
+        }
+        .fw-type-picker-label {
+            color: #6b7280;
+            font-weight: 500;
+            margin: 0;
+        }
+        .fw-type-select {
+            appearance: none;
+            -webkit-appearance: none;
+            -moz-appearance: none;
+            background-color: #ffffff;
+            background-image: url("data:image/svg+xml;utf8,<svg xmlns='http://www.w3.org/2000/svg' width='12' height='12' viewBox='0 0 24 24' fill='none' stroke='%236b7280' stroke-width='2.5' stroke-linecap='round' stroke-linejoin='round'><polyline points='6 9 12 15 18 9'/></svg>");
+            background-repeat: no-repeat;
+            background-position: right 10px center;
+            background-size: 12px 12px;
+            padding: 6px 32px 6px 12px;
+            font-size: 0.85rem;
+            font-weight: 500;
+            color: #1f2937;
+            border: 1px solid #d1d5db;
+            border-radius: 8px;
+            cursor: pointer;
+            outline: none;
+            min-width: 150px;
+            transition: border-color 0.15s ease, box-shadow 0.15s ease;
+        }
+        .fw-type-select:hover {
+            border-color: #9ca3af;
+        }
+        .fw-type-select:focus {
+            border-color: #005A9C;
+            box-shadow: 0 0 0 3px rgba(0, 90, 156, 0.15);
+        }
+        .fw-type-hint {
+            color: #6b7280;
+            font-size: 0.9rem;
+            font-weight: 500;
+            margin-left: 6px;
+        }
         .bt-file-item {
             padding: 1rem;
             border: 2px solid #e9ecef;
@@ -550,7 +596,12 @@
         {% set sys_info_ns.has_items = true %}
     {% endif %}
 
-    {% if wifi_ns.has_items %}
+    {% if wifi_ns.has_items and bt_ns.has_items and wifi_or_bt == 'bt' %}
+        {# Coex + Salesforce hint says BT: land on the BT tab so the primary
+           domain is what the user sees first. Falls through to the wifi-first
+           order for non-coex or wifi-hinted coex cases. #}
+        {% set active_tab = 'bt' %}
+    {% elif wifi_ns.has_items %}
         {% set active_tab = 'wifi' %}
     {% elif bt_ns.has_items %}
         {% set active_tab = 'bt' %}
@@ -882,6 +933,17 @@
                                         {% if ns.skip %}<span class="excluded-badge">Excluded: {{ ns.matched_kw }}</span>{% endif %}
                                     </p>
                                     <p class="analysis-file-path mb-0">Path: {{ fw_path }}</p>
+                                    {% if is_coex %}
+                                    <div class="fw-type-picker" onclick="event.stopPropagation();">
+                                        <span class="fw-type-picker-label">Parse as</span>
+                                        <select class="fw-type-select" data-fw-encoded="{{ fw_path | urlencode }}" onchange="onFwTypeChange(this)">
+                                            <option value="" selected disabled>Select domain</option>
+                                            <option value="bt">Bluetooth</option>
+                                            <option value="wifi">Wi-Fi</option>
+                                        </select>
+                                        <span class="fw-type-hint">coex log — choose parser</span>
+                                    </div>
+                                    {% endif %}
                                 </div>
                             {% endfor %}
                         {% endfor %}
@@ -1805,7 +1867,7 @@
             if (isSuccess) window._parseAutoHideTimer = setTimeout(() => $('#parseProgressModal').modal('hide'), 3000);
         }
 
-        function startAnalysis(button, etlPathEncoded, mode) {
+        function startAnalysis(button, etlPathEncoded, mode, etlType) {
             cancelPendingFwAnalysis();
             if (button.classList.contains('disabled')) return;
 
@@ -1817,13 +1879,19 @@
             const decoded = decodePath(etlPathEncoded);
             logBox.innerText += `🛠️ Parsing...\n`;
             logBox.scrollTop = logBox.scrollHeight;
-            if (window.__wifiOrBt === 'wifi') {
+            // Coex: caller passes etlType so the modal + backend route match
+            // the actual tab (BT vs WiFi). Fall back to the Salesforce hint
+            // for non-coex call sites that don't pass etlType yet.
+            const resolvedType = etlType || window.__wifiOrBt;
+            if (resolvedType === 'wifi') {
                 openWppModal(`🛠️ Wi-Fi Parsing: ${decoded.split('\\').pop() || decoded.split('/').pop()}`);
-            } else if (window.__wifiOrBt === 'bt') {
+            } else if (resolvedType === 'bt') {
                 openParseModal(`🔵 BT Decoding: ${decoded.split('\\').pop() || decoded.split('/').pop()}`);
             }
-            console.log(`${ETL_ANALYSIS_URL}?etl_path=${etlPathEncoded}&mode=${mode}`)
-            fetch(`${ETL_ANALYSIS_URL}?etl_path=${etlPathEncoded}&mode=${mode}`)
+            const typeParam = resolvedType ? `&etl_type=${encodeURIComponent(resolvedType)}` : '';
+            const fetchUrl = `${ETL_ANALYSIS_URL}?etl_path=${etlPathEncoded}&mode=${mode}${typeParam}`;
+            console.log(fetchUrl);
+            fetch(fetchUrl)
                 .then(res => res.text())
                 .then(data => {
                     console.log(data);
@@ -1870,8 +1938,8 @@
             etlPathEncoded: etlPathEncoded,
             button: button
         };
-        console.log(`${ETL_ANALYSIS_URL}?etl_path=${etlPathEncoded}&mode=`)
-        fetch(`${ETL_ANALYSIS_URL}?etl_path=${etlPathEncoded}&mode=`)
+        console.log(`${ETL_ANALYSIS_URL}?etl_path=${etlPathEncoded}&mode=&etl_type=wifi`)
+        fetch(`${ETL_ANALYSIS_URL}?etl_path=${etlPathEncoded}&mode=&etl_type=wifi`)
             .then(res => res.text())
             .catch(err => {
                 console.error("Analysis failed:", err);
@@ -2045,7 +2113,7 @@
             button: button,
         };
 
-        fetch(`${ETL_ANALYSIS_URL}?etl_path=${btPathEncoded}&mode=LLM`)
+        fetch(`${ETL_ANALYSIS_URL}?etl_path=${btPathEncoded}&mode=LLM&etl_type=bt`)
             .then(res => res.text())
             .catch(err => {
                 console.error("BT HCI decode request failed:", err);
@@ -2238,7 +2306,7 @@
         });
     }
 
-    function startFwAnalysis(button, fwPathEncoded) {
+    function startFwAnalysis(button, fwPathEncoded, fwType) {
         if (button.classList.contains('disabled')) return;
 
         reconnectProgressSocket();
@@ -2258,7 +2326,10 @@
             appendLog(`\n\n🚀 Starting FW Analysis: ${decoded}\n`);
             openWppModal(`🔬 FW Parsing: ${getFilename(decoded)}`);
 
-            fetch(`${FW_ETL_ANALYSIS_URL}?fw_path=${fwPathEncoded}`)
+            // Coex: fwType is picked per-row in the UI. Non-coex callers pass
+            // undefined and the backend falls back to case_context.wifi_or_bt.
+            const typeParam = fwType ? `&fw_type=${encodeURIComponent(fwType)}` : '';
+            fetch(`${FW_ETL_ANALYSIS_URL}?fw_path=${fwPathEncoded}${typeParam}`)
                 .then(res => res.json())
                 .then(data => {
                     if (!data.ok || !data.task_id) {
@@ -2327,6 +2398,9 @@
     // when llm_issue_time is None server-side.
     window.__llmIssueTime = {{ (llm_issue_time or "") | tojson }};
     window.__wifiOrBt = {{ wifi_or_bt | tojson }};
+    // Coex mode = both BT and WiFi ETL logs are present. Drives the FW
+    // per-file BT/WiFi selector and the etl_type disambiguation on Parse.
+    window.__isCoex = {{ is_coex | tojson }};
     // Server-side AI pick (timezone-aware via pick_etl_by_ai_time). When set,
     // we use this path verbatim to pre-tick the auto-pick checkbox and
     // select the matching .wifi-file-item row on page load — bypassing the
@@ -2351,7 +2425,7 @@
             button: button
         };
 
-        fetch(`${ETL_ANALYSIS_URL}?etl_path=${etlPathEncoded}&mode=`)
+        fetch(`${ETL_ANALYSIS_URL}?etl_path=${etlPathEncoded}&mode=&etl_type=wifi`)
             .then(res => res.text())
             .catch(err => {
                 console.error('ETL Analysis failed:', err);
@@ -2746,7 +2820,26 @@
         }
 
         const hasSelection = !!selectedEncoded;
-        if (analyzeBtn) analyzeBtn.disabled = !hasSelection;
+        // In coex mode the user must pick BT / WiFi on the selected row before
+        // Parse becomes clickable.
+        const needsType = !!window.__isCoex;
+        const hasType = needsType ? !!getSelectedFwType() : true;
+        if (analyzeBtn) analyzeBtn.disabled = !(hasSelection && hasType);
+    }
+
+    // Called from each <select class="fw-type-select"> onchange; re-evaluates
+    // whether Parse should be enabled now that a type has been picked.
+    function onFwTypeChange(selectEl) {
+        updateFwActionButtons();
+    }
+
+    // Returns the fw_type value ('bt' | 'wifi' | '') from the SELECTED row's
+    // <select>. Empty string when no row is selected or no type picked yet.
+    function getSelectedFwType() {
+        const selectedRow = document.querySelector('.fw-file-item.selected');
+        if (!selectedRow) return '';
+        const select = selectedRow.querySelector('.fw-type-select');
+        return select ? (select.value || '') : '';
     }
 
     function runSelectedWifiAction(button, actionType) {
@@ -2763,7 +2856,7 @@
         if (actionType === 'parse') {
             window.pendingWifiAnalyze = true;
             setWifiActionButtonsBusy(true, 'wifi-action-analyze');
-            startAnalysis(button, selectedEncoded, 'etl');
+            startAnalysis(button, selectedEncoded, 'etl', 'wifi');
             return;
         }
         if (actionType === 'llm') {
@@ -2790,7 +2883,9 @@
         if (actionType === 'parse') {
             window.pendingDddAnalyze = true;
             setDddActionButtonsBusy(true, 'ddd-action-analyze');
-            startAnalysis(button, selectedEncoded, 'DDD');
+            // DDD sits under the WiFi analysis pipeline; hardcode 'wifi' so
+            // coex-BT hint cases still route through wifi_service.
+            startAnalysis(button, selectedEncoded, 'DDD', 'wifi');
             return;
         }
     }
@@ -2825,10 +2920,17 @@
             return;
         }
 
+        // Coex: enforce explicit BT / WiFi pick on the selected row.
+        const fwType = window.__isCoex ? getSelectedFwType() : '';
+        if (window.__isCoex && !fwType) {
+            alert('Please pick BT or WiFi for this FW file before parsing.');
+            return;
+        }
+
         if (actionType === 'parse') {
             window.pendingFwAnalyze = true;
             setFwActionButtonsBusy(true, 'fw-action-analyze');
-            startFwAnalysis(button, selectedEncoded);
+            startFwAnalysis(button, selectedEncoded, fwType);
             return;
         }
     }
@@ -3018,7 +3120,7 @@
         if (mode === 'CHATBOT') {
             startBtLogParser(button, selectedEncoded);
         } else {
-            startAnalysis(button, selectedEncoded, mode);
+            startAnalysis(button, selectedEncoded, mode, 'bt');
         }
     }
 

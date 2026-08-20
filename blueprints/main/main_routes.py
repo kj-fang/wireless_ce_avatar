@@ -542,27 +542,25 @@ def render_download_result_form():
 
     result_data = app_config.get_download_results(case_context.case_nbr)
 
-    if session.get('debug_mode'):
-        file_dicts = {
-            'wifi_dict': result_data.get('wifi', {}),
-            'ddd_dict': result_data.get('ddd', {}),
-            'bt_dict': result_data.get('bt', {}),
-            'fw_dict': result_data.get('fw', {})
-        }
-    elif case_context.wifi_or_bt == 'wifi':
-        file_dicts = {
-            'wifi_dict': result_data.get('wifi', {}),
-            'ddd_dict': result_data.get('ddd', {}),
-            'bt_dict': {},
-            'fw_dict': result_data.get('fw', {})
-        }
-    else:
-        file_dicts = {
-            'wifi_dict': {},
-            'ddd_dict': result_data.get('ddd', {}),
-            'bt_dict': result_data.get('bt', {}),
-            'fw_dict': result_data.get('fw', {})
-        }
+    # Tab display is driven purely by which dicts have items — the Salesforce
+    # hint (case_context.wifi_or_bt) no longer gates visibility. This surfaces
+    # BT+WiFi coex zips naturally (both tabs show up) and also unbreaks cases
+    # where the Salesforce subcategory was misclassified relative to the
+    # actual attached logs.
+    file_dicts = {
+        'wifi_dict': result_data.get('wifi', {}),
+        'ddd_dict': result_data.get('ddd', {}),
+        'bt_dict': result_data.get('bt', {}),
+        'fw_dict': result_data.get('fw', {})
+    }
+
+    # Coex detection: both BT and WiFi ETL logs present in the same case.
+    # Downstream reads case_context.is_coex to enable the FW BT/WiFi selector,
+    # keep both parse tabs interactive, and gate the auto-analysis fallback.
+    has_wifi_items = any(bool(v) for v in file_dicts['wifi_dict'].values())
+    has_bt_items = any(bool(v) for v in file_dicts['bt_dict'].values())
+    case_context.is_coex = has_wifi_items and has_bt_items
+    session["case_context"] = case_context.to_session()
     
     # Extract issue time from selected files
     selected_files = session.get("selected_files", [])
@@ -697,14 +695,23 @@ def render_download_result_form():
     run_analysis_pending = bool(session.pop('_run_analysis_requested', False))
 
     # Upstream pick: newest-by-number (also clears session['latest_etl_llm']).
-    auto_analysis_etl = get_auto_analysis_etl(file_dicts['wifi_dict'], file_dicts['ddd_dict'])
-    auto_analysis_etl_reason = 'latest_by_number' if auto_analysis_etl else None
+    # In coex mode with a BT hint, skip the wifi-flavored pick entirely — the
+    # BT side has its own auto_analysis_bt pipeline below and picking a wifi
+    # ETL here would launch the wrong parser.
+    if case_context.is_coex and case_context.wifi_or_bt == 'bt':
+        auto_analysis_etl = None
+        auto_analysis_etl_reason = None
+    else:
+        auto_analysis_etl = get_auto_analysis_etl(file_dicts['wifi_dict'], file_dicts['ddd_dict'])
+        auto_analysis_etl_reason = 'latest_by_number' if auto_analysis_etl else None
 
     # Recovery: if Run Analysis was pending but upstream picked nothing
     # (most often because its latest_etl_llm flag was already cleared by an
     # earlier request to this view), find any .etl ourselves so the auto-
     # launch the user just asked for still happens.
-    if not auto_analysis_etl and run_analysis_pending:
+    if not auto_analysis_etl and run_analysis_pending and not (
+        case_context.is_coex and case_context.wifi_or_bt == 'bt'
+    ):
         try:
             import re as _re
             from utils.etl_utils import extract_file_number
@@ -871,6 +878,7 @@ def render_download_result_form():
                          llm_issue_times=llm_issue_times,
                          ai_pre_selected_etl=ai_pre_selected_etl,
                          wifi_or_bt=case_context.wifi_or_bt,
+                         is_coex=bool(case_context.is_coex),
                          auto_analysis_etl = auto_analysis_etl,
                          auto_analysis_etl_reason = auto_analysis_etl_reason,
                          auto_analysis_bt=auto_analysis_bt,

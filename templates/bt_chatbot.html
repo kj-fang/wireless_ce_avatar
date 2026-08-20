@@ -8474,7 +8474,11 @@
             if (bodyEl) return;
             removeTyping();
             hideWelcome();
-            cardId = 'agent-process-' + Date.now();
+            // History replay can create several cards synchronously; Date.now()
+            // alone can repeat within the same millisecond and make the second
+            // card append its steps into the first card's duplicate id.
+            window.__agentProcessCardSeq = (window.__agentProcessCardSeq || 0) + 1;
+            cardId = 'agent-process-' + Date.now() + '-' + window.__agentProcessCardSeq;
             const html =
                 '<div class="agent-process-card">' +
                   '<div class="agent-process-header' + (collapsed ? ' collapsed' : '') + '" onclick="' +

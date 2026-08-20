@@ -156,6 +156,22 @@ def _ensure_feedback_conversation_id(*, rotate: bool = False) -> str:
     return session["feedback_conversation_id"]
 
 
+def _export_agent_context(agent) -> list:
+    """Snapshot the agent's model-facing conversation. Never raises.
+
+    Persisting the context is a convenience — without it a conversation still
+    resumes, just from result text. The caller runs inside the turn's worker
+    try/except, where an exception would mark an already-successful turn as
+    failed, so this swallows its own errors rather than costing the user a
+    finished analysis.
+    """
+    try:
+        return agent.export_conversation_context()
+    except Exception as e:
+        print(f"[history] context export failed: {e}")
+        return []
+
+
 def _extract_issue_context() -> dict:
     """
     Consolidate issue context from session into a single dict with keys:
@@ -979,6 +995,10 @@ def chat():
                         # conversation shows how the answer was reached and
                         # not only what it was.
                         steps=collected_steps,
+                        # And the model-facing conversation, so a follow-up
+                        # asked tomorrow is answered by something that still
+                        # has the evidence, not just the conclusions.
+                        agent_context=_export_agent_context(agent),
                     )
                     chat_jobs.finish_job(job, result)
                 except Exception as exc:
@@ -1388,18 +1408,37 @@ def history_load():
             except Exception:
                 pass
 
-        # Rebuild the agent's textual conversation history ONLY when we didn't
-        # adopt a live agent (which already holds the real history). Plain
-        # user/assistant text pairs — no tool_use blocks, so the tool loop's
-        # pairing invariants stay intact.
+        # Restore the agent's conversation ONLY when we didn't adopt a live
+        # agent (which already holds the real history).
+        #
+        # Preferred: the stored model-facing context — the same messages the
+        # agent last sent, tool results included — so a follow-up is answered
+        # by something that still has the evidence. It is applied AFTER
+        # prime_with_context, which resets conversation_history along with the
+        # agent's caches; the stored context already carries its own priming
+        # head, so replacing wholesale avoids a duplicate one.
+        #
+        # Fallback: the pre-existing rebuild from result text. Plain
+        # user/assistant pairs, no tool_use blocks, so the tool loop's pairing
+        # invariants stay intact. Conversations saved before contexts were
+        # stored land here, and behave exactly as they did before.
+        context_restored = 0
         if not adopted:
-            for turn in turns:
-                um = (turn.get("user_message") or "").strip()
-                if um:
-                    agent.conversation_history.append({"role": "user", "content": um})
-                at = history_service.assistant_text_from_result(turn.get("result"))
-                if at:
-                    agent.conversation_history.append({"role": "assistant", "content": at})
+            stored_context = history_service.get_context(conversation_id, domain="bt")
+            if stored_context:
+                try:
+                    context_restored = agent.import_conversation_context(stored_context)
+                except Exception as _e:
+                    print(f"[history] context restore failed: {_e}")
+                    context_restored = 0
+            if not context_restored:
+                for turn in turns:
+                    um = (turn.get("user_message") or "").strip()
+                    if um:
+                        agent.conversation_history.append({"role": "user", "content": um})
+                    at = history_service.assistant_text_from_result(turn.get("result"))
+                    if at:
+                        agent.conversation_history.append({"role": "assistant", "content": at})
 
         if log_exists:
             session["chatbot_log_path"] = log_path
@@ -1409,6 +1448,10 @@ def history_load():
             "conversation_id": conversation_id,
             "title": conv.get("title") or (job.title if job else "") or "Conversation",
             "turns": turns,
+            # How grounded the resumed agent is, so the UI can say so rather
+            # than leaving the user to guess whether a follow-up will still
+            # know what the analysis found. 0 = rebuilt from result text.
+            "context_restored": context_restored,
             # Live-analysis hand-off: when running, the client renders these
             # buffered steps and then opens /history/stream to follow the rest.
             "running": running,

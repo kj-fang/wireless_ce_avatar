@@ -8683,9 +8683,13 @@
                 if (data.issue_time && typeof setIssueTimeFromString === 'function') {
                     setIssueTimeFromString(data.issue_time);
                 }
+                // Say whether the follow-up will still know what the analysis
+                // found, rather than leaving the user to discover it by asking.
                 if (st) showStatus(st, data.running
                     ? '⏳ Analysis in progress — following live…'
-                    : '✔ Resumed conversation — log re-loaded.',
+                    : (data.context_restored
+                        ? '✔ Resumed conversation — log re-loaded, analysis context restored.'
+                        : '✔ Resumed conversation — log re-loaded.'),
                     data.running ? 'warn' : 'ok',
                     // Keep the "in progress" line up while it streams; the
                     // "resumed" confirmation is transient — auto-hide after 3s.

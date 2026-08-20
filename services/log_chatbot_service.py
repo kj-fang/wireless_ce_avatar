@@ -21,7 +21,7 @@ import importlib.util
 import xml.etree.ElementTree as ET
 from pathlib import Path
 from datetime import datetime, timedelta
-from typing import Dict, List, Optional, Tuple
+from typing import Any, Dict, List, Optional, Tuple
 from utils.softAP_supported_channel import softAP_supported_channel
 from pydantic import BaseModel, Field
 
@@ -2049,6 +2049,150 @@ class WifiLogAgentSystem:
             print(f"[chat] 🧹 Repaired tool_use/tool_result consistency — "
                   f"dropped {dropped} orphan/stray message(s) before sending.")
             self.conversation_history = out
+
+    # Budget for a persisted conversation context. Every restored message is
+    # re-sent on every follow-up, so this is a recurring token cost, not a
+    # one-off disk cost: 120k chars is roughly 30k tokens of grounding.
+    MAX_PERSISTED_CONTEXT_CHARS = 120_000
+
+    @staticmethod
+    def _plain_message(m) -> Optional[dict]:
+        """Flatten one history entry into a plain, JSON-safe message dict.
+
+        ``conversation_history`` holds a mix of dicts we appended ourselves and
+        raw SDK message objects straight off the response, so this reads both
+        shapes through attribute-or-key access and keeps only the fields the
+        API round-trips: the tool_calls ids and arguments especially, since
+        those are what pair an assistant tool_use with its tool results.
+        """
+        def field(key):
+            return m.get(key) if isinstance(m, dict) else getattr(m, key, None)
+
+        role = field("role")
+        tool_calls = field("tool_calls") or []
+        if not role:
+            # A raw assistant SDK object can read back with no role; if it
+            # carries tool_calls it is an assistant turn by construction.
+            role = "assistant" if tool_calls else None
+        if not role:
+            return None
+
+        out: dict = {"role": role, "content": field("content")}
+        calls = []
+        for tc in tool_calls:
+            def sub(obj, key):
+                return obj.get(key) if isinstance(obj, dict) else getattr(obj, key, None)
+            fn = sub(tc, "function")
+            call_id = sub(tc, "id")
+            name = sub(fn, "name") if fn is not None else None
+            arguments = sub(fn, "arguments") if fn is not None else None
+            if not call_id or not name:
+                continue
+            calls.append({
+                "id": call_id,
+                "type": sub(tc, "type") or "function",
+                "function": {"name": name, "arguments": arguments or "{}"},
+            })
+        if calls:
+            out["tool_calls"] = calls
+        tool_call_id = field("tool_call_id")
+        if tool_call_id:
+            out["tool_call_id"] = tool_call_id
+            name = field("name")
+            if name:
+                out["name"] = name
+        # An assistant message with tool_calls legitimately has no content;
+        # anything else with neither content nor tool_calls carries nothing.
+        if out["content"] is None and "tool_calls" not in out:
+            return None
+        return out
+
+    def export_conversation_context(self, max_chars: Optional[int] = None) -> list[dict]:
+        """Snapshot the model-facing conversation so it can be resumed later.
+
+        This is NOT the UI trace — it is what actually goes to the API on the
+        next request: the primed case context, the questions, the assistant
+        turns and the tool results they were grounded in.
+
+        Trimmed to a character budget from the OLDEST end, and only ever at a
+        group boundary: an assistant tool_use and the tool results answering it
+        are kept or dropped together, so a restored context can never open with
+        an orphan. The head — the priming message the conversation opened with
+        — is always kept; it is small and it is what tells the model which case
+        this is.
+        """
+        budget = self.MAX_PERSISTED_CONTEXT_CHARS if max_chars is None else max_chars
+        history = self.conversation_history or []
+
+        # Walk into groups: [assistant-with-tool_calls + its tool results] or
+        # [single message]. Grouping mirrors _repair_tool_use_consistency so
+        # the two agree on what a severable unit is.
+        groups: list[list[dict]] = []
+        i, n = 0, len(history)
+        while i < n:
+            plain = self._plain_message(history[i])
+            call_ids = set(self._msg_tool_call_ids(history[i]))
+            if call_ids and plain is not None:
+                group = [plain]
+                j = i + 1
+                while j < n and self._msg_role(history[j]) == "tool":
+                    tool_plain = self._plain_message(history[j])
+                    if tool_plain is not None:
+                        group.append(tool_plain)
+                    j += 1
+                groups.append(group)
+                i = j
+                continue
+            if plain is not None and self._msg_role(history[i]) != "tool":
+                groups.append([plain])
+            i += 1
+
+        if not groups:
+            return []
+
+        def size(group: list[dict]) -> int:
+            try:
+                return len(json.dumps(group, ensure_ascii=False, default=str))
+            except Exception:
+                return sum(len(str(msg)) for msg in group)
+
+        head, tail = groups[0], groups[1:]
+        total = size(head)
+        kept: list[list[dict]] = []
+        # Newest-first so the most recent evidence is what survives the budget.
+        for group in reversed(tail):
+            group_size = size(group)
+            if total + group_size > budget:
+                break
+            kept.append(group)
+            total += group_size
+        kept.reverse()
+
+        out: list[dict] = list(head)
+        for group in kept:
+            out.extend(group)
+        return out
+
+    def import_conversation_context(self, messages: Any) -> int:
+        """Restore a context produced by ``export_conversation_context``.
+
+        Returns how many messages were adopted (0 when there was nothing
+        usable, so the caller can fall back to rebuilding from result text).
+        The restored list is run through the same repair pass every request
+        gets, so a snapshot that was truncated or hand-edited into an invalid
+        state degrades to a smaller valid context instead of a 400.
+        """
+        if not isinstance(messages, list):
+            return 0
+        restored = [m for m in messages if isinstance(m, dict) and m.get("role")]
+        if not restored:
+            return 0
+        self.conversation_history = restored
+        try:
+            self._repair_tool_use_consistency()
+        except Exception as e:
+            print(f"[chat] restored context repair failed: {e}")
+        return len(self.conversation_history)
 
     def _history_skeleton(self) -> str:
         """Compact one-line-per-message view of conversation_history showing

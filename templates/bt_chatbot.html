@@ -541,6 +541,17 @@
             overflow-x: auto;
             white-space: pre;
         }
+        /* Answers that draw something — an ASCII timeline, a diagram, a wide
+           table — used to set the width of the whole message instead of
+           scrolling inside their own block. Same flex rule as the step card:
+           the section has to be allowed to be narrower than its content
+           before the overflow-x above can do anything. */
+        .markdown-section { min-width: 0; }
+        .markdown-section pre { max-width: 100%; }
+        /* An unbroken token in inline code (a path, a hex blob) wraps rather
+           than widening the answer. No effect inside pre, where white-space
+           is pre and the block scrolls instead. */
+        .markdown-section code { overflow-wrap: anywhere; }
         .markdown-section ul { padding-left: 18px; }
 
         .skills-badge {
@@ -818,6 +829,13 @@
 
         .agent-step-content {
             flex: 1;
+            /* A flex item will not shrink below its content's intrinsic width
+               unless told to, so one wide <pre> — a tool dump, an ASCII
+               timeline — drags the whole card past the window and the chat
+               pane grows a horizontal scrollbar. Measured on a 401px pane:
+               the card came out 834px. The pre's own overflow:auto only
+               starts working once the item is allowed to be narrower. */
+            min-width: 0;
             font-size: 0.78rem;
             color: #374151;
             line-height: 1.5;
@@ -3317,7 +3335,7 @@
         const wrapper = document.createElement('div');
         wrapper.className = 'msg-row assistant';
         wrapper.style.maxWidth = '95%';
-        wrapper.innerHTML = `<div class="avatar-icon">🤖</div><div style="flex:1;">${html}${turnId ? renderFeedbackWidget(turnId) : ''}</div>`;
+        wrapper.innerHTML = `<div class="avatar-icon">🤖</div><div style="flex:1;min-width:0;">${html}${turnId ? renderFeedbackWidget(turnId) : ''}</div>`;
         document.getElementById('chat-window').appendChild(wrapper);
         scrollBottom();
 
@@ -3919,7 +3937,7 @@
             const wrapper = document.createElement('div');
             wrapper.className = 'msg-row assistant';
             wrapper.style.maxWidth = '95%';
-            wrapper.innerHTML = `<div class="avatar-icon">🤖</div><div style="flex:1;">${html}</div>`;
+            wrapper.innerHTML = `<div class="avatar-icon">🤖</div><div style="flex:1;min-width:0;">${html}</div>`;
             document.getElementById('chat-window').appendChild(wrapper);
             agentCardBodyEl = document.getElementById(agentCardId);
             scrollBottom();
@@ -4126,7 +4144,7 @@
         wrapper.className = 'msg-row assistant';
         wrapper.innerHTML =
             `<div class="avatar-icon">🕒</div>` +
-            `<div style="flex:1;"><span class="incident-tag">Incident ${idx} / ${total}` +
+            `<div style="flex:1;min-width:0;"><span class="incident-tag">Incident ${idx} / ${total}` +
             (fmt ? ` &nbsp;·&nbsp; ${fmt}` : '') + `</span></div>`;
         document.getElementById('chat-window').appendChild(wrapper);
         scrollBottom();
@@ -4227,7 +4245,7 @@
         const wrapper = document.createElement('div');
         wrapper.className = 'msg-row assistant';
         wrapper.style.maxWidth = '95%';
-        wrapper.innerHTML = `<div class="avatar-icon">🤖</div><div style="flex:1;">${html}</div>`;
+        wrapper.innerHTML = `<div class="avatar-icon">🤖</div><div style="flex:1;min-width:0;">${html}</div>`;
         document.getElementById('chat-window').appendChild(wrapper);
         scrollBottom();
 
@@ -8500,7 +8518,7 @@
             const wrapper = document.createElement('div');
             wrapper.className = 'msg-row assistant';
             wrapper.style.maxWidth = '95%';
-            wrapper.innerHTML = '<div class="avatar-icon">🤖</div><div style="flex:1;">' + html + '</div>';
+            wrapper.innerHTML = '<div class="avatar-icon">🤖</div><div style="flex:1;min-width:0;">' + html + '</div>';
             document.getElementById('chat-window').appendChild(wrapper);
             bodyEl = document.getElementById(cardId);
             scrollBottom();

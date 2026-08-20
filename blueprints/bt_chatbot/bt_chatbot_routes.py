@@ -589,21 +589,51 @@ def set_log():
         rotated = bool(prev_log_path) and prev_log_path != log_path
         prev_conv_id = (session.get("feedback_conversation_id") or "") if rotated else ""
 
+        # Re-loading the SAME file is not a new case. It used to be treated as
+        # one anyway — a fresh conversation id and a wiped agent — so anything
+        # that incidentally re-loaded the log (the path field losing focus, a
+        # draft restore, returning to the live session) silently split a case
+        # into another one-turn conversation and made the next question start
+        # from nothing. Continue the thread when the file has not changed.
+        same_log = bool(prev_log_path) and prev_log_path == log_path
+
         agent = _get_or_create_agent(skip_prime=True)
         agent.current_log_path = log_path
-        agent.reset_conversation()          # fresh conversation for a new file
+        if not same_log:
+            agent.reset_conversation()      # fresh conversation for a new file
         ctx = _extract_issue_context()      # re-extract context in case session was updated after agent creation
         # Always prime: prime_with_context falls back to the log file's latest
         # timestamp when ctx has no usable issue time, so the sidebar always
         # gets an issue_time to display (covers the no-session entry path).
+        # It also clears conversation_history, so on a same-file re-load the
+        # thread is put back afterwards — priming is wanted for its caches and
+        # issue-time resolution, not for its side effect on the conversation.
+        preserved_history = list(agent.conversation_history or []) if same_log else []
         agent.prime_with_context(**ctx)
 
         session["chatbot_log_path"] = log_path
 
-        # Sidecar: a new log file = a new conversation. Rotate the id and
+        # Sidecar: a NEW log file = a new conversation. Rotate the id (and
         # eagerly create the snapshot file so issue context is captured even
-        # if the user never sends a message.
-        new_conv_id = _ensure_feedback_conversation_id(rotate=True)
+        # if the user never sends a message); keep it for a same-file re-load
+        # so the next turn appends to the conversation already on screen.
+        new_conv_id = _ensure_feedback_conversation_id(rotate=not same_log)
+
+        if same_log:
+            if preserved_history:
+                agent.conversation_history = preserved_history
+            else:
+                # The per-conversation agent is detached from the session slot
+                # at the start of every tools run, so by now this is usually a
+                # fresh instance with nothing to preserve. Fall back to the
+                # conversation's stored context for the same continuity a
+                # History click gets.
+                try:
+                    stored = history_service.get_context(new_conv_id, domain="bt")
+                    if stored:
+                        agent.import_conversation_context(stored)
+                except Exception as _e:
+                    print(f"[set_log] context restore skipped: {_e}")
         feedback_service.ensure_conversation(
             conversation_id=new_conv_id,
             session_id=session.get("chatbot_session_id", ""),

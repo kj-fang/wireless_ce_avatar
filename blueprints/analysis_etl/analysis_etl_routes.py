@@ -31,19 +31,22 @@ def process_etl_path():
     # when case_context.wifi_or_bt (the Salesforce hint) points the other way.
     # Falls back to the hint when the caller doesn't specify, preserving
     # every existing non-coex call site.
-    etl_type = (request.args.get('etl_type') or case_context.wifi_or_bt or '').lower()
+    etl_type = (request.args.get('etl_type') or case_context.wifi_or_bt or '').strip().lower()
 
     print("etl_path: ", etl_path)
     print("etl_type: ", etl_type)
 
     if not etl_path or not os.path.exists(etl_path):
         return f"❌ Invalid file path: {etl_path}"
-    
+
+    if etl_type not in ('wifi', 'bt'):
+        return "❌ Unknown case subcategory", 400
+
     subprocess.run(['explorer', '/select,', etl_path])
 
-    if 'wifi' in etl_type:
+    if etl_type == 'wifi':
         wifi_service.analyze(etl_path)
-    elif 'bt' in etl_type:
+    else:
         classification = session.get("classification", {})
         issue_type = (classification or {}).get("issue_type")
         bt_service.analyze(
@@ -52,9 +55,7 @@ def process_etl_path():
             issue_type=issue_type,
             wifi_or_bt=etl_type,
         )
-    else:
-        return "❌ Unknown case subcategory", 400
-    
+
     return f"🚀 Analysis triggered for: {etl_path}"
     
 

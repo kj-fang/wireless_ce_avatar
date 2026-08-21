@@ -10,7 +10,6 @@ from utils.fw_utils import load_fw_system_info
 class FWAnalysisService():
 
     def __init__(self):
-        self.service_name = "bt"
         self._tasks = {}
         self._lock = Lock()
         self.exe_cli_path = r"C:\UtilityPackage\WRT_BT_Logs_Decoder\bt_decoder_cli.exe"
@@ -33,7 +32,7 @@ class FWAnalysisService():
 
         return True, ""
 
-    def _validate_precheck(self, file_path: str):
+    def _validate_precheck(self, file_path: str, wifi_or_bt: str):
 
         # check etl file 
         if not file_path:
@@ -54,31 +53,32 @@ class FWAnalysisService():
         except OSError as e:
             return False, f"Cannot access FW file: {e}"
         
-        # check driver log file
-        try:
-            fw_dir = os.path.dirname(file_path)
-            for file in os.listdir(os.path.join(fw_dir, "BT")):
-                if file.lower().startswith("Host_Logs") and os.path.isdir(os.path.join(fw_dir, "BT", file)):
-                    for subfile in os.listdir(os.path.join(fw_dir, "BT", file)):
-                        if subfile.lower().startswith("ibtpci") and subfile.lower().endswith('.etl'):
-                            driver_log_path = os.path.join(fw_dir, "BT", file, subfile)
-                            if os.path.exists(driver_log_path) and os.path.isfile(driver_log_path):
-                                if os.path.getsize(driver_log_path) < 1024*96: 
-                                    return False, f"Driver log file size is less than 96KB: {driver_log_path}"
-        except Exception as e:
-            return False, f"Error checking driver log file: {e}"
-        
-        # check CLI tool
-        if not os.path.exists(self.exe_cli_path):
-            return False, f"FW analysis CLI tool not found at: {self.exe_cli_path}"
+        if 'bt' in wifi_or_bt:
+            # check driver log file
+            try:
+                fw_dir = os.path.dirname(file_path)
+                for file in os.listdir(os.path.join(fw_dir, "BT")):
+                    if file.lower().startswith("Host_Logs") and os.path.isdir(os.path.join(fw_dir, "BT", file)):
+                        for subfile in os.listdir(os.path.join(fw_dir, "BT", file)):
+                            if subfile.lower().startswith("ibtpci") and subfile.lower().endswith('.etl'):
+                                driver_log_path = os.path.join(fw_dir, "BT", file, subfile)
+                                if os.path.exists(driver_log_path) and os.path.isfile(driver_log_path):
+                                    if os.path.getsize(driver_log_path) < 1024*96: 
+                                        return False, f"Driver log file size is less than 96KB: {driver_log_path}"
+            except Exception as e:
+                return False, f"Error checking driver log file: {e}"
+
+            # check CLI tool
+            if not os.path.exists(self.exe_cli_path):
+                return False, f"FW analysis CLI tool not found at: {self.exe_cli_path}"
 
         return True, ""
 
-    def start_async(self, file_path: str, wifi_of_bt: str):
+    def start_async(self, file_path: str, wifi_or_bt: str):
         close_active_text_analysis_tool(on_log=self.emit_tool_closed)
 
         # fw validation precheck
-        is_valid, error_msg = self._validate_precheck(file_path)
+        is_valid, error_msg = self._validate_precheck(file_path, wifi_or_bt)
         if not is_valid:
             app_config.socketio.emit(
                 'fw_analysis_warning',
@@ -97,7 +97,7 @@ class FWAnalysisService():
             self._tasks[task_id] = {
                 "status": "running",
                 "fw_path": file_path,
-                "wifi_of_bt": wifi_of_bt,
+                "wifi_or_bt": wifi_or_bt,
                 "cancel_event": cancel_event,
                 "result": {
                     "log": None,
@@ -108,30 +108,29 @@ class FWAnalysisService():
 
         Thread(
             target=self._run_task,
-            args=(task_id, file_path, wifi_of_bt, cancel_event),
+            args=(task_id, file_path, wifi_or_bt, cancel_event),
             daemon=True,
         ).start()
         return task_id, ""
 
-    def _run_task(self, task_id: str, file_path: str, wifi_of_bt: str, cancel_event: Event):
+    def _run_task(self, task_id: str, file_path: str, wifi_or_bt: str, cancel_event: Event):
         try:
             results = {}
             results['system_info'] = load_fw_system_info(file_path)
+            if 'bt' in wifi_or_bt:
+                system_info_ok, rejected_reason = self._validate_system_info(results['system_info'])
+                if not system_info_ok:
+                    app_config.socketio.emit(
+                        'fw_analysis_warning',
+                        {
+                            'task_id': task_id,
+                            'fw_path': file_path,
+                            'error': rejected_reason,
+                        },
+                        namespace='/progress'
+                    )
 
-            system_info_ok, rejected_reason = self._validate_system_info(results['system_info'])
-
-            if not system_info_ok:
-                app_config.socketio.emit(
-                    'fw_analysis_warning',
-                    {
-                        'task_id': task_id,
-                        'fw_path': file_path,
-                        'error': rejected_reason,
-                    },
-                    namespace='/progress'
-                )
-
-            decode_complete, log = self.analyze(file_path, wifi_of_bt, cancel_event=cancel_event)
+            decode_complete, log = self.analyze(file_path, wifi_or_bt, cancel_event=cancel_event)
             with self._lock:
                 task = self._tasks.get(task_id)
                 if not task:
@@ -161,7 +160,7 @@ class FWAnalysisService():
                         namespace='/progress'
                     )
 
-                    if 'bt' in wifi_of_bt:
+                    if 'bt' in wifi_or_bt:
                         opened = open_sysmon_with_tool(file_path, on_log=self.emit_tool_log, on_close=self.emit_tool_closed)
                         if not opened:
                             app_config.socketio.emit(
@@ -184,7 +183,7 @@ class FWAnalysisService():
                     return
                 task["status"] = "failed"
                 task["error"] = str(e)
-            self.emit_fw_log(f"❌ FW analysis failed: {e}")
+            self.emit_fw_log(f"? FW analysis failed: {e}")
             self.emit_fw_log(traceback.format_exc())
             app_config.socketio.emit(
                 'fw_analysis_failed',
@@ -222,15 +221,15 @@ class FWAnalysisService():
                 "error": task["error"],
             }
     
-    def analyze(self, file_path: str, wifi_of_bt: str, cancel_event: Event | None = None):
+    def analyze(self, file_path: str, wifi_or_bt: str, cancel_event: Event | None = None):
         # for _run_task to call
         # returns complete success or not
 
-        if 'wifi' in wifi_of_bt:
+        if 'wifi' in wifi_or_bt:
             self.emit_fw_log("Start FW WiFi analysis...")
             completed = fw_wifi_analysis(file_path, cancel_event=cancel_event, on_log=self.emit_fw_log)
             return completed, None
-        else:  # BT case → run BT FW analysis
+        else:  # BT case �� run BT FW analysis
             self.emit_fw_log("Start FW BT analysis...")
             completed, log = fw_bt_analysis(file_path, cancel_event=cancel_event, on_log=self.emit_fw_log)
             return completed, log

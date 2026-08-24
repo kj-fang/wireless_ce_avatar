@@ -157,6 +157,10 @@ class BtLogAgentSystem(WifiLogAgentSystem):
                 temperature=temperature,
                 max_tokens=max_tokens,
             )
+            # Same accounting the shared _chat_simple does — this override
+            # exists only for the BT system prompt, so a BT turn must still
+            # reach gather_service with its token cost.
+            self._accumulate_turn_usage(getattr(response, "usage", None))
             content = response.choices[0].message.content or ""
             self.conversation_history.append({"role": "assistant", "content": content})
             return {"type": "text", "data": content}

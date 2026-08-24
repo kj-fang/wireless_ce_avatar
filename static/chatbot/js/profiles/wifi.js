@@ -1,6 +1,3 @@
-    // Agentic mode is no longer user-selectable: the sidebar "AI Mode" toggle
-    // was removed, so the agent always runs with skills/tools available.
-    // Still sent as `use_tools` on /chat, which the backend expects.
     let isAutoFillMode = false;  // true after auto_run prefill; requires a timestamp before sending
     let firstRoundSent = false;  // true after the user successfully sends the first question
     // True when the primary Issue Time was auto-filled from the PREVIOUS PAGE
@@ -9,13 +6,6 @@
     // must tick the confirm checkbox, edit a field, or apply an AI suggestion).
     let issueTimeAwaitingConfirm = false;
 
-    // ── Utilities ──────────────────────────────────────────────────
-
-    // Field id -> [min, max] valid range
-
-    // Which Issue Time fields are REQUIRED. For a loaded log that has no date
-    // (e.g. DDD/tracefmt logs), the date is optional — only the time is needed,
-    // and Segment2 matches by time-of-day.
     // Show / hide the inline "Log ends at: HH:MM:SS.mmm" link that sits under
     // the no-date hint. Visible only when:
     //   * the loaded log is time-only (DDD/tracefmt), AND
@@ -51,20 +41,6 @@
             if (typeof validateUserInput === 'function') validateUserInput();
         }
     }
-
-    // Reflect the date-optional state in the UI when the loaded log has no date.
-    //
-    // Wi-Fi (log_has_date=true): date row fully editable (required).
-    // DDD / tracefmt (log_has_date=false): date row stays visible (same layout
-    // as Wi-Fi) but the three Month/Day/Year inputs go DISABLED and turn light
-    // grey. Any stale value is cleared. Users can still describe a date in the
-    // chat description or AI-suggest popup if they want, but it's never
-    // captured into the sidebar — the agent only sees HH:MM:SS.
-
-
-    // "🗑️ Clear" button: wipe EVERYTHING in one click — the primary picker
-    // AND every extra issue-time row.
-
 
     // Parse a "(GMT-0500)" / "(UTC-05:00)" / "GMT+8" style suffix into minutes
     // from UTC. Returns null when no offset can be read.
@@ -170,38 +146,11 @@
     }
 
 
-    // ── Auto-filled issue-time confirmation gate ─────────────────────
-    // Show/hide the "tick to use this auto-detected time" row and reset
-    // its checkbox. Called when a previous-page time is auto-filled (show)
-    // and whenever the time becomes user-owned: manual edit, clear, or an
-    // applied AI suggestion (hide).
-    // Called from manual-edit / clear / AI-apply paths: the time is now
-    // user-owned, so drop the pending-confirmation state.
-
     // ── Confirm modal (used when sending without Issue Time) ──────
     let _confirmModalResolver = null;
 
 
 
-
-    // AI-suggest option inside the no-issue-time confirm modal: cancel this
-    // send attempt, then open the AI suggestion flow. It reads the description
-    // already typed in the chat box, asks for consent, infers time(s) from the
-    // description + a rough browse of the log, and drops them into the capture
-    // popup. After applying a suggested time the user can click Send again.
-
-    // "Use log's last time" in the no-issue-time prompt: set the issue time to
-    // the log's last timestamp (an explicit choice → counts immediately), then
-    // re-send. Falls back to analysing without a time if the log has no
-    // readable timestamp.
-
-
-
-
-    // ── Browse for skills YAML file ────────────────────────────
-
-
-    // ── Reload skills from shared folder ────────────────────────────
 
     // Insert a small "Incident N/M at <time>" chip into the chat — used
     // before each multi-time analysis iteration so the user can scan
@@ -214,49 +163,6 @@
         validateUserInput();
         tryAutoAnalyzeOnLoad();
     });
-
-    // ============================================================
-    // Multi-issue-time support
-    //   1. Pattern detection on the user's chat message
-    //   2. Capture popup with editable rows
-    //   3. Sidebar "extras" list with + / × buttons
-    //   4. getAllIssueTimes() — primary picker + extras combined
-    // ============================================================
-
-    // ── Issue-time capture window (±N min) ───────────────────────────
-    // Sidebar control deciding how wide the Segment2 log slice is around
-    // the issue time. Valid range is 0 .. log-span (set from /set_log's
-    // log_span_minutes); falls back to 120 when the span is unknown.
-    // Read by sendMessage and forwarded to /chat.
-    // Re-apply the max attribute + readouts whenever the log (and thus
-    // the span) changes, or the user edits the field.
-
-    // RFC4122 v4 UUID — used for parent_message_id (multi-incident
-    // co-firing key). crypto.randomUUID() is available in all modern
-    // browsers; this fallback is purely defensive for old environments.
-
-    // Match HH:MM:SS or HH:MM:SS.mmm anywhere in the text. The leading
-    // \b is a word boundary — between a non-word char (e.g. "." or
-    // space) and a digit. That's what lets enumerated inputs like
-    // "1.17:36:13" pick up the "17:36:13" portion: the regex engine
-    // anchors the match at the `.→1` transition, not at the leading
-    // "1". (Earlier comment versions described this as a "negative
-    // lookbehind" — that was inaccurate; there is no lookbehind in
-    // the pattern, just `\b`.) Hours / minutes / seconds are bounds-
-    // checked AFTER the regex match so things like "99:88:77" don't
-    // slip through.
-
-    // ---- Time-capture popup ----
-
-    // Pull MM/DD/YYYY from the sidebar primary picker first (the user's
-    // current explicit choice). Fall back to the log's auto-detected
-    // timestamp cached at /set_log. Returns null if neither is available.
-
-    // Extract the date portion of a "MM/DD/YYYY-HH:MM:SS(.mmm)" or
-    // "MM/DD/YYYY HH:MM:SS(.mmm)" or "YYYY-MM-DD HH:MM:SS(.mmm)" string.
-    // Returns {month, day, year} or null.
-
-
 
     // ── Pick / multi-mode helpers (capture popup) ──────────────────
     // Single-pick mode (master ☐ OFF, the default): clicking a row's
@@ -310,15 +216,6 @@
         });
     }
 
-    // send=false → "✓ Confirm time(s)": just put the reviewed time(s) into the
-    //              sidebar (user reviews, then sends manually later).
-    // send=true  → "Apply & send to agent": apply the time(s) AND immediately
-    //              send the description already in the chat box for analysis.
-
-    // ---- Sidebar extras list ----
-
-
-
     // ---- Shared row helpers ----
     // For DDD/tracefmt logs (window.__logHasDate === false), strip the
     // month/day/year before writing them into ANY row (popup or sidebar
@@ -332,10 +229,6 @@
         if (!t || window.__logHasDate !== false) return t;
         return { ...t, month: null, day: null, year: null };
     }
-    // Render an eit-row's fields into the same string format that
-    // getIssueTimeString() emits for the primary picker, so the agent
-    // sees a uniform "at around MM/DD/YYYY HH:MM:SS.mmm" suffix.
-
     // True when the sidebar "Use multiple issue times" master is ticked.
     // When false, the sidebar extras are hidden AND excluded from the
     // accessors below — only the primary picker counts.
@@ -384,28 +277,6 @@
         }
     }
 
-    // Combined accessor: primary picker first, then each filled extra row.
-    // Extras only contribute when the master "Use multiple issue times" is on.
-
-    // Same idea but returns the PARSED row objects ({month, day, year,
-    // hh, mm, ss, ms}) rather than formatted strings — used by the
-    // multi-time chain in sendMessage so it can re-inject each row into
-    // _formatEitRowString on its own turn.
-
-    // Read the sidebar primary picker fields and return a row object,
-    // or null when the time portion (HH:MM:SS) isn't fully filled.
-
-    // Apply captured times to the sidebar. Mode: 'replace' clears
-    // existing first; 'append' keeps existing entries.
-
-    // Parse a canonical "MM/DD/YYYY-HH:MM:SS(.mmm)" (or bare "HH:MM:SS(.mmm)")
-    // string into the row object the sidebar pickers consume.
-
-    // Pre-fill the sidebar from a list of canonical time strings: first goes
-    // into the primary picker, the rest become extra rows. Used for the
-    // LLM-organized multi-time auto-fill (which stays pending confirmation).
-
-
     // ── AI issue-time assistant ──────────────────────────────────────
     // Button in the Issue Time sidebar. Reads the chat-input description +
     // (server-side) a rough browse of the loaded log, asks the user to
@@ -418,5 +289,3 @@
 
 
 
-    // Relabel + repopulate the capture popup's title/summary for the AI
-    // flow. Called AFTER openTimeCaptureModal (which sets its own defaults).

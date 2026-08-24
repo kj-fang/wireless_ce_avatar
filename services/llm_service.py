@@ -3,6 +3,7 @@ from logging import log
 import requests
 import json
 import re
+import threading
 import urllib3
 import openai
 import httpx
@@ -154,8 +155,8 @@ def _convert_messages_to_anthropic(messages):
 
 
 class _AnthropicCompletions:
-    def __init__(self, client):
-        self._client = client
+    def __init__(self, adapter):
+        self._adapter = adapter
 
     def create(self, model, messages, temperature=1.0, top_p=1.0,
                max_tokens=1024, frequency_penalty=None, presence_penalty=None,
@@ -191,20 +192,123 @@ class _AnthropicCompletions:
             if tc is not None:
                 params["tool_choice"] = tc
 
-        return _AnthropicResponseAdapter(self._client.messages.create(**params))
+        # Retry loop: transparently rotate to the next pool token when the
+        # current one hits its daily cost cap. All other errors propagate.
+        while True:
+            # Snapshot the client that will actually service this attempt so a
+            # concurrent rotation on another thread cannot misattribute the
+            # 429 to the wrong pool entry.
+            client_snapshot = self._adapter._client
+            pool = self._adapter._pool
+            used_token = pool.current()[1] if pool is not None else None
+            try:
+                return _AnthropicResponseAdapter(
+                    client_snapshot.messages.create(**params)
+                )
+            except Exception as e:
+                if pool is None or not _is_daily_cost_limit_error(e):
+                    raise
+                next_entry = pool.mark_dead_and_advance(used_token)
+                if next_entry is None:
+                    raise
+                self._adapter._rebuild_underlying(next_entry[1])
+                # loop and retry with the newly-selected token
 
 
 class _AnthropicChatAdapter:
-    def __init__(self, client):
-        self.completions = _AnthropicCompletions(client)
+    def __init__(self, adapter):
+        self.completions = _AnthropicCompletions(adapter)
 
 
 class AnthropicOpenAIAdapter:
-    """Wraps an ``Anthropic`` instance with an OpenAI-compatible interface."""
+    """Wraps an ``Anthropic`` instance with an OpenAI-compatible interface.
 
-    def __init__(self, anthropic_client):
+    Optionally accepts a ``TokenPool`` and a ``client_factory`` to enable
+    transparent rotation to the next pool token when the current one exhausts
+    its daily cost limit. When both are omitted, behaves as a passive adapter.
+    """
+
+    def __init__(self, anthropic_client, pool=None, client_factory=None):
         self._client = anthropic_client
-        self.chat = _AnthropicChatAdapter(anthropic_client)
+        self._pool = pool
+        self._client_factory = client_factory
+        self.chat = _AnthropicChatAdapter(self)
+
+    def _rebuild_underlying(self, new_token):
+        if self._client_factory is None:
+            raise RuntimeError("client_factory required to rotate tokens")
+        old_client = self._client
+        # Concurrent rotations may briefly build two clients; the loser is GC'd.
+        self._client = self._client_factory(new_token)
+        close = getattr(old_client, "close", None)
+        if callable(close):
+            try:
+                close()
+            except Exception:
+                pass
+
+# ---------------------------------------------------------------------------
+# Token pool for gnaigpt daily-cost-limit failover.
+# ---------------------------------------------------------------------------
+
+def _is_daily_cost_limit_error(exc):
+    """True for the specific 429 that means 'this token is done for the day'.
+
+    Detects the gnaigpt proxy's per-user daily $ cap error, e.g.:
+        "Error code: 429 - {'type': 'error', 'error': {'type': 'rate_limit_error',
+         'message': 'Individual daily cost limit of 30.000000 reached...'}}"
+    Deliberately narrow: short-window rate limits and unrelated 429s pass through.
+    """
+    if getattr(exc, "status_code", None) != 429:
+        return False
+    return "daily cost limit" in str(exc).lower()
+
+
+class TokenPool:
+    """Ordered, thread-safe pool of (label, token) pairs with sequential failover.
+
+    Once a token is marked dead it stays dead for this pool's lifetime
+    (process restart clears state). Callers use ``current()`` to read the
+    active token and ``mark_dead_and_advance(dying_token)`` on 429s; the
+    latter is a no-op when another thread has already advanced past the
+    dying token, which is the correct behavior for concurrent 429s racing
+    on the same key.
+    """
+
+    def __init__(self, entries):
+        cleaned = [(str(label), tok) for label, tok in entries if tok]
+        if not cleaned:
+            raise ValueError("TokenPool requires at least one non-empty token")
+        self._entries = cleaned
+        self._index = 0
+        self._dead = set()
+        self._lock = threading.Lock()
+
+    def current(self):
+        with self._lock:
+            return self._entries[self._index]
+
+    def mark_dead_and_advance(self, dying_token):
+        """Advance past ``dying_token`` if it is still current; else no-op.
+
+        Returns the new active ``(label, token)`` or ``None`` when the whole
+        pool is exhausted.
+        """
+        with self._lock:
+            current_label, current_token = self._entries[self._index]
+            if current_token != dying_token:
+                # Another thread already rotated past this token; just report current.
+                return self._entries[self._index]
+            self._dead.add(self._index)
+            for next_i in range(self._index + 1, len(self._entries)):
+                if next_i not in self._dead:
+                    self._index = next_i
+                    new_label = self._entries[next_i][0]
+                    print(f"⚠️  [TokenPool] '{current_label}' exhausted (daily cost limit) → rotated to '{new_label}'")
+                    return self._entries[next_i]
+            print(f"❌ [TokenPool] '{current_label}' exhausted — all {len(self._entries)} tokens dead")
+            return None
+
 
 
 # ---------------------------------------------------------------------------
@@ -266,13 +370,28 @@ class LLM_helper:
         )
         return target
 
-    def set_up(self, gpt_token, gpt_url, model="gpt-4.1", classifitation_path=None):
+    def set_up(self, gpt_token, gpt_url, model="gpt-4.1", classifitation_path=None,
+               token_pool=None):
+        # ``token_pool``: optional list of (label, token) tuples enabling
+        # transparent rotation on daily-cost-limit 429s (Anthropic path only).
+        # When supplied, ``gpt_token`` should equal the pool's first entry so
+        # the initial client and pool head agree.
         if model.startswith("claude"):
-            self.client = AnthropicOpenAIAdapter(Anthropic(
-                base_url=gpt_url,
-                auth_token=gpt_token,
-                http_client=httpx.Client(proxy=None, verify=False, trust_env=False),
-            ))
+            def _make_anthropic(tok):
+                return Anthropic(
+                    base_url=gpt_url,
+                    auth_token=tok,
+                    http_client=httpx.Client(proxy=None, verify=False, trust_env=False),
+                )
+            pool = TokenPool(token_pool) if token_pool else None
+            initial_token = pool.current()[1] if pool is not None else gpt_token
+            self.client = AnthropicOpenAIAdapter(
+                _make_anthropic(initial_token),
+                pool=pool,
+                client_factory=_make_anthropic,
+            )
+            if pool is not None:
+                print(f"🔑 [TokenPool] active token: '{pool.current()[0]}' ({len(pool._entries)} in pool)")
         else:
             self.client = openai.OpenAI(
                 api_key=gpt_token,

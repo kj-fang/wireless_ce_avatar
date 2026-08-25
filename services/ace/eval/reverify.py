@@ -100,7 +100,8 @@ def _case_title(entry: dict) -> str:
     case_nbr = str(entry.get("case_nbr") or "").strip()
     ts_label = _feedback_ts_label(str(entry.get("feedback_ts") or ""))
     if _is_local_case(case_nbr):
-        return f"Local upload ({entry.get('log_path') or 'unknown log'}) [{ts_label}]"
+        log_name = Path(entry.get("log_path") or "").name or "unknown log"
+        return f"Local upload ({log_name}) [{ts_label}]"
     base = case_nbr or "unknown case"
     return f"{base} [{ts_label}]"
 
@@ -316,6 +317,7 @@ def _build_section(entry: dict, *, max_steps: int) -> dict:
     domain = "bt" if entry.get("namespace") == "bt" else "wifi"
     section = {
         "title": _case_title(entry),
+        "title_full": str(entry.get("log_path") or ""),
         "domain": domain,
         "feedback_ts": entry.get("feedback_ts") or "",
         "feedback_detail": entry.get("feedback_detail") or "",
@@ -424,8 +426,11 @@ def reverify_and_notify(
         display = bundle["display"]
         replay_sections = [s for s in sections if s.get("reanswered")]
         no_log_case_count = sum(1 for s in sections if not s.get("reanswered"))
-        cases = [{"title": s["title"], "domain": s["domain"],
-                  "reanswered": s["reanswered"], "attachment_name": None}
+        cases = [{"title": s["title"], "title_full": s.get("title_full") or "",
+                  "domain": s["domain"],
+                  "reanswered": s["reanswered"], "attachment_name": None,
+                  "feedback_detail": s.get("feedback_detail") or "",
+                  "user_question": s.get("user_question") or ""}
                  for s in sections]
         has_attachment = bool(replay_sections)
         safe = _safe_email_filename(display)

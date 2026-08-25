@@ -3,51 +3,56 @@
     <div style="font-family:Segoe UI,Arial,sans-serif;color:#1f2937;max-width:920px;">
       <h2 style="margin:0 0 10px 0;">Avatar Feedback Reverify — {{ date }}</h2>
 
+      <p style="margin:0 0 12px 0;">
+        You previously submitted feedback (a down-vote) for the case(s) below.<br>
+        The Intel Avatar has re-run the analysis using its auto-learned experience,<br>
+        and this email includes the re-analysis result so you can confirm whether the
+        new answer resolves the issue you originally reported.
+      </p>
+
       <h3 style="margin:16px 0 8px 0;">Case(s)</h3>
-      <table style="border-collapse:collapse;font-size:13px;min-width:420px;">
+      <table style="border-collapse:collapse;font-size:13px;width:100%;table-layout:fixed;">
         <tr>
-          <th style="padding:8px 10px;border:1px solid #d9e2ec;background:#f8fafc;text-align:left;">Case</th>
-          <th style="padding:8px 10px;border:1px solid #d9e2ec;background:#f8fafc;text-align:left;">Domain</th>
-          <th style="padding:8px 10px;border:1px solid #d9e2ec;background:#f8fafc;text-align:left;">Replay Attachment</th>
+          <th style="padding:8px 10px;border:1px solid #d9e2ec;background:#f8fafc;text-align:left;width:22%;">Case</th>
+          <th style="padding:8px 10px;border:1px solid #d9e2ec;background:#f8fafc;text-align:left;width:8%;">Domain</th>
+          <th style="padding:8px 10px;border:1px solid #d9e2ec;background:#f8fafc;text-align:left;width:45%;">Your Feedback Summary</th>
+          <th style="padding:8px 10px;border:1px solid #d9e2ec;background:#f8fafc;text-align:left;width:25%;">Replay Attachment</th>
         </tr>
         {% for c in cases %}
         <tr>
-          <td style="padding:8px 10px;border:1px solid #d9e2ec;vertical-align:top;">{{ c.title }}</td>
-          <td style="padding:8px 10px;border:1px solid #d9e2ec;vertical-align:top;">{{ 'BT' if c.domain == 'bt' else 'Wi-Fi' }}</td>
+          <td style="padding:8px 10px;border:1px solid #d9e2ec;vertical-align:top;overflow-wrap:anywhere;font-weight:600;" title="{{ c.title_full }}">{{ c.title }}</td>
           <td style="padding:8px 10px;border:1px solid #d9e2ec;vertical-align:top;">
-            {% if c.attachment_name %}
-            <strong>{{ c.attachment_name }}</strong>
+            <span style="display:inline-block;padding:2px 8px;border-radius:999px;font-size:11px;font-weight:700;background:{{ '#ede9fe' if c.domain == 'bt' else '#e0f2fe' }};color:{{ '#6d28d9' if c.domain == 'bt' else '#0369a1' }};">{{ 'BT' if c.domain == 'bt' else 'Wi-Fi' }}</span>
+          </td>
+          <td style="padding:8px 10px;border:1px solid #d9e2ec;vertical-align:top;white-space:pre-line;overflow-wrap:anywhere;">
+            {% if c.feedback_detail %}
+            <span style="color:#475569;font-style:italic;">{{ c.feedback_detail }}</span>
             {% else %}
-            N/A (no attached log)
+            <span style="color:#94a3b8;font-style:italic;">(no details provided)</span>
+            {% endif %}
+          </td>
+          <td style="padding:8px 10px;border:1px solid #d9e2ec;vertical-align:top;overflow-wrap:anywhere;">
+            {% if c.attachment_name %}
+            <span style="display:inline-block;padding:2px 6px;border-radius:6px;background:#ecfdf5;color:#047857;font-family:Consolas,Menlo,monospace;font-size:12px;">{{ c.attachment_name }}</span>
+            {% else %}
+            <span style="color:#94a3b8;font-style:italic;">N/A (no attached log)</span>
             {% endif %}
           </td>
         </tr>
         {% endfor %}
       </table>
 
-      <div style="margin-top:12px;border:1px solid #d9e2ec;border-radius:8px;padding:12px;background:#f8fafc;">
+      <div style="margin-top:12px;border:1px solid #f0b100;border-radius:8px;padding:12px;background:#fffbeb;">
+        <p style="margin:0;font-weight:700;color:#92400e;">TODO</p>
         {% if has_attachment %}
-        <p style="margin:0 0 6px 0;">
-          Reverify is complete for your feedback case(s).
-        </p>
-        {% if attachment_names|length == 1 %}
-        <p style="margin:0;">
-          Please open <strong>{{ attachment_names[0] }}</strong> to review the updated re-analysis result.
+        <p style="margin:6px 0 0 0;color:#92400e;">
+          Please open <strong>the attachment(s)</strong> and check whether the re-analyzed
+          answer(s) meet expectations and address the feedback you provided above.
         </p>
         {% else %}
-        <p style="margin:0 0 6px 0;">Replay attachments are included per case:</p>
-        <ul style="margin:0;padding-left:18px;">
-          {% for name in attachment_names %}
-          <li><strong>{{ name }}</strong></li>
-          {% endfor %}
-        </ul>
-        {% endif %}
-        {% else %}
-        <p style="margin:0 0 6px 0;">
-          No replay attachment is included for this email.
-        </p>
-        <p style="margin:0;">
-          The feedback case(s) were submitted without an attached log, so the server could not re-run the analysis.
+        <p style="margin:6px 0 0 0;color:#92400e;">
+          No replay attachment is included for this email — the feedback case(s) were
+          submitted without an attached log, so the server could not re-run the analysis.
           {% if no_log_case_count > 0 %}
           Affected case count: <strong>{{ no_log_case_count }}</strong>.
           {% endif %}

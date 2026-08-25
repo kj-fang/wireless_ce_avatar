@@ -37,7 +37,7 @@ from . import notify_email
 # Redirect ALL reverify mail here for testing. Set to e.g.
 # ["me@intel.com"] to route every per-user email to your own inbox; leave
 # None to send to each down-voter's real address.
-REVERIFY_REDIRECT_TO: Optional[list[str]] = ["wei-ling.chi@intel.com"]
+REVERIFY_REDIRECT_TO: Optional[list[str]] = None
 
 # Production fallback for a missing/invalid captured email or a failed direct
 # SMTP submission. Unlike REVERIFY_REDIRECT_TO, this does not override valid

@@ -117,6 +117,8 @@ class FWAnalysisService():
         try:
             results = {}
             results['system_info'] = load_fw_system_info(file_path)
+            print(f"[FW system_info] Wi-Fi FW: {(results['system_info'] or {}).get('Wi-Fi FW')}")
+            print(f"[FW system_info] BT FW Config: {(results['system_info'] or {}).get('BT FW Config')}")
             if 'bt' in wifi_or_bt:
                 system_info_ok, rejected_reason = self._validate_system_info(results['system_info'])
                 if not system_info_ok:

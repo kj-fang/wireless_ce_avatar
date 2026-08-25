@@ -29,6 +29,7 @@ def load_fw_system_info(fw_path):
         'Intel® Smart Sound Technology for Bluetooth® Audio': system_info.get('Intel® Smart Sound Technology for Bluetooth® Audio', ''),
         'WRT::2G Version': versions.get('WRT::2G Version', ''),
         'preset': system_info.get('preset', ''),
+        'Wi-Fi FW': system_info.get('Wi-Fi FW', ''),
         'BT FW Config': system_info.get('BT FW Config', ''),
         'Dbgc Status Global as seen by BT': system_info.get('Dbgc Status Global as seen by BT', ''),
         'Dbgc Status as read from Mailbox': system_info.get('Dbgc Status as read from Mailbox', ''),

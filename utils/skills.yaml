@@ -572,7 +572,6 @@ P2P_PIE_Supported_Channel_Query:
     - "vifMgrChSelGetSupportedChannelList"
   exclusive:
     - "GO_VIF"
-    - "P2P_GO"
     - "GO activated with SSID"
     - "TASK_START_AP"
     - "[prvChSelBestChDumpOperatingChannelList]"

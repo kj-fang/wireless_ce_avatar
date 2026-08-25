@@ -549,6 +549,17 @@ def render_download_result_form():
             'bt_dict': result_data.get('bt', {}),
             'fw_dict': result_data.get('fw', {})
         }
+    elif 'wifi' in (case_context.wifi_or_bt or '') and 'bt' in (case_context.wifi_or_bt or ''):
+        # Wi-Fi / BT coexistence case (currently produced by the local upload
+        # flow when an archive contains both Wi-Fi and BT logs). Surface every
+        # section so the user can drill into either technology from the same
+        # download result page.
+        file_dicts = {
+            'wifi_dict': result_data.get('wifi', {}),
+            'ddd_dict': result_data.get('ddd', {}),
+            'bt_dict': result_data.get('bt', {}),
+            'fw_dict': result_data.get('fw', {})
+        }
     elif case_context.wifi_or_bt == 'wifi':
         file_dicts = {
             'wifi_dict': result_data.get('wifi', {}),

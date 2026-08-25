@@ -132,6 +132,10 @@ class ChatbotBlueprintConfig:
     on_reset: Callable[[], Any] | None = None
 
 
+# Lets a profile opt into a route group by listing a capability string,
+# instead of every route file conditionally wrapping (or omitting) its own
+# @app.route decorator per profile — adding "history" here is a one-line
+# change instead of touching bt/log/nw's route files individually.
 def enabled_route_specs(capabilities: Collection[str]) -> tuple[RouteSpec, ...]:
     enabled = set(capabilities)
     return tuple(
@@ -166,6 +170,10 @@ def handler_map(
         for spec in enabled_route_specs(capabilities)
         if spec.endpoint not in shared_endpoints
     }
+    # Fails at import time if a profile forgot a handler its own enabled
+    # capabilities require. The alternative is a 404 a user hits at runtime —
+    # possibly weeks after the change that caused it — instead of the app
+    # refusing to boot the moment the mistake is made.
     missing = sorted(name for name in required if not callable(namespace.get(name)))
     if missing:
         raise RuntimeError(
@@ -206,12 +214,18 @@ def create_chatbot_blueprint(config: ChatbotBlueprintConfig) -> Blueprint:
             "path": choose_skills_yaml(),
         })
 
+    # The only 3 endpoints whose *definition* — not just registration — lives
+    # in one place for all profiles. Everything else is either profile-local
+    # (e.g. chat) or imported from shared_routes.py's build_shared_handlers().
     shared_handlers: dict[str, ViewHandler] = {
         "reset": reset,
         "get_skills": get_skills,
         "browse_yaml": browse_yaml,
     }
 
+    # One registration loop stands in for what used to be a hand-written
+    # @bp.route(...) decorator per endpoint, repeated near-identically across
+    # all 3 profile route files — this is the only add_url_rule call site now.
     for spec in enabled_route_specs(config.capabilities):
         view = shared_handlers.get(spec.endpoint) or config.handlers.get(spec.endpoint)
         if view is None:

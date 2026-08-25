@@ -933,15 +933,16 @@
                                         {% if ns.skip %}<span class="excluded-badge">Excluded: {{ ns.matched_kw }}</span>{% endif %}
                                     </p>
                                     <p class="analysis-file-path mb-0">Path: {{ fw_path }}</p>
-                                    {% if is_coex %}
+                                    {% if files_coexist %}
                                     <div class="fw-type-picker" onclick="event.stopPropagation();">
                                         <span class="fw-type-picker-label">Parse as</span>
+                                        {% set fw_hint = fw_type_hints.get(fw_path) %}
                                         <select class="fw-type-select" data-fw-encoded="{{ fw_path | urlencode }}" onchange="onFwTypeChange(this)">
-                                            <option value="" selected disabled>Select domain</option>
-                                            <option value="bt">Bluetooth</option>
-                                            <option value="wifi">Wi-Fi</option>
+                                            <option value="" {% if fw_hint not in ('bt', 'wifi') %}selected {% endif %}disabled>Select domain</option>
+                                            <option value="bt" {% if fw_hint == 'bt' %}selected {% endif %}>Bluetooth</option>
+                                            <option value="wifi" {% if fw_hint == 'wifi' %}selected {% endif %}>Wi-Fi</option>
                                         </select>
-                                        <span class="fw-type-hint">coex log — choose parser</span>
+                                        <span class="fw-type-hint">{% if fw_hint in ('bt', 'wifi') %}auto-selected{% elif fw_hint == 'coex' %}coex log — choose parser{% else %}Cannot detect type — choose parser manually{% endif %}</span>
                                     </div>
                                     {% endif %}
                                 </div>
@@ -2400,14 +2401,14 @@
     window.__wifiOrBt = {{ wifi_or_bt | tojson }};
     // Coex mode = both BT and WiFi ETL logs are present. Drives the FW
     // per-file BT/WiFi selector and the etl_type disambiguation on Parse.
-    window.__isCoex = {{ is_coex | tojson }};
+    window.__filesCoexist = {{ files_coexist | tojson }};
     // Server-side AI pick (timezone-aware via pick_etl_by_ai_time). When set,
     // we use this path verbatim to pre-tick the auto-pick checkbox and
     // select the matching .wifi-file-item row on page load — bypassing the
     // frontend's autoSelectLogByIssueTime, which compares folder timestamps
     // and `__llmIssueTime` as if they were in the same frame and misses by
     // the customer's UTC offset on non-Asia cases.
-    window.__aiPreSelectedEtl = {{ (ai_pre_selected_etl or "")|tojson }};
+    window.__aiPreSelectedEtl = {{ (ai_pre_selected_etl or "") | tojson }};
 
     function startChatbotAnalysis(button, etlPathEncoded) {
         if (button.classList.contains('disabled')) return;
@@ -2822,7 +2823,7 @@
         const hasSelection = !!selectedEncoded;
         // In coex mode the user must pick BT / WiFi on the selected row before
         // Parse becomes clickable.
-        const needsType = !!window.__isCoex;
+        const needsType = !!window.__filesCoexist;
         const hasType = needsType ? !!getSelectedFwType() : true;
         if (analyzeBtn) analyzeBtn.disabled = !(hasSelection && hasType);
     }
@@ -2830,6 +2831,10 @@
     // Called from each <select class="fw-type-select"> onchange; re-evaluates
     // whether Parse should be enabled now that a type has been picked.
     function onFwTypeChange(selectEl) {
+        const hintEl = selectEl.closest('.fw-type-picker').querySelector('.fw-type-hint');
+        if (hintEl && selectEl.value) {
+            hintEl.textContent = 'manual-selected';
+        }
         updateFwActionButtons();
     }
 
@@ -2921,8 +2926,8 @@
         }
 
         // Coex: enforce explicit BT / WiFi pick on the selected row.
-        const fwType = window.__isCoex ? getSelectedFwType() : '';
-        if (window.__isCoex && !fwType) {
+        const fwType = window.__filesCoexist ? getSelectedFwType() : '';
+        if (window.__filesCoexist && !fwType) {
             alert('Please pick BT or WiFi for this FW file before parsing.');
             return;
         }

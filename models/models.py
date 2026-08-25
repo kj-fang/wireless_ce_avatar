@@ -27,7 +27,7 @@ class CaseContext:
     wifi_or_bt: Optional[str] = None
     # True when the downloaded attachments contain both BT and WiFi ETL logs
     # simultaneously. Set at render_download_result_form time from result_data.
-    is_coex: Optional[bool] = None
+    files_coexist: Optional[bool] = None
 
     ##----- helper functions -----##
     def print_all(self):

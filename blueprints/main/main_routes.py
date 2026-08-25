@@ -7,7 +7,7 @@ from datetime import datetime
 
 from utils import helpers
 from utils.etl_utils import get_auto_analysis_etl, get_issue_time_from_selected_files, filter_folders_by_time, extract_timestamp_from_folder, pick_latest_zip_attachment
-from utils.fw_utils import load_fw_system_info
+from utils.fw_utils import load_fw_system_info, infer_fw_parse_type
 from services.case_info_service import CaseService
 from models.models import CaseContext
 from services.llm_service import LLM_helper
@@ -555,11 +555,11 @@ def render_download_result_form():
     }
 
     # Coex detection: both BT and WiFi ETL logs present in the same case.
-    # Downstream reads case_context.is_coex to enable the FW BT/WiFi selector,
+    # Downstream reads case_context.files_coexist to enable the FW BT/WiFi selector,
     # keep both parse tabs interactive, and gate the auto-analysis fallback.
     has_wifi_items = any(bool(v) for v in file_dicts['wifi_dict'].values())
     has_bt_items = any(bool(v) for v in file_dicts['bt_dict'].values())
-    case_context.is_coex = has_wifi_items and has_bt_items
+    case_context.files_coexist = has_wifi_items and has_bt_items
     session["case_context"] = case_context.to_session()
     
     # Extract issue time from selected files
@@ -698,7 +698,7 @@ def render_download_result_form():
     # In coex mode with a BT hint, skip the wifi-flavored pick entirely — the
     # BT side has its own auto_analysis_bt pipeline below and picking a wifi
     # ETL here would launch the wrong parser.
-    if case_context.is_coex and case_context.wifi_or_bt == 'bt':
+    if case_context.files_coexist and case_context.wifi_or_bt == 'bt':
         auto_analysis_etl = None
         auto_analysis_etl_reason = None
     else:
@@ -710,7 +710,7 @@ def render_download_result_form():
     # earlier request to this view), find any .etl ourselves so the auto-
     # launch the user just asked for still happens.
     if not auto_analysis_etl and run_analysis_pending and not (
-        case_context.is_coex and case_context.wifi_or_bt == 'bt'
+        case_context.files_coexist and case_context.wifi_or_bt == 'bt'
     ):
         try:
             import re as _re
@@ -828,6 +828,12 @@ def render_download_result_form():
             print(f"[download_result] chip date anchor failed: {e}")
 
     latest_fw_system_info_path, latest_fw_system_info = _get_latest_fw_system_info(file_dicts['fw_dict'])
+    fw_type_hints = {
+        fw_path: infer_fw_parse_type(fw_path, case_context.wifi_or_bt)
+        for fw_list in file_dicts['fw_dict'].values()
+        for fw_path in fw_list
+        if fw_path
+    }
     wifi_table_rows = _build_wifi_table_rows(file_dicts['wifi_dict'], download_path=download_path)
     bt_table_rows = _build_bt_table_rows(file_dicts['bt_dict'], download_path=download_path)
     event_table_rows = _build_event_table_rows(file_dicts['ddd_dict'], download_path=download_path)
@@ -878,7 +884,7 @@ def render_download_result_form():
                          llm_issue_times=llm_issue_times,
                          ai_pre_selected_etl=ai_pre_selected_etl,
                          wifi_or_bt=case_context.wifi_or_bt,
-                         is_coex=bool(case_context.is_coex),
+                         files_coexist=bool(case_context.files_coexist),
                          auto_analysis_etl = auto_analysis_etl,
                          auto_analysis_etl_reason = auto_analysis_etl_reason,
                          auto_analysis_bt=auto_analysis_bt,
@@ -889,6 +895,7 @@ def render_download_result_form():
                          bt_table_rows=bt_table_rows,
                          event_table_rows=event_table_rows,
                          fw_table_rows=fw_table_rows,
+                         fw_type_hints=fw_type_hints,
                          bt_file_sizes=bt_file_sizes,
                          latest_evt_path=latest_evt_path,
                          time_filter_info=time_filter_info,

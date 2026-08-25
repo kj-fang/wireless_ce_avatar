@@ -589,7 +589,7 @@ def _diff_playbook_bullet_state(before: dict[str, dict], after: dict[str, dict])
 
         old_file = old.get("playbook_file") if old else "-"
         new_file = new.get("playbook_file") if new else "-"
-        playbook_label = old_file if old_file == new_file else f"{old_file} -> {new_file}"
+        playbook_label = new_file if new_file != "-" else old_file
 
         out.append({
             "bullet_id": bid,

@@ -89,9 +89,8 @@
         {% endfor %}
       </table>
       {% else %}
-      <div style="margin-top:16px;border:1px solid #d9e2ec;border-radius:8px;padding:12px;background:#f8fafc;">
-        <strong>Corrupted-bullet triage was not run for this pipeline execution.</strong>
-      </div>
+      <h3 style="margin:20px 0 8px 0;">Triage KPI</h3>
+      <p style="margin:0;color:#64748b;">Corrupted-bullet triage was not run for this pipeline execution.</p>
       {% endif %}
 
       {% if show_killer_section %}
@@ -120,7 +119,8 @@
       </table>
       {% endif %}
 
-      <h3 style="margin:20px 0 8px 0;">Playbook Bullet Changes (Before -&gt; After)</h3>
+      <h3 style="margin:20px 0 8px 0;">Playbook Bullet Changes</h3>
+      {% set change_colors = {'added': '#067647', 'updated': '#b54708', 'removed': '#b42318'} %}
       <table style="border-collapse:collapse;width:100%;font-size:13px;">
         <tr>
           <th style="padding:8px 10px;border:1px solid #d9e2ec;background:#f8fafc;text-align:left;">Bullet ID</th>
@@ -130,7 +130,7 @@
         {% for row in changed_bullet_rows %}
         <tr>
           <td style="padding:8px 10px;border:1px solid #d9e2ec;vertical-align:top;">{{ row.bullet_id }}</td>
-          <td style="padding:8px 10px;border:1px solid #d9e2ec;vertical-align:top;">{{ row.change_type }}</td>
+          <td style="padding:8px 10px;border:1px solid #d9e2ec;vertical-align:top;color:{{ change_colors.get(row.change_type, '#1f2937') }};font-weight:700;">{{ row.change_type }}</td>
           <td style="padding:8px 10px;border:1px solid #d9e2ec;vertical-align:top;">{{ row.playbook_label }}</td>
         </tr>
         {% endfor %}

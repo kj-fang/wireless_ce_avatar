@@ -362,51 +362,52 @@ wfd_p2p_flow:
     - "DeAuth"
     - "bestChSel"
     - "chosen channel"
+    - "is inactive"
   expert_rules: |
     WiFi Driver P2P connection flow are listed below along with the log example.
-        If firmware crash UMAC/LMAC//TCM errors are present in the failed log, prioritize those fields in Key evidence and include the full UMAC/TCM blocks as raw lines, including: driver, firmware version, legacy_alon_nic_identify, rtStatus, LOGPC, timestamp(s), and the full quoted UMAC/LMAC/TCM blocks.
+    If firmware crash UMAC/LMAC//TCM errors are present in the failed log, prioritize those fields in Key evidence and include the full UMAC/TCM blocks as raw lines, including: driver, firmware version, legacy_alon_nic_identify, rtStatus, LOGPC, timestamp(s), and the full quoted UMAC/LMAC/TCM blocks.
     1. Device Initialization (MAC/PHY and device ID lines).
-        - The device hardware is identified and initialized with MAC and PHY configurations.
-        - Log should contains the information below: `
-          [ALON         ][12] [S] legacy_alon_nic_identify [186]: HW identification: macId = 0x47, phyId = 0x112, macStep = 0x2, phyStep = 0x2, phyDash = 0x0, phyFlavor = 0x0, isPhyCdb = 0x0, isPhyJacket = 0x0, deviceId = 0x272b
-          [ALON         ][12] [S] legacy_alon_nic_identify Identified GALE_C
-          [ALON         ][12] [S] legacy_alon_nic_identify GALE_C: MAC_ID: 0x47, MAC_STEP: MAC_STEP_C, PHY: FMP2 0x112, PHY_STEP: RADIO_STEP_C
+      - The device hardware is identified and initialized with MAC and PHY configurations.
+      - Log should contains the information below:
+        [ALON         ][12] [S] legacy_alon_nic_identify [186]: HW identification: macId = 0x47, phyId = 0x112, macStep = 0x2, phyStep = 0x2, phyDash = 0x0, phyFlavor = 0x0, isPhyCdb = 0x0, isPhyJacket = 0x0, deviceId = 0x272b
+        [ALON         ][12] [S] legacy_alon_nic_identify Identified GALE_C
+        [ALON         ][12] [S] legacy_alon_nic_identify GALE_C: MAC_ID: 0x47, MAC_STEP: MAC_STEP_C, PHY: FMP2 0x112, PHY_STEP: RADIO_STEP_C
     2. OS issue to SCAN and driver detemined MCC according to country info from APs' beacons. check skill "drs_mcc_analysis" for more details.
-    [prvLarStoreCurrentMcc]: : LarEnable: 1, CurrMCC: 0x5553 (US), UEFI exist: 0, bWfaPunctEnabledUSA: 0, set bEhtPuncturingRegulatoryValid 1
+      [prvLarStoreCurrentMcc]: : LarEnable: 1, CurrMCC: 0x5553 (US), UEFI exist: 0, bWfaPunctEnabledUSA: 0, set bEhtPuncturingRegulatoryValid 1
     3. OS issue to P2P discover "Got Command (M1 Message) TASK_P2P_DISCOVERY" and check if Probe response from another WFD device. For example:
-    [OSC] [SPECIAL] [CPort::handleOid]:Got Command (M1 Message) TASK_P2P_DISCOVERY[5][0x5] (p-0x1, DEVICE, TransId-1711[0x6AF])
-    [MGMTFRAME] [SPECIAL] [hmfmEvRxMgmtFrame]:PROBE_RX - 06:B9:E3:4F:6B:26, channel 1  , band 2.4GHz, RSSI -59, rate  6Mbps, seq 290 qbss:-1, qbss-mclm:-1 "DIRECT-"
+      [OSC] [SPECIAL] [CPort::handleOid]:Got Command (M1 Message) TASK_P2P_DISCOVERY[5][0x5] (p-0x1, DEVICE, TransId-1711[0x6AF])
+      [MGMTFRAME] [SPECIAL] [hmfmEvRxMgmtFrame]:PROBE_RX - 06:B9:E3:4F:6B:26, channel 1  , band 2.4GHz, RSSI -59, rate  6Mbps, seq 290 qbss:-1, qbss-mclm:-1 "DIRECT-"
     4. P2P Provision Discovery flow or P2P GO negotiation flow.
-        Check if request and response are sent or received.
-        [SPECIAL] [CCoreIndicationsObserver::printHandlingInfo]:[OSC] [SPECIAL]coreInd: CORE_INDICATION_P2P_PROVISION_DISCOVERY_REQUEST_SEND
-        [SPECIAL] [CCoreIndicationsObserver::printHandlingInfo]:[OSC] [SPECIAL]coreInd: CORE_INDICATION_P2P_RECEIVED_PROVISION_DISCOVERY_RESPONSE
-        [SPECIAL] [CCoreIndicationsObserver::printHandlingInfo]:[OSC] [SPECIAL]coreInd: CORE_INDICATION_P2P_GON_REQUEST_SEND
-        [SPECIAL] [CCoreIndicationsObserver::printHandlingInfo]:[OSC] [SPECIAL]coreInd: CORE_INDICATION_P2P_RECEIVED_GON_RESPONSE
+      Check if request and response are sent or received.
+      [SPECIAL] [CCoreIndicationsObserver::printHandlingInfo]:[OSC] [SPECIAL]coreInd: CORE_INDICATION_P2P_PROVISION_DISCOVERY_REQUEST_SEND
+      [SPECIAL] [CCoreIndicationsObserver::printHandlingInfo]:[OSC] [SPECIAL]coreInd: CORE_INDICATION_P2P_RECEIVED_PROVISION_DISCOVERY_RESPONSE
+      [SPECIAL] [CCoreIndicationsObserver::printHandlingInfo]:[OSC] [SPECIAL]coreInd: CORE_INDICATION_P2P_GON_REQUEST_SEND
+      [SPECIAL] [CCoreIndicationsObserver::printHandlingInfo]:[OSC] [SPECIAL]coreInd: CORE_INDICATION_P2P_RECEIVED_GON_RESPONSE
 
-        Check if driver RX path was intercepted due to peerGroup 0 port closed/detainer active, so the WFD layer couldn't receive, example from log:
-        [RXDATA] [SPECIAL] [rxPacketProcessValidMpduFrameApi]: : Rx port is closed - detaining data and action frames packet
-        Detainer for peerGroupId: 0 is full - drop packet
+      Check if driver RX path was intercepted due to peerGroup 0 port closed/detainer active, so the WFD layer couldn't receive, example from log:
+      [RXDATA] [SPECIAL] [rxPacketProcessValidMpduFrameApi]: : Rx port is closed - detaining data and action frames packet
+      Detainer for peerGroupId: 0 is full - drop packet
     5. Check current wifi device is WFD_GO or WFD Client.
-    This "WFD_GO" means current wifi device is GO mode, another device will try to connect to this GO:
-    [VIF_MANAGER] [SPECIAL] [vifMgrPrintVifsInfo]:vifMgrPrintVifsInfo | 2  |    0x0002    |     WFD_GO |      WFD_GO |   3  |  0xFF |     0xFF    |  0xFF  |    0xFF    | Address(BE:F1:05:AE:C7:A7)
+      This "WFD_GO" means current wifi device is GO mode, another device will try to connect to this GO:
+      [VIF_MANAGER] [SPECIAL] [vifMgrPrintVifsInfo]:vifMgrPrintVifsInfo | 2  |    0x0002    |     WFD_GO |      WFD_GO |   3  |  0xFF |     0xFF    |  0xFF  |    0xFF    | Address(BE:F1:05:AE:C7:A7)
 
-    This "WFD_Client" means current wifi device is P2P Client mode, it will try to connect to another  P2P device(GO):
-    [VIF_MANAGER] [SPECIAL] [vifMgrPrintVifsInfo]:vifMgrPrintVifsInfo | 2  |    0x0002    | WFD_CLIENT |  WFD_CLIENT |   3  |  0xFF |     0xFF    |  0xFF  |    0xFF    | Address(EA:BF:E1:F1:45:64)
+      This "WFD_Client" means current wifi device is P2P Client mode, it will try to connect to another  P2P device(GO):
+      [VIF_MANAGER] [SPECIAL] [vifMgrPrintVifsInfo]:vifMgrPrintVifsInfo | 2  |    0x0002    | WFD_CLIENT |  WFD_CLIENT |   3  |  0xFF |     0xFF    |  0xFF  |    0xFF    | Address(EA:BF:E1:F1:45:64)
     6. If GO mode, check is softap or P2P GO:
-        "Start as soft AP:", 0 means P2P GO, 1 means SoftAP.
-        OS trigger "TASK_START_AP" and select the channel of GO:
-        Here we need to check if channel of GO follow BSS channel. If no, why ?
-        [VIF_MANAGER] [SPECIAL] [prvChSelFindFirstValidGoOperatingChannel]:  chosen channel: channel:36, band:1, bandwidth:40mhz, priority:3
+      "Start as soft AP:", 0 means P2P GO, 1 means SoftAP.
+      OS trigger "TASK_START_AP" and select the channel of GO:
+      Here we need to check if channel of GO follow BSS channel. If no, why ?
+      [VIF_MANAGER] [SPECIAL] [prvChSelFindFirstValidGoOperatingChannel]:  chosen channel: channel:36, band:1, bandwidth:40mhz, priority:3
 
-    If P2P Client mode, check if OS trigger connect task:
-    Got Command (M1 Message) TASK_CONNECT[6][0x6] (p-0x3, CLIENT, TransId-4625[0x1211])
+      If P2P Client mode, check if OS trigger connect task:
+      Got Command (M1 Message) TASK_CONNECT[6][0x6] (p-0x3, CLIENT, TransId-4625[0x1211])
     7. If GO mode, check Authentication and Association (AUTH_REQ/AUTH_RSP, ASSOC_REQ/ASSOC_RSP, EAPOL messages, 4‑way handshake lines)
-        [GO_VIF] [SPECIAL] [goVifClientCtrlHandleRxMgmtFrameApi]: : Received Auth request from a new Client Address
-        [OSC] [SPECIAL] [osal::CCmdTask::completeTask]:Completing Task (M4 Message) TASK_SEND_AP_ASSOCIATION_RESPONSE with indication
-        [CNCT_FLOW] [SPECIAL] [prvRxSecurityVerifyMpdu]:EAPOL RECEIVED
-        [CNCT_FLOW] [SPECIAL] [prvTxScdSendPacket]:EAPOL TRANSMIT
+      [GO_VIF] [SPECIAL] [goVifClientCtrlHandleRxMgmtFrameApi]: : Received Auth request from a new Client Address
+      [OSC] [SPECIAL] [osal::CCmdTask::completeTask]:Completing Task (M4 Message) TASK_SEND_AP_ASSOCIATION_RESPONSE with indication
+      [CNCT_FLOW] [SPECIAL] [prvRxSecurityVerifyMpdu]:EAPOL RECEIVED
+      [CNCT_FLOW] [SPECIAL] [prvTxScdSendPacket]:EAPOL TRANSMIT
 
-    If P2P Client mode, check Authentication and Association (AUTH_REQ/AUTH_RSP, ASSOC_REQ/ASSOC_RSP, EAPOL messages, 4‑way handshake lines)
+      If P2P Client mode, check Authentication and Association (AUTH_REQ/AUTH_RSP, ASSOC_REQ/ASSOC_RSP, EAPOL messages, 4‑way handshake lines)
         TRANSITION: CVC_SM_SENDING_AUTH ==> CVC_SM_WAIT_FOR_AUTH_RSP
         TRANSITION: CVC_SM_WAIT_FOR_AUTH_RSP ==> CVC_SM_SENDING_ASSOC
         TRANSITION: CVC_SM_SENDING_ASSOC ==> CVC_SM_WAIT_FOR_ASSOC_RSP
@@ -414,9 +415,12 @@ wfd_p2p_flow:
         EAPOL TRANSMIT
         EAPOL RECEIVED
     8. Connection Establishment (WDI_IND_ASSOC_RESULT or similar success/failure lines).
-    Check if there is any missed beacon issue.
+      Check if there is any missed beacon issue.
+
     9. Link and Resource Management (resource allocation and CCR_SM_* transitions).
     10. Check disconnection or deauth, it come from OS or another P2P device.
+      For example, if GO mode, check if Client is inactive:
+      Client * has pending Tx packets and is inactive
 
 softap_supported_channels:
   name: "SoftAP Supported Channels"
@@ -556,3 +560,68 @@ SoftAP_flow:
             [CNCT_FLOW] [SPECIAL] [prvRxSecurityVerifyMpdu]:EAPOL RECEIVED
             [CNCT_FLOW] [SPECIAL] [prvTxScdSendPacket]:EAPOL TRANSMIT
     5. Check disconnection or deauth, it come from OS or another P2P device
+
+P2P_PIE_Supported_Channel_Query:
+  name: "P2P PIE Supported-Channel Query"
+  description: "Diagnoses the per-channel regulatory gate decisions made during a PIE-initiated OID_WIFI_P2P_GO_QUERY_SUPPORTED_CHANNELS session, covering the full evaluation loop from PHY-config check through regulatory allowance verdict to the returned channel list. Applies when: OID_WIFI_P2P_GO_QUERY_SUPPORTED_CHANNELS is issued by PIE (external application); P2P GO channel list returned to PIE is suspect — missing channels or unexpected exclusions."
+  keywords:
+    - "Got Proprietary"
+    - "OID_WIFI_P2P_GO_QUERY_SUPPORTED_CHANNELS"
+    - "[mvmManagerFindSimilarPhyConfig]"
+    - "[vifMgrChSelIsGoRegulatoryAllowedChannelFromChFeatures]"
+    - "vifMgrChSelGetSupportedChannelList"
+  exclusive:
+    - "GO_VIF"
+    - "P2P_GO"
+    - "GO activated with SSID"
+    - "TASK_START_AP"
+    - "[prvChSelBestChDumpOperatingChannelList]"
+    - "ROAM_DECISION"
+    - "CNCT_FLOW"
+    - "TLC_CONFIG"
+    - "LAR"
+  expert_rules: |
+    1. Session entry point.
+    - 'Got Proprietary' is the required session-boundary anchor line. It carries the full PIE query context: OID name, OID hex code, and BSS handle.
+    - If the log contains:
+      04/16/2026-20:45:52.482 [2] [OSC] [SPECIAL] [osal::CCmdPropIhvRequest::execute]:Got Proprietary OID OID_WIFI_P2P_GO_QUERY_SUPPORTED_CHANNELS[0xFF10080B] (p-0x0, BSS)
+      Then conclude:
+      - A PIE-initiated supported-channel query session has started at this timestamp.
+      - All subsequent [mvmManagerFindSimilarPhyConfig] and [vifMgrChSelIsGoRegulatoryAllowedChannelFromChFeatures] lines until the next 'Got Proprietary' OID_WIFI_P2P_GO_QUERY_SUPPORTED_CHANNELS line belong to this session.
+      - 'Got Proprietary' lines for other OIDs (e.g. OID_SV_RLG_FLUSH_LOG_FILE, OID_SV_APPLICATION_PRINT, OID_WIFI_MCC_API_TEST_MODE) are not session anchors for this skill — skip them.
+
+    2. Per-channel evaluation loop structure.
+    - For every channel evaluated, the loop fires in this guaranteed order:
+      a. One or more [mvmManagerFindSimilarPhyConfig] lines (PHY-config check; may emit supplementary info lines beyond the 'Channel requirements' line).
+      b. Exactly one [vifMgrChSelIsGoRegulatoryAllowedChannelFromChFeatures] line (regulatory gate verdict).
+    - The [vifMgrChSelIsGoRegulatoryAllowedChannelFromChFeatures] line is the authoritative per-channel verdict anchor. All [mvmManagerFindSimilarPhyConfig] lines between two consecutive verdict lines belong to the same channel evaluation.
+    - Example PHY-config line:
+      04/16/2026-20:45:52.483 [2] [MVM_MANAGER] [SPECIAL] [mvmManagerFindSimilarPhyConfig]:  Channel requirements: control channel 1 (2.4GHz), center frequency 3, bandwidth 1
+    - Example verdict line (allowed):
+      04/16/2026-20:45:52.483 [2] [VIF_MANAGER] [SPECIAL] [vifMgrChSelIsGoRegulatoryAllowedChannelFromChFeatures]:: requested channel 1 is active in Eeprom, allowed for GO activation
+    - Example verdict line (rejected):
+      04/16/2026-20:45:52.483 [2] [VIF_MANAGER] [SPECIAL] [vifMgrChSelIsGoRegulatoryAllowedChannelFromChFeatures]:: requested channel: 44 (5.2GHz) is not allowed for GO different channel activation, BSS on 165 (5.2GHz)
+
+    3. Per-channel verdict classification.
+    - If the verdict line contains 'allowed for GO activation':
+      - Channel = ALLOWED. Add to expected returned list.
+    - If the verdict line does NOT contain 'allowed for GO activation':
+      - Channel = REJECTED. Record the full rejection reason string verbatim.
+      - If the rejection reason cites 'BSS on <channel>':
+        - Conclude: MCC-driven exclusion. The concurrent BSS on the cited channel forces this channel out of the GO candidate list.
+      - If the rejection reason cites 'not active in Eeprom' or similar Eeprom language:
+        - Conclude: Regulatory/Eeprom exclusion. Channel is not enabled for this regulatory domain.
+      - If the rejection reason cites DFS or radar:
+        - Conclude: DFS exclusion.
+      - For any other rejection reason string: surface it verbatim and flag for engineer review — the full enumeration of rejection reasons is not exhaustively documented in this skill.
+
+    4. Returned channel list verification.
+    - After the per-channel loop, [vifMgrChSelGetSupportedChannelList] lines enumerate the channels returned to PIE.
+    - Example:
+      04/17/2026-18:32:18.969 [2] [VIF_MANAGER] [SPECIAL] [vifMgrChSelGetSupportedChannelList]: : OID_WIFI_P2P_GO_QUERY_SUPPORTED_CHANNELS returned channel 149
+    - Cross-check: every channel in the returned list must have an 'allowed for GO activation' verdict in the loop above. Any mismatch (channel returned but rejected, or channel allowed but not returned) is a bug — flag it.
+    - If a channel expected by the caller is absent from the returned list, locate its verdict line and surface the rejection reason as the root cause.
+
+    5. Structural anomaly check.
+    - Every [vifMgrChSelIsGoRegulatoryAllowedChannelFromChFeatures] line must be preceded by at least one [mvmManagerFindSimilarPhyConfig] line in the same session. If a verdict line appears with no preceding PHY-config line, flag as a structural anomaly.
+    - [mvmManagerFindSimilarPhyConfig] hit count will be >= [vifMgrChSelIsGoRegulatoryAllowedChannelFromChFeatures] hit count due to supplementary output lines. A large delta (engineer-provided threshold: not yet established) may indicate log truncation at session boundaries.

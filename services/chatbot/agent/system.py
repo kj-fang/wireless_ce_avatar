@@ -39,6 +39,8 @@ from utils.log_parser_preprocess import (
 
 # ---------------------------------------------------------
 # 0. Local cache sync
+#    Mirrors the shared skill folder to local disk so the agent can still
+#    boot on cached files if the network share is briefly unreachable.
 # ---------------------------------------------------------
 def sync_to_local(remote_dir: str, local_dir: str) -> bool:
     """
@@ -126,6 +128,9 @@ FALLBACK_KEYWORDS: Dict[str, List[str]] = {
 
 # ---------------------------------------------------------
 # 2. Data structures
+#    Skill is one skill's full definition; AgentCapabilityPolicy is the
+#    per-profile switch set every method below reads instead of branching
+#    on which chatbot (Wi-Fi/BT/NW) is running.
 # ---------------------------------------------------------
 class Skill(BaseModel):
     name: str
@@ -192,6 +197,9 @@ BT_AGENT_POLICY = AgentCapabilityPolicy(
 
 # ---------------------------------------------------------
 # 3. Shared-folder loaders
+#    Legacy path: one .py (prompt) + one .tat (filter) file per skill, read
+#    straight off disk. Superseded by the single-file YAML loader below but
+#    kept as the data_dir fallback.
 # ---------------------------------------------------------
 def _load_prompt_from_py(py_path: str) -> str:
     """Import a prompt .py file and return its SYS_PROMPT string."""
@@ -304,6 +312,9 @@ def load_skills_from_data_dir(data_dir: str) -> Dict[str, "Skill"]:
 
 # ---------------------------------------------------------
 # 4. Builtin fallback skills (module-level so llm_service can import it)
+#    Currently an empty dict — skills are always loaded explicitly via YAML
+#    or data_dir. This is the last-resort return type contract, not a
+#    hardcoded skill set.
 # ---------------------------------------------------------
 def get_builtin_skills() -> Dict[str, "Skill"]:
     """
@@ -315,6 +326,8 @@ def get_builtin_skills() -> Dict[str, "Skill"]:
 
 # ---------------------------------------------------------
 # 4b. Load skills from a YAML file (standalone, no prompt/filter dirs needed)
+#     The primary loader in production — one skills.yaml now drives what
+#     used to require a matching .py + .tat pair per skill.
 # ---------------------------------------------------------
 def load_skills_from_yaml(yaml_path: str) -> Dict[str, "Skill"]:
     """
@@ -400,6 +413,9 @@ def load_skills_from_yaml(yaml_path: str) -> Dict[str, "Skill"]:
 
 # ---------------------------------------------------------
 # 5. Agent System
+#    Everything below assembles into WifiLogAgentSystem: behavior lives in
+#    the imported mixins, this class supplies shared state, skill lifecycle,
+#    and turn-level bookkeeping (token usage, ACE, capability policy).
 # ---------------------------------------------------------
 from services.chatbot.agent.log_scope import LogScopeMixin
 from services.chatbot.agent.skill_analysis import SkillAnalysisMixin
@@ -505,22 +521,11 @@ class WifiLogAgentSystem(
         """True if the (already-lowercased) line contains any candidate marker."""
         return any(m in line_lower for m in markers)
 
-    REPORT_MARKDOWN_TEMPLATE = (
-        "Your `markdown_summary` format (REQUIRED):\n"
-        "  # Executive Summary\n  (1-2 sentences that directly answer the user question)\n\n"
-        "  | Aspect | Finding |\n"
-        "  |--------|---------|\n"
-        "  | Signal | ... |\n"
-        "  (Markdown table with data gaps)\n\n"
-        "  ## Timeline\n"
-        "  - T-Ns: Trigger Event (if confirmed)\n"
-        "  - T+0s: Symptom/Observation\n"
-        "  - T+Ns: Latest verified state\n\n"
-        "  ## Recommendations\n"
-        "  **P0 (Urgent):** ...\n"
-        "  **P1 (Important):** ...\n"
-        "  **P2 (Nice-to-have):** ..."
-    )
+    # The report skeleton that used to live here as REPORT_MARKDOWN_TEMPLATE
+    # is now per-profile data: <profile>_report.md under Speclets, with the
+    # built-in fallback in agent/speclet_defaults.py. Keeping a class attribute
+    # nothing reads would just be a trap for the next person who edits it and
+    # wonders why the prompt did not change.
 
     def __init__(self, client, model: str = "gpt-4.1",
                  data_dir: Optional[str] = None,

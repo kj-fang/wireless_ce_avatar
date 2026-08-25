@@ -74,41 +74,13 @@ class BtLogAgentSystem(WifiLogAgentSystem):
     SCOPE_FULL_LOG_WHEN_EMPTY = True
     CAPABILITY_POLICY = BT_AGENT_POLICY
 
-    # Bluetooth keeps three genuine overrides: the analysis and simple-chat
-    # prompts carry a BT identity rather than the Wi-Fi one, and
-    # prime_with_context skips the Wi-Fi timezone conversion because
-    # .hci.txt timestamps are already in the log frame. The Wi-Fi-only tool
-    # filtering that used to live here is now BT_AGENT_POLICY.disabled_tools.
-
-    # ------------------------------------------------------------------
-    # Override WiFi-specific system prompts with BT-appropriate identity
-    # ------------------------------------------------------------------
-    def _build_analyze_system_prompt(self, context_section: str) -> str:
-        """Build the agentic analysis system prompt for Bluetooth log analysis."""
-        ace_block = self._build_ace_workflow_block()
-        return (
-            f"{context_section}"
-            + ace_block
-            + "You are an Elite Bluetooth Diagnostic Detective. Your GOAL: Find the REAL Root Cause based on evidence.\n"
-            + "Available skills:\n"
-            + "".join(
-                f"  - {s['name']}: {s['description']}\n"
-                for s in self.get_skill_descriptions()
-                if s.get('description')
-            )
-            + "\n"
-            "PHASE 1 (SYMPTOM LOCALIZATION):\n"
-            "   - Call `fetch_filtered_logs` with the most relevant skill to get symptom-focused log evidence.\n"
-            "   - Call `fetch_filtered_logs` with skill `assert_code_analysis` to scan for firmware asserts.\n"
-            "PHASE 2 (SOURCE RETROSPECTIVE - optional):\n"
-            "   - if needed, based on the analysis from PHASE1, use additional skills to get more detail from the logs.\n"
-            "PHASE 3. Call `submit_final_report` to conclude.\n\n"
-            "CRITICAL CONSTRAINTS:\n"
-            "- Max step is 8\n"
-            "- 🛑 NO REPETITION: Do not fetch the same data twice. If Phase 1 keywords are found in Phase 2, ignore them.\n"
-            "- 🛑 IMMEDIATELY call `submit_final_report` after your detail query. Do not over-analyze.\n\n"
-            + self.REPORT_MARKDOWN_TEMPLATE
-        )
+    # Bluetooth keeps two genuine overrides: the simple-chat prompt carries a
+    # BT identity rather than the Wi-Fi one, and prime_with_context skips the
+    # Wi-Fi timezone conversion because .hci.txt timestamps are already in the
+    # log frame. The Wi-Fi-only tool filtering that used to live here is now
+    # BT_AGENT_POLICY.disabled_tools, and the agentic analysis prompt is now
+    # bt_prompt.md / bt_report.md under Speclets (see speclet_defaults.py for
+    # the built-in fallback copies).
 
     def _chat_simple(self, user_message: str, temperature: float = 0.2,
                      max_tokens: int = 4000) -> dict:

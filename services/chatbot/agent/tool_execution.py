@@ -13,44 +13,38 @@ class ToolExecutionMixin:
     """ToolExecution behavior for the composed agent."""
 
     def _build_analyze_system_prompt(self, context_section: str) -> str:
-        """Build the agentic analysis system prompt used by _chat_with_tools."""
-        ace_block = self._build_ace_workflow_block()
-        return (
-            f"{context_section}"
-            + ace_block
-            + "You are an Elite Wi-Fi Diagnostic Detective. Your GOAL: Find the REAL Root Cause based on evidence.\n"
-                        + "Available skills:\n"
-                        + "".join(
-                            f"  - {s['name']}: {s['description']}\n"
-                            for s in self.get_skill_descriptions()
-                            if s.get('description')
-                        )
-                        + "\n"
-                        "PHASE 1 (SYMPTOM LOCALIZATION):\n"
-                        "   - Call `fetch_filtered_logs` with the most relevant skill to get symptom-focused log evidence.\n"
-                        "   - Call `fetch_filtered_logs` with skill `assert_code_analysis` to scan for firmware asserts.\n"
-                        "PHASE 2 (SOURCE RETROSPECTIVE - optional):\n"
-                        "   - if needed, based on the analysis from PHASE1, use additional skills to get more detail from the logs.\n"
-                        "PHASE 3. Call `submit_final_report` to conclude.\n\n"
-                        "CRITICAL CONSTRAINTS:\n"
-                        "- Max step is 8\n"
-                        "- 🛑 NO REPETITION: Do not fetch the same data twice. If Phase 1 keywords are found in Phase 2, ignore them.\n"
-                        "- 🛑 IMMEDIATELY call `submit_final_report` after your detail query. Do not over-analyze.\n\n"
-                        "Your `markdown_summary` format (REQUIRED):\n"
-                        "  # Executive Summary\n  (1-2 sentences about the true root cause found in Phase 2)\n\n"
-                        "  | Aspect | Finding |\n"
-                        "  |--------|---------|\n"
-                        "  | Signal | ... |\n"
-                        "  (Markdown table with data gaps)\n\n"
-                        "  ## Timeline\n"
-                        "  - T-Ns: Trigger Event (The Source)\n"
-                        "  - T+0s: Physical Failure begins\n"
-                        "  - T+Ns: Final Termination\n\n"
-                        "  ## Recommendations\n"
-                        "  **P0 (Urgent):** ...\n"
-                        "  **P1 (Important):** ...\n"
-                        "  **P2 (Nice-to-have):** ..."                
+        """Build the agentic analysis system prompt used by _chat_with_tools.
+
+        The identity/phases body and the report skeleton are per-profile
+        Speclets: shared Markdown files domain experts edit without touching
+        Python (see utils/speclets_utils.py). When the share has not been
+        mirrored — off-VPN, or the background prime has not finished yet —
+        this falls back to the built-in defaults, which are byte-identical
+        to the prompts these agents carried inline before Speclets existed.
+        """
+        from services.chatbot.agent.speclet_defaults import default_speclet
+        from utils.speclets_utils import get_speclet
+
+        profile = self.capabilities.profile
+        body = get_speclet(profile, "prompt") or default_speclet(profile, "prompt")
+        report = get_speclet(profile, "report") or default_speclet(profile, "report")
+
+        skills_block = "".join(
+            f"  - {s['name']}: {s['description']}\n"
+            for s in self.get_skill_descriptions()
+            if s.get('description')
         )
+        body = body.replace("{skills}", skills_block)
+
+        # Gate on the policy flag rather than "is an AceRunner attached?": NW
+        # deliberately runs without playbook context even on a build where one
+        # happens to be wired up.
+        ace_block = (
+            self._build_ace_workflow_block()
+            if self.capabilities.ace_playbooks
+            else ""
+        )
+        return f"{context_section}{ace_block}{body}\n\n{report}"
 
     def _invoke_tool(self, tool_name: str, args: dict) -> str:
         """Centralized tool dispatch used by both chat and analyze flows."""

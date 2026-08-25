@@ -71,41 +71,10 @@ class NwAnalysisAgentSystem(WifiLogAgentSystem):
             result += f"\n\nSaved merged filter log: {export_path}"
         return result
 
-    def _build_analyze_system_prompt(self, context_section: str) -> str:
-        """Build the shorter six-step prompt used by the NW page."""
-        return (
-            f"{context_section}"
-            "You are an Elite Wi-Fi Diagnostic Detective. Your GOAL: Find the REAL Root Cause based on evidence.\n"
-            "Available skills:\n"
-            + "".join(
-                f"  - {skill['name']}: {skill['description']}\n"
-                for skill in self.get_skill_descriptions()
-                if skill.get("description")
-            )
-            + "\n"
-            "PHASE 1 (SYMPTOM LOCALIZATION):\n"
-            "   - Use the most relevant skill to analyze the logs by calling `fetch_filtered_logs`.\n"
-            "PHASE 2 (SOURCE RETROSPECTIVE - optional):\n"
-            "   - If needed, use additional skills to get more detail from the logs.\n"
-            "PHASE 3. Call `submit_final_report` to conclude.\n\n"
-            "CRITICAL CONSTRAINTS:\n"
-            "- Max step is 6, and use at most 2 skills per step.\n"
-            "- NO REPETITION: Do not fetch the same data twice.\n"
-            "- IMMEDIATELY call `submit_final_report` after your detail query. Do not over-analyze.\n\n"
-            "Your `markdown_summary` format (REQUIRED):\n"
-            "  # Executive Summary\n  (1-2 sentences about the true root cause found in Phase 2)\n\n"
-            "  | Aspect | Finding |\n"
-            "  |--------|---------|\n"
-            "  | Signal | ... |\n\n"
-            "  ## Timeline\n"
-            "  - T-Ns: Trigger Event (The Source)\n"
-            "  - T+0s: Physical Failure begins\n"
-            "  - T+Ns: Final Termination\n\n"
-            "  ## Recommendations\n"
-            "  **P0 (Urgent):** ...\n"
-            "  **P1 (Important):** ...\n"
-            "  **P2 (Nice-to-have):** ..."
-        )
+    # The shorter six-step analysis prompt NW used to define here is now
+    # nw_prompt.md / nw_report.md under Speclets, with byte-identical
+    # fallbacks in speclet_defaults.py. NW_AGENT_POLICY.ace_playbooks=False
+    # keeps the playbook block out of it exactly as this override did.
 
     def prime_with_context(self, case_nbr: str = "", subject: str = "",
                            description: str = "", issue_type: str = "",

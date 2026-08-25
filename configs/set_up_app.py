@@ -10,6 +10,7 @@ from configs.path_configs import (
     LOCAL_SKILLS_YAML,
 )
 from utils import helpers
+from utils import speclets_utils
 from utils.skills_yaml_utils import (
     current_active_yaml,
     refresh_local_cloud_baseline,
@@ -74,7 +75,13 @@ def set_up(socketio):
     if key_path is not None:
         Thread(target=_prewarm_connections, args=(key.snowflake_passwd,), daemon=True).start()
 
-    
+    # Mirror the shared Speclets (per-profile agent prompt + report format) in
+    # the background. Deliberately not awaited: the share probe alone can take
+    # seconds off-VPN, and every agent falls back to its built-in prompt until
+    # this finishes, so boot is never blocked on it.
+    Thread(target=speclets_utils.refresh_and_load, name="speclets-prime", daemon=True).start()
+
+
     # LLM
     llm_helper = LLM_helper()
 

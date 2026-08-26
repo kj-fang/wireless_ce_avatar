@@ -541,6 +541,17 @@
             overflow-x: auto;
             white-space: pre;
         }
+        /* Answers that draw something — an ASCII timeline, a diagram, a wide
+           table — used to set the width of the whole message instead of
+           scrolling inside their own block. Same flex rule as the step card:
+           the section has to be allowed to be narrower than its content
+           before the overflow-x above can do anything. */
+        .markdown-section { min-width: 0; }
+        .markdown-section pre { max-width: 100%; }
+        /* An unbroken token in inline code (a path, a hex blob) wraps rather
+           than widening the answer. No effect inside pre, where white-space
+           is pre and the block scrolls instead. */
+        .markdown-section code { overflow-wrap: anywhere; }
         .markdown-section ul { padding-left: 18px; }
 
         .skills-badge {
@@ -818,6 +829,13 @@
 
         .agent-step-content {
             flex: 1;
+            /* A flex item will not shrink below its content's intrinsic width
+               unless told to, so one wide <pre> — a tool dump, an ASCII
+               timeline — drags the whole card past the window and the chat
+               pane grows a horizontal scrollbar. Measured on a 401px pane:
+               the card came out 834px. The pre's own overflow:auto only
+               starts working once the item is allowed to be narrower. */
+            min-width: 0;
             font-size: 0.78rem;
             color: #374151;
             line-height: 1.5;
@@ -3317,7 +3335,7 @@
         const wrapper = document.createElement('div');
         wrapper.className = 'msg-row assistant';
         wrapper.style.maxWidth = '95%';
-        wrapper.innerHTML = `<div class="avatar-icon">🤖</div><div style="flex:1;">${html}${turnId ? renderFeedbackWidget(turnId) : ''}</div>`;
+        wrapper.innerHTML = `<div class="avatar-icon">🤖</div><div style="flex:1;min-width:0;">${html}${turnId ? renderFeedbackWidget(turnId) : ''}</div>`;
         document.getElementById('chat-window').appendChild(wrapper);
         scrollBottom();
 
@@ -3901,7 +3919,7 @@
             if (agentCardBodyEl) return;
             removeTyping();
             hideWelcome();
-            agentCardId = 'agent-process-' + Date.now();
+            agentCardId = __nextAgentCardId();
             const html = `
             <div class="agent-process-card">
                 <div class="agent-process-header" onclick="
@@ -3919,7 +3937,7 @@
             const wrapper = document.createElement('div');
             wrapper.className = 'msg-row assistant';
             wrapper.style.maxWidth = '95%';
-            wrapper.innerHTML = `<div class="avatar-icon">🤖</div><div style="flex:1;">${html}</div>`;
+            wrapper.innerHTML = `<div class="avatar-icon">🤖</div><div style="flex:1;min-width:0;">${html}</div>`;
             document.getElementById('chat-window').appendChild(wrapper);
             agentCardBodyEl = document.getElementById(agentCardId);
             scrollBottom();
@@ -4126,7 +4144,7 @@
         wrapper.className = 'msg-row assistant';
         wrapper.innerHTML =
             `<div class="avatar-icon">🕒</div>` +
-            `<div style="flex:1;"><span class="incident-tag">Incident ${idx} / ${total}` +
+            `<div style="flex:1;min-width:0;"><span class="incident-tag">Incident ${idx} / ${total}` +
             (fmt ? ` &nbsp;·&nbsp; ${fmt}` : '') + `</span></div>`;
         document.getElementById('chat-window').appendChild(wrapper);
         scrollBottom();
@@ -4197,7 +4215,7 @@
         hideWelcome();
         removeTyping();
 
-        const cardId = 'agent-process-' + Date.now();
+        const cardId = __nextAgentCardId();
         const skillsUsed = steps
             .filter(s => s.content && s.content.includes('Invoking skill'))
             .map(s => { const m = s.content.match(/`([^`]+)`/); return m ? m[1] : ''; })
@@ -4227,7 +4245,7 @@
         const wrapper = document.createElement('div');
         wrapper.className = 'msg-row assistant';
         wrapper.style.maxWidth = '95%';
-        wrapper.innerHTML = `<div class="avatar-icon">🤖</div><div style="flex:1;">${html}</div>`;
+        wrapper.innerHTML = `<div class="avatar-icon">🤖</div><div style="flex:1;min-width:0;">${html}</div>`;
         document.getElementById('chat-window').appendChild(wrapper);
         scrollBottom();
 
@@ -8412,6 +8430,16 @@
         hideWelcome();
         (turns || []).forEach(function (t) {
             if (t.user_message) appendUserMsg(t.user_message);
+            // Replay this turn's saved reasoning trace above its answer, in
+            // the same card the live stream drew — collapsed, so a resumed
+            // conversation still reads as a conversation. Turns saved before
+            // traces were stored simply have none, and render as they always
+            // did.
+            const savedSteps = Array.isArray(t.steps) ? t.steps : [];
+            if (savedSteps.length) {
+                const card = __makeStepCard({collapsed: true});
+                savedSteps.forEach(function (s) { card.appendStep(s); });
+            }
             const r = t.result || {};
             const turnId = t.turn_id || null;
             if (r.type === 'report') {
@@ -8440,7 +8468,19 @@
 
     // Self-contained "Agent Processing Steps" card + step renderer, mirroring
     // the live send path so a reconnected stream renders identically.
-    function __makeStepCard() {
+    // Unique id for one "Agent Processing Steps" card. A timestamp alone is
+    // not enough: history replay builds cards synchronously in a loop, so two
+    // can land in the same millisecond, and getElementById would then hand the
+    // second card's steps — and its collapse toggle — to the first one.
+    function __nextAgentCardId() {
+        window.__agentProcessCardSeq = (window.__agentProcessCardSeq || 0) + 1;
+        return 'agent-process-' + Date.now() + '-' + window.__agentProcessCardSeq;
+    }
+
+    function __makeStepCard(opts) {
+        // {collapsed:true} starts the card folded — used when replaying a
+        // saved trace, where the answer matters more than the steps.
+        const collapsed = !!(opts && opts.collapsed);
         const steps = [];
         let bodyEl = null, cardId = null;
         const startTs = Date.now();
@@ -8461,24 +8501,24 @@
             if (bodyEl) return;
             removeTyping();
             hideWelcome();
-            cardId = 'agent-process-' + Date.now();
+            cardId = __nextAgentCardId();
             const html =
                 '<div class="agent-process-card">' +
-                  '<div class="agent-process-header" onclick="' +
+                  '<div class="agent-process-header' + (collapsed ? ' collapsed' : '') + '" onclick="' +
                     "this.classList.toggle('collapsed');" +
                     "document.getElementById('" + cardId + "').classList.toggle('hidden');" +
                     "var icon=this.querySelector('.toggle-icon');" +
                     "icon.textContent=this.classList.contains('collapsed')?'\\u25BC':'\\u25B2';" +
                   '">Agent Processing Steps' +
                     '<span id="' + cardId + '-summary" style="font-weight:400;font-size:0.75rem;opacity:0.75;margin-left:8px;"></span>' +
-                    '<span class="toggle-icon">▲</span>' +
+                    '<span class="toggle-icon">' + (collapsed ? '▼' : '▲') + '</span>' +
                   '</div>' +
-                  '<div class="agent-process-body" id="' + cardId + '"></div>' +
+                  '<div class="agent-process-body' + (collapsed ? ' hidden' : '') + '" id="' + cardId + '"></div>' +
                 '</div>';
             const wrapper = document.createElement('div');
             wrapper.className = 'msg-row assistant';
             wrapper.style.maxWidth = '95%';
-            wrapper.innerHTML = '<div class="avatar-icon">🤖</div><div style="flex:1;">' + html + '</div>';
+            wrapper.innerHTML = '<div class="avatar-icon">🤖</div><div style="flex:1;min-width:0;">' + html + '</div>';
             document.getElementById('chat-window').appendChild(wrapper);
             bodyEl = document.getElementById(cardId);
             scrollBottom();
@@ -8500,8 +8540,11 @@
             else if (/Tool call|Tool cap|🧭/i.test(content)) { stepClass = 'step-tool'; label = '🧭 Tools'; }
             else if (/Conclusion reached|submit_final_report|✅/i.test(content)) { stepClass = 'step-done'; label = '✅ Done'; }
             else { stepClass = 'step-info'; label = 'ℹ️'; }
-            const now = Date.now();
-            const elapsedMs = now - startTs, deltaMs = now - lastTs;
+            // A live step is timed by this browser; a replayed one carries the
+            // offset the server recorded, so the badges show how long the run
+            // actually took rather than how fast the replay redrew it.
+            const now = (typeof step.ts_ms === 'number') ? (startTs + step.ts_ms) : Date.now();
+            const elapsedMs = now - startTs, deltaMs = Math.max(0, now - lastTs);
             lastTs = now;
             const badge = timeBadge(elapsedMs, deltaMs);
             let html;
@@ -8667,9 +8710,13 @@
                 if (data.issue_time && typeof setIssueTimeFromString === 'function') {
                     setIssueTimeFromString(data.issue_time);
                 }
+                // Say whether the follow-up will still know what the analysis
+                // found, rather than leaving the user to discover it by asking.
                 if (st) showStatus(st, data.running
                     ? '⏳ Analysis in progress — following live…'
-                    : '✔ Resumed conversation — log re-loaded.',
+                    : (data.context_restored
+                        ? '✔ Resumed conversation — log re-loaded, analysis context restored.'
+                        : '✔ Resumed conversation — log re-loaded.'),
                     data.running ? 'warn' : 'ok',
                     // Keep the "in progress" line up while it streams; the
                     // "resumed" confirmation is transient — auto-hide after 3s.

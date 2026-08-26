@@ -148,6 +148,38 @@ def _convert_messages_to_anthropic(messages):
                 converted.append({"role": "user", "content": [result_block]})
             continue
 
+        # ── Assistant message carrying tool calls as a PLAIN DICT ──
+        # The shape a conversation restored from disk has: a stored message
+        # cannot be an SDK adapter object, so it comes back as the OpenAI-style
+        # dict. Without this branch it falls through to the text case below,
+        # its tool_calls are silently dropped, and the tool_results that follow
+        # have no tool_use to pair with — which the API rejects with
+        # "unexpected tool_use_id ... in tool_result blocks".
+        # Same blocks as the adapter branch above.
+        tool_calls = msg.get("tool_calls") if isinstance(msg, dict) else None
+        if role == "assistant" and tool_calls:
+            content_blocks = []
+            if content:
+                content_blocks.append({"type": "text", "text": content})
+            for tc in tool_calls:
+                fn = tc.get("function") or {}
+                try:
+                    tool_input = json.loads(fn.get("arguments") or "{}")
+                except (TypeError, ValueError):
+                    # A malformed argument string must not sink the whole
+                    # request; an empty input is recoverable, a 400 is not.
+                    tool_input = {}
+                content_blocks.append({
+                    "type": "tool_use",
+                    "id": tc.get("id"),
+                    "name": fn.get("name"),
+                    "input": tool_input,
+                })
+            if not content_blocks:
+                content_blocks = [{"type": "text", "text": ""}]
+            converted.append({"role": "assistant", "content": content_blocks})
+            continue
+
         # Regular user / assistant text message
         converted.append({"role": role, "content": content})
 

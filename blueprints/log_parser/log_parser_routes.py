@@ -408,6 +408,11 @@ def _is_bt_etl(file_path: str) -> bool:
     name = os.path.basename(file_path).lower()
     return name.startswith(('ibtpci-', 'ibtusb-')) and name.endswith('.etl')
 
+def _is_fw_etl(file_path: str) -> bool:
+    name = os.path.basename(file_path).lower()
+    # wrt-fw~N.etl is the Windows 8.3 short name when the full path exceeds MAX_PATH
+    return name.startswith(('wrt-fw-', 'wrt-fw~')) and name.endswith('.etl')
+
 def _infer_local_upload_case_type(bt_files) -> str:
     if bt_files:
         return 'bt'
@@ -616,6 +621,52 @@ def _process_local_analysis(source_path: str, source_dir: str, file_path: str,
         app_config.last_analyzed_log_path = hci_path
         return url_for('bt_chatbot.index', auto_run='analyze_all')
 
+    elif _is_fw_etl(file_path):
+        _cb(20, 'FW ETL detected. Reading system_info.txt…')
+        from utils.fw_utils import infer_fw_parse_type
+        fw_type = infer_fw_parse_type(file_path, 'wifi')
+        local_case_nbr = f'local_upload_{timestamp}'
+        local_case_type = fw_type if fw_type in ('bt', 'wifi') else 'wifi'
+        local_context = CaseContext(
+            case_nbr=local_case_nbr,
+            wifi_or_bt=local_case_type,
+            case_download_dir=source_dir,
+        )
+        session['case_context'] = local_context.to_session()
+        session['selected_files'] = []
+        session['bsod'] = False
+        session['latest_etl_llm'] = False
+        session['auto_analysis_fw'] = file_path
+        workflow_id = gather_service.new_workflow_id()
+        session['gather_workflow_id'] = workflow_id
+        local_attachment = [(original_name, original_name, None)]
+        gather_service.record_workflow_start(
+            workflow_id=workflow_id, issue=local_context.to_dict(),
+            domain=local_case_type, attachment_list=local_attachment,
+        )
+        gather_service.record_attachment_selection(
+            workflow_id=workflow_id, selected_files=local_attachment,
+            issue=local_context.to_dict(), domain=local_case_type,
+        )
+        try:
+            local_bytes = os.path.getsize(file_path)
+        except OSError:
+            local_bytes = None
+        gather_service.record_attachment_download_result(
+            workflow_id=workflow_id, name=original_name, status='already_exists',
+            byte_count=local_bytes, latency_ms=0, attempt_count=0,
+            issue=local_context.to_dict(), domain=local_case_type,
+        )
+        app_config.set_download_results(
+            local_case_nbr,
+            wifi={},
+            ddd={},
+            bt={},
+            fw={original_name: [file_path]},
+        )
+        _cb(90, 'FW ETL ready. Opening analysis page…')
+        return url_for('main.download_result')
+
     else:
         _cb(20, 'Starting WPP/DDD parser…')
         wpp_ddd_parser_run(file_path)
@@ -743,6 +794,7 @@ def upload_local_analysis():
         'download_path', 'uploaded_source_path', 'local_in_place',
         'classification', 'case_context', 'selected_files', 'bsod',
         'latest_etl_llm', 'latest_etl_path', 'gather_workflow_id',
+        'auto_analysis_fw',
     )
 
     upload_id = (request.form.get('upload_id') or '').strip()
@@ -1137,6 +1189,8 @@ def _run_sendto_in_background(socketio, client_sid, source_path: str):
             emit_progress(10, 'Bluetooth log detected. Preparing Bluetooth chatbot…')
         elif _is_bt_etl(source_path):
             emit_progress(10, 'Bluetooth ETL detected. Starting HCI decode…')
+        elif _is_fw_etl(source_path):
+            emit_progress(10, 'FW ETL detected. Preparing…')
         else:
             emit_progress(10, 'Wi-Fi ETL file detected. Starting WPP/DDD parser…')
         time.sleep(0.5)

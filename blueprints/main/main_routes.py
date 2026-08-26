@@ -834,6 +834,7 @@ def render_download_result_form():
         for fw_path in fw_list
         if fw_path
     }
+    auto_analysis_fw = session.pop('auto_analysis_fw', None)
     wifi_table_rows = _build_wifi_table_rows(file_dicts['wifi_dict'], download_path=download_path)
     bt_table_rows = _build_bt_table_rows(file_dicts['bt_dict'], download_path=download_path)
     event_table_rows = _build_event_table_rows(file_dicts['ddd_dict'], download_path=download_path)
@@ -888,6 +889,7 @@ def render_download_result_form():
                          auto_analysis_etl = auto_analysis_etl,
                          auto_analysis_etl_reason = auto_analysis_etl_reason,
                          auto_analysis_bt=auto_analysis_bt,
+                         auto_analysis_fw=auto_analysis_fw,
                          exclude_keywords=app_config.etl_exclude_keywords,
                          latest_fw_system_info=latest_fw_system_info,
                          latest_fw_system_info_path=latest_fw_system_info_path,

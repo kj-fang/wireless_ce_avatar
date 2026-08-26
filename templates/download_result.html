@@ -2409,6 +2409,7 @@
     // and `__llmIssueTime` as if they were in the same frame and misses by
     // the customer's UTC offset on non-Asia cases.
     window.__aiPreSelectedEtl = {{ (ai_pre_selected_etl or "") | tojson }};
+    window.__autoAnalysisFw = {{ (auto_analysis_fw or "") | tojson }};
 
     function startChatbotAnalysis(button, etlPathEncoded) {
         if (button.classList.contains('disabled')) return;
@@ -2838,6 +2839,18 @@
         updateFwActionButtons();
     }
 
+    // Called from the FW type modal (sendto/local-upload flow when hint is None).
+    function _confirmFwType(fwType) {
+        $('#fwTypeSelectModal').modal('hide');
+        const selectedRow = document.querySelector('.fw-file-item.selected');
+        if (!selectedRow) return;
+        setAnalysisCardLocked(true);
+        window.pendingFwAnalyze = true;
+        setFwActionButtonsBusy(true, 'fw-action-analyze');
+        startFwAnalysis(document.getElementById('fw-action-analyze'),
+                        selectedRow.dataset.fwEncoded, fwType);
+    }
+
     // Returns the fw_type value ('bt' | 'wifi' | '') from the SELECTED row's
     // <select>. Empty string when no row is selected or no type picked yet.
     function getSelectedFwType() {
@@ -3218,6 +3231,34 @@
             console.log(`[Auto-Init] Loading latest evt file: ${latestEvtPath}`);
             loadEventLog(latestEvtPath);
         }
+
+        // Auto-trigger FW parse for single FW ETL from sendto/local-upload
+        if (window.__autoAnalysisFw) {
+            const norm = s => s.replace(/\\/g, '/');
+            const targetFwPath = norm(window.__autoAnalysisFw);
+            const fwRows = document.querySelectorAll('.fw-file-item');
+            let matchedFwRow = null;
+            fwRows.forEach(el => {
+                if (norm(decodePath(el.dataset.fwEncoded || '')) === targetFwPath) {
+                    matchedFwRow = el;
+                }
+            });
+            if (matchedFwRow) {
+                selectFwRow(matchedFwRow);
+                matchedFwRow.scrollIntoView({ block: 'nearest', behavior: 'smooth' });
+                const fwHint = matchedFwRow.dataset.fwHint;
+                if (fwHint === 'bt' || fwHint === 'wifi') {
+                    setAnalysisCardLocked(true);
+                    window.pendingFwAnalyze = true;
+                    setFwActionButtonsBusy(true, 'fw-action-analyze');
+                    startFwAnalysis(document.getElementById('fw-action-analyze'),
+                                    matchedFwRow.dataset.fwEncoded, fwHint);
+                } else {
+                    // Type unknown: prompt user to pick
+                    $('#fwTypeSelectModal').modal('show');
+                }
+            }
+        }
     });
 
     // Auto-refresh page when returning via browser back button
@@ -3356,6 +3397,27 @@
     // });
 
     </script>
+
+<!-- ===== FW Type Selection Modal (sendto / local-upload flow) ===== -->
+<div class="modal fade" id="fwTypeSelectModal" tabindex="-1" role="dialog"
+     data-backdrop="static" data-keyboard="false">
+  <div class="modal-dialog modal-dialog-centered" role="document">
+    <div class="modal-content" style="border-radius:10px; overflow:hidden;">
+      <div class="modal-header" style="background:#0b4a78; color:white; padding:12px 20px;">
+        <h6 class="modal-title mb-0" style="font-size:1rem;">Select FW Parse Domain</h6>
+      </div>
+      <div class="modal-body">
+        <p class="mb-1">Cannot determine FW type — <code>system_info.txt</code> is missing or incomplete.</p>
+        <p class="mb-0 text-muted" style="font-size:0.9rem;">Please select the parser domain for this FW ETL:</p>
+      </div>
+      <div class="modal-footer">
+        <button type="button" class="btn btn-primary" onclick="_confirmFwType('wifi')">Wi-Fi</button>
+        <button type="button" class="btn btn-info" style="color:white;" onclick="_confirmFwType('bt')">Bluetooth</button>
+      </div>
+    </div>
+  </div>
+</div>
+<!-- ===== /FW Type Selection Modal ===== -->
 
 <!-- ===== Parse Progress Modal (shared: WiFi WPP / BT Decode / FW Parse) ===== -->
 <div class="modal fade" id="parseProgressModal" tabindex="-1" role="dialog"

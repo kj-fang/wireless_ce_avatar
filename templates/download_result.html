@@ -927,7 +927,7 @@
                                             {% endif %}
                                         {% endfor %}
                                     {% endif %}
-                                <div class="fw-file-item{% if ns.skip %} excluded-row{% endif %}" data-fw-encoded="{{ fw_path | urlencode }}" onclick="selectFwRow(this)">
+                                <div class="fw-file-item{% if ns.skip %} excluded-row{% endif %}" data-fw-encoded="{{ fw_path | urlencode }}" data-fw-hint="{{ fw_type_hints.get(fw_path) }}" onclick="selectFwRow(this)">
                                     <p class="text-muted mb-0 small analysis-file-name">
                                         {{ fw_path.replace('\\', '/').split('/')[-1] }}
                                         {% if ns.skip %}<span class="excluded-badge">Excluded: {{ ns.matched_kw }}</span>{% endif %}
@@ -2930,6 +2930,14 @@
         if (window.__filesCoexist && !fwType) {
             alert('Please pick BT or WiFi for this FW file before parsing.');
             return;
+        }
+
+        // Non-coex: warn if system_info.txt is empty both FW config fields
+        if (!window.__filesCoexist) {
+            const selectedRow = document.querySelector('.fw-file-item.selected');
+            if (selectedRow && selectedRow.dataset.fwHint === 'None') {
+                alert('Warning: FW config is empty or unexpected in system_info.txt.');
+            }
         }
 
         if (actionType === 'parse') {

@@ -263,6 +263,10 @@ Bluetooth_device_YB_Lost:
     - "PerformSharedHwReset failed"
     - "Error: BT Shared Hw Reset fail"
     - "Error: BT SHR Failed in InitializeAdapter"
+  exclusive:
+    - "Bit 0 Enabled: Extended System Exception Event"
+    - "Bit 1 Enabled: Extended Fatal Exception Event"
+    - "Bit 2 Enabled: Extended Debug Exception Event"
   expert_rules: |
     1. If the design pass schematic review and layout review, we also need to confirm the problem is not single or specific unit. This indicates it is low risk on HW design related.
     2. We would expect proper PLDR, FLR and product reset without problem. It will guarantee the fundamental function for error recovery.
@@ -277,9 +281,57 @@ Bluetooth_BIOS_DSM:
     - "BthFdQueryBiosConfigFromMethod"
     - "IoCallDriver"
     - "DriverEntry"
+    - "DSM method"
+    - "Attempting to query"
   expert_rules: |
-    1. CallBiosMethod failed with status 0xC0000034, BthFdQueryBiosConfigFromMethod failed with status 0xC0000034, and IoCallDriver failed with status 0xC0000034, indicating that the required DSM entries were not found. The customer BIOS does not appear to include the required Bluetooth DSM method implementation, and next action item is for the OEM/ODM BIOS team to review the Bluetooth BIOS integration.
-    2. DriverEntry log show this log have bluetooth reboot , driver entry log , which able to check platform bluetooth init config. if this log do not present DriverEntry log, it means this log do not have platform init config information.
+    1. Analyze Intel Bluetooth driver logs for ACPI/DSM method checks.
+
+    Goal:
+    Find which method failed with 0xc0000034 (STATUS_OBJECT_NAME_NOT_FOUND).
+
+    Method map:
+
+    49414c47 = GuidLockIndicator ACPI method
+    444c4f41 = Audio offload BIOS ACPI method
+    43535442 = BT SmartThings ACPI method
+    53444153 = Antenna diversity BIOS ACPI method
+    4d53445f = BIOS PLDR Duration DSM method
+    Rules:
+
+    Identify each method from log lines like “Attempting to query ACPI method <hex>” or “Attempting to query ACPI DSM method <hex>”.
+    For each method block, if any line contains 0xc0000034 or STATUS_OBJECT_NAME_NOT_FOUND, mark it FAIL.
+    If the block ends with STATUS_SUCCESS and no 0xc0000034 appears, mark it PASS.
+    Output the result for each method as: Method <hex> (<feature name>): PASS/FAIL
+    If FAIL, include the exact evidence line with 0xc0000034.
+    Final line:
+    Failed method(s): ...
+    Or: No 0xc0000034 failures detected
+    Severity:
+
+    49414c47 and 43535442 failures are not real issues.
+    444c4f41 and 4d53445f failures are P0 critical issues.
+    Samsung rule:
+
+    Only mention SmartThings details for 43535442 if the platform is confirmed Samsung.
+    If Samsung is not confirmed, hide all SmartThings-related output completely.
+    2. Analyze Bluetooth DriverEntry logs.
+
+    Rules:
+
+    DriverEntry means a real driver load and initialization event.
+    DriverEntry is a one-time log per load cycle, shown only when the driver is actually initialized.
+    Normal Bluetooth re-initialization should not print DriverEntry again unless the driver was reloaded.
+    If DriverEntry is present, the log window contains first-load platform init context such as build number, version, signer type, OS build, and ETW registration status.
+    If DriverEntry is absent, do not assume platform init details are available in that window.
+    DriverEntry during a user cold boot is normal and not a problem.
+    DriverEntry during a platform PLDR flow may indicate recovery behavior, so check whether Bluetooth needed PLDR recovery.
+    DriverEntry presence alone is not a failure. Judge it together with boot type, PLDR indicators, and surrounding recovery logs.
+    Output:
+
+    DriverEntry present or absent
+    Likely scenario: cold boot / PLDR recovery / normal reload / unclear
+    Whether this suggests a problem or normal behavior
+    Brief evidence from the log
 
 Bluetooth_PLDR:
   name: "Bluetooth_PLDR"
@@ -303,19 +355,76 @@ Bluetooth_PLDR:
     - "PLDR retries"
     - "Recovery is already in progress"
     - "Handle PLDR triggered by Wifi"
+    - "Attempting to query"
   expert_rules: |
-    1. BthFdConfigureBiosUsingDsmMethod failed with status 0xC0000034, and iBtPciQueryAndConfigurePldrDurationValue failed with status 0xC0000034, indicating that the required PLDR DSM entries were not found. The customer BIOS does not appear to include the required Bluetooth DSM method implementation, and next action item is for the OEM/ODM BIOS team to review the Bluetooth BIOS integration.
-    2. DriverEntry log show this log have bluetooth reboot , driver entry log , which able to check platform bluetooth init config. if this log do not present DriverEntry log, it means this log do not have platform init config information.
+    1. Analyze Intel Bluetooth driver logs for ACPI/DSM method checks.
+
+    Goal:
+    Find which method failed with 0xc0000034 (STATUS_OBJECT_NAME_NOT_FOUND).
+
+    Method map:
+
+    49414c47 = GuidLockIndicator ACPI method
+    444c4f41 = Audio offload BIOS ACPI method
+    43535442 = BT SmartThings ACPI method
+    53444153 = Antenna diversity BIOS ACPI method
+    4d53445f = BIOS PLDR Duration DSM method
+    Rules:
+
+    Identify each method from log lines like “Attempting to query ACPI method <hex>” or “Attempting to query ACPI DSM method <hex>”.
+    For each method block, if any line contains 0xc0000034 or STATUS_OBJECT_NAME_NOT_FOUND, mark it FAIL.
+    If the block ends with STATUS_SUCCESS and no 0xc0000034 appears, mark it PASS.
+    Output the result for each method as: Method <hex> (<feature name>): PASS/FAIL
+    If FAIL, include the exact evidence line with 0xc0000034.
+    Final line:
+    Failed method(s): ...
+    Or: No 0xc0000034 failures detected
+    Severity:
+
+    49414c47 and 43535442 failures are not real issues.
+    444c4f41 and 4d53445f failures are P0 critical issues.
+    Samsung rule:
+
+    Only mention SmartThings details for 43535442 if the platform is confirmed Samsung.
+    If Samsung is not confirmed, hide all SmartThings-related output completely.
+    2. Analyze Bluetooth DriverEntry logs.
+
+    Rules:
+
+    DriverEntry means a real driver load and initialization event.
+    DriverEntry is a one-time log per load cycle, shown only when the driver is actually initialized.
+    Normal Bluetooth re-initialization should not print DriverEntry again unless the driver was reloaded.
+    If DriverEntry is present, the log window contains first-load platform init context such as build number, version, signer type, OS build, and ETW registration status.
+    If DriverEntry is absent, do not assume platform init details are available in that window.
+    DriverEntry during a user cold boot is normal and not a problem.
+    DriverEntry during a platform PLDR flow may indicate recovery behavior, so check whether Bluetooth needed PLDR recovery.
+    DriverEntry presence alone is not a failure. Judge it together with boot type, PLDR indicators, and surrounding recovery logs.
+    Output:
+
+    DriverEntry present or absent
+    Likely scenario: cold boot / PLDR recovery / normal reload / unclear
+    Whether this suggests a problem or normal behavior
+    Brief evidence from the log
     3. Log show "PLDR is supported in this platform" or "BT Internal PLDR supported on this platform" means PLDR is supported.
     4. Log show "PLDR is not supported in this platform" means PLDR is not config correctly to support bluetooth error recovery.
     5. "Warning!! Handle PLDR triggered by Wifi" means WIFI trigger product and bluetooth is await for reload.
     6. "Recovery is already in progress" means PLDR had been triggered by others mechanism.
-    7. "Error!! Product reset rejected" means BT PLDR had rejected by WIFI , there will be status code and reason code , reason code definition
-    IBTWLAN_RESET_REJECT_REASON_IRRELEVANT = 0,
-    IBTWLAN_RESET_REJECT_REASON_PRODUCT_RESET_NOT_SUPPORTED =1,
-    IBTWLAN_RESET_REJECT_REASON_POWER_TRANISITION =2,
-    IBTWLAN_RESET_REJECT_REASON_WIMA_NACK_RESPONSE=3,
-    IBTWLAN_RESET_REJECT_REASON_WIFI_MAX_PLDR_ATTEMPTS=4, and status code definition     IBTWLAN_RESET_STATUS_PRODUCT_RESET_STARTED = 0, IBTWLAN_RESET_STATUS_PRODUCT_RESET_REJECTED = 1,
+    7. Interpretation: “Error!! Product reset rejected” means the BT PLDR request was rejected by WiFi"
+    This event should be analyzed using both status code and reject reason code.
+    Status codes:
+    0 = reset started
+    1 = reset rejected
+    Reject reason codes:
+    0 = irrelevant / no specific reject reason
+    1 = product reset not supported
+    2 = power transition in progress
+    3 = WiFi returned NACK response
+    4 = WiFi reached maximum PLDR attempts
+    Analysis goal:
+
+    Determine whether the PLDR was started or rejected.
+    If rejected, identify the reject reason and explain it in plain language.
+    Use the status code and reason code together to judge whether this is normal behavior or a problem.
     8. "Error: BT SHR Failed, As this is Product reset.. no mitigation" means BT SHR (share reset) failed, and no mitigation on this case.
 
 Bluetooth_Audio:
@@ -334,21 +443,75 @@ Bluetooth_Audio:
     - "IoCallDriver failed"
     - "NHLT"
     - "AUD_OFF_ACPI"
-    - "[BthFdQueryAcpiAudOffloadConfig]Method[0]"
-    - "[BthFdQueryAcpiAudOffloadConfig]Method[1]"
-    - "[BthFdQueryAcpiAudOffloadConfig]Method[2]"
     - "DLOA"
     - "BtFdReadUefiAudioConfig"
+    - "BthFdQueryAcpiAudOffloadConfig"
+    - "Attempting to query"
   expert_rules: |
-    1. DriverEntry log show this log have bluetooth reboot , driver entry log , which able to check platform bluetooth init config. if this log do not present DriverEntry log, it means this log do not have platform init config information.
+    1. Analyze Bluetooth DriverEntry logs.
+
+    Rules:
+
+    DriverEntry means a real driver load and initialization event.
+    DriverEntry is a one-time log per load cycle, shown only when the driver is actually initialized.
+    Normal Bluetooth re-initialization should not print DriverEntry again unless the driver was reloaded.
+    If DriverEntry is present, the log window contains first-load platform init context such as build number, version, signer type, OS build, and ETW registration status.
+    If DriverEntry is absent, do not assume platform init details are available in that window.
+    DriverEntry during a user cold boot is normal and not a problem.
+    DriverEntry during a platform PLDR flow may indicate recovery behavior, so check whether Bluetooth needed PLDR recovery.
+    DriverEntry presence alone is not a failure. Judge it together with boot type, PLDR indicators, and surrounding recovery logs.
+    Output:
+
+    DriverEntry present or absent
+    Likely scenario: cold boot / PLDR recovery / normal reload / unclear
+    Whether this suggests a problem or normal behavior
+    Brief evidence from the log
     2. "Hf offload support is available in firmware" and "A2dp Offload support is available in firmware" only means bluetooth firmware audio offload capability available , it does not means the audio offload feature get enabled.
-    3. IoCallDriver failed with status 0xC0000034, and BthFdQueryBiosConfigFromDsmMethod failed with status 0xC0000034, indicating that the required audio offload DSM entries were not found. The customer BIOS does not appear to include the required Bluetooth DSM method implementation, and next action item is for the OEM/ODM BIOS team to review the Bluetooth BIOS integration.
+    3. Analyze Intel Bluetooth driver logs for ACPI/DSM method checks.
+
+    Goal:
+    Find which method failed with 0xc0000034 (STATUS_OBJECT_NAME_NOT_FOUND).
+
+    Method map:
+
+    49414c47 = GuidLockIndicator ACPI method
+    444c4f41 = Audio offload BIOS ACPI method
+    43535442 = BT SmartThings ACPI method
+    53444153 = Antenna diversity BIOS ACPI method
+    4d53445f = BIOS PLDR Duration DSM method
+    Rules:
+
+    Identify each method from log lines like “Attempting to query ACPI method <hex>” or “Attempting to query ACPI DSM method <hex>”.
+    For each method block, if any line contains 0xc0000034 or STATUS_OBJECT_NAME_NOT_FOUND, mark it FAIL.
+    If the block ends with STATUS_SUCCESS and no 0xc0000034 appears, mark it PASS.
+    Output the result for each method as: Method <hex> (<feature name>): PASS/FAIL
+    If FAIL, include the exact evidence line with 0xc0000034.
+    Final line:
+    Failed method(s): ...
+    Or: No 0xc0000034 failures detected
+    Severity:
+
+    49414c47 and 43535442 failures are not real issues.
+    444c4f41 and 4d53445f failures are P0 critical issues.
+    Samsung rule:
+
+    Only mention SmartThings details for 43535442 if the platform is confirmed Samsung.
+    If Samsung is not confirmed, hide all SmartThings-related output completely.
     4. "Audio offload configuration is NOT supported" , "Audio offload registry key value set to 0" , or "Audio offload configuration is NOT present" means driver was not able to enable on audio offload.
-    5. Audio NHLT BT role is 0x0 means BT offload is disable in NHLT config (NHLT_BT_OFFLOAD_DISABLED) , Audio NHLT BT role is 0x1 means NHLT BT is I2S Master Role (NHLT_BT_I2S_MASTER_ROLE) , Audio NHLT BT role is 0x2 means NHLT BT is Slave Role (NHLT_BT_I2S_SLAVE_ROLE). BT I2S role is a BIOS Config of BT role of I2S clock.
+    5. NHLT Bluetooth role configuration.
+
+    This configuration comes from the NHLT side, not from BIOS.
+    It defines the Bluetooth I2S clock role in the audio topology.
+    Meaning of the values,
+    0x0 = Bluetooth offload is disabled
+    0x1 = Bluetooth is the I2S clock master
+    0x2 = Bluetooth is the I2S clock slave
+    This setting determines whether Bluetooth or the Audio DSP acts as master, and the other side acts as slave.
+    BIOS alignment rule.There is a separate BIOS-side configuration for the same Bluetooth/audio role.The BIOS configuration must align with the NHLT configuration.If the two sides do not match, treat it as a configuration mismatch and investigate the platform setup.
     6. [BthFdQueryAcpiAudOffloadConfig]Method[0] and [UtilHCIDump][AUD_OFF_ACPI] 00 00 00 00 , means Revision = 0 , this information is from acpi method AOLD/DLOA.
-    7. [BthFdQueryAcpiAudOffloadConfig]Method[1] and [UtilHCIDump][AUD_OFF_ACPI] 12 00 00 00 , it means Domain Type = 0x12（Bluetooth）, this information is from acpi method AOLD/DLOA.
-    8. [BthFdQueryAcpiAudOffloadConfig]Method[2] and [UtilHCIDump][AUD_OFF_ACPI] 03 00 00 00 , it means  BT Audio Offload Sel = 0x03（Audio offload enabled I2S）, this information is from acpi method AOLD/DLOA.
+    7. [BthFdQueryAcpiAudOffloadConfig]Method[1] and [UtilHCIDump][AUD_OFF_ACPI] 12 00 00 00 , it means Domain Type = 0x12（Bluetooth）, this information is from acpi methid AOLD/DLOA.
+    8. [BthFdQueryAcpiAudOffloadConfig]Method[2] and ][UtilHCIDump][AUD_OFF_ACPI] 03 00 00 00 , it means  BT Audio Offload Sel = 0x03（Audio offload enabled I2S）, this information is from acpi methid AOLD/DLOA.
     9. Bluetooth audio offload , AOLD UEFI name is UefiCnvBtAOLD , and AOLD UUID is 42780DD5-9A7D-404C-80E4-7F7094360394
     10. Bluetooth audio offload , BT NHLT UEFI name is NhltBtConfigurationVariable , and UUID is B2364F9C-B817-4750-A5D2-37A0D1DAF8DD
 
-    11. [BtFdReadUefiAudioConfig]Failed to read uefi config means driver can not read correct BT audio UEFI uuid 42780DD5-9A7D-404C-80E4-7F7094360394
+    11. "[BthFdQueryAcpiAudOffloadConfig]Audio offload configuration is supported" , and "[BthFdQueryAcpiAudOffloadConfig]Audio offload is supported and enabled" , and "[BthFdQueryAcpiAudOffloadConfig]Audio offload registry key value set to 2" means audio offload enabled normally.

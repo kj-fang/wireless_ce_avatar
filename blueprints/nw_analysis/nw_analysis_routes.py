@@ -19,8 +19,8 @@ from tkinter import filedialog
 from configs.chatbot_ui import WIFI_UI
 from configs.global_configs import app_config
 from models.models import CaseContext
-from services.chatbot.agent.network_experience import NwAnalysisAgentSystem
-from services.chatbot.agent.system import load_skills_from_yaml
+from services.chatbot.engine.network_experience import NwAnalysisAgentSystem
+from services.chatbot.engine.system import load_skills_from_yaml
 from services.sleepstudy_analyzer import analyze_sleepstudy_stream
 from services import gather_service
 from utils.etl_utils import extract_time_from_description

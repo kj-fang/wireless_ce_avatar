@@ -47,7 +47,7 @@ from datetime import datetime
 from configs.chatbot_ui import LOG_CHATBOT_UI
 from configs.global_configs import app_config
 from models.models import CaseContext
-from services.chatbot.agent.system import WifiLogAgentSystem, load_skills_from_yaml
+from services.chatbot.engine.system import WifiLogAgentSystem, load_skills_from_yaml
 from utils.etl_utils import extract_time_from_description
 from utils.issue_time_utils import (
     parse_issue_time_string,
@@ -1335,7 +1335,7 @@ _activate_yaml = _YAML_HELPERS["activate_yaml"]
 # Top-level skill header (column 0, ends with bare ":"). Widened from
 # the original `[A-Za-z_]\w*` so it accepts the real skill IDs in this
 # codebase that contain "/" (e.g. "VLP/UHB/AFC", "WRDS/WGDS/EWRD/SGOM"
-# — see services/chatbot/agent/system.py:SKILL_FILE_MAP). The previous
+# — see services/chatbot/engine/system.py:SKILL_FILE_MAP). The previous
 # regex silently failed on those, dropping their `# - "..."` disabled
 # entries on every save round-trip. The first char is anchored to
 # [A-Za-z0-9_] so list items ("- foo:") and comment lines ("# x:")

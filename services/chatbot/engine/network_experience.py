@@ -4,7 +4,7 @@ from __future__ import annotations
 
 from datetime import datetime
 
-from services.chatbot.agent.system import (
+from services.chatbot.engine.system import (
     NW_AGENT_POLICY,
     Skill,
     WifiLogAgentSystem,

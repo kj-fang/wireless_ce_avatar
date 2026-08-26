@@ -137,7 +137,7 @@ def _write_playbook(path: Path, scope: str, bullets: list[tuple[str, str]]) -> N
 
 
 def _make_skills() -> dict:
-    from services.chatbot.agent.system import Skill
+    from services.chatbot.engine.system import Skill
     return {
         "Connectivity": Skill(
             name="Connectivity",

@@ -117,7 +117,7 @@ def _load_active_skills(namespace: str = "wifi") -> dict:
             from utils import bt_skills_yaml_utils as skills_yaml_utils
         else:
             from utils import skills_yaml_utils
-        from services.chatbot.agent.system import load_skills_from_yaml
+        from services.chatbot.engine.system import load_skills_from_yaml
         yaml_path, _date, _src = skills_yaml_utils.current_active_yaml()
         if not yaml_path:
             _SKILLS_CACHE[namespace] = {}

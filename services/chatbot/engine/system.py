@@ -417,11 +417,11 @@ def load_skills_from_yaml(yaml_path: str) -> Dict[str, "Skill"]:
 #    the imported mixins, this class supplies shared state, skill lifecycle,
 #    and turn-level bookkeeping (token usage, ACE, capability policy).
 # ---------------------------------------------------------
-from services.chatbot.agent.log_scope import LogScopeMixin
-from services.chatbot.agent.skill_analysis import SkillAnalysisMixin
-from services.chatbot.agent.conversation import ConversationMixin
-from services.chatbot.agent.report_quality import ReportQualityMixin
-from services.chatbot.agent.tool_execution import ToolExecutionMixin
+from services.chatbot.engine.log_scope import LogScopeMixin
+from services.chatbot.engine.skill_analysis import SkillAnalysisMixin
+from services.chatbot.engine.conversation import ConversationMixin
+from services.chatbot.engine.report_quality import ReportQualityMixin
+from services.chatbot.engine.tool_execution import ToolExecutionMixin
 
 class WifiLogAgentSystem(
     LogScopeMixin,
@@ -523,7 +523,7 @@ class WifiLogAgentSystem(
 
     # The report skeleton that used to live here as REPORT_MARKDOWN_TEMPLATE
     # is now per-profile data: <profile>_report.md under Speclets, with the
-    # built-in fallback in agent/speclet_defaults.py. Keeping a class attribute
+    # built-in fallback in engine/speclet_defaults.py. Keeping a class attribute
     # nothing reads would just be a trap for the next person who edits it and
     # wonders why the prompt did not change.
 

@@ -22,7 +22,7 @@ class ToolExecutionMixin:
         this falls back to the built-in defaults, which are byte-identical
         to the prompts these agents carried inline before Speclets existed.
         """
-        from services.chatbot.agent.speclet_defaults import default_speclet
+        from services.chatbot.engine.speclet_defaults import default_speclet
         from utils.speclets_utils import get_speclet
 
         profile = self.capabilities.profile

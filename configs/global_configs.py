@@ -5,7 +5,7 @@ from services.driver_manage_service import DriverManager
 from services.llm_service import LLM_helper
 from flask_socketio import SocketIO
 # Forward reference — imported lazily to avoid circular deps at module load time
-# from services.chatbot.agent.system import WifiLogAgentSystem
+# from services.chatbot.engine.system import WifiLogAgentSystem
 
 
 class GlobalConfig:

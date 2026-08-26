@@ -22,9 +22,9 @@ from utils.bt_skills_yaml_utils import (
     set_active_source as bt_set_active_source,
 )
 from services.llm_service import LLM_helper
-from services.chatbot.agent.system import WifiLogAgentSystem, sync_to_local, load_skills_from_yaml
-from services.chatbot.agent.network_experience import NwAnalysisAgentSystem
-from services.chatbot.agent.bluetooth import BtLogAgentSystem
+from services.chatbot.engine.system import WifiLogAgentSystem, sync_to_local, load_skills_from_yaml
+from services.chatbot.engine.network_experience import NwAnalysisAgentSystem
+from services.chatbot.engine.bluetooth import BtLogAgentSystem
 
 from configs.global_configs import app_config
 

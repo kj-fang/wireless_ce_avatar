@@ -5363,20 +5363,13 @@
                     </div>
                 </div>
 
-                <!-- ─── Attachments ─── -->
-                <div class="fbd-group">
-                    <div class="fbd-group-title">Attachments</div>
-                    <label class="fbd-attach-row" id="fbd-attach-log-row"
-                           title="Lets reviewers replay the exact log you analysed. Recommended when reporting a wrong answer.">
-                        <input type="checkbox" id="fbd-attach-log">
-                        <span>Attach the current session log for diagnosis.</span>
-                    </label>
-                </div>
+
             </div>
         </div>
         <div class="fbd-footer">
             <button type="button" class="fbd-btn" id="fbd-back-btn" onclick="feedbackWizardBack()" style="display:none;">← Back</button>
             <span class="fbd-footer-spacer"></span>
+            <span style="font-size:0.7rem;color:#9ca3af;align-self:center;">Submitting feedback automatically uploads the log file that Avatar uses to self-improve.</span>
             <button type="button" class="fbd-btn" id="fbd-cancel-btn" onclick="closeFeedbackModal()">Cancel</button>
             <button type="button" class="fbd-btn primary" id="fbd-submit-btn" onclick="submitFeedbackDetail()" style="display:none;">Submit</button>
         </div>
@@ -5863,7 +5856,6 @@
             skillLaneHint:   'Per skill: mark 👎 Wrong on any skill whose output was off and add the correction.',
             concLabel:       'Conclusion category',
             concFirstOpt:    '— Select if you know —',
-            attachLogHint:   'Lets reviewers replay the exact log you analysed. Recommended when reporting a wrong answer.',
             submitText:      'Submit',
         },
         up: {
@@ -5896,7 +5888,6 @@
             skillLaneHint:   'Mark 👍 knowledge is complete, 👎 knowledge is wrong or has gaps',
             concLabel:       'Conclusion category the agent nailed (optional)',
             concFirstOpt:    '— Select if it matched —',
-            attachLogHint:   'Lets reviewers replay the same log the agent analysed — only attach if you want to share it.',
             submitText:      'Submit',
         },
     };
@@ -5961,9 +5952,7 @@
             });
         }
 
-        // Attach-log hover tooltip (lives on the row's `title` attribute now).
-        const logRow = document.getElementById('fbd-attach-log-row');
-        if (logRow) logRow.setAttribute('title', T.attachLogHint);
+
 
         // Submit button label.
         const submitBtn = document.getElementById('fbd-submit-btn');
@@ -6031,10 +6020,7 @@
         // recreates the empty issue row) so the new row is re-toned too.
         applyFeedbackTone(vote);
 
-        // Attach-LOG default: always UNCHECKED. The option stays available
-        // so the user can opt in, but the log is never pre-selected.
-        const logCb = document.getElementById('fbd-attach-log');
-        if (logCb) logCb.checked = false;
+
 
         // If the user already submitted feedback for this turn, pre-fill
         // every field with what they sent last time — so they can revise
@@ -6133,7 +6119,7 @@
             correctIssueTime:     _val('fbd-correct-issue-time'),
             skillFeedback:        collectSkillFeedback(),
             stepFeedback:         collectStepFeedback(),
-            attachLog:       !!(document.getElementById('fbd-attach-log') || {}).checked,
+            attachLog:       true,
         };
     }
 
@@ -6194,9 +6180,7 @@
             if (e && item.should_be) e.value = item.should_be;
         });
 
-        // Attachment checkbox picks up whatever the user last chose.
-        const logCb = document.getElementById('fbd-attach-log');
-        if (logCb && d.attachLog !== undefined) logCb.checked = !!d.attachLog;
+
     }
 
     function closeFeedbackModal() {
@@ -6359,9 +6343,8 @@
             return;
         }
 
-        // Read attachment checkboxes up here so we can include them in
-        // the no-change comparison below.
-        const attachLog       = !!document.getElementById('fbd-attach-log').checked;
+        // Detailed feedback always attaches the log automatically.
+        const attachLog       = true;
 
         // No-change guard: when the user re-opens the modal via
         // "✏️ Edit feedback" and clicks Submit without touching

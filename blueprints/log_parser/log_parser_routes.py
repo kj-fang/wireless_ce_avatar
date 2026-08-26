@@ -406,7 +406,7 @@ def _is_allowed_local_analysis_filename(filename: str) -> bool:
 def _is_bt_etl(file_path: str) -> bool:
     """Return True if the file is a BT ETL that should be decoded via bt_decode_hci_via_folder."""
     name = os.path.basename(file_path).lower()
-    return name.startswith(('ibtpci-', 'ibtusb-')) and name.endswith('.etl')
+    return name.startswith(('ibtpci', 'ibtusb')) and name.endswith('.etl')
 
 def _infer_local_upload_case_type(bt_files) -> str:
     if bt_files:

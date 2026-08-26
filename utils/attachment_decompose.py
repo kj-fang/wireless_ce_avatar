@@ -36,7 +36,7 @@ def filter_files(type, etl_files):
 
     elif type == "bt":
         for file in etl_files:
-            if os.path.basename(file).lower().startswith(('ibtusb-', 'ibtpci-')) and os.path.basename(file).lower().endswith('.etl'):
+            if os.path.basename(file).lower().startswith(('ibtusb', 'ibtpci')) and os.path.basename(file).lower().endswith('.etl'):
                 filtered_tiles.append(file)
 
     elif type == "fw":

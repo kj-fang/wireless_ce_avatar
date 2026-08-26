@@ -447,6 +447,7 @@ Bluetooth_Audio:
     - "BtFdReadUefiAudioConfig"
     - "BthFdQueryAcpiAudOffloadConfig"
     - "Attempting to query"
+    - "Sco Support Type"
   expert_rules: |
     1. Analyze Bluetooth DriverEntry logs.
 

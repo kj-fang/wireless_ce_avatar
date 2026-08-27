@@ -288,7 +288,12 @@ def _resolve_domain(conversation_id: str, domain_hint: Any) -> str:
     """
     with _pending_lock:
         snap = _pending_buffer.get(conversation_id)
-        if snap and snap.get("_domain"):
+        # Key presence, not truthiness: wifi/default records "" as its routing
+        # key, so `snap.get("_domain")` is falsy for a perfectly well-formed
+        # Wi-Fi conversation and would let a caller-supplied domain="bt" hint
+        # take over — switching both the JSONL stream and the conclusion-tag
+        # whitelist for a conversation that was created as Wi-Fi.
+        if snap and "_domain" in snap:
             return snap["_domain"]
     return _norm_domain(domain_hint)
 
@@ -800,9 +805,11 @@ def record_turn(
                 # Track whether a previous turn already flushed this conv to
                 # disk; if so we want write-through. We mark this on the
                 # buffer so we don't have to hit disk to check.
-            elif domain and not snap.get("_domain"):
+            elif domain and "_domain" not in snap:
                 # Back-fill domain on a snapshot created before domain
                 # tracking (e.g. ensure_conversation ran on an older path).
+                # Keyed on absence, not falsiness — "" is Wi-Fi's real value
+                # and must not be re-bound by a later hint.
                 norm = _norm_domain(domain)
                 snap["_domain"] = norm
                 snap["domain"] = norm or "wifi"

@@ -22,7 +22,7 @@ from typing import Any
 
 
 _ALLOWED_FIELDS = ("name", "description", "keywords", "exclusive", "expert_rules")
-_REQUIRED_FIELDS = ("name", "description", "expert_rules") 
+_REQUIRED_FIELDS = ("name", "expert_rules") 
 
 
 def _clean_field(key: str, value: Any) -> Any:

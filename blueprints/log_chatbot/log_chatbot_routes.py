@@ -9,6 +9,7 @@ from datetime import datetime
 from typing import Optional
 import tkinter as tk
 from tkinter import filedialog
+from dateutil import parser as dateutil_parser
 
 from configs.global_configs import app_config
 from models.models import CaseContext
@@ -19,6 +20,7 @@ from utils.issue_time_utils import (
     read_log_time_range,
     resolve_issue_time,
     format_issue_time,
+    validate_issue_time_in_log_range,
 )
 from utils.issue_time_ai import build_issue_time_suggestions, organize_issue_context, realign_times_to_log
 from utils.timezone_utils import (
@@ -132,6 +134,9 @@ def _invalidate_issue_context_caches() -> None:
         "_attachment_time_cache",     # parsed attachment subtitle time
         "_resolved_issue_time_cache",  # log_path -> resolved issue_time
         "_issue_ai_quick",            # LLM-organized description + issue times
+        "_carried_issue_time",         # download_result -> chatbot hand-off
+        "_carried_issue_time_warning", # failed hand-off range validation
+        "_carried_issue_time_present", # blocks a second date guess on failure
     ):
         session.pop(key, None)
 
@@ -285,6 +290,98 @@ def _resolved_issue_time_for(log_path: str, attachment_time: str) -> str:
     cache[cache_key] = formatted
     session["_resolved_issue_time_cache"] = cache
     return formatted
+
+
+# Bare "HH:MM:SS" / "HH:MM:SS.mmm" (or ":mmm") timestamp, used to scan
+# time-only logs (e.g. DDD/tracefmt) that carry no date on any line —
+# read_log_time_range's dated regexes never match these.
+_TIME_ONLY_SCAN_RE = re.compile(r'(?<!\d)(\d{1,2}):(\d{2}):(\d{2})(?:[:.](\d{1,6}))?(?!\d)')
+
+
+def _scan_last_time_only(agent) -> str:
+    """Last bare time-of-day timestamp in a time-only log (e.g. DDD /
+    tracefmt: "HH:MM:SS.mmm" with no date on any line), scanned from the
+    tail of the agent's raw log cache backwards. Loads/refreshes the cache
+    for ``agent.current_log_path`` first so a stale cache from a
+    previously loaded log is never mistaken for this one. Returns "" on
+    any failure or when no line matches — callers should only call this
+    once ``agent._log_has_date()`` is already known to be False.
+    """
+    try:
+        agent._ensure_raw_log_cache()
+    except Exception:
+        pass
+    cache = getattr(agent, "_raw_log_cache", None) or []
+    for line in reversed(cache):
+        m = _TIME_ONLY_SCAN_RE.search(line or "")
+        if not m:
+            continue
+        hh, mm, ss = (int(m.group(i)) for i in (1, 2, 3))
+        if not (0 <= hh <= 23 and 0 <= mm <= 59 and 0 <= ss <= 59):
+            continue
+        raw_ms = m.group(4)
+        if raw_ms:
+            ms = int(raw_ms.ljust(6, "0")[:6]) // 1000
+            return f"{hh:02d}:{mm:02d}:{ss:02d}.{ms:03d}"
+        return f"{hh:02d}:{mm:02d}:{ss:02d}"
+    return ""
+
+
+def _earliest_attachment_upload_time() -> Optional[datetime]:
+    """Earliest comment/upload timestamp across ALL attachments listed on the
+    select-attachments page (item[2][0] in ``case_context.attachment_list``),
+    regardless of which ones the user actually selected.
+
+    Values arrive as either a native ``datetime`` (Snowflake
+    ``CORE_IPS_CREATED_DTM``, populated by ``_get_case_comments_from_snowflake``)
+    or an ISO-8601 string (Salesforce REST API ``CreatedDate`` fallback,
+    populated by ``_supplement_attachment_info_from_api``) — both are
+    accepted. Naive-ized (tzinfo stripped) so it compares against the rest of
+    the codebase's naive local-time datetimes.
+    """
+    raw_ctx_dict = session.get("case_context", {})
+    if isinstance(raw_ctx_dict, dict) and raw_ctx_dict:
+        raw_ctx_dict = CaseContext.from_session(raw_ctx_dict).to_dict()
+    att_list = raw_ctx_dict.get("attachment_list", []) if isinstance(raw_ctx_dict, dict) else []
+
+    earliest = None
+    for item in att_list:
+        if not (isinstance(item, (list, tuple)) and len(item) >= 3):
+            continue
+        pair = item[2]
+        raw_ts = pair[0] if isinstance(pair, (list, tuple)) and len(pair) >= 1 else None
+        dt = None
+        if isinstance(raw_ts, datetime):
+            dt = raw_ts.replace(tzinfo=None)
+        elif isinstance(raw_ts, str) and raw_ts.strip():
+            try:
+                dt = dateutil_parser.parse(raw_ts).replace(tzinfo=None)
+            except (ValueError, TypeError):
+                dt = None
+        if dt and (earliest is None or dt < earliest):
+            earliest = dt
+    return earliest
+
+
+def _clamp_description_time_to_attachments(time_str: str) -> str:
+    """Clamp an LLM-organized description time to the earliest attachment
+    upload timestamp when that's earlier.
+
+    The customer can't have experienced an issue after they already uploaded
+    evidence of it, so if the description-parsed time is (spuriously) later
+    than every attachment's upload time, the attachment timestamp is the more
+    trustworthy of the two. Leaves ``time_str`` unchanged when it doesn't
+    parse, is time-only (no date to compare), or no attachment time exists.
+    """
+    if not time_str:
+        return time_str
+    parsed, is_time_only = parse_issue_time_string(time_str)
+    if not parsed or is_time_only:
+        return time_str
+    earliest_upload = _earliest_attachment_upload_time()
+    if earliest_upload and earliest_upload < parsed:
+        return format_issue_time(earliest_upload)
+    return time_str
 
 
 def _extract_disconnect_time(*text_sources: str) -> str:
@@ -629,24 +726,7 @@ def set_log():
             if _last_ts:
                 log_last_time = format_issue_time(_last_ts)
             elif log_has_date is False:
-                cache = getattr(agent, "_raw_log_cache", None) or []
-                _time_re = re.compile(
-                    r'(?<!\d)(\d{1,2}):(\d{2}):(\d{2})(?:[:.](\d{1,6}))?(?!\d)'
-                )
-                for _line in reversed(cache):
-                    _m = _time_re.search(_line or "")
-                    if not _m:
-                        continue
-                    _hh, _mm, _ss = (int(_m.group(i)) for i in (1, 2, 3))
-                    if not (0 <= _hh <= 23 and 0 <= _mm <= 59 and 0 <= _ss <= 59):
-                        continue
-                    _raw_ms = _m.group(4)
-                    if _raw_ms:
-                        _ms = int(_raw_ms.ljust(6, "0")[:6]) // 1000
-                        log_last_time = f"{_hh:02d}:{_mm:02d}:{_ss:02d}.{_ms:03d}"
-                    else:
-                        log_last_time = f"{_hh:02d}:{_mm:02d}:{_ss:02d}"
-                    break
+                log_last_time = _scan_last_time_only(agent)
         except Exception as _e:
             print(f"⚠️  log_last_time lookup failed: {_e}")
             log_last_time = ""
@@ -1487,6 +1567,9 @@ def back_to_avatar():
         "_attachment_time_cache",
         "_resolved_issue_time_cache",
         "_issue_ai_quick",            # LLM-organized description + issue times
+        "_carried_issue_time",
+        "_carried_issue_time_warning",
+        "_carried_issue_time_present",
         "feedback_conversation_id",   # next /log_chatbot/ visit starts a fresh conversation
         "gather_workflow_id",         # next case starts a fresh v5 workflow
     ):
@@ -1516,6 +1599,7 @@ def prepare():
     """
     data = request.get_json(silent=True) or {}
     etl_path = data.get("etl_path", "").strip()
+    carried_issue_time = str(data.get("issue_time") or "").strip()
     if not etl_path:
          return jsonify({"success": False, "error": "etl_path is required"}), 400
 
@@ -1524,12 +1608,68 @@ def prepare():
          return jsonify({"success": False, "error": f".log file not found: {log_path}"}), 404
 
     try:
+        # This cache belongs to the result page that initiated this request.
+        # Preserve it only when that page explicitly hands off an issue time;
+        # after cache invalidation it supplies the cleaned description without
+        # triggering a second LLM date guess.
+        carried_quick_context = (
+            session.get("_issue_ai_quick") if carried_issue_time else None
+        )
+
         # Entering a NEW analysis from download_result. Purge the derived
         # issue-context caches FIRST so the context below is rebuilt from this
         # run's selected_files / case_context — not a previous run's leftovers.
         # (Fixes stale attachment time / description when a second analysis is
         # started without going through "Back to Avatar".)
         _invalidate_issue_context_caches()
+        if isinstance(carried_quick_context, dict):
+            session["_issue_ai_quick"] = carried_quick_context
+
+        # The result page has already resolved the issue clock against the
+        # selected capture. Carry that exact value forward instead of asking
+        # the model to choose a date again for a log that may span midnight.
+        if carried_issue_time:
+            session["_carried_issue_time_present"] = True
+            # download_result displays customer wall-clock time, whereas the
+            # decoded log range is in the decoder-host frame. Resolve complete
+            # datetimes into log frame before validating; GMT+8 customers take
+            # the explicit same-timezone no-op path.
+            validation_value = carried_issue_time
+            candidate_dt, candidate_time_only = parse_issue_time_string(carried_issue_time)
+            if candidate_dt is not None and not candidate_time_only:
+                try:
+                    from utils.issue_time_ai import determine_issue_time_frames
+                    range_first, range_last = read_log_time_range(log_path)
+                    frames = determine_issue_time_frames(
+                        candidate_dt, [log_path], range_first, range_last,
+                    )
+                    validation_value = format_issue_time(
+                        frames.get("log_frame") or candidate_dt
+                    )
+                except Exception as frame_error:
+                    print(f"[prepare] carried issue-time frame detection skipped: {frame_error}")
+            carried_dt, range_first, range_last, range_error = (
+                validate_issue_time_in_log_range(validation_value, log_path)
+            )
+            if carried_dt is not None:
+                session["_carried_issue_time"] = format_issue_time(carried_dt)
+                session["_carried_issue_time_warning"] = ""
+            else:
+                session["_carried_issue_time"] = ""
+                if range_first and range_last:
+                    range_text = (
+                        f"{format_issue_time(range_first)} to "
+                        f"{format_issue_time(range_last)}"
+                    )
+                    session["_carried_issue_time_warning"] = (
+                        f"Auto-detected issue time {carried_issue_time} was not used: "
+                        f"{range_error} Log range: {range_text}. Please confirm the issue time."
+                    )
+                else:
+                    session["_carried_issue_time_warning"] = (
+                        f"Auto-detected issue time {carried_issue_time} was not used: "
+                        f"{range_error} Please confirm the issue time."
+                    )
 
         # Pull consolidated issue context from all session sources
         ctx = _extract_issue_context()
@@ -1858,14 +1998,48 @@ def get_issue_context():
     clean_desc = organized.get("clean_description") or _compose_concise_description(ctx)
     issue_times = organized.get("issue_times") or []
 
+    # A result-page hand-off is authoritative for this transition. It either
+    # supplies the already resolved, range-checked value or deliberately
+    # supplies no value after validation failed. In the latter case, do not
+    # silently fall back to another LLM/attachment/log-latest guess.
+    carried_present = bool(session.get("_carried_issue_time_present"))
+    carried_issue_time = (session.get("_carried_issue_time") or "").strip()
+    carried_warning = (session.get("_carried_issue_time_warning") or "").strip()
+    if carried_present:
+        issue_times = [carried_issue_time] if carried_issue_time else []
+        attachment_time = carried_issue_time
+
+    # The description time can't be later than when the customer uploaded
+    # the evidence for it — clamp to the earliest attachment-folder
+    # timestamp (across ALL listed attachments) when that's earlier.
+    if issue_times and not carried_present:
+        issue_times[0] = _clamp_description_time_to_attachments(issue_times[0])
+
     # Back-compat single issue_time: prefer the first organized time, else the
     # previous attachment_time / log-latest resolution (cached by log_path).
     if issue_times:
         issue_time_str = issue_times[0]
+    elif carried_present:
+        issue_time_str = ""
     else:
         # attachment_time is already frame-corrected above; use it directly.
         # When absent, fall back to the cached log-latest resolution.
         issue_time_str = attachment_time or _resolved_issue_time_for(log_path, attachment_time)
+
+    # Time-only logs (e.g. DDD/tracefmt: "HH:MM:SS.mmm" with no date on any
+    # line) never match read_log_time_range's dated regexes, so
+    # _resolved_issue_time_for comes back empty above — a direct main-page
+    # upload of one of these would silently skip the "last log time"
+    # auto-fill that dated logs get for free. set_log()'s "Use log's last
+    # time" button already covers this exact case; reuse the same fallback
+    # here so the initial sidebar auto-fill benefits too.
+    if not issue_time_str and log_path and not carried_present:
+        try:
+            agent = _get_or_create_agent()
+            if agent.current_log_path == log_path and agent._log_has_date() is False:
+                issue_time_str = _scan_last_time_only(agent)
+        except Exception as e:
+            print(f"[get_issue_context] DDD last-time fallback skipped ({e})")
 
     # Align every surfaced time to the LOG frame so the picker drives
     # PreScan / Segment-2 against the raw .log content (which the decoder
@@ -1911,6 +2085,33 @@ def get_issue_context():
         except Exception as e:
             print(f"[get_issue_context] issue-time frame detect skipped ({e})")
 
+    # Final safety net for every automatic source. Never populate the picker
+    # with a complete timestamp that cannot occur inside the selected log.
+    range_blocked = False
+    range_warning = ""
+    if first_ts and last_ts:
+        def _inside_log_range(value: str) -> bool:
+            parsed, is_time_only = parse_issue_time_string(value)
+            return bool(parsed and not is_time_only and first_ts <= parsed <= last_ts)
+
+        had_auto_candidate = bool(issue_times or attachment_time or issue_time_str)
+        issue_times = [value for value in issue_times if _inside_log_range(value)]
+        attachment_time = attachment_time if _inside_log_range(attachment_time) else ""
+        if issue_times:
+            issue_time_str = issue_times[0]
+        elif attachment_time:
+            issue_time_str = attachment_time
+        elif _inside_log_range(issue_time_str):
+            pass
+        elif carried_present or had_auto_candidate:
+            issue_time_str = ""
+            range_blocked = True
+            range_warning = (
+                "The auto-detected issue time was not used because it is outside "
+                f"the selected log range ({format_issue_time(first_ts)} to "
+                f"{format_issue_time(last_ts)}). Please confirm the issue time."
+            )
+
     return jsonify({
         "description": clean_desc,
         "attachment_time": attachment_time,
@@ -1930,6 +2131,12 @@ def get_issue_context():
         # date typed into the picker. Empty when only a fixed offset is known —
         # the frontend then falls back to the label's standard offset.
         "customer_iana": to_iana_timezone(customer_tz_for_ui) if customer_tz_for_ui else "",
+        "issue_time_blocked": bool(
+            (carried_present and not carried_issue_time) or range_blocked
+        ),
+        "issue_time_warning": carried_warning or range_warning,
+        "log_first_time": format_issue_time(first_ts),
+        "log_last_time": format_issue_time(last_ts),
     })
 
 

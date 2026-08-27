@@ -4418,16 +4418,26 @@
                 const rawQuestion = question || '🔍 Run full multi-skill analysis';
 
                 let descPart = rawQuestion;
-                // Priority: LLM-organized multi-time list (from the case
-                // description) → URL ?issue_time= → attachment_time →
-                // backend-resolved issue_time → regex on description. Each
-                // branch is tagged with whichever of the 4 named sources it
-                // actually is ("last time" absorbs the URL-carried-over case
-                // and the crude regex fallback isn't a real 4th category —
-                // it's the same "customer description" source, just found by
-                // regex instead of the LLM organizer).
+                // Priority: attachment_time (customer-provided issue time
+                // parsed from the attachment's own gray subtitle) →
+                // LLM-organized description time(s) (clamped server-side to
+                // the earliest attachment-folder upload time, so it can
+                // never claim a later moment than when the evidence was
+                // actually uploaded) → URL ?issue_time= / backend-resolved
+                // issue_time → regex on description. Each branch is tagged
+                // with whichever of the 4 named sources it actually is
+                // ("last time" absorbs the URL-carried-over case and the
+                // crude regex fallback isn't a real 4th category — it's the
+                // same "customer description" source, just found by regex
+                // instead of the LLM organizer).
                 let filledSourceLabel = '';
-                if (issueTimes.length > 0 && _prefillAutoTimes(issueTimes)) {
+                if (attachmentTime && setIssueTimeFromString(attachmentTime)) {
+                    descPart = rawQuestion.replace(attachmentTime, ' ');
+                    filledSourceLabel = TIME_SOURCE.ATTACHMENT;
+                    issueTimeAwaitingConfirm = true;
+                    setIssueTimeConfirmUI(true);
+                    validateUserInput();
+                } else if (issueTimes.length > 0 && _prefillAutoTimes(issueTimes)) {
                     // The backend already returned a CLEAN description (raw
                     // timestamps stripped), so use it verbatim. These auto-
                     // filled time(s) await the user's confirm tick.
@@ -4436,12 +4446,8 @@
                     setIssueTimeConfirmUI(true);
                     validateUserInput();
                 } else {
-                    let foundTime = urlIssueTime || attachmentTime || resolvedTime;
-                    if (foundTime) {
-                        filledSourceLabel = attachmentTime && foundTime === attachmentTime
-                            ? TIME_SOURCE.ATTACHMENT
-                            : TIME_SOURCE.LAST_TIME;
-                    }
+                    let foundTime = urlIssueTime || resolvedTime;
+                    if (foundTime) filledSourceLabel = TIME_SOURCE.LAST_TIME;
                     if (!foundTime) {
                         for (const re of VALID_TIME_REGEXES) {
                             const m = rawQuestion.match(re);

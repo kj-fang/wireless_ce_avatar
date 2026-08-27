@@ -3778,6 +3778,15 @@
                     try {
                         const ctxRes = await fetch('/log_chatbot/get_issue_context');
                         const ctxData = await ctxRes.json();
+                        if (ctxData && ctxData.issue_time_blocked) {
+                            const warn = document.getElementById('it-unknown-warn');
+                            if (warn) {
+                                warn.textContent = '⚠ ' + (ctxData.issue_time_warning
+                                    || 'The auto-detected issue time is outside this log. Please confirm it.');
+                                warn.style.display = 'block';
+                            }
+                            return;
+                        }
                         const times = Array.isArray(ctxData && ctxData.issue_times)
                             ? ctxData.issue_times.filter(Boolean)
                             : [];
@@ -4516,8 +4525,18 @@
             window.__customerAnnotations = contextData.customer_annotations || {};
             window.__customerTzLabel = contextData.customer_tz || '';
             window.__customerIana = contextData.customer_iana || '';
+            const issueTimeBlocked = !!contextData.issue_time_blocked;
             if (typeof populateCustomerAnnotation === 'function') {
                 populateCustomerAnnotation();
+            }
+            if (issueTimeBlocked) {
+                if (typeof clearAllIssueTimes === 'function') clearAllIssueTimes();
+                const warn = document.getElementById('it-unknown-warn');
+                if (warn) {
+                    warn.textContent = '⚠ ' + (contextData.issue_time_warning
+                        || 'The auto-detected issue time is outside this log. Please confirm it.');
+                    warn.style.display = 'block';
+                }
             }
 
             // Enable agentic mode for auto-analysis
@@ -4535,28 +4554,37 @@
                 const rawQuestion = question || '🔍 Run full multi-skill analysis';
 
                 let descPart = rawQuestion;
-                // Priority: LLM-organized multi-time list (from the case
-                // description) → URL ?issue_time= → attachment_time →
-                // backend-resolved issue_time → regex on description. Each
-                // branch is tagged with whichever of the 4 named sources it
-                // actually is ("last time" absorbs the URL-carried-over case
-                // and the crude regex fallback isn't a real 4th category —
-                // it's the same "customer description" source, just found by
-                // regex instead of the LLM organizer).
+                // Priority: attachment_time (customer-provided issue time
+                // parsed from the attachment's own gray subtitle) →
+                // LLM-organized description time(s) (clamped server-side to
+                // the earliest attachment-folder upload time, so it can
+                // never claim a later moment than when the evidence was
+                // actually uploaded) → URL ?issue_time= / backend-resolved
+                // issue_time → regex on description. Each branch is tagged
+                // with whichever of the 4 named sources it actually is
+                // ("last time" absorbs the URL-carried-over case and the
+                // crude regex fallback isn't a real 4th category — it's the
+                // same "customer description" source, just found by regex
+                // instead of the LLM organizer).
                 let filledSourceLabel = '';
-                if (issueTimes.length > 0 && _prefillAutoTimes(issueTimes)) {
+                if (issueTimeBlocked) {
+                    // A carried value failed server-side range validation.
+                    // Keep the picker empty: URL, regex, attachment and log
+                    // latest fallbacks must not silently undo that decision.
+                    filledSourceLabel = '';
+                } else if (attachmentTime && setIssueTimeFromString(attachmentTime)) {
+                    descPart = rawQuestion.replace(attachmentTime, ' ');
+                    filledSourceLabel = TIME_SOURCE.ATTACHMENT;
+                    validateUserInput();
+                } else if (issueTimes.length > 0 && _prefillAutoTimes(issueTimes)) {
                     // The backend already returned a CLEAN description (raw
                     // timestamps stripped), so use it verbatim. Auto-detected
                     // time(s) apply immediately (confirm-gate removed).
                     filledSourceLabel = TIME_SOURCE.DESCRIPTION;
                     validateUserInput();
                 } else {
-                    let foundTime = urlIssueTime || attachmentTime || resolvedTime;
-                    if (foundTime) {
-                        filledSourceLabel = attachmentTime && foundTime === attachmentTime
-                            ? TIME_SOURCE.ATTACHMENT
-                            : TIME_SOURCE.LAST_TIME;
-                    }
+                    let foundTime = urlIssueTime || resolvedTime;
+                    if (foundTime) filledSourceLabel = TIME_SOURCE.LAST_TIME;
                     if (!foundTime) {
                         for (const re of VALID_TIME_REGEXES) {
                             const m = rawQuestion.match(re);

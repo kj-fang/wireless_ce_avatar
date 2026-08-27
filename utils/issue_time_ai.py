@@ -1527,20 +1527,22 @@ def _first_high_confidence(sugs: List[dict]) -> Optional[dict]:
 _CONFIDENCE_RANK = {"high": 0, "medium": 1, "low": 2}
 
 
-def _filter_to_highest_confidence(sugs: List[dict]) -> List[dict]:
-    """Keep only the suggestions at the single HIGHEST confidence tier
-    present (high > medium > low) — e.g. if any suggestion is "high", every
-    "medium"/"low" one is dropped from what the user sees; if the best
-    present is only "medium", the "low" ones are dropped and the "medium"
-    ones are kept. Applies to BOTH chatbots (log_chatbot and bt_chatbot),
-    since they share this function. Preserves the model's own relative
-    order within the kept tier — never re-sorts. A suggestion list that's
-    already empty is returned as-is."""
+def _filter_to_top_confidence_tiers(sugs: List[dict]) -> List[dict]:
+    """Keep only the suggestions at the TOP TWO confidence tiers present
+    (high > medium > low) — e.g. if any suggestion is "high", "medium" ones
+    stay too but every "low" one is dropped from what the user sees; if the
+    best present is only "medium" (no "high" at all), "low" ones are
+    dropped and the "medium" ones are kept. When at most one distinct tier
+    is present, nothing is dropped (there's no second tier to fall back to).
+    Applies to BOTH chatbots (log_chatbot and bt_chatbot), since they share
+    this function. Preserves the model's own relative order — never
+    re-sorts, and never reorders top-tier suggestions ahead of second-tier
+    ones. A suggestion list that's already empty is returned as-is."""
     if not sugs:
         return sugs
     ranked = [(s, _CONFIDENCE_RANK.get(str(s.get("confidence", "")).lower(), 1)) for s in sugs]
-    best_rank = min(r for _, r in ranked)
-    return [s for s, r in ranked if r == best_rank]
+    keep_ranks = set(sorted({r for _, r in ranked})[:2])
+    return [s for s, r in ranked if r in keep_ranks]
 
 
 def _explicit_only_payload(explicit_suggestions: List[dict], message: str) -> dict:
@@ -1833,10 +1835,10 @@ def build_issue_time_suggestions(
 
     ref = last_ts or first_ts
     suggestions = []
-    # Only surface the single highest confidence tier the model actually
-    # reported (see _filter_to_highest_confidence) — applies uniformly to
-    # both chatbots since they share this function.
-    for s in _filter_to_highest_confidence(llm.get("suggestions") or [])[:5]:
+    # Only surface the top TWO confidence tiers the model actually reported
+    # (see _filter_to_top_confidence_tiers) — applies uniformly to both
+    # chatbots since they share this function.
+    for s in _filter_to_top_confidence_tiers(llm.get("suggestions") or [])[:5]:
         dt, is_time_only = parse_issue_time_string((s.get("issue_time") or "").strip())
         if dt is None:
             continue
@@ -2768,7 +2770,7 @@ def determine_issue_time_frames(
             "log_frame": datetime | None,       # for PreScan / log content match
             "customer_frame": datetime | None,  # for UI annotation
             "customer_tz": str,                 # tz label (empty when unknown)
-            "source_frame": "customer" | "log" | "unknown",
+            "source_frame": "customer" | "log" | "same_timezone" | "unknown",
         }
 
     Two physical anchors disambiguate which frame the input is in:
@@ -2808,6 +2810,7 @@ def determine_issue_time_frames(
     from utils.etl_utils import extract_timestamp_from_folder
     from utils.timezone_utils import (
         get_effective_timezone, taiwan_to_local, local_to_taiwan,
+        resolve_timezone,
     )
 
     blank = {
@@ -2832,6 +2835,25 @@ def determine_issue_time_frames(
     # Need the customer tz (to convert at all) plus at least one anchor.
     if not customer_tz or (not folder_ts and not have_range):
         return blank
+
+    # The decoder host uses GMT+8.  When the customer is also GMT+8 there are
+    # not two frames to disambiguate: preserve the value byte-for-byte instead
+    # of scoring alternate interpretations that could move it across a date.
+    try:
+        customer_zone = resolve_timezone(customer_tz)
+        customer_offset = (
+            issue_dt.replace(tzinfo=customer_zone).utcoffset()
+            if customer_zone is not None else None
+        )
+        if customer_offset == timedelta(hours=8):
+            return {
+                "log_frame": issue_dt,
+                "customer_frame": issue_dt,
+                "customer_tz": customer_tz,
+                "source_frame": "same_timezone",
+            }
+    except Exception:
+        pass
 
     REASONABLE_GAP_SECONDS = 60 * 60
     # Only flip to log frame against the customer default — when neither

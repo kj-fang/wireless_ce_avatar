@@ -22,7 +22,11 @@ from utils.issue_time_utils import (
 from utils.issue_time_ai import build_issue_time_suggestions, organize_issue_context, realign_times_to_log, find_nearest_event_error
 # Reuse the Wi-Fi side's stage-1 cheap-model resolver so the key.py contract
 # (``gnaigpt_stage1_model``) is defined in exactly one place for both chatbots.
-from blueprints.log_chatbot.log_chatbot_routes import _resolve_stage1_model, _resolve_current_issue_time
+from blueprints.log_chatbot.log_chatbot_routes import (
+    _resolve_stage1_model,
+    _resolve_current_issue_time,
+    _clamp_description_time_to_attachments,
+)
 from services import feedback_service
 from services import gather_service
 from services import history_service
@@ -1897,6 +1901,12 @@ def get_issue_context():
     organized = _issue_context_organized(ctx.get("description", "") or "", first_ts, last_ts)
     clean_desc = organized.get("clean_description") or _compose_concise_description(ctx)
     issue_times = organized.get("issue_times") or []
+
+    # The description time can't be later than when the customer uploaded
+    # the evidence for it — clamp to the earliest attachment-folder
+    # timestamp (across ALL listed attachments) when that's earlier.
+    if issue_times:
+        issue_times[0] = _clamp_description_time_to_attachments(issue_times[0])
 
     # Back-compat single issue_time: prefer the first organized time, else the
     # previous attachment_time / log-latest resolution (cached by log_path).

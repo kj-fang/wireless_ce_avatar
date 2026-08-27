@@ -14,7 +14,7 @@ canonical strings + log-file-based fallback.
 
 import os
 import re
-from datetime import datetime
+from datetime import datetime, timedelta
 from typing import Optional, Tuple
 
 
@@ -149,6 +149,54 @@ def read_log_time_range(log_path: str) -> Tuple[Optional[datetime], Optional[dat
     except Exception as e:
         print(f"[issue_time] read_log_time_range failed for {log_path}: {e}")
     return first_ts, last_ts
+
+
+def validate_issue_time_in_log_range(
+    raw_str: str,
+    log_path: str,
+) -> Tuple[Optional[datetime], Optional[datetime], Optional[datetime], str]:
+    """Resolve a carried issue time and reject values outside the selected log.
+
+    Time-only values are tried on every date covered by the log and accepted
+    only when exactly one occurrence falls inside the range. A malformed,
+    ambiguous, or out-of-range value returns a ``None`` issue datetime plus a
+    user-facing error.
+    """
+    parsed, is_time_only = parse_issue_time_string(raw_str)
+    first_ts, last_ts = read_log_time_range(log_path) if log_path else (None, None)
+
+    if parsed is None:
+        return None, first_ts, last_ts, "The carried issue time could not be parsed."
+
+    if not first_ts or not last_ts:
+        return None, first_ts, last_ts, (
+            "The carried issue time cannot be validated because the log has no readable date range."
+        )
+
+    if is_time_only:
+        candidates = []
+        first_day = first_ts.date()
+        max_days = min((last_ts.date() - first_day).days, 366)
+        for offset in range(max_days + 1):
+            candidate = datetime.combine(first_day + timedelta(days=offset), parsed.time())
+            if first_ts <= candidate <= last_ts:
+                candidates.append(candidate)
+        if not candidates:
+            return None, first_ts, last_ts, (
+                "The carried issue clock does not occur inside the selected log range."
+            )
+        if len(candidates) > 1:
+            return None, first_ts, last_ts, (
+                "The carried issue clock matches more than one date in the selected log range."
+            )
+        parsed = candidates[0]
+
+    if first_ts and last_ts and not (first_ts <= parsed <= last_ts):
+        return None, first_ts, last_ts, (
+            "The carried issue time is outside the selected log range."
+        )
+
+    return parsed, first_ts, last_ts, ""
 
 
 def resolve_issue_time(raw_str: str, log_path: str = "") -> Tuple[Optional[datetime], str]:

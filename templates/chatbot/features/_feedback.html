@@ -105,20 +105,12 @@
                     </div>
                 </div>
 
-                <!-- ─── Attachments ─── -->
-                <div class="fbd-group">
-                    <div class="fbd-group-title">Attachments</div>
-                    <label class="fbd-attach-row" id="fbd-attach-log-row"
-                           title="Lets reviewers replay the exact log you analysed. Recommended when reporting a wrong answer.">
-                        <input type="checkbox" id="fbd-attach-log">
-                        <span>Attach the current session log for diagnosis.</span>
-                    </label>
-                </div>
             </div>
         </div>
         <div class="fbd-footer">
             <button type="button" class="fbd-btn" id="fbd-back-btn" onclick="feedbackWizardBack()" style="display:none;">← Back</button>
             <span class="fbd-footer-spacer"></span>
+            <span style="font-size:0.7rem;color:#9ca3af;align-self:center;">Submitting feedback automatically uploads the log file that Avatar uses to self-improve.</span>
             <button type="button" class="fbd-btn" id="fbd-cancel-btn" onclick="closeFeedbackModal()">Cancel</button>
             <button type="button" class="fbd-btn primary" id="fbd-submit-btn" onclick="submitFeedbackDetail()" style="display:none;">Submit</button>
         </div>

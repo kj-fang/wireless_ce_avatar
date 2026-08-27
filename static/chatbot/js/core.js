@@ -88,6 +88,16 @@
         setSendBtnSendMode();
     }
 
+    // Unique id for one "Agent Processing Steps" card. A timestamp alone is
+    // not enough: history replay builds cards synchronously in a loop, so two
+    // can land in the same millisecond, and getElementById would then hand the
+    // second card's steps — and its collapse toggle — to the first one.
+    function __nextAgentCardId() {
+        window.__agentProcessCardSeq = (window.__agentProcessCardSeq || 0) + 1;
+        return 'agent-process-' + Date.now() + '-' + window.__agentProcessCardSeq;
+    }
+    window.__nextAgentCardId = __nextAgentCardId;
+
     function scrollBottom() {
         const w = document.getElementById('chat-window');
         w.scrollTop = w.scrollHeight;
@@ -367,7 +377,7 @@
             if (bodyEl) return;
             removeTyping();
             hideWelcome();
-            cardId = 'agent-process-' + Date.now();
+            cardId = __nextAgentCardId();
             const html = `
             <div class="agent-process-card">
                 <div class="agent-process-header" onclick="
@@ -484,7 +494,7 @@
         hideWelcome();
         removeTyping();
 
-        const cardId = 'agent-process-' + Date.now();
+        const cardId = __nextAgentCardId();
         const skillsUsed = steps
             .filter(s => s.content && s.content.includes('Invoking skill'))
             .map(s => { const m = s.content.match(/`([^`]+)`/); return m ? m[1] : ''; })

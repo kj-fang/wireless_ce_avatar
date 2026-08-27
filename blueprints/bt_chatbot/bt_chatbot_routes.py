@@ -167,6 +167,22 @@ def _get_or_create_agent(skip_prime: bool = False) -> WifiLogAgentSystem:
     return _chatbot_instances[sid]
 
 
+def _export_agent_context(agent) -> list:
+    """Snapshot the agent's model-facing conversation. Never raises.
+
+    Persisting the context is a convenience — without it a conversation still
+    resumes, just from result text. The caller runs inside the turn's worker
+    try/except, where an exception would mark an already-successful turn as
+    failed, so this swallows its own errors rather than costing the user a
+    finished analysis.
+    """
+    try:
+        return agent.export_conversation_context()
+    except Exception as e:
+        print(f"[history] context export failed: {e}")
+        return []
+
+
 def _resume_agent_for(conversation_id: str):
     """
     Return the agent to use for ``conversation_id``.
@@ -245,21 +261,51 @@ def set_log():
         rotated = bool(prev_log_path) and prev_log_path != log_path
         prev_conv_id = (session.get("feedback_conversation_id") or "") if rotated else ""
 
+        # Re-loading the SAME file is not a new case. It used to be treated as
+        # one anyway — a fresh conversation id and a wiped agent — so anything
+        # that incidentally re-loaded the log (the path field losing focus, a
+        # draft restore, returning to the live session) silently split a case
+        # into another one-turn conversation and made the next question start
+        # from nothing. Continue the thread when the file has not changed.
+        same_log = bool(prev_log_path) and prev_log_path == log_path
+
         agent = _get_or_create_agent(skip_prime=True)
         agent.current_log_path = log_path
-        agent.reset_conversation()          # fresh conversation for a new file
+        if not same_log:
+            agent.reset_conversation()      # fresh conversation for a new file
         ctx = _extract_issue_context()      # re-extract context in case session was updated after agent creation
         # Always prime: prime_with_context falls back to the log file's latest
         # timestamp when ctx has no usable issue time, so the sidebar always
         # gets an issue_time to display (covers the no-session entry path).
+        # It also clears conversation_history, so on a same-file re-load the
+        # thread is put back afterwards — priming is wanted for its caches and
+        # issue-time resolution, not for its side effect on the conversation.
+        preserved_history = list(agent.conversation_history or []) if same_log else []
         agent.prime_with_context(**ctx)
 
         session["chatbot_log_path"] = log_path
 
-        # Sidecar: a new log file = a new conversation. Rotate the id and
+        # Sidecar: a NEW log file = a new conversation. Rotate the id (and
         # eagerly create the snapshot file so issue context is captured even
-        # if the user never sends a message.
-        new_conv_id = _ensure_feedback_conversation_id(rotate=True)
+        # if the user never sends a message); keep it for a same-file re-load
+        # so the next turn appends to the conversation already on screen.
+        new_conv_id = _ensure_feedback_conversation_id(rotate=not same_log)
+
+        if same_log:
+            if preserved_history:
+                agent.conversation_history = preserved_history
+            else:
+                # The per-conversation agent is detached from the session slot
+                # at the start of every tools run, so by now this is usually a
+                # fresh instance with nothing to preserve. Fall back to the
+                # conversation's stored context for the same continuity a
+                # History click gets.
+                try:
+                    stored = history_service.get_context(new_conv_id, domain="bt")
+                    if stored:
+                        agent.import_conversation_context(stored)
+                except Exception as _e:
+                    print(f"[set_log] context restore skipped: {_e}")
         feedback_service.ensure_conversation(
             conversation_id=new_conv_id,
             session_id=session.get("chatbot_session_id", ""),
@@ -578,7 +624,14 @@ def chat():
             def step_cb(step):
                 try:
                     if isinstance(step, dict):
-                        collected_steps.append(step)
+                        # Stamp how far into the turn this step arrived. The
+                        # live card times itself from the browser clock; a
+                        # replay months later cannot, so the offset travels
+                        # with the step into history. The copy keeps the
+                        # object published to live subscribers untouched.
+                        elapsed_ms = int(
+                            (datetime.now() - turn_started_at).total_seconds() * 1000)
+                        collected_steps.append({**step, "ts_ms": elapsed_ms})
                 except Exception:
                     pass
                 chat_jobs.publish_step(job, step)
@@ -638,6 +691,14 @@ def chat():
                         log_path=getattr(agent, "current_log_path", "") or "",
                         issue_time=format_issue_time(agent.issue_time),
                         domain="bt",
+                        # Keep the reasoning trace too, so reopening this
+                        # conversation shows how the answer was reached and
+                        # not only what it was.
+                        steps=collected_steps,
+                        # And the model-facing conversation, so a follow-up
+                        # asked tomorrow is answered by something that still
+                        # has the evidence, not just the conclusions.
+                        agent_context=_export_agent_context(agent),
                     )
                     chat_jobs.finish_job(job, result)
                 except Exception as exc:
@@ -777,7 +838,9 @@ def history_load():
     job = chat_jobs.get_job(conversation_id)
     if job is not None and getattr(job, "domain", "") != "bt":
         job = None
-    conv = history_service.get_conversation(conversation_id, domain="bt")
+    # with_steps: the client re-renders each saved turn's reasoning trace, the
+    # same card the live stream drew while the turn was running.
+    conv = history_service.get_conversation(conversation_id, domain="bt", with_steps=True)
     if conv is None and job is None:
         return jsonify({"success": False, "error": "Conversation not found"}), 404
 
@@ -872,18 +935,37 @@ def history_load():
             except Exception:
                 pass
 
-        # Rebuild the agent's textual conversation history ONLY when we didn't
-        # adopt a live agent (which already holds the real history). Plain
-        # user/assistant text pairs — no tool_use blocks, so the tool loop's
-        # pairing invariants stay intact.
+        # Restore the agent's conversation ONLY when we didn't adopt a live
+        # agent (which already holds the real history).
+        #
+        # Preferred: the stored model-facing context — the same messages the
+        # agent last sent, tool results included — so a follow-up is answered
+        # by something that still has the evidence. It is applied AFTER
+        # prime_with_context, which resets conversation_history along with the
+        # agent's caches; the stored context already carries its own priming
+        # head, so replacing wholesale avoids a duplicate one.
+        #
+        # Fallback: the pre-existing rebuild from result text. Plain
+        # user/assistant pairs, no tool_use blocks, so the tool loop's pairing
+        # invariants stay intact. Conversations saved before contexts were
+        # stored land here, and behave exactly as they did before.
+        context_restored = 0
         if not adopted:
-            for turn in turns:
-                um = (turn.get("user_message") or "").strip()
-                if um:
-                    agent.conversation_history.append({"role": "user", "content": um})
-                at = history_service.assistant_text_from_result(turn.get("result"))
-                if at:
-                    agent.conversation_history.append({"role": "assistant", "content": at})
+            stored_context = history_service.get_context(conversation_id, domain="bt")
+            if stored_context:
+                try:
+                    context_restored = agent.import_conversation_context(stored_context)
+                except Exception as _e:
+                    print(f"[history] context restore failed: {_e}")
+                    context_restored = 0
+            if not context_restored:
+                for turn in turns:
+                    um = (turn.get("user_message") or "").strip()
+                    if um:
+                        agent.conversation_history.append({"role": "user", "content": um})
+                    at = history_service.assistant_text_from_result(turn.get("result"))
+                    if at:
+                        agent.conversation_history.append({"role": "assistant", "content": at})
 
         if log_exists:
             session["chatbot_log_path"] = log_path
@@ -893,6 +975,10 @@ def history_load():
             "conversation_id": conversation_id,
             "title": conv.get("title") or (job.title if job else "") or "Conversation",
             "turns": turns,
+            # How grounded the resumed agent is, so the UI can say so rather
+            # than leaving the user to guess whether a follow-up will still
+            # know what the analysis found. 0 = rebuilt from result text.
+            "context_restored": context_restored,
             # Live-analysis hand-off: when running, the client renders these
             # buffered steps and then opens /history/stream to follow the rest.
             "running": running,

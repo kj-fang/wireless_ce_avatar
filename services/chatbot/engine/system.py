@@ -469,6 +469,10 @@ class WifiLogAgentSystem(
     MAX_TOOL_CALLS_PER_STEP = 3
     FORCE_CONCLUDE_LAST_N_STEPS = 2  # last 2 steps forces conclusion (5-step loop is tighter)
     MAX_SKILL_FETCHES = 6             # max distinct skills the agent may fetch per analysis
+    # Budget for a persisted conversation context. Every restored message is
+    # re-sent on every follow-up, so this is a recurring token cost, not a
+    # one-off disk cost: 120k chars is roughly 30k tokens of grounding.
+    MAX_PERSISTED_CONTEXT_CHARS = 120_000
 
     # Segment1 (driver/init context block) is an OPTIONAL part of scoping.
     # The domain-agnostic scoping is the issue-time window (Segment2); the

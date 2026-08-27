@@ -582,9 +582,8 @@
             });
         }
 
-        // Attach-log hover tooltip (lives on the row's `title` attribute now).
-        const logRow = document.getElementById('fbd-attach-log-row');
-        if (logRow) logRow.setAttribute('title', T.attachLogHint);
+        // No attach-log row to describe any more; the footer note states that
+        // the log is uploaded with every submission.
 
         // Submit button label.
         const submitBtn = document.getElementById('fbd-submit-btn');
@@ -652,10 +651,8 @@
         // recreates the empty issue row) so the new row is re-toned too.
         applyFeedbackTone(vote);
 
-        // Attach-LOG default: always UNCHECKED. The option stays available
-        // so the user can opt in, but the log is never pre-selected.
-        const logCb = document.getElementById('fbd-attach-log');
-        if (logCb) logCb.checked = false;
+        // The attach-log checkbox no longer exists — the log always goes with
+        // the feedback (main PR #139), so there is no default to reset here.
 
         // If the user already submitted feedback for this turn, pre-fill
         // every field with what they sent last time — so they can revise
@@ -754,7 +751,7 @@
             correctIssueTime:     _val('fbd-correct-issue-time'),
             skillFeedback:        collectSkillFeedback(),
             stepFeedback:         collectStepFeedback(),
-            attachLog:       !!(document.getElementById('fbd-attach-log') || {}).checked,
+            attachLog:       true,
         };
     }
 
@@ -815,9 +812,8 @@
             if (e && item.should_be) e.value = item.should_be;
         });
 
-        // Attachment checkbox picks up whatever the user last chose.
-        const logCb = document.getElementById('fbd-attach-log');
-        if (logCb && d.attachLog !== undefined) logCb.checked = !!d.attachLog;
+        // Nothing to restore for the log attachment: it is unconditional now,
+        // so a saved draft's attachLog value no longer drives any control.
     }
 
     function closeFeedbackModal() {
@@ -980,9 +976,11 @@
             return;
         }
 
-        // Read attachment checkboxes up here so we can include them in
-        // the no-change comparison below.
-        const attachLog       = !!document.getElementById('fbd-attach-log').checked;
+        // The log is always attached now — the opt-in checkbox was removed and
+        // the footer tells the user the upload happens (main PR #139). Kept as
+        // a named constant so the no-change comparison below and the payloads
+        // further down keep reading one value.
+        const attachLog       = true;
 
         // No-change guard: when the user re-opens the modal via
         // "✏️ Edit feedback" and clicks Submit without touching

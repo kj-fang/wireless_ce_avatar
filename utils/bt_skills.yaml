@@ -1,0 +1,1097 @@
+# skill features:
+#   name: skill name
+#   description: a brief description of the skill
+#   keywords: use "-" to represent each keyword
+#   expert_rules: use "|" to start a multi-line string
+
+Bluetooth_device_abnormal_disconnected:
+  name: "Bluetooth_device_abnormal_disconnected"
+  description: "Analyze any unexpected Bluetooth disconnections with possible error information. When we have Bluetooth abnormal disconnection while using LE HID, Classic headset, LE Audio headset or any accessory connected. No matter it's caused by Environment, Accessory problem, Laptop problem or user decline"
+  keywords:
+    - "[CMD DEC]Disconnect"
+    - "[CMD DEC]RejectConnectionReq"
+    - "[CMD DEC]RejectSyncConnectionReq"
+    - "[CMD DEC]UserConfirmationReqNegReply"
+    - "[CMD DEC]UserPasskeyReqNegReply"
+    - "[CMD DEC]RemoteOOBDataReqNegReply"
+    - "[EVT DEC]DisconnectionCompl"
+    - "HardwareError"
+    - "Intel Fatal Exception"
+    - "Intel Other Core Fatal Exception"
+    - "Intel System Exception"
+    - "Fatal Exception"
+    - "Watchdog Reset Occurred"
+    - "Sync connection rejected by LM"
+    - "AuthPayloadTimeoutExpired"
+    - "LE_LongTermKeyReqNegReply"
+    - "LE_RemoteConnParamReqNegRply"
+    - "LE_RemoveCig"
+    - "[CMD DEC]OpCode:               0x2065"
+    - "LE_RejectCisRequest"
+    - "[CMD DEC]OpCode:               0x2067"
+    - "LE_Remove_ISO_Data_Path"
+    - "[CMD DEC]OpCode:               0x206F"
+    - "LE_Terminate_BIG"
+    - "[CMD DEC]OpCode:               0x206A"
+    - "LE_BIG_Terminate_Sync"
+    - "[CMD DEC]OpCode:               0x206C"
+    - "LE_PeriodicAdvSyncLost"
+    - "LE_AdvertisingSetTerminated"
+    - "ConnectionlessSlaveBroadcastTimeout"
+    - "SlavePageResponseTimeout"
+    - "RejectSyncConnectionReq"
+    - "Unknown HCI Command"
+    - "Unknown Connection Identifier"
+    - "Hardware Failure"
+    - "Page Timeout"
+    - "Authentication Failure"
+    - "PIN Missing"
+    - "Memory Capacity Exceeded"
+    - "Connection Timeout"
+    - "Connection Limit Exceeded"
+    - "Synchronous Connection Limit To A Device Exceeded"
+    - "ACL Connection Already Exists"
+    - "Command Disallowed"
+    - "Connection Rejected due to Limited Resources"
+    - "Connection Rejected Due To Security Reasons"
+    - "Connection Rejected due to Unacceptable BD_ADDR"
+    - "Connection Accept Timeout Exceeded"
+    - "Unsupported Feature or Parameter Value"
+    - "Invalid HCI Command Parameters"
+    - "Remote User Terminated Connection"
+    - "Remote Device Terminated Connection due to Low Resources"
+    - "Remote Device Terminated Connection due to Power Off"
+    - "Connection Terminated By Local Host"
+    - "Repeated Attempts"
+    - "Pairing Not Allowed"
+    - "Unknown LMP PDU"
+    - "Unsupported Remote Feature"
+    - "SCO Offset Rejected"
+    - "SCO Interval Rejected"
+    - "SCO Air Mode Rejected"
+    - "Invalid LMP Parameters"
+    - "Unspecified Error"
+    - "Unsupported LMP Parameter Value"
+    - "Role Change Not Allowed"
+    - "LMP/LL Response Timeout"
+    - "LMP Response Timeout / LL Response Timeout"
+    - "LMP Error Transaction Collision"
+    - "LMP Error Transaction Collision / LL Procedure Collision"
+    - "LMP PDU Not Allowed"
+    - "Encryption Mode Not Acceptable"
+    - "Link Key Can Not be Changed"
+    - "Requested QoS Is Not Supported"
+    - "Instant Passed"
+    - "Pairing With Unit Key Not Supported"
+    - "Different Transaction Collision"
+    - "Insufficient Resources To Accept Scatter Mode Request"
+    - "QoS Unacceptable Parameter"
+    - "Unacceptable Connection Parameters"
+    - "QoS Rejected"
+    - "Channel Classification Not Supported"
+    - "Insufficient Security"
+    - "Parameter Out Of Mandatory Range"
+    - "Scatter Mode No Longer Required"
+    - "Role Switch Pending"
+    - "Scatter Mode Parameter Change Pending"
+    - "Reserved Slot Violation"
+    - "Role Switch Failed"
+    - "Inquiry Response Data too large for FEC encoding"
+    - "Simple Pairing Not Supported By Host"
+    - "Host Busy-Pairing"
+    - "Connection Rejected due to No Suitable Channel Found"
+    - "Controller Busy"
+    - "Unacceptable Connection Interval"
+    - "Directed Advertising Timeout"
+    - "Connection Terminated Due To MIC Failure"
+    - "Connection Failed To Be Established"
+  expert_rules: |
+    0. Abort Condition
+    If Bluetooth_Connection_Lifecycle_Analysis is present in the current analysis session, stop immediately.
+    Return no findings, no conclusions, no recommendations and no root-cause assessment.
+    Carefully analyze the timeline of events immediately when there is disconnection behavior. Categorize the root cause into one of the following three scenarios based on the log pattern:
+    1. If there is UserConfirmationReqNegReply, UserPasskeyReqNegReply or RemoteOOBDataReqNegReply. This indicates the user did not acknowledge or accept the connection. Conclude this is a user behavior to reject the connection.
+    2. Sometimes we will observe firmware error which will lead disconnection behavior. It will represent Intel Fatal Exception, Intel System Exception or Hardware Failure.
+    3. In the latest disconnection log behavior, try to analyze the possible reason and timing. We will be able to utilize the problem reason and error timing, then clarify the needs through additional Bluetooth snoop or OTA log.
+
+BREDR_and_LE_create_Connection:
+  name: "BREDR_and_LE_create_Connection"
+  description: "Check the outgoing or incoming connection behavior."
+  keywords:
+    - "[CMD DEC]CreateConnection"
+    - "[CMD DEC]OpCode:               0x0405"
+    - "[CMD DEC]AddSCOConnection"
+    - "[CMD DEC]OpCode:               0x0407"
+    - "SetupSyncConnection"
+    - "[CMD DEC]OpCode:               0x0428"
+    - "AcceptSyncConnectionReq"
+    - "[CMD DEC]OpCode:               0x0429"
+    - "EnhancedSetupSyncConnection"
+    - "[CMD DEC]OpCode:               0x043D"
+    - "EnhancedAcceptSyncConnection"
+    - "[CMD DEC]OpCode:               0x043E"
+    - "[CMD DEC]AcceptConnectionReq"
+    - "[CMD DEC]OpCode:               0x2049"
+    - "[CMD DEC]LE_ExtendedCreateConnection"
+    - "[CMD DEC]OpCode:               0x2043"
+    - "[CMD DEC]LE_CreateConnection"
+    - "[CMD DEC]OpCode:               0x200D"
+    - "[CMD DEC]LE_RemDevFromWhiteList"
+    - "[CMD DEC]OpCode:               0x2012"
+    - "LE_LongTermKeyReqReply"
+    - "[CMD DEC]OpCode:               0x201A"
+    - "[CMD DEC]LE_SetExtAdvParam"
+    - "[CMD DEC]OpCode:               0x2036"
+    - "LE_SetPeriodicAdvParam"
+    - "[CMD DEC]OpCode:               0x203E"
+    - "LE_SetExtAdvData"
+    - "[CMD DEC]OpCode:               0x2037"
+    - "LE_SetExtAdvEnable"
+    - "[CMD DEC]OpCode:               0x2039"
+    - "LE_SetPeriodicAdvData"
+    - "[CMD DEC]OpCode:               0x203F"
+    - "LE_SetPeriodicAdvEnable"
+    - "[CMD DEC]OpCode:               0x2040"
+    - "LE_SetCigParameters"
+    - "[CMD DEC]OpCode:               0x2062"
+    - "LE_CreateCis"
+    - "[CMD DEC]OpCode:               0x2064"
+    - "LE_AcceptCisRequest"
+    - "[CMD DEC]OpCode:               0x2066"
+    - "LE_Create_BIG"
+    - "[CMD DEC]OpCode:               0x2068"
+    - "LE_BIG_Create_Sync"
+    - "[CMD DEC]OpCode:               0x206B"
+    - "LE_Setup_ISO_Data_Path"
+    - "[CMD DEC]OpCode:               0x206E"
+    - "ReadLocalSupportedCodecs"
+    - "[EVT DEC]ConnectionCompl"
+    - "ConnectionReq"
+    - "LE_ConnComplete"
+    - "LE_EnhancedConnComplete"
+    - "LE_CIS_Established"
+    - "SyncConnectionCompl"
+    - "[EVT DEC]Status:               0x00 (OK)"
+  expert_rules: |
+    0. Abort Condition
+    If Bluetooth_Connection_Lifecycle_Analysis is present in the current analysis session, stop immediately.
+    Return no findings, no conclusions, no recommendations and no root-cause assessment.
+    1. Clarify the latest connection info includes CreateConnection over BREDR connection or LE_CreateConnection over LE connection.
+    2. In Bluetooth LE Audio connection usage, we will observe the flow with below items.
+        [CMD DEC]LE_ExtendedCreateConnection
+        [CMD DEC]OpCode:               0x2043
+        [EVT DEC]LE_EnhancedConnComplete
+        [EVT DEC]Status:               0x00 (OK)
+        [CMD DEC]CreateConnection
+        [CMD DEC]OpCode:               0x0405
+        [EVT DEC]ConnectionCompl
+        [EVT DEC]Status:               0x00 (OK)
+        ReadLocalSupportedCodecs
+        LE_SetCigParameters
+        [CMD DEC]OpCode:               0x2062
+        LE_CreateCis
+        [CMD DEC]OpCode:               0x2064
+        LE_Setup_ISO_Data_Path
+        [CMD DEC]OpCode:               0x206E
+    3. In Bluetooth LE Audio Auracast or "Shared Audio" usage, we will observe the flow with below items.
+        [CMD DEC]LE_SetExtAdvParam
+        [CMD DEC]OpCode:               0x2036
+        LE_SetPeriodicAdvParam
+        [CMD DEC]OpCode:               0x203E
+        LE_SetExtAdvData
+        [CMD DEC]OpCode:               0x2037
+        LE_SetPeriodicAdvData
+        [CMD DEC]OpCode:               0x203F
+        LE_SetPeriodicAdvEnable
+        [CMD DEC]OpCode:               0x2040
+        LE_SetExtAdvEnable
+        [CMD DEC]OpCode:               0x2039
+        LE_Create_BIG
+        [CMD DEC]OpCode:               0x2068
+        LE_Setup_ISO_Data_Path
+        [CMD DEC]OpCode:               0x206E
+    4. In Bluetooth LE HID connection usage, we will observe the flow with below items.
+        [CMD DEC]LE_ExtendedCreateConnection
+        [EVT DEC]LE_EnhancedConnComplete
+    5. In device is removed by end user, we will have below information.
+        [EVT DEC]LE_RemDevFromWhiteList
+    6. In Bluetooth Classic headset connection usage, we will observe the flow with below items.
+        [CMD DEC]CreateConnection
+        [EVT DEC]ConnectionCompl
+        [EVT DEC]Status:               0x00 (OK)
+
+Bluetooth_Connection_Lifecycle_Analysis:
+  name: "Bluetooth_Connection_Lifecycle_Analysis"
+  description: "Analyze Bluetooth BR/EDR and LE ACL connection lifecycles, including incoming and outgoing connections, connection establishment, disconnection, connection failures, role determination, peer attribution, and root-cause analysis based on HCI logs."
+  keywords:
+
+    # ============================================================
+    # BR/EDR ACL Connection
+    # ============================================================
+    - "[CMD DEC]CreateConnection"
+    - "[CMD DEC]OpCode:               0x0405"
+    - "[EVT DEC]ConnectionReq"
+    #- "ConnectionReq"
+    - "[CMD DEC]AcceptConnectionReq"
+    - "[CMD DEC]OpCode:               0x0409"
+    - "[CMD DEC]RejectConnectionReq"
+    - "[CMD DEC]OpCode:               0x040A"
+    - "[EVT DEC]ConnectionCompl"
+
+    # ============================================================
+    # LE ACL Connection
+    # ============================================================
+    - "[CMD DEC]LE_CreateConnection"
+    - "[CMD DEC]OpCode:               0x200D"
+    - "[CMD DEC]LE_ExtendedCreateConnection"
+    - "[CMD DEC]OpCode:               0x2043"
+    - "[CMD DEC]LE_CreateConnectionCancel"
+    - "[CMD DEC]OpCode:               0x200E"
+    - "[EVT DEC]LE_ConnComplete"
+   # - "LE_ConnComplete"
+    - "[EVT DEC]LE_EnhancedConnComplete"
+
+    # ============================================================
+    # Common Lifecycle Fields
+    # ============================================================
+    #- "[EVT DEC]CommandStatus"
+    #- "[EVT DEC]CommandComplete"
+    #- "[EVT DEC]CommandOpCode:"
+    - "[EVT DEC]Status:               0x00 (OK)"
+    # Peer identity and lifecycle fields
+    - "BD_ADDR"
+   # - "Peer_Address_Type:"
+    - "Peer_Address："
+   # - "[CMD DEC]Connection_Handle:"
+   # - "[EVT DEC]ConnectionHandle:"
+    - "Role: 0x00 (Central)"
+    - "Role: 0x01 (Peripheral)"
+
+    # ============================================================
+    # Disconnect Lifecycle
+    # ============================================================
+    #- "Disconnect"
+    - "[CMD DEC]Disconnect"
+    - "[CMD DEC]OpCode:               0x0406"
+    - "[EVT DEC]DisconnectionCompl"
+    - "[EVT DEC]Reason:"
+
+    # ============================================================
+    # Random Address
+    # ============================================================
+    - "[CMD DEC]Random_Address:"
+
+    # ============================================================
+    # Connection Failure
+    # ============================================================
+    - "Page Timeout"
+    - "Authentication Failure"
+    - "Connection Timeout"
+    - "Connection Accept Timeout Exceeded"
+    - "ACL Connection Already Exists"
+    - "Command Disallowed"
+    - "Controller Busy"
+    - "Directed Advertising Timeout"
+    - "Connection Failed To Be Established"
+    - "Connection Terminated By Local Host"
+    - "Remote User Terminated Connection"
+
+    # ============================================================
+    # Controller / Firmware Exceptions
+    # ============================================================
+    - "HardwareError"
+    - "Intel Fatal Exception"
+    - "Intel Other Core Fatal Exception"
+    - "Intel System Exception"
+    - "Fatal Exception"
+    - "Watchdog Reset Occurred"
+
+    # ============================================================
+    # Encryption/Security Event Variants
+    # ============================================================
+    - "[EVT DEC]EncryptionChg"
+    - "[EVT DEC]EncryptionKeyRefreshCompl"
+    - "EncryptionKeyRefreshCompl"
+    - "[CMD DEC]LE_StartEncryption"
+    - "[EVT DEC]EncryptionEnable"
+    - "[CMD DEC]LE_EnableEncryption"
+    - "[CMD DEC]OpCode:               0x2019"
+    - "LE_LongTermKeyReq"
+    - "LE_LongTermKeyReqReply"
+    - "[CMD DEC]OpCode:               0x201A"
+    - "LE_LongTermKeyReqNegReply"
+    - "[CMD DEC]OpCode:               0x201B"
+    - "AuthPayloadTimeoutExpired"
+
+    # ============================================================
+    # LE Audio
+    # ============================================================
+    - "ReadLocalSupportedCodecs"
+    - "LE_SetCigParameters"
+    - "[CMD DEC]OpCode:               0x2062"
+    - "LE_CreateCis"
+    - "[CMD DEC]OpCode:               0x2064"
+    - "LE_AcceptCisRequest"
+    - "[CMD DEC]OpCode:               0x2066"
+    - "LE_CIS_Established"
+    - "LE_RemoveCig"
+    - "[CMD DEC]OpCode:               0x2065"
+    - "LE_RejectCisRequest"
+    - "[CMD DEC]OpCode:               0x2067"
+    - "LE_Setup_ISO_Data_Path"
+    - "[CMD DEC]OpCode:               0x206E"
+    - "LE_Remove_ISO_Data_Path"
+    - "[CMD DEC]OpCode:               0x206F"
+    #- "Connection_Handle:"
+    #- "ConnectionHandle:"
+    - "Link_ID:"
+    - "Link_Index:"
+
+    # ============================================================
+    # Device Removal
+    # ============================================================
+    - "[CMD DEC]LE_RemDevFromWhiteList"
+    - "[CMD DEC]OpCode:               0x2012"
+    
+    # ============================================================
+    # Optional
+    # ============================================================
+    #- "[CMD DEC]LE_SetExtAdvParam"
+    #- "[CMD DEC]OpCode:               0x2036"
+    #- "LE_SetExtAdvData"
+    #- "[CMD DEC]OpCode:               0x2037"
+    #- "LE_SetExtAdvEnable"
+    #- "[CMD DEC]OpCode:               0x2039"
+    #- "LE_AdvertisingSetTerminated"
+    # Optional：Periodic Advertising/BIG/BIS Auracast
+    - "LE_SetPeriodicAdvParam"
+    - "[CMD DEC]OpCode:               0x203E"
+    - "LE_SetPeriodicAdvData"
+    - "[CMD DEC]OpCode:               0x203F"
+    - "LE_SetPeriodicAdvEnable"
+    - "[CMD DEC]OpCode:               0x2040"
+    - "LE_Create_BIG"
+    - "[CMD DEC]OpCode:               0x2068"
+    - "LE_BIG_Create_Sync"
+    - "[CMD DEC]OpCode:               0x206B"
+    - "LE_Terminate_BIG"
+    - "[CMD DEC]OpCode:               0x206A"
+    - "LE_BIG_Terminate_Sync"
+    - "[CMD DEC]OpCode:               0x206C"
+    - "LE_PeriodicAdvSyncLost"
+    - "ConnectionlessSlaveBroadcastTimeout"
+    # Optional：SCO/eSCO
+    - "[CMD DEC]AddSCOConnection"
+    - "[CMD DEC]OpCode:               0x0407"
+    - "SetupSyncConnection"
+    - "[CMD DEC]OpCode:               0x0428"
+    - "AcceptSyncConnectionReq"
+    - "[CMD DEC]OpCode:               0x0429"
+    - "EnhancedSetupSyncConnection"
+    - "[CMD DEC]OpCode:               0x043D"
+    - "EnhancedAcceptSyncConnection"
+    - "[CMD DEC]OpCode:               0x043E"
+    - "SyncConnectionCompl"
+    - "RejectSyncConnectionReq"
+    - "Sync connection rejected by LM"
+    - "Synchronous Connection Limit To A Device Exceeded"
+    - "SCO Offset Rejected"
+    - "SCO Interval Rejected"
+    - "SCO Air Mode Rejected"
+  expert_rules: |
+    0. Exclusive Analysis Mode
+       Bluetooth_Connection_Lifecycle_Analysis is the authoritative and exclusive Bluetooth analysis skill.
+       When this skill is triggered:
+         - Ignore all other Bluetooth analysis skills.
+         - Do not merge outputs from other Bluetooth skills.
+         - Do not import findings from other Bluetooth skills.
+         - Do not perform additional root-cause analysis using other Bluetooth skills.
+         - Do not generate combined or synthesized conclusions across skills.
+       Bluetooth_Connection_Lifecycle_Analysis becomes the sole source of findings, conclusions and recommendations.
+    1. Identity Attribution and Lifecycle Evidence
+       Classify identity attribution and lifecycle evidence independently before target-specific pattern, delay, recommendation or root-cause analysis.
+       Identity attribution:
+       - Target-confirmed:
+         The observed peer address is the requested target's exact known address, or explicit identity resolution/address mapping links the observed address to the requested target.
+         A synchronized OTA trace may establish identity only when it explicitly identifies the same observed address as the target.
+       - Observed-peer:
+         A peer BD_ADDR or Peer_Address is explicitly decoded, but it is not mapped to the requested target.
+       - Unattributed:
+         No peer address or explicit identity mapping is available for the event or lifecycle.
+       Lifecycle evidence level:
+       - Observed connection attempt:
+         A CreateConnection, LE_CreateConnection, LE_ExtendedCreateConnection, ConnectionReq, AcceptConnectionReq or RejectConnectionReq is explicitly observed.
+         Report an attempt only unless a correlated successful connection-complete event is available.
+       - Observed ACL establishment:
+         A ConnectionCompl, LE_ConnComplete or LE_EnhancedConnComplete explicitly reports Status 0x00.
+         This proves ACL establishment.
+         Explicit lifecycle association is not required to prove ACL establishment.
+         If peer attribution is unavailable, report: "Unattributed ACL establishment observed."
+       - Correlated ACL lifecycle:
+         An explicit lifecycle association allows later observations to be attributed to the same ACL lifecycle.
+       Apply identity attribution and lifecycle evidence independently.
+       A Random Device Address alone does not prove that the address is an RPA and does not identify its owner.
+       Do not rename an Observed-peer event as the target based only on timestamp proximity, scenario description, device type or Random address type.
+       Correlate pre-ACL events by the same explicit BD_ADDR, Peer_Address or resolved identity.
+       Correlate post-ACL events by an explicit lifecycle association.
+       Explicit lifecycle association may include:
+       - Explicit peer-preserving lifecycle context
+       - Explicit protocol-specific correlation evidence
+       - Explicitly decoded lifecycle-correlation fields when available
+       Absence of lifecycle association prevents lifecycle attribution but does not prevent reporting an explicitly observed protocol stage.
+       Confirmation of one address or explicit lifecycle association MUST NOT be extended to another address, peer or lifecycle without explicit evidence.
+       Events belonging to other peers MUST be reported separately and MUST NOT be counted as target attempts, failures, retries, disconnections or delays.
+       Missing target identity prevents target-specific conclusions, but does not prevent reporting Observed-peer or Unattributed events.
+       When target identity is not established, report:
+       "The target device was not identified in the retrieved events."
+       "Observed-peer and unattributed events are reported without target attribution."
+    2. Use explicit correlation before causal interpretation.
+        Correlate pre-connection events by the same explicit BD_ADDR, Peer_Address or resolved identity, and post-connection events by an explicit lifecycle association.
+        Timestamp proximity establishes sequence only, not identity or causality.
+        If causality is not explicitly established, report "Root Cause: Not established from the available driver/HCI evidence." Present possible explanations only as investigation hypotheses.
+    3. Determine the transport and direction independently for each lifecycle.
+       Classify BR/EDR using CreateConnection, ConnectionReq and ConnectionCompl, and classify LE using LE_CreateConnection or LE_ExtendedCreateConnection with LE_ConnComplete or LE_EnhancedConnComplete.
+       For LE, decoded Role=Central means the local device is the initiator and the connection is outgoing; decoded Role=Peripheral means the connection is incoming.
+       If Role is not available, classify the connection as outgoing only when a local LE create command is explicitly correlated to the same lifecycle by peer address, completion event or another explicit LE_AdvertisingSetTerminated, advertising commands and event timing MUST NOT be used to infer role or direction.
+       If neither decoded Role nor an explicitly correlated local create command establishes the direction, report "Direction: not established."
+       If Role and the correlated create flow conflict, report the conflicting evidence instead of selecting a direction.
+       Do not infer transport, direction or LE Audio from the device type or reported symptom.
+    4. Protocol-stage determination, lifecycle attribution and target attribution are separate decisions.
+       An explicitly observed protocol stage MUST be reported even when peer identity, target attribution or lifecycle correlation is unavailable.
+       Missing lifecycle correlation prevents attribution of a stage to a specific lifecycle, but MUST NOT suppress, downgrade or remove the observed protocol stage.
+       A later-stage event may prove that an ACL or security procedure existed even when peer attribution or lifecycle correlation is unavailable.
+       Examples:
+       - LE_StartEncryption without lifecycle attribution: "An ACL reached SECURITY_STARTED; peer attribution was not established."
+       - EncryptionChg with Status 0x00 and EncryptionEnable 0x01 without lifecycle attribution: "An ACL reached SECURITY_COMPLETED; peer attribution was not established."
+       - AuthPayloadTimeoutExpired without lifecycle attribution: "An unattributed authenticated-payload timeout was observed."
+       Apply connection-stage precedence and contradiction checks before root-cause analysis.
+       Lifecycle stage order:
+       CONNECTION_ATTEMPT -> ACL_ESTABLISHED -> SECURITY_STARTED -> SECURITY_COMPLETED -> PROFILE_READY -> DISCONNECTED
+       A later explicitly observed stage proves that all required earlier stages were reached for the same explicitly correlated lifecycle.
+       Mandatory precedence rules:
+       - LE_ConnComplete or LE_EnhancedConnComplete with Status 0x00 proves LE ACL establishment.
+       - LE_StartEncryption or LE_EnableEncryption proves that an ACL existed and that security processing was started.
+       - EncryptionChg proves that an ACL existed and that an encryption-state event was reached.
+       - EncryptionChg with Status 0x00 and EncryptionEnable 0x01 proves SECURITY_COMPLETED even when lifecycle attribution is unavailable.
+       - EncryptionChg with non-zero Status proves that encryption processing reached a failure state.
+       - For the same correlated lifecycle, MUST NOT report:
+         "connection was not initiated"
+         "ACL was never established"
+         "no reconnect attempt was made"
+         "incoming request was not serviced"
+       - When EncryptionChg with Status 0x00 and EncryptionEnable 0x01 is explicitly observed, MUST NOT report:
+         "security completion was not observed"
+         "encryption completion was not observed"
+         "SECURITY_COMPLETED was not reached"
+         unless explicitly limited to a lifecycle whose correlation cannot be established.
+       Field ownership rules:
+       - Associate Status, Reason and EncryptionEnable only with their explicitly decoded enclosing HCI event.
+       - Standard EncryptionChg fields include Status and EncryptionEnable. Connection_Handle may be present but is not required for protocol-stage reporting.
+       - Standard DisconnectionCompl fields include Status and Reason. Connection_Handle may be present for lifecycle correlation.
+       - Reason 0x22 under DisconnectionCompl MUST be reported as DisconnectionCompl Reason 0x22 and MUST NOT be rewritten as EncryptionChg Status 0x22.
+       - If DisconnectionCompl and EncryptionChg labels appear in the same context block and event boundaries are ambiguous, preserve the explicit field names and do not assign Reason to EncryptionChg based on proximity.
+       - Status 0x00 in DisconnectionCompl means the disconnection event completed successfully; it does not prove that encryption succeeded.
+       - EncryptionEnable 0x00 observed with disconnection may reflect link teardown and does not independently identify the failed procedure.
+       Stage classification:
+       - Create observed only: CONNECTION_ATTEMPTED
+       - Connection complete Status 0x00: ACL_ESTABLISHED
+       - LE_StartEncryption or LE_EnableEncryption: SECURITY_STARTED
+       - EncryptionChg with Status 0x00 and EncryptionEnable 0x01: SECURITY_COMPLETED
+       - EncryptionChg with non-zero Status: POST_ACL_ENCRYPTION_FAILURE
+       - AuthPayloadTimeoutExpired followed by correlated DisconnectionCompl Reason 0x22: POST_ACL_SECURITY_OR_LINK_LAYER_FAILURE
+       AuthPayloadTimeoutExpired proves only that an authenticated payload timeout occurred for the reported ACL context.
+       It does not independently prove RF failure, encryption failure, reconnect failure or a firmware defect.
+       The exact LL or firmware cause of Status/Reason 0x22 MUST NOT be inferred from HCI evidence alone.
+       LL_PHY_REQ collision, missing LL_START_ENC_RSP and firmware link-state stall require explicit OTA, WRT or firmware trace evidence.
+    5. A possible Bluetooth LE Audio connection may include the following events:
+        [CMD DEC]LE_ExtendedCreateConnection
+        [CMD DEC]OpCode:               0x2043
+        [EVT DEC]LE_EnhancedConnComplete
+        [EVT DEC]Status:               0x00 (OK)
+        LE_SetCigParameters
+        [CMD DEC]OpCode:               0x2062
+        LE_CreateCis
+        [CMD DEC]OpCode:               0x2064
+        LE_CIS_Established
+        LE_Setup_ISO_Data_Path
+        [CMD DEC]OpCode:               0x206E
+        LE_ExtendedCreateConnection proves an LE ACL attempt.
+        LE_EnhancedConnComplete or LE_ConnComplete with Status 0x00 proves LE ACL establishment.
+        Classify the flow as LE Audio only when explicit CIG, CIS or ISO data-path events are observed and correlated to the same ACL lifecycle.
+        Report missing LE Audio stages as "not observed" rather than inferring that they failed.
+        BR/EDR CreateConnection is optional for a dual-mode device; its absence does not prove a missing fallback.
+    6. In Bluetooth LE Audio Auracast or "Shared Audio" usage, the following events may be observed:
+        [CMD DEC]LE_SetExtAdvParam
+        [CMD DEC]OpCode:               0x2036
+        LE_SetPeriodicAdvParam
+        [CMD DEC]OpCode:               0x203E
+        LE_SetExtAdvData
+        [CMD DEC]OpCode:               0x2037
+        LE_SetPeriodicAdvData
+        [CMD DEC]OpCode:               0x203F
+        LE_SetPeriodicAdvEnable
+        [CMD DEC]OpCode:               0x2040
+        LE_SetExtAdvEnable
+        [CMD DEC]OpCode:               0x2039
+        LE_Create_BIG
+        [CMD DEC]OpCode:               0x2068
+        LE_Setup_ISO_Data_Path
+        [CMD DEC]OpCode:               0x206E
+        Classify a flow as Auracast or Shared Audio only when the required periodic advertising and BIG/BIS events are explicitly observed.
+        Advertising commands alone do not prove that an Auracast flow was established.
+    7. In Bluetooth LE HID connection usage, the following events may be observed:
+        [CMD DEC]LE_ExtendedCreateConnection
+        [EVT DEC]LE_EnhancedConnComplete
+        A possible Bluetooth LE HID connection may include LE_ExtendedCreateConnection and LE_EnhancedConnComplete.
+        These events prove only LE ACL establishment and do not by themselves identify HID usage.
+        Classify the connection as HID only when explicit HID/GATT/profile evidence is available; otherwise report only the LE ACL flow.
+    8. In device is removed by end user, the following events may be observed:
+        [CMD DEC]LE_RemDevFromWhiteList
+        [CMD DEC]LE_RemDevFromWhiteList (0x2012) indicates that the Host removed an entry from the LE Filter Accept List. Do not infer that the end user removed or unpaired the device unless an explicit user-action marker exists.
+        Associate a status with a lifecycle only when its enclosing command or event is decoded and an explicit lifecycle association is present.
+        A status appearing after connection completion is temporal evidence only and MUST NOT be labeled post-ACL feature, service, GATT, LLCP, PHY, DLE, security or audio negotiation unless the exact procedure is decoded.
+        Status 0x1A preceding DisconnectionCompl does not prove that it triggered or caused the disconnection.
+        Reason 0x13 identifies the reported HCI reason only and does not establish why the remote terminated the connection. Status 0x1A followed by Reason 0x13 establishes sequence only and MUST NOT be reported as a causal chain.
+        A thread ID, packet index, context identifier or temporal proximity MUST NOT be used to associate Status 0x1A with an HCI procedure or ACL lifecycle.
+        Identify the exact enclosing HCI command or event and correlate it through an explicit lifecycle association.
+    9. In outgoing Bluetooth Classic headset connection usage, the following events may be observed:
+         [CMD DEC]CreateConnection
+         [EVT DEC]ConnectionCompl
+         [EVT DEC]Status:               0x00 (OK)
+       ConnectionCompl with Status 0x00 means the BR/EDR ACL was established.
+    10. Distinguish incoming auto-reconnect from outgoing manual connection by correlating HCI events with explicit user-action timestamps.
+        Incoming BR/EDR auto-reconnect is visible in the driver/HCI log as:
+         [EVT DEC]ConnectionReq
+         -> [CMD DEC]AcceptConnectionReq or RejectConnectionReq
+         -> [EVT DEC]ConnectionCompl, if accepted
+        Outgoing BR/EDR connection is:
+         [CMD DEC]CreateConnection
+         -> [EVT DEC]ConnectionCompl
+       If CreateConnection occurs after an explicit manual-connect action,classify it as "manual outgoing connection". Do not use it as evidence of delayed auto-reconnect.
+       A successful outgoing connection proves only that the outgoing ACL path works. It does not prove that incoming Page Scan or auto-reconnect works.
+       Correlate failures by the same BD_ADDR before ACL creation and by explicit lifecycle association after ACL creation.
+       Report the decoded value as "Reason 0x13 (Remote User Terminated Connection)" and separately report whether a correlated local Disconnect command was observed.
+    11. Define a successful incoming BR/EDR ACL flow using the available log:
+        ConnectionReq
+         -> AcceptConnectionReq
+         -> ConnectionCompl with Status 0x00
+        AcceptConnectionReq is strong evidence that the Host received an incoming connection request even when the decoder omits the explicit ConnectionReq. Report authentication, encryption and profile establishment separately. ACL success does not guarantee that the complete device reconnect succeeds.
+    12. ACL Lifecycle Construction and Reporting
+        Build and report ACL connection lifecycles chronologically from the available driver/HCI log.
+        Apply Rule 1 for attribution and evidence levels, Rule 4 for protocol-stage determination and field ownership, and Rule 3 and Rule 14 for transport and direction.
+        ACL Lifecycle Summary Table:
+        Time | Transport | Direction | Role | Peer | Flow | Status | Disconnect
+        One row represents one connection transaction only.
+        Classify direction as follows:
+          BR/EDR outgoing:
+            CreateConnection -> ConnectionCompl
+          BR/EDR incoming:
+            ConnectionReq -> AcceptConnectionReq/RejectConnectionReq -> ConnectionCompl when accepted
+          LE outgoing:
+            LE_CreateConnection or LE_ExtendedCreateConnection -> LE_ConnComplete or LE_EnhancedConnComplete with local Role=Central when visible
+          LE incoming:
+            LE_ConnComplete or LE_EnhancedConnComplete with local Role=Peripheral and without a matching local LE create command
+        Valid lifecycle flows include:
+        - Create Only
+        - Create -> Complete
+        - Create -> Complete -> Disconnect
+        - Incoming Request -> Accepted -> Complete
+        - Incoming Request -> Rejected
+        - Incoming -> Complete -> Disconnect
+        - Observed ACL Establishment
+        - Unattributed ACL Establishment
+        Establishment rules:
+        - ConnectionCompl Status 0x00 proves ACL establishment.
+        - LE_ConnComplete Status 0x00 proves ACL establishment.
+        - LE_EnhancedConnComplete Status 0x00 proves ACL establishment.
+        - Explicit lifecycle association is not required to prove ACL establishment.
+        - Subsequent Security, Profile, Disconnect and DisconnectionCompl events require explicit lifecycle association before they may be attributed to a specific lifecycle.
+        - A successful connection-complete event MUST NOT be downgraded to "attempt only" solely because lifecycle correlation is unavailable.
+        If Status 0x00, peer attribution and completion event are present but no explicit lifecycle association is available:
+        - Flow = Observed ACL Establishment.
+        - Do not correlate later post-ACL events to that peer by timestamp proximity.
+        If Status 0x00 is present but peer attribution is unavailable:
+        - Flow = Unattributed ACL Establishment.
+        If a create/request is observed without a correlated successful completion event:
+        - Flow = Create Only.
+        Correlation rules:
+        - Correlate pre-ACL commands and events by explicit BD_ADDR, Peer_Address or resolved identity.
+        - Correlate post-ACL events by explicit lifecycle association.
+        - Correlate Disconnect and DisconnectionCompl using explicit lifecycle association when available.
+        - Report both the local Disconnect command reason and the final DisconnectionCompl reason when both are explicitly decoded and correlated.
+        Post-ACL observations including EncryptionChg, EncryptionEnable, AuthPayloadTimeoutExpired, Disconnect, DisconnectionCompl, GATT activity, Profile activity, SCO/eSCO, CIS/BIS, standalone Status and standalone Reason MUST NOT be represented as separate ACL lifecycle rows.
+        Report uncorrelated observations in a separate section:
+        "Security, Timeout and Teardown Observations"
+        For each observation report when explicitly available:
+        - Timestamp
+        - Event or Command Name
+        - Status
+        - Reason
+        - EncryptionEnable
+        - Attribution
+        If attribution is unavailable:
+        - Attribution = Unattributed.
+        Missing attribution prevents target association but MUST NOT cause an explicitly observed event to be discarded.
+        A later CreateConnection, LE_CreateConnection or LE_ExtendedCreateConnection MUST be reported as a new connection attempt unless peer identity or an explicit reconnect trigger associates it with an earlier lifecycle.
+        Do not call it a retry without such evidence.
+        Scan-only and advertising-only observations MUST NOT appear as ACL lifecycle rows.
+        Report an expected stage as "not observed" only when the available evidence establishes that the stage is relevant.
+        "Not observed" MUST NOT be interpreted as proof that the stage failed or never occurred.
+        Repeated substantially identical correlated lifecycles may be aggregated when more than five are explicitly present.
+        Aggregated reporting shall include:
+        - Count
+        - First occurrence
+        - Last occurrence
+        - Typical observed interval
+        Do not aggregate unattributed events into a target-specific lifecycle pattern. 
+    13. Do not correlate connection events only because they are temporally close to the target timestamp.
+        Correlate pre-connection BR/EDR events only by the same explicitly decoded BD_ADDR, and post-connection events only by explicit lifecycle association.
+        Do not treat packet indexes, context identifiers or unlabeled hexadecimal values as BD_ADDRs or lifecycle-association evidence.
+        A later CreateConnection is a separate outgoing transaction unless an explicit user action, reconnect marker or the same peer BD_ADDR links it to the target scenario.
+        Do not infer reconnect backoff, stale link keys, remote-device degradation or profile negotiation failure from nearby Page Timeout, Authentication Failure or Reason 0x13 events without explicit correlation.
+        A later LE_CreateConnection or LE_ExtendedCreateConnection that cannot be correlated to the requested target MUST still be reported as a new observed outgoing LE connection attempt. Do not omit it merely because the peer fields are missing from the retrieved block.
+    14. LE ACL Lifecycle Rules
+        Apply the following rules specifically to LE ACL connection flows.
+        Outgoing LE connection:
+        LE_CreateConnection (0x200D) or LE_ExtendedCreateConnection (0x2043) -> CommandStatus when explicitly associated -> LE_ConnComplete or LE_EnhancedConnComplete
+        Rules:
+        - A local LE create command proves an outgoing LE connection attempt.
+        - CommandStatus 0x00 proves only that the Controller accepted the create procedure.
+        - CommandStatus 0x00 does not prove ACL establishment.
+        - LE_ConnComplete or LE_EnhancedConnComplete with Status 0x00 proves LE ACL establishment.
+        Direction determination:
+        - Role = Central means the local device is the initiator and the LE ACL connection is outgoing.
+        - Role = Peripheral means the local device accepted an incoming LE ACL connection.
+        If Role is unavailable:
+        - An explicitly correlated local LE_CreateConnection or LE_ExtendedCreateConnection may establish outgoing direction.
+        - Absence of a local create command alone does not prove an incoming connection.
+        Incoming LE connection:
+        LE_ConnComplete or LE_EnhancedConnComplete with Status 0x00 and local Role = Peripheral.
+        - A local LE create command is not required for an incoming LE lifecycle.
+        - Advertising commands outside the retrieved log interval are not required to classify an explicitly decoded Peripheral-role connection as incoming.
+        LE connection cancellation:
+        LE_CreateConnectionCancel (0x200E) -> CommandComplete or corresponding completion result when explicitly decoded.
+        Rules:
+        - Cancellation proves that the Host requested cancellation of a pending LE create procedure.
+        - Do not report ACL establishment unless a successful LE_ConnComplete or LE_EnhancedConnComplete is also observed.
+        Attribution and correlation:
+        - Apply peer attribution before ACL establishment using Peer_Address or resolved identity.
+        - Apply post-ACL correlation using an explicit lifecycle association as defined in Rule 1 and Rule 12.
+        Successful LE ACL establishment does not by itself prove SECURITY_STARTED, SECURITY_COMPLETED, HID restoration, GATT readiness, Profile readiness or Audio readiness.
+        Report those stages separately according to Rule 4.
+        LE_ExtendedCreateConnection and LE_EnhancedConnComplete alone do not prove LE HID usage or LE Audio usage.
+        HID classification requires explicit HID, GATT or profile evidence.
+        LE Audio classification requires explicit CIG, CIS, BIS, BIG or ISO data-path evidence.
+        Missing HID or LE Audio evidence shall be reported as "not observed" rather than inferred as a failure.
+        BR/EDR observations MUST NOT override, rename or redefine an explicitly observed LE lifecycle.
+        LE and BR/EDR transactions shall be analyzed independently unless explicit evidence links them to the same requested scenario.
+    15. Treat the target timestamp as an analysis anchor, not as an exact lifecycle boundary.
+        Analyze the nearest relevant ACL create, connection-complete, encryption, authenticated-payload-timeout, Disconnect and DisconnectionCompl events before and after the target timestamp within the retrieved analysis window.
+        Do not stop analysis merely because no ACL event occurs at the exact timestamp.
+        Do not require a create or connection-complete event to occur at the exact target timestamp.
+        If no target-correlated lifecycle is available, report:
+          "No target-correlated ACL lifecycle was established around the target timestamp. Relevant observed-peer and unattributed events are reported separately."
+        Do not stop reporting observed security, timeout, disconnection or new connection-attempt events merely because target correlation is absent.
+    16. Measure and label connection intervals only from target-specific evidence.
+        A ConnectionCompl, LE_ConnComplete or LE_EnhancedConnComplete with Status 0x00 proves ACL establishment only. 
+        Report security, GATT, profile, audio and service readiness separately.
+        Calculate "ACL establishment latency" only from an explicit target-specific Host/Profile connection trigger or OTA connection request to the target connection-complete event.
+        A user-provided reference timestamp that is not explicitly identified as a target connection trigger may be used only to calculate an "Observed interval" to a later target event. It MUST NOT be labeled connection latency.
+        For an incoming LE lifecycle, the interval from the latest explicitly correlated local advertising command to the target connection-complete event may be reported only as an "Observed pre-ACL gap." The advertising command is not the remote connection-attempt timestamp, so this gap MUST NOT be labeled ACL establishment latency.
+        Calculate "Post-ACL readiness delay" only from a successful target ACL completion to an explicitly observed target security-, GATT-, profile-, audio- or service-ready endpoint.
+        Repeated target ACL establishments and disconnections may be summarized as an "Observed repeated-lifecycle interval" only after every included lifecycle is independently attributed to the target. This interval MUST NOT be labeled connection latency, retry duration or time to stable connection unless the corresponding target-specific trigger and endpoint are explicitly observed.
+        For every calculated interval, report its label, exact start event and timestamp, exact end event and timestamp, and duration.
+        If the required start or end event for a requested latency is missing, state that the latency cannot be measured from the available driver/HCI log and identify the additional OTA, BT firmware/WRT or Host/Profile evidence required.
+    17. Repeated Behavior, Root Cause and Recommendations
+        Report repeated behavior, root cause and recommendations only within the available attribution and correlation evidence.
+        Repeated behavior:
+        - Confirm each target lifecycle independently through Rule 1 attribution and the event fields required for the claimed correlation.
+        - Repeated ACL establishments and disconnections may be reported as an observed pattern only when each lifecycle is explicitly present in the retrieved evidence.
+        - Call repeated transactions "retries" only when an explicit retry trigger, reconnect policy marker or initiator establishes retry behavior.
+        - Do not use omitted, compacted or truncated content to increase lifecycle counts.
+        - Do not infer a stable connection unless an explicit Service Ready, Profile Ready, Audio Ready or Sustained Link endpoint is observed.
+        Missing correlation:
+        - Missing target identity prevents target-specific attribution.
+        - Missing lifecycle correlation prevents attribution of post-ACL events to a specific lifecycle.
+        - Apply Rule 4 for protocol-stage reporting when lifecycle correlation is unavailable.
+        - Missing lifecycle correlation does not invalidate an explicitly observed connection-complete event or protocol stage.
+        - Explicit unattributed events MUST still be reported.
+        - Multiple unattributed timeout events may be reported as repeated unattributed observations.
+        - They MUST NOT be reported as repeated target failures, controller degradation or device instability without additional evidence.
+        Causal interpretation:
+        - Apply Rule 2: Timestamp proximity establishes sequence only, not identity or causality.
+        - Do not infer that a Status, Reason, Page Timeout, FAL operation, AuthPayloadTimeoutExpired, nearby crash or nearby reset caused a later event unless an explicit target-correlated procedural chain exists.
+        - Use "caused by", "because", "triggered by" or "driven by" only when the causal chain is explicitly established.
+        - Otherwise report:
+          "Root Cause: Not established from the available driver/HCI evidence."
+        Procedure-specific findings:
+        - A specific HCI procedure failure may be reported without target identity when the enclosing event and fields are explicit.
+        - Such findings must be labelled Observed-peer or Unattributed.
+        - HCI Status 0x22 or Reason 0x22 identifies only the explicitly decoded enclosing timeout procedure.
+        - It does not identify an LL procedure, firmware defect or controller bug without additional evidence.
+        Fatal exception and reset handling:
+        - HardwareError, Fatal Exception, Watchdog, Reset or Controller Re-initialization observed near a failure is correlation only.
+        - Such events MUST NOT be selected as root cause when a later lifecycle successfully reaches ACL establishment and fails at a more specific procedure.
+        - A fatal exception may be selected as the primary cause only when the evidence explicitly establishes:
+          Exception/Reset
+          ->
+          Target connection state lost
+          ->
+          No later target ACL establishment
+          and no more specific target-correlated failure procedure exists.
+        Recommendations:
+        - Recommendations MUST follow the same attribution, correlation and procedure-evidence boundaries as the findings.
+        - Do not recommend target firmware fixes, device quirks, compatibility workarounds or feature suppression when target identity or affected procedure is not established.
+    Confidence Assessment:
+        High:
+          - Explicit peer attribution
+          - Explicit lifecycle correlation
+        Medium:
+          - Partial lifecycle correlation
+          - Missing secondary evidence
+        Low:
+          - Observation only
+          - No explicit lifecycle correlation
+        When multiple confidence levels apply, report the lowest applicable confidence level.
+
+Bluetooth_Page_Scan_Analysis:
+  name: "Bluetooth_Page_Scan_Analysis"
+  description: "Analyze BR/EDR page scan configuration, discoverability, connectability and incoming reconnect readiness."
+  keywords:
+    - "WrScanEnable"
+    - "WriteScanEnable"
+    - "ScanEnable:"
+    - "WrPageScanActivity"
+    - "WritePageScanActivity"
+    - "[CMD DEC]OpCode:               0x0C1C"
+    - "Page_Scan_Interval"
+    - "Page_Scan_Window"
+    - "WrPageScanType"
+    - "WritePageScanType"
+    - "[CMD DEC]OpCode:               0x0C47"
+  expert_rules: |
+    0. Abort Condition
+    If Bluetooth_Connection_Lifecycle_Analysis is present in the current analysis session, stop immediately.
+    Return no findings, no conclusions, no recommendations and no root-cause assessment.
+    1. Report BR/EDR Page Scan state only from explicit scan commands or driver events. Interpret WrScanEnable as:
+       - ScanEnable 0x00: Inquiry Scan and Page Scan disabled
+       - ScanEnable 0x01: Inquiry Scan enabled; Page Scan disabled
+       - ScanEnable 0x02: Page Scan enabled; Inquiry Scan disabled
+       - ScanEnable 0x03: Inquiry Scan and Page Scan enabled
+       WrPageScanActivity and WrPageScanType indicate Page Scan configuration, but do not prove that Page Scan was enabled. Page Scan enabled does not prove that it received RF scheduling time or received a remote Page over the air. If no explicit Page Scan command or driver event is present, report:
+        "Page Scan state not observed."
+       WrScanEnable configures BR/EDR Inquiry Scan and Page Scan only.
+       It MUST NOT be used to determine whether LE scanning, LE initiating, LE Extended Create Connection or an existing LE ACL was enabled.
+       Page Timeout Status 0x04 normally indicates that a locally initiated BR/EDR paging procedure did not complete. It does not prove that a remote device paged the local controller while Page Scan was disabled.
+       Do not report "incoming pages were missed" from Page Timeout alone. Incoming BR/EDR reconnect evidence requires ConnectionReq, AcceptConnectionReq or synchronized OTA/controller reception evidence. 
+       A Page Timeout may be attributed to the requested target only when the same explicit target BD_ADDR is decoded in the corresponding BR/EDR create/page transaction.
+       BR/EDR Page Scan state MUST NOT override an explicitly established LE lifecycle. If the target has a successful LE completion event, analyze the LE lifecycle independently and report BR/EDR Page Scan observations as unrelated unless explicit target correlation exists.
+    2. Analyze explicit page scan configuration when available.
+    3. Report:
+       - ScanEnable
+       - Page Scan Interval
+       - Page Scan Window
+       - Page Scan Type
+    4. Page Scan analysis must be reported independently from ACL lifecycle analysis.
+
+Bluetooth_device_YB_Lost:
+  name: "Bluetooth_device_YB_Lost"
+  description: "Analyze any unexpected driver or FW error which leads Bluetooth device crash in OS mode"
+  keywords:
+    - "SYSTEM EXCEPTION Occurred in Controller"
+    - "FATAL EXCEPTION Occurred in Controller"
+    - "Error!! Wifi  rejected PLDR request, Transitioning to YB!"
+    - "Entering device state D3 Final"
+    - "Error! Received unexpected alive interrupt"
+    - "HardwareError"
+    - "HW Error detected"
+    - "Force Recovery from D0"
+    - "CSR_F2D_MBX_1: 0xBADBAD"
+    - "[CSR_F2D_MBX_1]: 0x01BADBAD"
+    - "[CSR_F2D_MBX_1]: 0x02BADBAD"
+    - "Error! DMA failed."
+    - "FdoEvtDeviceReleaseHardware"
+    - "BtPdoEvtDeviceReleaseHardware"
+    - "Signature Verification Failed"
+    - "Error: BT Shared Hw Reset fail."
+    - "WdfDmaEnblerCreate failed"
+    - "FwDownloadSFIBurst failed"
+    - "Error! Received unexpected HW Rfkill Ack (GP2) interrupt"
+    - "Report YB"
+    - "Recovery is disabled in registry"
+    - "Nothing to do since Reset/Surprise removal is pending or Recovery is performed"
+    - "BtFdEvtDeviceSurpriseRemoval"
+    - "Do not report USB errors"
+    - "DriverUnload"
+    - "STATUS_NO_SUCH_DEVICE"
+    - "Transitioning to YB"
+    - "Force to YB"
+    - "Device is YB"
+    - "Reporting YB"
+    - "Transition to YB"
+    - "let it YB"
+    - "Inform Upper driver stack and YB"
+    - "Forcerecovery:"
+    - "IBtPciHandleHwErrorEvent"
+    - "HandleFwException Failed"
+    - "STATUS_TIMEOUT"
+    - "BtPciPerformErrorRecovery"
+    - "STATUS_IO_TIMEOUT"
+    - "USBD_STATUS_XACT_ERROR"
+    - "Failed to validate Secure Send Result event"
+    - "DownloadAllFwImages failed"
+    - "PerformSharedHwReset failed"
+    - "Error: BT Shared Hw Reset fail"
+    - "Error: BT SHR Failed in InitializeAdapter"
+  exclusive:
+    - "Bit 0 Enabled: Extended System Exception Event"
+    - "Bit 1 Enabled: Extended Fatal Exception Event"
+    - "Bit 2 Enabled: Extended Debug Exception Event"
+  expert_rules: |
+    1. If the design pass schematic review and layout review, we also need to confirm the problem is not single or specific unit. This indicates it is low risk on HW design related.
+    2. We would expect proper PLDR, FLR and product reset without problem. It will guarantee the fundamental function for error recovery.
+    3. Match the latest error timing and analyze the possible problem information to disclose the finding.
+
+Bluetooth_BIOS_DSM:
+  name: "Bluetooth_BIOS_DSM"
+  description: "Ensure Bluetooth BIOS, DSM, and ACPI configurations are correctly configured."
+  keywords:
+    - "CallBiosMethod"
+    - "BtCommonConfigureBiosUsingDsmMethod"
+    - "BthFdQueryBiosConfigFromMethod"
+    - "IoCallDriver"
+    - "DriverEntry"
+    - "DSM method"
+    - "Attempting to query"
+  expert_rules: |
+    1. Analyze Intel Bluetooth driver logs for ACPI/DSM method checks.
+
+    Goal:
+    Find which method failed with 0xc0000034 (STATUS_OBJECT_NAME_NOT_FOUND).
+
+    Method map:
+
+    49414c47 = GuidLockIndicator ACPI method
+    444c4f41 = Audio offload BIOS ACPI method
+    43535442 = BT SmartThings ACPI method
+    53444153 = Antenna diversity BIOS ACPI method
+    4d53445f = BIOS PLDR Duration DSM method
+    Rules:
+
+    Identify each method from log lines like “Attempting to query ACPI method <hex>” or “Attempting to query ACPI DSM method <hex>”.
+    For each method block, if any line contains 0xc0000034 or STATUS_OBJECT_NAME_NOT_FOUND, mark it FAIL.
+    If the block ends with STATUS_SUCCESS and no 0xc0000034 appears, mark it PASS.
+    Output the result for each method as: Method <hex> (<feature name>): PASS/FAIL
+    If FAIL, include the exact evidence line with 0xc0000034.
+    Final line:
+    Failed method(s): ...
+    Or: No 0xc0000034 failures detected
+    Severity:
+
+    49414c47 and 43535442 failures are not real issues.
+    444c4f41 and 4d53445f failures are P0 critical issues.
+    Samsung rule:
+
+    Only mention SmartThings details for 43535442 if the platform is confirmed Samsung.
+    If Samsung is not confirmed, hide all SmartThings-related output completely.
+    2. Analyze Bluetooth DriverEntry logs.
+
+    Rules:
+
+    DriverEntry means a real driver load and initialization event.
+    DriverEntry is a one-time log per load cycle, shown only when the driver is actually initialized.
+    Normal Bluetooth re-initialization should not print DriverEntry again unless the driver was reloaded.
+    If DriverEntry is present, the log window contains first-load platform init context such as build number, version, signer type, OS build, and ETW registration status.
+    If DriverEntry is absent, do not assume platform init details are available in that window.
+    DriverEntry during a user cold boot is normal and not a problem.
+    DriverEntry during a platform PLDR flow may indicate recovery behavior, so check whether Bluetooth needed PLDR recovery.
+    DriverEntry presence alone is not a failure. Judge it together with boot type, PLDR indicators, and surrounding recovery logs.
+    Output:
+
+    DriverEntry present or absent
+    Likely scenario: cold boot / PLDR recovery / normal reload / unclear
+    Whether this suggests a problem or normal behavior
+    Brief evidence from the log
+
+Bluetooth_PLDR:
+  name: "Bluetooth_PLDR"
+  description: "Check Platform Bluetooth PLDR , Bluetooth Error Recovery , PLDR DSM status"
+  keywords:
+    - "BtCommonQueryDevicePLDRSupport"
+    - "BtCommonConfigureBiosUsingDsmMethod"
+    - "DriverEntry"
+    - "PLDR Duration"
+    - "EvtWdfWorkitemPldrRegistryUpdate"
+    - "ibtPciUpdatePldrRegistry"
+    - "ibtPciWorkItemUpdatePldrRegistry"
+    - "BtCommonQueryAndConfigurePldrDurationValue"
+    - "UpdateBiosRecoveryType"
+    - "BtCommonCheckAndConfigurePldr"
+    - "PLDR is"
+    - "supported in this platform"
+    - "PLDR Support"
+    - "Core Reset"
+    - "product reset"
+    - "PLDR retries"
+    - "Recovery is already in progress"
+    - "Handle PLDR triggered by Wifi"
+    - "Attempting to query"
+  expert_rules: |
+    1. Analyze Intel Bluetooth driver logs for ACPI/DSM method checks.
+
+    Goal:
+    Find which method failed with 0xc0000034 (STATUS_OBJECT_NAME_NOT_FOUND).
+
+    Method map:
+
+    49414c47 = GuidLockIndicator ACPI method
+    444c4f41 = Audio offload BIOS ACPI method
+    43535442 = BT SmartThings ACPI method
+    53444153 = Antenna diversity BIOS ACPI method
+    4d53445f = BIOS PLDR Duration DSM method
+    Rules:
+
+    Identify each method from log lines like “Attempting to query ACPI method <hex>” or “Attempting to query ACPI DSM method <hex>”.
+    For each method block, if any line contains 0xc0000034 or STATUS_OBJECT_NAME_NOT_FOUND, mark it FAIL.
+    If the block ends with STATUS_SUCCESS and no 0xc0000034 appears, mark it PASS.
+    Output the result for each method as: Method <hex> (<feature name>): PASS/FAIL
+    If FAIL, include the exact evidence line with 0xc0000034.
+    Final line:
+    Failed method(s): ...
+    Or: No 0xc0000034 failures detected
+    Severity:
+
+    49414c47 and 43535442 failures are not real issues.
+    444c4f41 and 4d53445f failures are P0 critical issues.
+    Samsung rule:
+
+    Only mention SmartThings details for 43535442 if the platform is confirmed Samsung.
+    If Samsung is not confirmed, hide all SmartThings-related output completely.
+    2. Analyze Bluetooth DriverEntry logs.
+
+    Rules:
+
+    DriverEntry means a real driver load and initialization event.
+    DriverEntry is a one-time log per load cycle, shown only when the driver is actually initialized.
+    Normal Bluetooth re-initialization should not print DriverEntry again unless the driver was reloaded.
+    If DriverEntry is present, the log window contains first-load platform init context such as build number, version, signer type, OS build, and ETW registration status.
+    If DriverEntry is absent, do not assume platform init details are available in that window.
+    DriverEntry during a user cold boot is normal and not a problem.
+    DriverEntry during a platform PLDR flow may indicate recovery behavior, so check whether Bluetooth needed PLDR recovery.
+    DriverEntry presence alone is not a failure. Judge it together with boot type, PLDR indicators, and surrounding recovery logs.
+    Output:
+
+    DriverEntry present or absent
+    Likely scenario: cold boot / PLDR recovery / normal reload / unclear
+    Whether this suggests a problem or normal behavior
+    Brief evidence from the log
+    3. Log show "PLDR is supported in this platform" or "BT Internal PLDR supported on this platform" means PLDR is supported.
+    4. Log show "PLDR is not supported in this platform" means PLDR is not config correctly to support bluetooth error recovery.
+    5. "Warning!! Handle PLDR triggered by Wifi" means WIFI trigger product and bluetooth is await for reload.
+    6. "Recovery is already in progress" means PLDR had been triggered by others mechanism.
+    7. Interpretation: “Error!! Product reset rejected” means the BT PLDR request was rejected by WiFi"
+    This event should be analyzed using both status code and reject reason code.
+    Status codes:
+    0 = reset started
+    1 = reset rejected
+    Reject reason codes:
+    0 = irrelevant / no specific reject reason
+    1 = product reset not supported
+    2 = power transition in progress
+    3 = WiFi returned NACK response
+    4 = WiFi reached maximum PLDR attempts
+    Analysis goal:
+
+    Determine whether the PLDR was started or rejected.
+    If rejected, identify the reject reason and explain it in plain language.
+    Use the status code and reason code together to judge whether this is normal behavior or a problem.
+    8. "Error: BT SHR Failed, As this is Product reset.. no mitigation" means BT SHR (share reset) failed, and no mitigation on this case.
+
+Bluetooth_Audio:
+  name: "Bluetooth_Audio"
+  description: "Review Bluetooth Audio , Audio offload config , Discrete offload , and platform audio config correctness."
+  keywords:
+    - "DriverEntry"
+    - "audio offload"
+    - "EnableLEAudioBroadcast"
+    - "IbtPciSelectAudioInterfaceCmd"
+    - "ibtPciQueryIntelExtendedAudioOffloadFeatureSupport"
+    - "Hf offload"
+    - "A2dp Offload"
+    - "IbtpciBthFdQueryAcpiAudOffloadConfig"
+    - "AOLD"
+    - "IoCallDriver failed"
+    - "NHLT"
+    - "AUD_OFF_ACPI"
+    - "DLOA"
+    - "BtFdReadUefiAudioConfig"
+    - "BthFdQueryAcpiAudOffloadConfig"
+    - "Attempting to query"
+  expert_rules: |
+    1. Analyze Bluetooth DriverEntry logs.
+
+    Rules:
+
+    DriverEntry means a real driver load and initialization event.
+    DriverEntry is a one-time log per load cycle, shown only when the driver is actually initialized.
+    Normal Bluetooth re-initialization should not print DriverEntry again unless the driver was reloaded.
+    If DriverEntry is present, the log window contains first-load platform init context such as build number, version, signer type, OS build, and ETW registration status.
+    If DriverEntry is absent, do not assume platform init details are available in that window.
+    DriverEntry during a user cold boot is normal and not a problem.
+    DriverEntry during a platform PLDR flow may indicate recovery behavior, so check whether Bluetooth needed PLDR recovery.
+    DriverEntry presence alone is not a failure. Judge it together with boot type, PLDR indicators, and surrounding recovery logs.
+    Output:
+
+    DriverEntry present or absent
+    Likely scenario: cold boot / PLDR recovery / normal reload / unclear
+    Whether this suggests a problem or normal behavior
+    Brief evidence from the log
+    2. "Hf offload support is available in firmware" and "A2dp Offload support is available in firmware" only means bluetooth firmware audio offload capability available , it does not means the audio offload feature get enabled.
+    3. Analyze Intel Bluetooth driver logs for ACPI/DSM method checks.
+
+    Goal:
+    Find which method failed with 0xc0000034 (STATUS_OBJECT_NAME_NOT_FOUND).
+
+    Method map:
+
+    49414c47 = GuidLockIndicator ACPI method
+    444c4f41 = Audio offload BIOS ACPI method
+    43535442 = BT SmartThings ACPI method
+    53444153 = Antenna diversity BIOS ACPI method
+    4d53445f = BIOS PLDR Duration DSM method
+    Rules:
+
+    Identify each method from log lines like “Attempting to query ACPI method <hex>” or “Attempting to query ACPI DSM method <hex>”.
+    For each method block, if any line contains 0xc0000034 or STATUS_OBJECT_NAME_NOT_FOUND, mark it FAIL.
+    If the block ends with STATUS_SUCCESS and no 0xc0000034 appears, mark it PASS.
+    Output the result for each method as: Method <hex> (<feature name>): PASS/FAIL
+    If FAIL, include the exact evidence line with 0xc0000034.
+    Final line:
+    Failed method(s): ...
+    Or: No 0xc0000034 failures detected
+    Severity:
+
+    49414c47 and 43535442 failures are not real issues.
+    444c4f41 and 4d53445f failures are P0 critical issues.
+    Samsung rule:
+
+    Only mention SmartThings details for 43535442 if the platform is confirmed Samsung.
+    If Samsung is not confirmed, hide all SmartThings-related output completely.
+    4. "Audio offload configuration is NOT supported" , "Audio offload registry key value set to 0" , or "Audio offload configuration is NOT present" means driver was not able to enable on audio offload.
+    5. NHLT Bluetooth role configuration.
+
+    This configuration comes from the NHLT side, not from BIOS.
+    It defines the Bluetooth I2S clock role in the audio topology.
+    Meaning of the values,
+    0x0 = Bluetooth offload is disabled
+    0x1 = Bluetooth is the I2S clock master
+    0x2 = Bluetooth is the I2S clock slave
+    This setting determines whether Bluetooth or the Audio DSP acts as master, and the other side acts as slave.
+    BIOS alignment rule.There is a separate BIOS-side configuration for the same Bluetooth/audio role.The BIOS configuration must align with the NHLT configuration.If the two sides do not match, treat it as a configuration mismatch and investigate the platform setup.
+    6. [BthFdQueryAcpiAudOffloadConfig]Method[0] and [UtilHCIDump][AUD_OFF_ACPI] 00 00 00 00 , means Revision = 0 , this information is from acpi method AOLD/DLOA.
+    7. [BthFdQueryAcpiAudOffloadConfig]Method[1] and [UtilHCIDump][AUD_OFF_ACPI] 12 00 00 00 , it means Domain Type = 0x12（Bluetooth）, this information is from acpi methid AOLD/DLOA.
+    8. [BthFdQueryAcpiAudOffloadConfig]Method[2] and ][UtilHCIDump][AUD_OFF_ACPI] 03 00 00 00 , it means  BT Audio Offload Sel = 0x03（Audio offload enabled I2S）, this information is from acpi methid AOLD/DLOA.
+    9. Bluetooth audio offload , AOLD UEFI name is UefiCnvBtAOLD , and AOLD UUID is 42780DD5-9A7D-404C-80E4-7F7094360394
+    10. Bluetooth audio offload , BT NHLT UEFI name is NhltBtConfigurationVariable , and UUID is B2364F9C-B817-4750-A5D2-37A0D1DAF8DD
+
+    11. "[BthFdQueryAcpiAudOffloadConfig]Audio offload configuration is supported" , and "[BthFdQueryAcpiAudOffloadConfig]Audio offload is supported and enabled" , and "[BthFdQueryAcpiAudOffloadConfig]Audio offload registry key value set to 2" means audio offload enabled normally.

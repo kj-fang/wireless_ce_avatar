@@ -621,7 +621,7 @@
             if (bodyEl) return;
             removeTyping();
             hideWelcome();
-            cardId = 'agent-process-' + Date.now();
+            cardId = __nextAgentCardId();
             const html =
                 '<div class="agent-process-card">' +
                   '<div class="agent-process-header" onclick="' +

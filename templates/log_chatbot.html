@@ -3759,6 +3759,15 @@
                     try {
                         const ctxRes = await fetch('/log_chatbot/get_issue_context');
                         const ctxData = await ctxRes.json();
+                        if (ctxData && ctxData.issue_time_blocked) {
+                            const warn = document.getElementById('it-unknown-warn');
+                            if (warn) {
+                                warn.textContent = '\u26a0 ' + (ctxData.issue_time_warning
+                                    || 'The auto-detected issue time is outside this log. Please confirm it.');
+                                warn.style.display = 'block';
+                            }
+                            return;
+                        }
                         const times = Array.isArray(ctxData && ctxData.issue_times)
                             ? ctxData.issue_times.filter(Boolean)
                             : [];
@@ -4499,6 +4508,14 @@
             window.__customerIana = contextData.customer_iana || '';
             if (typeof populateCustomerAnnotation === 'function') {
                 populateCustomerAnnotation();
+            }
+            if (contextData.issue_time_blocked) {
+                const warn = document.getElementById('it-unknown-warn');
+                if (warn) {
+                    warn.textContent = '\u26a0 ' + (contextData.issue_time_warning
+                        || 'The auto-detected issue time is outside this log. Please confirm it.');
+                    warn.style.display = 'block';
+                }
             }
 
             // Enable agentic mode for auto-analysis

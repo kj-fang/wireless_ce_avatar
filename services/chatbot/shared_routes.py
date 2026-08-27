@@ -256,7 +256,13 @@ def build_shared_handlers(ctx: SharedRouteContext) -> dict[str, Callable[..., An
         conversation_id = (request.args.get("conversation_id") or "").strip()
         if not conversation_id:
             return jsonify({"success": False, "error": "conversation_id is required"}), 400
-        conv = history_service.get_conversation(conversation_id, domain=ctx.domain)
+        # with_steps: the client re-renders each saved turn's reasoning trace,
+        # so the stored steps have to travel with the conversation. Without it
+        # a replayed turn shows only its answer and the Agent Processing Steps
+        # card never appears.
+        conv = history_service.get_conversation(
+            conversation_id, domain=ctx.domain, with_steps=True
+        )
         if conv is None:
             return jsonify({"success": False, "error": "Conversation not found"}), 404
         return jsonify({"success": True, "conversation": conv})

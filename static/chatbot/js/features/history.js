@@ -572,6 +572,16 @@
         hideWelcome();
         (turns || []).forEach(function (t) {
             if (t.user_message) appendUserMsg(t.user_message);
+            // Replay this turn's saved reasoning trace above its answer, in
+            // the same card the live stream drew — collapsed, so a resumed
+            // conversation still reads as a conversation. Turns saved before
+            // traces were stored simply have none, and render as they always
+            // did.
+            const savedSteps = Array.isArray(t.steps) ? t.steps : [];
+            if (savedSteps.length) {
+                const card = __makeStepCard({collapsed: true});
+                savedSteps.forEach(function (s) { card.appendStep(s); });
+            }
             const r = t.result || {};
             const turnId = t.turn_id || null;
             if (r.type === 'report') {
@@ -600,7 +610,10 @@
 
     // Self-contained "Agent Processing Steps" card + step renderer, mirroring
     // the live send path so a reconnected stream renders identically.
-    function __makeStepCard() {
+    function __makeStepCard(opts) {
+        // {collapsed:true} starts the card folded — used when replaying a
+        // saved trace, where the answer matters more than the steps.
+        const collapsed = !!(opts && opts.collapsed);
         const steps = [];
         let bodyEl = null, cardId = null;
         const startTs = Date.now();
@@ -624,16 +637,16 @@
             cardId = __nextAgentCardId();
             const html =
                 '<div class="agent-process-card">' +
-                  '<div class="agent-process-header" onclick="' +
+                  '<div class="agent-process-header' + (collapsed ? ' collapsed' : '') + '" onclick="' +
                     "this.classList.toggle('collapsed');" +
                     "document.getElementById('" + cardId + "').classList.toggle('hidden');" +
                     "var icon=this.querySelector('.toggle-icon');" +
                     "icon.textContent=this.classList.contains('collapsed')?'\\u25BC':'\\u25B2';" +
                   '">Agent Processing Steps' +
                     '<span id="' + cardId + '-summary" style="font-weight:400;font-size:0.75rem;opacity:0.75;margin-left:8px;"></span>' +
-                    '<span class="toggle-icon">▲</span>' +
+                    '<span class="toggle-icon">' + (collapsed ? '▼' : '▲') + '</span>' +
                   '</div>' +
-                  '<div class="agent-process-body" id="' + cardId + '"></div>' +
+                  '<div class="agent-process-body' + (collapsed ? ' hidden' : '') + '" id="' + cardId + '"></div>' +
                 '</div>';
             const wrapper = document.createElement('div');
             wrapper.className = 'msg-row assistant';

@@ -2301,14 +2301,13 @@
             <div id="skill-editor-status" class="log-status"></div>
         </div>
 
-        <!-- Reload skills from directory -->
+        <!-- Add skills by importing a YAML file -->
         <div class="sidebar-section">
-            <h6>🛠 Reload Skills</h6>
-            <div class="log-input-group">
-                <input id="skills-dir-input" type="text" placeholder="Skills data directory…">
-                <button type="button" class="btn-browse" onclick="browseSkillsDir()" title="Browse for directory">📁</button>
-            </div>
-            <button class="btn-set-log" style="width:100%;margin-top:6px;" onclick="reloadSkills()">🔄 Reload Skills</button>
+            <h6>📥 Add Skills</h6>
+            <button class="btn-set-log" style="width:100%;" onclick="addSkillsFromYaml()"
+                    title="Pick a YAML file; its skills will be appended to your customised configuration (duplicates overwrite).">
+                📁 Choose YAML file to add…
+            </button>
             <div id="skills-reload-status" class="log-status"></div>
         </div>
 
@@ -3547,29 +3546,47 @@
         }
     }
 
-    // ── Reload skills from directory ───────────────────────────────
-    async function reloadSkills() {
-        const dir = document.getElementById('skills-dir-input').value.trim();
+    // ── Add skills from a user-picked YAML file ───────────────────
+    // Opens the native file dialog via /browse_yaml, then imports
+    // the selected file's skills into the currently-active user YAML
+    // (fields kept: name, description, keywords, exclusive,
+    // expert_rules; duplicate keys overwrite existing).
+    async function addSkillsFromYaml() {
         const statusEl = document.getElementById('skills-reload-status');
-        statusEl.textContent = 'Reloading…';
+        // Step 1 — pick the source YAML file.
+        let yamlPath = '';
+        try {
+            const pickRes = await fetch('/log_chatbot/browse_yaml');
+            const pickData = await pickRes.json();
+            yamlPath = (pickData && pickData.path) ? pickData.path.trim() : '';
+        } catch (e) {
+            showStatus(statusEl, '✘ Could not open file picker: ' + e.message, 'err');
+            return;
+        }
+        if (!yamlPath) return; // user cancelled
+
+        statusEl.textContent = 'Importing…';
         statusEl.className = 'log-status';
         statusEl.style.display = 'block';
+
+        // Step 2 — send the picked path to the server for merge + activate.
         try {
-            const res = await fetch('/log_chatbot/reload_skills', {
+            const res = await fetch('/log_chatbot/add_skills_yaml', {
                 method: 'POST',
                 headers: {'Content-Type': 'application/json'},
-                body: JSON.stringify({data_dir: dir})
+                body: JSON.stringify({yaml_path: yamlPath})
             });
             const data = await res.json();
             if (data.success) {
-                if (data.warning) {
-                    showStatus(statusEl, '⚠ ' + data.warning, 'warn');
-                } else {
-                    showStatus(statusEl, '✔ ' + data.message, 'ok');
+                showStatus(statusEl, '✔ ' + data.message, 'ok');
+                if (data.skills) renderSkills(data.skills);
+                // Reflect the new "Customised (user)" active source in the
+                // side panel toggle without a page reload.
+                if (typeof refreshSkillSourcePanel === 'function') {
+                    refreshSkillSourcePanel();
                 }
-                renderSkills(data.skills);
             } else {
-                showStatus(statusEl, '✘ ' + data.error, 'err');
+                showStatus(statusEl, '✘ ' + (data.error || 'Import failed.'), 'err');
             }
         } catch (e) {
             showStatus(statusEl, '✘ Network error: ' + e.message, 'err');

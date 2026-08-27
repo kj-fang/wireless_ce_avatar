@@ -3768,6 +3768,11 @@
                         const ctxRes = await fetch('/log_chatbot/get_issue_context');
                         const ctxData = await ctxRes.json();
                         if (ctxData && ctxData.issue_time_blocked) {
+                            // Drop whatever the previous log left in the picker:
+                            // this path runs on every setLog() and is meant to
+                            // override stale values, so returning early without
+                            // clearing would anchor analysis on the old log.
+                            clearAllIssueTimes();
                             const warn = document.getElementById('it-unknown-warn');
                             if (warn) {
                                 warn.textContent = '\u26a0 ' + (ctxData.issue_time_warning

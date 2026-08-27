@@ -151,6 +151,17 @@ def read_log_time_range(log_path: str) -> Tuple[Optional[datetime], Optional[dat
     return first_ts, last_ts
 
 
+def _customer_timezone_for(log_path: str) -> str:
+    """Customer timezone label for a capture, or "" when it cannot be read."""
+    if not log_path:
+        return ""
+    try:
+        from utils.timezone_utils import get_effective_timezone
+        return get_effective_timezone(log_path) or ""
+    except Exception:
+        return ""
+
+
 def _full_datetime_to_log_frame(
     parsed: datetime,
     log_path: str,
@@ -206,6 +217,19 @@ def validate_issue_time_in_log_range(
     if parsed is None:
         return None, first_ts, last_ts, "The carried issue time could not be parsed."
 
+    # Frames coincide only when the customer timezone is actually readable.
+    # Without it a failed range check cannot tell "wrong time" apart from
+    # "right time in a frame we could not convert", so the error says so
+    # instead of asserting the value is out of range. Validation still
+    # proceeds: when the customer really is GMT+8 (or the capture is ours)
+    # the raw comparison is the correct one, and refusing outright would
+    # block those valid values.
+    customer_tz = _customer_timezone_for(log_path)
+    unverified = "" if customer_tz else (
+        " The customer timezone could not be read from the capture, so the "
+        "value could not be converted to the log's clock."
+    )
+
     if is_time_only:
         if not first_ts or not last_ts:
             return None, first_ts, last_ts, (
@@ -213,13 +237,6 @@ def validate_issue_time_in_log_range(
             )
         # Walk dates in the frame the clock was written in (the customer's),
         # converting each candidate back so the range check stays log-frame.
-        customer_tz = ""
-        if log_path:
-            try:
-                from utils.timezone_utils import get_effective_timezone
-                customer_tz = get_effective_timezone(log_path) or ""
-            except Exception:
-                customer_tz = ""
         walk_first, walk_last = first_ts, last_ts
         if customer_tz:
             from utils.timezone_utils import taiwan_to_local
@@ -239,6 +256,7 @@ def validate_issue_time_in_log_range(
         if not candidates:
             return None, first_ts, last_ts, (
                 "The carried issue clock does not occur inside the selected log range."
+                + unverified
             )
         parsed = max(candidates)
     else:
@@ -246,7 +264,7 @@ def validate_issue_time_in_log_range(
 
     if first_ts and last_ts and not (first_ts <= parsed <= last_ts):
         return None, first_ts, last_ts, (
-            "The carried issue time is outside the selected log range."
+            "The carried issue time is outside the selected log range." + unverified
         )
 
     return parsed, first_ts, last_ts, ""

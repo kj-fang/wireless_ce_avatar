@@ -247,6 +247,17 @@ def create_app():
 
 
 if __name__ == "__main__":
+    # REQUIRED before any multiprocessing.Pool/ProcessPoolExecutor use (see
+    # utils/issue_time_ai.py's huge-log parallel scan): this app is packaged
+    # with PyInstaller (IntelAvatar.spec, entry script app.py). Without this
+    # call, a frozen .exe spawning worker processes on Windows re-executes
+    # the ENTIRE frozen bootstrap in each child — re-running single-instance
+    # checks, tray manager, ChromeDriver setup, etc. — which can spiral into
+    # runaway child processes / duplicate browser windows. No-op when not
+    # frozen (plain `python app.py`), so this changes nothing for dev runs.
+    import multiprocessing
+    multiprocessing.freeze_support()
+
     # Parse command-line arguments
     parser = argparse.ArgumentParser()
     parser.add_argument('--port', type=int, default=None, help='Override the port for this run only (not persisted). Defaults to the machine-local persisted port (initially 48596).')

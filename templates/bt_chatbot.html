@@ -266,8 +266,21 @@
             background: #f0f0f0;
             border-color: #888;
         }
+        /* Compact trash icon in the Issue Time header; reveals "Clear" on
+           hover -- matches the WIFI chatbot (log_chatbot.html) layout. */
+        .it-clear-top {
+            background: none; border: none; cursor: pointer; color: #9aa3ad;
+            font-size: 0.85rem; display: inline-flex; align-items: center; gap: 4px;
+            padding: 2px 6px; border-radius: 5px; line-height: 1;
+        }
+        .it-clear-top:hover { color: #c62828; background: #fbeaea; }
+        .it-clear-top-label { display: none; font-size: 0.72rem; font-weight: 600; }
+        .it-clear-top:hover .it-clear-top-icon,
+        .it-clear-top:active .it-clear-top-icon { display: none; }
+        .it-clear-top:hover .it-clear-top-label,
+        .it-clear-top:active .it-clear-top-label { display: inline; }
 
-        /* ── Confirm modal ── */
+        /* -- Confirm modal -- */
         .cm-overlay {
             position: fixed;
             inset: 0;
@@ -1812,6 +1825,70 @@
         }
         .eit-add-btn:hover { background: #eef2ff; }
 
+        /* ── Pick checkbox + "most likely" highlight (capture popup) ──
+           Inside the popup, each row carries a checkbox. Only ticked
+           rows are applied. Row 0 is auto-ticked as the most-likely
+           candidate; the user can re-pick (single-pick mode) or tick
+           more (multi-mode toggled via #tc-multi). */
+        .eit-pick {
+            width: 16px;
+            height: 16px;
+            margin-right: 6px;
+            cursor: pointer;
+            accent-color: #2563eb;
+            flex-shrink: 0;
+        }
+        .eit-row.eit-row-picked {
+            background: #eff6ff;
+            border-color: #60a5fa;
+            box-shadow: 0 0 0 1px #60a5fa inset;
+        }
+        .eit-row .eit-pick-badge {
+            display: none;
+            margin-left: 6px;
+            font-size: 0.65rem;
+            font-weight: 700;
+            color: #1d4ed8;
+            background: #dbeafe;
+            border: 1px solid #93c5fd;
+            border-radius: 999px;
+            padding: 1px 8px;
+            white-space: nowrap;
+        }
+        /* "★ most likely" badge is tied to the top-ranked candidate (row 0
+           of the capture popup), NOT to whichever row the user has currently
+           ticked. Showing it on .eit-row-picked would re-label the badge as
+           the user changed their pick, which contradicts what "most likely"
+           means (it's the model's top ranking, fixed at the time the
+           suggestions arrived). */
+        #time-capture-list .eit-row:first-child .eit-pick-badge { display: inline-block; }
+        .tc-multi-row {
+            display: flex;
+            align-items: flex-start;
+            gap: 8px;
+            margin: 10px 0 4px;
+            padding: 8px 10px;
+            background: #f9fafb;
+            border: 1px solid #e5e7eb;
+            border-radius: 6px;
+            font-size: 0.76rem;
+            cursor: pointer;
+            line-height: 1.4;
+        }
+        .tc-multi-row input[type="checkbox"] {
+            margin-top: 2px;
+            accent-color: #2563eb;
+            cursor: pointer;
+            flex-shrink: 0;
+        }
+        .tc-multi-row .tc-multi-sub {
+            display: block;
+            font-size: 0.7rem;
+            color: #6b7280;
+            font-weight: 400;
+            margin-top: 2px;
+        }
+
         /* ── Time-capture popup (uses .fbd-modal centered shell) ──── */
         #time-capture-modal .fbd-card { width: min(580px, 94vw); }
         .tc-mode-row {
@@ -2176,8 +2253,26 @@
         <div id="evt-hover-card" class="evt-hover-card" style="display:none;"></div>
 
         <!-- Issue Time -->
-        <div class="sidebar-section">
-            <h6>⏰ Issue Time</h6>
+        <div class="sidebar-section" style="position:relative;">
+            <!-- Pinned to the section's top-right corner (out of the flex
+                 flow entirely) so it never fights the heading + badge for
+                 room and never wraps onto its own line at narrow widths. -->
+            <button type="button" class="it-clear-top" onclick="clearAllIssueTimes()"
+                    style="position:absolute;top:14px;right:14px;"
+                    title="Clear the primary time AND all extra issue-time rows">
+                <span class="it-clear-top-icon">🗑️</span><span class="it-clear-top-label">Clear</span>
+            </button>
+            <h6 style="margin:0 56px 10px 0;display:flex;align-items:center;gap:6px;flex-wrap:wrap;">
+                <span style="flex-shrink:0;">⏰ Issue Time</span>
+                <!-- Simple source badge: exactly one of the 4 named sources
+                     ("From last time" / "From attachment" / "From
+                     description" / "From AI suggestion"). Small font/padding
+                     so the full text fits on the SAME line as the heading
+                     (never ellipsized) — only wraps onto its own line if the
+                     row is genuinely too narrow for both. -->
+                <span id="it-time-source-tag"
+                      style="display:none;flex:0 0 auto;font-size:0.6rem;font-weight:600;text-transform:none;letter-spacing:normal;color:#4338ca;background:#eef2ff;border:1px solid #c7d2fe;border-radius:9px;padding:1px 6px;white-space:nowrap;"></span>
+            </h6>
             <div style="font-size:0.72rem;color:#666;margin-bottom:8px;line-height:1.4;">
                 When did the issue happen?<br>
                 <span style="color:#2563eb;font-weight:600;">Format: MM / DD / YYYY &nbsp; HH : MM : SS . mmm</span>
@@ -2188,9 +2283,6 @@
                 <div id="it-unknown-warn" style="display:none;flex:1;font-size:0.7rem;color:#92400e;background:#fff7ed;border:1px solid #fdba74;border-radius:6px;padding:5px 8px;line-height:1.3;">
                     ⚠️ <strong>Unknown time.</strong> Couldn't auto-detect the issue time — please fill it in below.
                 </div>
-                <button class="it-quick-btn it-quick-btn-clear" onclick="clearAllIssueTimes()" title="Clear the primary time AND all extra issue-time rows">
-                    🗑️ Clear
-                </button>
             </div>
 
             <!-- AI issue-time assistant: infers issue time(s) from the chat
@@ -2216,30 +2308,6 @@
                     <input type="checkbox" id="it-confirm-autofill" onchange="onIssueTimeConfirmToggle()" style="margin-top:2px;">
                     <span>⏱ Auto-detected time(s) — <strong>tick to use</strong>.</span>
                 </label>
-            </div>
-
-            <!-- Refine picker: lets the user choose between the original issue
-                 time and the closest system-event error time. Hidden by default;
-                 shown by refineIssueTimeFromEventLog() when a close match exists. -->
-            <div id="it-refine-picker"
-                 style="display:none;margin-bottom:10px;font-size:0.72rem;color:#1e3a5f;background:#eff6ff;border:1px solid #93c5fd;border-radius:6px;padding:8px;line-height:1.35;">
-                <div style="margin-bottom:6px;font-weight:600;">
-                    🔍 Found a nearby system error — which time to use?
-                </div>
-                <div style="display:flex;flex-direction:column;gap:5px;">
-                    <button type="button" id="refine-pick-original" class="it-quick-btn"
-                            style="text-align:left;padding:6px 10px;background:#fff;border:1px solid #cbd5e1;font-size:0.72rem;line-height:1.4;white-space:normal;"
-                            onclick="pickRefineOption('original')">
-                        <strong>Keep original</strong><br>
-                        <span id="refine-original-label" style="color:#475569;"></span>
-                    </button>
-                    <button type="button" id="refine-pick-error" class="it-quick-btn"
-                            style="text-align:left;padding:6px 10px;background:#fff;border:1px solid #cbd5e1;font-size:0.72rem;line-height:1.4;white-space:normal;"
-                            onclick="pickRefineOption('error')">
-                        <strong>Use error time</strong><br>
-                        <span id="refine-error-label" style="color:#475569;"></span>
-                    </button>
-                </div>
             </div>
 
             <!-- Hidden native datetime-local for the calendar popup -->
@@ -2305,6 +2373,20 @@
                            inputmode="numeric" placeholder="mmm"
                            oninput="onPartChange('it-ms', 999, null)">
                 </div>
+            </div>
+
+            <!-- Compact "use error time" snap link, placed right below the
+                 fields it applies to. The fields above are already auto-
+                 filled from whichever of the 4 named sources won (see
+                 it-time-source-tag); this is just the ONE nearby System
+                 Event Log Error/Critical entry for THAT filled time, one
+                 line, click to snap to it. Hidden when none is within
+                 10 min. Styled like the original refine-picker card
+                 (bordered, tinted background) rather than a bare link. -->
+            <div id="it-use-error-row"
+                 style="display:none;margin-top:6px;margin-bottom:10px;font-size:0.72rem;color:#1e3a5f;background:#eff6ff;border:1px solid #93c5fd;border-radius:6px;padding:6px 8px;line-height:1.35;">
+                <a href="javascript:void(0)" id="it-use-error-link" onclick="useErrorTime()"
+                   style="color:#1d4ed8;cursor:pointer;text-decoration:none;font-weight:600;"></a>
             </div>
 
             <!-- Hidden legacy field kept so other code referencing it doesn't break -->
@@ -2645,6 +2727,13 @@
         markIssueTimeUserOwned();
         updateIssueTimeDisplay();
         validateUserInput();
+        // Re-check the nearest system event error against the NEW time —
+        // otherwise the "Use error time" link/Δ would keep showing a stale
+        // match computed for whatever time was in the field before this
+        // edit. Debounced: this fires on every keystroke, and each check is
+        // a findClosestEventError() round trip — no need to re-fetch for
+        // every character while the user is still typing.
+        refreshUseErrorLinkDebounced();
     }
 
     /**
@@ -2933,8 +3022,12 @@
         setVal('it-min',   String(parseInt(mi, 10)));
         setVal('it-sec',   String(parseInt(ss, 10)));
         // Keep ms as-is (the native picker doesn't capture milliseconds)
+        markIssueTimeUserOwned();
         updateIssueTimeDisplay();
         validateUserInput();
+        // Re-check the nearest system event error against the NEW time — see
+        // the matching comment in onPartChange() above.
+        refreshUseErrorLink();
     }
 
     function updateIssueTimeDisplay() {
@@ -3620,12 +3713,13 @@
                 updateEvtButton(data.evtx_path || '');
 
                 // If an issue time is already filled (e.g. from session context),
-                // auto-refine it against the closest system event error.
-                // Skipped when restoring a draft / resumed live session: the
-                // user already committed to a specific time, so we must not
-                // pop the refine picker or shift it to a nearby event.
-                if (!skipIssueTimeAutofill && getIssueTimeString()) {
-                    refineIssueTimeFromEventLog();
+                // compare it against the closest system event error. Its
+                // source may already be tagged (e.g. a resumed draft); if
+                // not, default the tag to "From last time" — it's whatever
+                // was already there before this page load.
+                if (getIssueTimeString()) {
+                    if (!window.__timeSourceLabel) _setTimeSourceTag(TIME_SOURCE.LAST_TIME);
+                    refreshUseErrorLink();
                 }
             } else {
                 showStatus(statusEl, '✘ ' + data.error, 'err');
@@ -4326,20 +4420,32 @@
                 let descPart = rawQuestion;
                 // Priority: LLM-organized multi-time list (from the case
                 // description) → URL ?issue_time= → attachment_time →
-                // backend-resolved issue_time → regex on description.
+                // backend-resolved issue_time → regex on description. Each
+                // branch is tagged with whichever of the 4 named sources it
+                // actually is ("last time" absorbs the URL-carried-over case
+                // and the crude regex fallback isn't a real 4th category —
+                // it's the same "customer description" source, just found by
+                // regex instead of the LLM organizer).
+                let filledSourceLabel = '';
                 if (issueTimes.length > 0 && _prefillAutoTimes(issueTimes)) {
                     // The backend already returned a CLEAN description (raw
                     // timestamps stripped), so use it verbatim. These auto-
                     // filled time(s) await the user's confirm tick.
+                    filledSourceLabel = TIME_SOURCE.DESCRIPTION;
                     issueTimeAwaitingConfirm = true;
                     setIssueTimeConfirmUI(true);
                     validateUserInput();
                 } else {
                     let foundTime = urlIssueTime || attachmentTime || resolvedTime;
+                    if (foundTime) {
+                        filledSourceLabel = attachmentTime && foundTime === attachmentTime
+                            ? TIME_SOURCE.ATTACHMENT
+                            : TIME_SOURCE.LAST_TIME;
+                    }
                     if (!foundTime) {
                         for (const re of VALID_TIME_REGEXES) {
                             const m = rawQuestion.match(re);
-                            if (m) { foundTime = m[0]; break; }
+                            if (m) { foundTime = m[0]; filledSourceLabel = TIME_SOURCE.DESCRIPTION; break; }
                         }
                     }
                     if (foundTime && setIssueTimeFromString(foundTime)) {
@@ -4354,6 +4460,7 @@
                         // the user knows to fill it in (or use AI suggest).
                         const warn = document.getElementById('it-unknown-warn');
                         if (warn) warn.style.display = 'block';
+                        filledSourceLabel = '';
                     }
                 }
                 descPart = trimTrailingTimeConnector(descPart.replace(/\s+/g, ' ').trim());
@@ -4370,9 +4477,10 @@
                 if (prefillHint) prefillHint.style.display = 'block';
                 validateUserInput();
 
-                // Auto-refine: cross-reference the issue time with system event
-                // errors and snap to the closest error timestamp (if within 10 min).
-                refineIssueTimeFromEventLog();
+                // Tag the field with whichever of the 4 named sources filled
+                // it, then compare against the closest system event error.
+                if (filledSourceLabel) _setTimeSourceTag(filledSourceLabel);
+                refreshUseErrorLink();
             }, 400);
 
         } catch (err) {
@@ -4381,88 +4489,111 @@
         }
     }
 
+    // window.__timeSourceLabel names which of the 4 sources currently fills
+    // the Issue Time fields — shown as a small badge beside the "Issue Time"
+    // heading (see TIME_SOURCE below for the exact 4 strings). Set by
+    // tryAutoAnalyzeOnLoad() (whichever of the 4 sources actually filled the
+    // field, per its own priority order) and by applyTimeCapture() (only
+    // tagged when the SINGLE applied row's own __aiSuggested flag is set —
+    // stashed per-row by addTimeCaptureRow(), so the tag/nearest-error always
+    // match whichever suggestion actually got applied).
+    const TIME_SOURCE = {
+        LAST_TIME: 'From last time',
+        ATTACHMENT: 'From attachment',
+        DESCRIPTION: 'From description',
+        AI_SUGGEST: 'From AI suggestion',
+    };
+
     /**
-     * Show a two-button picker letting the user choose between the original
-     * issue time and the closest Error/Critical event time from the system
-     * event log.  Called after the issue time is set during auto-analyze.
+     * Set (or clear) the small source badge beside the "Issue Time" heading.
+     * Shared by every fill point so the show/hide + text logic lives in one
+     * place instead of being repeated at each call site. The badge only
+     * ever shows one of the 4 short TIME_SOURCE labels — any extra detail
+     * belongs in the fields/rows below, not here.
      */
-    // Stash used by pickRefineOption() to know the two candidate times.
-    let _refineOriginalTime = '';
-    let _refineErrorTime   = '';
+    function _setTimeSourceTag(label) {
+        window.__timeSourceLabel = label || '';
+        const tag = document.getElementById('it-time-source-tag');
+        if (!tag) return;
+        if (window.__timeSourceLabel) {
+            tag.textContent = window.__timeSourceLabel;
+            tag.style.display = 'inline-block';
+        } else {
+            tag.textContent = '';
+            tag.style.display = 'none';
+        }
+    }
 
-    async function refineIssueTimeFromEventLog() {
+    /**
+     * Fill the Issue Time fields with `timeStr` and tag them with which of
+     * the 4 named sources it came from — replaces the old "Keep original"
+     * button: since the box is filled immediately, there's nothing to click
+     * to "keep" it, only the source label to read.
+     */
+    function _applyTimeWithSource(timeStr, sourceLabel) {
+        if (!timeStr || !setIssueTimeFromString(timeStr)) return false;
+        _setTimeSourceTag(sourceLabel);
+        refreshUseErrorLink();
+        return true;
+    }
+
+    /**
+     * Compact, single-line "use error time" link for whatever is CURRENTLY
+     * in the Issue Time fields (tagged by _applyTimeWithSource above) — the
+     * one nearby System Event Log Error/Critical entry for that exact time.
+     * Reuses the AI's server-side nearest_error when the current source is
+     * the AI suggestion (no extra fetch); otherwise does the same live
+     * client-side lookup used everywhere else on this page. Hidden when
+     * nothing is within 10 min, or the error time equals the current one.
+     */
+    async function refreshUseErrorLink() {
+        const box = document.getElementById('it-use-error-row');
+        const link = document.getElementById('it-use-error-link');
+        if (!box || !link) return;
         const currentTime = getIssueTimeString();
-        if (!currentTime) return;
+        if (!currentTime) { box.style.display = 'none'; return; }
 
-        try {
-            // Use the event log source filter (pci_bt / usb_bt) to only
-            // match errors from the relevant BT driver source.
+        let errInfo;
+        if (window.__timeSourceLabel === TIME_SOURCE.AI_SUGGEST && window.__aiNearestError) {
+            errInfo = window.__aiNearestError;
+        } else {
             const srcSel = document.getElementById('evtPopupSourceFilter');
             const srcGroup = srcSel ? srcSel.value : '';
-            const result = await window.findClosestEventError(currentTime, srcGroup);
-            showRefinePickerFromData(currentTime, result);
-        } catch (e) {
-            // Fetch/parse failed — still show picker, just disable error option.
-            showRefinePickerFromData(currentTime, null, '(event log unavailable)');
-            console.warn('[Refine-Picker] Failed to find closest event error:', e);
+            try { errInfo = await window.findClosestEventError(currentTime, srcGroup); }
+            catch (e) { errInfo = null; }
         }
-    }
-
-    /**
-     * Render the refine picker from already-resolved data — NO event-log fetch.
-     * Shared by both entry points:
-     *   1) refineIssueTimeFromEventLog()  → data from findClosestEventError()
-     *   2) the AI-suggest flow            → data reused from the suggest_issue_times
-     *      response (`nearest_error`), so the same events the AI weighed drive
-     *      the picker without a second /parse_event_log round-trip.
-     * @param {string} originalTime  current/applied issue time string
-     * @param {object|null} errInfo  {formatted_time, diff_seconds, source, event_id} or null
-     * @param {string} [noneLabel]   label to show when no usable error is given
-     */
-    function showRefinePickerFromData(originalTime, errInfo, noneLabel) {
-        if (!originalTime) return;
-        _refineOriginalTime = originalTime;
-        _refineErrorTime    = '';
-
-        const origLabel = document.getElementById('refine-original-label');
-        const errLabel  = document.getElementById('refine-error-label');
-        const errBtn    = document.getElementById('refine-pick-error');
-        if (origLabel) origLabel.textContent = `⏱ ${originalTime}`;
 
         if (errInfo && errInfo.formatted_time && errInfo.diff_seconds <= 600
-            && errInfo.formatted_time !== originalTime) {
-            _refineErrorTime = errInfo.formatted_time;
-            if (errLabel) errLabel.textContent =
-                `⏱ ${errInfo.formatted_time}  (${errInfo.source}, ID ${errInfo.event_id}, Δ${Number(errInfo.diff_seconds).toFixed(0)}s)`;
-            if (errBtn) { errBtn.disabled = false; errBtn.style.opacity = '1'; }
-            console.log(`[Refine-Picker] Closest event error: ${errInfo.formatted_time} ` +
-                `(${errInfo.source}, ID: ${errInfo.event_id}, diff: ${Number(errInfo.diff_seconds).toFixed(0)}s)`);
+                && errInfo.formatted_time !== currentTime) {
+            window.__pendingErrorInfo = errInfo;
+            link.innerHTML = `⏱ Use error time: ${_itEscHtml(errInfo.formatted_time)} `
+                + `<span style="color:#94a3b8;">(${_itEscHtml(errInfo.source)}, `
+                + `ID ${_itEscHtml(errInfo.event_id)}, Δ${Number(errInfo.diff_seconds).toFixed(0)}s)</span>`;
+            box.style.display = 'block';
         } else {
-            if (errLabel) errLabel.textContent = noneLabel || '(no close error found)';
-            if (errBtn) { errBtn.disabled = true; errBtn.style.opacity = '0.5'; }
-            console.log('[Refine-Picker] No close error found — showing picker with original only.');
+            window.__pendingErrorInfo = null;
+            box.style.display = 'none';
         }
-
-        const picker = document.getElementById('it-refine-picker');
-        if (picker) picker.style.display = 'block';
     }
 
-    /**
-     * Handler for the refine picker buttons.
-     * @param {'original'|'error'} choice
-     */
-    function pickRefineOption(choice) {
-        const timeStr = (choice === 'error') ? _refineErrorTime : _refineOriginalTime;
-        if (timeStr) {
-            setIssueTimeFromString(timeStr);
-            markIssueTimeUserOwned();
-            validateUserInput();
-        }
-        // Highlight the selected button, dim the other
-        const btnOrig = document.getElementById('refine-pick-original');
-        const btnErr  = document.getElementById('refine-pick-error');
-        if (btnOrig) btnOrig.style.border = (choice === 'original') ? '2px solid #2563eb' : '1px solid #cbd5e1';
-        if (btnErr)  btnErr.style.border  = (choice === 'error')    ? '2px solid #2563eb' : '1px solid #cbd5e1';
+    // Debounced wrapper for callers that can fire in rapid succession — most
+    // notably onPartChange(), which runs on every keystroke while the user
+    // manually types a timestamp. Without this, editing one field by hand
+    // fires a fresh findClosestEventError() (a /parse_event_log round trip)
+    // per character instead of once after the user pauses.
+    let _refreshUseErrorLinkTimer = null;
+    function refreshUseErrorLinkDebounced(delayMs) {
+        clearTimeout(_refreshUseErrorLinkTimer);
+        _refreshUseErrorLinkTimer = setTimeout(refreshUseErrorLink, delayMs || 400);
+    }
+
+    /** Click handler for the "Use error time" link. */
+    function useErrorTime() {
+        const info = window.__pendingErrorInfo;
+        if (!info || !info.formatted_time) return;
+        _applyTimeWithSource(info.formatted_time, `System Event Log — ${info.source}, ID ${info.event_id}`);
+        markIssueTimeUserOwned();
+        validateUserInput();
     }
 
     document.addEventListener('DOMContentLoaded', function () {
@@ -4590,14 +4721,18 @@
     }
 
     // ---- Time-capture popup ----
-    function openTimeCaptureModal(detectedTimes) {
+    // isAiFlow marks every row created in this call as originating from the
+    // AI-suggest flow (vs. a plain typed-time-token capture) — each row
+    // carries its OWN nearest_error (see addTimeCaptureRow), so whichever
+    // row the user actually applies drives the "Use error time" link, not a
+    // separately confidence-ranked "best" suggestion that might be a
+    // DIFFERENT row than the one ticked/applied by default (row 0).
+    function openTimeCaptureModal(detectedTimes, isAiFlow) {
         const list = document.getElementById('time-capture-list');
         list.innerHTML = '';
-        // Clear any AI refine linkage by default; the AI-suggest flow re-sets it
-        // AFTER this call. This keeps typed-token captures (which also open this
-        // modal) from inheriting a stale nearest-error and showing the picker.
+        // Clear any AI refine linkage by default; per-row data (stashed by
+        // addTimeCaptureRow below) is what applyTimeCapture() actually reads.
         window.__aiNearestError = null;
-        window.__aiBestTimeStr = '';
         // Reset the title to the default; the AI flow relabels it afterwards.
         const _tcTitle = document.getElementById('tc-title');
         if (_tcTitle) _tcTitle.textContent = 'Detected issue time(s) in your message';
@@ -4623,14 +4758,30 @@
             const dateHint = refDate
                 ? ` &middot; MM/DD/YYYY pre-filled from the loaded log.`
                 : '';
-            summary.innerHTML = `Found ${n} time(s) in your text. Edit any field, add more with “+ Add another time”, or remove any you don’t want.${dateHint}`;
+            const pickHint = n > 1
+                ? ` The <strong>most likely</strong> one is auto-selected (highlighted); tick <em>Allow multiple issue times</em> to apply more.`
+                : '';
+            summary.innerHTML = `Found ${n} time(s) in your text. Edit any field, add more with “+ Add another time”, or remove any you don’t want.${dateHint}${pickHint}`;
         }
 
         if (n === 0) {
-            addTimeCaptureRow(refDate ? { ...refDate } : undefined);
+            addTimeCaptureRow(refDate ? { ...refDate } : undefined, isAiFlow);
         } else {
-            enrichedTimes.forEach((t) => addTimeCaptureRow(t));
+            enrichedTimes.forEach((t) => addTimeCaptureRow(t, isAiFlow));
         }
+
+        // Default UI state: single-pick mode (master OFF), row 0 ticked as
+        // the most-likely candidate, others unticked. The user re-picks by
+        // clicking another row, or enables multi-pick via the master ☐.
+        const master = document.getElementById('tc-multi');
+        if (master) master.checked = false;
+        const rows = list.querySelectorAll('.eit-row');
+        rows.forEach((row, idx) => {
+            const cb = row.querySelector('.eit-pick');
+            if (cb) cb.checked = (idx === 0);
+        });
+        _refreshRowHighlights();
+
         const modal = document.getElementById('time-capture-modal');
         modal.classList.add('open');
         modal.setAttribute('aria-hidden', 'false');
@@ -4680,7 +4831,7 @@
         modal.setAttribute('aria-hidden', 'true');
     }
 
-    function addTimeCaptureRow(t) {
+    function addTimeCaptureRow(t, isAiFlow) {
         // Popup uses the COMPACT one-row template (slimmer than the
         // sidebar's labeled two-row version) so 2-5 detected times
         // stack neatly inside the modal.
@@ -4688,7 +4839,71 @@
         const list = document.getElementById('time-capture-list');
         const node = tpl.content.firstElementChild.cloneNode(true);
         _populateEitRow(node, t);
+        // Stash provenance directly ON the row so applyTimeCapture() tags the
+        // source by whichever row(s) are ACTUALLY applied — never by a
+        // separately re-ranked "best" suggestion, which could be a different
+        // row than the one the user ends up ticking/applying.
+        node.__aiSuggested = !!isAiFlow;
+        node.__nearestError = (t && t.nearest_error) || null;
         list.appendChild(node);
+        // Newly added rows start UNTICKED — they're visible but not applied
+        // unless the user explicitly ticks them (in either single- or
+        // multi-pick mode). The initial most-likely tick is set in
+        // openTimeCaptureModal AFTER all rows are added.
+        const cb = node.querySelector('.eit-pick');
+        if (cb) cb.checked = false;
+    }
+
+    // ── Pick / multi-mode helpers (capture popup) ──────────────────
+    // Single-pick mode (master ☐ OFF, the default): clicking a row's
+    // checkbox unticks every other row (radio-like). The user can never
+    // end up with zero picked — unticking the only ticked row re-ticks it.
+    // Multi-pick mode (master ☐ ON): rows toggle independently.
+    function _onRowPickToggle(cb) {
+        const list = document.getElementById('time-capture-list');
+        const master = document.getElementById('tc-multi');
+        const multi = !!(master && master.checked);
+        if (!multi) {
+            if (cb.checked) {
+                list.querySelectorAll('.eit-pick').forEach((other) => {
+                    if (other !== cb) other.checked = false;
+                });
+            } else {
+                // Don't allow unticking the last picked row.
+                const anyOther = Array.from(list.querySelectorAll('.eit-pick'))
+                    .some((o) => o !== cb && o.checked);
+                if (!anyOther) cb.checked = true;
+            }
+        }
+        _refreshRowHighlights();
+    }
+
+    function _onMasterMultiToggle(masterCb) {
+        const list = document.getElementById('time-capture-list');
+        if (!masterCb.checked) {
+            // Switching back to single-pick: keep only the FIRST currently
+            // ticked row, untick the rest. If none was ticked, tick the
+            // very first row so something always gets applied.
+            let kept = false;
+            list.querySelectorAll('.eit-pick').forEach((cb) => {
+                if (cb.checked) {
+                    if (kept) cb.checked = false;
+                    else kept = true;
+                }
+            });
+            if (!kept) {
+                const first = list.querySelector('.eit-pick');
+                if (first) first.checked = true;
+            }
+        }
+        _refreshRowHighlights();
+    }
+
+    function _refreshRowHighlights() {
+        document.querySelectorAll('#time-capture-list .eit-row').forEach((row) => {
+            const cb = row.querySelector('.eit-pick');
+            row.classList.toggle('eit-row-picked', !!(cb && cb.checked));
+        });
     }
 
     // send=false → "✓ Confirm time(s)": just put the reviewed time(s) into the
@@ -4698,23 +4913,38 @@
     function applyTimeCapture(send) {
         const list = document.getElementById('time-capture-list');
         const times = [];
+        const pickedRows = [];
+        // Only PICKED rows are applied. Single-pick mode (master off) means
+        // exactly one row is picked; multi-pick mode lets the user tick
+        // several. Unpicked rows stay visible but are ignored here.
         list.querySelectorAll('.eit-row').forEach((row) => {
+            const cb = row.querySelector('.eit-pick');
+            if (!cb || !cb.checked) return;
             const t = _readEitRow(row);
-            if (t.hh != null && t.mm != null && t.ss != null) times.push(t);
+            if (t.hh != null && t.mm != null && t.ss != null) { times.push(t); pickedRows.push(row); }
         });
         const modeEl = document.querySelector('input[name="tc-mode"]:checked');
         const mode = modeEl ? modeEl.value : 'replace';
         closeTimeCaptureModal();
         // Applying = confirming → the time(s) become user-owned (no extra tick).
         if (times.length > 0) _applyCapturedTimesToSidebar(times, mode);
-        // If this apply came from the AI-suggest flow, surface the refine picker
-        // using the AI's own nearest-error data (no extra event-log fetch).
-        if (window.__aiNearestError) {
-            const origTime = getIssueTimeString() || window.__aiBestTimeStr || '';
-            if (origTime) showRefinePickerFromData(origTime, window.__aiNearestError);
+        // Tag the just-applied time. Only tagged "From AI suggestion" when
+        // exactly ONE row was applied AND that specific row is the one that
+        // came from the AI-suggest flow — reading the row's OWN stashed data
+        // (set in addTimeCaptureRow) instead of a separately confidence-ranked
+        // "best" suggestion keeps the Δ/nearest-error always in sync with
+        // whatever time actually landed in the sidebar. Multi-pick applies (or
+        // a plain typed-token capture) aren't one of the 4 named sources, so
+        // clear the tag rather than leaving a stale/incorrect one showing.
+        const singlePicked = pickedRows.length === 1 ? pickedRows[0] : null;
+        if (singlePicked && singlePicked.__aiSuggested) {
+            _setTimeSourceTag(TIME_SOURCE.AI_SUGGEST);
+            window.__aiNearestError = singlePicked.__nearestError || null;
+        } else {
+            _setTimeSourceTag('');
+            window.__aiNearestError = null;
         }
-        window.__aiNearestError = null;
-        window.__aiBestTimeStr = '';
+        refreshUseErrorLink();
         if (send) {
             // Fire analysis now with the description in the chat box. The
             // skip-once guard stops sendMessage from re-opening this popup.
@@ -4999,32 +5229,24 @@
                 return;
             }
             const sugg = data.suggestions || [];
-            // For AI suggestions, pre-select ONLY the single best candidate so
-            // the user isn't forced to prune a long auto-filled list. The user's
-            // own explicit times (user_explicit) are NOT narrowed — all of them
-            // are intentional, so we keep the original behaviour there.
-            const bestIdx = _pickBestSuggestionIndex(sugg);
-            const chosen = (data.user_explicit || sugg.length <= 1)
-                ? sugg
-                : (bestIdx >= 0 ? [sugg[bestIdx]] : []);
-            // Funnel into the existing capture popup (handles replace/append).
-            const detected = chosen.map((s) => ({
+            // Funnel EVERY suggestion into the capture popup as its own
+            // editable, pickable row (matches log_chatbot's WiFi flow) —
+            // the popup's own "row 0 = most likely, tick more via Allow
+            // multiple issue times" mechanism handles narrowing, so the
+            // user can actually select an alternative directly instead of
+            // only reading it as inert text in the summary. Each row's OWN
+            // nearest_error (computed server-side per-suggestion) rides along
+            // so applyTimeCapture() can show "Use error time" for whichever
+            // row the user actually applies — NOT a separately confidence-
+            // ranked "best" suggestion that could be a different row than
+            // the one ticked/applied by default.
+            const detected = sugg.map((s) => ({
                 month: s.month, day: s.day, year: s.year,
                 hh: s.hh, mm: s.mm, ss: s.ss, ms: s.ms,
+                nearest_error: s.nearest_error || null,
             }));
-            openTimeCaptureModal(detected);
-            // Link the refine picker to the SAME events the AI used: stash the
-            // best suggestion's nearest system Error/Critical (computed server-
-            // side in the suggest response) so applyTimeCapture() can show
-            // "Found a nearby system error" WITHOUT a second /parse_event_log
-            // fetch. Set AFTER openTimeCaptureModal (which clears the stash).
-            const _bestSugg = (!data.user_explicit && bestIdx >= 0) ? sugg[bestIdx]
-                : (sugg.length === 1 ? sugg[0] : null);
-            if (_bestSugg && _bestSugg.nearest_error) {
-                window.__aiNearestError = _bestSugg.nearest_error;
-                window.__aiBestTimeStr = _bestSugg.issue_time || '';
-            }
-            _setAiTimeSummary(data, bestIdx);
+            openTimeCaptureModal(detected, /* isAiFlow */ true);
+            _setAiTimeSummary(data);
             if (sugg.length === 0 && typeof showToast === 'function') {
                 showToast({ message: 'ℹ️ ' + (data.message || "AI couldn't pin down a time — please fill it in."), ttlMs: 6000 });
             }
@@ -5037,25 +5259,9 @@
         }
     }
 
-    // Choose the index of the single most suitable AI suggestion.
-    // Ranking: higher confidence wins (high > medium > low); ties break by
-    // the backend's order, which is already "best first". Returns -1 for an
-    // empty list.
-    function _pickBestSuggestionIndex(sugg) {
-        if (!sugg || sugg.length === 0) return -1;
-        const rank = { high: 0, medium: 1, low: 2 };
-        let bestIdx = 0;
-        let bestRank = rank[String(sugg[0].confidence || '').toLowerCase()] ?? 1;
-        for (let i = 1; i < sugg.length; i++) {
-            const r = rank[String(sugg[i].confidence || '').toLowerCase()] ?? 1;
-            if (r < bestRank) { bestRank = r; bestIdx = i; }
-        }
-        return bestIdx;
-    }
-
     // Relabel + repopulate the capture popup's title/summary for the AI
     // flow. Called AFTER openTimeCaptureModal (which sets its own defaults).
-    function _setAiTimeSummary(data, bestIdx) {
+    function _setAiTimeSummary(data) {
         const title = document.getElementById('tc-title');
         if (title) title.textContent = data.user_explicit
             ? 'Issue time(s) from your message'
@@ -5063,36 +5269,36 @@
         const summary = document.getElementById('tc-summary');
         if (!summary) return;
         const parts = [];
-        if (data.user_explicit) {
+        if (data.user_explicit && data.ai_also_analyzed) {
+            parts.push('<strong>Using the explicit time(s) from your message</strong>, plus AI’s own read of the log below.');
+        } else if (data.user_explicit) {
             parts.push('<strong>Using the explicit time(s) from your message</strong> (AI not used).');
         } else if (data.interpretation) {
             parts.push('<strong>AI read:</strong> ' + _itEscHtml(data.interpretation));
         }
         const sugg = data.suggestions || [];
-        const onlyBest = !data.user_explicit && sugg.length > 1;
+        // Once AI has also weighed in, suggestions mix explicit ("user") and
+        // log-derived ("log"/"inferred") sources — label each row so it's
+        // clear which is which. (BT doesn't currently send force_ai, so
+        // ai_also_analyzed is never true together with user_explicit here —
+        // kept aligned with log_chatbot's format for when/if it is added.)
+        const showSource = !!data.ai_also_analyzed;
         if (sugg.length) {
-            const lis = sugg.map((s, i) => {
+            const lis = sugg.map((s) => {
                 const conf = s.confidence ? ` <em>(${_itEscHtml(s.confidence)})</em>` : '';
                 const reason = s.reason ? ' — ' + _itEscHtml(s.reason) : '';
-                // Mark the auto-selected best candidate so the user can see
-                // which one was pre-filled below (the rest are alternatives).
-                const isBest = onlyBest && i === bestIdx;
-                const tag = isBest
-                    ? ' <strong style="color:#15803d;">✓ selected</strong>'
-                    : (onlyBest ? ' <span style="color:#94a3b8;">(alternative)</span>' : '');
-                return `<li><code>${_itEscHtml(s.issue_time)}</code>${conf}${tag}${reason}</li>`;
+                const src = (showSource && s.source)
+                    ? ` <span style="color:#9ca3af;">[${_itEscHtml(s.source)}]</span>` : '';
+                return `<li><code>${_itEscHtml(s.issue_time)}</code>${conf}${src}${reason}</li>`;
             }).join('');
             parts.push(`<ul style="margin:6px 0 0 16px;padding:0;font-size:0.72rem;line-height:1.45;">${lis}</ul>`);
         } else {
             parts.push('<em>No specific time found — edit the row below or add one.</em>');
         }
-        if (onlyBest) {
-            parts.push('<div style="margin-top:6px;">Only the <strong>best</strong> time is pre-filled below. '
-                + 'Add an alternative with “＋ Add another time” if needed, then choose '
-                + '<strong>Replace</strong> or <strong>Append</strong>.</div>');
-        } else {
-            parts.push('<div style="margin-top:6px;">Edit if needed, then choose <strong>Replace</strong> or <strong>Append</strong>.</div>');
+        if (sugg.length > 1) {
+            parts.push('<div style="margin-top:6px;">The <strong>most likely</strong> one is auto-selected (highlighted); tick <em>Allow multiple issue times</em> to apply more.</div>');
         }
+        parts.push('<div style="margin-top:6px;">Edit if needed, then choose <strong>Replace</strong> or <strong>Append</strong>.</div>');
         summary.innerHTML = parts.join(' ');
     }
 </script>
@@ -5115,6 +5321,13 @@
                 Found 0 time(s). Edit any field, add more with “+ Add another time”,
                 or remove any you don’t want.
             </div>
+            <label class="tc-multi-row" for="tc-multi" title="When OFF, only the highlighted row is applied; tick to apply more">
+                <input type="checkbox" id="tc-multi" onchange="_onMasterMultiToggle(this)">
+                <span>
+                    <strong>Allow multiple issue times</strong>
+                    <span class="tc-multi-sub">Off (default) — only the highlighted row is applied. Tick to pick more.</span>
+                </span>
+            </label>
             <div id="time-capture-list"></div>
             <button type="button" class="eit-add-btn" style="margin-top:6px;"
                     onclick="addTimeCaptureRow()">
@@ -5174,6 +5387,7 @@
     <div class="eit-row eit-row-compact">
         <button type="button" class="eit-remove" onclick="removeEitRow(this)" aria-label="Remove">×</button>
         <div class="eit-fields">
+            <input type="checkbox" class="eit-pick" onchange="_onRowPickToggle(this)" title="Use this time" aria-label="Use this time">
             <input type="number" class="eit-month" min="1"  max="12"  placeholder="MM"   inputmode="numeric">
             <span class="eit-sep">/</span>
             <input type="number" class="eit-day"   min="1"  max="31"  placeholder="DD"   inputmode="numeric">
@@ -5187,6 +5401,7 @@
             <input type="number" class="eit-sec"   min="0"  max="59"  placeholder="SS"   inputmode="numeric">
             <span class="eit-sep">.</span>
             <input type="number" class="eit-ms"    min="0"  max="999" placeholder="mmm"  inputmode="numeric">
+            <span class="eit-pick-badge">★ most likely</span>
         </div>
     </div>
 </template>

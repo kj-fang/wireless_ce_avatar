@@ -323,7 +323,10 @@
         }
         .it-clear-top:hover { color: #c62828; background: #fbeaea; }
         .it-clear-top-label { display: none; font-size: 0.72rem; font-weight: 600; }
-        .it-clear-top:hover .it-clear-top-label { display: inline; }
+        .it-clear-top:hover .it-clear-top-icon,
+        .it-clear-top:active .it-clear-top-icon { display: none; }
+        .it-clear-top:hover .it-clear-top-label,
+        .it-clear-top:active .it-clear-top-label { display: inline; }
 
         /* ── Confirm modal ── */
         .cm-overlay {
@@ -2089,13 +2092,29 @@
         </div>
 
         <!-- Issue Time -->
-        <div class="sidebar-section">
-            <h6 style="display:flex;align-items:center;justify-content:space-between;">
-                <span>⏰ Issue Time</span>
-                <button type="button" class="it-clear-top" onclick="clearAllIssueTimes()"
-                        title="Clear the issue time (and any extra rows)">
-                    🗑️<span class="it-clear-top-label">Clear</span>
-                </button>
+        <div class="sidebar-section" style="position:relative;">
+            <!-- Pinned to the section's top-right corner (out of the flex
+                 flow entirely) so it never fights the heading + badge for
+                 room and never wraps onto its own line at narrow widths. -->
+            <button type="button" class="it-clear-top" onclick="clearAllIssueTimes()"
+                    style="position:absolute;top:14px;right:14px;"
+                    title="Clear the issue time (and any extra rows)">
+                <span class="it-clear-top-icon">🗑️</span><span class="it-clear-top-label">Clear</span>
+            </button>
+            <h6 style="margin:0 56px 10px 0;display:flex;align-items:center;gap:6px;flex-wrap:wrap;">
+                <span style="flex-shrink:0;">⏰ Issue Time</span>
+                <!-- Simple source badge: exactly one of the 4 named sources
+                     ("From last time" / "From attachment" / "From
+                     description" / "From AI suggestion"). Colored to match
+                     THIS page's own WIFI/Intel-blue theme (#0071c5 + the
+                     same light-blue tint/border used by the "Customer time"
+                     card below) instead of the BT chatbot's indigo badge.
+                     Small font/padding so the full text fits on the SAME
+                     line as the heading (never ellipsized) — only wraps
+                     onto its own line if the row is genuinely too narrow
+                     for both. -->
+                <span id="it-time-source-tag"
+                      style="display:none;flex:0 0 auto;font-size:0.6rem;font-weight:600;text-transform:none;letter-spacing:normal;color:#0071c5;background:#eaf3ff;border:1px solid #cfe0fa;border-radius:9px;padding:1px 6px;white-space:nowrap;"></span>
             </h6>
             <div style="font-size:0.72rem;color:#666;margin-bottom:10px;line-height:1.4;">
                 When did the issue happen?
@@ -4518,18 +4537,30 @@
                 let descPart = rawQuestion;
                 // Priority: LLM-organized multi-time list (from the case
                 // description) → URL ?issue_time= → attachment_time →
-                // backend-resolved issue_time → regex on description.
+                // backend-resolved issue_time → regex on description. Each
+                // branch is tagged with whichever of the 4 named sources it
+                // actually is ("last time" absorbs the URL-carried-over case
+                // and the crude regex fallback isn't a real 4th category —
+                // it's the same "customer description" source, just found by
+                // regex instead of the LLM organizer).
+                let filledSourceLabel = '';
                 if (issueTimes.length > 0 && _prefillAutoTimes(issueTimes)) {
                     // The backend already returned a CLEAN description (raw
                     // timestamps stripped), so use it verbatim. Auto-detected
                     // time(s) apply immediately (confirm-gate removed).
+                    filledSourceLabel = TIME_SOURCE.DESCRIPTION;
                     validateUserInput();
                 } else {
                     let foundTime = urlIssueTime || attachmentTime || resolvedTime;
+                    if (foundTime) {
+                        filledSourceLabel = attachmentTime && foundTime === attachmentTime
+                            ? TIME_SOURCE.ATTACHMENT
+                            : TIME_SOURCE.LAST_TIME;
+                    }
                     if (!foundTime) {
                         for (const re of VALID_TIME_REGEXES) {
                             const m = rawQuestion.match(re);
-                            if (m) { foundTime = m[0]; break; }
+                            if (m) { foundTime = m[0]; filledSourceLabel = TIME_SOURCE.DESCRIPTION; break; }
                         }
                     }
                     if (foundTime && setIssueTimeFromString(foundTime)) {
@@ -4542,6 +4573,7 @@
                         // the user knows to fill it in (or use AI suggest).
                         const warn = document.getElementById('it-unknown-warn');
                         if (warn) warn.style.display = 'block';
+                        filledSourceLabel = '';
                     }
                 }
                 descPart = trimTrailingTimeConnector(descPart.replace(/\s+/g, ' ').trim());
@@ -4557,11 +4589,50 @@
                 const prefillHint = document.getElementById('prefill-hint');
                 if (prefillHint) prefillHint.style.display = 'block';
                 validateUserInput();
+
+                // Tag the field with whichever of the 4 named sources filled it.
+                if (filledSourceLabel) _setTimeSourceTag(filledSourceLabel);
             }, 400);
 
         } catch (err) {
             autoAnalyzeTriggered = false;
             console.error('[Auto-Analysis] Failed:', err);
+        }
+    }
+
+    // window.__timeSourceLabel names which of the 4 sources currently fills
+    // the Issue Time fields — shown as a small badge beside the "Issue Time"
+    // heading. Set by tryAutoAnalyzeOnLoad() (whichever of the 4 sources
+    // actually filled the field, per its own priority order) and by
+    // applyTimeCapture() (only tagged when the apply came from the AI-suggest
+    // flow — window.__aiSuggestApplied, stashed by _runAiSuggest(), is
+    // checked there; this page has no nearest-system-error feature, so
+    // unlike bt_chatbot.html only a boolean "was this the AI flow" is
+    // needed, never the actual suggested time string).
+    const TIME_SOURCE = {
+        LAST_TIME: 'From last time',
+        ATTACHMENT: 'From attachment',
+        DESCRIPTION: 'From description',
+        AI_SUGGEST: 'From AI suggestion',
+    };
+
+    /**
+     * Set (or clear) the small source badge beside the "Issue Time" heading.
+     * Shared by every fill point so the show/hide + text logic lives in one
+     * place instead of being repeated at each call site. The badge only
+     * ever shows one of the 4 short TIME_SOURCE labels — any extra detail
+     * belongs in the fields/rows below, not here.
+     */
+    function _setTimeSourceTag(label) {
+        window.__timeSourceLabel = label || '';
+        const tag = document.getElementById('it-time-source-tag');
+        if (!tag) return;
+        if (window.__timeSourceLabel) {
+            tag.textContent = window.__timeSourceLabel;
+            tag.style.display = 'inline-block';
+        } else {
+            tag.textContent = '';
+            tag.style.display = 'none';
         }
     }
 
@@ -4693,6 +4764,10 @@
     function openTimeCaptureModal(detectedTimes) {
         const list = document.getElementById('time-capture-list');
         list.innerHTML = '';
+        // Cleared here and re-stashed by _runAiSuggest() only when this popup
+        // is being opened FOR the AI-suggest flow — so a stale flag from a
+        // previous AI suggestion doesn't leak into a plain typed-token capture.
+        window.__aiSuggestApplied = false;
         // Reset the title to the default; the AI flow relabels it afterwards.
         const _tcTitle = document.getElementById('tc-title');
         if (_tcTitle) _tcTitle.textContent = 'Detected issue time(s) in your message';
@@ -4881,6 +4956,12 @@
         closeTimeCaptureModal();
         // Applying = confirming → the time(s) become user-owned (no extra tick).
         if (times.length > 0) _applyCapturedTimesToSidebar(times, mode);
+        // Tag the just-applied time. Only the AI-suggest flow gets one of the
+        // 4 named source tags — the plain typed-token capture (this same
+        // modal's other purpose) isn't one of them, so clear the tag rather
+        // than leaving a stale/incorrect one showing.
+        _setTimeSourceTag(window.__aiSuggestApplied ? TIME_SOURCE.AI_SUGGEST : '');
+        window.__aiSuggestApplied = false;
         // Confirm-only path (send=false) — guard the user's NEXT manual Send
         // against immediately re-opening this same modal. Their chat message
         // probably still contains the time token(s) we just absorbed into the
@@ -5235,6 +5316,16 @@
 
     async function confirmLlmTimeConsent() {
         closeLlmTimeConsent();
+        await _runAiSuggest(false);
+    }
+
+    // Shared by the normal "Allow & analyze" flow (forceAi=false) and the
+    // "Also let AI check the log" button rendered inside the popup summary
+    // when the description had an explicit time (forceAi=true) — see
+    // _setAiTimeSummary below. force_ai tells the backend to ALSO run the
+    // log-driven AI cascade even though an explicit time was found in the
+    // text, instead of short-circuiting on it for free.
+    async function _runAiSuggest(forceAi) {
         const btn = document.getElementById('ai-time-btn');
         const orig = btn ? btn.innerHTML : '';
         if (btn) { btn.disabled = true; btn.innerHTML = '⏳ Analyzing…'; }
@@ -5242,7 +5333,7 @@
             const res = await fetch('/log_chatbot/suggest_issue_times', {
                 method: 'POST',
                 headers: { 'Content-Type': 'application/json' },
-                body: JSON.stringify({ text: _llmTimeConsentText }),
+                body: JSON.stringify({ text: _llmTimeConsentText, force_ai: !!forceAi }),
             });
             const data = await res.json();
             if (!data.success) {
@@ -5258,6 +5349,18 @@
                 hh: s.hh, mm: s.mm, ss: s.ss, ms: s.ms,
             }));
             openTimeCaptureModal(detected);
+            // Flag that this popup came from the AI-suggest flow, so
+            // applyTimeCapture() can tag the eventual pick as "From AI
+            // suggestion". Only when the AI itself did the inferring — an
+            // explicit time typed by the user (not further checked against
+            // the log) isn't an AI suggestion, so it's left untagged (falls
+            // through to the plain-capture "no tag" case). This page has no
+            // nearest-system-error feature (unlike bt_chatbot.html), so only
+            // a boolean is needed — the suggested time's actual value is
+            // never read back out.
+            if (!data.user_explicit && sugg.length > 0) {
+                window.__aiSuggestApplied = true;
+            }
             _setAiTimeSummary(data);
             if (sugg.length === 0 && typeof showToast === 'function') {
                 showToast({ message: 'ℹ️ ' + (data.message || "AI couldn't pin down a time — please fill it in."), ttlMs: 6000 });
@@ -5271,6 +5374,13 @@
         }
     }
 
+    // Re-run with force_ai=true from the button inside the summary — the
+    // user already consented once (they got here via "Allow & analyze"), so
+    // this doesn't re-show the consent modal.
+    function alsoRunAiCheckOnExplicitTime() {
+        _runAiSuggest(true);
+    }
+
     // Relabel + repopulate the capture popup's title/summary for the AI
     // flow. Called AFTER openTimeCaptureModal (which sets its own defaults).
     function _setAiTimeSummary(data) {
@@ -5281,17 +5391,25 @@
         const summary = document.getElementById('tc-summary');
         if (!summary) return;
         const parts = [];
-        if (data.user_explicit) {
+        if (data.user_explicit && data.ai_also_analyzed) {
+            parts.push('<strong>Using the explicit time(s) from your message</strong>, plus AI’s own read of the log below.');
+        } else if (data.user_explicit) {
             parts.push('<strong>Using the explicit time(s) from your message</strong> (AI not used).');
         } else if (data.interpretation) {
             parts.push('<strong>AI read:</strong> ' + _itEscHtml(data.interpretation));
         }
         const sugg = data.suggestions || [];
+        // Once AI has also weighed in (force_ai), suggestions mix explicit
+        // ("user") and log-derived ("log"/"inferred") sources — label each
+        // row so it's clear which is which.
+        const showSource = !!data.ai_also_analyzed;
         if (sugg.length) {
             const lis = sugg.map((s) => {
                 const conf = s.confidence ? ` <em>(${_itEscHtml(s.confidence)})</em>` : '';
                 const reason = s.reason ? ' — ' + _itEscHtml(s.reason) : '';
-                return `<li><code>${_itEscHtml(s.issue_time)}</code>${conf}${reason}</li>`;
+                const src = (showSource && s.source)
+                    ? ` <span style="color:#9ca3af;">[${_itEscHtml(s.source)}]</span>` : '';
+                return `<li><code>${_itEscHtml(s.issue_time)}</code>${conf}${src}${reason}</li>`;
             }).join('');
             parts.push(`<ul style="margin:6px 0 0 16px;padding:0;font-size:0.72rem;line-height:1.45;">${lis}</ul>`);
         } else {
@@ -5299,6 +5417,17 @@
         }
         if (sugg.length > 1) {
             parts.push('<div style="margin-top:6px;">The <strong>most likely</strong> one is auto-selected (highlighted); tick <em>Allow multiple issue times</em> to apply more.</div>');
+        }
+        // Only offer the "also check the log" follow-up while the AI hasn't
+        // run yet (pure explicit-time short-circuit) — once ai_also_analyzed
+        // is true there's nothing further to trigger.
+        if (data.user_explicit && !data.ai_also_analyzed) {
+            parts.push(
+                '<div style="margin-top:8px;">' +
+                '<button type="button" class="fbd-btn" style="font-size:0.72rem;padding:4px 10px;" ' +
+                'onclick="alsoRunAiCheckOnExplicitTime()">🤖 Also let AI check the log</button>' +
+                '</div>'
+            );
         }
         parts.push('<div style="margin-top:6px;">Edit if needed, then choose <strong>Replace</strong> or <strong>Append</strong>.</div>');
         summary.innerHTML = parts.join(' ');

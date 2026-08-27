@@ -6,6 +6,7 @@ import uuid
 import os
 import threading
 from datetime import datetime
+from typing import Optional
 import tkinter as tk
 from tkinter import filedialog
 
@@ -40,6 +41,65 @@ log_chatbot_bp = Blueprint("log_chatbot", __name__, url_prefix="/log_chatbot")
 
 # Server-side store: session_id -> WifiLogAgentSystem instance
 _chatbot_instances: dict = {}
+
+# Cheaper model for the AI-suggest-issue-time cascade's stage 1 ONLY (a
+# near-mechanical "does this description carry a usable time cue?" check,
+# already gated by a strict confidence check in build_issue_time_suggestions
+# — a wrong/uncertain stage-1 answer just escalates to stage 2, never ships
+# silently). Verified against the gnai.intel.com gateway with
+# scripts/probe_gnaigpt_models.py (2026-07-08): both "claude-haiku-4-5" and
+# "claude-4-5-haiku" respond; using the former since it matches Anthropic's
+# real public model ID. Stage 2 (log-driven reasoning) always stays on the
+# main configured model — see stage1_model's docstring in
+# utils/issue_time_ai.py for why that step is NOT a safe downgrade target.
+#
+# Preferred source is key.py's ``gnaigpt_stage1_model`` (same place
+# gnaigpt_model/gnaigpt_token/gnaigpt_url live) so it can be retuned without a
+# code deploy — see _resolve_stage1_model() below. This constant is only the
+# fallback when key.py doesn't set that attribute yet.
+_STAGE1_ISSUE_TIME_MODEL_DEFAULT = "claude-haiku-4-5"
+
+
+def _resolve_stage1_model(main_model: str) -> Optional[str]:
+    """Cheaper stage-1 model, or None to keep everything on ``main_model``.
+
+    None unless ``main_model`` is Claude-family — llm_service.py picks the
+    Anthropic vs. OpenAI client based on that same prefix check, so a
+    non-Claude main model means agent.client isn't the Anthropic adapter and
+    a Claude model string would 404 against it.
+    """
+    if not main_model.startswith("claude"):
+        return None
+    try:
+        key = app_config.get_key()
+        configured = getattr(key, "gnaigpt_stage1_model", None)
+        if configured:
+            return configured
+    except Exception:
+        pass
+    return _STAGE1_ISSUE_TIME_MODEL_DEFAULT
+
+
+def _resolve_current_issue_time(data: dict, agent) -> str:
+    """Currently-filled sidebar issue_time (if any), as a formatted string —
+    a strong stage-1 anchor for build_issue_time_suggestions even when the
+    description carries no time cue. Shared by both chatbots'
+    suggest_issue_times routes (identical logic, previously duplicated).
+
+    The request body's ``current_issue_time`` wins when present (client
+    override); otherwise falls back to the agent's own ``issue_time``,
+    skipping the sentinel year-1 placeholder ("no real time yet") so a
+    bogus date is never fed to the model.
+    """
+    current_it_str = (data.get("current_issue_time") or "").strip()
+    if not current_it_str:
+        try:
+            cur_dt = getattr(agent, "issue_time", None)
+            if cur_dt and cur_dt.year >= 2000:
+                current_it_str = format_issue_time(cur_dt)
+        except Exception:
+            current_it_str = ""
+    return current_it_str
 
 
 # ------------------------------------------------------------------
@@ -621,6 +681,14 @@ def suggest_issue_times():
     state in and jsonifies the result out."""
     data = request.get_json(silent=True) or {}
     text = (data.get("text") or "").strip()
+    # "Also let AI check the log" — when the description has an explicit
+    # time, build_issue_time_suggestions normally short-circuits on it (free,
+    # no LLM). This flag opts into ALSO running the LLM cascade against the
+    # log and merging its suggestion(s) in after the explicit one(s), for
+    # when the user wants a second opinion instead of trusting their own
+    # typed time outright. No effect when the description has no explicit
+    # time — that path already always runs the AI cascade.
+    force_ai = bool(data.get("force_ai"))
     try:
         agent = _get_or_create_agent()
         log_path = agent.current_log_path or ""
@@ -659,6 +727,9 @@ def suggest_issue_times():
         except Exception:
             log_has_date = None
 
+        current_it_str = _resolve_current_issue_time(data, agent)
+        stage1_model = _resolve_stage1_model(getattr(agent, "model", None) or "")
+
         payload = build_issue_time_suggestions(
             text=text,
             log_lines=log_lines,
@@ -666,10 +737,13 @@ def suggest_issue_times():
             last_ts=last_ts,
             llm_client=getattr(agent, "client", None),
             llm_model=getattr(agent, "model", None),
+            stage1_model=stage1_model,
+            force_ai=force_ai,
             log_has_date=log_has_date,
             log_frame_first_ts=log_frame_first_ts,
             log_frame_last_ts=log_frame_last_ts,
             tz_label=tz_label,
+            current_issue_time=current_it_str or None,
         )
         return jsonify(payload), (200 if payload.get("success") else 503)
     except Exception as e:

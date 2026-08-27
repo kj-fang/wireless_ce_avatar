@@ -20,6 +20,9 @@ from utils.issue_time_utils import (
     format_issue_time,
 )
 from utils.issue_time_ai import build_issue_time_suggestions, organize_issue_context, realign_times_to_log, find_nearest_event_error
+# Reuse the Wi-Fi side's stage-1 cheap-model resolver so the key.py contract
+# (``gnaigpt_stage1_model``) is defined in exactly one place for both chatbots.
+from blueprints.log_chatbot.log_chatbot_routes import _resolve_stage1_model, _resolve_current_issue_time
 from services import feedback_service
 from services import gather_service
 from services import history_service
@@ -751,6 +754,9 @@ def suggest_issue_times():
             return jsonify({"success": False,
                             "error": "Type a problem description or load a log first."}), 400
 
+        current_it_str = _resolve_current_issue_time(data, agent)
+        stage1_model = _resolve_stage1_model(getattr(agent, "model", None) or "")
+
         payload = build_issue_time_suggestions(
             text=text,
             log_lines=log_lines,
@@ -758,7 +764,9 @@ def suggest_issue_times():
             last_ts=last_ts,
             llm_client=getattr(agent, "client", None),
             llm_model=getattr(agent, "model", None),
+            stage1_model=stage1_model,
             event_log_events=event_log_events,
+            current_issue_time=current_it_str or None,
         )
 
         # Link the sidebar refine picker to the SAME events the AI used:

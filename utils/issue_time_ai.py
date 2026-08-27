@@ -14,12 +14,115 @@ Deliberately free of Flask and of the agent class — callers pass plain inputs
 model name) so the logic is unit-testable in isolation.
 """
 
+import atexit
 import json
 import re
+import hashlib
+import threading
+from collections import OrderedDict
+from concurrent.futures import ProcessPoolExecutor
 from datetime import datetime, timedelta
 from typing import Any, List, Optional, Tuple, Union
 
 from utils.issue_time_utils import parse_issue_time_string, format_issue_time
+
+
+# ---------------------------------------------------------------------------
+# Response cache for build_issue_time_suggestions
+# ---------------------------------------------------------------------------
+# Users often click the "AI suggest issue time" button multiple times per case
+# (edit description → retry → tweak → retry). When (log, description, frames)
+# are identical the LLM answer is deterministic enough that we can hand back
+# the previous payload — zero tokens, zero latency. Bounded LRU so a
+# long-running server doesn't grow unbounded.
+_SUGGEST_CACHE_MAX = 64
+_suggest_cache: "OrderedDict[str, dict]" = OrderedDict()
+
+
+def _log_fingerprint(log_lines: Optional[List[str]]) -> str:
+    """Small hashable fingerprint for a possibly-huge log line list. Uses the
+    first + last 100 lines plus the total count — collision-safe for real
+    captures (which change either content or length when swapped)."""
+    if not log_lines:
+        return "no-log"
+    n = len(log_lines)
+    head = "\n".join(log_lines[:100])
+    tail = "\n".join(log_lines[-100:]) if n > 100 else ""
+    return hashlib.md5(f"{n}\n{head}\n{tail}".encode(errors="replace")).hexdigest()
+
+
+def _suggest_cache_key(
+    text: str,
+    log_lines: Optional[List[str]],
+    first_ts: Optional[datetime],
+    last_ts: Optional[datetime],
+    log_has_date: Optional[bool],
+    tz_label: str,
+    log_frame_first_ts: Optional[datetime],
+    log_frame_last_ts: Optional[datetime],
+    event_events_len: int,
+    current_issue_time: Optional[str] = None,
+    stage1_model: Optional[str] = None,
+    force_ai: bool = False,
+) -> str:
+    payload = "|".join([
+        (text or "").strip(),
+        _log_fingerprint(log_lines),
+        str(first_ts), str(last_ts),
+        str(log_has_date), str(tz_label),
+        str(log_frame_first_ts), str(log_frame_last_ts),
+        str(event_events_len),
+        (current_issue_time or "").strip(),
+        (stage1_model or "").strip(),
+        str(bool(force_ai)),
+    ])
+    return hashlib.md5(payload.encode(errors="replace")).hexdigest()
+
+
+def _cache_get(key: str) -> Optional[dict]:
+    hit = _suggest_cache.get(key)
+    if hit is not None:
+        _suggest_cache.move_to_end(key)
+    return hit
+
+
+def _cache_put(key: str, value: dict) -> None:
+    _suggest_cache[key] = value
+    _suggest_cache.move_to_end(key)
+    while len(_suggest_cache) > _SUGGEST_CACHE_MAX:
+        _suggest_cache.popitem(last=False)
+
+
+# ---------------------------------------------------------------------------
+# Per-log digest cache (separate from the full-answer cache above)
+# ---------------------------------------------------------------------------
+# build_event_timeline_digest / build_log_digest both do a full LINEAR SCAN of
+# every line in the log to find strong/weak anchor hits. For a huge trace
+# (e.g. a multi-million-line "-boot" BT HCI capture) this scan alone can take
+# tens of seconds — independent of, and much larger than, the LLM call that
+# follows. The full-answer cache above is keyed on the DESCRIPTION TEXT, so
+# it misses every time an engineer tweaks the description and retries — but
+# the underlying LOG never changed, so re-running the multi-million-line scan
+# on every retry is pure waste. This cache is keyed ONLY on the log
+# fingerprint + digest parameters (no description text), so a retry with
+# different wording reuses the already-computed digest string instantly —
+# turning a repeat ~80s scan into a dict lookup.
+_DIGEST_CACHE_MAX = 8
+_digest_cache: "OrderedDict[str, str]" = OrderedDict()
+
+
+def _digest_cache_get(key: str) -> Optional[str]:
+    hit = _digest_cache.get(key)
+    if hit is not None:
+        _digest_cache.move_to_end(key)
+    return hit
+
+
+def _digest_cache_put(key: str, value: str) -> None:
+    _digest_cache[key] = value
+    _digest_cache.move_to_end(key)
+    while len(_digest_cache) > _DIGEST_CACHE_MAX:
+        _digest_cache.popitem(last=False)
 
 
 # Full datetime tokens (carry their own date) — user-first, no LLM.
@@ -51,9 +154,147 @@ _LOG_DIGEST_KEYWORDS = re.compile(
     r'|connect|disconnect|enable|disable|query|request|response|notif|event'
     # Sensing / discovery
     r'|scan|discover|search|probe|detect|monitor|observ|interrupt|\bisr\b'
+    # Bluetooth generic anchors — HCI/LMP protocol + link lifecycle terms that
+    # frequently sit next to the interesting moment in a BT capture (the
+    # concrete BT FAULT words live in _LOG_DIGEST_STRONG_RE above).
+    r'|\bhci\b|\blmp\b|advertis|inquiry|\bpair|bond|encrypt|\brole\b'
+    r'|firmware|\bfw\b|controller|recover|coex|supervis|\bacl\b|\bsco\b'
     r')\b',
     re.IGNORECASE,
 )
+
+# Stronger anchors than the generic sweep above. The generic keywords match
+# on nearly every line of a busy Wi-Fi ETL trace ("connect"/"event"/"scan"
+# fire dozens of times a second), so on a large log the keyword-hit list can
+# run into the tens of thousands before the file is even half read. These
+# tokens name a concrete fault or state change instead of a generic verb —
+# lines matching them get first claim on the (still small) digest budget, see
+# ``build_log_digest``.
+#
+# Two vocabularies, one regex — kept together so a mixed capture (Wi-Fi ETL +
+# BT HCI in the same session) is handled by a single sweep:
+#   * Wi-Fi ETL   — bracketed [ERROR]/[WARN]/[CRIT] severity tags plus
+#                   DEAUTH/DISASSOC/MISBEHAV/EXCLUD and friends.
+#   * BT HCI/driver (ibtpci/ibtusb .hci.txt) — Intel driver traces do NOT use
+#                   [ERROR] tags; the fault signal is inline: "Error!" /
+#                   "Warning!", firmware EXCEPTION / FATAL / "critical assert
+#                   failure", "Trigger dump", error-recovery ("recovery",
+#                   RECOVERY_TYPE_*, watchdog), and concrete NT STATUS_* codes
+#                   (a bare STATUS_ is too broad — STATUS_SUCCESS is the most
+#                   common line — so only the fault codes are listed). The bare
+#                   ``timeout`` alt requires non-letter/underscore boundaries so
+#                   it hits "STATUS_IO_TIMEOUT" but skips the benign, high-
+#                   frequency "GetTrasactionTimeoutMs" / "IOSF_TRANS_TIMEOUT_
+#                   DEFAULT" config chatter.
+_LOG_DIGEST_STRONG_RE = re.compile(
+    # Wi-Fi ETL
+    r'\[(?:ERROR|WARN|CRIT(?:ICAL)?|FATAL)\]'
+    r'|MISBEHAV|FAILED|DEAUTH|DISASSOC|EXCLUD|CRASH|PANIC|REJECT'
+    # BT HCI / driver
+    r'|Error!|Warning!|\bfatal\b|\bexception\b|\bassert'
+    r'|Trigger dump|\bunexpected\b'
+    r'|STATUS_(?:NO_SUCH_DEVICE|IO_TIMEOUT|UNSUCCESSFUL|CANCELLED'
+    r'|DEVICE_NOT_CONNECTED|INSUFFICIENT_RESOURCES|DEVICE_POWER_FAILURE)'
+    r'|\brecover(?:y|ed|ing)?\b|\bwatchdog\b'
+    r'|(?<![A-Za-z_])timeout(?![A-Za-z_])',
+    re.IGNORECASE,
+)
+
+
+# Fast, dependency-free PRE-FILTER for ``_LOG_DIGEST_STRONG_RE`` — a plain
+# tuple of lowercase literal substrings that MUST be present for the real
+# regex to have ANY chance of matching a line (a strict SUPERSET of true
+# matches: every branch of ``_LOG_DIGEST_STRONG_RE`` requires at least one of
+# these to appear, so this can never produce a false NEGATIVE). Checking
+# these with plain ``in`` on a once-lowercased copy of the line (CPython's
+# highly optimized C string search) is far cheaper per line than dispatching
+# the real regex's multi-alternative, IGNORECASE-folding search — so on a
+# huge trace (millions of lines, only a tiny fraction ever match) this lets
+# the vast majority of lines skip the expensive regex call entirely. Every
+# candidate that DOES pass this pre-filter is still confirmed with the real
+# ``_LOG_DIGEST_STRONG_RE.search()`` before counting as a hit (see
+# ``_is_strong_hit``), so this can only make scanning FASTER — it never
+# changes WHICH lines end up classified as strong anchors.
+#
+# (An Aho-Corasick automaton — e.g. the third-party ``pyahocorasick``
+# package — would make this pre-filter itself O(1)-per-character regardless
+# of substring count, instead of this list's O(#substrings) worst case. That
+# package needs a network install and a compiled C-extension, which this
+# offline-packaged, PyInstaller-distributed app can't rely on being
+# available on every machine it runs on, so this pure-stdlib version is the
+# safe default — no new dependency, no packaging risk.)
+_STRONG_PREFILTER_LITERALS = (
+    "[error", "[warn", "[crit", "[fatal",
+    "misbehav", "failed", "deauth", "disassoc", "exclud", "crash", "panic",
+    "reject", "error!", "warning!", "fatal", "exception", "assert",
+    "trigger dump", "unexpected",
+    "status_no_such_device", "status_io_timeout", "status_unsuccessful",
+    "status_cancelled", "status_device_not_connected",
+    "status_insufficient_resources", "status_device_power_failure",
+    "recover", "watchdog", "timeout",
+)
+
+
+def _is_strong_hit(line: str) -> bool:
+    """True iff ``line`` matches ``_LOG_DIGEST_STRONG_RE`` — identical result
+    to calling that regex directly, just faster on average: a cheap literal
+    substring pre-filter (see ``_STRONG_PREFILTER_LITERALS``) skips the real
+    regex dispatch for lines that can't possibly match."""
+    if not any(lit in line.lower() for lit in _STRONG_PREFILTER_LITERALS):
+        return False
+    return bool(_LOG_DIGEST_STRONG_RE.search(line))
+
+
+# Description-side "does this text seem to carry a time hint?" — used by the
+# stage-1 gate. When the description has no time cue, stage1 (description-only
+# LLM call) has no basis to infer a time from, so we skip it and go straight
+# to stage2 (log-driven) to avoid burning tokens on a guess with no evidence.
+#
+# Deliberately STRICT / high-precision: only matches unambiguous, absolute
+# time-pointing tokens. Generic connectives like "at", "around", "before",
+# "after", "when", "during" were tried and REMOVED — they're some of the most
+# common words in English/support-case prose (e.g. "at the AP", "failure
+# occurs when device roams") and matched almost every description, causing
+# stage1 to fire on text with NO real time information and hallucinate a
+# "high confidence" answer purely from wording (no log evidence at all). A
+# false NEGATIVE here only costs a few hundred tokens (falls through to the
+# now-cheap stage2a timeline digest); a false POSITIVE can produce a wrong
+# time with no way for the model to know better — so precision is prioritized
+# over recall.
+#
+# Hits any of:
+#   * digit patterns   — "12:34", "3pm", "5 minutes ago", "o'clock"
+#   * day-segment words — "morning", "afternoon", "evening", "night",
+#                         "midnight", "noon" (informative even standalone)
+#   * Chinese clock units / day-segments — 「點」「分」「秒」「早上」「下午」…
+_TIME_HINT_RE = re.compile(
+    r'\d{1,2}:\d{2}'
+    r'|\d+\s*(?:am|pm|a\.m\.|p\.m\.)'
+    r'|\d+\s*(?:hr|hrs|hour|hours|min|mins|minute|minutes|sec|secs|second|seconds)\s*(?:ago|before|after|earlier|later)\b'
+    r"|\bo['’]?clock\b"
+    r'|\b(?:this|last|early|late|yesterday)\s+(?:morning|afternoon|evening|night)\b'
+    r'|\b(?:morning|afternoon|evening|night|midnight|noon|midday)\b'
+    r'|[點分秒時]'
+    r'|早上|下午|上午|晚上|半夜|凌晨|中午|傍晚|清晨',
+    re.IGNORECASE,
+)
+
+
+def _has_time_hint(text: str) -> bool:
+    """Return True when the description likely carries a time cue worth asking
+    the LLM about (description-only stage-1). Purely regex — no LLM."""
+    if not text:
+        return False
+    m = _TIME_HINT_RE.search(text)
+    if m:
+        # Debug visibility: print exactly which token triggered stage1 so a
+        # future false-positive (a word that matches but isn't really a time
+        # cue) can be diagnosed from the console log instead of guessed at.
+        print(f"[issue_time_ai] _has_time_hint matched {m.group(0)!r} "
+              f"at offset {m.start()} in description "
+              f"(context: …{text[max(0, m.start()-20):m.end()+20]!r}…)")
+        return True
+    return False
 
 
 def make_suggestion(
@@ -156,6 +397,177 @@ def extract_explicit_times(
     return [], None
 
 
+# ---------------------------------------------------------------------------
+# Per-line log compression (for the LLM digest)
+# ---------------------------------------------------------------------------
+# Wi-Fi ETL / BT HCI / DDD lines all start with a recognisable timestamp
+# followed by bracketed metadata tags. For issue-time inference the LLM only
+# needs the TIMESTAMP + a short human-readable message; thread IDs, uniform
+# level tags (SPECIAL/INFO/DEBUG), C-function names and multi-hundred-item
+# numeric channel lists are pure noise. Stripping them here shrinks the
+# per-line footprint by ~40-60% without touching signal.
+
+_WIFI_ETL_TS_RE = re.compile(r'^(\d{2}/\d{2}/\d{4}-\d{2}:\d{2}:\d{2}\.\d{1,6})\s+')
+_BT_HCI_TS_RE = re.compile(r'^(\d{4}/\d{2}/\d{2}\s\d{2}:\d{2}:\d{2}(?:\.\d{1,6})?)\s+')
+_TIME_ONLY_TS_RE = re.compile(r'^(\d{1,2}:\d{2}:\d{2}[.:]\d{1,6})\s+')
+# Intel BT driver trace (ibtpci / ibtusb .hci.txt) prefixes every line with
+# ``[idx]<procHex>.<threadHex>::`` BEFORE the timestamp, e.g.
+#   [0]32CC.43E4::10/28/2025-15:01:38.904 [ibtpci][Func]Error! ...
+# The timestamp AFTER the prefix is the exact Wi-Fi ``MM/DD/YYYY-HH:MM:SS.mmm``
+# shape, so we just strip this prefix up front and let _WIFI_ETL_TS_RE do the
+# rest. Anchored + requires the ``HEX.HEX::`` shape so it can never touch a
+# Wi-Fi ETL line (starts with a digit) or a time-only DDD line.
+_BT_DRV_PREFIX_RE = re.compile(r'^\[\d+\][0-9A-Fa-f]{1,8}\.[0-9A-Fa-f]{1,8}::')
+_LEADING_TAG_RE = re.compile(r'^\[([^\]]*)\]\s*')
+# Uniform, low-signal severity tags to drop. WARN / ERROR / CRIT are KEPT —
+# they're real anchors for the issue moment.
+_NOISE_LEVEL_TAGS = frozenset({"SPECIAL", "INFO", "DEBUG", "VERBOSE", "TRACE"})
+# C-identifier pattern for function-name tags right before the message ':'
+_FUNC_TAG_RE = re.compile(r'^[A-Za-z_][A-Za-z0-9_]*$')
+# Long comma-separated list inside parens (channels, PMKIDs, hex dumps …).
+_LONG_LIST_RE = re.compile(r'\(([^)]{20,})\)')
+
+
+def _compress_log_line(line: str, max_len: int = 240) -> Tuple[str, str]:
+    """Return ``(compressed, category)`` for one raw log line.
+
+    ``category`` is used only by the caller's per-run stats print — one of:
+      * ``'wifi'`` / ``'bt'`` / ``'ddd'`` — timestamped line recognised,
+        metadata tags stripped
+      * ``'other'`` — unrecognised format, only truncated to ``max_len``
+
+    Never returns None; on any parse quirk the line is passed through unchanged
+    (truncated to ``max_len``) so we can't lose signal.
+    """
+    # Strip trailing newline AND any leading whitespace/BOM so the timestamp
+    # anchor matches on the first line of a UTF-8-with-BOM file too.
+    s = line.rstrip("\n").lstrip("\ufeff \t")
+
+    # Intel BT driver traces put ``[idx]procHex.threadHex::`` before the
+    # timestamp. Strip it so the (Wi-Fi-shaped) timestamp is at line start;
+    # remember it was BT so the category stays honest for the stats print.
+    bt_driver = bool(_BT_DRV_PREFIX_RE.match(s))
+    if bt_driver:
+        s = _BT_DRV_PREFIX_RE.sub("", s, count=1)
+
+    m = _WIFI_ETL_TS_RE.match(s)
+    category = "bt" if bt_driver else "wifi"
+    if m is None:
+        m = _BT_HCI_TS_RE.match(s)
+        category = "bt"
+    if m is None:
+        m = _TIME_ONLY_TS_RE.match(s)
+        category = "ddd"
+    if m is None:
+        return (s if len(s) <= max_len else s[:max_len] + "…"), "other"
+
+    ts = m.group(1)
+    rest = s[m.end():]
+
+    # Peel leading [tag] blocks. Drop thread-id-only, drop uniform level tags,
+    # drop a function-name tag when the next char is ':' (message separator).
+    kept_tags: List[str] = []
+    while True:
+        tm = _LEADING_TAG_RE.match(rest)
+        if not tm:
+            break
+        tag = tm.group(1).strip()
+        after = rest[tm.end():]
+        if tag.isdigit():
+            rest = after
+            continue
+        if tag.upper() in _NOISE_LEVEL_TAGS:
+            rest = after
+            continue
+        # Function-name tag right before the ':' separator — drop.
+        if after.startswith(":") and _FUNC_TAG_RE.match(tag):
+            rest = after
+            continue
+        kept_tags.append(f"[{tag}]")
+        rest = after
+
+    # Collapse the ": :" separator (Wi-Fi ETL uses "]: : message") and
+    # any leading colons on the message body.
+    rest = re.sub(r'^\s*:\s*:\s*', ': ', rest)
+    rest = re.sub(r'^\s*:\s*', ': ', rest)
+    rest = rest.strip()
+
+    def _shrink(m2: "re.Match") -> str:
+        inner = m2.group(1)
+        parts = [p.strip() for p in inner.split(",") if p.strip()]
+        if len(parts) > 8:
+            return f"({','.join(parts[:3])},…+{len(parts) - 3}more)"
+        return m2.group(0)
+    rest = _LONG_LIST_RE.sub(_shrink, rest)
+
+    tag_block = " ".join(kept_tags)
+    out = f"{ts} {tag_block} {rest}".strip() if tag_block else f"{ts} {rest}".strip()
+    if len(out) > max_len:
+        out = out[:max_len] + "…"
+    return out, category
+
+
+# Prefix splitter for _coalesce_same_prefix: pulls "TS [tag1] [tag2] :" as the
+# grouping key and the rest as the coalescable message. Runs on already-
+# compressed lines so the prefix is short and predictable.
+_PREFIX_SPLIT_RE = re.compile(r'^(\S+(?:\s\[[^\]]*\])*)\s*(?::\s*)?(.*)$')
+
+
+def _coalesce_same_prefix(
+    lines: List[str], max_group: int = 6, sep: str = " ‖ ",
+) -> List[str]:
+    """Merge consecutive lines sharing the same ``TS [tags]`` prefix into one
+    row. Wi-Fi ETL SCAN_REQUEST bursts fire 5 sub-lines at the same ms with
+    identical module tag; DDD traces likewise fire clusters at one timestamp.
+    Folding them saves ~20-30% chars with zero timestamp loss — the LLM still
+    sees every distinct message payload, just without the repeated header.
+
+    ``max_group`` caps how many payloads get concatenated onto one prefix so a
+    pathological 100-line burst doesn't produce an unreadable mega-line;
+    overflow becomes ``…+Nmore`` at the end. ``sep`` is the on-line separator
+    (double-bar U+2016 by default — visually clear, never appears in log
+    text).
+    """
+    if not lines:
+        return list(lines)
+    out: List[str] = []
+    cur_prefix: Optional[str] = None
+    cur_msgs: List[str] = []
+
+    def _flush() -> None:
+        if cur_prefix is None:
+            return
+        if not cur_msgs:
+            out.append(cur_prefix)
+        elif len(cur_msgs) == 1:
+            payload = cur_msgs[0]
+            out.append(f"{cur_prefix} : {payload}" if payload else cur_prefix)
+        else:
+            kept = cur_msgs[:max_group]
+            tail = (f"{sep}…+{len(cur_msgs) - max_group}more"
+                    if len(cur_msgs) > max_group else "")
+            out.append(f"{cur_prefix} : {sep.join(kept)}{tail}")
+
+    for ln in lines:
+        m = _PREFIX_SPLIT_RE.match(ln)
+        if not m:
+            _flush()
+            out.append(ln)
+            cur_prefix, cur_msgs = None, []
+            continue
+        prefix = m.group(1).strip()
+        msg = m.group(2).strip()
+        if prefix == cur_prefix:
+            if msg:
+                cur_msgs.append(msg)
+        else:
+            _flush()
+            cur_prefix = prefix
+            cur_msgs = [msg] if msg else []
+    _flush()
+    return out
+
+
 def build_log_digest(
     log_lines: List[str],
     head: int = 50,
@@ -166,39 +578,495 @@ def build_log_digest(
     """Rough browse of the log for the LLM: head + tail + symptom-keyword hits,
     deduped and kept in original order, capped to keep the prompt small.
 
-    Keyword hits are SAMPLED EVENLY across the whole log rather than just
-    the first N matches. Without this, a long log whose head is dominated
-    by init/lifecycle events (e.g. a multi-thousand-line DDD trace) would
-    burn the entire ``max_keyword`` budget on the first few hundred lines
-    and never surface the actual issue-relevant events buried in the
-    middle/tail. Capping the collected-indices list keeps memory bounded
-    on very large logs while preserving the sampling property.
+    Keyword hits are collected in fixed-size BUCKETS spanning the whole file
+    (not a single running counter), then sampled evenly within a severity
+    tier. Two tiers: ``_LOG_DIGEST_STRONG_RE`` (ERROR/WARN tags, FAILED,
+    TIMEOUT, DEAUTH, MISBEHAV, ...) gets first claim on ``max_keyword``;
+    ``_LOG_DIGEST_KEYWORDS`` (generic connect/scan/event/... verbs that match
+    on nearly every line of a busy Wi-Fi ETL trace) only fills what's left.
+    Both the bucketing and the tiering exist for the same reason: on a large,
+    busy log the generic keyword sweep alone can rack up tens of thousands of
+    hits before the file is even half read, so a naive "collect first N then
+    sample" approach silently loses the entire back half of the log (and with
+    it whatever repeating failure pattern lives there) — plain
+    even-index sampling over a front-loaded hit list still front-loads the
+    digest. Bucketing guarantees every region of the file can contribute;
+    tiering guarantees a real fault line doesn't lose its slot to a "connect"
+    match. This costs zero extra LLM tokens — the regex sweep is local CPU
+    work, and ``max_keyword``/``max_chars`` are unchanged.
+
+    Each picked line is passed through ``_compress_log_line`` to strip thread
+    IDs, uniform level tags (``[SPECIAL]``, ``[INFO]``, ``[DEBUG]``),
+    C-function-name tags, and to shrink long numeric lists (e.g.
+    ``Channels(1,2,3,...,165,)``). Trims ~40-60% of characters on Wi-Fi ETL /
+    BT captures without touching the timestamp or the message payload. A
+    per-run ``[TOKEN] build_log_digest`` stats line prints the raw vs.
+    compressed footprint plus estimated tokens (~4 chars/token) so callers can
+    track savings.
     """
     lines = log_lines or []
     n = len(lines)
     if n == 0:
         return ""
+
+    # Cache on (log fingerprint + these size params) — NOT on any description
+    # text, so a retry with a tweaked description reuses this instantly
+    # instead of re-scanning every line. Fingerprinting itself is cheap (only
+    # touches the first/last 100 lines), so this check costs nothing even on
+    # a multi-million-line trace.
+    _cache_key = (
+        "full|" + _log_fingerprint(lines) +
+        f"|{n}|{head}|{tail}|{max_keyword}|{max_chars}"
+    )
+    _cached = _digest_cache_get(_cache_key)
+    if _cached is not None:
+        print(f"[TOKEN] build_log_digest: CACHE HIT (skipped {n}-line scan) "
+              f"final_chars={len(_cached)} est_tokens_sent~{len(_cached) // 4}")
+        return _cached
+
     picked = set(range(min(head, n)))
     picked.update(range(max(0, n - tail), n))
-    # First collect every keyword hit (capped to keep memory bounded), then
-    # sample evenly so the digest spans the entire log, not just the head.
-    _max_collect = 5000
-    hit_indices: List[int] = []
-    for i, line in enumerate(lines):
-        if _LOG_DIGEST_KEYWORDS.search(line):
-            hit_indices.append(i)
-            if len(hit_indices) >= _max_collect:
-                break
-    if len(hit_indices) > max_keyword:
-        step = len(hit_indices) / max_keyword
-        sampled = [hit_indices[int(j * step)] for j in range(max_keyword)]
+
+    # Bucket the file into ~4x max_keyword equal slices and cap hits PER
+    # BUCKET (not globally) so a dense region early in the log can't exhaust
+    # the collection budget before later buckets are even visited — see the
+    # docstring above. Strong and weak hits get independent per-bucket caps
+    # so a bucket full of generic "event"/"connect" noise can't crowd out an
+    # ERROR/FAILED line landing in that same bucket.
+    _num_buckets = max(1, max_keyword * 4)
+    _bucket_size = max(1, -(-n // _num_buckets))  # ceil div
+    _cap_per_bucket = 25
+    strong_hits: List[int] = []
+    weak_hits: List[int] = []
+    if n > _MP_LINE_THRESHOLD:
+        # Above the multiprocessing threshold, split the scan so the strong
+        # tier goes through the same parallel scan build_event_timeline_digest
+        # uses, instead of a second, hand-duplicated, always-sequential
+        # full-file pass — this is exactly the stage2b escalation path for
+        # the multi-million-line BT traces _scan_strong_hits was built for.
+        # The weak tier still needs its own full pass (a different regex
+        # with no literal prefilter — unlike _is_strong_hit's, so it
+        # dominates wall time on a huge file either way), but only
+        # re-checks _is_strong_hit for lines that pass it — cheap, since
+        # generic-keyword hits are a small fraction of a busy log — while
+        # preserving the original per-line priority: a strong-tier line is
+        # NEVER also counted as weak, even if the strong bucket cap left it
+        # out of strong_hits. Measured on a real 2.94M-line file: still a
+        # net win (~9%) even though the weak pass dominates — see
+        # scripts/bench_issue_time_ai.py history for the full numbers.
+        strong_hits = _scan_strong_hits(lines, _bucket_size, _num_buckets, _cap_per_bucket)
+        weak_bucket_counts = [0] * _num_buckets
+        for i, line in enumerate(lines):
+            if not _LOG_DIGEST_KEYWORDS.search(line) or _is_strong_hit(line):
+                continue
+            bucket = min(i // _bucket_size, _num_buckets - 1)
+            if weak_bucket_counts[bucket] < _cap_per_bucket:
+                weak_hits.append(i)
+                weak_bucket_counts[bucket] += 1
     else:
-        sampled = hit_indices
-    for i in sampled:
+        # At or below the threshold there's no multiprocessing win to chase
+        # (_scan_strong_hits would just fall back to sequential anyway), and
+        # a single combined pass — strong first, weak only as an elif — is
+        # measurably cheaper than two separate full-file passes (~30% faster
+        # on a real 108K-line file), so keep that simpler, faster form here.
+        strong_bucket_counts = [0] * _num_buckets
+        weak_bucket_counts = [0] * _num_buckets
+        for i, line in enumerate(lines):
+            bucket = min(i // _bucket_size, _num_buckets - 1)
+            if _is_strong_hit(line):
+                if strong_bucket_counts[bucket] < _cap_per_bucket:
+                    strong_hits.append(i)
+                    strong_bucket_counts[bucket] += 1
+            elif _LOG_DIGEST_KEYWORDS.search(line):
+                if weak_bucket_counts[bucket] < _cap_per_bucket:
+                    weak_hits.append(i)
+                    weak_bucket_counts[bucket] += 1
+
+    def _even_sample(idxs: List[int], budget: int) -> List[int]:
+        if budget <= 0 or not idxs:
+            return []
+        if len(idxs) <= budget:
+            return idxs
+        step = len(idxs) / budget
+        return [idxs[int(j * step)] for j in range(budget)]
+
+    # Strong (ERROR/WARN/FAILED/DEAUTH/...) anchors claim the budget first;
+    # generic keyword hits only fill whatever's left.
+    sampled_strong = _even_sample(strong_hits, max_keyword)
+    sampled_weak = _even_sample(weak_hits, max_keyword - len(sampled_strong))
+    for i in sampled_strong + sampled_weak:
         picked.add(i)
-    digest = "\n".join(str(lines[i]).rstrip("\n") for i in sorted(picked))
+    ordered = sorted(picked)
+
+    raw_pieces = [str(lines[i]).rstrip("\n") for i in ordered]
+    # Chars of the picked lines BEFORE any compression or truncation. Newlines
+    # (one per join) are counted so raw vs. compressed are apples-to-apples.
+    raw_chars = sum(len(p) for p in raw_pieces) + max(0, len(raw_pieces) - 1)
+
+    def _assemble(idxs: List[int]) -> Tuple[str, int, dict, int]:
+        """Compress + coalesce a chronologically-sorted index subset.
+        Returns (joined_text, line_count, cat_counts, coalesced_from)."""
+        pcs = [str(lines[i]).rstrip("\n") for i in idxs]
+        cc = {"wifi": 0, "bt": 0, "ddd": 0, "other": 0}
+        compressed: List[str] = []
+        for p in pcs:
+            out, cat = _compress_log_line(p)
+            cc[cat] = cc.get(cat, 0) + 1
+            compressed.append(out)
+        pre_coalesce = len(compressed)
+        coalesced = _coalesce_same_prefix(compressed)
+        return "\n".join(coalesced), len(coalesced), cc, pre_coalesce - len(coalesced)
+
+    # head/tail lines are a hard floor — they're never dropped for budget.
+    # If the full pick doesn't fit max_chars, binary-search DOWN how many of
+    # the WEAK-tier sampled hits to keep first (least important — generic
+    # connect/scan/event chatter), then the STRONG tier if still needed.
+    # This replaces a flat ``digest[:max_chars]`` string slice: on a large
+    # log the flat slice always cuts the CHRONOLOGICALLY LATEST picked lines
+    # (since ``ordered`` is sorted ascending) — which silently drops the
+    # explicit tail(50) lines this function is supposed to guarantee, and
+    # whatever late-log evidence the strong/weak sampling just surfaced.
+    # Same max_chars budget either way — zero extra tokens, just spent on
+    # the highest-priority lines instead of "whichever come first."
+    head_tail_set = set(range(min(head, n))) | set(range(max(0, n - tail), n))
+
+    def _pick(n_strong: int, n_weak: int) -> List[int]:
+        k1 = _even_sample(sampled_strong, n_strong) if n_strong < len(sampled_strong) else sampled_strong
+        k2 = _even_sample(sampled_weak, n_weak) if n_weak < len(sampled_weak) else sampled_weak
+        return sorted(head_tail_set | set(k1) | set(k2))
+
+    # Full (untrimmed) assembly first — its length is what pure compression
+    # produced, independent of whether budget-trimming kicks in below.
+    digest, line_count, cat_counts, coalesced_from = _assemble(_pick(len(sampled_strong), len(sampled_weak)))
+    compressed_pre_trunc = len(digest)
+    n_strong_kept, n_weak_kept = len(sampled_strong), len(sampled_weak)
+    truncated = False
     if len(digest) > max_chars:
-        digest = digest[:max_chars] + "\n…(truncated)"
+        lo, hi = 0, len(sampled_weak)
+        while lo < hi:
+            mid = (lo + hi + 1) // 2
+            text, *_ = _assemble(_pick(len(sampled_strong), mid))
+            if len(text) <= max_chars:
+                lo = mid
+            else:
+                hi = mid - 1
+        n_weak_kept = lo
+        digest, line_count, cat_counts, coalesced_from = _assemble(_pick(len(sampled_strong), n_weak_kept))
+        if len(digest) > max_chars:
+            lo, hi = 0, len(sampled_strong)
+            while lo < hi:
+                mid = (lo + hi + 1) // 2
+                text, *_ = _assemble(_pick(mid, n_weak_kept))
+                if len(text) <= max_chars:
+                    lo = mid
+                else:
+                    hi = mid - 1
+            n_strong_kept = lo
+            digest, line_count, cat_counts, coalesced_from = _assemble(_pick(n_strong_kept, n_weak_kept))
+        if len(digest) > max_chars:
+            # Last-resort safety net: even head+tail alone don't fit (e.g. a
+            # single pathologically long line) — fall back to a flat cut.
+            digest = digest[:max_chars] + "\n…(truncated)"
+            truncated = True
+
+    # Two separate numbers so the log line is honest:
+    #   * compression_saved — what stripping tags/lists actually removed
+    #     (raw_chars - compressed_pre_trunc).
+    #   * final_chars — what actually goes to the LLM (after max_chars cap).
+    # The LLM's real prompt tokens still come from the `usage` field printed
+    # by llm_suggest right after the call; this line is the pre-call estimate.
+    final_chars = len(digest)
+    compression_saved = max(0, raw_chars - compressed_pre_trunc)
+    compression_pct = (compression_saved * 100.0 / raw_chars) if raw_chars else 0.0
+    budget_dropped_weak = len(sampled_weak) - n_weak_kept
+    budget_dropped_strong = len(sampled_strong) - n_strong_kept
+    print(
+        f"[TOKEN] build_log_digest: picked={line_count} lines "
+        f"raw_chars={raw_chars} "
+        f"compressed_chars_pre_trunc={compressed_pre_trunc} "
+        f"final_chars={final_chars} "
+        f"compression_saved_chars={compression_saved} "
+        f"compression_pct={compression_pct:.1f}% "
+        f"coalesced_lines={coalesced_from} "
+        f"budget_dropped_weak={budget_dropped_weak} "
+        f"budget_dropped_strong={budget_dropped_strong} "
+        f"est_tokens_before_compress~{raw_chars // 4} "
+        f"est_tokens_after_compress~{compressed_pre_trunc // 4} "
+        f"est_tokens_sent~{final_chars // 4} "
+        f"truncated={truncated} "
+        f"categories={cat_counts}"
+    )
+    _digest_cache_put(_cache_key, digest)
+    return digest
+
+
+# Volatile tokens to blank out when deciding whether two strong-anchor lines
+# are "the same KIND of event": MACs, hex handles, bare decimals, thread ids.
+# Folding by this normalized key collapses a 24x AUTH_TX_FAILURE burst (one per
+# BSSID) into a single counted row — the single biggest token saver on a Wi-Fi
+# connection-failure trace, where the same fault repeats for every candidate AP.
+_TL_VOLATILE_RE = re.compile(
+    r'Address\([^)]*\)'                        # Address(74:9E:75:48:CA:E1)
+    r'|[0-9A-Fa-f]{2}(?::[0-9A-Fa-f]{2}){5}'   # bare MAC
+    r'|0x[0-9A-Fa-f]+'                         # hex handle / status
+    r'|\bTS=\d+'                               # firmware TS counters
+    r'|\b\d+\b'                                # any bare decimal
+)
+_TL_TS_RE = re.compile(r'^(\d{2}/\d{2}/\d{4}-\d{2}:\d{2}:\d{2}\.\d{1,6}'
+                       r'|\d{1,2}:\d{2}:\d{2}[.:]\d{1,6})')
+
+
+def _timeline_key(compressed_line: str) -> str:
+    """Normalized identity of a strong-anchor line (timestamp + volatile ids
+    removed) so repeated failures of the same kind fold together."""
+    body = _TL_TS_RE.sub("", compressed_line)
+    return _TL_VOLATILE_RE.sub("#", body).strip()
+
+
+# ---------------------------------------------------------------------------
+# Parallel strong-hit scan for huge logs (multi-million-line BT "-boot" HCI
+# captures). Empirically measured on a real 2.94M-line file: sequential
+# ~21s -> 6 worker processes ~7.4s (2.84x), with the parallel result index-
+# for-index IDENTICAL to the sequential scan (verified, not assumed — see
+# scripts/bench_mp_scan.py). Only engages above _MP_LINE_THRESHOLD: ordinary
+# Wi-Fi ETL logs (~100K lines) are sub-second sequentially and would only
+# pay process overhead for nothing, so they never touch this path.
+# ---------------------------------------------------------------------------
+_MP_LINE_THRESHOLD = 300_000
+_MP_WORKERS = 6
+
+_scan_pool: Optional[ProcessPoolExecutor] = None
+_scan_pool_lock = threading.Lock()
+
+
+def _get_scan_pool() -> ProcessPoolExecutor:
+    """Lazily create the shared worker pool, once, on the first log big
+    enough to need it. Most sessions never touch this at all.
+
+    Thread-safe (double-checked locking): the app runs Flask-SocketIO with
+    ``async_mode='threading'``, so multiple request threads could reach here
+    at the same instant for two different huge logs.
+
+    Deliberately NOT created at import time or tied to Flask's app lifecycle
+    (this module is "free of Flask... unit-testable in isolation" by
+    design) — it only ever exists if something actually calls
+    ``_scan_strong_hits`` on a log past the threshold. Cleanup is via
+    ``atexit`` rather than any app-level shutdown hook, so it tears down
+    correctly regardless of which code path exits the process.
+    """
+    global _scan_pool
+    if _scan_pool is None:
+        with _scan_pool_lock:
+            if _scan_pool is None:  # re-check inside the lock
+                pool = ProcessPoolExecutor(max_workers=_MP_WORKERS)
+                atexit.register(pool.shutdown, wait=False, cancel_futures=True)
+                _scan_pool = pool
+    return _scan_pool
+
+
+def _scan_bucket_capped(lines: List[str], start: int, bucket_size: int,
+                         num_buckets: int, cap_per_bucket: int) -> List[int]:
+    """Strong-hit scan over ``lines``, bucket-capped. ``start`` is the
+    ABSOLUTE index of ``lines[0]`` (0 for a whole-file sequential scan; a
+    chunk's own offset when called per-worker) — the one shared loop body
+    for both the sequential path and each multiprocessing worker, so the
+    two don't hand-duplicate the same scan.
+
+    Returns ABSOLUTE line indices. Callers that split a file into multiple
+    chunks must choose boundaries that are multiples of ``bucket_size``, so
+    no bucket ever straddles two chunks — each call enforces
+    ``cap_per_bucket`` independently and correctly, with no cross-chunk
+    coordination needed. That is what makes concatenated per-chunk results
+    identical to one whole-file sequential call.
+    """
+    bucket_counts = [0] * num_buckets
+    picked: List[int] = []
+    for offset, line in enumerate(lines):
+        if not _is_strong_hit(line):
+            continue
+        i = start + offset
+        b = min(i // bucket_size, num_buckets - 1)
+        if bucket_counts[b] < cap_per_bucket:
+            picked.append(i)
+            bucket_counts[b] += 1
+    return picked
+
+
+def _scan_chunk_for_strong_hits(args):
+    """Multiprocessing worker entry point: unpack one chunk's args and
+    delegate to ``_scan_bucket_capped``. Must be a plain module-level
+    function (Windows ``spawn`` pickles it by reference — the child process
+    re-imports ``utils.issue_time_ai`` to find it) and must not depend on
+    anything but its arguments."""
+    start, chunk_lines, bucket_size, num_buckets, cap_per_bucket = args
+    return _scan_bucket_capped(chunk_lines, start, bucket_size, num_buckets, cap_per_bucket)
+
+
+def _scan_strong_hits_sequential(lines: List[str], bucket_size: int,
+                                  num_buckets: int, cap_per_bucket: int) -> List[int]:
+    """Original single-threaded scan — unchanged behaviour, used directly
+    for every log at or below ``_MP_LINE_THRESHOLD`` and as the fallback
+    when the parallel path fails for any reason."""
+    return _scan_bucket_capped(lines, 0, bucket_size, num_buckets, cap_per_bucket)
+
+
+def _scan_strong_hits(lines: List[str], bucket_size: int, num_buckets: int,
+                       cap_per_bucket: int) -> List[int]:
+    """Strong-hit index scan, bucket-capped. Sequential below
+    ``_MP_LINE_THRESHOLD``; above it, splits into ``_MP_WORKERS``
+    bucket-aligned chunks and scans them in parallel worker processes.
+
+    Falls back to the sequential scan on ANY multiprocessing failure (pool
+    creation, pickling, a worker crash) so a broken pool can never turn a
+    log-analysis request into a 500 — same defensive philosophy as the LLM
+    call guards elsewhere in this module.
+    """
+    n = len(lines)
+    if n <= _MP_LINE_THRESHOLD:
+        return _scan_strong_hits_sequential(lines, bucket_size, num_buckets, cap_per_bucket)
+    try:
+        chunk_size_in_buckets = -(-num_buckets // _MP_WORKERS)  # ceil
+        chunk_lines = max(1, chunk_size_in_buckets * bucket_size)
+        tasks = []
+        start = 0
+        while start < n:
+            end = min(start + chunk_lines, n)
+            tasks.append((start, lines[start:end], bucket_size, num_buckets, cap_per_bucket))
+            start = end
+        pool = _get_scan_pool()
+        picked: List[int] = []
+        for chunk_result in pool.map(_scan_chunk_for_strong_hits, tasks):
+            picked.extend(chunk_result)
+        return picked
+    except Exception as e:
+        print(f"[issue_time_ai] parallel scan failed ({e}); falling back to sequential.")
+        return _scan_strong_hits_sequential(lines, bucket_size, num_buckets, cap_per_bucket)
+
+
+def build_event_timeline_digest(
+    log_lines: List[str],
+    max_rows: int = 40,
+    max_chars: int = 3000,
+    *,
+    cap_per_bucket: int = 30,
+) -> str:
+    """Compact, high-signal FAILURE TIMELINE for the LLM — the cheap stage-2a
+    pass that replaces the full head/tail/keyword browse for most Wi-Fi cases.
+
+    Unlike ``build_log_digest`` (which samples ~160 lines: 50 head init noise,
+    50 tail, 60 generic connect/scan/event hits), this keeps ONLY strong-tier
+    anchor lines — ``_LOG_DIGEST_STRONG_RE``: ERROR/WARN tags plus
+    FAILED/TIMEOUT/DEAUTH/DISASSOC/MISBEHAV/EXCLUD/CRASH/PANIC/REJECT. For a
+    Wi-Fi connection failure the issue time is, by construction, the timestamp
+    of one of these events, so a pure timeline is both SMALLER (~1/3 the
+    tokens) and MORE accurate (no init/telemetry noise to distract the model).
+
+    Two compaction steps keep it tiny and readable:
+      * bucket the file into slices and cap strong hits per bucket, so a dense
+        early burst can't crowd out later events (same rationale as
+        ``build_log_digest``);
+      * fold consecutive same-KIND events (see ``_timeline_key``) into one row
+        ``TS  message  (×N → last_clock)`` — a 24-line AUTH_TX_FAILURE burst
+        becomes one line naming the count and the time span.
+
+    Returns "" when the log has NO strong anchors (e.g. a clean throughput /
+    latency complaint with no fault lines). The caller then falls back to the
+    full ``build_log_digest`` so accuracy is never sacrificed for the saving.
+    """
+    lines = log_lines or []
+    n = len(lines)
+    if n == 0:
+        return ""
+
+    # Cache on (log fingerprint + these size params) — NOT on description
+    # text. This is the single biggest win for huge traces: a multi-million-
+    # line "-boot" capture can take tens of seconds to scan for strong-anchor
+    # hits; a retry with a tweaked description (common — the full-answer
+    # cache upstream is keyed on the text and misses on every retry) would
+    # otherwise redo that whole scan for an unchanged log. Fingerprinting
+    # itself only touches the first/last 100 lines, so this check is cheap
+    # even here.
+    _cache_key = (
+        "timeline|" + _log_fingerprint(lines) +
+        f"|{n}|{max_rows}|{max_chars}|{cap_per_bucket}"
+    )
+    _cached = _digest_cache_get(_cache_key)
+    if _cached is not None:
+        print(f"[TOKEN] build_event_timeline_digest: CACHE HIT "
+              f"(skipped {n}-line scan) final_chars={len(_cached)} "
+              f"est_tokens_sent~{len(_cached) // 4}")
+        return _cached
+
+    num_buckets = max(1, max_rows * 3)
+    bucket_size = max(1, -(-n // num_buckets))  # ceil div
+    picked = _scan_strong_hits(lines, bucket_size, num_buckets, cap_per_bucket)
+    if not picked:
+        # Cache the negative result too — "no strong anchors" still cost a
+        # full scan to determine, and callers fall back to build_log_digest
+        # (which has its own independent cache) so re-scanning here on every
+        # retry would be pure waste.
+        _digest_cache_put(_cache_key, "")
+        return ""
+
+    def _clock(compressed: str) -> str:
+        mm = _TL_TS_RE.match(compressed)
+        if not mm:
+            return ""
+        tok = mm.group(0)
+        # keep just HH:MM:SS(.mmm) for the "→ last" marker
+        return tok.split("-")[-1] if "-" in tok else tok
+
+    def _render(k: int) -> Tuple[str, int]:
+        """Even-sample k strong-hit lines across the WHOLE file span, compress,
+        then fold adjacent same-KIND rows into one ``… (×N → last_clock)``.
+
+        Sampling the picked indices directly (rather than folding first) is
+        what guarantees chronological coverage of the entire capture: with
+        interleaved fault kinds, strictly-consecutive folding almost never
+        triggers, so a fold-then-sample order would still let an even sample
+        skip the late (01:26) cluster. Sampling first pins the time span; the
+        adjacent-fold is then just cosmetic burst removal.
+        """
+        if k >= len(picked):
+            sel = picked
+        else:
+            step = len(picked) / k
+            sel = [picked[int(j * step)] for j in range(k)]
+        out: List[str] = []
+        cur = None  # (compressed, key, count, last_clock)
+        for i in sel:
+            compressed, _ = _compress_log_line(str(lines[i]))
+            key = _timeline_key(compressed)
+            if cur and key and key == cur[1]:
+                cur = (cur[0], cur[1], cur[2] + 1, _clock(compressed))
+            else:
+                if cur:
+                    out.append(cur[0] if cur[2] == 1
+                               else f"{cur[0]}  (×{cur[2]} → {cur[3]})")
+                cur = (compressed, key, 1, "")
+        if cur:
+            out.append(cur[0] if cur[2] == 1
+                       else f"{cur[0]}  (×{cur[2]} → {cur[3]})")
+        return "\n".join(out), len(out)
+
+    # Shrink the sample count until it fits BOTH max_rows and max_chars —
+    # always by even sampling across the whole span, NEVER a flat
+    # ``digest[:max_chars]`` tail cut (which drops the chronologically latest
+    # rows, i.e. the recurring failure near the end of the capture — the 01:26
+    # deauth cluster in the reference case).
+    k = min(len(picked), max_rows)
+    digest, kept = _render(k)
+    while len(digest) > max_chars and k > 1:
+        k -= 1
+        digest, kept = _render(k)
+    truncated = k < len(picked)
+
+    print(
+        f"[TOKEN] build_event_timeline_digest: strong_hits={len(picked)} "
+        f"sampled={k} rows={kept} final_chars={len(digest)} "
+        f"est_tokens_sent~{len(digest) // 4} truncated={truncated}"
+    )
+    _digest_cache_put(_cache_key, digest)
     return digest
 
 
@@ -334,6 +1202,56 @@ def parse_json_loose(raw: str) -> dict:
     return {"interpretation": "", "needs_user_input": True, "suggestions": []}
 
 
+def _call_llm_and_log(
+    llm_client: Any,
+    llm_model: str,
+    system: str,
+    user: str,
+    stage_label: str,
+    usage_out: Optional[List[dict]],
+    max_tokens: int,
+    digest_chars: int = 0,
+) -> dict:
+    """Shared tail for ``llm_suggest`` / ``llm_suggest_desc_only``: print the
+    ``[TOKEN] ... request`` line, make the call, print + record usage, parse
+    the reply. Extracted because both callers had this block byte-for-byte
+    identical apart from ``stage_label``/``max_tokens``/``digest_chars``."""
+    system_chars = len(system)
+    user_chars = len(user)
+    print(
+        f"[TOKEN] issue_time_ai {stage_label} request: "
+        f"model={llm_model} "
+        f"system_chars={system_chars} user_chars={user_chars} "
+        f"log_digest_chars={digest_chars} "
+        f"total_prompt_chars={system_chars + user_chars}"
+    )
+    response = llm_client.chat.completions.create(
+        model=llm_model,
+        messages=[{"role": "system", "content": system},
+                  {"role": "user", "content": user}],
+        temperature=0.1,
+        max_tokens=max_tokens,
+    )
+    usage = getattr(response, "usage", None)
+    if usage:
+        print(
+            f"[TOKEN] issue_time_ai {stage_label} usage: "
+            f"prompt={usage.prompt_tokens} "
+            f"completion={usage.completion_tokens} "
+            f"total={usage.total_tokens}"
+        )
+        if usage_out is not None:
+            usage_out.append({
+                "stage": stage_label,
+                "prompt": int(usage.prompt_tokens),
+                "completion": int(usage.completion_tokens),
+                "total": int(usage.total_tokens),
+            })
+    else:
+        print(f"[TOKEN] issue_time_ai {stage_label} usage: <no usage on response>")
+    return parse_json_loose(response.choices[0].message.content or "")
+
+
 def llm_suggest(
     llm_client: Any,
     llm_model: str,
@@ -347,6 +1265,9 @@ def llm_suggest(
     log_frame_last_ts: Optional[datetime] = None,
     tz_label: str = "",
     event_digest: Optional[str] = None,
+    stage_label: str = "llm_suggest",
+    usage_out: Optional[List[dict]] = None,
+    candidate_hint: Optional[Tuple[str, str]] = None,
 ) -> dict:
     """Ask the LLM to infer issue time(s) from the description + log sample.
 
@@ -376,6 +1297,14 @@ def llm_suggest(
     whether a nearby fault row is actually relevant before leaning on it. Their
     timestamps are real dated clock times that correlate with the BT log's own
     timeline, so they help cross-check / refine the inferred time.
+
+    ``candidate_hint`` (optional): ``(issue_time_str, reason)`` from a prior
+    description-only pass (stage 1). It is presented as a PRELIMINARY guess
+    made WITHOUT any log evidence — the model must VALIDATE it against the
+    log sample below, not echo it blindly. If the log confirms/is consistent,
+    return it (or a nearby precise anchor) with high confidence. If the log
+    evidence points elsewhere, prefer the log. This lets a genuine text-based
+    time cue narrow the search without ever skipping the log check entirely.
     """
     if first_ts and last_ts:
         rng = f"The log spans {format_issue_time(first_ts)} to {format_issue_time(last_ts)}."
@@ -449,6 +1378,20 @@ def llm_suggest(
         "event-log row when the description and log point elsewhere. "
         if event_digest else ""
     )
+    candidate_block = ""
+    if candidate_hint:
+        cand_time, cand_reason = candidate_hint
+        candidate_block = (
+            f" A PRELIMINARY candidate time was inferred from the description "
+            f"ALONE, with NO log evidence: {cand_time} (reason: {cand_reason or 'n/a'}). "
+            f"Treat this ONLY as a starting hint to narrow your search — you MUST "
+            f"validate it against the actual log sample below. If the log shows "
+            f"real evidence (a fault/failure line) at or very near this time, "
+            f"confirm it (or refine to the exact evidencing line) with high "
+            f"confidence. If the log evidence clearly points to a different "
+            f"moment, prefer the log evidence instead — do NOT echo the "
+            f"candidate without checking. "
+        )
     system = (
         "You determine the 'issue time' that anchors log analysis. Logs are "
         "typically Wi-Fi or Bluetooth, but the user's problem description "
@@ -458,7 +1401,7 @@ def llm_suggest(
         "— use the description to decide which lines in the log are "
         "relevant, and pick the timestamp that sits next to one of those "
         "lines. "
-        f"{event_priority}"
+        f"{event_priority}{candidate_block}"
         f"{rng}{tz_block} {format_rule}\n"
         "Reply with STRICT JSON only (no markdown, no prose) of the form:\n"
         '{"interpretation":"<one short sentence on what the user means>",'
@@ -486,14 +1429,134 @@ def llm_suggest(
         f"=== Rough log sample ===\n{log_digest or '(no log loaded)'}"
         f"{event_section}"
     )
-    response = llm_client.chat.completions.create(
-        model=llm_model,
-        messages=[{"role": "system", "content": system},
-                  {"role": "user", "content": user}],
-        temperature=0.1,
-        max_tokens=900,
+    return _call_llm_and_log(
+        llm_client, llm_model, system, user, stage_label, usage_out,
+        max_tokens=900, digest_chars=len(log_digest or ""),
     )
-    return parse_json_loose(response.choices[0].message.content or "")
+
+
+def llm_suggest_desc_only(
+    llm_client: Any,
+    llm_model: str,
+    text: str,
+    first_ts: Optional[datetime],
+    last_ts: Optional[datetime],
+    log_has_date: Optional[bool] = None,
+    *,
+    tz_label: str = "",
+    usage_out: Optional[List[dict]] = None,
+) -> dict:
+    """Cheap stage-1: infer issue time from description + log time RANGE only.
+
+    No log digest, no event digest, no tz-anchor block — just the user text and
+    the log's first/last timestamps. Typical prompt ~200-400 tokens (vs. the
+    ~6000 tokens of a full ``llm_suggest`` call). The caller inspects the
+    returned suggestions and only escalates to ``llm_suggest`` when the model
+    itself signals uncertainty (empty list, low/medium confidence, or
+    ``needs_user_input=true``).
+
+    We deliberately do NOT accept a "current sidebar issue_time" hint here.
+    Users press the AI button precisely because they're unsure about the
+    sidebar value; feeding it back to a description-only LLM (which has no
+    log to check against) just yields a biased echo. Sidebar-anchored
+    validation belongs in stage2, where actual log evidence is available.
+
+    Same output shape as ``llm_suggest``.
+    """
+    if first_ts and last_ts:
+        rng = f"The related log spans {format_issue_time(first_ts)} to {format_issue_time(last_ts)}."
+    elif first_ts:
+        rng = f"The related log starts at {format_issue_time(first_ts)}."
+    else:
+        rng = "No log time range available."
+
+    tz_note = (f" Customer wall clock: {tz_label}. Output times in the customer frame."
+               if tz_label else "")
+
+    if log_has_date is False:
+        format_rule = ("Log has NO date — output HH:MM:SS.mmm only. "
+                       "Do NOT invent a year/month/day.")
+        format_example = '"issue_time":"HH:MM:SS.mmm"'
+    else:
+        format_rule = "Output MM/DD/YYYY-HH:MM:SS.mmm."
+        format_example = '"issue_time":"MM/DD/YYYY-HH:MM:SS.mmm"'
+
+    system = (
+        "You infer the 'issue time' for Wi-Fi/Bluetooth log analysis from the "
+        "user's problem description alone. You do NOT have a log preview — "
+        f"only the log's time range. {rng}{tz_note} {format_rule}\n"
+        "Rules:\n"
+        "1. If the description carries an explicit clock time OR you can "
+        "PRECISELY pin the moment (e.g. user says 'at 04:45 PM', 'around 13:22:10'), "
+        "return a HIGH-confidence suggestion.\n"
+        "2. If the description is vague (e.g. 'wifi disconnected', 'connection "
+        "failed today', no clock hint), return EMPTY suggestions and "
+        "needs_user_input=true — a follow-up pass will read the log.\n"
+        "Reply with STRICT JSON only:\n"
+        '{"interpretation":"<one short sentence>",'
+        '"needs_user_input":<true|false>,'
+        f'"suggestions":[{{{format_example},'
+        '"confidence":"high|medium|low","reason":"<short why>",'
+        '"source":"description"}}]}\n'
+        "At most 3 suggestions."
+    )
+    user = f"User description:\n{text}"
+    return _call_llm_and_log(
+        llm_client, llm_model, system, user, "stage1_desc_only", usage_out,
+        max_tokens=400,
+    )
+
+
+def _first_high_confidence(sugs: List[dict]) -> Optional[dict]:
+    """First suggestion (in list order) with ``confidence=='high'`` and a
+    non-empty ``issue_time``, else ``None``. Shared by the stage1 and stage2a
+    promotion checks in ``build_issue_time_suggestions`` — both only act on a
+    genuinely high-confidence, evidenced suggestion, never a maybe-right
+    guess."""
+    for s in sugs:
+        if (str(s.get("confidence", "")).lower() == "high"
+                and (s.get("issue_time") or "").strip()):
+            return s
+    return None
+
+
+# high=0, medium=1, low=2; unknown/missing treated as medium. This is the
+# only place confidence gets ranked or filtered — neither frontend template
+# re-ranks or re-filters suggestions; both just render them in the order
+# this module returns them (row 0 = best).
+_CONFIDENCE_RANK = {"high": 0, "medium": 1, "low": 2}
+
+
+def _filter_to_highest_confidence(sugs: List[dict]) -> List[dict]:
+    """Keep only the suggestions at the single HIGHEST confidence tier
+    present (high > medium > low) — e.g. if any suggestion is "high", every
+    "medium"/"low" one is dropped from what the user sees; if the best
+    present is only "medium", the "low" ones are dropped and the "medium"
+    ones are kept. Applies to BOTH chatbots (log_chatbot and bt_chatbot),
+    since they share this function. Preserves the model's own relative
+    order within the kept tier — never re-sorts. A suggestion list that's
+    already empty is returned as-is."""
+    if not sugs:
+        return sugs
+    ranked = [(s, _CONFIDENCE_RANK.get(str(s.get("confidence", "")).lower(), 1)) for s in sugs]
+    best_rank = min(r for _, r in ranked)
+    return [s for s, r in ranked if r == best_rank]
+
+
+def _explicit_only_payload(explicit_suggestions: List[dict], message: str) -> dict:
+    """Response payload for the two "explicit time(s), AI not consulted"
+    returns in build_issue_time_suggestions (the plain not-force_ai
+    short-circuit, and the force_ai-requested-but-no-LLM-configured case) —
+    identical shape, only the message differs per caller."""
+    return {
+        "success": True,
+        "user_explicit": True,
+        "ai_also_analyzed": False,
+        "interpretation": "You provided explicit time(s) — using them as-is.",
+        "needs_user_input": False,
+        "suggestions": explicit_suggestions,
+        "message": message,
+    }
 
 
 def build_issue_time_suggestions(
@@ -509,6 +1572,9 @@ def build_issue_time_suggestions(
     log_frame_last_ts: Optional[datetime] = None,
     tz_label: str = "",
     event_log_events: Optional[List[dict]] = None,
+    current_issue_time: Optional[str] = None,
+    stage1_model: Optional[str] = None,
+    force_ai: bool = False,
 ) -> dict:
     """Full orchestration. Returns a response payload dict ready to ``jsonify``.
 
@@ -528,7 +1594,42 @@ def build_issue_time_suggestions(
     to the LLM alongside the raw-log sample — the model weighs them itself
     rather than being forced onto a fault row. Omitting it (Wi-Fi /
     log_chatbot) keeps the original behaviour.
+
+    ``current_issue_time`` (optional): the time-string the user has already
+    filled into the sidebar (typically ``agent.issue_time`` formatted). Used
+    for CACHE INVALIDATION ONLY — a sidebar edit changes the cache key so a
+    retry does not reuse a stale payload. We deliberately do NOT feed it to
+    the stage-1 LLM as a validation hint: users press the AI button precisely
+    because they're unsure about the sidebar value, and a description-only
+    LLM (no log evidence) that receives the sidebar value tends to echo it
+    back as "high confidence", biasing the result toward a possibly-wrong
+    guess. Stage-2 sees actual log evidence and can't be tricked that way.
+
+    ``stage1_model`` (optional): a cheaper/faster model to use for stage 1
+    (description-only, no log digest) ONLY. Defaults to ``llm_model`` when
+    omitted, so passing nothing keeps today's single-model behaviour exactly.
+    Stage 1 NEVER produces the final answer by itself when a log is loaded —
+    it only proposes a CANDIDATE hint (kept when the model claims "high"
+    confidence) that stage 2 (which has actual log evidence) must validate,
+    confirm, or override. This means a weaker stage-1 model's mistakes are
+    always caught by the log-driven stage 2 rather than shipped straight to
+    the user — the only way stage 1 alone determines the outcome is when
+    there is no log at all to check it against. Stage 2a/2b intentionally do
+    NOT get a cheaper-model override here: those steps disambiguate between
+    multiple plausible log events using the free-text description, which is
+    a real reasoning task, not a mechanical check.
+
+    ``force_ai`` (default False): when the description carries an explicit
+    time, the default behaviour is to short-circuit on it — deterministic,
+    zero LLM tokens (see step 1 below). Set ``force_ai=True`` to ALSO run the
+    LLM cascade against the log even though an explicit time was found (the
+    "also let AI check the log" button) — e.g. when the user isn't sure their
+    typed time is actually the best-evidenced moment. The explicit time(s)
+    are kept and returned FIRST (still marked ``source="user"``), with the
+    AI's own suggestions appended after. Has no effect when the description
+    has no explicit time — that path already always runs the AI cascade.
     """
+    stage1_llm_model = stage1_model or llm_model
     no_date = log_has_date is False
 
     # 1) User-first deterministic pass — explicit time(s) win, no LLM.
@@ -546,6 +1647,7 @@ def build_issue_time_suggestions(
         log_frame_last_ts=log_frame_last_ts,
         tz_to_customer_delta=tz_to_customer_delta,
     )
+    explicit_suggestions: List[dict] = []
     if explicit:
         if no_date:
             reason = "Clock time taken from your message (log has no date)."
@@ -553,23 +1655,33 @@ def build_issue_time_suggestions(
             reason = "Clock time taken from your message; date aligned to the log."
         else:
             reason = "Explicit timestamp taken directly from your message."
-        suggestions = [make_suggestion(dt, "high", reason, "user",
-                                       log_has_date=not no_date)
-                       for dt in explicit]
-        return {
-            "success": True,
-            "user_explicit": True,
-            "interpretation": "You provided explicit time(s) — using them as-is.",
-            "needs_user_input": False,
-            "suggestions": suggestions,
-            "message": f"Found {len(suggestions)} explicit time(s) in your text.",
-        }
+        explicit_suggestions = [make_suggestion(dt, "high", reason, "user",
+                                                 log_has_date=not no_date)
+                                 for dt in explicit]
+        if not force_ai:
+            return _explicit_only_payload(
+                explicit_suggestions,
+                f"Found {len(explicit_suggestions)} explicit time(s) in your text.",
+            )
+        # force_ai=True: fall through to also run the LLM cascade below,
+        # merging its suggestions after these explicit ones.
 
-    # 2) LLM inference for vague / malformed / missing times.
+    # 2) LLM inference for vague / malformed / missing times (or, with
+    # force_ai, an additional opinion alongside an explicit time already
+    # found above).
     if llm_client is None or not llm_model:
+        if explicit_suggestions:
+            # force_ai was requested but there's no LLM to honor it with —
+            # still return the explicit time(s) rather than erroring out.
+            return _explicit_only_payload(
+                explicit_suggestions,
+                f"Found {len(explicit_suggestions)} explicit time(s) in your "
+                f"text. AI check skipped — LLM is not configured on this server.",
+            )
         return {
             "success": False,
             "user_explicit": False,
+            "ai_also_analyzed": False,
             "interpretation": "",
             "needs_user_input": True,
             "suggestions": [],
@@ -577,28 +1689,154 @@ def build_issue_time_suggestions(
             "message": "LLM is not configured on this server.",
         }
 
-    log_digest = build_log_digest(log_lines or [])
-    event_digest = build_event_log_digest(event_log_events)
-    # Wrap the LLM call so any network / parse / API-error failure degrades
-    # gracefully into "no suggestions" instead of a 500 — the log-first
-    # fallback below then still gives the user a usable anchor. Without
-    # this, a transient LLM hiccup makes the AI button look broken.
-    try:
-        llm = llm_suggest(
-            llm_client, llm_model, text, log_digest, first_ts, last_ts,
-            log_has_date=log_has_date,
-            log_frame_first_ts=log_frame_first_ts,
-            log_frame_last_ts=log_frame_last_ts,
-            tz_label=tz_label,
-            event_digest=event_digest,
-        )
-    except Exception as _e:
-        print(f"[issue_time_ai] llm_suggest failed, deferring to fallback: {_e}")
-        llm = {"interpretation": "", "needs_user_input": True, "suggestions": []}
+    # 2a) Response cache — same (text, log fingerprint, frames, current
+    # candidate) reuses the last payload. Users retry the button often when
+    # fine-tuning the description; identical inputs shouldn't burn fresh
+    # tokens. current_issue_time IS part of the key so a sidebar edit
+    # invalidates the cache automatically.
+    cache_key = _suggest_cache_key(
+        text=text, log_lines=log_lines, first_ts=first_ts, last_ts=last_ts,
+        log_has_date=log_has_date, tz_label=tz_label,
+        log_frame_first_ts=log_frame_first_ts,
+        log_frame_last_ts=log_frame_last_ts,
+        event_events_len=len(event_log_events or []),
+        current_issue_time=current_issue_time,
+        stage1_model=stage1_llm_model,
+        force_ai=force_ai,
+    )
+    cached = _cache_get(cache_key)
+    if cached is not None:
+        print(f"[TOKEN] issue_time_ai TOTAL: cache=HIT stage1=- stage2=- "
+              f"prompt=0 completion=0 total=0 (key={cache_key[:8]}…)")
+        # Return a shallow copy so downstream mutation can't poison the cache.
+        return dict(cached)
+
+    # Per-request token accumulator populated by llm_suggest / stage1 helper.
+    usage_out: List[dict] = []
+
+    # 2b) Stage 1: cheap description-only pass (~300-500 tokens), run only
+    # when the description carries a genuine time cue (`_has_time_hint`).
+    # IMPORTANT: stage 1's result is NEVER treated as final by itself when a
+    # log is loaded — it produces only a CANDIDATE hint that stage 2 (which
+    # has actual log evidence) must validate/confirm/override. This is
+    # deliberate: a description-only LLM has no way to check whether its
+    # guess actually matches a real event in the log, so shipping it straight
+    # to the user risks a confidently-wrong answer (e.g. picking a plausible-
+    # sounding but wrong minute). The candidate still saves tokens overall —
+    # it lets stage 2 anchor its search instead of scanning blind — but the
+    # log always gets the final say. The ONLY case stage 1 stands alone is
+    # when there's no log loaded at all (nothing to validate against).
+    #
+    # We deliberately do NOT trigger stage1 based on a pre-filled sidebar
+    # issue_time — the user usually pressed the AI button precisely BECAUSE
+    # they're unsure about the sidebar value. The sidebar value still
+    # participates in the cache key so a sidebar edit invalidates stale
+    # results.
+    llm: dict = {"interpretation": "", "needs_user_input": True, "suggestions": []}
+    stage1_skipped_reason = ""
+    candidate_hint: Optional[Tuple[str, str]] = None
+    if not text:
+        stage1_skipped_reason = "no_description_text"
+    elif not _has_time_hint(text):
+        stage1_skipped_reason = "no_time_hint_in_text"
+    else:
+        try:
+            stage1 = llm_suggest_desc_only(
+                llm_client, stage1_llm_model, text, first_ts, last_ts,
+                log_has_date=log_has_date, tz_label=tz_label,
+                usage_out=usage_out,
+            )
+        except Exception as _e:
+            print(f"[issue_time_ai] stage1 failed, escalating to stage2: {_e}")
+            stage1 = {"interpretation": "", "needs_user_input": True, "suggestions": []}
+        s1_sugs = stage1.get("suggestions") or []
+        # Only promote to a candidate hint when stage 1 itself claims "high"
+        # confidence — a maybe-right guess without log evidence isn't good
+        # enough even to seed the search.
+        top = _first_high_confidence(s1_sugs)
+        if top is not None and not stage1.get("needs_user_input", False):
+            # Keep stage1's full result as a fallback ONLY for the no-log
+            # case (handled below); do NOT treat it as final here.
+            llm = stage1
+            candidate_hint = (str(top.get("issue_time") or ""),
+                               str(top.get("reason") or ""))
+
+    log_digest = ""
+    event_digest = ""
+    stage2b_escalated = False
+    # Whenever a log is loaded, ALWAYS run the log-driven stage(s) — even
+    # when stage 1 produced a high-confidence candidate. A description-only
+    # guess is never allowed to be the final answer while real log evidence
+    # is available to check it against; the candidate is passed through as a
+    # hint (see ``candidate_hint`` in ``llm_suggest``) so it narrows rather
+    # than replaces the log-based search. Only when there's NO log at all
+    # (``log_lines`` empty) does stage 1's own result stand as the answer,
+    # since there's nothing left to validate it against.
+    stage2_needed = bool(log_lines) or bool(event_log_events)
+    if stage2_needed:
+        event_digest = build_event_log_digest(event_log_events)
+
+        # 2a) Cheap high-signal pass: a compact failure-timeline digest (strong
+        # anchors only) instead of the full head/tail/keyword browse. For a
+        # Wi-Fi failure the issue time IS one of these rows, so this usually
+        # resolves the time at ~1/3 the tokens of the full digest. We escalate
+        # to the full digest (2b) only when the timeline is empty (no fault
+        # lines) or the model isn't confident — so accuracy is never traded
+        # away, only tokens are saved on the common path.
+        stage2b_needed = True
+        timeline_digest = build_event_timeline_digest(log_lines or [])
+        if timeline_digest:
+            try:
+                llm2a = llm_suggest(
+                    llm_client, llm_model, text, timeline_digest, first_ts, last_ts,
+                    log_has_date=log_has_date,
+                    log_frame_first_ts=log_frame_first_ts,
+                    log_frame_last_ts=log_frame_last_ts,
+                    tz_label=tz_label,
+                    event_digest=event_digest,
+                    stage_label="stage2a_timeline",
+                    usage_out=usage_out,
+                    candidate_hint=candidate_hint,
+                )
+            except Exception as _e:
+                print(f"[issue_time_ai] stage2a failed, escalating to stage2b: {_e}")
+                llm2a = {"interpretation": "", "needs_user_input": True, "suggestions": []}
+            s2a_sugs = llm2a.get("suggestions") or []
+            if (_first_high_confidence(s2a_sugs) is not None
+                    and not llm2a.get("needs_user_input", False)):
+                llm = llm2a
+                stage2b_needed = False
+
+        # 2b) Full-digest fallback. Wrap the LLM call so any network / parse /
+        # API-error failure degrades gracefully into "no suggestions" instead
+        # of a 500 — the log-first fallback below then still gives the user a
+        # usable anchor. Without this, a transient hiccup makes the AI button
+        # look broken.
+        if stage2b_needed:
+            stage2b_escalated = True
+            log_digest = build_log_digest(log_lines or [])
+            try:
+                llm = llm_suggest(
+                    llm_client, llm_model, text, log_digest, first_ts, last_ts,
+                    log_has_date=log_has_date,
+                    log_frame_first_ts=log_frame_first_ts,
+                    log_frame_last_ts=log_frame_last_ts,
+                    tz_label=tz_label,
+                    event_digest=event_digest,
+                    stage_label="stage2b_full",
+                    usage_out=usage_out,
+                    candidate_hint=candidate_hint,
+                )
+            except Exception as _e:
+                print(f"[issue_time_ai] stage2b failed, deferring to fallback: {_e}")
+                llm = {"interpretation": "", "needs_user_input": True, "suggestions": []}
 
     ref = last_ts or first_ts
     suggestions = []
-    for s in (llm.get("suggestions") or [])[:5]:
+    # Only surface the single highest confidence tier the model actually
+    # reported (see _filter_to_highest_confidence) — applies uniformly to
+    # both chatbots since they share this function.
+    for s in _filter_to_highest_confidence(llm.get("suggestions") or [])[:5]:
         dt, is_time_only = parse_issue_time_string((s.get("issue_time") or "").strip())
         if dt is None:
             continue
@@ -631,7 +1869,10 @@ def build_issue_time_suggestions(
     # end). The user still sees "low" confidence + a reason explaining
     # it's a guess, and needs_user_input stays True so they're prompted
     # to confirm or edit.
-    if not suggestions and log_lines:
+    # Skip the "log's last timestamp" low-confidence filler when we already
+    # have a real user-provided anchor (force_ai + explicit path) — it would
+    # just clutter the list next to a suggestion the user typed themselves.
+    if not suggestions and log_lines and not explicit_suggestions:
         fallback_dt = _find_last_log_timestamp(log_lines, no_date_log=no_date)
         if fallback_dt is not None:
             suggestions.append(make_suggestion(
@@ -643,20 +1884,64 @@ def build_issue_time_suggestions(
                 log_has_date=not no_date,
             ))
 
-    msg = (f"AI suggested {len(suggestions)} time(s)."
-           if suggestions else
-           "AI couldn't pin down a specific time — please review or fill it in.")
-    return {
+    # Explicit time(s) — if any (force_ai path) — lead the list; the AI's own
+    # suggestions follow. Order matters here: the user's own typed time stays
+    # the default pick in the frontend's capture popup.
+    all_suggestions = explicit_suggestions + suggestions if explicit_suggestions else suggestions
+
+    if explicit_suggestions:
+        msg = (f"Found {len(explicit_suggestions)} explicit time(s) in your text; "
+               f"AI also suggests {len(suggestions)} more.") if suggestions else (
+               f"Found {len(explicit_suggestions)} explicit time(s) in your text. "
+               f"AI didn't find an additional anchor to add.")
+    else:
+        msg = (f"AI suggested {len(suggestions)} time(s)."
+               if suggestions else
+               "AI couldn't pin down a specific time — please review or fill it in.")
+    payload = {
         "success": True,
-        "user_explicit": False,
+        "user_explicit": bool(explicit_suggestions),
+        "ai_also_analyzed": True,
         "interpretation": str(llm.get("interpretation", "")),
-        # Even with a low-confidence fallback we still want the user to
-        # double-check, so keep needs_user_input True unless the LLM
-        # itself confidently said otherwise.
-        "needs_user_input": bool(llm.get("needs_user_input", not suggestions)),
-        "suggestions": suggestions,
+        # With an explicit anchor already in hand, don't force a confirm
+        # prompt just because the AI's own read was uncertain. Otherwise
+        # (no explicit time), keep needs_user_input True unless the LLM
+        # itself confidently said otherwise — even with a low-confidence
+        # fallback, the user should still double-check.
+        "needs_user_input": (False if explicit_suggestions
+                              else bool(llm.get("needs_user_input", not suggestions))),
+        "suggestions": all_suggestions,
         "message": msg,
     }
+
+    # Per-request token summary: sum every LLM call (stage1 alone, or stage1 +
+    # stage2 on escalate) so the console shows the real spend for this button
+    # click. The individual [TOKEN] stageN lines above already report per-call
+    # detail; this line is the "grand total" the user asked for.
+    total_prompt = sum(u.get("prompt", 0) for u in usage_out)
+    total_completion = sum(u.get("completion", 0) for u in usage_out)
+    total_all = sum(u.get("total", 0) for u in usage_out)
+    stage1_total = sum(u.get("total", 0) for u in usage_out
+                       if u.get("stage") == "stage1_desc_only")
+    stage2a_total = sum(u.get("total", 0) for u in usage_out
+                        if u.get("stage") == "stage2a_timeline")
+    stage2b_total = sum(u.get("total", 0) for u in usage_out
+                        if u.get("stage") == "stage2b_full")
+    print(
+        f"[TOKEN] issue_time_ai TOTAL: cache=MISS "
+        f"stage1_model={stage1_llm_model} "
+        f"stage1_skipped_reason={stage1_skipped_reason or '-'} "
+        f"stage1_candidate_hint={candidate_hint[0] if candidate_hint else '-'} "
+        f"log_available={bool(log_lines) or bool(event_log_events)} "
+        f"stage2b_escalated={stage2b_escalated} "
+        f"stage1_total={stage1_total} stage2a_total={stage2a_total} "
+        f"stage2b_total={stage2b_total} "
+        f"prompt={total_prompt} completion={total_completion} total={total_all} "
+        f"(key={cache_key[:8]}…)"
+    )
+
+    _cache_put(cache_key, payload)
+    return payload
 
 
 # Regexes used by the log-first-timestamp fallback. Two flavours:
@@ -1615,16 +2900,3 @@ def determine_issue_time_frames(
     # 4) No clear signal — stay with the customer assumption.
     return customer_result
 
-
-def align_issue_datetime_to_log_frame(
-    issue_dt: datetime,
-    folder_paths: List[str],
-) -> datetime:
-    """Return ``issue_dt`` aligned to the log's own frame (chatbot path).
-
-    Thin wrapper around :func:`determine_issue_time_frames` for callers
-    that only need the log-frame value. When detection isn't possible the
-    input is returned unchanged.
-    """
-    frames = determine_issue_time_frames(issue_dt, folder_paths)
-    return frames["log_frame"] or issue_dt

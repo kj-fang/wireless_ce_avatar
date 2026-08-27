@@ -39,6 +39,30 @@ TAG_KEYWORDS: dict[str, list[str]] = {
                             "ppag table", "bios block"],
     "ROAMING_DECISION":    ["roaming decision", "roam decision", "roamed to", "roam to a",
                             "roaming event", "roam trigger"],
+    # SoftAP / P2P keywords name the FAILURE, never the feature. A bare
+    # "softap" / "p2p" co-occurs with a root-cause phrase in almost every real
+    # report (and "IE_P2P" alone appears in ordinary STA scan logs), which
+    # would make two families match and silently drop the tag component.
+    "SOFTAP_START_FAILURE": ["softap failed to start", "softap start failure",
+                             "hosted network failed to start",
+                             "hotspot failed to start"],
+    "P2P_CONNECT_FAILURE":  ["go negotiation fail", "group owner negotiation fail",
+                             "p2p negotiation fail", "p2p connection fail",
+                             "wi-fi direct connection fail", "wfd connection fail",
+                             "p2p invitation fail"],
+    # Every keyword must carry the multi-role context. A bare "channel
+    # conflict" / "supported channel mismatch" is a SYMPTOM phrase that shows
+    # up as a supporting detail under other root causes, so anchoring on it
+    # would turn correct MCC_MISMATCH / ROAMING_DECISION / ASSOC_FAILURE
+    # reports into ambiguous ones. Erring toward abstaining is cheap here (the
+    # user's dropdown pick is the ground truth); a false match is not.
+    "CONCURRENCY_CHANNEL_CONFLICT": ["softap channel conflict", "p2p channel conflict",
+                                     "hotspot channel conflict",
+                                     "multi-role channel conflict",
+                                     "concurrency channel conflict",
+                                     "concurrent channel restriction",
+                                     "softap supported channel mismatch",
+                                     "p2p supported channel mismatch"],
     # "OTHER" deliberately has no keywords — it is the fallback the scorer
     # never infers (ambiguity yields "" instead).
 }

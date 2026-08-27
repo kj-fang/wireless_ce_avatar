@@ -981,6 +981,9 @@ CORRECT_CONCLUSION_TAGS = {
     "WAKE_RESUME_DELAY",
     "BIOS_CONFIG_ISSUE",
     "ROAMING_DECISION",
+    "SOFTAP_START_FAILURE",
+    "P2P_CONNECT_FAILURE",
+    "CONCURRENCY_CHANNEL_CONFLICT",
     "OTHER",
 }
 
@@ -1018,10 +1021,7 @@ BT_CONCLUSION_TAGS = {
     "AUDIO_QUALITY",
 }
 
-# Validation accepts EITHER domain's tags. Each frontend only ever offers
-# its own set, and records are already partitioned into wifi/bt streams, so
-# a single union keeps one validation path without cross-contaminating the
-# offered options.
+# Kept for compatibility with callers/tests that need the complete universe.
 ALL_CONCLUSION_TAGS = CORRECT_CONCLUSION_TAGS | BT_CONCLUSION_TAGS
 
 
@@ -1077,11 +1077,14 @@ def record_detail(
     correct_skill = (correct_skill or "").strip()
     correct_approach = (correct_approach or "").strip()
 
-    # Conclusion tag must come from the whitelisted set (or be empty).
-    # Accept either domain's tags — the frontend only offers its own set.
+    # Conclusion tag must come from this feedback stream's domain-specific
+    # whitelist (or be empty). UI separation alone is not a trust boundary:
+    # validate here so a Wi-Fi request cannot pollute ACE with BT-only labels,
+    # and vice versa.
     eff_domain = _resolve_domain(conversation_id, domain)
     tag_in = (correct_conclusion_tag or "").strip().upper()
-    correct_conclusion_tag = tag_in if tag_in in ALL_CONCLUSION_TAGS else ""
+    allowed_tags = BT_CONCLUSION_TAGS if eff_domain == "bt" else CORRECT_CONCLUSION_TAGS
+    correct_conclusion_tag = tag_in if tag_in in allowed_tags else ""
 
     # Agent-workflow assessment must come from the whitelisted set (or empty).
     # This is the primary ACE signal for the agent-prompt-layer Playbook —

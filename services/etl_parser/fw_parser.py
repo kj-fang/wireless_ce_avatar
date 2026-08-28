@@ -7,6 +7,7 @@ import glob
 import json
 from threading import Event
 from threading import Lock, Thread
+from utils.helpers import get_long_path, to_long_path, get_short_path
 
 DECODER_EXE = r"C:\UtilityPackage\uSnifferAutoParser\uSnifferAutoParser.exe"
 
@@ -210,13 +211,16 @@ def fw_wifi_analysis(fw_path: str, timeout: int = 30, cancel_event: Event | None
     if not os.path.exists(DECODER_EXE):
         _emit_viewer_log(on_log, f"❌ Decoder executable not found: {DECODER_EXE}")
         return False
-    
-    if not os.path.exists(fw_path):
+
+    fw_path = get_long_path(fw_path)
+    if not os.path.exists(to_long_path(fw_path)):
         _emit_viewer_log(on_log, f"❌ ETL file not found: {fw_path}")
         return False
 
     folder = os.path.dirname(fw_path)
     base_no_ext = os.path.splitext(os.path.basename(fw_path))[0]
+
+    print(f"[fw_wifi_analysis] fw_path={fw_path}")
 
     try:
         _emit_viewer_log(on_log, f"⚙️ Running decoder: {DECODER_EXE} {fw_path}")
@@ -265,22 +269,23 @@ def fw_wifi_analysis(fw_path: str, timeout: int = 30, cancel_event: Event | None
             return False
 
         # Look for output folder matching "base_no_ext_*"
+        prefix = base_no_ext + "_"
         output_folder = None
         for _ in range(timeout):
             if cancel_event and cancel_event.is_set():
                 _emit_viewer_log(on_log, "⚠️ FW WiFi analysis canceled while waiting output folder.")
                 return None
-            candidates = glob.glob(os.path.join(folder, base_no_ext + "_*"))
-            candidates = [c for c in candidates if os.path.isdir(c)]
-            if candidates:
-                # Pick the newest folder
-                output_folder = max(candidates, key=os.path.getmtime)
+            # os.scandir avoids os.path.isdir on full paths that exceed MAX_PATH.
+            entries = [e for e in os.scandir(to_long_path(folder)) if e.is_dir() and e.name.startswith(prefix)]
+            if entries:
+                # DirEntry.stat() avoids os.path.getmtime on paths that exceed MAX_PATH.
+                output_folder = os.path.join(folder, max(entries, key=lambda e: e.stat().st_mtime).name)
                 break
             time.sleep(1)
 
-        if output_folder and os.path.exists(output_folder):
+        if output_folder and os.path.exists(to_long_path(output_folder)):
             _emit_viewer_log(on_log, f"✅ Output folder generated: {output_folder}")
-            subprocess.run(['explorer', output_folder])
+            subprocess.run(['explorer', folder])
         else:
             _emit_viewer_log(on_log, f"⚠️ Output folder not found for base: {base_no_ext}_* (waited {timeout}s)")
 
@@ -300,6 +305,7 @@ def fw_bt_analysis(fw_path, use_cli=True, cancel_event: Event | None = None, on_
     Launch WRT_BT_Decoder.exe with elevation and attach UI (via window detection)
     """
     _log = on_log if callable(on_log) else print
+    fw_path = get_long_path(fw_path)
     global active_fw_pid
     exe_path = r"C:\UtilityPackage\WRT_BT_Logs_Decoder\WRT_BT_Decoder.exe"
     exe_cli_path = r"C:\UtilityPackage\WRT_BT_Logs_Decoder\bt_decoder_cli.exe"
@@ -352,6 +358,7 @@ def fw_bt_analysis(fw_path, use_cli=True, cancel_event: Event | None = None, on_
             stderr = ''.join(_stderr_lines)
 
             outputs_ready = _has_fw_bt_decode_outputs(fw_path)
+            print(f"[fw_bt_analysis] fw_path={fw_path!r}, outputs_ready={outputs_ready}")
 
             if result_proc.returncode != 0:
                 if outputs_ready:
@@ -443,17 +450,6 @@ def _extract_last_timestamp_from_folder_name(folder_name: str):
         return None
 
 
-def _get_short_path(long_path: str) -> str:
-    """Convert a long Windows path to its 8.3 short form to bypass MAX_PATH limits."""
-    import ctypes
-    buf_size = ctypes.windll.kernel32.GetShortPathNameW(long_path, None, 0)
-    if buf_size == 0:
-        return long_path  # fallback: return as-is
-    buf = ctypes.create_unicode_buffer(buf_size)
-    ctypes.windll.kernel32.GetShortPathNameW(long_path, buf, buf_size)
-    return buf.value or long_path
-
-
 def open_sysmon_with_tool(fw_path: str, on_log=None, on_close=None):
     """
     Find the .sysmon file from the latest decode output folder (the folder
@@ -461,6 +457,7 @@ def open_sysmon_with_tool(fw_path: str, on_log=None, on_close=None):
     'Latest' is determined by the timestamp embedded in the folder name.
     """
     from datetime import datetime
+    fw_path = get_long_path(fw_path)
     fw_dir = os.path.dirname(fw_path)
     eventid = _get_eventid_from_summary(fw_path)
     if not eventid:
@@ -469,9 +466,9 @@ def open_sysmon_with_tool(fw_path: str, on_log=None, on_close=None):
 
     # Find all dirs ending with the event ID, sort by embedded folder-name timestamp.
     candidates = [
-        os.path.join(fw_dir, d)
-        for d in os.listdir(fw_dir)
-        if os.path.isdir(os.path.join(fw_dir, d)) and (str(eventid) in d)
+        os.path.join(fw_dir, e.name)
+        for e in os.scandir(to_long_path(fw_dir))
+        if e.is_dir() and (str(eventid) in e.name)
     ]
     if not candidates:
         _emit_viewer_log(on_log, f"❌ No directory ending with event ID '{eventid}' found in {fw_dir}")
@@ -484,9 +481,9 @@ def open_sysmon_with_tool(fw_path: str, on_log=None, on_close=None):
     sysmon_dir = max(candidates, key=sort_key)
 
     sysmon_path = None
-    for f in os.listdir(sysmon_dir):
-        if f.endswith(".sysmon"):
-            sysmon_path = os.path.join(sysmon_dir, f)
+    for f in os.scandir(to_long_path(sysmon_dir)):
+        if f.name.endswith(".sysmon"):
+            sysmon_path = os.path.join(sysmon_dir, f.name)
             break
 
     if not sysmon_path:
@@ -521,19 +518,19 @@ def open_sysmon_with_tool(fw_path: str, on_log=None, on_close=None):
         return False
 
 def _get_sysmon_to_text(fw_path):
-
+    fw_path = get_long_path(fw_path)
     fw_dir = os.path.dirname(fw_path)
     eventid = _get_eventid_from_summary(fw_path)
     if not eventid:
         print("❌ Cannot get Event ID, aborting sysmon log extraction.")
         return None
     try:
-        for file in os.listdir(fw_dir):
-            if os.path.isdir(os.path.join(fw_dir, file)) and file.endswith(eventid):
-                sysmon_dir = os.path.join(fw_dir, file)
-                for candidate in os.listdir(sysmon_dir):
-                    if candidate.endswith(".sysmon"):
-                        sysmon_path = os.path.join(sysmon_dir, candidate)
+        for entry in os.scandir(to_long_path(fw_dir)):
+            if entry.is_dir() and entry.name.endswith(eventid):
+                sysmon_dir = os.path.join(fw_dir, entry.name)
+                for candidate in os.scandir(to_long_path(sysmon_dir)):
+                    if candidate.name.endswith(".sysmon"):
+                        sysmon_path = os.path.join(sysmon_dir, candidate.name)
                         with open("\\\\?\\"+sysmon_path, 'r') as f:
                             return f.read()
     except Exception as e:
@@ -546,32 +543,34 @@ def _has_fw_bt_decode_outputs(fw_path):
     if not fw_path:
         return False
 
-    fw_dir = os.path.dirname(fw_path)
-    fw_stem = os.path.splitext(os.path.basename(fw_path))[0]
-    if not fw_stem or not os.path.isdir(fw_dir):
+    # Expand 8.3 short path so the stem matches the actual long folder names.
+    fw_path_long = get_long_path(fw_path)
+    fw_dir = os.path.dirname(fw_path_long)
+    fw_stem = os.path.splitext(os.path.basename(fw_path_long))[0]
+    if not fw_stem or not os.path.isdir(to_long_path(fw_dir)):
         return False
 
     prefix = fw_stem.lower()
-    decoded_folders = []
-    for name in os.listdir(fw_dir):
-        full_path = os.path.join(fw_dir, name)
-        if os.path.isdir(full_path) and name.lower().startswith(prefix):
-            decoded_folders.append(name)
-
-    return len(decoded_folders) >= 4
+    # os.scandir avoids constructing full_path strings that exceed MAX_PATH.
+    count = sum(
+        1 for e in os.scandir(to_long_path(fw_dir))
+        if e.is_dir() and e.name.lower().startswith(prefix)
+    )
+    return count >= 4
 
 def _get_eventid_from_summary(fw_path):
-    if not os.path.exists(fw_path) or not fw_path.endswith(".etl"):
+    fw_path = get_long_path(fw_path)
+    if not fw_path.endswith(".etl") or not os.path.exists(to_long_path(fw_path)):
         print(f"❌ ETL file not found: {fw_path}")
         return None
-    
+
     summary_path = fw_path[:-4] + "decodeSummary.json"
 
-    if not os.path.exists(summary_path):
+    if not os.path.exists(to_long_path(summary_path)):
         print(f"❌ Summary file not found: {summary_path}")
         return None
     try:
-        with open(summary_path, 'r') as f:
+        with open(to_long_path(summary_path), 'r') as f:
             summary_data = json.load(f)
             event_id = summary_data['dumpInfo']['dumps'][0]['dumps'][0]['eventID']
             print(f"✅ Extracted Event ID: {event_id} from summary")

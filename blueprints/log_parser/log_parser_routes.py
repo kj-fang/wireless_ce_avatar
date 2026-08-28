@@ -450,6 +450,11 @@ def _process_local_analysis(source_path: str, source_dir: str, file_path: str,
 
     _raise_if_cancelled(cancel_event)
 
+    # Expand Windows 8.3 short names so external tools receive the full path
+    source_path = helpers.get_long_path(source_path)
+    file_path   = helpers.get_long_path(file_path)
+    source_dir  = os.path.dirname(file_path) or source_dir
+
     session['download_path'] = source_dir
     session['uploaded_source_path'] = source_path
     session['local_in_place'] = True
@@ -865,6 +870,8 @@ def upload_local_analysis():
         resp['use_chatbot'] = True
         resp['is_bt'] = True
         resp['log_path'] = helpers.to_long_path(source_path + '.hci.txt')
+    elif _is_fw_etl(source_path):
+        pass  # FW ETL: redirect to download_result is already set by _process_local_analysis
     elif source_lower.endswith('.etl') or bool(re.search(r'\.etl\.\d+$', source_lower)) or bool(re.fullmatch(r"dddLog_\d+\.bin", os.path.basename(source_path))):  # Wi-Fi .etl(.N) or DDD dddLog_<n>.bin
         resp['use_chatbot'] = True
         resp['etl_path'] = helpers.to_long_path(source_path)

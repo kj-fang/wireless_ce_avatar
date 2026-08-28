@@ -1408,6 +1408,12 @@
             appendLog(text + "\n");
             advanceFwStage(text);
             _appendParseModalLog(text);
+            // Fatal error in FW tool output: close modal immediately so user can dismiss
+            if (text.startsWith('❌')) {
+                _closeParseModal(false, '❌ FW Parse Failed', text.slice(0, 120));
+                setFwActionButtonsBusy(false);
+                setAnalysisCardLocked(false);
+            }
         }
 
         function handleFwToolLog(msg) {
@@ -2378,6 +2384,7 @@
         window.pendingFwAnalyze = false;
         resetFwButton(button);
         setFwActionButtonsBusy(false);
+        setAnalysisCardLocked(false);
 
         const decoded = decodePath(fwPathEncoded);
         appendLog(`✅ FW analysis complete: ${decoded}\n`);
@@ -3294,6 +3301,7 @@
         window.pendingFwAnalyze = false;
         resetFwButton(button);
         setFwActionButtonsBusy(false);
+        setAnalysisCardLocked(false);
 
         const decoded = decodePath(fwPathEncoded);
         appendLog(`⏹ FW analysis canceled: ${decoded}\n`, 'red');
@@ -3310,6 +3318,7 @@
         window.pendingFwAnalyze = false;
         resetFwButton(button);
         setFwActionButtonsBusy(false);
+        setAnalysisCardLocked(false);
 
         const decoded = decodePath(fwPathEncoded);
         appendLog(`❌ FW analysis failed: ${decoded} (${msg.error || 'unknown error'})\n`, 'red');

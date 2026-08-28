@@ -6,6 +6,7 @@ import uuid
 from configs.global_configs import app_config
 from services.etl_parser.fw_parser import fw_bt_analysis, fw_wifi_analysis, open_sysmon_with_tool, close_active_text_analysis_tool
 from utils.fw_utils import load_fw_system_info
+from utils.helpers import to_long_path
 
 class FWAnalysisService():
 
@@ -38,17 +39,17 @@ class FWAnalysisService():
         if not file_path:
             return False, "FW path is empty"
 
-        if not os.path.exists(file_path):
+        if not os.path.exists(to_long_path(file_path)):
             return False, f"Invalid file path: {file_path}"
 
-        if not os.path.isfile(file_path):
+        if not os.path.isfile(to_long_path(file_path)):
             return False, "FW path must be a file"
 
         if not file_path.lower().endswith('.etl'):
             return False, "FW parse only supports .etl files"
 
         try:
-            if os.path.getsize(file_path) < 1024*1024*10: 
+            if os.path.getsize(to_long_path(file_path)) < 1024*1024*10: 
                 return False, f"FW ETL file size is less than 10MB: {file_path}"
         except OSError as e:
             return False, f"Cannot access FW file: {e}"

@@ -1,4 +1,4 @@
-# version skills_2026-06-04-1 features:
+# version skills_2026-08-28-1 features:
 #   name: skill name
 #   description: a brief description of the skill
 #   keywords: use "-" to represent each keyword
@@ -561,6 +561,109 @@ SoftAP_flow:
             [CNCT_FLOW] [SPECIAL] [prvTxScdSendPacket]:EAPOL TRANSMIT
     5. Check disconnection or deauth, it come from OS or another P2P device
 
+Roaming_Analysis:
+  name: "Roaming Analysis"
+  description: "Used to analyze Wi-Fi roaming events: trigger reasons, AP selection scoring, execution outcome, and RSSI history."
+  keywords:
+    - "Triggering Roaming Flow due to reason"
+    - "TASK ROAM"
+    - "PRE_TASK_ROAM"
+    - "ROAMING_DECISION_STATE"
+    - "WDI_IND_ROAM_COMPLETE"
+    - "AP rssi changed to"
+    - "printCurrentConnectionParameters"
+    - "Best Candidate"
+    - "EmergencyRoamingWD"
+    - "ROAM_DECISION"
+    - "AP_SELECTION_CHANNEL_LOAD"
+    - "AP_SELECTION_POORLY_DISCOVERABLE_AP_PENALTY"
+  expert_rules: |
+    WiFi Driver Roaming Flow analysis guidelines based on the driver FSM:
+
+    【Roaming FSM Overview】
+    1. Trigger: "Triggering Roaming Flow due to reason ROAM_REASON_<X>" — roaming evaluation starts.
+    2. Not executed: "PRE_TASK_ROAM ==> ROAMING_DECISION_STATE_ASSOCIATED" — driver evaluated but stayed on current AP.
+    3. Executed:
+       a. "PRE_TASK_ROAM ==> ROAMING_DECISION_STATE_WAITING_FOR_TASK_ROAM" (ETL format)
+          or "PRE_TASK_ROAM ==> ROAMING_DECISION_STATE_ROAM_DECISION_IN_TASK_ROAM" (UT format)
+       b. OS sends "Got Command (M1 Message) TASK_ROAM"
+       c. "IND_ASSOC_RESULT[0] - status=0, ..., reassoc=1" — success
+       d. "WDI_IND_ROAM_COMPLETE - task complete indication. Status= 0x0"
+
+    【Step 1 — Enumerate All Roam Events】
+    Find every "Triggering Roaming Flow due to reason" line and list them in timestamp order.
+    For each event extract:
+    - Timestamp
+    - ROAM_REASON_<X> value (the raw reason string after "due to reason")
+    - Classify into one of:
+        BG_SCAN / PERIODIC  → "Background scan found potentially better AP"
+        LOW_RSSI / RSSI     → "Signal strength dropped below roaming threshold"
+        BEACON / MISS       → "Missed beacons from current AP"
+        DEGRAD              → "Serving AP signal degraded (active-link RSSI/latency check)"
+        TOPOLOGY            → "Current link/band received a topology penalty"
+        BTM / BSS_TM        → "AP sent BSS Transition Management request"
+        LINK / QUALITY      → "Link quality degraded"
+        AP_RANK             → "AP ranking changed"
+        Other               → "Unknown roaming reason (raw: <value>)"
+
+    【Step 2 — Execution Outcome】
+    For each roam event, determine whether the driver actually roamed:
+    - NOT EXECUTED: "PRE_TASK_ROAM ==> ROAMING_DECISION_STATE_ASSOCIATED"
+    - ABORTED: "PRE_TASK_ROAM ==> ROAMING_DECISION_STATE_ABORTING" or "PROP_ABORT_TASK"
+    - EXECUTED + SUCCESS: "WDI_IND_ROAM_COMPLETE" with "Status= 0x0" or "ROAM COMPLETE"
+    - EXECUTED + FAILED: "CONNECTION FAILED - <reason>" or "ROAMING DECISION ... Roam Failed"
+    - EXECUTED + WD EXPIRED: "EmergencyRoamingWD ... Triggering disconnection" — driver internally
+      triggered disconnect after missed beacons and failed roam attempts. Subsequent AUTH failures
+      belong to the OS reconnect, not this roam.
+    - EXECUTED (outcome unknown if none of the above are found within 8000 lines)
+
+    【Step 3 — RSSI Evidence】
+    For each roam event extract:
+    - RSSI at trigger time: "AP rssi changed to <X>" immediately before "Triggering Roaming Flow"
+    - RSSI at execution time: "printCurrentConnectionParameters ... RSSI[<X>]" near TASK_ROAM
+    - Target AP RSSI from AP selection: "[Best Candidate 0] ... RSSI:<X>" or "[BC 0]: ... RSSI:<X>"
+    - Old AP RSSI from previous AP selection run (the scan before the roam trigger)
+
+    【Step 4 — AP Selection Scoring (for EXECUTED roams)】
+    After "Triggering Roaming Flow", the driver runs AP selection. Extract:
+    - Current AP BSSID: "Candidate is the active entry" following "Calculating BSS entry grade for: Address(<BSSID>)"
+    - Penalties applied to current AP: "Penalty for AP_SELECTION_CHANNEL_LOAD ... Address(<current AP BSSID>)"
+    - Poorly-discoverable penalties: count of "AP_SELECTION_POORLY_DISCOVERABLE_AP_PENALTY"
+    - BT coexistence state: "BT is Connected" present in the AP selection run
+    - Winning candidate: "[Best Candidate 0]" or "[BC 0]:" — report band, channel, BW, RSSI, chLoad, BTcoex
+    - Root cause of BG_SCAN roam: compare new AP RSSI vs old AP RSSI:
+        new >= old         → "RSSI improvement"
+        new < old but BW wider → "Channel bandwidth upgrade"
+        new < old, ch_load penalty on current AP → "Channel load on current AP"
+        new < old, other   → "Grade advantage (other factors)"
+
+    【Step 5 — Roam Target】
+    If roam was executed, find the new AP:
+    - "CONNECTED - to: <SSID> <BSSID>" after the TASK_ROAM
+    - Or "[Best Candidate 0] ... Address(<BSSID>)" from AP selection as fallback
+
+    【Step 6 — Emergency Watchdog Disconnect】
+    If "EmergencyRoamingWD ... Triggering disconnection" is found:
+    - Report it as a driver-internal disconnect decision (NOT OS-initiated, NOT AP deauth)
+    - Root cause: missed beacons AND all roam/reconnect attempts failed within the WD window
+    - Do NOT attribute any subsequent OS TASK_CONNECT AUTH failures to this roam
+
+    【Output Format】
+    For each roam event produce:
+    - Event #N | Timestamp | Reason | Outcome
+    - RSSI: trigger=<X> dBm, execution=<Y> dBm, target AP=<Z> dBm, old AP=<W> dBm
+    - AP Selection: current AP BSSID, penalties, winner BSSID/band/channel/BW
+    - Root cause summary sentence
+
+    Finish with a statistics table:
+    | Metric | Value |
+    | Total roam evaluations | N |
+    | Roams executed | N |
+    | Roams succeeded | N |
+    | Roams failed | N |
+    | WD-triggered disconnects | N |
+    | Most common reason | <reason> |
+
 P2P_PIE_Supported_Channel_Query:
   name: "P2P PIE Supported-Channel Query"
   description: "Diagnoses the per-channel regulatory gate decisions made during a PIE-initiated OID_WIFI_P2P_GO_QUERY_SUPPORTED_CHANNELS session, covering the full evaluation loop from PHY-config check through regulatory allowance verdict to the returned channel list. Applies when: OID_WIFI_P2P_GO_QUERY_SUPPORTED_CHANNELS is issued by PIE (external application); P2P GO channel list returned to PIE is suspect — missing channels or unexpected exclusions."
@@ -624,3 +727,173 @@ P2P_PIE_Supported_Channel_Query:
     5. Structural anomaly check.
     - Every [vifMgrChSelIsGoRegulatoryAllowedChannelFromChFeatures] line must be preceded by at least one [mvmManagerFindSimilarPhyConfig] line in the same session. If a verdict line appears with no preceding PHY-config line, flag as a structural anomaly.
     - [mvmManagerFindSimilarPhyConfig] hit count will be >= [vifMgrChSelIsGoRegulatoryAllowedChannelFromChFeatures] hit count due to supplementary output lines. A large delta (engineer-provided threshold: not yet established) may indicate log truncation at session boundaries.
+
+PPAG Settings Check:
+  name: "PPAG Settings Check"
+  description: "Used to verify PPAG related settings"
+  keywords:
+    - "PPAG"
+    - "PPAG is supported"
+    - "PPAG is Enable"
+    - "UEFI"
+    - "BIOS"
+    - "SAR"
+    - "oem"
+    - "table"
+  expert_rules: |
+    PPAG setting checks are listed below.
+    Focus on whether PPAG is supported, whether it is enabled, where the configuration is loaded from, and whether firmware receives a valid PPAG configuration.
+
+    1. Check PPAG capability and runtime status first.
+    - Find lines that indicate PPAG capability and state.
+    - Capture values such as supported/unsupported, enabled/disabled, revision/version, table source, and any validity flags.
+    - If both supported and enabled are shown, report "PPAG feature is active".
+    - If supported but disabled, report "PPAG feature is present but disabled by platform or policy".
+    - If unsupported, report "PPAG feature not supported on this platform".
+
+    2. Check PPAG source path (UEFI/BIOS/ACPI/default).
+    - Determine where PPAG data is loaded from.
+    - If multiple source indications appear, use the latest successful load before connection bring-up as effective source.
+    - If a preferred source fails (for example ACPI failure) but UEFI succeeds, classify as "UEFI effective" and include both lines as evidence.
+
+    3. Check PPAG table load integrity.
+    - Verify whether a PPAG table read/load action succeeded.
+    - Extract and report key metadata if present: table size, table revision, country/region scope, chain/path count, and checksum/validation status.
+    - If the log contains malformed, out-of-range, or rejected table indicators, classify as "PPAG table invalid" and quote the exact failure lines.
+
+    4. Check SAR/Tx power interaction.
+    - Determine whether PPAG values are consumed by SAR/power-limiting path.
+    - Look for indications that PPAG constraints were applied, ignored, or overridden.
+    - If override path exists (registry/debug/test hook), clearly state effective precedence in this order unless logs show otherwise:
+      runtime override > BIOS/UEFI PPAG table > firmware default.
+
+    5. Check firmware handoff result.
+    - Confirm whether PPAG payload/config command was sent to firmware and whether firmware accepted it.
+    - If command send exists but no completion/ack is found, classify as "handoff incomplete".
+    - If firmware reject/unsupported code is present, classify as "handoff failed" and include the return/error code.
+
+    6. Output format (strict).
+    - PPAG Support: Supported / Unsupported / Unknown
+    - PPAG Enablement: Enabled / Disabled / Unknown
+    - Effective Source: UEFI / BIOS / ACPI / Default / Unknown
+    - Table Status: Valid / Invalid / Missing / Unknown
+    - FW Handoff: Success / Failed / Incomplete / Unknown
+    - SAR Interaction: Applied / Not Applied / Overridden / Unknown
+    - Key Evidence:
+      - <exact log line 1>
+      - <exact log line 2>
+      - <exact log line N>
+
+    7. Failure classification rules.
+    - If PPAG is disabled and there is no table load attempt, this is not a failure; classify as "disabled by configuration".
+    - If PPAG is enabled but table is missing/invalid, classify as "configuration defect".
+    - If table is valid but firmware handoff fails, classify as "FW integration issue".
+    - If PPAG is fully active but behavior is still abnormal, classify as "non-PPAG issue" and continue with RF/SAR/connection flow analysis.
+
+    8. Evidence requirements.
+    - Always include exact timestamps and full raw lines for every conclusion.
+    - Do not infer values that are not explicitly present in logs.
+    - If required fields are missing, explicitly list missing fields instead of guessing.
+
+OEM Tool DRTU Check:
+  name: "OEM Tool DRTU Check"
+  description: "Check fail from OEM Tool DRTU"
+  keywords:
+    - "tool_log::error"
+    - "tool_log::fail"
+    - "tool_log::pass"
+    - "tool_log::xVT API"
+    - "driver_log::XVT Mode Enabled"
+    - "driver_log::WorkQ"
+    - "driver_log::XVT"
+    - "driver_log::assert"
+    - "driver_log::pldr"
+  expert_rules: |
+    This skill supports OEM Tool DRTU analysis and MUST classify input log type first.
+
+    1. Determine log type before any conclusion.
+    - "drtuLog.txt" and "DrtuTestResults.txt" are tool log.
+    - "WifiDriverIHVSession.etl.XXX.log" is driver log, for example "WifiDriverIHVSession.etl.002.log".
+    - If input log filename does not match rules above, classify as "unknown log type" and report missing filename/log-type evidence.
+
+    2. If log type is tool log, analyze DRTU execution result.
+    - Extract tool stage names, pass/fail status, error code, and failure text.
+    - Bypass "Finished command, errorlevel = 0".    
+    - Keep original wording for fail reason; do not paraphrase away technical tokens.
+
+    3. If log type is driver log, check stop point.
+    - Start from "XVT Mode Enabled" and follow the sequence.
+    - Check any stop point with assert or pldr.
+    - Not all fail and error need to check, bypass information with "TIME_POINT_FW_HW_ERROR" and "[ERROR] [prvTfdQueueSendCommand]". 
+
+    4. Output format (strict).
+    - OEM Tool Type: DRTU
+    - Log Type: tool log / driver log
+    - Tool Verdict: PASS / FAIL / UNKNOWN
+    - Driver Verdict: HEALTHY / DEFECT / UNKNOWN
+    - Failure Stage: <stage name or N/A>
+    - Root Cause Class: tool issue / config defect / fw integration issue / mismatch / unknown
+    - Key Evidence:
+      - <exact log line 1>
+      - <exact log line 2>
+      - <exact log line N>
+
+    5. Evidence rules.
+    - Always include exact raw lines with timestamps where available.
+    - Do not infer missing error codes.
+    - If evidence is insufficient, explicitly state which field is missing.
+
+OEM Tool CITU Check:
+  name: "OEM Tool CITU Check"
+  description: "Check fail from OEM Tool CITU"
+  keywords:
+    - "tool_log::error"
+    - "tool_log::fail"
+    - "tool_log::pass"
+    - "tool_log::xVT API"
+    - "result_file::StepMarginalTest_"
+    - "result_file::csv"
+    - "result_file::reserved_for_future_fields"
+    - "driver_log::XVT Mode Enabled"
+    - "driver_log::WorkQ"
+    - "driver_log::XVT"
+    - "driver_log::assert"
+    - "driver_log::pldr"
+  expert_rules: |
+    This skill supports OEM Tool CITU analysis and MUST classify input log type first.
+
+    1. Determine log type before any conclusion.
+    - "Core_Log_XXXX.log" is tool log, for example "Core_Log_09-08-2026-22-39-02.log".
+    - "CITU_Log_XXXX.log" is tool log, for example "CITU_Log_26-08-2026-11-46-06.log".  
+    - "WifiDriverIHVSession.etl.XXX.log" is driver log, for example "WifiDriverIHVSession.etl.002.log".
+    - "StepMarginalTest_XXXX.csv" is result file, for example "StepMarginalTest_08_09_2026_10_39_14.csv".
+    - Reserved detection space for result file is enabled by result_file::* keywords and can be expanded later.
+    - Check the "StepMarginalTest_XXXX.csv" exist, if not, add missing information in the Output format.
+    - If input log filename does not match rules above, classify as "unknown log type" and report missing filename/log-type evidence.
+
+    2. If log type is tool log, analyze CITU execution result.
+    - Extract tool stage names, pass/fail status, error code, and failure text.
+    - Bypass "Error bits:".    
+    - Keep original wording for fail reason; do not paraphrase away technical tokens.
+
+    3. If log type is driver log, check stop point.
+    - Start from "XVT Mode Enabled" and follow the sequence.
+    - Check any stop point with assert or pldr.
+    - Not all fail and error need to check, bypass information with "TIME_POINT_FW_HW_ERROR" and "[ERROR] [prvTfdQueueSendCommand]". 
+
+    4. Output format (strict).
+    - OEM Tool Type: CITU
+    - Log Type: tool log / driver log / result file
+    - Tool Verdict: PASS / FAIL / UNKNOWN
+    - Driver Verdict: HEALTHY / DEFECT / UNKNOWN
+    - Failure Stage: <stage name or N/A>
+    - Root Cause Class: tool issue / config defect / fw integration issue / mismatch / unknown
+    - Key Evidence:
+      - <exact log line 1>
+      - <exact log line 2>
+      - <exact log line N>
+
+    5. Evidence rules.
+    - Always include exact raw lines with timestamps where available.
+    - Do not infer missing error codes.
+    - If evidence is insufficient, explicitly state which field is missing.

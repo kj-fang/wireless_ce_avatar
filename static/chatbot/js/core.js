@@ -88,6 +88,63 @@
         setSendBtnSendMode();
     }
 
+    // Lightweight new-session flow for profiles that intentionally do not
+    // load the conversation-history feature (currently NW).  It resets only
+    // the conversation while preserving the selected log and loaded skills,
+    // matching the legacy NW "Reset Conversation" behavior without bringing
+    // back the removed Actions column or the 900-line history controller.
+    async function startNewConversationKeepingLog(button) {
+        const originalText = button ? button.textContent : '';
+        if (button) {
+            button.disabled = true;
+            button.textContent = 'Resetting…';
+        }
+
+        try {
+            if (window.__streamCtl) {
+                try { window.__streamCtl.abort(); } catch (e) { /* best-effort */ }
+            }
+            removeTyping();
+
+            const response = await fetch(`${CHATBOT_API}/reset`, {method: 'POST'});
+            const payload = await response.json().catch(() => ({}));
+            if (!response.ok || payload.success === false) {
+                throw new Error(payload.error || `Server error ${response.status}`);
+            }
+
+            window.__feedbackConversationId = '';
+            window.__turnContext = {};
+            window.__lastFeedback = {};
+            window.__multiTimeContext = null;
+
+            const input = document.getElementById('user-input');
+            if (input) {
+                input.value = '';
+                autoResize(input);
+            }
+
+            const chatWindow = document.getElementById('chat-window');
+            if (chatWindow) {
+                chatWindow.innerHTML = `
+                    <div class="welcome-msg" id="welcome-msg">
+                        <div class="big-icon">🤖</div>
+                        <strong>New session started.</strong><br>
+                        The log file is still loaded. Ask me a new question.
+                    </div>`;
+            }
+
+            setSendBtnSendMode();
+            if (input) input.focus();
+        } catch (error) {
+            appendAssistantText(`❌ Could not start a new session: ${error.message}`);
+        } finally {
+            if (button) {
+                button.disabled = false;
+                button.textContent = originalText || '➕ New session';
+            }
+        }
+    }
+
     // Unique id for one "Agent Processing Steps" card. A timestamp alone is
     // not enough: history replay builds cards synchronously in a loop, so two
     // can land in the same millisecond, and getElementById would then hand the

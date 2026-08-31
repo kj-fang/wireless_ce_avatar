@@ -7,6 +7,7 @@ import subprocess
 
 from models.models import CaseContext
 from configs.global_configs import app_config
+from utils.helpers import get_long_path, to_long_path
 
 from services.analysis_service_wifi import WiFiAnalysisService
 from services.analysis_service_bt import BTAnalysisService
@@ -25,30 +26,37 @@ def process_etl_path():
     case_context = session["case_context"]
     case_context = CaseContext.from_session(case_context)
 
-    etl_path = unquote(request.args.get('etl_path', ''))
+    etl_path = to_long_path(get_long_path(unquote(request.args.get('etl_path', ''))))
     mode = request.args.get('mode', '')
+    # Coex: caller passes etl_type=wifi|bt so the correct parser fires even
+    # when case_context.wifi_or_bt (the Salesforce hint) points the other way.
+    # Falls back to the hint when the caller doesn't specify, preserving
+    # every existing non-coex call site.
+    etl_type = (request.args.get('etl_type') or case_context.wifi_or_bt or '').strip().lower()
 
     print("etl_path: ", etl_path)
+    print("etl_type: ", etl_type)
 
     if not etl_path or not os.path.exists(etl_path):
         return f"❌ Invalid file path: {etl_path}"
-    
-    subprocess.run(['explorer', '/select,', etl_path])
 
-    if 'wifi' in case_context.wifi_or_bt:
+    if etl_type not in ('wifi', 'bt'):
+        return "❌ Unknown case subcategory", 400
+
+    subprocess.run(['explorer', os.path.dirname(etl_path)])
+
+    if etl_type == 'wifi':
         wifi_service.analyze(etl_path)
-    elif 'bt' in case_context.wifi_or_bt:
+    else:
         classification = session.get("classification", {})
         issue_type = (classification or {}).get("issue_type")
         bt_service.analyze(
             etl_path,
             mode=mode,
             issue_type=issue_type,
-            wifi_or_bt=case_context.wifi_or_bt,
+            wifi_or_bt=etl_type,
         )
-    else:
-        return "❌ Unknown case subcategory", 400
-    
+
     return f"🚀 Analysis triggered for: {etl_path}"
     
 
@@ -57,16 +65,18 @@ def process_etl_path_fw():
     case_context = session["case_context"]
     case_context = CaseContext.from_session(case_context)
 
-    fw_path = unquote(request.args.get("fw_path", ""))
+    fw_path = get_long_path(unquote(request.args.get("fw_path", "")))
+    # Coex FW dropdown sends fw_type=wifi|bt per file. Non-coex callers omit
+    # it and fall back to the Salesforce hint (existing behavior).
+    fw_type = (request.args.get('fw_type') or case_context.wifi_or_bt or '').lower()
 
-    if case_context.wifi_or_bt in ['wifi', 'bt']:
-        task_id, error_msg = fw_service.start_async(fw_path, case_context.wifi_or_bt)
+    if fw_type in ('wifi', 'bt'):
+        task_id, error_msg = fw_service.start_async(fw_path, fw_type)
         if not task_id:
             return jsonify({"ok": False, "error": error_msg}), 400
     else:
         return jsonify({"ok": False, "error": "Unknown case subcategory"}), 400
-
-    subprocess.run(['explorer', '/select,', fw_path])
+    subprocess.run(['explorer', os.path.dirname(fw_path)])
 
     return jsonify({"ok": True, "task_id": task_id, "fw_path": fw_path})
 

@@ -32,6 +32,40 @@ def to_long_path(path: str) -> str:
         return '\\\\?\\UNC\\' + path[2:]
     return '\\\\?\\' + path
 
+def get_long_path(path: str) -> str:
+    """Expand Windows 8.3 short names (e.g. INTELA~1) to the full long path.
+
+    Uses GetLongPathNameW so that downstream tools receive the real name
+    instead of creating short-name artefacts. Falls back to the original
+    path on non-Windows or if the API call fails.
+    """
+    if os.name != 'nt' or not path:
+        return path
+    try:
+        import ctypes
+        buf_size = ctypes.windll.kernel32.GetLongPathNameW(path, None, 0)
+        if buf_size == 0:
+            return path
+        buf = ctypes.create_unicode_buffer(buf_size)
+        ctypes.windll.kernel32.GetLongPathNameW(path, buf, buf_size)
+        return buf.value or path
+    except Exception:
+        return path
+
+def get_short_path(path: str) -> str:
+    """Convert a long path to its 8.3 short form. Falls back to the original on failure."""
+    if os.name != 'nt' or not path:
+        return path
+    try:
+        import ctypes
+        buf_size = ctypes.windll.kernel32.GetShortPathNameW(path, None, 0)
+        if buf_size == 0:
+            return path
+        buf = ctypes.create_unicode_buffer(buf_size)
+        ctypes.windll.kernel32.GetShortPathNameW(path, buf, buf_size)
+        return buf.value or path
+    except Exception:
+        return path
 
 def get_available_port(start=54000, end=60000, max_tries=20):
     for _ in range(max_tries):

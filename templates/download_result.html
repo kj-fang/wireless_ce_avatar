@@ -208,6 +208,52 @@
             filter: grayscale(100%);
             opacity: 0.55;
         }
+        /* ── Coex: per-row FW BT/WiFi picker (modern, subtle) ─────────────── */
+        .fw-type-picker {
+            display: inline-flex;
+            align-items: center;
+            gap: 8px;
+            margin-top: 10px;
+            font-size: 0.85rem;
+        }
+        .fw-type-picker-label {
+            color: #6b7280;
+            font-weight: 500;
+            margin: 0;
+        }
+        .fw-type-select {
+            appearance: none;
+            -webkit-appearance: none;
+            -moz-appearance: none;
+            background-color: #ffffff;
+            background-image: url("data:image/svg+xml;utf8,<svg xmlns='http://www.w3.org/2000/svg' width='12' height='12' viewBox='0 0 24 24' fill='none' stroke='%236b7280' stroke-width='2.5' stroke-linecap='round' stroke-linejoin='round'><polyline points='6 9 12 15 18 9'/></svg>");
+            background-repeat: no-repeat;
+            background-position: right 10px center;
+            background-size: 12px 12px;
+            padding: 6px 32px 6px 12px;
+            font-size: 0.85rem;
+            font-weight: 500;
+            color: #1f2937;
+            border: 1px solid #d1d5db;
+            border-radius: 8px;
+            cursor: pointer;
+            outline: none;
+            min-width: 150px;
+            transition: border-color 0.15s ease, box-shadow 0.15s ease;
+        }
+        .fw-type-select:hover {
+            border-color: #9ca3af;
+        }
+        .fw-type-select:focus {
+            border-color: #005A9C;
+            box-shadow: 0 0 0 3px rgba(0, 90, 156, 0.15);
+        }
+        .fw-type-hint {
+            color: #6b7280;
+            font-size: 0.9rem;
+            font-weight: 500;
+            margin-left: 6px;
+        }
         .bt-file-item {
             padding: 1rem;
             border: 2px solid #e9ecef;
@@ -550,7 +596,12 @@
         {% set sys_info_ns.has_items = true %}
     {% endif %}
 
-    {% if wifi_ns.has_items %}
+    {% if wifi_ns.has_items and bt_ns.has_items and wifi_or_bt == 'bt' %}
+        {# Coex + Salesforce hint says BT: land on the BT tab so the primary
+           domain is what the user sees first. Falls through to the wifi-first
+           order for non-coex or wifi-hinted coex cases. #}
+        {% set active_tab = 'bt' %}
+    {% elif wifi_ns.has_items %}
         {% set active_tab = 'wifi' %}
     {% elif bt_ns.has_items %}
         {% set active_tab = 'bt' %}
@@ -876,12 +927,24 @@
                                             {% endif %}
                                         {% endfor %}
                                     {% endif %}
-                                <div class="fw-file-item{% if ns.skip %} excluded-row{% endif %}" data-fw-encoded="{{ fw_path | urlencode }}" onclick="selectFwRow(this)">
+                                <div class="fw-file-item{% if ns.skip %} excluded-row{% endif %}" data-fw-encoded="{{ fw_path | urlencode }}" data-fw-hint="{{ fw_type_hints.get(fw_path) }}" onclick="selectFwRow(this)">
                                     <p class="text-muted mb-0 small analysis-file-name">
                                         {{ fw_path.replace('\\', '/').split('/')[-1] }}
                                         {% if ns.skip %}<span class="excluded-badge">Excluded: {{ ns.matched_kw }}</span>{% endif %}
                                     </p>
                                     <p class="analysis-file-path mb-0">Path: {{ fw_path }}</p>
+                                    {% if files_coexist %}
+                                    <div class="fw-type-picker" onclick="event.stopPropagation();">
+                                        <span class="fw-type-picker-label">Parse as</span>
+                                        {% set fw_hint = fw_type_hints.get(fw_path) %}
+                                        <select class="fw-type-select" data-fw-encoded="{{ fw_path | urlencode }}" onchange="onFwTypeChange(this)">
+                                            <option value="" {% if fw_hint not in ('bt', 'wifi') %}selected {% endif %}disabled>Select domain</option>
+                                            <option value="bt" {% if fw_hint == 'bt' %}selected {% endif %}>Bluetooth</option>
+                                            <option value="wifi" {% if fw_hint == 'wifi' %}selected {% endif %}>Wi-Fi</option>
+                                        </select>
+                                        <span class="fw-type-hint">{% if fw_hint in ('bt', 'wifi') %}auto-selected{% elif fw_hint == 'coex' %}coex log — choose parser{% else %}Cannot detect type — choose parser manually{% endif %}</span>
+                                    </div>
+                                    {% endif %}
                                 </div>
                             {% endfor %}
                         {% endfor %}
@@ -1345,6 +1408,12 @@
             appendLog(text + "\n");
             advanceFwStage(text);
             _appendParseModalLog(text);
+            // Fatal error in FW tool output: close modal immediately so user can dismiss
+            if (text.startsWith('❌')) {
+                _closeParseModal(false, '❌ FW Parse Failed', text.slice(0, 120));
+                setFwActionButtonsBusy(false);
+                setAnalysisCardLocked(false);
+            }
         }
 
         function handleFwToolLog(msg) {
@@ -1805,7 +1874,7 @@
             if (isSuccess) window._parseAutoHideTimer = setTimeout(() => $('#parseProgressModal').modal('hide'), 3000);
         }
 
-        function startAnalysis(button, etlPathEncoded, mode) {
+        function startAnalysis(button, etlPathEncoded, mode = '', etlType = '') {
             cancelPendingFwAnalysis();
             if (button.classList.contains('disabled')) return;
 
@@ -1817,13 +1886,19 @@
             const decoded = decodePath(etlPathEncoded);
             logBox.innerText += `🛠️ Parsing...\n`;
             logBox.scrollTop = logBox.scrollHeight;
-            if (window.__wifiOrBt === 'wifi') {
+            // Coex: caller passes etlType so the modal + backend route match
+            // the actual tab (BT vs WiFi). Fall back to the Salesforce hint
+            // for non-coex call sites that don't pass etlType yet.
+            const resolvedType = etlType || window.__wifiOrBt;
+            if (resolvedType === 'wifi') {
                 openWppModal(`🛠️ Wi-Fi Parsing: ${decoded.split('\\').pop() || decoded.split('/').pop()}`);
-            } else if (window.__wifiOrBt === 'bt') {
+            } else if (resolvedType === 'bt') {
                 openParseModal(`🔵 BT Decoding: ${decoded.split('\\').pop() || decoded.split('/').pop()}`);
             }
-            console.log(`${ETL_ANALYSIS_URL}?etl_path=${etlPathEncoded}&mode=${mode}`)
-            fetch(`${ETL_ANALYSIS_URL}?etl_path=${etlPathEncoded}&mode=${mode}`)
+            const typeParam = resolvedType ? `&etl_type=${encodeURIComponent(resolvedType)}` : '';
+            const fetchUrl = `${ETL_ANALYSIS_URL}?etl_path=${etlPathEncoded}&mode=${mode}${typeParam}`;
+            console.log(fetchUrl);
+            fetch(fetchUrl)
                 .then(res => res.text())
                 .then(data => {
                     console.log(data);
@@ -1870,8 +1945,8 @@
             etlPathEncoded: etlPathEncoded,
             button: button
         };
-        console.log(`${ETL_ANALYSIS_URL}?etl_path=${etlPathEncoded}&mode=`)
-        fetch(`${ETL_ANALYSIS_URL}?etl_path=${etlPathEncoded}&mode=`)
+        console.log(`${ETL_ANALYSIS_URL}?etl_path=${etlPathEncoded}&mode=&etl_type=wifi`)
+        fetch(`${ETL_ANALYSIS_URL}?etl_path=${etlPathEncoded}&mode=&etl_type=wifi`)
             .then(res => res.text())
             .catch(err => {
                 console.error("Analysis failed:", err);
@@ -2045,7 +2120,7 @@
             button: button,
         };
 
-        fetch(`${ETL_ANALYSIS_URL}?etl_path=${btPathEncoded}&mode=LLM`)
+        fetch(`${ETL_ANALYSIS_URL}?etl_path=${btPathEncoded}&mode=LLM&etl_type=bt`)
             .then(res => res.text())
             .catch(err => {
                 console.error("BT HCI decode request failed:", err);
@@ -2238,7 +2313,7 @@
         });
     }
 
-    function startFwAnalysis(button, fwPathEncoded) {
+    function startFwAnalysis(button, fwPathEncoded, fwType) {
         if (button.classList.contains('disabled')) return;
 
         reconnectProgressSocket();
@@ -2258,7 +2333,10 @@
             appendLog(`\n\n🚀 Starting FW Analysis: ${decoded}\n`);
             openWppModal(`🔬 FW Parsing: ${getFilename(decoded)}`);
 
-            fetch(`${FW_ETL_ANALYSIS_URL}?fw_path=${fwPathEncoded}`)
+            // Coex: fwType is picked per-row in the UI. Non-coex callers pass
+            // undefined and the backend falls back to case_context.wifi_or_bt.
+            const typeParam = fwType ? `&fw_type=${encodeURIComponent(fwType)}` : '';
+            fetch(`${FW_ETL_ANALYSIS_URL}?fw_path=${fwPathEncoded}${typeParam}`)
                 .then(res => res.json())
                 .then(data => {
                     if (!data.ok || !data.task_id) {
@@ -2306,6 +2384,7 @@
         window.pendingFwAnalyze = false;
         resetFwButton(button);
         setFwActionButtonsBusy(false);
+        setAnalysisCardLocked(false);
 
         const decoded = decodePath(fwPathEncoded);
         appendLog(`✅ FW analysis complete: ${decoded}\n`);
@@ -2327,13 +2406,17 @@
     // when llm_issue_time is None server-side.
     window.__llmIssueTime = {{ (llm_issue_time or "") | tojson }};
     window.__wifiOrBt = {{ wifi_or_bt | tojson }};
+    // Coex mode = both BT and WiFi ETL logs are present. Drives the FW
+    // per-file BT/WiFi selector and the etl_type disambiguation on Parse.
+    window.__filesCoexist = {{ files_coexist | tojson }};
     // Server-side AI pick (timezone-aware via pick_etl_by_ai_time). When set,
     // we use this path verbatim to pre-tick the auto-pick checkbox and
     // select the matching .wifi-file-item row on page load — bypassing the
     // frontend's autoSelectLogByIssueTime, which compares folder timestamps
     // and `__llmIssueTime` as if they were in the same frame and misses by
     // the customer's UTC offset on non-Asia cases.
-    window.__aiPreSelectedEtl = {{ (ai_pre_selected_etl or "")|tojson }};
+    window.__aiPreSelectedEtl = {{ (ai_pre_selected_etl or "") | tojson }};
+    window.__autoAnalysisFw = {{ (auto_analysis_fw or "") | tojson }};
 
     function startChatbotAnalysis(button, etlPathEncoded) {
         if (button.classList.contains('disabled')) return;
@@ -2351,7 +2434,7 @@
             button: button
         };
 
-        fetch(`${ETL_ANALYSIS_URL}?etl_path=${etlPathEncoded}&mode=`)
+        fetch(`${ETL_ANALYSIS_URL}?etl_path=${etlPathEncoded}&mode=&etl_type=wifi`)
             .then(res => res.text())
             .catch(err => {
                 console.error('ETL Analysis failed:', err);
@@ -2746,7 +2829,42 @@
         }
 
         const hasSelection = !!selectedEncoded;
-        if (analyzeBtn) analyzeBtn.disabled = !hasSelection;
+        // In coex mode the user must pick BT / WiFi on the selected row before
+        // Parse becomes clickable.
+        const needsType = !!window.__filesCoexist;
+        const hasType = needsType ? !!getSelectedFwType() : true;
+        if (analyzeBtn) analyzeBtn.disabled = !(hasSelection && hasType);
+    }
+
+    // Called from each <select class="fw-type-select"> onchange; re-evaluates
+    // whether Parse should be enabled now that a type has been picked.
+    function onFwTypeChange(selectEl) {
+        const hintEl = selectEl.closest('.fw-type-picker').querySelector('.fw-type-hint');
+        if (hintEl && selectEl.value) {
+            hintEl.textContent = 'manual-selected';
+        }
+        updateFwActionButtons();
+    }
+
+    // Called from the FW type modal (sendto/local-upload flow when hint is None).
+    function _confirmFwType(fwType) {
+        $('#fwTypeSelectModal').modal('hide');
+        const selectedRow = document.querySelector('.fw-file-item.selected');
+        if (!selectedRow) return;
+        setAnalysisCardLocked(true);
+        window.pendingFwAnalyze = true;
+        setFwActionButtonsBusy(true, 'fw-action-analyze');
+        startFwAnalysis(document.getElementById('fw-action-analyze'),
+                        selectedRow.dataset.fwEncoded, fwType);
+    }
+
+    // Returns the fw_type value ('bt' | 'wifi' | '') from the SELECTED row's
+    // <select>. Empty string when no row is selected or no type picked yet.
+    function getSelectedFwType() {
+        const selectedRow = document.querySelector('.fw-file-item.selected');
+        if (!selectedRow) return '';
+        const select = selectedRow.querySelector('.fw-type-select');
+        return select ? (select.value || '') : '';
     }
 
     function runSelectedWifiAction(button, actionType) {
@@ -2763,7 +2881,7 @@
         if (actionType === 'parse') {
             window.pendingWifiAnalyze = true;
             setWifiActionButtonsBusy(true, 'wifi-action-analyze');
-            startAnalysis(button, selectedEncoded, 'etl');
+            startAnalysis(button, selectedEncoded, 'etl', 'wifi');
             return;
         }
         if (actionType === 'llm') {
@@ -2790,7 +2908,9 @@
         if (actionType === 'parse') {
             window.pendingDddAnalyze = true;
             setDddActionButtonsBusy(true, 'ddd-action-analyze');
-            startAnalysis(button, selectedEncoded, 'DDD');
+            // DDD sits under the WiFi analysis pipeline; hardcode 'wifi' so
+            // coex-BT hint cases still route through wifi_service.
+            startAnalysis(button, selectedEncoded, 'DDD', 'wifi');
             return;
         }
     }
@@ -2825,10 +2945,25 @@
             return;
         }
 
+        // Coex: enforce explicit BT / WiFi pick on the selected row.
+        const fwType = window.__filesCoexist ? getSelectedFwType() : '';
+        if (window.__filesCoexist && !fwType) {
+            alert('Please pick BT or WiFi for this FW file before parsing.');
+            return;
+        }
+
+        // Non-coex: warn if system_info.txt is empty both FW config fields
+        if (!window.__filesCoexist) {
+            const selectedRow = document.querySelector('.fw-file-item.selected');
+            if (selectedRow && selectedRow.dataset.fwHint === 'None') {
+                alert('Warning: FW config is empty or unexpected in system_info.txt.');
+            }
+        }
+
         if (actionType === 'parse') {
             window.pendingFwAnalyze = true;
             setFwActionButtonsBusy(true, 'fw-action-analyze');
-            startFwAnalysis(button, selectedEncoded);
+            startFwAnalysis(button, selectedEncoded, fwType);
             return;
         }
     }
@@ -3018,7 +3153,7 @@
         if (mode === 'CHATBOT') {
             startBtLogParser(button, selectedEncoded);
         } else {
-            startAnalysis(button, selectedEncoded, mode);
+            startAnalysis(button, selectedEncoded, mode, 'bt');
         }
     }
 
@@ -3103,6 +3238,36 @@
             console.log(`[Auto-Init] Loading latest evt file: ${latestEvtPath}`);
             loadEventLog(latestEvtPath);
         }
+
+        // Auto-trigger FW parse for single FW ETL from sendto/local-upload
+        if (window.__autoAnalysisFw) {
+            const norm = s => s.replace(/\\/g, '/');
+            const targetFwPath = norm(window.__autoAnalysisFw);
+            const fwRows = document.querySelectorAll('.fw-file-item');
+            let matchedFwRow = null;
+            fwRows.forEach(el => {
+                if (norm(decodePath(el.dataset.fwEncoded || '')) === targetFwPath) {
+                    matchedFwRow = el;
+                }
+            });
+            if (matchedFwRow) {
+                selectFwRow(matchedFwRow);
+                matchedFwRow.scrollIntoView({ block: 'nearest', behavior: 'smooth' });
+                const fwHint = matchedFwRow.dataset.fwHint;
+                if (fwHint === 'bt' || fwHint === 'wifi') {
+                    setAnalysisCardLocked(true);
+                    window.pendingFwAnalyze = true;
+                    setFwActionButtonsBusy(true, 'fw-action-analyze');
+                    startFwAnalysis(document.getElementById('fw-action-analyze'),
+                                    matchedFwRow.dataset.fwEncoded, fwHint);
+                } else {
+                    const isCoex = fwHint === 'coex';
+                    document.querySelector('#fwTypeSelectModal .fw-modal-msg-coex').style.display = isCoex ? '' : 'none';
+                    document.querySelector('#fwTypeSelectModal .fw-modal-msg-unknown').style.display = isCoex ? 'none' : '';
+                    $('#fwTypeSelectModal').modal('show');
+                }
+            }
+        }
     });
 
     // Auto-refresh page when returning via browser back button
@@ -3138,6 +3303,7 @@
         window.pendingFwAnalyze = false;
         resetFwButton(button);
         setFwActionButtonsBusy(false);
+        setAnalysisCardLocked(false);
 
         const decoded = decodePath(fwPathEncoded);
         appendLog(`⏹ FW analysis canceled: ${decoded}\n`, 'red');
@@ -3154,6 +3320,7 @@
         window.pendingFwAnalyze = false;
         resetFwButton(button);
         setFwActionButtonsBusy(false);
+        setAnalysisCardLocked(false);
 
         const decoded = decodePath(fwPathEncoded);
         appendLog(`❌ FW analysis failed: ${decoded} (${msg.error || 'unknown error'})\n`, 'red');
@@ -3241,6 +3408,28 @@
     // });
 
     </script>
+
+<!-- ===== FW Type Selection Modal (sendto / local-upload flow) ===== -->
+<div class="modal fade" id="fwTypeSelectModal" tabindex="-1" role="dialog"
+     data-backdrop="static" data-keyboard="false">
+  <div class="modal-dialog modal-dialog-centered" role="document">
+    <div class="modal-content" style="border-radius:10px; overflow:hidden;">
+      <div class="modal-header" style="background:#0b4a78; color:white; padding:12px 20px;">
+        <h6 class="modal-title mb-0" style="font-size:1rem;">Select FW Parse Domain</h6>
+      </div>
+      <div class="modal-body">
+        <p class="mb-1 fw-modal-msg-coex" style="display:none;">Coex FW detected — please select which domain to parse.</p>
+        <p class="mb-1 fw-modal-msg-unknown">Cannot determine FW type — <code>system_info.txt</code> is missing or incomplete.</p>
+        <p class="mb-0 text-muted" style="font-size:0.9rem;">Please select the parser domain for this FW ETL:</p>
+      </div>
+      <div class="modal-footer">
+        <button type="button" class="btn btn-primary" onclick="_confirmFwType('wifi')">Wi-Fi</button>
+        <button type="button" class="btn btn-info" style="color:white;" onclick="_confirmFwType('bt')">Bluetooth</button>
+      </div>
+    </div>
+  </div>
+</div>
+<!-- ===== /FW Type Selection Modal ===== -->
 
 <!-- ===== Parse Progress Modal (shared: WiFi WPP / BT Decode / FW Parse) ===== -->
 <div class="modal fade" id="parseProgressModal" tabindex="-1" role="dialog"

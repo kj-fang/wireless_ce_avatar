@@ -186,7 +186,7 @@ class FWAnalysisService():
                     return
                 task["status"] = "failed"
                 task["error"] = str(e)
-            self.emit_fw_log(f"? FW analysis failed: {e}")
+            self.emit_fw_log(f"❌ FW analysis failed: {e}")
             self.emit_fw_log(traceback.format_exc())
             app_config.socketio.emit(
                 'fw_analysis_failed',
@@ -232,7 +232,7 @@ class FWAnalysisService():
             self.emit_fw_log("Start FW WiFi analysis...")
             completed = fw_wifi_analysis(file_path, cancel_event=cancel_event, on_log=self.emit_fw_log)
             return completed, None
-        else:  # BT case �� run BT FW analysis
+        else:  # BT case → run BT FW analysis
             self.emit_fw_log("Start FW BT analysis...")
             completed, log = fw_bt_analysis(file_path, cancel_event=cancel_event, on_log=self.emit_fw_log)
             return completed, log

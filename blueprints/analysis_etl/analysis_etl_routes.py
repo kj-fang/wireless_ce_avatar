@@ -7,7 +7,7 @@ import subprocess
 
 from models.models import CaseContext
 from configs.global_configs import app_config
-from utils.helpers import get_long_path, get_short_path
+from utils.helpers import get_long_path, to_long_path
 
 from services.analysis_service_wifi import WiFiAnalysisService
 from services.analysis_service_bt import BTAnalysisService
@@ -26,7 +26,7 @@ def process_etl_path():
     case_context = session["case_context"]
     case_context = CaseContext.from_session(case_context)
 
-    etl_path = unquote(request.args.get('etl_path', ''))
+    etl_path = to_long_path(get_long_path(unquote(request.args.get('etl_path', ''))))
     mode = request.args.get('mode', '')
     # Coex: caller passes etl_type=wifi|bt so the correct parser fires even
     # when case_context.wifi_or_bt (the Salesforce hint) points the other way.

@@ -629,6 +629,8 @@ def _process_local_analysis(source_path: str, source_dir: str, file_path: str,
     elif _is_fw_etl(file_path):
         _cb(20, 'FW ETL detected. Reading system_info.txt…')
         from utils.fw_utils import infer_fw_parse_type
+        # hint hardcoded 'wifi'; 'coex'/None collapse to 'wifi' for CaseContext but
+        # fwTypeSelectModal (via __autoAnalysisFw) handles them at render time.
         fw_type = infer_fw_parse_type(file_path, 'wifi')
         local_case_nbr = f'local_upload_{timestamp}'
         local_case_type = fw_type if fw_type in ('bt', 'wifi') else 'wifi'

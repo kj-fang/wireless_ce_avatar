@@ -1,12 +1,13 @@
 import json
 import os
+from utils.helpers import to_long_path
 
 
 def load_fw_system_info(fw_path):
     if not fw_path:
         return None
 
-    system_info_path = os.path.join(os.path.dirname(fw_path), 'system_info.txt')
+    system_info_path = to_long_path(os.path.join(os.path.dirname(fw_path), 'system_info.txt'))
     if not os.path.exists(system_info_path):
         return None
 
@@ -40,7 +41,23 @@ _BT_ONLY_WIFI_FW = {"release default", "bt_only_kpi", "bt_only_d3"}
 
 
 def infer_fw_parse_type(fw_path: str, wifi_or_bt: str) -> str | None:
-    """Return 'bt', 'wifi', 'coex', or None (needs manual selection)."""
+    """Return 'bt', 'wifi', 'coex', or None (needs manual selection).
+
+    Decision table (system_info.txt fields -> return value):
+      system_info.txt  | Wi-Fi FW          | BT FW Config | Result
+      -----------------+-------------------+--------------+--------
+      absent           | -                 | -            | 'bt' if hint=='bt', else None
+      present          | '' (empty)        | 'none'       | None  (unparseable)
+      present          | bt-only keyword*  | != 'none'    | 'bt'
+      present          | any               | 'none'       | 'wifi'
+      present          | non-bt-only       | != 'none'    | 'coex'
+
+    * bt-only keywords: {"release default", "bt_only_kpi", "bt_only_d3"}
+
+    wifi_or_bt hint is only consulted when system_info.txt is absent:
+      IPS flow     : hint = case_context.wifi_or_bt (from Salesforce subcategory)
+      local-upload : hint = 'wifi' (hardcoded); 'coex'/None trigger fwTypeSelectModal
+    """
     import os
     system_info = load_fw_system_info(fw_path)
 

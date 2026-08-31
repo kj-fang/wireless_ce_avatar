@@ -1874,7 +1874,7 @@
             if (isSuccess) window._parseAutoHideTimer = setTimeout(() => $('#parseProgressModal').modal('hide'), 3000);
         }
 
-        function startAnalysis(button, etlPathEncoded, mode, etlType) {
+        function startAnalysis(button, etlPathEncoded, mode = '', etlType = '') {
             cancelPendingFwAnalysis();
             if (button.classList.contains('disabled')) return;
 
@@ -3261,7 +3261,9 @@
                     startFwAnalysis(document.getElementById('fw-action-analyze'),
                                     matchedFwRow.dataset.fwEncoded, fwHint);
                 } else {
-                    // Type unknown: prompt user to pick
+                    const isCoex = fwHint === 'coex';
+                    document.querySelector('#fwTypeSelectModal .fw-modal-msg-coex').style.display = isCoex ? '' : 'none';
+                    document.querySelector('#fwTypeSelectModal .fw-modal-msg-unknown').style.display = isCoex ? 'none' : '';
                     $('#fwTypeSelectModal').modal('show');
                 }
             }
@@ -3416,7 +3418,8 @@
         <h6 class="modal-title mb-0" style="font-size:1rem;">Select FW Parse Domain</h6>
       </div>
       <div class="modal-body">
-        <p class="mb-1">Cannot determine FW type — <code>system_info.txt</code> is missing or incomplete.</p>
+        <p class="mb-1 fw-modal-msg-coex" style="display:none;">Coex FW detected — please select which domain to parse.</p>
+        <p class="mb-1 fw-modal-msg-unknown">Cannot determine FW type — <code>system_info.txt</code> is missing or incomplete.</p>
         <p class="mb-0 text-muted" style="font-size:0.9rem;">Please select the parser domain for this FW ETL:</p>
       </div>
       <div class="modal-footer">

@@ -334,5 +334,100 @@ def set_up(socketio):
         print("⚠️  BT Chatbot Agent skipped — LLM client not configured (no API key).")
     app_config.set_bt_chatbot_agent(bt_chatbot_agent)
 
+    # ------------------------------------------------------------------
+    # Linux WiFi Chatbot Agent — Linux kernel WiFi log analysis chatbot
+    # ------------------------------------------------------------------
+    from utils.linux_skills_yaml_utils import (
+        current_active_yaml as linux_current_active_yaml,
+        refresh_local_cloud_baseline as linux_refresh_local_cloud_baseline,
+        set_active_source as linux_set_active_source,
+    )
+    from services.linux_chatbot_service import LinuxWifiLogAgentSystem
+
+    linux_skills = None
+    linux_set_active_source("cloud")
+    try:
+        linux_refreshed_path, linux_refreshed_date = linux_refresh_local_cloud_baseline()
+        if linux_refreshed_path is not None:
+            print(f"📥 Refreshed local Linux cloud baseline → {linux_refreshed_path} "
+                  f"(date={linux_refreshed_date})")
+        else:
+            print("ℹ️  Linux cloud baseline refresh skipped — share folder unreachable.")
+    except Exception as e:
+        print(f"⚠️  Linux cloud baseline refresh failed: {e}")
+
+    linux_chosen_yaml, linux_chosen_date, linux_chosen_source = linux_current_active_yaml()
+    if linux_chosen_yaml is not None and linux_chosen_yaml.exists():
+        try:
+            linux_skills = load_skills_from_yaml(str(linux_chosen_yaml))
+            print(f"✅  {len(linux_skills)} Linux skills loaded from "
+                  f"{linux_chosen_source} YAML: {linux_chosen_yaml} (date={linux_chosen_date})")
+        except Exception as e:
+            print(f"⚠️  Failed to load Linux skills from YAML ({e}); Linux chatbot will try local fallback.")
+
+    # If no share/cloud YAML, try the bundled utils/linux_skills.yaml
+    if linux_skills is None:
+        from pathlib import Path as _Path2
+        _bundled = _Path2(__file__).parent.parent / "utils" / "linux_skills.yaml"
+        if _bundled.exists():
+            try:
+                linux_skills = load_skills_from_yaml(str(_bundled))
+                print(f"✅  {len(linux_skills)} Linux skills loaded from bundled YAML: {_bundled}")
+            except Exception as e:
+                print(f"⚠️  Failed to load bundled Linux skills ({e}); Linux chatbot will reuse WiFi skills.")
+        else:
+            print("ℹ️  No Linux skills YAML found — Linux chatbot will reuse WiFi skills.")
+
+    if llm_helper.client is not None:
+        model = getattr(llm_helper, 'model', 'gpt-4.1')
+        linux_chatbot_agent = LinuxWifiLogAgentSystem(
+            client=llm_helper.client,
+            model=model,
+            skills=linux_skills if linux_skills else llm_helper.skills,
+        )
+        print(f"🐧 Linux WiFi Chatbot Agent loaded (model={model})")
+
+        try:
+            from services.ace import AceRunner, HistoryWriter
+            from services.ace import sync_utils as ace_sync
+            from services import feedback_service
+            try:
+                ace_sync.sync_at_boot(namespace="linux")
+            except Exception as e:
+                print(f"⚠️  Linux ACE playbook cloud sync skipped: {e}")
+            linux_playbooks_root = ace_sync.local_working_dir(namespace="linux")
+
+            def _linux_skill_provider(sid: str):
+                skills = linux_skills or getattr(llm_helper, "skills", None) or {}
+                sk = skills.get(sid)
+                if sk is None:
+                    return None
+                try:
+                    return {
+                        "description": getattr(sk, "description", "") or "",
+                        "expert_rules": getattr(sk, "expert_rules", "") or "",
+                        "keywords": list(getattr(sk, "keywords", []) or []),
+                    }
+                except Exception:
+                    return None
+
+            linux_ace_history = HistoryWriter(root=linux_playbooks_root / "history")
+            linux_ace_runner = AceRunner(
+                llm=llm_helper,
+                playbooks_dir=linux_playbooks_root,
+                feedback_root=feedback_service._feedback_root(),
+                skills=list((linux_skills or llm_helper.skills or {}).keys()) or None,
+                skill_context_provider=_linux_skill_provider,
+                history=linux_ace_history,
+                feedback_prefix=feedback_service._domain_prefix("linux"),
+            )
+            linux_chatbot_agent.attach_ace(linux_ace_runner)
+        except Exception as e:
+            print(f"⚠️  Linux ACE attach skipped: {e}")
+    else:
+        linux_chatbot_agent = None
+        print("⚠️  Linux WiFi Chatbot Agent skipped — LLM client not configured (no API key).")
+    app_config.set_linux_chatbot_agent(linux_chatbot_agent)
+
     # socketio
     app_config.set_socketio(socketio)

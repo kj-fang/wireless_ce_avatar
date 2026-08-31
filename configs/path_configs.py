@@ -45,6 +45,14 @@ BT_SKILLS_YAML_DATED_GLOB = "bt_skills_*.yaml"                # e.g. bt_skills_2
 BT_SKILLS_YAML_DATED_RE = r"^bt_skills_(\d{4}-\d{2}-\d{2})\.yaml$"
 BT_SKILLS_YAML_DATED_TEMPLATE = "bt_skills_{date}.yaml"       # date = YYYY-MM-DD
 
+# Linux WiFi skills YAML — lives next to the BT/WiFi skills in the same
+# shared skills_config dir. Loaded at startup to populate the
+# linux_chatbot_agent. Falls back to the WiFi skills when this file is missing.
+LINUX_SKILLS_YAML_FILENAME = "linux_skills.yaml"                    # legacy un-dated file
+LINUX_SKILLS_YAML_DATED_GLOB = "linux_skills_*.yaml"                # e.g. linux_skills_2026-06-02.yaml
+LINUX_SKILLS_YAML_DATED_RE = r"^linux_skills_(\d{4}-\d{2}-\d{2})\.yaml$"
+LINUX_SKILLS_YAML_DATED_TEMPLATE = "linux_skills_{date}.yaml"       # date = YYYY-MM-DD
+
 # Feedback sidecar — shared training-data layer.
 # Each user writes under a per-user subfolder (see feedback_service) so
 # concurrent writes from different machines never touch the same file

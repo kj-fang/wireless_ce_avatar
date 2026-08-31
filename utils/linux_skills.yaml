@@ -1,0 +1,322 @@
+# skill features:
+#   name: skill name
+#   description: a brief description of the skill
+#   keywords: use "-" to represent each keyword
+#   expert_rules: use "|" to start a multi-line string
+
+iwlwifi_firmware_error:
+  name: "iwlwifi_firmware_error"
+  description: "Detect iwlwifi firmware crashes, assert failures, and hardware errors in Linux kernel logs. Use when the WiFi connection drops suddenly or the device becomes unresponsive."
+  keywords:
+    - "iwlwifi"
+    - "Microcode SW error"
+    - "Microcode HW error"
+    - "loaded firmware"
+    - "FW error"
+    - "firmware error"
+    - "ASSERT"
+    - "assert"
+    - "FATAL"
+    - "hardware restart"
+    - "iwl_mvm_fw_error"
+    - "mvm: FW"
+    - "Firmware error"
+    - "ERROR: FATAL"
+    - "UMAC assert"
+    - "LMAC assert"
+    - "BAD_CMD"
+    - "NMI"
+    - "Host command sent while RFKILL"
+    - "Failed to run INIT ucode"
+    - "Failed to start HW"
+    - "iwl-debug-flow.txt"
+    - "ERROR_RECOVERY"
+    - "error -110"
+    - "error -5"
+    - "error -16"
+    - "error -22"
+    - "error -110"
+    - "IOCTL failed"
+    - "reset_work"
+    - "reload firmware"
+    - "iwlwifi 0000"
+  expert_rules: |
+    Analyze iwlwifi firmware error events in chronological order.
+    1. Identify the first occurrence of the firmware crash: Microcode SW/HW error, ASSERT, or FATAL.
+    2. Check if there is a preceding sequence of errors (e.g. TX timeout, hardware not ready) that caused the firmware crash.
+    3. Check if the firmware recovered ("hardware restart", "loaded firmware") or if the driver gave up.
+    4. Summarize the assert code and any associated error codes.
+    5. Indicate whether this is a firmware defect, hardware issue, or software trigger.
+
+iwlwifi_disconnect:
+  name: "iwlwifi_disconnect"
+  description: "Analyze unexpected WiFi disconnections reported by the iwlwifi driver, cfg80211, or wpa_supplicant. Covers deauthentication, disassociation, and beacon loss events."
+  keywords:
+    - "disconnected"
+    - "deauthenticated"
+    - "disassociated"
+    - "DEAUTH"
+    - "DISASSOC"
+    - "beacon loss"
+    - "No probe response"
+    - "Authentication failed"
+    - "Association request"
+    - "Connection timed out"
+    - "wpa_supplicant"
+    - "reason code"
+    - "reason="
+    - "CTRL-EVENT-DISCONNECTED"
+    - "CTRL-EVENT-ASSOC-REJECT"
+    - "CTRL-EVENT-AUTH-REJECT"
+    - "CTRL-EVENT-BEACON-LOSS"
+    - "CTRL-EVENT-NETWORK-NOT-FOUND"
+    - "wpa_auth"
+    - "disconnect reason"
+    - "cfg80211: disconnected"
+    - "Connection attempt timed"
+    - "link is not up"
+    - "Connection lost"
+    - "RX status 0x"
+    - "No channel"
+    - "TX timeout"
+    - "RSSI"
+  expert_rules: |
+    Examine the WiFi disconnection timeline:
+    1. Identify the disconnect trigger: was it driver-initiated (beacon loss, TX timeout), AP-initiated (DEAUTH/DISASSOC), or OS/supplicant-initiated?
+    2. Check the reason code (IEEE 802.11 disassociation/deauthentication reason codes).
+    3. Examine signal strength (RSSI) trends before the disconnect — declining RSSI suggests coverage or interference issues.
+    4. Check if reconnection was attempted and whether it succeeded.
+    5. Determine if this is an AP problem, channel interference, driver bug, or firmware error.
+
+wpa_supplicant_auth_failure:
+  name: "wpa_supplicant_auth_failure"
+  description: "Diagnose WPA/WPA2/WPA3 authentication and key exchange failures reported by wpa_supplicant. Covers 4-way handshake issues, EAP failures, and PMK/PMKID problems."
+  keywords:
+    - "wpa_supplicant"
+    - "CTRL-EVENT-AUTH-REJECT"
+    - "CTRL-EVENT-ASSOC-REJECT"
+    - "WPA: 4-Way Handshake failed"
+    - "4-way handshake"
+    - "WPA: EAPOL-Key"
+    - "WPA: Key negotiation"
+    - "EAP"
+    - "EAP failure"
+    - "EAPOL"
+    - "PMK"
+    - "PMKID"
+    - "Authentication failed"
+    - "Authentication timeout"
+    - "Group cipher"
+    - "Pairwise cipher"
+    - "key handshake"
+    - "SAE"
+    - "SAE failed"
+    - "OWE"
+    - "FT"
+    - "FT-PSK"
+    - "802.1X"
+    - "RADIUS"
+    - "Certificate"
+    - "TLS"
+    - "password"
+    - "WRONG_KEY"
+    - "incorrect password"
+  expert_rules: |
+    Focus on the WPA authentication exchange sequence:
+    1. Identify the authentication method (WPA2-PSK, WPA3-SAE, 802.1X/EAP).
+    2. For PSK: check if 4-way handshake failed at step 2 or step 4 (wrong passphrase vs. AP-side rejection).
+    3. For EAP/802.1X: note the EAP method and where it failed (identity, challenge, or certificate).
+    4. For SAE: check if the commit or confirm exchange failed.
+    5. Distinguish between wrong credentials, AP configuration mismatch, and driver/supplicant bugs.
+
+cfg80211_nl80211_scan:
+  name: "cfg80211_nl80211_scan"
+  description: "Analyze WiFi scan operations, BSS visibility, and channel availability issues as reported by cfg80211 and nl80211 in Linux kernel logs."
+  keywords:
+    - "cfg80211"
+    - "nl80211"
+    - "scan"
+    - "Scan request"
+    - "CTRL-EVENT-SCAN-RESULTS"
+    - "CTRL-EVENT-SCAN-FAILED"
+    - "BSS"
+    - "SSID"
+    - "channel"
+    - "frequency"
+    - "No BSS found"
+    - "scan aborted"
+    - "scan failed"
+    - "scan timed out"
+    - "cfg80211: Calling CRDA"
+    - "regulatory"
+    - "DFS"
+    - "DFS state"
+    - "passive scan"
+    - "channel switch"
+    - "Channel Switch"
+    - "CSA"
+    - "CTRL-EVENT-CHANNEL-SWITCH"
+    - "Channel utilization"
+    - "beacon"
+    - "probe response"
+  expert_rules: |
+    Examine scan and channel operations:
+    1. Check if scans complete successfully or are aborted/timed out.
+    2. Verify that the target SSID/BSS is visible in scan results.
+    3. Look for DFS channel events (CAC, radar detection, channel switch) that may block connectivity.
+    4. Check regulatory domain settings — incorrect domain can restrict available channels.
+    5. Identify channel switch announcements (CSA) that may interrupt the connection.
+
+roaming_and_handoff:
+  name: "roaming_and_handoff"
+  description: "Analyze 802.11r/k/v fast roaming events, BSS transitions, and handoff failures in Linux WiFi logs. Use when a device fails to roam to a better AP or roams unexpectedly."
+  keywords:
+    - "roam"
+    - "BSS transition"
+    - "FT"
+    - "FT-PSK"
+    - "FT-EAP"
+    - "802.11r"
+    - "802.11k"
+    - "802.11v"
+    - "BTM"
+    - "CTRL-EVENT-DO-ROAM"
+    - "CTRL-EVENT-SKIP-ROAM"
+    - "CTRL-EVENT-STARTED-ROAMING"
+    - "CTRL-EVENT-ROAM"
+    - "RRM"
+    - "Neighbor report"
+    - "Beacon request"
+    - "candidate"
+    - "PMKSA"
+    - "OKC"
+    - "key caching"
+    - "reassociation"
+    - "Reassociation Request"
+    - "Reassociation Response"
+    - "signal threshold"
+    - "RSSI threshold"
+    - "CQM"
+    - "cfg80211: BSS"
+  expert_rules: |
+    Analyze the roaming decision and execution sequence:
+    1. Identify what triggered the roam: RSSI threshold, BTM request, or periodic scan.
+    2. Check if a neighbor list (802.11k) was available to guide the roam target selection.
+    3. For FT roams: verify that the FT key exchange (FT-Auth or Over-the-DS) completed.
+    4. Check if the roam succeeded or fell back to full re-authentication.
+    5. Determine whether the roam was premature (good signal dropped), delayed (poor signal lingered), or failed entirely.
+
+power_management_and_ps:
+  name: "power_management_and_ps"
+  description: "Diagnose WiFi power-save mode issues, wakeup latency, and power management state transitions in Linux WiFi logs. Covers legacy PS-Poll, UAPSD, and WoWLAN."
+  keywords:
+    - "power save"
+    - "power management"
+    - "PS-Poll"
+    - "UAPSD"
+    - "WoWLAN"
+    - "Wake on LAN"
+    - "power_save"
+    - "iwlmvm: ps"
+    - "ieee80211_sta_ps"
+    - "pm_qos"
+    - "runtime PM"
+    - "runtime suspend"
+    - "D3"
+    - "wakeup"
+    - "suspend"
+    - "resume"
+    - "dynamic PS"
+    - "tx_latency"
+    - "PS mode"
+    - "Network device"
+    - "null func"
+    - "nullfunc"
+    - "keepalive"
+    - "missed beacon"
+    - "dtim"
+    - "DTIM"
+  expert_rules: |
+    Focus on power management state changes and their impact on connectivity:
+    1. Check if power save mode is causing excessive TX/RX latency or unexpected disconnects.
+    2. Look for null-frame transmission failures that indicate PS exit problems.
+    3. For suspend/resume cycles: verify that WoWLAN configuration is correct and the device wakes properly.
+    4. Check if missed beacons are related to power save timing mismatches.
+    5. Identify pm_qos conflicts that force the device to stay awake when it should sleep, or vice versa.
+
+driver_load_and_init:
+  name: "driver_load_and_init"
+  description: "Analyze iwlwifi driver loading, firmware loading, hardware initialization, and PCI/USB enumeration in Linux kernel logs."
+  keywords:
+    - "iwlwifi"
+    - "loaded firmware"
+    - "firmware version"
+    - "pci"
+    - "PCI"
+    - "probe"
+    - "insmod"
+    - "modprobe"
+    - "rmmod"
+    - "driver_probe"
+    - "driver_detach"
+    - "iwl_pcie"
+    - "iwl_mvm"
+    - "device ID"
+    - "hardware rev"
+    - "NVM"
+    - "calibration"
+    - "RF"
+    - "channel map"
+    - "antenna"
+    - "phy"
+    - "Phy error"
+    - "TX/RX"
+    - "queue"
+    - "ring buffer"
+    - "init ucode"
+    - "operational ucode"
+    - "loaded ucode"
+    - "Loaded ucode"
+    - "Detected Intel"
+    - "Intel Wi-Fi"
+  expert_rules: |
+    Examine the driver and hardware initialization sequence:
+    1. Verify that the firmware blob was found and loaded successfully.
+    2. Check for PCI enumeration errors or resource allocation failures.
+    3. Look for NVM (EEPROM/OTP) read failures that produce incorrect calibration or channel maps.
+    4. Identify if the driver loaded successfully through the full init → operational ucode sequence.
+    5. Check for hardware version mismatches between the firmware and the physical device.
+
+thermal_and_rfkill:
+  name: "thermal_and_rfkill"
+  description: "Detect RF kill events (hardware/software), thermal throttling, and SAR limit changes that disable or degrade WiFi radio operation."
+  keywords:
+    - "rfkill"
+    - "RFKILL"
+    - "RF kill"
+    - "radio disabled"
+    - "radio enabled"
+    - "Kill switch"
+    - "airplane mode"
+    - "thermal"
+    - "thermal throttle"
+    - "SAR"
+    - "WRDS"
+    - "EWRD"
+    - "WGDS"
+    - "temperature"
+    - "overheat"
+    - "ACPI"
+    - "hw rfkill"
+    - "sw rfkill"
+    - "blocked"
+    - "unblocked"
+    - "Host command sent while RFKILL"
+    - "cannot TX while RFKILL"
+  expert_rules: |
+    Analyze RF kill and thermal events:
+    1. Identify whether the rfkill is hardware-triggered (physical switch/BIOS) or software-triggered (OS/supplicant).
+    2. For hardware rfkill: check ACPI/BIOS events that may toggle the radio (e.g. airplane mode key, thermal policy).
+    3. For thermal events: verify whether the SAR/WRDS/EWRD table is being applied and if it is causing excessive TX power reduction.
+    4. Confirm that rfkill events are followed by a proper radio re-enable sequence.
+    5. Check if frequent rfkill toggles are causing connectivity instability.

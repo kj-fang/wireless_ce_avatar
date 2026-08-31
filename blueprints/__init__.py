@@ -8,6 +8,7 @@ from .log_parser import log_parser_bp
 from .nw_analysis import nw_analysis_bp
 from .log_chatbot import log_chatbot_bp
 from .bt_chatbot import bt_chatbot_bp
+from .linux_chatbot import linux_chatbot_bp
 from .feedback import feedback_bp
 from .handsfree import handsfree_bp
 
@@ -22,6 +23,7 @@ __all__ = [
     "nw_analysis_bp",
     "log_chatbot_bp",
     "bt_chatbot_bp",
+    "linux_chatbot_bp",
     "feedback_bp",
     "handsfree_bp",
 ]

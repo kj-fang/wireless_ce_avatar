@@ -302,6 +302,85 @@ def _parse_ndis_metadata(meta_vals: list) -> list:
     return results
 
 
+def _to_int_maybe(value):
+    """Best-effort conversion of metadata values to int."""
+    if value is None:
+        return None
+    if isinstance(value, bool):
+        return int(value)
+    if isinstance(value, (int, float)):
+        return int(value)
+
+    text = str(value).strip()
+    if not text:
+        return None
+
+    try:
+        return int(float(text))
+    except (ValueError, TypeError):
+        pass
+
+    m = re.search(r"-?\d+", text)
+    if m:
+        try:
+            return int(m.group(0))
+        except (ValueError, TypeError):
+            return None
+    return None
+
+
+def _collect_wake_reason_counts(session: dict) -> dict:
+    """
+    Collect wake-reason counts for NetWakeReasonTypeNdis / NetWakeReasonTypeDevice
+    from session-level metadata and blocker metadata.
+    """
+    keys = ("NetWakeReasonTypeNdis", "NetWakeReasonTypeDevice")
+    counts = {k: 0 for k in keys}
+
+    def _consume_values(values):
+        for mv in values or []:
+            key = str(mv.get("Key", ""))
+            for target in keys:
+                if target in key:
+                    val = _to_int_maybe(mv.get("Value"))
+                    if val is not None:
+                        counts[target] += val
+
+    # Session metadata
+    _consume_values(session.get("Metadata", {}).get("Values", []))
+
+    # Blocker hierarchy metadata
+    for bg in session.get("BlockerGroups", []):
+        for blocker in bg.get("Blockers", []):
+            _consume_values(blocker.get("Metadata", {}).get("Values", []))
+            for child in blocker.get("Children", []):
+                _consume_values(child.get("Metadata", {}).get("Values", []))
+                for grandchild in child.get("Children", []):
+                    _consume_values(grandchild.get("Metadata", {}).get("Values", []))
+
+    return counts
+
+
+def build_wrt_upload_note_if_needed(session: dict) -> str:
+    """
+    Return an English WRT-upload guidance note when either wake reason count >= 1000
+    or the sum is >= 1000; otherwise return empty string.
+    """
+    counts = _collect_wake_reason_counts(session)
+    ndis = counts.get("NetWakeReasonTypeNdis", 0)
+    device = counts.get("NetWakeReasonTypeDevice", 0)
+
+    if ndis >= 1000 or device >= 1000 or (ndis + device) >= 1000:
+        start_time = session.get("EntryTimestampLocal", "Unknown")
+        return (
+            "\n\nAdditional Data Request:\n"
+            f"Session Start Time: {start_time}\n"
+            "Please go to the Wi-Fi Log page and upload the WRT log file "
+            "closest to this timestamp."
+        )
+    return ""
+
+
 # ══════════════════════════════════════════════════════════════════════════════
 #  STEP 5 — BUILD SESSION SUMMARY (structured text for agent context)
 # ══════════════════════════════════════════════════════════════════════════════
@@ -497,6 +576,7 @@ def analyze_sleepstudy_stream(html_path: str, llm_call=None):
                         f"```\n{summary}\n```"
                     )
                     ai_report = llm_call(SLEEPSTUDY_SYSTEM_PROMPT, user_msg) or ""
+                    ai_report += build_wrt_upload_note_if_needed(sess)
                 except Exception as llm_err:
                     ai_report = f"_LLM call failed: {llm_err}_"
 

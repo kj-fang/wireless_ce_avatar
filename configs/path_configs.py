@@ -45,6 +45,19 @@ BT_SKILLS_YAML_DATED_GLOB = "bt_skills_*.yaml"                # e.g. bt_skills_2
 BT_SKILLS_YAML_DATED_RE = r"^bt_skills_(\d{4}-\d{2}-\d{2})\.yaml$"
 BT_SKILLS_YAML_DATED_TEMPLATE = "bt_skills_{date}.yaml"       # date = YYYY-MM-DD
 
+# Sleepstudy skills YAML — lives next to skills.yaml in the same shared
+# skills_config dir. Loaded at startup by set_up_app to populate the
+# nw_analysis_agent. Falls back to the WiFi skills (skills.yaml) when this
+# file is missing.
+#
+# Naming convention mirrors WiFi (skills_YYYY-MM-DD.yaml) but with a
+# `sleepstudy_` prefix so both domains can coexist in the same skills_config/
+# (cloud, user) sub-folders without name collisions.
+SLEEPSTUDY_SKILLS_YAML_FILENAME = "sleepstudy_skills.yaml"           # legacy un-dated file
+SLEEPSTUDY_SKILLS_YAML_DATED_GLOB = "sleepstudy_skills_*.yaml"       # e.g. sleepstudy_skills_2026-07-29.yaml
+SLEEPSTUDY_SKILLS_YAML_DATED_RE = r"^sleepstudy_skills_(\d{4}-\d{2}-\d{2})\.yaml$"
+SLEEPSTUDY_SKILLS_YAML_DATED_TEMPLATE = "sleepstudy_skills_{date}.yaml"  # date = YYYY-MM-DD
+
 # Feedback sidecar — shared training-data layer.
 # Each user writes under a per-user subfolder (see feedback_service) so
 # concurrent writes from different machines never touch the same file
@@ -126,4 +139,6 @@ LOCAL_LOG_PARSER_DATA_DIR = str(_Path(__file__).parent.parent / "data" / "log_pa
 LOCAL_SKILLS_DIR_NAME = "skills_config"
 LOCAL_SKILLS_YAML = str(_Path(__file__).parent.parent / "data" / "skills.yaml")
 
+# Local sleepstudy skills YAML cache (mirrors bt_skills.yaml)
+LOCAL_SLEEPSTUDY_SKILLS_YAML = str(_Path(__file__).parent.parent / "data" / "sleepstudy_skills.yaml")
 

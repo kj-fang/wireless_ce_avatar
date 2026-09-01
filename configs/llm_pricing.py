@@ -40,8 +40,10 @@ CACHE_READ_MULTIPLIER = 0.10
 CACHE_WRITE_MULTIPLIER = 1.25
 
 # model id -> USD per 1M tokens.
-# Keys are matched case-insensitively, exact first then longest-prefix, so a
-# gateway that appends a suffix (e.g. "claude-sonnet-4-6-intel") still resolves.
+# Keys are matched case-insensitively, exact first then longest-prefix, then
+# shape (words in any order, digits in sequence), so a gateway that appends a
+# suffix (e.g. "claude-sonnet-4-6-intel") or transposes the family and version
+# (e.g. "claude-4-6-sonnet") still resolves.
 RATES_PER_MTOK: dict[str, dict[str, float]] = {
     "claude-sonnet-4-6": {"input": 3.00, "output": 15.00},
     "claude-sonnet-4-5": {"input": 3.00, "output": 15.00},
@@ -51,9 +53,32 @@ RATES_PER_MTOK: dict[str, dict[str, float]] = {
 }
 
 
+def _shape(key: str) -> tuple[tuple[str, ...], tuple[str, ...]]:
+    """Reduce a model id to (sorted words, ordered digits).
+
+    Sorting the words makes the comparison order-insensitive, while keeping the
+    digits in sequence preserves the version — so "claude-sonnet-4-6" and
+    "claude-4-6-sonnet" resolve to the same rates, but "claude-6-4-sonnet"
+    (version 6.4) does not silently collapse into version 4.6.
+    """
+    parts = [p for p in key.split("-") if p]
+    words = tuple(sorted(p for p in parts if not p.isdigit()))
+    nums = tuple(p for p in parts if p.isdigit())
+    return words, nums
+
+
+_SHAPES: dict[tuple, str] = {_shape(name): name for name in RATES_PER_MTOK}
+
+
 def resolve_rates(model: str) -> Optional[dict[str, float]]:
     """
     Return ``{"input": x, "output": y}`` per 1M tokens for ``model``.
+
+    Matching is case-insensitive and tried narrowest first: exact, longest
+    prefix (a gateway suffix such as "claude-sonnet-4-6-20260514"), then shape
+    — the words in any order with the version digits in sequence. Shape was
+    added after the gateway started returning "claude-4-6-sonnet", which the
+    two earlier steps could not resolve.
 
     Returns None for an unknown model — callers must then record the token
     counts but leave cost unset. Guessing a rate would put a wrong number in
@@ -69,7 +94,19 @@ def resolve_rates(model: str) -> Optional[dict[str, float]]:
     for known in RATES_PER_MTOK:
         if key.startswith(known) and (best is None or len(known) > len(best)):
             best = known
-    return RATES_PER_MTOK[best] if best else None
+    if best is not None:
+        return RATES_PER_MTOK[best]
+    # Last: same words in a different order, digits still in sequence. Applied
+    # against progressively shorter leading runs of the name, because the two
+    # mangles compose — a gateway is free to hand back a transposed name and
+    # stamp a build suffix on it, and neither step above catches that
+    # combination.
+    parts = [p for p in key.split("-") if p]
+    for cut in range(len(parts), 1, -1):
+        canonical = _SHAPES.get(_shape("-".join(parts[:cut])))
+        if canonical is not None:
+            return RATES_PER_MTOK[canonical]
+    return None
 
 
 def cost_for(model: str, usage: Any) -> Optional[dict]:

@@ -39,6 +39,17 @@ TAG_KEYWORDS: dict[str, list[str]] = {
                             "ppag table", "bios block"],
     "ROAMING_DECISION":    ["roaming decision", "roam decision", "roamed to", "roam to a",
                             "roaming event", "roam trigger"],
+    # SoftAP / P2P keywords name the FAILURE, never the feature. A bare
+    # "softap" / "p2p" co-occurs with a root-cause phrase in almost every real
+    # report (and "IE_P2P" alone appears in ordinary STA scan logs), which
+    # would make two families match and silently drop the tag component.
+    "SOFTAP_START_FAILURE": ["softap failed to start", "softap start failure",
+                             "hosted network failed to start",
+                             "hotspot failed to start"],
+    "P2P_CONNECT_FAILURE":  ["go negotiation fail", "group owner negotiation fail",
+                             "p2p negotiation fail", "p2p connection fail",
+                             "wi-fi direct connection fail", "wfd connection fail",
+                             "p2p invitation fail"],
     # "OTHER" deliberately has no keywords — it is the fallback the scorer
     # never infers (ambiguity yields "" instead).
 }

@@ -288,7 +288,12 @@ def _resolve_domain(conversation_id: str, domain_hint: Any) -> str:
     """
     with _pending_lock:
         snap = _pending_buffer.get(conversation_id)
-        if snap and snap.get("_domain"):
+        # Key presence, not truthiness: wifi/default records "" as its routing
+        # key, so `snap.get("_domain")` is falsy for a perfectly well-formed
+        # Wi-Fi conversation and would let a caller-supplied domain="bt" hint
+        # take over — switching both the JSONL stream and the conclusion-tag
+        # whitelist for a conversation that was created as Wi-Fi.
+        if snap and "_domain" in snap:
             return snap["_domain"]
     return _norm_domain(domain_hint)
 
@@ -800,9 +805,11 @@ def record_turn(
                 # Track whether a previous turn already flushed this conv to
                 # disk; if so we want write-through. We mark this on the
                 # buffer so we don't have to hit disk to check.
-            elif domain and not snap.get("_domain"):
+            elif domain and "_domain" not in snap:
                 # Back-fill domain on a snapshot created before domain
                 # tracking (e.g. ensure_conversation ran on an older path).
+                # Keyed on absence, not falsiness — "" is Wi-Fi's real value
+                # and must not be re-bound by a later hint.
                 norm = _norm_domain(domain)
                 snap["_domain"] = norm
                 snap["domain"] = norm or "wifi"
@@ -981,6 +988,8 @@ CORRECT_CONCLUSION_TAGS = {
     "WAKE_RESUME_DELAY",
     "BIOS_CONFIG_ISSUE",
     "ROAMING_DECISION",
+    "SOFTAP_START_FAILURE",
+    "P2P_CONNECT_FAILURE",
     "OTHER",
 }
 
@@ -1018,10 +1027,7 @@ BT_CONCLUSION_TAGS = {
     "AUDIO_QUALITY",
 }
 
-# Validation accepts EITHER domain's tags. Each frontend only ever offers
-# its own set, and records are already partitioned into wifi/bt streams, so
-# a single union keeps one validation path without cross-contaminating the
-# offered options.
+# Kept for compatibility with callers/tests that need the complete universe.
 ALL_CONCLUSION_TAGS = CORRECT_CONCLUSION_TAGS | BT_CONCLUSION_TAGS
 
 
@@ -1077,11 +1083,14 @@ def record_detail(
     correct_skill = (correct_skill or "").strip()
     correct_approach = (correct_approach or "").strip()
 
-    # Conclusion tag must come from the whitelisted set (or be empty).
-    # Accept either domain's tags — the frontend only offers its own set.
+    # Conclusion tag must come from this feedback stream's domain-specific
+    # whitelist (or be empty). UI separation alone is not a trust boundary:
+    # validate here so a Wi-Fi request cannot pollute ACE with BT-only labels,
+    # and vice versa.
     eff_domain = _resolve_domain(conversation_id, domain)
     tag_in = (correct_conclusion_tag or "").strip().upper()
-    correct_conclusion_tag = tag_in if tag_in in ALL_CONCLUSION_TAGS else ""
+    allowed_tags = BT_CONCLUSION_TAGS if eff_domain == "bt" else CORRECT_CONCLUSION_TAGS
+    correct_conclusion_tag = tag_in if tag_in in allowed_tags else ""
 
     # Agent-workflow assessment must come from the whitelisted set (or empty).
     # This is the primary ACE signal for the agent-prompt-layer Playbook —

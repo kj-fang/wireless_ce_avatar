@@ -322,7 +322,7 @@ GET /log_parser/open_local_analysis → open_local_analysis() in log_parser_rout
   → json_path   = os.path.abspath(request.args.get("json"))
   → session["sendto_pending_path"]  = source_path
   → session["sendto_report_path"]   = report_path
-  → session["sendto_json_path"]     = json_path
+  → session["sendto_json_path"]     = json_path (Temporarily remove because it's not implement yet.)
   → session["sendto_auto_llm"]      = False   ← (auto_llm arg was not set)
   → renders sendto_transmission.html
 
@@ -376,7 +376,7 @@ GET /log_parser/open_local_analysis → open_local_analysis() in log_parser_rout
 
 ```
 app.py __main__
-  → argparse: --sendto-token, <file>, --report r, --json j, --auto-llm
+  → argparse: --sendto-token, <file>, --report r, --json j, --auto-llm (Temporarily remove "--json" because it's not implement yet.)
   → _build_startup_path(..., auto_llm=True)
       → URL: /log_parser/open_local_analysis?token=...&path=...
              &report=...&json=...&auto_llm=1    ← key difference from Flow 3

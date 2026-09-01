@@ -392,7 +392,7 @@ def _terminal_sse(job, kind: str, payload) -> str:
         {"type": "error", "content": payload}, ensure_ascii=False) + "\n\n")
 
 
-def _job_sse(job):
+def _job_sse(job, sendto_report_path: str = "", log_path: str = ""):
     """
     Shared SSE generator for a chat job: emit the steps buffered so far, then
     follow live steps until the job reaches a terminal state. Used by both the
@@ -424,8 +424,8 @@ def _job_sse(job):
                         import os as _os
                         from datetime import datetime as _dt
                         _report_dir = ""
-                        _sendto_rp = _save_sendto_report_path
-                        _log_path  = _save_log_path
+                        _sendto_rp = sendto_report_path
+                        _log_path  = log_path or getattr(getattr(job, "agent", None), "current_log_path", "") or ""
                         if _sendto_rp:
                             _report_dir = _os.path.dirname(_sendto_rp)
                         elif _log_path:
@@ -434,9 +434,9 @@ def _job_sse(job):
                             _ts = _dt.now().strftime("%Y%m%d_%H%M%S")
                             _out_path = _os.path.join(_report_dir, f"llm_report_{_ts}.json")
                             _save_data = {
-                                "turn_id": turn_id,
-                                "conversation_id": conversation_id,
-                                "user_message": user_message,
+                                "turn_id": job.turn_id,
+                                "conversation_id": job.conversation_id,
+                                "user_message": job.title,
                                 "issue_time": payload.get("issue_time"),
                                 "report": payload.get("data", {}),
                                 "log_path": _log_path,
@@ -1144,15 +1144,14 @@ def chat():
             t = threading.Thread(target=run_chat_with_tools, daemon=True)
             t.start()
 
-			# Capture session values NOW (inside request context) so the
-            # event_stream generator can use them after the context ends.
-            _save_sendto_report_path = (session.get("sendto_report_path") or "").strip()
-            _save_log_path = getattr(agent, "current_log_path", "") or ""
-
             # The original request streams the job exactly like a reconnect
             # would (replay buffered steps, then follow to done/error).
             return Response(
-                _job_sse(job),
+                _job_sse(
+                    job,
+                    sendto_report_path=(session.get("sendto_report_path") or "").strip(),
+                    log_path=getattr(agent, "current_log_path", "") or "",
+                ),
                 mimetype="text/event-stream",
                 headers={"Cache-Control": "no-cache", "X-Accel-Buffering": "no"},
             )

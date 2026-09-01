@@ -260,7 +260,6 @@ if __name__ == "__main__":
     parser.add_argument('--no-tray', action='store_true', help='Disable tray manager')
     parser.add_argument('--tray-mode', action='store_true', help='Run as tray manager')
     parser.add_argument('--sendto-token', type=str, default=None, help='SendTo security token (auto-set by shortcut, not for manual use).')
-    parser.add_argument('--json', type=str, default=None, help='Optional json file path (.json / .jsonl) produced by validation AI agent.')
     parser.add_argument('--agent-zip', type=str, default=None, help='Path to a report zip produced by the validation AI agent. Reads the SendTo token from the running instance automatically.')
     parser.add_argument('--auto-llm', action='store_true', help='Automatically submit LLM analysis using the log\'s last timestamp (no user click required).')
     parser.add_argument('input_paths', nargs='*', help='Optional local analysis file paths passed from Windows SendTo.')

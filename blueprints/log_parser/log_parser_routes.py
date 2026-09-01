@@ -1029,10 +1029,11 @@ def open_local_analysis():
     # browser connects to the /sendto-progress Socket.IO namespace.
     session['sendto_pending_path'] = source_path
     session['is_agent_zip'] = request.args.get('is_agent_zip') == '1'
-    # Clear any stale report/json paths from a previous session; the zip
-    # auto-detection in _process_local_analysis will populate them if applicable.
-    session['sendto_report_path'] = ''
-    session['sendto_json_path'] = ''
+    # Persist ?report= arg when provided; fall back to '' so zip
+    # auto-detection in _process_local_analysis can still overwrite if needed.
+    _arg_report_raw = (request.args.get('report') or '').strip()
+    _arg_report = os.path.abspath(_arg_report_raw) if _arg_report_raw else ''
+    session['sendto_report_path'] = _arg_report if _arg_report and os.path.exists(_arg_report) else ''
     # [auto-llm] Store flag so _process_local_analysis can append auto_send to redirect URL.
     _auto_llm_flag = (request.args.get('auto_llm') == '1')
     session['sendto_auto_llm'] = _auto_llm_flag

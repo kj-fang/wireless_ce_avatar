@@ -2091,7 +2091,13 @@
         <!-- Issue Time -->
         <div class="sidebar-section">
             <h6 style="display:flex;align-items:center;justify-content:space-between;">
-                <span>⏰ Issue Time</span>
+                <span style="display:flex;align-items:center;gap:6px;flex-wrap:wrap;">
+                    <span>⏰ Issue Time</span>
+                    <span id="it-time-source-tag"
+                          style="display:none;font-size:0.6rem;font-weight:600;color:#0071c5;
+                                 background:#eaf3ff;border:1px solid #cfe0fa;border-radius:9px;
+                                 padding:1px 6px;white-space:nowrap;"></span>
+                </span>
                 <button type="button" class="it-clear-top" onclick="clearAllIssueTimes()"
                         title="Clear the issue time (and any extra rows)">
                     🗑️<span class="it-clear-top-label">Clear</span>
@@ -2869,6 +2875,7 @@
         // Clearing also drops any pending auto-fill confirmation.
         issueTimeAwaitingConfirm = false;
         setIssueTimeConfirmUI(false);
+        _setIssueTimeSourceTag('');
         updateIssueTimeDisplay();
         validateUserInput();
     }
@@ -3215,6 +3222,7 @@
     // Called from manual-edit / clear / AI-apply paths: the time is now
     // user-owned, so drop the pending-confirmation state.
     function markIssueTimeUserOwned() {
+        _setIssueTimeSourceTag('');
         if (issueTimeAwaitingConfirm) {
             issueTimeAwaitingConfirm = false;
             setIssueTimeConfirmUI(false);
@@ -3759,6 +3767,20 @@
                     try {
                         const ctxRes = await fetch('/log_chatbot/get_issue_context');
                         const ctxData = await ctxRes.json();
+                        if (ctxData && ctxData.issue_time_blocked) {
+                            // Drop whatever the previous log left in the picker:
+                            // this path runs on every setLog() and is meant to
+                            // override stale values, so returning early without
+                            // clearing would anchor analysis on the old log.
+                            clearAllIssueTimes();
+                            const warn = document.getElementById('it-unknown-warn');
+                            if (warn) {
+                                warn.textContent = '\u26a0 ' + (ctxData.issue_time_warning
+                                    || 'The auto-detected issue time is outside this log. Please confirm it.');
+                                warn.style.display = 'block';
+                            }
+                            return;
+                        }
                         const times = Array.isArray(ctxData && ctxData.issue_times)
                             ? ctxData.issue_times.filter(Boolean)
                             : [];
@@ -4453,6 +4475,18 @@
 
     // === Auto-load log and trigger first Analyze-All on page load ===
 
+    const ISSUE_TIME_SOURCE = {
+        ATTACHMENT: 'From selected attachment issue time',
+        DESCRIPTION: 'From customer-provided issue time (description)',
+    };
+
+    function _setIssueTimeSourceTag(label) {
+        const tag = document.getElementById('it-time-source-tag');
+        if (!tag) return;
+        tag.textContent = label || '';
+        tag.style.display = label ? 'inline-block' : 'none';
+    }
+
     async function tryAutoAnalyzeOnLoad() {
         if (autoAnalyzeTriggered) return;
 
@@ -4497,8 +4531,18 @@
             window.__customerAnnotations = contextData.customer_annotations || {};
             window.__customerTzLabel = contextData.customer_tz || '';
             window.__customerIana = contextData.customer_iana || '';
+            const issueTimeBlocked = !!contextData.issue_time_blocked;
             if (typeof populateCustomerAnnotation === 'function') {
                 populateCustomerAnnotation();
+            }
+            if (issueTimeBlocked) {
+                clearAllIssueTimes();
+                const warn = document.getElementById('it-unknown-warn');
+                if (warn) {
+                    warn.textContent = '\u26a0 ' + (contextData.issue_time_warning
+                        || 'The auto-detected issue time is outside this log. Please confirm it.');
+                    warn.style.display = 'block';
+                }
             }
 
             // Enable agentic mode for auto-analysis
@@ -4516,16 +4560,24 @@
                 const rawQuestion = question || '🔍 Run full multi-skill analysis';
 
                 let descPart = rawQuestion;
-                // Priority: LLM-organized multi-time list (from the case
-                // description) → URL ?issue_time= → attachment_time →
-                // backend-resolved issue_time → regex on description.
-                if (issueTimes.length > 0 && _prefillAutoTimes(issueTimes)) {
-                    // The backend already returned a CLEAN description (raw
-                    // timestamps stripped), so use it verbatim. Auto-detected
-                    // time(s) apply immediately (confirm-gate removed).
+                // Priority: selected attachment time → the first time parsed
+                // from the customer description by organize_issue_context()
+                // → previous-page/backend value → deterministic regex.
+                let filledSourceLabel = '';
+                if (issueTimeBlocked) {
+                    // Do not let a lower-priority fallback undo the backend's
+                    // selected-log range validation.
+                } else if (attachmentTime && setIssueTimeFromString(attachmentTime)) {
+                    descPart = rawQuestion.replace(attachmentTime, ' ');
+                    filledSourceLabel = ISSUE_TIME_SOURCE.ATTACHMENT;
+                    validateUserInput();
+                } else if (issueTimes.length > 0 && setIssueTimeFromString(issueTimes[0])) {
+                    // The backend already returned a clean description. Use
+                    // only the organizer's best-first item at this priority.
+                    filledSourceLabel = ISSUE_TIME_SOURCE.DESCRIPTION;
                     validateUserInput();
                 } else {
-                    let foundTime = urlIssueTime || attachmentTime || resolvedTime;
+                    let foundTime = urlIssueTime || resolvedTime;
                     if (!foundTime) {
                         for (const re of VALID_TIME_REGEXES) {
                             const m = rawQuestion.match(re);
@@ -4544,6 +4596,7 @@
                         if (warn) warn.style.display = 'block';
                     }
                 }
+                _setIssueTimeSourceTag(filledSourceLabel);
                 descPart = trimTrailingTimeConnector(descPart.replace(/\s+/g, ' ').trim());
 
                 if (input) {

@@ -18,6 +18,7 @@ from utils.issue_time_utils import (
     read_log_time_range,
     resolve_issue_time,
     format_issue_time,
+    validate_issue_time_in_log_range,
 )
 from utils.issue_time_ai import build_issue_time_suggestions, organize_issue_context, realign_times_to_log
 from utils.timezone_utils import (
@@ -72,6 +73,9 @@ def _invalidate_issue_context_caches() -> None:
         "_attachment_time_cache",     # parsed attachment subtitle time
         "_resolved_issue_time_cache",  # log_path -> resolved issue_time
         "_issue_ai_quick",            # LLM-organized description + issue times
+        "_carried_issue_time",         # download_result -> chatbot hand-off
+        "_carried_issue_time_warning", # failed hand-off range validation
+        "_carried_issue_time_present", # blocks a second date guess on failure
     ):
         session.pop(key, None)
 
@@ -1442,6 +1446,7 @@ def prepare():
     """
     data = request.get_json(silent=True) or {}
     etl_path = data.get("etl_path", "").strip()
+    carried_issue_time = str(data.get("issue_time") or "").strip()
     if not etl_path:
          return jsonify({"success": False, "error": "etl_path is required"}), 400
 
@@ -1456,6 +1461,36 @@ def prepare():
         # (Fixes stale attachment time / description when a second analysis is
         # started without going through "Back to Avatar".)
         _invalidate_issue_context_caches()
+
+        # ``download_result`` has already resolved a time-only case timestamp
+        # against the selected capture folder. Carry that exact value forward;
+        # asking the LLM to choose a date again is both redundant and unstable
+        # when a log spans midnight. The selected log is now available, so this
+        # is also the right place to reject an impossible/out-of-range value.
+        if carried_issue_time:
+            session["_carried_issue_time_present"] = True
+            _carried_dt, _range_first, _range_last, _range_error = (
+                validate_issue_time_in_log_range(carried_issue_time, log_path)
+            )
+            if _carried_dt is not None:
+                session["_carried_issue_time"] = format_issue_time(_carried_dt)
+                session["_carried_issue_time_warning"] = ""
+            else:
+                session["_carried_issue_time"] = ""
+                if _range_first and _range_last:
+                    _range_text = (
+                        f"{format_issue_time(_range_first)} to "
+                        f"{format_issue_time(_range_last)}"
+                    )
+                    session["_carried_issue_time_warning"] = (
+                        f"Auto-detected issue time {carried_issue_time} was not used: "
+                        f"{_range_error} Log range: {_range_text}. Please confirm the issue time."
+                    )
+                else:
+                    session["_carried_issue_time_warning"] = (
+                        f"Auto-detected issue time {carried_issue_time} was not used: "
+                        f"{_range_error} Please confirm the issue time."
+                    )
 
         # Pull consolidated issue context from all session sources
         ctx = _extract_issue_context()
@@ -1784,10 +1819,23 @@ def get_issue_context():
     clean_desc = organized.get("clean_description") or _compose_concise_description(ctx)
     issue_times = organized.get("issue_times") or []
 
+    # A case-number hand-off is authoritative for this transition. It either
+    # supplies the already-resolved, range-checked value from download_result,
+    # or deliberately supplies no value after validation failed. In the latter
+    # case do not silently fall back to a fresh LLM/attachment/log-latest guess.
+    carried_present = bool(session.get("_carried_issue_time_present"))
+    carried_issue_time = (session.get("_carried_issue_time") or "").strip()
+    carried_warning = (session.get("_carried_issue_time_warning") or "").strip()
+    if carried_present:
+        issue_times = [carried_issue_time] if carried_issue_time else []
+        attachment_time = carried_issue_time
+
     # Back-compat single issue_time: prefer the first organized time, else the
     # previous attachment_time / log-latest resolution (cached by log_path).
     if issue_times:
         issue_time_str = issue_times[0]
+    elif carried_present:
+        issue_time_str = ""
     else:
         # attachment_time is already frame-corrected above; use it directly.
         # When absent, fall back to the cached log-latest resolution.
@@ -1837,6 +1885,37 @@ def get_issue_context():
         except Exception as e:
             print(f"[get_issue_context] issue-time frame detect skipped ({e})")
 
+    # Final safety net for every auto-filled source, not only the explicit
+    # download_result hand-off. An LLM can choose the wrong date when a log
+    # spans midnight; never place such a value in the picker unless it actually
+    # falls inside the selected log. Manual entry remains available so the user
+    # can correct the time or deliberately choose another log.
+    range_blocked = False
+    range_warning = ""
+    if first_ts and last_ts:
+        def _is_inside_log_range(s: str) -> bool:
+            parsed, is_time_only = parse_issue_time_string(s)
+            return bool(parsed and not is_time_only and first_ts <= parsed <= last_ts)
+
+        had_auto_candidate = bool(issue_times or attachment_time or issue_time_str)
+        issue_times = [s for s in issue_times if _is_inside_log_range(s)]
+        attachment_time = attachment_time if _is_inside_log_range(attachment_time) else ""
+        if issue_times:
+            issue_time_str = issue_times[0]
+        elif attachment_time:
+            issue_time_str = attachment_time
+        elif _is_inside_log_range(issue_time_str):
+            # Deterministic log-latest fallback is already safe.
+            pass
+        elif carried_present or had_auto_candidate:
+            issue_time_str = ""
+            range_blocked = True
+            range_warning = (
+                "The auto-detected issue time was not used because it is outside "
+                f"the selected log range ({format_issue_time(first_ts)} to "
+                f"{format_issue_time(last_ts)}). Please confirm the issue time."
+            )
+
     return jsonify({
         "description": clean_desc,
         "attachment_time": attachment_time,
@@ -1856,6 +1935,12 @@ def get_issue_context():
         # date typed into the picker. Empty when only a fixed offset is known —
         # the frontend then falls back to the label's standard offset.
         "customer_iana": to_iana_timezone(customer_tz_for_ui) if customer_tz_for_ui else "",
+        "issue_time_blocked": bool(
+            (carried_present and not carried_issue_time) or range_blocked
+        ),
+        "issue_time_warning": carried_warning or range_warning,
+        "log_first_time": format_issue_time(first_ts),
+        "log_last_time": format_issue_time(last_ts),
     })
 
 

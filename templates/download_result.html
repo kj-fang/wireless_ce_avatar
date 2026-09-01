@@ -1976,7 +1976,10 @@
                 fetch(CHATBOT_PREPARE_URL, {
                     method: 'POST',
                     headers: { 'Content-Type': 'application/json' },
-                    body: JSON.stringify({ etl_path: etlPath })
+                    body: JSON.stringify({
+                        etl_path: etlPath,
+                        issue_time: window.__llmIssueTime || ''
+                    })
                 })
                 .then(res => res.json())
                 .then(data => {
@@ -2023,7 +2026,10 @@
                 fetch(CHATBOT_PREPARE_URL, {
                     method: 'POST',
                     headers: { 'Content-Type': 'application/json' },
-                    body: JSON.stringify({ etl_path: etlPath })
+                    body: JSON.stringify({
+                        etl_path: etlPath,
+                        issue_time: window.__llmIssueTime || ''
+                    })
                 })
                 .then(res => res.json())
                 .then(data => {

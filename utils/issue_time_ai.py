@@ -1483,7 +1483,7 @@ def determine_issue_time_frames(
             "log_frame": datetime | None,       # for PreScan / log content match
             "customer_frame": datetime | None,  # for UI annotation
             "customer_tz": str,                 # tz label (empty when unknown)
-            "source_frame": "customer" | "log" | "unknown",
+            "source_frame": "customer" | "log" | "same_timezone" | "unknown",
         }
 
     Two physical anchors disambiguate which frame the input is in:
@@ -1523,6 +1523,7 @@ def determine_issue_time_frames(
     from utils.etl_utils import extract_timestamp_from_folder
     from utils.timezone_utils import (
         get_effective_timezone, taiwan_to_local, local_to_taiwan,
+        resolve_timezone,
     )
 
     blank = {
@@ -1547,6 +1548,26 @@ def determine_issue_time_frames(
     # Need the customer tz (to convert at all) plus at least one anchor.
     if not customer_tz or (not folder_ts and not have_range):
         return blank
+
+    # Same-offset fast path: there are not two clock frames to disambiguate.
+    # In particular, Chinese Standard Time (GMT+8) and the ETL decode host
+    # (GMT+8) must preserve the date/time byte-for-byte; scoring alternative
+    # interpretations can add no information and must never move the date.
+    try:
+        _customer_zone = resolve_timezone(customer_tz)
+        _customer_offset = (
+            issue_dt.replace(tzinfo=_customer_zone).utcoffset()
+            if _customer_zone is not None else None
+        )
+        if _customer_offset == timedelta(hours=8):
+            return {
+                "log_frame": issue_dt,
+                "customer_frame": issue_dt,
+                "customer_tz": customer_tz,
+                "source_frame": "same_timezone",
+            }
+    except Exception:
+        pass
 
     REASONABLE_GAP_SECONDS = 60 * 60
     # Only flip to log frame against the customer default — when neither

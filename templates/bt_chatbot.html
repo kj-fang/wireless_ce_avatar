@@ -4324,10 +4324,18 @@
                 const rawQuestion = question || '🔍 Run full multi-skill analysis';
 
                 let descPart = rawQuestion;
-                // Priority: LLM-organized multi-time list (from the case
-                // description) → URL ?issue_time= → attachment_time →
-                // backend-resolved issue_time → regex on description.
-                if (issueTimes.length > 0 && _prefillAutoTimes(issueTimes)) {
+                // Priority: selected attachment time → LLM-organized
+                // multi-time list (from the case description) → URL
+                // ?issue_time= → backend-resolved issue_time → regex on
+                // description.
+                if (attachmentTime && setIssueTimeFromString(attachmentTime)) {
+                    descPart = rawQuestion.replace(attachmentTime, ' ');
+                    // Carried over from the previous page → show it, but
+                    // require the user to tick the confirm box first.
+                    issueTimeAwaitingConfirm = true;
+                    setIssueTimeConfirmUI(true);
+                    validateUserInput();
+                } else if (issueTimes.length > 0 && _prefillAutoTimes(issueTimes)) {
                     // The backend already returned a CLEAN description (raw
                     // timestamps stripped), so use it verbatim. These auto-
                     // filled time(s) await the user's confirm tick.
@@ -4335,7 +4343,7 @@
                     setIssueTimeConfirmUI(true);
                     validateUserInput();
                 } else {
-                    let foundTime = urlIssueTime || attachmentTime || resolvedTime;
+                    let foundTime = urlIssueTime || resolvedTime;
                     if (!foundTime) {
                         for (const re of VALID_TIME_REGEXES) {
                             const m = rawQuestion.match(re);

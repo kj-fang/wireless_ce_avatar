@@ -1638,8 +1638,8 @@ def load_skills_yaml_route():
 # ------------------------------------------------------------------
 # API: append skills from a user-supplied YAML into the active user file
 # ------------------------------------------------------------------
-@log_chatbot_bp.route("/add_skills_yaml", methods=["POST"])
-def add_skills_yaml_route():
+@log_chatbot_bp.route("/append_skills_yaml", methods=["POST"])
+def append_skills_yaml_route():
     """
     Import skills from a user-picked YAML file and append them to the
     currently-active user local YAML. Only these fields survive per
@@ -1671,7 +1671,7 @@ def add_skills_yaml_route():
     if not valid:
         return jsonify({
             "success": False,
-            "error": "No importable skills found in the selected YAML.",
+            "error": "No appendable skills found in the selected YAML.",
             "skipped": skipped,
         }), 400
 
@@ -1681,7 +1681,7 @@ def add_skills_yaml_route():
             base_path, _ = _latest_cloud_baseline()
         existing = _read_yaml_file(base_path) if base_path is not None else {}
 
-        merged, added, overwritten = merge_overwrite(existing, valid)
+        merged, appended, overwritten = merge_overwrite(existing, valid)
         target = _persist_user_yaml_snapshot(merged)
 
         _set_active_source("user")
@@ -1690,8 +1690,8 @@ def add_skills_yaml_route():
         session["yaml_modified_path"] = str(target)
 
         parts = []
-        if added:
-            parts.append(f"added {len(added)}")
+        if appended:
+            parts.append(f"appended {len(appended)}")
         if overwritten:
             parts.append(f"overwrote {len(overwritten)}")
         if skipped:
@@ -1703,7 +1703,7 @@ def add_skills_yaml_route():
             "active_source": "user",
             "target_path":   str(target),
             "filename":      target.name,
-            "added":         added,
+            "appended":      appended,
             "overwritten":   overwritten,
             "skipped":       skipped,
             "message":       f"Imported from {Path(yaml_path).name}: {summary}.",

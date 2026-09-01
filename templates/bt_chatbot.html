@@ -2363,12 +2363,12 @@
             <div id="skill-editor-status" class="log-status"></div>
         </div>
 
-        <!-- Add skills by importing a YAML file -->
+        <!-- Append skills by importing a YAML file -->
         <div class="sidebar-section">
-            <h6>📥 Add Skills</h6>
-            <button class="btn-set-log" style="width:100%;" onclick="addSkillsFromYaml()"
-                    title="Pick a YAML file; its skills will be appended to your customised BT configuration (duplicates overwrite).">
-                📁 Choose YAML file to add…
+            <h6>📥 Append Skills</h6>
+            <button class="btn-set-log" style="width:100%;" onclick="appendSkillsFromYaml()"
+                    title="Pick a YAML file; its skills will be appended to your customized BT configuration (duplicates overwrite).">
+                📁 Choose YAML file to append…
             </button>
             <div id="skills-reload-status" class="log-status"></div>
         </div>
@@ -3458,7 +3458,7 @@
     // the selected file's skills into the currently-active BT user
     // YAML (fields kept: name, description, keywords, exclusive,
     // expert_rules; duplicate keys overwrite existing).
-    async function addSkillsFromYaml() {
+    async function appendSkillsFromYaml() {
         const statusEl = document.getElementById('skills-reload-status');
         let yamlPath = '';
         try {
@@ -3476,7 +3476,7 @@
         statusEl.style.display = 'block';
 
         try {
-            const res = await fetch('/bt_chatbot/add_skills_yaml', {
+            const res = await fetch('/bt_chatbot/append_skills_yaml', {
                 method: 'POST',
                 headers: {'Content-Type': 'application/json'},
                 body: JSON.stringify({yaml_path: yamlPath})

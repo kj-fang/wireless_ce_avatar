@@ -116,15 +116,15 @@ def load_and_filter_source(source_yaml_path: str | Path) -> tuple[dict, dict]:
 def merge_overwrite(existing: dict, incoming: dict) -> tuple[dict, list[str], list[str]]:
     """
     Merge `incoming` into `existing`. Duplicate keys are OVERWRITTEN.
-    Returns (merged_dict, added_keys, overwritten_keys).
+    Returns (merged_dict, appended_keys, overwritten_keys).
     """
     merged = dict(existing) if isinstance(existing, dict) else {}
-    added: list[str] = []
+    appended: list[str] = []
     overwritten: list[str] = []
     for k, v in incoming.items():
         if k in merged:
             overwritten.append(k)
         else:
-            added.append(k)
+            appended.append(k)
         merged[k] = v
-    return (merged, added, overwritten)
+    return (merged, appended, overwritten)

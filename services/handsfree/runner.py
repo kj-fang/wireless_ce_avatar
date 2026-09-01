@@ -112,6 +112,7 @@ class CaseAnalysis:
     clean_description: str = ""
     issue_type: str = ""
     wifi_or_bt: str = ""
+    bt_case_valid: Optional[bool] = None  # True when archive contains BT ETLs
     triage: dict = field(default_factory=dict)       # analyze_desc output
     classification: dict = field(default_factory=dict)
     case_reader: dict = field(default_factory=dict)  # comment-aware reader output
@@ -203,14 +204,6 @@ class HandsfreeRunner:
                 analysis.triage = triage
                 analysis.classification = triage.get("Classification") or {}
                 analysis.issue_type = analysis.classification.get("issue_type", "") or ""
-
-        # BT cases: the agentic analyzer is Wi-Fi; deliver triage only (v1).
-        if analysis.wifi_or_bt != "wifi":
-            analysis.mode = "triage_only"
-            analysis.ok = bool(analysis.triage)
-            analysis.error = ("BT case — v1 runs description triage only"
-                              if analysis.ok else "triage failed")
-            return analysis
 
         # -- 3. read the case history (description + comments, chronological) --
         # The reader mirrors how an engineer works the case: description
@@ -306,11 +299,12 @@ class HandsfreeRunner:
         # -- 6. decompose ------------------------------------------------------
         wifi_files: list = []
         ddd_files: list = []
+        bt_files: list = []
         decompose_ok = False
         with self._stage(analysis, "decompose"):
             from utils.attachment_decompose import process_single_zip
             file_path, _name, already = downloaded[0]
-            wifi_files, ddd_files, _evt, _bt, _fw = process_single_zip(
+            wifi_files, ddd_files, _evt, bt_files, _fw = process_single_zip(
                 file_path, case_ctx.case_download_dir, already)
             decompose_ok = True
         if not decompose_ok:
@@ -322,6 +316,31 @@ class HandsfreeRunner:
             analysis.ok = bool(analysis.triage)
             analysis.error = "attachment decompose failed"
             return analysis
+
+        # BT classification mirrors Avatar's local-upload rule: an extracted
+        # ibtpci-*.etl or ibtusb-*.etl is returned in bt_files. Handsfree does
+        # not run those through the Wi-Fi agent yet, but it must inspect the
+        # archive before deciding whether this is a valid BT capture.
+        if analysis.wifi_or_bt == "bt":
+            with self._stage(analysis, "check_bt_log"):
+                analysis.bt_case_valid = bool(bt_files)
+                if bt_files:
+                    self.progress("check_bt_log",
+                                  f"valid BT case: recognized {len(bt_files)} "
+                                  "BT ETL(s)")
+                else:
+                    self.progress("check_bt_log",
+                                  f"'{analysis.chosen_attachment}' contains no "
+                                  "recognized BT ETL (ibtpci-/ibtusb-)")
+            analysis.mode = "triage_only"
+            analysis.ok = bool(analysis.triage)
+            analysis.error = (
+                "valid BT case: recognized BT ETLs; v1 produces triage only"
+                if analysis.bt_case_valid else
+                "BT case archive contains no recognized BT ETL"
+            )
+            return analysis
+
         # -- 6b. confirm WRT logs exist in the unzipped archive ----------------
         # The archive downloaded and decomposed — now verify it actually
         # contains driver ETL traces (WRT wifi ETLs / DDD). An archive of

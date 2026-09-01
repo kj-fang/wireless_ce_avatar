@@ -303,6 +303,31 @@ def smoke_runner(tmp: Path) -> None:
 
         r = runner_mod.HandsfreeRunner(
             progress_cb=lambda s, d: print(f"    · {s}: {d}"))
+
+        # BT cases must inspect extracted contents before triage-only exit.
+        # This matches Avatar's local-upload rule: ibtpci-/ibtusb- ETLs are
+        # recognized BT captures.
+        bt_etl = case_dir / "bt_capture" / "ibtpci-driver.etl"
+        bt_etl.parent.mkdir(parents=True, exist_ok=True)
+        bt_etl.write_bytes(b"\x00fake")
+
+        def _fake_process_bt(case_ctx: CaseContext) -> CaseContext:
+            case_ctx = _fake_process(case_ctx)
+            case_ctx.wifi_or_bt = "bt"
+            return case_ctx
+
+        cis.CaseService.process_case = staticmethod(_fake_process_bt)
+        adc.process_single_zip = lambda *a, **k: ([], [], [], [str(bt_etl)], [])
+        bt_analysis = r.analyze_case("01234567")
+        bt_stages = [s.name for s in bt_analysis.stages]
+        check("S4.bt valid BT capture is content-checked",
+              bt_analysis.bt_case_valid is True
+              and "decompose" in bt_stages
+              and "check_bt_log" in bt_stages,
+              f"valid={getattr(bt_analysis, 'bt_case_valid', None)} stages={bt_stages}")
+
+        cis.CaseService.process_case = staticmethod(_fake_process)
+        adc.process_single_zip = _fake_zip_proc
         analysis = r.analyze_case("01234567")
 
         check("S4.a mode is full", analysis.mode == "full",

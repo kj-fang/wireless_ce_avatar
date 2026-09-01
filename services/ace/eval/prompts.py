@@ -50,19 +50,6 @@ TAG_KEYWORDS: dict[str, list[str]] = {
                              "p2p negotiation fail", "p2p connection fail",
                              "wi-fi direct connection fail", "wfd connection fail",
                              "p2p invitation fail"],
-    # Every keyword must carry the multi-role context. A bare "channel
-    # conflict" / "supported channel mismatch" is a SYMPTOM phrase that shows
-    # up as a supporting detail under other root causes, so anchoring on it
-    # would turn correct MCC_MISMATCH / ROAMING_DECISION / ASSOC_FAILURE
-    # reports into ambiguous ones. Erring toward abstaining is cheap here (the
-    # user's dropdown pick is the ground truth); a false match is not.
-    "CONCURRENCY_CHANNEL_CONFLICT": ["softap channel conflict", "p2p channel conflict",
-                                     "hotspot channel conflict",
-                                     "multi-role channel conflict",
-                                     "concurrency channel conflict",
-                                     "concurrent channel restriction",
-                                     "softap supported channel mismatch",
-                                     "p2p supported channel mismatch"],
     # "OTHER" deliberately has no keywords — it is the fallback the scorer
     # never infers (ambiguity yields "" instead).
 }

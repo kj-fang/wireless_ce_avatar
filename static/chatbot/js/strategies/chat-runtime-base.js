@@ -667,12 +667,28 @@
                 const rawQuestion = question || '🔍 Run full multi-skill analysis';
 
                 let descPart = rawQuestion;
+                let filledSourceLabel = '';
+                // The backend validated the carried-over time against the log
+                // the user actually selected. When it says the two disagree,
+                // no lower-priority fallback may quietly fill the field back
+                // in — that is what used to anchor an analysis on a timestamp
+                // belonging to a different capture.
+                const issueTimeBlocked = !!contextData.issue_time_blocked;
                 // Priority: LLM-organized multi-time list (from the case
                 // description) → URL ?issue_time= → attachment_time →
                 // backend-resolved issue_time → regex on description.
-                if (issueTimes.length > 0 && _prefillAutoTimes(issueTimes)) {
+                if (issueTimeBlocked) {
+                    clearAllIssueTimes();
+                    const warn = document.getElementById('it-unknown-warn');
+                    if (warn) {
+                        warn.textContent = '⚠ ' + (contextData.issue_time_warning
+                            || 'The auto-detected issue time is outside this log. Please confirm it.');
+                        warn.style.display = 'block';
+                    }
+                } else if (issueTimes.length > 0 && _prefillAutoTimes(issueTimes)) {
                     // The backend already returned a CLEAN description (raw
                     // timestamps stripped), so use it verbatim.
+                    filledSourceLabel = ISSUE_TIME_SOURCE.DESCRIPTION;
                     this._onAutoIssueTimeApplied();
                     validateUserInput();
                 } else {
@@ -685,6 +701,9 @@
                     }
                     if (foundTime && setIssueTimeFromString(foundTime)) {
                         descPart = rawQuestion.replace(foundTime, ' ');
+                        if (attachmentTime && foundTime === attachmentTime) {
+                            filledSourceLabel = ISSUE_TIME_SOURCE.ATTACHMENT;
+                        }
                         this._onAutoIssueTimeApplied();
                         validateUserInput();
                     } else {
@@ -694,6 +713,7 @@
                         if (warn) warn.style.display = 'block';
                     }
                 }
+                _setIssueTimeSourceTag(filledSourceLabel);
                 descPart = trimTrailingTimeConnector(descPart.replace(/\s+/g, ' ').trim());
 
                 if (input) {

@@ -9,6 +9,7 @@ from services.chatbot.engine.system import (
     Skill,
     WifiLogAgentSystem,
 )
+from utils.issue_time_utils import resolve_issue_time
 
 
 class NwAnalysisAgentSystem(WifiLogAgentSystem):
@@ -79,7 +80,15 @@ class NwAnalysisAgentSystem(WifiLogAgentSystem):
     def prime_with_context(self, case_nbr: str = "", subject: str = "",
                            description: str = "", issue_type: str = "",
                            attachment_time: str = "") -> None:
-        """Prime NW context using its legacy local-clock parsing contract."""
+        """Prime NW context, resolving issue time the same way BT does.
+
+        The hand-rolled strptime ladder this used to carry (eight formats,
+        time-only entries dated to *today*) is now resolve_issue_time, which
+        BT already used: a time-only value is aligned to the LOG's date rather
+        than today's, and a value that parses to nothing falls back to the
+        log's latest timestamp instead of leaving issue_time unset. Ported
+        from main; no tz frame conversion here, same as BT.
+        """
         self.reset_conversation()
         self.issue_context = {
             "case_nbr": case_nbr,
@@ -88,32 +97,9 @@ class NwAnalysisAgentSystem(WifiLogAgentSystem):
             "issue_type": issue_type,
         }
 
-        if attachment_time:
-            self.issue_time = None
-            self._issue_time_time_only = False
-            formats = [
-                ("%m/%d/%Y-%H:%M:%S", False),
-                ("%m/%d/%Y %H:%M:%S", False),
-                ("%Y-%m-%dT%H:%M:%S", False),
-                ("%Y-%m-%d %H:%M:%S", False),
-                ("%Y-%m-%d %H:%M", False),
-                ("%m/%d/%Y-%H:%M:%S.%f", False),
-                ("%H:%M:%S", True),
-                ("%H:%M", True),
-            ]
-            for fmt, is_time_only in formats:
-                try:
-                    parsed = datetime.strptime(attachment_time, fmt)
-                except ValueError:
-                    continue
-                if is_time_only:
-                    self.issue_time = datetime.combine(datetime.now().date(), parsed.time())
-                    self._issue_time_time_only = True
-                else:
-                    self.issue_time = parsed
-                break
-        else:
-            self._issue_time_time_only = False
+        dt, src = resolve_issue_time(attachment_time, self.current_log_path)
+        self.issue_time = dt
+        self._issue_time_time_only = (src == "input_time_only")
 
         context_parts = []
         if case_nbr:

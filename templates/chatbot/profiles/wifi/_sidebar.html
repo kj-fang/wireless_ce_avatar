@@ -11,7 +11,15 @@
         <!-- Issue Time -->
         <div class="sidebar-section">
             <h6 style="display:flex;align-items:center;justify-content:space-between;">
-                <span>⏰ Issue Time</span>
+                <span style="display:flex;align-items:center;gap:6px;flex-wrap:wrap;">
+                    <span>⏰ Issue Time</span>
+                    {# Says where the pre-filled time came from, so a user can tell
+                       an attachment timestamp from one parsed out of the case text. #}
+                    <span id="it-time-source-tag"
+                          style="display:none;font-size:0.6rem;font-weight:600;color:#0071c5;
+                                 background:#eaf3ff;border:1px solid #cfe0fa;border-radius:9px;
+                                 padding:1px 6px;white-space:nowrap;"></span>
+                </span>
                 <button type="button" class="it-clear-top" onclick="clearAllIssueTimes()"
                         title="Clear the issue time (and any extra rows)">
                     🗑️<span class="it-clear-top-label">Clear</span>

@@ -42,6 +42,8 @@ WIFI_FEEDBACK_CONCLUSIONS = [
     ["WAKE_RESUME_DELAY", "Wake / resume delay"],
     ["BIOS_CONFIG_ISSUE", "BIOS DSM / UEFI misconfiguration"],
     ["ROAMING_DECISION", "Roaming decision / AP selection"],
+    ["SOFTAP_START_FAILURE", "SoftAP / hosted network start failure"],
+    ["P2P_CONNECT_FAILURE", "P2P / Wi-Fi Direct connection failure"],
 ]
 
 BT_UI = {

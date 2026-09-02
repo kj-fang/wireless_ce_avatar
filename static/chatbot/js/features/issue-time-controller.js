@@ -3,6 +3,23 @@
         /\b\d{4}[-/]\d{1,2}[-/]\d{1,2}[\sT]\d{1,2}:\d{2}:\d{2}\b/
     ];
 
+    // Shown as a small badge beside the "Issue Time" heading so the user can
+    // tell an attachment's own timestamp apart from one the organizer parsed
+    // out of the customer's description — they carry different confidence.
+    const ISSUE_TIME_SOURCE = {
+        ATTACHMENT:  'From selected attachment issue time',
+        DESCRIPTION: 'From customer-provided issue time (description)',
+    };
+
+    function _setIssueTimeSourceTag(label) {
+        const tag = document.getElementById('it-time-source-tag');
+        if (!tag) return;
+        tag.textContent = label || '';
+        tag.style.display = label ? 'inline-block' : 'none';
+    }
+    window.ISSUE_TIME_SOURCE = ISSUE_TIME_SOURCE;
+    window._setIssueTimeSourceTag = _setIssueTimeSourceTag;
+
     const IT_RANGES = {
         'it-month': [1, 12],
         'it-day':   [1, 31],
@@ -292,6 +309,9 @@
     IssueTimeController.prototype.clearAllIssueTimes = function () {
         clearAllExtraIssueTimes();
         clearIssueTime();
+        // The badge described where the CLEARED value came from; leaving it up
+        // would label whatever the user types next as coming from that source.
+        _setIssueTimeSourceTag('');
     };
 
     IssueTimeController.prototype.setIssueTimeNow = function () {
@@ -421,6 +441,9 @@
     };
 
     IssueTimeController.prototype.markIssueTimeUserOwned = function () {
+        // Manual edit / AI-apply: the value is the user's now, so the
+        // provenance badge no longer describes it.
+        _setIssueTimeSourceTag('');
         if (issueTimeAwaitingConfirm) {
             issueTimeAwaitingConfirm = false;
             setIssueTimeConfirmUI(false);

@@ -1,10 +1,6 @@
     let logLoaded = false;
     let skillsLoaded = false;
     let autoAnalyzeTriggered = false;
-    // Agentic mode is no longer user-selectable: the sidebar "AI Mode" toggle
-    // was removed, so every agent always runs with skills/tools available.
-    // Still sent as `use_tools` on /chat, which the backends expect.
-    const agenticMode = true;
 
     const CHATBOT_API = (window.CHATBOT && window.CHATBOT.api) || '';
 

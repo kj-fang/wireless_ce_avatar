@@ -466,21 +466,11 @@ def chat():
     if not user_message:
         return jsonify({"success": False, "error": "message is required"}), 400
 
-    mode = str(data.get("mode", "tools")).strip().lower()
-    if mode not in ("simple", "tools"):
-        mode = "tools"
-
     try:
         temperature = float(data.get("temperature", 0.2))
     except Exception:
         temperature = 0.2
     temperature = max(0.0, min(1.0, temperature))
-
-    try:
-        max_tokens = int(data.get("max_tokens", 4000))
-    except Exception:
-        max_tokens = 4000
-    max_tokens = max(256, min(8000, max_tokens))
 
     try:
         max_steps = int(data.get("max_steps", 6))
@@ -544,81 +534,60 @@ def chat():
                 )
             except Exception:
                 pass
+        import queue as _queue
+        step_queue = _queue.Queue()
 
-        # Use the mode flag sent by the frontend toggle.
-        use_tools = bool(data.get("use_tools", False))
+        def step_cb(step):
+            step_queue.put(("step", step))
 
-        if use_tools:
-            import queue as _queue
-            step_queue = _queue.Queue()
+        @copy_current_request_context
+        def run_chat_with_tools():
+            turn_status = "completed"
+            error_code = ""
+            try:
+                result = agent.chat(
+                    user_message,
+                    max_steps=max_steps,
+                    temperature=temperature,
+                    step_callback=step_cb,
+                )
+                step_queue.put(("done", result))
+            except Exception as exc:
+                turn_status = "failed"
+                error_code = type(exc).__name__
+                error_tb = traceback.format_exc()
+                print(f"❌ Chat-with-tools thread error:\n{error_tb}")
+                step_queue.put(("error", str(exc)))
+            finally:
+                # Book the spend even when the turn errored or was
+                # cancelled — those tokens were still billed.
+                _record_turn_cost(turn_status, error_code)
 
-            def step_cb(step):
-                step_queue.put(("step", step))
+        t = threading.Thread(target=run_chat_with_tools, daemon=True)
+        t.start()
 
-            @copy_current_request_context
-            def run_chat_with_tools():
-                turn_status = "completed"
-                error_code = ""
+        def event_stream():
+            while True:
                 try:
-                    result = agent.chat(
-                        user_message,
-                        use_tools=True,
-                        max_steps=max_steps,
-                        temperature=temperature,
-                        max_tokens=max_tokens,
-                        step_callback=step_cb,
-                    )
-                    step_queue.put(("done", result))
-                except Exception as exc:
-                    turn_status = "failed"
-                    error_code = type(exc).__name__
-                    error_tb = traceback.format_exc()
-                    print(f"❌ Chat-with-tools thread error:\n{error_tb}")
-                    step_queue.put(("error", str(exc)))
-                finally:
-                    # Book the spend even when the turn errored or was
-                    # cancelled — those tokens were still billed.
-                    _record_turn_cost(turn_status, error_code)
+                    msg_type, payload = step_queue.get(timeout=120)
+                except _queue.Empty:
+                    yield f"data: {json.dumps({'type': 'error', 'content': 'Chat timed out.'})}\n\n"
+                    break
+                if msg_type == "step":
+                    yield f"data: {json.dumps({'type': 'step', 'step': payload}, ensure_ascii=False)}\n\n"
+                elif msg_type == "done":
+                    yield f"data: {json.dumps({'type': 'done', 'result': payload}, ensure_ascii=False)}\n\n"
+                    break
+                elif msg_type == "error":
+                    yield f"data: {json.dumps({'type': 'error', 'content': payload})}\n\n"
+                    break
 
-            t = threading.Thread(target=run_chat_with_tools, daemon=True)
-            t.start()
+        return Response(
+            event_stream(),
+            mimetype="text/event-stream",
+            headers={"Cache-Control": "no-cache", "X-Accel-Buffering": "no"},
+        )
 
-            def event_stream():
-                while True:
-                    try:
-                        msg_type, payload = step_queue.get(timeout=120)
-                    except _queue.Empty:
-                        yield f"data: {json.dumps({'type': 'error', 'content': 'Chat timed out.'})}\n\n"
-                        break
-                    if msg_type == "step":
-                        yield f"data: {json.dumps({'type': 'step', 'step': payload}, ensure_ascii=False)}\n\n"
-                    elif msg_type == "done":
-                        yield f"data: {json.dumps({'type': 'done', 'result': payload}, ensure_ascii=False)}\n\n"
-                        break
-                    elif msg_type == "error":
-                        yield f"data: {json.dumps({'type': 'error', 'content': payload})}\n\n"
-                        break
-
-            return Response(
-                event_stream(),
-                mimetype="text/event-stream",
-                headers={"Cache-Control": "no-cache", "X-Accel-Buffering": "no"},
-            )
-        else:
-            # No prior analysis — simple direct chat, wrapped in SSE
-            result = agent.chat(
-                user_message,
-                use_tools=False,
-                temperature=temperature,
-                max_tokens=max_tokens,
-            )
-            # Cost accounting — see the tools branch above.
-            _record_turn_cost()
-
-            def generate():
-                yield f"data: {json.dumps({'type': 'done', 'result': result}, ensure_ascii=False)}\n\n"
-
-            return Response(generate(), mimetype="text/event-stream")
     except Exception as e:
         error_traceback = traceback.format_exc()
         print(f"❌ Chatbot error:\n{error_traceback}")

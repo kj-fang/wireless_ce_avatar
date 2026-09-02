@@ -33,7 +33,7 @@
                 method: 'POST',
                 headers: {'Content-Type': 'application/json'},
                 signal: __chatCtl.signal,
-                body: JSON.stringify({message: text, use_tools: agenticMode})
+                body: JSON.stringify({message: text})
             });
 
             if (!res.ok) throw new Error(`Server error ${res.status}`);

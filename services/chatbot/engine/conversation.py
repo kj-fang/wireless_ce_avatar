@@ -154,46 +154,33 @@ class ConversationMixin:
             print(f"[chat] restored context repair failed: {e}")
         return len(self.conversation_history)
 
-    def chat(self, user_message: str, use_tools: bool = False, max_steps: int = 6,
-             temperature: float = 0.2, max_tokens: int = 4000, step_callback=None) -> dict:
+    def chat(self, user_message: str, max_steps: int = 6,
+             temperature: float = 0.2, step_callback=None) -> dict:
         """
-        Process user message with flexible LLM call - simple or agentic mode.
-        
-        Two modes available:
-          
-          MODE 1: Simple Conversation (use_tools=False, DEFAULT)
-            - Direct LLM call, no tools
-            - Perfect for free-form Q&A chatbot
-            - Faster, fewer tokens
-          
-          MODE 2: Agentic Reasoning (use_tools=True)
-            - LLM can call diagnostic tools
-            - Autonomous skill selection and investigation
-            - For complex root-cause analysis
-        
+        Process a user message as an agentic reasoning turn.
+
+        The agent may call diagnostic tools, select skills on its own and
+        iterate for up to `max_steps` before answering.
+
+        There used to be a second, tool-free mode selected by a `use_tools`
+        flag, behind a sidebar "AI Mode" toggle. That toggle was removed from
+        the UI, after which every caller passed use_tools=True and the simple
+        path became unreachable; both the flag and the path are gone now.
+
         Args:
             user_message: User's question or statement
-            use_tools: Enable agentic tool mode (default False for simple chat)
-            max_steps: Max reasoning iterations when use_tools=True (default 6)
+            max_steps: Max reasoning iterations (default 6)
             temperature: Sampling temperature for response generation
-            max_tokens: Maximum tokens for direct/simple response generation
-            
+            step_callback: Called once per reasoning step, for live progress
+
         Returns:
             dict: {
-                "type": "text" | "report" | "error",
-                "data": str or dict depending on mode
+                "type": "text" | "report" | "partial_report" | "error",
+                "data": str or dict depending on the outcome
             }
-            
-        Examples:
-            # Simple chatbot (default, no tools)
-            >>> result = agent.chat("What errors are in the log?")
-            >>> print(result["data"])  # Direct answer
-            
-            # With tools for diagnosis
-            >>> result = agent.chat(
-            ...     "Why does device disconnect?",
-            ...     use_tools=True
-            ... )
+
+        Example:
+            >>> result = agent.chat("Why does the device disconnect?")
             >>> # Agent may call fetch_filtered_logs, query_log_detail, etc.
         """
         try:
@@ -201,12 +188,6 @@ class ConversationMixin:
         except Exception:
             temperature = 0.2
         temperature = max(0.0, min(1.0, temperature))
-
-        try:
-            max_tokens = int(max_tokens)
-        except Exception:
-            max_tokens = 4000
-        max_tokens = max(256, min(8000, max_tokens))
 
         # Fresh turn — discard any stop signal left over from a previous turn
         # so the user's new message is never pre-cancelled.
@@ -216,86 +197,7 @@ class ConversationMixin:
         # Fresh turn — token counters describe THIS turn only.
         self._reset_turn_usage()
 
-        # Delegate to appropriate implementation
-        if use_tools:
-            return self._chat_with_tools(user_message, max_steps, temperature=temperature, step_callback=step_callback)
-        else:
-            return self._chat_simple(user_message, temperature=temperature, max_tokens=max_tokens)
-
-    def _chat_simple(self, user_message: str, temperature: float = 0.2,
-                     max_tokens: int = 4000) -> dict:
-        """
-        Simple chat mode: Direct conversation without tools.
-        
-        Perfect for chatbot UI where users expect immediate, conversational responses.
-        """
-        if not self.conversation_history:
-            # Initialize system message with context on first turn
-            log_snippet = ""
-            if self.current_log_path:
-                try:
-                    from utils.helpers import read_log_file
-                    lines = read_log_file(self.current_log_path)
-                    log_snippet = "\n".join(str(l) for l in lines[:500])
-                except Exception:
-                    log_snippet = "(unable to read log file)"
-
-            # Build comprehensive system message
-            system_msg = (
-                "You are a Wi-Fi Troubleshooting Assistant.\n"
-                "Answer user questions about the log file concisely and accurately.\n"
-            )
-            
-            # Add case context if available
-            if self.issue_context:
-                ctx_parts = []
-                if self.issue_context.get("case_nbr"):
-                    ctx_parts.append(f"Case #: {self.issue_context['case_nbr']}")
-                if self.issue_context.get("issue_type"):
-                    ctx_parts.append(f"Issue Type: {self.issue_context['issue_type']}")
-                if self.issue_context.get("subject"):
-                    ctx_parts.append(f"Subject: {self.issue_context['subject']}")
-                if self.issue_context.get("description"):
-                    ctx_parts.append(f"Description: {self.issue_context['description']}")
-                
-                if ctx_parts:
-                    system_msg += "\n=== CASE CONTEXT ===\n" + "\n".join(ctx_parts) + "\n\n"
-            
-            # Add log file reference
-            if self.current_log_path:
-                system_msg += f"Log file: {self.current_log_path}\n"
-            
-            # Add log snippet for reference
-            if log_snippet:
-                system_msg += f"\n=== Log Excerpt (first 500 lines) ===\n{log_snippet}\n"
-
-            self.conversation_history.append({
-                "role": "system",
-                "content": system_msg,
-            })
-
-        # Add user message to history
-        self.conversation_history.append({"role": "user", "content": user_message})
-
-        try:
-            # Simple LLM call (no tools)
-            response = self.client.chat.completions.create(
-                model=self.model,
-                messages=self.conversation_history,
-                temperature=temperature,
-                max_tokens=max_tokens,
-            )
-            self._accumulate_turn_usage(getattr(response, "usage", None))
-            content = response.choices[0].message.content or ""
-
-            # Add assistant response to history
-            self.conversation_history.append({"role": "assistant", "content": content})
-            
-            return {"type": "text", "data": content}
-        except Exception as e:
-            error_msg = f"Chat error: {str(e)}"
-            print(f"[ERROR] {error_msg}")
-            return {"type": "text", "data": error_msg}
+        return self._chat_with_tools(user_message, max_steps, temperature=temperature, step_callback=step_callback)
 
     @staticmethod
     def _msg_role(m):

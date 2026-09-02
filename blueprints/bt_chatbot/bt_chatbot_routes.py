@@ -464,21 +464,11 @@ def chat():
     if not user_message:
         return jsonify({"success": False, "error": "message is required"}), 400
 
-    mode = str(data.get("mode", "tools")).strip().lower()
-    if mode not in ("simple", "tools"):
-        mode = "tools"
-
     try:
         temperature = float(data.get("temperature", 0.2))
     except Exception:
         temperature = 0.2
     temperature = max(0.0, min(1.0, temperature))
-
-    try:
-        max_tokens = int(data.get("max_tokens", 4000))
-    except Exception:
-        max_tokens = 4000
-    max_tokens = max(256, min(8000, max_tokens))
 
     try:
         max_steps = int(data.get("max_steps", 6))
@@ -598,195 +588,131 @@ def chat():
             )
         except Exception:
             pass
+        collected_steps: list = []
 
-        # Use the mode flag sent by the frontend toggle.
-        use_tools = bool(data.get("use_tools", False))
+        # Register a background job that OWNS this analysis, then detach the
+        # agent from the session slot. The run keeps going — and stays
+        # uncorrupted — even if the user switches to another conversation
+        # mid-analysis (any later session use just creates a fresh agent).
+        # The job buffers every step so a reconnecting client can replay +
+        # follow it via /history/stream.
+        job = chat_jobs.start_job(
+            conversation_id=conversation_id,
+            turn_id=turn_id,
+            title=user_message,
+            agent=agent,
+            domain="bt",
+        )
+        if session_id:
+            _chatbot_instances.pop(session_id, None)
 
-        if use_tools:
-            collected_steps: list = []
-
-            # Register a background job that OWNS this analysis, then detach the
-            # agent from the session slot. The run keeps going — and stays
-            # uncorrupted — even if the user switches to another conversation
-            # mid-analysis (any later session use just creates a fresh agent).
-            # The job buffers every step so a reconnecting client can replay +
-            # follow it via /history/stream.
-            job = chat_jobs.start_job(
-                conversation_id=conversation_id,
-                turn_id=turn_id,
-                title=user_message,
-                agent=agent,
-                domain="bt",
-            )
-            if session_id:
-                _chatbot_instances.pop(session_id, None)
-
-            def step_cb(step):
-                try:
-                    if isinstance(step, dict):
-                        # Stamp how far into the turn this step arrived. The
-                        # live card times itself from the browser clock; a
-                        # replay months later cannot, so the offset travels
-                        # with the step into history. The copy keeps the
-                        # object published to live subscribers untouched.
-                        elapsed_ms = int(
-                            (datetime.now() - turn_started_at).total_seconds() * 1000)
-                        collected_steps.append({**step, "ts_ms": elapsed_ms})
-                except Exception:
-                    pass
-                chat_jobs.publish_step(job, step)
-
-            @copy_current_request_context
-            def run_chat_with_tools():
-                try:
-                    result = agent.chat(
-                        user_message,
-                        use_tools=True,
-                        max_steps=max_steps,
-                        temperature=temperature,
-                        max_tokens=max_tokens,
-                        step_callback=step_cb,
-                    )
-                    # Cost accounting: token counts only exist once the LLM has
-                    # finished, so this is a second Gather write on top of the
-                    # record_send() that opened this turn.
-                    try:
-                        gather_service.record_usage(
-                            conversation_id=conversation_id,
-                            workflow_id=session.get("gather_workflow_id", ""),
-                            model=getattr(agent, "model", "") or "",
-                            usage=getattr(agent, "last_turn_usage", None),
-                            issue=_issue_ctx_for_snapshot,
-                            domain="bt",
-                            turn_id=turn_id,
-                            latency_ms=int((datetime.now() - turn_started_at).total_seconds() * 1000),
-                        )
-                    except Exception:
-                        pass
-                    # Persist BEFORE signalling done so any subscriber that
-                    # refreshes its history list on 'done' already sees this
-                    # turn. feedback is vote-gated; history always persists.
-                    feedback_service.record_turn(
-                        session_id=session_id,
-                        conversation_id=conversation_id,
-                        turn_id=turn_id,
-                        user_message=user_message,
-                        agent_result=result,
-                        steps=collected_steps,
-                        mode="tools",
-                        duration_ms=int((datetime.now() - turn_started_at).total_seconds() * 1000),
-                        issue=_issue_ctx_for_snapshot,
-                        log_path=getattr(agent, "current_log_path", "") or "",
-                        parent_message_id=parent_message_id,
-                        domain="bt",
-                    )
-                    history_service.record_turn(
-                        conversation_id=conversation_id,
-                        session_id=session_id,
-                        turn_id=turn_id,
-                        user_message=user_message,
-                        agent_result=result,
-                        mode="tools",
-                        issue=_issue_ctx_for_snapshot,
-                        log_path=getattr(agent, "current_log_path", "") or "",
-                        issue_time=format_issue_time(agent.issue_time),
-                        domain="bt",
-                        # Keep the reasoning trace too, so reopening this
-                        # conversation shows how the answer was reached and
-                        # not only what it was.
-                        steps=collected_steps,
-                        # And the model-facing conversation, so a follow-up
-                        # asked tomorrow is answered by something that still
-                        # has the evidence, not just the conclusions.
-                        agent_context=_export_agent_context(agent),
-                    )
-                    chat_jobs.finish_job(job, result)
-                except Exception as exc:
-                    error_tb = traceback.format_exc()
-                    print(f"❌ Chat-with-tools thread error:\n{error_tb}")
-                    try:
-                        gather_service.record_turn_status(
-                            conversation_id=conversation_id,
-                            turn_id=turn_id,
-                            status="failed",
-                            workflow_id=session.get("gather_workflow_id", ""),
-                            issue=_issue_ctx_for_snapshot,
-                            domain="bt",
-                            latency_ms=int((datetime.now() - turn_started_at).total_seconds() * 1000),
-                            error_code=type(exc).__name__,
-                        )
-                    except Exception:
-                        pass
-                    chat_jobs.fail_job(job, str(exc))
-
-            t = threading.Thread(target=run_chat_with_tools, daemon=True)
-            t.start()
-
-            # The original request streams the job exactly like a reconnect
-            # would (replay buffered steps, then follow to done/error).
-            return Response(
-                _job_sse(job),
-                mimetype="text/event-stream",
-                headers={"Cache-Control": "no-cache", "X-Accel-Buffering": "no"},
-            )
-        else:
-            # No prior analysis — simple direct chat, wrapped in SSE
-            result = agent.chat(
-                user_message,
-                use_tools=False,
-                temperature=temperature,
-                max_tokens=max_tokens,
-            )
-            # Cost accounting — see the tools branch above.
+        def step_cb(step):
             try:
-                gather_service.record_usage(
-                    conversation_id=conversation_id,
-                    workflow_id=session.get("gather_workflow_id", ""),
-                    model=getattr(agent, "model", "") or "",
-                    usage=getattr(agent, "last_turn_usage", None),
-                    issue=_issue_ctx_for_snapshot,
-                    domain="bt",
-                    turn_id=turn_id,
-                    latency_ms=int((datetime.now() - turn_started_at).total_seconds() * 1000),
-                )
+                if isinstance(step, dict):
+                    # Stamp how far into the turn this step arrived. The
+                    # live card times itself from the browser clock; a
+                    # replay months later cannot, so the offset travels
+                    # with the step into history. The copy keeps the
+                    # object published to live subscribers untouched.
+                    elapsed_ms = int(
+                        (datetime.now() - turn_started_at).total_seconds() * 1000)
+                    collected_steps.append({**step, "ts_ms": elapsed_ms})
             except Exception:
                 pass
+            chat_jobs.publish_step(job, step)
 
-            # Sidecar: persist the turn (no step trace in simple mode).
-            feedback_service.record_turn(
-                session_id=session_id,
-                conversation_id=conversation_id,
-                turn_id=turn_id,
-                user_message=user_message,
-                agent_result=result,
-                steps=[],
-                mode="simple",
-                duration_ms=int((datetime.now() - turn_started_at).total_seconds() * 1000),
-                issue=_issue_ctx_for_snapshot,
-                log_path=getattr(agent, "current_log_path", "") or "",
-                parent_message_id=parent_message_id,
-                domain="bt",
-            )
-            # Local browsable history (always persists, unlike feedback which
-            # is vote-gated). Stored under the "bt" domain — a different
-            # folder from the WiFi bot's history (see history_service).
-            history_service.record_turn(
-                conversation_id=conversation_id,
-                session_id=session_id,
-                turn_id=turn_id,
-                user_message=user_message,
-                agent_result=result,
-                mode="simple",
-                issue=_issue_ctx_for_snapshot,
-                log_path=getattr(agent, "current_log_path", "") or "",
-                issue_time=format_issue_time(agent.issue_time),
-                domain="bt",
-            )
+        @copy_current_request_context
+        def run_chat_with_tools():
+            try:
+                result = agent.chat(
+                    user_message,
+                    max_steps=max_steps,
+                    temperature=temperature,
+                    step_callback=step_cb,
+                )
+                # Cost accounting: token counts only exist once the LLM has
+                # finished, so this is a second Gather write on top of the
+                # record_send() that opened this turn.
+                try:
+                    gather_service.record_usage(
+                        conversation_id=conversation_id,
+                        workflow_id=session.get("gather_workflow_id", ""),
+                        model=getattr(agent, "model", "") or "",
+                        usage=getattr(agent, "last_turn_usage", None),
+                        issue=_issue_ctx_for_snapshot,
+                        domain="bt",
+                        turn_id=turn_id,
+                        latency_ms=int((datetime.now() - turn_started_at).total_seconds() * 1000),
+                    )
+                except Exception:
+                    pass
+                # Persist BEFORE signalling done so any subscriber that
+                # refreshes its history list on 'done' already sees this
+                # turn. feedback is vote-gated; history always persists.
+                feedback_service.record_turn(
+                    session_id=session_id,
+                    conversation_id=conversation_id,
+                    turn_id=turn_id,
+                    user_message=user_message,
+                    agent_result=result,
+                    steps=collected_steps,
+                    mode="tools",
+                    duration_ms=int((datetime.now() - turn_started_at).total_seconds() * 1000),
+                    issue=_issue_ctx_for_snapshot,
+                    log_path=getattr(agent, "current_log_path", "") or "",
+                    parent_message_id=parent_message_id,
+                    domain="bt",
+                )
+                history_service.record_turn(
+                    conversation_id=conversation_id,
+                    session_id=session_id,
+                    turn_id=turn_id,
+                    user_message=user_message,
+                    agent_result=result,
+                    mode="tools",
+                    issue=_issue_ctx_for_snapshot,
+                    log_path=getattr(agent, "current_log_path", "") or "",
+                    issue_time=format_issue_time(agent.issue_time),
+                    domain="bt",
+                    # Keep the reasoning trace too, so reopening this
+                    # conversation shows how the answer was reached and
+                    # not only what it was.
+                    steps=collected_steps,
+                    # And the model-facing conversation, so a follow-up
+                    # asked tomorrow is answered by something that still
+                    # has the evidence, not just the conclusions.
+                    agent_context=_export_agent_context(agent),
+                )
+                chat_jobs.finish_job(job, result)
+            except Exception as exc:
+                error_tb = traceback.format_exc()
+                print(f"❌ Chat-with-tools thread error:\n{error_tb}")
+                try:
+                    gather_service.record_turn_status(
+                        conversation_id=conversation_id,
+                        turn_id=turn_id,
+                        status="failed",
+                        workflow_id=session.get("gather_workflow_id", ""),
+                        issue=_issue_ctx_for_snapshot,
+                        domain="bt",
+                        latency_ms=int((datetime.now() - turn_started_at).total_seconds() * 1000),
+                        error_code=type(exc).__name__,
+                    )
+                except Exception:
+                    pass
+                chat_jobs.fail_job(job, str(exc))
 
-            def generate():
-                yield f"data: {json.dumps({'type': 'done', 'turn_id': turn_id, 'conversation_id': conversation_id, 'result': result}, ensure_ascii=False)}\n\n"
+        t = threading.Thread(target=run_chat_with_tools, daemon=True)
+        t.start()
 
-            return Response(generate(), mimetype="text/event-stream")
+        # The original request streams the job exactly like a reconnect
+        # would (replay buffered steps, then follow to done/error).
+        return Response(
+            _job_sse(job),
+            mimetype="text/event-stream",
+            headers={"Cache-Control": "no-cache", "X-Accel-Buffering": "no"},
+        )
+
     except Exception as e:
         error_traceback = traceback.format_exc()
         print(f"❌ Chatbot error:\n{error_traceback}")

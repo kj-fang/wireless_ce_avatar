@@ -193,7 +193,6 @@ def replay_case(
             )
             res = agent.chat(
                 case.user_message,
-                use_tools=True,
                 max_steps=max_steps,
                 step_callback=_capture,
             )

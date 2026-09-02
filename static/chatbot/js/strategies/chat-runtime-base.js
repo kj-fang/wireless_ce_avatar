@@ -323,7 +323,6 @@
                 signal: __chatCtl.signal,
                 body: JSON.stringify({
                     message: text,
-                    use_tools: agenticMode,
                     // Sidebar Issue Time is the SINGLE source of truth.
                     // Always send the field explicitly so the backend can
                     // override / clear any pre-primed attachment_time.

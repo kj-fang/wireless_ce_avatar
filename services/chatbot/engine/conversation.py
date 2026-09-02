@@ -154,6 +154,13 @@ class ConversationMixin:
             print(f"[chat] restored context repair failed: {e}")
         return len(self.conversation_history)
 
+    # The one conversation entry point, inherited by all three agents.
+    #
+    # Not to be confused with the Flask view also called chat() in each
+    # blueprint's *_routes.py. Those are three separate HTTP adapters —
+    # they parse the request, apply per-profile issue-time policy and run
+    # their own accounting — and each of them ends up calling this single
+    # method. The route layer is not shared; this is.
     def chat(self, user_message: str, max_steps: int = 6,
              temperature: float = 0.2, step_callback=None) -> dict:
         """

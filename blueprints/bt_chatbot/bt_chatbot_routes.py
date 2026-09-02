@@ -457,6 +457,15 @@ def suggest_issue_times():
 
 # ------------------------------------------------------------------
 # API: chat
+#
+# The HTTP adapter, deliberately NOT shared: request parsing, issue-time
+# policy, background-job bookkeeping and Gather/feedback accounting all
+# differ per profile, so Wi-Fi and NW keep their own copies of this.
+#
+# What IS shared is what the worker below eventually calls — agent.chat(),
+# i.e. ConversationMixin.chat in services/chatbot/engine/conversation.py,
+# one implementation inherited by all three agents. Same name, two layers:
+# seeing agent.chat() in here does not mean this function is shared.
 # ------------------------------------------------------------------
 def chat():
     data = request.get_json(silent=True) or {}

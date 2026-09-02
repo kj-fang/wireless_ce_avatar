@@ -459,6 +459,18 @@ def analyze_sleepstudy():
 
 # ------------------------------------------------------------------
 # API: chat
+#
+# The HTTP adapter, deliberately NOT shared: request parsing, issue-time
+# policy, background-job bookkeeping and Gather accounting all differ per
+# profile, so Wi-Fi and BT keep their own copies of this. NW's is the
+# shortest of the three — it publishes steps through a request-local
+# queue.Queue rather than registering with chat_jobs, and has no history
+# or feedback sidecar.
+#
+# What IS shared is what the worker below eventually calls — agent.chat(),
+# i.e. ConversationMixin.chat in services/chatbot/engine/conversation.py,
+# one implementation inherited by all three agents. Same name, two layers:
+# seeing agent.chat() in here does not mean this function is shared.
 # ------------------------------------------------------------------
 def chat():
     data = request.get_json(silent=True) or {}

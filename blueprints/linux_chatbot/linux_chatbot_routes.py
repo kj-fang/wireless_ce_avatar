@@ -295,7 +295,7 @@ def index():
             _first_ts, _last_ts = read_log_time_range(suggested_log)
             _issue_context_organized(ctx.get("description", "") or "", _first_ts, _last_ts)
     except Exception as _warm_err:
-        print(f"\u26a0\ufe0f Linux chatbot index pre-warm skipped: {_warm_err}")
+        print(f"⚠️ Linux chatbot index pre-warm skipped: {_warm_err}")
 
     return render_template("linux_chatbot.html", suggested_log=suggested_log, issue_description=issue_desc)
 

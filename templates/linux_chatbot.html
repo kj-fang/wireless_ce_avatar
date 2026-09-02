@@ -22,9 +22,9 @@
             overflow: hidden;
         }
 
-        /* â”€â”€ Top bar â”€â”€ */
+        /* ── Top bar ── */
         .top-bar {
-            background: linear-gradient(135deg, #166534 0%, #16a34a 100%);
+            background: linear-gradient(135deg, #2563eb 0%, #3b82f6 100%);
             color: white;
             padding: 14px 24px;
             display: flex;
@@ -44,7 +44,7 @@
             font-size: 0.75rem;
         }
 
-        /* â”€â”€ Layout â”€â”€ */
+        /* ── Layout ── */
         .main-layout {
             display: flex;
             flex: 1;
@@ -52,7 +52,7 @@
             gap: 0;
         }
 
-        /* â”€â”€ Left sidebar â”€â”€ */
+        /* ── Left sidebar ── */
         .sidebar {
             width: 320px;
             min-width: 280px;
@@ -131,7 +131,7 @@
         }
         .btn-set-log:hover { background: #1e40af; }
 
-        /* â”€â”€ Issue Time picker â”€â”€ */
+        /* ── Issue Time picker ── */
         .it-row {
             display: flex;
             align-items: flex-end;
@@ -189,7 +189,7 @@
             font-size: 0.95rem;
             user-select: none;
         }
-        /* â”€â”€ Issue-time capture window control â”€â”€â”€â”€â”€â”€â”€â”€â”€â”€â”€â”€â”€â”€â”€â”€â”€â”€â”€â”€â”€â”€â”€â”€ */
+        /* ── Issue-time capture window control ──────────────────────── */
         .itw-row { margin-top: 12px; }
         .itw-label {
             display: block;
@@ -267,7 +267,7 @@
             border-color: #888;
         }
 
-        /* â”€â”€ Confirm modal â”€â”€ */
+        /* ── Confirm modal ── */
         .cm-overlay {
             position: fixed;
             inset: 0;
@@ -425,7 +425,7 @@
         }
         .btn-reset:hover { background: #e9eaeb; }
 
-        /* â”€â”€ Chat area â”€â”€ */
+        /* ── Chat area ── */
         .chat-area {
             flex: 1;
             display: flex;
@@ -542,7 +542,7 @@
             white-space: pre;
         }
         /* Answers that draw something â€” an ASCII timeline, a diagram, a wide
-           table â€” used to set the width of the whole message instead of
+           table — used to set the width of the whole message instead of
            scrolling inside their own block. Same flex rule as the step card:
            the section has to be allowed to be narrower than its content
            before the overflow-x above can do anything. */
@@ -663,7 +663,7 @@
         .agent-process-body.hidden { display: none; }
         .report-details.hidden { display: none; }
 
-        /* â”€â”€ Step separator â”€â”€ */
+        /* ── Step separator ── */
         .agent-step-divider {
             display: flex;
             align-items: center;
@@ -713,7 +713,7 @@
             margin-left: 4px;
         }
 
-        /* â”€â”€ Individual step entry â”€â”€ */
+        /* ── Individual step entry ── */
         .agent-step {
             padding: 5px 14px 5px 32px;
             display: flex;
@@ -723,7 +723,7 @@
         }
         .agent-step:last-child { border-bottom: none; }
 
-        /* â”€â”€ Thinking block â”€â”€ */
+        /* ── Thinking block ── */
         .agent-step.step-thinking {
             background: #fffbeb;
             border-left-color: #f59e0b;
@@ -737,7 +737,7 @@
             margin-top: 1px;
         }
 
-        /* â”€â”€ Tool / Skill call â”€â”€ */
+        /* ── Tool / Skill call ── */
         .agent-step.step-tool {
             background: #eef2ff;
             border-left-color: #3b82f6;
@@ -751,7 +751,7 @@
             margin-top: 1px;
         }
 
-        /* â”€â”€ Skill invocation â”€â”€ */
+        /* ── Skill invocation ── */
         .agent-step.step-skill {
             background: #f0fdf4;
             border-left-color: #22c55e;
@@ -765,7 +765,7 @@
             margin-top: 1px;
         }
 
-        /* â”€â”€ Conclusion / done â”€â”€ */
+        /* ── Conclusion / done ── */
         .agent-step.step-done {
             background: #f0fdf4;
             border-left-color: #16a34a;
@@ -779,7 +779,7 @@
             margin-top: 1px;
         }
 
-        /* â”€â”€ Error â”€â”€ */
+        /* ── Error ── */
         .agent-step.step-error {
             background: #fff1f2;
             border-left-color: #ef4444;
@@ -793,7 +793,7 @@
             margin-top: 1px;
         }
 
-        /* â”€â”€ Token usage â”€â”€ */
+        /* ── Token usage ── */
         .agent-step.step-token {
             background: #f8fafc;
             border-left-color: #94a3b8;
@@ -806,7 +806,7 @@
             margin-top: 1px;
         }
 
-        /* â”€â”€ Default / info â”€â”€ */
+        /* ── Default / info ── */
         .agent-step.step-info {
             background: transparent;
             border-left-color: #d1d5db;
@@ -846,7 +846,7 @@
         }
         .agent-step-content strong { color: #1e40af; }
 
-        /* â”€â”€ Feedback widget (thumbs up / down on each agent reply) â”€â”€ */
+        /* ── Feedback widget (thumbs up / down on each agent reply) ── */
         .feedback-widget {
             display: flex;
             gap: 6px;
@@ -892,7 +892,7 @@
         .feedback-more-link:hover { text-decoration: underline; }
         .feedback-more-link.submitted { color: #1a7f37; cursor: default; text-decoration: none; }
 
-        /* â”€â”€ Sidebar: skill source badge + cloud/user toggle â”€â”€â”€â”€â”€â”€â”€â”€â”€â”€â”€ */
+        /* ── Sidebar: skill source badge + cloud/user toggle ─────────── */
         /* No outer panel frame â€” the badge already conveys state, and a
            frame here visually competes with the bordered card the whole
            "Available Skills" section sits in. */
@@ -960,7 +960,7 @@
         }
         .skill-source-btn:active { background: #d0d6dd; }
 
-        /* â”€â”€ Skill editor (reuses .fbd-modal shell) â”€â”€â”€â”€â”€â”€â”€â”€â”€â”€â”€â”€â”€â”€â”€â”€â”€â”€â”€â”€â”€ */
+        /* ── Skill editor (reuses .fbd-modal shell) ───────────────────── */
         .skill-edit-row {
             border: 1px solid #e5e7eb;
             border-radius: 8px;
@@ -973,7 +973,7 @@
             margin-bottom: 8px;
         }
         /* Collapsed mode: only the skill-key input + delete + toggle are
-           visible. Click the â–¾ triangle to expand the full editor. */
+           visible. Click the ▾ triangle to expand the full editor. */
         .skill-edit-row.collapsed { padding-bottom: 0; }
         .skill-edit-row.collapsed .row-head { margin-bottom: 0; }
         .skill-edit-row.collapsed .row-body { display: none; }
@@ -1077,7 +1077,7 @@
         }
         .skill-edit-row input.invalid { border-color: #cf222e; background: #fdecec; }
 
-        /* Description strength meter â€” password-style grade.
+        /* Description strength meter — password-style grade.
            Non-blocking: it never prevents save, it just hints at what
            would make the description more discoverable for the agent. */
         .desc-strength {
@@ -1184,7 +1184,7 @@
         .skill-edit-row .preamble-show-btn.invalid {
             color: #cf222e; border-color: #cf222e; background: #fdecec;
         }
-        /* "Ã— Hide overview" sits BELOW the textarea, outside its border â€”
+        /* "× Hide overview" sits BELOW the textarea, outside its border —
            a plain text link, never overlaps the typing area. */
         .skill-edit-row .preamble-hide-btn {
             margin-top: 3px;
@@ -1327,7 +1327,7 @@
             background: white;
         }
 
-        /* â”€â”€ Feedback detail modal â”€â”€â”€â”€â”€â”€â”€â”€â”€â”€â”€â”€â”€â”€â”€â”€â”€â”€â”€â”€â”€â”€â”€â”€â”€â”€â”€â”€â”€â”€â”€â”€â”€â”€â”€â”€â”€ */
+        /* ── Feedback detail modal ───────────────────────────────────── */
         .fbd-modal { position: fixed; inset: 0; z-index: 9000; display: none; }
         .fbd-modal.open { display: block; }
         .fbd-backdrop {
@@ -1346,7 +1346,7 @@
             overflow: hidden;
         }
 
-        /* â”€â”€ Feedback panel = RIGHT sidebar, formatted identically to
+        /* ── Feedback panel = RIGHT sidebar, formatted identically to
               the existing LEFT sidebar: flush against the bottom of
               the top blue bar, full height of the main-layout area,
               flat (no card-style shadow / rounded corners), thin
@@ -1355,7 +1355,7 @@
               hamburger button in the top-bar can re-show the left
               sidebar manually. Skill editor keeps its centered-modal
               look â€” these rules only apply via the .fbd-modal--drawer
-              modifier. â”€â”€â”€â”€â”€â”€â”€â”€â”€â”€â”€â”€â”€â”€â”€â”€â”€â”€â”€â”€â”€â”€â”€â”€â”€â”€â”€â”€â”€â”€â”€â”€â”€â”€â”€â”€â”€â”€â”€â”€â”€â”€â”€â”€â”€â”€ */
+              modifier. ────────────────────────────────────────────── */
         :root {
             --fbd-topbar-height: 58px;
             --fbd-sidebar-width: 320px;
@@ -1392,7 +1392,7 @@
         }
         .chat-area { transition: margin-left 0.22s ease, margin-right 0.22s ease; }
 
-        /* Left sidebar collapse â€” driven by `body.sidebar-collapsed`.
+        /* Left sidebar collapse — driven by `body.sidebar-collapsed`.
            Used both for the manual hamburger toggle AND auto-collapse
            when a feedback session opens. */
         .sidebar {
@@ -1408,7 +1408,7 @@
             opacity: 0;
         }
 
-        /* Top-bar hamburger button â€” manually shows / hides the left
+        /* Top-bar hamburger button — manually shows / hides the left
            sidebar. Always visible so the user can recover the sidebar
            after the feedback panel auto-collapsed it. */
         .sidebar-toggle {
@@ -1433,7 +1433,7 @@
         }
         .fbd-draft-hint.show { display: inline-block; }
 
-        /* â”€â”€ Top toast (used by the auto-reset on log switch) â”€â”€â”€â”€â”€â”€â”€â”€â”€â”€ */
+        /* ── Top toast (used by the auto-reset on log switch) ────────── */
         .toast-stack {
             position: fixed; top: 14px; left: 50%;
             transform: translateX(-50%);
@@ -1498,7 +1498,7 @@
         }
         .fbd-section-label:first-child { margin-top: 0; }
 
-        /* â”€â”€â”€ Two-page wizard â”€â”€â”€â”€â”€â”€â”€â”€â”€â”€â”€â”€â”€â”€â”€â”€â”€â”€â”€â”€â”€â”€â”€â”€â”€â”€â”€â”€â”€â”€â”€â”€â”€â”€
+        /* ─── Two-page wizard ──────────────────────────────────
            Page 1 routes by problem type and shows the matching menu(s);
            Page 2 always collects the correct answer. .hidden-row hides
            the inactive page / menu. */
@@ -1525,7 +1525,7 @@
         /* Workflow lane â€” "skills that weren't needed here" toggle list. */
         .fbd-skill-toggle-list { display: flex; flex-direction: column; gap: 4px; margin-top: 4px; }
 
-        /* Skill lane â€” one row per skill that ran. */
+        /* Skill lane — one row per skill that ran. */
         .fbd-skill-rows { display: flex; flex-direction: column; gap: 8px; }
         #fbd-step-rows { margin-top: 8px; }
         .fbd-skill-row {
@@ -1618,11 +1618,11 @@
             box-shadow: 0 0 0 2px rgba(37,99,235,0.12);
         }
         /* "Or describe the approach" input sits directly under the skill
-           dropdown in the Wrong-direction sub-block â€” small breathing
+           dropdown in the Wrong-direction sub-block — small breathing
            room so the two fields don't fuse visually. */
         .fbd-body input.fbd-approach-input { margin-top: 6px; }
 
-        /* "Specific problems" â€” one row per issue inside the
+        /*  "Specific problems" — one row per issue inside the
            Agent-workflow group. Compact two-column grid for the
            always-visible Where / Problem pickers, sub-rows reveal
            skill / step dropdowns conditionally. */
@@ -1644,7 +1644,7 @@
         .fbd-issue-row .fbd-note {
             margin-top: 4px;
         }
-        /* Options the areaâ†”note-type matrix says don't apply stay
+        /* Options the area↔note-type matrix says don't apply stay
            visible but greyed out, so the user can see the full taxonomy
            and understand which combinations are valid. */
         .fbd-issue-row select option:disabled {
@@ -1708,7 +1708,7 @@
         .fbd-btn:disabled { opacity: 0.6; cursor: not-allowed; }
         .hidden-row { display: none !important; }
 
-        /* â”€â”€ Multi-issue-time UI â”€â”€â”€â”€â”€â”€â”€â”€â”€â”€â”€â”€â”€â”€â”€â”€â”€â”€â”€â”€â”€â”€â”€â”€â”€â”€â”€â”€â”€â”€â”€â”€â”€â”€â”€â”€â”€â”€
+        /* ── Multi-issue-time UI ──────────────────────────────────────
            Extra issue-time rows in the sidebar AND rows inside the
            time-capture popup. Both reuse the exact .it-row / .it-field
            / .it-label / .it-input / .it-sep structure of the primary
@@ -1743,7 +1743,7 @@
             background: #fee2e2;
         }
 
-        /* â”€â”€ Compact one-row variant (time-capture popup) â”€â”€â”€â”€â”€â”€â”€â”€â”€â”€
+        /* ── Compact one-row variant (time-capture popup) ──────────
            Wider drawer width lets us pack MM/DD/YYYY HH:MM:SS.mmm
            on a single line. Placeholders carry the field meaning so
            we drop the labels for a slimmer look. */
@@ -1803,7 +1803,7 @@
         }
         .eit-add-btn:hover { background: #eef2ff; }
 
-        /* â”€â”€ Time-capture popup (uses .fbd-modal centered shell) â”€â”€â”€â”€ */
+        /* ── Time-capture popup (uses .fbd-modal centered shell) ──── */
         #time-capture-modal .fbd-card { width: min(580px, 94vw); }
         .tc-mode-row {
             display: flex;
@@ -1824,7 +1824,7 @@
             line-height: 1.4;
         }
 
-        /* â”€â”€ Per-incident report wrapper (multi-time analysis) â”€â”€â”€â”€â”€â”€ */
+        /* ── Per-incident report wrapper (multi-time analysis) ────── */
         .incident-tag {
             display: inline-block;
             background: #eef2ff;
@@ -1837,7 +1837,7 @@
             margin: 4px 0;
         }
 
-        /* â”€â”€ System Event Log button â”€â”€ */
+        /* ── System Event Log button ── */
         .btn-evt-log {
             width: 100%;
             background: #f0f4ff;
@@ -1858,7 +1858,7 @@
         .evt-arrow { transition: transform 0.2s; font-size: 0.7rem; }
         .evt-arrow.open { transform: rotate(90deg); }
 
-        /* â”€â”€ Inline Event Log table â”€â”€ */
+        /* ── Inline Event Log table ── */
         .evt-section { position: relative; }
         .evt-inline-toolbar {
             display: flex;
@@ -1923,7 +1923,7 @@
             padding: 4px 0;
         }
 
-        /* â”€â”€ Event hover card (fixed, appears to the right of sidebar) â”€â”€ */
+        /* ── Event hover card (fixed, appears to the right of sidebar) ── */
         .evt-hover-card {
             position: fixed;
             z-index: 10001;
@@ -2086,17 +2086,17 @@
 
 <!-- Top bar -->
 <div class="top-bar">
-    <!-- Hamburger â€” manually shows / hides the left sidebar. Stays
+    <!-- Hamburger — manually shows / hides the left sidebar. Stays
          visible at all times so the user can recover the sidebar
          after a feedback session auto-collapses it. -->
     <button type="button" class="sidebar-toggle"
             onclick="toggleSidebar()"
             title="Show / hide sidebar"
-            aria-label="Toggle sidebar">â˜°</button>
-    <span style="font-size:1.4rem;">ðŸ“¡</span>
+            aria-label="Toggle sidebar">☰</button>
+    <span style="font-size:1.4rem;">📡</span>
     <h1>Linux WiFi Chatbot</h1>
-    <span class="badge-model">Avatar Â· Multi-Skill Agent</span>
-    <a href="/linux_chatbot/back_to_avatar" class="ml-auto" style="color:rgba(255,255,255,0.75);font-size:0.8rem;text-decoration:none;">â† Back to Avatar</a>
+    <span class="badge-model">Avatar · Multi-Skill Agent</span>
+    <a href="/linux_chatbot/back_to_avatar" class="ml-auto" style="color:rgba(255,255,255,0.75);font-size:0.8rem;text-decoration:none;">← Back to Avatar</a>
 </div>
 
 <div class="main-layout">
@@ -2109,9 +2109,9 @@
              history without leaving the page. -->
         <div class="sidebar-switcher">
             <button type="button" id="tab-controls" class="sb-tab active"
-                    onclick="switchSidebarView('controls')">âš™ï¸ Controls</button>
+                    onclick="switchSidebarView('controls')">⚙️ Controls</button>
             <button type="button" id="tab-history" class="sb-tab"
-                    onclick="switchSidebarView('history')">ðŸ•˜ History</button>
+                    onclick="switchSidebarView('history')">🕘 History</button>
         </div>
 
         <!-- View 1: live controls (Log File / Issue Time / Skills / â€¦) -->
@@ -2119,7 +2119,7 @@
 
         <!-- Log file -->
         <div class="sidebar-section">
-            <h6>ðŸ“‚ Log File</h6>
+            <h6>📂 Log File</h6>
             <div class="log-input-group">
                 <div class="log-input-wrap">
                     <input id="log-path-input" type="text"
@@ -2131,7 +2131,7 @@
                         onclick="copyLogPath(this)" title="Copy log path"
                         aria-label="Copy log path">ðŸ“‹</button>
                 </div> 
-                <button type="button" class="btn-browse" onclick="browseLog()" title="Browse for file">ðŸ“</button>
+                <button type="button" class="btn-browse" onclick="browseLog()" title="Browse for file">📁</button>
             </div>
             <div id="log-status" class="log-status"></div>
         </div>
@@ -2139,7 +2139,7 @@
         <!-- System Event Log toggle + inline table -->
         <div class="sidebar-section evt-section" style="padding:10px 16px;">
             <button id="btn-evt-log" class="btn-evt-log" disabled onclick="toggleEvtPanel()" title="No event log available">
-                ðŸ“‹ System Event Log <span id="evt-toggle-arrow" class="evt-arrow">â–¸</span>
+                📋 System Event Log <span id="evt-toggle-arrow" class="evt-arrow">â–¸</span>
             </button>
             <div id="evt-inline-panel" style="display:none;margin-top:8px;">
                 <div class="evt-inline-toolbar">
@@ -2168,7 +2168,7 @@
 
         <!-- Issue Time -->
         <div class="sidebar-section">
-            <h6>â° Issue Time</h6>
+            <h6>⏰ Issue Time</h6>
             <div style="font-size:0.72rem;color:#666;margin-bottom:8px;line-height:1.4;">
                 When did the issue happen?<br>
                 <span style="color:#2563eb;font-weight:600;">Format: MM / DD / YYYY &nbsp; HH : MM : SS . mmm</span>
@@ -2177,10 +2177,10 @@
             <!-- Quick actions -->
             <div style="display:flex;gap:6px;margin-bottom:10px;align-items:center;">
                 <div id="it-unknown-warn" style="display:none;flex:1;font-size:0.7rem;color:#92400e;background:#fff7ed;border:1px solid #fdba74;border-radius:6px;padding:5px 8px;line-height:1.3;">
-                    âš ï¸ <strong>Unknown time.</strong> Couldn't auto-detect the issue time â€” please fill it in below.
+                    ⚠️ <strong>Unknown time.</strong> Couldn't auto-detect the issue time â€” please fill it in below.
                 </div>
                 <button class="it-quick-btn it-quick-btn-clear" onclick="clearAllIssueTimes()" title="Clear the primary time AND all extra issue-time rows">
-                    ðŸ—‘ï¸ Clear
+                     🗑️ Clear
                 </button>
             </div>
 
@@ -2190,11 +2190,11 @@
                     style="display:flex;align-items:center;justify-content:center;gap:6px;width:100%;margin-bottom:6px;background:#e8edff;border-color:#bac8ff;"
                     onclick="suggestIssueTimesWithAI()"
                     title="Analyze your description + the loaded log with AI to suggest the issue time">
-                ðŸª„ AI suggest issue time
+                🪄 AI suggest issue time
             </button>
             <!-- Non-blocking hint when AI suggest is used with an empty chat box. -->
             <div id="ai-time-nodesc" style="display:none;font-size:0.7rem;color:#92400e;margin-bottom:10px;line-height:1.35;">
-                â„¹ No description â€” AI will infer from the log only. Add a problem description in the chat box for better accuracy.
+               ℹ No description — AI will infer from the log only. Add a problem description in the chat box for better accuracy.
             </div>
 
             <!-- Confirmation gate for an auto-filled (previous-page) time.
@@ -2205,7 +2205,7 @@
                  style="display:none;margin-bottom:10px;font-size:0.72rem;color:#92400e;background:#fff7ed;border:1px solid #fdba74;border-radius:6px;padding:6px 8px;line-height:1.35;">
                 <label style="display:flex;align-items:flex-start;gap:6px;cursor:pointer;margin:0;">
                     <input type="checkbox" id="it-confirm-autofill" onchange="onIssueTimeConfirmToggle()" style="margin-top:2px;">
-                    <span>â± Auto-detected time(s) â€” <strong>tick to use</strong>.</span>
+                    <span>⏱ Auto-detected time(s) — <strong>tick to use</strong>.</span>
                 </label>
             </div>
 
@@ -2215,7 +2215,7 @@
             <div id="it-refine-picker"
                  style="display:none;margin-bottom:10px;font-size:0.72rem;color:#1e3a5f;background:#eff6ff;border:1px solid #93c5fd;border-radius:6px;padding:8px;line-height:1.35;">
                 <div style="margin-bottom:6px;font-weight:600;">
-                    ðŸ” Found a nearby system error â€” which time to use?
+                    🔍 Found a nearby system error — which time to use?
                 </div>
                 <div style="display:flex;flex-direction:column;gap:5px;">
                     <button type="button" id="refine-pick-original" class="it-quick-btn"
@@ -2240,7 +2240,7 @@
 
             <!-- Shown when the loaded log has no dates (e.g. DDD): date optional. -->
             <div id="it-nodate-hint" style="display:none;font-size:0.7rem;color:#92400e;background:#fff7ed;border:1px solid #fdba74;border-radius:6px;padding:5px 8px;margin-bottom:8px;line-height:1.3;">
-                â± This log has no dates â€” fill in the <strong>time only</strong> (Month/Day/Year optional).
+                ⏱ This log has no dates — fill in the <strong>time only</strong> (Month/Day/Year optional).
             </div>
 
             <!-- Date row: Month / Day / Year -->
@@ -2313,14 +2313,14 @@
             <div id="extra-issue-times"></div>
             <button type="button" class="eit-add-btn"
                     onclick="addExtraIssueTimeRow()">
-                ï¼‹ Add another issue time
+                ＋ Add another issue time
             </button>
 
             <!-- Issue-time capture window: how many minutes before/after
                  the issue time the log slice (Segment2) is taken. -->
             <div class="itw-row">
                 <label class="itw-label" for="it-window-min">
-                    â± Capture window
+                    ⏱ Capture window
                 </label>
                 <div class="itw-control">
                     <button type="button" class="itw-step" onclick="stepIssueWindow(-1)" title="Less">âˆ’</button>
@@ -2336,7 +2336,7 @@
 
         <!-- Skills -->
         <div class="sidebar-section">
-            <h6>ðŸ›  Available Skills</h6>
+            <h6>🛠 Available Skills</h6>
             <div id="skill-source-panel" class="skill-source-panel">
                 <div class="skill-source-row">
                     <span id="skill-source-badge" class="skill-source-badge cloud">Cloud baseline</span>
@@ -2350,24 +2350,24 @@
             <button class="btn-set-log" style="width:100%;margin-top:8px;"
                     onclick="openSkillEditor()" id="skill-editor-btn"
                     title="Edit the local skill configuration"
-                    >âœï¸ Edit Skills Configuration</button>
+                    >✏️ Edit Skills Configuration</button>
             <div id="skill-editor-status" class="log-status"></div>
         </div>
 
         <!-- Reload skills from directory -->
         <!-- <div class="sidebar-section">
-            <h6>ðŸ›  Reload Skills</h6>
+            <h6>🛠 Reload Skills</h6>
             <div class="log-input-group">
                 <input id="skills-dir-input" type="text" placeholder="Skills data directoryâ€¦">
-                <button class="btn-browse" onclick="browseSkillsDir()" title="Browse for directory">ðŸ“</button>
+                <button class="btn-browse" onclick="browseSkillsDir()" title="Browse for directory">📁</button>
             </div>
-            <button class="btn-set-log" style="width:100%;margin-top:6px;" onclick="reloadSkills()">ðŸ”„ Reload Skills</button>
+            <button class="btn-set-log" style="width:100%;margin-top:6px;" onclick="reloadSkills()">🔄 Reload Skills</button>
             <div id="skills-reload-status" class="log-status"></div>
         </div> -->
 
         <!-- Actions -->
         <div class="sidebar-section">
-            <h6>âš¡ Actions</h6>
+            <h6>⚡ Actions</h6>
 
             <div style="display:flex;align-items:center;gap:8px;margin-bottom:8px;">
                 <span style="font-size:0.78rem;color:#555;font-weight:600;">AI Mode:</span>
@@ -2383,7 +2383,7 @@
 
         <!-- Quick ask shortcuts -->
         <div class="sidebar-section">
-            <h6>ðŸ’¬ Quick Ask</h6>
+            <h6>💬 Quick Ask</h6>
             <div id="quick-questions">
                 <button class="skill-card" style="width:100%;text-align:left;background:none;border:1px solid #e0e7ff;border-radius:7px;padding:7px 10px;cursor:pointer;font-size:0.78rem;color:#444;margin-bottom:5px;" onclick="sendQuick('Why user could not find any APs at 6GHz? at around 04/02/2026-14:50:51.910')">Why user could not find any APs at 6GHz? at around 04/02/2026-14:50:51.910</button>
                 <button class="skill-card" style="width:100%;text-align:left;background:none;border:1px solid #e0e7ff;border-radius:7px;padding:7px 10px;cursor:pointer;font-size:0.78rem;color:#444;margin-bottom:5px;" onclick="sendQuick('What is the average resume connection time?')">What is the resume connection time?</button>
@@ -2404,19 +2404,19 @@
                     <button type="button" class="hist-action-btn"
                             onclick="startNewConversation()"
                             title="Start a new, empty conversation (clears the log path, issue time and chat)">
-                        âž• New session
+                        ➕ New session
                     </button>
                     <button type="button" id="hist-restore-btn"
                             class="hist-action-btn hist-action-secondary" style="display:none;"
                             onclick="restoreLiveSession()"
                             title="Restore the unsent draft you were preparing before browsing history (log path, issue time and chat-box text)">
-                        â†© Resume draft
+                        ↩ Resume draft
                     </button>
                 </div>
                 <div style="display:flex;align-items:center;justify-content:space-between;margin-bottom:10px;">
-                    <h6 style="margin:0;">ðŸ•˜ RECENT</h6>
+                    <h6 style="margin:0;">🕘 RECENT</h6>
                     <button type="button" class="hist-refresh" title="Refresh"
-                            onclick="loadHistoryList()">âŸ³</button>
+                            onclick="loadHistoryList()">⟳</button>
                 </div>
                 <div id="history-empty" style="display:none;font-size:0.78rem;color:#888;padding:8px 2px;">
                     No saved conversations yet.<br>Ask a question to start one.
@@ -2427,11 +2427,11 @@
 
     </div>
 
-    <!-- â”€â”€ Chat area â”€â”€ -->
+    <!-- ── Chat area ── -->
     <div class="chat-area">
         <div id="chat-window">
             <div class="welcome-msg" id="welcome-msg">
-                <div class="big-icon">ðŸ¤–</div>
+                <div class="big-icon">🤖</div>
                 <strong>Linux WiFi Chatbot</strong><br>
                 Load a log file on the left, then ask me anything about it.<br>
                 I will apply the relevant skill filter and analyse the logs for you.
@@ -2439,19 +2439,19 @@
         </div>
 
         <div id="no-log-hint" style="display:none; padding: 8px 20px; background:#ede7f6; border-top:1px solid #b39ddb; color:#311b92; font-size:0.8rem;">
-            <strong>ðŸ“ Please load a log file first.</strong>
+            <strong>📁 Please load a log file first.</strong>
             Enter the log path on the left sidebar and click <strong>Load</strong> before sending the first question.
         </div>
         <div id="no-desc-hint" style="display:none; padding: 8px 20px; background:#fce8e8; border-top:1px solid #f5c0c0; color:#7a0000; font-size:0.8rem;">
-            <strong>âœï¸ Please describe the issue.</strong>
+            <strong>✏️ Please describe the issue.</strong>
             Type a brief problem description (e.g. <em>"6G Weak Signal disconnected"</em>) before sending.
         </div>
         <div id="no-time-hint" style="display:none; padding: 8px 20px; background:#fff3e0; border-top:1px solid #ffcc80; color:#7a4700; font-size:0.8rem;">
-            <strong>â° Issue Time is missing or incomplete.</strong>
-            For best results, fill in every field on the left (Month / Day / Year / Hour / Minute / Second). You can still send without a time â€” you'll be asked to confirm.
+            <strong>⏰ Issue Time is missing or incomplete.</strong>
+            For best results, fill in every field on the left (Month / Day / Year / Hour / Minute / Second). You can still send without a time — you'll be asked to confirm.
         </div>
         <div id="time-hint" style="display:none; padding: 8px 20px; background:#fff8e1; border-top:1px solid #ffe082; color:#8a6d00; font-size:0.8rem;">
-            <strong>âš  Invalid time format.</strong>
+            <strong>⚠ Invalid time format.</strong>
             Please use one of:
             <code>MM/DD/YYYY-HH:MM:SS</code>,
             <code>MM/DD/YYYY HH:MM:SS</code>,
@@ -2460,21 +2460,21 @@
             (optional <code>.mmm</code> milliseconds).
         </div>
         <div id="prefill-hint" style="display:none; padding: 8px 20px; background:#e8f4fd; border-top:1px solid #b6dcf6; color:#1e3a8a; font-size:0.8rem;">
-            âœï¸ Auto-extracted issue context is pre-filled below. Review or edit the time/text, then click <strong>Send â†‘</strong> to start the analysis.
+            ✏️ Auto-extracted issue context is pre-filled below. Review or edit the time/text, then click <strong>Send ↑</strong> to start the analysis.
         </div>
         <div class="input-row">
-            <textarea id="user-input" rows="1" placeholder="Describe the issue (e.g. '6G Weak Signal disconnected'). Pick the issue time on the left." onkeydown="handleEnter(event)" oninput="onUserInputChange(this)"></textarea>
-            <button id="send-btn" onclick="onSendBtnClick()">Send â†‘</button>
+            <textarea id="user-input" rows="1" placeholder="Describe the issue (e.g. ''It is Linux wifi issue or bt issue.''). Pick the issue time on the left." onkeydown="handleEnter(event)" oninput="onUserInputChange(this)"></textarea>
+            <button id="send-btn" onclick="onSendBtnClick()"> ↑</button>
         </div>
     </div>
 
 </div>
 
-<!-- â”€â”€ Modal: confirm sending without an Issue Time â”€â”€ -->
+<!-- ── Modal: confirm sending without an Issue Time ── -->
 <div id="confirm-modal" class="cm-overlay" style="display:none;" onclick="onConfirmModalBackdrop(event)">
     <div class="cm-dialog" role="dialog" aria-modal="true" aria-labelledby="cm-title">
         <div class="cm-header">
-            <span class="cm-icon">âš </span>
+            <span class="cm-icon">⚠</span>
             <h3 id="cm-title">Send without Issue Time?</h3>
         </div>
         <div class="cm-body">
@@ -2492,7 +2492,7 @@
 
 
 
-<!-- â”€â”€ JavaScript â”€â”€ -->
+<!-- ── JavaScript ── -->
 <script>
     let logLoaded = false;
     let skillsLoaded = false;
@@ -2520,7 +2520,7 @@
         if (btn) btn.disabled = !(logLoaded && skillsLoaded);
     }
 
-    // â”€â”€ Utilities â”€â”€â”€â”€â”€â”€â”€â”€â”€â”€â”€â”€â”€â”€â”€â”€â”€â”€â”€â”€â”€â”€â”€â”€â”€â”€â”€â”€â”€â”€â”€â”€â”€â”€â”€â”€â”€â”€â”€â”€â”€â”€â”€â”€â”€â”€â”€â”€â”€â”€
+    // ── Utilities ──────────────────────────────────────────────────
     function autoResize(el) {
         el.style.height = 'auto';
         el.style.height = Math.min(el.scrollHeight, 120) + 'px';
@@ -2860,7 +2860,7 @@
         validateUserInput();
     }
 
-    // "ðŸ—‘ï¸ Clear" button: wipe EVERYTHING in one click â€” the primary picker
+    // "🗑️ Clear" button: wipe EVERYTHING in one click — the primary picker
     // AND every extra issue-time row.
     function clearAllIssueTimes() {
         clearAllExtraIssueTimes();
@@ -3058,8 +3058,8 @@
                 // Tailor the message: a time pending confirmation just needs a
                 // tick; a genuinely empty Issue Time needs to be filled in.
                 noTimeHint.innerHTML = issueTimeAwaitingConfirm
-                    ? '<strong>â° Time(s) auto-detected from the previous page.</strong> Tick the checkbox on the left to use them â€” or edit the fields / use ðŸª„ AI suggest.'
-                    : '<strong>â° Issue Time is missing or incomplete.</strong> For best results, fill in every field on the left (Month / Day / Year / Hour / Minute / Second). You can still send without a time â€” you\'ll be asked to confirm.';
+                    ? '<strong>⏰ Time(s) auto-detected from the previous page.</strong> Tick the checkbox on the left to use them — or edit the fields / use 🪄 AI suggest.'
+                    : '<strong>⏰ Issue Time is missing or incomplete.</strong> For best results, fill in every field on the left (Month / Day / Year / Hour / Minute / Second). You can still send without a time — you\'ll be asked to confirm.';
                 noTimeHint.style.display = 'block';
             } else {
                 noTimeHint.style.display = 'none';
@@ -3077,7 +3077,7 @@
         validateUserInput();
     }
 
-    // â”€â”€ Auto-filled issue-time confirmation gate â”€â”€â”€â”€â”€â”€â”€â”€â”€â”€â”€â”€â”€â”€â”€â”€â”€â”€â”€â”€â”€
+    // ── Auto-filled issue-time confirmation gate ─────────────────────
     // Show/hide the "tick to use this auto-detected time" row and reset
     // its checkbox. Called when a previous-page time is auto-filled (show)
     // and whenever the time becomes user-owned: manual edit, clear, or an
@@ -3103,7 +3103,7 @@
         }
     }
 
-    // â”€â”€ Confirm modal (used when sending without Issue Time) â”€â”€â”€â”€â”€â”€
+    // ── Confirm modal (used when sending without Issue Time) ──────
     let _confirmModalResolver = null;
 
     function confirmNoIssueTime() {
@@ -3144,7 +3144,7 @@
     }
 
     // "Use log's last time" in the no-issue-time prompt: set the issue time to
-    // the log's last timestamp (an explicit choice â†’ counts immediately), then
+    // the log's last timestamp (an explicit choice → counts immediately), then
     // re-send. Falls back to analysing without a time if the log has no
     // readable timestamp.
     function useLogLastTimeAndSend() {
@@ -3154,7 +3154,7 @@
             closeConfirmModal(false);   // cancel this attempt; re-send with the time set
             sendMessage();
         } else {
-            closeConfirmModal(true);    // no readable timestamp â†’ analyse without a time
+            closeConfirmModal(true);    // no readable timestamp → analyse without a time
         }
     }
 
@@ -3173,7 +3173,7 @@
         if (w) w.remove();
     }
 
-    // â”€â”€ Append messages â”€â”€â”€â”€â”€â”€â”€â”€â”€â”€â”€â”€â”€â”€â”€â”€â”€â”€â”€â”€â”€â”€â”€â”€â”€â”€â”€â”€â”€â”€â”€â”€â”€â”€â”€â”€â”€â”€â”€â”€â”€â”€â”€â”€
+    // ── Append messages ────────────────────────────────────────────
     function appendUserMsg(text) {
         hideWelcome();
         const row = document.createElement('div');
@@ -3192,10 +3192,10 @@
         row.className = 'msg-row assistant';
         row.id = 'typing-row';
         row.innerHTML = `
-            <div class="avatar-icon">ðŸ¤–</div>
+            <div class="avatar-icon">🤖</div>
             <div class="typing-indicator">
                 <span class="dot"></span><span class="dot"></span><span class="dot"></span>
-                &nbsp;Analysingâ€¦
+                &nbsp;Analysing…
             </div>
         `;
         document.getElementById('chat-window').appendChild(row);
@@ -3213,7 +3213,7 @@
         const row = document.createElement('div');
         row.className = 'msg-row assistant';
         row.innerHTML = `
-            <div class="avatar-icon">ðŸ¤–</div>
+            <div class="avatar-icon">🤖</div>
             <div style="flex:1;min-width:0;">
                 <div class="msg-bubble">${marked.parse(text)}</div>
                 ${turnId ? renderFeedbackWidget(turnId) : ''}
@@ -3239,7 +3239,7 @@
         }
     }
 
-    function appendReport(data, header = 'ðŸ“Š Analysis Report', eventTime = null, turnId = null) {
+    function appendReport(data, header = '📊 Analysis Report', eventTime = null, turnId = null) {
         removeTyping();
         hideWelcome();
 
@@ -3342,7 +3342,7 @@
             .replace(/>/g, '&gt;').replace(/"/g, '&quot;');
     }
 
-    // â”€â”€ Copy log path to clipboard â”€â”€â”€â”€â”€â”€â”€â”€â”€â”€â”€â”€â”€â”€â”€â”€â”€â”€â”€â”€â”€â”€â”€â”€â”€â”€â”€â”€â”€â”€â”€â”€â”€â”€
+    // ── Copy log path to clipboard ──────────────────────────────────
     async function copyLogPath(btn) {
         const path = (document.getElementById('log-path-input') || {}).value || '';
         if (!path.trim()) return;
@@ -3358,10 +3358,10 @@
         }
     }
 
-    // â”€â”€ Browse for log file (server-side native dialog) â”€â”€â”€â”€â”€â”€â”€â”€â”€â”€â”€â”€
+    // ── Browse for log file (server-side native dialog) ────────────
     async function browseLog() {
         const btn = document.querySelector('.btn-browse');
-        btn.textContent = 'â³';
+        btn.textContent = '⏳';
         btn.disabled = true;
         try {
             const res = await fetch('/linux_chatbot/browse');
@@ -3373,15 +3373,15 @@
         } catch (e) {
             console.error('Browse failed:', e);
         } finally {
-            btn.textContent = 'ðŸ“';
+            btn.textContent = '📁';
             btn.disabled = false;
         }
     }
 
-    // â”€â”€ Browse for skills YAML file â”€â”€â”€â”€â”€â”€â”€â”€â”€â”€â”€â”€â”€â”€â”€â”€â”€â”€â”€â”€â”€â”€â”€â”€â”€â”€â”€â”€
+    // ── Browse for skills YAML file ────────────────────────────
     async function browseYaml() {
         const btn = document.querySelector('#yaml-path-input + .btn-browse');
-        btn.textContent = 'â³';
+        btn.textContent = '⏳';
         btn.disabled = true;
         try {
             const res = await fetch('/linux_chatbot/browse_yaml');
@@ -3392,12 +3392,12 @@
         } catch (e) {
             console.error('Browse YAML failed:', e);
         } finally {
-            btn.textContent = 'ðŸ“';
+            btn.textContent = '📁';
             btn.disabled = false;
         }
     }
 
-    // â”€â”€ Load skills from YAML file â”€â”€â”€â”€â”€â”€â”€â”€â”€â”€â”€â”€â”€â”€â”€â”€â”€â”€â”€â”€â”€â”€â”€â”€â”€â”€â”€â”€â”€â”€
+    // ── Load skills from YAML file ──────────────────────────────
     async function loadSkillsYaml() {
         const yamlPath = document.getElementById('yaml-path-input').value.trim();
         const statusEl = document.getElementById('yaml-load-status');
@@ -3416,20 +3416,20 @@
             });
             const data = await res.json();
             if (data.success) {
-                showStatus(statusEl, 'âœ” ' + data.message, 'ok');
+                showStatus(statusEl, '✔ ' + data.message, 'ok');
                 renderSkills(data.skills);
             } else {
-                showStatus(statusEl, 'âœ˜ ' + data.error, 'err');
+                showStatus(statusEl, '✘ ' + data.error, 'err');
             }
         } catch (e) {
-            showStatus(statusEl, 'âœ˜ Network error: ' + e.message, 'err');
+            showStatus(statusEl, '✘ Network error: ' + e.message, 'err');
         }
     }
 
-    // â”€â”€ Browse for skills data directory â”€â”€â”€â”€â”€â”€â”€â”€â”€â”€â”€â”€â”€â”€â”€â”€â”€â”€â”€â”€â”€â”€â”€â”€â”€â”€
+    // ── Browse for skills data directory ──────────────────────────
     async function browseSkillsDir() {
         const btn = document.querySelector('#skills-dir-input + .btn-browse');
-        btn.textContent = 'â³';
+        btn.textContent = '⏳';
         btn.disabled = true;
         try {
             const res = await fetch('/linux_chatbot/browse_dir');
@@ -3440,12 +3440,12 @@
         } catch (e) {
             console.error('Browse dir failed:', e);
         } finally {
-            btn.textContent = 'ðŸ“';
+            btn.textContent = '📁';
             btn.disabled = false;
         }
     }
 
-    // â”€â”€ Reload skills from directory â”€â”€â”€â”€â”€â”€â”€â”€â”€â”€â”€â”€â”€â”€â”€â”€â”€â”€â”€â”€â”€â”€â”€â”€â”€â”€â”€â”€â”€â”€â”€
+    // ── Reload skills from directory ───────────────────────────────
     async function reloadSkills() {
         const dir = document.getElementById('skills-dir-input').value.trim();
         const statusEl = document.getElementById('skills-reload-status');
@@ -3461,24 +3461,24 @@
             const data = await res.json();
             if (data.success) {
                 if (data.warning) {
-                    showStatus(statusEl, 'âš  ' + data.warning, 'warn');
+                    showStatus(statusEl, '⚠ ' + data.warning, 'warn');
                 } else {
-                    showStatus(statusEl, 'âœ” ' + data.message, 'ok');
+                    showStatus(statusEl, '✔ ' + data.message, 'ok');
                 }
                 renderSkills(data.skills);
             } else {
-                showStatus(statusEl, 'âœ˜ ' + data.error, 'err');
+                showStatus(statusEl, '✘ ' + data.error, 'err');
             }
         } catch (e) {
-            showStatus(statusEl, 'âœ˜ Network error: ' + e.message, 'err');
+            showStatus(statusEl, '✘ Network error: ' + e.message, 'err');
         }
     }
 
-    // â”€â”€ Set log file â”€â”€â”€â”€â”€â”€â”€â”€â”€â”€â”€â”€â”€â”€â”€â”€â”€â”€â”€â”€â”€â”€â”€â”€â”€â”€â”€â”€â”€â”€â”€â”€â”€â”€â”€â”€â”€â”€â”€â”€â”€â”€â”€â”€â”€â”€â”€
+    // ── Set log file ───────────────────────────────────────────────
     async function setLog(opts) {
         // When restoring a per-conversation draft / a resumed live session we
         // manage the Issue Time ourselves (from the saved snapshot), so the
-        // caller can suppress this function's own issue-time auto-fill â€”
+        // caller can suppress this function's own issue-time auto-fill —
         // otherwise the rotation branch below would clear the restored time
         // and refill it with the log's last timestamp, losing the user's
         // newly-edited issue time.
@@ -3499,12 +3499,12 @@
             if (data.success) {
                 // Match the Wi-Fi chatbot: show a brief "loaded" confirmation
                 // that auto-dismisses after 3s rather than a persistent line
-                // (the full path lives in the input box + the ðŸ“‹ copy button).
-                showStatus(statusEl, 'âœ” Log loaded', 'ok', 3000);
+                // (the full path lives in the input box + the 📋 copy button).
+                showStatus(statusEl, '✔ Log loaded', 'ok', 3000);
                 renderSkills(data.skills);
                 logLoaded = true;
 
-                // â”€â”€ Auto-reset when switching from one log to another â”€â”€
+                // ── Auto-reset when switching from one log to another ──
                 // Backend signals `rotated=true` when this set_log replaces
                 // a DIFFERENT log path. We snapshot the chat UI + per-turn
                 // caches so the user can undo the reset for 30 s.
@@ -3528,7 +3528,7 @@
                     window.__yamlModified = false;
 
                     showToast({
-                        message: 'ðŸ”„ Detected new log â€” chat history cleared.',
+                        message: '🔄 Detected new log — chat history cleared.',
                         actionLabel: 'Undo (30s)',
                         ttlMs: 30000,
                         onAction: () => {
@@ -3549,7 +3549,7 @@
                                     undoCache.previousLogPath;
                             }
                             showToast({
-                                message: 'â†©ï¸ Restored previous chat view. Reload the old log file to continue chatting.',
+                                message: '↩️ Restored previous chat view. Reload the old log file to continue chatting.',
                                 ttlMs: 6000,
                             });
                         },
@@ -3619,10 +3619,10 @@
                     refineIssueTimeFromEventLog();
                 }
             } else {
-                showStatus(statusEl, 'âœ˜ ' + data.error, 'err');
+                showStatus(statusEl, '✘ ' + data.error, 'err');
             }
         } catch (e) {
-            showStatus(statusEl, 'âœ˜ Network error: ' + e.message, 'err');
+            showStatus(statusEl, '✘ Network error: ' + e.message, 'err');
         }
     }
 
@@ -3646,7 +3646,7 @@
         }
     }
 
-    // â”€â”€ Reload skills from shared folder â”€â”€â”€â”€â”€â”€â”€â”€â”€â”€â”€â”€â”€â”€â”€â”€â”€â”€â”€â”€â”€â”€â”€â”€â”€â”€â”€â”€
+    // ── Reload skills from shared folder ────────────────────────────
     async function reloadFromShared() {
         const statusEl = document.getElementById('reload-shared-status');
         statusEl.textContent = 'Reloadingâ€¦';
@@ -3660,15 +3660,15 @@
             });
             const data = await res.json();
             if (data.success) {
-                showStatus(statusEl, 'âœ” ' + data.message, 'ok');
+                showStatus(statusEl, '✔ ' + data.message, 'ok');
                 renderSkills(data.skills);
                 skillsLoaded = true;
                 updateAnalyzeBtn();
             } else {
-                showStatus(statusEl, 'âœ˜ ' + data.error, 'err');
+                showStatus(statusEl, '✘ ' + data.error, 'err');
             }
         } catch (e) {
-            showStatus(statusEl, 'âœ˜ Network error: ' + e.message, 'err');
+            showStatus(statusEl, '✘ Network error: ' + e.message, 'err');
         }
     }
 
@@ -3678,7 +3678,7 @@
         if (!skills || skills.length === 0) {
             const empty = document.createElement('div');
             empty.style.cssText = 'font-size:0.78rem;color:#aaa;';
-            empty.innerHTML = 'No skills loaded. Use <strong>ðŸ“¦ Load Skills YAML</strong> below.';
+            empty.innerHTML = 'No skills loaded. Use <strong>📦 Load Skills YAML</strong> below.';
             container.appendChild(empty);
             skillsLoaded = false;
         } else {
@@ -3702,8 +3702,8 @@
         updateAnalyzeBtn();
     }
 
-    // â”€â”€ Send chat message â”€â”€â”€â”€â”€â”€â”€â”€â”€â”€â”€â”€â”€â”€â”€â”€â”€â”€â”€â”€â”€â”€â”€â”€â”€â”€â”€â”€â”€â”€â”€â”€â”€â”€â”€â”€â”€â”€â”€â”€â”€â”€
-    // â”€â”€ Stop / abort support â”€â”€â”€â”€â”€â”€â”€â”€â”€â”€â”€â”€â”€â”€â”€â”€â”€â”€â”€â”€â”€â”€â”€â”€â”€â”€â”€â”€â”€â”€â”€â”€â”€â”€â”€â”€â”€â”€â”€
+    // ── Send chat message ──────────────────────────────────────────
+    // ── Stop / abort support ───────────────────────────────────────
     // While a tools-mode analysis streams, the Send button becomes a red
     // Stop button. Clicking it aborts the SSE stream locally AND asks the
     // backend to halt the running analysis (its agent loop bails out at the
@@ -3726,7 +3726,7 @@
         const btn = document.getElementById('send-btn');
         if (!btn) return;
         btn.classList.remove('stopping');
-        btn.textContent = 'Send â†‘';
+        btn.textContent = 'Stop ■';
         // Re-derive the disabled state from the current input validity.
         if (typeof validateUserInput === 'function') validateUserInput(false);
         else btn.disabled = false;
@@ -3752,7 +3752,7 @@
             });
         } catch (e) { /* best-effort */ }
         removeTyping();
-        appendAssistantText('â¹ï¸ Analysis stopped by user.');
+          appendAssistantText('⏹️ Analysis stopped by user.');
         setSendBtnSendMode();
     }
 
@@ -3760,7 +3760,7 @@
         const input = document.getElementById('user-input');
         let desc = input.value.trim();
 
-        // â”€â”€ Multi-time CONTINUATION? â”€â”€â”€â”€â”€â”€â”€â”€â”€â”€â”€â”€â”€â”€â”€â”€â”€â”€â”€â”€â”€â”€â”€â”€â”€â”€â”€â”€â”€â”€â”€â”€â”€â”€
+        // ── Multi-time CONTINUATION? ──────────────────────────────────
         // When the previous /chat iteration finished and there are
         // queued issue times, sendMessage is re-entered with the saved
         // desc + the next time popped from the queue.
@@ -3788,13 +3788,13 @@
 
         // Hard blockers (log not loaded, empty description). Skipped on
         // continuations because the textbox was cleared after iteration
-        // 1 â€” we already know the original input passed validation.
+        // 1 — we already know the original input passed validation.
         if (!isContinuation && !validateUserInput(true)) {
             input.focus();
             return;
         }
 
-        // â”€â”€ Detect time tokens inside the typed message â”€â”€â”€â”€â”€â”€â”€â”€â”€â”€â”€â”€â”€â”€
+        // ── Detect time tokens inside the typed message ──────────────
         // Skipped on continuations and on the second-pass call after
         // the popup has already been resolved (via __skipTimeCaptureOnce).
         if (!isContinuation && !window.__skipTimeCaptureOnce) {
@@ -3809,7 +3809,7 @@
         }
         window.__skipTimeCaptureOnce = false;
 
-        // â”€â”€ Decide the issue time for THIS iteration â”€â”€â”€â”€â”€â”€â”€â”€â”€â”€â”€â”€â”€â”€â”€â”€â”€â”€
+         // ── Decide the issue time for THIS iteration ──────────────────
         let issueTime = '';
         if (multiTimeForThisIter) {
             issueTime = _formatEitRowString(multiTimeForThisIter);
@@ -3903,7 +3903,7 @@
             const delta = (deltaMs >= 50)
                 ? `<span class="step-time-delta">Î”${fmtElapsed(deltaMs)}</span>`
                 : '';
-            return `<span class="step-time" title="Elapsed since start Â· delta from previous step">+${elapsed}${delta}</span>`;
+            return `<span class="step-time" title="Elapsed since start · delta from previous step">+${elapsed}${delta}</span>`;
         }
 
         function ensureAgentCard() {
@@ -3928,7 +3928,7 @@
             const wrapper = document.createElement('div');
             wrapper.className = 'msg-row assistant';
             wrapper.style.maxWidth = '95%';
-            wrapper.innerHTML = `<div class="avatar-icon">ðŸ¤–</div><div style="flex:1;min-width:0;">${html}</div>`;
+            wrapper.innerHTML = `<div class="avatar-icon">🤖</div><div style="flex:1;min-width:0;">${html}</div>`;
             document.getElementById('chat-window').appendChild(wrapper);
             agentCardBodyEl = document.getElementById(agentCardId);
             scrollBottom();
@@ -3945,32 +3945,32 @@
             let isStepDivider = false;
             let stepNum = null;
 
-            if (role === 'token_usage') {
+             if (role === 'token_usage') {
                 stepClass = 'step-token';
-                label = 'ðŸ“Š Tokens';
+                label = '📊 Tokens';
             } else if (role === 'error') {
                 stepClass = 'step-error';
-                label = 'â›” Error';
+                label = '⛔ Error';
             } else if (/Reasoning Step (\d+)/.test(content)) {
                 // Extract step number and render as a visual divider
                 const m = content.match(/Reasoning Step (\d+)/);
                 stepNum = m ? m[1] : steps.length;
                 isStepDivider = true;
-            } else if (/ðŸ§ .*Thinking/i.test(content)) {
+            } else if (/🧠.*Thinking/i.test(content)) {
                 stepClass = 'step-thinking';
-                label = 'ðŸ§  Thinking';
+                label = '🧠 Thinking';
             } else if (/Invoking skill|fetch_filtered_logs/i.test(content)) {
                 stepClass = 'step-skill';
-                label = 'ðŸ”¬ Skill';
-            } else if (/Tool call|Tool cap|ðŸ§­/i.test(content)) {
+                label = '🔬 Skill';
+            } else if (/Tool call|Tool cap|🧭/i.test(content)) {
                 stepClass = 'step-tool';
-                label = 'ðŸ§­ Tools';
-            } else if (/Conclusion reached|submit_final_report|âœ…/i.test(content)) {
+                label = '🧭 Tools';
+            } else if (/Conclusion reached|submit_final_report|✅/i.test(content)) {
                 stepClass = 'step-done';
-                label = 'âœ… Done';
+                label = '✅ Done';
             } else {
                 stepClass = 'step-info';
-                label = 'â„¹ï¸';
+                label = 'ℹ️';
             }
 
             let html;
@@ -4000,8 +4000,8 @@
             const summaryEl = document.getElementById(agentCardId + '-summary');
             if (summaryEl) {
                 summaryEl.textContent =
-                    `${steps.length} steps Â· ${fmtElapsed(elapsedMs)}` +
-                    (skillsUsed.length ? ` Â· Skills: ${skillsUsed.join(', ')}` : '');
+                    `${steps.length} steps · ${fmtElapsed(elapsedMs)}` +
+                    (skillsUsed.length ? ` · Skills: ${skillsUsed.join(', ')}` : '');
             }
             scrollBottom();
         }
@@ -4026,7 +4026,7 @@
                     // multi-incident chained send so all resulting turns
                     // carry the same parent_message_id in the snapshot.
                     parent_message_id: parentMessageId,
-                    // Sidebar-adjustable Â±N min log capture window.
+                   // Sidebar-adjustable ±N min log capture window.
                     issue_time_window_minutes: getIssueWindowMinutes(),
                 })
             });
@@ -4057,15 +4057,15 @@
                     }
                     if (result && result.type === 'report') {
                         if (agentCardId) collapseAgentProcessCard(agentCardId);
-                        appendReport(result.data, 'ðŸ“Š Analysis Report', result.issue_time || null, turnId);
+                        appendReport(result.data, '📊 Analysis Report', result.issue_time || null, turnId);
                     } else if (result && result.type === 'partial_report' && result.data) {
                         if (agentCardId) collapseAgentProcessCard(agentCardId);
-                        appendReport(result.data, 'âš ï¸ Partial Analysis (Step Limit)', result.issue_time || null, turnId);
+                        appendReport(result.data, '⚠️ Partial Analysis (Step Limit)', result.issue_time || null, turnId);
                     } else if (result && result.type === 'text') appendAssistantText(result.data || '_No response._', turnId);
-                    else if (result) appendAssistantText('âš ï¸ ' + (result.data || 'Unknown response.'), turnId);
+                    else if (result) appendAssistantText('⚠️ ' + (result.data || 'Unknown response.'), turnId);
                 } else if (evt.type === 'error') {
                     removeTyping();
-                    appendAssistantText('âŒ Error: ' + (evt.content || 'Unknown error'));
+                    appendAssistantText('❌ Error: ' + (evt.content || 'Unknown error'));
                 }
             };
 
@@ -4086,7 +4086,7 @@
                 __btAborted = true;
             } else {
                 removeTyping();
-                appendAssistantText('âŒ Network error: ' + e.message);
+                appendAssistantText('❌ Network error: ' + e.message);
             }
         } finally {
             removeTyping();
@@ -4098,12 +4098,12 @@
                 setSendBtnSendMode();
                 return;
             }
-            // â”€â”€ Multi-time chain: if the queue still has unprocessed
+            // ── Multi-time chain: if the queue still has unprocessed
             // issue times, schedule the next iteration AND keep Send
             // disabled. Re-enabling Send between iterations lets the
             // user click it during the ~250ms gap, which would re-
             // enter sendMessage with isContinuation=true (because
-            // __multiTimeContext is still set) â€” popping the queue
+            // __multiTimeContext is still set) — popping the queue
             // early and ignoring whatever they had just typed.
             // We only re-enable Send when the chain is fully drained
             // (or on a regular single-time finish).
@@ -4134,9 +4134,9 @@
         const wrapper = document.createElement('div');
         wrapper.className = 'msg-row assistant';
         wrapper.innerHTML =
-            `<div class="avatar-icon">ðŸ•’</div>` +
+            `<div class="avatar-icon">🕒</div>` +
             `<div style="flex:1;min-width:0;"><span class="incident-tag">Incident ${idx} / ${total}` +
-            (fmt ? ` &nbsp;Â·&nbsp; ${fmt}` : '') + `</span></div>`;
+            (fmt ? ` &nbsp;·&nbsp; ${fmt}` : '') + `</span></div>`;
         document.getElementById('chat-window').appendChild(wrapper);
         scrollBottom();
     }
@@ -4151,7 +4151,7 @@
             header.classList.add('collapsed');
             body.classList.add('hidden');
             const toggleIcon = header.querySelector('.toggle-icon');
-            if (toggleIcon) toggleIcon.textContent = 'â–¼';
+             if (toggleIcon) toggleIcon.textContent = '▼';
         }
     }
 
@@ -4213,7 +4213,7 @@
             .filter(Boolean);
 
         const summaryText = `${steps.length} steps` +
-            (skillsUsed.length ? ` Â· Skills: ${skillsUsed.join(', ')}` : '');
+            (skillsUsed.length ? ` · Skills: ${skillsUsed.join(', ')}` : '');
 
         // Create the container (initially collapsed)
         const html = `
@@ -4250,12 +4250,12 @@
         });
     }
 
-    // â”€â”€ Reset â”€â”€â”€â”€â”€â”€â”€â”€â”€â”€â”€â”€â”€â”€â”€â”€â”€â”€â”€â”€â”€â”€â”€â”€â”€â”€â”€â”€â”€â”€â”€â”€â”€â”€â”€â”€â”€â”€â”€â”€â”€â”€â”€â”€â”€â”€â”€â”€â”€â”€â”€â”€â”€â”€
+     // ── Reset ──────────────────────────────────────────────────────
     async function resetConversation() {
-        await fetch('/linux_chatbot/reset', {method: 'POST'});
+        await fetch('/bt_chatbot/reset', {method: 'POST'});
         document.getElementById('chat-window').innerHTML = `
             <div class="welcome-msg" id="welcome-msg">
-                <div class="big-icon">ðŸ¤–</div>
+                <div class="big-icon">🤖</div>
                 <strong>Conversation reset.</strong><br>
                 The log file is still loaded. Ask me a new question.
             </div>`;
@@ -4312,12 +4312,12 @@
             // the issue context (especially the timestamp) and clicks Send.
             setTimeout(() => {
                 const input = document.getElementById('user-input');
-                const rawQuestion = question || 'ðŸ” Run full multi-skill analysis';
+                const rawQuestion = question || '🔍 Run full multi-skill analysis';
 
                 let descPart = rawQuestion;
                 // Priority: LLM-organized multi-time list (from the case
-                // description) â†’ URL ?issue_time= â†’ attachment_time â†’
-                // backend-resolved issue_time â†’ regex on description.
+                // description) → URL ?issue_time= → attachment_time →
+                // backend-resolved issue_time → regex on description.
                 if (issueTimes.length > 0 && _prefillAutoTimes(issueTimes)) {
                     // The backend already returned a CLEAN description (raw
                     // timestamps stripped), so use it verbatim. These auto-
@@ -4335,13 +4335,13 @@
                     }
                     if (foundTime && setIssueTimeFromString(foundTime)) {
                         descPart = rawQuestion.replace(foundTime, ' ');
-                        // Carried over from the previous page â†’ show it, but
+                        // Carried over from the previous page → show it, but
                         // require the user to tick the confirm box first.
                         issueTimeAwaitingConfirm = true;
                         setIssueTimeConfirmUI(true);
                         validateUserInput();
                     } else {
-                        // Couldn't find/parse a time â€” surface the warning so
+                        // Couldn't find/parse a time — surface the warning so
                         // the user knows to fill it in (or use AI suggest).
                         const warn = document.getElementById('it-unknown-warn');
                         if (warn) warn.style.display = 'block';
@@ -4418,13 +4418,13 @@
         const origLabel = document.getElementById('refine-original-label');
         const errLabel  = document.getElementById('refine-error-label');
         const errBtn    = document.getElementById('refine-pick-error');
-        if (origLabel) origLabel.textContent = `â± ${originalTime}`;
+           if (origLabel) origLabel.textContent = `⏱ ${originalTime}`;
 
         if (errInfo && errInfo.formatted_time && errInfo.diff_seconds <= 600
             && errInfo.formatted_time !== originalTime) {
             _refineErrorTime = errInfo.formatted_time;
             if (errLabel) errLabel.textContent =
-                `â± ${errInfo.formatted_time}  (${errInfo.source}, ID ${errInfo.event_id}, Î”${Number(errInfo.diff_seconds).toFixed(0)}s)`;
+                `⏱ ${errInfo.formatted_time}  (${errInfo.source}, ID ${errInfo.event_id}, Δ${Number(errInfo.diff_seconds).toFixed(0)}s)`;
             if (errBtn) { errBtn.disabled = false; errBtn.style.opacity = '1'; }
             console.log(`[Refine-Picker] Closest event error: ${errInfo.formatted_time} ` +
                 `(${errInfo.source}, ID: ${errInfo.event_id}, diff: ${Number(errInfo.diff_seconds).toFixed(0)}s)`);
@@ -4470,7 +4470,7 @@
     //   4. getAllIssueTimes() â€” primary picker + extras combined
     // ============================================================
 
-    // â”€â”€ Issue-time capture window (Â±N min) â”€â”€â”€â”€â”€â”€â”€â”€â”€â”€â”€â”€â”€â”€â”€â”€â”€â”€â”€â”€â”€â”€â”€â”€â”€â”€â”€
+     // ── Issue-time capture window (±N min) ───────────────────────────
     // Sidebar control deciding how wide the Segment2 log slice is around
     // the issue time. Valid range is 0 .. log-span (set from /set_log's
     // log_span_minutes); falls back to 120 when the span is unknown.
@@ -4516,7 +4516,7 @@
             if (String(clamped) !== el.value) el.value = String(clamped);
             v = clamped;
         }
-        const shown = isNaN(v) ? 'â€”' : String(v);
+          const shown = isNaN(v) ? '—' : String(v);
         const r1 = document.getElementById('itw-readout');
         const r2 = document.getElementById('itw-readout2');
         if (r1) r1.textContent = shown;
@@ -4544,13 +4544,13 @@
         });
     }
 
-    // Match HH:MM:SS or HH:MM:SS.mmm anywhere in the text. The leading
-    // \b is a word boundary â€” between a non-word char (e.g. "." or
+// Match HH:MM:SS or HH:MM:SS.mmm anywhere in the text. The leading
+    // \b is a word boundary — between a non-word char (e.g. "." or
     // space) and a digit. That's what lets enumerated inputs like
     // "1.17:36:13" pick up the "17:36:13" portion: the regex engine
-    // anchors the match at the `.â†’1` transition, not at the leading
+    // anchors the match at the `.→1` transition, not at the leading
     // "1". (Earlier comment versions described this as a "negative
-    // lookbehind" â€” that was inaccurate; there is no lookbehind in
+    // lookbehind" — that was inaccurate; there is no lookbehind in
     // the pattern, just `\b`.) Hours / minutes / seconds are bounds-
     // checked AFTER the regex match so things like "99:88:77" don't
     // slip through.
@@ -4614,7 +4614,7 @@
             const dateHint = refDate
                 ? ` &middot; MM/DD/YYYY pre-filled from the loaded log.`
                 : '';
-            summary.innerHTML = `Found ${n} time(s) in your text. Edit any field, add more with â€œ+ Add another timeâ€, or remove any you donâ€™t want.${dateHint}`;
+            summary.innerHTML = `Found ${n} time(s) in your text. Edit any field, add more with “+ Add another time”, or remove any you don’t want.${dateHint}`;
         }
 
         if (n === 0) {
@@ -4682,9 +4682,9 @@
         list.appendChild(node);
     }
 
-    // send=false â†’ "âœ“ Confirm time(s)": just put the reviewed time(s) into the
+    // send=false → "✓ Confirm time(s)": just put the reviewed time(s) into the
     //              sidebar (user reviews, then sends manually later).
-    // send=true  â†’ "Apply & send to agent": apply the time(s) AND immediately
+    // send=true  → "Apply & send to agent": apply the time(s) AND immediately
     //              send the description already in the chat box for analysis.
     function applyTimeCapture(send) {
         const list = document.getElementById('time-capture-list');
@@ -4696,7 +4696,7 @@
         const modeEl = document.querySelector('input[name="tc-mode"]:checked');
         const mode = modeEl ? modeEl.value : 'replace';
         closeTimeCaptureModal();
-        // Applying = confirming â†’ the time(s) become user-owned (no extra tick).
+        // Applying = confirming → the time(s) become user-owned (no extra tick).
         if (times.length > 0) _applyCapturedTimesToSidebar(times, mode);
         // If this apply came from the AI-suggest flow, surface the refine picker
         // using the AI's own nearest-error data (no extra event-log fetch).
@@ -4912,7 +4912,7 @@
         if (typeof validateUserInput === 'function') validateUserInput();
     }
 
-    // â”€â”€ AI issue-time assistant â”€â”€â”€â”€â”€â”€â”€â”€â”€â”€â”€â”€â”€â”€â”€â”€â”€â”€â”€â”€â”€â”€â”€â”€â”€â”€â”€â”€â”€â”€â”€â”€â”€â”€â”€â”€â”€â”€
+    // ── AI issue-time assistant ──────────────────────────────────────
     // Button in the Issue Time sidebar. Reads the chat-input description +
     // (server-side) a rough browse of the loaded log, asks the user to
     // consent, then calls /suggest_issue_times. Suggestions are funneled
@@ -4930,20 +4930,20 @@
         const input = document.getElementById('user-input');
         const text = (input ? input.value : '').trim();
         const nodesc = document.getElementById('ai-time-nodesc');
-        // An empty chat box is allowed â€” the AI can still infer the issue time
+        // An empty chat box is allowed — the AI can still infer the issue time
         // from the log alone. Show a non-blocking hint (not an error) nudging
         // the user to add a description for better accuracy, then continue.
         if (nodesc) nodesc.style.display = text ? 'none' : 'block';
         _llmTimeConsentText = text;   // may be empty
         const prev = document.getElementById('llm-consent-text');
         if (prev) prev.textContent = text
-            || '(no description â€” the AI will infer the issue time from the log only)';
+            || '(no description — the AI will infer the issue time from the log only)';
         const loghint = document.getElementById('llm-consent-loghint');
         if (loghint) {
             const hasLog = (typeof logLoaded !== 'undefined' && logLoaded) || !!window.__logSpanMinutes;
             loghint.innerHTML = hasLog
-                ? 'âœ” A log is loaded and will be sampled to anchor the suggestion.'
-                : 'âš ï¸ No log loaded â€” load a log so the AI has something to analyze.';
+                ? '✔ A log is loaded and will be sampled to anchor the suggestion.'
+                : '⚠️ No log loaded — load a log so the AI has something to analyze.';
             loghint.style.color = hasLog ? '#15803d' : '#92400e';
         }
         openLlmTimeConsent();
@@ -4966,14 +4966,14 @@
         closeLlmTimeConsent();
         const btn = document.getElementById('ai-time-btn');
         const orig = btn ? btn.innerHTML : '';
-        if (btn) { btn.disabled = true; btn.innerHTML = 'â³ Analyzingâ€¦'; }
+        if (btn) { btn.disabled = true; btn.innerHTML = '⏳ Analyzing…'; }
         try {
             // Forward the System Event Log dropdowns so the AI weighs the
             // SAME Warn+Err selection the user sees on this page as a
             // high-priority anchor for the issue time.
             const srcSel = document.getElementById('evtPopupSourceFilter');
             const lvlSel = document.getElementById('evtPopupLevelFilter');
-            const res = await fetch('/linux_chatbot/suggest_issue_times', {
+            const res = await fetch('/bt_chatbot/suggest_issue_times', {
                 method: 'POST',
                 headers: { 'Content-Type': 'application/json' },
                 body: JSON.stringify({
@@ -4985,7 +4985,7 @@
             const data = await res.json();
             if (!data.success) {
                 if (typeof showToast === 'function') {
-                    showToast({ message: 'âœ˜ ' + (data.error || 'AI time analysis failed.'), ttlMs: 6000 });
+                    showToast({ message: '✘ ' + (data.error || 'AI time analysis failed.'), ttlMs: 6000 });
                 }
                 return;
             }
@@ -5017,11 +5017,11 @@
             }
             _setAiTimeSummary(data, bestIdx);
             if (sugg.length === 0 && typeof showToast === 'function') {
-                showToast({ message: 'â„¹ï¸ ' + (data.message || "AI couldn't pin down a time â€” please fill it in."), ttlMs: 6000 });
+                showToast({ message: 'ℹ️ ' + (data.message || "AI couldn't pin down a time — please fill it in."), ttlMs: 6000 });
             }
         } catch (e) {
             if (typeof showToast === 'function') {
-                showToast({ message: 'âœ˜ AI time analysis error: ' + e.message, ttlMs: 6000 });
+                showToast({ message: '✘ AI time analysis error: ' + e.message, ttlMs: 6000 });
             }
         } finally {
             if (btn) { btn.disabled = false; btn.innerHTML = orig; }
@@ -5061,25 +5061,25 @@
         }
         const sugg = data.suggestions || [];
         const onlyBest = !data.user_explicit && sugg.length > 1;
-        if (sugg.length) {
+       if (sugg.length) {
             const lis = sugg.map((s, i) => {
                 const conf = s.confidence ? ` <em>(${_itEscHtml(s.confidence)})</em>` : '';
-                const reason = s.reason ? ' â€” ' + _itEscHtml(s.reason) : '';
+                const reason = s.reason ? ' — ' + _itEscHtml(s.reason) : '';
                 // Mark the auto-selected best candidate so the user can see
                 // which one was pre-filled below (the rest are alternatives).
                 const isBest = onlyBest && i === bestIdx;
                 const tag = isBest
-                    ? ' <strong style="color:#15803d;">âœ“ selected</strong>'
+                    ? ' <strong style="color:#15803d;">✓ selected</strong>'
                     : (onlyBest ? ' <span style="color:#94a3b8;">(alternative)</span>' : '');
                 return `<li><code>${_itEscHtml(s.issue_time)}</code>${conf}${tag}${reason}</li>`;
             }).join('');
             parts.push(`<ul style="margin:6px 0 0 16px;padding:0;font-size:0.72rem;line-height:1.45;">${lis}</ul>`);
         } else {
-            parts.push('<em>No specific time found â€” edit the row below or add one.</em>');
+            parts.push('<em>No specific time found — edit the row below or add one.</em>');
         }
         if (onlyBest) {
             parts.push('<div style="margin-top:6px;">Only the <strong>best</strong> time is pre-filled below. '
-                + 'Add an alternative with â€œï¼‹ Add another timeâ€ if needed, then choose '
+                + 'Add an alternative with “＋ Add another time” if needed, then choose '
                 + '<strong>Replace</strong> or <strong>Append</strong>.</div>');
         } else {
             parts.push('<div style="margin-top:6px;">Edit if needed, then choose <strong>Replace</strong> or <strong>Append</strong>.</div>');
@@ -5099,17 +5099,17 @@
     <div class="fbd-card" role="dialog" aria-modal="true">
         <div class="fbd-header">
             <h3 id="tc-title">Detected issue time(s) in your message</h3>
-            <button type="button" class="fbd-close" onclick="closeTimeCaptureModal()" aria-label="Close">Ã—</button>
+            <button type="button" class="fbd-close" onclick="closeTimeCaptureModal()" aria-label="Close">×</button>
         </div>
         <div class="fbd-body">
             <div class="tc-hint" id="tc-summary">
-                Found 0 time(s). Edit any field, add more with â€œ+ Add another timeâ€,
-                or remove any you donâ€™t want.
+                Found 0 time(s). Edit any field, add more with “+ Add another time”,
+                or remove any you don’t want.
             </div>
             <div id="time-capture-list"></div>
             <button type="button" class="eit-add-btn" style="margin-top:6px;"
                     onclick="addTimeCaptureRow()">
-                ï¼‹ Add another time
+                ＋ Add another time
             </button>
 
             <div class="tc-hint" style="margin-top:14px;font-weight:600;color:#374151;">
@@ -5123,7 +5123,7 @@
         <div class="fbd-footer">
             <button type="button" class="fbd-btn" onclick="closeTimeCaptureModal()">Cancel</button>
             <button type="button" class="fbd-btn" id="tc-confirm-btn" onclick="applyTimeCapture(false)"
-                    title="Put these time(s) into the sidebar Issue Time list â€” don't send yet">âœ“ Confirm time(s)</button>
+                    title="Put these time(s) into the sidebar Issue Time list — don't send yet">✓ Confirm time(s)</button>
             <button type="button" class="fbd-btn primary" id="tc-apply-btn" onclick="applyTimeCapture(true)"
                     title="Apply the time(s) and send your description to the agent for analysis now">Apply &amp; send to agent</button>
         </div>
@@ -5139,7 +5139,7 @@
     <div class="fbd-card" role="dialog" aria-modal="true">
         <div class="fbd-header">
             <h3>Send this to the AI for time analysis?</h3>
-            <button type="button" class="fbd-close" onclick="closeLlmTimeConsent()" aria-label="Close">Ã—</button>
+            <button type="button" class="fbd-close" onclick="closeLlmTimeConsent()" aria-label="Close">×</button>
         </div>
         <div class="fbd-body">
             <div class="tc-hint">
@@ -5254,17 +5254,17 @@
             <button type="button" class="fbd-close" onclick="closeFeedbackModal()" aria-label="Close">Ã—</button>
         </div>
         <div class="fbd-body">
-            <!-- ===== PAGE 1 â€” problem type ONLY (pick one â†’ new screen) === -->
+             <!-- ===== PAGE 1 — problem type ONLY (pick one → new screen) === -->
             <div id="fbd-page-1" class="fbd-page">
                 <div class="fbd-section-label" id="fbd-route-label">What kind of problem?</div>
                 <div class="fbd-route-cards" id="fbd-route-cards">
                     <button type="button" class="fbd-route-card" data-route="workflow" onclick="selectFeedbackRoute('workflow')">
                         <span class="fbd-route-title" data-route-title="workflow">How it investigated</span>
-                        <span class="fbd-route-desc" data-route-desc="workflow">The steps it took â€” repeated itself, ran checks it didn't need, stopped too early, or went in the wrong order.</span>
+                        <span class="fbd-route-desc" data-route-desc="workflow">The steps it took — repeated itself, ran checks it didn't need, stopped too early, or went in the wrong order.</span>
                     </button>
                     <button type="button" class="fbd-route-card" data-route="skill" onclick="selectFeedbackRoute('skill')">
                         <span class="fbd-route-title" data-route-title="skill">What it knew</span>
-                        <span class="fbd-route-desc" data-route-desc="skill">Its knowledge was off â€” it misread the logs, reasoned wrongly, or used a wrong rule.</span>
+                        <span class="fbd-route-desc" data-route-desc="skill">Its knowledge was off — it misread the logs, reasoned wrongly, or used a wrong rule.</span>
                     </button>
                     <button type="button" class="fbd-route-card" data-route="both" onclick="selectFeedbackRoute('both')">
                         <span class="fbd-route-title" data-route-title="both">Both</span>
@@ -5273,9 +5273,9 @@
                 </div>
             </div>
 
-            <!-- ===== PAGE 2 â€” the chosen route's full interface ========= -->
+            <!-- ===== PAGE 2 — the chosen route's full interface ========= -->
             <div id="fbd-page-2" class="fbd-page hidden-row">
-                <!-- â”€â”€â”€ Category (ACE label) â€” top of every route â”€â”€â”€ -->
+                <!-- ─── Category (ACE label) — top of every route ─── -->
                 <div class="fbd-group" id="fbd-category-block">
                     <label class="fbd-sub-label" id="fbd-conc-label">Category</label>
                     <select id="fbd-correct-conclusion-tag">
@@ -5334,12 +5334,12 @@
                     <div id="fbd-skill-rows" class="fbd-skill-rows"></div>
                 </div>
 
-                <!-- â”€â”€â”€ Issue Time â€” collapsed by default; tick to expand â”€â”€â”€ -->
+                <!-- ─── Skill menu (shown for skill / both) ─── -->
                 <div class="fbd-group">
                     <label class="fbd-attach-row" title="Tick to say what it should have been.">
                         <input type="checkbox" id="fbd-issue-time-flag" onchange="onIssueTimeFlagToggle()">
                         <span>
-                            â± The issue time (or its capture window) was a problem.
+                             ⏱ The issue time (or its capture window) was a problem.
                         </span>
                     </label>
                     <div id="fbd-issue-time-detail" class="hidden-row" style="margin-top:8px;">
@@ -5358,7 +5358,7 @@
             </div>
         </div>
         <div class="fbd-footer">
-            <button type="button" class="fbd-btn" id="fbd-back-btn" onclick="feedbackWizardBack()" style="display:none;">â† Back</button>
+            <button type="button" class="fbd-btn" id="fbd-back-btn" onclick="feedbackWizardBack()" style="display:none;">← Back</button>
             <span class="fbd-footer-spacer"></span>
             <span style="font-size:0.7rem;color:#9ca3af;align-self:center;">Submitting feedback automatically uploads the log file that Avatar uses to self-improve.</span>
             <button type="button" class="fbd-btn" id="fbd-cancel-btn" onclick="closeFeedbackModal()">Cancel</button>
@@ -5368,14 +5368,14 @@
 </div>
 
 <script>
-    // â”€â”€ Feedback widget renderer (called by appendAssistantText / appendReport) â”€
+    // ── Feedback widget renderer (called by appendAssistantText / appendReport) ─
     function renderFeedbackWidget(turnId) {
         return `
             <div class="feedback-widget" data-turn-id="${turnId}">
                 <button type="button" class="feedback-btn" title="Helpful"
-                        onclick="submitFeedback('${turnId}', 1, this)">ðŸ‘</button>
+                        onclick="submitFeedback('${turnId}', 1, this)">👍</button>
                 <button type="button" class="feedback-btn" title="Not helpful"
-                        onclick="submitFeedback('${turnId}', -1, this)">ðŸ‘Ž</button>
+                        onclick="submitFeedback('${turnId}', -1, this)">👎</button>
             </div>`;
     }
 
@@ -5421,9 +5421,9 @@
                 if (thanks) thanks.remove();
             } else {
                 if (!more) {
-                    more = document.createElement('a');
+                     more = document.createElement('a');
                     more.className = 'feedback-more-link';
-                    more.textContent = 'âœï¸ More feedback';
+                    more.textContent = '✏️ More feedback';
                     widget.appendChild(more);
                 }
                 more.onclick = () => openFeedbackModal(turnId, nextVote, more);
@@ -5441,7 +5441,7 @@
         }
     }
 
-    // â”€â”€ Feedback Layer 2: detailed structured feedback modal â”€â”€â”€â”€â”€â”€â”€â”€â”€
+    // ── Feedback Layer 2: detailed structured feedback modal ─────────
     window.__turnContext = window.__turnContext || {};
     window.__currentFeedbackCtx = null;
 
@@ -5454,7 +5454,7 @@
         const invokeRe = /Invoking[^`]*`([^`]+)`/i;
         const fetchRe  = /Fetching\s+filtered\s+logs[^`]*for[^`]*`([^`]+)`/i;
         // Names like `get_final_state_snapshot` / `get_phase_summaries` are
-        // raw tool calls, not domain skills â€” surface them in the step row
+        // raw tool calls, not domain skills — surface them in the step row
         // but keep them out of the skill picker (no playbook to feed back).
         const toolRe   = /^(get|fetch)_/i;
 

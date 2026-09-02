@@ -16,7 +16,7 @@ from datetime import datetime
 import tkinter as tk
 from tkinter import filedialog
 
-from configs.chatbot_ui import WIFI_UI
+from configs.chatbot_ui import NW_UI
 from configs.global_configs import app_config
 from models.models import CaseContext
 from services.chatbot.engine.network_experience import NwAnalysisAgentSystem
@@ -250,7 +250,7 @@ def index():
         pass
     return render_template(
         "chatbot/page.html",
-        ui=WIFI_UI,
+        ui=NW_UI,
         suggested_log=suggested_log,
         issue_description=issue_desc,
     )
@@ -976,7 +976,7 @@ def back_to_avatar():
 # The module above is now a domain adapter: its functions retain BT/Wi-Fi/NW
 # policy, while the factory owns the public route table and shared use cases.
 _NW_ANALYSIS_CAPABILITIES = {
-    key for key, enabled in WIFI_UI["features"].items() if enabled
+    key for key, enabled in NW_UI["features"].items() if enabled
 }
 _NW_ANALYSIS_HANDLERS = handler_map(globals(), _NW_ANALYSIS_CAPABILITIES)
 nw_analysis_bp = create_chatbot_blueprint(ChatbotBlueprintConfig(

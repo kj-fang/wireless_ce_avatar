@@ -168,7 +168,12 @@ LOG_CHATBOT_UI = {
     },
 }
 
-WIFI_UI = {
+# Network Experience. `domain` stays "wifi" on purpose: NW analyses Wi-Fi
+# logs and its agent introduces itself as a Wi-Fi diagnostic detective, so
+# that field describes the subject matter, not the profile. The profile is
+# identified by which dict is used (and by GATHER_DOMAIN = "nw" in the route
+# module, which is what actually gets persisted).
+NW_UI = {
     "domain": "wifi",
     "api": "/nw_analysis",
     "title": "Wi-Fi Log Chatbot",

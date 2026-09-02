@@ -588,6 +588,52 @@ def smoke_echo_kb() -> None:
                 _os.environ[k] = v
 
 
+# ---------------------------------------------------------------- S8
+def smoke_time_coverage(tmp: Path) -> None:
+    print("[S8] Issue-time vs log-window coverage check")
+    from .runner import CaseAnalysis, HandsfreeRunner
+    from .composer import compose_plain
+
+    log = tmp / "s8" / "x.etl.log"
+    log.parent.mkdir(parents=True, exist_ok=True)
+    log.write_text(
+        "06/20/2026-10:16:01.000 [I] Connected to BSSID aa:bb:cc:dd:ee:ff\n"
+        "06/20/2026-10:44:58.154 [I] last line\n", encoding="utf-8")
+    r = HandsfreeRunner(progress_cb=lambda s, d: None)
+
+    a = CaseAnalysis(case_nbr="1", mode="full", log_path=str(log),
+                     issue_times=["06/20/2026-08:00:00"])
+    r._check_time_coverage(a)
+    check("S8.a issue time outside window -> mismatch flagged",
+          a.time_mismatch.get("issue_times") == ["06/20/2026-08:00:00"]
+          and a.time_mismatch.get("log_first", "").endswith("10:16:01"),
+          str(a.time_mismatch))
+
+    b = CaseAnalysis(case_nbr="2", mode="full", log_path=str(log),
+                     issue_times=["06/20/2026-10:30:00"])
+    r._check_time_coverage(b)
+    check("S8.b issue time inside window -> no flag", b.time_mismatch == {})
+
+    c = CaseAnalysis(case_nbr="3", mode="full", log_path=str(log),
+                     issue_times=["10:17:30"])
+    r._check_time_coverage(c)
+    check("S8.c time-only value never flags (borrows log date)",
+          c.time_mismatch == {})
+
+    d = CaseAnalysis(case_nbr="4", mode="full", log_path=str(log),
+                     issue_times=["06/20/2026-10:10:00"])
+    r._check_time_coverage(d)
+    check("S8.d grace window (10 min before start) -> no flag",
+          d.time_mismatch == {})
+
+    a.triage = {}
+    plain = compose_plain(a)
+    check("S8.e mismatch warning composed with request for issue-time log",
+          "TIME MISMATCH" in plain
+          and "please help provide a WRT log captured at the issue time" in plain,
+          plain[:300])
+
+
 def run_smoke() -> int:
     tmp = Path(tempfile.mkdtemp(prefix="handsfree_smoke_"))
     try:
@@ -598,6 +644,7 @@ def run_smoke() -> int:
         smoke_orchestrator(tmp)
         smoke_ui_commenter()
         smoke_echo_kb()
+        smoke_time_coverage(tmp)
     finally:
         shutil.rmtree(tmp, ignore_errors=True)
     print(f"\nsmoke result: {'ALL PASS' if not PASS_FAIL else 'FAILURES: ' + ', '.join(PASS_FAIL)}")

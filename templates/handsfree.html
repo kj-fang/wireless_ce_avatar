@@ -629,6 +629,13 @@
       chips.push({label: 'visibility', text: 'public reply to customer', cls: 'warn',
                   title: 'Approving posts this as a customer-visible comment (not Private to Intel)'});
     }
+    const tm = analysis.time_mismatch || {};
+    if (tm.log_first) {
+      chips.push({label: 'time check', text: 'log does NOT cover issue time', cls: 'bad',
+                  title: 'reported: ' + (tm.issue_times || []).join(' · ')
+                       + ' — log covers ' + tm.log_first + ' – ' + tm.log_last
+                       + ' (±' + (tm.grace_minutes || 10) + ' min grace)'});
+    }
     const times = (cr.issue_times && cr.issue_times.length)
       ? cr.issue_times : (analysis.issue_times || []);
     if (times.length) {

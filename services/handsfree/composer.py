@@ -121,6 +121,21 @@ def compose_plain(analysis: CaseAnalysis) -> str:
             text = text.replace("\n\n\n", "\n\n")
         return text.strip() + "\n"
 
+    # Time-coverage warning first — the reviewer must see it before the
+    # findings, because findings from a log that does not cover the reported
+    # issue time may describe a DIFFERENT occurrence.
+    tm = analysis.time_mismatch or {}
+    if tm.get("log_first"):
+        parts += [
+            "*** TIME MISMATCH — the attached log does NOT cover the reported "
+            "issue time ***",
+            f"Reported issue time: {', '.join(tm.get('issue_times', []))}. "
+            f"Attached WRT log covers {tm['log_first']} – {tm.get('log_last')}.",
+            "Log time is not the same as the issue time — please help provide "
+            "a WRT log captured at the issue time.",
+            "",
+        ]
+
     if analysis.mode == "full" and analysis.incidents:
         parts.append(f"Automated log analysis for case {analysis.case_nbr}"
                      + (f" — {analysis.subject}" if analysis.subject else ""))

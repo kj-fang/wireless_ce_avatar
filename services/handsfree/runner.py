@@ -123,6 +123,7 @@ class CaseAnalysis:
     incidents: list[IncidentReport] = field(default_factory=list)
     stages: list[StageStatus] = field(default_factory=list)
     echo_insights: list = field(default_factory=list)  # Echo KB root-cause answers
+    time_mismatch: dict = field(default_factory=dict)  # log doesn't cover issue time
     error: str = ""
 
     @property
@@ -389,6 +390,15 @@ class HandsfreeRunner:
             return analysis
         analysis.log_path = log_path
 
+        # -- 9b. does the log actually cover the reported issue time? ----------
+        # e.g. case 01025350: issue stated at 17:14, capture covered
+        # 17:39–17:44. The agent may still find an assert, but the reviewer
+        # (and the customer) must know the log is from a different time.
+        try:
+            self._check_time_coverage(analysis)
+        except Exception as e:
+            print(f"[handsfree.runner] time-coverage check failed (non-fatal): {e}")
+
         # -- 10. agentic analysis (one run per incident time) --------------------
         with self._stage(analysis, "agent_analysis"):
             self._run_agent(analysis, max_steps=max_steps)
@@ -443,6 +453,57 @@ class HandsfreeRunner:
         if not got_report:
             analysis.error = analysis.error or "agent produced no report; triage used instead"
         return analysis
+
+    # ------------------------------------------------------------------
+    def _check_time_coverage(self, analysis: CaseAnalysis,
+                             grace_minutes: int = 10) -> None:
+        """Flag when NO reported issue time falls inside the decoded log's
+        time range (±grace). Only full datetimes count — time-only values
+        borrow the log's date downstream, so they are inside by construction.
+        Sets analysis.time_mismatch and emits a WARNING progress line."""
+        from datetime import timedelta
+        from utils.issue_time_utils import (format_issue_time,
+                                            parse_issue_time_string,
+                                            read_log_time_range)
+
+        if not analysis.issue_times or not analysis.log_path:
+            return
+        first, last = read_log_time_range(analysis.log_path)
+        if not first or not last:
+            return
+
+        grace = timedelta(minutes=grace_minutes)
+        checked: list[str] = []
+        covered = False
+        for raw in analysis.issue_times:
+            dt, time_only = parse_issue_time_string(str(raw))
+            if dt is None or time_only:
+                continue
+            # Resolve customer-vs-log frame when tz anchors are available
+            # (system_info.txt / folder timestamp); harmless no-op otherwise.
+            try:
+                from utils.issue_time_ai import determine_issue_time_frames
+                dt = determine_issue_time_frames(
+                    dt, [analysis.log_path], first, last).get("log_frame") or dt
+            except Exception:
+                pass
+            checked.append(str(raw))
+            if first - grace <= dt <= last + grace:
+                covered = True
+                break
+
+        if checked and not covered:
+            analysis.time_mismatch = {
+                "issue_times": checked,
+                "log_first": format_issue_time(first, with_ms=False),
+                "log_last": format_issue_time(last, with_ms=False),
+                "grace_minutes": grace_minutes,
+            }
+            self.progress(
+                "decode_etl",
+                f"WARNING: log covers {analysis.time_mismatch['log_first']} – "
+                f"{analysis.time_mismatch['log_last']} but the reported issue "
+                f"time(s) {', '.join(checked)} are OUTSIDE this window")
 
     # ------------------------------------------------------------------
     def _pick_etl(self, wifi_files: list, ddd_files: list,

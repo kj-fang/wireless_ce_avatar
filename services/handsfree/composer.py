@@ -80,6 +80,48 @@ def _incident_lines(inc: IncidentReport) -> list[str]:
     return lines
 
 
+# Customer-facing ask per missing-info item (fixed text, no LLM — these can
+# post publicly via the request_info / request_logs replies).
+_INFO_ASKS = {
+    "issue_description": ("a clearer description of the issue — what exactly "
+                          "fails, and expected vs actual behavior"),
+    "issue_time": ("the exact date and time (with timezone) when the issue "
+                   "occurred, matching the attached logs"),
+    "repro_steps": ("step-by-step reproduction instructions and how often "
+                    "the issue reproduces"),
+}
+
+
+def _info_ask_bullets(analysis: CaseAnalysis, numbered: bool = False) -> list[str]:
+    out = []
+    for n, m in enumerate((analysis.missing_info or []), 1):
+        ask = _INFO_ASKS.get(m.get("item"))
+        if ask:
+            out.append(f"  {n}. {ask}," if numbered else f"  - {ask}")
+    if out and not numbered:
+        out[-1] = out[-1].rstrip(",")
+    return out
+
+
+def _request_info_lines(analysis: CaseAnalysis) -> list[str]:
+    """Customer-facing reply asking for missing case information. Fixed
+    template (no LLM text): this draft posts PUBLICLY once approved."""
+    parts = [
+        "Hello,",
+        "",
+        "Thank you for reporting this issue"
+        + (f" ({analysis.subject})" if analysis.subject else "") + ".",
+        "",
+        "To start the analysis we need some additional information about the "
+        "case. Could you please provide:",
+    ]
+    parts += _info_ask_bullets(analysis)
+    parts += ["",
+              "We will proceed with the analysis as soon as this information "
+              "is available. Thank you!"]
+    return parts
+
+
 def _request_logs_lines(analysis: CaseAnalysis) -> list[str]:
     """Customer-facing reply asking for the missing WRT logs. Deliberately a
     fixed template (no LLM text): this draft posts PUBLICLY once approved."""
@@ -90,7 +132,7 @@ def _request_logs_lines(analysis: CaseAnalysis) -> list[str]:
                    "logs inside it")
     else:
         missing = "we could not find a WRT log archive attached to this case"
-    return [
+    parts = [
         "Hello,",
         "",
         "Thank you for reporting this issue"
@@ -108,14 +150,26 @@ def _request_logs_lines(analysis: CaseAnalysis) -> list[str]:
         "We will start the analysis as soon as the logs are available. "
         "Thank you!",
     ]
+    # One combined public reply: if case info is also missing, ask for it
+    # here rather than drafting a second request.
+    info = _info_ask_bullets(analysis)
+    if info:
+        tail = parts.pop()
+        parts += ["",
+                  "In addition, to speed up the analysis please also provide:"]
+        parts += info
+        parts += ["", tail]
+    return parts
 
 
 def compose_plain(analysis: CaseAnalysis) -> str:
     """Plain-text draft (editable in the review UI)."""
     parts: list[str] = [AI_MARKER, ""]
 
-    if analysis.mode == "request_logs":
-        parts.extend(_request_logs_lines(analysis))
+    if analysis.mode in ("request_logs", "request_info"):
+        parts.extend(_request_logs_lines(analysis)
+                     if analysis.mode == "request_logs"
+                     else _request_info_lines(analysis))
         text = "\n".join(parts)
         while "\n\n\n" in text:
             text = text.replace("\n\n\n", "\n\n")
@@ -135,6 +189,18 @@ def compose_plain(analysis: CaseAnalysis) -> str:
             "a WRT log captured at the issue time.",
             "",
         ]
+
+    # Case-info gaps that didn't block the analysis: give the reviewer a
+    # forwardable clarification request (this draft posts Private-to-Intel).
+    if analysis.missing_info:
+        parts.append("Request for clarification — please ask the customer to provide:")
+        for m in analysis.missing_info:
+            ask = _INFO_ASKS.get(m.get("item"))
+            if not ask:
+                continue
+            reason = (m.get("reason") or "").strip()
+            parts.append(f"  - {ask}" + (f" ({reason})" if reason else ""))
+        parts.append("")
 
     if analysis.mode == "full" and analysis.incidents:
         parts.append(f"Automated log analysis for case {analysis.case_nbr}"

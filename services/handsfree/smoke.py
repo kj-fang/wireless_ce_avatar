@@ -272,6 +272,8 @@ def smoke_runner(tmp: Path) -> None:
         "attachment_name": "repro_logs.7z",
         "attachment_reason": "uploaded right after the 10:17:30 repro; later_capture.zip had no failure",
         "reasoning": "Comment #2 supersedes the vague description; comment #3 rules out the newer capture.",
+        "missing_info": [{"item": "repro_steps",
+                          "reason": "no reproduction steps mentioned anywhere"}],
     })
     fake_llm = types.SimpleNamespace(
         client=FakeAgentClient(report, report),   # same report either way
@@ -316,9 +318,10 @@ def smoke_runner(tmp: Path) -> None:
               and analysis.case_reader.get("issue_time_source") == "comment #2")
         stage_names = [s.name for s in analysis.stages]
         check("S4.e all stages recorded",
-              {"fetch_case", "triage", "read_case_history", "check_wrt_log",
-               "pick_zip", "download", "decompose", "issue_time", "pick_etl",
-               "agent_analysis", "echo_kb"} <= set(stage_names),
+              {"fetch_case", "triage", "read_case_history", "check_case_info",
+               "check_wrt_log", "pick_zip", "download", "decompose",
+               "issue_time", "pick_etl", "agent_analysis", "echo_kb"}
+              <= set(stage_names),
               str(stage_names))
         check("S4.e2 no assert evidence -> Echo never queried",
               analysis.echo_insights == [], str(analysis.echo_insights))
@@ -338,6 +341,12 @@ def smoke_runner(tmp: Path) -> None:
                             analysis=analysis.to_dict())
         check("S4.f draft queued pending_review",
               rec["status"] == "pending_review" and "AP-initiated" in rec["draft_plain"])
+        check("S4.f2 minor info gap -> best-effort analysis + clarification section",
+              analysis.mode == "full"
+              and [m["item"] for m in analysis.missing_info] == ["repro_steps"]
+              and "Request for clarification" in rec["draft_plain"]
+              and "step-by-step reproduction instructions" in rec["draft_plain"],
+              rec["draft_plain"][:300])
 
         # --- request-logs path A: no archive attached at all ----------------
         def _fake_process_no_logs(case_ctx: CaseContext) -> CaseContext:
@@ -384,6 +393,60 @@ def smoke_runner(tmp: Path) -> None:
               analysis4.mode == "triage_only"
               and analysis4.error == "attachment decompose failed",
               f"mode={analysis4.mode} err={analysis4.error}")
+
+        # --- S9: case-information completeness gate --------------------------
+        severe_reply = json.dumps({
+            "clean_description": "", "issue_times": [], "issue_time_source": "",
+            "attachment_name": "", "attachment_reason": "",
+            "reasoning": "boilerplate description, nothing concrete",
+            "missing_info": [
+                {"item": "issue_description",
+                 "reason": "no understandable failure statement"},
+                {"item": "issue_time", "reason": "no failure time stated"},
+                {"item": "repro_steps", "reason": "no repro steps"},
+            ],
+        })
+        fake_llm.chat = lambda messages, system_content=None: severe_reply
+        analysis5 = r.analyze_case("01234567")
+        stage_names5 = [s.name for s in analysis5.stages]
+        check("S9.a severe info gap -> request_info, stops before pick_zip",
+              analysis5.mode == "request_info"
+              and "pick_zip" not in stage_names5
+              and "check_case_info" in stage_names5,
+              f"mode={analysis5.mode} stages={stage_names5}")
+        draft5 = compose(analysis5)
+        check("S9.b request-info reply asks for every missing item",
+              "Could you please provide:" in draft5["plain"]
+              and "clearer description of the issue" in draft5["plain"]
+              and "exact date and time (with timezone)" in draft5["plain"]
+              and "step-by-step reproduction instructions" in draft5["plain"]
+              and draft5["confidence"] is None,
+              draft5["plain"][:400])
+
+        # Fallback-found issue time retracts the gap (stage-7 refinement).
+        time_gap_reply = json.dumps({
+            "clean_description": "Device disconnects after association",
+            "issue_times": [], "issue_time_source": "",
+            "attachment_name": "repro_logs.7z",
+            "attachment_reason": "only driver log upload",
+            "reasoning": "time never stated; org fallback should find it",
+            "missing_info": [{"item": "issue_time",
+                              "reason": "no failure time stated"}],
+        })
+        fake_llm.chat = lambda messages, system_content=None: time_gap_reply
+        adc.process_single_zip = _fake_zip_proc
+        analysis6 = r.analyze_case("01234567")
+        check("S9.c fallback-found issue time retracts the gap",
+              analysis6.mode == "full" and analysis6.missing_info == [],
+              f"mode={analysis6.mode} missing={analysis6.missing_info}")
+
+        # request_logs + info gaps merge into ONE public reply.
+        analysis2.missing_info = [{"item": "issue_time", "reason": ""}]
+        draft2b = compose(analysis2)
+        check("S9.d request-logs reply merges the info asks",
+              "In addition, to speed up the analysis" in draft2b["plain"]
+              and "exact date and time (with timezone)" in draft2b["plain"],
+              draft2b["plain"][:400])
     finally:
         cis.CaseService.process_case = orig_process
         adl.run_dload_threads = orig_dload

@@ -45,6 +45,15 @@ Your tasks:
     issue), filename hints (date stamps, "log", "trace", platform names),
     and the attachment subtitle. Prefer .zip driver-log captures over
     screenshots/documents.
+ 4. Assess whether the case gives an engineer enough to analyze, judged
+    over the description AND all comments together (a later comment can
+    fill a gap in the description). Report what is missing or too vague:
+    - "issue_description": no understandable statement of what fails /
+      expected vs actual behavior.
+    - "issue_time": no failure date/time stated anywhere.
+    - "repro_steps": no reproduction steps and no frequency information.
+    Report ONLY genuinely missing/unclear items — an item that is stated
+    anywhere, even briefly, is NOT missing.
 
 Output ONLY a valid JSON object (no markdown, no code fences):
 {{
@@ -53,7 +62,9 @@ Output ONLY a valid JSON object (no markdown, no code fences):
   "issue_time_source": "<'description' or 'comment #N' that stated the time>",
   "attachment_name": "<EXACT filename from the ATTACHMENTS list, or '' if none fits>",
   "attachment_reason": "<one sentence: why this attachment matches the issue time>",
-  "reasoning": "<2-4 sentences tracing how the comments changed the picture>"
+  "reasoning": "<2-4 sentences tracing how the comments changed the picture>",
+  "missing_info": [{{"item": "issue_description|issue_time|repro_steps",
+                     "reason": "<one short sentence why it is missing/unclear>"}}]
 }}
 
 === SUBJECT ===
@@ -161,6 +172,24 @@ def read_case_history(llm, *, subject: str, description: str,
         return None
 
     times = [str(t).strip() for t in (res.get("issue_times") or []) if str(t).strip()]
+
+    # Normalize the completeness assessment: known items only, deduped,
+    # reasons capped. Tolerates bare-string entries ("repro_steps").
+    known_items = ("issue_description", "issue_time", "repro_steps")
+    missing: list[dict] = []
+    seen: set = set()
+    for entry in (res.get("missing_info") or []):
+        if isinstance(entry, str):
+            entry = {"item": entry, "reason": ""}
+        if not isinstance(entry, dict):
+            continue
+        item = str(entry.get("item") or "").strip().lower()
+        if item not in known_items or item in seen:
+            continue
+        seen.add(item)
+        missing.append({"item": item,
+                        "reason": str(entry.get("reason") or "").strip()[:200]})
+
     return {
         "clean_description": str(res.get("clean_description") or "").strip(),
         "issue_times": times[:3],
@@ -168,6 +197,7 @@ def read_case_history(llm, *, subject: str, description: str,
         "attachment_name": str(res.get("attachment_name") or "").strip(),
         "attachment_reason": str(res.get("attachment_reason") or ""),
         "reasoning": str(res.get("reasoning") or ""),
+        "missing_info": missing,
     }
 
 

@@ -124,6 +124,7 @@ class CaseAnalysis:
     stages: list[StageStatus] = field(default_factory=list)
     echo_insights: list = field(default_factory=list)  # Echo KB root-cause answers
     time_mismatch: dict = field(default_factory=dict)  # log doesn't cover issue time
+    missing_info: list = field(default_factory=list)   # [{item, reason}] case-info gaps
     error: str = ""
 
     @property
@@ -239,6 +240,38 @@ class HandsfreeRunner:
                     f"issue_times={reader.get('issue_times')} "
                     f"attachment={reader.get('attachment_name') or '(none)'} "
                     f"({reader.get('issue_time_source') or 'no source'})")
+
+        # -- 3a. is the case information usable? -------------------------------
+        # LLM-judged completeness (description clarity / issue time / repro
+        # steps) with deterministic backstops for outright-empty fields.
+        with self._stage(analysis, "check_case_info"):
+            missing = list((analysis.case_reader or {}).get("missing_info") or [])
+            flagged = {m.get("item") for m in missing}
+            if (not (analysis.description or "").strip()
+                    and not analysis.clean_description
+                    and "issue_description" not in flagged):
+                missing.append({"item": "issue_description",
+                                "reason": "the case has no issue description"})
+            if not analysis.issue_times and "issue_time" not in flagged:
+                missing.append({"item": "issue_time",
+                                "reason": "no failure time stated anywhere in the case"})
+            analysis.missing_info = missing
+            self.progress(
+                "check_case_info",
+                ("missing/unclear: " + ", ".join(m["item"] for m in missing))
+                if missing else "all case info present")
+
+        # Severe gap: neither an understandable description nor an issue time
+        # — there is nothing to anchor an analysis on. Draft a request-info
+        # reply (mode "request_info": human-approved, posted PUBLIC like
+        # request_logs) instead of burning the log pipeline.
+        gap_items = {m.get("item") for m in analysis.missing_info}
+        if "issue_description" in gap_items and "issue_time" in gap_items:
+            analysis.mode = "request_info"
+            analysis.ok = True
+            analysis.error = ("case lacks both an understandable description and "
+                              "an issue time — drafted a request-info reply")
+            return analysis
 
         # -- 4. pick the log-archive attachment --------------------------------
         # Reader's nomination first; newest-archive heuristic as fallback.
@@ -365,6 +398,10 @@ class HandsfreeRunner:
                 analysis.issue_times = times[:max_incidents]
         if not analysis.clean_description:
             analysis.clean_description = analysis.description or analysis.subject
+        if analysis.issue_times and analysis.missing_info:
+            # A fallback source produced a time after all — retract the gap.
+            analysis.missing_info = [m for m in analysis.missing_info
+                                     if m.get("item") != "issue_time"]
 
         # -- 8. pick the ETL ----------------------------------------------------
         etl_path = None

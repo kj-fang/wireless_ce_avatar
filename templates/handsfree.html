@@ -480,9 +480,10 @@
 
   // ---------- per-case stage table ----------
 
-  const STAGES = ['fetch_case', 'triage', 'read_case_history', 'pick_zip',
-                  'download', 'decompose', 'check_wrt_log', 'issue_time',
-                  'pick_etl', 'decode_etl', 'agent_analysis', 'echo_kb'];
+  const STAGES = ['fetch_case', 'triage', 'read_case_history', 'check_case_info',
+                  'pick_zip', 'download', 'decompose', 'check_wrt_log',
+                  'issue_time', 'pick_etl', 'decode_etl', 'agent_analysis',
+                  'echo_kb'];
   let stageCasePinned = null;   // user-selected case; null = follow the running one
 
   function pinStageCase(caseNbr) {
@@ -625,9 +626,15 @@
     const el = document.getElementById('draft-chips');
     const chips = [];
     const cr = analysis.case_reader || {};
-    if (analysis.mode === 'request_logs') {
+    if (analysis.mode === 'request_logs' || analysis.mode === 'request_info') {
       chips.push({label: 'visibility', text: 'public reply to customer', cls: 'warn',
                   title: 'Approving posts this as a customer-visible comment (not Private to Intel)'});
+    }
+    const mi = analysis.missing_info || [];
+    if (mi.length) {
+      chips.push({label: 'case info', text: mi.length + ' item' + (mi.length > 1 ? 's' : '') + ' missing',
+                  cls: 'warn',
+                  title: mi.map(m => m.item + (m.reason ? ': ' + m.reason : '')).join(' · ')});
     }
     const tm = analysis.time_mismatch || {};
     if (tm.log_first) {
@@ -706,7 +713,7 @@
 
   async function approveDraft() {
     if (!currentDraftId) return;
-    const msg = currentDraftMode === 'request_logs'
+    const msg = (currentDraftMode === 'request_logs' || currentDraftMode === 'request_info')
       ? 'Post this reply to IPS as a PUBLIC comment visible to the customer?'
       : 'Post this comment to IPS as Private to Intel?';
     if (!confirm(msg)) return;

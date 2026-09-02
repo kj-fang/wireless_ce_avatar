@@ -242,9 +242,9 @@ def _approve_and_post_locked(draft_id: str, edited_plain: Optional[str]) -> dict
     backend = (cfg.get("post_backend") or "auto").lower()
     result = None
 
-    # request_logs drafts are customer-facing: post PUBLIC (visible to the
-    # customer). Everything else stays Private-to-Intel.
-    is_public_reply = (rec.get("mode") == "request_logs")
+    # request_logs / request_info drafts are customer-facing: post PUBLIC
+    # (visible to the customer). Everything else stays Private-to-Intel.
+    is_public_reply = (rec.get("mode") in ("request_logs", "request_info"))
 
     if backend in ("rest", "auto"):
         try:

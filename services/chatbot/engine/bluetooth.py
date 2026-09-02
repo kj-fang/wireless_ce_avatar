@@ -74,13 +74,13 @@ class BtLogAgentSystem(WifiLogAgentSystem):
     SCOPE_FULL_LOG_WHEN_EMPTY = True
     CAPABILITY_POLICY = BT_AGENT_POLICY
 
-    # Bluetooth keeps two genuine overrides: the simple-chat prompt carries a
-    # BT identity rather than the Wi-Fi one, and prime_with_context skips the
-    # Wi-Fi timezone conversion because .hci.txt timestamps are already in the
-    # log frame. The Wi-Fi-only tool filtering that used to live here is now
-    # BT_AGENT_POLICY.disabled_tools, and the agentic analysis prompt is now
+    # Bluetooth keeps exactly one genuine override: prime_with_context skips
+    # the Wi-Fi timezone conversion because .hci.txt timestamps are already in
+    # the log frame. The Wi-Fi-only tool filtering that used to live here is
+    # now BT_AGENT_POLICY.disabled_tools, the agentic analysis prompt is now
     # bt_prompt.md / bt_report.md under Speclets (see speclet_defaults.py for
-    # the built-in fallback copies).
+    # the built-in fallback copies), and the BT-flavoured simple-chat prompt
+    # went away with the simple-chat path itself.
 
     def prime_with_context(self, case_nbr: str = "", subject: str = "",
                            description: str = "", issue_type: str = "",

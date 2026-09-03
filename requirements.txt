@@ -38,7 +38,7 @@ hpack==4.1.0
 httpcore==1.0.9
 httpx==0.28.1
 hyperframe==6.1.0
-idna==3.10
+idna==3.18
 imageio==2.37.0
 inflate64==1.0.3
 iniconfig==2.1.0

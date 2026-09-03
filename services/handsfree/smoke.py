@@ -698,6 +698,36 @@ def smoke_time_coverage(tmp: Path) -> None:
           plain[:300])
 
 
+# ---------------------------------------------------------------- S10
+def smoke_yb_etl_pick() -> None:
+    print("[S10] YB/assert ETL-folder preference (earliest nonzero error code)")
+    from .runner import _pick_etl_yb_earliest, _YB_ASSERT_ISSUE_RE
+
+    base = r"C:\x\case\WRT\Log"
+    wifi = [
+        base + r"\TEST1-PC_20-08-2026_13-41-21_288_Dump_failed\WifiDriverIHVSession.etl.004",
+        base + r"\TEST1-PC_20-08-2026_10-47-05_267_12_5010_0x4222_0x0_0x0\WifiDriverIHVSession.etl.002",
+        base + r"\TEST1-PC_20-08-2026_10-46-44_524_12_4222_0xa_0x0_0x1fffff\WifiDriverIHVSession.etl.001",
+        base + r"\TEST1-PC_20-08-2026_10-46-44_524_12_4222_0xa_0x0_0x1fffff\WifiDriverIHVSession_History\WifiDriverIHVSession.etl.003",
+        base + r"\TEST1-PC_20-08-2026_10-35-05_699_Autologger\WifiDriverIHVSession.etl.001",
+        base + r"\TEST1-PC_20-08-2026_10-34-21_993_9_6050_0x0_0x0_0x0\WifiDriverIHVSession.etl.001",
+    ]
+    picked = _pick_etl_yb_earliest(wifi, [])
+    check("S10.a earliest nonzero-code folder wins, non-History ETL",
+          picked is not None and "10-46-44" in picked
+          and "0xa_0x0_0x1fffff" in picked and "History" not in picked,
+          str(picked))
+    check("S10.b all-zero / codeless folders never qualify",
+          _pick_etl_yb_earliest(
+              [base + r"\A_20-08-2026_10-34-21_993_9_6050_0x0_0x0_0x0\x.etl.001",
+               base + r"\B_20-08-2026_10-35-05_699_Autologger\x.etl.001"], [])
+          is None)
+    check("S10.c issue-type trigger matches YB/assert wording",
+          bool(_YB_ASSERT_ISSUE_RE.search("Yellow Bang (YB)"))
+          and bool(_YB_ASSERT_ISSUE_RE.search("firmware assert during test"))
+          and not _YB_ASSERT_ISSUE_RE.search("slow roaming between APs"))
+
+
 def run_smoke() -> int:
     tmp = Path(tempfile.mkdtemp(prefix="handsfree_smoke_"))
     try:
@@ -709,6 +739,7 @@ def run_smoke() -> int:
         smoke_ui_commenter()
         smoke_echo_kb()
         smoke_time_coverage(tmp)
+        smoke_yb_etl_pick()
     finally:
         shutil.rmtree(tmp, ignore_errors=True)
     print(f"\nsmoke result: {'ALL PASS' if not PASS_FAIL else 'FAILURES: ' + ', '.join(PASS_FAIL)}")

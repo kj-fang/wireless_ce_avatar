@@ -3248,11 +3248,18 @@
         }
     }
 
+    function _toArr(v) {
+        if (Array.isArray(v)) return v;
+        if (typeof v === 'string' && v.trim()) return v.split('\n').map(s => s.replace(/^[-•\s]+/, '').trim()).filter(Boolean);
+        return [];
+    }
+
     function appendReport(data, header = '📊 Analysis Report', eventTime = null, turnId = null) {
         removeTyping();
         hideWelcome();
 
-        const actions = (data.recommended_actions || []).map(a => `<li>${escapeHtml(a)}</li>`).join('');
+        const actions = _toArr(data.recommended_actions).map(a => `<li>${escapeHtml(a)}</li>`).join('');
+
         const skills  = (data.involved_skills || data.skill_findings ? Object.keys(data.skill_findings || {}) : [])
                          .map(s => `<span class="skills-badge">${s}</span>`).join(' ');
         const score   = data.confidence_score || 0;

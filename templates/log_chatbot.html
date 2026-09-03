@@ -2455,6 +2455,12 @@
     let agenticMode = true;
     let isAutoFillMode = false;  // true after auto_run prefill; requires a timestamp before sending
     let firstRoundSent = false;  // true after the user successfully sends the first question
+    // Extracted SUMMARY from --report file (CLI --auto-llm flow). Empty string
+    // when not in CLI mode or report has no parseable SUMMARY section.
+    const REPORT_SUMMARY = {{ report_summary | default('') | tojson }};
+    // 'Test Error Happened Time' from --report file, converted to MM/DD/YYYY-HH:MM:SS.
+    // Takes priority over log's last timestamp in the auto-send branch.
+    const REPORT_ISSUE_TIME = {{ report_issue_time | default('') | tojson }};
     // True when the primary Issue Time was auto-filled from the PREVIOUS PAGE
     // and the user hasn't confirmed it yet. While true the primary time is
     // shown in the fields but does NOT count as a usable issue time (the user
@@ -3365,11 +3371,19 @@
         }
     }
 
+    // Coerce a value to a plain array — handles the case where the LLM
+    // returns a newline-delimited string instead of a proper JSON array.
+    function _toArr(v) {
+        if (Array.isArray(v)) return v;
+        if (typeof v === 'string' && v.trim()) return v.split('\n').map(s => s.replace(/^[-•\s]+/, '').trim()).filter(Boolean);
+        return [];
+    }
+
     function appendReport(data, header = '📊 Analysis Report', eventTime = null, turnId = null) {
         removeTyping();
         hideWelcome();
 
-        const actions = (data.recommended_actions || []).map(a => `<li>${escapeHtml(a)}</li>`).join('');
+        const actions = _toArr(data.recommended_actions).map(a => `<li>${escapeHtml(a)}</li>`).join('');
         const skills  = (data.involved_skills || data.skill_findings ? Object.keys(data.skill_findings || {}) : [])
                          .map(s => `<span class="skills-badge">${s}</span>`).join(' ');
         const score   = data.confidence_score || 0;
@@ -4494,6 +4508,8 @@
         const _urlParams = new URLSearchParams(window.location.search);
         const autoRun = _urlParams.get('auto_run');
         const urlIssueTime = (_urlParams.get('issue_time') || '').trim();
+        const autoSend = _urlParams.get('auto_send') === '1';
+        console.log('[auto-llm] tryAutoAnalyzeOnLoad: autoRun=%s autoSend=%s suggestedLog=%s', autoRun, autoSend, suggestedLog);
         const shouldAutoRun = (autoRun === 'analyze_all') || !!suggestedLog;
 
         if (!shouldAutoRun || !suggestedLog) return;
@@ -4557,7 +4573,14 @@
             // the issue context (especially the timestamp) and clicks Send.
             setTimeout(() => {
                 const input = document.getElementById('user-input');
-                const rawQuestion = question || '🔍 Run full multi-skill analysis';
+                // CLI --auto-llm: prefer the extracted report summary over the
+                // generic context description so the agent sees the real test failure.
+                const rawQuestion = (autoSend && REPORT_SUMMARY)
+                    ? REPORT_SUMMARY
+                    : (question || '🔍 Run full multi-skill analysis');
+                if (autoSend && REPORT_SUMMARY) {
+                    console.log('[auto-llm] using report summary as description (%d chars)', REPORT_SUMMARY.length);
+                }
 
                 let descPart = rawQuestion;
                 // Priority: selected attachment time → the first time parsed
@@ -4610,6 +4633,32 @@
                 const prefillHint = document.getElementById('prefill-hint');
                 if (prefillHint) prefillHint.style.display = 'block';
                 validateUserInput();
+
+                // [auto-llm] If --auto-llm was passed from CLI, skip user confirmation
+                // and submit automatically.
+                // Priority: report error time → log's last timestamp → prefilled time.
+                if (autoSend) {
+                    const reportTime = REPORT_ISSUE_TIME || '';
+                    const lastTime   = window.__logLastTime || '';
+                    const chosenTime = reportTime || lastTime;
+                    console.log('[auto-llm] auto_send=1: reportTime=%s logLastTime=%s chosen=%s',
+                        reportTime, lastTime, chosenTime);
+                    if (chosenTime && setIssueTimeFromString(chosenTime)) {
+                        markIssueTimeUserOwned();
+                        console.log('[auto-llm] issue time set from %s: %s',
+                            reportTime ? 'reportErrorTime' : 'logLastTime', chosenTime);
+                    } else if (issueTimeAwaitingConfirm) {
+                        // No extracted time but a prefilled time exists — accept it automatically.
+                        issueTimeAwaitingConfirm = false;
+                        setIssueTimeConfirmUI(false);
+                        validateUserInput();
+                        console.log('[auto-llm] no extracted time — accepted prefilled time (confirm cleared)');
+                    } else {
+                        console.warn('[auto-llm] no time source available — sendMessage will show no-time modal');
+                    }
+                    console.log('[auto-llm] scheduling sendMessage() in 100ms');
+                    setTimeout(() => sendMessage(), 100);
+                }
             }, 400);
 
         } catch (err) {

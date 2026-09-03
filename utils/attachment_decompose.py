@@ -336,7 +336,7 @@ def process_single_zip(zip_path, download_path_tmp, already_downloaded, progress
     os.makedirs(download_path, exist_ok=True)
     
     # Initialize result lists
-    wifi_files, ddd_files, evt_files, bt_files, fw_files = [], [], [], [], []
+    wifi_files, ddd_files, evt_files, bt_files, fw_files, wifilog_files = [], [], [], [], [], []
     processed_files = set()
     unzip_pending = [os.path.abspath(zip_path)]
     is_first_archive = True
@@ -375,8 +375,12 @@ def process_single_zip(zip_path, download_path_tmp, already_downloaded, progress
                 # Include files with 'ddd' in name or .evt files (System Event logs)
                 is_ddd_file = 'ddd' in fname.lower() and not fname.lower().endswith(compressed_exts)
                 is_evt_file = fname.lower() == "raweventviewersystemlogs.evt" or fname.lower() == 'system.evtx'
-                # print(f"[DEBUG] File: {fname} (DDD: {is_ddd_file}, EVT: {is_evt_file})")
-                if is_ddd_file:
+                # WiFi driver plain-text log: basename starts with 'wifilog' (case-insensitive)
+                is_wifilog_file = fname.lower().startswith('wifilog') and fname.lower().endswith(('.log', '.txt'))
+                # print(f"[DEBUG] File: {fname} (DDD: {is_ddd_file}, EVT: {is_evt_file}, WiFiLog: {is_wifilog_file})")
+                if is_wifilog_file:
+                    wifilog_files.append(os.path.abspath(os.path.join(root, fname)))
+                elif is_ddd_file:
                     ddd_files.append(os.path.abspath(os.path.join(root, fname)))
                 elif is_evt_file:
                     evt_files.append(os.path.abspath(os.path.join(root, fname)))
@@ -398,11 +402,13 @@ def process_single_zip(zip_path, download_path_tmp, already_downloaded, progress
     evt_files = dedup_by_capture_signature(list(dict.fromkeys(evt_files)))
     bt_files = dedup_by_capture_signature(list(dict.fromkeys(bt_files)))
     fw_files = dedup_by_capture_signature(list(dict.fromkeys(fw_files)))
+    wifilog_files = dedup_by_capture_signature(list(dict.fromkeys(wifilog_files)))
 
     print(f"WiFi files: {len(wifi_files)}")
     print(f"DDD files: {len(ddd_files)}")
     print(f"EVT files: {len(evt_files)}")
     print(f"BT files: {len(bt_files)}")
     print(f"FW files: {len(fw_files)}")
+    print(f"wifilog files: {len(wifilog_files)}")
     
-    return wifi_files, ddd_files, evt_files, bt_files, fw_files
+    return wifi_files, ddd_files, evt_files, bt_files, fw_files, wifilog_files

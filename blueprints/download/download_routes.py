@@ -76,7 +76,7 @@ def handle_start_download(socketio):
         ):
             print("Downloaded:", file_path, name)
             if not is_bsod:
-                wifi_files, ddd_files, evt_files, bt_files, fw_files = attachment_decompose.process_single_zip(file_path, download_path, already_dload) #####0806
+                wifi_files, ddd_files, evt_files, bt_files, fw_files, wifilog_files = attachment_decompose.process_single_zip(file_path, download_path, already_dload) #####0806
 
                 wifi_dict[name] = wifi_files
                 ddd_dict[name] = ddd_files + evt_files

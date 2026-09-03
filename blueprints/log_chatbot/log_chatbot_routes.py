@@ -396,7 +396,7 @@ def _terminal_sse(job, kind: str, payload) -> str:
         {"type": "error", "content": payload}, ensure_ascii=False) + "\n\n")
 
 
-def _job_sse(job):
+def _job_sse(job, sendto_report_path: str = "", log_path: str = ""):
     """
     Shared SSE generator for a chat job: emit the steps buffered so far, then
     follow live steps until the job reaches a terminal state. Used by both the
@@ -414,6 +414,45 @@ def _job_sse(job):
         while True:
             try:
                 kind, payload = q.get(timeout=120)
+				
+				# --------------------------------------------------
+                # Auto-save LLM report to JSON next to the source file.
+                # Triggered whenever the agent returns a final report
+                # (both CLI --auto-llm and manual web UI flows).
+                # Save location priority:
+                #   1) folder of sendto_report_path  (CLI flow)
+                #   2) folder of current_log_path    (web UI flow)
+                # --------------------------------------------------
+                if isinstance(payload, dict) and payload.get("type") == "report":
+                    try:
+                        import os as _os
+                        from datetime import datetime as _dt
+                        _report_dir = ""
+                        _sendto_rp = sendto_report_path
+                        _log_path  = log_path or getattr(getattr(job, "agent", None), "current_log_path", "") or ""
+                        if _sendto_rp:
+                            _report_dir = _os.path.dirname(_sendto_rp)
+                        elif _log_path:
+                            _report_dir = _os.path.dirname(_log_path)
+                        if _report_dir and _os.path.isdir(_report_dir):
+                            _ts = _dt.now().strftime("%Y%m%d_%H%M%S")
+                            _out_path = _os.path.join(_report_dir, f"llm_report_{_ts}.json")
+                            _save_data = {
+                                "turn_id": job.turn_id,
+                                "conversation_id": job.conversation_id,
+                                "user_message": job.title,
+                                "issue_time": payload.get("issue_time"),
+                                "report": payload.get("data", {}),
+                                "log_path": _log_path,
+                                "saved_at": _dt.now().isoformat(),
+                            }
+                            with open(_out_path, "w", encoding="utf-8") as _f:
+                                json.dump(_save_data, _f, ensure_ascii=False, indent=2)
+                            print(f"💾 [llm-report] Saved → {_out_path}")
+                        else:
+                            print(f"⚠️ [llm-report] No valid directory to save report (sendto_rp={_sendto_rp!r}, log_path={_log_path!r})")
+                    except Exception as _e:
+                        print(f"⚠️ [llm-report] Save failed: {_e}")
             except _q.Empty:
                 yield "data: " + json.dumps({"type": "error", "content": "Chat timed out."}) + "\n\n"
                 return
@@ -429,6 +468,100 @@ def _job_sse(job):
 # ------------------------------------------------------------------
 # Pages
 # ------------------------------------------------------------------
+def _extract_report_summary(report_path: str) -> tuple:
+    """Extract Test Item, Test Result, SUMMARY section, and error time from a
+    structured validation report (.txt or .md).
+
+    Returns: (summary: str, issue_time: str)
+      summary    — multi-part description for the LLM
+      issue_time — value of 'Test Error Happened Time' line, or "" if absent
+                   Format: 'YYYY-MM-DD HH:MM:SS' → converted to 'MM/DD/YYYY-HH:MM:SS'
+    """
+    import re as _re
+    try:
+        with open(report_path, 'r', encoding='utf-8', errors='replace') as _f:
+            content = _f.read()
+    except Exception:
+        return "", ""
+
+    parts = []
+
+    if report_path.lower().endswith('.md'):
+        # ── Markdown report format ─────────────────────────────────────────
+        # Title: first level-1 heading  (# WiFi 6GHz Connection Test Report …)
+        title_m = _re.search(r'^#\s+(.+)', content, _re.MULTILINE)
+        if title_m:
+            parts.append(title_m.group(1).strip())
+
+        # Test Item: **Test Item:** <value>
+        item_m = _re.search(r'\*\*Test Item:\*\*\s*(.+)', content)
+        if item_m:
+            item = ' '.join(item_m.group(1).split())
+            parts.append(f"Test: {item}")
+
+        # Test Result: **Test Result:** ❌ **FAILED** / ✅ **PASSED** / plain word
+        result_m = _re.search(r'\*\*Test Result:\*\*\s*(.+)', content)
+        if result_m:
+            # Strip markdown bold markers and emoji, keep the first word (PASSED/FAILED/…)
+            raw_result = result_m.group(1).strip()
+            raw_result = _re.sub(r'\*+', '', raw_result)           # remove ** bold
+            raw_result = _re.sub(r'[^\x00-\x7F]', '', raw_result)  # strip non-ASCII (emoji)
+            raw_result = raw_result.strip()
+            first_word = raw_result.split()[0] if raw_result.split() else raw_result
+            parts.append(f"Result: {first_word}")
+
+        # Summary section: content under "## Summary" up to the next "---" or "##"
+        summary_m = _re.search(
+            r'^##\s+Summary\s*\n(.*?)(?=\n---|\n##\s)',
+            content, _re.DOTALL | _re.MULTILINE | _re.IGNORECASE
+        )
+        if summary_m:
+            parts.append(summary_m.group(1).strip())
+
+    else:
+        # ── Plain-text (.txt) report format ───────────────────────────────
+        # Title / Test Item (first non-empty line after the top divider)
+        title_m = _re.search(r'={10,}\s*\n(.+?)\s*\n={10,}', content)
+        if title_m:
+            parts.append(title_m.group(1).strip())
+
+        # Test Item details
+        item_m = _re.search(r'Test Item:\s*(.+?)(?=\nTest Result:|\n\n={5,})', content, _re.DOTALL)
+        if item_m:
+            item = ' '.join(item_m.group(1).split())
+            parts.append(f"Test: {item}")
+
+        # Test Result (PASSED / FAILED / BLOCKED …)
+        result_m = _re.search(r'Test Result:\s*(\S+)', content)
+        if result_m:
+            parts.append(f"Result: {result_m.group(1)}")
+
+        # SUMMARY section body (between the two === dividers that wrap it)
+        summary_m = _re.search(
+            r'={10,}\s*\nSUMMARY\s*\n={10,}\s*\n(.*?)(?=\n={10,})',
+            content, _re.DOTALL | _re.IGNORECASE
+        )
+        if summary_m:
+            parts.append(summary_m.group(1).strip())
+
+    summary = '\n\n'.join(p for p in parts if p)
+
+    # Test Error Happened Time: 2026-06-17 17:30:21  (shared by both formats)
+    # Convert YYYY-MM-DD HH:MM:SS → MM/DD/YYYY-HH:MM:SS (matches setIssueTimeFromString)
+    issue_time = ""
+    err_time_m = _re.search(
+        r'Test Error Happened Time:\*{0,2}\s*(\d{4})-(\d{2})-(\d{2})\s+(\d{2}:\d{2}:\d{2})',
+        content
+    )
+    if err_time_m:
+        yyyy, mm, dd, hms = err_time_m.groups()
+        issue_time = f"{int(mm):02d}/{int(dd):02d}/{yyyy}-{hms}"
+        print(f"📅 [report-summary] Extracted error time: {issue_time}")
+
+    print(f"📄 [report-summary] Extracted summary length [{issue_time}]: {summary} ({len(summary)})")
+    return summary, issue_time
+
+
 @log_chatbot_bp.route("/", methods=["GET"])
 def index():
     suggested_log = app_config.last_analyzed_log_path or ""
@@ -438,7 +571,21 @@ def index():
         issue_desc = ctx.get("description", "")
     except Exception:
         pass
-    return render_template("log_chatbot.html", suggested_log=suggested_log, issue_description=issue_desc)
+
+    # CLI --auto-llm flow: extract summary + error time from --report file.
+    report_summary = ""
+    report_issue_time = ""
+    _sendto_report = (session.get("sendto_report_path") or "").strip()
+    if _sendto_report and session.get("sendto_auto_llm"):
+        report_summary, report_issue_time = _extract_report_summary(_sendto_report)
+        if report_summary:
+            print(f"📄 [report-summary] Extracted {len(report_summary)} chars from {_sendto_report}")
+        if report_issue_time:
+            print(f"📅 [report-summary] Error time for issue time field: {report_issue_time}")
+
+    return render_template("log_chatbot.html", suggested_log=suggested_log,
+                           issue_description=issue_desc, report_summary=report_summary,
+                           report_issue_time=report_issue_time)
 
 
 # ------------------------------------------------------------------
@@ -475,6 +622,41 @@ def browse():
 # ------------------------------------------------------------------
 @log_chatbot_bp.route("/set_log", methods=["POST"])
 def set_log():
+    # These paths are auto-detected from the report zip structure after extraction
+    # (report_zip: <stem>/<stem>/artifacts/*.json  +  <stem>/<stem>/*report*.txt).
+    is_agent_zip = session.get('is_agent_zip', False)
+    if is_agent_zip:
+        _report_path = (session.get("sendto_report_path") or "").strip()
+        _artifacts_path = (session.get("sendto_artifacts_path") or "").strip()
+        if _report_path:
+            print(f'[Agent-zip] Report txt detected: {_report_path}')
+            try:
+                with open(_report_path, 'r', encoding='utf-8') as _f:
+                    _preview = [next(_f).rstrip() for _ in range(3)]
+                print(f'[Agent-zip] Report preview (first 3 lines):')
+                for _i, _line in enumerate(_preview, 1):
+                    print(f'  {_i}: {_line}')
+            except StopIteration:
+                print(f'[Agent-zip] Report has fewer than 3 lines.')
+            except Exception as _e:
+                print(f'[Agent-zip] Failed to read report: {_e}')
+
+        if _artifacts_path:
+            print(f'[Agent-zip] Artifacts folder detected: {_artifacts_path}')
+            try:
+                _ext_counts: dict = {}
+                for _fname in os.listdir(_artifacts_path):
+                    _fpath = os.path.join(_artifacts_path, _fname)
+                    if not os.path.isfile(_fpath):
+                        continue
+                    _ext = os.path.splitext(_fname)[1].lower() or '(no ext)'
+                    _ext_counts[_ext] = _ext_counts.get(_ext, 0) + 1
+                _total = sum(_ext_counts.values())
+                _summary = ', '.join(f'{cnt} {ext}' for ext, cnt in sorted(_ext_counts.items()))
+                print(f'[Agent-zip] Artifacts summary: {_total} file(s) — {_summary}')
+            except Exception as _e:
+                print(f'[Agent-zip] Failed to summarise artifacts folder: {_e}')
+
     data = request.get_json(silent=True) or {}
     log_path = data.get("log_path", "").strip()
     if not log_path:
@@ -969,7 +1151,11 @@ def chat():
             # The original request streams the job exactly like a reconnect
             # would (replay buffered steps, then follow to done/error).
             return Response(
-                _job_sse(job),
+                _job_sse(
+                    job,
+                    sendto_report_path=(session.get("sendto_report_path") or "").strip(),
+                    log_path=getattr(agent, "current_log_path", "") or "",
+                ),
                 mimetype="text/event-stream",
                 headers={"Cache-Control": "no-cache", "X-Accel-Buffering": "no"},
             )

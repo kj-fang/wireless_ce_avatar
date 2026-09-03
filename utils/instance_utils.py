@@ -65,7 +65,7 @@ def check_already_running():
     return None
 
 
-def register_instance(port):
+def register_instance(port, sendto_token=None):
     """Register this instance by writing running_avatar.json (always, regardless of tray usage)"""
     pid = os.getpid()
     instance_file = os.path.join(get_user_data_dir(), 'running_avatar.json')
@@ -74,8 +74,10 @@ def register_instance(port):
         'pid': pid,
         'port': port,
         'url': f'http://127.0.0.1:{port}',
-        'started_at': time.time()
+        'started_at': time.time(),
     }
+    if sendto_token:
+        instance['sendto_token'] = sendto_token
 
     try:
         with open(instance_file, 'w', encoding='utf-8') as f:

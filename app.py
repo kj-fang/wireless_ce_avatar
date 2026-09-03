@@ -119,7 +119,7 @@ def _bring_chrome_to_front(server_pid):
     except Exception as e:
         print(f'⚠️ [SendTo] _bring_chrome_to_front failed: {e}')
 
-def _build_startup_path(input_paths, sendto_token=None):
+def _build_startup_path(input_paths, sendto_token=None, is_agent_zip=False, auto_llm=False):
     if not input_paths:
         return '/'
 
@@ -152,7 +152,14 @@ def _build_startup_path(input_paths, sendto_token=None):
     # [DO NOT remove] - Only log the first few chars as a sanity check
     print(f"🔑 [_build_startup_path] using token: {'CLI arg=' + sendto_token[:8] + '...' if sendto_token else 'app_config=' + app_config.sendto_token[:8] + '...'}")
 
-    return f'/log_parser/open_local_analysis?token={token}&path={quoted_path}'
+    url = f'/log_parser/open_local_analysis?token={token}&path={quoted_path}'
+    if is_agent_zip:
+        url += '&is_agent_zip=1'
+    if auto_llm:
+        url += '&auto_llm=1'
+    print(f"🔗 Built startup path: {url}")
+    print(f"🤖 [auto-llm] flag={'ON' if auto_llm else 'OFF'} → auto_send will be {'appended to redirect URL' if auto_llm else 'omitted'}")
+    return url
 
 
 def _navigate_existing_browser(instance_url, startup_path):
@@ -254,9 +261,31 @@ if __name__ == "__main__":
     parser.add_argument('--no-tray', action='store_true', help='Disable tray manager')
     parser.add_argument('--tray-mode', action='store_true', help='Run as tray manager')
     parser.add_argument('--sendto-token', type=str, default=None, help='SendTo security token (auto-set by shortcut, not for manual use).')
+    parser.add_argument('--agent-zip', type=str, default=None, help='Path to a report zip produced by the validation AI agent. Reads the SendTo token from the running instance automatically.')
+    parser.add_argument('--auto-llm', action='store_true', help='Automatically submit LLM analysis using the log\'s last timestamp (no user click required).')
     parser.add_argument('input_paths', nargs='*', help='Optional local analysis file paths passed from Windows SendTo.')
     args = parser.parse_args()
-    startup_path = _build_startup_path(args.input_paths, sendto_token=args.sendto_token)
+
+    # --agent-zip: let an external agent (or script) pass a report zip without
+    # knowing the current SendTo token.  The token is read directly from the
+    # running instance registry (running_avatar.json) so no --sendto-token arg
+    # is needed.
+    if args.agent_zip:
+        _existing = check_already_running()
+        if not _existing:
+            print('⚠️ IntelAvatar is not running. Please start it first before using --agent-zip.')
+            sys.exit(1)
+        _instance_token = _existing.get('sendto_token', '')
+        if not _instance_token:
+            print('⚠️ Running instance has no sendto_token registered. Please restart IntelAvatar.')
+            sys.exit(1)
+        _agent_startup_path = _build_startup_path([args.agent_zip], sendto_token=_instance_token, is_agent_zip=True, auto_llm=args.auto_llm)
+        _bring_chrome_to_front(_existing['pid'])
+        if not _navigate_existing_browser(_existing['url'], _agent_startup_path):
+            webbrowser.open(f"{_existing['url']}{_agent_startup_path}")
+        sys.exit(0)
+
+    startup_path = _build_startup_path(args.input_paths, sendto_token=args.sendto_token, auto_llm=args.auto_llm)
     
     # Check whether to run in tray mode
     if args.tray_mode:
@@ -339,7 +368,7 @@ if __name__ == "__main__":
             persist_default_port(port)
     
     # Register this instance so single-instance enforcement works regardless of tray usage
-    register_instance(port)
+    register_instance(port, sendto_token=app_config.sendto_token)
     release_app_start_lock()  # Lock no longer needed — json is written
 
     print(f"🚀 IntelAvatar v{__version__} starting...")

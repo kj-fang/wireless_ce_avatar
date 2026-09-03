@@ -890,6 +890,7 @@ def render_download_result_form():
                          auto_analysis_etl_reason = auto_analysis_etl_reason,
                          auto_analysis_bt=auto_analysis_bt,
                          auto_analysis_fw=auto_analysis_fw,
+						 sendto_auto_llm=bool(session.get('sendto_auto_llm')),
                          exclude_keywords=app_config.etl_exclude_keywords,
                          latest_fw_system_info=latest_fw_system_info,
                          latest_fw_system_info_path=latest_fw_system_info_path,

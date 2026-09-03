@@ -10,7 +10,12 @@ LOAD_PATH_prim = rf"\\elitpts46.ger.corp.intel.com\BSOD_Dumps"
 KEY_PATH_prim = rf"\\pgsfls0101.gar.corp.intel.com\symstore\CMAttachments\JIRA\WIFI\Temp\KJ\Intel_WirelessCE_Avatar\key\keys.py"
 KEY_PATH_bkup = rf"\\infs089.iil.intel.com\HOME\WirelessCE\Intel_WirelessCE_Avatar\key\keys.py"
 
-# llm 
+# LLM provider switch — LLM_PROVIDER lives in keys.py alongside the token/url/model
+# fields it selects. set_up_app.py / ace/cli.py / ace/web/server.py read
+# key.LLM_PROVIDER after loading the key module and use it to pick which
+# "<provider>_token/_url/_model" trio to send to LLM_helper.set_up().
+
+# llm
 CLASSIFY_PATH = rf"\\infs089.iil.intel.com\HOME\WirelessCE\Intel_WirelessCE_Avatar\log_parser_data\classification.py"
 LOG_PARSER_DIR = rf"\\infs089.iil.intel.com\HOME\WirelessCE\Intel_WirelessCE_Avatar\log_parser_data"
 

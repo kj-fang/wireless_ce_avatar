@@ -320,7 +320,8 @@ def smoke_runner(tmp: Path) -> None:
         check("S4.e all stages recorded",
               {"fetch_case", "triage", "read_case_history", "check_case_info",
                "check_wrt_log", "pick_zip", "download", "decompose",
-               "issue_time", "pick_etl", "agent_analysis", "echo_kb"}
+               "issue_time", "pick_etl", "decode_etl", "agent_analysis",
+               "echo_kb"}
               <= set(stage_names),
               str(stage_names))
         check("S4.e2 no assert evidence -> Echo never queried",

@@ -416,9 +416,16 @@ class HandsfreeRunner:
             return analysis
 
         # -- 9. decode ETL -> .log ----------------------------------------------
+        # Always record the stage: a cached .log (this case analyzed before)
+        # is a fast "done", not a skip — otherwise the stage table shows a
+        # confusing forever-"pending" row on re-runs.
         log_path = etl_path + ".log"
-        if not os.path.exists(log_path):
-            with self._stage(analysis, "decode_etl"):
+        with self._stage(analysis, "decode_etl"):
+            if os.path.exists(log_path):
+                self.progress("decode_etl",
+                              f"reusing existing decoded log "
+                              f"({os.path.basename(log_path)})")
+            else:
                 self._decode_etl(etl_path)
         if not os.path.exists(log_path):
             analysis.mode = "triage_only"

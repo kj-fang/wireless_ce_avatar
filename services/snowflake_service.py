@@ -45,11 +45,20 @@ def _connect(passwd, use_privatelink):
         warehouse="WH_SMG_CONSUMPTION",
         database="SALES_MARKETING",
         insecure_mode=True,  # skip OCSP checks — ocsp.digicert.com unreachable on this network
-        login_timeout=30,
-        network_timeout=30,
+        # Bound retries so a network blip can't hang callers forever
+        # (observed: handsfree fetch_case stuck 20+ min in the
+        # connector's unbounded query-request retry loop).
+        login_timeout=30,    # fresh connection attempt: fail after 30s
+        network_timeout=180, # established-connection requests: fail after ~3 min
     )
     if use_privatelink:
         kwargs["host"] = _PRIVATELINK_HOST
+    else:
+        # Pass proxy as connection params so Snowflake doesn't depend on
+        # HTTP(S)_PROXY/NO_PROXY staying stable in os.environ (DriverManager
+        # clears those vars during Chrome startup).
+        kwargs["proxy_host"] = "proxy-dmz.intel.com"
+        kwargs["proxy_port"] = 912
     return snowflake.connector.connect(**kwargs)
 
 

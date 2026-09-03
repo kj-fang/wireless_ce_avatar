@@ -26,6 +26,7 @@ Design notes:
 from __future__ import annotations
 
 import json
+import re
 import os
 import time
 import traceback
@@ -73,6 +74,58 @@ def _pick_latest_archive(attachment_list):
         dated.sort(key=lambda p: p[1], reverse=True)
         return dated[0][0]
     return items[0]
+
+
+# YB / assert issue detection for the ETL-folder preference below.
+_YB_ASSERT_ISSUE_RE = re.compile(
+    r"(?i)yellow[ _-]?bang|\bYB\b|assert|device (?:lost|drop)|\bCode 10\b")
+_HEX_TOKEN_RE = re.compile(r"0x[0-9A-Fa-f]+")
+_ETL_FILE_RE = re.compile(r"\.etl(\.\d+)?$", re.IGNORECASE)
+
+
+def _yb_capture_folder(path: str):
+    """Return (folder_component, timestamp) for the ancestor capture folder
+    whose name carries at least one NONZERO 0x error token (autologger names
+    captures like HOST_20-08-2026_10-46-44_524_12_4222_0xa_0x0_0x1fffff when
+    a failure fired; all-zero tokens mean a clean capture). None when the
+    path has no such ancestor."""
+    from utils.etl_utils import extract_timestamp_from_folder
+    for comp in str(path).replace("\\", "/").split("/"):
+        toks = _HEX_TOKEN_RE.findall(comp)
+        if not toks:
+            continue
+        try:
+            if any(int(t, 16) != 0 for t in toks):
+                return comp, extract_timestamp_from_folder(comp)
+        except ValueError:
+            continue
+    return None
+
+
+def _pick_etl_yb_earliest(wifi_files: list, ddd_files: list):
+    """For YB/assert issues: among captures whose folder name carries a
+    nonzero error code, pick the EARLIEST folder (by name timestamp) and
+    return the best ETL inside it (non-History preferred, highest segment
+    number). None when no capture qualifies — callers fall back to the
+    normal AI-time / newest heuristics."""
+    groups: dict = {}
+    for p in list(ddd_files or []) + list(wifi_files or []):
+        p = str(p)
+        if not _ETL_FILE_RE.search(p):
+            continue
+        hit = _yb_capture_folder(p)
+        if hit is None:
+            continue
+        comp, ts = hit
+        groups.setdefault(comp, {"ts": ts, "paths": []})["paths"].append(p)
+    if not groups:
+        return None
+    # Earliest first; unparseable timestamps sort last.
+    comp = min(groups, key=lambda c: (groups[c]["ts"] is None,
+                                      groups[c]["ts"] or 0, c))
+    paths = groups[comp]["paths"]
+    non_history = [p for p in paths if "history" not in p.lower()]
+    return sorted(non_history or paths)[-1]
 
 
 @dataclass
@@ -406,8 +459,24 @@ class HandsfreeRunner:
         # -- 8. pick the ETL ----------------------------------------------------
         etl_path = None
         with self._stage(analysis, "pick_etl"):
-            etl_path = self._pick_etl(wifi_files, ddd_files,
-                                      analysis.issue_times[0] if analysis.issue_times else "")
+            # YB / assert issues: the capture folder whose NAME carries a
+            # nonzero error code (e.g. ..._12_4222_0xa_0x0_0x1fffff) is the
+            # one that recorded the failure — prefer the EARLIEST such folder
+            # (first occurrence) over the AI-time / newest heuristics.
+            yb_assert = bool(_YB_ASSERT_ISSUE_RE.search(
+                " ".join([analysis.issue_type or "", analysis.subject or "",
+                          analysis.clean_description or "",
+                          analysis.description or ""])))
+            if yb_assert:
+                etl_path = _pick_etl_yb_earliest(wifi_files, ddd_files)
+                if etl_path:
+                    self.progress(
+                        "pick_etl",
+                        "YB/assert issue — earliest capture with nonzero "
+                        f"error code in folder name: {os.path.basename(os.path.dirname(etl_path))}")
+            if not etl_path:
+                etl_path = self._pick_etl(wifi_files, ddd_files,
+                                          analysis.issue_times[0] if analysis.issue_times else "")
             analysis.etl_path = etl_path or ""
         if not etl_path:
             analysis.mode = "triage_only"

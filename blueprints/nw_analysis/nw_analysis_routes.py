@@ -16,6 +16,14 @@ from services.sleepstudy_analyzer import analyze_sleepstudy_stream
 from services import gather_service
 from utils.etl_utils import extract_time_from_description
 
+from utils.skills_yaml_utils import (
+    find_latest_cloud_baseline_yaml as _latest_cloud_baseline,
+    find_latest_user_yaml as _latest_user_yaml,
+    set_active_source as _set_active_source,
+    local_user_overrides_dir as _user_local_dir,
+    today_dated_filename as _today_yaml_filename,
+)
+
 nw_analysis_bp = Blueprint("nw_analysis", __name__, url_prefix="/nw_analysis")
 
 # Server-side store: session_id -> WifiLogAgentSystem instance
@@ -878,6 +886,381 @@ def load_skills_yaml_route():
         traceback.print_exc()
         return jsonify({"success": False, "error": str(e)}), 500
 
+# ------------------------------------------------------------------
+# Skills YAML I/O helpers — mirror the log_chatbot / bt_chatbot layout
+# so all three blueprints emit the SAME hand-authored yaml style when
+# writing to the shared Wi-Fi user override file.
+# ------------------------------------------------------------------
+def _read_yaml_file(path) -> dict:
+    """Load a YAML file as a plain dict. Raises on parse failure."""
+    import yaml
+    with open(path, "r", encoding="utf-8") as f:
+        data = yaml.safe_load(f) or {}
+    if not isinstance(data, dict):
+        raise ValueError(
+            f"Invalid YAML structure: expected a dict, got {type(data).__name__}"
+        )
+    return data
+
+
+_CLOUD_YAML_HEADER = (
+    "# skill features:\n"
+    "#   name: skill name\n"
+    "#   description: a brief description of the skill\n"
+    "#   keywords: use \"-\" to represent each keyword\n"
+    "#   expert_rules: use \"|\" to start a multi-line string\n"
+    "\n"
+)
+
+_USER_YAML_WRITE_LOCK = threading.Lock()
+
+
+def _write_yaml_file(path, data: dict, disabled_comments: dict | None = None) -> None:
+    """Write a dict to YAML with the cloud-baseline hand-authored layout.
+
+    See log_chatbot_routes._write_yaml_file for the full spec — this is a
+    verbatim copy so nw_analysis can produce byte-identical output.
+    """
+    import yaml
+    from pathlib import Path as _P
+
+    class _CloudDumper(yaml.SafeDumper):
+        pass
+
+    _CloudDumper._cloud_in_key = False  # type: ignore[attr-defined]
+
+    def _str_representer(dumper, value):
+        if isinstance(value, str) and "\n" in value:
+            value = value.replace("\t", "    ")
+            value = "\n".join(line.rstrip() for line in value.split("\n"))
+            if not value.endswith("\n"):
+                value = value + "\n"
+            return dumper.represent_scalar("tag:yaml.org,2002:str", value, style="|")
+        if getattr(dumper, "_cloud_in_key", False):
+            return dumper.represent_scalar("tag:yaml.org,2002:str", value)
+        cleaned = value.replace("\t", "    ")
+        if '"' in cleaned and "'" not in cleaned:
+            style = "'"
+        else:
+            style = '"'
+        return dumper.represent_scalar("tag:yaml.org,2002:str", cleaned, style=style)
+
+    _CloudDumper.add_representer(str, _str_representer)
+
+    def _represent_mapping(self, tag, mapping, flow_style=None):
+        value = []
+        node = yaml.MappingNode(tag, value, flow_style=flow_style)
+        if self.alias_key is not None:
+            self.represented_objects[self.alias_key] = node
+        best_style = True
+        if hasattr(mapping, "items"):
+            mapping = list(mapping.items())
+        for item_key, item_value in mapping:
+            self._cloud_in_key = True
+            node_key = self.represent_data(item_key)
+            self._cloud_in_key = False
+            node_value = self.represent_data(item_value)
+            if not (isinstance(node_key, yaml.ScalarNode) and not node_key.style):
+                best_style = False
+            if not (isinstance(node_value, yaml.ScalarNode) and not node_value.style):
+                best_style = False
+            value.append((node_key, node_value))
+        if flow_style is None:
+            if self.default_flow_style is not None:
+                node.flow_style = self.default_flow_style
+            else:
+                node.flow_style = best_style
+        return node
+    _CloudDumper.represent_mapping = _represent_mapping
+
+    def _increase_indent(self, flow=False, indentless=False):
+        return yaml.SafeDumper.increase_indent(self, flow, False)
+    _CloudDumper.increase_indent = _increase_indent
+
+    def _dump_one(skill_key: str, skill_val) -> str:
+        return yaml.dump(
+            {skill_key: skill_val},
+            Dumper=_CloudDumper,
+            allow_unicode=True,
+            sort_keys=False,
+            default_flow_style=False,
+            width=1000,
+        ).rstrip("\n")
+
+    if isinstance(data, dict):
+        blocks = [_dump_one(k, v) for k, v in data.items()]
+    else:
+        blocks = [yaml.dump(
+            data, Dumper=_CloudDumper, allow_unicode=True,
+            sort_keys=False, default_flow_style=False, width=1000,
+        ).rstrip("\n")]
+
+    content = _CLOUD_YAML_HEADER + "\n\n".join(blocks) + "\n"
+
+    if disabled_comments:
+        content = _inject_disabled_comments(content, disabled_comments)
+
+    p = _P(path)
+    p.parent.mkdir(parents=True, exist_ok=True)
+    tmp = p.with_name(f"{p.name}.{uuid.uuid4().hex}.tmp")
+    try:
+        tmp.write_text(content, encoding="utf-8")
+        tmp.replace(p)
+    finally:
+        try:
+            if tmp.exists():
+                tmp.unlink()
+        except OSError:
+            pass
+
+
+def _persist_user_yaml_snapshot(data: dict) -> object:
+    """Persist a user-edited YAML under today's dated filename."""
+    with _USER_YAML_WRITE_LOCK:
+        target_dir = _user_local_dir()
+        target = target_dir / _today_yaml_filename()
+        _write_yaml_file(target, data, _gather_disabled_comments(data))
+
+        for entry in target_dir.iterdir():
+            if entry.is_file() and entry.name != target.name \
+                    and entry.name.startswith("skills_") and entry.suffix == ".yaml":
+                try:
+                    entry.unlink()
+                except OSError:
+                    pass
+
+        return target
+
+
+# ---- Disabled-comment scanning + injection -------------------------------
+_DISABLED_COMMENT_RE = re.compile(
+    r"""^\s*\#\s*-\s*(['"])(?P<val>.+?)\1\s*$"""
+)
+_DISABLED_SKILL_RE = re.compile(r"^([A-Za-z0-9_][^:]*):\s*$")
+_DISABLED_LIST_HEADER_RE = re.compile(r"^  (keywords|exclusive):\s*$")
+_DISABLED_DEPTH2_RE = re.compile(r"^  \w+\s*:")
+
+
+def _scan_disabled_comments(text: str) -> dict:
+    """Pull commented-out keyword / exclusive entries out of a YAML text."""
+    if not text:
+        return {}
+    result: dict = {}
+    current_skill = None
+    current_list = None
+    for line in text.split("\n"):
+        m = _DISABLED_SKILL_RE.match(line)
+        if m:
+            current_skill = m.group(1)
+            current_list = None
+            continue
+        m = _DISABLED_LIST_HEADER_RE.match(line)
+        if m:
+            current_list = m.group(1)
+            continue
+        if (current_list is not None
+                and _DISABLED_DEPTH2_RE.match(line)
+                and not _DISABLED_LIST_HEADER_RE.match(line)):
+            current_list = None
+            continue
+        if current_skill and current_list:
+            m = _DISABLED_COMMENT_RE.match(line)
+            if m:
+                result.setdefault(current_skill, {}) \
+                      .setdefault(current_list, []) \
+                      .append(m.group("val"))
+    return result
+
+
+def _inject_disabled_comments(content: str, disabled: dict) -> str:
+    """Stitch `# - "..."` comment lines back into a freshly-rendered YAML."""
+    if not disabled:
+        return content
+
+    lines = content.split("\n")
+    insertions: dict = {}
+    current_skill = None
+    current_list = None
+    last_list_item_idx = -1
+
+    def _commit():
+        nonlocal current_list, last_list_item_idx
+        if current_skill and current_list:
+            entries = disabled.get(current_skill, {}).get(current_list) or []
+            if entries and last_list_item_idx >= 0:
+                comments = [f'    # - "{v}"' for v in entries]
+                insertions.setdefault(last_list_item_idx, []).extend(comments)
+        current_list = None
+        last_list_item_idx = -1
+
+    for i, line in enumerate(lines):
+        if _DISABLED_SKILL_RE.match(line):
+            _commit()
+            current_skill = _DISABLED_SKILL_RE.match(line).group(1)
+            continue
+        m_list = _DISABLED_LIST_HEADER_RE.match(line)
+        if m_list:
+            _commit()
+            current_list = m_list.group(1)
+            continue
+        if (current_list is not None
+                and _DISABLED_DEPTH2_RE.match(line)
+                and not _DISABLED_LIST_HEADER_RE.match(line)):
+            _commit()
+            continue
+        if current_list is not None and line.startswith("    - "):
+            last_list_item_idx = i
+    _commit()
+
+    if not insertions:
+        return content
+    out = []
+    for i, line in enumerate(lines):
+        out.append(line)
+        if i in insertions:
+            out.extend(insertions[i])
+    return "\n".join(out)
+
+
+def _gather_disabled_comments(active_data: dict) -> dict:
+    """Merge disabled-comment entries from cloud + user files, dropping
+    any that the caller is about to write as an ACTIVE keyword."""
+    merged: dict = {}
+
+    def _absorb(path):
+        if not path:
+            return
+        try:
+            text = path.read_text(encoding="utf-8")
+        except Exception:
+            return
+        for skill_key, blocks in _scan_disabled_comments(text).items():
+            for list_key, vals in blocks.items():
+                bucket = merged.setdefault(skill_key, {}).setdefault(list_key, [])
+                for v in vals:
+                    if v not in bucket:
+                        bucket.append(v)
+
+    try:
+        cloud_path, _ = _latest_cloud_baseline()
+        _absorb(cloud_path)
+    except Exception:
+        pass
+    try:
+        user_path, _ = _latest_user_yaml()
+        _absorb(user_path)
+    except Exception:
+        pass
+
+    if isinstance(active_data, dict):
+        for skill_key, blocks in list(merged.items()):
+            skill_row = active_data.get(skill_key)
+            if not isinstance(skill_row, dict):
+                continue
+            for list_key in ("keywords", "exclusive"):
+                if list_key not in blocks:
+                    continue
+                active_vals = set(skill_row.get(list_key) or [])
+                blocks[list_key] = [
+                    v for v in blocks[list_key] if v not in active_vals
+                ]
+                if not blocks[list_key]:
+                    blocks.pop(list_key, None)
+            if not blocks:
+                merged.pop(skill_key, None)
+
+    return merged
+
+
+# ------------------------------------------------------------------
+# API: append skills from a user-supplied YAML into the active user file
+# ------------------------------------------------------------------
+@nw_analysis_bp.route("/append_skills_yaml", methods=["POST"])
+def append_skills_yaml_route():
+    """
+    Import skills from a user-picked YAML file and append them to the
+    currently-active user local YAML. Only these fields survive per
+    skill: name, description, keywords, exclusive, expert_rules.
+    Skills whose key already exists in the destination are overwritten.
+
+    Auto-seeds the user local YAML from the cloud baseline when no user
+    file exists yet. Always flips the active source to "user" and
+    reloads the live agent so imported skills take effect immediately.
+
+    Request JSON: { "yaml_path": "/path/to/skills.yaml" }
+    """
+    from pathlib import Path
+    from utils.skill_import_utils import load_and_filter_source, merge_overwrite
+
+    data = request.get_json(silent=True) or {}
+    yaml_path = (data.get("yaml_path") or "").strip()
+    if not yaml_path:
+        return jsonify({"success": False, "error": "yaml_path is required."}), 400
+
+    try:
+        valid, skipped = load_and_filter_source(yaml_path)
+    except FileNotFoundError as e:
+        return jsonify({"success": False, "error": str(e)}), 404
+    except Exception as e:
+        traceback.print_exc()
+        return jsonify({"success": False, "error": f"Cannot parse YAML: {e}"}), 400
+
+    if not valid:
+        return jsonify({
+            "success": False,
+            "error": "No importable skills found in the selected YAML.",
+            "skipped": skipped,
+        }), 400
+
+    try:
+        base_path, _ = _latest_user_yaml()
+        if base_path is None:
+            base_path, _ = _latest_cloud_baseline()
+        existing = _read_yaml_file(base_path) if base_path is not None else {}
+
+        merged, appended, overwritten = merge_overwrite(existing, valid)
+        target = _persist_user_yaml_snapshot(merged)
+
+        _set_active_source("user")
+
+        # Refresh THIS page's live agent + the shared Wi-Fi agent slots so
+        # the imported skills take effect immediately without a page reload.
+        skills = load_skills_from_yaml(str(target))
+        agent = _get_or_create_agent()
+        agent.skills = skills
+        if app_config.nw_analysis_agent:
+            app_config.nw_analysis_agent.skills = skills
+        if app_config.llm_helper:
+            app_config.llm_helper.skills = skills
+        if getattr(app_config, "log_chatbot_agent", None):
+            app_config.log_chatbot_agent.skills = skills
+
+        session["yaml_modified"] = True
+        session["yaml_modified_path"] = str(target)
+
+        parts = []
+        if appended:
+            parts.append(f"appended {len(appended)}")
+        if overwritten:
+            parts.append(f"overwrote {len(overwritten)}")
+        if skipped:
+            parts.append(f"skipped {len(skipped)}")
+        summary = ", ".join(parts) if parts else "no changes"
+
+        return jsonify({
+            "success":       True,
+            "active_source": "user",
+            "target_path":   str(target),
+            "filename":      target.name,
+            "appended":      appended,
+            "overwritten":   overwritten,
+            "skipped":       skipped,
+            "message":       f"Imported from {Path(yaml_path).name}: {summary}.",
+            "skills":        agent.get_skill_descriptions(),
+        })
+    except Exception as e:
+        traceback.print_exc()
+        return jsonify({"success": False, "error": str(e)}), 500
 
 # ------------------------------------------------------------------
 # API: Reload skills from shared folder (auto-discovery)

@@ -2363,16 +2363,15 @@
             <div id="skill-editor-status" class="log-status"></div>
         </div>
 
-        <!-- Reload skills from directory -->
-        <!-- <div class="sidebar-section">
-            <h6>🛠 Reload Skills</h6>
-            <div class="log-input-group">
-                <input id="skills-dir-input" type="text" placeholder="Skills data directory…">
-                <button class="btn-browse" onclick="browseSkillsDir()" title="Browse for directory">📁</button>
-            </div>
-            <button class="btn-set-log" style="width:100%;margin-top:6px;" onclick="reloadSkills()">🔄 Reload Skills</button>
+        <!-- Append skills by importing a YAML file -->
+        <div class="sidebar-section">
+            <h6>📥 Append Skills</h6>
+            <button class="btn-set-log" style="width:100%;" onclick="appendSkillsFromYaml()"
+                    title="Pick a YAML file; its skills will be appended to your customized BT configuration (duplicates overwrite).">
+                📁 Choose YAML file to append…
+            </button>
             <div id="skills-reload-status" class="log-status"></div>
-        </div> -->
+        </div>
 
         <!-- Actions -->
         <div class="sidebar-section">
@@ -3454,29 +3453,43 @@
         }
     }
 
-    // ── Reload skills from directory ───────────────────────────────
-    async function reloadSkills() {
-        const dir = document.getElementById('skills-dir-input').value.trim();
+    // ── Add skills from a user-picked YAML file ───────────────────
+    // Opens the native file dialog via /browse_yaml, then imports
+    // the selected file's skills into the currently-active BT user
+    // YAML (fields kept: name, description, keywords, exclusive,
+    // expert_rules; duplicate keys overwrite existing).
+    async function appendSkillsFromYaml() {
         const statusEl = document.getElementById('skills-reload-status');
-        statusEl.textContent = 'Reloading…';
+        let yamlPath = '';
+        try {
+            const pickRes = await fetch('/bt_chatbot/browse_yaml');
+            const pickData = await pickRes.json();
+            yamlPath = (pickData && pickData.path) ? pickData.path.trim() : '';
+        } catch (e) {
+            showStatus(statusEl, '✘ Could not open file picker: ' + e.message, 'err');
+            return;
+        }
+        if (!yamlPath) return; // user cancelled
+
+        statusEl.textContent = 'Importing…';
         statusEl.className = 'log-status';
         statusEl.style.display = 'block';
+
         try {
-            const res = await fetch('/bt_chatbot/reload_skills', {
+            const res = await fetch('/bt_chatbot/append_skills_yaml', {
                 method: 'POST',
                 headers: {'Content-Type': 'application/json'},
-                body: JSON.stringify({data_dir: dir})
+                body: JSON.stringify({yaml_path: yamlPath})
             });
             const data = await res.json();
             if (data.success) {
-                if (data.warning) {
-                    showStatus(statusEl, '⚠ ' + data.warning, 'warn');
-                } else {
-                    showStatus(statusEl, '✔ ' + data.message, 'ok');
+                showStatus(statusEl, '✔ ' + data.message, 'ok');
+                if (data.skills) renderSkills(data.skills);
+                if (typeof refreshSkillSourcePanel === 'function') {
+                    refreshSkillSourcePanel();
                 }
-                renderSkills(data.skills);
             } else {
-                showStatus(statusEl, '✘ ' + data.error, 'err');
+                showStatus(statusEl, '✘ ' + (data.error || 'Import failed.'), 'err');
             }
         } catch (e) {
             showStatus(statusEl, '✘ Network error: ' + e.message, 'err');

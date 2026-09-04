@@ -1754,6 +1754,85 @@ def load_skills_yaml_route():
 
 
 # ------------------------------------------------------------------
+# API: append skills from a user-supplied YAML into the active user file
+# ------------------------------------------------------------------
+@bt_chatbot_bp.route("/append_skills_yaml", methods=["POST"])
+def append_skills_yaml_route():
+    """
+    Import skills from a user-picked YAML file and append them to the
+    currently-active BT user local YAML. Only these fields survive per
+    skill: name, description, keywords, exclusive, expert_rules.
+    Skills whose key already exists in the destination are overwritten.
+
+    Auto-seeds the user local YAML from the cloud baseline when no user
+    file exists yet. Always flips the active source to "user" and
+    reloads the live agent so imported skills take effect immediately.
+
+    Request JSON: { "yaml_path": "/path/to/skills.yaml" }
+    """
+    from pathlib import Path
+    from utils.skill_import_utils import load_and_filter_source, merge_overwrite
+
+    data = request.get_json(silent=True) or {}
+    yaml_path = (data.get("yaml_path") or "").strip()
+    if not yaml_path:
+        return jsonify({"success": False, "error": "yaml_path is required."}), 400
+
+    try:
+        valid, skipped = load_and_filter_source(yaml_path)
+    except FileNotFoundError as e:
+        return jsonify({"success": False, "error": str(e)}), 404
+    except Exception as e:
+        traceback.print_exc()
+        return jsonify({"success": False, "error": f"Cannot parse YAML: {e}"}), 400
+
+    if not valid:
+        return jsonify({
+            "success": False,
+            "error": "No importable skills found in the selected YAML.",
+            "skipped": skipped,
+        }), 400
+
+    try:
+        base_path, _ = _latest_user_yaml()
+        if base_path is None:
+            base_path, _ = _latest_cloud_baseline()
+        existing = _read_yaml_file(base_path) if base_path is not None else {}
+
+        merged, appended, overwritten = merge_overwrite(existing, valid)
+        target = _persist_user_yaml_snapshot(merged)
+
+        _set_active_source("user")
+        skills = _activate_yaml(target)
+        session["yaml_modified"] = True
+        session["yaml_modified_path"] = str(target)
+
+        parts = []
+        if appended:
+            parts.append(f"appended {len(appended)}")
+        if overwritten:
+            parts.append(f"overwrote {len(overwritten)}")
+        if skipped:
+            parts.append(f"skipped {len(skipped)}")
+        summary = ", ".join(parts) if parts else "no changes"
+
+        return jsonify({
+            "success":       True,
+            "active_source": "user",
+            "target_path":   str(target),
+            "filename":      target.name,
+            "appended":      appended,
+            "overwritten":   overwritten,
+            "skipped":       skipped,
+            "message":       f"Imported from {Path(yaml_path).name}: {summary}.",
+            "skills":        skills,
+        })
+    except Exception as e:
+        traceback.print_exc()
+        return jsonify({"success": False, "error": str(e)}), 500
+
+
+# ------------------------------------------------------------------
 # API: Reload skills from shared folder (auto-discovery)
 # ------------------------------------------------------------------
 @bt_chatbot_bp.route("/reload_from_shared", methods=["POST"])

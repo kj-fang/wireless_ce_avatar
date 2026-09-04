@@ -73,34 +73,60 @@ class BtLogAgentSystem(WifiLogAgentSystem):
     SCOPE_FULL_LOG_WHEN_EMPTY = True
 
     # ------------------------------------------------------------------
-    # Override WiFi-specific system prompts with BT-appropriate identity
+    # Override WiFi-specific system prompts with BT/Audio-appropriate identity
     # ------------------------------------------------------------------
     def _build_analyze_system_prompt(self, context_section: str) -> str:
-        """Build the agentic analysis system prompt for Bluetooth log analysis."""
+        """Build the agentic bt analysis system prompt for Bluetooth log analysis.
+
+        A user-editable Markdown file at
+        ``<local_user_overrides_dir>/bt_prompt.md`` overrides the built-in
+        body when present. Use ``{{SKILLS}}`` inside the file to have the
+        current skills list spliced in.
+        """
         ace_block = self._build_ace_workflow_block()
-        return (
-            f"{context_section}"
-            + ace_block
-            + "You are an Elite Bluetooth Diagnostic Detective. Your GOAL: Find the REAL Root Cause based on evidence.\n"
-            + "Available skills:\n"
-            + "".join(
-                f"  - {s['name']}: {s['description']}\n"
-                for s in self.get_skill_descriptions()
-                if s.get('description')
-            )
-            + "\n"
-            "PHASE 1 (SYMPTOM LOCALIZATION):\n"
-            "   - Call `fetch_filtered_logs` with the most relevant skill to get symptom-focused log evidence.\n"
-            "   - Call `fetch_filtered_logs` with skill `assert_code_analysis` to scan for firmware asserts.\n"
-            "PHASE 2 (SOURCE RETROSPECTIVE - optional):\n"
-            "   - if needed, based on the analysis from PHASE1, use additional skills to get more detail from the logs.\n"
-            "PHASE 3. Call `submit_final_report` to conclude.\n\n"
-            "CRITICAL CONSTRAINTS:\n"
-            "- Max step is 8\n"
-            "- 🛑 NO REPETITION: Do not fetch the same data twice. If Phase 1 keywords are found in Phase 2, ignore them.\n"
-            "- 🛑 IMMEDIATELY call `submit_final_report` after your detail query. Do not over-analyze.\n\n"
-            + self.REPORT_MARKDOWN_TEMPLATE
+        skills_block = "Available skills:\n" + "".join(
+            f"  - {s['name']}: {s['description']}\n"
+            for s in self.get_skill_descriptions()
+            if s.get('description')
         )
+
+        override = self._load_analyze_prompt_override()
+        if override is not None:
+            body = override.replace("{{SKILLS}}", skills_block)
+            print(f"[INFO] Using audio_prompt.md override with skills block")
+        else:
+            print("[INFO] audio_prompt.md not found — using built-in BT analyze prompt")
+            body = (
+                "You are an Elite Bluetooth Diagnostic Detective. Your GOAL: Find the REAL Root Cause based on evidence.\n"
+                + skills_block
+                + "\n"
+                "PHASE 1 (SYMPTOM LOCALIZATION):\n"
+                "   - Call `fetch_filtered_logs` with the most relevant skill to get symptom-focused log evidence.\n"
+                "   - Call `fetch_filtered_logs` with skill `assert_code_analysis` to scan for firmware asserts.\n"
+                "PHASE 2 (SOURCE RETROSPECTIVE - optional):\n"
+                "   - if needed, based on the analysis from PHASE1, use additional skills to get more detail from the logs.\n"
+                "PHASE 3. Call `submit_final_report` to conclude.\n\n"
+                "CRITICAL CONSTRAINTS:\n"
+                "- Max step is 8\n"
+                "- 🛑 NO REPETITION: Do not fetch the same data twice. If Phase 1 keywords are found in Phase 2, ignore them.\n"
+                "- 🛑 IMMEDIATELY call `submit_final_report` after your detail query. Do not over-analyze.\n\n"
+            )
+
+        return f"{context_section}{ace_block}{body}" + self.REPORT_MARKDOWN_TEMPLATE
+
+    @staticmethod
+    def _load_analyze_prompt_override() -> str | None:
+        """Return the contents of ``audio_prompt.md`` in the user overrides dir,
+        or ``None`` when the file is absent or unreadable."""
+        try:
+            from utils.bt_skills_yaml_utils import local_user_overrides_dir
+            path = local_user_overrides_dir() / "audio_prompt.md"
+            print(f"[DEBUG] Looking for prompt override at: {path}  exists={path.is_file()}")
+            if path.is_file():
+                return path.read_text(encoding="utf-8")
+        except Exception as e:
+            print(f"[WARN] audio_prompt.md override read failed: {e}")
+        return None
 
     def _chat_simple(self, user_message: str, temperature: float = 0.2,
                      max_tokens: int = 4000) -> dict:

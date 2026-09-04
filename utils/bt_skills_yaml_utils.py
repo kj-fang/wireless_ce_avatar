@@ -160,6 +160,56 @@ def find_latest_share_yaml() -> Tuple[Optional[Path], Optional[date]]:
     return (None, None)
 
 
+# --- Audio override ------------------------------------------------------
+#
+# When the user drops an ``audio_*.yaml`` into the local ``user/`` or
+# ``cloud/`` folder, it hijacks the BT resolver so the BT pipeline runs
+# with the audio-flavoured skills. Dated audio filenames win by date,
+# undated ones by mtime; ``user/`` beats ``cloud/`` on tie.
+
+_AUDIO_DATED_RE = re.compile(r"^audio_.*?(\d{4}-\d{2}-\d{2})\.yaml$", re.IGNORECASE)
+
+
+def _find_latest_audio_yaml(directory: str | Path) -> Tuple[Optional[Path], Optional[date]]:
+    """Return `(path, date-or-None)` for the newest ``audio_*.yaml`` in
+    ``directory``. Prefers dated filenames, falls back to file mtime."""
+    try:
+        d = Path(directory)
+        if not d.is_dir():
+            return (None, None)
+    except OSError:
+        return (None, None)
+
+    candidates: list[Tuple[Path, Optional[date]]] = []
+    try:
+        for entry in d.iterdir():
+            if not entry.is_file():
+                continue
+            name = entry.name.lower()
+            if not (name.startswith("audio_") and name.endswith(".yaml")):
+                continue
+            m = _AUDIO_DATED_RE.match(entry.name)
+            parsed: Optional[date] = None
+            if m:
+                try:
+                    parsed = datetime.strptime(m.group(1), "%Y-%m-%d").date()
+                except ValueError:
+                    parsed = None
+            candidates.append((entry, parsed))
+    except OSError:
+        return (None, None)
+
+    if not candidates:
+        return (None, None)
+
+    dated = [(p, dt) for (p, dt) in candidates if dt is not None]
+    if dated:
+        dated.sort(key=lambda x: x[1], reverse=True)
+        return dated[0]
+    candidates.sort(key=lambda x: x[0].stat().st_mtime, reverse=True)
+    return (candidates[0][0], None)
+
+
 # --- Active YAML resolver ------------------------------------------------
 
 def current_active_yaml() -> Tuple[Optional[Path], Optional[date], str]:
@@ -168,7 +218,17 @@ def current_active_yaml() -> Tuple[Optional[Path], Optional[date], str]:
     loaded right now. `effective_source` may differ from
     `get_active_source()` — when active="user" but no user file exists,
     cloud baseline is loaded and effective source is reported as "cloud".
+    Audio override: any ``audio_*.yaml`` present in ``user/`` (checked
+    first) or ``cloud/`` wins outright over the regular bt_ resolution.
     """
+
+    # for audio only
+    for scan_dir, src in ((local_user_overrides_dir(), _ACTIVE_SOURCE_USER),
+                          (local_cloud_baseline_dir(), _ACTIVE_SOURCE_CLOUD)):
+        a_path, a_date = _find_latest_audio_yaml(scan_dir)
+        if a_path is not None:
+            return (a_path, a_date, src)
+
     if get_active_source() == _ACTIVE_SOURCE_USER:
         u_path, u_date = find_latest_user_yaml()
         if u_path is not None:

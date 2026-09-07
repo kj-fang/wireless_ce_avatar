@@ -395,10 +395,14 @@ def _is_allowed_local_analysis_filename(filename: str) -> bool:
         lower_name.endswith('.zip')
         or lower_name.endswith('.7z')
         or lower_name.endswith('.rar')
+        or lower_name.endswith('.txt')
         or lower_name.endswith('.log')
         or lower_name.endswith('.hci.txt')
         or lower_name.endswith('.etl')
         or bool(re.fullmatch(r"dddLog_\d+\.bin", clean_name))
+        or bool(re.fullmatch(r"syslog(\..+)?", clean_name))
+        or bool(re.fullmatch(r"messages(\..+)?", clean_name))
+        or bool(re.fullmatch(r"dmesg(\..+)?", clean_name))
         or lower_name.endswith('.dmp')
         or bool(re.search(r'\.etl\.\d+$', clean_name, re.IGNORECASE))
     )
@@ -412,6 +416,16 @@ def _is_fw_etl(file_path: str) -> bool:
     name = os.path.basename(file_path).lower()
     # wrt-fw~N.etl is the Windows 8.3 short name when the full path exceeds MAX_PATH
     return name.startswith(('wrt-fw-', 'wrt-fw~')) and name.endswith('.etl')
+
+def _is_linux(file_path: str) -> bool:
+    """Return True if the file is a Linux log that should be handled by the Linux chatbot."""
+    name = os.path.basename(file_path).lower()
+    return (
+        name.endswith('.txt')
+        or bool(re.fullmatch(r"syslog(\..+)?", name))
+        or bool(re.fullmatch(r"messages(\..+)?", name))
+        or bool(re.fullmatch(r"dmesg(\..+)?", name))
+    )
 
 def _infer_local_upload_case_type(bt_files) -> str:
     if bt_files:
@@ -606,6 +620,13 @@ def _process_local_analysis(source_path: str, source_dir: str, file_path: str,
         app_config.last_analyzed_log_path = file_path
         _cb(90, 'Log file ready.')
         return url_for('log_chatbot.index', auto_run='analyze_all')
+
+    elif _is_linux(file_path):
+            # Shoot for a Linux log
+            session['linux_chatbot_log_path'] = file_path
+            app_config.last_analyzed_log_path = file_path
+            _cb(90, 'Linux log file ready.')
+            return url_for('linux_chatbot.index', auto_run='analyze_all')
 
     elif file_path.lower().endswith('.hci.txt'):
         # Treat .hci.txt from BT HCI decode as a decoded BT log
@@ -942,7 +963,7 @@ def open_local_analysis():
         return redirect(url_for('main.index'))
 
     if not _is_allowed_local_analysis_filename(original_name):
-        flash(f'Invalid file type: {original_name}. Only .zip, .7z, .rar, .etl, ddd, .hci.txt, .log, or .dmp are allowed.', 'danger')
+        flash(f'Invalid file type: {original_name}. Only .zip, .7z, .txt, .rar, .etl, ddd, .hci.txt, .log, or .dmp are allowed.', 'danger')
         return redirect(url_for('main.index'))
 
     # Store validated path in session; actual processing starts after the

@@ -5,6 +5,7 @@ import json
 import os
 import sys
 import webbrowser
+import re
 
 # Force UTF-8 stdout/stderr so emoji print() calls don't crash on Windows
 # cp1252 consoles (this is undone by cachelib/flask-session locale init).
@@ -133,6 +134,8 @@ def _build_startup_path(input_paths, sendto_token=None):
 
         lower_name = os.path.basename(normalized_path).lower()
         if lower_name.endswith('.zip') or lower_name.endswith('.7z') or lower_name.endswith('.rar') or lower_name.endswith('.log') or lower_name.endswith('.etl') or lower_name.endswith('.dmp') or '.etl.' in lower_name:
+            supported_paths.append(normalized_path)
+        elif lower_name.endswith('.txt') or bool(re.fullmatch(r"syslog(\..+)?", lower_name)) or bool(re.fullmatch(r"messages(\..+)?", lower_name)) or bool(re.fullmatch(r"dmesg(\..+)?", lower_name)):
             supported_paths.append(normalized_path)
         else:
             print(f"⚠️ Ignoring unsupported SendTo path: {normalized_path}")

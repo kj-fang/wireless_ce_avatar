@@ -5,6 +5,7 @@ import json
 import os
 import sys
 import webbrowser
+import re
 
 # Force UTF-8 stdout/stderr so emoji print() calls don't crash on Windows
 # cp1252 consoles (this is undone by cachelib/flask-session locale init).

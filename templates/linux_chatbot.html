@@ -2114,7 +2114,7 @@
                     onclick="switchSidebarView('history')">🕘 History</button>
         </div>
 
-        <!-- View 1: live controls (Log File / Issue Time / Skills / â€¦) -->
+        <!-- View 1: live controls (Log File / Issue Time / Skills / …) -->
         <div id="sidebar-controls-view">
 
         <!-- Log file -->
@@ -2123,13 +2123,13 @@
             <div class="log-input-group">
                 <div class="log-input-wrap">
                     <input id="log-path-input" type="text"
-                        placeholder="Full path to .log fileâ€¦"
+                        placeholder="Full path to .log file…"
                         value="{{ suggested_log | default('', true) }}"
                         onkeydown="if(event.key==='Enter'){event.preventDefault();setLog();}"
                         onchange="setLog()">
                     <button type="button" class="log-input-copy"
                         onclick="copyLogPath(this)" title="Copy log path"
-                        aria-label="Copy log path">ðŸ“‹</button>
+                        aria-label="Copy log path">📋</button>
                 </div> 
                 <button type="button" class="btn-browse" onclick="browseLog()" title="Browse for file">📁</button>
             </div>
@@ -2139,7 +2139,7 @@
         <!-- System Event Log toggle + inline table -->
         <div class="sidebar-section evt-section" style="padding:10px 16px;">
             <button id="btn-evt-log" class="btn-evt-log" disabled onclick="toggleEvtPanel()" title="No event log available">
-                📋 System Event Log <span id="evt-toggle-arrow" class="evt-arrow">â–¸</span>
+                 📋 System Event Log <span id="evt-toggle-arrow" class="evt-arrow">▸</span>
             </button>
             <div id="evt-inline-panel" style="display:none;margin-top:8px;">
                 <div class="evt-inline-toolbar">
@@ -2177,7 +2177,7 @@
             <!-- Quick actions -->
             <div style="display:flex;gap:6px;margin-bottom:10px;align-items:center;">
                 <div id="it-unknown-warn" style="display:none;flex:1;font-size:0.7rem;color:#92400e;background:#fff7ed;border:1px solid #fdba74;border-radius:6px;padding:5px 8px;line-height:1.3;">
-                    ⚠️ <strong>Unknown time.</strong> Couldn't auto-detect the issue time â€” please fill it in below.
+                    ⚠️ <strong>Unknown time.</strong> Couldn't auto-detect the issue time — please fill it in below.
                 </div>
                 <button class="it-quick-btn it-quick-btn-clear" onclick="clearAllIssueTimes()" title="Clear the primary time AND all extra issue-time rows">
                      🗑️ Clear
@@ -2323,13 +2323,13 @@
                     ⏱ Capture window
                 </label>
                 <div class="itw-control">
-                    <button type="button" class="itw-step" onclick="stepIssueWindow(-1)" title="Less">âˆ’</button>
+                    <button type="button" class="itw-step" onclick="stepIssueWindow(-1)" title="Less">−</button>
                     <input id="it-window-min" class="itw-input" type="number"
                            min="0" max="120" step="1" value="5"
                            inputmode="numeric"
                            oninput="onIssueWindowChange()">
-                    <button type="button" class="itw-step" onclick="stepIssueWindow(1)" title="More">ï¼‹</button>
-                    <span class="itw-unit">min Â± around issue time</span>
+                    <button type="button" class="itw-step" onclick="stepIssueWindow(1)" title="More">＋</button>
+                    <span class="itw-unit">min ± around issue time</span>
                 </div>
             </div>
         </div>
@@ -2358,7 +2358,7 @@
         <!-- <div class="sidebar-section">
             <h6>🛠 Reload Skills</h6>
             <div class="log-input-group">
-                <input id="skills-dir-input" type="text" placeholder="Skills data directoryâ€¦">
+                <input id="skills-dir-input" type="text" placeholder="Skills data directory…">
                 <button class="btn-browse" onclick="browseSkillsDir()" title="Browse for directory">📁</button>
             </div>
             <button class="btn-set-log" style="width:100%;margin-top:6px;" onclick="reloadSkills()">🔄 Reload Skills</button>
@@ -2378,7 +2378,7 @@
             </div>
             <div id="mode-desc" style="font-size:0.72rem;color:#888;margin-bottom:8px;">Direct LLM answer, fast.</div>
 
-            <button class="btn-reset" onclick="resetConversation()">ðŸ”„ Reset Conversation</button>
+            <button class="btn-reset" onclick="resetConversation()">🔄 Reset Conversation</button>
         </div>
 
         <!-- Quick ask shortcuts -->

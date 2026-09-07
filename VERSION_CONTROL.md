@@ -1,197 +1,156 @@
-# IntelAvatar Version Control Guide
+# IntelAvatar Version Control and Release Guide
 
-## Overview
+## Version Model
 
-Two parallel version lines keep nightly development and stable releases clearly separated.
+| Build line | Branch | Public version | Meaning of the third number |
+|---|---|---|---|
+| Nightly | `main` | `99.CYCLE.CHECKIN` | Commits since the nightly cycle base |
+| Developer | `feature/*`, `fix/*` | `99.CYCLE.CHECKIN-dev.SHA` | Nightly count at the feature branch point |
+| Stable release | `release/X.Y` | `X.Y.PATCH` | Release-branch hotfix count |
 
-| Line | Branch | Version format | Example |
-|------|--------|---------------|---------|
-| **Nightly** | `main` | `99.0.PATCH` | `99.0.312` |
-| **Release** | `release/X.Y` | `X.Y.PATCH` | `1.1.5` |
-| **Dev** (feature branch off main) | `feature/*` / `fix/*` | `99.0.BASE-dev.SHA1` | `99.0.312-dev.f3c9e12` |
+Examples for the current cycle:
 
-- `PATCH` on `main` = total commit count on `main`
-- `PATCH` on `feature/*` / `fix/*` = commit count on `main` **at the branch point** (i.e. `git rev-list --count <merge-base>`), so the dev version anchors to the nightly it was branched from
-- `PATCH` on `release/X.Y` = number of commits on that branch **since it was cut from `main`** (starts at 0 on branch cut, increments by 1 per hotfix)
-- The `99` major makes it impossible to mistake a nightly build for a stable release
-
----
-
-## Branching Model
-
-```
-main (99.0.x)    o--o--o--o--o--o--o--o--o--o--o--o--o-->  open to all
-                          |                   |
-                    release/1.1         release/1.2
-                   o--o (hotfixes)      o (next cycle)
-                   1.1.0  1.1.1  1.1.2  1.2.0 ...
+```text
+main:         99.2.0, 99.2.1, 99.2.2
+release/1.2:  1.2.0, 1.2.1, 1.2.2
+feature/fix:  99.2.1-dev.a1b2c3d
 ```
 
-### `main` branch
-- Everyone pushes here directly (or via PR, per team preference)
-- CI builds on every push → nightly artifact versioned `99.0.<commit_count>`
+The `99` major identifies non-stable builds. The nightly and release counters are intentionally independent: `99.2.8` and `1.2.2` are both valid at the same time.
 
-### `release/X.Y` branches
-- Cut from `main` every **~4 weeks** by a maintainer
-- **Locked** — no direct pushes; only hotfix PRs reviewed and approved before merge
-- Version bumps to `X.Y.1`, `X.Y.2` etc. automatically with each merged hotfix
-- When the next cycle begins, cut `release/X.(Y+1)` from `main`
+## GitHub Downloads
 
-### Feature / fix branches
-- Branch from `main`, merge back to `main`
-- Version: `99.0.<base_patch>-dev.<sha1>` — patch anchors to the nightly they branched from
+The repository home page contains direct links to both build lines:
 
----
+- **Latest nightly:** the `nightly-latest` prerelease, updated after every successful push to `main`
+- **Latest stable:** the newest non-prerelease GitHub Release from `release/X.Y`
 
-## How to Cut a Release Branch
+The nightly workflow also uploads a GitHub Actions artifact. The prerelease ZIP is the recommended nightly download because it remains available from one stable link.
+
+## Branches and Workflows
+
+### `main`
+
+`.github/workflows/build.yml` runs for:
+
+- Pull requests targeting `main`: developer build
+- Pushes to `main`: nightly build
+
+Nightly builds use the configured cycle base and produce `99.2.<cycle_checkin>`. The current configuration uses `release/1.2` as the cycle-base reference for the `99.2` cycle.
+
+### `release/X.Y`
+
+`.github/workflows/build-release.yml` runs when a commit reaches a branch matching `release/**`, for example `release/1.2`.
+
+The branch name controls the first two version components:
+
+```text
+release/1.2 -> 1.2.x
+release/1.3 -> 1.3.x
+```
+
+The release workflow builds the executable, creates a ZIP, publishes a stable GitHub Release, creates a tag such as `v1.2.1`, and uploads a workflow artifact.
+
+Use `release/1.2`, not `release/v1.2`. The `v` prefix belongs on Git tags, not branch names.
+
+### Feature and fix branches
+
+Feature and fix branches produce developer versions such as:
+
+```text
+99.2.1-dev.a1b2c3d
+```
+
+The SHA identifies the exact source commit. These builds are posted to the pull request and are not stable releases.
+
+## Starting a New Release Cycle
+
+For the next cycle, such as `1.3`, use this order:
+
+1. Update the nightly cycle from `99.2` to `99.3` in both the GitHub Actions workflow and the local build script.
+2. Commit the change on a branch with a message such as:
+
+   ```text
+   chore(version): start 99.3 nightly cycle
+   ```
+
+3. Open a pull request to `main` and merge it using the repository's branch-protection rules.
+4. After the pull request is merged, create an immutable cycle-base reference from the resulting `main` commit. Prefer a tag such as `nightly-99.3-base`.
+5. Create the stable branch from that exact `main` commit:
+
+   ```powershell
+   git fetch origin --prune
+   git switch main
+   git pull origin main
+   git switch -c release/1.3
+   git push -u origin release/1.3
+   ```
+
+6. Confirm the first builds are:
+
+   ```text
+   main:         99.3.0
+   release/1.3:  1.3.0
+   ```
+
+Do not push the cycle-start commit independently to the release branch before it reaches `main`. A squash merge creates a new commit ID, so the cycle base must be created after the merge from the final `main` commit.
+
+## Normal Development
+
+After the cycle starts:
+
+```text
+main:         99.3.0 -> 99.3.1 -> 99.3.2
+release/1.3:  1.3.0   -> 1.3.1   -> 1.3.2
+```
+
+The `main` number increases for commits in the nightly cycle. The release number increases only for approved hotfixes on the release branch.
+
+## Critical Fixes and Cherry-Picks
+
+When a critical fix already exists on `main`:
 
 ```powershell
-# 1. Make sure main is up to date
-git checkout main
-git pull
-
-# 2. Cut the release branch (change 1.1 to the new MAJOR.MINOR)
-git checkout -b release/1.1
-
-# 3. Push and set upstream
-git push -u origin release/1.1
+git fetch origin
+git switch release/1.3
+git pull origin release/1.3
+git switch -c hotfix/critical-fix
+git cherry-pick <main-commit-sha>
+git push -u origin hotfix/critical-fix
 ```
 
-Then on GitHub/GitLab:
-- Set **branch protection** on `release/1.1`:
-  - Disable direct pushes
-  - Require at least 1 PR approval
-  - Optionally restrict who can merge
+Open a pull request from `hotfix/critical-fix` to `release/1.3`. After it is merged, `build-release.yml` runs and publishes the next patch, for example `v1.3.1`.
 
----
+The cherry-picked commit has a different Git commit ID on the release branch. That is expected and does not need to match `main`.
 
-## How It Works
+## Local Builds
 
-### Local Building
+Run the local build script from the repository root:
+
 ```powershell
 .\build_with_version.ps1
 ```
 
-| Current branch | Version produced | Build type |
-|---------------|-----------------|------------|
-| `main` | `99.0.<commit_count>` | `NIGHTLY` |
-| `release/1.1` | `1.1.<commit_count_on_branch>` | `RELEASE` |
-| `feature/my-fix` | `99.0.<base_patch>-dev.<sha1>` | `DEV` |
+The script mirrors CI:
 
-### CI/CD (GitHub Actions)
+| Current branch | Build type | Example |
+|---|---|---|
+| `main` | Nightly | `99.2.0` |
+| `release/1.2` | Stable release | `1.2.0` |
+| `feature/my-fix` | Developer | `99.2.0-dev.a1b2c3d` |
 
-#### Pull Requests (`build.yml`)
-Triggered on PRs to `main`:
-- Version = `99.0.<base_patch>-dev.<SHA1>`
-- Posts version as PR comment
+Do not manually edit `configs/version.py` or `version_info.txt`; the build process regenerates them.
 
-#### Merges to `main` (`build.yml`)
-- Version = `99.0.<commit_count>`
-- Uploads nightly artifact (no GitHub Release)
+## Troubleshooting
 
-#### Merges to `release/X.Y` (`build-release.yml`)
-- Version = `X.Y.<commit_count_on_branch>`
-- Creates a GitHub Release and git tag `vX.Y.<patch>`
+- A push to `main` runs `build.yml`, not `build-release.yml`.
+- A push to `release/X.Y` runs `build-release.yml`.
+- A push to a feature branch does not publish a stable release.
+- A failed build does not create a valid stable release.
+- Failed or skipped build numbers are not reused by rewriting Git history.
+- Existing tags must not be moved after publication.
+- If branch protection requires pull requests, direct pushes to `main` or a release branch will be rejected.
 
----
+## Historical Note
 
-## Usage
-
-### Check Current Version
-```python
-from configs.version import __version__, BUILD_DATE, GIT_HASH
-print(f"Version: {__version__}")
-```
-
-### Startup Output Examples
-```
-# Nightly (on main)
-🚀 IntelAvatar v99.0.312 starting...
-📅 Build: 2026-06-04 14:30:00
-🔖 Git: abc1234 (main)
-
-# Release (on release/1.1)
-🚀 IntelAvatar v1.1.5 starting...
-📅 Build: 2026-06-04 10:00:00
-🔖 Git: def5678 (release/1.1)
-
-# Dev (on feature branch)
-🚀 IntelAvatar v99.0.312-dev.f3c9e12 starting...
-📅 Build: 2026-06-05 09:15:00
-🔖 Git: f3c9e12 (feature/my-fix)
-```
-
----
-
-## Release Cadence Summary
-
-| Week | Action |
-|------|--------|
-| Week 0 | Cut `release/1.1` from `main` |
-| Week 0–4 | Hotfixes only on `release/1.1`; `main` continues freely |
-| Week 4 | Cut `release/1.2` from `main`; retire `release/1.1` |
-| Repeat | `release/1.3`, `release/1.4` ... |
-
-
-### 3. Release Process
-1. Make changes on a feature branch
-2. Create pull request to **main**
-3. Merge PR to main
-4. GitHub Actions automatically:
-   - Increments version
-   - Builds application
-   - Creates release
-
----
-
-## Version Alignment Examples
-
-| Scenario | Version |
-|----------|---------|
-| Release merged to main (commit #245) | `v1.0.245` |
-| Feature branch from `v1.0.245`, SHA `abc1234` | `1.0.245-dev.abc1234` |
-| Another commit on same branch, SHA `f3c9e1` | `1.0.245-dev.f3c9e1` |
-| Next release merged to main (commit #246) | `v1.0.246` |
-| New feature branch from `v1.0.246`, SHA `d7e8f9` | `1.0.246-dev.d7e8f9` |
-
----
-
-## Files Created
-
-1. **configs/version.py** - Stores version info (auto-updated)
-2. **build_with_version.ps1** - Local build script with versioning
-3. **.github/workflows/build.yml** - CI/CD for PRs (scenarios 1) and main merges (scenario 2)
-4. **.github/workflows/build-release.yml** - CI/CD for release branches only (scenarios 3 & 4)
-
----
-
-## Changing the Release Version (X.Y)
-
-The `X.Y` in a release version is derived entirely from the **branch name** — no code edits needed.
-
-To start a new release cycle with a different `X.Y`, simply cut a branch with the desired name:
-
-```powershell
-git checkout main
-git pull
-git checkout -b release/2.0   # → produces 2.0.0, 2.0.1, 2.0.2 ...
-git push -u origin release/2.0
-```
-
-The build script and CI workflow both parse `release/X.Y` via regex and use `X` and `Y` directly as the version components.
-
-> **Note:** Nightly builds on `main` are always `99.0.x` and cannot be changed — the `99` major is intentional to distinguish nightlies from stable releases at a glance.
-
----
-
-## Tips
-
-✅ **DO:**
-- Let CI/CD handle releases automatically
-- Keep main branch clean and stable
-- Use feature branches for development
-
-❌ **DON'T:**
-- Manually edit `configs/version.py` (it gets overwritten)
-- Push broken code to main
-- Skip testing before merging to main
+The `1.2` cycle exposed why a release branch should not be the permanent nightly anchor: cherry-picks and squash merges intentionally create different commit IDs. Future cycles should use an immutable cycle-base tag created from the final merged `main` commit, then create the release branch from that same commit.

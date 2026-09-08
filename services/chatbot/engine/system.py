@@ -167,6 +167,11 @@ class AgentCapabilityPolicy:
     scope_time_only_logs: bool = True
     configurable_issue_window: bool = True
     full_scope_for_undated_logs: bool = True
+    # Follow-up turns reuse the evidence the opening analysis already
+    # gathered, so they rarely need a full reasoning budget. Wi-Fi and NW
+    # cap them; BT never did, and matching that is deliberate rather than
+    # an oversight — its .hci.txt follow-ups routinely re-fetch.
+    follow_up_max_steps: int | None = 4
 
 
 WIFI_AGENT_POLICY = AgentCapabilityPolicy()
@@ -192,6 +197,7 @@ NW_AGENT_POLICY = AgentCapabilityPolicy(
 BT_AGENT_POLICY = AgentCapabilityPolicy(
     profile="bt",
     disabled_tools=frozenset({"lookup_assert_code", "softAP_supported_channel"}),
+    follow_up_max_steps=None,
 )
 
 
@@ -872,28 +878,12 @@ class WifiLogAgentSystem(
         print(f"[DEBUG] prime_with_context issue_time={dt} source={src} "
               f"raw='{attachment_time}' log_frame='{aligned_attachment_time}' "
               f"customer_frame='{self.issue_time_customer}'")
-        context_parts = []
-        if case_nbr:
-            context_parts.append(f"Case: {case_nbr}")
-        if subject:
-            context_parts.append(f"Subject: {subject}")
-        if issue_type:
-            context_parts.append(f"Classified issue type: {issue_type}")
-        if description:
-            context_parts.append(f"\nIssue description:\n{description}")
-
-        if context_parts:
-            self.conversation_history.append({
-                "role": "system",
-                "content": (
-                    "You are a Wi-Fi troubleshooting assistant with expert-level knowledge.\n"
-                    f"Available skills: {', '.join(self.skills.keys())}.\n"
-                    "Use fetch_filtered_logs with the most relevant skill(s), then call "
-                    "submit_final_report.\n\n"
-                    "=== Case Context ===\n"
-                    + "\n".join(context_parts)
-                )
-            })
+        # No opening system message is built here. The agentic system prompt
+        # is assembled on the first user turn by ConversationMixin.chat ->
+        # _build_analyze_system_prompt, which clears this history first, so
+        # anything appended here was only ever discarded. What this method
+        # DOES contribute is issue_context (read by skill_analysis and the
+        # issue-time fallbacks) and the reset caches above.
 
     # ------------------------------------------------------------------
     # Internal helpers

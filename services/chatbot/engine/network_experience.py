@@ -101,28 +101,12 @@ class NwAnalysisAgentSystem(WifiLogAgentSystem):
         self.issue_time = dt
         self._issue_time_time_only = (src == "input_time_only")
 
-        context_parts = []
-        if case_nbr:
-            context_parts.append(f"Case: {case_nbr}")
-        if subject:
-            context_parts.append(f"Subject: {subject}")
-        if issue_type:
-            context_parts.append(f"Classified issue type: {issue_type}")
-        if description:
-            context_parts.append(f"\nIssue description:\n{description}")
-
-        if context_parts:
-            self.conversation_history.append({
-                "role": "system",
-                "content": (
-                    "You are a Wi-Fi troubleshooting assistant with expert-level knowledge.\n"
-                    f"Available skills: {', '.join(self.skills.keys())}.\n"
-                    "Use fetch_filtered_logs with the most relevant skill(s), then call "
-                    "submit_final_report.\n\n"
-                    "=== Case Context ===\n"
-                    + "\n".join(context_parts)
-                ),
-            })
+        # No opening system message is built here. The agentic system prompt
+        # is assembled on the first user turn by ConversationMixin.chat ->
+        # _build_analyze_system_prompt, which clears this history first, so
+        # anything appended here was only ever discarded. What this method
+        # DOES contribute is issue_context (read by skill_analysis and the
+        # issue-time fallbacks) and the reset caches above.
 
 
 __all__ = ["NwAnalysisAgentSystem", "Skill"]

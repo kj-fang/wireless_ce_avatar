@@ -344,9 +344,16 @@ class ConversationMixin:
             for m in self.conversation_history
         )
 
+        # A follow-up already has the opening analysis's evidence in history,
+        # so it gets a smaller reasoning budget (policy, because BT is the one
+        # profile that never capped this).
+        if not _first_user_turn and self.capabilities.follow_up_max_steps:
+            max_steps = min(max_steps, self.capabilities.follow_up_max_steps)
+
         if _first_user_turn:
-            # First user turn — rebuild system prompt for agentic mode
-            # (replaces any simpler prompt from prime_with_context).
+            # First user turn — build the agentic system prompt. The history
+            # is cleared first: prime_with_context() populates issue_context
+            # and the caches, but contributes no message of its own.
             self.conversation_history = []
 
             context_section = ""

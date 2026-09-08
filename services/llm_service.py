@@ -1,5 +1,8 @@
 from logging import log
 
+import httpx2
+httpx2.alias_httpx()
+
 import requests
 import json
 import re
@@ -413,7 +416,7 @@ class LLM_helper:
                 return Anthropic(
                     base_url=gpt_url,
                     auth_token=tok,
-                    http_client=httpx2.Client(proxy=None, verify=False, trust_env=False),
+                    http_client=httpx.Client(proxy=None, verify=False, trust_env=False),
                 )
             pool = TokenPool(token_pool) if token_pool else None
             initial_token = pool.current()[1] if pool is not None else gpt_token

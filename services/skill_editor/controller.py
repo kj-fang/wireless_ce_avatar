@@ -412,10 +412,91 @@ def build_profile_yaml_helpers(
     }
 
 
+def append_skills_yaml_route(context: SkillEditorContext):
+    """
+    Import skills from a user-picked YAML file and append them to the
+    currently-active user local YAML. Only these fields survive per skill:
+    name, description, keywords, exclusive, expert_rules. A skill whose key
+    already exists in the destination is overwritten.
+
+    Seeds the user local YAML from the cloud baseline when no user file
+    exists yet, always flips the active source to "user", and reloads the
+    live agent so imported skills take effect without a page reload.
+
+    Ported from main (#142), which added one copy of this per profile route
+    module. Every dependency it needs was already on SkillEditorContext, so
+    here it is a single body both full agents share.
+
+    Request JSON: { "yaml_path": "/path/to/skills.yaml" }
+    """
+    from pathlib import Path
+
+    from utils.skill_import_utils import load_and_filter_source, merge_overwrite
+
+    data = request.get_json(silent=True) or {}
+    yaml_path = (data.get("yaml_path") or "").strip()
+    if not yaml_path:
+        return jsonify({"success": False, "error": "yaml_path is required."}), 400
+
+    try:
+        valid, skipped = load_and_filter_source(yaml_path)
+    except FileNotFoundError as e:
+        return jsonify({"success": False, "error": str(e)}), 404
+    except Exception as e:
+        traceback.print_exc()
+        return jsonify({"success": False, "error": f"Cannot parse YAML: {e}"}), 400
+
+    if not valid:
+        return jsonify({
+            "success": False,
+            "error": "No appendable skills found in the selected YAML.",
+            "skipped": skipped,
+        }), 400
+
+    try:
+        base_path, _ = context.latest_user_yaml()
+        if base_path is None:
+            base_path, _ = context.latest_cloud_baseline()
+        existing = context.read_yaml_file(base_path) if base_path is not None else {}
+
+        merged, appended, overwritten = merge_overwrite(existing, valid)
+        target = context.persist_user_yaml_snapshot(merged)
+
+        context.set_active_source("user")
+        skills = context.activate_yaml(target)
+        session["yaml_modified"] = True
+        session["yaml_modified_path"] = str(target)
+
+        parts = []
+        if appended:
+            parts.append(f"appended {len(appended)}")
+        if overwritten:
+            parts.append(f"overwrote {len(overwritten)}")
+        if skipped:
+            parts.append(f"skipped {len(skipped)}")
+        summary = ", ".join(parts) if parts else "no changes"
+
+        return jsonify({
+            "success":       True,
+            "active_source": "user",
+            "target_path":   str(target),
+            "filename":      target.name,
+            "appended":      appended,
+            "overwritten":   overwritten,
+            "skipped":       skipped,
+            "message":       f"Imported from {Path(yaml_path).name}: {summary}.",
+            "skills":        skills,
+        })
+    except Exception as e:
+        traceback.print_exc()
+        return jsonify({"success": False, "error": str(e)}), 500
+
+
 def build_skill_editor_handlers(
     context: SkillEditorContext,
 ) -> dict[str, Callable[..., Any]]:
     return {
+        "append_skills_yaml_route": partial(append_skills_yaml_route, context),
         "skills_yaml_status": partial(skills_yaml_status, context),
         "skills_yaml_use_cloud": partial(skills_yaml_use_cloud, context),
         "skills_yaml_use_user": partial(skills_yaml_use_user, context),

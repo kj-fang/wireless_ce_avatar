@@ -163,6 +163,10 @@
                     onclick="openSkillEditor()" id="skill-editor-btn"
                     title="Edit the local skill configuration"
                     >✏️ Edit Skills Configuration</button>
+            <button class="btn-set-log" style="width:100%;margin-top:6px;"
+                    onclick="appendSkillsFromYaml()" id="skill-append-btn"
+                    title="Pick a YAML file; its skills are appended to your customised configuration (duplicates overwrite)."
+                    >📥 Append Skills from YAML…</button>
             <div id="skill-editor-status" class="log-status"></div>
         </div>
 {% endmacro %}

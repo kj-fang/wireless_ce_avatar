@@ -92,6 +92,15 @@ def set_up(socketio):
         key = helpers.load_module(key_path, "key_moudle")
         app_config.set_key(key)
 
+    # Initialize driver_manager before the prewarm thread so _get_vf_session()
+    # can call driver_manager.create_download_driver() without hitting NoneType.
+    # This is the single initialization point — do not re-create it elsewhere
+    # (a second DriverManager would re-run ChromeDriver setup on the same dir
+    # and could overwrite this reference while the prewarm thread uses it).
+    from services.driver_manage_service import DriverManager
+    if app_config.driver_manager is None:
+        app_config.set_driver_manager(DriverManager(app_config.avatarfiles_dir))
+
     # Pre-warm Snowflake + Salesforce VF session in background so first user request is fast
     if key_path is not None:
         Thread(target=_prewarm_connections, args=(key.snowflake_passwd,), daemon=True).start()

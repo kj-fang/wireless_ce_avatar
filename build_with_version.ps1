@@ -1,18 +1,13 @@
 # Local build script — mirrors the same 4-scenario version logic as CI:
 #
 #  Scenario 1 (PR build / local dev):  feature/* or fix/* branch
-#    → version: <MAJOR>.<MINOR>.<patch>-dev.<sha1>   BUILD_TYPE: DEV
+#    → version: 99.2.<cycle_count>-dev.<sha1>   BUILD_TYPE: DEV
 #
 #  Scenario 2 (nightly):  main branch
-#    → version: <MAJOR>.<MINOR>.<patch>              BUILD_TYPE: NIGHTLY
+#    → version: 99.2.<cycle_count>               BUILD_TYPE: NIGHTLY
 #
 #  Scenario 3 & 4 (release candidate):  release/X.Y branch
-#    → version: X.Y.<commit_count_on_branch>         BUILD_TYPE: RELEASE
-#
-# <MAJOR>.<MINOR> is controlled by $NightlyMajor/$NightlyMinor below.
-# Patch is counted from the version anchor tag (e.g. v99.1.0) so it
-# resets to 0 when the minor is bumped.
-# Tag the bump commit: git tag v<MAJOR>.<MINOR>.0 && git push origin v<MAJOR>.<MINOR>.0
+#    → version: X.Y.<commit_count_on_branch>   BUILD_TYPE: RELEASE
 #
 # Run from repo root:  .\build_with_version.ps1
 
@@ -21,14 +16,11 @@ param(
 )
 
 # ── Nightly version line ──────────────────────────────────────────────────────
-# To bump the nightly minor (e.g. 99.1 → 99.2), update ALL three locations:
-#   1. $NightlyMajor / $NightlyMinor below (this file)
-#   2. NIGHTLY_MAJOR / NIGHTLY_MINOR in .github/workflows/build.yml  ← must match
-#   3. Tag the bump commit: git tag v99.2.0 && git push origin v99.2.0
-# Keeping this file and build.yml in sync is REQUIRED — they are two separate
-# sources of truth for local builds vs CI builds respectively.
+# To start a new nightly cycle, update $NightlyMinor and $NightlyBaseRef together.
+# build.yml has matching NIGHTLY_MAJOR, NIGHTLY_MINOR, and NIGHTLY_BASE_REF values.
 $NightlyMajor = 99
-$NightlyMinor = 1
+$NightlyMinor = 2
+$NightlyBaseRef = "release/1.2"
 # ─────────────────────────────────────────────────────────────────────────────
 
 Write-Host "===== IntelAvatar Build Script with Version Control =====" -ForegroundColor Cyan
@@ -44,17 +36,12 @@ try {
 
     if ($currentBranch -eq $Branch) {
         # ---- NIGHTLY build: on main branch ----
-        # Patch = commits since the version anchor tag (e.g. v99.1.0).
-        # Tag resets patch to 0 on each minor bump.
-        $anchorTag = "v{0}.{1}.0" -f $NightlyMajor, $NightlyMinor
-        try {
-            $patchCount = git rev-list --count "${anchorTag}..HEAD" 2>$null
-            if ($LASTEXITCODE -ne 0 -or -not $patchCount) { throw "tag not found" }
-        } catch {
-            Write-Host "⚠️  Tag '$anchorTag' not found — falling back to global commit count" -ForegroundColor Yellow
-            $patchCount = git rev-list --count $Branch
-        }
-        $version = "{0}.{1}.{2}" -f $NightlyMajor, $NightlyMinor, $patchCount
+        # Version 99.2.x — the third number counts check-ins in this nightly cycle.
+        git fetch origin $NightlyBaseRef --no-tags 2>$null
+        $nightlyBase = git merge-base $Branch "origin/$NightlyBaseRef" 2>$null
+        if ($LASTEXITCODE -ne 0 -or -not $nightlyBase) { throw "nightly cycle base unavailable" }
+        $commitCount = git rev-list --count "${nightlyBase}..HEAD"
+        $version = "$NightlyMajor.$NightlyMinor.$commitCount"
         $buildType = "NIGHTLY"
     } elseif ($currentBranch -match '^release/(\d+\.\d+)$') {
         # ---- RELEASE build: on a release/X.Y branch ----
@@ -72,25 +59,29 @@ try {
             $patchCount = git rev-list --count HEAD
             Write-Host "⚠️  Could not compute branch-point patch count — falling back to global count" -ForegroundColor Yellow
         }
-        $version   = "{0}.{1}.{2}" -f $releaseMajor, $releaseMinor, $patchCount
+        $version   = "$releaseMajor.$releaseMinor.$patchCount"
         $buildType = "RELEASE"
     } else {
         # ---- DEV build: on a feature/fix branch ----
-        # Version <MAJOR>.<MINOR>.<patch>-dev.<sha1>
-        # patch = commits on main since anchor tag at the branch point, so it matches
-        # the nightly build this feature was branched from.
+        # Version 99.2.<cycle_count>-dev.<sha1>
+        # cycle_count = commits in the nightly cycle at the branch point.
         try {
             $mergeBase = git merge-base HEAD $Branch 2>$null
             if ($LASTEXITCODE -ne 0 -or -not $mergeBase) { throw "merge-base failed" }
-            $anchorTag = "v{0}.{1}.0" -f $NightlyMajor, $NightlyMinor
-            $baseCommitCount = git rev-list --count "${anchorTag}..${mergeBase}" 2>$null
-            if ($LASTEXITCODE -ne 0 -or $null -eq $baseCommitCount) { throw "tag not found" }
+            git fetch origin $NightlyBaseRef --no-tags 2>$null
+            $nightlyBase = git merge-base $Branch "origin/$NightlyBaseRef" 2>$null
+            if ($LASTEXITCODE -ne 0 -or -not $nightlyBase) { throw "nightly cycle base failed" }
+            $baseCommitCount = git rev-list --count "${nightlyBase}..${mergeBase}"
         } catch {
-            # Fallback: merge-base unavailable or tag missing
-            $baseCommitCount = git rev-list --count $Branch
+            # Fallback: use the current main tip as the branch point.
+            $mergeBase = git rev-parse $Branch
+            git fetch origin $NightlyBaseRef --no-tags 2>$null
+            $nightlyBase = git merge-base $Branch "origin/$NightlyBaseRef" 2>$null
+            if ($LASTEXITCODE -ne 0 -or -not $nightlyBase) { throw "nightly cycle base failed" }
+            $baseCommitCount = git rev-list --count "${nightlyBase}..${mergeBase}"
             Write-Host "⚠️  Could not determine branch point — using tip of '$Branch' as fallback (version may be approximate)" -ForegroundColor Yellow
         }
-        $version = "{0}.{1}.{2}-dev.{3}" -f $NightlyMajor, $NightlyMinor, $baseCommitCount, $gitHash
+        $version = "$NightlyMajor.$NightlyMinor.$baseCommitCount-dev.$gitHash"
         $buildType = "DEV"
     }
 
@@ -102,7 +93,7 @@ try {
 
 } catch {
     Write-Host "Error getting git information. Using defaults." -ForegroundColor Red
-    $version = "{0}.{1}.0-dev.unknown" -f $NightlyMajor, $NightlyMinor
+    $version = "$NightlyMajor.$NightlyMinor.0-dev.unknown"
     $gitHash = "unknown"
     $currentBranch = "unknown"
     $buildDate = Get-Date -Format "yyyy-MM-dd HH:mm:ss"
@@ -171,12 +162,12 @@ VSVersionInfo(
         u'040904B0',
         [StringStruct(u'CompanyName', u'Intel Corporation'),
         StringStruct(u'FileDescription', u'IntelAvatar - Wireless CE Log Analysis Tool'),
-        StringStruct(u'FileVersion', u'${version}.0'),
+        StringStruct(u'FileVersion', u'$version.0'),
         StringStruct(u'InternalName', u'IntelAvatar'),
         StringStruct(u'LegalCopyright', u'Copyright `u00a9 2026 Intel Corporation'),
         StringStruct(u'OriginalFilename', u'IntelAvatar.exe'),
         StringStruct(u'ProductName', u'IntelAvatar'),
-        StringStruct(u'ProductVersion', u'${version}.0'),
+        StringStruct(u'ProductVersion', u'$version.0'),
         StringStruct(u'Comments', u'Git: $gitHash | Build: $buildDate')])
       ]), 
     VarFileInfo([VarStruct(u'Translation', [1033, 1200])])
@@ -202,7 +193,7 @@ try {
     # Rename exe with version
     Write-Host "Renaming executable with version..." -ForegroundColor Yellow
     $exePath = "dist/IntelAvatar/IntelAvatar.exe"
-    # For dev builds, $version already contains the SHA (e.g. 99.1.14-dev.b0530f21)
+    # For dev builds, $version already contains the SHA (e.g. 99.0.14-dev.b0530f21)
     # For nightly builds on main, append the short git hash
     # For release builds (release/X.Y), version is clean (e.g. 1.1.5) — no hash needed
     $exeName = if ($buildType -eq "RELEASE") { "IntelAvatar_v${version}.exe" } elseif ($buildType -eq "NIGHTLY") { "IntelAvatar_v${version}_${gitHash}.exe" } else { "IntelAvatar_v${version}.exe" }

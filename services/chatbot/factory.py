@@ -58,6 +58,12 @@ ROUTE_SPECS: tuple[RouteSpec, ...] = (
     # page reloaded after "Back to Avatar" starts clean.
     RouteSpec("/back_to_avatar", "back_to_avatar", ("GET",)),
     RouteSpec(
+        "/append_skills_yaml",
+        "append_skills_yaml_route",
+        ("POST",),
+        "skill_editor",
+    ),
+    RouteSpec(
         "/skills_yaml_status",
         "skills_yaml_status",
         ("GET",),

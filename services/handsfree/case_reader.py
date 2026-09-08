@@ -46,8 +46,12 @@ Your tasks:
     and the attachment subtitle. Prefer .zip driver-log captures over
     screenshots/documents.
  4. Assess whether the case gives an engineer enough to analyze, judged
-    over the description AND all comments together (a later comment can
-    fill a gap in the description). Report what is missing or too vague:
+    over the description, all comments AND the ENVIRONMENT DETAILS form
+    together (a later comment or a filled form field can fill a gap in the
+    description — a filled "Steps to reproduce" form field means repro steps
+    are NOT missing; a non-NA "Assert Error" field is a firmware assert
+    code; form dates such as "HDD Lock" or "Found In Build" are context,
+    not the issue occurrence time). Report what is missing or too vague:
     - "issue_description": no understandable statement of what fails /
       expected vs actual behavior.
     - "issue_time": no failure date/time stated anywhere.
@@ -69,6 +73,9 @@ Output ONLY a valid JSON object (no markdown, no code fences):
 
 === SUBJECT ===
 {subject}
+
+=== ENVIRONMENT DETAILS (structured Q&A form filled by the customer) ===
+{env_block}
 
 === ISSUE DESCRIPTION ===
 {description}
@@ -130,6 +137,27 @@ def _format_comments(rows: list[dict]) -> str:
     return "\n".join(out)
 
 
+_MAX_ENV_ENTRIES = 25
+_MAX_ENV_VALUE_CHARS = 300
+
+
+def _format_env_detail(env: Any) -> str:
+    """Render the IPS Environment Details Q&A dict as 'Q: A' lines.
+    Empty/whitespace responses are skipped (the form always lists every
+    question; only filled answers carry information)."""
+    if not isinstance(env, dict) or not env:
+        return "(none)"
+    out = []
+    for q, a in list(env.items())[:_MAX_ENV_ENTRIES]:
+        a = str(a or "").strip()
+        if not a:
+            continue
+        if len(a) > _MAX_ENV_VALUE_CHARS:
+            a = a[:_MAX_ENV_VALUE_CHARS] + " …[truncated]"
+        out.append(f"{str(q).strip()}: {a}")
+    return "\n".join(out) or "(none)"
+
+
 def _format_attachments(attachment_list: Any) -> str:
     if not attachment_list:
         return "(no attachments)"
@@ -149,13 +177,15 @@ def _format_attachments(attachment_list: Any) -> str:
 
 
 def read_case_history(llm, *, subject: str, description: str,
-                      comments: Any, attachment_list: Any) -> Optional[dict]:
+                      comments: Any, attachment_list: Any,
+                      env_detail: Any = None) -> Optional[dict]:
     """One LLM call. Returns the parsed reader dict, or None on any failure
     (callers fall back to description-only organize_issue_context)."""
     from services.ace.roles import _extract_json
 
     prompt = READER_PROMPT.format(
         subject=(subject or "").strip()[:500],
+        env_block=_format_env_detail(env_detail),
         description=(description or "").strip()[:_MAX_DESC_CHARS] or "(empty)",
         comments_block=_format_comments(_normalize_comments(comments)),
         attachments_block=_format_attachments(attachment_list),

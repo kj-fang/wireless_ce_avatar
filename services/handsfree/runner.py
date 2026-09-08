@@ -128,6 +128,30 @@ def _pick_etl_yb_earliest(wifi_files: list, ddd_files: list):
     return sorted(non_history or paths)[-1]
 
 
+_ENV_REPRO_KEY_RE = re.compile(r"(?i)steps to reproduce|repro")
+_ENV_BRIEF_KEY_RE = re.compile(
+    r"(?i)platform|found in build|operating system|frequency|tested hardware|computer model")
+
+
+def _env_repro_steps(env: dict) -> str:
+    """Non-trivial 'Steps to reproduce' answer from the Environment Details
+    form, or '' — a filled form field means repro steps are NOT missing."""
+    for q, a in (env or {}).items():
+        if _ENV_REPRO_KEY_RE.search(str(q)) and len(str(a or "").strip()) > 20:
+            return str(a).strip()
+    return ""
+
+
+def _env_brief(env: dict, limit: int = 300) -> str:
+    """Compact one-line environment summary for the agent context."""
+    parts = []
+    for q, a in (env or {}).items():
+        a = str(a or "").strip()
+        if a and _ENV_BRIEF_KEY_RE.search(str(q)):
+            parts.append(f"{str(q).strip()}: {a}")
+    return "; ".join(parts)[:limit]
+
+
 @dataclass
 class StageStatus:
     name: str
@@ -178,6 +202,7 @@ class CaseAnalysis:
     echo_insights: list = field(default_factory=list)  # Echo KB root-cause answers
     time_mismatch: dict = field(default_factory=dict)  # log doesn't cover issue time
     missing_info: list = field(default_factory=list)   # [{item, reason}] case-info gaps
+    env_detail: dict = field(default_factory=dict)     # IPS Environment Details Q&A form
     error: str = ""
 
     @property
@@ -242,6 +267,7 @@ class HandsfreeRunner:
             analysis.subject = case_ctx.subject or ""
             analysis.description = case_ctx.description or ""
             analysis.wifi_or_bt = case_ctx.wifi_or_bt or "wifi"
+            analysis.env_detail = dict(case_ctx.env_detail or {})
         if case_ctx is None or not (analysis.subject or analysis.description):
             analysis.mode = "error"
             analysis.error = "case fetch failed — no subject/description"
@@ -281,6 +307,7 @@ class HandsfreeRunner:
                 description=analysis.description,
                 comments=case_ctx.comments,
                 attachment_list=case_ctx.attachment_list,
+                env_detail=case_ctx.env_detail,
             )
             if reader:
                 analysis.case_reader = reader
@@ -308,6 +335,16 @@ class HandsfreeRunner:
             if not analysis.issue_times and "issue_time" not in flagged:
                 missing.append({"item": "issue_time",
                                 "reason": "no failure time stated anywhere in the case"})
+            # A filled "Steps to reproduce" form field IS the repro steps —
+            # retract a reader-flagged gap so we never ask for what the
+            # customer already provided in the Environment Details form.
+            if _env_repro_steps(analysis.env_detail):
+                if any(m.get("item") == "repro_steps" for m in missing):
+                    missing = [m for m in missing
+                               if m.get("item") != "repro_steps"]
+                    self.progress("check_case_info",
+                                  "repro steps found in the Environment "
+                                  "Details form — gap retracted")
             analysis.missing_info = missing
             self.progress(
                 "check_case_info",
@@ -528,6 +565,7 @@ class HandsfreeRunner:
             evidence = find_assert_evidence(analysis)
             if evidence["assert_codes"] or evidence["yellow_bang"]:
                 src = {"wrt_log": "from WRT log", "agent_text": "from agent text",
+                       "env_detail": "from IPS Environment Details form",
                        None: ""}.get(evidence.get("source"), "")
                 self.progress(
                     "echo_kb",
@@ -693,10 +731,13 @@ class HandsfreeRunner:
     def _run_agent(self, analysis: CaseAnalysis, *, max_steps: int) -> None:
         agent = self._build_agent()
         agent.current_log_path = analysis.log_path
+        env_brief = _env_brief(analysis.env_detail)
+        primed_description = (analysis.clean_description
+                              + (f"\n[Environment] {env_brief}" if env_brief else ""))
         agent.prime_with_context(
             case_nbr=analysis.case_nbr,
             subject=analysis.subject,
-            description=analysis.clean_description,
+            description=primed_description,
             issue_type=analysis.issue_type,
             attachment_time=analysis.attachment_time,
         )

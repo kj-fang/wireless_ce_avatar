@@ -234,6 +234,32 @@ def find_assert_evidence(analysis) -> dict:
                for a in scan_wrt_log_for_asserts(getattr(analysis, "log_path", "") or "")]
     source = "wrt_log" if asserts else None
 
+    # IPS Environment Details form: a non-NA "Assert Error" answer is a
+    # customer-declared 32-bit assert code — stronger than agent prose,
+    # weaker than the WRT log itself. Deduped against log-found codes.
+    seen_codes = {a["code"].lower() for a in asserts}
+    for q, a in (getattr(analysis, "env_detail", None) or {}).items():
+        if not re.search(r"(?i)assert", str(q)):
+            continue
+        val = str(a or "").strip()
+        m = re.fullmatch(r"(0x[0-9A-Fa-f]{1,8}|\d{1,10})", val)
+        if not m:
+            continue   # "NA", empty, or prose
+        try:
+            raw = int(m.group(1), 16 if m.group(1).lower().startswith("0x") else 10)
+        except ValueError:
+            continue
+        code = hex(raw)
+        if raw == 0 or code.lower() in seen_codes:
+            continue
+        seen_codes.add(code.lower())
+        asserts.append({"code": code, "cpu": "", "data": {},
+                        "line": f"IPS Environment Details field '{str(q).strip()[:80]}' = {val}",
+                        "source": "env_detail"})
+        source = source or "env_detail"
+        if len(asserts) >= MAX_ASSERTS_PER_CASE:
+            break
+
     blob = _analysis_text_blob(analysis)
     if not asserts:
         seen: set = set()

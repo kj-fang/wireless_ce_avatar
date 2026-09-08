@@ -766,16 +766,16 @@ def smoke_env_detail() -> None:
           and "Found In Build: 24.30.1.1" in _env_brief(env)
           and _env_repro_steps({"Steps to reproduce": "NA"}) == "")
 
+    # The "Assert Error" form field is customer-filled from Windows Event
+    # Viewer — a DIFFERENT code namespace than driver rtStatus asserts.
+    # It must NEVER become assert evidence (same trap as the 0x5002 bug).
     a = CaseAnalysis(case_nbr="1", mode="full",
                      env_detail={"Assert Error (32bit or NA)": "0x2000008A"})
     ev = find_assert_evidence(a)
-    check("S11.c non-NA Assert Error form field becomes assert evidence",
-          ev["source"] == "env_detail" and ev["assert_codes"] == ["0x2000008a"]
-          and "Environment Details" in ev["asserts"][0]["line"], str(ev))
-    b = CaseAnalysis(case_nbr="2", mode="full",
-                     env_detail={"Assert Error (32bit or NA)": "NA"})
-    check("S11.d NA / empty form values ignored",
-          find_assert_evidence(b)["assert_codes"] == [])
+    check("S11.c customer-filled Assert Error field NEVER becomes evidence",
+          ev["assert_codes"] == [] and ev["source"] is None, str(ev))
+    check("S11.d reader prompt warns the field is not a firmware assert",
+          "NOT a driver/firmware assert code" in READER_PROMPT)
 
 
 def run_smoke() -> int:

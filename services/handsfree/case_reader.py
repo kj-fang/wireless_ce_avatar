@@ -49,9 +49,11 @@ Your tasks:
     over the description, all comments AND the ENVIRONMENT DETAILS form
     together (a later comment or a filled form field can fill a gap in the
     description — a filled "Steps to reproduce" form field means repro steps
-    are NOT missing; a non-NA "Assert Error" field is a firmware assert
-    code; form dates such as "HDD Lock" or "Found In Build" are context,
-    not the issue occurrence time). Report what is missing or too vague:
+    are NOT missing; form dates such as "HDD Lock" or "Found In Build" are
+    context, not the issue occurrence time). CAUTION: the "Assert Error"
+    form field is customer-filled from Windows Event Viewer — its value is
+    NOT a driver/firmware assert code; never treat it as one. Report what
+    is missing or too vague:
     - "issue_description": no understandable statement of what fails /
       expected vs actual behavior.
     - "issue_time": no failure date/time stated anywhere.

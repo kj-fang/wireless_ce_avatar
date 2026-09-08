@@ -137,8 +137,12 @@ def _env_repro_steps(env: dict) -> str:
     """Non-trivial 'Steps to reproduce' answer from the Environment Details
     form, or '' — a filled form field means repro steps are NOT missing."""
     for q, a in (env or {}).items():
-        if _ENV_REPRO_KEY_RE.search(str(q)) and len(str(a or "").strip()) > 20:
-            return str(a).strip()
+        if not _ENV_REPRO_KEY_RE.search(str(q)):
+            continue
+        ans = str(a or "").strip()
+        if not ans or ans.lower() in {"na", "n/a", "none"}:
+            continue
+        return ans
     return ""
 
 

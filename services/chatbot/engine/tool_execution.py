@@ -3,10 +3,314 @@
 from __future__ import annotations
 
 import re
-from typing import Optional
+from dataclasses import dataclass
+from functools import partial
+from typing import Callable, Optional
 
 from utils.assert_code_utils import lookup_assert_code
 from utils.softAP_supported_channel import softAP_supported_channel
+
+
+# ---------------------------------------------------------------------------
+# Tool registry
+#
+# One table, two projections. `schema` is what the LLM is offered; `run` is
+# what actually executes. Deriving both from the same entries means a tool
+# cannot appear in the menu without a dispatch branch (or the reverse), and
+# AgentCapabilityPolicy.disabled_tools can be validated against the registry
+# at import time -- a misspelled entry used to disable nothing, silently,
+# because the schema filter and the dispatch guard each just missed on a
+# string.
+#
+# `schema=None` marks a tool that is dispatchable but never advertised:
+# query_log_detail is reachable from a replayed transcript and has anti-loop
+# handling in the reasoning loop, but is deliberately kept off the menu.
+# ---------------------------------------------------------------------------
+
+
+def _schema_fetch_filtered_logs(agent) -> dict:
+    return {
+            "type": "function",
+            "function": {
+                "name": "fetch_filtered_logs",
+                "description": (
+                    "Filter from the original full log using the specified skill, then merge results "
+                    "into a cumulative timestamp-assembled log (line numbers are not persisted). "
+                    "Returns a compact skill-focused evidence payload to save tokens."
+                ),
+                "parameters": {
+                    "type": "object",
+                    "properties": {
+                        "skill_name": {
+                            "type": "string",
+                            "enum": list(agent.skills.keys()),
+                            "description": "Which skill's filter to apply (e.g., 'Connectivity', 'Roaming')"
+                        }
+                    },
+                    "required": ["skill_name"]
+                }
+            }
+        }
+
+
+def _schema_lookup_assert_code(agent) -> dict:
+    return {
+            "type": "function",
+            "function": {
+                "name": "lookup_assert_code",
+                "description": (
+                    "Look up a firmware assert/error code from the Intel Wi-Fi LMAC or UMAC header. "
+                    "Accepts the raw code exactly as it appears in the log — flag decomposition is "
+                    "handled automatically.\n"
+                    "Code formats seen in logs:\n"
+                    "  0x20xxxxxx → UMAC assert (0x20000000 CPU flag stripped automatically)\n"
+                    "  0x10xxxx   → UMAC namespace (UMAC_ASSERT_START)\n"
+                    "  0x40xxxx   → LMAC RCM sub-CPU assert\n"
+                    "  0x50xxxx   → LMAC TCM sub-CPU assert\n"
+                    "  0x00xxxx   → LMAC direct assert\n"
+                    "Call this whenever you see 'assert', 'ASSERT', or a hex code after "
+                    "'code=' in the logs."
+                ),
+                "parameters": {
+                    "type": "object",
+                    "properties": {
+                        "code": {
+                            "type": "string",
+                            "description": (
+                                "Raw assert code from the log, as a hex string "
+                                "e.g. '0x20100505' or '0x34'"
+                            )
+                        }
+                    },
+                    "required": ["code"]
+                }
+            }
+        }
+
+
+def _schema_softap_supported_channel(agent) -> dict:
+    return {
+            "type": "function",
+            "function": {
+                "name": "softAP_supported_channel",
+                "description": (
+                    "Analyze the SoftAP supported channels per country/region from the currently loaded log. "
+                    "Takes no arguments — the server reads the full raw log internally. "
+                    "Do NOT pass log_text; you do not have the full raw log in context."
+                ),
+                "parameters": {
+                    "type": "object",
+                    "properties": {},
+                    "required": []
+                }
+            }
+        }
+
+
+def _schema_submit_final_report(agent) -> dict:
+    schema = {
+            "type": "function",
+            "function": {
+                "name": "submit_final_report",
+                "description": (
+                    "Call this tool once you have identified the root cause. "
+                    "Submits the structured final analysis report."
+                ),
+                "parameters": {
+                    "type": "object",
+                    "properties": {
+                        "root_cause_summary": {
+                            "type": "string",
+                            "description": "One-sentence root cause summary"
+                        },
+                        "confidence_score": {
+                            "type": "integer",
+                            "description": "Confidence 0-100"
+                        },
+                        "recommended_actions": {
+                            "type": "array",
+                            "items": {"type": "string"},
+                            "description": "Bullet-point actions"
+                        },
+                        "involved_skills": {
+                            "type": "array",
+                            "items": {"type": "string"},
+                            "description": "Skills used in this diagnosis"
+                        },
+                        "markdown_summary": {
+                            "type": "string",
+                            "description": "Full Markdown report for engineers"
+                        },
+                        "applied_bullet_ids": {
+                            "type": "array",
+                            "items": {"type": "string"},
+                            "description": (
+                                "ACE playbook bullet ids (e.g. 'conn-00042', 'agent-00007') "
+                                "that you actually relied on for this analysis. "
+                                "Leave empty if no playbook bullets applied."
+                            )
+                        },
+                        "flagged_bullet_ids": {
+                            "type": "array",
+                            "items": {"type": "string"},
+                            "description": (
+                                "ACE playbook bullet ids that conflicted with the evidence "
+                                "and should be flagged as harmful in the next reflection."
+                            )
+                        }
+                    },
+                    "required": [
+                        "root_cause_summary", "confidence_score",
+                        "recommended_actions", "involved_skills", "markdown_summary"
+                    ]
+                }
+            }
+        }
+    if not agent.capabilities.ace_playbooks:
+        properties = schema["function"]["parameters"]["properties"]
+        properties.pop("applied_bullet_ids", None)
+        properties.pop("flagged_bullet_ids", None)
+    return schema
+
+
+# The two snapshot tools below were withdrawn from the menu but are still
+# answered by name, so a model working from an older transcript gets a
+# redirect instead of "Unknown tool". Their original schemas:
+    # {
+    #     "type": "function",
+    #     "function": {
+    #         "name": "get_assembled_log_snapshot",
+    #         "description": (
+    #             "Retrieve assembled-log macro view on demand. "
+    #             "Use mode='summary' for metadata only, 'compact' for limited body, "
+    #             "or 'full' for complete assembled content."
+    #         ),
+    #         "parameters": {
+    #             "type": "object",
+    #             "properties": {
+    #                 "mode": {
+    #                     "type": "string",
+    #                     "enum": ["summary", "compact", "full"],
+    #                     "description": "How much assembled content to return.",
+    #                     "default": "summary"
+    #                 }
+    #             },
+    #             "required": []
+    #         }
+    #     }
+    # },
+    # {
+    #     "type": "function",
+    #     "function": {
+    #         "name": "get_final_state_snapshot",
+    #         "description": (
+    #             "Retrieve the latest assembled-log tail for end-of-analysis verification. "
+    #             "Use this before declaring a persistent failure to check whether later logs show recovery/success."
+    #         ),
+    #         "parameters": {
+    #             "type": "object",
+    #             "properties": {
+    #                 "tail_lines": {
+    #                     "type": "integer",
+    #                     "description": "Number of latest lines to inspect. Default 120, range 20-400.",
+    #                     "default": 120
+    #                 }
+    #             },
+    #             "required": []
+    #         }
+    #     }
+    # },
+
+
+def _run_fetch_filtered_logs(agent, args: dict) -> str:
+    return agent.fetch_filtered_logs(args.get("skill_name", ""))
+
+
+def _run_query_log_detail(agent, args: dict) -> str:
+    anchor_text = args.get("anchor_text", "")
+    anchor_timestamp = args.get("anchor_timestamp", "")
+    context_span = agent._resolve_context_span(
+        anchor_text,
+        args.get("context_span", agent.DEFAULT_DETAIL_CONTEXT_SPAN),
+    )
+    max_hits = min(args.get("max_hits", 3), agent.MAX_DETAIL_HITS)
+    return agent.query_log_detail(
+        anchor_text=anchor_text,
+        anchor_timestamp=anchor_timestamp,
+        context_span=context_span,
+        max_hits=max_hits,
+    )
+
+
+def _run_withdrawn_snapshot(agent, args: dict, _name: str = "") -> str:
+    return (
+        f"{_name} is disabled. "
+        "Use fetch_filtered_logs(skill_name) to retrieve skill-focused evidence "
+        "or query_log_detail(keyword) to search specific events."
+    )
+
+
+def _run_lookup_assert_code(agent, args: dict) -> str:
+    return lookup_assert_code(args.get("code", ""))
+
+
+def _run_softap_supported_channel(agent, args: dict) -> str:
+    err = agent._ensure_raw_log_cache()
+    if err:
+        return err
+    log_text = "\n".join(agent._raw_log_cache)
+    if not log_text.strip():
+        return "ERROR: Raw log is empty or unavailable."
+    return softAP_supported_channel(log_text)
+
+
+def _run_submit_final_report(agent, args: dict) -> str:
+    # Terminal tool: the reasoning loop intercepts this call before dispatch,
+    # so arriving here means it was invoked outside that path.
+    return "submit_final_report is handled by the reasoning loop."
+
+
+@dataclass(frozen=True)
+class Tool:
+    """One diagnostic tool: how it is advertised, and what it runs."""
+
+    name: str
+    run: Callable[..., str]
+    schema: Optional[Callable[..., dict]] = None
+
+
+TOOLS: tuple[Tool, ...] = (
+    Tool("fetch_filtered_logs", _run_fetch_filtered_logs, _schema_fetch_filtered_logs),
+    Tool("query_log_detail", _run_query_log_detail),
+    Tool("get_assembled_log_snapshot",
+         partial(_run_withdrawn_snapshot, _name="get_assembled_log_snapshot")),
+    Tool("get_final_state_snapshot",
+         partial(_run_withdrawn_snapshot, _name="get_final_state_snapshot")),
+    Tool("lookup_assert_code", _run_lookup_assert_code, _schema_lookup_assert_code),
+    Tool("softAP_supported_channel", _run_softap_supported_channel,
+         _schema_softap_supported_channel),
+    Tool("submit_final_report", _run_submit_final_report, _schema_submit_final_report),
+)
+
+TOOLS_BY_NAME: dict[str, Tool] = {t.name: t for t in TOOLS}
+TOOL_NAMES: frozenset[str] = frozenset(TOOLS_BY_NAME)
+
+
+def validate_disabled_tools(profile: str, disabled) -> None:
+    """Fail at import time when a policy disables a tool that does not exist.
+
+    The same trick handler_map() plays for route endpoints. Before this, a
+    typo in disabled_tools was a silent no-op: the schema filter and the
+    dispatch guard both just failed to match, leaving the tool fully enabled
+    -- the exact opposite of what the policy asked for.
+    """
+    unknown = sorted(set(disabled) - TOOL_NAMES)
+    if unknown:
+        raise RuntimeError(
+            "Profile '%s' disables unknown tool(s): %s. Known tools: %s"
+            % (profile, ", ".join(unknown), ", ".join(sorted(TOOL_NAMES)))
+        )
+
 
 
 class ToolExecutionMixin:
@@ -47,48 +351,20 @@ class ToolExecutionMixin:
         return f"{context_section}{ace_block}{body}\n\n{report}"
 
     def _invoke_tool(self, tool_name: str, args: dict) -> str:
-        """Centralized tool dispatch used by both chat and analyze flows."""
+        """Centralized tool dispatch used by both chat and analyze flows.
+
+        Second of the two gates over capabilities.disabled_tools: _build_tools
+        keeps a disabled tool off the menu, this keeps it from running if it is
+        called anyway (a replayed transcript, or a hallucinated name). Both
+        gates now read the same registry, so they cannot disagree.
+        """
         if tool_name in self.capabilities.disabled_tools:
             return f"{tool_name} is not available for {self.capabilities.profile} log analysis."
 
-        if tool_name == "fetch_filtered_logs":
-            return self.fetch_filtered_logs(args.get("skill_name", ""))
-
-        if tool_name == "query_log_detail":
-            anchor_text = args.get("anchor_text", "")
-            anchor_timestamp = args.get("anchor_timestamp", "")
-            context_span = self._resolve_context_span(
-                anchor_text,
-                args.get("context_span", self.DEFAULT_DETAIL_CONTEXT_SPAN),
-            )
-            max_hits = min(args.get("max_hits", 3), self.MAX_DETAIL_HITS)
-            return self.query_log_detail(
-                anchor_text=anchor_text,
-                anchor_timestamp=anchor_timestamp,
-                context_span=context_span,
-                max_hits=max_hits,
-            )
-
-        if tool_name in ("get_assembled_log_snapshot", "get_final_state_snapshot"):
-            return (
-                f"{tool_name} is disabled. "
-                "Use fetch_filtered_logs(skill_name) to retrieve skill-focused evidence "
-                "or query_log_detail(keyword) to search specific events."
-            )
-
-        if tool_name == "lookup_assert_code":
-            return lookup_assert_code(args.get("code", ""))
-
-        if tool_name == "softAP_supported_channel":
-            err = self._ensure_raw_log_cache()
-            if err:
-                return err
-            log_text = "\n".join(self._raw_log_cache)
-            if not log_text.strip():
-                return "ERROR: Raw log is empty or unavailable."
-            return softAP_supported_channel(log_text)
-
-        return f"Unknown tool: {tool_name}"
+        tool = TOOLS_BY_NAME.get(tool_name)
+        if tool is None:
+            return f"Unknown tool: {tool_name}"
+        return tool.run(self, args)
 
     def _append_tool_message(self, messages: list, tool_call, content: str) -> None:
         """Append a tool result message in the required protocol format."""
@@ -419,190 +695,12 @@ class ToolExecutionMixin:
         ]
 
     def _build_tools(self) -> list:
-        tools = [
-            {
-                "type": "function",
-                "function": {
-                    "name": "fetch_filtered_logs",
-                    "description": (
-                        "Filter from the original full log using the specified skill, then merge results "
-                        "into a cumulative timestamp-assembled log (line numbers are not persisted). "
-                        "Returns a compact skill-focused evidence payload to save tokens."
-                    ),
-                    "parameters": {
-                        "type": "object",
-                        "properties": {
-                            "skill_name": {
-                                "type": "string",
-                                "enum": list(self.skills.keys()),
-                                "description": "Which skill's filter to apply (e.g., 'Connectivity', 'Roaming')"
-                            }
-                        },
-                        "required": ["skill_name"]
-                    }
-                }
-            },
-            # {
-            #     "type": "function",
-            #     "function": {
-            #         "name": "get_assembled_log_snapshot",
-            #         "description": (
-            #             "Retrieve assembled-log macro view on demand. "
-            #             "Use mode='summary' for metadata only, 'compact' for limited body, "
-            #             "or 'full' for complete assembled content."
-            #         ),
-            #         "parameters": {
-            #             "type": "object",
-            #             "properties": {
-            #                 "mode": {
-            #                     "type": "string",
-            #                     "enum": ["summary", "compact", "full"],
-            #                     "description": "How much assembled content to return.",
-            #                     "default": "summary"
-            #                 }
-            #             },
-            #             "required": []
-            #         }
-            #     }
-            # },
-            # {
-            #     "type": "function",
-            #     "function": {
-            #         "name": "get_final_state_snapshot",
-            #         "description": (
-            #             "Retrieve the latest assembled-log tail for end-of-analysis verification. "
-            #             "Use this before declaring a persistent failure to check whether later logs show recovery/success."
-            #         ),
-            #         "parameters": {
-            #             "type": "object",
-            #             "properties": {
-            #                 "tail_lines": {
-            #                     "type": "integer",
-            #                     "description": "Number of latest lines to inspect. Default 120, range 20-400.",
-            #                     "default": 120
-            #                 }
-            #             },
-            #             "required": []
-            #         }
-            #     }
-            # },
-            {
-                "type": "function",
-                "function": {
-                    "name": "lookup_assert_code",
-                    "description": (
-                        "Look up a firmware assert/error code from the Intel Wi-Fi LMAC or UMAC header. "
-                        "Accepts the raw code exactly as it appears in the log — flag decomposition is "
-                        "handled automatically.\n"
-                        "Code formats seen in logs:\n"
-                        "  0x20xxxxxx → UMAC assert (0x20000000 CPU flag stripped automatically)\n"
-                        "  0x10xxxx   → UMAC namespace (UMAC_ASSERT_START)\n"
-                        "  0x40xxxx   → LMAC RCM sub-CPU assert\n"
-                        "  0x50xxxx   → LMAC TCM sub-CPU assert\n"
-                        "  0x00xxxx   → LMAC direct assert\n"
-                        "Call this whenever you see 'assert', 'ASSERT', or a hex code after "
-                        "'code=' in the logs."
-                    ),
-                    "parameters": {
-                        "type": "object",
-                        "properties": {
-                            "code": {
-                                "type": "string",
-                                "description": (
-                                    "Raw assert code from the log, as a hex string "
-                                    "e.g. '0x20100505' or '0x34'"
-                                )
-                            }
-                        },
-                        "required": ["code"]
-                    }
-                }
-            },
-            {
-                "type": "function",
-                "function": {
-                    "name": "softAP_supported_channel",
-                    "description": (
-                        "Analyze the SoftAP supported channels per country/region from the currently loaded log. "
-                        "Takes no arguments — the server reads the full raw log internally. "
-                        "Do NOT pass log_text; you do not have the full raw log in context."
-                    ),
-                    "parameters": {
-                        "type": "object",
-                        "properties": {},
-                        "required": []
-                    }
-                }
-            },
-            {
-                "type": "function",
-                "function": {
-                    "name": "submit_final_report",
-                    "description": (
-                        "Call this tool once you have identified the root cause. "
-                        "Submits the structured final analysis report."
-                    ),
-                    "parameters": {
-                        "type": "object",
-                        "properties": {
-                            "root_cause_summary": {
-                                "type": "string",
-                                "description": "One-sentence root cause summary"
-                            },
-                            "confidence_score": {
-                                "type": "integer",
-                                "description": "Confidence 0-100"
-                            },
-                            "recommended_actions": {
-                                "type": "array",
-                                "items": {"type": "string"},
-                                "description": "Bullet-point actions"
-                            },
-                            "involved_skills": {
-                                "type": "array",
-                                "items": {"type": "string"},
-                                "description": "Skills used in this diagnosis"
-                            },
-                            "markdown_summary": {
-                                "type": "string",
-                                "description": "Full Markdown report for engineers"
-                            },
-                            "applied_bullet_ids": {
-                                "type": "array",
-                                "items": {"type": "string"},
-                                "description": (
-                                    "ACE playbook bullet ids (e.g. 'conn-00042', 'agent-00007') "
-                                    "that you actually relied on for this analysis. "
-                                    "Leave empty if no playbook bullets applied."
-                                )
-                            },
-                            "flagged_bullet_ids": {
-                                "type": "array",
-                                "items": {"type": "string"},
-                                "description": (
-                                    "ACE playbook bullet ids that conflicted with the evidence "
-                                    "and should be flagged as harmful in the next reflection."
-                                )
-                            }
-                        },
-                        "required": [
-                            "root_cause_summary", "confidence_score",
-                            "recommended_actions", "involved_skills", "markdown_summary"
-                        ]
-                    }
-                }
-            }
+        """The menu handed to the LLM: every registered tool that has a schema
+        and is not disabled for this profile."""
+        return [
+            tool.schema(self)
+            for tool in TOOLS
+            if tool.schema is not None
+            and tool.name not in self.capabilities.disabled_tools
         ]
-        tools = [
-            tool for tool in tools
-            if tool["function"]["name"] not in self.capabilities.disabled_tools
-        ]
-        if not self.capabilities.ace_playbooks:
-            report = next(
-                tool["function"] for tool in tools
-                if tool["function"]["name"] == "submit_final_report"
-            )
-            properties = report["parameters"]["properties"]
-            properties.pop("applied_bullet_ids", None)
-            properties.pop("flagged_bullet_ids", None)
-        return tools
+

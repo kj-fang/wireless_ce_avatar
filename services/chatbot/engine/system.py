@@ -427,7 +427,19 @@ from services.chatbot.engine.log_scope import LogScopeMixin
 from services.chatbot.engine.skill_analysis import SkillAnalysisMixin
 from services.chatbot.engine.conversation import ConversationMixin
 from services.chatbot.engine.report_quality import ReportQualityMixin
-from services.chatbot.engine.tool_execution import ToolExecutionMixin
+from services.chatbot.engine.tool_execution import (
+    ToolExecutionMixin,
+    validate_disabled_tools as _validate_disabled_tools,
+)
+
+# The policies above name tools as strings. Check them against the registry
+# now rather than discovering at runtime that a typo left a tool enabled --
+# the same import-time guard handler_map() applies to route endpoints. The
+# policies are declared before this import can happen (tool_execution imports
+# nothing from here), so this is the first point where both are visible.
+for _policy in (WIFI_AGENT_POLICY, NW_AGENT_POLICY, BT_AGENT_POLICY):
+    _validate_disabled_tools(_policy.profile, _policy.disabled_tools)
+
 
 class WifiLogAgentSystem(
     LogScopeMixin,

@@ -166,6 +166,12 @@ class AgentCapabilityPolicy:
     merge_wrapped_time_only_logs: bool = True
     scope_time_only_logs: bool = True
     configurable_issue_window: bool = True
+    # The Segment2 half-width in minutes. Wi-Fi and BT let the sidebar slider
+    # override it per turn; NW has no issue-time UI at all, so this IS its
+    # window -- main hard-coded the same 5 twice inside its own NW class.
+    # Keeping it here means changing NW's window is a one-line policy edit
+    # rather than hunting magic numbers in log_scope.
+    issue_window_minutes_default: int = 5
     full_scope_for_undated_logs: bool = True
     # Follow-up turns reuse the evidence the opening analysis already
     # gathered, so they rarely need a full reasoning budget. Wi-Fi and NW

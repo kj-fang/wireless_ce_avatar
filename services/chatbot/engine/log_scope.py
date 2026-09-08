@@ -21,6 +21,26 @@ from utils.log_parser_preprocess import (
 class LogScopeMixin:
     """LogScope behavior for the composed agent."""
 
+    def _effective_issue_window(self) -> int:
+        """Half-width in minutes for the Segment2 issue-time slice.
+
+        Wi-Fi and BT expose a sidebar slider that writes
+        issue_time_window_minutes per turn. NW has no issue-time UI, so its
+        policy default is the whole story -- the flag guards a value that
+        never arrives today, and would keep guarding it if someone later
+        wired NW's /chat to accept the field.
+
+        0 is a legitimate answer (capture only the exact issue instant); a
+        None or negative value falls back to the policy default. Both
+        Segment2 branches below read this rather than repeating the rule.
+        """
+        default = self.capabilities.issue_window_minutes_default
+        raw = (
+            self.issue_time_window_minutes
+            if self.capabilities.configurable_issue_window else default
+        )
+        return raw if isinstance(raw, int) and raw >= 0 else default
+
     def _ensure_raw_log_cache(self) -> Optional[str]:
         """Load raw log once per current log path and keep it in memory."""
         if not self.current_log_path:
@@ -287,11 +307,7 @@ class LogScopeMixin:
             # --- 2A (TIME-ONLY logs, e.g. DDD/tracefmt with no date) ---
             # The log carries no date, so match the issue_time's TIME-OF-DAY
             # only (seconds-of-day). issue_time's date part (if any) is ignored.
-            _raw_win = (
-                self.issue_time_window_minutes
-                if self.capabilities.configurable_issue_window else 5
-            )
-            _win = _raw_win if isinstance(_raw_win, int) and _raw_win >= 0 else 5
+            _win = self._effective_issue_window()
             issue_sod = (self.issue_time.hour * 3600 + self.issue_time.minute * 60
                          + self.issue_time.second)
             win_sec = _win * 60
@@ -350,13 +366,7 @@ class LogScopeMixin:
 
         elif self.issue_time:
             # --- 2A: issue_time ±N min (timestamp indices + contiguous slice) ---
-            # 0 is allowed (capture only the exact issue instant); a None /
-            # negative falls back to the default 5.
-            _raw_win = (
-                self.issue_time_window_minutes
-                if self.capabilities.configurable_issue_window else 5
-            )
-            _win = _raw_win if isinstance(_raw_win, int) and _raw_win >= 0 else 5
+            _win = self._effective_issue_window()
             window_start = self.issue_time - timedelta(minutes=_win)
             window_end   = self.issue_time + timedelta(minutes=_win)
 

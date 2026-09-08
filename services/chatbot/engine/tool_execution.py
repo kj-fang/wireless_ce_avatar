@@ -5,6 +5,7 @@ from __future__ import annotations
 import re
 from dataclasses import dataclass
 from functools import partial
+from types import SimpleNamespace
 from typing import Callable, Optional
 
 from utils.assert_code_utils import lookup_assert_code
@@ -312,6 +313,96 @@ def validate_disabled_tools(profile: str, disabled) -> None:
         )
 
 
+def _schema_probe():
+    """Minimal stand-in for an agent, enough to render every schema once."""
+    return SimpleNamespace(
+        skills={},
+        capabilities=SimpleNamespace(ace_playbooks=True),
+    )
+
+
+def _validate_registry() -> None:
+    """Assert the registry key and the advertised tool name agree.
+
+    Each name is written twice -- once as the Tool entry's key, once inside
+    the schema handed to the model -- and nothing else compares them. If they
+    drift, the model calls the advertised name, TOOLS_BY_NAME misses, and the
+    call comes back as "Unknown tool" at runtime. Catch it at import instead.
+    """
+    probe = _schema_probe()
+    for tool in TOOLS:
+        if tool.schema is None:
+            continue
+        advertised = tool.schema(probe).get("function", {}).get("name")
+        if advertised != tool.name:
+            raise RuntimeError(
+                "Tool registry mismatch: entry %r advertises itself as %r"
+                % (tool.name, advertised)
+            )
+
+
+_validate_registry()
+
+
+def _type_ok(value, json_type: str) -> bool:
+    if json_type == "string":
+        return isinstance(value, str)
+    if json_type == "integer":
+        return isinstance(value, int) and not isinstance(value, bool)
+    if json_type == "number":
+        return isinstance(value, (int, float)) and not isinstance(value, bool)
+    if json_type == "array":
+        return isinstance(value, list)
+    if json_type == "object":
+        return isinstance(value, dict)
+    return True          # unconstrained or a type we do not police
+
+
+def validate_tool_args(tool: Tool, agent, args: dict) -> Optional[str]:
+    """Check one tool call against its own schema; return a message or None.
+
+    The provider enforces the schema on calls it generates, but not every
+    call arrives that way: a replayed transcript, a hand-built request or a
+    hallucinated name all reach dispatch unchecked. Reading the constraints
+    off the schema rather than restating them means a new tool is covered the
+    day it is registered.
+
+    The return value is phrased for the model, because that is where it goes:
+    the reasoning loop feeds it back as the tool result, so a bad call turns
+    into a correctable message instead of a stack trace or a silent default.
+    """
+    if tool.schema is None:
+        return None
+    params = tool.schema(agent).get("function", {}).get("parameters", {}) or {}
+    properties = params.get("properties", {}) or {}
+
+    for name in params.get("required", []) or []:
+        value = args.get(name)
+        if value is None or (isinstance(value, str) and not value.strip()):
+            return (
+                f"{tool.name} requires '{name}'. "
+                f"Re-issue the call with all of: {', '.join(params.get('required', []))}."
+            )
+
+    for name, value in args.items():
+        spec = properties.get(name)
+        if not isinstance(spec, dict) or value is None:
+            continue          # extras are the provider's business, not ours
+        expected = spec.get("type")
+        if expected and not _type_ok(value, expected):
+            return (
+                f"{tool.name}: '{name}' must be a {expected}, "
+                f"got {type(value).__name__}."
+            )
+        allowed = spec.get("enum")
+        if allowed and value not in allowed:
+            return (
+                f"{tool.name}: '{name}' must be one of {', '.join(map(str, allowed))}. "
+                f"Got {value!r}."
+            )
+    return None
+
+
 
 class ToolExecutionMixin:
     """ToolExecution behavior for the composed agent."""
@@ -364,6 +455,9 @@ class ToolExecutionMixin:
         tool = TOOLS_BY_NAME.get(tool_name)
         if tool is None:
             return f"Unknown tool: {tool_name}"
+        complaint = validate_tool_args(tool, self, args)
+        if complaint:
+            return complaint
         return tool.run(self, args)
 
     def _append_tool_message(self, messages: list, tool_call, content: str) -> None:

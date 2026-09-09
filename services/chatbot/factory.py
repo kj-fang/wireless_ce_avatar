@@ -61,7 +61,7 @@ ROUTE_SPECS: tuple[RouteSpec, ...] = (
         "/append_skills_yaml",
         "append_skills_yaml_route",
         ("POST",),
-        "skill_editor",
+        "skill_append",
     ),
     RouteSpec(
         "/skills_yaml_status",

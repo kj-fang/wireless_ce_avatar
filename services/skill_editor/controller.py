@@ -412,7 +412,42 @@ def build_profile_yaml_helpers(
     }
 
 
-def append_skills_yaml_route(context: SkillEditorContext):
+@dataclass(frozen=True)
+class SkillAppendContext:
+    """The six callables appending skills actually needs.
+
+    Deliberately narrower than SkillEditorContext. NW has no skill editor and
+    should not have to supply the six fields the editor endpoints want just to
+    gain one import button, so the append handler asks for its own slice and
+    SkillEditorContext converts into it.
+    """
+
+    activate_yaml: Callable[..., Any]
+    latest_cloud_baseline: Callable[..., Any]
+    latest_user_yaml: Callable[..., Any]
+    persist_user_yaml_snapshot: Callable[..., Any]
+    read_yaml_file: Callable[..., Any]
+    set_active_source: Callable[..., Any]
+
+    @classmethod
+    def from_editor(cls, editor: SkillEditorContext) -> "SkillAppendContext":
+        return cls(
+            activate_yaml=editor.activate_yaml,
+            latest_cloud_baseline=editor.latest_cloud_baseline,
+            latest_user_yaml=editor.latest_user_yaml,
+            persist_user_yaml_snapshot=editor.persist_user_yaml_snapshot,
+            read_yaml_file=editor.read_yaml_file,
+            set_active_source=editor.set_active_source,
+        )
+
+
+def build_skill_append_handlers(
+    context: SkillAppendContext,
+) -> dict[str, Callable[..., Any]]:
+    return {"append_skills_yaml_route": partial(append_skills_yaml_route, context)}
+
+
+def append_skills_yaml_route(context: SkillAppendContext):
     """
     Import skills from a user-picked YAML file and append them to the
     currently-active user local YAML. Only these fields survive per skill:
@@ -496,7 +531,7 @@ def build_skill_editor_handlers(
     context: SkillEditorContext,
 ) -> dict[str, Callable[..., Any]]:
     return {
-        "append_skills_yaml_route": partial(append_skills_yaml_route, context),
+        **build_skill_append_handlers(SkillAppendContext.from_editor(context)),
         "skills_yaml_status": partial(skills_yaml_status, context),
         "skills_yaml_use_cloud": partial(skills_yaml_use_cloud, context),
         "skills_yaml_use_user": partial(skills_yaml_use_user, context),

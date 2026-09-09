@@ -1,6 +1,22 @@
 from flask import render_template, request, session, jsonify, Response, copy_current_request_context
 from services.chatbot.issue_context import extract_disconnect_time as _extract_disconnect_time
 from services.chatbot.shared_routes import leave_chatbot as _leave_chatbot
+from services.skill_editor.controller import (
+    SkillAppendContext,
+    build_profile_yaml_helpers,
+    build_skill_append_handlers,
+)
+from services.skill_editor.yaml_service import (
+    read_yaml_file as _read_yaml_file,
+    write_yaml_file as _write_yaml_file,
+)
+from utils.skills_yaml_utils import (
+    find_latest_cloud_baseline_yaml as _latest_cloud_baseline,
+    find_latest_user_yaml as _latest_user_yaml,
+    local_user_overrides_dir as _user_local_dir,
+    set_active_source as _set_active_source,
+    today_dated_filename as _today_yaml_filename,
+)
 from services.chatbot.factory import (
     ChatbotBlueprintConfig,
     create_chatbot_blueprint,
@@ -959,7 +975,33 @@ def back_to_avatar():
 _NW_ANALYSIS_CAPABILITIES = {
     key for key, enabled in NW_UI["features"].items() if enabled
 }
-_NW_ANALYSIS_HANDLERS = handler_map(globals(), _NW_ANALYSIS_CAPABILITIES)
+
+# NW gains the YAML import button without the rest of the skill editor -- the
+# same shape main shipped. The four helpers and the six-field context are the
+# shared ones; only the dated filename prefix and the app-level agent slot are
+# NW's own.
+_YAML_HELPERS = build_profile_yaml_helpers(
+    user_local_dir=_user_local_dir,
+    today_yaml_filename=_today_yaml_filename,
+    user_yaml_prefix="skills_",
+    latest_cloud_baseline=_latest_cloud_baseline,
+    latest_user_yaml=_latest_user_yaml,
+    write_yaml_file=_write_yaml_file,
+    load_skills_from_yaml=load_skills_from_yaml,
+    get_agent=_get_or_create_agent,
+    agent_config_attr="nw_analysis_agent",
+)
+_SKILL_APPEND_HANDLERS = build_skill_append_handlers(SkillAppendContext(
+    activate_yaml=_YAML_HELPERS["activate_yaml"],
+    latest_cloud_baseline=_latest_cloud_baseline,
+    latest_user_yaml=_latest_user_yaml,
+    persist_user_yaml_snapshot=_YAML_HELPERS["persist_user_yaml_snapshot"],
+    read_yaml_file=_read_yaml_file,
+    set_active_source=_set_active_source,
+))
+
+_NW_ANALYSIS_HANDLERS = handler_map(
+    {**globals(), **_SKILL_APPEND_HANDLERS}, _NW_ANALYSIS_CAPABILITIES)
 nw_analysis_bp = create_chatbot_blueprint(ChatbotBlueprintConfig(
     name="nw_analysis",
     import_name=__name__,

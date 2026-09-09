@@ -11,6 +11,10 @@ _COMMON_FEATURES = {
     "feedback": False,
     "history": False,
     "skill_editor": False,
+    # Importing extra skills from a YAML file. Narrower than skill_editor:
+    # NW offers the import button without the full editor panel, which is
+    # what main shipped too.
+    "skill_append": False,
     "sleepstudy": False,
 }
 
@@ -103,6 +107,7 @@ BT_UI = {
         "feedback": True,
         "history": True,
         "skill_editor": True,
+        "skill_append": True,
     },
 }
 
@@ -165,6 +170,7 @@ LOG_CHATBOT_UI = {
         "feedback": True,
         "history": True,
         "skill_editor": True,
+        "skill_append": True,
     },
 }
 
@@ -220,6 +226,7 @@ NW_UI = {
     },
     "features": {
         **_COMMON_FEATURES,
+        "skill_append": True,
         "sleepstudy": True,
     },
 }

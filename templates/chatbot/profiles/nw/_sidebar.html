@@ -1,0 +1,58 @@
+{% import 'chatbot/profiles/_sidebar_parts.html' as sb with context %}
+<!-- Log file -->
+<div class="sidebar-section">
+    <h6>📂 Log File</h6>
+
+    <!-- Inner tabs: Wi-Fi Log / Sleepstudy -->
+    <div style="display:flex;gap:4px;margin-bottom:8px;border-bottom:1px solid #e0e0e0;">
+        <button id="logtab-wifi" class="log-subtab active"
+                onclick="switchLogTab('wifi')"
+                style="flex:1;padding:6px 8px;font-size:0.75rem;font-weight:600;border:none;background:none;color:var(--accent);border-bottom:2px solid var(--accent);cursor:pointer;">
+            Wi-Fi Log
+        </button>
+        <button id="logtab-sleep" class="log-subtab"
+                onclick="switchLogTab('sleep')"
+                style="flex:1;padding:6px 8px;font-size:0.75rem;font-weight:600;border:none;background:none;color:#888;border-bottom:2px solid transparent;cursor:pointer;">
+            Sleepstudy
+        </button>
+    </div>
+
+    <!-- Wi-Fi log panel -->
+    <div id="logpanel-wifi">
+{{ sb.log_input() }}
+    </div>
+
+    <!-- Sleepstudy panel -->
+    <div id="logpanel-sleep" style="display:none;">
+        <div class="log-input-group">
+            <input id="sleepstudy-path-input" type="text"
+                   placeholder="Full path to sleepstudy file…">
+            <button class="btn-browse" onclick="browseSleepstudy()" title="Browse for file">📁</button>
+            <button class="btn-set-log" onclick="setSleepstudy()">Load</button>
+        </div>
+        <div id="sleepstudy-status" class="log-status"></div>
+    </div>
+</div>
+
+{{ sb.event_log() }}
+
+<!-- Skills -->
+<div class="sidebar-section">
+    <h6>🛠 Available Skills</h6>
+    <div id="skills-list">
+        <div style="font-size:0.78rem;color:#aaa;">Load a log file to see skills.</div>
+    </div>
+    <button class="btn-set-log" style="width:100%;margin-top:8px;"
+            onclick="appendSkillsFromYaml()" id="skill-append-btn"
+            title="Pick a YAML file; its skills are appended to your customised configuration (duplicates overwrite)."
+            >📥 Append Skills from YAML…</button>
+    <div id="skill-editor-status" class="log-status"></div>
+    <button type="button" class="btn-set-log"
+            style="width:100%;margin-top:8px;"
+            onclick="startNewConversationKeepingLog(this)"
+            title="Start a new conversation while keeping the currently loaded log">
+        ➕ New session
+    </button>
+</div>
+
+{{ sb.quick_questions() }}

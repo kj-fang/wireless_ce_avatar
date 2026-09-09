@@ -25,8 +25,10 @@ interleave.
 
 from __future__ import annotations
 
+import json
 import queue as _queue
 import threading
+from collections.abc import Iterator
 from datetime import datetime, timedelta
 from typing import Any, Optional
 
@@ -243,3 +245,74 @@ def active_summaries(domain: Optional[str] = None) -> list[dict]:
         if domain is not None:
             jobs = [j for j in jobs if j.domain == domain]
         return [j.summary() for j in jobs if j.status == "running"]
+
+
+# --- Server-sent event transport -----------------------------------------
+def terminal_sse(job: Any, kind: str, payload: Any) -> str:
+    """Format a job's terminal event (done or error) as one SSE frame."""
+    if kind == "done":
+        return (
+            "data: "
+            + json.dumps(
+                {
+                    "type": "done",
+                    "turn_id": job.turn_id,
+                    "conversation_id": job.conversation_id,
+                    "result": payload,
+                },
+                ensure_ascii=False,
+            )
+            + "\n\n"
+        )
+    return (
+        "data: "
+        + json.dumps(
+            {"type": "error", "content": payload},
+            ensure_ascii=False,
+        )
+        + "\n\n"
+    )
+
+
+def job_sse(job: Any) -> Iterator[str]:
+    """Replay buffered steps, follow live events, then emit a terminal event."""
+    event_queue, replay, terminal = subscribe(job)
+    try:
+        for step in replay:
+            yield (
+                "data: "
+                + json.dumps(
+                    {"type": "step", "step": step},
+                    ensure_ascii=False,
+                )
+                + "\n\n"
+            )
+        if terminal is not None:
+            yield terminal_sse(job, terminal[0], terminal[1])
+            return
+        while True:
+            try:
+                kind, payload = event_queue.get(timeout=120)
+            except _queue.Empty:
+                yield (
+                    "data: "
+                    + json.dumps(
+                        {"type": "error", "content": "Chat timed out."},
+                    )
+                    + "\n\n"
+                )
+                return
+            if kind == "step":
+                yield (
+                    "data: "
+                    + json.dumps(
+                        {"type": "step", "step": payload},
+                        ensure_ascii=False,
+                    )
+                    + "\n\n"
+                )
+            else:
+                yield terminal_sse(job, kind, payload)
+                return
+    finally:
+        unsubscribe(job, event_queue)

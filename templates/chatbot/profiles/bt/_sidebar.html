@@ -1,0 +1,101 @@
+{% import 'chatbot/profiles/_sidebar_parts.html' as sb with context %}
+{{ sb.switcher() }}
+
+        <!-- View 1: live controls (Log File / Issue Time / Skills / …) -->
+        <div id="sidebar-controls-view">
+
+{{ sb.log_file() }}
+
+{{ sb.event_log() }}
+
+        <!-- Issue Time -->
+        <div class="sidebar-section">
+            <h6>⏰ Issue Time</h6>
+            <div style="font-size:0.72rem;color:#666;margin-bottom:8px;line-height:1.4;">
+                When did the issue happen?<br>
+                <span style="color:var(--accent);font-weight:600;">Format: MM / DD / YYYY &nbsp; HH : MM : SS . mmm</span>
+            </div>
+
+            <!-- Quick actions -->
+            <div style="display:flex;gap:6px;margin-bottom:10px;align-items:center;">
+                <div id="it-unknown-warn" style="display:none;flex:1;font-size:0.7rem;color:#92400e;background:#fff7ed;border:1px solid #fdba74;border-radius:6px;padding:5px 8px;line-height:1.3;">
+                    ⚠️ <strong>Unknown time.</strong> Couldn't auto-detect the issue time — please fill it in below.
+                </div>
+                <button class="it-quick-btn it-quick-btn-clear" onclick="clearAllIssueTimes()" title="Clear the primary time AND all extra issue-time rows">
+                    🗑️ Clear
+                </button>
+            </div>
+
+            <!-- AI issue-time assistant: infers issue time(s) from the chat
+                 description + a rough browse of the log, into the capture popup. -->
+            <button type="button" class="it-quick-btn" id="ai-time-btn"
+                    style="display:flex;align-items:center;justify-content:center;gap:6px;width:100%;margin-bottom:6px;background:#e8edff;border-color:#bac8ff;"
+                    onclick="suggestIssueTimesWithAI()"
+                    title="Analyze your description + the loaded log with AI to suggest the issue time">
+                🪄 AI suggest issue time
+            </button>
+            <!-- Non-blocking hint when AI suggest is used with an empty chat box. -->
+            <div id="ai-time-nodesc" style="display:none;font-size:0.7rem;color:#92400e;margin-bottom:10px;line-height:1.35;">
+                ℹ No description — AI will infer from the log only. Add a problem description in the chat box for better accuracy.
+            </div>
+
+            <!-- Confirmation gate for an auto-filled (previous-page) time.
+                 Manually-typed times count immediately; a time carried over
+                 from the previous page does NOT count until the user ticks
+                 this box (or edits a field / applies an AI suggestion). -->
+            <div id="it-confirm-row"
+                 style="display:none;margin-bottom:10px;font-size:0.72rem;color:#92400e;background:#fff7ed;border:1px solid #fdba74;border-radius:6px;padding:6px 8px;line-height:1.35;">
+                <label style="display:flex;align-items:flex-start;gap:6px;cursor:pointer;margin:0;">
+                    <input type="checkbox" id="it-confirm-autofill" onchange="onIssueTimeConfirmToggle()" style="margin-top:2px;">
+                    <span>⏱ Auto-detected time(s) — <strong>tick to use</strong>.</span>
+                </label>
+            </div>
+
+            <!-- Refine picker: lets the user choose between the original issue
+                 time and the closest system-event error time. Hidden by default;
+                 shown by refineIssueTimeFromEventLog() when a close match exists. -->
+            <div id="it-refine-picker"
+                 style="display:none;margin-bottom:10px;font-size:0.72rem;color:#1e3a5f;background:#eff6ff;border:1px solid #93c5fd;border-radius:6px;padding:8px;line-height:1.35;">
+                <div style="margin-bottom:6px;font-weight:600;">
+                    🔍 Found a nearby system error — which time to use?
+                </div>
+                <div style="display:flex;flex-direction:column;gap:5px;">
+                    <button type="button" id="refine-pick-original" class="it-quick-btn"
+                            style="text-align:left;padding:6px 10px;background:#fff;border:1px solid #cbd5e1;font-size:0.72rem;line-height:1.4;white-space:normal;"
+                            onclick="pickRefineOption('original')">
+                        <strong>Keep original</strong><br>
+                        <span id="refine-original-label" style="color:#475569;"></span>
+                    </button>
+                    <button type="button" id="refine-pick-error" class="it-quick-btn"
+                            style="text-align:left;padding:6px 10px;background:#fff;border:1px solid #cbd5e1;font-size:0.72rem;line-height:1.4;white-space:normal;"
+                            onclick="pickRefineOption('error')">
+                        <strong>Use error time</strong><br>
+                        <span id="refine-error-label" style="color:#475569;"></span>
+                    </button>
+                </div>
+            </div>
+
+            <!-- Shown when the loaded log has no dates (e.g. DDD): date optional. -->
+            <div id="it-nodate-hint" style="display:none;font-size:0.7rem;color:#92400e;background:#fff7ed;border:1px solid #fdba74;border-radius:6px;padding:5px 8px;margin-bottom:8px;line-height:1.3;">
+                ⏱ This log has no dates — fill in the <strong>time only</strong> (Month/Day/Year optional).
+            </div>
+
+{{ sb.time_fields() }}
+
+            <div id="issue-time-display"
+                 style="font-size:0.78rem;color:var(--accent);margin-top:8px;font-weight:600;font-family:'SFMono-Regular',Consolas,monospace;min-height:1.1em;"></div>
+            <div id="issue-time-error"
+                 style="display:none;font-size:0.7rem;color:#c62828;margin-top:4px;"></div>
+
+{{ sb.extra_issue_times() }}
+
+{{ sb.capture_window() }}
+        </div>
+
+{{ sb.skills() }}
+
+{{ sb.quick_questions() }}
+
+        </div><!-- /#sidebar-controls-view -->
+
+{{ sb.history_view() }}

@@ -1,0 +1,199 @@
+.evt-section { position: relative; }
+    .btn-evt-log {
+        width: 100%;
+        background: var(--accent-soft);
+        color: var(--accent);
+        border: 1px solid var(--accent-border);
+        border-radius: 8px;
+        padding: 8px 12px;
+        font-size: 0.8rem;
+        font-weight: 600;
+        cursor: pointer;
+        transition: background 0.15s, border-color 0.15s, opacity 0.15s;
+        display: flex;
+        align-items: center;
+        justify-content: space-between;
+    }
+    .btn-evt-log:hover:not(:disabled) { background: var(--accent-hover); border-color: var(--accent); }
+    .btn-evt-log:disabled { opacity: 0.5; cursor: not-allowed; color: #888; background: #f5f5f5; border-color: #ddd; }
+    .evt-arrow { transition: transform 0.2s; font-size: 0.7rem; }
+    .evt-arrow.open { transform: rotate(90deg); }
+
+    .evt-inline-toolbar {
+        display: flex;
+        gap: 4px;
+        margin-bottom: 6px;
+        flex-wrap: wrap;
+        align-items: center;
+    }
+    .evt-inline-toolbar select {
+        font-size: 0.68rem;
+        border: 1px solid #d1d5db;
+        border-radius: 4px;
+        padding: 3px 4px;
+        flex: 1;
+        min-width: 0;
+    }
+    .evt-inline-count {
+        font-size: 0.65rem;
+        color: #6b7280;
+        margin-left: auto;
+    }
+    .evt-inline-body {
+        height: 250px;
+        overflow-y: auto;
+        border: 1px solid #e5e7eb;
+        border-radius: 6px;
+        background: #fff;
+        font-family: Consolas, monospace;
+        font-size: 10px;
+        line-height: 1.4;
+    }
+    .evt-inline-body table { width: 100%; border-collapse: collapse; }
+    .evt-inline-body th, .evt-inline-body td {
+        padding: 2px 4px;
+        border-bottom: 1px solid #f0f0f0;
+        white-space: nowrap;
+        overflow: hidden;
+        text-overflow: ellipsis;
+    }
+    .evt-inline-body th {
+        position: sticky;
+        top: 0;
+        background: #f1f5f9;
+        font-size: 0.62rem;
+        text-transform: uppercase;
+        letter-spacing: 0.02em;
+        z-index: 1;
+        border-bottom: 1px solid #e5e7eb;
+    }
+    .evt-inline-body tr:hover { background: #f0f7ff; }
+    .evt-inline-body tr { cursor: default; }
+    .evt-inline-footer {
+        font-size: 0.65rem;
+        color: #6b7280;
+        text-align: center;
+        padding: 4px 0;
+    }
+
+    .evt-hover-card {
+        position: fixed;
+        z-index: 10001;
+        background: #fff;
+        border: 1px solid #d1d5db;
+        border-radius: 8px;
+        box-shadow: 0 8px 24px rgba(0,0,0,0.15);
+        padding: 0;
+        width: 380px;
+        max-height: 240px;
+        overflow-y: auto;
+        font-family: Consolas, monospace;
+        font-size: 11px;
+        line-height: 1.4;
+        pointer-events: none;
+    }
+    .evt-hover-card table { width: 100%; border-collapse: collapse; }
+    .evt-hover-card th {
+        text-align: left;
+        padding: 4px 10px;
+        background: #f3f4f6;
+        color: #6b7280;
+        font-size: 0.65rem;
+        font-weight: 700;
+        text-transform: uppercase;
+        white-space: nowrap;
+        width: 60px;
+        vertical-align: top;
+        border-bottom: 1px solid #e5e7eb;
+    }
+    .evt-hover-card td {
+        padding: 4px 10px;
+        color: #1f2937;
+        white-space: pre-wrap;
+        word-break: break-word;
+        border-bottom: 1px solid #f3f4f6;
+    }
+    .evt-hover-card tr:last-child th,
+    .evt-hover-card tr:last-child td { border-bottom: none; }
+
+details.skill-card summary {
+        cursor: pointer;
+        display: flex;
+        align-items: center;
+        gap: 8px;
+        list-style: none;
+    }
+    /* Replace the default black ▶ marker with a soft accent-coloured chevron. */
+    details.skill-card summary::marker { content: ''; }
+    details.skill-card summary::-webkit-details-marker { display: none; }
+    details.skill-card summary::before {
+        content: '';
+        flex: 0 0 auto;
+        width: 6px;
+        height: 6px;
+        border-right: 1.5px solid var(--accent);
+        border-bottom: 1.5px solid var(--accent);
+        border-radius: 1px;
+        transform: translateY(-1px) rotate(-45deg);
+        transition: transform 0.15s ease;
+        opacity: 0.75;
+    }
+    details.skill-card[open] summary::before {
+        transform: translateY(-2px) rotate(45deg);
+    }
+    details.skill-card summary:hover::before { opacity: 1; }
+    details.skill-card summary .skill-name { display: inline; }
+    details.skill-card .skill-desc { padding: 6px 0 2px 14px; line-height: 1.45; }
+    #quick-questions { display: flex; flex-direction: column; gap: 6px; }
+    .quick-question {
+        position: relative;
+        width: 100%;
+        margin-bottom: 0;
+        padding: 9px 28px 9px 30px;
+        text-align: left;
+        font-size: 0.76rem;
+        line-height: 1.45;
+        color: #475569;
+        background: #fff;
+        border: 1px solid var(--accent-border);
+        border-radius: 10px;
+        transition: color .15s, background .15s, border-color .15s,
+                    box-shadow .15s, transform .15s;
+    }
+    .quick-question::before {
+        content: '💬';
+        position: absolute;
+        left: 10px;
+        top: 9px;
+        font-size: 0.78rem;
+        line-height: 1.45;
+        opacity: 0.5;
+        transition: opacity .15s;
+    }
+    /* Nudge arrow stays hidden at rest so the list reads as calm text. */
+    .quick-question::after {
+        content: '→';
+        position: absolute;
+        right: 10px;
+        top: 50%;
+        transform: translate(-4px, -50%);
+        font-size: 0.8rem;
+        color: var(--accent);
+        opacity: 0;
+        transition: opacity .15s, transform .15s;
+    }
+    .quick-question:hover {
+        color: var(--accent-dark);
+        background: var(--accent-hover);
+        border-color: var(--accent);
+        box-shadow: 0 2px 8px rgba(var(--accent-rgb), 0.12);
+        transform: translateY(-1px);
+    }
+    .quick-question:hover::before { opacity: 1; }
+    .quick-question:hover::after { opacity: 1; transform: translate(0, -50%); }
+    .quick-question:active { transform: none; box-shadow: none; }
+    .quick-question:focus-visible {
+        outline: none;
+        border-color: var(--accent);
+        box-shadow: 0 0 0 3px rgba(var(--accent-rgb), 0.25);
+    }

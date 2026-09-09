@@ -8,6 +8,20 @@ from datetime import datetime
 from typing import Optional
 
 
+
+def _shared_prompt(kind: str) -> str:
+    """One of the shared Speclets documents, or its built-in default.
+
+    Same contract as the per-profile speclets: the share is an override, never
+    a dependency, so an off-VPN run uses the compiled-in copy and behaves
+    exactly as it did before these three were extracted.
+    """
+    from services.chatbot.engine.speclet_defaults import default_speclet
+    from utils.speclets_utils import SHARED, get_speclet
+
+    return get_speclet(SHARED, kind) or default_speclet(SHARED, kind)
+
+
 class ReportQualityMixin:
     """ReportQuality behavior for the composed agent."""
 
@@ -52,12 +66,8 @@ class ReportQualityMixin:
                 pass
 
         # Fallback: let the LLM extract timestamp from free-form issue text.
-        prompt = (
-            "Extract the exact date and time mentioned in the following user issue description.\n"
-            "If a time is found, output ONLY the timestamp in 'MM/DD/YYYY-HH:MM:SS' format "
-            "(e.g., 10/28/2025-11:25:50).\n"
-            "If no time is mentioned, output 'NONE'.\n\n"
-            f"User Description: {issue_description}"
+        prompt = _shared_prompt("issue_time").replace(
+            "{issue_description}", issue_description or ""
         )
         try:
             response = self.client.chat.completions.create(
@@ -137,33 +147,14 @@ class ReportQualityMixin:
             if deterministic:
                 return deterministic
             report_text = json.dumps(report, ensure_ascii=False)
-            prompt = (
-                "You are a diagnostic quality auditor. Evaluate whether the proposed final report "
-                "is sufficiently supported by evidence and temporally consistent.\n"
-                "Do NOT require domain-specific keywords. Apply generic checks only:\n"
-                "1) Claims must be tied to explicit evidence.\n"
-                "2) Early failures must be checked against later state to avoid stale conclusions.\n"
-                "3) Detect state transitions (e.g., unavailable -> available, fail -> success). "
-                "If transition exists, avoid absolute failure conclusions.\n"
-                "4) If contradictions or evidence gaps exist, require uncertainty wording.\n"
-                "5) Prefer latest confirmed state over earlier transient state.\n"
-                "6) Before approving any persistent failure claim, verify latest log tail for success "
-                "signals of the same target (for example probe/connected-like evidence).\n"
-                "7) Treat explicit gate-status lines like '<feature> is ALLOWED/DISALLOWED/ENABLED/DISABLED' "
-                "as high-priority state indicators; prefer the latest state bit.\n"
-                "8) Apply hierarchy-of-truth conflict resolution: capability state > physical events > task intent > warning/error.\n"
-                "If a lower layer conflicts with a higher layer, reject absolute lower-layer conclusions.\n"
-                "9) Confirm that skill rules were used as investigative clues and validated/refuted by logs; "
-                "rules are not ground truth by themselves.\n"
-                "10) The report MUST directly answer the user's question in the first sentence.\n"
-                "11) Distinguish transient/background maintenance behavior from persistent fatal failures.\n"
-                "Return strict JSON only with this schema:\n"
-                "{\"approved\": true|false, \"reason\": \"...\", \"required_actions\": [\"...\"]}\n\n"
-                f"Issue:\n{issue_description}\n\n"
-                f"Evidence (compact assembled snapshot):\n{evidence}\n\n"
-                f"Latest evidence tail (high priority for final-state checks):\n{evidence_tail}\n\n"
-                f"Proposed report JSON:\n{report_text}"
-            )
+            prompt = _shared_prompt("review")
+            for token, value in (
+                ("{issue_description}", issue_description or ""),
+                ("{evidence}", evidence or ""),
+                ("{evidence_tail}", evidence_tail or ""),
+                ("{report_text}", report_text),
+            ):
+                prompt = prompt.replace(token, value)
 
             response = self.client.chat.completions.create(
                 model=self.model,

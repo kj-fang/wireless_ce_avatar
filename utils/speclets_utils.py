@@ -1,17 +1,28 @@
-"""Speclets — per-profile agent architecture prompt and report format.
+"""Speclets — the prompts domain experts tune without touching Python.
 
 The same "one shared copy everyone can edit" lifecycle the skills YAML has
-(see utils/skills_yaml_utils.py), applied to the two pieces of the agent that
-domain experts most often want to tune without touching Python:
+(see utils/skills_yaml_utils.py), applied to the prompt text most often
+worth adjusting:
 
     <profile>_prompt.md   the agent's identity, phases and constraints
     <profile>_report.md   the required ``markdown_summary`` skeleton
+    shared_*.md           prompts the engine sends on its own behalf
 
 Layout on the share (and mirrored locally):
 
     Speclets/wifi_prompt.md   Speclets/wifi_report.md
     Speclets/bt_prompt.md     Speclets/bt_report.md
     Speclets/nw_prompt.md     Speclets/nw_report.md
+    Speclets/shared_review.md      the final-report quality auditor
+    Speclets/shared_issue_time.md  free-text issue-time extraction
+    Speclets/shared_followup.md    the post-analysis follow-up framing
+
+The shared three have no per-profile variant because the engine is not
+speaking as one of the three agents when it sends them -- it is auditing,
+extracting or re-framing, and all three profiles want the same behaviour.
+They carry the most domain judgement of anything here (the auditor alone
+encodes an eleven-rule hierarchy of truth), which is exactly why they should
+be editable by the people who own that judgement.
 
 Loading is deliberately non-blocking. ``prime_async()`` refreshes the local
 mirror and fills the in-memory cache on a daemon thread, so a slow or
@@ -40,9 +51,30 @@ PROFILES = ("wifi", "bt", "nw")
 #: The two documents each profile owns.
 KINDS = ("prompt", "report")
 
+#: Documents that are the same for every profile. "shared" is not a real
+#: profile -- it is a fourth namespace, so ``speclet_filename`` and the cache
+#: key need no special case: shared + review -> shared_review.md. These are
+#: prompts the engine sends on its own behalf rather than as one of the three
+#: agents, which is why they have no per-profile variant.
+SHARED = "shared"
+SHARED_KINDS = ("review", "issue_time", "followup")
+
 _cache: dict[str, str] = {}
 _cache_lock = threading.Lock()
 _primed = threading.Event()
+
+
+def all_speclets():
+    """Every (profile, kind) pair the mirror, cache and publisher iterate.
+
+    One generator so the three loops cannot drift: adding a shared document
+    means adding a name to SHARED_KINDS, nothing else.
+    """
+    for profile in PROFILES:
+        for kind in KINDS:
+            yield profile, kind
+    for kind in SHARED_KINDS:
+        yield SHARED, kind
 
 
 def speclet_filename(profile: str, kind: str) -> str:
@@ -97,17 +129,16 @@ def refresh_local_mirror() -> int:
     share_dir = Path(share)
     target_dir = local_speclets_dir()
     copied = 0
-    for profile in PROFILES:
-        for kind in KINDS:
-            name = speclet_filename(profile, kind)
-            src = share_dir / name
-            if not src.is_file():
-                continue
-            try:
-                shutil.copy2(str(src), str(target_dir / name))
-                copied += 1
-            except Exception as e:
-                print(f"[speclets] could not copy {name}: {e}")
+    for profile, kind in all_speclets():
+        name = speclet_filename(profile, kind)
+        src = share_dir / name
+        if not src.is_file():
+            continue
+        try:
+            shutil.copy2(str(src), str(target_dir / name))
+            copied += 1
+        except Exception as e:
+            print(f"[speclets] could not copy {name}: {e}")
     print(f"[speclets] mirrored {copied} file(s) -> {target_dir}")
     return copied
 
@@ -127,11 +158,10 @@ def _read_local(profile: str, kind: str) -> Optional[str]:
 def load_into_cache() -> int:
     """Read whatever the local mirror holds into the in-memory cache."""
     found = {}
-    for profile in PROFILES:
-        for kind in KINDS:
-            text = _read_local(profile, kind)
-            if text:
-                found[_cache_key(profile, kind)] = text
+    for profile, kind in all_speclets():
+        text = _read_local(profile, kind)
+        if text:
+            found[_cache_key(profile, kind)] = text
     with _cache_lock:
         _cache.clear()
         _cache.update(found)
@@ -196,20 +226,19 @@ def publish_defaults_to_share(defaults: dict[str, str], overwrite: bool = False)
 
     share_dir = Path(share)
     written = 0
-    for profile in PROFILES:
-        for kind in KINDS:
-            key = _cache_key(profile, kind)
-            text = defaults.get(key)
-            if not text:
-                continue
-            target = share_dir / speclet_filename(profile, kind)
-            if target.exists() and not overwrite:
-                print(f"[speclets] {target.name} already exists - left untouched.")
-                continue
-            try:
-                target.write_text(text.strip() + "\n", encoding="utf-8")
-                written += 1
-            except Exception as e:
-                print(f"[speclets] could not write {target.name}: {e}")
+    for profile, kind in all_speclets():
+        key = _cache_key(profile, kind)
+        text = defaults.get(key)
+        if not text:
+            continue
+        target = share_dir / speclet_filename(profile, kind)
+        if target.exists() and not overwrite:
+            print(f"[speclets] {target.name} already exists - left untouched.")
+            continue
+        try:
+            target.write_text(text.strip() + "\n", encoding="utf-8")
+            written += 1
+        except Exception as e:
+            print(f"[speclets] could not write {target.name}: {e}")
     print(f"[speclets] published {written} default(s) -> {share_dir}")
     return written

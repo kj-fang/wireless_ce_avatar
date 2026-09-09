@@ -8,6 +8,7 @@ from functools import partial
 from types import SimpleNamespace
 from typing import Callable, Optional
 
+from services.chatbot.engine.report_quality import _shared_prompt
 from utils.assert_code_utils import lookup_assert_code
 from utils.softAP_supported_channel import softAP_supported_channel
 
@@ -771,11 +772,9 @@ class ToolExecutionMixin:
             {
                 "role": "system",
                 "content": (
-                    "You are a Wi-Fi troubleshooting expert.\n"
-                    f"Available diagnostic skills: {', '.join(self.skills.keys())}.\n\n"
-                    "A comprehensive multi-skill analysis has been completed.\n"
-                    "Review the results below and answer user follow-up questions.\n"
-                    f"Log file: {self.current_log_path}"
+                    _shared_prompt("followup")
+                    .replace("{skills}", ", ".join(self.skills.keys()))
+                    .replace("{log_path}", str(self.current_log_path))
                 ),
             },
             {

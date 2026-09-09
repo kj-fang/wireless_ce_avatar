@@ -128,6 +128,64 @@ NW_REPORT = """Your `markdown_summary` format (REQUIRED):
 
 
 #: Keyed as "<profile>_<kind>" to match utils.speclets_utils' cache keys.
+
+# ---------------------------------------------------------------------------
+# Shared documents. Not per-profile: the engine sends these on its own behalf
+# rather than as one of the three agents, so all three want the same text.
+# Placeholders are substituted with str.replace, never str.format -- the
+# auditor's schema line contains literal braces.
+# ---------------------------------------------------------------------------
+
+SHARED_REVIEW = (
+    "You are a diagnostic quality auditor. Evaluate whether the proposed final report "
+    "is sufficiently supported by evidence and temporally consistent.\n"
+    "Do NOT require domain-specific keywords. Apply generic checks only:\n"
+    "1) Claims must be tied to explicit evidence.\n"
+    "2) Early failures must be checked against later state to avoid stale conclusions.\n"
+    "3) Detect state transitions (e.g., unavailable -> available, fail -> success). "
+    "If transition exists, avoid absolute failure conclusions.\n"
+    "4) If contradictions or evidence gaps exist, require uncertainty wording.\n"
+    "5) Prefer latest confirmed state over earlier transient state.\n"
+    "6) Before approving any persistent failure claim, verify latest log tail for success "
+    "signals of the same target (for example probe/connected-like evidence).\n"
+    "7) Treat explicit gate-status lines like '<feature> is ALLOWED/DISALLOWED/ENABLED/DISABLED' "
+    "as high-priority state indicators; prefer the latest state bit.\n"
+    "8) Apply hierarchy-of-truth conflict resolution: capability state > physical events > task intent > warning/error.\n"
+    "If a lower layer conflicts with a higher layer, reject absolute lower-layer conclusions.\n"
+    "9) Confirm that skill rules were used as investigative clues and validated/refuted by logs; "
+    "rules are not ground truth by themselves.\n"
+    "10) The report MUST directly answer the user's question in the first sentence.\n"
+    "11) Distinguish transient/background maintenance behavior from persistent fatal failures.\n"
+    "Return strict JSON only with this schema:\n"
+    "{\"approved\": true|false, \"reason\": \"...\", \"required_actions\": [\"...\"]}\n\n"
+    "Issue:\n{issue_description}\n\n"
+    "Evidence (compact assembled snapshot):\n{evidence}\n\n"
+    "Latest evidence tail (high priority for final-state checks):\n{evidence_tail}\n\n"
+    "Proposed report JSON:\n{report_text}"
+)
+
+
+SHARED_ISSUE_TIME = (
+    "Extract the exact date and time mentioned in the following user issue description.\n"
+    "If a time is found, output ONLY the timestamp in 'MM/DD/YYYY-HH:MM:SS' format "
+    "(e.g., 10/28/2025-11:25:50).\n"
+    "If no time is mentioned, output 'NONE'.\n\n"
+    "User Description: {issue_description}"
+)
+
+
+# Says "Wi-Fi" for all three profiles. Pre-existing behaviour -- main has
+# the same wording in its Wi-Fi and NW services and BT inherits it -- kept
+# verbatim here rather than quietly corrected.
+SHARED_FOLLOWUP = (
+    "You are a Wi-Fi troubleshooting expert.\n"
+    "Available diagnostic skills: {skills}.\n\n"
+    "A comprehensive multi-skill analysis has been completed.\n"
+    "Review the results below and answer user follow-up questions.\n"
+    "Log file: {log_path}"
+)
+
+
 DEFAULTS: dict[str, str] = {
     "wifi_prompt": WIFI_PROMPT,
     "wifi_report": WIFI_REPORT,
@@ -135,6 +193,9 @@ DEFAULTS: dict[str, str] = {
     "bt_report": BT_REPORT,
     "nw_prompt": NW_PROMPT,
     "nw_report": NW_REPORT,
+    "shared_review": SHARED_REVIEW,
+    "shared_issue_time": SHARED_ISSUE_TIME,
+    "shared_followup": SHARED_FOLLOWUP,
 }
 
 

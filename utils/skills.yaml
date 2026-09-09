@@ -1,4 +1,4 @@
-# version skills_2026-08-28-1 features:
+# version skills_2026-09-04-1 features:
 #   name: skill name
 #   description: a brief description of the skill
 #   keywords: use "-" to represent each keyword
@@ -897,3 +897,59 @@ OEM Tool CITU Check:
     - Always include exact raw lines with timestamps where available.
     - Do not infer missing error codes.
     - If evidence is insufficient, explicitly state which field is missing.
+
+WiFi_Sensing_Proximity_Proxy_Init_and_Status:
+  name: "WiFi Sensing Proximity Proxy Init and Status"
+  description: "Diagnoses the Wi-Fi sensing proximity proxy initialization parameters and ongoing FW proximity decision notifications, covering config validation, control-mode decode, decision state transitions, seqNum integrity, and ETW statistics pipeline health. Applies when: SENSING_PROX module lines present in the driver log; sensingProxyInitApi appears at session start."
+  keywords:
+    - "SENSING_PROX"
+    - "sensingProxyInitApi"
+    - "SENSING_PROXIMITY_CONFIG_CMD"
+    - "prvSensingProxySetSeqNumAndProxStat"
+    - "sensingProxyHandleSensingStatisticsApi"
+    - "sensingProxyGpHostNotificationHandlerApi"
+  exclusive:
+    - "DP_MON"
+    - "TID_0"
+    - "_RX"
+    - "CNCT_FLOW"
+    - "prvTfdQueueSendCommand"
+    - "[LAR"
+    - "LAR"
+    - "TLC_CONFIG"
+    - "candidate grade"
+  expert_rules: |
+    1. Init parameter check (sensingProxyInitApi lines at session start).
+    - If the log contains sensingProxyInitApi with humanPresenceControlMode, humanPresenceSpdConfigId, humanPresenceSpdConfigId2:
+      For example:  [SENSING_PROX ][02] [S] sensingProxyInitApi: humanPresenceControlMode 0 [SENSING_PROX_CONTROL_ISH_MODE] humanPresenceData 1 humanPresenceConfigId 1, humanPresenceSpdConfigId 88, humanPresenceSpdConfigId2 88
+      Then check:
+      - humanPresenceControlMode:
+        - 0 = Operational mode: decision=1 → monitor ON; decision=0 → monitor OFF. Expected for production.
+        - 2 = Demo mode: decision changes trigger demo tool indication only; no monitor power action. Flag as misconfiguration in a production capture.
+        - Any other value → flag as unknown/unsupported mode.
+      - spdConfigId valid range: 70–133 decimal (0x46–0x85 hex), corresponding to BNR 500–32000.
+        - Default expected value: 88 (0x58), BNR ~9500.
+        - spdConfigId < 70 or > 133 → Error: out-of-range / misconfigured.
+        - spdConfigId = 88 → Expected default.
+        - spdConfigId ≠ 88 but within 70–133 → Note: non-default; verify platform intent.
+        - spdConfigId1 ≠ spdConfigId2 → Flag: asymmetric config.
+
+    2. CONFIG_CMD handshake check.
+    - If the log contains sensingProxySendProxyConfigCmdApi sending SENSING_PROXIMITY_CONFIG_CMD followed by a solicited response:
+      For example: [SENSING_PROX ][03] [S] sensingProxySendProxyConfigCmdApi: sending SENSING_PROXIMITY_CONFIG_CMD with proximityState = TRUE, spdConfigId = 88, spdConfigId2 = 88
+      Then conclude: FW was successfully configured. Confirm spdConfigId values match the init registry values.
+    - If SENSING_PROXIMITY_CONFIG_CMD is never seen after sensingProxyInitApi → Error: FW never configured; report as init failure.
+
+    4. Proximity decision notification check (prvSensingProxySetSeqNumAndProxStat).
+    - If the log contains decision field values:
+      For example: 08/14/2026-14:05:03.032 [SENSING_PROX ][02] [S] prvSensingProxySetSeqNumAndProxStat: Sensing Proximity Decision Notification, decision = 1, seqNum = 2
+      Then:
+      - decision=1 = human present; decision=0 = human absent.
+      - Actionable signal is a state transition: 0→1 or 1→0. Report each transition with its timestamp and seqNum.
+      - Consecutive same-value notifications (e.g., multiple decision=1 in a row) are normal FW periodic confirmations; do not flag.
+      - No minimum sustained duration is required before a transition is considered valid.
+
+    5. seqNum integrity check.
+    - seqNum is monotonically increasing per session. Gaps (non-uniform increments) are normal — they reflect FW internal pacing.
+      For example: seqNum = 2 → 255 → 550 → 822 → ... → 12537 (healthy, monotonic).
+    - If seqNum[n] < seqNum[n-1] (backward jump) → Error: FW restart or session reset; flag immediately with both seqNum values and timestamps.

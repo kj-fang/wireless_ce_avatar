@@ -25,6 +25,8 @@ from flask import Response, jsonify, redirect, request, session, url_for
 
 from configs.global_configs import app_config
 from services import history_service
+from services import gather_service
+from services.chatbot.issue_context import extract_issue_context
 from services.chatbot import job_runtime as chat_jobs
 from services.chatbot.job_runtime import job_sse
 
@@ -46,6 +48,11 @@ class SharedRouteContext:
     browse_filetypes: Sequence[tuple[str, str]]
     #: YAML loader shared by the remaining skill-source endpoints.
     load_skills_from_yaml: Callable[[str], Any]
+    #: Gather's domain label for this profile. NOT the same string as ``domain``
+    #: above: that one partitions history ("" for Wi-Fi), this one labels
+    #: analytics rows ("wifi"). Keeping them separate preserves both the legacy
+    #: history layout and the analytics values main already writes.
+    gather_domain: str = "wifi"
 
 
 def llm_client_model(agent_config_attr: str):
@@ -170,7 +177,24 @@ def build_shared_handlers(ctx: SharedRouteContext) -> dict[str, Callable[..., An
             conversation_id = (data.get("conversation_id") or "").strip()
             if not conversation_id:
                 conversation_id = (session.get("feedback_conversation_id") or "").strip()
+            job = chat_jobs.get_job(conversation_id) if conversation_id else None
             stopped = chat_jobs.request_cancel(conversation_id) if conversation_id else False
+            # A cancelled turn still spent tokens and still says something about
+            # how the agent is doing, so Gather gets a row for it. Non-blocking
+            # and swallowed: analytics must never turn a successful Stop into an
+            # error the user sees.
+            if stopped and job is not None:
+                try:
+                    gather_service.record_turn_status(
+                        conversation_id=conversation_id,
+                        turn_id=getattr(job, "turn_id", ""),
+                        status="cancelled",
+                        workflow_id=session.get("gather_workflow_id", ""),
+                        issue=extract_issue_context(),
+                        domain=ctx.gather_domain,
+                    )
+                except Exception:
+                    pass
             return jsonify({"success": True, "stopped": bool(stopped)})
         except Exception as e:
             return jsonify({"success": False, "error": str(e)}), 500

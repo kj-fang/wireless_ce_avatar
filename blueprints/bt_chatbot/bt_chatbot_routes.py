@@ -1496,6 +1496,7 @@ _SHARED_HANDLERS = build_shared_handlers(SharedRouteContext(
     session_agents=_chatbot_instances,
     browse_filetypes=(("hci.txt files", "*.hci.txt"), ("All files", "*.*")),
     load_skills_from_yaml=load_skills_from_yaml,
+    gather_domain="bt",
 ))
 _CHATBOT_ADAPTER_NAMESPACE = {**globals(), **_SHARED_HANDLERS, **_SKILL_EDITOR_HANDLERS}
 _BT_CHATBOT_HANDLERS = handler_map(_CHATBOT_ADAPTER_NAMESPACE, _BT_CHATBOT_CAPABILITIES)

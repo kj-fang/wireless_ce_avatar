@@ -1483,6 +1483,7 @@ _SHARED_HANDLERS = build_shared_handlers(SharedRouteContext(
     session_agents=_chatbot_instances,
     browse_filetypes=(("Log files", "*.log"), ("All files", "*.*")),
     load_skills_from_yaml=load_skills_from_yaml,
+    gather_domain="wifi",
 ))
 _CHATBOT_ADAPTER_NAMESPACE = {**globals(), **_SHARED_HANDLERS, **_SKILL_EDITOR_HANDLERS}
 _LOG_CHATBOT_HANDLERS = handler_map(_CHATBOT_ADAPTER_NAMESPACE, _LOG_CHATBOT_CAPABILITIES)

@@ -168,13 +168,13 @@ class CaseService:
         if case_fields is not None:
             case_context = CaseService._process_snowflake_data(case_context, case_fields, key)
         else:
-            case_context.id, case_context.ips_pdf_path = CaseService._download_pdf_by_simulation(
+            case_context.id, case_context.ips_pdf_path, sim_err = CaseService._download_pdf_by_simulation(
                 case_context.case_nbr,
                 case_context.case_download_dir,
             )
             if case_context.id is None:
                 session.clear()
-                case_context.error_message = "Error downloading PDF"
+                case_context.error_message = sim_err or "Error downloading PDF"
                 return case_context
             case_context = case_utils.parse_pdf_for_all_info(case_context.ips_pdf_path, case_context)
 
@@ -411,12 +411,12 @@ class CaseService:
             pdf_url = f"https://intel--c.vf.force.com/apex/Core_IPS_Case_ExportPDF_LEX?id={case_id}"
             pdf_path = CaseService._download_pdf_common(pdf_url, download_path, driver)
 
-            return case_id, pdf_path
+            return case_id, pdf_path, None
 
         except Exception as e:
-            print(f"link of case {case_nbr} not found: {e}")
-            flash(f"link of case {case_nbr} not found: {e}", "danger")
-            return None, None
+            err_msg = f"link of case {case_nbr} not found: {e}"
+            print(err_msg)
+            return None, None, err_msg
         finally:
             driver.quit()
             if driver in driver_manager.all_drivers:

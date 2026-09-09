@@ -102,7 +102,7 @@ def handle_case_submission():
     try:
         case_context = CaseService.process_case(case_context=case_context)
         if case_context.error_message:
-            flash("Invalid case number or unable to retrieve data. Please try again.", "danger")
+            flash(case_context.error_message, "danger")
             case_context.error_message = None
             return redirect(url_for('main.index'))
         
@@ -138,8 +138,9 @@ def start_latest_etl_llm():
     try:
         case_context = CaseService.process_case(case_context=case_context)
         if case_context.error_message:
+            msg = case_context.error_message
             case_context.error_message = None
-            return jsonify({'success': False, 'message': 'Invalid case number or unable to retrieve data.'}), 400
+            return jsonify({'success': False, 'message': msg}), 400
 
         selected_latest = pick_latest_zip_attachment(case_context.attachment_list)
         if not selected_latest:

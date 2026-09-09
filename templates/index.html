@@ -845,6 +845,8 @@
     <script src="https://code.jquery.com/jquery-3.5.1.slim.min.js"></script>
     <script src="https://cdn.jsdelivr.net/npm/bootstrap@4.5.2/dist/js/bootstrap.bundle.min.js"></script>
 
+    <script id="case-error-messages" type="application/json">{{ get_flashed_messages() | list | tojson }}</script>
+
     <!-- Main functionality script -->
     <script>
         const CASE_MESSAGES = [
@@ -1123,6 +1125,10 @@
 
         // Auto-fill from clipboard and zero-padding
         document.addEventListener("DOMContentLoaded", () => {
+            const caseErrorsEl = document.getElementById('case-error-messages');
+            const allFlashes = caseErrorsEl ? JSON.parse(caseErrorsEl.textContent) : [];
+            allFlashes.filter(msg => msg.includes('link of case')).forEach(() => alert('Case not found, please check the case number.'));
+
             const input = document.getElementById("case_number");
             const caseSubmitBtn = document.getElementById('case-submit-btn');
             if (!input) {

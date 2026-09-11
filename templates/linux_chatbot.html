@@ -6437,7 +6437,7 @@
         <div class="fbd-header">
             <h3>Edit skill configuration</h3>
             <span class="fbd-vote-badge" id="skill-editor-file"></span>
-            <button type="button" class="fbd-close" onclick="closeSkillEditor()" aria-label="Close">Ã—</button>
+            <button type="button" class="fbd-close" onclick="closeSkillEditor()" aria-label="Close">×</button>
         </div>
         <div class="fbd-body">
             <div style="font-size:0.82rem;color:#555;margin-bottom:12px;">
@@ -6462,7 +6462,7 @@
         <div class="row-head">
             <button type="button" class="row-toggle"
                     onclick="toggleSkillEditorRow(this)"
-                    title="Expand / collapse this skill">â–¾</button>
+                    title="Expand / collapse this skill">▾</button>
             <input type="text" class="skill-key" placeholder="e.g. Roaming">
             <button type="button" class="delete-skill-btn" onclick="removeSkillEditorRow(this)">Delete</button>
         </div>
@@ -6487,7 +6487,7 @@
 
         <label>Description<span class="required-star">*</span></label>
         <div class="field-hint">
-            One sentence â€” what this skill does + when the agent should pick it.
+            One sentence — what this skill does + when the agent should pick it.
             Example: <code>Identifies roaming events and reconnection flows. Use when the user asks about roaming, scan, or AP switching.</code>
         </div>
         <input type="text" class="skill-desc"
@@ -6500,7 +6500,7 @@
                 <span class="seg"></span>
             </div>
             <div class="desc-strength-line">
-                <span class="desc-strength-label">â€”</span>
+                <span class="desc-strength-label">—</span>
                 <span class="desc-strength-count"></span>
                 <span class="desc-strength-hints"></span>
             </div>
@@ -6562,7 +6562,7 @@
 
 
 <script>
-    // â”€â”€ Two related but DISTINCT skill-YAML flags â”€â”€â”€â”€â”€â”€â”€â”€â”€â”€â”€â”€â”€â”€â”€â”€â”€â”€â”€â”€â”€
+    // ── Two related but DISTINCT skill-YAML flags ─────────────────────
     //
     // __yamlModified
     //   "Did the user modify the skill YAML *this session*?"
@@ -6570,25 +6570,25 @@
     //   editor (line ~6230) or when /feedback/vote echoes back
     //   yaml_modified=true (the server-side session flag). Reset to
     //   false on log switch / by the user explicitly switching back
-    //   to the cloud baseline isn't relevant â€” that's the OTHER flag.
+    //   to the cloud baseline isn't relevant — that's the OTHER flag.
     //   Read by: isYamlModified() (feedback attach-yaml default),
-    //            uploadModifiedYamlSilently() (auto-fire after ðŸ‘).
+    //            uploadModifiedYamlSilently() (auto-fire after 👍).
     //
     // __usingUserYaml
     //   "Is the currently active YAML the user/ customised one (vs
     //   cloud baseline)?"
-    //   Persistent â€” survives sessions because it reflects on-disk
+    //   Persistent — survives sessions because it reflects on-disk
     //   state. Set from /skills_yaml/status.effective_source. Used
     //   to drive UI hints / source-badge logic.
     //
     // Previously a single window.__yamlModified flag was overloaded
     // with both meanings, which let stale "active source = user" from
-    // a previous session silently trigger an upload on the next ðŸ‘
+    // a previous session silently trigger an upload on the next 👍
     // even when nothing was modified this session.
     window.__yamlModified = false;
     window.__usingUserYaml = false;
 
-    // â”€â”€ Skill source state (cloud baseline â‡„ user customised) â”€â”€â”€â”€â”€â”€â”€â”€â”€
+    // ── Skill source state (cloud baseline ⇄ user customised) ─────────
     window.__skillYamlStatus = null;
 
     async function refreshSkillSourcePanel() {
@@ -6634,7 +6634,7 @@
             // colour as soon as a real status payload arrives.
             if (panelEl) panelEl.classList.add('unknown');
             badgeEl.className = 'skill-source-badge unknown';
-            badgeEl.textContent = 'â€¦';
+            badgeEl.textContent = '…';
             fileEl.textContent = '';
             return;
         }
@@ -6665,7 +6665,7 @@
         } else {
             badgeEl.className = 'skill-source-badge cloud';
             badgeEl.textContent = 'Cloud baseline';
-            fileEl.textContent = cloudFile || 'â€”';
+            fileEl.textContent = cloudFile || '—';
 
             if (userFile) {
                 const btn = document.createElement('button');
@@ -6724,12 +6724,12 @@
         }
     }
 
-    // â”€â”€ Side-panel skill editor (per-skill structured form) â”€â”€â”€â”€â”€â”€â”€â”€â”€â”€â”€â”€
+    // ── Side-panel skill editor (per-skill structured form) ────────────
     async function openSkillEditor() {
         const statusEl = document.getElementById('skill-editor-status');
         const saveBtn = document.getElementById('skill-editor-save-btn');
         if (saveBtn) saveBtn.disabled = false;
-        statusEl.textContent = 'Loadingâ€¦';
+        statusEl.textContent = 'Loading…';
         statusEl.className = 'log-status';
         statusEl.style.display = 'block';
         try {
@@ -6738,7 +6738,7 @@
             const res = await fetch('/linux_chatbot/load_local_skills_yaml');
             const data = await res.json().catch(() => ({}));
             if (!data || !data.success) {
-                showStatus(statusEl, 'âœ˜ ' + (data && data.error ? data.error : 'Failed to load YAML.'), 'err');
+                showStatus(statusEl, '✘ ' + (data && data.error ? data.error : 'Failed to load YAML.'), 'err');
                 return;
             }
             renderSkillEditor(
@@ -6794,7 +6794,7 @@
         if (!list.children.length) addSkillEditorRow();
     }
 
-    // â”€â”€ Description strength evaluator (WiFi-debug + PDF hybrid) â”€â”€â”€â”€â”€â”€
+    // ── Description strength evaluator (Linux-debug + PDF hybrid) ──────
     //
     // The Anthropic "Building Skills for Claude" guide is written for
     // chat-style skills whose triggering depends entirely on the
@@ -6834,7 +6834,7 @@
             };
         }
 
-        // Action verbs â€” generous whitelist, both PDF examples and
+        // Action verbs — generous whitelist, both PDF examples and
         // log-analysis vocabulary.
         const verbRe = new RegExp(
             '^\\s*(' +
@@ -6848,17 +6848,17 @@
                 'end-to-end|multi-step' +
             ')\\b', 'i');
 
-        // Generic "concrete content" signals â€” works across any debug
-        // domain (Wi-Fi, Linux WiFi, USB, audio, â€¦), no hard-coded
+        // Generic "concrete content" signals — works across any debug
+        // domain (Wi-Fi, Bluetooth, USB, audio, …), no hard-coded
         // vocabulary. ANY one of these counts as concrete content even
         // without an action-verb opener.
-        //   * acronym       â€” 2+ contiguous capitals (BT, BLE, GATT, BIOS, AP, RFâ€¦)
-        //   * camelOrSnake  â€” mixed-case or underscored identifier
+        //   * acronym       — 2+ contiguous capitals (BT, BLE, GATT, BIOS, AP, RF…)
+        //   * camelOrSnake  — mixed-case or underscored identifier
         //                     (TASK_DISCONNECT, prvLarStoreCurrentMcc,
-        //                      bssVifClcConnected, profileSwitch, â€¦)
-        //   * numericTech   â€” alphanumeric blends (6GHz, 11ax, 11be, A2DP, USB3)
-        //   * markedTerm    â€” explicitly marked tokens: `term`, [TAG], "TERM"
-        //   * debugDomain   â€” generic debug-vocabulary words
+        //                      bssVifClcConnected, profileSwitch, …)
+        //   * numericTech   — alphanumeric blends (6GHz, 11ax, 11be, A2DP, USB3)
+        //   * markedTerm    — explicitly marked tokens: `term`, [TAG], "TERM"
+        //   * debugDomain   — generic debug-vocabulary words
         const acronymRe     = /\b[A-Z]{2,}(?:[_-][A-Z]+)*\b/;
         const camelOrSnake  = /\b(?:[a-z]+_[a-zA-Z0-9_]+|[a-z]+[A-Z][a-zA-Z0-9]*)\b/;
         const numericTech   = /\b(?:\d+[A-Za-z][A-Za-z0-9]*|[A-Za-z]+\d+[A-Za-z0-9]*)\b/;
@@ -6867,7 +6867,7 @@
 
         // Scope hint â€” symptom, event, condition, audience. Same
         // domain-agnostic vocabulary as above plus structural cues
-        // ("when â€¦", "after â€¦", "for cases where â€¦").
+        // ("when …", "after …", "for cases where …").
         const scopeRe = /\b(when|after|during|before|while|whenever|on\s+\w+|for\s+\w+|in\s+cases?|distinguish|categori[sz]e|fallback|range\s+of|driven\s+by|set[_-]?up|reconnection|drops?|kick[_-]?off|failure|timeout|crash|reset|resume|suspend|wake|specific|country[_-]?specific|platform[_-]?specific|signal|coverage|interference|profile|pairing|initiali[sz]ation|negotiation)\b/i;
 
         // Bonus signals (any one counts).
@@ -6911,9 +6911,9 @@
         // grade â€” never floods the user with everything at once.
         const hints = [];
         if (HAS_XML) {
-            hints.push('âš  Remove "<" / ">" â€” angle brackets are forbidden in skill descriptions.');
+            hints.push('⚠ Remove "<" / ">" — angle brackets are forbidden in skill descriptions.');
         } else if (HAS_VAGUE) {
-            hints.push('Replace the vague verb with something concrete (Analyses, Identifies, Checks â€¦).');
+            hints.push('Replace the vague verb with something concrete (Analyses, Identifies, Checks …).');
         } else if (!HAS_CONCRETE) {
             hints.push('Add an action verb OR a concrete debug term (a log keyword, a protocol acronym, a code identifier, etc.).');
         } else if (!HAS_SCOPE) {
@@ -6956,7 +6956,7 @@
         countEl.textContent = 'Â· ' + r.length + '/1024';
 
         const hintEl = wrap.querySelector('.desc-strength-hints');
-        hintEl.textContent = r.hints.length ? 'â€” ' + r.hints.join(' ') : '';
+        hintEl.textContent = r.hints.length ? '— ' + r.hints.join(' ') : '';
     }
 
     function syncSkillNameFromKey(skillRow) {

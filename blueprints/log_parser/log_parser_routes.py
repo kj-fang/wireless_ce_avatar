@@ -1221,6 +1221,8 @@ def _run_sendto_in_background(socketio, client_sid, source_path: str):
             emit_progress(10, 'Bluetooth ETL detected. Starting HCI decode…')
         elif _is_fw_etl(source_path):
             emit_progress(10, 'FW ETL detected. Preparing…')
+        elif _is_linux(source_path):
+            emit_progress(10, 'Linux log detected. Preparing Linux chatbot…')
         else:
             emit_progress(10, 'Wi-Fi ETL file detected. Starting WPP/DDD parser…')
         time.sleep(0.5)

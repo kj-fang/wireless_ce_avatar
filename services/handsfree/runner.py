@@ -113,6 +113,8 @@ class CaseAnalysis:
     issue_type: str = ""
     wifi_or_bt: str = ""
     bt_case_valid: Optional[bool] = None  # True when archive contains BT ETLs
+    time_mismatch: dict = field(default_factory=dict)
+    missing_info: list[dict] = field(default_factory=list)
     triage: dict = field(default_factory=dict)       # analyze_desc output
     classification: dict = field(default_factory=dict)
     case_reader: dict = field(default_factory=dict)  # comment-aware reader output
@@ -318,9 +320,7 @@ class HandsfreeRunner:
             return analysis
 
         # BT classification mirrors Avatar's local-upload rule: an extracted
-        # ibtpci-*.etl or ibtusb-*.etl is returned in bt_files. Handsfree does
-        # not run those through the Wi-Fi agent yet, but it must inspect the
-        # archive before deciding whether this is a valid BT capture.
+        # ibtpci-*.etl or ibtusb-*.etl is returned in bt_files.
         if analysis.wifi_or_bt == "bt":
             with self._stage(analysis, "check_bt_log"):
                 analysis.bt_case_valid = bool(bt_files)
@@ -332,34 +332,32 @@ class HandsfreeRunner:
                     self.progress("check_bt_log",
                                   f"'{analysis.chosen_attachment}' contains no "
                                   "recognized BT ETL (ibtpci-/ibtusb-)")
-            analysis.mode = "triage_only"
-            analysis.ok = bool(analysis.triage)
-            analysis.error = (
-                "valid BT case: recognized BT ETLs; v1 produces triage only"
-                if analysis.bt_case_valid else
-                "BT case archive contains no recognized BT ETL"
-            )
-            return analysis
+            if not analysis.bt_case_valid:
+                analysis.mode = "triage_only"
+                analysis.ok = bool(analysis.triage)
+                analysis.error = "BT case archive contains no recognized BT ETL"
+                return analysis
 
-        # -- 6b. confirm WRT logs exist in the unzipped archive ----------------
-        # The archive downloaded and decomposed — now verify it actually
-        # contains driver ETL traces (WRT wifi ETLs / DDD). An archive of
-        # screenshots or dmesg dumps is not analyzable: ask for WRT logs.
-        with self._stage(analysis, "check_wrt_log"):
-            if wifi_files or ddd_files:
-                self.progress("check_wrt_log",
-                              f"ETLs found — wifi(WRT): {len(wifi_files)}, "
-                              f"DDD: {len(ddd_files)}")
-            else:
-                self.progress("check_wrt_log",
-                              f"'{analysis.chosen_attachment}' contains no "
-                              "WRT/DDD ETL logs")
-        if not wifi_files and not ddd_files:
-            analysis.mode = "request_logs"
-            analysis.ok = True
-            analysis.error = (f"attachment '{analysis.chosen_attachment}' contains "
-                              "no WRT ETL logs — drafted a request-logs reply")
-            return analysis
+        if analysis.wifi_or_bt == "wifi":
+            # -- 6b. confirm WRT logs exist in the unzipped archive ------------
+            # The archive downloaded and decomposed — now verify it actually
+            # contains driver ETL traces (WRT wifi ETLs / DDD). An archive of
+            # screenshots or dmesg dumps is not analyzable: ask for WRT logs.
+            with self._stage(analysis, "check_wrt_log"):
+                if wifi_files or ddd_files:
+                    self.progress("check_wrt_log",
+                                  f"ETLs found — wifi(WRT): {len(wifi_files)}, "
+                                  f"DDD: {len(ddd_files)}")
+                else:
+                    self.progress("check_wrt_log",
+                                  f"'{analysis.chosen_attachment}' contains no "
+                                  "WRT/DDD ETL logs")
+            if not wifi_files and not ddd_files:
+                analysis.mode = "request_logs"
+                analysis.ok = True
+                analysis.error = (f"attachment '{analysis.chosen_attachment}' contains "
+                                  "no WRT ETL logs — drafted a request-logs reply")
+                return analysis
 
         # -- 7. issue times -----------------------------------------------------
         # Primary source: the case-history reader (description + comments).
@@ -387,8 +385,12 @@ class HandsfreeRunner:
         # -- 8. pick the ETL ----------------------------------------------------
         etl_path = None
         with self._stage(analysis, "pick_etl"):
-            etl_path = self._pick_etl(wifi_files, ddd_files,
-                                      analysis.issue_times[0] if analysis.issue_times else "")
+            if analysis.wifi_or_bt == "bt":
+                etl_path = self._pick_bt_etl(bt_files)
+            else:
+                etl_path = self._pick_etl(
+                    wifi_files, ddd_files,
+                    analysis.issue_times[0] if analysis.issue_times else "")
             analysis.etl_path = etl_path or ""
         if not etl_path:
             analysis.mode = "triage_only"
@@ -396,15 +398,24 @@ class HandsfreeRunner:
             analysis.error = "could not select an ETL file"
             return analysis
 
-        # -- 9. decode ETL -> .log ----------------------------------------------
-        log_path = etl_path + ".log"
-        if not os.path.exists(log_path):
-            with self._stage(analysis, "decode_etl"):
-                self._decode_etl(etl_path)
+        # -- 9. decode ETL -> analysis log --------------------------------------
+        if analysis.wifi_or_bt == "bt":
+            from services.etl_parser.bt_parser import find_ready_hci
+            log_path = find_ready_hci(etl_path) or ""
+            if not log_path:
+                with self._stage(analysis, "decode_bt"):
+                    log_path = self._decode_bt(etl_path) or ""
+        else:
+            log_path = etl_path + ".log"
+            if not os.path.exists(log_path):
+                with self._stage(analysis, "decode_etl"):
+                    self._decode_etl(etl_path)
         if not os.path.exists(log_path):
             analysis.mode = "triage_only"
             analysis.ok = bool(analysis.triage)
-            analysis.error = f"ETL decode did not produce {os.path.basename(log_path)}"
+            analysis.error = (f"BT HCI decode did not produce {os.path.basename(log_path)}"
+                              if analysis.wifi_or_bt == "bt" else
+                              f"ETL decode did not produce {os.path.basename(log_path)}")
             return analysis
         analysis.log_path = log_path
 
@@ -464,6 +475,20 @@ class HandsfreeRunner:
         return analysis
 
     # ------------------------------------------------------------------
+    def _pick_bt_etl(self, bt_files: list) -> Optional[str]:
+        """Pick the newest BT capture, matching the UI's folder-time rule."""
+        if not bt_files:
+            return None
+        try:
+            from blueprints.bt_chatbot.bt_chatbot_routes import _parse_path_timestamp
+            dated = [(path, _parse_path_timestamp(path)) for path in bt_files]
+            dated = [(path, ts) for path, ts in dated if ts is not None]
+            if dated:
+                return max(dated, key=lambda item: item[1])[0]
+        except Exception as e:
+            print(f"[handsfree.runner] BT capture-time pick failed: {e}")
+        return sorted(bt_files)[-1]
+
     def _pick_etl(self, wifi_files: list, ddd_files: list,
                   issue_time_str: str) -> Optional[str]:
         """AI-time pick first; fallback = newest DDD, then newest Wi-Fi ETL.
@@ -518,7 +543,15 @@ class HandsfreeRunner:
             else:
                 os.environ["AVATAR_HEADLESS_DECODE"] = prev
 
-    def _build_agent(self):
+    def _decode_bt(self, etl_path: str) -> Optional[str]:
+        """Decode one BT ETL with the existing headless CLI decoder."""
+        from services.etl_parser.bt_parser import bt_decode_via_cli
+        return bt_decode_via_cli(
+            os.path.dirname(etl_path), etl_path,
+            emit_callback=lambda message: self.progress("decode_bt", message),
+        )
+
+    def _build_agent(self, domain: str = "wifi"):
         """Fresh agent per case; borrows client/model/skills (and the ACE
         runner, so learned playbooks apply) from the boot-time base agent."""
         from configs.global_configs import app_config
@@ -527,16 +560,20 @@ class HandsfreeRunner:
         base = getattr(app_config, "log_chatbot_agent", None)
         llm = app_config.llm_helper
         skills = getattr(base, "skills", None) or getattr(llm, "skills", None) or {}
-        agent = WifiLogAgentSystem(client=llm.client,
-                                   model=getattr(llm, "model", "gpt-4.1"),
-                                   skills=skills)
+        agent_cls = WifiLogAgentSystem
+        if domain == "bt":
+            from services.bt_chatbot_service import BtLogAgentSystem
+            agent_cls = BtLogAgentSystem
+        agent = agent_cls(client=llm.client,
+                          model=getattr(llm, "model", "gpt-4.1"),
+                          skills=skills)
         ace_runner = getattr(base, "ace_runner", None)
         if ace_runner is not None:
             agent.attach_ace(ace_runner)
         return agent
 
     def _run_agent(self, analysis: CaseAnalysis, *, max_steps: int) -> None:
-        agent = self._build_agent()
+        agent = self._build_agent(analysis.wifi_or_bt)
         agent.current_log_path = analysis.log_path
         agent.prime_with_context(
             case_nbr=analysis.case_nbr,

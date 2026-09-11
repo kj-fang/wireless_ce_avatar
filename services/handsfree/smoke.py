@@ -233,6 +233,8 @@ def smoke_runner(tmp: Path) -> None:
     from utils import attachment_download as adl
     from utils import attachment_decompose as adc
     orig_dload, orig_zip = adl.run_dload_threads, adc.process_single_zip
+    from services.etl_parser import bt_parser
+    orig_bt_decode = bt_parser.bt_decode_via_cli
 
     def _fake_dload(att_list, download_path, socketio):
         # Serve whichever zip the runner actually selected.
@@ -310,6 +312,9 @@ def smoke_runner(tmp: Path) -> None:
         bt_etl = case_dir / "bt_capture" / "ibtpci-driver.etl"
         bt_etl.parent.mkdir(parents=True, exist_ok=True)
         bt_etl.write_bytes(b"\x00fake")
+        bt_hci = Path(str(bt_etl) + ".hci.txt")
+        bt_hci.write_text("12:00:00.000 [INFO] Bluetooth capture\n",
+                          encoding="utf-8")
 
         def _fake_process_bt(case_ctx: CaseContext) -> CaseContext:
             case_ctx = _fake_process(case_ctx)
@@ -318,13 +323,18 @@ def smoke_runner(tmp: Path) -> None:
 
         cis.CaseService.process_case = staticmethod(_fake_process_bt)
         adc.process_single_zip = lambda *a, **k: ([], [], [], [str(bt_etl)], [])
+        bt_parser.bt_decode_via_cli = lambda *a, **k: str(bt_hci)
         bt_analysis = r.analyze_case("01234567")
         bt_stages = [s.name for s in bt_analysis.stages]
         check("S4.bt valid BT capture is content-checked",
               bt_analysis.bt_case_valid is True
+              and bt_analysis.mode == "full"
+              and bt_analysis.log_path == str(bt_hci)
               and "decompose" in bt_stages
-              and "check_bt_log" in bt_stages,
-              f"valid={getattr(bt_analysis, 'bt_case_valid', None)} stages={bt_stages}")
+              and "check_bt_log" in bt_stages
+              and "agent_analysis" in bt_stages,
+              f"valid={getattr(bt_analysis, 'bt_case_valid', None)} "
+              f"mode={bt_analysis.mode} log={bt_analysis.log_path} stages={bt_stages}")
 
         cis.CaseService.process_case = staticmethod(_fake_process)
         adc.process_single_zip = _fake_zip_proc
@@ -413,6 +423,7 @@ def smoke_runner(tmp: Path) -> None:
         cis.CaseService.process_case = orig_process
         adl.run_dload_threads = orig_dload
         adc.process_single_zip = orig_zip
+        bt_parser.bt_decode_via_cli = orig_bt_decode
         ita.organize_issue_context = orig_org
         app_config.llm_helper = orig_llm
         app_config.log_chatbot_agent = orig_agent

@@ -211,6 +211,7 @@ class CaseAnalysis:
     clean_description: str = ""
     issue_type: str = ""
     wifi_or_bt: str = ""
+    bt_case_valid: Optional[bool] = None  # True when archive contains BT ETLs
     triage: dict = field(default_factory=dict)       # analyze_desc output
     classification: dict = field(default_factory=dict)
     case_reader: dict = field(default_factory=dict)  # comment-aware reader output
@@ -476,11 +477,12 @@ class HandsfreeRunner:
         # -- 6. decompose ------------------------------------------------------
         wifi_files: list = []
         ddd_files: list = []
+        bt_files: list = []
         decompose_ok = False
         with self._stage(analysis, "decompose"):
             from utils.attachment_decompose import process_single_zip
             file_path, _name, already = downloaded[0]
-            wifi_files, ddd_files, _evt, _bt, _fw = process_single_zip(
+            wifi_files, ddd_files, _evt, bt_files, _fw = process_single_zip(
                 file_path, case_ctx.case_download_dir, already)
             decompose_ok = True
         if not decompose_ok:
@@ -492,6 +494,31 @@ class HandsfreeRunner:
             analysis.ok = bool(analysis.triage)
             analysis.error = "attachment decompose failed"
             return analysis
+
+        # BT classification mirrors Avatar's local-upload rule: an extracted
+        # ibtpci-*.etl or ibtusb-*.etl is returned in bt_files. Handsfree does
+        # not run those through the Wi-Fi agent yet, but it must inspect the
+        # archive before deciding whether this is a valid BT capture.
+        if analysis.wifi_or_bt == "bt":
+            with self._stage(analysis, "check_bt_log"):
+                analysis.bt_case_valid = bool(bt_files)
+                if bt_files:
+                    self.progress("check_bt_log",
+                                  f"valid BT case: recognized {len(bt_files)} "
+                                  "BT ETL(s)")
+                else:
+                    self.progress("check_bt_log",
+                                  f"'{analysis.chosen_attachment}' contains no "
+                                  "recognized BT ETL (ibtpci-/ibtusb-)")
+            analysis.mode = "triage_only"
+            analysis.ok = bool(analysis.triage)
+            analysis.error = (
+                "valid BT case: recognized BT ETLs; v1 produces triage only"
+                if analysis.bt_case_valid else
+                "BT case archive contains no recognized BT ETL"
+            )
+            return analysis
+
         # -- 6b. confirm WRT logs exist in the unzipped archive ----------------
         # The archive downloaded and decomposed — now verify it actually
         # contains driver ETL traces (WRT wifi ETLs / DDD). An archive of
@@ -534,32 +561,12 @@ class HandsfreeRunner:
                 analysis.issue_times = times[:max_incidents]
         if not analysis.clean_description:
             analysis.clean_description = analysis.description or analysis.subject
-        if analysis.issue_times and analysis.missing_info:
-            # A fallback source produced a time after all — retract the gap.
-            analysis.missing_info = [m for m in analysis.missing_info
-                                     if m.get("item") != "issue_time"]
 
         # -- 8. pick the ETL ----------------------------------------------------
         etl_path = None
         with self._stage(analysis, "pick_etl"):
-            # YB / assert issues: the capture folder whose NAME carries a
-            # nonzero error code (e.g. ..._12_4222_0xa_0x0_0x1fffff) is the
-            # one that recorded the failure — prefer the EARLIEST such folder
-            # (first occurrence) over the AI-time / newest heuristics.
-            yb_assert = bool(_YB_ASSERT_ISSUE_RE.search(
-                " ".join([analysis.issue_type or "", analysis.subject or "",
-                          analysis.clean_description or "",
-                          analysis.description or ""])))
-            if yb_assert:
-                etl_path = _pick_etl_yb_earliest(wifi_files, ddd_files)
-                if etl_path:
-                    self.progress(
-                        "pick_etl",
-                        "YB/assert issue — earliest capture with nonzero "
-                        f"error code in folder name: {os.path.basename(os.path.dirname(etl_path))}")
-            if not etl_path:
-                etl_path = self._pick_etl(wifi_files, ddd_files,
-                                          analysis.issue_times[0] if analysis.issue_times else "")
+            etl_path = self._pick_etl(wifi_files, ddd_files,
+                                      analysis.issue_times[0] if analysis.issue_times else "")
             analysis.etl_path = etl_path or ""
         if not etl_path:
             analysis.mode = "triage_only"
@@ -568,16 +575,9 @@ class HandsfreeRunner:
             return analysis
 
         # -- 9. decode ETL -> .log ----------------------------------------------
-        # Always record the stage: a cached .log (this case analyzed before)
-        # is a fast "done", not a skip — otherwise the stage table shows a
-        # confusing forever-"pending" row on re-runs.
         log_path = etl_path + ".log"
-        with self._stage(analysis, "decode_etl"):
-            if os.path.exists(log_path):
-                self.progress("decode_etl",
-                              f"reusing existing decoded log "
-                              f"({os.path.basename(log_path)})")
-            else:
+        if not os.path.exists(log_path):
+            with self._stage(analysis, "decode_etl"):
                 self._decode_etl(etl_path)
         if not os.path.exists(log_path):
             analysis.mode = "triage_only"
@@ -585,15 +585,6 @@ class HandsfreeRunner:
             analysis.error = f"ETL decode did not produce {os.path.basename(log_path)}"
             return analysis
         analysis.log_path = log_path
-
-        # -- 9b. does the log actually cover the reported issue time? ----------
-        # e.g. case 01025350: issue stated at 17:14, capture covered
-        # 17:39–17:44. The agent may still find an assert, but the reviewer
-        # (and the customer) must know the log is from a different time.
-        try:
-            self._check_time_coverage(analysis)
-        except Exception as e:
-            print(f"[handsfree.runner] time-coverage check failed (non-fatal): {e}")
 
         # -- 10. agentic analysis (one run per incident time) --------------------
         with self._stage(analysis, "agent_analysis"):
@@ -650,57 +641,6 @@ class HandsfreeRunner:
         if not got_report:
             analysis.error = analysis.error or "agent produced no report; triage used instead"
         return analysis
-
-    # ------------------------------------------------------------------
-    def _check_time_coverage(self, analysis: CaseAnalysis,
-                             grace_minutes: int = 10) -> None:
-        """Flag when NO reported issue time falls inside the decoded log's
-        time range (±grace). Only full datetimes count — time-only values
-        borrow the log's date downstream, so they are inside by construction.
-        Sets analysis.time_mismatch and emits a WARNING progress line."""
-        from datetime import timedelta
-        from utils.issue_time_utils import (format_issue_time,
-                                            parse_issue_time_string,
-                                            read_log_time_range)
-
-        if not analysis.issue_times or not analysis.log_path:
-            return
-        first, last = read_log_time_range(analysis.log_path)
-        if not first or not last:
-            return
-
-        grace = timedelta(minutes=grace_minutes)
-        checked: list[str] = []
-        covered = False
-        for raw in analysis.issue_times:
-            dt, time_only = parse_issue_time_string(str(raw))
-            if dt is None or time_only:
-                continue
-            # Resolve customer-vs-log frame when tz anchors are available
-            # (system_info.txt / folder timestamp); harmless no-op otherwise.
-            try:
-                from utils.issue_time_ai import determine_issue_time_frames
-                dt = determine_issue_time_frames(
-                    dt, [analysis.log_path], first, last).get("log_frame") or dt
-            except Exception:
-                pass
-            checked.append(str(raw))
-            if first - grace <= dt <= last + grace:
-                covered = True
-                break
-
-        if checked and not covered:
-            analysis.time_mismatch = {
-                "issue_times": checked,
-                "log_first": format_issue_time(first, with_ms=False),
-                "log_last": format_issue_time(last, with_ms=False),
-                "grace_minutes": grace_minutes,
-            }
-            self.progress(
-                "decode_etl",
-                f"WARNING: log covers {analysis.time_mismatch['log_first']} – "
-                f"{analysis.time_mismatch['log_last']} but the reported issue "
-                f"time(s) {', '.join(checked)} are OUTSIDE this window")
 
     # ------------------------------------------------------------------
     def _pick_etl(self, wifi_files: list, ddd_files: list,

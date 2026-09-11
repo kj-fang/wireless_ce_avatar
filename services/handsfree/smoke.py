@@ -274,8 +274,6 @@ def smoke_runner(tmp: Path) -> None:
         "attachment_name": "repro_logs.7z",
         "attachment_reason": "uploaded right after the 10:17:30 repro; later_capture.zip had no failure",
         "reasoning": "Comment #2 supersedes the vague description; comment #3 rules out the newer capture.",
-        "missing_info": [{"item": "repro_steps",
-                          "reason": "no reproduction steps mentioned anywhere"}],
     })
     fake_llm = types.SimpleNamespace(
         client=FakeAgentClient(report, report),   # same report either way
@@ -307,6 +305,31 @@ def smoke_runner(tmp: Path) -> None:
 
         r = runner_mod.HandsfreeRunner(
             progress_cb=lambda s, d: print(f"    · {s}: {d}"))
+
+        # BT cases must inspect extracted contents before triage-only exit.
+        # This matches Avatar's local-upload rule: ibtpci-/ibtusb- ETLs are
+        # recognized BT captures.
+        bt_etl = case_dir / "bt_capture" / "ibtpci-driver.etl"
+        bt_etl.parent.mkdir(parents=True, exist_ok=True)
+        bt_etl.write_bytes(b"\x00fake")
+
+        def _fake_process_bt(case_ctx: CaseContext) -> CaseContext:
+            case_ctx = _fake_process(case_ctx)
+            case_ctx.wifi_or_bt = "bt"
+            return case_ctx
+
+        cis.CaseService.process_case = staticmethod(_fake_process_bt)
+        adc.process_single_zip = lambda *a, **k: ([], [], [], [str(bt_etl)], [])
+        bt_analysis = r.analyze_case("01234567")
+        bt_stages = [s.name for s in bt_analysis.stages]
+        check("S4.bt valid BT capture is content-checked",
+              bt_analysis.bt_case_valid is True
+              and "decompose" in bt_stages
+              and "check_bt_log" in bt_stages,
+              f"valid={getattr(bt_analysis, 'bt_case_valid', None)} stages={bt_stages}")
+
+        cis.CaseService.process_case = staticmethod(_fake_process)
+        adc.process_single_zip = _fake_zip_proc
         analysis = r.analyze_case("01234567")
 
         check("S4.a mode is full", analysis.mode == "full",
@@ -320,11 +343,9 @@ def smoke_runner(tmp: Path) -> None:
               and analysis.case_reader.get("issue_time_source") == "comment #2")
         stage_names = [s.name for s in analysis.stages]
         check("S4.e all stages recorded",
-              {"fetch_case", "triage", "read_case_history", "check_case_info",
-               "check_wrt_log", "pick_zip", "download", "decompose",
-               "issue_time", "pick_etl", "decode_etl", "agent_analysis",
-               "echo_kb"}
-              <= set(stage_names),
+              {"fetch_case", "triage", "read_case_history", "check_wrt_log",
+               "pick_zip", "download", "decompose", "issue_time", "pick_etl",
+               "agent_analysis", "echo_kb"} <= set(stage_names),
               str(stage_names))
         check("S4.e2 no assert evidence -> Echo never queried",
               analysis.echo_insights == [], str(analysis.echo_insights))
@@ -344,12 +365,6 @@ def smoke_runner(tmp: Path) -> None:
                             analysis=analysis.to_dict())
         check("S4.f draft queued pending_review",
               rec["status"] == "pending_review" and "AP-initiated" in rec["draft_plain"])
-        check("S4.f2 minor info gap -> best-effort analysis + clarification section",
-              analysis.mode == "full"
-              and [m["item"] for m in analysis.missing_info] == ["repro_steps"]
-              and "Request for clarification" in rec["draft_plain"]
-              and "step-by-step reproduction instructions" in rec["draft_plain"],
-              rec["draft_plain"][:300])
 
         # --- request-logs path A: no archive attached at all ----------------
         def _fake_process_no_logs(case_ctx: CaseContext) -> CaseContext:

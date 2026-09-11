@@ -403,6 +403,14 @@ def _is_allowed_local_analysis_filename(filename: str) -> bool:
         or bool(re.search(r'\.etl\.\d+$', clean_name, re.IGNORECASE))
     )
 
+def _reject_if_directory(path: str) -> str | None:
+    """Return an error message if `path` is a directory (unexpected local-analysis
+    input, e.g. a folder dragged onto the SendTo shortcut); otherwise None."""
+    if os.path.isdir(path):
+        return 'Selected path is a folder, not a file. Please choose a valid analysis file.'
+    return None
+
+
 def _is_bt_etl(file_path: str) -> bool:
     """Return True if the file is a BT ETL that should be decoded via bt_decode_hci_via_folder."""
     name = os.path.basename(file_path).lower()
@@ -447,6 +455,10 @@ def _process_local_analysis(source_path: str, source_dir: str, file_path: str,
     def _track_cleanup(path: str) -> None:
         if cleanup_paths is not None and path:
             cleanup_paths.append(path)
+
+    dir_error = _reject_if_directory(file_path)
+    if dir_error:
+        raise ValueError(dir_error)
 
     _raise_if_cancelled(cancel_event)
 
@@ -786,6 +798,10 @@ def upload_local_analysis():
     print(f"[upload_local_analysis] source_path: {source_path}")
     logging.info("[upload_local_analysis] source_path: %s", source_path)
 
+    dir_error = _reject_if_directory(source_path)
+    if dir_error:
+        return jsonify({'success': False, 'message': dir_error}), 400
+
     if not _is_allowed_local_analysis_filename(original_name):
         return jsonify({
             'success': False,
@@ -939,6 +955,11 @@ def open_local_analysis():
 
     if not os.path.exists(source_path):
         flash(f'Local analysis file not found: {source_path}', 'danger')
+        return redirect(url_for('main.index'))
+
+    dir_error = _reject_if_directory(source_path)
+    if dir_error:
+        flash(dir_error, 'danger')
         return redirect(url_for('main.index'))
 
     if not _is_allowed_local_analysis_filename(original_name):

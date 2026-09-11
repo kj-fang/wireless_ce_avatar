@@ -1295,6 +1295,17 @@ from utils.linux_skills_yaml_utils import (
     today_dated_filename as _today_yaml_filename,
 )
 
+def _read_yaml_file(path) -> dict:
+    """Load a YAML file as a plain dict. Raises on parse failure."""
+    import yaml
+    with open(path, "r", encoding="utf-8") as f:
+        data = yaml.safe_load(f) or {}
+    if not isinstance(data, dict):
+        raise ValueError(
+            f"Invalid YAML structure: expected a dict, got {type(data).__name__}"
+        )
+    return data
+
 
 @linux_chatbot_bp.route("/skills_yaml/status", methods=["GET"])
 def skills_yaml_status():
@@ -1374,6 +1385,49 @@ def skills_yaml_save():
             "success": True,
             "path": str(save_path),
             "skills": agent.get_skill_descriptions(),
+        })
+    except Exception as e:
+        traceback.print_exc()
+        return jsonify({"success": False, "error": str(e)}), 500
+
+
+@linux_chatbot_bp.route("/load_local_skills_yaml", methods=["GET"])
+def load_local_skills_yaml():
+    """
+    Return the raw contents of a local YAML for the side-panel editor.
+
+    Query string:
+      ?source=cloud|user   (default = current active source)
+
+    The editor uses `source=user` to pre-fill from the user's previous
+    edits, and `source=cloud` to start from the pristine baseline.
+    """
+    requested = (request.args.get("source") or "").strip().lower() or _get_active_source()
+    try:
+        if requested == "user":
+            local_path, local_date = _latest_user_yaml()
+        else:
+            requested = "cloud"
+            local_path, local_date = _latest_cloud_baseline()
+
+        if local_path is None:
+            return jsonify({
+                "success":   False,
+                "error":     ("No customised configuration on disk yet."
+                              if requested == "user"
+                              else "Cloud baseline not present locally. "
+                                   "Connect to VPN and use 'Refresh from share folder'."),
+                "source":    requested,
+            }), 404
+
+        data = _read_yaml_file(local_path)
+        return jsonify({
+            "success":    True,
+            "source":     requested,
+            "local_path": str(local_path),
+            "local_date": local_date.isoformat() if local_date else None,
+            "filename":   local_path.name,
+            "skills":     data,
         })
     except Exception as e:
         traceback.print_exc()

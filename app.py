@@ -119,31 +119,20 @@ def _bring_chrome_to_front(server_pid):
         print(f'⚠️ [SendTo] _bring_chrome_to_front failed: {e}')
 
 def _build_startup_path(input_paths, sendto_token=None):
-    if not input_paths:
+    """Route any SendTo path straight to open_local_analysis and let that route
+    do ALL validation (existence, directory-vs-file, allowed extension) so
+    every rejection reason is surfaced to the user as a flash-modal on the
+    page, instead of being silently swallowed here as a console-only print().
+    """
+    candidate_paths = [p for p in input_paths if p]
+    if not candidate_paths:
         return '/'
 
-    supported_paths = []
-    for input_path in input_paths:
-        if not input_path:
-            continue
-        normalized_path = os.path.abspath(input_path)
-        if not os.path.exists(normalized_path):
-            print(f"⚠️ Ignoring missing SendTo path: {normalized_path}")
-            continue
+    if len(candidate_paths) > 1:
+        print(f"⚠️ Multiple SendTo files were provided; only the first one will be used: {candidate_paths[0]}")
 
-        lower_name = os.path.basename(normalized_path).lower()
-        if lower_name.endswith('.zip') or lower_name.endswith('.7z') or lower_name.endswith('.rar') or lower_name.endswith('.log') or lower_name.endswith('.etl') or lower_name.endswith('.dmp') or '.etl.' in lower_name:
-            supported_paths.append(normalized_path)
-        else:
-            print(f"⚠️ Ignoring unsupported SendTo path: {normalized_path}")
-
-    if not supported_paths:
-        return '/'
-
-    if len(supported_paths) > 1:
-        print(f"⚠️ Multiple SendTo files were provided; only the first one will be used: {supported_paths[0]}")
-
-    quoted_path = quote(supported_paths[0], safe='')
+    normalized_path = os.path.abspath(candidate_paths[0])
+    quoted_path = quote(normalized_path, safe='')
 
     # Use CLI token from shortcut (for existing instance) or current app token (for fresh start)
     resolved_token = sendto_token or app_config.sendto_token

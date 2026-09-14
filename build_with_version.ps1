@@ -164,7 +164,7 @@ VSVersionInfo(
         StringStruct(u'FileDescription', u'IntelAvatar - Wireless CE Log Analysis Tool'),
         StringStruct(u'FileVersion', u'$version.0'),
         StringStruct(u'InternalName', u'IntelAvatar'),
-        StringStruct(u'LegalCopyright', u'Copyright `u00a9 2026 Intel Corporation'),
+        StringStruct(u'LegalCopyright', u'Copyright © 2026 Intel Corporation'),
         StringStruct(u'OriginalFilename', u'IntelAvatar.exe'),
         StringStruct(u'ProductName', u'IntelAvatar'),
         StringStruct(u'ProductVersion', u'$version.0'),

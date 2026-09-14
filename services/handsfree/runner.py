@@ -657,14 +657,18 @@ class HandsfreeRunner:
         """Run the WPP/DDD decoder headlessly.
 
         parse_single_binary honors AVATAR_HEADLESS_DECODE=1 to skip opening
-        TextAnalysisTool + Explorer. SystemExit (the decoder's failure exits)
-        is caught so it cannot kill the app process.
+        TextAnalysisTool + Explorer. WppParserError (typed failure from the
+        parser) and SystemExit (legacy fallback) are caught so they cannot
+        kill the app process.
         """
         prev = os.environ.get("AVATAR_HEADLESS_DECODE")
         os.environ["AVATAR_HEADLESS_DECODE"] = "1"
         try:
-            from services.etl_parser.wpp_ddd_parser import wpp_ddd_parser_run
-            wpp_ddd_parser_run(etl_path)
+            from services.etl_parser.wpp_ddd_parser import wpp_ddd_parser_run, WppParserError
+            try:
+                wpp_ddd_parser_run(etl_path)
+            except WppParserError as e:
+                raise RuntimeError(f"decoder failed at {e.stage}: {e.detail}") from None
         except SystemExit as e:
             raise RuntimeError(f"decoder aborted (sys.exit {e.code})") from None
         finally:

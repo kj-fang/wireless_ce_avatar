@@ -3,7 +3,7 @@ from threading import Thread
 import traceback
 
 from configs.global_configs import app_config
-from services.etl_parser.wpp_ddd_parser import wpp_ddd_parser_run
+from services.etl_parser.wpp_ddd_parser import wpp_ddd_parser_run, WppParserError
 
 
 class WiFiAnalysisService():
@@ -21,6 +21,9 @@ class WiFiAnalysisService():
         try:
             self.emit_log("Start wpp_ddd_parser...")
             wpp_ddd_parser_run(etl_file)
+        except WppParserError:
+            # Parser already emitted wpp_error on /progress; frontend handles it.
+            pass
         except Exception as e:
             self.emit_log(f"❌ Exception occurred:{e}")
             self.emit_log(traceback.format_exc())

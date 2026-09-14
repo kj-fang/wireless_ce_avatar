@@ -27,7 +27,7 @@ from utils.log_parser_preprocess import extract_all_keywords_from_filter_file
 from services.log_parser_file_manage_service import FileManagerService
 from services.log_parser_service import LogParserService
 from services import gather_service
-from services.etl_parser.wpp_ddd_parser import wpp_ddd_parser_run
+from services.etl_parser.wpp_ddd_parser import wpp_ddd_parser_run, WppParserError
 from services.etl_parser.bt_parser import bt_decode_via_cli
 
 log_parser_bp = Blueprint("log_parser", __name__, url_prefix="/log_parser")
@@ -855,6 +855,16 @@ def upload_local_analysis():
             if cancel_event is not None and cancel_event.is_set():
                 return _cancelled_response()
             return jsonify({'success': False, 'message': str(e)}), 400
+        except WppParserError as e:
+            if cancel_event is not None and cancel_event.is_set():
+                return _cancelled_response()
+            logging.warning("[upload_local_analysis] WPP parser failed at %s: %s", e.stage, e.detail)
+            return jsonify({
+                'success': False,
+                'message': f'WPP parser failed at {e.stage}: {e.detail}',
+                'stage': e.stage,
+                'detail': e.detail,
+            }), 500
         except Exception as e:
             if cancel_event is not None and cancel_event.is_set():
                 return _cancelled_response()
@@ -1224,15 +1234,22 @@ def _run_sendto_in_background(socketio, client_sid, source_path: str):
         else:
             emit_progress(10, 'Wi-Fi ETL file detected. Starting WPP/DDD parser…')
         time.sleep(0.5)
-        # ── Intercept wpp_log events and forward to /sendto-progress ─────────
+        # ── Intercept wpp_log / wpp_error events and forward to /sendto-progress ─
         # Temporarily monkey-patch the socketio emit for wpp_log so the
         # detail log on the waiting page also shows ETL sub-step output.
+        # wpp_error is translated into sendto_error so the SendTo page's
+        # existing failure banner fires without extra frontend changes.
         _orig_emit = socketio.emit
 
         def _forwarding_emit(event, data=None, **kwargs):
             _orig_emit(event, data, **kwargs)
             if event == 'wpp_log' and isinstance(data, dict):
                 _emit_sendto(socketio, client_sid, 'sendto_wpp_log', data)
+            elif event == 'wpp_error' and isinstance(data, dict):
+                stage = data.get('stage', 'unknown')
+                detail = data.get('detail', '')
+                _emit_sendto(socketio, client_sid, 'sendto_error',
+                             {'message': f'WPP parser failed at {stage}: {detail}'})
 
         socketio.emit = _forwarding_emit
 
@@ -1264,6 +1281,9 @@ def _run_sendto_in_background(socketio, client_sid, source_path: str):
     except ValueError as e:
         logging.warning('[sendto] Validation error: %s', e)
         _emit_sendto(socketio, client_sid, 'sendto_error', {'message': str(e)})
+    except WppParserError as e:
+        # sendto_error already emitted by the forwarding monkey-patch above.
+        logging.warning('[sendto] WPP parser failed at %s: %s', e.stage, e.detail)
     except Exception as e:
         logging.exception('[sendto] Unexpected error for %s: %s', source_path, e)
         _emit_sendto(socketio, client_sid, 'sendto_error', {'message': f'Processing failed: {e}'})

@@ -428,10 +428,10 @@
     {% if auto_analysis_etl %}
     <div class="alert alert-info alert-dismissible fade show" role="alert">
         {% if auto_analysis_etl_reason == 'ai_time' %}
-        <i class="fas fa-robot"></i> <strong>Auto Running: ETL matched to AI-extracted issue time</strong>
+        <i class="fas fa-robot"></i> <strong>Auto Running: Log matched to AI-extracted issue time</strong>
         {% if llm_issue_time %}<code style="font-size:0.85rem;">{{ llm_issue_time }}</code>{% endif %}
         {% else %}
-        <i class="fas fa-robot"></i> <strong>Auto Running: Latest ETL with LLM analysis</strong>
+        <i class="fas fa-robot"></i> <strong>Auto Running: Latest log with LLM analysis</strong>
         {% endif %}
         <button type="button" class="close" data-dismiss="alert" aria-label="Close">
             <span aria-hidden="true">&times;</span>

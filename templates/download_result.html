@@ -1191,6 +1191,7 @@
             socket.on("fw_tool_closed", handleFwToolClosed);
             socket.on("fw_tool_error", handleFwToolError);
             socket.on("wpp_complete", handleWppComplete);
+            socket.on("wpp_error", handleWppError);
             socket.on("bt_hci_ready", handleBtHciReady);
             socket.on("bt_hci_failed", handleBtHciFailed);
             socket.on("autofolder_complete", handleAutofolderComplete);
@@ -1400,6 +1401,28 @@
             appendLog(text + "\n");
             advanceWppStage(text);
             _appendParseModalLog(text);
+        }
+
+        function handleWppError(msg) {
+            console.warn("wpp_error:", msg);
+            const stage = (msg && msg.stage) || 'unknown';
+            const detail = (msg && msg.detail) || 'WPP parser failed.';
+            const line = `❌ WPP parser failed at ${stage}: ${detail}`;
+            appendLog(line + "\n"); // append WPP error log to main log area
+            _appendParseModalLog(line); // append WPP error log to parse modal
+            _closeParseModal(false, '❌ Wi-Fi Parsing Failed', `${stage}: ${detail}`); // close parse modal on WPP error
+            // Clear pending-run flags and per-tab busy state so buttons return
+            // to their normal enabled state — the wpp_complete path would have
+            // done this, but wpp_error short-circuits before it fires.
+            window.pendingWifiAnalyze = false;
+            window.pendingDddAnalyze = false;
+            window.pendingBtAnalyze = false;
+            window.pendingLogParser = null;
+            window.pendingChatbot = null;
+            setWifiActionButtonsBusy(false);
+            setDddActionButtonsBusy(false);
+            setBtActionButtonsBusy(false);
+            setAnalysisCardLocked(false); // unlock the analysis card after handling WPP error
         }
 
         function handleFwLog(msg) {

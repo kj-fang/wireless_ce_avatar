@@ -33,6 +33,39 @@ def emit_and_log(msg):
     log.info(msg)
     app_config.socketio.emit('wpp_log', {'data': msg}, namespace='/progress') 
 
+
+class WppParserError(Exception):
+    """Raised when WPP/DDD parsing cannot complete.
+
+    stage: short tag identifying which pipeline step failed
+           (e.g. 'pf_unreachable', 'pdb_not_found', 'tracefmt_failed',
+            'ddd_build_id', 'dddplayer_failed', 'no_pdb_found',
+            'no_matching_binary', 'timeout').
+    detail: one-line human-readable description shown in the UI.
+    """
+    def __init__(self, *, stage: str, detail: str):
+        self.stage = stage
+        self.detail = detail
+        super().__init__(f"[{stage}] {detail}")
+
+
+def _raise_wpp_failure(stage: str, detail: str) -> "WppParserError":
+    """Broadcast a failure line + wpp_error to the browser, then return the
+    exception for the caller to raise."""
+    emit_and_log(f"❌ WPP parser failed at {stage}: {detail}")
+    app_config.socketio.emit(
+        'wpp_error',
+        {'stage': stage, 'detail': detail},
+        namespace='/progress',
+    )
+    return WppParserError(stage=stage, detail=detail)
+
+
+# subprocess timeouts (seconds) for external tools called by the parser
+_TRACEFMT_TIMEOUT_S = 600   # 10 min – large ETL parses
+_DDDPLAYER_INFO_TIMEOUT_S = 120  # 2 min – header read only
+_DDDPLAYER_PARSE_TIMEOUT_S = 600  # 10 min – full DDD parse
+
 # disable some warning of unverified HTTP get requests
 urllib3.disable_warnings(urllib3.exceptions.InsecureRequestWarning)
 
@@ -266,7 +299,10 @@ class Parser:
                 log.error(f"Failed to reach PF: {pf_site}")
 
         # if we got here, we didn't manage to reach PF site to get PDB from
-        sys.exit(0)
+        raise _raise_wpp_failure(
+            stage='pf_unreachable',
+            detail=f"Could not reach Potato Farm site(s): {', '.join(POTATO_FARM_SITE_LIST)}",
+        )
 
     def __get_build_details(self, jenkins_build_id: str) -> dict:
         """
@@ -407,12 +443,16 @@ class Parser:
                     # override file path dir
                     file_path = local_file_name
                 else:
-                    log.error("failed to find build path - file could not be extracted")
-                    sys.exit(0)
+                    raise _raise_wpp_failure(
+                        stage='pdb_not_found',
+                        detail=f"{file_name} not in PF folders and no local copy next to {os.path.basename(self.binary_path)}",
+                    )
 
             if not file_path:
-                log.error(f"failed to find file in {file_path_glob}")
-                sys.exit(0)
+                raise _raise_wpp_failure(
+                    stage='pdb_not_found',
+                    detail=f"{file_name} not found under {file_dir_path} (glob: {file_path_glob})",
+                )
 
         # directory cannot have multiple PDBs with same name, therefore, add _build suffix
         local_pdb_name = file_name.replace(".pdb", f"_{jenkins_build_id}.pdb")
@@ -495,14 +535,24 @@ class WppParser(Parser):
         # run the process sync
         emit_and_log("run tracefmt to parse the ETL")
         proc = subprocess.Popen(cmd, stdout=subprocess.DEVNULL)
-        proc.wait()
+        try:
+            proc.wait(timeout=_TRACEFMT_TIMEOUT_S)
+        except subprocess.TimeoutExpired:
+            proc.kill()
+            proc.wait()
+            raise _raise_wpp_failure(
+                stage='timeout',
+                detail=f"tracefmt.exe exceeded {_TRACEFMT_TIMEOUT_S // 60}-minute limit",
+            )
 
         # verify output
         if os.path.isfile(OUTPUT_TXT_NAME):
             emit_and_log(f"ETL was successfully parsed into: {OUTPUT_TXT_NAME}")
         else:
-            log.Error("failed to parse ETL file")
-            sys.exit(0)
+            raise _raise_wpp_failure(
+                stage='tracefmt_failed',
+                detail=f"tracefmt.exe did not produce {OUTPUT_TXT_NAME}",
+            )
 
     def __get_build_id_and_os_type(self) -> list[tuple[int, str, str]]:
         """
@@ -539,7 +589,11 @@ class WppParser(Parser):
                     log.error(f"build regex doesn't match: {substring}")
 
         # either one of them should exists (local PDB or build which is found)
-        assert builds_db or self.__local_pdb_path, "failed to find PDBs in ETL"
+        if not (builds_db or self.__local_pdb_path):
+            raise _raise_wpp_failure(
+                stage='no_pdb_found',
+                detail="No PDB references found inside ETL and no local .pdb next to it",
+            )
         emit_and_log(f"found {len(builds_db)} PDBs: {builds_db}, local PDB path: {self.__local_pdb_path}")
 
         return builds_db
@@ -601,9 +655,10 @@ class DddParser(Parser):
         if match := re.findall(r"\d+", build_id_bin.decode("ascii")):
             build_id = int(match[0])
         else:
-            log.error("failed to find build ID")
-            # cannot proceed
-            sys.exit(0)
+            raise _raise_wpp_failure(
+                stage='ddd_build_id',
+                detail="Could not extract Jenkins build ID from DDD binary header",
+            )
 
         # b'\x01' or b'\x00'
         is_net_adapter = bool(int.from_bytes(is_net_adapter_bin, "big"))
@@ -632,7 +687,16 @@ class DddParser(Parser):
         # id is 0, since when binary is copied, it is renamed to be 0
         cmd = f"{DDD_PLAYER_NAME} -bin . -id 0 -info"
         proc = subprocess.Popen(cmd, stdout=subprocess.PIPE)
-        res = proc.stdout.read().decode("utf-8")
+        try:
+            stdout_bytes, _ = proc.communicate(timeout=_DDDPLAYER_INFO_TIMEOUT_S)
+        except subprocess.TimeoutExpired:
+            proc.kill()
+            proc.communicate()
+            raise _raise_wpp_failure(
+                stage='timeout',
+                detail=f"DDDPlayer -info exceeded {_DDDPLAYER_INFO_TIMEOUT_S // 60}-minute limit",
+            )
+        res = stdout_bytes.decode("utf-8")
 
         build_id = 0
         pattern = r"Build ID: (\d+)"
@@ -698,21 +762,43 @@ class DddParser(Parser):
         """
         cmd = f"{DDD_PLAYER_NAME} -bin . -id 0 -l FFFF07 -o ."
         proc = subprocess.Popen(cmd, stdout=subprocess.PIPE)
-        res = proc.stdout.read().decode("utf-8")
+        try:
+            stdout_bytes, _ = proc.communicate(timeout=_DDDPLAYER_PARSE_TIMEOUT_S)
+        except subprocess.TimeoutExpired:
+            proc.kill()
+            proc.communicate()
+            raise _raise_wpp_failure(
+                stage='timeout',
+                detail=f"DDDPlayer parse exceeded {_DDDPLAYER_PARSE_TIMEOUT_S // 60}-minute limit",
+            )
+        res = stdout_bytes.decode("utf-8")
 
         # verify DDD was played successfully
         if "exit with success" in res:
             emit_and_log("DDD was played successfully")
         elif "DDD logs didn't record the halt flow" in res:
             emit_and_log("halt flow was not recorded, DDD was cut in the middle")
+        elif "probably was purged" in res:
+            raise _raise_wpp_failure(
+                stage='dddplayer_failed',
+                detail="DDD player build was probably purged from PF",
+            )
         else:
-            log.error("failed to play DDD")
-            sys.exit(0)
+            raise _raise_wpp_failure(
+                stage='dddplayer_failed',
+                detail=f"DDDPlayer output not recognised: {res[:200]!r}",
+            )
 
         # rename file to output, since DDD player adds some suffix to file name
         res = Path(self.workspace).glob("*.LOG")
         # take the first file - there should be only one
-        log_file = str(list(res)[0])
+        log_files = list(res)
+        if not log_files:
+            raise _raise_wpp_failure(
+                stage='dddplayer_failed',
+                detail="DDDPlayer did not produce a .LOG output file",
+            )
+        log_file = str(log_files[0])
         os.rename(log_file, OUTPUT_TXT_NAME)
 
         emit_and_log(f"successfully created log file {OUTPUT_TXT_NAME}")
@@ -779,6 +865,7 @@ def wpp_ddd_parser_run(binary_path: str, is_use_custom_filter=False, is_add_trac
             binaries_file_list.append(_to_long_path(str(file)))
 
     # iterate over the list of files and parse each one of them
+    parsed_any = False
     for binary_file in binaries_file_list:
         # classification - find handler class
         for key, handler in PARSERS_DICT.items():
@@ -790,13 +877,22 @@ def wpp_ddd_parser_run(binary_path: str, is_use_custom_filter=False, is_add_trac
                     parsed_log_path = Path(binary_file).parent / (Path(binary_file).name + ".log")
                     if parsed_log_path.exists():
                         emit_and_log(f"skipping {binary_file} - parsed log already exists: {parsed_log_path}")
+                        parsed_any = True
                         break
                     if ".log" not in Path(binary_file).suffixes:
                         parser = handler(binary_file, is_use_custom_filter, is_add_tracefmt_format)
                         # handler class is found - run the parser
                         parse_single_binary(parser)
+                        parsed_any = True
                         # go to next binary, rather to next parser
                         break
+
+    if not parsed_any:
+        raise _raise_wpp_failure(
+            stage='no_matching_binary',
+            detail=f"No WPP/DDD parser matches: {os.path.basename(binary_path)}",
+        )
+
     log.info('wpp_complete')
     app_config.socketio.emit('wpp_complete', {'status': 'done'}, namespace='/progress') 
 

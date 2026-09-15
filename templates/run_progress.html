@@ -83,7 +83,15 @@
     socket.on("wpp_log", function(msg) {
         console.log("wpp_log:",msg)
         log.innerText += msg.data + "\n";
-        log.scrollTop = logBox.scrollHeight;
+        log.scrollTop = log.scrollHeight;
+    });
+
+    socket.on("wpp_error", function(msg) {
+        console.warn("wpp_error:", msg);
+        const stage = (msg && msg.stage) || 'unknown';
+        const detail = (msg && msg.detail) || 'WPP parser failed.';
+        log.innerText += `\n❌ WPP parser failed at ${stage}: ${detail}\n`;
+        log.scrollTop = log.scrollHeight;
     });
 
     socket.on("case_nbr", function(data) {

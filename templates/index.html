@@ -1031,6 +1031,20 @@
 
                 logArea.scrollTop = logArea.scrollHeight;
             });
+
+            uploadSocket.on('wpp_error', function(data) {
+                const logArea = document.getElementById('upload-log-messages');
+                if (!logArea) {
+                    return;
+                }
+                const stage = (data && data.stage) || 'unknown';
+                const detail = (data && data.detail) || 'WPP parser failed.';
+                const p = document.createElement('div');
+                p.style.color = '#d9534f';
+                p.textContent = `❌ WPP parser failed at ${stage}: ${detail}`;
+                logArea.appendChild(p);
+                logArea.scrollTop = logArea.scrollHeight;
+            });
         }
 
         function disconnectUploadSocket() {

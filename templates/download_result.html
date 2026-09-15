@@ -823,6 +823,9 @@
                         <button id="ddd-action-analyze" class="btn btn-primary btn-sm" style="border-radius: 30px; font-size: 1.15rem; padding: 0.5rem 1rem;" disabled onclick="runSelectedDddAction(this, 'parse')">
                             Parse
                         </button>
+                        <button id="ddd-action-chatbot" class="btn btn-info" style="border-radius: 30px; color:white; font-size: 1.15rem; padding: 0.5rem 1rem;" disabled onclick="runSelectedDddAction(this, 'chatbot')">
+                            🤖 DDD Analysis Agent
+                        </button>
                     </div>
                     <div class="mb-3">
                         {% for name, ddd_list in ddd_dict.items() %}
@@ -2427,11 +2430,11 @@
     function startChatbotAnalysis(button, etlPathEncoded) {
         if (button.classList.contains('disabled')) return;
         button.classList.add('disabled');
-        button.innerText = '⏳ Running ETL...';
+        button.innerText = '⏳ Running ...';
 
         const decoded = decodePath(etlPathEncoded);
         logBox.innerText += `🤖 Starting Wi-Fi Analysis Agent for: ${decoded}\n`;
-        logBox.innerText += `🛠️ Step 1: Running ETL Analysis...\n`;
+        logBox.innerText += `🛠️ Step 1: Running Analysis...\n`;
         logBox.scrollTop = logBox.scrollHeight;
         openWppModal(`🤖 Wi-Fi Analysis Agent: ${decoded.split('\\').pop() || decoded.split('/').pop()}`);
 
@@ -2444,7 +2447,7 @@
             .then(res => res.text())
             .catch(err => {
                 console.error('ETL Analysis failed:', err);
-                logBox.innerText += `❌ ETL Analysis Failed: ${decoded}\n`;
+                logBox.innerText += `❌ Analysis Failed: ${decoded}\n`;
                 logBox.scrollTop = logBox.scrollHeight;
                 button.classList.remove('disabled');
                 button.innerText = '🤖 Wi-Fi Analysis Agent';
@@ -2777,8 +2780,7 @@
         const selectedEncoded = getSelectedDddEtlEncoded();
         const selectedText = document.getElementById('selected-ddd-etl-text');
         const analyzeBtn = document.getElementById('ddd-action-analyze');
-        // const llmBtn = document.getElementById('ddd-action-llm');
-        // const chatbotBtn = document.getElementById('ddd-action-chatbot');
+        const chatbotBtn = document.getElementById('ddd-action-chatbot');
 
         if (selectedText) {
             selectedText.innerText = selectedEncoded ? decodePath(selectedEncoded) : 'None';
@@ -2787,12 +2789,14 @@
         // Keep all DDD action buttons locked while parser flow is still running.
         if (window.dddActionsBusy) {
             if (analyzeBtn) analyzeBtn.disabled = true;
+            if (chatbotBtn) chatbotBtn.disabled = true;
             return;
         }
 
         const hasSelection = !!selectedEncoded;
         console.log("DDD selection changed. Encoded:", selectedEncoded, "Has selection?", hasSelection);
         if (analyzeBtn) analyzeBtn.disabled = !hasSelection;
+        if (chatbotBtn) chatbotBtn.disabled = !hasSelection;
     }
 
     function updateEventActionButtons() {
@@ -2919,6 +2923,10 @@
             startAnalysis(button, selectedEncoded, 'DDD', 'wifi');
             return;
         }
+        if (actionType === 'chatbot') {
+            setDddActionButtonsBusy(true, 'ddd-action-chatbot');
+            startChatbotAnalysis(button, selectedEncoded);
+        }
     }
 
     function runSelectedEventAction(button, actionType) {
@@ -3008,9 +3016,10 @@
     function setDddActionButtonsBusy(isBusy, activeButtonId = null) {
         window.dddActionsBusy = !!isBusy;
         const defaultLabels = {
-            'ddd-action-analyze': 'Parse'
+            'ddd-action-analyze': 'Parse',
+            'ddd-action-chatbot': '🤖 DDD Analysis Agent'
         };
-        const buttonIds = ['ddd-action-analyze'];
+        const buttonIds = ['ddd-action-analyze', 'ddd-action-chatbot'];
         buttonIds.forEach(id => {
             const btn = document.getElementById(id);
             if (!btn) return;

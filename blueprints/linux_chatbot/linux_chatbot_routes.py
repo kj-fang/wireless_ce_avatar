@@ -1307,7 +1307,7 @@ def _read_yaml_file(path) -> dict:
     return data
 
 
-@linux_chatbot_bp.route("/skills_yaml/status", methods=["GET"])
+@linux_chatbot_bp.route("/skills_yaml_status", methods=["GET"])
 def skills_yaml_status():
     try:
         payload = _skills_yaml_status_payload()
@@ -1316,7 +1316,7 @@ def skills_yaml_status():
         return jsonify({"success": False, "error": str(e)}), 500
 
 
-@linux_chatbot_bp.route("/skills_yaml/set_source", methods=["POST"])
+@linux_chatbot_bp.route("/skills_yaml_set_source", methods=["POST"])
 def skills_yaml_set_source():
     data = request.get_json(silent=True) or {}
     source = (data.get("source") or "cloud").strip().lower()
@@ -1339,7 +1339,7 @@ def skills_yaml_set_source():
     return jsonify({"success": True, "active_source": effective, "skills": []})
 
 
-@linux_chatbot_bp.route("/skills_yaml/read", methods=["GET"])
+@linux_chatbot_bp.route("/skills_yaml_read", methods=["GET"])
 def skills_yaml_read():
     source = (request.args.get("source") or _get_active_source()).strip().lower()
     if source == "user":
@@ -1358,7 +1358,7 @@ def skills_yaml_read():
         return jsonify({"success": False, "error": str(e)}), 500
 
 
-@linux_chatbot_bp.route("/skills_yaml/save", methods=["POST"])
+@linux_chatbot_bp.route("/skills_yaml_save", methods=["POST"])
 def skills_yaml_save():
     """Save an edited skills dict as a new dated user YAML and reload."""
     import yaml

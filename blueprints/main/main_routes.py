@@ -970,6 +970,9 @@ def handle_parse_event_log():
     print(f"\n[UI View] 🔍 Scanning Event Log: {path}")
     if not path or not os.path.exists(path):
         return jsonify({'error': 'Invalid path'}), 400
+    if not path.lower().endswith(('.evt', '.evtx')):
+        # Linux logs have no Windows System Event Log to parse.
+        return jsonify({'events': [], 'total': 0, 'offset': 0, 'limit': 0, 'has_more': False})
     try:
         offset = max(0, int(request.json.get('offset', 0) or 0))
         limit = int(request.json.get('limit', 0) or 0)

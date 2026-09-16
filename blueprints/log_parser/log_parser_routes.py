@@ -615,18 +615,18 @@ def _process_local_analysis(source_path: str, source_dir: str, file_path: str,
 
         return url_for('main.download_result')
 
+    elif _is_linux(file_path):
+        # Shoot for a Linux log
+        session['linux_chatbot_log_path'] = file_path
+        app_config.last_analyzed_log_path = file_path
+        _cb(90, 'Linux log file ready.')
+        return url_for('linux_chatbot.index', auto_run='analyze_all')
+
     elif file_path.lower().endswith('.log'):
         session['latest_etl_path'] = None
         app_config.last_analyzed_log_path = file_path
         _cb(90, 'Log file ready.')
         return url_for('log_chatbot.index', auto_run='analyze_all')
-
-    elif _is_linux(file_path):
-            # Shoot for a Linux log
-            session['linux_chatbot_log_path'] = file_path
-            app_config.last_analyzed_log_path = file_path
-            _cb(90, 'Linux log file ready.')
-            return url_for('linux_chatbot.index', auto_run='analyze_all')
 
     elif file_path.lower().endswith('.hci.txt'):
         # Treat .hci.txt from BT HCI decode as a decoded BT log

@@ -3179,7 +3179,7 @@
         const row = document.createElement('div');
         row.className = 'msg-row user';
         row.innerHTML = `
-            <div class="avatar-icon">ðŸ‘¤</div>
+            <div class="avatar-icon">👤</div>
             <div class="msg-bubble">${escapeHtml(text)}</div>
         `;
         document.getElementById('chat-window').appendChild(row);
@@ -3326,7 +3326,7 @@
         const wrapper = document.createElement('div');
         wrapper.className = 'msg-row assistant';
         wrapper.style.maxWidth = '95%';
-        wrapper.innerHTML = `<div class="avatar-icon">ðŸ¤–</div><div style="flex:1;min-width:0;">${html}${turnId ? renderFeedbackWidget(turnId) : ''}</div>`;
+        wrapper.innerHTML = `<div class="avatar-icon">🤖</div><div style="flex:1;min-width:0;">${html}${turnId ? renderFeedbackWidget(turnId) : ''}</div>`;
         document.getElementById('chat-window').appendChild(wrapper);
         scrollBottom();
 
@@ -3607,7 +3607,7 @@
                 updateAnalyzeBtn();
                 validateUserInput();
 
-                // â”€â”€ System Event Log button state â”€â”€
+                // ── System Event Log button state ──
                 updateEvtButton(data.evtx_path || '');
 
                 // If an issue time is already filled (e.g. from session context),
@@ -3921,7 +3921,7 @@
                 ">
                     Agent Processing Steps
                     <span id="${agentCardId}-summary" style="font-weight:400;font-size:0.75rem;opacity:0.75;margin-left:8px;"></span>
-                    <span class="toggle-icon">â–²</span>
+                    <span class="toggle-icon">▲</span>
                 </div>
                 <div class="agent-process-body" id="${agentCardId}"></div>
             </div>`;
@@ -4236,7 +4236,7 @@
         const wrapper = document.createElement('div');
         wrapper.className = 'msg-row assistant';
         wrapper.style.maxWidth = '95%';
-        wrapper.innerHTML = `<div class="avatar-icon">ðŸ¤–</div><div style="flex:1;min-width:0;">${html}</div>`;
+        wrapper.innerHTML = `<div class="avatar-icon">🤖</div><div style="flex:1;min-width:0;">${html}</div>`;
         document.getElementById('chat-window').appendChild(wrapper);
         scrollBottom();
 
@@ -4250,7 +4250,7 @@
         });
     }
 
-     // ── Reset ──────────────────────────────────────────────────────
+    // ── Reset ──────────────────────────────────────────────────────
     async function resetConversation() {
         await fetch('/bt_chatbot/reset', {method: 'POST'});
         document.getElementById('chat-window').innerHTML = `
@@ -7536,9 +7536,9 @@
         }
     }
 
-    // â•â•â•â•â•â•â•â•â•â•â•â•â•â•â•â•â•â•â•â•â•â•â•â•â•â•â•â•â•â•â•â•â•â•â•â•â•â•â•â•â•â•â•â•â•â•â•â•â•â•â•â•â•â•â•â•â•â•â•â•â•â•â•â•â•â•
-    // â”€â”€ System Event Log (inline sidebar table) â”€â”€â”€â”€â”€â”€â”€â”€â”€â”€â”€â”€â”€â”€â”€â”€â”€â”€â”€â”€â”€â”€
-    // â•â•â•â•â•â•â•â•â•â•â•â•â•â•â•â•â•â•â•â•â•â•â•â•â•â•â•â•â•â•â•â•â•â•â•â•â•â•â•â•â•â•â•â•â•â•â•â•â•â•â•â•â•â•â•â•â•â•â•â•â•â•â•â•â•â•
+    // ══════════════════════════════════════════════════════════════════
+    // ── System Event Log (inline sidebar table) ──────────────────────
+    // ══════════════════════════════════════════════════════════════════
     (function () {
         let _evtPath = '';
         let _evtData = [];
@@ -7701,7 +7701,7 @@
             return String(s).replace(/&/g,'&amp;').replace(/</g,'&lt;').replace(/>/g,'&gt;').replace(/"/g,'&quot;');
         }
 
-        // â”€â”€ Expose: find the closest Error/Critical event to a given time â”€â”€
+        // ── Expose: find the closest Error/Critical event to a given time ──
         // Used by the auto-refine logic to snap the issue time to the nearest
         // system event error without a separate backend round-trip.
         // If _evtData is already populated (panel was opened), search locally.
@@ -8467,8 +8467,8 @@
         }
         function timeBadge(elapsedMs, deltaMs) {
             const delta = (deltaMs >= 50)
-                ? '<span class="step-time-delta">Î”' + fmtElapsed(deltaMs) + '</span>' : '';
-            return '<span class="step-time" title="Elapsed since start Â· delta from previous step">+'
+                ? '<span class="step-time-delta">Δ' + fmtElapsed(deltaMs) + '</span>' : '';
+            return '<span class="step-time" title="Elapsed since start · delta from previous step">+'
                    + fmtElapsed(elapsedMs) + delta + '</span>';
         }
         function ensureCard() {
@@ -8485,14 +8485,14 @@
                     "icon.textContent=this.classList.contains('collapsed')?'\\u25BC':'\\u25B2';" +
                   '">Agent Processing Steps' +
                     '<span id="' + cardId + '-summary" style="font-weight:400;font-size:0.75rem;opacity:0.75;margin-left:8px;"></span>' +
-                    '<span class="toggle-icon">' + (collapsed ? 'â–¼' : 'â–²') + '</span>' +
+                    '<span class="toggle-icon">' + (collapsed ? '▼' : '▲') + '</span>' +
                   '</div>' +
                   '<div class="agent-process-body' + (collapsed ? ' hidden' : '') + '" id="' + cardId + '"></div>' +
                 '</div>';
             const wrapper = document.createElement('div');
             wrapper.className = 'msg-row assistant';
             wrapper.style.maxWidth = '95%';
-            wrapper.innerHTML = '<div class="avatar-icon">ðŸ¤–</div><div style="flex:1;min-width:0;">' + html + '</div>';
+            wrapper.innerHTML = '<div class="avatar-icon">🤖</div><div style="flex:1;min-width:0;">' + html + '</div>';
             document.getElementById('chat-window').appendChild(wrapper);
             bodyEl = document.getElementById(cardId);
             scrollBottom();
@@ -8503,17 +8503,17 @@
             const content = step.content || '';
             const role = step.role || 'agent';
             let stepClass = 'step-info', label = '', isDivider = false, stepNum = null;
-            if (role === 'token_usage') { stepClass = 'step-token'; label = 'ðŸ“Š Tokens'; }
-            else if (role === 'error') { stepClass = 'step-error'; label = 'â›” Error'; }
+            if (role === 'token_usage') { stepClass = 'step-token'; label = '📊 Tokens'; }
+            else if (role === 'error') { stepClass = 'step-error'; label = '⛔ Error'; }
             else if (/Reasoning Step (\d+)/.test(content)) {
                 const m = content.match(/Reasoning Step (\d+)/);
                 stepNum = m ? m[1] : steps.length; isDivider = true;
             }
-            else if (/ðŸ§ .*Thinking/i.test(content)) { stepClass = 'step-thinking'; label = 'ðŸ§  Thinking'; }
-            else if (/Invoking skill|fetch_filtered_logs/i.test(content)) { stepClass = 'step-skill'; label = 'ðŸ”¬ Skill'; }
-            else if (/Tool call|Tool cap|ðŸ§­/i.test(content)) { stepClass = 'step-tool'; label = 'ðŸ§­ Tools'; }
-            else if (/Conclusion reached|submit_final_report|âœ…/i.test(content)) { stepClass = 'step-done'; label = 'âœ… Done'; }
-            else { stepClass = 'step-info'; label = 'â„¹ï¸'; }
+            else if (/🧠.*Thinking/i.test(content)) { stepClass = 'step-thinking'; label = '🧠 Thinking'; }
+            else if (/Invoking skill|fetch_filtered_logs/i.test(content)) { stepClass = 'step-skill'; label = '🔬 Skill'; }
+            else if (/Tool call|Tool cap|🧭/i.test(content)) { stepClass = 'step-tool'; label = '🧭 Tools'; }
+            else if (/Conclusion reached|submit_final_report|✅/i.test(content)) { stepClass = 'step-done'; label = '✅ Done'; }
+            else { stepClass = 'step-info'; label = 'ℹ️'; }
             // A live step is timed by this browser; a replayed one carries the
             // offset the server recorded, so the badges show how long the run
             // actually took rather than how fast the replay redrew it.
@@ -8533,8 +8533,8 @@
                 .map(s => { const m = s.content.match(/`([^`]+)`/); return m ? m[1] : ''; }).filter(Boolean);
             const summaryEl = document.getElementById(cardId + '-summary');
             if (summaryEl) {
-                summaryEl.textContent = steps.length + ' steps Â· ' + fmtElapsed(elapsedMs) +
-                    (skillsUsed.length ? ' Â· Skills: ' + skillsUsed.join(', ') : '');
+                summaryEl.textContent = steps.length + ' steps · ' + fmtElapsed(elapsedMs) +
+                    (skillsUsed.length ? ' · Skills: ' + skillsUsed.join(', ') : '');
             }
             scrollBottom();
         }

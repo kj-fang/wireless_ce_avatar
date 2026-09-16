@@ -1031,6 +1031,23 @@
 
                 logArea.scrollTop = logArea.scrollHeight;
             });
+            uploadSocket.on('wpp_error', function(data) {
+                const logArea = document.getElementById('upload-log-messages');
+                if (!logArea) {
+                    return;
+                }
+                const message = String((data && data.data) || '').trim();
+                if (!message) {
+                    return;
+                }
+                clearUploadPreparingTimeout();
+                const prefix = data && data.fatal ? '\u274C ERROR: ' : '\u26A0\uFE0F WARNING: ';
+                const p = document.createElement('div');
+                p.textContent = '- ' + prefix + message;
+                p.style.color = data && data.fatal ? '#c0392b' : '#b7791f';
+                logArea.appendChild(p);
+                logArea.scrollTop = logArea.scrollHeight;
+            });
         }
 
         function disconnectUploadSocket() {

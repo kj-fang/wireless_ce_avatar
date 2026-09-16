@@ -33,6 +33,20 @@ def emit_and_log(msg):
     log.info(msg)
     app_config.socketio.emit('wpp_log', {'data': msg}, namespace='/progress') 
 
+
+class WppParserError(Exception):
+    """Raised when the WPP/DDD parser cannot continue."""
+
+
+def emit_error(msg, *, fatal=False):
+    # send parser errors to the frontend without killing the worker process
+    log.error(msg)
+    app_config.socketio.emit(
+        'wpp_error',
+        {'data': str(msg), 'fatal': bool(fatal)},
+        namespace='/progress',
+    )
+
 # disable some warning of unverified HTTP get requests
 urllib3.disable_warnings(urllib3.exceptions.InsecureRequestWarning)
 
@@ -266,7 +280,8 @@ class Parser:
                 log.error(f"Failed to reach PF: {pf_site}")
 
         # if we got here, we didn't manage to reach PF site to get PDB from
-        sys.exit(0)
+        emit_error("Failed to reach any Potato Farm site to fetch build info", fatal=True)
+        raise WppParserError("Failed to reach any Potato Farm site")
 
     def __get_build_details(self, jenkins_build_id: str) -> dict:
         """
@@ -407,12 +422,12 @@ class Parser:
                     # override file path dir
                     file_path = local_file_name
                 else:
-                    log.error("failed to find build path - file could not be extracted")
-                    sys.exit(0)
+                    emit_error(f"failed to find build path - {file_name} could not be extracted", fatal=True)
+                    raise WppParserError(f"failed to find build path for {file_name}")
 
             if not file_path:
-                log.error(f"failed to find file in {file_path_glob}")
-                sys.exit(0)
+                emit_error(f"failed to find file in {file_path_glob}", fatal=True)
+                raise WppParserError(f"failed to find file in {file_path_glob}")
 
         # directory cannot have multiple PDBs with same name, therefore, add _build suffix
         local_pdb_name = file_name.replace(".pdb", f"_{jenkins_build_id}.pdb")
@@ -501,8 +516,8 @@ class WppParser(Parser):
         if os.path.isfile(OUTPUT_TXT_NAME):
             emit_and_log(f"ETL was successfully parsed into: {OUTPUT_TXT_NAME}")
         else:
-            log.Error("failed to parse ETL file")
-            sys.exit(0)
+            emit_error("failed to parse ETL file", fatal=True)
+            raise WppParserError("failed to parse ETL file")
 
     def __get_build_id_and_os_type(self) -> list[tuple[int, str, str]]:
         """
@@ -539,7 +554,9 @@ class WppParser(Parser):
                     log.error(f"build regex doesn't match: {substring}")
 
         # either one of them should exists (local PDB or build which is found)
-        assert builds_db or self.__local_pdb_path, "failed to find PDBs in ETL"
+        if not (builds_db or self.__local_pdb_path):
+            emit_error("failed to find PDBs in ETL", fatal=True)
+            raise WppParserError("failed to find PDBs in ETL")
         emit_and_log(f"found {len(builds_db)} PDBs: {builds_db}, local PDB path: {self.__local_pdb_path}")
 
         return builds_db
@@ -601,9 +618,9 @@ class DddParser(Parser):
         if match := re.findall(r"\d+", build_id_bin.decode("ascii")):
             build_id = int(match[0])
         else:
-            log.error("failed to find build ID")
+            emit_error("failed to find build ID in DDD binary", fatal=True)
             # cannot proceed
-            sys.exit(0)
+            raise WppParserError("failed to find build ID in DDD binary")
 
         # b'\x01' or b'\x00'
         is_net_adapter = bool(int.from_bytes(is_net_adapter_bin, "big"))
@@ -706,8 +723,8 @@ class DddParser(Parser):
         elif "DDD logs didn't record the halt flow" in res:
             emit_and_log("halt flow was not recorded, DDD was cut in the middle")
         else:
-            log.error("failed to play DDD")
-            sys.exit(0)
+            emit_error("failed to play DDD", fatal=True)
+            raise WppParserError("failed to play DDD")
 
         # rename file to output, since DDD player adds some suffix to file name
         res = Path(self.workspace).glob("*.LOG")
@@ -778,6 +795,8 @@ def wpp_ddd_parser_run(binary_path: str, is_use_custom_filter=False, is_add_trac
         for file in Path(binary_path).rglob("*"):
             binaries_file_list.append(_to_long_path(str(file)))
 
+    errors: list[str] = []
+
     # iterate over the list of files and parse each one of them
     for binary_file in binaries_file_list:
         # classification - find handler class
@@ -792,13 +811,26 @@ def wpp_ddd_parser_run(binary_path: str, is_use_custom_filter=False, is_add_trac
                         emit_and_log(f"skipping {binary_file} - parsed log already exists: {parsed_log_path}")
                         break
                     if ".log" not in Path(binary_file).suffixes:
-                        parser = handler(binary_file, is_use_custom_filter, is_add_tracefmt_format)
-                        # handler class is found - run the parser
-                        parse_single_binary(parser)
+                        try:
+                            parser = handler(binary_file, is_use_custom_filter, is_add_tracefmt_format)
+                            # handler class is found - run the parser
+                            parse_single_binary(parser)
+                        except WppParserError as e:
+                            errors.append(f"{binary_file}: {e}")
+                        except Exception as e:
+                            emit_error(f"unexpected error parsing {binary_file}: {e}", fatal=True)
+                            errors.append(f"{binary_file}: {e}")
                         # go to next binary, rather to next parser
                         break
-    log.info('wpp_complete')
-    app_config.socketio.emit('wpp_complete', {'status': 'done'}, namespace='/progress') 
+    status = 'error' if errors else 'done'
+    log.info(f'wpp_complete status={status}')
+    app_config.socketio.emit(
+        'wpp_complete',
+        {'status': status, 'errors': errors},
+        namespace='/progress',
+    )
+    if errors:
+        raise WppParserError("; ".join(errors))
 
 """if __name__ == "__main__":
     g_parser = argparse.ArgumentParser(description="Log parser")

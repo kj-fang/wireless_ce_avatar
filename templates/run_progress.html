@@ -86,6 +86,13 @@
         log.scrollTop = logBox.scrollHeight;
     });
 
+    socket.on("wpp_error", function(msg) {
+        console.error("wpp_error:", msg);
+        const prefix = msg && msg.fatal ? "\u274C ERROR: " : "\u26A0\uFE0F WARNING: ";
+        log.innerText += prefix + ((msg && msg.data) || "Unknown parser error") + "\n";
+        log.scrollTop = log.scrollHeight;
+    });
+
     socket.on("case_nbr", function(data) {
       caseNbr.innerText = "IPS Number: " + data.name;
     });

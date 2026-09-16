@@ -1185,6 +1185,7 @@
 
         function bindProgressSocketHandlers() {
             socket.on("wpp_log", handleWppLog);
+            socket.on("wpp_error", handleWppError);
             socket.on("bt_log", handleBtLog);
             socket.on("fw_log", handleFwLog);
             socket.on("fw_tool_log", handleFwToolLog);
@@ -1400,6 +1401,19 @@
             appendLog(text + "\n");
             advanceWppStage(text);
             _appendParseModalLog(text);
+        }
+
+        function handleWppError(msg) {
+            console.error("wpp_error:", msg);
+            const prefix = msg && msg.fatal ? '\u274C ERROR: ' : '\u26A0\uFE0F WARNING: ';
+            const text = prefix + ((msg && msg.data) || 'Unknown parser error');
+            appendLog(text + "\n");
+            _appendParseModalLog(text);
+            if (msg && msg.fatal) {
+                _closeParseModal(false, '\u274C WPP Parse Failed', text.slice(0, 200));
+                setWifiActionButtonsBusy(false);
+                setAnalysisCardLocked(false);
+            }
         }
 
         function handleFwLog(msg) {

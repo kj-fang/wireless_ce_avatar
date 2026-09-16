@@ -688,7 +688,16 @@ def _process_local_analysis(source_path: str, source_dir: str, file_path: str,
 
     else:
         _cb(20, 'Starting WPP/DDD parser…')
-        wpp_ddd_parser_run(file_path)
+        try:
+            wpp_ddd_parser_run(file_path)
+        except Exception as e:
+            # keep the request alive so the UI can surface the wpp_error emit
+            app_config.socketio.emit(
+                'wpp_error',
+                {'data': f'WPP/DDD parser failed: {e}', 'fatal': True},
+                namespace='/progress',
+            )
+            raise
         _raise_if_cancelled(cancel_event)
         _cb(90, 'Parser complete.')
         session['latest_etl_path'] = file_path
@@ -1233,6 +1242,8 @@ def _run_sendto_in_background(socketio, client_sid, source_path: str):
             _orig_emit(event, data, **kwargs)
             if event == 'wpp_log' and isinstance(data, dict):
                 _emit_sendto(socketio, client_sid, 'sendto_wpp_log', data)
+            elif event == 'wpp_error' and isinstance(data, dict):
+                _emit_sendto(socketio, client_sid, 'sendto_wpp_error', data)
 
         socketio.emit = _forwarding_emit
 

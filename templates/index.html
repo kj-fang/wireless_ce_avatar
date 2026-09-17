@@ -998,7 +998,7 @@
                 uploadSocket.disconnect();
                 uploadSocket = null;
             }
-            uploadSocket = io('/progress');
+            uploadSocket = io('/wpp_progress');
             uploadSocket.on('wpp_log', function(data) {
                 const logArea = document.getElementById('upload-log-messages');
                 if (!logArea) {

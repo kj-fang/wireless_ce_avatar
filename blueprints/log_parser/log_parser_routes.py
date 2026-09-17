@@ -321,7 +321,7 @@ def _copy_file_with_console_progress(src_path: str, dst_path: str, chunk_size: i
         shutil.copystat(src_path, dst_path)
         msg = f"Upload complete: {os.path.basename(src_path)} (0 B)"
         print(msg)
-        app_config.socketio.emit('wpp_log', {'data': msg}, namespace='/progress')
+        app_config.socketio.emit('wpp_log', {'data': msg}, namespace='/wpp_progress')
         return
 
     copied = 0
@@ -359,7 +359,7 @@ def _copy_file_with_console_progress(src_path: str, dst_path: str, chunk_size: i
                     formatted_size = _format_bytes(total_size)
                     formatted_copied = _format_bytes(copied)
                     socket_msg = f"Uploading {upload_name} [{bar}] {display_percent:6.2f}% ({formatted_copied}/{formatted_size})"
-                    app_config.socketio.emit('wpp_log', {'data': socket_msg}, namespace='/progress')
+                    app_config.socketio.emit('wpp_log', {'data': socket_msg}, namespace='/wpp_progress')
                     last_emit_percent = current_percent
     finally:
         if cancelled:
@@ -375,7 +375,7 @@ def _copy_file_with_console_progress(src_path: str, dst_path: str, chunk_size: i
 
     print()
     completion_msg = f"Upload complete: {upload_name}"
-    app_config.socketio.emit('wpp_log', {'data': completion_msg}, namespace='/progress')
+    app_config.socketio.emit('wpp_log', {'data': completion_msg}, namespace='/wpp_progress')
     shutil.copystat(src_path, dst_path)
 
 
@@ -688,27 +688,7 @@ def _process_local_analysis(source_path: str, source_dir: str, file_path: str,
 
     else:
         _cb(20, 'Starting WPP/DDD parser…')
-        try:
-            wpp_ddd_parser_run(file_path)
-        except Exception as e:
-            # parser only raises; route owns all frontend reporting for wpp errors
-            app_config.socketio.emit(
-                'wpp_error',
-                {'data': f'WPP/DDD parser failed: {e}', 'fatal': True},
-                namespace='/progress',
-            )
-            app_config.socketio.emit(
-                'wpp_complete',
-                {'status': 'error', 'errors': [str(e)]},
-                namespace='/progress',
-            )
-            raise
-        else:
-            app_config.socketio.emit(
-                'wpp_complete',
-                {'status': 'done', 'errors': []},
-                namespace='/progress',
-            )
+        wpp_ddd_parser_run(file_path) 
         _raise_if_cancelled(cancel_event)
         _cb(90, 'Parser complete.')
         session['latest_etl_path'] = file_path
@@ -1143,6 +1123,13 @@ def estimate_tokens():
 
 
 def register_socketio_handlers(socketio):
+    # Flask-SocketIO rejects client connections to namespaces with no
+    # registered handler. This empty connect keeps /wpp_progress open so the
+    # WPP parser's socketio.emit() calls actually reach the browser.
+    @socketio.on('wpp_events', namespace='/wpp_progress')
+    def socketio_wpp_progress_connect():
+        pass
+
     @socketio.on('submit_analysis', namespace='/progress')
     def socketio_submit_analysis(data):
         print("✅ Received socket event 'submit_analysis':", data)

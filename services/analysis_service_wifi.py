@@ -22,27 +22,8 @@ class WiFiAnalysisService():
             self.emit_log("Start wpp_ddd_parser...")
             wpp_ddd_parser_run(etl_file)
         except Exception as e:
-            # parser only raises; this service owns the frontend notification
-            self.emit_log(f"❌ Exception occurred:{e}")
-            self.emit_log(traceback.format_exc())
-            app_config.socketio.emit(
-                'wpp_error',
-                {'data': f'WPP/DDD parser failed: {e}', 'fatal': True},
-                namespace='/progress',
-            )
-            app_config.socketio.emit(
-                'wpp_complete',
-                {'status': 'error', 'errors': [str(e)]},
-                namespace='/progress',
-            )
-        else:
-            app_config.socketio.emit(
-                'wpp_complete',
-                {'status': 'done', 'errors': []},
-                namespace='/progress',
-            )
+            self.emit_log(f"❌ Exception occurred: {e}")
 
-    
     def emit_log(self, msg):
-        app_config.socketio.emit('wpp_log', {'data': msg}, namespace='/progress')  # Ensure the correct namespace is used
-
+        app_config.socketio.emit('wpp_log', {'data': msg}, namespace='/wpp_progress')
+    

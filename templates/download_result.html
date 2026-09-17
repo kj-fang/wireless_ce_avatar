@@ -1181,17 +1181,18 @@
             return fullPath.split(/[\\\/]/).pop();
         }
         let socket = null;
+        let wppsocket = null;
         const logBox = document.getElementById("log");
 
         function bindProgressSocketHandlers() {
-            socket.on("wpp_log", handleWppLog);
-            socket.on("wpp_error", handleWppError);
+            wppsocket.on("wpp_log", handleWppLog);
+            wppsocket.on("wpp_error", handleWppError);
+            wppsocket.on("wpp_complete", handleWppComplete);
             socket.on("bt_log", handleBtLog);
             socket.on("fw_log", handleFwLog);
             socket.on("fw_tool_log", handleFwToolLog);
             socket.on("fw_tool_closed", handleFwToolClosed);
             socket.on("fw_tool_error", handleFwToolError);
-            socket.on("wpp_complete", handleWppComplete);
             socket.on("bt_hci_ready", handleBtHciReady);
             socket.on("bt_hci_failed", handleBtHciFailed);
             socket.on("autofolder_complete", handleAutofolderComplete);
@@ -1202,20 +1203,31 @@
         }
 
         function reconnectProgressSocket(forceFresh = false) {
-            if (socket && forceFresh) {
-                socket.removeAllListeners();
-                socket.disconnect();
-                socket = null;
+            if (forceFresh) {
+                if (socket) {
+                    socket.removeAllListeners();
+                    socket.disconnect();
+                    socket = null;
+                }
+                if (wppsocket) {
+                    wppsocket.removeAllListeners();
+                    wppsocket.disconnect();
+                    wppsocket = null;
+                }
             }
 
-            if (!socket) {
+            if (!socket || !wppsocket) {
                 socket = io('/progress');
+                wppsocket = io('/wpp_progress');
                 bindProgressSocketHandlers();
                 return;
             }
 
             if (!socket.connected) {
                 socket.connect();
+            }
+            if (!wppsocket.connected) {
+                wppsocket.connect();
             }
         }
 

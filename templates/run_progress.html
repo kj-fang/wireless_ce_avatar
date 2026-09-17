@@ -73,6 +73,7 @@
     const etaText = document.getElementById("eta-text");
 
     const socket = io('/progress');
+    const wppsocket = io('/wpp_progress');
 
     // Display analysis stage message
     socket.on("stage", function(data) {
@@ -80,13 +81,13 @@
       log.scrollTop = log.scrollHeight;
     });
 
-    socket.on("wpp_log", function(msg) {
+    wppsocket.on("wpp_log", function(msg) {
         console.log("wpp_log:",msg)
         log.innerText += msg.data + "\n";
         log.scrollTop = logBox.scrollHeight;
     });
 
-    socket.on("wpp_error", function(msg) {
+    wppsocket.on("wpp_error", function(msg) {
         console.error("wpp_error:", msg);
         const prefix = msg && msg.fatal ? "\u274C ERROR: " : "\u26A0\uFE0F WARNING: ";
         log.innerText += prefix + ((msg && msg.data) || "Unknown parser error") + "\n";

@@ -691,13 +691,24 @@ def _process_local_analysis(source_path: str, source_dir: str, file_path: str,
         try:
             wpp_ddd_parser_run(file_path)
         except Exception as e:
-            # keep the request alive so the UI can surface the wpp_error emit
+            # parser only raises; route owns all frontend reporting for wpp errors
             app_config.socketio.emit(
                 'wpp_error',
                 {'data': f'WPP/DDD parser failed: {e}', 'fatal': True},
                 namespace='/progress',
             )
+            app_config.socketio.emit(
+                'wpp_complete',
+                {'status': 'error', 'errors': [str(e)]},
+                namespace='/progress',
+            )
             raise
+        else:
+            app_config.socketio.emit(
+                'wpp_complete',
+                {'status': 'done', 'errors': []},
+                namespace='/progress',
+            )
         _raise_if_cancelled(cancel_event)
         _cb(90, 'Parser complete.')
         session['latest_etl_path'] = file_path

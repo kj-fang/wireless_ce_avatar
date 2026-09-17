@@ -35,17 +35,12 @@ def emit_and_log(msg):
 
 
 class WppParserError(Exception):
-    """Raised when the WPP/DDD parser cannot continue."""
+    """Raised when the WPP/DDD parser cannot continue.
 
+    The caller (route / analysis service) is responsible for reporting this
+    to the frontend; the parser itself no longer touches socketio for errors.
+    """
 
-def emit_error(msg, *, fatal=False):
-    # send parser errors to the frontend without killing the worker process
-    log.error(msg)
-    app_config.socketio.emit(
-        'wpp_error',
-        {'data': str(msg), 'fatal': bool(fatal)},
-        namespace='/progress',
-    )
 
 # disable some warning of unverified HTTP get requests
 urllib3.disable_warnings(urllib3.exceptions.InsecureRequestWarning)
@@ -280,8 +275,7 @@ class Parser:
                 log.error(f"Failed to reach PF: {pf_site}")
 
         # if we got here, we didn't manage to reach PF site to get PDB from
-        emit_error("Failed to reach any Potato Farm site to fetch build info", fatal=True)
-        raise WppParserError("Failed to reach any Potato Farm site")
+        raise WppParserError("Failed to reach any Potato Farm site to fetch build info")
 
     def __get_build_details(self, jenkins_build_id: str) -> dict:
         """
@@ -422,11 +416,9 @@ class Parser:
                     # override file path dir
                     file_path = local_file_name
                 else:
-                    emit_error(f"failed to find build path - {file_name} could not be extracted", fatal=True)
-                    raise WppParserError(f"failed to find build path for {file_name}")
+                    raise WppParserError(f"failed to find build path - {file_name} could not be extracted")
 
             if not file_path:
-                emit_error(f"failed to find file in {file_path_glob}", fatal=True)
                 raise WppParserError(f"failed to find file in {file_path_glob}")
 
         # directory cannot have multiple PDBs with same name, therefore, add _build suffix
@@ -516,7 +508,6 @@ class WppParser(Parser):
         if os.path.isfile(OUTPUT_TXT_NAME):
             emit_and_log(f"ETL was successfully parsed into: {OUTPUT_TXT_NAME}")
         else:
-            emit_error("failed to parse ETL file", fatal=True)
             raise WppParserError("failed to parse ETL file")
 
     def __get_build_id_and_os_type(self) -> list[tuple[int, str, str]]:
@@ -555,7 +546,6 @@ class WppParser(Parser):
 
         # either one of them should exists (local PDB or build which is found)
         if not (builds_db or self.__local_pdb_path):
-            emit_error("failed to find PDBs in ETL", fatal=True)
             raise WppParserError("failed to find PDBs in ETL")
         emit_and_log(f"found {len(builds_db)} PDBs: {builds_db}, local PDB path: {self.__local_pdb_path}")
 
@@ -618,7 +608,6 @@ class DddParser(Parser):
         if match := re.findall(r"\d+", build_id_bin.decode("ascii")):
             build_id = int(match[0])
         else:
-            emit_error("failed to find build ID in DDD binary", fatal=True)
             # cannot proceed
             raise WppParserError("failed to find build ID in DDD binary")
 
@@ -723,7 +712,6 @@ class DddParser(Parser):
         elif "DDD logs didn't record the halt flow" in res:
             emit_and_log("halt flow was not recorded, DDD was cut in the middle")
         else:
-            emit_error("failed to play DDD", fatal=True)
             raise WppParserError("failed to play DDD")
 
         # rename file to output, since DDD player adds some suffix to file name
@@ -816,19 +804,13 @@ def wpp_ddd_parser_run(binary_path: str, is_use_custom_filter=False, is_add_trac
                             # handler class is found - run the parser
                             parse_single_binary(parser)
                         except WppParserError as e:
+                            log.exception(f"parser failed for {binary_file}")
                             errors.append(f"{binary_file}: {e}")
                         except Exception as e:
-                            emit_error(f"unexpected error parsing {binary_file}: {e}", fatal=True)
+                            log.exception(f"unexpected error parsing {binary_file}")
                             errors.append(f"{binary_file}: {e}")
                         # go to next binary, rather to next parser
                         break
-    status = 'error' if errors else 'done'
-    log.info(f'wpp_complete status={status}')
-    app_config.socketio.emit(
-        'wpp_complete',
-        {'status': status, 'errors': errors},
-        namespace='/progress',
-    )
     if errors:
         raise WppParserError("; ".join(errors))
 

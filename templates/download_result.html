@@ -824,7 +824,7 @@
                             Parse
                         </button>
                         <button id="ddd-action-chatbot" class="btn btn-info" style="border-radius: 30px; color:white; font-size: 1.15rem; padding: 0.5rem 1rem;" disabled onclick="runSelectedDddAction(this, 'chatbot')">
-                            🤖 DDD Analysis Agent
+                            🤖 Wi-Fi Analysis Agent
                         </button>
                     </div>
                     <div class="mb-3">
@@ -2054,6 +2054,8 @@
                         logBox.scrollTop = logBox.scrollHeight;
                         _closeParseModal(false, '❌ Agent Prepare Failed', `Prepare failed: ${data.error}`);
                         setWifiActionButtonsBusy(false);
+                        // DDD chatbot flow shares this path — clear its lock too.
+                        setDddActionButtonsBusy(false);
                     }
                 })
                 .catch(err => {
@@ -2063,6 +2065,7 @@
                     logBox.scrollTop = logBox.scrollHeight;
                     _closeParseModal(false, '❌ Agent Prepare Failed', `Prepare error: ${err}`);
                     setWifiActionButtonsBusy(false);
+                    setDddActionButtonsBusy(false);
                 });
             }
         }
@@ -2453,6 +2456,7 @@
                 button.innerText = '🤖 Wi-Fi Analysis Agent';
                 window.pendingChatbot = null;
                 setWifiActionButtonsBusy(false);
+                setDddActionButtonsBusy(false);
             });
     }
 

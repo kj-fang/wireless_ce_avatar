@@ -756,6 +756,37 @@
         </div>
     </div>
 
+    <div class="text-center mt-4 mb-2" id="random-joke-box" style="
+        display: flex;
+        align-items: center;
+        justify-content: center;
+        gap: 12px;
+        padding: 14px 18px;
+        border-radius: 16px;
+        background: linear-gradient(135deg, rgba(76, 194, 255, 0.12), rgba(0, 113, 197, 0.08));
+        border: 1px solid rgba(0, 113, 197, 0.2);
+        box-shadow: 0 6px 18px rgba(0, 113, 197, 0.08);
+        font-size: 1.05rem;
+        color: #32414d;
+        font-weight: 600;
+        line-height: 1.5;
+        white-space: pre-line;
+        flex-wrap: wrap;
+    ">
+        <span>{{ random_joke }}</span>
+        <button type="button" onclick="window.location.reload()" style="
+            border: none;
+            border-radius: 999px;
+            background: linear-gradient(135deg, #0071c5, #4cc2ff);
+            color: white;
+            padding: 7px 14px;
+            font-size: 0.82rem;
+            font-weight: 600;
+            box-shadow: 0 4px 12px rgba(0, 113, 197, 0.25);
+            cursor: pointer;
+        ">New joke</button>
+    </div>
+
     <!-- Tabs Container -->
     <div class="tabs-container" id="tabs-container">
         <div class="tabs">

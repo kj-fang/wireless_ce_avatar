@@ -210,6 +210,15 @@
       appendLog(data.data || data, 'log-info');
     });
 
+    socket.on('sendto_wpp_error', function (data) {
+      const prefix = data && data.fatal ? 'ERROR: ' : 'WARNING: ';
+      const text = prefix + ((data && data.data) || 'Unknown parser error');
+      appendLog(text, data && data.fatal ? 'log-err' : 'log-info');
+      if (data && data.fatal) {
+        showError(text);
+      }
+    });
+
     // { redirect_url: String }
     socket.on('sendto_complete', function (data) {
       stageLabel.textContent = '✅ Complete!';

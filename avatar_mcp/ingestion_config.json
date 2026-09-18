@@ -1,0 +1,19 @@
+{
+    "host": "0.0.0.0",
+    "port": 8443,
+    "public_url": "http://avatar-ingestion.local:8443",
+    "api_keys": {
+        "ci-runner-01": "CHANGE-ME-generate-with-secrets.token_urlsafe-32"
+    },
+    "max_upload_bytes": 5368709120,
+    "max_concurrent_analyses": 3,
+    "job_result_ttl_seconds": 3600,
+    "upload_staging_dir": "",
+    "email_from": "agent-admin-robot@intel.com",
+    "smtp_host": "smtp.intel.com",
+    "smtp_port": 25,
+    "smtp_use_tls": false,
+    "smtp_username": "",
+    "smtp_password": "",
+    "email_dry_run": false
+}

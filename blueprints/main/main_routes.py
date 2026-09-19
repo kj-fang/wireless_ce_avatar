@@ -3,10 +3,7 @@ import os
 import glob
 import subprocess
 import time
-import random
 from datetime import datetime
-
-import yaml
 
 from utils import helpers
 from utils.etl_utils import get_auto_analysis_etl, get_issue_time_from_selected_files, filter_folders_by_time, extract_timestamp_from_folder, pick_latest_zip_attachment
@@ -87,27 +84,11 @@ def get_bt_event_map():
 
 #------------ INDEX render/submission -------------#
 
-def _get_random_joke():
-    joke_file = os.path.join(os.path.dirname(os.path.dirname(os.path.dirname(__file__))), 'jokes_summary.yaml')
-    try:
-        with open(joke_file, 'r', encoding='utf-8') as f:
-            data = yaml.safe_load(f) or {}
-        jokes = data.get('jokes') or []
-        if not jokes:
-            return "Avatar 搞笑段子：我問 Wi‑Fi 和藍牙誰比較會聊天，它們同時說：「我們都不想聽你說連線失敗。」"
-        joke = random.choice(jokes)
-        return joke.get('text') or joke.get('summary') or 'Avatar 搞笑段子：這裡本來該有笑話，但它先跑去連 Wi‑Fi 了。'
-    except Exception:
-        return "Avatar 搞笑段子：我問 Wi‑Fi 和藍牙誰比較會聊天，它們同時說：「我們都不想聽你說連線失敗。」"
-
-
 def render_case_form():
     clipboard_text = helpers.get_clipboard_case_number()
-    random_joke = _get_random_joke()
     
     return render_template('index.html', 
-                         clipboard_text=clipboard_text,
-                         random_joke=random_joke)
+                         clipboard_text=clipboard_text)
 
 def handle_case_submission():
     """Submit IPS number"""

@@ -3,7 +3,10 @@ import os
 import glob
 import subprocess
 import time
+import random
 from datetime import datetime
+
+import yaml
 
 from utils import helpers
 from utils.etl_utils import get_auto_analysis_etl, get_issue_time_from_selected_files, filter_folders_by_time, extract_timestamp_from_folder, pick_latest_zip_attachment
@@ -84,11 +87,49 @@ def get_bt_event_map():
 
 #------------ INDEX render/submission -------------#
 
+def _get_random_wireless_topic():
+    topics_dir = os.path.dirname(os.path.dirname(os.path.dirname(__file__)))
+    fallback = {
+        'topic': 'Bluetooth Core Specification',
+        'explanation': 'Defines the technologies required to create interoperable Bluetooth devices.',
+    }
+    topics = []
+    try:
+        for filename in ('bluetooth_topics.yaml', 'WiFi_7_topics.yaml'):
+            topic_file = os.path.join(topics_dir, filename)
+            with open(topic_file, 'r', encoding='utf-8') as f:
+                data = yaml.safe_load(f) or {}
+
+            if filename == 'bluetooth_topics.yaml':
+                topics.extend(
+                    {
+                        'topic': item.get('topic'),
+                        'explanation': item.get('explanation'),
+                    }
+                    for item in data.get('bluetooth_topics', [])
+                    if item.get('topic') and item.get('explanation')
+                )
+            else:
+                topics.extend(
+                    {
+                        'topic': item.get('topic'),
+                        'explanation': item.get('fact'),
+                    }
+                    for item in data.get('knowledge_base', {}).get('items', [])
+                    if item.get('topic') and item.get('fact')
+                )
+
+        return random.choice(topics) if topics else fallback
+    except (OSError, yaml.YAMLError, TypeError, AttributeError, IndexError):
+        return fallback
+
 def render_case_form():
     clipboard_text = helpers.get_clipboard_case_number()
+    wireless_topic = _get_random_wireless_topic()
     
     return render_template('index.html', 
-                         clipboard_text=clipboard_text)
+                         clipboard_text=clipboard_text,
+                         bluetooth_topic=wireless_topic)
 
 def handle_case_submission():
     """Submit IPS number"""

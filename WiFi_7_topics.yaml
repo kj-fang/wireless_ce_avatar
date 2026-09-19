@@ -1,0 +1,258 @@
+knowledge_base:
+  domain: wifi7_eht_mlo
+  version: draft
+  items:
+    - id: 1
+      topic: ieee_draft_status
+      fact: "The IEEE document is an unapproved draft and is subject to change."
+
+    - id: 2
+      topic: patent_disclaimer
+      fact: "Patent responsibility disclaimer was not explicitly found in the provided sources."
+
+    - id: 3
+      topic: mld_management
+      fact: "The Station Management Entity (SME) is the central entity managing a Multi-link Device (MLD)."
+
+    - id: 4
+      topic: min_max
+      fact: "min(x,y) returns the smaller value. max(x,y) returns the larger value."
+
+    - id: 5
+      topic: association
+      fact: "Association is the process of establishing a connection between an AP or MLD and a STA."
+
+    - id: 6
+      topic: service_set_transition
+      fact: "A service set transition occurs when a station moves from one BSS to another."
+
+    - id: 7
+      topic: eht_bss
+      fact: "An EHT BSS is identified by the presence of an EHT Operation element in Beacon frames."
+
+    - id: 8
+      topic: eht_beamformee
+      fact: "An EHT beamformee receives beamformed wireless transmissions."
+
+    - id: 9
+      topic: eht_beamformer
+      fact: "An EHT beamformer transmits directed beamformed wireless signals."
+
+    - id: 10
+      topic: mobile_ap
+      fact: "A Mobile AP can move while maintaining network operation."
+
+    - id: 11
+      topic: multi_link_operation
+      acronym: MLO
+      fact: "MLO enables communication across one or more wireless links simultaneously or non-simultaneously."
+
+    - id: 12
+      topic: multi_link_probe_request
+      fact: "Used to discover information about APs affiliated with a Multi-link Device."
+
+    - id: 13
+      topic: eht_definition
+      acronym: EHT
+      fact: "EHT stands for Extremely High Throughput."
+
+    - id: 14
+      topic: mld_definition
+      acronym: MLD
+      fact: "MLD stands for Multi-link Device."
+
+    - id: 15
+      topic: mlo_definition
+      acronym: MLO
+      fact: "MLO stands for Multi-link Operation."
+
+    - id: 16
+      topic: rsna_features
+      fact: "RSNA provides authentication, key management, and encryption."
+
+    - id: 17
+      topic: pae
+      fact: "Port Access Entities (PAEs) exist on all RSNA devices to control data flow."
+
+    - id: 18
+      topic: authentication_server
+      acronym: AS
+      fact: "Authentication Servers verify STA or MLD identities within RSNA."
+
+    - id: 19
+      topic: eht_security
+      fact: "EHT APs are required to support GCMP-256."
+
+    - id: 20
+      topic: eht_mlo_requirement
+      fact: "EHT APs must support Multi-link Operation."
+
+    - id: 21
+      topic: mld_requirements
+      fact: "MLDs support discovery, setup, and power management procedures."
+
+    - id: 22
+      topic: mac_sublayer
+      fact: "The MAC sublayer transfers MSDUs between devices."
+
+    - id: 23
+      topic: mlme_sap
+      fact: "Each MLD operates with a single MLME SAP."
+
+    - id: 24
+      topic: upper_lower_mac
+      fact: "Upper MAC handles common functions; lower MAC handles per-link functions."
+
+    - id: 25
+      topic: scan_request
+      fact: "MLME-SCAN.request may include EHT capability information."
+
+    - id: 26
+      topic: scan_type
+      fact: "ScanType can be MULTI-LINK PROBE."
+
+    - id: 27
+      topic: join_request
+      fact: "MLME-JOIN.request can include EHT and MultiLink parameters."
+
+    - id: 28
+      topic: bss_link_disable
+      fact: "MLME-BSS-LINK-DISABLE.request temporarily disables a BSS link."
+
+    - id: 29
+      topic: bss_link_enable
+      fact: "MLME-BSS-LINK-ENABLE.request re-enables a disabled BSS link."
+
+    - id: 30
+      topic: ap_removal
+      fact: "MLME-BSS-AP-REMOVAL.request permanently removes an affiliated AP."
+
+    - id: 31
+      topic: ds_sta_notify
+      fact: "Tracks MLD associations with AP MLDs."
+
+    - id: 32
+      topic: more_data
+      fact: "Indicates buffered data exists for a power-saving non-AP MLD."
+
+    - id: 33
+      topic: eht_mcs_range
+      fact: "EHT MCS generally ranges 0-13 and 15. MCS 14 is SU-only."
+
+    - id: 34
+      topic: compressed_blockack
+      fact: "Compressed BlockAck supports acknowledgment of up to 1024 MPDUs."
+
+    - id: 35
+      topic: ndp_announcement
+      fact: "Used for efficient channel state information exchange."
+
+    - id: 36
+      topic: trigger_frame
+      fact: "EHT Trigger frames include an EHT variant User Info field."
+
+    - id: 37
+      topic: special_user_info
+      fact: "Carries additional common information not present elsewhere."
+
+    - id: 38
+      topic: mlo_keys
+      fact: "GTK, IGTK, and BIGTK subelements carry per-link cryptographic keys."
+
+    - id: 39
+      topic: critical_update_flag
+      fact: "Indicates important changes in network parameters."
+
+    - id: 40
+      topic: aid_range
+      fact: "AID values range from 1 to 2006."
+
+    - id: 41
+      topic: association_denied
+      code: DENIED_STA_AFFILIATED_WITH_MLD_WITH_EXISTING_MLD_ASSOCIATION
+      fact: "Association denied because STA already belongs to an MLD with an active association."
+
+    - id: 42
+      topic: eht_capabilities
+      fact: "Advertises EHT feature support."
+
+    - id: 43
+      topic: tid_to_link_mapping
+      fact: "Defines which TIDs are permitted on specific links."
+
+    - id: 44
+      topic: bandwidth_indication
+      fact: "Signals channel widths above 160 MHz or punctured channels."
+
+    - id: 45
+      topic: quiet_count
+      fact: "Can indicate a quiet period that began in the past."
+
+    - id: 46
+      topic: neighbor_report
+      fact: "EHT subfield identifies whether a neighboring AP supports EHT."
+
+    - id: 47
+      topic: mlo_link_info
+      fact: "Identifies the target link for management messages."
+
+    - id: 48
+      topic: aligned_twt
+      fact: "Supports coordinated wake times across multiple links."
+
+    - id: 49
+      topic: eht_mac_capabilities
+      fact: "Contains maximum data unit length and EHT-MCS feedback capabilities."
+
+    - id: 50
+      topic: eht_phy_capabilities
+      fact: "Includes beamforming, triggered feedback, and 1024/4096-QAM support."
+
+    - id: 51
+      topic: ppe_thresholds
+      fact: "Defines packet padding behavior based on signal parameters."
+
+    - id: 52
+      topic: multi_link_traffic_indication
+      fact: "Contains per-link traffic status bitmap."
+
+    - id: 53
+      topic: qos_characteristics
+      fact: "Specifies QoS requirements and expected traffic performance."
+
+    - id: 54
+      topic: tdls_security
+      fact: "Single-link TDLS TPK derivation includes the AP MLD MAC address."
+
+    - id: 55
+      topic: sounding_protocol
+      fact: "Collects channel information to optimize transmission."
+
+    - id: 56
+      topic: preamble_puncturing
+      fact: "Leaves at least one 20 MHz subchannel unused."
+
+    - id: 57
+      topic: wifi7_mlo
+      fact: "Wi-Fi 7 uses MLO to communicate across multiple links simultaneously."
+
+    - id: 58
+      topic: static_puncturing
+      fact: "Avoids congested portions of wide channels to improve spectrum efficiency."
+
+    - id: 59
+      topic: critical_update
+      fact: "Multi-link BSS parameter updates keep devices informed while conserving power."
+
+    - id: 60
+      topic: mcs_12_13
+      fact: "MCS 12 and 13 are optional Wi-Fi 7 modes using 4096-QAM."
+
+    - id: 61
+      topic: epcs
+      acronym: EPCS
+      fact: "Emergency Preparedness Communications Services traffic receives higher priority during congestion."
+
+    - id: 62
+      topic: dynamic_mu_smps
+      fact: "Allows temporary shutdown of extra radio chains to save power."

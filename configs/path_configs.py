@@ -45,6 +45,9 @@ BT_SKILLS_YAML_DATED_GLOB = "bt_skills_*.yaml"                # e.g. bt_skills_2
 BT_SKILLS_YAML_DATED_RE = r"^bt_skills_(\d{4}-\d{2}-\d{2})\.yaml$"
 BT_SKILLS_YAML_DATED_TEMPLATE = "bt_skills_{date}.yaml"       # date = YYYY-MM-DD
 
+# Wireless knowledge topics used by the home page.
+WIRELESS_TOPICS_DIR = rf"\\infs089.iil.intel.com\HOME\WirelessCE\Intel_WirelessCE_Avatar\WiFi_BT_knowledge_yaml"
+
 # Feedback sidecar — shared training-data layer.
 # Each user writes under a per-user subfolder (see feedback_service) so
 # concurrent writes from different machines never touch the same file

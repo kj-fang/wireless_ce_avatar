@@ -756,35 +756,6 @@
         </div>
     </div>
 
-    <div class="text-center mt-4 mb-2" id="bluetooth-topic-box" style="
-        display: flex;
-        align-items: center;
-        justify-content: center;
-        gap: 12px;
-        padding: 14px 18px;
-        border-radius: 16px;
-        background: linear-gradient(135deg, rgba(76, 194, 255, 0.12), rgba(0, 113, 197, 0.08));
-        border: 1px solid rgba(0, 113, 197, 0.2);
-        box-shadow: 0 6px 18px rgba(0, 113, 197, 0.08);
-        font-size: 1.05rem;
-        color: #32414d;
-        line-height: 1.5;
-        flex-wrap: wrap;
-    ">
-        <span><strong>{{ bluetooth_topic.topic }}</strong>: {{ bluetooth_topic.explanation }}</span>
-        <button type="button" onclick="window.location.reload()" style="
-            border: none;
-            border-radius: 999px;
-background: #0071c5;
-            color: white;
-            padding: 7px 14px;
-            font-size: 0.82rem;
-            font-weight: 600;
-            box-shadow: 0 4px 12px rgba(0, 113, 197, 0.25);
-            cursor: pointer;
-        ">New topic</button>
-    </div>
-
     <!-- Tabs Container -->
     <div class="tabs-container" id="tabs-container">
         <div class="tabs">
@@ -845,6 +816,33 @@ background: #0071c5;
                 Validating case number...
             </div>
             <img src="../static/pacman.gif" alt="Loading..." style="width: 200px; height: 200px; position: absolute; bottom: 10px; left: 50%; transform: translateX(-50%);">
+        </div>
+        <div id="quick-knowledge-box" class="text-center px-3 py-2" style="
+            width: 50%;
+            margin: 12px auto 0;
+            min-height: 88px;
+            box-sizing: border-box;
+            background: linear-gradient(135deg, rgba(76, 194, 255, 0.12), rgba(0, 113, 197, 0.08));
+            border: 1px solid rgba(0, 113, 197, 0.2);
+            border-radius: 6px;
+            color: #32414d;
+            font-size: 0.9em;
+            line-height: 1.6;
+        ">
+            <div id="quick-knowledge-text"></div>
+            <div id="quick-knowledge-controls" style="display: flex; justify-content: center; margin-top: 8px;">
+                <button id="quick-knowledge-next" type="button" onclick="showNextQuickKnowledge()" style="
+                    border: none;
+                    border-radius: 999px;
+                    background: #0071c5;
+                    color: white;
+                    padding: 7px 14px;
+                    font-size: 0.82rem;
+                    font-weight: 600;
+                    box-shadow: 0 4px 12px rgba(0, 113, 197, 0.25);
+                    cursor: pointer;
+                ">Next</button>
+            </div>
         </div>
     </div>
 
@@ -907,6 +905,9 @@ background: #0071c5;
 
     <!-- Main functionality script -->
     <script>
+        const QUICK_KNOWLEDGE = {{ wireless_topics|tojson }};
+        let quickKnowledgeIndex = 0;
+
         const CASE_MESSAGES = [
             "- Validating case number...",
             "- Fetching case description...",
@@ -924,6 +925,28 @@ background: #0071c5;
         let uploadPreparingTimeoutId = null;
         let uploadAbortController = null;
         let uploadCurrentId = null;
+
+        function formatQuickKnowledge(knowledge) {
+            return `${knowledge.topic}: ${knowledge.explanation}`;
+        }
+
+        function updateQuickKnowledgeDisplay() {
+            const knowledgeText = document.getElementById('quick-knowledge-text');
+            if (knowledgeText && QUICK_KNOWLEDGE.length) {
+                knowledgeText.textContent = formatQuickKnowledge(QUICK_KNOWLEDGE[quickKnowledgeIndex]);
+            }
+        }
+
+        function showNextQuickKnowledge() {
+            if (!QUICK_KNOWLEDGE.length) {
+                return;
+            }
+
+            quickKnowledgeIndex = (quickKnowledgeIndex + 1) % QUICK_KNOWLEDGE.length;
+            updateQuickKnowledgeDisplay();
+        }
+
+        updateQuickKnowledgeDisplay();
         
         const tabs = document.querySelectorAll('.tab');
         const container = document.querySelector('.tabs');

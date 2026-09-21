@@ -16,6 +16,7 @@ from models.models import CaseContext
 from services.llm_service import LLM_helper
 from services import gather_service
 from configs.global_configs import app_config
+from configs.path_configs import WIRELESS_TOPICS_DIR
 
 
 main_bp = Blueprint("main", __name__, url_prefix="/")
@@ -87,8 +88,7 @@ def get_bt_event_map():
 
 #------------ INDEX render/submission -------------#
 
-def _get_random_wireless_topic():
-    topics_dir = os.path.dirname(os.path.dirname(os.path.dirname(__file__)))
+def _get_wireless_topics(limit=5):
     fallback = {
         'topic': 'Bluetooth Core Specification',
         'explanation': 'Defines the technologies required to create interoperable Bluetooth devices.',
@@ -96,7 +96,7 @@ def _get_random_wireless_topic():
     topics = []
     try:
         for filename in ('bluetooth_topics.yaml', 'WiFi_7_topics.yaml'):
-            topic_file = os.path.join(topics_dir, filename)
+            topic_file = os.path.join(WIRELESS_TOPICS_DIR, filename)
             with open(topic_file, 'r', encoding='utf-8') as f:
                 data = yaml.safe_load(f) or {}
 
@@ -119,17 +119,20 @@ def _get_random_wireless_topic():
                     if item.get('topic') and item.get('fact')
                 )
 
-        return random.choice(topics) if topics else fallback
+        if not topics:
+            return [fallback]
+        random.shuffle(topics)
+        return topics[:limit]
     except (OSError, yaml.YAMLError, TypeError, AttributeError, IndexError):
-        return fallback
+        return [fallback]
 
 def render_case_form():
     clipboard_text = helpers.get_clipboard_case_number()
-    wireless_topic = _get_random_wireless_topic()
+    wireless_topics = _get_wireless_topics()
     
     return render_template('index.html', 
                          clipboard_text=clipboard_text,
-                         bluetooth_topic=wireless_topic)
+                         wireless_topics=wireless_topics)
 
 def handle_case_submission():
     """Submit IPS number"""

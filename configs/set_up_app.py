@@ -24,6 +24,7 @@ from services.llm_service import LLM_helper
 from services.log_chatbot_service import WifiLogAgentSystem, sync_to_local, load_skills_from_yaml
 from services.nw_analysis_service import WifiLogAgentSystem as NwAnalysisAgentSystem
 from services.bt_chatbot_service import BtLogAgentSystem
+from services.feedback_service import _current_user
 
 from configs.global_configs import app_config
 
@@ -88,10 +89,39 @@ def set_up(socketio):
     llm_helper = LLM_helper()
 
     if key_path != None:
-        llm_helper.set_up(
-            key.gnaigpt_token_r, key.gnaigpt_url, key.gnaigpt_model, CLASSIFY_PATH,
-            token_pool=getattr(key, "gnaigpt_tokens", None),
-        )
+        # Per-user personal token override: if the Windows login name matches
+        # an entry in `gnaigpt_token_per_user`, put that token at the head of
+        # the failover pool so this user's own quota is spent first; on
+        # daily-cost-limit 429s the pool rotates into the shared
+        # `gnaigpt_tokens` entries. Unknown users just use the shared pool.
+        personal_map = getattr(key, "gnaigpt_token_per_user", None) or {}
+        try:
+            _login = _current_user().strip().lower()
+        except Exception:
+            _login = ""
+        personal_map_ci = {str(k).strip().lower(): v for k, v in personal_map.items()}
+        personal_token = personal_map_ci.get(_login) if _login else None
+
+        if personal_token:
+            shared_pool = list(getattr(key, "gnaigpt_tokens", None) or [])
+            # Drop shared entries reusing the same JWT — once the personal
+            # token hits the daily cap those duplicates are already dead too.
+            dedup = []
+            for (lbl, tok) in shared_pool:
+                if tok != personal_token:
+                    dedup.append((lbl, tok))
+            combined_pool = [(_login, personal_token)] + dedup
+            print(f"🔑 [LLM] personal gnaigpt token for user '{_login}' "
+                  f"(then falls back to {len(dedup)} shared tokens on daily-cap 429)")
+            llm_helper.set_up(
+                personal_token, key.gnaigpt_url, key.gnaigpt_model, CLASSIFY_PATH,
+                token_pool=combined_pool,
+            )
+        else:
+            llm_helper.set_up(
+                key.gnaigpt_token_r, key.gnaigpt_url, key.gnaigpt_model, CLASSIFY_PATH,
+                token_pool=getattr(key, "gnaigpt_tokens", None),
+            )
 
     app_config.set_llm_helper(llm_helper)
 

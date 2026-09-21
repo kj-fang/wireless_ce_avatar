@@ -257,7 +257,7 @@ class AnthropicOpenAIAdapter:
 
     Optionally accepts a ``TokenPool`` and a ``client_factory`` to enable
     transparent rotation to the next pool token when the current one exhausts
-    its daily cost limit. When both are omitted, behaves as a passive adapter.
+    its cost limit. When both are omitted, behaves as a passive adapter.
     """
 
     def __init__(self, anthropic_client, pool=None, client_factory=None):
@@ -286,14 +286,14 @@ class AnthropicOpenAIAdapter:
 def _is_daily_cost_limit_error(exc):
     """True for the specific 429 that means 'this token is done for the day'.
 
-    Detects the gnaigpt proxy's per-user daily $ cap error, e.g.:
+    Detects the gnaigpt proxy's per-user daily/team $ cap error, e.g.:
         "Error code: 429 - {'type': 'error', 'error': {'type': 'rate_limit_error',
-         'message': 'Individual daily cost limit of 30.000000 reached...'}}"
+         'message': 'Individual daily/team cost limit of 30.000000 reached...'}}"
     Deliberately narrow: short-window rate limits and unrelated 429s pass through.
     """
     if getattr(exc, "status_code", None) != 429:
         return False
-    return "daily cost limit" in str(exc).lower()
+    return "cost limit" in str(exc).lower()
 
 
 class TokenPool:
@@ -336,7 +336,7 @@ class TokenPool:
                 if next_i not in self._dead:
                     self._index = next_i
                     new_label = self._entries[next_i][0]
-                    print(f"⚠️  [TokenPool] '{current_label}' exhausted (daily cost limit) → rotated to '{new_label}'")
+                    print(f"⚠️  [TokenPool] '{current_label}' exhausted (cost limit) → rotated to '{new_label}'")
                     return self._entries[next_i]
             print(f"❌ [TokenPool] '{current_label}' exhausted — all {len(self._entries)} tokens dead")
             return None

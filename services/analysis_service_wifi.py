@@ -22,10 +22,8 @@ class WiFiAnalysisService():
             self.emit_log("Start wpp_ddd_parser...")
             wpp_ddd_parser_run(etl_file)
         except Exception as e:
-            self.emit_log(f"❌ Exception occurred:{e}")
-            self.emit_log(traceback.format_exc())
+            self.emit_log(f"❌ Exception occurred: {e}")
 
-    
     def emit_log(self, msg):
-        app_config.socketio.emit('wpp_log', {'data': msg}, namespace='/progress')  # Ensure the correct namespace is used
-
+        app_config.socketio.emit('wpp_log', {'data': msg}, namespace='/wpp_progress')
+    

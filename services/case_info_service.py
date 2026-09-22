@@ -211,15 +211,22 @@ class CaseService:
 
         prompt_filename = f"prompt_{wifi_or_bt.lower()}.py"
         target_prompt = os.path.join(app_config.prompt_dir, prompt_filename)
+        source_prompt = os.path.join(app_config.project_root, "utils", "summary_prompt_templates", prompt_filename)
+        template_version = "prompt_template_version: 2"
 
-        if not os.path.exists(target_prompt):
+        target_needs_update = not os.path.exists(target_prompt)
+        if os.path.exists(target_prompt):
+            try:
+                with open(target_prompt, "r", encoding="utf-8") as prompt_file:
+                    target_needs_update = template_version not in prompt_file.read(256)
+            except OSError:
+                target_needs_update = True
 
-            source_prompt = os.path.join(app_config.project_root, "utils", "summary_prompt_templates",prompt_filename)   
-            if os.path.exists(source_prompt):
-                shutil.copy(source_prompt, target_prompt)
-                print(f"✅ Copied prompt.py to {target_prompt}")
-            else:
-                print(f"❌ Source prompt.py not found at {source_prompt}") 
+        if os.path.exists(source_prompt) and target_needs_update:
+            shutil.copy(source_prompt, target_prompt)
+            print(f"✅ Updated prompt.py at {target_prompt}")
+        elif not os.path.exists(source_prompt):
+            print(f"❌ Source prompt.py not found at {source_prompt}")
            
         return target_prompt
     

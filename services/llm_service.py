@@ -584,7 +584,7 @@ class LLM_helper:
                 top_p=0.85,
                 frequency_penalty=0.1,
                 presence_penalty=0,
-                max_tokens=1500,
+                max_tokens=3000,
                 #stop=None
             )
             self.accumulate_usage(operation_usage, getattr(response, "usage", None))

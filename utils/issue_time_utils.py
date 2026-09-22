@@ -15,7 +15,9 @@ canonical strings + log-file-based fallback.
 import os
 import re
 from datetime import datetime, timedelta
-from typing import Optional, Tuple
+from typing import Callable, Optional, Tuple, Union
+
+_LogTsFormat = Union[str, Callable[[str], Optional[datetime]]]
 
 
 # Strict datetime formats accepted from sidebar / attachment_time / URL.
@@ -37,26 +39,53 @@ _TIME_ONLY_FORMATS = (
 )
 
 # Recognised in-log timestamp formats (tried per line; first/best match wins).
-# Each entry is (compiled-regex, tuple-of-strptime-formats-to-try).
-#   * Wi-Fi ETL : MM/DD/YYYY-HH:MM:SS.mmm    (date/time joined by '-')
-#   * BT HCI    : YYYY/MM/DD HH:MM:SS(.mmm)  (date/time space-separated, ms optional)
+# Each entry is (compiled-regex, tuple-of-strptime-formats-or-parser-callables).
+#   * Wi-Fi ETL   : MM/DD/YYYY-HH:MM:SS.mmm         (date/time joined by '-')
+#   * BT HCI      : YYYY/MM/DD HH:MM:SS(.mmm)       (date/time space-separated, ms optional)
+#   * Linux ISO   : YYYY-MM-DDTHH:MM:SS.ffffff(Z|+HH:MM)  (journalctl / syslog, RFC3339)
+#   * Linux dmesg : [  12.345678]                   (kernel-uptime seconds, no wall-clock date)
 # The Wi-Fi pattern is kept exactly as before so existing Wi-Fi cases are
-# unaffected; the HCI pattern is purely additive.
+# unaffected; later entries are purely additive.
+
+
+def _parse_kernel_uptime_token(token: str) -> Optional[datetime]:
+    """Linux kernel ring-buffer style '[   12.345678]' -> epoch + uptime seconds.
+
+    There is no wall-clock date in this format, so it's anchored to the Unix
+    epoch purely to preserve relative ordering when scanning for first/last.
+    """
+    m = re.search(r"[\d.]+", token)
+    if not m:
+        return None
+    try:
+        seconds = float(m.group(0))
+    except ValueError:
+        return None
+    return datetime(1970, 1, 1) + timedelta(seconds=seconds)
+
+
 _LOG_TS_SPECS = (
     (re.compile(r"\d{2}/\d{2}/\d{4}-\d{2}:\d{2}:\d{2}\.\d{3}"),
      ("%m/%d/%Y-%H:%M:%S.%f",)),
     (re.compile(r"\d{4}/\d{2}/\d{2}\s\d{2}:\d{2}:\d{2}(?:\.\d{1,3})?"),
      ("%Y/%m/%d %H:%M:%S.%f", "%Y/%m/%d %H:%M:%S")),
+    (re.compile(r"\d{4}-\d{2}-\d{2}T\d{2}:\d{2}:\d{2}\.\d{1,6}(?:Z|[+-]\d{2}:\d{2})"),
+     ("%Y-%m-%dT%H:%M:%S.%f%z",)),
+    (re.compile(r"\[\s*\d+\.\d+\]"),
+     (_parse_kernel_uptime_token,)),
 )
 
 
-def _parse_log_ts_token(token: str, fmts: Tuple[str, ...]) -> Optional[datetime]:
-    """Parse a matched timestamp token against its candidate strptime formats."""
+def _parse_log_ts_token(token: str, fmts: Tuple[_LogTsFormat, ...]) -> Optional[datetime]:
+    """Parse a matched timestamp token against its candidate strptime formats
+    (or custom parser callables for formats strptime can't express)."""
     for fmt in fmts:
         try:
-            return datetime.strptime(token, fmt)
-        except ValueError:
+            dt = fmt(token) if callable(fmt) else datetime.strptime(token, fmt)
+        except (ValueError, TypeError):
             continue
+        if dt is not None:
+            return dt.replace(tzinfo=None) if dt.tzinfo else dt
     return None
 
 

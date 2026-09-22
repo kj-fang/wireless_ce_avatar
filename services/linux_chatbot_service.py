@@ -88,8 +88,8 @@ class LinuxWifiLogAgentSystem(WifiLogAgentSystem):
             "PHASE 3. Call `submit_final_report` to conclude.\n\n"
             "CRITICAL CONSTRAINTS:\n"
             "- Max step is 8\n"
-            "- \U0001f6d1 NO REPETITION: Do not fetch the same data twice. If Phase 1 keywords are found in Phase 2, ignore them.\n"
-            "- \U0001f6d1 IMMEDIATELY call `submit_final_report` after your detail query. Do not over-analyze.\n\n"
+            "- 🛑 NO REPETITION: Do not fetch the same data twice. If Phase 1 keywords are found in Phase 2, ignore them.\n"
+            "- 🛑 IMMEDIATELY call `submit_final_report` after your detail query. Do not over-analyze.\n\n"
             + self.REPORT_MARKDOWN_TEMPLATE
         )
 

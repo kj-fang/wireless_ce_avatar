@@ -1234,7 +1234,7 @@ def _run_sendto_in_background(socketio, client_sid, source_path: str):
             emit_progress(10, 'BSOD dump detected. Copying to shared folder…')
         elif file_lower.endswith(('.zip', '.7z', '.rar')):
             emit_progress(10, 'Archive detected. Extracting…')
-        elif file_lower.endswith('.log'):
+        elif not _is_linux(source_path) and file_lower.endswith('.log'):
             emit_progress(10, 'Log file detected. Preparing chatbot…')
         elif file_lower.endswith('.hci.txt'):
             emit_progress(10, 'Bluetooth log detected. Preparing Bluetooth chatbot…')

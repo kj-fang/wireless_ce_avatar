@@ -163,7 +163,7 @@ def _compose_concise_description(ctx: dict = None) -> str:
         if ctx is None:
             ctx = _extract_issue_context()
     except Exception:
-        return "Perform full multi-skill Linux WiFi log analysis"
+        return "Perform Linux WiFi log analysis"
 
     subject = ctx.get("subject", "")
     desc_raw = ctx.get("description", "")
@@ -182,7 +182,7 @@ def _compose_concise_description(ctx: dict = None) -> str:
     if desc_raw:
         return desc_raw[:200].strip() + time_hint
 
-    return "Perform full multi-skill Linux WiFi log analysis"
+    return "Perform Linux WiFi log analysis"
 
 
 def _get_or_create_agent(skip_prime: bool = False) -> LinuxWifiLogAgentSystem:

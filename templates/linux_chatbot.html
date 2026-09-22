@@ -4973,7 +4973,7 @@
             // high-priority anchor for the issue time.
             const srcSel = document.getElementById('evtPopupSourceFilter');
             const lvlSel = document.getElementById('evtPopupLevelFilter');
-            const res = await fetch('/bt_chatbot/suggest_issue_times', {
+            const res = await fetch('/linux_chatbot/suggest_issue_times', {
                 method: 'POST',
                 headers: { 'Content-Type': 'application/json' },
                 body: JSON.stringify({
@@ -5811,26 +5811,26 @@
         return out;
     }
 
-    // â”€â”€ Tone presets: ðŸ‘ vs ðŸ‘Ž wording â”€â”€â”€â”€â”€â”€â”€â”€â”€â”€â”€â”€â”€â”€â”€â”€â”€â”€â”€â”€â”€â”€â”€â”€â”€â”€â”€â”€â”€â”€â”€â”€
-    // Same form, same backend payload â€” only the display text shifts so
+    // ── Tone presets: 👍 vs 👎 wording ────────────────────────────────
+    // Same form, same backend payload — only the display text shifts so
     // a thumbs-up reviewer isn't asked to label things as "wrong" or
     // "problems". Option *values* stay identical so ACE downstream
     // analytics keep working without a schema change.
     const FBD_TONE = {
         down: {
             title:           'More feedback',
-            badge:           'ðŸ‘Ž',
+            badge:           '👎',
             routeLabel:      'What kind of problem?',
             routes: {
                 workflow: { title: 'Workflow',
-                            desc:  'The investigation flow was off â€” e.g. order of steps, stopping too early, looping, or going down the wrong path.' },
+                            desc:  'The investigation flow was off — e.g. order of steps, stopping too early, looping, or going down the wrong path.' },
                 skill:    { title: 'Skill knowledge',
-                            desc:  'The agent\'s domain knowledge was off â€” e.g. misread a log, applied a wrong rule, or drew a wrong conclusion from the evidence.' },
+                            desc:  'The agent\'s domain knowledge was off — e.g. misread a log, applied a wrong rule, or drew a wrong conclusion from the evidence.' },
                 both:     { title: 'Both',
                             desc:  "Both the workflow and the skill knowledge need fixing." },
             },
             grpFlowTitle:    'Agent workflow',
-            flowFirstOpt:    'â€” Pick the main issue â€”',
+            flowFirstOpt:    '— Pick the main issue —',
             flowOpts: {
                 missed_evidence:    'Missed key log evidence',
                 wrong_conclusion:   'Wrong root cause / conclusion',
@@ -5843,26 +5843,26 @@
                 other:              'Other',
             },
             grpSkillTitle:   'Which skill was wrong?',
-            stepLaneHint:    'Per step: mark â™»ï¸ Redundant (unnecessary) or ðŸ‘Ž Wrong (off-track), then add the correction. ðŸ‘ marks a good step.',
-            skillLaneHint:   'Per skill: mark ðŸ‘Ž Wrong on any skill whose output was off and add the correction.',
+            stepLaneHint:    'Per step: mark ♻️ Redundant (unnecessary) or 👎 Wrong (off-track), then add the correction. 👍 marks a good step.',
+            skillLaneHint:   'Per skill: mark 👎 Wrong on any skill whose output was off and add the correction.',
             concLabel:       'Conclusion category',
-            concFirstOpt:    'â€” Select if you know â€”',
+            concFirstOpt:    '— Select if you know —',
             submitText:      'Submit',
         },
         up: {
-            title:           'What worked â€” and what could still sharpen up?',
-            badge:           'ðŸ‘',
-            routeLabel:      'What to keep doing â€” and where to polish a little?',
+            title:           'What worked — and what could still sharpen up?',
+            badge:           '👍',
+            routeLabel:      'What to keep doing — and where to polish a little?',
             routes: {
                 workflow: { title: 'Workflow',
-                            desc:  'Investigation flow was mostly right â€” note any small step that could be tightened.' },
+                            desc:  'Investigation flow was mostly right — note any small step that could be tightened.' },
                 skill:    { title: 'Skill knowledge',
-                            desc:  'Domain knowledge held up â€” flag any small misread or shaky claim worth correcting.' },
+                            desc:  'Domain knowledge held up — flag any small misread or shaky claim worth correcting.' },
                 both:     { title: 'Both',
-                            desc:  'Right answer, good path â€” call out small slips so the next run is even cleaner.' },
+                            desc:  'Right answer, good path — call out small slips so the next run is even cleaner.' },
             },
             grpFlowTitle:    'Agent workflow',
-            flowFirstOpt:    'â€” Pick the main issue â€”',
+            flowFirstOpt:    '— Pick the main issue —',
             flowOpts: {
                 missed_evidence:    'Missed key log evidence',
                 wrong_conclusion:   'Wrong root cause / conclusion',
@@ -5870,15 +5870,15 @@
                 stopped_too_early:  'Stopped too early / incomplete',
                 over_investigated:  'Over-investigated unnecessarily',
                 loop_or_stuck:      'Loop / stuck / repeated the same fetch',
-                wrong_direction:    'Wrong direction â€” followed the wrong path',
+                wrong_direction:    'Wrong direction — followed the wrong path',
                 bad_output:         'Output unclear or misleading',
                 other:              'Other',
-            },
+            }
             grpSkillTitle:   'Which skill did well?',
             stepLaneHint:    '',
-            skillLaneHint:   'Mark ðŸ‘ knowledge is complete, ðŸ‘Ž knowledge is wrong or has gaps',
+            skillLaneHint:   'Mark 👍 knowledge is complete, 👎 knowledge is wrong or has gaps',
             concLabel:       'Conclusion category the agent nailed (optional)',
-            concFirstOpt:    'â€” Select if it matched â€”',
+            concFirstOpt:    '— Select if it matched —',
             submitText:      'Submit',
         },
     };
@@ -5919,7 +5919,7 @@
         const skillTitleEl = document.querySelector('#fbd-grp-skill-title > span:first-child');
         if (skillTitleEl) skillTitleEl.textContent = T.grpSkillTitle;
 
-        // Per-lane instruction hints â€” tone-aware so a 1 reviewer is
+        // Per-lane instruction hints — tone-aware so a 1 reviewer is
         // explicitly invited to flag small slips per step / per skill.
         setText('fbd-step-lane-hint',  T.stepLaneHint  || '');
         setText('fbd-skill-lane-hint', T.skillLaneHint || '');

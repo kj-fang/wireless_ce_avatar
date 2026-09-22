@@ -46,7 +46,8 @@ Step 3. Output your analysis as a valid JSON object without any additional expla
             "Other Information": ["<list all the questions in string format, only present if needed>"]},
         "Next action": {
             "Recommendation": ["<If needed, list any questions in bullet points that should be asked to the customer>",
-                "<Recommended next step, e.g., 'Request missing dump file' or 'Logs are sufficient, proceed to triage'>"]
+                "<Recommended next step, e.g., 'Request missing dump file' or 'Logs are sufficient, proceed to triage'>"],
+            "Customer email draft": "<Always write a concise, professional email that a CFE can send directly to the customer. Include every customer question from Recommendation, preserving their meaning. Use a neutral greeting without the recipient's name, such as 'Hello,'. Include a professional closing without assuming the recipient's name. If no customer questions are needed, state that the initial review is complete and explain the next action. Never return this field empty>"
         }
     }
  

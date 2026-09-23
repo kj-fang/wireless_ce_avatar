@@ -265,7 +265,7 @@
         const socket = io('/progress');
         let pendingServerSessionReset = true;
         
-        // Socket 连接状态监控
+        // Socket connection status monitoring
         socket.on('connect', function() {
             console.log('✅ Socket connected');
             if (pendingServerSessionReset) {
@@ -277,11 +277,11 @@
         socket.on('disconnect', function() {
             console.log('❌ Socket disconnected');
             hideProgress();
-            alert('连接已断开，请刷新页面重试');
+            alert('Connection lost. Please refresh the page and try again.');
         });
         
         socket.on('connect_error', function(error) {
-            console.error('Socket 连接错误:', error);
+            console.error('Socket connection error:', error);
         });
 
         socket.on('session_reset', function(data) {
@@ -400,13 +400,13 @@
         function startAutoAnalysis(analysisData) {
             console.log('Auto analysis data:', analysisData);
             
-            // 更新狀態文字
+            // Update status text
             const statusText = document.getElementById('auto-analysis-text');
             if (statusText) {
                 statusText.textContent = `Loading configuration for "${analysisData.issue_type}"...`;
             }
             
-            // 設置 filter 選擇
+            // Set filter selection
             const filterSelect = document.getElementById('filterSelect');
             filterSelect.value = analysisData.filter_file;
             // Remember which .tat was auto-selected so the tree can pre-check only this one

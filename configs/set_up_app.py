@@ -10,6 +10,7 @@ from configs.path_configs import (
     LOCAL_SKILLS_YAML,
 )
 from utils import helpers
+from utils import speclets_utils
 from utils.skills_yaml_utils import (
     current_active_yaml,
     refresh_local_cloud_baseline,
@@ -21,11 +22,32 @@ from utils.bt_skills_yaml_utils import (
     set_active_source as bt_set_active_source,
 )
 from services.llm_service import LLM_helper
-from services.log_chatbot_service import WifiLogAgentSystem, sync_to_local, load_skills_from_yaml
-from services.nw_analysis_service import WifiLogAgentSystem as NwAnalysisAgentSystem
-from services.bt_chatbot_service import BtLogAgentSystem
+from services.chatbot.engine.system import WifiLogAgentSystem, sync_to_local, load_skills_from_yaml
+from services.chatbot.engine.network_experience import NwAnalysisAgentSystem
+from services.chatbot.engine.bluetooth import BtLogAgentSystem
 
 from configs.global_configs import app_config
+
+
+def _sync_ace_playbooks():
+    """Pull both ACE playbook namespaces from the share, off the boot path.
+
+    Measured ~15s of the ~23s of blocking network work startup used to do
+    (9.7s wifi + 5.4s bt), almost all of it the SMB probe and file compare.
+
+    Safe to background because AceRunner never caches: render_workflow() and
+    render_domain() both call reload_if_changed() every time, so a playbook
+    that lands after boot is picked up by the next turn that renders it.
+    local_working_dir() — the only thing the agents need synchronously — just
+    resolves and creates a local path, independent of this sync.
+    """
+    from services.ace import sync_utils as ace_sync
+
+    for namespace in ("wifi", "bt"):
+        try:
+            ace_sync.sync_at_boot(namespace=namespace)
+        except Exception as e:
+            print(f"⚠️  ACE playbook cloud sync skipped ({namespace}): {e}")
 
 
 def _prewarm_connections(snowflake_passwd):
@@ -83,7 +105,17 @@ def set_up(socketio):
     if key_path is not None:
         Thread(target=_prewarm_connections, args=(key.snowflake_passwd,), daemon=True).start()
 
-    
+    # Mirror the shared Speclets (per-profile agent prompt + report format) in
+    # the background. Deliberately not awaited: the share probe alone can take
+    # seconds off-VPN, and every agent falls back to its built-in prompt until
+    # this finishes, so boot is never blocked on it.
+    Thread(target=speclets_utils.refresh_and_load, name="speclets-prime", daemon=True).start()
+
+    # Same treatment for the ACE playbooks — see _sync_ace_playbooks for why
+    # this is safe to run after the agents are already serving.
+    Thread(target=_sync_ace_playbooks, name="ace-sync", daemon=True).start()
+
+
     # LLM
     llm_helper = LLM_helper()
 
@@ -166,10 +198,8 @@ def set_up(socketio):
             from services.ace import AceRunner, HistoryWriter
             from services.ace import sync_utils as ace_sync
             from services import feedback_service
-            try:
-                ace_sync.sync_at_boot()
-            except Exception as e:
-                print(f"⚠️  ACE playbook cloud sync skipped: {e}")
+            # The share pull runs on the _sync_ace_playbooks thread started
+            # above; this only resolves the local dir, which needs no network.
             playbooks_root = ace_sync.local_working_dir()
 
             def _skill_provider(sid: str):
@@ -288,10 +318,8 @@ def set_up(socketio):
             from services.ace import AceRunner, HistoryWriter
             from services.ace import sync_utils as ace_sync
             from services import feedback_service
-            try:
-                ace_sync.sync_at_boot(namespace="bt")
-            except Exception as e:
-                print(f"⚠️  BT ACE playbook cloud sync skipped: {e}")
+            # Share pull happens on the _sync_ace_playbooks thread; this is
+            # just the local path.
             bt_playbooks_root = ace_sync.local_working_dir(namespace="bt")
 
             def _bt_skill_provider(sid: str):

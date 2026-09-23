@@ -97,7 +97,7 @@ def temp_playbooks(src_dir: Path) -> Iterator[Path]:
 
 def build_agent(llm_client, model: str, skills: dict):
     """Fresh WifiLogAgentSystem — clean caches and history every replay."""
-    from services.log_chatbot_service import WifiLogAgentSystem
+    from services.chatbot.engine.system import WifiLogAgentSystem
     return WifiLogAgentSystem(client=llm_client, model=model, skills=skills)
 
 
@@ -193,7 +193,6 @@ def replay_case(
             )
             res = agent.chat(
                 case.user_message,
-                use_tools=True,
                 max_steps=max_steps,
                 step_callback=_capture,
             )

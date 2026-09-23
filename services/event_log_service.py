@@ -25,6 +25,7 @@ _SPECIAL_SOURCES = ['ibtusb', 'ibtpci', 'bthmini', 'bthusb', 'netwaw', 'netwtw']
 _SOURCE_GROUPS = {
     'pci_bt':      ['ibtpci', 'bthmini'],
     'usb_bt':      ['ibtusb', 'bthusb'],
+    'wifi':        ['netwaw', 'netwtw'],
     'pci_bt_wifi': ['ibtpci', 'bthmini', 'netwaw', 'netwtw'],
     'usb_bt_wifi': ['ibtusb', 'bthusb', 'netwaw', 'netwtw'],
 }

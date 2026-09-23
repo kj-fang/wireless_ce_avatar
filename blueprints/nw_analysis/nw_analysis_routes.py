@@ -1,4 +1,27 @@
-from flask import Blueprint, render_template, request, session, jsonify, Response, copy_current_request_context
+from flask import render_template, request, session, jsonify, Response, copy_current_request_context
+from services.chatbot.issue_context import extract_disconnect_time as _extract_disconnect_time
+from services.chatbot.shared_routes import leave_chatbot as _leave_chatbot
+from services.skill_editor.controller import (
+    SkillAppendContext,
+    build_profile_yaml_helpers,
+    build_skill_append_handlers,
+)
+from services.skill_editor.yaml_service import (
+    read_yaml_file as _read_yaml_file,
+    write_yaml_file as _write_yaml_file,
+)
+from utils.skills_yaml_utils import (
+    find_latest_cloud_baseline_yaml as _latest_cloud_baseline,
+    find_latest_user_yaml as _latest_user_yaml,
+    local_user_overrides_dir as _user_local_dir,
+    set_active_source as _set_active_source,
+    today_dated_filename as _today_yaml_filename,
+)
+from services.chatbot.factory import (
+    ChatbotBlueprintConfig,
+    create_chatbot_blueprint,
+    handler_map,
+)
 import json
 import re
 import traceback
@@ -9,24 +32,18 @@ from datetime import datetime
 import tkinter as tk
 from tkinter import filedialog
 
+from configs.chatbot_ui import NW_UI
 from configs.global_configs import app_config
 from models.models import CaseContext
-from services.nw_analysis_service import WifiLogAgentSystem, load_skills_from_data_dir, get_builtin_skills, build_skill_file_map, load_skills_from_yaml
+from services.chatbot.engine.network_experience import NwAnalysisAgentSystem
+from services.chatbot.engine.system import load_skills_from_yaml
 from services.sleepstudy_analyzer import analyze_sleepstudy_stream
 from services import gather_service
 from utils.etl_utils import extract_time_from_description
+from utils.event_log_utils import find_event_log_for_log
 
-from utils.skills_yaml_utils import (
-    find_latest_cloud_baseline_yaml as _latest_cloud_baseline,
-    find_latest_user_yaml as _latest_user_yaml,
-    set_active_source as _set_active_source,
-    local_user_overrides_dir as _user_local_dir,
-    today_dated_filename as _today_yaml_filename,
-)
 
-nw_analysis_bp = Blueprint("nw_analysis", __name__, url_prefix="/nw_analysis")
-
-# Server-side store: session_id -> WifiLogAgentSystem instance
+# Server-side store: session_id -> NwAnalysisAgentSystem instance
 _chatbot_instances: dict = {}
 
 # Gather analytics domain for this blueprint. Kept as a constant so the NW
@@ -152,30 +169,6 @@ def _extract_issue_context() -> dict:
     }
 
 
-def _extract_disconnect_time(*text_sources: str) -> str:
-    """
-    Search multiple text sources for the most precise disconnect/event
-    timestamp.  Returns a string like ' at around 10/28/2025-11:25:49'
-    or '' if nothing found.
-
-    Tries several common formats:
-      MM/DD/YYYY-HH:MM:SS(.mmm)
-      MM/DD/YYYY HH:MM:SS
-      YYYY-MM-DD HH:MM:SS
-      YYYY/MM/DD HH:MM:SS
-    """
-    patterns = [
-        r'(\d{1,2}/\d{1,2}/\d{4}[\s-]\d{1,2}:\d{2}:\d{2}(?:\.\d{1,3})?)',
-        r'(\d{4}[-/]\d{1,2}[-/]\d{1,2}[\sT]\d{1,2}:\d{2}:\d{2})',
-    ]
-    for src in text_sources:
-        if not src:
-            continue
-        for pat in patterns:
-            m = re.search(pat, src)
-            if m:
-                return f" at around {m.group(1)}"
-    return ""
 
 
 def _compose_concise_description() -> str:
@@ -213,9 +206,9 @@ def _compose_concise_description() -> str:
     return "Perform full multi-skill log analysis"
 
 
-def _get_or_create_agent() -> WifiLogAgentSystem:
+def _get_or_create_agent() -> NwAnalysisAgentSystem:
     """
-    Return a per-session WifiLogAgentSystem.
+    Return a per-session NwAnalysisAgentSystem.
     Borrows client/model from app_config.nw_analysis_agent which is
     initialised at app startup (set_up_app.py -> set_up()).
     """
@@ -234,13 +227,13 @@ def _get_or_create_agent() -> WifiLogAgentSystem:
                     "Log Chatbot Agent is not available. "
                     "The app may not have an API key configured."
                 )
-            base = WifiLogAgentSystem(
+            base = NwAnalysisAgentSystem(
                 client=llm_helper.client,
                 model=getattr(llm_helper, "model", "gpt-4.1"),
                 skills=getattr(llm_helper, "skills", None),
             )
         # Create a fresh per-session instance sharing the same client + skills
-        agent = WifiLogAgentSystem(
+        agent = NwAnalysisAgentSystem(
             client=base.client,
             model=base.model,
             skills=base.skills,   # reuse pre-loaded skills, no disk re-read
@@ -263,7 +256,6 @@ def _get_or_create_agent() -> WifiLogAgentSystem:
 # ------------------------------------------------------------------
 # Pages
 # ------------------------------------------------------------------
-@nw_analysis_bp.route("/", methods=["GET"])
 def index():
     suggested_log = app_config.last_analyzed_log_path or ""
     issue_desc = ""
@@ -272,13 +264,17 @@ def index():
         issue_desc = ctx.get("description", "")
     except Exception:
         pass
-    return render_template("NW_analysis.html", suggested_log=suggested_log, issue_description=issue_desc)
+    return render_template(
+        "chatbot/page.html",
+        ui=NW_UI,
+        suggested_log=suggested_log,
+        issue_description=issue_desc,
+    )
 
 
 # ------------------------------------------------------------------
 # API: open native file browser and return selected path
 # ------------------------------------------------------------------
-@nw_analysis_bp.route("/browse", methods=["GET"])
 def browse():
     """Open a native Windows file dialog and return the selected .log path."""
     result = {"path": ""}
@@ -307,7 +303,6 @@ def browse():
 # ------------------------------------------------------------------
 # API: set log file path
 # ------------------------------------------------------------------
-@nw_analysis_bp.route("/set_log", methods=["POST"])
 def set_log():
     data = request.get_json(silent=True) or {}
     log_path = data.get("log_path", "").strip()
@@ -323,10 +318,15 @@ def set_log():
             agent.prime_with_context(**ctx)
 
         session["chatbot_log_path"] = log_path
+        try:
+            event_log_path = find_event_log_for_log(log_path)
+        except Exception:
+            event_log_path = ""
         return jsonify({
             "success": True,
             "message": f"Log file set: {log_path}",
             "skills": agent.get_skill_descriptions(),
+            "evtx_path": event_log_path,
         })
     except Exception as e:
         return jsonify({"success": False, "error": str(e)}), 500
@@ -336,7 +336,6 @@ def set_log():
 # API: set sleepstudy file path (same as set_log but no session write
 # and no skills payload in response)
 # ------------------------------------------------------------------
-@nw_analysis_bp.route("/set_log_sleepstudy", methods=["POST"])
 def set_log_sleepstudy():
     data = request.get_json(silent=True) or {}
     log_path = data.get("log_path", "").strip()
@@ -362,7 +361,6 @@ def set_log_sleepstudy():
 # ------------------------------------------------------------------
 # API: analyze sleepstudy via the script (SSE stream)
 # ------------------------------------------------------------------
-@nw_analysis_bp.route("/analyze_sleepstudy", methods=["POST"])
 def analyze_sleepstudy():
     """
     Run the sleepstudy_analyzer.py pipeline against the given .html report
@@ -477,29 +475,30 @@ def analyze_sleepstudy():
 
 # ------------------------------------------------------------------
 # API: chat
+#
+# The HTTP adapter, deliberately NOT shared: request parsing, issue-time
+# policy, background-job bookkeeping and Gather accounting all differ per
+# profile, so Wi-Fi and BT keep their own copies of this. NW's is the
+# shortest of the three — it publishes steps through a request-local
+# queue.Queue rather than registering with chat_jobs, and has no history
+# or feedback sidecar.
+#
+# What IS shared is what the worker below eventually calls — agent.chat(),
+# i.e. ConversationMixin.chat in services/chatbot/engine/conversation.py,
+# one implementation inherited by all three agents. Same name, two layers:
+# seeing agent.chat() in here does not mean this function is shared.
 # ------------------------------------------------------------------
-@nw_analysis_bp.route("/chat", methods=["POST"])
 def chat():
     data = request.get_json(silent=True) or {}
     user_message = (data.get("message") or "").strip()
     if not user_message:
         return jsonify({"success": False, "error": "message is required"}), 400
 
-    mode = str(data.get("mode", "tools")).strip().lower()
-    if mode not in ("simple", "tools"):
-        mode = "tools"
-
     try:
         temperature = float(data.get("temperature", 0.2))
     except Exception:
         temperature = 0.2
     temperature = max(0.0, min(1.0, temperature))
-
-    try:
-        max_tokens = int(data.get("max_tokens", 4000))
-    except Exception:
-        max_tokens = 4000
-    max_tokens = max(256, min(8000, max_tokens))
 
     try:
         max_steps = int(data.get("max_steps", 6))
@@ -563,81 +562,60 @@ def chat():
                 )
             except Exception:
                 pass
+        import queue as _queue
+        step_queue = _queue.Queue()
 
-        # Use the mode flag sent by the frontend toggle.
-        use_tools = bool(data.get("use_tools", False))
+        def step_cb(step):
+            step_queue.put(("step", step))
 
-        if use_tools:
-            import queue as _queue
-            step_queue = _queue.Queue()
+        @copy_current_request_context
+        def run_chat_with_tools():
+            turn_status = "completed"
+            error_code = ""
+            try:
+                result = agent.chat(
+                    user_message,
+                    max_steps=max_steps,
+                    temperature=temperature,
+                    step_callback=step_cb,
+                )
+                step_queue.put(("done", result))
+            except Exception as exc:
+                turn_status = "failed"
+                error_code = type(exc).__name__
+                error_tb = traceback.format_exc()
+                print(f"❌ Chat-with-tools thread error:\n{error_tb}")
+                step_queue.put(("error", str(exc)))
+            finally:
+                # Book the spend even when the turn errored or was
+                # cancelled — those tokens were still billed.
+                _record_turn_cost(turn_status, error_code)
 
-            def step_cb(step):
-                step_queue.put(("step", step))
+        t = threading.Thread(target=run_chat_with_tools, daemon=True)
+        t.start()
 
-            @copy_current_request_context
-            def run_chat_with_tools():
-                turn_status = "completed"
-                error_code = ""
+        def event_stream():
+            while True:
                 try:
-                    result = agent.chat(
-                        user_message,
-                        use_tools=True,
-                        max_steps=max_steps,
-                        temperature=temperature,
-                        max_tokens=max_tokens,
-                        step_callback=step_cb,
-                    )
-                    step_queue.put(("done", result))
-                except Exception as exc:
-                    turn_status = "failed"
-                    error_code = type(exc).__name__
-                    error_tb = traceback.format_exc()
-                    print(f"❌ Chat-with-tools thread error:\n{error_tb}")
-                    step_queue.put(("error", str(exc)))
-                finally:
-                    # Book the spend even when the turn errored or was
-                    # cancelled — those tokens were still billed.
-                    _record_turn_cost(turn_status, error_code)
+                    msg_type, payload = step_queue.get(timeout=120)
+                except _queue.Empty:
+                    yield f"data: {json.dumps({'type': 'error', 'content': 'Chat timed out.'})}\n\n"
+                    break
+                if msg_type == "step":
+                    yield f"data: {json.dumps({'type': 'step', 'step': payload}, ensure_ascii=False)}\n\n"
+                elif msg_type == "done":
+                    yield f"data: {json.dumps({'type': 'done', 'result': payload}, ensure_ascii=False)}\n\n"
+                    break
+                elif msg_type == "error":
+                    yield f"data: {json.dumps({'type': 'error', 'content': payload})}\n\n"
+                    break
 
-            t = threading.Thread(target=run_chat_with_tools, daemon=True)
-            t.start()
+        return Response(
+            event_stream(),
+            mimetype="text/event-stream",
+            headers={"Cache-Control": "no-cache", "X-Accel-Buffering": "no"},
+        )
 
-            def event_stream():
-                while True:
-                    try:
-                        msg_type, payload = step_queue.get(timeout=120)
-                    except _queue.Empty:
-                        yield f"data: {json.dumps({'type': 'error', 'content': 'Chat timed out.'})}\n\n"
-                        break
-                    if msg_type == "step":
-                        yield f"data: {json.dumps({'type': 'step', 'step': payload}, ensure_ascii=False)}\n\n"
-                    elif msg_type == "done":
-                        yield f"data: {json.dumps({'type': 'done', 'result': payload}, ensure_ascii=False)}\n\n"
-                        break
-                    elif msg_type == "error":
-                        yield f"data: {json.dumps({'type': 'error', 'content': payload})}\n\n"
-                        break
-
-            return Response(
-                event_stream(),
-                mimetype="text/event-stream",
-                headers={"Cache-Control": "no-cache", "X-Accel-Buffering": "no"},
-            )
-        else:
-            # No prior analysis — simple direct chat, wrapped in SSE
-            result = agent.chat(
-                user_message,
-                use_tools=False,
-                temperature=temperature,
-                max_tokens=max_tokens,
-            )
-            # Cost accounting — see the tools branch above.
-            _record_turn_cost()
-
-            def generate():
-                yield f"data: {json.dumps({'type': 'done', 'result': result}, ensure_ascii=False)}\n\n"
-
-            return Response(generate(), mimetype="text/event-stream")
     except Exception as e:
         error_traceback = traceback.format_exc()
         print(f"❌ Chatbot error:\n{error_traceback}")
@@ -664,19 +642,6 @@ def chat():
 # ------------------------------------------------------------------
 # API: reset conversation
 # ------------------------------------------------------------------
-@nw_analysis_bp.route("/reset", methods=["POST"])
-def reset():
-    try:
-        agent = _get_or_create_agent()
-        agent.reset_conversation()
-        # A reset starts a genuinely new conversation, so the analytics
-        # records must not keep accumulating into the previous one.
-        _ensure_nw_conversation_id(rotate=True)
-        return jsonify({"success": True, "message": "Conversation reset."})
-    except Exception as e:
-        return jsonify({"success": False, "error": str(e)}), 500
-
-
 # ------------------------------------------------------------------
 # API: stop the in-flight tools-mode analysis
 #
@@ -686,7 +651,6 @@ def reset():
 # emits its terminal "done" with a "stopped" notice. Idempotent no-op when
 # nothing is running.
 # ------------------------------------------------------------------
-@nw_analysis_bp.route("/chat/stop", methods=["POST"])
 def chat_stop():
     try:
         sid = session.get("chatbot_session_id", "")
@@ -715,7 +679,6 @@ def chat_stop():
 # ------------------------------------------------------------------
 # API: prepare chatbot from download_result (set log path + case context)
 # ------------------------------------------------------------------
-@nw_analysis_bp.route("/prepare", methods=["POST"])
 def prepare():
     """
     Called from download_result when user clicks "Chatbot Analysis".
@@ -755,104 +718,16 @@ def prepare():
 # ------------------------------------------------------------------
 # API: open native directory browser and return selected path
 # ------------------------------------------------------------------
-@nw_analysis_bp.route("/browse_dir", methods=["GET"])
-def browse_dir():
-    """Open a native Windows folder dialog and return the selected directory path."""
-    result = {"path": ""}
-
-    def _open_dialog():
-        root = tk.Tk()
-        root.withdraw()
-        root.wm_attributes("-topmost", True)
-        path = filedialog.askdirectory(title="Select skills data directory")
-        root.destroy()
-        result["path"] = path or ""
-
-    t = threading.Thread(target=_open_dialog)
-    t.start()
-    t.join(timeout=60)
-
-    return jsonify({"success": True, "path": result["path"]})
-
-
-# ------------------------------------------------------------------
-# API: reload skills from a directory and apply to current agent
-# ------------------------------------------------------------------
-@nw_analysis_bp.route("/reload_skills", methods=["POST"])
-def reload_skills():
-    """
-    Reload skills from the given data_dir (must contain prompt/ and filter/
-    sub-folders) and apply them to the current session agent.
-    If data_dir is omitted or invalid the builtin fallback skills are used.
-    """
-    data = request.get_json(silent=True) or {}
-    data_dir = data.get("data_dir", "").strip()
-
-    try:
-        from pathlib import Path
-        warning = None
-        if data_dir and Path(data_dir).exists():
-            skill_map = build_skill_file_map(data_dir)
-            if skill_map is None:
-                skills = get_builtin_skills()
-                warning = f"No prompt/filter files found in '{data_dir}'. Using built-in skills."
-            else:
-                skills = load_skills_from_data_dir(data_dir)
-        elif data_dir:
-            skills = get_builtin_skills()
-            warning = f"Directory '{data_dir}' not found. Using built-in skills."
-        else:
-            skills = get_builtin_skills()
-            warning = f"No directory specified. Using built-in skills."
-
-        agent = _get_or_create_agent()
-        agent.skills = skills
-        # Also update the app-level agent so future sessions share the new skills
-        if app_config.nw_analysis_agent:
-            app_config.nw_analysis_agent.skills = skills
-        if app_config.llm_helper:
-            app_config.llm_helper.skills = skills
-
-        return jsonify({
-            "success": True,
-            "message": f"{len(skills)} skills loaded from {data_dir}",
-            "warning": warning,
-            "skills": agent.get_skill_descriptions(),
-        })
-    except Exception as e:
-        return jsonify({"success": False, "error": str(e)}), 500
 
 
 # ------------------------------------------------------------------
 # API: browse for a YAML file (native file dialog)
 # ------------------------------------------------------------------
-@nw_analysis_bp.route("/browse_yaml", methods=["GET"])
-def browse_yaml():
-    """Open a native file dialog to select a skills .yaml file."""
-    result = {"path": ""}
-
-    def _open_dialog():
-        root = tk.Tk()
-        root.withdraw()
-        root.wm_attributes("-topmost", True)
-        path = filedialog.askopenfilename(
-            title="Select skills YAML file",
-            filetypes=[("YAML files", "*.yaml *.yml"), ("All files", "*.*")],
-        )
-        root.destroy()
-        result["path"] = path or ""
-
-    t = threading.Thread(target=_open_dialog)
-    t.start()
-    t.join(timeout=60)
-
-    return jsonify({"success": True, "path": result["path"]})
 
 
 # ------------------------------------------------------------------
 # API: load skills from a YAML file (standalone, no prompt/filter dirs)
 # ------------------------------------------------------------------
-@nw_analysis_bp.route("/load_skills_yaml", methods=["POST"])
 def load_skills_yaml_route():
     """
     Load skills directly from a .yaml file.
@@ -886,386 +761,10 @@ def load_skills_yaml_route():
         traceback.print_exc()
         return jsonify({"success": False, "error": str(e)}), 500
 
-# ------------------------------------------------------------------
-# Skills YAML I/O helpers — mirror the log_chatbot / bt_chatbot layout
-# so all three blueprints emit the SAME hand-authored yaml style when
-# writing to the shared Wi-Fi user override file.
-# ------------------------------------------------------------------
-def _read_yaml_file(path) -> dict:
-    """Load a YAML file as a plain dict. Raises on parse failure."""
-    import yaml
-    with open(path, "r", encoding="utf-8") as f:
-        data = yaml.safe_load(f) or {}
-    if not isinstance(data, dict):
-        raise ValueError(
-            f"Invalid YAML structure: expected a dict, got {type(data).__name__}"
-        )
-    return data
-
-
-_CLOUD_YAML_HEADER = (
-    "# skill features:\n"
-    "#   name: skill name\n"
-    "#   description: a brief description of the skill\n"
-    "#   keywords: use \"-\" to represent each keyword\n"
-    "#   expert_rules: use \"|\" to start a multi-line string\n"
-    "\n"
-)
-
-_USER_YAML_WRITE_LOCK = threading.Lock()
-
-
-def _write_yaml_file(path, data: dict, disabled_comments: dict | None = None) -> None:
-    """Write a dict to YAML with the cloud-baseline hand-authored layout.
-
-    See log_chatbot_routes._write_yaml_file for the full spec — this is a
-    verbatim copy so nw_analysis can produce byte-identical output.
-    """
-    import yaml
-    from pathlib import Path as _P
-
-    class _CloudDumper(yaml.SafeDumper):
-        pass
-
-    _CloudDumper._cloud_in_key = False  # type: ignore[attr-defined]
-
-    def _str_representer(dumper, value):
-        if isinstance(value, str) and "\n" in value:
-            value = value.replace("\t", "    ")
-            value = "\n".join(line.rstrip() for line in value.split("\n"))
-            if not value.endswith("\n"):
-                value = value + "\n"
-            return dumper.represent_scalar("tag:yaml.org,2002:str", value, style="|")
-        if getattr(dumper, "_cloud_in_key", False):
-            return dumper.represent_scalar("tag:yaml.org,2002:str", value)
-        cleaned = value.replace("\t", "    ")
-        if '"' in cleaned and "'" not in cleaned:
-            style = "'"
-        else:
-            style = '"'
-        return dumper.represent_scalar("tag:yaml.org,2002:str", cleaned, style=style)
-
-    _CloudDumper.add_representer(str, _str_representer)
-
-    def _represent_mapping(self, tag, mapping, flow_style=None):
-        value = []
-        node = yaml.MappingNode(tag, value, flow_style=flow_style)
-        if self.alias_key is not None:
-            self.represented_objects[self.alias_key] = node
-        best_style = True
-        if hasattr(mapping, "items"):
-            mapping = list(mapping.items())
-        for item_key, item_value in mapping:
-            self._cloud_in_key = True
-            node_key = self.represent_data(item_key)
-            self._cloud_in_key = False
-            node_value = self.represent_data(item_value)
-            if not (isinstance(node_key, yaml.ScalarNode) and not node_key.style):
-                best_style = False
-            if not (isinstance(node_value, yaml.ScalarNode) and not node_value.style):
-                best_style = False
-            value.append((node_key, node_value))
-        if flow_style is None:
-            if self.default_flow_style is not None:
-                node.flow_style = self.default_flow_style
-            else:
-                node.flow_style = best_style
-        return node
-    _CloudDumper.represent_mapping = _represent_mapping
-
-    def _increase_indent(self, flow=False, indentless=False):
-        return yaml.SafeDumper.increase_indent(self, flow, False)
-    _CloudDumper.increase_indent = _increase_indent
-
-    def _dump_one(skill_key: str, skill_val) -> str:
-        return yaml.dump(
-            {skill_key: skill_val},
-            Dumper=_CloudDumper,
-            allow_unicode=True,
-            sort_keys=False,
-            default_flow_style=False,
-            width=1000,
-        ).rstrip("\n")
-
-    if isinstance(data, dict):
-        blocks = [_dump_one(k, v) for k, v in data.items()]
-    else:
-        blocks = [yaml.dump(
-            data, Dumper=_CloudDumper, allow_unicode=True,
-            sort_keys=False, default_flow_style=False, width=1000,
-        ).rstrip("\n")]
-
-    content = _CLOUD_YAML_HEADER + "\n\n".join(blocks) + "\n"
-
-    if disabled_comments:
-        content = _inject_disabled_comments(content, disabled_comments)
-
-    p = _P(path)
-    p.parent.mkdir(parents=True, exist_ok=True)
-    tmp = p.with_name(f"{p.name}.{uuid.uuid4().hex}.tmp")
-    try:
-        tmp.write_text(content, encoding="utf-8")
-        tmp.replace(p)
-    finally:
-        try:
-            if tmp.exists():
-                tmp.unlink()
-        except OSError:
-            pass
-
-
-def _persist_user_yaml_snapshot(data: dict) -> object:
-    """Persist a user-edited YAML under today's dated filename."""
-    with _USER_YAML_WRITE_LOCK:
-        target_dir = _user_local_dir()
-        target = target_dir / _today_yaml_filename()
-        _write_yaml_file(target, data, _gather_disabled_comments(data))
-
-        for entry in target_dir.iterdir():
-            if entry.is_file() and entry.name != target.name \
-                    and entry.name.startswith("skills_") and entry.suffix == ".yaml":
-                try:
-                    entry.unlink()
-                except OSError:
-                    pass
-
-        return target
-
-
-# ---- Disabled-comment scanning + injection -------------------------------
-_DISABLED_COMMENT_RE = re.compile(
-    r"""^\s*\#\s*-\s*(['"])(?P<val>.+?)\1\s*$"""
-)
-_DISABLED_SKILL_RE = re.compile(r"^([A-Za-z0-9_][^:]*):\s*$")
-_DISABLED_LIST_HEADER_RE = re.compile(r"^  (keywords|exclusive):\s*$")
-_DISABLED_DEPTH2_RE = re.compile(r"^  \w+\s*:")
-
-
-def _scan_disabled_comments(text: str) -> dict:
-    """Pull commented-out keyword / exclusive entries out of a YAML text."""
-    if not text:
-        return {}
-    result: dict = {}
-    current_skill = None
-    current_list = None
-    for line in text.split("\n"):
-        m = _DISABLED_SKILL_RE.match(line)
-        if m:
-            current_skill = m.group(1)
-            current_list = None
-            continue
-        m = _DISABLED_LIST_HEADER_RE.match(line)
-        if m:
-            current_list = m.group(1)
-            continue
-        if (current_list is not None
-                and _DISABLED_DEPTH2_RE.match(line)
-                and not _DISABLED_LIST_HEADER_RE.match(line)):
-            current_list = None
-            continue
-        if current_skill and current_list:
-            m = _DISABLED_COMMENT_RE.match(line)
-            if m:
-                result.setdefault(current_skill, {}) \
-                      .setdefault(current_list, []) \
-                      .append(m.group("val"))
-    return result
-
-
-def _inject_disabled_comments(content: str, disabled: dict) -> str:
-    """Stitch `# - "..."` comment lines back into a freshly-rendered YAML."""
-    if not disabled:
-        return content
-
-    lines = content.split("\n")
-    insertions: dict = {}
-    current_skill = None
-    current_list = None
-    last_list_item_idx = -1
-
-    def _commit():
-        nonlocal current_list, last_list_item_idx
-        if current_skill and current_list:
-            entries = disabled.get(current_skill, {}).get(current_list) or []
-            if entries and last_list_item_idx >= 0:
-                comments = [f'    # - "{v}"' for v in entries]
-                insertions.setdefault(last_list_item_idx, []).extend(comments)
-        current_list = None
-        last_list_item_idx = -1
-
-    for i, line in enumerate(lines):
-        if _DISABLED_SKILL_RE.match(line):
-            _commit()
-            current_skill = _DISABLED_SKILL_RE.match(line).group(1)
-            continue
-        m_list = _DISABLED_LIST_HEADER_RE.match(line)
-        if m_list:
-            _commit()
-            current_list = m_list.group(1)
-            continue
-        if (current_list is not None
-                and _DISABLED_DEPTH2_RE.match(line)
-                and not _DISABLED_LIST_HEADER_RE.match(line)):
-            _commit()
-            continue
-        if current_list is not None and line.startswith("    - "):
-            last_list_item_idx = i
-    _commit()
-
-    if not insertions:
-        return content
-    out = []
-    for i, line in enumerate(lines):
-        out.append(line)
-        if i in insertions:
-            out.extend(insertions[i])
-    return "\n".join(out)
-
-
-def _gather_disabled_comments(active_data: dict) -> dict:
-    """Merge disabled-comment entries from cloud + user files, dropping
-    any that the caller is about to write as an ACTIVE keyword."""
-    merged: dict = {}
-
-    def _absorb(path):
-        if not path:
-            return
-        try:
-            text = path.read_text(encoding="utf-8")
-        except Exception:
-            return
-        for skill_key, blocks in _scan_disabled_comments(text).items():
-            for list_key, vals in blocks.items():
-                bucket = merged.setdefault(skill_key, {}).setdefault(list_key, [])
-                for v in vals:
-                    if v not in bucket:
-                        bucket.append(v)
-
-    try:
-        cloud_path, _ = _latest_cloud_baseline()
-        _absorb(cloud_path)
-    except Exception:
-        pass
-    try:
-        user_path, _ = _latest_user_yaml()
-        _absorb(user_path)
-    except Exception:
-        pass
-
-    if isinstance(active_data, dict):
-        for skill_key, blocks in list(merged.items()):
-            skill_row = active_data.get(skill_key)
-            if not isinstance(skill_row, dict):
-                continue
-            for list_key in ("keywords", "exclusive"):
-                if list_key not in blocks:
-                    continue
-                active_vals = set(skill_row.get(list_key) or [])
-                blocks[list_key] = [
-                    v for v in blocks[list_key] if v not in active_vals
-                ]
-                if not blocks[list_key]:
-                    blocks.pop(list_key, None)
-            if not blocks:
-                merged.pop(skill_key, None)
-
-    return merged
-
-
-# ------------------------------------------------------------------
-# API: append skills from a user-supplied YAML into the active user file
-# ------------------------------------------------------------------
-@nw_analysis_bp.route("/append_skills_yaml", methods=["POST"])
-def append_skills_yaml_route():
-    """
-    Import skills from a user-picked YAML file and append them to the
-    currently-active user local YAML. Only these fields survive per
-    skill: name, description, keywords, exclusive, expert_rules.
-    Skills whose key already exists in the destination are overwritten.
-
-    Auto-seeds the user local YAML from the cloud baseline when no user
-    file exists yet. Always flips the active source to "user" and
-    reloads the live agent so imported skills take effect immediately.
-
-    Request JSON: { "yaml_path": "/path/to/skills.yaml" }
-    """
-    from pathlib import Path
-    from utils.skill_import_utils import load_and_filter_source, merge_overwrite
-
-    data = request.get_json(silent=True) or {}
-    yaml_path = (data.get("yaml_path") or "").strip()
-    if not yaml_path:
-        return jsonify({"success": False, "error": "yaml_path is required."}), 400
-
-    try:
-        valid, skipped = load_and_filter_source(yaml_path)
-    except FileNotFoundError as e:
-        return jsonify({"success": False, "error": str(e)}), 404
-    except Exception as e:
-        traceback.print_exc()
-        return jsonify({"success": False, "error": f"Cannot parse YAML: {e}"}), 400
-
-    if not valid:
-        return jsonify({
-            "success": False,
-            "error": "No importable skills found in the selected YAML.",
-            "skipped": skipped,
-        }), 400
-
-    try:
-        base_path, _ = _latest_user_yaml()
-        if base_path is None:
-            base_path, _ = _latest_cloud_baseline()
-        existing = _read_yaml_file(base_path) if base_path is not None else {}
-
-        merged, appended, overwritten = merge_overwrite(existing, valid)
-        target = _persist_user_yaml_snapshot(merged)
-
-        _set_active_source("user")
-
-        # Refresh THIS page's live agent + the shared Wi-Fi agent slots so
-        # the imported skills take effect immediately without a page reload.
-        skills = load_skills_from_yaml(str(target))
-        agent = _get_or_create_agent()
-        agent.skills = skills
-        if app_config.nw_analysis_agent:
-            app_config.nw_analysis_agent.skills = skills
-        if app_config.llm_helper:
-            app_config.llm_helper.skills = skills
-        if getattr(app_config, "log_chatbot_agent", None):
-            app_config.log_chatbot_agent.skills = skills
-
-        session["yaml_modified"] = True
-        session["yaml_modified_path"] = str(target)
-
-        parts = []
-        if appended:
-            parts.append(f"appended {len(appended)}")
-        if overwritten:
-            parts.append(f"overwrote {len(overwritten)}")
-        if skipped:
-            parts.append(f"skipped {len(skipped)}")
-        summary = ", ".join(parts) if parts else "no changes"
-
-        return jsonify({
-            "success":       True,
-            "active_source": "user",
-            "target_path":   str(target),
-            "filename":      target.name,
-            "appended":      appended,
-            "overwritten":   overwritten,
-            "skipped":       skipped,
-            "message":       f"Imported from {Path(yaml_path).name}: {summary}.",
-            "skills":        agent.get_skill_descriptions(),
-        })
-    except Exception as e:
-        traceback.print_exc()
-        return jsonify({"success": False, "error": str(e)}), 500
 
 # ------------------------------------------------------------------
 # API: Reload skills from shared folder (auto-discovery)
 # ------------------------------------------------------------------
-@nw_analysis_bp.route("/reload_from_shared", methods=["POST"])
 def reload_from_shared():
     """
     Reload skills from the shared YAML location.
@@ -1314,19 +813,6 @@ def reload_from_shared():
 # ------------------------------------------------------------------
 # API: get available skills
 # ------------------------------------------------------------------
-@nw_analysis_bp.route("/skills", methods=["GET"])
-def get_skills():
-    try:
-        agent = _get_or_create_agent()
-        return jsonify({
-            "success": True,
-            "skills": agent.get_skill_descriptions(),
-        })
-    except Exception as e:
-        return jsonify({"success": False, "error": str(e)}), 500
-
-
-@nw_analysis_bp.route("/get_issue_context", methods=["GET"])
 def get_issue_context():
     # Use _compose_concise_description() instead to get a cleaned and concise title/description.
     concise_desc = _compose_concise_description()
@@ -1341,7 +827,6 @@ def get_issue_context():
 # ------------------------------------------------------------------
 # API: find best matching log by reading actual file timestamps
 # ------------------------------------------------------------------
-@nw_analysis_bp.route("/find_best_log", methods=["POST"])
 def find_best_log():
     """
     Given a list of ETL paths and an issue time string, read the first/last
@@ -1480,3 +965,51 @@ def _parse_issue_time(time_str: str):
             except ValueError:
                 continue
     return None
+
+def back_to_avatar():
+    return _leave_chatbot(_chatbot_instances)
+
+
+# The module above is now a domain adapter: its functions retain BT/Wi-Fi/NW
+# policy, while the factory owns the public route table and shared use cases.
+_NW_ANALYSIS_CAPABILITIES = {
+    key for key, enabled in NW_UI["features"].items() if enabled
+}
+
+# NW gains the YAML import button without the rest of the skill editor -- the
+# same shape main shipped. The four helpers and the six-field context are the
+# shared ones; only the dated filename prefix and the app-level agent slot are
+# NW's own.
+_YAML_HELPERS = build_profile_yaml_helpers(
+    user_local_dir=_user_local_dir,
+    today_yaml_filename=_today_yaml_filename,
+    user_yaml_prefix="skills_",
+    latest_cloud_baseline=_latest_cloud_baseline,
+    latest_user_yaml=_latest_user_yaml,
+    write_yaml_file=_write_yaml_file,
+    load_skills_from_yaml=load_skills_from_yaml,
+    get_agent=_get_or_create_agent,
+    agent_config_attr="nw_analysis_agent",
+)
+_SKILL_APPEND_HANDLERS = build_skill_append_handlers(SkillAppendContext(
+    activate_yaml=_YAML_HELPERS["activate_yaml"],
+    latest_cloud_baseline=_latest_cloud_baseline,
+    latest_user_yaml=_latest_user_yaml,
+    persist_user_yaml_snapshot=_YAML_HELPERS["persist_user_yaml_snapshot"],
+    read_yaml_file=_read_yaml_file,
+    set_active_source=_set_active_source,
+))
+
+_NW_ANALYSIS_HANDLERS = handler_map(
+    {**globals(), **_SKILL_APPEND_HANDLERS}, _NW_ANALYSIS_CAPABILITIES)
+nw_analysis_bp = create_chatbot_blueprint(ChatbotBlueprintConfig(
+    name="nw_analysis",
+    import_name=__name__,
+    url_prefix="/nw_analysis",
+    capabilities=_NW_ANALYSIS_CAPABILITIES,
+    get_agent=_get_or_create_agent,
+    handlers=_NW_ANALYSIS_HANDLERS,
+    # Gather records are keyed by nw_conversation_id, so a reset must start a
+    # new one instead of appending this turn to the previous conversation.
+    on_reset=lambda: _ensure_nw_conversation_id(rotate=True),
+))

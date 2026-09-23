@@ -1,32 +1,33 @@
 """Manual smoke test for the Report Ingestion Endpoint (avatar_mcp/ingestion_server.py).
 Not part of the app; run manually against a live server:
 
-    python -m avatar_mcp._smoke_test_client <path-to-bt.zip> [server-host]
+    python -m avatar_mcp._smoke_test_client <path-to-bt.zip> --api-key <key> \
+        [--host 127.0.0.1] [--port 8443]
 
-server-host defaults to 127.0.0.1 (same machine). Pass the server machine's
-IP/hostname to test from a different machine, e.g.:
-
-    python -m avatar_mcp._smoke_test_client report.zip 10.1.2.3
+Standalone by design (only imports httpx2 + mcp, not avatar_mcp.ingestion_config)
+so this one file can be copied to a different test machine on its own - host,
+port and api-key are whatever the server operator hands out, never read from a
+local config file (a client-local ingestion_config.json would just contain
+that machine's own auto-generated placeholder values, which won't match the
+real server's key/port).
 
 Requires the server (python -m avatar_mcp.ingestion_server) already running,
 and its port reachable from this machine (firewall etc.).
 """
+import argparse
 import asyncio
+import base64
 import os
-import sys
 
 import httpx2
 
-from avatar_mcp import ingestion_config as cfg
 from mcp.client import Client
 from mcp.client.streamable_http import streamable_http_client
 
-API_KEY = next(iter(cfg.API_KEYS.values()))
 
-
-async def main(zip_path: str, server_host: str = '127.0.0.1') -> None:
-    base_url = f"http://{server_host}:{cfg.PORT}"
-    http_client = httpx2.AsyncClient(headers={"Authorization": f"Bearer {API_KEY}"})
+async def main(zip_path: str, host: str, port: int, api_key: str) -> None:
+    base_url = f"http://{host}:{port}"
+    http_client = httpx2.AsyncClient(headers={"Authorization": f"Bearer {api_key}"})
     transport = streamable_http_client(f"{base_url}/mcp", http_client=http_client)
 
     async with Client(transport) as client:
@@ -63,7 +64,6 @@ async def main(zip_path: str, server_host: str = '127.0.0.1') -> None:
                 print(data)
                 report_file = data.get("report_file")
                 if report_file:
-                    import base64
                     out_path = os.path.join(os.path.dirname(zip_path), report_file["filename"])
                     with open(out_path, "wb") as out_fh:
                         out_fh.write(base64.b64decode(report_file["content_base64"]))
@@ -73,8 +73,10 @@ async def main(zip_path: str, server_host: str = '127.0.0.1') -> None:
 
 
 if __name__ == "__main__":
-    if len(sys.argv) < 2:
-        print("Usage: python -m avatar_mcp._smoke_test_client <path-to-bt.zip> [server-host]")
-        sys.exit(1)
-    host = sys.argv[2] if len(sys.argv) > 2 else '127.0.0.1'
-    asyncio.run(main(sys.argv[1], host))
+    parser = argparse.ArgumentParser(description=__doc__, formatter_class=argparse.RawDescriptionHelpFormatter)
+    parser.add_argument("zip_path", help="Path to a BT report .zip/.7z/.rar/.hci.txt/.etl")
+    parser.add_argument("--host", default="127.0.0.1", help="Ingestion server host (default: 127.0.0.1)")
+    parser.add_argument("--port", type=int, default=8443, help="Ingestion server port (default: 8443)")
+    parser.add_argument("--api-key", required=True, help="Bearer API key issued by the server operator")
+    args = parser.parse_args()
+    asyncio.run(main(args.zip_path, args.host, args.port, args.api_key))

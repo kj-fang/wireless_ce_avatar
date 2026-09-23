@@ -29,6 +29,7 @@ import uuid
 from typing import Any, Optional
 
 from mcp.server import MCPServer
+from mcp.server.auth.middleware.auth_context import get_access_token
 from mcp.server.auth.provider import AccessToken, TokenVerifier
 from mcp.server.auth.settings import AuthSettings
 from starlette.requests import Request
@@ -53,14 +54,28 @@ class StaticApiKeyVerifier(TokenVerifier):
         return None
 
 
-def _check_bearer_auth(request: Request) -> bool:
+def _check_bearer_auth(request: Request) -> Optional[str]:
     """Manual auth check for the custom /uploads route, which the SDK's
-    token_verifier does NOT cover (custom_route() bypasses it by design)."""
+    token_verifier does NOT cover (custom_route() bypasses it by design).
+    Returns the matched caller_id, or None if the token is missing/invalid.
+    """
     auth = request.headers.get('authorization', '')
     if not auth.startswith('Bearer '):
-        return False
+        return None
     token = auth[len('Bearer '):].strip()
-    return any(key and hmac.compare_digest(token, key) for key in cfg.API_KEYS.values())
+    for caller_id, key in cfg.API_KEYS.items():
+        if key and hmac.compare_digest(token, key):
+            return caller_id
+    return None
+
+
+def _caller_id() -> str:
+    """Identify who is making the current @server.tool() call, for logging.
+    Populated by the SDK's auth middleware from StaticApiKeyVerifier's
+    AccessToken.client_id - see get_access_token()'s contextvar-based lookup.
+    """
+    token = get_access_token()
+    return token.client_id if token else 'unknown'
 
 
 server = MCPServer(
@@ -129,6 +144,7 @@ def _run_job(job_id: str) -> None:
         job = _jobs[job_id]
         source_path = job['source_path']
         filename = job['filename']
+        caller_id = job['caller_id']
 
     _analysis_semaphore.acquire()
     try:
@@ -146,12 +162,14 @@ def _run_job(job_id: str) -> None:
                 _jobs[job_id]['result'] = result
                 _jobs[job_id]['report_file'] = _build_report_file(result, filename, job_id)
                 _jobs[job_id]['completed_at'] = time.time()
+            print(f"✅ [{caller_id}] job {job_id} done ({filename})")
             _maybe_send_email(job_id, work_dir, filename, 'done', result, None)
         except Exception as exc:
             with _jobs_lock:
                 _jobs[job_id]['status'] = 'error'
                 _jobs[job_id]['error_message'] = str(exc)
                 _jobs[job_id]['completed_at'] = time.time()
+            print(f"❌ [{caller_id}] job {job_id} failed ({filename}): {exc}")
             _maybe_send_email(job_id, work_dir, filename, 'error', None, str(exc))
         finally:
             # Immediate cleanup, success or failure - see data/adr/0002.
@@ -191,6 +209,7 @@ def create_report_upload(filename: str, size_bytes: int) -> dict[str, Any]:
     if size_bytes <= 0 or size_bytes > cfg.MAX_UPLOAD_BYTES:
         raise ValueError(f'size_bytes must be between 1 and {cfg.MAX_UPLOAD_BYTES}')
 
+    caller_id = _caller_id()
     upload_id = uuid.uuid4().hex[:12]
     staging_dir = cfg.UPLOAD_STAGING_DIR or tempfile.gettempdir()
     os.makedirs(staging_dir, exist_ok=True)
@@ -202,13 +221,16 @@ def create_report_upload(filename: str, size_bytes: int) -> dict[str, Any]:
             'filename': filename,
             'expected_size': size_bytes,
             'complete': False,
+            'caller_id': caller_id,
         }
+    print(f"📥 [{caller_id}] create_report_upload({filename}, {size_bytes} bytes) -> upload_id={upload_id}")
     return {'upload_id': upload_id, 'upload_path': f'/uploads/{upload_id}'}
 
 
 @server.custom_route('/uploads/{upload_id}', methods=['PUT'])
 async def upload_report(request: Request) -> Response:
-    if not _check_bearer_auth(request):
+    caller_id = _check_bearer_auth(request)
+    if caller_id is None:
         return Response(status_code=401)
 
     upload_id = request.path_params['upload_id']
@@ -237,6 +259,7 @@ async def upload_report(request: Request) -> Response:
     with _uploads_lock:
         record['complete'] = True
         record['received_bytes'] = total
+    print(f"📤 [{caller_id}] PUT /uploads/{upload_id} complete ({total} bytes)")
     return Response(status_code=200)
 
 
@@ -253,6 +276,7 @@ def start_report_analysis(upload_id: str) -> dict[str, Any]:
     if not record.get('complete'):
         raise ValueError(f'Upload {upload_id} has not finished uploading yet.')
 
+    caller_id = _caller_id()
     job_id = uuid.uuid4().hex[:12]
     with _jobs_lock:
         _jobs[job_id] = {
@@ -264,10 +288,12 @@ def start_report_analysis(upload_id: str) -> dict[str, Any]:
             'completed_at': None,
             'source_path': record['dest_path'],
             'filename': record['filename'],
+            'caller_id': caller_id,
         }
     with _uploads_lock:
         _uploads.pop(upload_id, None)
 
+    print(f"▶️  [{caller_id}] start_report_analysis({upload_id}) -> job_id={job_id}")
     threading.Thread(target=_run_job, args=(job_id,), daemon=True).start()
     return {'job_id': job_id}
 
@@ -283,6 +309,7 @@ def get_report_status(job_id: str) -> dict[str, Any]:
         job = _jobs.get(job_id)
     if job is None:
         raise ValueError(f'Unknown job_id: {job_id}')
+    print(f"🔍 [{_caller_id()}] get_report_status({job_id}) -> {job['status']}")
     return {
         'status': job['status'],
         'result': job['result'],

@@ -25,9 +25,14 @@ from mcp.client import Client
 from mcp.client.streamable_http import streamable_http_client
 
 
-async def main(zip_path: str, host: str, port: int, api_key: str) -> None:
+async def main(zip_path: str, host: str, port: int, api_key: str, timeout: float) -> None:
     base_url = f"http://{host}:{port}"
-    http_client = httpx2.AsyncClient(headers={"Authorization": f"Bearer {api_key}"})
+    # httpx2 defaults to a 5s timeout, which large uploads over a real network
+    # blow through easily (this caused httpcore2.ReadTimeout on a 35MB file).
+    http_client = httpx2.AsyncClient(
+        headers={"Authorization": f"Bearer {api_key}"},
+        timeout=httpx2.Timeout(timeout),
+    )
     transport = streamable_http_client(f"{base_url}/mcp", http_client=http_client)
 
     async with Client(transport) as client:
@@ -78,5 +83,7 @@ if __name__ == "__main__":
     parser.add_argument("--host", default="127.0.0.1", help="Ingestion server host (default: 127.0.0.1)")
     parser.add_argument("--port", type=int, default=8443, help="Ingestion server port (default: 8443)")
     parser.add_argument("--api-key", required=True, help="Bearer API key issued by the server operator")
+    parser.add_argument("--timeout", type=float, default=300.0,
+                        help="HTTP timeout in seconds for all requests, incl. the file upload (default: 300)")
     args = parser.parse_args()
-    asyncio.run(main(args.zip_path, args.host, args.port, args.api_key))
+    asyncio.run(main(args.zip_path, args.host, args.port, args.api_key, args.timeout))

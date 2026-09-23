@@ -285,7 +285,9 @@ def fw_wifi_analysis(fw_path: str, timeout: int = 30, cancel_event: Event | None
 
         if output_folder and os.path.exists(to_long_path(output_folder)):
             _emit_viewer_log(on_log, f"✅ Output folder generated: {output_folder}")
-            subprocess.run(['explorer', folder])
+            from configs.global_configs import app_config
+            if app_config.auto_open_analysis:
+            	subprocess.run(['explorer', folder])
         else:
             _emit_viewer_log(on_log, f"⚠️ Output folder not found for base: {base_no_ext}_* (waited {timeout}s)")
 
@@ -456,6 +458,11 @@ def open_sysmon_with_tool(fw_path: str, on_log=None, on_close=None):
     whose name ends with the event ID) and open it with TextAnalysisTool.NET.
     'Latest' is determined by the timestamp embedded in the folder name.
     """
+    from configs.global_configs import app_config
+
+    if not app_config.auto_open_analysis:
+        _emit_viewer_log(on_log, "ℹ️ Silent mode: skipping TextAnalysisTool.NET sysmon viewer.")
+        return True
     from datetime import datetime
     fw_path = get_long_path(fw_path)
     fw_dir = os.path.dirname(fw_path)

@@ -743,11 +743,13 @@ PARSERS_DICT = {
 }
 
 
-def parse_single_binary(parser: object) -> None:
+def parse_single_binary(parser: object, auto_open_analysis: bool | None = None) -> None:
     """
     parse single binary which is DDD or driver WPP (ETL)
     gets parser class
     """
+    if auto_open_analysis is None:
+        auto_open_analysis = app_config.auto_open_analysis
     # copy artifacts from artifacts share to local workspace
     parser.copy_artifacts_to_local_ws()
 
@@ -777,7 +779,7 @@ def parse_single_binary(parser: object) -> None:
 from utils.helpers import to_long_path as _to_long_path  # shared MAX_PATH helper
 
 
-def wpp_ddd_parser_run(binary_path: str, is_use_custom_filter=False, is_add_tracefmt_format=False) -> None:
+def wpp_ddd_parser_run(binary_path: str, is_use_custom_filter=False, is_add_tracefmt_format=False, auto_open_analysis: bool | None = None) -> None:
     """
     entry point for main parser script
     """

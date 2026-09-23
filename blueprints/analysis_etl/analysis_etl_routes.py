@@ -42,8 +42,9 @@ def process_etl_path():
 
     if etl_type not in ('wifi', 'bt'):
         return "❌ Unknown case subcategory", 400
-
-    subprocess.run(['explorer', os.path.dirname(etl_path)])
+	
+	if app_config.auto_open_analysis:
+    	subprocess.run(['explorer', os.path.dirname(etl_path)])
 
     if etl_type == 'wifi':
         wifi_service.analyze(etl_path)
@@ -76,7 +77,9 @@ def process_etl_path_fw():
             return jsonify({"ok": False, "error": error_msg}), 400
     else:
         return jsonify({"ok": False, "error": "Unknown case subcategory"}), 400
-    subprocess.run(['explorer', os.path.dirname(fw_path)])
+    
+    if app_config.auto_open_analysis:
+    	subprocess.run(['explorer', os.path.dirname(fw_path)])
 
     return jsonify({"ok": True, "task_id": task_id, "fw_path": fw_path})
 

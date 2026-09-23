@@ -124,8 +124,9 @@ def handle_run_latest_etl():
         # 12) Run analysis depending on category
         if 'wifi' in  case_context.wifi_or_bt or ddd_candidates:
             if latest_etl:
-                subprocess.run(['explorer', '/select,', latest_etl])
-        
+                if app_config.auto_open_analysis:
+                    subprocess.run(['explorer', '/select,', latest_etl])
+                
                 wifi_service = WiFiAnalysisService()
                 app_config.socketio.emit("stage", {"message": f"🚀 Running analysis on {os.path.basename(latest_etl)}"})
                 
@@ -137,9 +138,9 @@ def handle_run_latest_etl():
                 app_config.socketio.emit("stage", {"message": "❌ No suitable ETL found."})
         else:
             if latest_etl:
-                subprocess.run(['explorer', '/select,', latest_etl])
+                if app_config.auto_open_analysis:
+                    subprocess.run(['explorer', '/select,', latest_etl])
                 app_config.socketio.emit("stage", {"message": f"🚀 Running analysis on {os.path.basename(latest_etl)}"})
-                
                 bt_service = BTAnalysisService()
                 bt_service.analyze(latest_etl, mode="AutoFile")
                 

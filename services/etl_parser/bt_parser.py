@@ -83,6 +83,12 @@ def open_with_text_analysis_tool(file_path: str, filter_path: str = None) -> boo
           '_internal/TextAnalysisTool.NET.exe'. Adjust if your packaging differs.
         - Uses subprocess.Popen to avoid blocking the current script.
     """
+    # Respect the global silent-mode switch so batch/decode runs remain quiet by default.
+    from configs.global_configs import app_config
+    if not app_config.auto_open_analysis:
+        print(f"ℹ️ Silent mode: skipping TextAnalysisTool auto-open for {file_path}")
+        return False
+
     #exe_path = "_internal/TextAnalysisTool.NET.exe"
     #exe_path = "TextAnalysisTool.NET.exe"
 
@@ -1414,10 +1420,11 @@ def bt_analysis_autoFolder_mode(
                 print(f"\n✅ Folder idle for {etl_txt_timeout}s — decode phase complete.")
                 if os.path.exists(hci_txt) and is_file_ready(hci_txt):
                     time.sleep(3)  # brief pause to ensure files are fully flushed
-                    if open_with_text_analysis_tool(hci_txt, filter_path=filter_path):
-                        print("✅ Opened HCI log with TextAnalysisTool.NET.")
-                    else:
-                        print("⚠️ Failed to open HCI log with TextAnalysisTool.NET.")
+                    # disabled: do not open TextAnalysisTool.NET viewer window during decode
+                    # if open_with_text_analysis_tool(hci_txt, filter_path=filter_path):
+                    #     print("✅ Opened HCI log with TextAnalysisTool.NET.")
+                    # else:
+                    #     print("⚠️ Failed to open HCI log with TextAnalysisTool.NET.")
                     _terminate_bt_tool("✅ BT tool closed after folder decode complete.")
                 else:
                     print(f"⚠️ Target .hci.txt not found or not ready: {hci_txt}")

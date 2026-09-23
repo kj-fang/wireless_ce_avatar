@@ -241,10 +241,13 @@ if __name__ == "__main__":
     parser.add_argument('--port', type=int, default=None, help='Override the port for this run only (not persisted). Defaults to the machine-local persisted port (initially 48596).')
     parser.add_argument('--no-tray', action='store_true', help='Disable tray manager')
     parser.add_argument('--tray-mode', action='store_true', help='Run as tray manager')
+    parser.add_argument('--silent-mode', action='store_true', help='Disable auto-opening analysis windows (TextAnalysisTool / Explorer) after parsing.')
     parser.add_argument('--sendto-token', type=str, default=None, help='SendTo security token (auto-set by shortcut, not for manual use).')
     parser.add_argument('input_paths', nargs='*', help='Optional local analysis file paths passed from Windows SendTo.')
     args = parser.parse_args()
     startup_path = _build_startup_path(args.input_paths, sendto_token=args.sendto_token)
+    from configs.global_configs import app_config
+    app_config.auto_open_analysis = not args.silent_mode
     
     # Check whether to run in tray mode
     if args.tray_mode:

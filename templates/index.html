@@ -713,6 +713,28 @@
 </head>
 
 
+    <!-- ✅ Flash messages (e.g. unsupported SendTo path) shown as a blocking modal -->
+    {% with messages = get_flashed_messages(with_categories=true) %}
+    {% if messages %}
+    <div class="modal fade" id="flashErrorModal" tabindex="-1" role="dialog" aria-labelledby="flashErrorModalLabel" aria-hidden="true">
+        <div class="modal-dialog modal-dialog-centered" role="document">
+            <div class="modal-content">
+                <div class="modal-header">
+                    <h5 class="modal-title" id="flashErrorModalLabel">Notice</h5>
+                </div>
+                <div class="modal-body" id="flashErrorModalBody">
+                    {% for category, message in messages %}
+                        <p class="mb-2">{{ message }}</p>
+                    {% endfor %}
+                </div>
+                <div class="modal-footer">
+                    <button type="button" class="btn btn-primary" data-dismiss="modal">OK</button>
+                </div>
+            </div>
+        </div>
+    </div>
+    {% endif %}
+    {% endwith %}
 
     <!-- SVG Banner -->
     <div class="form-container mb-4 p-0 overflow-hidden" 
@@ -795,6 +817,33 @@
             </div>
             <img src="../static/pacman.gif" alt="Loading..." style="width: 200px; height: 200px; position: absolute; bottom: 10px; left: 50%; transform: translateX(-50%);">
         </div>
+        <div id="quick-knowledge-box" class="text-center px-3 py-2" style="
+            width: 50%;
+            margin: 12px auto 0;
+            min-height: 88px;
+            box-sizing: border-box;
+            background: linear-gradient(135deg, rgba(76, 194, 255, 0.12), rgba(0, 113, 197, 0.08));
+            border: 1px solid rgba(0, 113, 197, 0.2);
+            border-radius: 6px;
+            color: #32414d;
+            font-size: 0.9em;
+            line-height: 1.6;
+        ">
+            <div id="quick-knowledge-text"></div>
+            <div id="quick-knowledge-controls" style="display: flex; justify-content: center; margin-top: 8px;">
+                <button id="quick-knowledge-next" type="button" onclick="showNextQuickKnowledge()" style="
+                    border: none;
+                    border-radius: 999px;
+                    background: #0071c5;
+                    color: white;
+                    padding: 7px 14px;
+                    font-size: 0.82rem;
+                    font-weight: 600;
+                    box-shadow: 0 4px 12px rgba(0, 113, 197, 0.25);
+                    cursor: pointer;
+                ">Next</button>
+            </div>
+        </div>
     </div>
 
     <!-- Local upload loading indicator -->
@@ -844,9 +893,21 @@
     <!-- Bootstrap JS -->
     <script src="https://code.jquery.com/jquery-3.5.1.slim.min.js"></script>
     <script src="https://cdn.jsdelivr.net/npm/bootstrap@4.5.2/dist/js/bootstrap.bundle.min.js"></script>
+    <script>
+        // Auto-show the flash-message modal (e.g. unsupported SendTo path) on load
+        document.addEventListener('DOMContentLoaded', function () {
+            var flashModal = document.getElementById('flashErrorModal');
+            if (flashModal) {
+                $('#flashErrorModal').modal({ backdrop: 'static', keyboard: true });
+            }
+        });
+    </script>
 
     <!-- Main functionality script -->
     <script>
+        const QUICK_KNOWLEDGE = {{ wireless_topics|tojson }};
+        let quickKnowledgeIndex = 0;
+
         const CASE_MESSAGES = [
             "- Validating case number...",
             "- Fetching case description...",
@@ -864,6 +925,28 @@
         let uploadPreparingTimeoutId = null;
         let uploadAbortController = null;
         let uploadCurrentId = null;
+
+        function formatQuickKnowledge(knowledge) {
+            return `${knowledge.topic}: ${knowledge.explanation}`;
+        }
+
+        function updateQuickKnowledgeDisplay() {
+            const knowledgeText = document.getElementById('quick-knowledge-text');
+            if (knowledgeText && QUICK_KNOWLEDGE.length) {
+                knowledgeText.textContent = formatQuickKnowledge(QUICK_KNOWLEDGE[quickKnowledgeIndex]);
+            }
+        }
+
+        function showNextQuickKnowledge() {
+            if (!QUICK_KNOWLEDGE.length) {
+                return;
+            }
+
+            quickKnowledgeIndex = (quickKnowledgeIndex + 1) % QUICK_KNOWLEDGE.length;
+            updateQuickKnowledgeDisplay();
+        }
+
+        updateQuickKnowledgeDisplay();
         
         const tabs = document.querySelectorAll('.tab');
         const container = document.querySelector('.tabs');
@@ -967,7 +1050,7 @@
                 uploadSocket.disconnect();
                 uploadSocket = null;
             }
-            uploadSocket = io('/progress');
+            uploadSocket = io('/wpp_progress');
             uploadSocket.on('wpp_log', function(data) {
                 const logArea = document.getElementById('upload-log-messages');
                 if (!logArea) {
@@ -998,6 +1081,23 @@
                     }
                 }
 
+                logArea.scrollTop = logArea.scrollHeight;
+            });
+            uploadSocket.on('wpp_error', function(data) {
+                const logArea = document.getElementById('upload-log-messages');
+                if (!logArea) {
+                    return;
+                }
+                const message = String((data && data.data) || '').trim();
+                if (!message) {
+                    return;
+                }
+                clearUploadPreparingTimeout();
+                const prefix = data && data.fatal ? '\u274C ERROR: ' : '\u26A0\uFE0F WARNING: ';
+                const p = document.createElement('div');
+                p.textContent = '- ' + prefix + message;
+                p.style.color = data && data.fatal ? '#c0392b' : '#b7791f';
+                logArea.appendChild(p);
                 logArea.scrollTop = logArea.scrollHeight;
             });
         }

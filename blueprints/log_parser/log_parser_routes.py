@@ -321,7 +321,7 @@ def _copy_file_with_console_progress(src_path: str, dst_path: str, chunk_size: i
         shutil.copystat(src_path, dst_path)
         msg = f"Upload complete: {os.path.basename(src_path)} (0 B)"
         print(msg)
-        app_config.socketio.emit('wpp_log', {'data': msg}, namespace='/progress')
+        app_config.socketio.emit('wpp_log', {'data': msg}, namespace='/wpp_progress')
         return
 
     copied = 0
@@ -359,7 +359,7 @@ def _copy_file_with_console_progress(src_path: str, dst_path: str, chunk_size: i
                     formatted_size = _format_bytes(total_size)
                     formatted_copied = _format_bytes(copied)
                     socket_msg = f"Uploading {upload_name} [{bar}] {display_percent:6.2f}% ({formatted_copied}/{formatted_size})"
-                    app_config.socketio.emit('wpp_log', {'data': socket_msg}, namespace='/progress')
+                    app_config.socketio.emit('wpp_log', {'data': socket_msg}, namespace='/wpp_progress')
                     last_emit_percent = current_percent
     finally:
         if cancelled:
@@ -375,7 +375,7 @@ def _copy_file_with_console_progress(src_path: str, dst_path: str, chunk_size: i
 
     print()
     completion_msg = f"Upload complete: {upload_name}"
-    app_config.socketio.emit('wpp_log', {'data': completion_msg}, namespace='/progress')
+    app_config.socketio.emit('wpp_log', {'data': completion_msg}, namespace='/wpp_progress')
     shutil.copystat(src_path, dst_path)
 
 
@@ -402,6 +402,14 @@ def _is_allowed_local_analysis_filename(filename: str) -> bool:
         or lower_name.endswith('.dmp')
         or bool(re.search(r'\.etl\.\d+$', clean_name, re.IGNORECASE))
     )
+
+def _reject_if_directory(path: str) -> str | None:
+    """Return an error message if `path` is a directory (unexpected local-analysis
+    input, e.g. a folder dragged onto the SendTo shortcut); otherwise None."""
+    if os.path.isdir(path):
+        return 'Selected path is a folder, not a file. Please choose a valid analysis file.'
+    return None
+
 
 def _is_bt_etl(file_path: str) -> bool:
     """Return True if the file is a BT ETL that should be decoded via bt_decode_hci_via_folder."""
@@ -447,6 +455,10 @@ def _process_local_analysis(source_path: str, source_dir: str, file_path: str,
     def _track_cleanup(path: str) -> None:
         if cleanup_paths is not None and path:
             cleanup_paths.append(path)
+
+    dir_error = _reject_if_directory(file_path)
+    if dir_error:
+        raise ValueError(dir_error)
 
     _raise_if_cancelled(cancel_event)
 
@@ -676,7 +688,7 @@ def _process_local_analysis(source_path: str, source_dir: str, file_path: str,
 
     else:
         _cb(20, 'Starting WPP/DDD parser…')
-        wpp_ddd_parser_run(file_path)
+        wpp_ddd_parser_run(file_path) 
         _raise_if_cancelled(cancel_event)
         _cb(90, 'Parser complete.')
         session['latest_etl_path'] = file_path
@@ -785,6 +797,10 @@ def upload_local_analysis():
     original_name = os.path.basename(source_path)
     print(f"[upload_local_analysis] source_path: {source_path}")
     logging.info("[upload_local_analysis] source_path: %s", source_path)
+
+    dir_error = _reject_if_directory(source_path)
+    if dir_error:
+        return jsonify({'success': False, 'message': dir_error}), 400
 
     if not _is_allowed_local_analysis_filename(original_name):
         return jsonify({
@@ -939,6 +955,11 @@ def open_local_analysis():
 
     if not os.path.exists(source_path):
         flash(f'Local analysis file not found: {source_path}', 'danger')
+        return redirect(url_for('main.index'))
+
+    dir_error = _reject_if_directory(source_path)
+    if dir_error:
+        flash(dir_error, 'danger')
         return redirect(url_for('main.index'))
 
     if not _is_allowed_local_analysis_filename(original_name):
@@ -1102,6 +1123,13 @@ def estimate_tokens():
 
 
 def register_socketio_handlers(socketio):
+    # Flask-SocketIO rejects client connections to namespaces with no
+    # registered handler. This empty connect keeps /wpp_progress open so the
+    # WPP parser's socketio.emit() calls actually reach the browser.
+    @socketio.on('wpp_events', namespace='/wpp_progress')
+    def socketio_wpp_progress_connect():
+        pass
+
     @socketio.on('submit_analysis', namespace='/progress')
     def socketio_submit_analysis(data):
         print("✅ Received socket event 'submit_analysis':", data)
@@ -1212,6 +1240,8 @@ def _run_sendto_in_background(socketio, client_sid, source_path: str):
             _orig_emit(event, data, **kwargs)
             if event == 'wpp_log' and isinstance(data, dict):
                 _emit_sendto(socketio, client_sid, 'sendto_wpp_log', data)
+            elif event == 'wpp_error' and isinstance(data, dict):
+                _emit_sendto(socketio, client_sid, 'sendto_wpp_error', data)
 
         socketio.emit = _forwarding_emit
 

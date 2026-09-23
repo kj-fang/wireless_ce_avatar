@@ -350,6 +350,12 @@ def set_log():
             if _last_ts:
                 log_last_time = format_issue_time(_last_ts)
             elif log_has_date is False:
+                # Force the raw-log cache to load — /set_log otherwise defers it
+                # until first analysis, and this fallback would find [] and no-op.
+                try:
+                    agent._ensure_raw_log_cache()
+                except Exception as _e:
+                    print(f"⚠️  _ensure_raw_log_cache failed for time-only log: {_e}")
                 cache = getattr(agent, "_raw_log_cache", None) or []
                 _time_re = re.compile(
                     r'(?<!\d)(\d{1,2}):(\d{2}):(\d{2})(?:[:.](\d{1,6}))?(?!\d)'

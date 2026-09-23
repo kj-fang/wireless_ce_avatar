@@ -818,6 +818,26 @@ def upload_local_analysis():
             'message': f'Invalid file type: {original_name}. Only .zip, .7z, .rar, .etl, ddd, .hci.txt, .log, or .dmp are allowed.'
         }), 400
 
+    # 428 Precondition Required: this log is about to be analysed and nothing
+    # says which case it belongs to. The /chat gate cannot cover this -- a
+    # Send To that is analysed and never chatted about would go unrecorded --
+    # and the analysis is the expensive half, so asking before it starts is
+    # also the cheaper place to ask. The client replays this request once the
+    # prompt is answered; only a path is posted here, never the file itself,
+    # so replaying costs nothing.
+    #
+    # A path that already names its case answers the question by itself, and
+    # is attached without interrupting anybody.
+    derived = ips_utils.derive_ips_from_path(source_path)
+    if derived and not ips_service.current_case_nbr():
+        try:
+            ips_service.attach(derived, ips_service.DERIVED_FROM_PATH)
+        except ValueError:
+            pass
+    blocked = ips_service.blocking_state(source_path)
+    if blocked:
+        return jsonify(blocked), 428
+
     timestamp = datetime.datetime.now().strftime('%Y%m%d_%H%M%S')
     source_dir = os.path.dirname(source_path) or os.getcwd()
     file_path = source_path

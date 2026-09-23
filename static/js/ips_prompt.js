@@ -284,14 +284,30 @@
   var originalFetch = window.fetch.bind(window);
 
   window.fetch = function (input, init) {
+    // A Request carries its body as a stream that may only be read once, so
+    // sending one consumes it and the replay below would throw "Cannot
+    // construct a Request with a Request object that has already been used".
+    // Take the copy before the first send, while the body is still unread.
+    // Nothing in the app passes a Request today; this is so that the first
+    // caller who does is not met with a dialog that resolves into a 428.
+    var replayable = null;
+    if (typeof Request !== "undefined" && input instanceof Request) {
+      try { replayable = input.clone(); } catch (e) { replayable = null; }
+    }
+
     return originalFetch(input, init).then(function (response) {
       if (response.status !== 428) { return response; }
       // Only 428s from this feature are ours to handle; anything else is
-      // passed through untouched.
+      // passed through untouched. The rejection handler is attached to the
+      // parse alone rather than to the whole chain: as a trailing .catch it
+      // also swallowed a failed replay and handed the caller back the
+      // original 428, which is indistinguishable from never having asked.
       return response.clone().json().then(function (body) {
         if (!body || !body.ips_required) { return response; }
-        return ask(body).then(function () { return originalFetch(input, init); });
-      }).catch(function () { return response; });
+        return ask(body).then(function () {
+          return originalFetch(replayable || input, init);
+        });
+      }, function () { return response; });
     });
   };
 

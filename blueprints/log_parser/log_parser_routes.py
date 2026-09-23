@@ -19,6 +19,7 @@ from urllib.parse import unquote
 from werkzeug.utils import secure_filename
 
 from utils import helpers, attachment_decompose
+from utils import ips_utils
 from configs.global_configs import app_config
 from configs.path_configs import LOG_PARSER_DIR, LOAD_PATH_prim, LOAD_PATH_bkup
 from models.models import CaseContext
@@ -27,6 +28,7 @@ from utils.log_parser_preprocess import extract_all_keywords_from_filter_file
 from services.log_parser_file_manage_service import FileManagerService
 from services.log_parser_service import LogParserService
 from services import gather_service
+from services import ips_service
 from services.etl_parser.wpp_ddd_parser import wpp_ddd_parser_run
 from services.etl_parser.bt_parser import bt_decode_via_cli
 
@@ -476,8 +478,16 @@ def _process_local_analysis(source_path: str, source_dir: str, file_path: str,
         'keywords_found': []
     }
 
+    # A log opened from disk usually already sits under its case folder
+    # (...\IntelAvatar_files\01010628\...). Naming the run after that beats
+    # minting local_upload_<ts>, which is a number nobody can look up later.
+    derived_ips = (ips_utils.derive_ips_from_path(file_path)
+                   or ips_utils.derive_ips_from_path(source_path))
+    if derived_ips:
+        session[ips_service.SESSION_SOURCE_KEY] = ips_service.DERIVED_FROM_PATH
+
     if file_path.lower().endswith('.dmp') or is_bsod:
-        local_case_nbr = f'local_bsod_{timestamp}'
+        local_case_nbr = derived_ips or f'local_bsod_{timestamp}'
 
         # For local BSOD uploads, copy the dump to shared storage first,
         # then submit analysis using that shared folder path.
@@ -568,7 +578,7 @@ def _process_local_analysis(source_path: str, source_dir: str, file_path: str,
         total = len(extracted_files)
         _cb(60, f'Extraction complete. Found {total} file{"s" if total != 1 else ""}.')
 
-        local_case_nbr = f'local_upload_{timestamp}'
+        local_case_nbr = derived_ips or f'local_upload_{timestamp}'
         # Only consider bt_files for case type inference since wifi_files may be present in both wifi and bt cases
         local_case_type = _infer_local_upload_case_type(bt_files)
 
@@ -644,7 +654,7 @@ def _process_local_analysis(source_path: str, source_dir: str, file_path: str,
         # hint hardcoded 'wifi'; 'coex'/None collapse to 'wifi' for CaseContext but
         # fwTypeSelectModal (via __autoAnalysisFw) handles them at render time.
         fw_type = infer_fw_parse_type(file_path, 'wifi')
-        local_case_nbr = f'local_upload_{timestamp}'
+        local_case_nbr = derived_ips or f'local_upload_{timestamp}'
         local_case_type = fw_type if fw_type in ('bt', 'wifi') else 'wifi'
         local_context = CaseContext(
             case_nbr=local_case_nbr,

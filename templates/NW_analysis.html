@@ -6,6 +6,9 @@
     <link href="https://fonts.googleapis.com/css2?family=Inter:wght@400;500;600;700&display=swap" rel="stylesheet">
     <link href="https://stackpath.bootstrapcdn.com/bootstrap/4.5.2/css/bootstrap.min.css" rel="stylesheet">
     <script src="https://cdn.jsdelivr.net/npm/marked/marked.min.js"></script>
+    <!-- Loaded before the page's own scripts: it wraps fetch to catch the
+         server's 428 "case number required" and replay the request. -->
+    <script src="{{ url_for('static', filename='js/ips_prompt.js') }}"></script>
     <style>
         * { font-family: 'Inter', sans-serif; box-sizing: border-box; }
 

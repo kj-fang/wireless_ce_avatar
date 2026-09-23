@@ -9,6 +9,7 @@ from datetime import datetime
 import yaml
 
 from utils import helpers
+from utils import ips_utils
 from utils.etl_utils import get_auto_analysis_etl, get_issue_time_from_selected_files, filter_folders_by_time, extract_timestamp_from_folder, pick_latest_zip_attachment
 from utils.fw_utils import load_fw_system_info, infer_fw_parse_type
 from services.case_info_service import CaseService
@@ -141,8 +142,13 @@ def handle_case_submission():
     if not case_nbr:
         flash("❌ No case number provided.", "danger")
         return redirect(url_for('main.index'))
-    
-    case_context = CaseContext(case_nbr=case_nbr)
+
+    # People type 1010628 for case 01010628. Pad it here so the folder name,
+    # the IPS lookup and the telemetry all use one spelling. A value that is
+    # not a case number is left as typed for the backend to reject as before.
+    case_nbr = ips_utils.normalise_ips(case_nbr) or case_nbr
+
+    case_context = CaseContext(case_nbr=case_nbr, case_ref_source='explicit')
     try:
         case_context = CaseService.process_case(case_context=case_context)
         if case_context.error_message:
@@ -178,7 +184,8 @@ def start_latest_etl_llm():
     if not case_nbr:
         return jsonify({'success': False, 'message': 'No case number provided.'}), 400
 
-    case_context = CaseContext(case_nbr=case_nbr)
+    case_nbr = ips_utils.normalise_ips(case_nbr) or case_nbr
+    case_context = CaseContext(case_nbr=case_nbr, case_ref_source='explicit')
     try:
         case_context = CaseService.process_case(case_context=case_context)
         if case_context.error_message:

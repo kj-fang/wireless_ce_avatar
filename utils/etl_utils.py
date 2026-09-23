@@ -3,6 +3,8 @@ import os
 from datetime import datetime, timedelta
 from flask import session
 
+from utils import ips_utils
+
 # Shared timezone helpers — the autologger writes folder names with the
 # CUSTOMER's machine clock (e.g. CST), but engineers often type ``issue_time``
 # transcribed straight from the ETL-decoded log (which is in the log frame,
@@ -70,7 +72,7 @@ def extract_address_digits(path):
     try:
         parts = path.split(os.sep)
         for i, part in enumerate(parts):
-            if re.fullmatch(r'\d{8}', part):  # Match IPS folder like '00960179'
+            if ips_utils.is_case_folder_segment(part):  # Match IPS folder like '00960179'
                 if i + 1 < len(parts):
                     addr_folder = parts[i + 1]  # Take folder after IPS number
                     numbers = re.findall(r'\d+', addr_folder)

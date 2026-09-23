@@ -492,7 +492,11 @@ def _new_record(
         # `domain` remains the pre-v6 agent-domain field for existing ETL.
         "domain": domain or UNKNOWN_DOMAIN,
         "agent_domain": _agent_domain(domain),
-        "case_domain": _case_domain(issue),
+        # The case's own `wifi_or_bt` is essentially never populated, so without
+        # the agent as fallback this settles on "unknown". wifi_chatbot and
+        # bt_chatbot only ever run on their own technology; `nw` is genuinely
+        # ambiguous and _case_domain already rejects it.
+        "case_domain": _case_domain(issue, domain),
         "case": _clean_case(issue),
         "log_path": log_path or "",
         "issue_time": issue_time or "",
@@ -1176,7 +1180,7 @@ def _do_record_feature_usage(
                 # `domain` is retained as the pre-v6 agent-domain alias.
                 "domain": str(domain or record.get("domain") or UNKNOWN_DOMAIN),
                 "agent_domain": _agent_domain(domain),
-                "case_domain": str(record.get("case_domain") or _case_domain(issue)),
+                "case_domain": str(record.get("case_domain") or _case_domain(issue, domain)),
                 "conversation_id": _safe_id(conversation_id) if conversation_id else "",
                 "turn_id": _safe_id(turn_id) if turn_id else "",
                 "model": str(model or ""),
@@ -1281,7 +1285,8 @@ def _do_record(
         # selected agent, while case_domain is derived independently.
         record["domain"] = str(record.get("domain") or domain or UNKNOWN_DOMAIN)
         record["agent_domain"] = _agent_domain(domain or record.get("agent_domain") or record.get("domain"))
-        case_dom = _case_domain(issue)
+        # Same agent fallback as _new_record().
+        case_dom = _case_domain(issue, domain)
         if case_dom != UNKNOWN_DOMAIN or not record.get("case_domain"):
             record["case_domain"] = case_dom
         record["app_version"] = APP_VERSION
@@ -1561,7 +1566,8 @@ def _do_record_usage(
             record["workflow_id"] = _safe_id(workflow_id)
         record["domain"] = str(record.get("domain") or domain or UNKNOWN_DOMAIN)
         record["agent_domain"] = _agent_domain(domain or record.get("agent_domain") or record.get("domain"))
-        case_dom = _case_domain(issue)
+        # Same agent fallback as _new_record().
+        case_dom = _case_domain(issue, domain)
         if case_dom != UNKNOWN_DOMAIN or not record.get("case_domain"):
             record["case_domain"] = case_dom
         record["app_version"] = APP_VERSION
@@ -1787,7 +1793,7 @@ def _do_record_feedback_submit(
             # `domain` stays as the pre-v6 agent-domain alias.
             "domain": _agent_domain(domain),
             "agent_domain": _agent_domain(domain),
-            "case_domain": _case_domain(issue),
+            "case_domain": _case_domain(issue, domain),
         }
         with _lock_for(path):
             _write_json_atomic(path, event)

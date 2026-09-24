@@ -1439,7 +1439,11 @@ def back_to_avatar():
     ):
         session.pop(key, None)
 
-    # 3) Clear the global "last analyzed log" hint so the chatbot page
+    # 3) This ends the conversation, so the case number is asked for again
+    #    rather than inherited by whatever is loaded next.
+    ips_service.start_new_session()
+
+    # 4) Clear the global "last analyzed log" hint so the chatbot page
     #    doesn't pre-fill the previous run's log path.
     try:
         app_config.last_analyzed_log_path = ""

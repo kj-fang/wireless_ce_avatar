@@ -762,13 +762,18 @@
         }
 
         function buildCustomerEmailDraft(recommendations) {
-            const actionableItems = recommendations.filter(item => String(item).trim());
-            if (!actionableItems.length) {
-                return 'Hello,\n\nWe have completed our initial review and will proceed with the next steps.\n\nBest regards,';
+            const nextStep = recommendations.length
+                ? String(recommendations[recommendations.length - 1]).trim()
+                : '';
+            const customerQuestions = recommendations
+                .slice(0, -1)
+                .filter(item => String(item).trim());
+            if (!customerQuestions.length) {
+                return `Hello,\n\nWe have completed our initial review and will proceed with the next action: ${nextStep || 'the next steps'}.\n\nBest regards,`;
             }
 
             return `Hello,\n\nBased on our initial review, please see the following items so we can continue:
-${actionableItems.map(item => `- ${item}`).join('\n')}\n\nBest regards,`;
+${customerQuestions.map(item => `- ${item}`).join('\n')}\n\nBest regards,`;
         }
 
         function renderClassificationSimple(classification) {

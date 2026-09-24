@@ -1,5 +1,6 @@
 import os
 import json
+import sys
 import threading
 import requests as _requests
 from flask import Blueprint, render_template, request, session, redirect, url_for, flash
@@ -14,6 +15,7 @@ from selenium.webdriver.support import expected_conditions as EC
 
 from models.models import CaseContext
 from configs.global_configs import app_config
+from configs import path_configs
 
 from utils import case_utils
 from services.snowflake_service import snowflake_query
@@ -207,20 +209,82 @@ class CaseService:
     
 
     @staticmethod
+    def _summary_prompt_sources(prompt_filename):
+        """Candidate prompt locations for a packaged run, highest priority first."""
+        return [
+            os.path.join(path_configs.SUMMARY_PROMPT_DIR_prim, prompt_filename),
+            os.path.join(path_configs.SUMMARY_PROMPT_DIR_bkup, prompt_filename),
+            CaseService._bundled_summary_prompt(prompt_filename, "cloud"),
+            CaseService._bundled_summary_prompt(prompt_filename, "local"),
+        ]
+
+    @staticmethod
+    def _bundled_summary_prompt(prompt_filename, flavor):
+        return os.path.join(
+            app_config.project_root, "utils", "summary_prompt_templates", flavor, prompt_filename
+        )
+
+    @staticmethod
+    def _resolve_summary_prompt_source(prompt_filename):
+        for candidate in CaseService._summary_prompt_sources(prompt_filename):
+            try:
+                if os.path.exists(candidate):
+                    return candidate
+            except OSError:
+                # Unreachable SMB share raises instead of returning False.
+                continue
+        return None
+
+    @staticmethod
+    def _summary_prompt_version(prompt_path):
+        """Value of the ``# prompt_template_version:`` header, or None."""
+        try:
+            with open(prompt_path, "r", encoding="utf-8") as prompt_file:
+                for line in prompt_file:
+                    if not line.startswith("#"):
+                        break
+                    marker = "prompt_template_version:"
+                    if marker in line:
+                        return line.split(marker, 1)[1].strip()
+        except OSError:
+            return None
+        return None
+
+    @staticmethod
     def load_case_summary_prompt(wifi_or_bt):
 
         prompt_filename = f"prompt_{wifi_or_bt.lower()}.py"
+
+        # Debug runs read the repo's local prompt in place, so edits apply on
+        # restart without touching the share or the user's copy.
+        if not getattr(sys, "frozen", False):
+            local_prompt = CaseService._bundled_summary_prompt(prompt_filename, "local")
+            if os.path.exists(local_prompt):
+                print(f"🛠️ Debug mode: using local prompt at {local_prompt}")
+                return local_prompt
+            print(f"❌ Local {prompt_filename} not found at {local_prompt}")
+
+        source_prompt = CaseService._resolve_summary_prompt_source(prompt_filename)
         target_prompt = os.path.join(app_config.prompt_dir, prompt_filename)
+        if source_prompt is None:
+            print(f"❌ Source {prompt_filename} not found in any prompt location")
+            return target_prompt
 
-        if not os.path.exists(target_prompt):
+        source_version = CaseService._summary_prompt_version(source_prompt)
+        target_version = CaseService._summary_prompt_version(target_prompt)
+        # An unreadable or header-less source can't be compared, so keep the
+        # user's copy rather than overwriting it with something unverifiable.
+        target_needs_update = not os.path.exists(target_prompt) or (
+            source_version is not None and source_version != target_version
+        )
 
-            source_prompt = os.path.join(app_config.project_root, "utils", "summary_prompt_templates",prompt_filename)   
-            if os.path.exists(source_prompt):
-                shutil.copy(source_prompt, target_prompt)
-                print(f"✅ Copied prompt.py to {target_prompt}")
-            else:
-                print(f"❌ Source prompt.py not found at {source_prompt}") 
-           
+        if target_needs_update:
+            shutil.copy(source_prompt, target_prompt)
+            print(
+                f"✅ Updated {prompt_filename} at {target_prompt} from {source_prompt} "
+                f"(version {target_version} -> {source_version})"
+            )
+
         return target_prompt
     
     @staticmethod

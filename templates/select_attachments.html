@@ -686,8 +686,11 @@
                 if (key === 'Classification' && typeof value === 'object') {
                     // html += renderClassificationSimple(value);
                     continue;
+                } else if (key === 'Next action' && typeof value === 'object' && value !== null) {
+                    html += renderNextAction(value);
                 } else {
-                    html += `<span class="${level === 0 ? 'fw-bolder text-primary h4 d-block mt-2 mb-1' : level === 1 ? 'fw-bolder text-dark h6 d-block' : 'fw-normal d-block'}">${cleanAngleBrackets(key)}:</span>`;
+                    const isTopLevelAnalysisHeading = level === 0 || key === 'Recommendation';
+                    html += `<span class="${isTopLevelAnalysisHeading ? 'fw-bolder text-primary h4 d-block mt-2 mb-1' : level === 1 ? 'fw-bolder text-dark h6 d-block' : 'fw-normal d-block'}">${cleanAngleBrackets(key)}:</span>`;
                     
                     if (key.toLowerCase().includes("other information") && typeof value === 'object'){
                         Object.entries(value).forEach(([k, v]) => {
@@ -735,6 +738,42 @@
             }
             html += '</ul>';
             return html;
+        }
+
+        function renderNextAction(nextAction) {
+            const recommendations = Array.isArray(nextAction.Recommendation)
+                ? nextAction.Recommendation
+                : nextAction.Recommendation ? [nextAction.Recommendation] : [];
+            const recommendationItems = recommendations
+                .map(item => `<li class="text-dark" style="padding-left: 1rem;"> • ${cleanAngleBrackets(String(item))}</li>`)
+                .join('');
+            const emailDraft = typeof nextAction['Customer email draft'] === 'string'
+                ? nextAction['Customer email draft'].trim()
+                : '';
+            const emailContent = emailDraft || buildCustomerEmailDraft(recommendations);
+
+            return `
+                <div class="ms-3 mb-2">
+                    <span class="fw-bolder text-primary h4 d-block mt-2 mb-1">Recommendation:</span>
+                    <ul class="list-unstyled ps-1 mb-2">${recommendationItems}</ul>
+                    <span class="fw-bolder text-primary h4 d-block mt-2 mb-1">Customer email draft:</span>
+                    <div class="ms-2" style="white-space: pre-wrap;">${cleanAngleBrackets(emailContent)}</div>
+                </div>`;
+        }
+
+        function buildCustomerEmailDraft(recommendations) {
+            const nextStep = recommendations.length
+                ? String(recommendations[recommendations.length - 1]).trim()
+                : '';
+            const customerQuestions = recommendations
+                .slice(0, -1)
+                .filter(item => String(item).trim());
+            if (!customerQuestions.length) {
+                return `Hello,\n\nWe have completed our initial review and will proceed with the next action: ${nextStep || 'the next steps'}.\n\nBest regards,`;
+            }
+
+            return `Hello,\n\nBased on our initial review, please see the following items so we can continue:
+${customerQuestions.map(item => `- ${item}`).join('\n')}\n\nBest regards,`;
         }
 
         function renderClassificationSimple(classification) {

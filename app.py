@@ -195,6 +195,9 @@ def create_app():
     app.config['SESSION_FILE_DIR'] = _session_dir
     app.config['SESSION_PERMANENT'] = False
     app.config['SESSION_USE_SIGNER'] = True   # sign the session-ID cookie for integrity
+    # Flask-Session otherwise rewrites the whole session on every response, so a
+    # slow request undoes anything answered while it was still in flight.
+    app.config['SESSION_REFRESH_EACH_REQUEST'] = False
     Session(app)
 
     @app.context_processor

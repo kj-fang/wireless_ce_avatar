@@ -112,6 +112,20 @@ ACE_PLAYBOOK_BT_DIR_prim = _os.environ.get("INTELAVATAR_ACE_PLAYBOOK_BT_DIR") \
 ACE_PLAYBOOK_BT_DIR_bkup = _os.environ.get("INTELAVATAR_ACE_PLAYBOOK_BT_DIR_BKUP") \
     or _sibling_share(FEEDBACK_DIR_bkup, _ACE_PLAYBOOK_BT_LEAF)
 
+# Case-summary prompt templates (prompt_wifi.py / prompt_bt.py).
+#
+# The share is not populated yet — until it is, the bundled
+# utils/summary_prompt_templates/cloud copy stands in for it, so the resolution
+# order below can ship unchanged once the folder goes live:
+#   shared folder -> bundled cloud copy -> bundled local copy
+# Once the share is populated everyone picks up the same prompt revision
+# without waiting for an app release.
+_SUMMARY_PROMPT_LEAF = "summary_prompt"
+SUMMARY_PROMPT_DIR_prim = _os.environ.get("INTELAVATAR_SUMMARY_PROMPT_DIR") \
+    or _sibling_share(FEEDBACK_DIR_prim, _SUMMARY_PROMPT_LEAF)
+SUMMARY_PROMPT_DIR_bkup = _os.environ.get("INTELAVATAR_SUMMARY_PROMPT_DIR_BKUP") \
+    or _sibling_share(FEEDBACK_DIR_bkup, _SUMMARY_PROMPT_LEAF)
+
 # Local cache — prompt/ and filter/ are copied here from the remote on first run.
 # Using a path relative to this file so it works regardless of install location.
 from pathlib import Path as _Path

@@ -42,8 +42,7 @@ def resolve():
                 "success": False,
                 "error": "Confirm there is no case number for this log before skipping.",
             }), 400
-        ips_service.remember_skip(log_path)
-        ips_service.attach("", ips_service.SKIPPED)
+        ips_service.attach("", ips_service.SKIPPED, log_path)
         return jsonify({
             "success": True,
             "case_nbr": "",
@@ -56,7 +55,7 @@ def resolve():
         source = ips_service.EXPLICIT
 
     try:
-        canonical = ips_service.attach(data.get("case_nbr"), source)
+        canonical = ips_service.attach(data.get("case_nbr"), source, log_path)
     except ValueError as e:
         return jsonify({"success": False, "error": str(e)}), 400
 

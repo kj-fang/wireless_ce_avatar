@@ -3529,6 +3529,10 @@
                 renderSkills(data.skills);
                 logLoaded = true;
 
+                // Ask while the user is still looking at the log they chose,
+                // rather than letting their first question bounce off /chat.
+                if (window.IpsPrompt) { window.IpsPrompt.handleSetLog(data); }
+
                 // ── Auto-reset when switching from one log to another ──
                 // Backend signals `rotated=true` when this set_log replaces
                 // a DIFFERENT log path. We snapshot the chat UI + per-turn

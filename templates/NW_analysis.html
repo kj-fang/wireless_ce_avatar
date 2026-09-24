@@ -948,6 +948,9 @@
                 renderSkills(data.skills);
                 logLoaded = true;
                 updateAnalyzeBtn();
+                // Ask while the user is still looking at the log they chose,
+                // rather than letting their first question bounce off /chat.
+                if (window.IpsPrompt) { window.IpsPrompt.handleSetLog(data); }
             } else {
                 showStatus(statusEl, '✘ ' + data.error, 'err');
             }
@@ -1018,8 +1021,12 @@
             const data = await res.json();
             if (data.success) {
                 showStatus(statusEl, '✔ ' + (data.message || 'Sleepstudy file loaded.'), 'ok');
-                // Run the dedicated sleepstudy analyzer pipeline
-                runSleepstudyAnalysis(path);
+                // The analysis starts on its own here, so the case has to be
+                // settled before it runs rather than alongside it.
+                const gate = window.IpsPrompt
+                    ? window.IpsPrompt.handleSetLog(data)
+                    : Promise.resolve(null);
+                gate.then(() => runSleepstudyAnalysis(path));
             } else {
                 showStatus(statusEl, '✘ ' + data.error, 'err');
             }

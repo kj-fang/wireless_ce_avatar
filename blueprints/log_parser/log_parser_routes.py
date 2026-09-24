@@ -831,7 +831,7 @@ def upload_local_analysis():
     derived = ips_utils.derive_ips_from_path(source_path)
     if derived and not ips_service.current_case_nbr():
         try:
-            ips_service.attach(derived, ips_service.DERIVED_FROM_PATH)
+            ips_service.attach(derived, ips_service.DERIVED_FROM_PATH, source_path)
         except ValueError:
             pass
     blocked = ips_service.blocking_state(source_path)

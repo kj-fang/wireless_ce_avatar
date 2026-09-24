@@ -3641,6 +3641,10 @@
                 renderSkills(data.skills);
                 logLoaded = true;
 
+                // Ask while the user is still looking at the log they chose,
+                // rather than letting their first question bounce off /chat.
+                if (window.IpsPrompt) { window.IpsPrompt.handleSetLog(data); }
+
                 // ── Always reset the chat UI when any log is loaded ──
                 // The backend always calls reset_conversation() in set_log,
                 // so the UI must always match: clear existing messages.

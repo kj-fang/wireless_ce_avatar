@@ -383,6 +383,16 @@ def analyze_sleepstudy():
             yield f"data: {json.dumps({'type': 'error', 'content': 'log_path is required'})}\n\n"
         return Response(_err(), mimetype="text/event-stream")
 
+    # 428 Precondition Required. set_log_sleepstudy only advertises needs_ips,
+    # and the page starts this analysis straight afterwards, so without a gate
+    # here a case-less sleepstudy runs anyway -- and so does any direct caller
+    # or a client whose prompt never loaded. Checked before the SSE stream
+    # opens, because a 428 inside an event stream is not a status the client
+    # can act on.
+    blocked = ips_service.blocking_state(sleep_path)
+    if blocked:
+        return jsonify(blocked), 428
+
     if not os.path.exists(sleep_path):
         def _missing():
             yield f"data: {json.dumps({'type': 'error', 'content': f'File not found: {sleep_path}'})}\n\n"

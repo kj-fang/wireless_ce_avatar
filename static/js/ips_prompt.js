@@ -89,6 +89,10 @@
 
     var input = el("input", {
       type: "text", inputmode: "numeric", maxlength: "12",
+      // The dialog is built in script, so there is no markup label to point
+      // at. Without a name a screen reader announces only "edit text" for the
+      // one control standing between the user and their work.
+      "aria-label": "IPS case number",
       placeholder: "e.g. 01010628",
       value: state.suggested_ips || "",
       style: {

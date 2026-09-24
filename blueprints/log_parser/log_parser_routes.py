@@ -835,7 +835,12 @@ def upload_local_analysis():
     # A path that already names its case answers the question by itself, and
     # is attached without interrupting anybody.
     derived = ips_utils.derive_ips_from_path(source_path)
-    if derived and not ips_service.current_case_nbr():
+    if (derived and not ips_service.current_case_nbr()
+            and ips_service.answer_for(source_path).get("source")
+                != ips_service.SKIPPED):
+        # Not over a confirmed skip: re-analysing a log somebody already
+        # checked and said has no case would quietly replace that answer with
+        # a folder name, and the confirmation would never be recorded again.
         try:
             ips_service.attach(derived, ips_service.DERIVED_FROM_PATH, source_path)
         except ValueError:
@@ -1010,7 +1015,12 @@ def open_local_analysis():
     # Explorer -- so the page asks before it emits start_sendto. A path that
     # already names its case answers the question without interrupting anyone.
     derived = ips_utils.derive_ips_from_path(source_path)
-    if derived and not ips_service.current_case_nbr():
+    if (derived and not ips_service.current_case_nbr()
+            and ips_service.answer_for(source_path).get("source")
+                != ips_service.SKIPPED):
+        # Not over a confirmed skip: re-analysing a log somebody already
+        # checked and said has no case would quietly replace that answer with
+        # a folder name, and the confirmation would never be recorded again.
         try:
             ips_service.attach(derived, ips_service.DERIVED_FROM_PATH, source_path)
         except ValueError:

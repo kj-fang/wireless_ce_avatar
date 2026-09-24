@@ -143,7 +143,35 @@ def current_case_nbr() -> str:
 
 
 def current_source() -> str:
+    """How the prompt flow recorded this session's case.
+
+    ABSENT here means "the prompt did not set it", which is what the gating in
+    needs_ips keys off: a case that arrived from the case search rather than
+    from this prompt counts for any log the user opens. For what to write into
+    telemetry, use attributed_source() instead -- these are different questions
+    and collapsing them breaks one or the other.
+    """
     value = str(session.get(SESSION_SOURCE_KEY) or "").strip()
+    return value if value in _SOURCES else ABSENT
+
+
+def attributed_source() -> str:
+    """How the case on this session was really obtained, for telemetry.
+
+    The main case-submission routes put the source on the CaseContext and
+    never on the separate session key, so reading only the key reported
+    'absent' for a case the user had typed in. That is worse than untidy:
+    sync_feedback drops the number whenever the source says absent, so an
+    ordinary case lost its attribution entirely on the way to the warehouse.
+    """
+    value = str(session.get(SESSION_SOURCE_KEY) or "").strip()
+    if value in _SOURCES and value != ABSENT:
+        return value
+    raw = session.get("case_context") or {}
+    if isinstance(raw, dict):
+        stated = str(raw.get("case_ref_source") or "").strip()
+        if stated in _SOURCES:
+            return stated
     return value if value in _SOURCES else ABSENT
 
 
@@ -173,6 +201,11 @@ def _apply_stored_answer(log_path) -> None:
     """
     record = answer_for(log_path)
     source = record.get("source")
+    if source in (SKIPPED, EXPLICIT, DERIVED_FROM_PATH):
+        # The restored answer is now this session's answer about this log.
+        # Without saying so, _session_answer_is_about disowns it and
+        # prompt_state reports 'absent' for a log that was in fact skipped.
+        _mark_answered(_log_key(log_path))
     if source == SKIPPED:
         _remember_on_session("", SKIPPED)
     elif source in (EXPLICIT, DERIVED_FROM_PATH) and record.get("case_nbr"):
@@ -210,6 +243,15 @@ def needs_ips(log_path) -> bool:
     key = _log_key(log_path)
     if key and key in _answered_this_session:
         # Answered in this conversation, so only the session can have lost it.
+        _apply_stored_answer(log_path)
+        return False
+    if key and answer_for(log_path).get("source") == SKIPPED:
+        # A confirmed "this log has no case" outlives the conversation and the
+        # process. The user answered a question about the file, and that does
+        # not stop being true when the app restarts or a new conversation
+        # begins -- otherwise the same log is nagged about forever. A
+        # remembered case number is deliberately not reapplied here: each new
+        # conversation confirms that one again.
         _apply_stored_answer(log_path)
         return False
     if not key:

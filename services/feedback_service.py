@@ -324,7 +324,12 @@ def _case_ref(issue: Optional[dict] = None, log_path: str = "") -> dict:
         from services import ips_service
         case_nbr = ips_service.current_case_nbr()
         if case_nbr:
-            return {"case_nbr": case_nbr, "case_ref_source": ips_service.current_source()}
+            # attributed_source, not current_source: the latter answers "did
+            # the prompt set this", which is 'absent' for a case typed into
+            # the case search -- and the collector drops the number whenever
+            # the source says absent.
+            return {"case_nbr": case_nbr,
+                    "case_ref_source": ips_service.attributed_source()}
         if ips_service.current_source() == ips_service.SKIPPED:
             return {"case_nbr": "", "case_ref_source": ips_service.SKIPPED}
     except Exception:
@@ -869,6 +874,12 @@ def record_turn(
                 snap["domain"] = norm or "wifi"
             if issue:
                 snap["issue"] = issue
+            # The snapshot is created by /set_log, which runs before the user
+            # answers the case prompt, so its root case fields were written as
+            # 'absent' and never revisited -- leaving the one record this whole
+            # change exists to make traceable with no case on it. Refresh them
+            # on every turn, while there is still a request to read them from.
+            snap.update(_case_ref(snap.get("issue"), snap.get("log_path", "")))
             if log_path:
                 snap["log_path"] = _scrub_user_path(log_path)
             snap["ended_at"] = _now_iso()
@@ -939,6 +950,10 @@ def record_vote(
     with _pending_lock:
         snap = _pending_buffer.get(conversation_id)
         if snap is not None:
+            # A vote is the usual trigger for the flush that writes this
+            # snapshot to disk, and by now the case prompt has certainly been
+            # answered. Take the answer before the file is written.
+            snap.update(_case_ref(snap.get("issue"), snap.get("log_path", "")))
             for t in snap.get("turns", []):
                 if t.get("turn_id") == turn_id:
                     if vote == 0:

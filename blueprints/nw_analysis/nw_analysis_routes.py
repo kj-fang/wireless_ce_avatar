@@ -683,6 +683,7 @@ def reset():
         # A reset starts a genuinely new conversation, so the analytics
         # records must not keep accumulating into the previous one.
         _ensure_nw_conversation_id(rotate=True)
+        ips_service.start_new_session()
         return jsonify({"success": True, "message": "Conversation reset."})
     except Exception as e:
         return jsonify({"success": False, "error": str(e)}), 500

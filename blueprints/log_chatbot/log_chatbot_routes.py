@@ -1074,6 +1074,7 @@ def reset():
     try:
         agent = _get_or_create_agent()
         agent.reset_conversation()
+        ips_service.start_new_session()
         return jsonify({"success": True, "message": "Conversation reset."})
     except Exception as e:
         return jsonify({"success": False, "error": str(e)}), 500

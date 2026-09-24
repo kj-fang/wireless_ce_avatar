@@ -13,7 +13,7 @@ import os
 import threading
 from datetime import datetime, timezone
 from pathlib import Path
-from typing import List
+from typing import List, Optional
 
 from flask import session
 
@@ -41,11 +41,18 @@ _answer_lock = threading.Lock()
 # desktop user, the same reason app_config.last_analyzed_log_path exists.
 _last_prompted_log = ""
 
+# Which logs have been answered in the conversation the user is in now. A new
+# conversation confirms the case again rather than inheriting the last answer,
+# because the case is recorded per conversation. Kept out of the session for
+# the same reason as the path above.
+_answered_this_session = set()
 
-def _answer_store_path() -> Path:
+
+def _answer_store_path() -> Optional[Path]:
     root = getattr(app_config, "avatarfiles_dir", "") or ""
     if not root:
-        return Path()
+        # Path() would be ".", which is truthy and would be written to.
+        return None
     state_dir = Path(root) / "app_state"
     state_dir.mkdir(parents=True, exist_ok=True)
     return state_dir / _ANSWER_FILE_NAME
@@ -63,7 +70,7 @@ def _log_key(log_path) -> str:
 
 def _load_answers() -> dict:
     path = _answer_store_path()
-    if not path or not path.is_file():
+    if path is None or not path.is_file():
         return {}
     try:
         with path.open("r", encoding="utf-8") as fh:
@@ -95,7 +102,7 @@ def remember_answer(log_path, case_nbr: str, source: str) -> None:
     if not key:
         return
     path = _answer_store_path()
-    if not path:
+    if path is None:
         return
     try:
         with _answer_lock:
@@ -134,18 +141,30 @@ def current_source() -> str:
     return value if value in _SOURCES else ABSENT
 
 
-def _restore_from_store(log_path) -> None:
+def _session_answer_is_about(log_path) -> bool:
     """
-    Put a remembered answer back on a session that lost it.
+    Whether the case sitting on the session was given about this log.
 
-    Sessions are held server-side and written back whole at the end of each
-    request, so a slow request that read the session before the user answered
-    overwrites the answer on its way out — the case number is simply gone, and
-    the user is asked again. The file keyed by log path is the durable record
-    of what they said; this restores it.
+    A case that came from the case search rather than from this prompt belongs
+    to whatever the user is working on, so it counts for any log they open.
+    An answer given through the prompt belongs to one file and one conversation.
     """
-    if current_case_nbr() or current_source() != ABSENT:
-        return
+    key = _log_key(log_path)
+    if not key:
+        return True
+    if current_source() == ABSENT:
+        return True
+    return key in _answered_this_session
+
+
+def _apply_stored_answer(log_path) -> None:
+    """
+    Put the answer for this log back on a session that lost it.
+
+    Sessions are held server-side and written back whole at the end of every
+    request, so a request that started before the user answered overwrites the
+    answer on its way out. The file keyed by log path is the durable record.
+    """
     record = answer_for(log_path)
     source = record.get("source")
     if source == SKIPPED:
@@ -154,33 +173,61 @@ def _restore_from_store(log_path) -> None:
         _remember_on_session(str(record["case_nbr"]), source)
 
 
+def start_new_session() -> None:
+    """Begin a fresh conversation, which confirms the case again."""
+    _answered_this_session.clear()
+    if current_source() not in (EXPLICIT, DERIVED_FROM_PATH, SKIPPED):
+        return
+    session[SESSION_SOURCE_KEY] = ABSENT
+    raw = session.get("case_context") or {}
+    if isinstance(raw, dict) and raw:
+        context = CaseContext.from_session(raw)
+        context.case_nbr = ""
+        context.case_ref_source = None
+        session["case_context"] = context.to_session()
+
+
 def candidates_for(log_path) -> List[str]:
     """Case numbers worth offering for this log, best guess first."""
     found = ips_utils.derive_ips_candidates(log_path)
     attached = current_case_nbr()
-    if attached and attached not in found:
+    if attached and attached not in found and _session_answer_is_about(log_path):
         found.insert(0, attached)
+    remembered = str(answer_for(log_path).get("case_nbr") or "")
+    if remembered and remembered not in found:
+        found.insert(0, remembered)
     return found
 
 
 def needs_ips(log_path) -> bool:
     """Whether the modal should block this log."""
-    _restore_from_store(log_path)
-    if current_case_nbr():
+    key = _log_key(log_path)
+    if key and key in _answered_this_session:
+        # Answered in this conversation, so only the session can have lost it.
+        _apply_stored_answer(log_path)
         return False
-    return current_source() != SKIPPED
+    if not key:
+        return not current_case_nbr() and current_source() != SKIPPED
+    if current_source() == ABSENT:
+        # A case that came from the case search rather than from this prompt.
+        return not current_case_nbr()
+    return True
 
 
 def prompt_state(log_path) -> dict:
     """Everything the client needs to decide whether and how to prompt."""
     _note_log_path(log_path)
+    needed = needs_ips(log_path)
     candidates = candidates_for(log_path)
+    mine = _session_answer_is_about(log_path)
     return {
-        "needs_ips": needs_ips(log_path),
+        "needs_ips": needed,
         "ips_candidates": candidates,
         "suggested_ips": candidates[0] if candidates else "",
-        "case_nbr": current_case_nbr(),
-        "case_ref_source": current_source(),
+        # Reporting a case that was answered about a different log would have
+        # the client show this conversation as already attributed.
+        "case_nbr": current_case_nbr() if mine else "",
+        "case_ref_source": current_source() if mine else ABSENT,
         # A skip is remembered against the path, so the dialog has to be able
         # to name the log it is about to mark as caseless.
         "log_path": str(log_path or ""),
@@ -222,8 +269,11 @@ def _remember_on_session(canonical: str, source: str) -> str:
     have_context = isinstance(raw, dict) and bool(raw)
 
     if source == SKIPPED:
+        # The prompt is only ever shown for a log with no case, so anything
+        # still on the context belongs to a different log.
         if have_context:
             context = CaseContext.from_session(raw)
+            context.case_nbr = ""
             context.case_ref_source = SKIPPED
             session["case_context"] = context.to_session()
         return ""
@@ -236,8 +286,9 @@ def _remember_on_session(canonical: str, source: str) -> str:
 
     # The extracted-file index is keyed by case number, and the results page
     # looks it up by the number on the context. Renaming one without the other
-    # leaves that page with nothing to show.
-    if previous and previous != canonical:
+    # leaves that page with nothing to show. Only a respelling of the same case
+    # is a rename — moving between logs is not, and must leave the index alone.
+    if previous and previous != canonical and ips_utils.normalise_ips(previous) == canonical:
         results = app_config.download_results.pop(previous, None)
         if results is not None:
             app_config.download_results[canonical] = results
@@ -257,6 +308,9 @@ def attach(case_nbr: str, source: str, log_path="") -> str:
         raise ValueError(f"unknown case reference source: {source}")
 
     _note_log_path(log_path)
+    key = _log_key(log_path)
+    if key:
+        _answered_this_session.add(key)
 
     if source == SKIPPED:
         remember_answer(log_path, "", SKIPPED)

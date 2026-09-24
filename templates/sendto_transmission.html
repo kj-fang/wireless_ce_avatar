@@ -6,6 +6,10 @@
   <link href="https://fonts.googleapis.com/css2?family=Inter:wght@400;500;600;700&display=swap" rel="stylesheet">
   <link href="https://stackpath.bootstrapcdn.com/bootstrap/4.5.2/css/bootstrap.min.css" rel="stylesheet">
   <script src="https://cdn.socket.io/4.6.1/socket.io.min.js"></script>
+  <!-- The prompt itself. Send To reaches the analysis over Socket.IO rather
+       than fetch, so the 428 interception does not apply here; the page asks
+       before it emits start_sendto instead. -->
+  <script src="{{ url_for('static', filename='js/ips_prompt.js') }}"></script>
   <style>
     * { font-family: 'Inter', sans-serif !important; }
 
@@ -179,12 +183,30 @@
     // start attempt after the server already popped session['sendto_pending_path'].
     let _startSent = false;
 
+    // What the server knows about this log's case, rendered with the page.
+    const IPS_STATE = {{ ips_state | tojson }};
+
+    function startWhenCaseIsKnown() {
+      if (_startSent) { return; }
+      _startSent = true;
+      // A log that arrives through Send To has had nobody type a case number
+      // for it, so ask before the analysis runs rather than after: the
+      // analysis is the expensive half, and once it has run the engineer has
+      // moved on. The server refuses start_sendto without an answer anyway,
+      // so this is the dialog for that refusal, not a substitute for it.
+      if (IPS_STATE && IPS_STATE.needs_ips && window.IpsPrompt) {
+        appendLog('Waiting for the IPS case number…', 'log-ok');
+        window.IpsPrompt.handleSetLog(IPS_STATE)
+          .then(function () { socket.emit('start_sendto'); })
+          .catch(function () { socket.emit('start_sendto'); });
+        return;
+      }
+      socket.emit('start_sendto');
+    }
+
     socket.on('connect', function () {
       appendLog('Connected. Starting processing…', 'log-ok');
-      if (!_startSent) {
-        _startSent = true;
-        socket.emit('start_sendto');
-      }
+      startWhenCaseIsKnown();
     });
 
     socket.on('connect_error', function (err) {

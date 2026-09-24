@@ -478,12 +478,18 @@ def _process_local_analysis(source_path: str, source_dir: str, file_path: str,
         'keywords_found': []
     }
 
-    # A log opened from disk usually already sits under its case folder
-    # (...\IntelAvatar_files\01010628\...). Naming the run after that beats
-    # minting local_upload_<ts>, which is a number nobody can look up later.
-    derived_ips = (ips_utils.derive_ips_from_path(file_path)
-                   or ips_utils.derive_ips_from_path(source_path))
-    if derived_ips:
+    # What to name this run. A number the user gave the prompt comes first:
+    # they were asked about this exact log and answered, and a Send To from a
+    # folder that happens to sit under some other case must not silently
+    # override that. Failing that, a log opened from disk usually already sits
+    # under its case folder (...\IntelAvatar_files\01010628\...), and naming
+    # the run after that beats minting local_upload_<ts>, which is a number
+    # nobody can look up later.
+    answered_ips = ips_service.current_case_nbr()
+    derived_ips = answered_ips or (
+        ips_utils.derive_ips_from_path(file_path)
+        or ips_utils.derive_ips_from_path(source_path))
+    if derived_ips and not answered_ips:
         session[ips_service.SESSION_SOURCE_KEY] = ips_service.DERIVED_FROM_PATH
 
     if file_path.lower().endswith('.dmp') or is_bsod:
@@ -1000,7 +1006,19 @@ def open_local_analysis():
     # browser connects to the /sendto-progress Socket.IO namespace.
     session['sendto_pending_path'] = source_path
 
-    return render_template('sendto_transmission.html', filename=original_name)
+    # Nobody typed a case number on the way in -- Send To is a right-click in
+    # Explorer -- so the page asks before it emits start_sendto. A path that
+    # already names its case answers the question without interrupting anyone.
+    derived = ips_utils.derive_ips_from_path(source_path)
+    if derived and not ips_service.current_case_nbr():
+        try:
+            ips_service.attach(derived, ips_service.DERIVED_FROM_PATH, source_path)
+        except ValueError:
+            pass
+
+    return render_template('sendto_transmission.html',
+                           filename=original_name,
+                           ips_state=ips_service.prompt_state(source_path))
 
 
 @log_parser_bp.route('/navigate_existing_browser', methods=['POST'])
@@ -1196,6 +1214,17 @@ def register_socketio_handlers(socketio):
         if not os.path.exists(source_path):
             socketio.emit('sendto_error',
                           {'message': f'File no longer exists: {source_path}'},
+                          namespace='/sendto-progress', to=client_sid)
+            return
+
+        # The page asks before it emits, but Socket.IO is not covered by the
+        # 428 interception that guards every other entry point, so the refusal
+        # is repeated here. The pending path is deliberately left in the
+        # session: this is the one error the user can act on and retry.
+        if ips_service.needs_ips(source_path):
+            socketio.emit('sendto_error',
+                          {'message': 'Enter the IPS case number for this log '
+                                      'before the analysis starts.'},
                           namespace='/sendto-progress', to=client_sid)
             return
 

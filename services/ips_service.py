@@ -81,6 +81,12 @@ def _load_answers() -> dict:
         return {}
 
 
+def _mark_answered(key: str) -> None:
+    """Record that this log has been answered for in the current conversation."""
+    if key:
+        _answered_this_session.add(key)
+
+
 def _note_log_path(log_path) -> None:
     global _last_prompted_log
     text = str(log_path or "").strip()
@@ -309,10 +315,17 @@ def attach(case_nbr: str, source: str, log_path="") -> str:
 
     _note_log_path(log_path)
     key = _log_key(log_path)
-    if key:
-        _answered_this_session.add(key)
 
+    # Marked as answered only once there is an answer. Doing it here, before
+    # the validation below, meant that typing something that is not a case
+    # number opened the gate: the route reported 400, the set kept the log,
+    # and needs_ips then found nothing in the store and returned False. The
+    # conversation went ahead with case_ref_source still 'absent' -- the exact
+    # silent gap this prompt exists to close -- and because the set is
+    # module-level the log was never asked about again for the life of the
+    # process.
     if source == SKIPPED:
+        _mark_answered(key)
         remember_answer(log_path, "", SKIPPED)
         return _remember_on_session("", SKIPPED)
 
@@ -320,6 +333,7 @@ def attach(case_nbr: str, source: str, log_path="") -> str:
     if not canonical:
         raise ValueError("Enter an 8-digit case number, for example 01010628.")
 
+    _mark_answered(key)
     remember_answer(log_path, canonical, source)
     return _remember_on_session(canonical, source)
 

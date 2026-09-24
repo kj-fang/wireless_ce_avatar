@@ -6,6 +6,9 @@
     <link href="https://fonts.googleapis.com/css2?family=Inter:wght@400;500;600;700&display=swap" rel="stylesheet">
     <link href="https://stackpath.bootstrapcdn.com/bootstrap/4.5.2/css/bootstrap.min.css" rel="stylesheet">
     <script src="https://cdn.jsdelivr.net/npm/marked/marked.min.js"></script>
+    <!-- Loaded before the page's own scripts: it wraps fetch to catch the
+         server's 428 "case number required" and replay the request. -->
+    <script src="{{ url_for('static', filename='js/ips_prompt.js') }}"></script>
     <style>
         * { font-family: 'Inter', sans-serif; box-sizing: border-box; }
 
@@ -945,6 +948,9 @@
                 renderSkills(data.skills);
                 logLoaded = true;
                 updateAnalyzeBtn();
+                // Ask while the user is still looking at the log they chose,
+                // rather than letting their first question bounce off /chat.
+                if (window.IpsPrompt) { window.IpsPrompt.handleSetLog(data); }
             } else {
                 showStatus(statusEl, '✘ ' + data.error, 'err');
             }
@@ -1015,8 +1021,12 @@
             const data = await res.json();
             if (data.success) {
                 showStatus(statusEl, '✔ ' + (data.message || 'Sleepstudy file loaded.'), 'ok');
-                // Run the dedicated sleepstudy analyzer pipeline
-                runSleepstudyAnalysis(path);
+                // The analysis starts on its own here, so the case has to be
+                // settled before it runs rather than alongside it.
+                const gate = window.IpsPrompt
+                    ? window.IpsPrompt.handleSetLog(data)
+                    : Promise.resolve(null);
+                gate.then(() => runSleepstudyAnalysis(path));
             } else {
                 showStatus(statusEl, '✘ ' + data.error, 'err');
             }

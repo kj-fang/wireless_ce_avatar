@@ -14,6 +14,7 @@ from models.models import CaseContext
 from services.nw_analysis_service import WifiLogAgentSystem, load_skills_from_data_dir, get_builtin_skills, build_skill_file_map, load_skills_from_yaml
 from services.sleepstudy_analyzer import analyze_sleepstudy_stream
 from services import gather_service
+from services import ips_service
 from utils.etl_utils import extract_time_from_description
 
 from utils.skills_yaml_utils import (
@@ -327,6 +328,9 @@ def set_log():
             "success": True,
             "message": f"Log file set: {log_path}",
             "skills": agent.get_skill_descriptions(),
+            # Whether the client must ask for a case number before the first
+            # question. Carries the candidates so the prompt opens pre-filled.
+            **ips_service.prompt_state(log_path),
         })
     except Exception as e:
         return jsonify({"success": False, "error": str(e)}), 500
@@ -354,6 +358,7 @@ def set_log_sleepstudy():
         return jsonify({
             "success": True,
             "message": f"Sleepstudy file set: {log_path}",
+            **ips_service.prompt_state(log_path),
         })
     except Exception as e:
         return jsonify({"success": False, "error": str(e)}), 500
@@ -377,6 +382,16 @@ def analyze_sleepstudy():
         def _err():
             yield f"data: {json.dumps({'type': 'error', 'content': 'log_path is required'})}\n\n"
         return Response(_err(), mimetype="text/event-stream")
+
+    # 428 Precondition Required. set_log_sleepstudy only advertises needs_ips,
+    # and the page starts this analysis straight afterwards, so without a gate
+    # here a case-less sleepstudy runs anyway -- and so does any direct caller
+    # or a client whose prompt never loaded. Checked before the SSE stream
+    # opens, because a 428 inside an event stream is not a status the client
+    # can act on.
+    blocked = ips_service.blocking_state(sleep_path)
+    if blocked:
+        return jsonify(blocked), 428
 
     if not os.path.exists(sleep_path):
         def _missing():
@@ -484,6 +499,12 @@ def chat():
     user_message = (data.get("message") or "").strip()
     if not user_message:
         return jsonify({"success": False, "error": "message is required"}), 400
+
+    # 428 Precondition Required: the log has no case number yet. The client
+    # opens the prompt and replays this request once it has one.
+    blocked = ips_service.blocking_state()
+    if blocked:
+        return jsonify(blocked), 428
 
     mode = str(data.get("mode", "tools")).strip().lower()
     if mode not in ("simple", "tools"):
@@ -672,6 +693,7 @@ def reset():
         # A reset starts a genuinely new conversation, so the analytics
         # records must not keep accumulating into the previous one.
         _ensure_nw_conversation_id(rotate=True)
+        ips_service.start_new_session()
         return jsonify({"success": True, "message": "Conversation reset."})
     except Exception as e:
         return jsonify({"success": False, "error": str(e)}), 500

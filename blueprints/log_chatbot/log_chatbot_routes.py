@@ -36,6 +36,7 @@ from services import feedback_service
 from services import history_service
 from services import chat_jobs
 from services import gather_service
+from services import ips_service
 
 log_chatbot_bp = Blueprint("log_chatbot", __name__, url_prefix="/log_chatbot")
 
@@ -614,6 +615,9 @@ def set_log():
             "previous_log_path": prev_log_path if rotated else "",
             "previous_conversation_id": prev_conv_id if rotated else "",
             "new_conversation_id": new_conv_id,
+            # Whether the client must ask for a case number before the first
+            # question. Carries the candidates so the prompt opens pre-filled.
+            **ips_service.prompt_state(log_path),
         })
     except Exception as e:
         return jsonify({"success": False, "error": str(e)}), 500
@@ -696,6 +700,12 @@ def chat():
     user_message = (data.get("message") or "").strip()
     if not user_message:
         return jsonify({"success": False, "error": "message is required"}), 400
+
+    # 428 Precondition Required: the log has no case number yet. The client
+    # opens the prompt and replays this request once it has one.
+    blocked = ips_service.blocking_state()
+    if blocked:
+        return jsonify(blocked), 428
 
     mode = str(data.get("mode", "tools")).strip().lower()
     if mode not in ("simple", "tools"):
@@ -1064,6 +1074,7 @@ def reset():
     try:
         agent = _get_or_create_agent()
         agent.reset_conversation()
+        ips_service.start_new_session()
         return jsonify({"success": True, "message": "Conversation reset."})
     except Exception as e:
         return jsonify({"success": False, "error": str(e)}), 500
@@ -1428,7 +1439,11 @@ def back_to_avatar():
     ):
         session.pop(key, None)
 
-    # 3) Clear the global "last analyzed log" hint so the chatbot page
+    # 3) This ends the conversation, so the case number is asked for again
+    #    rather than inherited by whatever is loaded next.
+    ips_service.start_new_session()
+
+    # 4) Clear the global "last analyzed log" hint so the chatbot page
     #    doesn't pre-fill the previous run's log path.
     try:
         app_config.last_analyzed_log_path = ""

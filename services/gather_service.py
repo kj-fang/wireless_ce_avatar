@@ -83,6 +83,7 @@ from configs.llm_pricing import cost_for
 from configs.path_configs import GATHER_DIR_prim, GATHER_DIR_bkup
 from configs.version import __version__ as APP_VERSION
 from utils import helpers
+from utils import ips_utils
 
 
 # Bump when the record structure changes (downstream ETL keys off this).
@@ -451,6 +452,31 @@ def _case_domain(issue: Optional[dict], explicit: str = "") -> str:
     return value if value in {"wifi", "bt"} else UNKNOWN_DOMAIN
 
 
+_CASE_REF_SOURCES = {"explicit", "derived_from_path", "skipped", "absent"}
+
+
+def _case_ref_source(issue: Optional[dict], log_path: str = "") -> str:
+    """
+    How this session came to be attached to its case number.
+
+    Kept alongside the number itself because "no case" and "a case we guessed
+    from the folder name" are not the same claim, and only the first should
+    count against the share of work that went untracked.
+    """
+    issue = issue if isinstance(issue, dict) else {}
+    declared = str(issue.get("case_ref_source") or "").strip().lower()
+    if declared in _CASE_REF_SOURCES:
+        return declared
+
+    nbr = str(issue.get("case_nbr") or "").strip()
+    if not nbr or ips_utils.is_synthetic_case_nbr(nbr):
+        return "absent"
+    canonical = ips_utils.normalise_ips(nbr)
+    if canonical and canonical == ips_utils.derive_ips_from_path(log_path):
+        return "derived_from_path"
+    return "explicit"
+
+
 def _clean_case(issue: Optional[dict]) -> dict:
     """Pull a tidy, compact case summary out of the issue context dict."""
     issue = issue if isinstance(issue, dict) else {}
@@ -458,7 +484,11 @@ def _clean_case(issue: Optional[dict]) -> dict:
     if len(desc) > _MAX_DESC_CHARS:
         desc = desc[:_MAX_DESC_CHARS] + "…"
     return {
-        "case_nbr": str(issue.get("case_nbr") or "").strip(),
+        # Zero-padded, so 1010628 and 01010628 are one case in the warehouse
+        # rather than two rows that every GROUP BY splits apart. Anything that
+        # is not a case number (a local_upload_ placeholder) is left alone.
+        "case_nbr": ips_utils.normalise_ips(issue.get("case_nbr"))
+                    or str(issue.get("case_nbr") or "").strip(),
         "subject": str(issue.get("subject") or "").strip(),
         "issue_type": str(issue.get("issue_type") or "").strip(),
         "description": desc,
@@ -494,6 +524,7 @@ def _new_record(
         "agent_domain": _agent_domain(domain),
         "case_domain": _case_domain(issue),
         "case": _clean_case(issue),
+        "case_ref_source": _case_ref_source(issue, log_path),
         "log_path": log_path or "",
         "issue_time": issue_time or "",
         # ±minutes window around issue_time used for the Segment2 log slice

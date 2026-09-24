@@ -19,6 +19,7 @@ from urllib.parse import unquote
 from werkzeug.utils import secure_filename
 
 from utils import helpers, attachment_decompose
+from utils import ips_utils
 from configs.global_configs import app_config
 from configs.path_configs import LOG_PARSER_DIR, LOAD_PATH_prim, LOAD_PATH_bkup
 from models.models import CaseContext
@@ -27,6 +28,7 @@ from utils.log_parser_preprocess import extract_all_keywords_from_filter_file
 from services.log_parser_file_manage_service import FileManagerService
 from services.log_parser_service import LogParserService
 from services import gather_service
+from services import ips_service
 from services.etl_parser.wpp_ddd_parser import wpp_ddd_parser_run
 from services.etl_parser.bt_parser import bt_decode_via_cli
 
@@ -476,8 +478,22 @@ def _process_local_analysis(source_path: str, source_dir: str, file_path: str,
         'keywords_found': []
     }
 
+    # What to name this run. A number the user gave the prompt comes first:
+    # they were asked about this exact log and answered, and a Send To from a
+    # folder that happens to sit under some other case must not silently
+    # override that. Failing that, a log opened from disk usually already sits
+    # under its case folder (...\IntelAvatar_files\01010628\...), and naming
+    # the run after that beats minting local_upload_<ts>, which is a number
+    # nobody can look up later.
+    answered_ips = ips_service.current_case_nbr()
+    derived_ips = answered_ips or (
+        ips_utils.derive_ips_from_path(file_path)
+        or ips_utils.derive_ips_from_path(source_path))
+    if derived_ips and not answered_ips:
+        session[ips_service.SESSION_SOURCE_KEY] = ips_service.DERIVED_FROM_PATH
+
     if file_path.lower().endswith('.dmp') or is_bsod:
-        local_case_nbr = f'local_bsod_{timestamp}'
+        local_case_nbr = derived_ips or f'local_bsod_{timestamp}'
 
         # For local BSOD uploads, copy the dump to shared storage first,
         # then submit analysis using that shared folder path.
@@ -568,7 +584,7 @@ def _process_local_analysis(source_path: str, source_dir: str, file_path: str,
         total = len(extracted_files)
         _cb(60, f'Extraction complete. Found {total} file{"s" if total != 1 else ""}.')
 
-        local_case_nbr = f'local_upload_{timestamp}'
+        local_case_nbr = derived_ips or f'local_upload_{timestamp}'
         # Only consider bt_files for case type inference since wifi_files may be present in both wifi and bt cases
         local_case_type = _infer_local_upload_case_type(bt_files)
 
@@ -644,7 +660,7 @@ def _process_local_analysis(source_path: str, source_dir: str, file_path: str,
         # hint hardcoded 'wifi'; 'coex'/None collapse to 'wifi' for CaseContext but
         # fwTypeSelectModal (via __autoAnalysisFw) handles them at render time.
         fw_type = infer_fw_parse_type(file_path, 'wifi')
-        local_case_nbr = f'local_upload_{timestamp}'
+        local_case_nbr = derived_ips or f'local_upload_{timestamp}'
         local_case_type = fw_type if fw_type in ('bt', 'wifi') else 'wifi'
         local_context = CaseContext(
             case_nbr=local_case_nbr,
@@ -808,6 +824,31 @@ def upload_local_analysis():
             'message': f'Invalid file type: {original_name}. Only .zip, .7z, .rar, .etl, ddd, .hci.txt, .log, or .dmp are allowed.'
         }), 400
 
+    # 428 Precondition Required: this log is about to be analysed and nothing
+    # says which case it belongs to. The /chat gate cannot cover this -- a
+    # Send To that is analysed and never chatted about would go unrecorded --
+    # and the analysis is the expensive half, so asking before it starts is
+    # also the cheaper place to ask. The client replays this request once the
+    # prompt is answered; only a path is posted here, never the file itself,
+    # so replaying costs nothing.
+    #
+    # A path that already names its case answers the question by itself, and
+    # is attached without interrupting anybody.
+    derived = ips_utils.derive_ips_from_path(source_path)
+    if (derived and not ips_service.current_case_nbr()
+            and ips_service.answer_for(source_path).get("source")
+                != ips_service.SKIPPED):
+        # Not over a confirmed skip: re-analysing a log somebody already
+        # checked and said has no case would quietly replace that answer with
+        # a folder name, and the confirmation would never be recorded again.
+        try:
+            ips_service.attach(derived, ips_service.DERIVED_FROM_PATH, source_path)
+        except ValueError:
+            pass
+    blocked = ips_service.blocking_state(source_path)
+    if blocked:
+        return jsonify(blocked), 428
+
     timestamp = datetime.datetime.now().strftime('%Y%m%d_%H%M%S')
     source_dir = os.path.dirname(source_path) or os.getcwd()
     file_path = source_path
@@ -970,7 +1011,24 @@ def open_local_analysis():
     # browser connects to the /sendto-progress Socket.IO namespace.
     session['sendto_pending_path'] = source_path
 
-    return render_template('sendto_transmission.html', filename=original_name)
+    # Nobody typed a case number on the way in -- Send To is a right-click in
+    # Explorer -- so the page asks before it emits start_sendto. A path that
+    # already names its case answers the question without interrupting anyone.
+    derived = ips_utils.derive_ips_from_path(source_path)
+    if (derived and not ips_service.current_case_nbr()
+            and ips_service.answer_for(source_path).get("source")
+                != ips_service.SKIPPED):
+        # Not over a confirmed skip: re-analysing a log somebody already
+        # checked and said has no case would quietly replace that answer with
+        # a folder name, and the confirmation would never be recorded again.
+        try:
+            ips_service.attach(derived, ips_service.DERIVED_FROM_PATH, source_path)
+        except ValueError:
+            pass
+
+    return render_template('sendto_transmission.html',
+                           filename=original_name,
+                           ips_state=ips_service.prompt_state(source_path))
 
 
 @log_parser_bp.route('/navigate_existing_browser', methods=['POST'])
@@ -1166,6 +1224,17 @@ def register_socketio_handlers(socketio):
         if not os.path.exists(source_path):
             socketio.emit('sendto_error',
                           {'message': f'File no longer exists: {source_path}'},
+                          namespace='/sendto-progress', to=client_sid)
+            return
+
+        # The page asks before it emits, but Socket.IO is not covered by the
+        # 428 interception that guards every other entry point, so the refusal
+        # is repeated here. The pending path is deliberately left in the
+        # session: this is the one error the user can act on and retry.
+        if ips_service.needs_ips(source_path):
+            socketio.emit('sendto_error',
+                          {'message': 'Enter the IPS case number for this log '
+                                      'before the analysis starts.'},
                           namespace='/sendto-progress', to=client_sid)
             return
 

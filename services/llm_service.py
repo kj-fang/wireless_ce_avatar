@@ -584,6 +584,7 @@ class LLM_helper:
                 top_p=0.85,
                 frequency_penalty=0.1,
                 presence_penalty=0,
+                # The customer email draft expands the JSON response, so allow enough room to avoid truncation.
                 max_tokens=3000,
                 #stop=None
             )

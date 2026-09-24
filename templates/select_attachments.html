@@ -741,6 +741,7 @@
         }
 
         function renderNextAction(nextAction) {
+            // Prefer the model-written email; construct a fallback when older prompts omit the new field.
             const recommendations = Array.isArray(nextAction.Recommendation)
                 ? nextAction.Recommendation
                 : nextAction.Recommendation ? [nextAction.Recommendation] : [];
@@ -762,6 +763,7 @@
         }
 
         function buildCustomerEmailDraft(recommendations) {
+            // Prompt contract: customer questions come first and the recommended next step is last.
             const nextStep = recommendations.length
                 ? String(recommendations[recommendations.length - 1]).trim()
                 : '';

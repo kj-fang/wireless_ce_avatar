@@ -37,6 +37,7 @@ def get_llm_analysis():
                 return_usage = True,
             )
             if type(ai_analysis) == dict:
+                # Some dict responses may omit Classification; downstream session consumers still expect this shape.
                 session['classification'] = ai_analysis.get(
                     "Classification",
                     {

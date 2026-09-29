@@ -425,10 +425,10 @@ def smoke_runner(tmp: Path) -> None:
               and "step-by-step reproduction instructions" in draft5["plain"]
               and draft5["confidence"] is None,
               draft5["plain"][:400])
-        check("S9.b2 request-info reply suggests the standard report template",
-              "you can reply using the following format:" in draft5["plain"]
-              and "Platform / WLAN Configuration" in draft5["plain"]
-              and "Last Build the test(s) was passed:" in draft5["plain"],
+        check("S9.b2 request-info reply carries the pre-filled domain checklist",
+              "=== General Info ===" in draft5["plain"]
+              and "=== Required Log (Others) ===" in draft5["plain"]
+              and "please provide" in draft5["plain"],
               draft5["plain"][-500:])
 
         # Fallback-found issue time retracts the gap (stage-7 refinement).
@@ -451,16 +451,16 @@ def smoke_runner(tmp: Path) -> None:
         # request_logs + info gaps merge into ONE public reply.
         analysis2.missing_info = [{"item": "issue_time", "reason": ""}]
         draft2b = compose(analysis2)
-        check("S9.d request-logs reply merges the info asks + template",
+        check("S9.d request-logs reply merges info asks + checklist body",
               "In addition, to speed up the analysis" in draft2b["plain"]
               and "exact date and time (with timezone)" in draft2b["plain"]
-              and "Workaround steps:" in draft2b["plain"],
+              and "=== General Info ===" in draft2b["plain"],
               draft2b["plain"][:400])
         analysis2.missing_info = []
         draft2c = compose(analysis2)
-        check("S9.d2 log-only request stays short (no template without info gaps)",
-              "following format" not in draft2c["plain"]
-              and "Workaround steps:" not in draft2c["plain"])
+        check("S9.d2 log-only request still carries the checklist",
+              "=== General Info ===" in draft2c["plain"]
+              and "In addition, to speed up" not in draft2c["plain"])
 
         # Env form fills the gap: reader flags repro_steps, but the customer
         # answered "Steps to reproduce" in Environment Details -> retracted.
@@ -491,7 +491,7 @@ def smoke_runner(tmp: Path) -> None:
 def smoke_orchestrator(tmp: Path) -> None:
     print("[S5] Approve/post guards (scan failure aborts; marker dedups)")
     from . import orchestrator as orch
-    from .composer import AI_MARKER
+    from .composer import AI_MARKER, CHECKLIST_TAG
     from .queue import HandsfreeStore
 
     store = HandsfreeStore(tmp / "handsfree_s5")
@@ -528,6 +528,24 @@ def smoke_orchestrator(tmp: Path) -> None:
               str(res2))
         check("S5.d second approve of posted draft refused",
               orch.approve_and_post(draft_id)["error"] == "draft already posted")
+
+        # Family-aware dedup: an ANALYSIS comment on the case must not block
+        # a first-response draft (and vice versa).
+        rec2 = store.enqueue(case_nbr="09999998", case_id="500S5B", subject="s5b",
+                             draft_plain=AI_MARKER + "\n" + CHECKLIST_TAG + "\n\nbody",
+                             draft_html="<p>b</p>", confidence=None,
+                             mode="first_response", analysis={})
+
+        class _MarkerNoTag(_HasMarker):
+            def post_comment(self, *a, **k):
+                from .ips_client import PostResult
+                return PostResult(ok=False, backend="rest", error="rest down")
+        orch.IpsClient = _MarkerNoTag
+        res3 = orch.approve_and_post(rec2["draft_id"])
+        check("S5.e analysis-family comment does not block first_response draft",
+              "already exists" not in (res3.get("error") or "")
+              and store.get(rec2["draft_id"])["status"] == "post_failed",
+              str(res3))
     finally:
         orch._store = orig_store_fn
         orch.IpsClient = orig_ips
@@ -789,6 +807,71 @@ def smoke_env_detail() -> None:
           "NOT a driver/firmware assert code" in READER_PROMPT)
 
 
+# ---------------------------------------------------------------- S12
+def smoke_checklist() -> None:
+    print("[S12] Debug-checklist data + first-response rendering")
+    from .runner import CaseAnalysis
+    from .checklist import (FALLBACK_DOMAIN, _blank_fills, build_fills,
+                            deterministic_fills, load_checklist, llm_fill,
+                            resolve_domain)
+    from .composer import compose, CHECKLIST_TAG, AI_MARKER
+
+    data = load_checklist()
+    check("S12.a committed JSON: 14 domains + 10 general questions",
+          len(data["domains"]) == 14 and len(data["general_info"]) == 10
+          and data["revision"] == "Rev1_0",
+          f"domains={len(data['domains'])} rev={data['revision']}")
+    w = data["domains"].get("WowLAN", {})
+    check("S12.b WowLAN tab has all three sections",
+          len(w.get("required_log", [])) >= 5
+          and any("wake method" in e["item"].lower() for e in w.get("required_info", []))
+          and any("firewall" in e["item"].lower() for e in w.get("initial_triage", [])),
+          str({k: len(w.get(k, [])) for k in ("required_log", "required_info", "initial_triage")}))
+    check("S12.c domain aliases resolve; unknown -> Others",
+          resolve_domain("Yellow Bang (YB)") == "Yellow Bang"
+          and resolve_domain("wake on wlan") == "WowLAN"
+          and resolve_domain("weird thing") == FALLBACK_DOMAIN
+          and resolve_domain("") == FALLBACK_DOMAIN)
+
+    a = CaseAnalysis(case_nbr="1", mode="first_response", ok=True,
+                     subject="YB after burn-in", issue_domain="Yellow Bang",
+                     chosen_attachment="WRT_0820.zip", log_path="x.log",
+                     issue_times=["08/20/2026 13:43"],
+                     env_detail={"Steps to reproduce": "1. stress test the DUT 2. check device manager"})
+    fills = _blank_fills("Yellow Bang")
+    deterministic_fills(a, fills)
+    wrt = next(e for e in fills["required_log"] if e["item"].startswith("WRT Log"))
+    steps = next(e for e in fills["general_info"] if "reproduction steps" in e["item"].lower())
+    check("S12.d deterministic fills: WRT log + env repro steps checked",
+          wrt["provided"] and "WRT_0820.zip" in wrt["value"] and steps["provided"])
+
+    def _boom(**kw):
+        raise RuntimeError("llm down")
+    import types
+    llm_fill(types.SimpleNamespace(chat=_boom), fills, "case text")
+    check("S12.e llm_fill failure leaves items unfilled, never raises",
+          not any(e["provided"] for e in fills["required_info"]))
+
+    a.checklist_fills = fills
+    d = compose(a)
+    check("S12.f first_response draft: tag, checked value, example hint, triage",
+          CHECKLIST_TAG in d["plain"] and AI_MARKER in d["plain"]
+          and "[x] WRT Log, including — provided: WRT_0820.zip" in d["plain"]
+          and "please provide (Example: code 10)" in d["plain"]
+          and "=== Please verify (initial triage) ===" in d["plain"]
+          and d["confidence"] is None,
+          d["plain"][:300])
+
+    # LLM fill happy path: answers item 1 of the remaining ones.
+    fills2 = _blank_fills("Yellow Bang")
+    fake = types.SimpleNamespace(chat=lambda messages, system_content=None:
+                                 '{"fills": {"1": {"provided": true, "value": "Yes, regression from 24.30"}}}')
+    llm_fill(fake, fills2, "case text")
+    check("S12.g llm_fill maps numbered answers onto items",
+          fills2["general_info"][0]["provided"]
+          and "regression" in fills2["general_info"][0]["value"])
+
+
 def run_smoke() -> int:
     tmp = Path(tempfile.mkdtemp(prefix="handsfree_smoke_"))
     try:
@@ -802,6 +885,7 @@ def run_smoke() -> int:
         smoke_time_coverage(tmp)
         smoke_yb_etl_pick()
         smoke_env_detail()
+        smoke_checklist()
     finally:
         shutil.rmtree(tmp, ignore_errors=True)
     print(f"\nsmoke result: {'ALL PASS' if not PASS_FAIL else 'FAILURES: ' + ', '.join(PASS_FAIL)}")

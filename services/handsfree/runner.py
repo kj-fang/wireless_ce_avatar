@@ -210,6 +210,8 @@ class CaseAnalysis:
     time_mismatch: dict = field(default_factory=dict)  # log doesn't cover issue time
     missing_info: list = field(default_factory=list)   # [{item, reason}] case-info gaps
     env_detail: dict = field(default_factory=dict)     # IPS Environment Details Q&A form
+    issue_domain: str = ""                             # debug-checklist domain (tab name)
+    checklist_fills: dict = field(default_factory=dict)  # pre-filled first-response items
     error: str = ""
 
     @property
@@ -327,6 +329,12 @@ class HandsfreeRunner:
                     f"issue_times={reader.get('issue_times')} "
                     f"attachment={reader.get('attachment_name') or '(none)'} "
                     f"({reader.get('issue_time_source') or 'no source'})")
+
+        # Debug-checklist domain: reader's pick, else mapped from the triage
+        # issue type; "Others" when nothing fits.
+        from .checklist import resolve_domain
+        analysis.issue_domain = ((analysis.case_reader or {}).get("issue_domain")
+                                 or resolve_domain(analysis.issue_type))
 
         # -- 3a. is the case information usable? -------------------------------
         # LLM-judged completeness (description clarity / issue time / repro

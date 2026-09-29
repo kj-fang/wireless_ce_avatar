@@ -1,0 +1,656 @@
+{
+  "revision": "Rev1_0",
+  "generated_from": "740684_Intel_Windows_Wi-Fi_SW_Issue_Debugging_Checklist_Rev1_0.xlsx",
+  "general_info": [
+    {
+      "item": "Is this a regression issue? If this issue did not happen previously, please specify the delta between passing and failing BKC. Also, check if the failure is observed by trying the passing driver in the same test environment.",
+      "example": "Example: Yes, the delta between passing and failing BKC: BIOS: 1.3 vs. 1.4 OS: Win10 vs. Win11 ME: 15.0 vs. 16.0 Is the failure observed on a passing driver in the same test environment?: Y/N"
+    },
+    {
+      "item": "Is the issue seen across platforms? Or only on a specific platform?",
+      "example": "It helps to understand if the issue is single-unit case."
+    },
+    {
+      "item": "What is the end-user impact?",
+      "example": "For example, does the Wi-Fi function still work?"
+    },
+    {
+      "item": "What is the reproduction rate?",
+      "example": "Example: 1/1000 cycles"
+    },
+    {
+      "item": "Provide clear issue reproduction steps.",
+      "example": "Repro steps shall be concise and precise."
+    },
+    {
+      "item": "Precise issue reproduction time for each log collected",
+      "example": "Reproduction time shall be as accurate as possible."
+    },
+    {
+      "item": "Can the issue be replicated using the latest driver release?",
+      "example": "Always verify the issue using the latest driver release."
+    },
+    {
+      "item": "Is the issue recoverable? How?",
+      "example": "Specify if the issue is recoverable, and if so, how to recover."
+    },
+    {
+      "item": "Does the issue happen only with a specific NIC?",
+      "example": "Example: Y/N"
+    },
+    {
+      "item": "What is the time zone configured on the DUT used for collecting logs?",
+      "example": "Example: (UTC-08:00) Pacific Time (US & Canada)"
+    }
+  ],
+  "domains": {
+    "Connectivity": {
+      "required_log": [
+        {
+          "item": "Issue Type",
+          "example": "Check Items"
+        },
+        {
+          "item": "Connectivity",
+          "example": "Default WRT Log, including"
+        },
+        {
+          "item": "Scan",
+          "example": "WRT Log, including"
+        },
+        {
+          "item": "Roaming",
+          "example": "WRT Log, including"
+        }
+      ],
+      "required_info": [],
+      "initial_triage": [
+        {
+          "item": "Can any relevant errors be found in the WLAN-AutoConfig/System event log around issue reproduction time?",
+          "example": "For example, assert 5002 found"
+        },
+        {
+          "item": "In case of no Internet access, check if WAN cable is connected properly to AP. Is IP address valid?",
+          "example": "Proper WAN cable connection and correct IP address are needed for connection to work"
+        }
+      ],
+      "description": "Typical connectivity issues can be one of the followings: * Problem connecting to AP * Random disconnection * No Internet access"
+    },
+    "WowLAN": {
+      "required_log": [
+        {
+          "item": "WRT Log, including",
+          "example": ""
+        },
+        {
+          "item": "1) WPP driver log",
+          "example": "Example: Y (included) /N (not included)"
+        },
+        {
+          "item": "2) FW usniffer",
+          "example": "Example: Y/N"
+        },
+        {
+          "item": "3) Windows event logs",
+          "example": "Example: Y/N"
+        },
+        {
+          "item": "Air sniffer log (optional)",
+          "example": "Example: Y/N"
+        },
+        {
+          "item": "OS log",
+          "example": "Example: Y/N"
+        }
+      ],
+      "required_info": [
+        {
+          "item": "Does the platform support Modern standby or legacy S3?",
+          "example": "Provide this system information for reference"
+        },
+        {
+          "item": "Is AMT test tool used during issue repro?",
+          "example": "Help to clarify if this is AMT related"
+        },
+        {
+          "item": "What is the wake method?",
+          "example": "Example: Remote desktop, magic packet, etc."
+        },
+        {
+          "item": "Exact time when wake is triggered",
+          "example": "Time shall be as precise as possible"
+        }
+      ],
+      "initial_triage": [
+        {
+          "item": "Not all wake sources will turn on device's display in Modern Standby.",
+          "example": "Reference https://docs.microsoft.com/en-us/windows-hardware/design/device-experiences/modern-standby-wake-sources"
+        },
+        {
+          "item": "Check if firewall is disabled",
+          "example": "Firewall shall be disabled"
+        },
+        {
+          "item": "Check if DUT is still connected to AP after it entered sleep/MS",
+          "example": "DUT must remain connected to AP after entering sleep/MS"
+        },
+        {
+          "item": "Check if wake option is enabled in device manager under \"Power Management\" tab (for non MS system)",
+          "example": "Wake option shall be enabled for wake to work"
+        },
+        {
+          "item": "When Remote desktop is used, make sure \"IP address\" is used instead of \"PC name\"",
+          "example": "IP address must be used (as opposed to PC name) to wake DUT on Remote desktop"
+        },
+        {
+          "item": "Check if relevant BIOS settings are enabled for Wake on WLAN",
+          "example": "Relevant BIOS settings shall be enabled"
+        }
+      ],
+      "description": "Wake on WLAN issue refers to system failing to wake via different wake methods"
+    },
+    "BSOD": {
+      "required_log": [
+        {
+          "item": "Kernel Dump",
+          "example": "Example: Y (included) /N (not included)"
+        }
+      ],
+      "required_info": [
+        {
+          "item": "In case BSOD does not point to Wi-Fi, but is suspected to be Wi-Fi related, check again by enabling verifier",
+          "example": "verifier is preferably enabled on all modules. If not, it shall be enabled on at least Wi-Fi-related modules, including the following: netwtw10.sys netwaw10.sys (netadapter)"
+        },
+        {
+          "item": "Check if issue happens on clean OS",
+          "example": "This helps to determine if the issue is OS-related"
+        }
+      ],
+      "initial_triage": [],
+      "description": "BSOD issue"
+    },
+    "System Hang": {
+      "required_log": [
+        {
+          "item": "Kernel Dump (if available)",
+          "example": "Example: Y (included) /N (not included)"
+        }
+      ],
+      "required_info": [
+        {
+          "item": "If a kernel dump is not available, try manually trigger the BSOD",
+          "example": "Reference https://docs.microsoft.com/en-us/windows-hardware/drivers/debugger/forcing-a-system-crash-from-the-keyboard"
+        },
+        {
+          "item": "If a Dump is not available, specify in detail the reason why it is suspected as Wi-Fi related; does issue happen when Wi-Fi is disabled?",
+          "example": "Provide reason in detail"
+        },
+        {
+          "item": "Try AB/BA test by swapping the failing module, and see if the issue follows a specific platform or NIC",
+          "example": "NIC swapping test can help clarify if issue follows a specific platform/NIC"
+        },
+        {
+          "item": "Enable verifier and see if issue still happens",
+          "example": "verifier is preferably enabled on all modules. If not, it shall be enabled on at least wifi related modules including the followings: netwtw10.sys netwaw10.sys (netadapter)"
+        }
+      ],
+      "initial_triage": [],
+      "description": "System ceases to respond to inputs"
+    },
+    "UEFI": {
+      "required_log": [
+        {
+          "item": "Issue Type",
+          "example": "Check Items"
+        },
+        {
+          "item": "Connectivity",
+          "example": "UEFI driver log (mandatory)"
+        },
+        {
+          "item": "Scan",
+          "example": "UEFI driver log"
+        }
+      ],
+      "required_info": [],
+      "initial_triage": [
+        {
+          "item": "Check if UEFI WiFi is enabled in BIOS",
+          "example": "UEFI WiFi must be enabled in BIOS"
+        },
+        {
+          "item": "Check if issue can be replicated on RVP",
+          "example": "IMPORTANT TEST. This helps clarify if issue is related to customer's BIOS customization"
+        },
+        {
+          "item": "Additional information about how to capture UEFI driver log",
+          "example": ""
+        },
+        {
+          "item": "Method 1 - Using UEFI bootable flash drive",
+          "example": ""
+        },
+        {
+          "item": "Method 2 - Using debug bios",
+          "example": ""
+        },
+        {
+          "item": "Method 2 - An example of driver debug print",
+          "example": ""
+        }
+      ],
+      "description": "Typical UEFI issue can be one of the followings: * Problem scanning AP * Connectivity problem (connection/disconnection) * Problem which happens while manipulating UEFI UI (e.g., system hang, missing MAC address, etc.)"
+    },
+    "P2P (Miracast)": {
+      "required_log": [
+        {
+          "item": "Issue Type",
+          "example": "Check Items"
+        },
+        {
+          "item": "Connectivity",
+          "example": "WRT Log, including"
+        },
+        {
+          "item": "Performance",
+          "example": "WRT Log, including"
+        }
+      ],
+      "required_info": [
+        {
+          "item": "What is the model name of the Miracast receiver used, and the FW version?",
+          "example": "Example: ActionTec 100B f/w: 1.1.15"
+        },
+        {
+          "item": "Is Miracast conneciton established over BSS?",
+          "example": "Clarify if the issue is on Miracast over Infra"
+        },
+        {
+          "item": "Does the issue happen in a clean environment?",
+          "example": "Often an issue can be related to interference, especially with video playback issues"
+        },
+        {
+          "item": "Check to see if the issue happens with another brand of Miracast receiver",
+          "example": "Clarify if the issue is dependent on a specific Miracast receiver"
+        },
+        {
+          "item": "Check to see if the issue happens after upgrading/downgrading the Gfx driver",
+          "example": "Clarify if the issue is related to the Gfx driver"
+        },
+        {
+          "item": "For video playback quality issues, check if the issue can be replicated using a cable connection (e.g., HDMI)",
+          "example": "Example: Y/N/NA"
+        }
+      ],
+      "initial_triage": [],
+      "description": "Miracast related issues"
+    },
+    "Yellow Bang": {
+      "required_log": [
+        {
+          "item": "WRT Log, including",
+          "example": ""
+        },
+        {
+          "item": "1) WPP driver log",
+          "example": "Example: Y (included) /N (not included)"
+        },
+        {
+          "item": "2) FW usniffer",
+          "example": "Example: Y/N"
+        },
+        {
+          "item": "3) Windows event logs",
+          "example": "Example: Y/N"
+        },
+        {
+          "item": "Note: If WRT creates multiple folders during issue reproduction, provide logs in all folders",
+          "example": ""
+        }
+      ],
+      "required_info": [
+        {
+          "item": "Yellow bang reason (in device manager)",
+          "example": "Example: code 10"
+        }
+      ],
+      "initial_triage": [
+        {
+          "item": "Check to see if the issue follows a specific NIC or platform by swapping the NIC module",
+          "example": "Check to see if the issue is a single-unit case"
+        },
+        {
+          "item": "Is it possible to recover from the issue? How?",
+          "example": "Example: warm boot, disable/enable driver, etc."
+        },
+        {
+          "item": "Is there an older driver version that this issue cannot be replicated with?",
+          "example": "Check to see if the issue did not happen in the past"
+        },
+        {
+          "item": "Was the HW design reviewed by Intel?",
+          "example": "Example: Y/N"
+        },
+        {
+          "item": "Check to see if the H/W functions properly",
+          "example": "Reference 738469_Intel_Wireless_Hardware_Issue_Working_List_Rev1_0.xlsx"
+        }
+      ],
+      "description": "Yellow bang observed in device manager."
+    },
+    "Performance": {
+      "required_log": [
+        {
+          "item": "WRT FW usniffer (with \"DataPathPerformance\" preset)",
+          "example": "Example: Y (included) /N (not included)"
+        },
+        {
+          "item": "Air sniffer log",
+          "example": "Example: Y/N"
+        },
+        {
+          "item": "Chariot test result (if applicable)",
+          "example": "Example: Y/N/NA"
+        }
+      ],
+      "required_info": [
+        {
+          "item": "Complete and provide \"Customer Performance defects template\"",
+          "example": "Template can be downloaded from https://personal.filesanywhere.com/fs/v.aspx?v=8e6d638f5b6373bdab6a"
+        },
+        {
+          "item": "Make sure DDD driver is not used as it may impact performance",
+          "example": "DDD driver shall not be used for throughput performance test"
+        },
+        {
+          "item": "If the issue is found in regresson testing, re-test with previous passing driver in the same test environment",
+          "example": "This helps confirm if the issue is related to the test setup (e.g., Chariot, RF cables, etc.)"
+        },
+        {
+          "item": "If the issue is related to BT Coex, check to see if the issue happens with another brand of BT device",
+          "example": "Clarify if issue is dependent on specific BT device"
+        },
+        {
+          "item": "Check CPU usage in logical processor view, make sure no core is 100% overloaded (for both Tx/Rx)",
+          "example": "If a specific core is 100% overloaded, it may be an indication that the issue is related to the platform"
+        }
+      ],
+      "initial_triage": [],
+      "description": "Throughput issue. E.g., throughput not meeting spec."
+    },
+    "HLK": {
+      "required_log": [
+        {
+          "item": "WRT Log, including",
+          "example": ""
+        },
+        {
+          "item": "1) WPP driver log",
+          "example": "Example: Y (included) /N (not included)"
+        },
+        {
+          "item": "2) FW usniffer",
+          "example": "Example: Y/N"
+        },
+        {
+          "item": "3) Windows event logs",
+          "example": "Example: Y/N"
+        },
+        {
+          "item": "Air sniffer log (when fail symptom is related to AP scanning or connectivity)",
+          "example": "Example: Y/N"
+        },
+        {
+          "item": "HLK Test Report",
+          "example": "Example: Y/N"
+        }
+      ],
+      "required_info": [],
+      "initial_triage": [
+        {
+          "item": "Check to see if the issue happens with older drivers",
+          "example": "Re-check with an old driver that has passed in the same test environment previously. This helps to confirm if the issue is related to the test setup."
+        },
+        {
+          "item": "Check to see if the issue happens in a clean environment/RF chamber",
+          "example": "Check to see if the issue is related to interference"
+        },
+        {
+          "item": "Check to see if the issue happens with different APs",
+          "example": "Check to see if the issue is AP-dependent"
+        },
+        {
+          "item": "Check to see if the issue follows a specific NIC",
+          "example": "Check to see if the issue is dependent on a specific NIC"
+        },
+        {
+          "item": "Make sure the AP has only one client (DUT) connected to it",
+          "example": "For HLK testing, there shall be only one DUT connected to the AP used for testing"
+        },
+        {
+          "item": "Make sure all Errata are applied",
+          "example": ""
+        }
+      ],
+      "description": "HLK failure"
+    },
+    "Power Consumption (MS)": {
+      "required_log": [
+        {
+          "item": "Sleepstudy report",
+          "example": "Example: Y (included) /N (not included)"
+        },
+        {
+          "item": "WPP driver log",
+          "example": "Example: Y/N"
+        },
+        {
+          "item": "OS log",
+          "example": "Example: Y/N"
+        },
+        {
+          "item": "WPR log",
+          "example": "Example: Y/N"
+        },
+        {
+          "item": "Windows event logs",
+          "example": "Example: Y/N"
+        }
+      ],
+      "required_info": [],
+      "initial_triage": [
+        {
+          "item": "Check to see if there's an active application running on top of WiFi device",
+          "example": "Example: Yes"
+        },
+        {
+          "item": "Check to see if the issue happens on a clean OS",
+          "example": "This helps confirm that the issue may be related to upper-layer applications"
+        },
+        {
+          "item": "Check the delta between the previously passed BKC (if any)",
+          "example": "This helps narrow the scope of potential relevant components"
+        },
+        {
+          "item": "DUT setting recommendations",
+          "example": ""
+        },
+        {
+          "item": "Ensure the following settings on DUT > Disable the Windows* update process - Windows* key +R (RUN) -> services.msc -> Windows* Update -> Stop and Status type: Disabled - Windows* key+R (RUN) -> services.msc ->Windows* Search -> stop and change status type: Disabled - Windows* key+R (RUN) -> gpedit.msc -> Computer Configuration -> Administrative Templates -> Windows* - Components -> Windows* update -> Do not connect to any windows* update internet location -> Enabled > Disable OneDrive* - Windows* key+R (RUN) -> gpedit.msc -> Computer Configuration -> Administrative Templates -> Windows* Components -> OneDrive: - Prevent OneDrive files from syncing over metered connections -> Enabled - Prevent the usage of OneDrive for file storage -> Enabled - Prevent the usage of OneDrive for file storage on Windows* 8.1 -> Enabled > Disable Windows* Defender - Windows* key+R (RUN) -> gpedit.msc -> Computer Configuration -> Administrative Templates -> Windows* Components -> Windows* Defender Antivirus -> * Turn off Windows* Defender Antivirus-> Enabled * Turn off routine remediation -> Enabled > Disable the Windows* store - Windows* key+R (RUN) -> gpedit.msc -> Computer Configuration -> Administrative Templates -> Windows* Components -> Store - Turn off automatic download of updates on win8 machines -> Enabled - Turn off automatic download and install of updates -> Enabled - Turn off the offer to update to the latest version of windows* -> Enabled - Disable all apps from windows* store -> Enabled - Turn off the store application -> Enabled > Disable Windows* Telemetry service - Computer Configuration-> Administrative Templates-> Windows* components-> Data Collection and Preview Builds -> Allow telemetry -> set to Disabled Note: Sometimes, some of these processes may need to be re-enabled for executing some test cases (for example Windows* OneDrive*, Skype*, and so on). Enable those processes only when executing those test cases. Otherwise, keep them disabled.",
+          "example": ""
+        },
+        {
+          "item": "Additional information about how to capture logs",
+          "example": ""
+        },
+        {
+          "item": "Since WRT may interfere with OS log capturing, when collecting logs for a power consumption issue in Modern Standby, remove WRT completely before reproducing Follow these steps to collect OS log, WPR log and driver log: 1) Create folder c:\\temp\\power 2) Start WPR collection: wpr -start power 3) Start OS log collection: netsh trace start wireless_dbg traceFile=c:\\temp\\power\\wireless_dbg_NetTrace.etl report=disable maxSize=1000 provider={21ba7b61-05f8-41f1-9048-c09493dcfe38} level=0xFF keywords=0xff provider=\"{DD7A21E6-A651-46D4-B7C2-66543067B869}\" level=5 keywords=0x88075F3 4) Do repro steps (this phase will preferably be as short as possible, to avoid losing collected data due to capacity, but yet be sufficient to reproduce the issue) 5) Stop WPR (this might take a while): wpr -stop c:\\temp\\power\\wpr.etl 6) Stop OS log collection (also might take a while): netsh trace stop 7) Generate sleepstudy report: powercfg /SleepStudy /output c:\\temp\\power\\sleepstudy.html 8) Copy Wi-Fi auto-logger data: copy C:\\WINDOWS\\System32\\LogFiles\\WMI\\Wifi*.* c:\\temp\\power\\ Perform the following commands using tracelog.exe (part of WDK, it can be downloaded here) before copying: tracelog.exe -flush WiFiSession tracelog.exe -flush WiFiDriverIHVSession 9) Compress and provide all collected data (c:\\temp\\power)",
+          "example": ""
+        }
+      ],
+      "description": "Wi-Fi adapter being top offender in sleepstudy report."
+    },
+    "WAPI": {
+      "required_log": [
+        {
+          "item": "WRT Log, including",
+          "example": ""
+        },
+        {
+          "item": "1) WPP driver log",
+          "example": "Example: Y (included) /N (not included)"
+        },
+        {
+          "item": "2) FW usniffer",
+          "example": "Example: Y/N"
+        },
+        {
+          "item": "3) Windows event logs",
+          "example": "Example: Y/N"
+        },
+        {
+          "item": "WAPI log (wapi.etl)",
+          "example": "Reference - 635209_Intel_Wireless_WAPI_Enterprise_Application_Guide_Rev1_0"
+        }
+      ],
+      "required_info": [],
+      "initial_triage": [
+        {
+          "item": "Make sure all items in the \"WAPI Connection Failure Checklist\" are checked",
+          "example": "Reference - \"635209_Intel_Wireless_WAPI_Enterprise_Application_Guide_Rev1_0\""
+        }
+      ],
+      "description": "WAPI-related issue"
+    },
+    "ICPS": {
+      "required_log": [
+        {
+          "item": "Issue Type",
+          "example": "Check Items"
+        },
+        {
+          "item": "AP Selection",
+          "example": "aps.log"
+        },
+        {
+          "item": "Dynamic Bandwidth",
+          "example": "aperture.log"
+        },
+        {
+          "item": "UI",
+          "example": "Screenshot of failure symptom"
+        }
+      ],
+      "required_info": [],
+      "initial_triage": [
+        {
+          "item": "Check to see if the entitlement bit is enabled, if the issue is related to an installation failure",
+          "example": "Entitlement bit shall be enabled for ICPS to install"
+        },
+        {
+          "item": "If prioritization fails to work, ensure there is sufficient background traffic by checking Wi-Fi performance in the Task Manager. Traffic shall occupy about 90% of the total bandwidth.",
+          "example": "For prioritization to work, ICPS requires background traffic to occupy at least 90% of total bandwidth of outbound connection"
+        },
+        {
+          "item": "If AP switching or recommendation for AP switching is expected, but does not happen, check to see if the traffic is under 100Kbps for more than 30 seconds",
+          "example": "Traffic shall be under 100Kbps for more than 30 seconds for AP switch/recommendation to work"
+        },
+        {
+          "item": "When AP switching is expected, ensure that \"Automatically switch to a better network\" is enabled",
+          "example": "\"Automatically switch to a better network\" option shall be enabled"
+        },
+        {
+          "item": "If a recommendation for a better AP does not pop up when expected, check to see if the option \"Pop up notifications for better access points\" is enabled, and make sure the recommended AP is one of the previously-connected APs",
+          "example": "\"Pop up notifications for better access points\" option shall be enabled"
+        },
+        {
+          "item": "Additional information about how to capture logs",
+          "example": ""
+        },
+        {
+          "item": "To capture aps.log, add the following registry key DWORD EnableFileLogging = 1​ under Computer\\HKEY_LOCAL_MACHINE\\SOFTWARE\\Intel\\IntelConnect and log will be created in C:\\ProgramData\\Intel\\ConnectivityService To capture aperture.log, add the following registry key DWORD EnableFileLogging = 1​ under Computer\\HKEY_LOCAL_MACHINE\\SOFTWARE\\Intel\\IDBM and log will be created in C:\\ProgramData\\Intel\\ConnectivityService To capture ICPSDbgLog.txt, add the following registry key DWORD App_EnableTraceLogs = 1​ under Computer\\HKEY_LOCAL_MACHINE\\SOFTWARE\\Intel\\ICPS and log will be created under c:\\users\\public",
+          "example": ""
+        }
+      ],
+      "description": "ICPS-related issue"
+    },
+    "OEM Tools": {
+      "required_log": [
+        {
+          "item": "Issue Type",
+          "example": "Customer Feedback"
+        },
+        {
+          "item": "ANT",
+          "example": ""
+        },
+        {
+          "item": "DRTU",
+          "example": ""
+        },
+        {
+          "item": "CITU",
+          "example": ""
+        },
+        {
+          "item": "NDT",
+          "example": ""
+        },
+        {
+          "item": "GNNR",
+          "example": ""
+        }
+      ],
+      "required_info": [],
+      "initial_triage": [
+        {
+          "item": "Tool",
+          "example": "Customer Feedback"
+        },
+        {
+          "item": "ANT",
+          "example": ""
+        },
+        {
+          "item": "DRTU",
+          "example": ""
+        },
+        {
+          "item": "CITU",
+          "example": ""
+        },
+        {
+          "item": "NDT",
+          "example": ""
+        }
+      ],
+      "description": "Issue related to one of the following OEM tools: * ANT * DRTU * CITU * NDT * GNNR"
+    },
+    "Others": {
+      "required_log": [
+        {
+          "item": "Default WRT Log, including",
+          "example": ""
+        },
+        {
+          "item": "1) WPP driver log",
+          "example": "Example: Y (included) /N (not included)"
+        },
+        {
+          "item": "2) FW usniffer",
+          "example": "Example: Y/N"
+        },
+        {
+          "item": "3) Windows event logs",
+          "example": "Example: Y/N"
+        }
+      ],
+      "required_info": [],
+      "initial_triage": [],
+      "notes": [
+        "For issues that do not belong to any other categories, capture the following logs for initial analysis:"
+      ],
+      "description": "Issue that does not belong to any of the above categories."
+    }
+  }
+}

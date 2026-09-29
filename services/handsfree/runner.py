@@ -150,9 +150,12 @@ def _env_brief(env: dict, limit: int = 300) -> str:
     """Compact one-line environment summary for the agent context."""
     parts = []
     for q, a in (env or {}).items():
-        a = str(a or "").strip()
-        if a and _ENV_BRIEF_KEY_RE.search(str(q)):
-            parts.append(f"{str(q).strip()}: {a}")
+        q = " ".join(str(q or "").split())
+        ans = " ".join(str(a or "").split())
+        if not ans or ans.lower() in {"na", "n/a", "none"}:
+            continue
+        if _ENV_BRIEF_KEY_RE.search(q):
+            parts.append(f"{q}: {ans}")
     return "; ".join(parts)[:limit]
 
 

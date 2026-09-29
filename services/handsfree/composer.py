@@ -92,6 +92,33 @@ _INFO_ASKS = {
 }
 
 
+# Standard issue-report template suggested to the customer whenever the case
+# information is insufficient (wording provided by the CE team; keep verbatim).
+_INFO_TEMPLATE = [
+    "Issue Description",
+    "Platform / WLAN Configuration",
+    "Reproduction Steps",
+    "",
+    "Expected Results:",
+    "Actual Results:",
+    "Environment (e.g. SKU, OS Version):",
+    "Steps to reproduce:",
+    "Frequency:",
+    "User Impact:",
+    "Workaround steps:",
+    "Recovery Step:",
+    "Last Build the test(s) was passed:",
+]
+
+
+def _info_template_block() -> list[str]:
+    return (["",
+             "To make sure nothing is missed, you can reply using the "
+             "following format:",
+             ""]
+            + [f"    {ln}" if ln else "" for ln in _INFO_TEMPLATE])
+
+
 def _info_ask_bullets(analysis: CaseAnalysis, numbered: bool = False) -> list[str]:
     out = []
     for n, m in enumerate((analysis.missing_info or []), 1):
@@ -116,6 +143,7 @@ def _request_info_lines(analysis: CaseAnalysis) -> list[str]:
         "case. Could you please provide:",
     ]
     parts += _info_ask_bullets(analysis)
+    parts += _info_template_block()
     parts += ["",
               "We will proceed with the analysis as soon as this information "
               "is available. Thank you!"]
@@ -158,6 +186,7 @@ def _request_logs_lines(analysis: CaseAnalysis) -> list[str]:
         parts += ["",
                   "In addition, to speed up the analysis please also provide:"]
         parts += info
+        parts += _info_template_block()
         parts += ["", tail]
     return parts
 

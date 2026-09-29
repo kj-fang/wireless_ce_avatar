@@ -425,6 +425,11 @@ def smoke_runner(tmp: Path) -> None:
               and "step-by-step reproduction instructions" in draft5["plain"]
               and draft5["confidence"] is None,
               draft5["plain"][:400])
+        check("S9.b2 request-info reply suggests the standard report template",
+              "you can reply using the following format:" in draft5["plain"]
+              and "Platform / WLAN Configuration" in draft5["plain"]
+              and "Last Build the test(s) was passed:" in draft5["plain"],
+              draft5["plain"][-500:])
 
         # Fallback-found issue time retracts the gap (stage-7 refinement).
         time_gap_reply = json.dumps({
@@ -446,10 +451,16 @@ def smoke_runner(tmp: Path) -> None:
         # request_logs + info gaps merge into ONE public reply.
         analysis2.missing_info = [{"item": "issue_time", "reason": ""}]
         draft2b = compose(analysis2)
-        check("S9.d request-logs reply merges the info asks",
+        check("S9.d request-logs reply merges the info asks + template",
               "In addition, to speed up the analysis" in draft2b["plain"]
-              and "exact date and time (with timezone)" in draft2b["plain"],
+              and "exact date and time (with timezone)" in draft2b["plain"]
+              and "Workaround steps:" in draft2b["plain"],
               draft2b["plain"][:400])
+        analysis2.missing_info = []
+        draft2c = compose(analysis2)
+        check("S9.d2 log-only request stays short (no template without info gaps)",
+              "following format" not in draft2c["plain"]
+              and "Workaround steps:" not in draft2c["plain"])
 
         # Env form fills the gap: reader flags repro_steps, but the customer
         # answered "Steps to reproduce" in Environment Details -> retracted.

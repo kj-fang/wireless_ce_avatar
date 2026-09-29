@@ -227,6 +227,8 @@ def smoke_runner(tmp: Path) -> None:
             ["later_capture.zip", "https://esft/x?FileName=later_capture.zip",
              ["06/21/2026 08:00", "no failure in this run"]],
         ]
+        case_ctx.env_detail = {"Computer Model": "LvzhouD",
+                               "Assert Error (32-bit value or NA)": "NA"}
         return case_ctx
 
     # --- mock download + decompose ---
@@ -448,6 +450,21 @@ def smoke_runner(tmp: Path) -> None:
               "In addition, to speed up the analysis" in draft2b["plain"]
               and "exact date and time (with timezone)" in draft2b["plain"],
               draft2b["plain"][:400])
+
+        # Env form fills the gap: reader flags repro_steps, but the customer
+        # answered "Steps to reproduce" in Environment Details -> retracted.
+        def _fake_process_env_steps(case_ctx: CaseContext) -> CaseContext:
+            case_ctx = _fake_process(case_ctx)
+            case_ctx.env_detail = {
+                "Steps to reproduce": "1. Run Burn-in stress 2. Check device status in Device Manager"}
+            return case_ctx
+        cis.CaseService.process_case = staticmethod(_fake_process_env_steps)
+        fake_llm.chat = lambda messages, system_content=None: reader_reply
+        analysis7 = r.analyze_case("01234567")
+        check("S11.e env-form repro steps retract the reader-flagged gap",
+              analysis7.mode == "full" and analysis7.missing_info == []
+              and analysis7.env_detail.get("Steps to reproduce", "").startswith("1. Run"),
+              f"missing={analysis7.missing_info}")
     finally:
         cis.CaseService.process_case = orig_process
         adl.run_dload_threads = orig_dload
@@ -728,6 +745,39 @@ def smoke_yb_etl_pick() -> None:
           and not _YB_ASSERT_ISSUE_RE.search("slow roaming between APs"))
 
 
+# ---------------------------------------------------------------- S11
+def smoke_env_detail() -> None:
+    print("[S11] IPS Environment Details wiring")
+    from .case_reader import _format_env_detail, READER_PROMPT
+    from .runner import CaseAnalysis, _env_repro_steps, _env_brief
+    from .echo_client import find_assert_evidence
+
+    env = {"Computer Model": "LvzhouD", "Found In Build": "24.30.1.1",
+           "Graphics Driver": "",
+           "Steps to reproduce": "[Operation Steps] 1. Burn-in stress 2. Check device status",
+           "Assert Error (The value must be a single, 32bit...)": "NA"}
+    block = _format_env_detail(env)
+    check("S11.a env form rendered as Q:A lines, empty answers skipped",
+          "Computer Model: LvzhouD" in block and "Graphics Driver" not in block
+          and "{env_block}" in READER_PROMPT, block[:200])
+
+    check("S11.b filled 'Steps to reproduce' detected; brief built",
+          _env_repro_steps(env).startswith("[Operation Steps]")
+          and "Found In Build: 24.30.1.1" in _env_brief(env)
+          and _env_repro_steps({"Steps to reproduce": "NA"}) == "")
+
+    # The "Assert Error" form field is customer-filled from Windows Event
+    # Viewer — a DIFFERENT code namespace than driver rtStatus asserts.
+    # It must NEVER become assert evidence (same trap as the 0x5002 bug).
+    a = CaseAnalysis(case_nbr="1", mode="full",
+                     env_detail={"Assert Error (32bit or NA)": "0x2000008A"})
+    ev = find_assert_evidence(a)
+    check("S11.c customer-filled Assert Error field NEVER becomes evidence",
+          ev["assert_codes"] == [] and ev["source"] is None, str(ev))
+    check("S11.d reader prompt warns the field is not a firmware assert",
+          "NOT a driver/firmware assert code" in READER_PROMPT)
+
+
 def run_smoke() -> int:
     tmp = Path(tempfile.mkdtemp(prefix="handsfree_smoke_"))
     try:
@@ -740,6 +790,7 @@ def run_smoke() -> int:
         smoke_echo_kb()
         smoke_time_coverage(tmp)
         smoke_yb_etl_pick()
+        smoke_env_detail()
     finally:
         shutil.rmtree(tmp, ignore_errors=True)
     print(f"\nsmoke result: {'ALL PASS' if not PASS_FAIL else 'FAILURES: ' + ', '.join(PASS_FAIL)}")

@@ -234,6 +234,13 @@ def find_assert_evidence(analysis) -> dict:
                for a in scan_wrt_log_for_asserts(getattr(analysis, "log_path", "") or "")]
     source = "wrt_log" if asserts else None
 
+    # NOTE deliberately NOT used as assert evidence: the IPS Environment
+    # Details "Assert Error" form field. It is customer-filled from Windows
+    # Event Viewer, whose codes live in a DIFFERENT namespace than the
+    # driver/firmware rtStatus asserts — same trap as the 0x5002 event-ID
+    # false positive. Only the decoded WRT log (and, as fallback, the
+    # agent's own write-up) supply assert codes.
+
     blob = _analysis_text_blob(analysis)
     if not asserts:
         seen: set = set()

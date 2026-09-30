@@ -239,9 +239,42 @@ def start_new_session() -> None:
         session["case_context"] = context.to_session()
 
 
+_ARCHIVE_EXTS = (".zip", ".7z", ".rar")
+
+
+def _archive_answer(log_path) -> dict:
+    """The answer given for the archive this log was extracted from, if any.
+
+    A local archive is extracted in place, into <its folder>/<stem with spaces
+    as underscores>/ (see _process_local_analysis). So a Send To of a zip that
+    is not under a case folder is asked about once, and then every log decoded
+    out of it is a new log with no case in its path: the chatbot asked again
+    with an empty box, and the number just typed had to be typed again. Read
+    from the durable store, not the in-process set, because loading a new log
+    may start a new conversation and clear that.
+    """
+    key = _log_key(log_path)
+    if not key:
+        return {}
+    for answered, record in _load_answers().items():
+        stem, ext = os.path.splitext(answered)
+        if ext.lower() not in _ARCHIVE_EXTS:
+            continue
+        folder = os.path.normcase(os.path.join(
+            os.path.dirname(answered), os.path.basename(stem).replace(" ", "_")))
+        if key.startswith(folder + os.sep) and isinstance(record, dict) \
+                and record.get("source") in (EXPLICIT, DERIVED_FROM_PATH) \
+                and record.get("case_nbr"):
+            return record
+    return {}
+
+
 def candidates_for(log_path) -> List[str]:
     """Case numbers worth offering for this log, best guess first."""
     found = ips_utils.derive_ips_candidates(log_path)
+    from_archive = str(_archive_answer(log_path).get("case_nbr") or "")
+    if from_archive and from_archive not in found:
+        found.insert(0, from_archive)
     attached = current_case_nbr()
     if attached and attached not in found and _session_answer_is_about(log_path):
         found.insert(0, attached)
@@ -261,6 +294,10 @@ def candidate_sources(log_path) -> dict:
     was recorded as 'explicit'.
     """
     sources = {nbr: DERIVED_FROM_PATH for nbr in ips_utils.derive_ips_candidates(log_path)}
+    archive = _archive_answer(log_path)
+    if archive and archive["case_nbr"] not in sources:
+        # Given for the archive this log came out of: keep how it was given.
+        sources[archive["case_nbr"]] = archive["source"]
     attached = current_case_nbr()
     if attached and attached not in sources and _session_answer_is_about(log_path):
         sources[attached] = attributed_source()

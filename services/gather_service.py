@@ -455,6 +455,55 @@ def _case_domain(issue: Optional[dict], explicit: str = "") -> str:
 _CASE_REF_SOURCES = {"explicit", "derived_from_path", "skipped", "absent"}
 
 
+def _with_case_ref(issue: Optional[dict]) -> Optional[dict]:
+    """The issue, with the session's case answer attached if it names none.
+
+    Most callers pass a chatbot's issue context, which carries case_nbr but
+    never case_ref_source -- it cannot, because the same dict is splatted into
+    prime_with_context(), which takes five fixed arguments. So a confirmed
+    "no case" never reached a Gather record: the source was inferred as
+    'absent', and the collector then fell back to reading a case folder out
+    of the log path, overriding the user's answer. The answer lives on the
+    session, and Gather writes happen on worker threads that cannot read it,
+    so it is taken here, on the calling request, before the work is handed
+    off. The caller's dict is copied, never changed.
+    """
+    if not isinstance(issue, dict) or issue.get("case_ref_source"):
+        return issue
+    try:
+        from flask import has_request_context
+        if not has_request_context():
+            return issue
+        from services import ips_service
+        if ips_service.current_source() == ips_service.SKIPPED:
+            return {**issue, "case_ref_source": "skipped"}
+        attached = ips_service.current_case_nbr()
+        if attached and attached == ips_utils.normalise_ips(issue.get("case_nbr")):
+            return {**issue, "case_ref_source": ips_service.attributed_source()}
+    except Exception:
+        pass
+    return issue
+
+
+def _carries_case_ref(fn):
+    """Decorate a public record_* entry point so its issue carries the answer."""
+    import functools
+    import inspect
+    signature = inspect.signature(fn)
+
+    @functools.wraps(fn)
+    def wrapper(*args, **kwargs):
+        try:
+            bound = signature.bind_partial(*args, **kwargs)
+            if "issue" in bound.arguments:
+                bound.arguments["issue"] = _with_case_ref(bound.arguments["issue"])
+                return fn(*bound.args, **bound.kwargs)
+        except TypeError:
+            pass
+        return fn(*args, **kwargs)
+    return wrapper
+
+
 def _case_ref_source(issue: Optional[dict], log_path: str = "") -> str:
     """
     How this session came to be attached to its case number.
@@ -864,6 +913,7 @@ def _do_record_workflow_start(
     _maybe_rebuild_aggregates_async()
 
 
+@_carries_case_ref
 def record_workflow_start(
     *,
     workflow_id: str,
@@ -918,6 +968,7 @@ def _do_record_attachment_selection(
     _maybe_rebuild_aggregates_async()
 
 
+@_carries_case_ref
 def record_attachment_selection(
     *, workflow_id: str, selected_files: Optional[list] = None,
     issue: Optional[dict] = None, domain: str = "",
@@ -968,6 +1019,7 @@ def _do_record_attachment_declaration(
     _maybe_rebuild_aggregates_async()
 
 
+@_carries_case_ref
 def record_attachment_declaration(
     *, workflow_id: str, declared: Optional[bool] = None, source: str = "ai_summary",
     issue: Optional[dict] = None, domain: str = "",
@@ -1173,6 +1225,7 @@ def _do_record_attachment_download_result(
     _maybe_rebuild_aggregates_async()
 
 
+@_carries_case_ref
 def record_attachment_download_result(
     *, workflow_id: str, name: str, status: str,
     byte_count: Optional[int] = None, latency_ms: Optional[int] = None,
@@ -1249,6 +1302,7 @@ def _do_record_feature_usage(
     _maybe_rebuild_aggregates_async()
 
 
+@_carries_case_ref
 def record_feature_usage(
     *, workflow_id: str, feature_code: str, model: str = "",
     usage: Optional[dict] = None, issue: Optional[dict] = None,
@@ -1427,6 +1481,7 @@ def _link_conversation_to_workflow(
         print(f"[gather] conversation link failed (workflow={workflow_id}): {e}")
 
 
+@_carries_case_ref
 def record_send(
     *,
     conversation_id: str,
@@ -1630,6 +1685,7 @@ def _do_record_usage(
     _maybe_rebuild_aggregates_async()
 
 
+@_carries_case_ref
 def record_usage(
     *,
     conversation_id: str,
@@ -1773,6 +1829,7 @@ def _do_record_turn_status(
     # and the record_usage that settles the same turn schedules one anyway.
 
 
+@_carries_case_ref
 def record_turn_status(
     *,
     conversation_id: str,
@@ -1844,6 +1901,7 @@ def _do_record_feedback_submit(
     # time, and Submit lands right after a turn that already scheduled one.
 
 
+@_carries_case_ref
 def record_feedback_submit(
     *,
     feedback_event_id: str,

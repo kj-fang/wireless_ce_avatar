@@ -434,9 +434,36 @@ def _placeholder_is_for(log_path) -> bool:
     return False
 
 
+_CONVERSATION_KEYS = ("feedback_conversation_id", "nw_conversation_id",
+                      "nw_active_conversation_id")
+
+
+def _pin_current_conversations(case_nbr: str, source: str) -> None:
+    """Tie this answer to the conversation it was given for, while we can.
+
+    Turns are recorded on a worker thread (tools mode), where the session
+    cannot be read, so a conversation's first turn used to fall back to the
+    log path -- turning a confirmed skip into the folder's case. Pinning it
+    here, on the request that carries the answer, gives that thread the answer.
+    A conversation already pinned to a case is left alone: an answer given on
+    the Send To page arrives while the session still names the previous
+    chatbot conversation, which must keep its own case.
+    """
+    try:
+        from services import feedback_service
+    except Exception:
+        return
+    ref = {"case_nbr": "" if source == SKIPPED else case_nbr, "case_ref_source": source}
+    for key in _CONVERSATION_KEYS:
+        conversation_id = str(session.get(key) or "").strip()
+        if conversation_id:
+            feedback_service.pin_conversation_case_if_unset(conversation_id, ref)
+
+
 def _remember_on_session(canonical: str, source: str, log_path="") -> str:
     """Write one answer onto the session. Returns the canonical number, or ""."""
     session[SESSION_SOURCE_KEY] = source
+    _pin_current_conversations(canonical, source)
 
     def own_placeholder(previous: str) -> bool:
         # With no log to check against, keep the earlier behaviour.

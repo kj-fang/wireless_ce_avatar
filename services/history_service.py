@@ -412,6 +412,22 @@ def record_turn(
                 snapshot["issue_time"] = issue_time
             snapshot["updated_at"] = _now_iso()
 
+            # The case this conversation belongs to, recorded with it. The
+            # issue context carries a number but never how it was obtained,
+            # and the per-log answer store is overwritten when the same log is
+            # later attached to another case -- so reopening this conversation
+            # had no reliable way to know its own case. Written once, and only
+            # improved on from 'absent'; a later case for the same log is a
+            # later conversation's.
+            if snapshot.get("case_ref_source") in (None, "", "absent"):
+                try:
+                    from services import feedback_service
+                    ref = feedback_service._case_ref_for(conversation_id, issue, log_path)
+                    snapshot["case_nbr"] = ref.get("case_nbr", "")
+                    snapshot["case_ref_source"] = ref.get("case_ref_source", "absent")
+                except Exception:
+                    pass
+
             # Defend against a corrupt / non-list ``turns`` from an existing
             # file: normalise to a list before appending so a bad snapshot
             # can't make this best-effort writer raise and drop the turn.

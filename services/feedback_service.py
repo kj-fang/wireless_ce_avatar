@@ -385,6 +385,14 @@ def _pin_conversation_case(conversation_id: str, ref: dict) -> None:
             _conversation_case.pop(next(iter(_conversation_case)))
 
 
+def pin_conversation_case_if_unset(conversation_id: str, ref: dict) -> None:
+    """Pin a conversation unless it is already pinned to a real answer."""
+    with _conversation_case_lock:
+        held = dict(_conversation_case.get(conversation_id) or {})
+    if held.get("case_ref_source") in (None, "", "absent"):
+        _pin_conversation_case(conversation_id, ref)
+
+
 def _case_ref_for(conversation_id: str, issue: Optional[dict] = None,
                   log_path: str = "") -> dict:
     """The case a record about this conversation belongs to.
@@ -426,18 +434,35 @@ def remember_conversation_case(conversation_id: str, conversation: Optional[dict
             held = dict(_conversation_case.get(conversation_id) or {})
         if held.get("case_ref_source") not in (None, "", "absent"):
             return
-        ref = _stored_answer_ref(conv.get("log_path", "")) or \
+        ref = _stored_answer_ref(conv.get("log_path", ""),
+                                 not_after=conv.get("updated_at")) or \
             _case_ref_from_evidence(conv.get("issue"), conv.get("log_path", ""))
     _pin_conversation_case(conversation_id, ref)
 
 
-def _stored_answer_ref(log_path: str) -> dict:
-    """The answer the prompt stored for this log, as a case reference, or {}."""
+def _stored_answer_ref(log_path: str, not_after=None) -> dict:
+    """The answer the prompt stored for this log, as a case reference, or {}.
+
+    The store is keyed by log path and overwritten when the same log is later
+    attached to a different case. So for a reloaded conversation it is only
+    evidence if it was given before that conversation last changed
+    (``not_after``); a later answer belongs to a later conversation, and taking
+    it would stamp this one's feedback with the wrong case. Without a usable
+    time on either side it is not used at all.
+    """
     try:
         from services import ips_service
         record = ips_service.answer_for(log_path)
     except Exception:
         return {}
+    if not_after is not None:
+        try:
+            given = datetime.fromisoformat(str(record.get("at")))
+            limit = datetime.fromisoformat(str(not_after))
+            if given.tzinfo is None or limit.tzinfo is None or given > limit:
+                return {}
+        except (TypeError, ValueError):
+            return {}
     source = record.get("source")
     if source == "skipped":
         return {"case_nbr": "", "case_ref_source": "skipped"}

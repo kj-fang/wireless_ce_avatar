@@ -30,7 +30,6 @@ refusing it would risk refusing real cases, the costlier mistake. A path
 segment is held to the 00/01 form, which keeps most such dates out of guesses.
 """
 
-import os
 import re
 from typing import List
 
@@ -66,10 +65,6 @@ def normalise_ips(raw) -> str:
         return ""
     padded = text.zfill(IPS_LENGTH)
     return padded if _TYPED_RE.match(padded) else ""
-
-
-def is_valid_ips(raw) -> bool:
-    return bool(normalise_ips(raw))
 
 
 def derive_ips_candidates(path) -> List[str]:
@@ -109,9 +104,3 @@ def is_synthetic_case_nbr(case_nbr) -> bool:
     """Whether this is a placeholder minted for a case-less local upload."""
     text = str(case_nbr or "").strip().lower()
     return text.startswith("local_upload") or text.startswith("local_bsod")
-
-
-def resolve_ips_dir(root: str, case_nbr: str) -> str:
-    """Path of a case's download folder, using the canonical spelling."""
-    canonical = normalise_ips(case_nbr)
-    return os.path.join(root, canonical) if canonical else ""

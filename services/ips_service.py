@@ -140,10 +140,6 @@ def remember_answer(log_path, case_nbr: str, source: str) -> None:
         print(f"[ips] could not remember the answer for {key}: {e}")
 
 
-def is_skipped(log_path) -> bool:
-    return answer_for(log_path).get("source") == SKIPPED
-
-
 def current_case_nbr() -> str:
     """The canonical case number already attached to this session, or ""."""
     raw = session.get("case_context") or {}
@@ -772,4 +768,3 @@ def attach(case_nbr: str, source: str, log_path="") -> str:
     _mark_answered(key)
     remember_answer(log_path, canonical, source)
     return _remember_on_session(canonical, source, log_path)
-

@@ -104,8 +104,13 @@ def _checklist_fills(analysis: CaseAnalysis) -> dict:
     fills = getattr(analysis, "checklist_fills", None)
     if fills:
         return fills
-    from .checklist import FALLBACK_DOMAIN, _blank_fills, deterministic_fills
-    fills = _blank_fills(getattr(analysis, "issue_domain", "") or FALLBACK_DOMAIN)
+    from .checklist import (FALLBACK_DOMAIN, _blank_fills,
+                            deterministic_fills, resolve_subcategory)
+    domain = getattr(analysis, "issue_domain", "") or FALLBACK_DOMAIN
+    subcat = resolve_subcategory(
+        domain, getattr(analysis, "issue_subcategory", ""),
+        str(getattr(analysis, "clean_description", "") or ""))
+    fills = _blank_fills(domain, subcat)
     deterministic_fills(analysis, fills)
     return fills
 
@@ -113,7 +118,8 @@ def _checklist_fills(analysis: CaseAnalysis) -> dict:
 def _checklist_body(analysis: CaseAnalysis) -> list[str]:
     from .checklist import FALLBACK_DOMAIN, render_checklist_body
     domain = getattr(analysis, "issue_domain", "") or FALLBACK_DOMAIN
-    return render_checklist_body(domain, _checklist_fills(analysis))
+    return render_checklist_body(domain, _checklist_fills(analysis),
+                                 getattr(analysis, "issue_subcategory", ""))
 
 
 def _info_ask_bullets(analysis: CaseAnalysis, numbered: bool = False) -> list[str]:

@@ -63,6 +63,9 @@ Your tasks:
  5. Classify the issue into exactly ONE debugging domain from this list
     (name must match verbatim; use "Others" when nothing fits):
 {domains_block}
+    When the chosen domain has sub-categories, also pick the ONE
+    "issue_subcategory" that fits best (empty string for other domains):
+{subcats_block}
 
 Output ONLY a valid JSON object (no markdown, no code fences):
 {{
@@ -74,7 +77,8 @@ Output ONLY a valid JSON object (no markdown, no code fences):
   "reasoning": "<2-4 sentences tracing how the comments changed the picture>",
   "missing_info": [{{"item": "issue_description|issue_time|repro_steps",
                      "reason": "<one short sentence why it is missing/unclear>"}}],
-  "issue_domain": "<one domain name from the list, verbatim>"
+  "issue_domain": "<one domain name from the list, verbatim>",
+  "issue_subcategory": "<sub-category name, or ''>"
 }}
 
 === SUBJECT ===
@@ -191,9 +195,16 @@ def read_case_history(llm, *, subject: str, description: str,
 
     from .checklist import load_checklist, resolve_domain
 
+    checklist = load_checklist()
     domains_block = "\n".join(
         f"    - {name}" + (f": {d.get('description', '')}" if d.get("description") else "")
-        for name, d in load_checklist()["domains"].items())
+        for name, d in checklist["domains"].items())
+    subcats_block = "\n".join(
+        f"      * {name}: " + "; ".join(
+            f"{sub} ({desc})" if desc else sub
+            for sub, desc in d["subcategories"].items())
+        for name, d in checklist["domains"].items()
+        if d.get("subcategories")) or "      (none)"
     prompt = READER_PROMPT.format(
         subject=(subject or "").strip()[:500],
         env_block=_format_env_detail(env_detail),
@@ -201,6 +212,7 @@ def read_case_history(llm, *, subject: str, description: str,
         comments_block=_format_comments(_normalize_comments(comments)),
         attachments_block=_format_attachments(attachment_list),
         domains_block=domains_block,
+        subcats_block=subcats_block,
     )
     try:
         raw = llm.chat(
@@ -241,6 +253,7 @@ def read_case_history(llm, *, subject: str, description: str,
         "reasoning": str(res.get("reasoning") or ""),
         "missing_info": missing,
         "issue_domain": resolve_domain(res.get("issue_domain")),
+        "issue_subcategory": str(res.get("issue_subcategory") or "").strip(),
     }
 
 

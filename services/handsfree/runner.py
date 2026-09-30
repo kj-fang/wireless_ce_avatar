@@ -226,6 +226,7 @@ class CaseAnalysis:
     missing_info: list = field(default_factory=list)   # [{item, reason}] case-info gaps
     env_detail: dict = field(default_factory=dict)     # IPS Environment Details Q&A form
     issue_domain: str = ""                             # debug-checklist domain (tab name)
+    issue_subcategory: str = ""                        # checklist sub-category (e.g. Roaming)
     subcategory: str = ""                              # IPS Core issue subcategory (customer-selected)
     checklist_fills: dict = field(default_factory=dict)  # pre-filled first-response items
     error: str = ""
@@ -360,6 +361,11 @@ class HandsfreeRunner:
         analysis.issue_domain = _resolve_issue_domain(
             (analysis.case_reader or {}).get("issue_domain") or "",
             analysis.subcategory, analysis.issue_type)
+        # Sub-category (Connectivity -> Connectivity/Scan/Roaming, P2P ->
+        # Connectivity/Performance): reader's raw pick, normalized/fallback-
+        # resolved inside checklist.build_fills at compose time.
+        analysis.issue_subcategory = str(
+            (analysis.case_reader or {}).get("issue_subcategory") or "")
 
         # -- 3a. is the case information usable? -------------------------------
         # LLM-judged completeness (description clarity / issue time / repro

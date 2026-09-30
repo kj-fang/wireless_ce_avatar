@@ -631,7 +631,9 @@
                   title: 'Approving posts this as a customer-visible comment (not Private to Intel)'});
     }
     if (analysis.issue_domain) {
-      chips.push({label: 'domain', text: analysis.issue_domain,
+      const sub = (analysis.issue_subcategory && analysis.issue_subcategory !== analysis.issue_domain)
+        ? ' · ' + analysis.issue_subcategory : '';
+      chips.push({label: 'domain', text: analysis.issue_domain + sub,
                   title: 'Debug-checklist domain identified from the case'});
     }
     const mi = analysis.missing_info || [];

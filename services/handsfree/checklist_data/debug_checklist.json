@@ -47,20 +47,109 @@
     "Connectivity": {
       "required_log": [
         {
-          "item": "Issue Type",
-          "example": "Check Items"
+          "item": "Default WRT Log, including",
+          "example": "",
+          "subcat": "Connectivity"
         },
         {
-          "item": "Connectivity",
-          "example": "Default WRT Log, including"
+          "item": "1) WPP driver log (mandatory)",
+          "example": "Example: Y (included) /N (not included)",
+          "subcat": "Connectivity"
         },
         {
-          "item": "Scan",
-          "example": "WRT Log, including"
+          "item": "2) FW usniffer",
+          "example": "Example: Y/N",
+          "subcat": "Connectivity"
         },
         {
-          "item": "Roaming",
-          "example": "WRT Log, including"
+          "item": "3) Windows event logs",
+          "example": "Example: Y/N",
+          "subcat": "Connectivity"
+        },
+        {
+          "item": "4) OS log",
+          "example": "Example: Y/N",
+          "subcat": "Connectivity"
+        },
+        {
+          "item": "Air sniffer log (optional)",
+          "example": "Example: Y/N",
+          "subcat": "Connectivity"
+        },
+        {
+          "item": "WRT Log, including",
+          "example": "",
+          "subcat": "Scan"
+        },
+        {
+          "item": "1) WPP driver log",
+          "example": "Example: Y/N",
+          "subcat": "Scan"
+        },
+        {
+          "item": "2) FW usniffer",
+          "example": "Example: Y/N",
+          "subcat": "Scan"
+        },
+        {
+          "item": "3) Windows event logs",
+          "example": "Example: Y/N",
+          "subcat": "Scan"
+        },
+        {
+          "item": "Air sniffer log",
+          "example": "Example: Y/N",
+          "subcat": "Scan"
+        },
+        {
+          "item": "OS log",
+          "example": "Example: Y/N",
+          "subcat": "Scan"
+        },
+        {
+          "item": "WRT BIOS settings (in case scanning UHB)",
+          "example": "Example: Y/N",
+          "subcat": "Scan"
+        },
+        {
+          "item": "WRT Log, including",
+          "example": "",
+          "subcat": "Roaming"
+        },
+        {
+          "item": "1) WPP driver log",
+          "example": "Example: Y/N",
+          "subcat": "Roaming"
+        },
+        {
+          "item": "2) FW usniffer",
+          "example": "Example: Y/N",
+          "subcat": "Roaming"
+        },
+        {
+          "item": "3) Windows event logs",
+          "example": "Example: Y/N",
+          "subcat": "Roaming"
+        },
+        {
+          "item": "Air sniffer log (need 2 sniffer logs, one for source AP and one for target AP)",
+          "example": "Example: Y/N",
+          "subcat": "Roaming"
+        },
+        {
+          "item": "OS log",
+          "example": "Example: Y/N",
+          "subcat": "Roaming"
+        },
+        {
+          "item": "High-level drawing/description of network topology; describe how roaming is done (e.g., turning off AP or based on RSSI)",
+          "example": "Example: AP1 is located on 17F AP2 is located on 18F DUT is connected to AP1 and then moves towards AP2",
+          "subcat": "Roaming"
+        },
+        {
+          "item": "Issue replication time",
+          "example": "Example: around 2:30pm, DUT roams from AP1 to AP2",
+          "subcat": "Roaming"
         }
       ],
       "required_info": [],
@@ -74,6 +163,11 @@
           "example": "Proper WAN cable connection and correct IP address are needed for connection to work"
         }
       ],
+      "subcategories": {
+        "Connectivity": "Typical connectivity issue can be one of the followings: * Problem connecting to AP * Random disconnection * No Internet access",
+        "Scan": "Scan issue refers to problem scanning an AP or empty scan list",
+        "Roaming": "Roaming issue refers to problem roaming from one AP to the other"
+      },
       "description": "Typical connectivity issues can be one of the followings: * Problem connecting to AP * Random disconnection * No Internet access"
     },
     "WowLAN": {
@@ -200,16 +294,24 @@
     "UEFI": {
       "required_log": [
         {
-          "item": "Issue Type",
-          "example": "Check Items"
+          "item": "UEFI driver log (mandatory)",
+          "example": "Example: Y (included) /N (not included)",
+          "subcat": "Connectivity"
         },
         {
-          "item": "Connectivity",
-          "example": "UEFI driver log (mandatory)"
+          "item": "Air sniffer log (optional)",
+          "example": "Example: Y/N",
+          "subcat": "Connectivity"
         },
         {
-          "item": "Scan",
-          "example": "UEFI driver log"
+          "item": "UEFI driver log",
+          "example": "Example: Y/N",
+          "subcat": "Scan"
+        },
+        {
+          "item": "Air sniffer log",
+          "example": "Example: Y/N",
+          "subcat": "Scan"
         }
       ],
       "required_info": [],
@@ -239,21 +341,78 @@
           "example": ""
         }
       ],
+      "subcategories": {
+        "Connectivity": "Typical connectivity issue can be one of the followings: * Problem connecting to AP * Random disconnection from AP",
+        "Scan": "Problem scanning AP"
+      },
       "description": "Typical UEFI issue can be one of the followings: * Problem scanning AP * Connectivity problem (connection/disconnection) * Problem which happens while manipulating UEFI UI (e.g., system hang, missing MAC address, etc.)"
     },
     "P2P (Miracast)": {
       "required_log": [
         {
-          "item": "Issue Type",
-          "example": "Check Items"
+          "item": "WRT Log, including",
+          "example": "",
+          "subcat": "Connectivity"
         },
         {
-          "item": "Connectivity",
-          "example": "WRT Log, including"
+          "item": "1) WPP driver log",
+          "example": "Example: Y (included) /N (not included)",
+          "subcat": "Connectivity"
         },
         {
-          "item": "Performance",
-          "example": "WRT Log, including"
+          "item": "2) FW usniffer",
+          "example": "Example: Y/N",
+          "subcat": "Connectivity"
+        },
+        {
+          "item": "3) Windows event logs",
+          "example": "Example: Y/N",
+          "subcat": "Connectivity"
+        },
+        {
+          "item": "Air sniffer log (optional)",
+          "example": "Example: Y/N",
+          "subcat": "Connectivity"
+        },
+        {
+          "item": "OS log",
+          "example": "Example: Y/N",
+          "subcat": "Connectivity"
+        },
+        {
+          "item": "Note: In case issue is related to projecting to another PC, logs shall also be collected on sink side",
+          "example": "",
+          "subcat": "Connectivity"
+        },
+        {
+          "item": "WRT Log, including",
+          "example": "",
+          "subcat": "Performance"
+        },
+        {
+          "item": "1) WPP driver log",
+          "example": "Example: Y/N",
+          "subcat": "Performance"
+        },
+        {
+          "item": "2) FW usniffer",
+          "example": "Example: Y/N",
+          "subcat": "Performance"
+        },
+        {
+          "item": "3) Windows event logs",
+          "example": "Example: Y/N",
+          "subcat": "Performance"
+        },
+        {
+          "item": "Air sniffer log",
+          "example": "Example: Y/N",
+          "subcat": "Performance"
+        },
+        {
+          "item": "Video of issue reproduction",
+          "example": "Example: Y/N",
+          "subcat": "Performance"
         }
       ],
       "required_info": [
@@ -283,6 +442,10 @@
         }
       ],
       "initial_triage": [],
+      "subcategories": {
+        "Connectivity": "Typical connectivity issues can be one of the following: * Problem scanning Miracast receivers * Problem connecting to a Miracast receiver or Notebook * Random disconnection",
+        "Performance": "Choppy, jerky, lagging video playback"
+      },
       "description": "Miracast related issues"
     },
     "Yellow Bang": {
@@ -525,20 +688,24 @@
     "ICPS": {
       "required_log": [
         {
-          "item": "Issue Type",
-          "example": "Check Items"
+          "item": "aps.log",
+          "example": "Example: Y (included) /N (not included)",
+          "subcat": "AP Selection"
         },
         {
-          "item": "AP Selection",
-          "example": "aps.log"
+          "item": "aperture.log",
+          "example": "Example: Y/N",
+          "subcat": "Dynamic Bandwidth"
         },
         {
-          "item": "Dynamic Bandwidth",
-          "example": "aperture.log"
+          "item": "Screenshot of failure symptom",
+          "example": "Example:",
+          "subcat": "UI"
         },
         {
-          "item": "UI",
-          "example": "Screenshot of failure symptom"
+          "item": "ICPSDbgLog.txt",
+          "example": "Example: Y/N",
+          "subcat": "UI"
         }
       ],
       "required_info": [],
@@ -572,35 +739,15 @@
           "example": ""
         }
       ],
+      "subcategories": {
+        "AP Selection": "Problem related to AP scoring",
+        "Dynamic Bandwidth": "Problem related to traffic prioritization, such as prioritized application, does not have better performance compared to the case when it is not prioritized",
+        "UI": "Problem found on UI"
+      },
       "description": "ICPS-related issue"
     },
     "OEM Tools": {
-      "required_log": [
-        {
-          "item": "Issue Type",
-          "example": "Customer Feedback"
-        },
-        {
-          "item": "ANT",
-          "example": ""
-        },
-        {
-          "item": "DRTU",
-          "example": ""
-        },
-        {
-          "item": "CITU",
-          "example": ""
-        },
-        {
-          "item": "NDT",
-          "example": ""
-        },
-        {
-          "item": "GNNR",
-          "example": ""
-        }
-      ],
+      "required_log": [],
       "required_info": [],
       "initial_triage": [
         {
@@ -624,6 +771,13 @@
           "example": ""
         }
       ],
+      "subcategories": {
+        "ANT": "Ant debug log",
+        "DRTU": "WPP driver log",
+        "CITU": "WPP driver log",
+        "NDT": "WPP driver log",
+        "GNNR": "GNNR debug log (wlantest.dmp)"
+      },
       "description": "Issue related to one of the following OEM tools: * ANT * DRTU * CITU * NDT * GNNR"
     },
     "Others": {

@@ -870,7 +870,7 @@ def smoke_checklist() -> None:
     d = compose(a)
     check("S12.f first_response draft: tag, checked value, example hint, triage",
           CHECKLIST_TAG in d["plain"] and AI_MARKER in d["plain"]
-          and "[x] WRT Log, including — provided: WRT_0820.zip" in d["plain"]
+          and "[✓] WRT Log, including — provided: WRT_0820.zip" in d["plain"]
           and "please provide (Example: code 10)" in d["plain"]
           and "=== Please verify (initial triage) ===" in d["plain"]
           and d["confidence"] is None,
@@ -898,6 +898,32 @@ def smoke_checklist() -> None:
           _resolve_issue_domain("", "", "Yellow Bang (YB)") == "Yellow Bang"
           and _resolve_issue_domain("", "", "") == "Others"
           and _resolve_issue_domain("Others", "weird", "stranger") == "Others")
+
+    # Sub-categories (Connectivity / P2P tabs use an Issue Type table).
+    from .checklist import resolve_subcategory, _blank_fills as _bf
+    c = data["domains"]["Connectivity"]
+    check("S12.k Connectivity/P2P sub-categories parsed with tagged items",
+          list(c["subcategories"]) == ["Connectivity", "Scan", "Roaming"]
+          and all(e.get("subcat") for e in c["required_log"])
+          and list(data["domains"]["P2P (Miracast)"]["subcategories"])
+          == ["Connectivity", "Performance"],
+          str(list(c.get("subcategories", {}))))
+    check("S12.l sub-category resolution: name, keywords, fallbacks",
+          resolve_subcategory("Connectivity", "Roaming", "") == "Roaming"
+          and resolve_subcategory("Connectivity", "", "DUT roams from AP1 to AP2") == "Roaming"
+          and resolve_subcategory("Connectivity", "", "empty scan list") == "Scan"
+          and resolve_subcategory("Connectivity", "", "connect fail after resume") == "Connectivity"
+          and resolve_subcategory("WowLAN", "x", "y") == "")
+    roam = _bf("Connectivity", "Roaming")
+    conn = _bf("Connectivity", "Connectivity")
+    check("S12.m fills filtered to the chosen sub-category only",
+          any("Issue replication time" == e["item"] for e in roam["required_log"])
+          and not any("WRT BIOS settings" in e["item"] for e in roam["required_log"])
+          and len(conn["required_log"]) == 6,
+          f"roam={len(roam['required_log'])} conn={len(conn['required_log'])}")
+    check("S12.n checked items render before unchecked",
+          d["plain"].find("provided: WRT_0820.zip")
+          < d["plain"].find("[ ] 2) FW usniffer"))
 
 
 def run_smoke() -> int:

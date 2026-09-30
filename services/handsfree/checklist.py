@@ -74,20 +74,57 @@ def resolve_domain(name: str) -> str:
     return FALLBACK_DOMAIN
 
 
+def domain_subcategories(domain: str) -> dict:
+    """{name: description} for the domain's sub-categories ({} when flat)."""
+    dom = load_checklist()["domains"].get(domain) or {}
+    return dict(dom.get("subcategories") or {})
+
+
+def resolve_subcategory(domain: str, name: str = "", context_text: str = "") -> str:
+    """Pick the applicable sub-category for a domain (e.g. Connectivity ->
+    Connectivity/Scan/Roaming). Order: explicit name match -> keyword hit in
+    the case text -> the sub-category named like the domain -> first one.
+    Returns "" for domains without sub-categories."""
+    subs = domain_subcategories(domain)
+    if not subs:
+        return ""
+    raw = re.sub(r"\s+", " ", str(name or "")).strip().lower()
+    for sub in subs:
+        if raw and (sub.lower() == raw or sub.lower() in raw or raw in sub.lower()):
+            return sub
+    text = str(context_text or "").lower()
+    if text:
+        # most-specific keyword first (e.g. "roam"/"scan" beat generic connect)
+        for sub in subs:
+            root = sub.lower().rstrip("gmi")[:4] if len(sub) > 4 else sub.lower()
+            if sub.lower() != domain.lower() and root and root in text:
+                return sub
+    for sub in subs:
+        if sub.lower() == domain.lower():
+            return sub
+    return next(iter(subs))
+
+
+def _entry_in_subcat(entry: dict, subcat: str) -> bool:
+    return entry.get("subcat") in (None, "", subcat)
+
+
 # ---------------------------------------------------------------------------
 # Pre-fill
 # ---------------------------------------------------------------------------
 
-def _blank_fills(domain: str) -> dict:
+def _blank_fills(domain: str, subcat: str = "") -> dict:
     """{"general_info": [...], "required_log": [...], "required_info": [...]}
-    where each entry is {"item", "example", "provided": False, "value": ""}."""
+    where each entry is {"item", "example", "provided": False, "value": ""}.
+    For sub-categorized domains only the chosen sub-category's items are
+    included (entries without a subcat tag always are)."""
     data = load_checklist()
     dom = data["domains"].get(domain) or data["domains"][FALLBACK_DOMAIN]
     out = {"general_info": [dict(e, provided=False, value="")
                             for e in data["general_info"]]}
     for sec in ("required_log", "required_info"):
         out[sec] = [dict(e, provided=False, value="")
-                    for e in dom.get(sec, [])]
+                    for e in dom.get(sec, []) if _entry_in_subcat(e, subcat)]
     return out
 
 
@@ -176,7 +213,17 @@ def llm_fill(llm, fills: dict, case_material: str) -> None:
 
 def build_fills(analysis, llm=None) -> dict:
     """Deterministic pipeline facts first, then one LLM pass for the rest."""
-    fills = _blank_fills(getattr(analysis, "issue_domain", "") or FALLBACK_DOMAIN)
+    domain = getattr(analysis, "issue_domain", "") or FALLBACK_DOMAIN
+    subcat = resolve_subcategory(
+        domain, getattr(analysis, "issue_subcategory", ""),
+        " ".join([str(getattr(analysis, "clean_description", "") or ""),
+                  str(getattr(analysis, "description", "") or ""),
+                  str(getattr(analysis, "subject", "") or "")]))
+    try:
+        analysis.issue_subcategory = subcat
+    except Exception:
+        pass
+    fills = _blank_fills(domain, subcat)
     deterministic_fills(analysis, fills)
     material = "\n".join(filter(None, [
         str(getattr(analysis, "subject", "") or ""),
@@ -194,32 +241,35 @@ def build_fills(analysis, llm=None) -> dict:
 # ---------------------------------------------------------------------------
 
 def _render_entries(entries: list[dict]) -> list[str]:
-    out = []
+    """Checked items first (easier to scan), then the asks, notes last."""
+    checked, unchecked, notes = [], [], []
     for e in entries:
         if str(e["item"]).lower().startswith("note:"):
-            out.append(f"  {e['item']}")
+            notes.append(f"  {e['item']}")
         elif e.get("provided"):
-            out.append(f"  [x] {e['item']} — provided: {e['value']}")
+            checked.append(f"  [✓] {e['item']} — provided: {e['value']}")
         else:
             hint = f" ({e['example']})" if e.get("example") else ""
-            out.append(f"  [ ] {e['item']} — please provide{hint}")
-    return out
+            unchecked.append(f"  [ ] {e['item']} — please provide{hint}")
+    return checked + unchecked + notes
 
 
-def render_checklist_body(domain: str, fills: dict) -> list[str]:
+def render_checklist_body(domain: str, fills: dict, subcat: str = "") -> list[str]:
     """The checklist sections shared by first_response and the request modes."""
     data = load_checklist()
     dom = data["domains"].get(domain) or data["domains"][FALLBACK_DOMAIN]
+    label = f"{domain} — {subcat}" if subcat and subcat != domain else domain
     parts: list[str] = []
     parts.append("=== General Info ===")
     parts += _render_entries(fills.get("general_info", []))
     if fills.get("required_log"):
-        parts += ["", f"=== Required Log ({domain}) ==="]
+        parts += ["", f"=== Required Log ({label}) ==="]
         parts += _render_entries(fills["required_log"])
     if fills.get("required_info"):
-        parts += ["", f"=== Required Info ({domain}) ==="]
+        parts += ["", f"=== Required Info ({label}) ==="]
         parts += _render_entries(fills["required_info"])
-    triage = dom.get("initial_triage") or []
+    triage = [e for e in (dom.get("initial_triage") or [])
+              if _entry_in_subcat(e, subcat)]
     if triage:
         parts += ["", "=== Please verify (initial triage) ==="]
         for e in triage:
@@ -242,11 +292,12 @@ def render_first_response(analysis, fills: dict) -> list[str]:
         f"Based on the report, we are treating this as a {domain} issue"
         + (f" ({desc})" if desc else "") + ".",
         "To speed up debugging, please review the checklist below: items "
-        "marked [x] we already have from your report; please provide the "
-        "items marked [ ] and go through the verification steps.",
+        "marked [✓] we already have from your report; please provide "
+        "the items marked [ ] and go through the verification steps.",
         "",
     ]
-    parts += render_checklist_body(domain, fills)
+    parts += render_checklist_body(domain, fills,
+                                   getattr(analysis, "issue_subcategory", ""))
     parts += ["",
               "Thank you — we will proceed as soon as the missing items are "
               "available."]

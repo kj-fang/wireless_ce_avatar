@@ -107,26 +107,50 @@ def _parse_main(rows: list[dict]) -> tuple[list[dict], dict]:
 
 
 def _parse_domain(rows: list[dict]) -> dict:
+    """Two section layouts exist:
+
+    * FLAT (most tabs): items in col A, example hint in col C.
+    * SUB-CATEGORY (Connectivity, P2P): header row 'Issue Type |
+      Description | Check Items | ...'; a row with col A starts a
+      sub-category (name=A, description=B, first item=C, example=E);
+      rows with only col C continue the current sub-category's items.
+    """
     d = {"required_log": [], "required_info": [], "initial_triage": [],
-         "notes": []}
+         "notes": [], "subcategories": {}}
     section = None
+    layout = "flat"
+    cur_subcat = ""
     for r in rows:
-        a = r.get("A", "")
-        if not a:
-            continue
-        key = _SECTION_NAMES.get(a.lower())
+        a, b = r.get("A", ""), r.get("B", "")
+        c, e = r.get("C", ""), r.get("E", "")
+        key = _SECTION_NAMES.get(a.lower()) if a else None
         if key:
-            section = key
+            section, layout, cur_subcat = key, "flat", ""
             continue
         if a.lower() == "check items":
             continue
-        entry = {"item": a, "example": r.get("C", "")}
+        if a.lower() == "issue type":       # sub-category header row
+            layout = "subcat"
+            continue
         if section is None:
-            d["notes"].append(a)
-        else:
-            d[section].append(entry)
-    if not d["notes"]:
-        del d["notes"]
+            if a:
+                d["notes"].append(a)
+            continue
+        if layout == "subcat":
+            if a:                            # new sub-category
+                cur_subcat = a
+                d["subcategories"].setdefault(a, b)
+                if c:
+                    d[section].append({"item": c, "example": e,
+                                       "subcat": a})
+            elif c:
+                d[section].append({"item": c, "example": e,
+                                   "subcat": cur_subcat})
+        elif a:
+            d[section].append({"item": a, "example": c})
+    for k in ("notes", "subcategories"):
+        if not d[k]:
+            del d[k]
     return d
 
 

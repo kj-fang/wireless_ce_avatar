@@ -366,7 +366,8 @@ def _case_ref_from_evidence(issue: Optional[dict] = None, log_path: str = "") ->
 # none. So each conversation's case is pinned the first time a turn is
 # recorded for it (and again when history is reloaded), and every feedback
 # record about that conversation reads the pin. The session is only the
-# fallback for a conversation nothing has been pinned for yet.
+# fallback for a conversation nothing has been pinned for yet. New turns pin
+# synchronously before their work can move to a background thread.
 _conversation_case: dict = {}        # conversation_id -> {case_nbr, case_ref_source}
 _conversation_case_lock = threading.Lock()
 _MAX_PINNED_CONVERSATIONS = 2000
@@ -387,10 +388,18 @@ def _pin_conversation_case(conversation_id: str, ref: dict) -> None:
 
 def pin_conversation_case_if_unset(conversation_id: str, ref: dict) -> None:
     """Pin a conversation unless it is already pinned to a real answer."""
+    if not conversation_id or not isinstance(ref, dict):
+        return
     with _conversation_case_lock:
         held = dict(_conversation_case.get(conversation_id) or {})
-    if held.get("case_ref_source") in (None, "", "absent"):
-        _pin_conversation_case(conversation_id, ref)
+        if held.get("case_ref_source") not in (None, "", "absent"):
+            return
+        _conversation_case[conversation_id] = {
+            "case_nbr": str(ref.get("case_nbr") or ""),
+            "case_ref_source": str(ref.get("case_ref_source") or "absent"),
+        }
+        while len(_conversation_case) > _MAX_PINNED_CONVERSATIONS:
+            _conversation_case.pop(next(iter(_conversation_case)))
 
 
 def _case_ref_for(conversation_id: str, issue: Optional[dict] = None,
@@ -918,6 +927,28 @@ def ensure_conversation(
             )
     except Exception as e:
         print(f"[feedback] ensure_conversation failed: {e}")
+
+
+def begin_turn(conversation_id: str, issue: Optional[dict] = None,
+               log_path: str = "") -> None:
+    """Freeze the case reference before a turn can move to a worker thread.
+
+    A later request may attach a different log while this turn is still
+    running. Recording the case only when the worker finishes would then read
+    that newer session and attribute the old turn to the wrong case.
+    """
+    if not conversation_id:
+        return
+    try:
+        pin_conversation_case_if_unset(
+            conversation_id, _case_ref(issue, log_path))
+        ref = _case_ref_for(conversation_id, issue, log_path)
+        with _pending_lock:
+            snap = _pending_buffer.get(conversation_id)
+            if snap is not None:
+                snap.update(ref)
+    except Exception as e:
+        print(f"[feedback] begin_turn failed: {e}")
 
 
 def record_turn(

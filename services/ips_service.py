@@ -12,6 +12,7 @@ import json
 import os
 import sys
 import threading
+from concurrent.futures import ThreadPoolExecutor, TimeoutError as FutureTimeoutError
 from datetime import datetime, timezone
 from pathlib import Path
 from typing import List, Optional
@@ -434,36 +435,9 @@ def _placeholder_is_for(log_path) -> bool:
     return False
 
 
-_CONVERSATION_KEYS = ("feedback_conversation_id", "nw_conversation_id",
-                      "nw_active_conversation_id")
-
-
-def _pin_current_conversations(case_nbr: str, source: str) -> None:
-    """Tie this answer to the conversation it was given for, while we can.
-
-    Turns are recorded on a worker thread (tools mode), where the session
-    cannot be read, so a conversation's first turn used to fall back to the
-    log path -- turning a confirmed skip into the folder's case. Pinning it
-    here, on the request that carries the answer, gives that thread the answer.
-    A conversation already pinned to a case is left alone: an answer given on
-    the Send To page arrives while the session still names the previous
-    chatbot conversation, which must keep its own case.
-    """
-    try:
-        from services import feedback_service
-    except Exception:
-        return
-    ref = {"case_nbr": "" if source == SKIPPED else case_nbr, "case_ref_source": source}
-    for key in _CONVERSATION_KEYS:
-        conversation_id = str(session.get(key) or "").strip()
-        if conversation_id:
-            feedback_service.pin_conversation_case_if_unset(conversation_id, ref)
-
-
 def _remember_on_session(canonical: str, source: str, log_path="") -> str:
     """Write one answer onto the session. Returns the canonical number, or ""."""
     session[SESSION_SOURCE_KEY] = source
-    _pin_current_conversations(canonical, source)
 
     def own_placeholder(previous: str) -> bool:
         # With no log to check against, keep the earlier behaviour.
@@ -561,6 +535,13 @@ _AGENT_CASE_FIELDS = ("subject", "description", "issue_type", "attachment_time")
 _case_facts: dict = {}              # case number -> {"fields": tuple, "classification": dict}
 _case_facts_lock = threading.Lock()
 _ENRICH_TIMEOUT_SEC = 20
+# A timed-out Future cannot stop a Snowflake call that is already running.
+# Reusing one worker and admitting only one lookup at a time keeps a hung
+# backend bounded to one thread and zero queued lookups instead of leaking a
+# new worker on every case attachment. The slot is released by the worker when
+# the backend call really finishes, not when the caller stops waiting.
+_case_lookup_pool = ThreadPoolExecutor(max_workers=1, thread_name_prefix="ips-case-lookup")
+_case_lookup_slot = threading.BoundedSemaphore(1)
 
 
 def _lookup_case_facts(canonical: str) -> Optional[dict]:
@@ -574,33 +555,47 @@ def _lookup_case_facts(canonical: str) -> Optional[dict]:
         return None
     llm = getattr(app_config, "llm_helper", None)
 
-    def work():
-        from services.case_info_service import CaseService
-        fields = CaseService._get_case_info_from_snowflake(canonical, passwd)
-        if not fields:
-            return None
-        _case_id, subject, _env, description, _backend, subcategory = fields
-        usage = llm.empty_usage() if llm is not None else None
-        classification = None
-        if llm is not None:
-            classification = llm.classify_issue(
-                {"case_nbr": canonical, "subject": subject or "",
-                 "description": description or "", "subcategory": subcategory or ""},
-                usage_accumulator=usage)
-        return {"fields": fields, "classification": classification,
-                "usage": usage, "model": getattr(llm, "model", "") if llm else ""}
+    if not _case_lookup_slot.acquire(blocking=False):
+        print(f"[ips] case lookup for {canonical} skipped: another lookup is still running")
+        return None
 
-    # Bounded: Snowflake has no timeout of its own, and the user is waiting on
-    # the dialog. On a timeout the worker is abandoned, not joined.
-    from concurrent.futures import ThreadPoolExecutor
-    pool = ThreadPoolExecutor(max_workers=1)
+    def work():
+        try:
+            from services.case_info_service import CaseService
+            fields = CaseService._get_case_info_from_snowflake(canonical, passwd)
+            if not fields:
+                return None
+            _case_id, subject, _env, description, _backend, subcategory = fields
+            usage = llm.empty_usage() if llm is not None else None
+            classification = None
+            if llm is not None:
+                classification = llm.classify_issue(
+                    {"case_nbr": canonical, "subject": subject or "",
+                     "description": description or "", "subcategory": subcategory or ""},
+                    usage_accumulator=usage)
+            return {"fields": fields, "classification": classification,
+                    "usage": usage, "model": getattr(llm, "model", "") if llm else ""}
+        finally:
+            _case_lookup_slot.release()
+
     try:
-        facts = pool.submit(work).result(timeout=_ENRICH_TIMEOUT_SEC)
+        future = _case_lookup_pool.submit(work)
+    except Exception as e:
+        _case_lookup_slot.release()
+        print(f"[ips] case lookup for {canonical} skipped: {e}")
+        return None
+    try:
+        facts = future.result(timeout=_ENRICH_TIMEOUT_SEC)
+    except FutureTimeoutError as e:
+        # cancel() succeeds only if the worker has not started. If it is
+        # already running, work() owns the slot until the backend returns.
+        if future.cancel():
+            _case_lookup_slot.release()
+        print(f"[ips] case lookup for {canonical} skipped: {e}")
+        return None
     except Exception as e:
         print(f"[ips] case lookup for {canonical} skipped: {e}")
         return None
-    finally:
-        pool.shutdown(wait=False)
     if facts:
         with _case_facts_lock:
             _case_facts[canonical] = facts

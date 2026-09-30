@@ -840,6 +840,11 @@ def chat():
             _issue_ctx_for_snapshot = _extract_issue_context()
         except Exception:
             _issue_ctx_for_snapshot = {}
+        feedback_service.begin_turn(
+            conversation_id,
+            issue=_issue_ctx_for_snapshot,
+            log_path=getattr(agent, "current_log_path", "") or "",
+        )
 
         # Usage analytics: on every Send, capture the entry session (user name,
         # date, CASE NUMBER + case summary) and the asked question into the

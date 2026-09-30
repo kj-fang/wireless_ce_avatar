@@ -230,13 +230,23 @@ def start_new_session() -> None:
     raw = session.get("case_context") or {}
     if isinstance(raw, dict) and raw:
         context = CaseContext.from_session(raw)
-        # A local_upload_/local_bsod_ name is the run's own, and the results
-        # page finds its extraction index by it -- the same reason
-        # _remember_on_session keeps it on a skip. It is not a case number, so
-        # keeping it attributes nothing; only the answer is reset.
-        if not ips_utils.is_synthetic_case_nbr(context.case_nbr):
-            context.case_nbr = ""
-        context.case_ref_source = None
+        if ips_utils.is_synthetic_case_nbr(context.case_nbr):
+            # A local_upload_/local_bsod_ name is the run's own, and the
+            # results page finds its extraction index by it -- the same reason
+            # _remember_on_session keeps it on a skip. It is not a case number,
+            # so keeping it attributes nothing; only the answer is reset.
+            context.case_ref_source = None
+        else:
+            # A real case's subject, description, backend id and attachments
+            # go with its number. Blanking only the number left them behind:
+            # the next log's agent was primed from them before its prompt, and
+            # the answer then found no previous case to clear -- so a new
+            # conversation could still discuss the old case. Rebuild the
+            # context, keeping only what is about the log, and clear the agents.
+            if context.case_nbr:
+                _forget_case_on_agents("")
+            context = CaseContext(wifi_or_bt=context.wifi_or_bt,
+                                  files_coexist=context.files_coexist)
         session["case_context"] = context.to_session()
 
 

@@ -873,10 +873,11 @@ def upload_local_analysis():
     derived = ips_utils.derive_ips_from_path(source_path)
     if (derived and not ips_service.current_case_nbr()
             and ips_service.answer_for(source_path).get("source")
-                != ips_service.SKIPPED):
-        # Not over a confirmed skip: re-analysing a log somebody already
-        # checked and said has no case would quietly replace that answer with
-        # a folder name, and the confirmation would never be recorded again.
+                not in (ips_service.SKIPPED, ips_service.EXPLICIT)):
+        # Not over an answer the user gave. Re-analysing a log somebody said
+        # has no case, or gave a case number for, would quietly replace that
+        # answer with a folder name. Left alone, the gate asks again with the
+        # remembered answer offered first.
         try:
             ips_service.attach(derived, ips_service.DERIVED_FROM_PATH, source_path)
         except ValueError:
@@ -1053,10 +1054,11 @@ def open_local_analysis():
     derived = ips_utils.derive_ips_from_path(source_path)
     if (derived and not ips_service.current_case_nbr()
             and ips_service.answer_for(source_path).get("source")
-                != ips_service.SKIPPED):
-        # Not over a confirmed skip: re-analysing a log somebody already
-        # checked and said has no case would quietly replace that answer with
-        # a folder name, and the confirmation would never be recorded again.
+                not in (ips_service.SKIPPED, ips_service.EXPLICIT)):
+        # Not over an answer the user gave. Re-analysing a log somebody said
+        # has no case, or gave a case number for, would quietly replace that
+        # answer with a folder name. Left alone, the gate asks again with the
+        # remembered answer offered first.
         try:
             ips_service.attach(derived, ips_service.DERIVED_FROM_PATH, source_path)
         except ValueError:

@@ -21,6 +21,13 @@ same distinction ``case_ref_source`` already draws downstream:
 * A number scraped from a path must match the narrower 00/01 form the
   collector uses, because a guess should not be the thing that invents a case.
   It also keeps an 8-digit date such as 05122024 out.
+
+Dates, precisely: a YYYYMMDD date (20260923) never starts with a zero and is
+rejected everywhere. A zero-led MMDDYYYY or DDMMYYYY date cannot be told from
+a case number -- 01012025 reads as 1 Jan 2025, yet sits inside the range real
+cases already occupy (01012497 is one) -- so a *typed* 05122024 is accepted:
+refusing it would risk refusing real cases, the costlier mistake. A path
+segment is held to the 00/01 form, which keeps most such dates out of guesses.
 """
 
 import os
@@ -30,7 +37,8 @@ from typing import List
 IPS_LENGTH = 8
 
 # What a person may assert. Leading zero only, which is what separates a case
-# number from a date such as 20260923.
+# number from a YYYYMMDD date such as 20260923. A zero-led MMDDYYYY date is
+# not rejected; see the module docstring for why.
 _TYPED_RE = re.compile(r"^0\d{7}$")
 
 # What may be inferred without being told. Matches the collector's own regex.

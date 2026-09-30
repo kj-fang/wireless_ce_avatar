@@ -103,7 +103,9 @@ def init_download_dir():
 def get_clipboard_case_number():
     text = pyperclip.paste()
     # normalise_ips also pads the seven-digit form people actually type, and
-    # rejects an 8-digit date, which the previous ^\d{8}$ accepted.
+    # rejects a YYYYMMDD date such as 20260923, which the previous ^\d{8}$
+    # accepted. A zero-led MMDDYYYY date still passes: it cannot be told from
+    # a real case number (see utils/ips_utils.py).
     return ips_utils.normalise_ips(text)
 
 def detect_user_email():

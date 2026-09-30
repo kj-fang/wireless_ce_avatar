@@ -493,14 +493,16 @@ def _carries_case_ref(fn):
 
     @functools.wraps(fn)
     def wrapper(*args, **kwargs):
+        # Only the binding is guarded. A TypeError raised by the recorder
+        # itself is a real failure, and catching it here would call the
+        # recorder a second time and write the record twice.
         try:
             bound = signature.bind_partial(*args, **kwargs)
-            if "issue" in bound.arguments:
-                bound.arguments["issue"] = _with_case_ref(bound.arguments["issue"])
-                return fn(*bound.args, **bound.kwargs)
         except TypeError:
-            pass
-        return fn(*args, **kwargs)
+            return fn(*args, **kwargs)
+        if "issue" in bound.arguments:
+            bound.arguments["issue"] = _with_case_ref(bound.arguments["issue"])
+        return fn(*bound.args, **bound.kwargs)
     return wrapper
 
 

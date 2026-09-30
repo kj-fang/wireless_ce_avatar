@@ -502,7 +502,18 @@ def chat():
 
     # 428 Precondition Required: the log has no case number yet. The client
     # opens the prompt and replays this request once it has one.
-    blocked = ips_service.blocking_state()
+    #
+    # Gated on the log this chatbot's agent actually holds. Only one of NW's
+    # set_log paths writes session['chatbot_log_path']; the sleepstudy and
+    # prepare paths do not, so the no-argument form could check a stale path
+    # left by the Wi-Fi or BT chatbot -- and if that old log had been
+    # answered, a newly loaded NW log went ahead without being asked about.
+    # The agent is looked up, not created: creating one has side effects and
+    # raises without an API key, and a missing agent falls back to the default.
+    sid = session.get("chatbot_session_id", "")
+    nw_agent = _chatbot_instances.get(sid) if sid else None
+    nw_log = str(getattr(nw_agent, "current_log_path", "") or "")
+    blocked = ips_service.blocking_state(nw_log or None)
     if blocked:
         return jsonify(blocked), 428
 

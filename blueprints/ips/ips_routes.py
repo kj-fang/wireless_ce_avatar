@@ -37,7 +37,9 @@ def resolve():
     action = str(data.get("action") or "attach").strip().lower()
 
     if action == "skip":
-        if not bool(data.get("confirmed")):
+        # The literal boolean only. bool() of the JSON string "false" is True,
+        # which let a caller record a skip without confirming anything.
+        if data.get("confirmed") is not True:
             return jsonify({
                 "success": False,
                 "error": "Confirm there is no case number for this log before skipping.",

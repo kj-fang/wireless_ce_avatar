@@ -325,12 +325,26 @@ def _remember_on_session(canonical: str, source: str) -> str:
     have_context = isinstance(raw, dict) and bool(raw)
 
     if source == SKIPPED:
-        # The prompt is only ever shown for a log with no case, so anything
-        # still on the context belongs to a different log.
         if have_context:
             context = CaseContext.from_session(raw)
-            context.case_nbr = ""
-            context.case_ref_source = SKIPPED
+            previous = str(context.case_nbr or "")
+            if ips_utils.is_synthetic_case_nbr(previous):
+                # A local_upload_/local_bsod_ run is this log's own run. Its
+                # name stays: the results page looks the extraction index up
+                # by it, and it is not a case number, so it does not attribute
+                # the conversation to anything.
+                context.case_ref_source = SKIPPED
+            else:
+                # A real case on the context belongs to a different log. Its
+                # subject, description, attachments and backend id went with
+                # it, and /set_log may already have primed the agent from
+                # them; keeping them meant a conversation confirmed to have no
+                # case could still discuss the previous one.
+                if previous:
+                    _forget_case_on_agents("")
+                context = CaseContext(wifi_or_bt=context.wifi_or_bt,
+                                      files_coexist=context.files_coexist,
+                                      case_nbr="", case_ref_source=SKIPPED)
             session["case_context"] = context.to_session()
         return ""
 

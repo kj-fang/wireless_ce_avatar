@@ -429,6 +429,51 @@ def _infer_local_upload_case_type(bt_files) -> str:
     return 'wifi'
 
 
+def _resolve_local_case(file_path: str, source_path: str):
+    """What case a local run is named after, and how it came by it.
+
+    Returns (case_nbr or '', case_ref_source). Kept apart from
+    _process_local_analysis so the decision can be checked without
+    extracting an archive.
+    """
+    # What to name this run. A number the user gave the prompt comes first:
+    # they were asked about this exact log and answered, and a Send To from a
+    # folder that happens to sit under some other case must not silently
+    # override that. Failing that, a log opened from disk usually already sits
+    # under its case folder (...\IntelAvatar_files\01010628\...), and naming
+    # the run after that beats minting local_upload_<ts>, which is a number
+    # nobody can look up later.
+    answered_ips = ips_service.current_case_nbr()
+    # A confirmed "no case" is an answer too, and it has to stop the folder
+    # guess below: otherwise a skipped log that happens to sit under a case
+    # folder is analysed under that case after all, and the skip is defeated
+    # by the very inference it was meant to overrule. Checked against the path
+    # the user answered about, before any long-path conversion.
+    confirmed_no_case = not answered_ips and (
+        ips_service.current_source() == ips_service.SKIPPED
+        or ips_service.answer_for(source_path).get("source") == ips_service.SKIPPED)
+    derived_ips = answered_ips or ("" if confirmed_no_case else (
+        ips_utils.derive_ips_from_path(file_path)
+        or ips_utils.derive_ips_from_path(source_path)))
+    if derived_ips and not answered_ips:
+        session[ips_service.SESSION_SOURCE_KEY] = ips_service.DERIVED_FROM_PATH
+
+    # How this run came by its case, carried on the CaseContext so that
+    # gather_service._case_ref_source reads it rather than inferring. Without
+    # it a run keeps a synthetic local_upload_<ts> number and is classified
+    # 'absent', which makes a log somebody confirmed has no case look exactly
+    # like one nobody was ever asked about -- the distinction 016 exists for.
+    if confirmed_no_case:
+        local_case_ref_source = ips_service.SKIPPED
+    elif answered_ips:
+        local_case_ref_source = ips_service.attributed_source()
+    elif derived_ips:
+        local_case_ref_source = ips_service.DERIVED_FROM_PATH
+    else:
+        local_case_ref_source = ips_service.ABSENT
+    return derived_ips, local_case_ref_source
+
+
 def _process_local_analysis(source_path: str, source_dir: str, file_path: str,
                             original_name: str, timestamp: str,
                             is_bsod: bool = False,
@@ -478,19 +523,7 @@ def _process_local_analysis(source_path: str, source_dir: str, file_path: str,
         'keywords_found': []
     }
 
-    # What to name this run. A number the user gave the prompt comes first:
-    # they were asked about this exact log and answered, and a Send To from a
-    # folder that happens to sit under some other case must not silently
-    # override that. Failing that, a log opened from disk usually already sits
-    # under its case folder (...\IntelAvatar_files\01010628\...), and naming
-    # the run after that beats minting local_upload_<ts>, which is a number
-    # nobody can look up later.
-    answered_ips = ips_service.current_case_nbr()
-    derived_ips = answered_ips or (
-        ips_utils.derive_ips_from_path(file_path)
-        or ips_utils.derive_ips_from_path(source_path))
-    if derived_ips and not answered_ips:
-        session[ips_service.SESSION_SOURCE_KEY] = ips_service.DERIVED_FROM_PATH
+    derived_ips, local_case_ref_source = _resolve_local_case(file_path, source_path)
 
     if file_path.lower().endswith('.dmp') or is_bsod:
         local_case_nbr = derived_ips or f'local_bsod_{timestamp}'
@@ -515,6 +548,7 @@ def _process_local_analysis(source_path: str, source_dir: str, file_path: str,
         # Build a minimal case context so BSOD submission page can render in local-upload mode.
         local_context = CaseContext(
             case_nbr=local_case_nbr,
+            case_ref_source=local_case_ref_source,
             backend_id=local_case_nbr,
             wifi_or_bt='wifi',
             case_download_dir=shared_case_dir,
@@ -590,6 +624,7 @@ def _process_local_analysis(source_path: str, source_dir: str, file_path: str,
 
         local_context = CaseContext(
             case_nbr=local_case_nbr,
+            case_ref_source=local_case_ref_source,
             wifi_or_bt=local_case_type,
             case_download_dir=source_dir
         )
@@ -664,6 +699,7 @@ def _process_local_analysis(source_path: str, source_dir: str, file_path: str,
         local_case_type = fw_type if fw_type in ('bt', 'wifi') else 'wifi'
         local_context = CaseContext(
             case_nbr=local_case_nbr,
+            case_ref_source=local_case_ref_source,
             wifi_or_bt=local_case_type,
             case_download_dir=source_dir,
         )

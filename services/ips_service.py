@@ -62,6 +62,14 @@ def _log_key(log_path) -> str:
     text = str(log_path or "").strip()
     if not text:
         return ""
+    # The analysis converts paths to the \\?\ extended-length form to get past
+    # MAX_PATH. The prompt records its answer under the path as the user saw
+    # it, so without this the same file had two keys and a confirmed skip was
+    # invisible to the code that later looked it up by the long form.
+    if text.startswith("\\\\?\\UNC\\"):
+        text = "\\\\" + text[len("\\\\?\\UNC\\"):]
+    elif text.startswith("\\\\?\\"):
+        text = text[len("\\\\?\\"):]
     try:
         return os.path.normcase(os.path.abspath(text))
     except Exception:
@@ -328,20 +336,71 @@ def _remember_on_session(canonical: str, source: str) -> str:
 
     context = CaseContext.from_session(raw) if have_context else CaseContext()
     previous = str(context.case_nbr or "")
+    same_case = bool(previous) and ips_utils.normalise_ips(previous) == canonical
+    # A local_upload_/local_bsod_ placeholder is a name for *this* log's run,
+    # so what hangs off it -- the extraction folder, the attachment list --
+    # describes the log being answered about and stays.
+    was_placeholder = ips_utils.is_synthetic_case_nbr(previous)
+
+    if previous and not same_case and not was_placeholder:
+        # A different real case. Its subject, description, attachments and
+        # backend id describe that case, not this one; keeping them meant the
+        # next analysis discussed the new case number using the old case's
+        # summary. Start from a clean context, keeping only what is about the
+        # log rather than the case.
+        context = CaseContext(wifi_or_bt=context.wifi_or_bt,
+                              files_coexist=context.files_coexist)
+        _forget_case_on_agents(canonical)
+
     context.case_nbr = canonical
     context.case_ref_source = source
     session["case_context"] = context.to_session()
 
     # The extracted-file index is keyed by case number, and the results page
     # looks it up by the number on the context. Renaming one without the other
-    # leaves that page with nothing to show. Only a respelling of the same case
-    # is a rename — moving between logs is not, and must leave the index alone.
-    if previous and previous != canonical and ips_utils.normalise_ips(previous) == canonical:
+    # leaves that page with nothing to show. A respelling of the same case is
+    # a rename, and so is naming a placeholder run -- it is this log's
+    # results either way. Moving to a different real case is not.
+    if previous and previous != canonical and (same_case or was_placeholder):
         results = app_config.download_results.pop(previous, None)
         if results is not None:
             app_config.download_results[canonical] = results
 
     return canonical
+
+
+# The issue-context fields a chatbot agent is primed with that belong to the
+# case rather than to the log.
+_AGENT_CASE_FIELDS = ("subject", "description", "issue_type", "attachment_time")
+
+
+def _forget_case_on_agents(canonical: str) -> None:
+    """Drop a previous case's summary from any agent primed with it.
+
+    /set_log primes the agent from the session before the prompt is answered,
+    so an agent can still be holding the last case's subject and description
+    when the user names a different one. Clearing the session alone leaves the
+    agent discussing the new case from the old case's notes.
+    """
+    for name in ("log_chatbot_agent", "bt_chatbot_agent", "nw_analysis_agent"):
+        agent = getattr(app_config, name, None)
+        ctx = getattr(agent, "issue_context", None)
+        if not isinstance(ctx, dict):
+            continue
+        held = ips_utils.normalise_ips(ctx.get("case_nbr"))
+        if held == canonical:
+            continue
+        for key in _AGENT_CASE_FIELDS:
+            ctx.pop(key, None)
+        ctx["case_nbr"] = canonical
+    # The caches derived from the old case: its attachment time, the issue
+    # time resolved from that, and the LLM's summary of its description. The
+    # _carried_issue_time* keys are left alone -- they are the time the user
+    # picked for this log, not something the old case supplied. Kept in step
+    # with log_chatbot_routes._invalidate_issue_context_caches.
+    for key in ("_attachment_time_cache", "_resolved_issue_time_cache",
+                "_issue_ai_quick"):
+        session.pop(key, None)
 
 
 def attach(case_nbr: str, source: str, log_path="") -> str:

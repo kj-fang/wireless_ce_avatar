@@ -1362,6 +1362,11 @@ def history_load():
         # Re-point BOTH sidecars at this conversation so new turns + feedback
         # continue appending here instead of spawning a fresh conversation.
         session["feedback_conversation_id"] = conversation_id
+        # Feedback on this conversation must be stamped with the case
+        # it was recorded under, not whatever the session holds now:
+        # reloading restores the issue onto the agent, not the case
+        # onto the session.
+        feedback_service.remember_conversation_case(conversation_id, conv)
 
         conv = conv or {}
         running = bool(job is not None and job.status == "running")

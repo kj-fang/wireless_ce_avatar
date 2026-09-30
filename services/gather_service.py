@@ -794,6 +794,11 @@ def _load_or_new_workflow(
         record = _new_workflow_record(workflow_id, user, issue, domain, attachment_list)
     if issue:
         record["case"] = _clean_case(issue)
+        # How the case was obtained, as on session records. Only sessions
+        # carried it, and every analysis -- Send To included -- is a workflow,
+        # so a run the user confirmed has no case was indistinguishable from
+        # one nobody asked about, and a typed number from a folder guess.
+        record["case_ref_source"] = _case_ref_source(issue, record.get("log_path") or "")
     # Write-once. record_workflow_start runs first, on case load, and sets the
     # CASE's technology (wifi/bt). Everything after it — feature usage, the
     # conversation link — passes the domain of whichever AGENT is running, and

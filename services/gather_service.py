@@ -798,7 +798,18 @@ def _load_or_new_workflow(
         # carried it, and every analysis -- Send To included -- is a workflow,
         # so a run the user confirmed has no case was indistinguishable from
         # one nobody asked about, and a typed number from a folder guess.
-        record["case_ref_source"] = _case_ref_source(issue, record.get("log_path") or "")
+        #
+        # Written when the issue states it, or when the record has none yet.
+        # Every later call (a chatbot invocation, say) passes the chatbot's
+        # issue context, which carries no source; inferring one from it
+        # replaced a Send To's derived_from_path with 'explicit' the first
+        # time the user chatted about the run.
+        declared = str(issue.get("case_ref_source") or "").strip().lower() \
+            if isinstance(issue, dict) else ""
+        if declared in _CASE_REF_SOURCES:
+            record["case_ref_source"] = declared
+        elif not record.get("case_ref_source"):
+            record["case_ref_source"] = _case_ref_source(issue, record.get("log_path") or "")
     # Write-once. record_workflow_start runs first, on case load, and sets the
     # CASE's technology (wifi/bt). Everything after it — feature usage, the
     # conversation link — passes the domain of whichever AGENT is running, and

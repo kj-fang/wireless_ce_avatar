@@ -195,8 +195,16 @@ def create_app():
     app.config['SESSION_FILE_DIR'] = _session_dir
     app.config['SESSION_PERMANENT'] = False
     app.config['SESSION_USE_SIGNER'] = True   # sign the session-ID cookie for integrity
-    # Flask-Session otherwise rewrites the whole session on every response, so a
-    # slow request undoes anything answered while it was still in flight.
+    # In Flask-Session 0.8, should_set_storage() is `session.modified or
+    # SESSION_REFRESH_EACH_REQUEST`, so with this False a response only writes
+    # the session back when that request changed it. That stops a slow request
+    # which touched nothing from undoing an answer given while it was in
+    # flight. It does NOT stop one that did change the session: that still
+    # writes its whole, stale copy back. Nothing here merges concurrent
+    # updates. The case answer survives that anyway because it is not only on
+    # the session -- ips_service keeps it per log file and needs_ips puts it
+    # back (_apply_stored_answer) -- so do not store anything else that must
+    # survive a race in the session on the strength of this setting.
     app.config['SESSION_REFRESH_EACH_REQUEST'] = False
     Session(app)
 

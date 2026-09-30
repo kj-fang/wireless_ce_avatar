@@ -504,6 +504,30 @@ def _carries_case_ref(fn):
     return wrapper
 
 
+def _refresh_case(record: dict, issue: Optional[dict], log_path: str = "") -> None:
+    """Rewrite a record's case and keep its case_ref_source in step with it.
+
+    Records are refreshed with the latest issue on later calls, and the case
+    used to be replaced while the source was left alone -- so a case could
+    change under a source describing a different one. The rule: a source the
+    issue states wins; if the case number changed, the source is inferred
+    again for the new one; otherwise the known source stays, because a later
+    call's issue (a chatbot's, say) usually states none and inferring from it
+    would replace a known answer with a guess.
+    """
+    if not issue:
+        return
+    previous = str((record.get("case") or {}).get("case_nbr") or "")
+    record["case"] = _clean_case(issue)
+    declared = str(issue.get("case_ref_source") or "").strip().lower() \
+        if isinstance(issue, dict) else ""
+    if declared in _CASE_REF_SOURCES:
+        record["case_ref_source"] = declared
+    elif not record.get("case_ref_source") or record["case"]["case_nbr"] != previous:
+        record["case_ref_source"] = _case_ref_source(
+            issue, log_path or record.get("log_path") or "")
+
+
 def _case_ref_source(issue: Optional[dict], log_path: str = "") -> str:
     """
     How this session came to be attached to its case number.
@@ -841,24 +865,12 @@ def _load_or_new_workflow(
             record = None
     if not isinstance(record, dict):
         record = _new_workflow_record(workflow_id, user, issue, domain, attachment_list)
-    if issue:
-        record["case"] = _clean_case(issue)
-        # How the case was obtained, as on session records. Only sessions
-        # carried it, and every analysis -- Send To included -- is a workflow,
-        # so a run the user confirmed has no case was indistinguishable from
-        # one nobody asked about, and a typed number from a folder guess.
-        #
-        # Written when the issue states it, or when the record has none yet.
-        # Every later call (a chatbot invocation, say) passes the chatbot's
-        # issue context, which carries no source; inferring one from it
-        # replaced a Send To's derived_from_path with 'explicit' the first
-        # time the user chatted about the run.
-        declared = str(issue.get("case_ref_source") or "").strip().lower() \
-            if isinstance(issue, dict) else ""
-        if declared in _CASE_REF_SOURCES:
-            record["case_ref_source"] = declared
-        elif not record.get("case_ref_source"):
-            record["case_ref_source"] = _case_ref_source(issue, record.get("log_path") or "")
+    # How the case was obtained, as on session records. Only sessions carried
+    # it, and every analysis -- Send To included -- is a workflow, so a run the
+    # user confirmed has no case was indistinguishable from one nobody asked
+    # about. Later calls (a chatbot invocation) pass an issue that states no
+    # source, so _refresh_case keeps the known one rather than re-inferring.
+    _refresh_case(record, issue)
     # Write-once. record_workflow_start runs first, on case load, and sets the
     # CASE's technology (wifi/bt). Everything after it — feature usage, the
     # conversation link — passes the domain of whichever AGENT is running, and
@@ -1368,10 +1380,10 @@ def _do_record(
 
         # Refresh latest context (the user may have loaded a log / set a time
         # after the conversation started).
-        if issue:
-            record["case"] = _clean_case(issue)
         if log_path:
             record["log_path"] = log_path
+        # The case and its source move together; see _refresh_case.
+        _refresh_case(record, issue, log_path)
         if issue_time:
             record["issue_time"] = issue_time
         if issue_time_window_minutes is not None:

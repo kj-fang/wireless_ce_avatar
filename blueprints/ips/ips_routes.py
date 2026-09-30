@@ -52,9 +52,11 @@ def resolve():
             "message": "Recorded as having no case number.",
         })
 
-    source = str(data.get("source") or ips_service.EXPLICIT).strip().lower()
-    if source not in (ips_service.EXPLICIT, ips_service.DERIVED_FROM_PATH):
-        source = ips_service.EXPLICIT
+    # The client says where it thinks the number came from; the server decides.
+    # A claim of derived_from_path only stands for a number that really is a
+    # case folder in this log's path, and a remembered answer keeps its own.
+    claimed = str(data.get("source") or ips_service.EXPLICIT).strip().lower()
+    source = ips_service.source_for_answer(data.get("case_nbr"), claimed, log_path)
 
     try:
         canonical = ips_service.attach(data.get("case_nbr"), source, log_path)

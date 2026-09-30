@@ -229,7 +229,12 @@ def start_new_session() -> None:
     raw = session.get("case_context") or {}
     if isinstance(raw, dict) and raw:
         context = CaseContext.from_session(raw)
-        context.case_nbr = ""
+        # A local_upload_/local_bsod_ name is the run's own, and the results
+        # page finds its extraction index by it -- the same reason
+        # _remember_on_session keeps it on a skip. It is not a case number, so
+        # keeping it attributes nothing; only the answer is reset.
+        if not ips_utils.is_synthetic_case_nbr(context.case_nbr):
+            context.case_nbr = ""
         context.case_ref_source = None
         session["case_context"] = context.to_session()
 
@@ -244,6 +249,44 @@ def candidates_for(log_path) -> List[str]:
     if remembered and remembered not in found:
         found.insert(0, remembered)
     return found
+
+
+def candidate_sources(log_path) -> dict:
+    """Where each offered candidate came from, so the answer keeps its origin.
+
+    The candidate list mixes numbers read from the path with a remembered or
+    session answer, and the client used to treat every one of them as path
+    evidence: a number the user had typed in an earlier conversation came back
+    as 'derived_from_path', and a path guess picked over a remembered answer
+    was recorded as 'explicit'.
+    """
+    sources = {nbr: DERIVED_FROM_PATH for nbr in ips_utils.derive_ips_candidates(log_path)}
+    attached = current_case_nbr()
+    if attached and attached not in sources and _session_answer_is_about(log_path):
+        sources[attached] = attributed_source()
+    record = answer_for(log_path)
+    remembered = str(record.get("case_nbr") or "")
+    if remembered and record.get("source") in (EXPLICIT, DERIVED_FROM_PATH):
+        # The stored answer says how it was given, whatever the path says now.
+        sources[remembered] = record["source"]
+    return sources
+
+
+def source_for_answer(case_nbr, claimed: str, log_path) -> str:
+    """The source to record for an answer, decided here rather than trusted.
+
+    A remembered answer keeps the source it was given with. Otherwise a claim
+    of 'derived_from_path' stands only if the number really is a case folder
+    in this log's path; anything else the user supplied is 'explicit'.
+    """
+    canonical = ips_utils.normalise_ips(case_nbr)
+    record = answer_for(log_path)
+    if canonical and canonical == str(record.get("case_nbr") or "") \
+            and record.get("source") in (EXPLICIT, DERIVED_FROM_PATH):
+        return record["source"]
+    if claimed == DERIVED_FROM_PATH and canonical in ips_utils.derive_ips_candidates(log_path):
+        return DERIVED_FROM_PATH
+    return EXPLICIT
 
 
 def needs_ips(log_path) -> bool:
@@ -279,6 +322,9 @@ def prompt_state(log_path) -> dict:
     return {
         "needs_ips": needed,
         "ips_candidates": candidates,
+        # Per-candidate origin, so choosing one records how it was obtained
+        # rather than the client guessing from the combined list.
+        "ips_candidate_sources": candidate_sources(log_path),
         "suggested_ips": candidates[0] if candidates else "",
         # Reporting a case that was answered about a different log would have
         # the client show this conversation as already attributed.

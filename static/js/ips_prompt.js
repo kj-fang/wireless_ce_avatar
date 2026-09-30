@@ -228,12 +228,14 @@
         input.focus();
         return;
       }
-      var fromPath = (candidates || []).indexOf(canonical) >= 0;
+      // The candidate list mixes path guesses with remembered answers, so the
+      // origin comes from the server's per-candidate map, not from membership
+      // in the list. The server checks the claim again when it records it.
+      var sources = state.ips_candidate_sources || {};
       post({
         action: "attach",
         case_nbr: canonical,
-        // Only claim the path supplied it when the user kept what we guessed.
-        source: (fromPath && canonical === state.suggested_ips) ? "derived_from_path" : "explicit",
+        source: sources[canonical] || "explicit",
         log_path: state.log_path || ""
       });
     });

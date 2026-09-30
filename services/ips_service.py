@@ -216,9 +216,9 @@ def _apply_stored_answer(log_path) -> None:
         # prompt_state reports 'absent' for a log that was in fact skipped.
         _mark_answered(_log_key(log_path))
     if source == SKIPPED:
-        _remember_on_session("", SKIPPED)
+        _remember_on_session("", SKIPPED, log_path)
     elif source in (EXPLICIT, DERIVED_FROM_PATH) and record.get("case_nbr"):
-        _remember_on_session(str(record["case_nbr"]), source)
+        _remember_on_session(str(record["case_nbr"]), source, log_path)
 
 
 def start_new_session() -> None:
@@ -401,9 +401,37 @@ def blocking_state(log_path=None):
     return state
 
 
-def _remember_on_session(canonical: str, source: str) -> str:
+def _placeholder_is_for(log_path) -> bool:
+    """Whether the session's local run is the run this log belongs to.
+
+    A local_upload_/local_bsod_ context is only this log's own when the log is
+    the file that was uploaded, a file decoded from it (x.etl -> x.etl.003.log),
+    or a file in its extraction folder. Otherwise it is left over from an
+    earlier upload, and its subject, attachments and download folder describe
+    a different log.
+    """
+    key = _log_key(log_path)
+    uploaded = _log_key(session.get("uploaded_source_path"))
+    if not key or not uploaded:
+        return False
+    if key == uploaded or key.startswith(uploaded + "."):
+        return True
+    stem, ext = os.path.splitext(uploaded)
+    if ext in _ARCHIVE_EXTS:
+        folder = os.path.join(os.path.dirname(uploaded),
+                              os.path.basename(stem).replace(" ", "_"))
+        return key.startswith(folder + os.sep)
+    return False
+
+
+def _remember_on_session(canonical: str, source: str, log_path="") -> str:
     """Write one answer onto the session. Returns the canonical number, or ""."""
     session[SESSION_SOURCE_KEY] = source
+
+    def own_placeholder(previous: str) -> bool:
+        # With no log to check against, keep the earlier behaviour.
+        return ips_utils.is_synthetic_case_nbr(previous) and (
+            not log_path or _placeholder_is_for(log_path))
 
     raw = session.get("case_context") or {}
     have_context = isinstance(raw, dict) and bool(raw)
@@ -412,7 +440,7 @@ def _remember_on_session(canonical: str, source: str) -> str:
         if have_context:
             context = CaseContext.from_session(raw)
             previous = str(context.case_nbr or "")
-            if ips_utils.is_synthetic_case_nbr(previous):
+            if own_placeholder(previous):
                 # A local_upload_/local_bsod_ run is this log's own run. Its
                 # name stays: the results page looks the extraction index up
                 # by it, and it is not a case number, so it does not attribute
@@ -435,10 +463,11 @@ def _remember_on_session(canonical: str, source: str) -> str:
     context = CaseContext.from_session(raw) if have_context else CaseContext()
     previous = str(context.case_nbr or "")
     same_case = bool(previous) and ips_utils.normalise_ips(previous) == canonical
-    # A local_upload_/local_bsod_ placeholder is a name for *this* log's run,
+    # A local_upload_/local_bsod_ placeholder is a name for this log's run,
     # so what hangs off it -- the extraction folder, the attachment list --
-    # describes the log being answered about and stays.
-    was_placeholder = ips_utils.is_synthetic_case_nbr(previous)
+    # describes the log being answered about and stays. One left over from an
+    # earlier upload does not: it is treated like any other case's context.
+    was_placeholder = own_placeholder(previous)
 
     if previous and not same_case and not was_placeholder:
         # A different real case. Its subject, description, attachments and
@@ -558,7 +587,7 @@ def attach(case_nbr: str, source: str, log_path="") -> str:
     if source == SKIPPED:
         _mark_answered(key)
         remember_answer(log_path, "", SKIPPED)
-        return _remember_on_session("", SKIPPED)
+        return _remember_on_session("", SKIPPED, log_path)
 
     canonical = ips_utils.normalise_ips(case_nbr)
     if not canonical:
@@ -566,5 +595,5 @@ def attach(case_nbr: str, source: str, log_path="") -> str:
 
     _mark_answered(key)
     remember_answer(log_path, canonical, source)
-    return _remember_on_session(canonical, source)
+    return _remember_on_session(canonical, source, log_path)
 

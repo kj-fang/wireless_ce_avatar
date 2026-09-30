@@ -415,9 +415,36 @@ def remember_conversation_case(conversation_id: str, conversation: Optional[dict
     elif stated_nbr and stated_source in ("explicit", "derived_from_path"):
         ref = {"case_nbr": stated_nbr, "case_ref_source": stated_source}
     else:
-        # Recorded before v7, which named no case: go by the issue and log.
-        ref = _case_ref_from_evidence(conv.get("issue"), conv.get("log_path", ""))
+        # The reloaded snapshot states no source -- history snapshots do not
+        # carry the v7 root fields, and their issue comes from a chatbot's
+        # context, which never does. Inferring from it turned a confirmed skip
+        # into 'absent', or into the case folder the log sits under, and the
+        # unconditional re-pin then threw away the right answer. Better
+        # evidence comes first: a pin this process already holds, then the
+        # answer stored against the log, which survives a restart.
+        with _conversation_case_lock:
+            held = dict(_conversation_case.get(conversation_id) or {})
+        if held.get("case_ref_source") not in (None, "", "absent"):
+            return
+        ref = _stored_answer_ref(conv.get("log_path", "")) or \
+            _case_ref_from_evidence(conv.get("issue"), conv.get("log_path", ""))
     _pin_conversation_case(conversation_id, ref)
+
+
+def _stored_answer_ref(log_path: str) -> dict:
+    """The answer the prompt stored for this log, as a case reference, or {}."""
+    try:
+        from services import ips_service
+        record = ips_service.answer_for(log_path)
+    except Exception:
+        return {}
+    source = record.get("source")
+    if source == "skipped":
+        return {"case_nbr": "", "case_ref_source": "skipped"}
+    nbr = ips_utils.normalise_ips(record.get("case_nbr"))
+    if nbr and source in ("explicit", "derived_from_path"):
+        return {"case_nbr": nbr, "case_ref_source": source}
+    return {}
 
 
 def _feedback_log_path(domain: str = "") -> Path:

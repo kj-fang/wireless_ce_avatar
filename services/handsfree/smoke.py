@@ -476,6 +476,20 @@ def smoke_runner(tmp: Path) -> None:
               analysis7.mode == "full" and analysis7.missing_info == []
               and analysis7.env_detail.get("Steps to reproduce", "").startswith("1. Run"),
               f"missing={analysis7.missing_info}")
+
+        # BT-gated case (wifi_or_bt='bt' skips the reader) must still get a
+        # checklist domain from the customer-selected IPS subcategory.
+        def _fake_process_bt_oem(case_ctx: CaseContext) -> CaseContext:
+            case_ctx = _fake_process(case_ctx)
+            case_ctx.wifi_or_bt = "bt"
+            case_ctx.subcategory = "OEM Tools"
+            return case_ctx
+        cis.CaseService.process_case = staticmethod(_fake_process_bt_oem)
+        analysis8 = r.analyze_case("01234567")
+        check("S11.f BT-gated case gets domain from IPS subcategory",
+              analysis8.mode == "triage_only"
+              and analysis8.issue_domain == "OEM Tools",
+              f"mode={analysis8.mode} domain={analysis8.issue_domain}")
     finally:
         cis.CaseService.process_case = orig_process
         adl.run_dload_threads = orig_dload
@@ -870,6 +884,20 @@ def smoke_checklist() -> None:
     check("S12.g llm_fill maps numbered answers onto items",
           fills2["general_info"][0]["provided"]
           and "regression" in fills2["general_info"][0]["value"])
+
+    # Domain fallback chain (finding from the 5-case Lenovo validation:
+    # 'OEM Tools' cases are wifi_or_bt='bt' and skipped the reader entirely).
+    from .runner import _resolve_issue_domain
+    check("S12.h reader's specific pick wins",
+          _resolve_issue_domain("Yellow Bang", "OEM Tools", "Connectivity")
+          == "Yellow Bang")
+    check("S12.i reader Others never shadows a specific subcategory",
+          _resolve_issue_domain("Others", "OEM Tools", "") == "OEM Tools"
+          and _resolve_issue_domain("", "OEM Tools", "") == "OEM Tools")
+    check("S12.j issue-type fallback, then Others",
+          _resolve_issue_domain("", "", "Yellow Bang (YB)") == "Yellow Bang"
+          and _resolve_issue_domain("", "", "") == "Others"
+          and _resolve_issue_domain("Others", "weird", "stranger") == "Others")
 
 
 def run_smoke() -> int:

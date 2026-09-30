@@ -133,6 +133,21 @@ _ENV_BRIEF_KEY_RE = re.compile(
     r"(?i)platform|found in build|operating system|frequency|tested hardware|computer model")
 
 
+def _resolve_issue_domain(reader_domain: str, subcategory: str,
+                          issue_type: str) -> str:
+    """Debug-checklist domain with graceful fallbacks: the reader's informed
+    pick wins, but a fallback 'Others' never shadows a specific domain from
+    the IPS subcategory (customer-selected, e.g. 'OEM Tools') or the triage
+    issue type."""
+    from .checklist import FALLBACK_DOMAIN, resolve_domain
+    for cand in (reader_domain,
+                 resolve_domain(subcategory) if subcategory else "",
+                 resolve_domain(issue_type) if issue_type else ""):
+        if cand and cand != FALLBACK_DOMAIN:
+            return cand
+    return FALLBACK_DOMAIN
+
+
 def _env_repro_steps(env: dict) -> str:
     """Non-trivial 'Steps to reproduce' answer from the Environment Details
     form, or '' — a filled form field means repro steps are NOT missing."""
@@ -211,6 +226,7 @@ class CaseAnalysis:
     missing_info: list = field(default_factory=list)   # [{item, reason}] case-info gaps
     env_detail: dict = field(default_factory=dict)     # IPS Environment Details Q&A form
     issue_domain: str = ""                             # debug-checklist domain (tab name)
+    subcategory: str = ""                              # IPS Core issue subcategory (customer-selected)
     checklist_fills: dict = field(default_factory=dict)  # pre-filled first-response items
     error: str = ""
 
@@ -277,6 +293,7 @@ class HandsfreeRunner:
             analysis.description = case_ctx.description or ""
             analysis.wifi_or_bt = case_ctx.wifi_or_bt or "wifi"
             analysis.env_detail = dict(case_ctx.env_detail or {})
+            analysis.subcategory = str(case_ctx.subcategory or "")
         if case_ctx is None or not (analysis.subject or analysis.description):
             analysis.mode = "error"
             analysis.error = "case fetch failed — no subject/description"
@@ -293,6 +310,14 @@ class HandsfreeRunner:
                 analysis.triage = triage
                 analysis.classification = triage.get("Classification") or {}
                 analysis.issue_type = analysis.classification.get("issue_type", "") or ""
+
+        # Provisional checklist domain before any early exit (the reader can
+        # upgrade it later): IPS subcategory is customer-selected and often
+        # exact ("OEM Tools"); note wifi_or_bt is derived as "bt" whenever
+        # the subcategory lacks the word "wifi", so BT-gated cases MUST get
+        # their domain here or the first-response checklist falls to Others.
+        analysis.issue_domain = _resolve_issue_domain(
+            "", analysis.subcategory, analysis.issue_type)
 
         # BT cases: the agentic analyzer is Wi-Fi; deliver triage only (v1).
         if analysis.wifi_or_bt != "wifi":
@@ -330,11 +355,11 @@ class HandsfreeRunner:
                     f"attachment={reader.get('attachment_name') or '(none)'} "
                     f"({reader.get('issue_time_source') or 'no source'})")
 
-        # Debug-checklist domain: reader's pick, else mapped from the triage
-        # issue type; "Others" when nothing fits.
-        from .checklist import resolve_domain
-        analysis.issue_domain = ((analysis.case_reader or {}).get("issue_domain")
-                                 or resolve_domain(analysis.issue_type))
+        # Upgrade the provisional domain with the reader's informed pick
+        # (a reader "Others" never shadows a specific subcategory domain).
+        analysis.issue_domain = _resolve_issue_domain(
+            (analysis.case_reader or {}).get("issue_domain") or "",
+            analysis.subcategory, analysis.issue_type)
 
         # -- 3a. is the case information usable? -------------------------------
         # LLM-judged completeness (description clarity / issue time / repro

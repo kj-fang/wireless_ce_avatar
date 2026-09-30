@@ -837,7 +837,7 @@ def smoke_checklist() -> None:
           f"domains={len(data['domains'])} rev={data['revision']}")
     w = data["domains"].get("WowLAN", {})
     check("S12.b WowLAN tab has all three sections",
-          len(w.get("required_log", [])) >= 5
+          len(w.get("required_log", [])) >= 4
           and any("wake method" in e["item"].lower() for e in w.get("required_info", []))
           and any("firewall" in e["item"].lower() for e in w.get("initial_triage", [])),
           str({k: len(w.get(k, [])) for k in ("required_log", "required_info", "initial_triage")}))
@@ -919,11 +919,27 @@ def smoke_checklist() -> None:
     check("S12.m fills filtered to the chosen sub-category only",
           any("Issue replication time" == e["item"] for e in roam["required_log"])
           and not any("WRT BIOS settings" in e["item"] for e in roam["required_log"])
-          and len(conn["required_log"]) == 6,
+          and len(conn["required_log"]) == 4,
           f"roam={len(roam['required_log'])} conn={len(conn['required_log'])}")
     check("S12.n checked items render before unchecked",
           d["plain"].find("provided: WRT_0820.zip")
           < d["plain"].find("[ ] 2) FW usniffer"))
+
+    # CE policy (2026-09-30): Air sniffer / OS log only requested for
+    # performance debugging.
+    import re as _re
+    hits = [(dom, sec, e.get("subcat", ""))
+            for dom, dd in data["domains"].items()
+            for sec in ("required_log", "required_info")
+            for e in dd.get(sec, [])
+            if _re.match(r"(?i)(\d+\)\s*)?(air sniffer log|os log)", e["item"])]
+    check("S12.o Air sniffer/OS log kept ONLY for Performance",
+          hits and all(dom == "Performance" or sub == "Performance"
+                       for dom, sec, sub in hits),
+          str(hits))
+    check("S12.p Power Consumption triage note about OS log preserved",
+          any("OS log" in e["item"]
+              for e in data["domains"]["Power Consumption (MS)"]["initial_triage"]))
 
 
 def run_smoke() -> int:

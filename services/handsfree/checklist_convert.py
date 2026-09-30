@@ -154,6 +154,25 @@ def _parse_domain(rows: list[dict]) -> dict:
     return d
 
 
+# CE-team decision (2026-09-30): Air sniffer log and OS log are NOT requested
+# from customers — except for performance debugging, where they matter
+# (P2P's Performance sub-category and the Performance domain tab keep them).
+# Applied at convert time so re-running against a new checklist revision
+# preserves the policy. Initial-triage guidance notes are never touched.
+_DROP_ITEM_RE = re.compile(r"(?i)^(\d+\)\s*)?(air sniffer log|os log)\b")
+
+
+def _apply_item_policy(data: dict) -> dict:
+    for dom_name, dom in data["domains"].items():
+        if dom_name == "Performance":
+            continue
+        for sec in ("required_log", "required_info"):
+            dom[sec] = [e for e in dom.get(sec, [])
+                        if e.get("subcat") == "Performance"
+                        or not _DROP_ITEM_RE.match(e["item"])]
+    return data
+
+
 def convert(xlsx_path: str) -> dict:
     sheets = _load_sheets(xlsx_path)
     by_name = {name: rows for name, rows in sheets}
@@ -180,10 +199,10 @@ def convert(xlsx_path: str) -> dict:
         parsed["description"] = desc
         domains[name] = parsed
 
-    return {"revision": revision,
-            "generated_from": Path(xlsx_path).name,
-            "general_info": general,
-            "domains": domains}
+    return _apply_item_policy({"revision": revision,
+                               "generated_from": Path(xlsx_path).name,
+                               "general_info": general,
+                               "domains": domains})
 
 
 def main(argv=None) -> int:

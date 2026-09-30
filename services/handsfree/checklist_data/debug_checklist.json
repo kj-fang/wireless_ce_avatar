@@ -67,16 +67,6 @@
           "subcat": "Connectivity"
         },
         {
-          "item": "4) OS log",
-          "example": "Example: Y/N",
-          "subcat": "Connectivity"
-        },
-        {
-          "item": "Air sniffer log (optional)",
-          "example": "Example: Y/N",
-          "subcat": "Connectivity"
-        },
-        {
           "item": "WRT Log, including",
           "example": "",
           "subcat": "Scan"
@@ -93,16 +83,6 @@
         },
         {
           "item": "3) Windows event logs",
-          "example": "Example: Y/N",
-          "subcat": "Scan"
-        },
-        {
-          "item": "Air sniffer log",
-          "example": "Example: Y/N",
-          "subcat": "Scan"
-        },
-        {
-          "item": "OS log",
           "example": "Example: Y/N",
           "subcat": "Scan"
         },
@@ -128,16 +108,6 @@
         },
         {
           "item": "3) Windows event logs",
-          "example": "Example: Y/N",
-          "subcat": "Roaming"
-        },
-        {
-          "item": "Air sniffer log (need 2 sniffer logs, one for source AP and one for target AP)",
-          "example": "Example: Y/N",
-          "subcat": "Roaming"
-        },
-        {
-          "item": "OS log",
           "example": "Example: Y/N",
           "subcat": "Roaming"
         },
@@ -186,14 +156,6 @@
         },
         {
           "item": "3) Windows event logs",
-          "example": "Example: Y/N"
-        },
-        {
-          "item": "Air sniffer log (optional)",
-          "example": "Example: Y/N"
-        },
-        {
-          "item": "OS log",
           "example": "Example: Y/N"
         }
       ],
@@ -299,17 +261,7 @@
           "subcat": "Connectivity"
         },
         {
-          "item": "Air sniffer log (optional)",
-          "example": "Example: Y/N",
-          "subcat": "Connectivity"
-        },
-        {
           "item": "UEFI driver log",
-          "example": "Example: Y/N",
-          "subcat": "Scan"
-        },
-        {
-          "item": "Air sniffer log",
           "example": "Example: Y/N",
           "subcat": "Scan"
         }
@@ -366,16 +318,6 @@
         },
         {
           "item": "3) Windows event logs",
-          "example": "Example: Y/N",
-          "subcat": "Connectivity"
-        },
-        {
-          "item": "Air sniffer log (optional)",
-          "example": "Example: Y/N",
-          "subcat": "Connectivity"
-        },
-        {
-          "item": "OS log",
           "example": "Example: Y/N",
           "subcat": "Connectivity"
         },
@@ -560,10 +502,6 @@
           "example": "Example: Y/N"
         },
         {
-          "item": "Air sniffer log (when fail symptom is related to AP scanning or connectivity)",
-          "example": "Example: Y/N"
-        },
-        {
           "item": "HLK Test Report",
           "example": "Example: Y/N"
         }
@@ -605,10 +543,6 @@
         },
         {
           "item": "WPP driver log",
-          "example": "Example: Y/N"
-        },
-        {
-          "item": "OS log",
           "example": "Example: Y/N"
         },
         {

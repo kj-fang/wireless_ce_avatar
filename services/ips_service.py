@@ -10,6 +10,7 @@ over the top of it.
 
 import json
 import os
+import sys
 import threading
 from datetime import datetime, timezone
 from pathlib import Path
@@ -471,6 +472,39 @@ def _remember_on_session(canonical: str, source: str) -> str:
 _AGENT_CASE_FIELDS = ("subject", "description", "issue_type", "attachment_time")
 
 
+_CHATBOT_ROUTE_MODULES = (
+    "blueprints.log_chatbot.log_chatbot_routes",
+    "blueprints.bt_chatbot.bt_chatbot_routes",
+    "blueprints.nw_analysis.nw_analysis_routes",
+)
+
+
+def _primed_agents() -> list:
+    """Every agent that may be holding this session's case summary.
+
+    The agents on app_config are boot-time templates. What /set_log actually
+    primes is each chatbot's per-session clone in its module-level
+    _chatbot_instances, keyed by session['chatbot_session_id'] -- the same map
+    a finished background job's agent is adopted into. Clearing only the
+    templates left the clone the next chat really uses still holding the old
+    case. Modules are read from sys.modules rather than imported: one that
+    has not been loaded has no agents to clear, and importing it here would
+    drag a whole chatbot in from the service layer.
+    """
+    agents = []
+    sid = session.get("chatbot_session_id")
+    if sid:
+        for module_name in _CHATBOT_ROUTE_MODULES:
+            instances = getattr(sys.modules.get(module_name), "_chatbot_instances", None)
+            if isinstance(instances, dict) and instances.get(sid) is not None:
+                agents.append(instances[sid])
+    for name in ("log_chatbot_agent", "bt_chatbot_agent", "nw_analysis_agent"):
+        agent = getattr(app_config, name, None)
+        if agent is not None and all(agent is not a for a in agents):
+            agents.append(agent)
+    return agents
+
+
 def _forget_case_on_agents(canonical: str) -> None:
     """Drop a previous case's summary from any agent primed with it.
 
@@ -479,8 +513,7 @@ def _forget_case_on_agents(canonical: str) -> None:
     when the user names a different one. Clearing the session alone leaves the
     agent discussing the new case from the old case's notes.
     """
-    for name in ("log_chatbot_agent", "bt_chatbot_agent", "nw_analysis_agent"):
-        agent = getattr(app_config, name, None)
+    for agent in _primed_agents():
         ctx = getattr(agent, "issue_context", None)
         if not isinstance(ctx, dict):
             continue

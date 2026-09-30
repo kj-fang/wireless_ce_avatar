@@ -63,6 +63,14 @@ def resolve():
     except ValueError as e:
         return jsonify({"success": False, "error": str(e)}), 400
 
+    # Look the case up and classify it, as the case search does, so a number
+    # given here is no longer left "Unclassified" with no description. After
+    # the answer is recorded, and never a reason to refuse it.
+    try:
+        ips_service.enrich_attached_case(canonical)
+    except Exception as e:
+        print(f"[ips] enrich after resolve failed: {e}")
+
     return jsonify({
         "success": True,
         "case_nbr": canonical,

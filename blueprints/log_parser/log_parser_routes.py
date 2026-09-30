@@ -517,7 +517,10 @@ def _process_local_analysis(source_path: str, source_dir: str, file_path: str,
     session['download_path'] = source_dir
     session['uploaded_source_path'] = source_path
     session['local_in_place'] = True
-    session['classification'] = {
+    # A case already looked up for this run (the prompt's answer) keeps its
+    # classification; only a run with no known case is "Unclassified".
+    session['classification'] = ips_service.cached_classification(
+        ips_service.current_case_nbr()) or {
         'issue_type': 'Unclassified',
         'confidence': 0,
         'keywords_found': []

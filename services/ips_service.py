@@ -493,6 +493,15 @@ def _remember_on_session(canonical: str, source: str, log_path="") -> str:
     context.case_ref_source = source
     session["case_context"] = context.to_session()
 
+    # The usual case is an agent primed at /set_log with no case at all, and
+    # only a *different* case was being handled above -- so after the answer
+    # the session and Gather knew the number while the agent answering the
+    # chat still had none. Point this session's primed agents at it.
+    for agent in _primed_agents():
+        ctx = getattr(agent, "issue_context", None)
+        if isinstance(ctx, dict) and ctx and not ips_utils.normalise_ips(ctx.get("case_nbr")):
+            ctx["case_nbr"] = canonical
+
     # The extracted-file index is keyed by case number, and the results page
     # looks it up by the number on the context. Renaming one without the other
     # leaves that page with nothing to show. A respelling of the same case is
@@ -509,6 +518,141 @@ def _remember_on_session(canonical: str, source: str, log_path="") -> str:
 # The issue-context fields a chatbot agent is primed with that belong to the
 # case rather than to the log.
 _AGENT_CASE_FIELDS = ("subject", "description", "issue_type", "attachment_time")
+
+
+# ---------------------------------------------------------------------------
+# Filling in the case the user named
+# ---------------------------------------------------------------------------
+# A case typed into the case search is looked up in IPS and classified; a case
+# typed into this prompt was recorded as a bare number. So a Send To or a
+# local upload with a perfectly good case number still showed "Unclassified",
+# the agent analysed without the customer's description, and Gather stored no
+# subject or issue type. enrich_attached_case does the light half of the case
+# search for it: the one fact_case row from Snowflake (no PDF, no attachments)
+# and the same LLM classifier. Anything that fails leaves the answer exactly
+# as recorded -- the lookup is an improvement, never a precondition.
+_case_facts: dict = {}              # case number -> {"fields": tuple, "classification": dict}
+_case_facts_lock = threading.Lock()
+_ENRICH_TIMEOUT_SEC = 20
+
+
+def _lookup_case_facts(canonical: str) -> Optional[dict]:
+    """Snowflake row + classification for a case, cached per process."""
+    with _case_facts_lock:
+        if canonical in _case_facts:
+            return _case_facts[canonical]
+    key = getattr(app_config, "key", None)
+    passwd = getattr(key, "snowflake_passwd", None)
+    if not passwd:
+        return None
+    llm = getattr(app_config, "llm_helper", None)
+
+    def work():
+        from services.case_info_service import CaseService
+        fields = CaseService._get_case_info_from_snowflake(canonical, passwd)
+        if not fields:
+            return None
+        _case_id, subject, _env, description, _backend, subcategory = fields
+        usage = llm.empty_usage() if llm is not None else None
+        classification = None
+        if llm is not None:
+            classification = llm.classify_issue(
+                {"case_nbr": canonical, "subject": subject or "",
+                 "description": description or "", "subcategory": subcategory or ""},
+                usage_accumulator=usage)
+        return {"fields": fields, "classification": classification,
+                "usage": usage, "model": getattr(llm, "model", "") if llm else ""}
+
+    # Bounded: Snowflake has no timeout of its own, and the user is waiting on
+    # the dialog. On a timeout the worker is abandoned, not joined.
+    from concurrent.futures import ThreadPoolExecutor
+    pool = ThreadPoolExecutor(max_workers=1)
+    try:
+        facts = pool.submit(work).result(timeout=_ENRICH_TIMEOUT_SEC)
+    except Exception as e:
+        print(f"[ips] case lookup for {canonical} skipped: {e}")
+        return None
+    finally:
+        pool.shutdown(wait=False)
+    if facts:
+        with _case_facts_lock:
+            _case_facts[canonical] = facts
+        facts = dict(facts, fresh=True)
+    return facts
+
+
+def cached_classification(case_nbr) -> Optional[dict]:
+    """The classification already looked up for this case, without a lookup."""
+    canonical = ips_utils.normalise_ips(case_nbr)
+    with _case_facts_lock:
+        facts = _case_facts.get(canonical) if canonical else None
+    classification = (facts or {}).get("classification")
+    return classification if isinstance(classification, dict) else None
+
+
+def enrich_attached_case(case_nbr) -> bool:
+    """Fill the session's case from IPS and classify it, as the case search does.
+
+    Only fields the context does not already hold are filled, so a case loaded
+    through the case search is never overwritten. Returns whether anything was
+    applied.
+    """
+    canonical = ips_utils.normalise_ips(case_nbr)
+    if not canonical or current_case_nbr() != canonical:
+        return False
+    facts = _lookup_case_facts(canonical)
+    if not facts:
+        return False
+    # The answer may have changed while the lookup ran.
+    if current_case_nbr() != canonical:
+        return False
+
+    case_id, subject, env_detail, description, backend_id, subcategory = facts["fields"]
+    context = CaseContext.from_session(session.get("case_context") or {})
+    context.id = context.id or case_id
+    context.subject = context.subject or subject
+    context.description = context.description or description
+    context.env_detail = context.env_detail or env_detail or {}
+    context.backend_id = context.backend_id or backend_id or ""
+    context.subcategory = context.subcategory or subcategory
+    session["case_context"] = context.to_session()
+
+    classification = facts.get("classification")
+    if isinstance(classification, dict) and classification.get("issue_type"):
+        session["classification"] = classification
+
+    # The agent reads issue_context on every answer, so updating it is enough;
+    # no re-priming, which would reset the conversation.
+    for agent in _primed_agents():
+        ctx = getattr(agent, "issue_context", None)
+        # Primed agents only: an empty context is a boot-time template.
+        if not isinstance(ctx, dict) or not ctx \
+                or ips_utils.normalise_ips(ctx.get("case_nbr")) != canonical:
+            continue
+        ctx["subject"] = ctx.get("subject") or context.subject or ""
+        ctx["description"] = ctx.get("description") or context.description or ""
+        if isinstance(classification, dict) and classification.get("issue_type"):
+            ctx["issue_type"] = classification["issue_type"]
+
+    # The classification is an LLM call; its cost is recorded the way the
+    # case search records its own, so it is not the one untracked spend.
+    usage = facts.get("usage") or {}
+    if facts.get("fresh") and int(usage.get("llm_calls") or 0) > 0:
+        try:
+            from services import gather_service
+            gather_service.record_feature_usage(
+                workflow_id=session.get("gather_workflow_id", ""),
+                feature_code="issue_time_prepass",
+                model=facts.get("model") or "",
+                usage=usage,
+                issue=context.to_dict(),
+                domain=context.wifi_or_bt or "wifi",
+                trigger="ips_prompt_case_lookup",
+                status="success",
+            )
+        except Exception:
+            pass
+    return True
 
 
 _CHATBOT_ROUTE_MODULES = (

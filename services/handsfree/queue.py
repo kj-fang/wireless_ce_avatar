@@ -112,7 +112,7 @@ class HandsfreeStore:
     def enqueue(self, *, case_nbr: str, case_id: str, subject: str,
                 draft_plain: str, draft_html: str,
                 confidence: Optional[int], mode: str,
-                analysis: dict) -> dict:
+                analysis: dict, owner_name: str = "") -> dict:
         draft_id = f"{case_nbr}__{datetime.now().strftime('%Y%m%dT%H%M%S')}_{uuid.uuid4().hex[:6]}"
         record = {
             "draft_id": draft_id,
@@ -121,6 +121,7 @@ class HandsfreeStore:
             "updated_at": _now_iso(),
             "case_nbr": str(case_nbr),
             "case_id": case_id,
+            "owner_name": owner_name,
             "subject": subject,
             "mode": mode,                      # full | triage_only
             "confidence": confidence,
@@ -171,9 +172,10 @@ class HandsfreeStore:
             return rec
 
     def list_drafts(self, include_closed: bool = True,
-                    limit: int = 100) -> list[dict]:
+                    limit: int = 100, owner_name: str = "") -> list[dict]:
         """Newest-first draft summaries (analysis payload omitted)."""
         out: list[dict] = []
+        owner_filter = (owner_name or "").strip().casefold()
         try:
             files = sorted(self.queue_dir.glob("*.json"),
                            key=lambda p: p.stat().st_mtime, reverse=True)
@@ -184,11 +186,13 @@ class HandsfreeStore:
                 rec = json.loads(p.read_text(encoding="utf-8"))
             except Exception:
                 continue
+            if owner_filter and str(rec.get("owner_name") or "").casefold() != owner_filter:
+                continue
             if not include_closed and rec.get("status") in ("posted", "rejected"):
                 continue
             slim = {k: rec.get(k) for k in
                     ("draft_id", "status", "created_at", "updated_at",
-                     "case_nbr", "case_id", "subject", "mode", "confidence",
+                     "case_nbr", "case_id", "owner_name", "subject", "mode", "confidence",
                      "post_result")}
             out.append(slim)
             if len(out) >= limit:

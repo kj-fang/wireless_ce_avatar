@@ -53,7 +53,9 @@ def status():
 @handsfree_bp.route("/queue")
 def list_queue():
     include_closed = request.args.get("all", "").lower() in ("1", "true", "yes")
-    return jsonify({"items": _store().list_drafts(include_closed=include_closed)})
+    owner_name = request.args.get("owner", "").strip()
+    return jsonify({"items": _store().list_drafts(
+        include_closed=include_closed, owner_name=owner_name)})
 
 
 @handsfree_bp.route("/queue/<draft_id>")

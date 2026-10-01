@@ -304,10 +304,15 @@
       <label style="font-size: 12px; margin-left: 4px; font-weight: 400;">
         <input type="checkbox" id="show-closed" onchange="loadQueue()"> show posted/rejected
       </label>
+      <label style="font-size: 12px; margin-left: 8px; font-weight: 400;">
+        owner:
+        <input type="text" id="owner-filter" placeholder="Filter by case owner"
+               style="width: 190px;" onkeydown="if(event.key==='Enter')loadQueue()">
+      </label>
     </h3>
     <table id="queue-table">
       <thead><tr>
-        <th>Case</th><th>Subject</th><th>Mode</th><th>Confidence</th>
+        <th>Case</th><th>Owner</th><th>Subject</th><th>Mode</th><th>Confidence</th>
         <th>Status</th><th>Created</th>
       </tr></thead>
       <tbody></tbody>
@@ -480,9 +485,10 @@
 
   // ---------- per-case stage table ----------
 
-  const STAGES = ['fetch_case', 'triage', 'read_case_history', 'pick_zip',
-                  'download', 'decompose', 'check_wrt_log', 'check_bt_log', 'issue_time',
-                  'pick_etl', 'decode_etl', 'decode_bt', 'agent_analysis', 'echo_kb'];
+  const STAGES = ['fetch_case', 'triage', 'read_case_history', 'check_case_info',
+                  'pick_zip', 'download', 'decompose', 'check_wrt_log', 'check_bt_log',
+                  'issue_time', 'pick_etl', 'decode_etl', 'decode_bt', 'agent_analysis',
+                  'echo_kb'];
   let stageCasePinned = null;   // user-selected case; null = follow the running one
 
   function pinStageCase(caseNbr) {
@@ -584,7 +590,12 @@
 
   async function loadQueue() {
     const showClosed = document.getElementById('show-closed').checked;
-    const r = await fetch('/handsfree/queue' + (showClosed ? '?all=1' : ''));
+    const params = new URLSearchParams();
+    if (showClosed) params.set('all', '1');
+    const owner = document.getElementById('owner-filter').value.trim();
+    if (owner) params.set('owner', owner);
+    const query = params.toString();
+    const r = await fetch('/handsfree/queue' + (query ? '?' + query : ''));
     const j = await r.json();
     const tbody = document.querySelector('#queue-table tbody');
     tbody.innerHTML = '';
@@ -596,6 +607,7 @@
       const tr = document.createElement('tr');
       tr.innerHTML =
         `<td class="case-nbr">${esc(it.case_nbr)}</td>` +
+        `<td>${esc(it.owner_name || '—')}</td>` +
         `<td>${esc((it.subject || '').slice(0, 70))}</td>` +
         `<td><span class="pill">${esc(it.mode || '')}</span></td>` +
         `<td>${it.confidence != null ? it.confidence + '/100' : '—'}</td>` +
@@ -605,7 +617,7 @@
       tbody.appendChild(tr);
     });
     if (!(j.items || []).length) {
-      tbody.innerHTML = '<tr><td colspan="6" style="color:var(--muted);">queue is empty — run a check above</td></tr>';
+      tbody.innerHTML = '<tr><td colspan="7" style="color:var(--muted);">queue is empty — run a check above</td></tr>';
     }
   }
 

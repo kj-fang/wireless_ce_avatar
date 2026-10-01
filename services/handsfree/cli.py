@@ -15,6 +15,7 @@ from __future__ import annotations
 import argparse
 import sys
 import time
+from pathlib import Path
 from typing import Optional
 
 
@@ -28,10 +29,15 @@ def _build_parser() -> argparse.ArgumentParser:
     parser = argparse.ArgumentParser(
         description="Run Handsfree case detection and analysis without the web UI."
     )
-    parser.add_argument(
+    owners = parser.add_mutually_exclusive_group(required=True)
+    owners.add_argument(
         "--owner",
-        required=True,
-        help="IPS/Salesforce Owner.Name to monitor.",
+        help="One IPS/Salesforce Owner.Name to monitor.",
+    )
+    owners.add_argument(
+        "--owners-file",
+        type=Path,
+        help="UTF-8 text file with one Owner.Name per line; blank lines and # comments are ignored.",
     )
     parser.add_argument(
         "--interval",
@@ -101,6 +107,41 @@ def _run_once(owner: str) -> int:
     return 0 if status == "done" else 1
 
 
+def _load_owners(args) -> list[str]:
+    if args.owner is not None:
+        owners = [args.owner.strip()]
+    else:
+        try:
+            lines = args.owners_file.read_text(encoding="utf-8-sig").splitlines()
+        except OSError as e:
+            raise ValueError(f"cannot read owners file {args.owners_file}: {e}") from e
+        owners = [line.strip() for line in lines
+                  if line.strip() and not line.lstrip().startswith("#")]
+
+    unique = []
+    seen = set()
+    for owner in owners:
+        key = owner.casefold()
+        if owner and key not in seen:
+            unique.append(owner)
+            seen.add(key)
+    if not unique:
+        raise ValueError("owner list is empty")
+    return unique
+
+
+def _run_owners(owners: list[str]) -> int:
+    failures = []
+    for owner in owners:
+        print(f"[handsfree-cli] checking owner {owner!r}")
+        if _run_once(owner) != 0:
+            failures.append(owner)
+    if failures:
+        print("[handsfree-cli] failed owner check(s): " + ", ".join(failures))
+        return 1
+    return 0
+
+
 def main(argv: Optional[list[str]] = None) -> int:
     _configure_output()
     args = _build_parser().parse_args(argv)
@@ -110,29 +151,37 @@ def main(argv: Optional[list[str]] = None) -> int:
     if args.max_cases is not None and not 1 <= args.max_cases <= 15:
         print("[handsfree-cli] --max-cases must be between 1 and 15", file=sys.stderr)
         return 2
+    try:
+        owners = _load_owners(args)
+    except ValueError as e:
+        print(f"[handsfree-cli] {e}", file=sys.stderr)
+        return 2
 
     print("[handsfree-cli] initializing analysis services (no web UI)")
     _initialize_services()
     store = _store()
-    updates = {"owner_name": args.owner.strip()}
+    updates = {}
+    if args.owner is not None:
+        updates["owner_name"] = owners[0]
     if args.max_cases is not None:
         updates["max_cases_per_run"] = args.max_cases
     if args.dry_run:
         updates["dry_run"] = True
     cfg = store.save_config(updates)
     print(
-        f"[handsfree-cli] owner={cfg['owner_name']!r}, "
+        f"[handsfree-cli] owners={len(owners)}, "
         f"max_cases={cfg['max_cases_per_run']}, "
         f"dry_run={cfg['dry_run']}"
     )
 
     if args.once:
-        return _run_once(cfg["owner_name"])
+        return _run_owners(owners)
 
-    print(f"[handsfree-cli] polling every {args.interval:g}s; press Ctrl+C to stop")
+    print(f"[handsfree-cli] polling {len(owners)} owner(s) every "
+          f"{args.interval:g}s; press Ctrl+C to stop")
     try:
         while True:
-            _run_once(cfg["owner_name"])
+            _run_owners(owners)
             time.sleep(args.interval)
     except KeyboardInterrupt:
         print("\n[handsfree-cli] stopped")

@@ -80,7 +80,8 @@ def start_check_now(owner_name: Optional[str] = None) -> dict:
 
 
 def _analyze_and_enqueue(store: HandsfreeStore, case_nbr: str,
-                         case_id: str = "", subject: str = "") -> dict:
+                         case_id: str = "", subject: str = "",
+                         owner_name: str = "") -> dict:
     """Shared per-case body for check runs and manual single-case runs."""
     def _progress(stage, detail, _c=case_nbr):
         _log_event(f"[{_c}] {stage}: {detail}")
@@ -114,6 +115,7 @@ def _analyze_and_enqueue(store: HandsfreeStore, case_nbr: str,
         confidence=draft["confidence"],
         mode=analysis.mode,
         analysis=analysis.to_dict(),
+        owner_name=owner_name,
     )
     _log_event(
         f"[{case_nbr}] queued draft {rec['draft_id']} "
@@ -135,6 +137,7 @@ def _analyze_and_enqueue(store: HandsfreeStore, case_nbr: str,
             confidence=None,
             mode="first_response",
             analysis=analysis.to_dict(),
+            owner_name=owner_name,
         )
         _log_event(f"[{case_nbr}] queued first-response checklist draft "
                    f"{fr_rec['draft_id']}")
@@ -161,7 +164,8 @@ def _run_check(owner: str, store: HandsfreeStore) -> None:
         for ref in fresh:
             _log_event(f"analyzing case {ref.case_nbr} — {ref.subject[:60]}")
             _analyze_and_enqueue(store, ref.case_nbr,
-                                 case_id=ref.case_id, subject=ref.subject)
+                                 case_id=ref.case_id, subject=ref.subject,
+                                 owner_name=owner)
 
         _set_state(status="done", finished_at=time.time())
         _log_event("check run complete — review the queue below")

@@ -148,9 +148,16 @@ def smoke_queue(tmp: Path) -> None:
     store = HandsfreeStore(tmp / "handsfree")
     rec = store.enqueue(case_nbr="01234567", case_id="500XYZ", subject="s",
                         draft_plain="body", draft_html="<p>body</p>",
-                        confidence=88, mode="full", analysis={"k": 1})
+                        confidence=88, mode="full", analysis={"k": 1},
+                        owner_name="Charles P Chu")
     check("S3.a enqueued pending_review", rec["status"] == "pending_review")
     check("S3.b ledger marks analyzed", store.is_processed("01234567"))
+    owner_items = store.list_drafts(owner_name="charles p chu")
+    check("S3.b2 owner is persisted and filter is case-insensitive",
+          len(owner_items) == 1 and owner_items[0]["owner_name"] == "Charles P Chu",
+          str(owner_items))
+    check("S3.b3 unknown owner filter returns no drafts",
+          store.list_drafts(owner_name="Another Owner") == [])
     upd = store.update(rec["draft_id"], status="posted",
                        post_result={"ok": True, "backend": "rest"})
     check("S3.c status transition", upd["status"] == "posted")

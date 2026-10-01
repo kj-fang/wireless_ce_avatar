@@ -127,3 +127,11 @@ LOCAL_SKILLS_DIR_NAME = "skills_config"
 LOCAL_SKILLS_YAML = str(_Path(__file__).parent.parent / "data" / "skills.yaml")
 
 
+# Per-user personal gnaigpt token override (see set_up_app._resolve_personal_token).
+# Files are named `<login>.py` (login = getpass.getuser().lower()) and each contains
+# `gnaigpt_token_per_user = {"<login>": "<jwt>"}`. Share dir tracks keys.py's backup
+# location so moves of the key share only touch KEY_PATH_bkup.
+USER_KEY_DIR = str(_Path(KEY_PATH_bkup).parent)
+USER_KEY_LOCAL_SUBDIR = "user_keys"
+
+

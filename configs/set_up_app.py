@@ -1,5 +1,7 @@
 from pathlib import Path
 from threading import Thread
+import shutil
+from typing import Optional
 
 from configs.path_configs import (
     KEY_PATH_prim, KEY_PATH_bkup, CLASSIFY_PATH,
@@ -8,6 +10,7 @@ from configs.path_configs import (
     SKILLS_CONFIG_DIR_prim, SKILLS_CONFIG_DIR_bkup, SKILLS_YAML_FILENAME,
     BT_SKILLS_YAML_FILENAME,
     LOCAL_SKILLS_YAML,
+    USER_KEY_LOCAL_SUBDIR,
 )
 from utils import helpers
 from utils.skills_yaml_utils import (
@@ -46,6 +49,147 @@ def _prewarm_connections(snowflake_passwd):
         print("✅ [Prewarm] Salesforce VF session ready")
     except Exception as e:
         print(f"⚠️ [Prewarm] Salesforce VF session failed: {e}")
+
+
+def _read_token_map(module) -> dict:
+    """Normalize a ``gnaigpt_token_per_user`` dict from module/file-backed config."""
+    token_map = getattr(module, "gnaigpt_token_per_user", None) or {}
+    if not isinstance(token_map, dict):
+        return {}
+    return {str(k).strip(): v for k, v in token_map.items() if v}
+
+
+def _write_local_user_cache(login: str, avatarfiles_dir: str, token: str) -> None:
+    """Persist a personal token into the local user cache for easy repeat use."""
+    filename = f"{login}.py"
+    local_dir = Path(avatarfiles_dir) / USER_KEY_LOCAL_SUBDIR
+    local_dir.mkdir(parents=True, exist_ok=True)
+    local_file = local_dir / filename
+    content = f'gnaigpt_token_per_user = {{\n    "{login}": "{token}",\n}}\n'
+    tmp = local_file.with_suffix(local_file.suffix + ".tmp")
+    tmp.write_text(content, encoding="utf-8")
+    shutil.move(str(tmp), str(local_file))
+
+
+def _resolve_personal_token(login: str, avatarfiles_dir: str, key_module=None) -> Optional[str]:
+    """Return the current user's personal gnaigpt token, or None to fall back to the shared pool.
+
+    Lookup order:
+      1. Local `<avatarfiles_dir>/user_keys/<login>.py`.
+      2. Shared `keys.py` module `gnaigpt_token_per_user` map.
+      3. Share `<USER_KEY_DIR>/<login>.py` — cached to local on hit.
+      4. Neither reachable → None.
+
+    When a match is found in the shared keys module, it is written to local
+    cache so local development stays ergonomic without making the keys file the
+    only truth source.
+    """
+    if not login:
+        return None
+    filename = f"{login}.py"
+    local_dir = Path(avatarfiles_dir) / USER_KEY_LOCAL_SUBDIR
+    local_file = local_dir / filename
+
+    if local_file.exists():
+        mod = helpers.load_module(str(local_file), f"user_key_{login}")
+        token = _read_token_map(mod).get(login)
+        if token:
+            return token
+
+    if key_module is not None:
+        token = _read_token_map(key_module).get(login)
+        if token:
+            try:
+                _write_local_user_cache(login, avatarfiles_dir, token)
+                print(f"📥 [LLM] copied personal token from keys.py → local cache: {local_file}")
+            except Exception as e:
+                print(f"⚠️  [LLM] failed to cache keys.py token locally: {e}")
+            return token
+
+    print(f"ℹ️  [LLM] no personal token for '{login}' in local cache or keys.py")
+    return None
+
+
+def _current_login() -> str:
+    """Windows login (lowercased) or empty when unavailable."""
+    try:
+        return (_current_user() or "").strip().lower()
+    except Exception:
+        return ""
+
+
+def _make_personal_token_expired_hook(login: str):
+    """Build a fire-and-forget hook the LLM retry loop calls on personal-token 401.
+
+    Emits a Socket.IO event on the ``/api_key_error`` namespace; the frontend
+    modal listens for it. ``socketio`` is looked up lazily via ``app_config``
+    because it is set later in ``set_up`` than the LLM_helper.
+    """
+    def _hook():
+        sio = getattr(app_config, "socketio", None)
+        if sio is None:
+            print("⚠️  [LLM] personal-token expiry hook fired but socketio not ready")
+            return
+        try:
+            sio.emit(
+                "personal_token_expired",
+                {"login": login},
+                namespace="/api_key_error",
+            )
+            print(f"📣 [LLM] emitted personal_token_expired for '{login}'")
+        except Exception as e:
+            print(f"⚠️  [LLM] socketio emit failed in expiry hook: {e}")
+    return _hook
+
+
+def configure_llm_personal_token(llm_helper, key_module, avatarfiles_dir: str) -> Optional[str]:
+    """Wire up the LLM_helper's gnaigpt client and token pool.
+
+    Called at boot AND from the ``/api/personal_token/update`` writeback so
+    both paths share one pool-building recipe. Returns the personal token
+    string (or None) so callers can log which path was taken.
+
+    Pool ordering is:
+      1. current user personal token (if present)
+      2. shared common pool from ``gnaigpt_token_per_user`` in keys.py
+      3. single default token as the non-pool fallback
+    """
+    if key_module is None:
+        return None
+    login = _current_login()
+    personal_token = _resolve_personal_token(login, avatarfiles_dir, key_module) if login else None
+
+    common_pool = [(label, tok) for label, tok in _read_token_map(key_module).items()]
+    deduped = []
+    seen = set()
+    for label, token in common_pool:
+        if not token or token in seen:
+            continue
+        seen.add(token)
+        deduped.append((label, token))
+
+    if personal_token:
+        # The personal token is always first in the failover chain; any shared
+        # entries reusing the same JWT are removed so a user refresh does not
+        # create duplicate dead entries in the pool.
+        deduped = [(lbl, tok) for (lbl, tok) in deduped if tok != personal_token]
+        combined_pool = [(login, personal_token)] + deduped
+        print(f"🔑 [LLM] personal gnaigpt token for user '{login}' "
+              f"(then falls back to {len(deduped)} shared/common tokens on 429)")
+        llm_helper.set_up(
+            personal_token, key_module.gnaigpt_url, key_module.gnaigpt_model, CLASSIFY_PATH,
+            token_pool=combined_pool,
+            personal_token=personal_token,
+            on_personal_token_expired=_make_personal_token_expired_hook(login),
+        )
+        return personal_token
+
+    fallback_pool = deduped or None
+    llm_helper.set_up(
+        fallback_pool[0][1], key_module.gnaigpt_url, key_module.gnaigpt_model, CLASSIFY_PATH,
+        token_pool=fallback_pool,
+    )
+    return None
 
 def set_up(socketio):
     # download dir
@@ -89,39 +233,14 @@ def set_up(socketio):
     llm_helper = LLM_helper()
 
     if key_path != None:
-        # Per-user personal token override: if the Windows login name matches
-        # an entry in `gnaigpt_token_per_user`, put that token at the head of
-        # the failover pool so this user's own quota is spent first; on
-        # daily-cost-limit 429s the pool rotates into the shared
-        # `gnaigpt_tokens` entries. Unknown users just use the shared pool.
-        personal_map = getattr(key, "gnaigpt_token_per_user", None) or {}
-        try:
-            _login = _current_user().strip().lower()
-        except Exception:
-            _login = ""
-        personal_map_ci = {str(k).strip().lower(): v for k, v in personal_map.items()}
-        personal_token = personal_map_ci.get(_login) if _login else None
-
-        if personal_token:
-            shared_pool = list(getattr(key, "gnaigpt_tokens", None) or [])
-            # Drop shared entries reusing the same JWT — once the personal
-            # token hits the daily cap those duplicates are already dead too.
-            dedup = []
-            for (lbl, tok) in shared_pool:
-                if tok != personal_token:
-                    dedup.append((lbl, tok))
-            combined_pool = [(_login, personal_token)] + dedup
-            print(f"🔑 [LLM] personal gnaigpt token for user '{_login}' "
-                  f"(then falls back to {len(dedup)} shared tokens on daily-cap 429)")
-            llm_helper.set_up(
-                personal_token, key.gnaigpt_url, key.gnaigpt_model, CLASSIFY_PATH,
-                token_pool=combined_pool,
-            )
-        else:
-            llm_helper.set_up(
-                key.gnaigpt_token_r, key.gnaigpt_url, key.gnaigpt_model, CLASSIFY_PATH,
-                token_pool=getattr(key, "gnaigpt_tokens", None),
-            )
+        # Per-user personal token override: look for the current user's
+        # `<login>.py` file (local cache first, then share) which carries a
+        # `gnaigpt_token_per_user = {"<login>": "<jwt>"}` dict. On hit put
+        # that token at the head of the failover pool so this user's own
+        # quota is spent first; on daily-cost-limit 429s the pool rotates
+        # into the shared `gnaigpt_tokens` entries. Users without a personal
+        # file just use the shared pool.
+        configure_llm_personal_token(llm_helper, key, avatarfiles_dir)
 
     app_config.set_llm_helper(llm_helper)
 

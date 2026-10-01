@@ -55,6 +55,7 @@ from configs.version import __version__, BUILD_DATE, GIT_HASH, GIT_BRANCH
 #from blueprints.log_analysis import log_bp
 from blueprints import automation_bp, main_bp, llm_bp, download_bp, analysis_etl_bp, bsod_bp, log_parser_bp, log_chatbot_bp, bt_chatbot_bp, nw_analysis_bp, feedback_bp, handsfree_bp # , attachment_bp, log_bp,
 import blueprints.download.download_routes
+import blueprints.llm.llm_routes
 
 def _bring_chrome_to_front(server_pid):
     """Bring Avatar's Chrome browser to the foreground.
@@ -227,6 +228,7 @@ def create_app():
     blueprints.download.download_routes.register_socketio_handlers(socketio)
     blueprints.log_parser.log_parser_routes.register_socketio_handlers(socketio)
     blueprints.automation.automation_routes.register_socketio_handlers(socketio)
+    blueprints.llm.llm_routes.register_socketio_handlers(socketio)
 
     print("📋 Registered routes:")
     for rule in app.url_map.iter_rules():

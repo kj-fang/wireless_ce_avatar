@@ -626,9 +626,15 @@
     const el = document.getElementById('draft-chips');
     const chips = [];
     const cr = analysis.case_reader || {};
-    if (analysis.mode === 'request_logs' || analysis.mode === 'request_info') {
+    if (['request_logs', 'request_info', 'first_response'].includes(analysis.mode)) {
       chips.push({label: 'visibility', text: 'public reply to customer', cls: 'warn',
                   title: 'Approving posts this as a customer-visible comment (not Private to Intel)'});
+    }
+    if (analysis.issue_domain) {
+      const sub = (analysis.issue_subcategory && analysis.issue_subcategory !== analysis.issue_domain)
+        ? ' · ' + analysis.issue_subcategory : '';
+      chips.push({label: 'domain', text: analysis.issue_domain + sub,
+                  title: 'Debug-checklist domain identified from the case'});
     }
     const mi = analysis.missing_info || [];
     if (mi.length) {
@@ -713,7 +719,7 @@
 
   async function approveDraft() {
     if (!currentDraftId) return;
-    const msg = (currentDraftMode === 'request_logs' || currentDraftMode === 'request_info')
+    const msg = (['request_logs', 'request_info', 'first_response'].includes(currentDraftMode))
       ? 'Post this reply to IPS as a PUBLIC comment visible to the customer?'
       : 'Post this comment to IPS as Private to Intel?';
     if (!confirm(msg)) return;

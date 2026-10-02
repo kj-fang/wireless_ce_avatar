@@ -425,6 +425,11 @@ def smoke_runner(tmp: Path) -> None:
               and "step-by-step reproduction instructions" in draft5["plain"]
               and draft5["confidence"] is None,
               draft5["plain"][:400])
+        check("S9.b2 request-info reply carries the pre-filled domain checklist",
+              "=== General Info ===" in draft5["plain"]
+              and "=== Required Log (Others) ===" in draft5["plain"]
+              and "please provide" in draft5["plain"],
+              draft5["plain"][-500:])
 
         # Fallback-found issue time retracts the gap (stage-7 refinement).
         time_gap_reply = json.dumps({
@@ -446,10 +451,16 @@ def smoke_runner(tmp: Path) -> None:
         # request_logs + info gaps merge into ONE public reply.
         analysis2.missing_info = [{"item": "issue_time", "reason": ""}]
         draft2b = compose(analysis2)
-        check("S9.d request-logs reply merges the info asks",
+        check("S9.d request-logs reply merges info asks + checklist body",
               "In addition, to speed up the analysis" in draft2b["plain"]
-              and "exact date and time (with timezone)" in draft2b["plain"],
+              and "exact date and time (with timezone)" in draft2b["plain"]
+              and "=== General Info ===" in draft2b["plain"],
               draft2b["plain"][:400])
+        analysis2.missing_info = []
+        draft2c = compose(analysis2)
+        check("S9.d2 log-only request still carries the checklist",
+              "=== General Info ===" in draft2c["plain"]
+              and "In addition, to speed up" not in draft2c["plain"])
 
         # Env form fills the gap: reader flags repro_steps, but the customer
         # answered "Steps to reproduce" in Environment Details -> retracted.
@@ -465,6 +476,81 @@ def smoke_runner(tmp: Path) -> None:
               analysis7.mode == "full" and analysis7.missing_info == []
               and analysis7.env_detail.get("Steps to reproduce", "").startswith("1. Run"),
               f"missing={analysis7.missing_info}")
+
+        # BT-gated case (wifi_or_bt='bt' skips the reader) must still get a
+        # checklist domain from the customer-selected IPS subcategory.
+        def _fake_process_bt_oem(case_ctx: CaseContext) -> CaseContext:
+            case_ctx = _fake_process(case_ctx)
+            case_ctx.wifi_or_bt = "bt"
+            case_ctx.subcategory = "OEM Tools"
+            return case_ctx
+        cis.CaseService.process_case = staticmethod(_fake_process_bt_oem)
+        analysis8 = r.analyze_case("01234567")
+        check("S11.f BT-gated case gets domain from IPS subcategory",
+              analysis8.mode == "triage_only"
+              and analysis8.issue_domain == "OEM Tools",
+              f"mode={analysis8.mode} domain={analysis8.issue_domain}")
+
+        # --- S13: failure-path reply policy (2026-10-02) --------------------
+        cis.CaseService.process_case = staticmethod(_fake_process)
+
+        # a) pick_zip crash -> ask the customer to re-upload
+        from . import case_reader as cr_mod
+        orig_find = cr_mod.find_attachment
+        def _find_boom(*a, **k):
+            raise RuntimeError("boom")
+        cr_mod.find_attachment = _find_boom
+        analysis9 = r.analyze_case("01234567")
+        cr_mod.find_attachment = orig_find
+        d9 = compose(analysis9)
+        check("S13.a pick_zip crash -> public re-upload request",
+              analysis9.mode == "request_logs"
+              and analysis9.log_request_reason == "unreadable_archive"
+              and "RE-UPLOAD" in d9["plain"],
+              f"mode={analysis9.mode} reason={analysis9.log_request_reason}")
+
+        # b) download fails once -> automatic retry recovers
+        calls = {"n": 0}
+        def _flaky_dload(att_list, download_path, socketio):
+            calls["n"] += 1
+            if calls["n"] == 1:
+                raise RuntimeError("share hiccup")
+            return [[str(case_dir / att_list[0][0]), att_list[0][0], True]]
+        adl.run_dload_threads = _flaky_dload
+        analysis10 = r.analyze_case("01234567")
+        check("S13.b download retry recovers to full analysis",
+              analysis10.mode == "full" and calls["n"] == 2,
+              f"mode={analysis10.mode} attempts={calls['n']}")
+
+        # c) download fails twice -> re-upload request
+        def _dead_dload(*a, **k):
+            raise RuntimeError("share down")
+        adl.run_dload_threads = _dead_dload
+        analysis10b = r.analyze_case("01234567")
+        adl.run_dload_threads = _fake_dload
+        check("S13.c double download failure -> public re-upload request",
+              analysis10b.mode == "request_logs"
+              and analysis10b.log_request_reason == "unreadable_archive",
+              f"mode={analysis10b.mode}")
+
+        # d) decode failure caused by a missing/purged PDB is explained
+        etl2 = case_dir / "capture2" / "WifiDriverIHVSession.etl.009"
+        etl2.parent.mkdir(parents=True, exist_ok=True)
+        etl2.write_bytes(b"x")
+        adc.process_single_zip = lambda *a, **k: ([str(etl2)], [], [], [], [])
+        orig_decode = runner_mod.HandsfreeRunner._decode_etl
+        def _pdb_fail(self, path):
+            raise RuntimeError("Netwaw18.pdb could not be extracted")
+        runner_mod.HandsfreeRunner._decode_etl = _pdb_fail
+        analysis11 = r.analyze_case("01234567")
+        runner_mod.HandsfreeRunner._decode_etl = orig_decode
+        adc.process_single_zip = _fake_zip_proc
+        d11 = compose(analysis11)
+        check("S13.d PDB decode failure explained in the draft",
+              analysis11.mode == "triage_only"
+              and "PDB symbol database" in analysis11.error
+              and "PDB symbol database" in d11["plain"],
+              str(analysis11.error)[:140])
     finally:
         cis.CaseService.process_case = orig_process
         adl.run_dload_threads = orig_dload
@@ -480,7 +566,7 @@ def smoke_runner(tmp: Path) -> None:
 def smoke_orchestrator(tmp: Path) -> None:
     print("[S5] Approve/post guards (scan failure aborts; marker dedups)")
     from . import orchestrator as orch
-    from .composer import AI_MARKER
+    from .composer import AI_MARKER, CHECKLIST_TAG
     from .queue import HandsfreeStore
 
     store = HandsfreeStore(tmp / "handsfree_s5")
@@ -517,6 +603,24 @@ def smoke_orchestrator(tmp: Path) -> None:
               str(res2))
         check("S5.d second approve of posted draft refused",
               orch.approve_and_post(draft_id)["error"] == "draft already posted")
+
+        # Family-aware dedup: an ANALYSIS comment on the case must not block
+        # a first-response draft (and vice versa).
+        rec2 = store.enqueue(case_nbr="09999998", case_id="500S5B", subject="s5b",
+                             draft_plain=AI_MARKER + "\n" + CHECKLIST_TAG + "\n\nbody",
+                             draft_html="<p>b</p>", confidence=None,
+                             mode="first_response", analysis={})
+
+        class _MarkerNoTag(_HasMarker):
+            def post_comment(self, *a, **k):
+                from .ips_client import PostResult
+                return PostResult(ok=False, backend="rest", error="rest down")
+        orch.IpsClient = _MarkerNoTag
+        res3 = orch.approve_and_post(rec2["draft_id"])
+        check("S5.e analysis-family comment does not block first_response draft",
+              "already exists" not in (res3.get("error") or "")
+              and store.get(rec2["draft_id"])["status"] == "post_failed",
+              str(res3))
     finally:
         orch._store = orig_store_fn
         orch.IpsClient = orig_ips
@@ -778,6 +882,127 @@ def smoke_env_detail() -> None:
           "NOT a driver/firmware assert code" in READER_PROMPT)
 
 
+# ---------------------------------------------------------------- S12
+def smoke_checklist() -> None:
+    print("[S12] Debug-checklist data + first-response rendering")
+    from .runner import CaseAnalysis
+    from .checklist import (FALLBACK_DOMAIN, _blank_fills, build_fills,
+                            deterministic_fills, load_checklist, llm_fill,
+                            resolve_domain)
+    from .composer import compose, CHECKLIST_TAG, AI_MARKER
+
+    data = load_checklist()
+    check("S12.a committed JSON: 14 domains + 10 general questions",
+          len(data["domains"]) == 14 and len(data["general_info"]) == 10
+          and data["revision"] == "Rev1_0",
+          f"domains={len(data['domains'])} rev={data['revision']}")
+    w = data["domains"].get("WowLAN", {})
+    check("S12.b WowLAN tab has all three sections",
+          len(w.get("required_log", [])) >= 4
+          and any("wake method" in e["item"].lower() for e in w.get("required_info", []))
+          and any("firewall" in e["item"].lower() for e in w.get("initial_triage", [])),
+          str({k: len(w.get(k, [])) for k in ("required_log", "required_info", "initial_triage")}))
+    check("S12.c domain aliases resolve; unknown -> Others",
+          resolve_domain("Yellow Bang (YB)") == "Yellow Bang"
+          and resolve_domain("wake on wlan") == "WowLAN"
+          and resolve_domain("weird thing") == FALLBACK_DOMAIN
+          and resolve_domain("") == FALLBACK_DOMAIN)
+
+    a = CaseAnalysis(case_nbr="1", mode="first_response", ok=True,
+                     subject="YB after burn-in", issue_domain="Yellow Bang",
+                     chosen_attachment="WRT_0820.zip", log_path="x.log",
+                     issue_times=["08/20/2026 13:43"],
+                     env_detail={"Steps to reproduce": "1. stress test the DUT 2. check device manager"})
+    fills = _blank_fills("Yellow Bang")
+    deterministic_fills(a, fills)
+    wrt = next(e for e in fills["required_log"] if e["item"].startswith("WRT Log"))
+    steps = next(e for e in fills["general_info"] if "reproduction steps" in e["item"].lower())
+    check("S12.d deterministic fills: WRT log + env repro steps checked",
+          wrt["provided"] and "WRT_0820.zip" in wrt["value"] and steps["provided"])
+
+    def _boom(**kw):
+        raise RuntimeError("llm down")
+    import types
+    llm_fill(types.SimpleNamespace(chat=_boom), fills, "case text")
+    check("S12.e llm_fill failure leaves items unfilled, never raises",
+          not any(e["provided"] for e in fills["required_info"]))
+
+    a.checklist_fills = fills
+    d = compose(a)
+    check("S12.f first_response draft: tag, checked value, example hint, triage",
+          CHECKLIST_TAG in d["plain"] and AI_MARKER in d["plain"]
+          and "[✓] WRT Log, including — provided: WRT_0820.zip" in d["plain"]
+          and "please provide (Example: code 10)" in d["plain"]
+          and "=== Please verify (initial triage) ===" in d["plain"]
+          and d["confidence"] is None,
+          d["plain"][:300])
+
+    # LLM fill happy path: answers item 1 of the remaining ones.
+    fills2 = _blank_fills("Yellow Bang")
+    fake = types.SimpleNamespace(chat=lambda messages, system_content=None:
+                                 '{"fills": {"1": {"provided": true, "value": "Yes, regression from 24.30"}}}')
+    llm_fill(fake, fills2, "case text")
+    check("S12.g llm_fill maps numbered answers onto items",
+          fills2["general_info"][0]["provided"]
+          and "regression" in fills2["general_info"][0]["value"])
+
+    # Domain fallback chain (finding from the 5-case Lenovo validation:
+    # 'OEM Tools' cases are wifi_or_bt='bt' and skipped the reader entirely).
+    from .runner import _resolve_issue_domain
+    check("S12.h reader's specific pick wins",
+          _resolve_issue_domain("Yellow Bang", "OEM Tools", "Connectivity")
+          == "Yellow Bang")
+    check("S12.i reader Others never shadows a specific subcategory",
+          _resolve_issue_domain("Others", "OEM Tools", "") == "OEM Tools"
+          and _resolve_issue_domain("", "OEM Tools", "") == "OEM Tools")
+    check("S12.j issue-type fallback, then Others",
+          _resolve_issue_domain("", "", "Yellow Bang (YB)") == "Yellow Bang"
+          and _resolve_issue_domain("", "", "") == "Others"
+          and _resolve_issue_domain("Others", "weird", "stranger") == "Others")
+
+    # Sub-categories (Connectivity / P2P tabs use an Issue Type table).
+    from .checklist import resolve_subcategory, _blank_fills as _bf
+    c = data["domains"]["Connectivity"]
+    check("S12.k Connectivity/P2P sub-categories parsed with tagged items",
+          list(c["subcategories"]) == ["Connectivity", "Scan", "Roaming"]
+          and all(e.get("subcat") for e in c["required_log"])
+          and list(data["domains"]["P2P (Miracast)"]["subcategories"])
+          == ["Connectivity", "Performance"],
+          str(list(c.get("subcategories", {}))))
+    check("S12.l sub-category resolution: name, keywords, fallbacks",
+          resolve_subcategory("Connectivity", "Roaming", "") == "Roaming"
+          and resolve_subcategory("Connectivity", "", "DUT roams from AP1 to AP2") == "Roaming"
+          and resolve_subcategory("Connectivity", "", "empty scan list") == "Scan"
+          and resolve_subcategory("Connectivity", "", "connect fail after resume") == "Connectivity"
+          and resolve_subcategory("WowLAN", "x", "y") == "")
+    roam = _bf("Connectivity", "Roaming")
+    conn = _bf("Connectivity", "Connectivity")
+    check("S12.m fills filtered to the chosen sub-category only",
+          any("Issue replication time" == e["item"] for e in roam["required_log"])
+          and not any("WRT BIOS settings" in e["item"] for e in roam["required_log"])
+          and len(conn["required_log"]) == 4,
+          f"roam={len(roam['required_log'])} conn={len(conn['required_log'])}")
+    check("S12.n checked items render before unchecked",
+          d["plain"].find("provided: WRT_0820.zip")
+          < d["plain"].find("[ ] 2) FW usniffer"))
+
+    # CE policy (2026-09-30): Air sniffer / OS log only requested for
+    # performance debugging.
+    import re as _re
+    hits = [(dom, sec, e.get("subcat", ""))
+            for dom, dd in data["domains"].items()
+            for sec in ("required_log", "required_info")
+            for e in dd.get(sec, [])
+            if _re.match(r"(?i)(\d+\)\s*)?(air sniffer log|os log)", e["item"])]
+    check("S12.o Air sniffer/OS log kept ONLY for Performance",
+          hits and all(dom == "Performance" or sub == "Performance"
+                       for dom, sec, sub in hits),
+          str(hits))
+    check("S12.p Power Consumption triage note about OS log preserved",
+          any("OS log" in e["item"]
+              for e in data["domains"]["Power Consumption (MS)"]["initial_triage"]))
+
+
 def run_smoke() -> int:
     tmp = Path(tempfile.mkdtemp(prefix="handsfree_smoke_"))
     try:
@@ -791,6 +1016,7 @@ def run_smoke() -> int:
         smoke_time_coverage(tmp)
         smoke_yb_etl_pick()
         smoke_env_detail()
+        smoke_checklist()
     finally:
         shutil.rmtree(tmp, ignore_errors=True)
     print(f"\nsmoke result: {'ALL PASS' if not PASS_FAIL else 'FAILURES: ' + ', '.join(PASS_FAIL)}")

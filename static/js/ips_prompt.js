@@ -140,8 +140,9 @@
     var skipBtn = el("button", {
       type: "button", text: "This log has no case",
       style: {
-        background: "none", border: "none", color: "#64748b",
-        textDecoration: "underline", cursor: "pointer", fontSize: "13px", padding: "0"
+        background: "transparent", border: "1px solid #e2e8f0", color: "#64748b",
+        borderRadius: "999px", cursor: "pointer", fontSize: "13px",
+        padding: "5px 12px", fontWeight: "500"
       }
     });
     var saveBtn = el("button", {
@@ -240,11 +241,28 @@
       });
     });
 
+    // Both states are the same quiet pill, differing only by fill. Resting is
+    // a slate outline that reads as a secondary control; armed is a soft
+    // amber whose shape has not changed, so the eye sees "the same thing,
+    // now about to act" rather than a new element appearing.
+    var SKIP_REST = {
+      background: "transparent", borderColor: "#e2e8f0", color: "#64748b"
+    };
+    var SKIP_ARMED = {
+      background: "#fffbeb", borderColor: "#fde68a", color: "#92400e"
+    };
+
+    function styleSkip(style) {
+      Object.keys(style).forEach(function (k) { skipBtn.style[k] = style[k]; });
+    }
+
     function disarmSkip() {
       skipArmed = false;
       skipBtn.textContent = "This log has no case";
-      skipBtn.style.color = "#64748b";
+      styleSkip(SKIP_REST);
     }
+
+    skipBtn.style.transition = "background .15s, border-color .15s, color .15s";
 
     skipBtn.addEventListener("click", function () {
       if (busy) { return; }
@@ -252,8 +270,8 @@
         // Skipping is a claim about the log, not a way out of the dialog, so
         // it is made twice on purpose.
         skipArmed = true;
-        skipBtn.textContent = "Confirm: no case number exists — don't ask again";
-        skipBtn.style.color = "#b45309";
+        skipBtn.textContent = "Click again to confirm";
+        styleSkip(SKIP_ARMED);
         hint.textContent = "This log will be recorded without a case.";
         hint.style.color = "#b45309";
         return;

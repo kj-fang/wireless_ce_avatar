@@ -722,12 +722,14 @@ def _forget_case_on_agents(canonical: str) -> None:
             ctx.pop(key, None)
         ctx["case_nbr"] = canonical
     # The caches derived from the old case: its attachment time, the issue
-    # time resolved from that, and the LLM's summary of its description. The
-    # _carried_issue_time* keys are left alone -- they are the time the user
-    # picked for this log, not something the old case supplied. Kept in step
-    # with log_chatbot_routes._invalidate_issue_context_caches.
+    # time resolved from that, the LLM's summary of its description, and its
+    # classification and IPS analysis, which _extract_issue_context would
+    # otherwise prime the next agent with. The _carried_issue_time* keys are
+    # left alone -- they are the time the user picked for this log, not
+    # something the old case supplied. Kept in step with
+    # log_chatbot_routes._invalidate_issue_context_caches.
     for key in ("_attachment_time_cache", "_resolved_issue_time_cache",
-                "_issue_ai_quick"):
+                "_issue_ai_quick", "classification", "ai_ips_analysis"):
         session.pop(key, None)
 
 

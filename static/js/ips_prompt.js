@@ -1,15 +1,6 @@
 /*
- * The case-number prompt.
- *
- * A log that arrives through Send To, a local upload, or a path typed into a
- * chatbot carries no case number, so the analysis and the conversation that
- * follows cannot be attributed to the case they were done for. The server
- * refuses to start such a conversation with 428; this turns that refusal into
- * a dialog and replays the request once the number is known.
- *
- * Installed by including the script. There is nothing to call: the three
- * chatbots reach /chat from enough different places that intercepting the
- * refusal is more reliable than finding every send button.
+ * Shows the case-number dialog after a 428 response, then retries the request.
+ * Loaded once and automatically intercepts chatbot requests; no direct call needed.
  */
 (function () {
   "use strict";

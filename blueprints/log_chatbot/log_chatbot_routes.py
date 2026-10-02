@@ -36,6 +36,7 @@ from services import feedback_service
 from services import history_service
 from services import chat_jobs
 from services import gather_service
+from services import check_ips_service
 
 log_chatbot_bp = Blueprint("log_chatbot", __name__, url_prefix="/log_chatbot")
 
@@ -614,6 +615,9 @@ def set_log():
             "previous_log_path": prev_log_path if rotated else "",
             "previous_conversation_id": prev_conv_id if rotated else "",
             "new_conversation_id": new_conv_id,
+            # Whether the client must ask for a case number before the first
+            # question. Carries the candidates so the prompt opens pre-filled.
+            **check_ips_service.prompt_state(log_path),
         })
     except Exception as e:
         return jsonify({"success": False, "error": str(e)}), 500
@@ -696,6 +700,12 @@ def chat():
     user_message = (data.get("message") or "").strip()
     if not user_message:
         return jsonify({"success": False, "error": "message is required"}), 400
+
+    # 428 Precondition Required: the log has no case number yet. The client
+    # opens the prompt and replays this request once it has one.
+    blocked = check_ips_service.blocking_state()
+    if blocked:
+        return jsonify(blocked), 428
 
     mode = str(data.get("mode", "tools")).strip().lower()
     if mode not in ("simple", "tools"):
@@ -830,6 +840,11 @@ def chat():
             _issue_ctx_for_snapshot = _extract_issue_context()
         except Exception:
             _issue_ctx_for_snapshot = {}
+        feedback_service.begin_turn(
+            conversation_id,
+            issue=_issue_ctx_for_snapshot,
+            log_path=getattr(agent, "current_log_path", "") or "",
+        )
 
         # Usage analytics: on every Send, capture the entry session (user name,
         # date, CASE NUMBER + case summary) and the asked question into the
@@ -1064,6 +1079,7 @@ def reset():
     try:
         agent = _get_or_create_agent()
         agent.reset_conversation()
+        check_ips_service.start_new_session()
         return jsonify({"success": True, "message": "Conversation reset."})
     except Exception as e:
         return jsonify({"success": False, "error": str(e)}), 500
@@ -1256,6 +1272,11 @@ def history_load():
         # Re-point BOTH sidecars at this conversation so new turns + feedback
         # continue appending here instead of spawning a fresh conversation.
         session["feedback_conversation_id"] = conversation_id
+        # Feedback on this conversation must be stamped with the case
+        # it was recorded under, not whatever the session holds now:
+        # reloading restores the issue onto the agent, not the case
+        # onto the session.
+        feedback_service.remember_conversation_case(conversation_id, conv)
 
         conv = conv or {}
         running = bool(job is not None and job.status == "running")
@@ -1428,7 +1449,11 @@ def back_to_avatar():
     ):
         session.pop(key, None)
 
-    # 3) Clear the global "last analyzed log" hint so the chatbot page
+    # 3) This ends the conversation, so the case number is asked for again
+    #    rather than inherited by whatever is loaded next.
+    check_ips_service.start_new_session()
+
+    # 4) Clear the global "last analyzed log" hint so the chatbot page
     #    doesn't pre-fill the previous run's log path.
     try:
         app_config.last_analyzed_log_path = ""

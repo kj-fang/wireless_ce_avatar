@@ -37,16 +37,10 @@ _MAX_REMEMBERED_ANSWERS = 500
 
 _answer_lock = threading.Lock()
 
-# The answer is filed under the log path, so losing the path loses the answer.
-# The session cannot be trusted to hold it — the clobbering request is usually
-# one that started before the log was even chosen — and this app serves one
-# desktop user, the same reason app_config.last_analyzed_log_path exists.
+# Kept outside the session so overlapping requests cannot detach an answer from its log.
 _last_prompted_log = ""
 
-# Which logs have been answered in the conversation the user is in now. A new
-# conversation confirms the case again rather than inheriting the last answer,
-# because the case is recorded per conversation. Kept out of the session for
-# the same reason as the path above.
+# Logs answered in this conversation; cleared so each new conversation reconfirms its case.
 _answered_this_session = set()
 
 

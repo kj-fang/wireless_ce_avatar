@@ -185,7 +185,6 @@ def _convert_messages_to_anthropic(messages):
 
     return system, converted
 
-
 class _AnthropicCompletions:
     def __init__(self, adapter):
         self._adapter = adapter
@@ -225,7 +224,10 @@ class _AnthropicCompletions:
                 params["tool_choice"] = tc
 
         # Retry loop: transparently rotate to the next pool token when the
-        # current one hits its daily cost cap. All other errors propagate.
+        # current one hits its daily cost cap OR its JWT expires (401). All
+        # other errors propagate. When the dying token equals the owning
+        # helper's ``personal_token``, fire the expiry hook first so the
+        # frontend can prompt for a refresh.
         while True:
             # Snapshot the client that will actually service this attempt so a
             # concurrent rotation on another thread cannot misattribute the
@@ -238,8 +240,29 @@ class _AnthropicCompletions:
                     client_snapshot.messages.create(**params)
                 )
             except Exception as e:
-                if pool is None or not _is_daily_cost_limit_error(e):
+                if pool is None:
                     raise
+                is_cost_limit = _is_daily_cost_limit_error(e)
+                is_expired = _is_token_expired_error(e)
+                if not (is_cost_limit or is_expired):
+                    raise
+                if is_expired:
+                    helper = self._adapter._helper
+                    personal = getattr(helper, "personal_token", None) if helper else None
+                    if personal is not None and used_token == personal:
+                        # Personal-token 401: notify the user via the hook and
+                        # let this request fail. The pool is deliberately NOT
+                        # advanced — the user must refresh (via the modal) or
+                        # every retry will silently succeed on a shared token
+                        # and hide the fact that their personal token is dead.
+                        print("🔒 [LLM] personal gnaigpt token 401 — firing expiry hook")
+                        hook = getattr(helper, "on_personal_token_expired", None)
+                        if callable(hook):
+                            try:
+                                hook()
+                            except Exception as hook_err:
+                                print(f"⚠️  [LLM] personal-token expiry hook failed: {hook_err}")
+                        raise
                 next_entry = pool.mark_dead_and_advance(used_token)
                 if next_entry is None:
                     raise
@@ -257,13 +280,17 @@ class AnthropicOpenAIAdapter:
 
     Optionally accepts a ``TokenPool`` and a ``client_factory`` to enable
     transparent rotation to the next pool token when the current one exhausts
-    its daily cost limit. When both are omitted, behaves as a passive adapter.
+    its cost limit. When both are omitted, behaves as a passive adapter.
+    ``helper`` is a back-reference to the owning ``LLM_helper`` so the retry
+    loop can compare the dying token against ``helper.personal_token`` and
+    invoke ``helper.on_personal_token_expired`` on match.
     """
 
-    def __init__(self, anthropic_client, pool=None, client_factory=None):
+    def __init__(self, anthropic_client, pool=None, client_factory=None, helper=None):
         self._client = anthropic_client
         self._pool = pool
         self._client_factory = client_factory
+        self._helper = helper
         self.chat = _AnthropicChatAdapter(self)
 
     def _rebuild_underlying(self, new_token):
@@ -279,6 +306,21 @@ class AnthropicOpenAIAdapter:
             except Exception:
                 pass
 
+    def hot_swap_token(self, new_token, new_pool_entries=None):
+        """In-place update of underlying client and token pool.
+
+        Preserves adapter instance identity so all upstream references
+        (e.g., WifiLogAgentSystem instances in Log Chatbot) immediately perceive
+        the updated token without object-rebinding or stale-reference bugs.
+        """
+        if new_pool_entries is not None:
+            if self._pool is not None:
+                self._pool.reset_entries(new_pool_entries)
+            else:
+                self._pool = TokenPool(new_pool_entries)
+        self._rebuild_underlying(new_token)
+
+
 # ---------------------------------------------------------------------------
 # Token pool for gnaigpt daily-cost-limit failover.
 # ---------------------------------------------------------------------------
@@ -286,14 +328,19 @@ class AnthropicOpenAIAdapter:
 def _is_daily_cost_limit_error(exc):
     """True for the specific 429 that means 'this token is done for the day'.
 
-    Detects the gnaigpt proxy's per-user daily $ cap error, e.g.:
+    Detects the gnaigpt proxy's per-user daily/team $ cap error, e.g.:
         "Error code: 429 - {'type': 'error', 'error': {'type': 'rate_limit_error',
-         'message': 'Individual daily cost limit of 30.000000 reached...'}}"
+         'message': 'Individual daily/team cost limit of 30.000000 reached...'}}"
     Deliberately narrow: short-window rate limits and unrelated 429s pass through.
     """
     if getattr(exc, "status_code", None) != 429:
         return False
-    return "daily cost limit" in str(exc).lower()
+    return "cost limit" in str(exc).lower()
+
+
+def _is_token_expired_error(exc):
+    """True for auth failures (JWT expired / invalid): HTTP 401 from the provider."""
+    return getattr(exc, "status_code", None) == 401
 
 
 class TokenPool:
@@ -316,6 +363,16 @@ class TokenPool:
         self._dead = set()
         self._lock = threading.Lock()
 
+    def reset_entries(self, entries):
+        """Replace the pool's token entries in-place and clear dead states."""
+        cleaned = [(str(label), tok) for label, tok in entries if tok]
+        if not cleaned:
+            raise ValueError("TokenPool requires at least one non-empty token")
+        with self._lock:
+            self._entries = cleaned
+            self._index = 0
+            self._dead = set()
+
     def current(self):
         with self._lock:
             return self._entries[self._index]
@@ -336,7 +393,7 @@ class TokenPool:
                 if next_i not in self._dead:
                     self._index = next_i
                     new_label = self._entries[next_i][0]
-                    print(f"⚠️  [TokenPool] '{current_label}' exhausted (daily cost limit) → rotated to '{new_label}'")
+                    print(f"⚠️  [TokenPool] '{current_label}' exhausted (cost limit) → rotated to '{new_label}'")
                     return self._entries[next_i]
             print(f"❌ [TokenPool] '{current_label}' exhausted — all {len(self._entries)} tokens dead")
             return None
@@ -356,6 +413,13 @@ class LLM_helper:
         }
         self.client = None
         self.skills = None   # Dict[str, Skill] shared with log chatbot agent
+        # Personal-token identity + expiry hook — the retry loop compares the
+        # dying token string against ``personal_token`` (unambiguous even when
+        # common pool has multiple entries labelled with the same login) and
+        # invokes ``on_personal_token_expired`` on match so the frontend can
+        # prompt for a refresh.
+        self.personal_token = None
+        self.on_personal_token_expired = None
         self.issue_categories = ["BSOD", "Yellow Bang (YB)", "Connectivity", "PPAG", 
                                 "MLO", "Assert", "WRDS/WGDS/EWRD/SGOM", "TAS", "Roaming", 
                                 "P2P", "DSM", "VLP/UHB/AFC", "UATS", "Unclassified"]
@@ -403,11 +467,16 @@ class LLM_helper:
         return target
 
     def set_up(self, gpt_token, gpt_url, model="gpt-4.1", classifitation_path=None,
-               token_pool=None):
+               token_pool=None, personal_token=None, on_personal_token_expired=None):
         # ``token_pool``: optional list of (label, token) tuples enabling
         # transparent rotation on daily-cost-limit 429s (Anthropic path only).
         # When supplied, ``gpt_token`` should equal the pool's first entry so
         # the initial client and pool head agree.
+        # ``personal_token`` / ``on_personal_token_expired``: when a 401 on
+        # the retry loop matches ``personal_token`` (string equality), the
+        # hook is fired so the frontend can prompt the user to refresh it.
+        self.personal_token = personal_token
+        self.on_personal_token_expired = on_personal_token_expired
         if model.startswith("claude"):
             def _make_anthropic(tok):
                 return Anthropic(
@@ -415,15 +484,26 @@ class LLM_helper:
                     auth_token=tok,
                     http_client=httpx.Client(proxy=None, verify=False, trust_env=False),
                 )
-            pool = TokenPool(token_pool) if token_pool else None
-            initial_token = pool.current()[1] if pool is not None else gpt_token
-            self.client = AnthropicOpenAIAdapter(
-                _make_anthropic(initial_token),
-                pool=pool,
-                client_factory=_make_anthropic,
-            )
-            if pool is not None:
-                print(f"🔑 [TokenPool] active token: '{pool.current()[0]}' ({len(pool._entries)} in pool)")
+            if isinstance(self.client, AnthropicOpenAIAdapter):
+                # In-place hot-swap: update underlying client and token pool without
+                # reallocating the adapter, so all agents holding this adapter reference
+                # (e.g. WifiLogAgentSystem in Log Chatbot) seamlessly see the new key.
+                self.client._client_factory = _make_anthropic
+                initial_token = (token_pool[0][1] if token_pool else gpt_token)
+                self.client.hot_swap_token(initial_token, new_pool_entries=token_pool)
+                if self.client._pool is not None:
+                    print(f"🔑 [TokenPool] hot-swapped active token: '{self.client._pool.current()[0]}' ({len(self.client._pool._entries)} in pool)")
+            else:
+                pool = TokenPool(token_pool) if token_pool else None
+                initial_token = pool.current()[1] if pool is not None else gpt_token
+                self.client = AnthropicOpenAIAdapter(
+                    _make_anthropic(initial_token),
+                    pool=pool,
+                    client_factory=_make_anthropic,
+                    helper=self,
+                )
+                if pool is not None:
+                    print(f"🔑 [TokenPool] active token: '{pool.current()[0]}' ({len(pool._entries)} in pool)")
         else:
             self.client = openai.OpenAI(
                 api_key=gpt_token,

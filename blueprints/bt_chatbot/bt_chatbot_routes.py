@@ -24,7 +24,7 @@ from services import feedback_service
 from services import gather_service
 from services import history_service
 from services import chat_jobs
-from services import ips_service
+from services import check_ips_service
 
 bt_chatbot_bp = Blueprint("bt_chatbot", __name__, url_prefix="/bt_chatbot")
 
@@ -689,7 +689,7 @@ def set_log():
             "new_conversation_id": new_conv_id,
             # Whether the client must ask for a case number before the first
             # question. Carries the candidates so the prompt opens pre-filled.
-            **ips_service.prompt_state(log_path),
+            **check_ips_service.prompt_state(log_path),
         })
     except Exception as e:
         return jsonify({"success": False, "error": str(e)}), 500
@@ -800,7 +800,7 @@ def chat():
 
     # 428 Precondition Required: the log has no case number yet. The client
     # opens the prompt and replays this request once it has one.
-    blocked = ips_service.blocking_state()
+    blocked = check_ips_service.blocking_state()
     if blocked:
         return jsonify(blocked), 428
 
@@ -1163,7 +1163,7 @@ def reset():
     try:
         agent = _get_or_create_agent()
         agent.reset_conversation()
-        ips_service.start_new_session()
+        check_ips_service.start_new_session()
         return jsonify({"success": True, "message": "Conversation reset."})
     except Exception as e:
         return jsonify({"success": False, "error": str(e)}), 500
@@ -1557,7 +1557,7 @@ def back_to_avatar():
 
     # 3) This ends the conversation, so the case number is asked for again
     #    rather than inherited by whatever is loaded next.
-    ips_service.start_new_session()
+    check_ips_service.start_new_session()
 
     # 4) Clear the global "last analyzed log" hint so the chatbot page
     #    doesn't pre-fill the previous run's log path.

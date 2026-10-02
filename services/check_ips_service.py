@@ -21,7 +21,7 @@ from flask import session
 
 from configs.global_configs import app_config
 from models.models import CaseContext
-from utils import ips_utils
+from utils import check_ips_utils, helpers
 
 EXPLICIT = "explicit"
 DERIVED_FROM_PATH = "derived_from_path"
@@ -66,6 +66,9 @@ def _log_key(log_path) -> str:
         text = "\\\\" + text[len("\\\\?\\UNC\\"):]
     elif text.startswith("\\\\?\\"):
         text = text[len("\\\\?\\"):]
+    # Send To can hand over an 8.3 short name (INTELA~1) that the analysis
+    # later expands, so both spellings must land on one key.
+    text = helpers.get_long_path(text)
     try:
         return os.path.normcase(os.path.abspath(text))
     except Exception:
@@ -139,7 +142,7 @@ def current_case_nbr() -> str:
     raw = session.get("case_context") or {}
     if not isinstance(raw, dict) or not raw:
         return ""
-    return ips_utils.normalise_ips(raw.get("case_nbr"))
+    return check_ips_utils.normalise_ips(raw.get("case_nbr"))
 
 
 def current_source() -> str:
@@ -221,7 +224,7 @@ def start_new_session() -> None:
     raw = session.get("case_context") or {}
     if isinstance(raw, dict) and raw:
         context = CaseContext.from_session(raw)
-        if ips_utils.is_synthetic_case_nbr(context.case_nbr):
+        if check_ips_utils.is_synthetic_case_nbr(context.case_nbr):
             # A local_upload_/local_bsod_ name is the run's own, and the
             # results page finds its extraction index by it -- the same reason
             # _remember_on_session keeps it on a skip. It is not a case number,
@@ -273,7 +276,7 @@ def _archive_answer(log_path) -> dict:
 
 def candidates_for(log_path) -> List[str]:
     """Case numbers worth offering for this log, best guess first."""
-    found = ips_utils.derive_ips_candidates(log_path)
+    found = check_ips_utils.derive_ips_candidates(log_path)
     from_archive = str(_archive_answer(log_path).get("case_nbr") or "")
     if from_archive and from_archive not in found:
         found.insert(0, from_archive)
@@ -295,7 +298,7 @@ def candidate_sources(log_path) -> dict:
     as 'derived_from_path', and a path guess picked over a remembered answer
     was recorded as 'explicit'.
     """
-    sources = {nbr: DERIVED_FROM_PATH for nbr in ips_utils.derive_ips_candidates(log_path)}
+    sources = {nbr: DERIVED_FROM_PATH for nbr in check_ips_utils.derive_ips_candidates(log_path)}
     archive = _archive_answer(log_path)
     if archive and archive["case_nbr"] not in sources:
         # Given for the archive this log came out of: keep how it was given.
@@ -318,12 +321,12 @@ def source_for_answer(case_nbr, claimed: str, log_path) -> str:
     of 'derived_from_path' stands only if the number really is a case folder
     in this log's path; anything else the user supplied is 'explicit'.
     """
-    canonical = ips_utils.normalise_ips(case_nbr)
+    canonical = check_ips_utils.normalise_ips(case_nbr)
     record = answer_for(log_path)
     if canonical and canonical == str(record.get("case_nbr") or "") \
             and record.get("source") in (EXPLICIT, DERIVED_FROM_PATH):
         return record["source"]
-    if claimed == DERIVED_FROM_PATH and canonical in ips_utils.derive_ips_candidates(log_path):
+    if claimed == DERIVED_FROM_PATH and canonical in check_ips_utils.derive_ips_candidates(log_path):
         return DERIVED_FROM_PATH
     return EXPLICIT
 
@@ -431,7 +434,7 @@ def _remember_on_session(canonical: str, source: str, log_path="") -> str:
 
     def own_placeholder(previous: str) -> bool:
         # With no log to check against, keep the earlier behaviour.
-        return ips_utils.is_synthetic_case_nbr(previous) and (
+        return check_ips_utils.is_synthetic_case_nbr(previous) and (
             not log_path or _placeholder_is_for(log_path))
 
     raw = session.get("case_context") or {}
@@ -463,7 +466,7 @@ def _remember_on_session(canonical: str, source: str, log_path="") -> str:
 
     context = CaseContext.from_session(raw) if have_context else CaseContext()
     previous = str(context.case_nbr or "")
-    same_case = bool(previous) and ips_utils.normalise_ips(previous) == canonical
+    same_case = bool(previous) and check_ips_utils.normalise_ips(previous) == canonical
     # A local_upload_/local_bsod_ placeholder is a name for this log's run,
     # so what hangs off it -- the extraction folder, the attachment list --
     # describes the log being answered about and stays. One left over from an
@@ -490,7 +493,7 @@ def _remember_on_session(canonical: str, source: str, log_path="") -> str:
     # chat still had none. Point this session's primed agents at it.
     for agent in _primed_agents():
         ctx = getattr(agent, "issue_context", None)
-        if isinstance(ctx, dict) and ctx and not ips_utils.normalise_ips(ctx.get("case_nbr")):
+        if isinstance(ctx, dict) and ctx and not check_ips_utils.normalise_ips(ctx.get("case_nbr")):
             ctx["case_nbr"] = canonical
 
     # The extracted-file index is keyed by case number, and the results page
@@ -595,7 +598,7 @@ def _lookup_case_facts(canonical: str) -> Optional[dict]:
 
 def cached_classification(case_nbr) -> Optional[dict]:
     """The classification already looked up for this case, without a lookup."""
-    canonical = ips_utils.normalise_ips(case_nbr)
+    canonical = check_ips_utils.normalise_ips(case_nbr)
     with _case_facts_lock:
         facts = _case_facts.get(canonical) if canonical else None
     classification = (facts or {}).get("classification")
@@ -609,7 +612,7 @@ def enrich_attached_case(case_nbr) -> bool:
     through the case search is never overwritten. Returns whether anything was
     applied.
     """
-    canonical = ips_utils.normalise_ips(case_nbr)
+    canonical = check_ips_utils.normalise_ips(case_nbr)
     if not canonical or current_case_nbr() != canonical:
         return False
     facts = _lookup_case_facts(canonical)
@@ -639,7 +642,7 @@ def enrich_attached_case(case_nbr) -> bool:
         ctx = getattr(agent, "issue_context", None)
         # Primed agents only: an empty context is a boot-time template.
         if not isinstance(ctx, dict) or not ctx \
-                or ips_utils.normalise_ips(ctx.get("case_nbr")) != canonical:
+                or check_ips_utils.normalise_ips(ctx.get("case_nbr")) != canonical:
             continue
         ctx["subject"] = ctx.get("subject") or context.subject or ""
         ctx["description"] = ctx.get("description") or context.description or ""
@@ -712,7 +715,7 @@ def _forget_case_on_agents(canonical: str) -> None:
         ctx = getattr(agent, "issue_context", None)
         if not isinstance(ctx, dict):
             continue
-        held = ips_utils.normalise_ips(ctx.get("case_nbr"))
+        held = check_ips_utils.normalise_ips(ctx.get("case_nbr"))
         if held == canonical:
             continue
         for key in _AGENT_CASE_FIELDS:
@@ -755,7 +758,7 @@ def attach(case_nbr: str, source: str, log_path="") -> str:
         remember_answer(log_path, "", SKIPPED)
         return _remember_on_session("", SKIPPED, log_path)
 
-    canonical = ips_utils.normalise_ips(case_nbr)
+    canonical = check_ips_utils.normalise_ips(case_nbr)
     if not canonical:
         raise ValueError("Enter an 8-digit case number, for example 01010628.")
 

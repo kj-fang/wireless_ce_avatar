@@ -19,7 +19,7 @@ from urllib.parse import unquote
 from werkzeug.utils import secure_filename
 
 from utils import helpers, attachment_decompose
-from utils import ips_utils
+from utils import check_ips_utils
 from configs.global_configs import app_config
 from configs.path_configs import LOG_PARSER_DIR, LOAD_PATH_prim, LOAD_PATH_bkup
 from models.models import CaseContext
@@ -28,7 +28,7 @@ from utils.log_parser_preprocess import extract_all_keywords_from_filter_file
 from services.log_parser_file_manage_service import FileManagerService
 from services.log_parser_service import LogParserService
 from services import gather_service
-from services import ips_service
+from services import check_ips_service
 from services.etl_parser.wpp_ddd_parser import wpp_ddd_parser_run
 from services.etl_parser.bt_parser import bt_decode_via_cli
 
@@ -443,20 +443,20 @@ def _resolve_local_case(file_path: str, source_path: str):
     # under its case folder (...\IntelAvatar_files\01010628\...), and naming
     # the run after that beats minting local_upload_<ts>, which is a number
     # nobody can look up later.
-    answered_ips = ips_service.current_case_nbr()
+    answered_ips = check_ips_service.current_case_nbr()
     # A confirmed "no case" is an answer too, and it has to stop the folder
     # guess below: otherwise a skipped log that happens to sit under a case
     # folder is analysed under that case after all, and the skip is defeated
     # by the very inference it was meant to overrule. Checked against the path
     # the user answered about, before any long-path conversion.
     confirmed_no_case = not answered_ips and (
-        ips_service.current_source() == ips_service.SKIPPED
-        or ips_service.answer_for(source_path).get("source") == ips_service.SKIPPED)
+        check_ips_service.current_source() == check_ips_service.SKIPPED
+        or check_ips_service.answer_for(source_path).get("source") == check_ips_service.SKIPPED)
     derived_ips = answered_ips or ("" if confirmed_no_case else (
-        ips_utils.derive_ips_from_path(file_path)
-        or ips_utils.derive_ips_from_path(source_path)))
+        check_ips_utils.derive_ips_from_path(file_path)
+        or check_ips_utils.derive_ips_from_path(source_path)))
     if derived_ips and not answered_ips:
-        session[ips_service.SESSION_SOURCE_KEY] = ips_service.DERIVED_FROM_PATH
+        session[check_ips_service.SESSION_SOURCE_KEY] = check_ips_service.DERIVED_FROM_PATH
 
     # How this run came by its case, carried on the CaseContext so that
     # gather_service._case_ref_source reads it rather than inferring. Without
@@ -464,13 +464,13 @@ def _resolve_local_case(file_path: str, source_path: str):
     # 'absent', which makes a log somebody confirmed has no case look exactly
     # like one nobody was ever asked about -- the distinction 016 exists for.
     if confirmed_no_case:
-        local_case_ref_source = ips_service.SKIPPED
+        local_case_ref_source = check_ips_service.SKIPPED
     elif answered_ips:
-        local_case_ref_source = ips_service.attributed_source()
+        local_case_ref_source = check_ips_service.attributed_source()
     elif derived_ips:
-        local_case_ref_source = ips_service.DERIVED_FROM_PATH
+        local_case_ref_source = check_ips_service.DERIVED_FROM_PATH
     else:
-        local_case_ref_source = ips_service.ABSENT
+        local_case_ref_source = check_ips_service.ABSENT
     return derived_ips, local_case_ref_source
 
 
@@ -519,8 +519,8 @@ def _process_local_analysis(source_path: str, source_dir: str, file_path: str,
     session['local_in_place'] = True
     # A case already looked up for this run (the prompt's answer) keeps its
     # classification; only a run with no known case is "Unclassified".
-    session['classification'] = ips_service.cached_classification(
-        ips_service.current_case_nbr()) or {
+    session['classification'] = check_ips_service.cached_classification(
+        check_ips_service.current_case_nbr()) or {
         'issue_type': 'Unclassified',
         'confidence': 0,
         'keywords_found': []
@@ -873,19 +873,19 @@ def upload_local_analysis():
     #
     # A path that already names its case answers the question by itself, and
     # is attached without interrupting anybody.
-    derived = ips_utils.derive_ips_from_path(source_path)
-    if (derived and not ips_service.current_case_nbr()
-            and ips_service.answer_for(source_path).get("source")
-                not in (ips_service.SKIPPED, ips_service.EXPLICIT)):
+    derived = check_ips_utils.derive_ips_from_path(source_path)
+    if (derived and not check_ips_service.current_case_nbr()
+            and check_ips_service.answer_for(source_path).get("source")
+                not in (check_ips_service.SKIPPED, check_ips_service.EXPLICIT)):
         # Not over an answer the user gave. Re-analysing a log somebody said
         # has no case, or gave a case number for, would quietly replace that
         # answer with a folder name. Left alone, the gate asks again with the
         # remembered answer offered first.
         try:
-            ips_service.attach(derived, ips_service.DERIVED_FROM_PATH, source_path)
+            check_ips_service.attach(derived, check_ips_service.DERIVED_FROM_PATH, source_path)
         except ValueError:
             pass
-    blocked = ips_service.blocking_state(source_path)
+    blocked = check_ips_service.blocking_state(source_path)
     if blocked:
         return jsonify(blocked), 428
 
@@ -1054,22 +1054,22 @@ def open_local_analysis():
     # Nobody typed a case number on the way in -- Send To is a right-click in
     # Explorer -- so the page asks before it emits start_sendto. A path that
     # already names its case answers the question without interrupting anyone.
-    derived = ips_utils.derive_ips_from_path(source_path)
-    if (derived and not ips_service.current_case_nbr()
-            and ips_service.answer_for(source_path).get("source")
-                not in (ips_service.SKIPPED, ips_service.EXPLICIT)):
+    derived = check_ips_utils.derive_ips_from_path(source_path)
+    if (derived and not check_ips_service.current_case_nbr()
+            and check_ips_service.answer_for(source_path).get("source")
+                not in (check_ips_service.SKIPPED, check_ips_service.EXPLICIT)):
         # Not over an answer the user gave. Re-analysing a log somebody said
         # has no case, or gave a case number for, would quietly replace that
         # answer with a folder name. Left alone, the gate asks again with the
         # remembered answer offered first.
         try:
-            ips_service.attach(derived, ips_service.DERIVED_FROM_PATH, source_path)
+            check_ips_service.attach(derived, check_ips_service.DERIVED_FROM_PATH, source_path)
         except ValueError:
             pass
 
     return render_template('sendto_transmission.html',
                            filename=original_name,
-                           ips_state=ips_service.prompt_state(source_path))
+                           ips_state=check_ips_service.prompt_state(source_path))
 
 
 @log_parser_bp.route('/navigate_existing_browser', methods=['POST'])
@@ -1272,7 +1272,7 @@ def register_socketio_handlers(socketio):
         # 428 interception that guards every other entry point, so the refusal
         # is repeated here. The pending path is deliberately left in the
         # session: this is the one error the user can act on and retry.
-        if ips_service.needs_ips(source_path):
+        if check_ips_service.needs_ips(source_path):
             socketio.emit('sendto_error',
                           {'message': 'Enter the IPS case number for this log '
                                       'before the analysis starts.'},

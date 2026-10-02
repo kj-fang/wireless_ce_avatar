@@ -9,19 +9,19 @@ the conversation starts.
 
 from flask import Blueprint, jsonify, request
 
-from services import ips_service
+from services import check_ips_service
 
-ips_bp = Blueprint("ips", __name__, url_prefix="/api/ips")
+check_ips_bp = Blueprint("check_ips", __name__, url_prefix="/api/ips")
 
 
-@ips_bp.route("/candidates", methods=["GET"])
+@check_ips_bp.route("/candidates", methods=["GET"])
 def candidates():
     """Case numbers worth pre-filling for a log, best guess first."""
     log_path = (request.args.get("log_path") or "").strip()
-    return jsonify({"success": True, **ips_service.prompt_state(log_path)})
+    return jsonify({"success": True, **check_ips_service.prompt_state(log_path)})
 
 
-@ips_bp.route("/resolve", methods=["POST"])
+@check_ips_bp.route("/resolve", methods=["POST"])
 def resolve():
     """
     Record the answer to the prompt.
@@ -44,22 +44,22 @@ def resolve():
                 "success": False,
                 "error": "Confirm there is no case number for this log before skipping.",
             }), 400
-        ips_service.attach("", ips_service.SKIPPED, log_path)
+        check_ips_service.attach("", check_ips_service.SKIPPED, log_path)
         return jsonify({
             "success": True,
             "case_nbr": "",
-            "case_ref_source": ips_service.SKIPPED,
+            "case_ref_source": check_ips_service.SKIPPED,
             "message": "Recorded as having no case number.",
         })
 
     # The client says where it thinks the number came from; the server decides.
     # A claim of derived_from_path only stands for a number that really is a
     # case folder in this log's path, and a remembered answer keeps its own.
-    claimed = str(data.get("source") or ips_service.EXPLICIT).strip().lower()
-    source = ips_service.source_for_answer(data.get("case_nbr"), claimed, log_path)
+    claimed = str(data.get("source") or check_ips_service.EXPLICIT).strip().lower()
+    source = check_ips_service.source_for_answer(data.get("case_nbr"), claimed, log_path)
 
     try:
-        canonical = ips_service.attach(data.get("case_nbr"), source, log_path)
+        canonical = check_ips_service.attach(data.get("case_nbr"), source, log_path)
     except ValueError as e:
         return jsonify({"success": False, "error": str(e)}), 400
 
@@ -67,7 +67,7 @@ def resolve():
     # given here is no longer left "Unclassified" with no description. After
     # the answer is recorded, and never a reason to refuse it.
     try:
-        ips_service.enrich_attached_case(canonical)
+        check_ips_service.enrich_attached_case(canonical)
     except Exception as e:
         print(f"[ips] enrich after resolve failed: {e}")
 

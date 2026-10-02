@@ -32,7 +32,7 @@ from configs.global_configs import app_config
 from configs.path_configs import FEEDBACK_DIR_prim, FEEDBACK_DIR_bkup
 from configs.version import __version__ as APP_VERSION
 from utils import helpers
-from utils import ips_utils
+from utils import check_ips_utils
 
 
 # ---------------------------------------------------------------------------
@@ -321,17 +321,17 @@ def _case_ref(issue: Optional[dict] = None, log_path: str = "") -> dict:
     where there is no session to read -- a background flush, for instance.
     """
     try:
-        from services import ips_service
-        case_nbr = ips_service.current_case_nbr()
+        from services import check_ips_service
+        case_nbr = check_ips_service.current_case_nbr()
         if case_nbr:
             # attributed_source, not current_source: the latter answers "did
             # the prompt set this", which is 'absent' for a case typed into
             # the case search -- and the collector drops the number whenever
             # the source says absent.
             return {"case_nbr": case_nbr,
-                    "case_ref_source": ips_service.attributed_source()}
-        if ips_service.current_source() == ips_service.SKIPPED:
-            return {"case_nbr": "", "case_ref_source": ips_service.SKIPPED}
+                    "case_ref_source": check_ips_service.attributed_source()}
+        if check_ips_service.current_source() == check_ips_service.SKIPPED:
+            return {"case_nbr": "", "case_ref_source": check_ips_service.SKIPPED}
     except Exception:
         # No request context, or the session is unreadable. Fall through to
         # the evidence that travelled with the record itself.
@@ -342,15 +342,15 @@ def _case_ref(issue: Optional[dict] = None, log_path: str = "") -> dict:
 def _case_ref_from_evidence(issue: Optional[dict] = None, log_path: str = "") -> dict:
     """The case a record names by its own content, ignoring the session."""
     issue = issue if isinstance(issue, dict) else {}
-    stated = ips_utils.normalise_ips(issue.get("case_nbr"))
+    stated = check_ips_utils.normalise_ips(issue.get("case_nbr"))
     if stated:
         # A number that matches the folder the log sits in was not typed by
         # anyone, so it is not an explicit claim.
-        derived = ips_utils.derive_ips_from_path(log_path)
+        derived = check_ips_utils.derive_ips_from_path(log_path)
         return {"case_nbr": stated,
                 "case_ref_source": "derived_from_path" if stated == derived else "explicit"}
 
-    derived = ips_utils.derive_ips_from_path(log_path)
+    derived = check_ips_utils.derive_ips_from_path(log_path)
     if derived:
         return {"case_nbr": derived, "case_ref_source": "derived_from_path"}
     return {"case_nbr": "", "case_ref_source": "absent"}
@@ -425,7 +425,7 @@ def remember_conversation_case(conversation_id: str, conversation: Optional[dict
     happens to hold.
     """
     conv = conversation if isinstance(conversation, dict) else {}
-    stated_nbr = ips_utils.normalise_ips(conv.get("case_nbr"))
+    stated_nbr = check_ips_utils.normalise_ips(conv.get("case_nbr"))
     stated_source = str(conv.get("case_ref_source") or "").strip().lower()
     if stated_source == "skipped":
         ref = {"case_nbr": "", "case_ref_source": "skipped"}
@@ -460,8 +460,8 @@ def _stored_answer_ref(log_path: str, not_after=None) -> dict:
     time on either side it is not used at all.
     """
     try:
-        from services import ips_service
-        record = ips_service.answer_for(log_path)
+        from services import check_ips_service
+        record = check_ips_service.answer_for(log_path)
     except Exception:
         return {}
     if not_after is not None:
@@ -475,7 +475,7 @@ def _stored_answer_ref(log_path: str, not_after=None) -> dict:
     source = record.get("source")
     if source == "skipped":
         return {"case_nbr": "", "case_ref_source": "skipped"}
-    nbr = ips_utils.normalise_ips(record.get("case_nbr"))
+    nbr = check_ips_utils.normalise_ips(record.get("case_nbr"))
     if nbr and source in ("explicit", "derived_from_path"):
         return {"case_nbr": nbr, "case_ref_source": source}
     return {}

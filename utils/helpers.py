@@ -13,7 +13,7 @@ import threading
 from pathlib import Path
 from typing import List
 
-from utils import ips_utils
+from utils import check_ips_utils
 
 
 def to_long_path(path: str) -> str:
@@ -105,8 +105,8 @@ def get_clipboard_case_number():
     # normalise_ips also pads the seven-digit form people actually type, and
     # rejects a YYYYMMDD date such as 20260923, which the previous ^\d{8}$
     # accepted. A zero-led MMDDYYYY date still passes: it cannot be told from
-    # a real case number (see utils/ips_utils.py).
-    return ips_utils.normalise_ips(text)
+    # a real case number (see utils/check_ips_utils.py).
+    return check_ips_utils.normalise_ips(text)
 
 def detect_user_email():
     try:

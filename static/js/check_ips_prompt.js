@@ -10,7 +10,7 @@
 
   var IPS_LENGTH = 8;
   var TYPED_RE = /^0\d{7}$/;
-  // Kept in step with utils/ips_utils.normalise_ips. Punctuation is trimmed
+  // Kept in step with utils/check_ips_utils.normalise_ips. Punctuation is trimmed
   // off the ends only, and six digits is the floor, so a stray "0" cannot pad
   // itself into a valid-looking 00000000.
   var EDGE_PUNCT_RE = /^[.,;:'"\-_#()\[\]]+|[.,;:'"\-_#()\[\]]+$/g;

@@ -83,7 +83,7 @@ from configs.llm_pricing import cost_for
 from configs.path_configs import GATHER_DIR_prim, GATHER_DIR_bkup
 from configs.version import __version__ as APP_VERSION
 from utils import helpers
-from utils import ips_utils
+from utils import check_ips_utils
 
 
 # Bump when the record structure changes (downstream ETL keys off this).
@@ -474,12 +474,12 @@ def _with_case_ref(issue: Optional[dict]) -> Optional[dict]:
         from flask import has_request_context
         if not has_request_context():
             return issue
-        from services import ips_service
-        if ips_service.current_source() == ips_service.SKIPPED:
+        from services import check_ips_service
+        if check_ips_service.current_source() == check_ips_service.SKIPPED:
             return {**issue, "case_ref_source": "skipped"}
-        attached = ips_service.current_case_nbr()
-        if attached and attached == ips_utils.normalise_ips(issue.get("case_nbr")):
-            return {**issue, "case_ref_source": ips_service.attributed_source()}
+        attached = check_ips_service.current_case_nbr()
+        if attached and attached == check_ips_utils.normalise_ips(issue.get("case_nbr")):
+            return {**issue, "case_ref_source": check_ips_service.attributed_source()}
     except Exception:
         pass
     return issue
@@ -544,10 +544,10 @@ def _case_ref_source(issue: Optional[dict], log_path: str = "") -> str:
         return declared
 
     nbr = str(issue.get("case_nbr") or "").strip()
-    if not nbr or ips_utils.is_synthetic_case_nbr(nbr):
+    if not nbr or check_ips_utils.is_synthetic_case_nbr(nbr):
         return "absent"
-    canonical = ips_utils.normalise_ips(nbr)
-    if canonical and canonical == ips_utils.derive_ips_from_path(log_path):
+    canonical = check_ips_utils.normalise_ips(nbr)
+    if canonical and canonical == check_ips_utils.derive_ips_from_path(log_path):
         return "derived_from_path"
     return "explicit"
 
@@ -562,7 +562,7 @@ def _clean_case(issue: Optional[dict]) -> dict:
         # Zero-padded, so 1010628 and 01010628 are one case in the warehouse
         # rather than two rows that every GROUP BY splits apart. Anything that
         # is not a case number (a local_upload_ placeholder) is left alone.
-        "case_nbr": ips_utils.normalise_ips(issue.get("case_nbr"))
+        "case_nbr": check_ips_utils.normalise_ips(issue.get("case_nbr"))
                     or str(issue.get("case_nbr") or "").strip(),
         "subject": str(issue.get("subject") or "").strip(),
         "issue_type": str(issue.get("issue_type") or "").strip(),

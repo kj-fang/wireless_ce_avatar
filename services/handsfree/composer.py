@@ -156,7 +156,14 @@ def _request_info_lines(analysis: CaseAnalysis) -> list[str]:
 def _request_logs_lines(analysis: CaseAnalysis) -> list[str]:
     """Customer-facing reply asking for the missing WRT logs. Deliberately a
     fixed template (no LLM text): this draft posts PUBLICLY once approved."""
-    if analysis.chosen_attachment:
+    if getattr(analysis, "log_request_reason", "") == "unreadable_archive":
+        # Archive selection crashed or the download failed twice — the upload
+        # is likely corrupted/incomplete; ask for a re-upload.
+        name = f" ({analysis.chosen_attachment})" if analysis.chosen_attachment else ""
+        missing = (f"we were unable to download or open the attached log "
+                   f"archive{name} — the file may be corrupted or the upload "
+                   "incomplete, so please RE-UPLOAD the log archive")
+    elif analysis.chosen_attachment:
         # An archive was attached, but after extraction it held no WRT ETLs.
         missing = (f"we checked the attached archive "
                    f"({analysis.chosen_attachment}) but could not find WRT "

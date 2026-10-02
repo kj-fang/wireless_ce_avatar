@@ -227,6 +227,8 @@ class CaseAnalysis:
     env_detail: dict = field(default_factory=dict)     # IPS Environment Details Q&A form
     issue_domain: str = ""                             # debug-checklist domain (tab name)
     issue_subcategory: str = ""                        # checklist sub-category (e.g. Roaming)
+    log_request_reason: str = ""                       # request_logs wording: no_archive |
+                                                       #   no_wrt_inside | unreadable_archive
     subcategory: str = ""                              # IPS Core issue subcategory (customer-selected)
     checklist_fills: dict = field(default_factory=dict)  # pre-filled first-response items
     error: str = ""
@@ -439,12 +441,14 @@ class HandsfreeRunner:
                     pass
             pick_ok = True
         if not pick_ok:
-            # pick_zip CRASHED (_stage swallowed the exception) — we don't
-            # actually know whether logs are attached, so never ask the
-            # customer for them. Triage fallback instead.
-            analysis.mode = "triage_only"
-            analysis.ok = bool(analysis.triage)
-            analysis.error = "archive selection failed"
+            # pick_zip CRASHED (_stage swallowed the exception) — the attached
+            # archive could not be processed. Policy (2026-10-02): ask the
+            # customer to RE-UPLOAD rather than silently falling to triage.
+            analysis.mode = "request_logs"
+            analysis.log_request_reason = "unreadable_archive"
+            analysis.ok = True
+            analysis.error = ("attached archive could not be processed — "
+                              "drafted a re-upload request to the customer")
             return analysis
         if zip_item is None:
             # No archive at all — certainly no WRT logs. Record the check
@@ -460,17 +464,32 @@ class HandsfreeRunner:
                               "drafted a request-logs reply to the customer")
             return analysis
 
-        # -- 5. download -------------------------------------------------------
+        # -- 5. download (one automatic retry) -----------------------------------
         downloaded = []   # [file_path, name, already_dload]
         with self._stage(analysis, "download"):
             from utils.attachment_download import run_dload_threads
-            for item in run_dload_threads([zip_item], case_ctx.case_download_dir,
-                                          socketio=None):
-                downloaded.append(item)
+            for attempt in (1, 2):
+                try:
+                    for item in run_dload_threads([zip_item],
+                                                  case_ctx.case_download_dir,
+                                                  socketio=None):
+                        downloaded.append(item)
+                except Exception as e:
+                    self.progress("download",
+                                  f"attempt {attempt} failed: "
+                                  f"{type(e).__name__}: {e}")
+                if downloaded:
+                    break
+                if attempt == 1:
+                    self.progress("download", "retrying download once…")
         if not downloaded:
-            analysis.mode = "triage_only"
-            analysis.ok = bool(analysis.triage)
-            analysis.error = "attachment download failed"
+            # Both attempts failed. Policy (2026-10-02): ask the customer to
+            # re-upload the archive (it may be corrupted on the share).
+            analysis.mode = "request_logs"
+            analysis.log_request_reason = "unreadable_archive"
+            analysis.ok = True
+            analysis.error = ("attachment download failed twice — "
+                              "drafted a re-upload request to the customer")
             return analysis
 
         # -- 6. decompose ------------------------------------------------------
@@ -582,7 +601,20 @@ class HandsfreeRunner:
         if not os.path.exists(log_path):
             analysis.mode = "triage_only"
             analysis.ok = bool(analysis.triage)
-            analysis.error = f"ETL decode did not produce {os.path.basename(log_path)}"
+            # When the decoder failed because the PDB symbol database for this
+            # driver build is missing/purged (e.g. "Netwaw18.pdb could not be
+            # extracted"), say so explicitly — the customer's logs are FINE,
+            # the decode environment needs a PDB refresh.
+            decode_detail = next((s.detail for s in reversed(analysis.stages)
+                                  if s.name == "decode_etl"), "")
+            if re.search(r"(?i)\bpdb\b", decode_detail or ""):
+                analysis.error = (
+                    "failed to decompose/decode the WRT log because the PDB "
+                    "symbol database for this driver build is out of date or "
+                    "unavailable — the uploaded logs are fine; analysis can "
+                    f"re-run after a PDB refresh ({decode_detail[:160]})")
+            else:
+                analysis.error = f"ETL decode did not produce {os.path.basename(log_path)}"
             return analysis
         analysis.log_path = log_path
 

@@ -490,6 +490,67 @@ def smoke_runner(tmp: Path) -> None:
               analysis8.mode == "triage_only"
               and analysis8.issue_domain == "OEM Tools",
               f"mode={analysis8.mode} domain={analysis8.issue_domain}")
+
+        # --- S13: failure-path reply policy (2026-10-02) --------------------
+        cis.CaseService.process_case = staticmethod(_fake_process)
+
+        # a) pick_zip crash -> ask the customer to re-upload
+        from . import case_reader as cr_mod
+        orig_find = cr_mod.find_attachment
+        def _find_boom(*a, **k):
+            raise RuntimeError("boom")
+        cr_mod.find_attachment = _find_boom
+        analysis9 = r.analyze_case("01234567")
+        cr_mod.find_attachment = orig_find
+        d9 = compose(analysis9)
+        check("S13.a pick_zip crash -> public re-upload request",
+              analysis9.mode == "request_logs"
+              and analysis9.log_request_reason == "unreadable_archive"
+              and "RE-UPLOAD" in d9["plain"],
+              f"mode={analysis9.mode} reason={analysis9.log_request_reason}")
+
+        # b) download fails once -> automatic retry recovers
+        calls = {"n": 0}
+        def _flaky_dload(att_list, download_path, socketio):
+            calls["n"] += 1
+            if calls["n"] == 1:
+                raise RuntimeError("share hiccup")
+            return [[str(case_dir / att_list[0][0]), att_list[0][0], True]]
+        adl.run_dload_threads = _flaky_dload
+        analysis10 = r.analyze_case("01234567")
+        check("S13.b download retry recovers to full analysis",
+              analysis10.mode == "full" and calls["n"] == 2,
+              f"mode={analysis10.mode} attempts={calls['n']}")
+
+        # c) download fails twice -> re-upload request
+        def _dead_dload(*a, **k):
+            raise RuntimeError("share down")
+        adl.run_dload_threads = _dead_dload
+        analysis10b = r.analyze_case("01234567")
+        adl.run_dload_threads = _fake_dload
+        check("S13.c double download failure -> public re-upload request",
+              analysis10b.mode == "request_logs"
+              and analysis10b.log_request_reason == "unreadable_archive",
+              f"mode={analysis10b.mode}")
+
+        # d) decode failure caused by a missing/purged PDB is explained
+        etl2 = case_dir / "capture2" / "WifiDriverIHVSession.etl.009"
+        etl2.parent.mkdir(parents=True, exist_ok=True)
+        etl2.write_bytes(b"x")
+        adc.process_single_zip = lambda *a, **k: ([str(etl2)], [], [], [], [])
+        orig_decode = runner_mod.HandsfreeRunner._decode_etl
+        def _pdb_fail(self, path):
+            raise RuntimeError("Netwaw18.pdb could not be extracted")
+        runner_mod.HandsfreeRunner._decode_etl = _pdb_fail
+        analysis11 = r.analyze_case("01234567")
+        runner_mod.HandsfreeRunner._decode_etl = orig_decode
+        adc.process_single_zip = _fake_zip_proc
+        d11 = compose(analysis11)
+        check("S13.d PDB decode failure explained in the draft",
+              analysis11.mode == "triage_only"
+              and "PDB symbol database" in analysis11.error
+              and "PDB symbol database" in d11["plain"],
+              str(analysis11.error)[:140])
     finally:
         cis.CaseService.process_case = orig_process
         adl.run_dload_threads = orig_dload

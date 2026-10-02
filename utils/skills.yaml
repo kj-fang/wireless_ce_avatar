@@ -1,4 +1,4 @@
-# version skills_2026-08-28-1 features:
+# version skills_2026-09-04-1 features:
 #   name: skill name
 #   description: a brief description of the skill
 #   keywords: use "-" to represent each keyword
@@ -165,6 +165,8 @@ bios_dsm_configuration:
     - "BIOS source of table:"
     - "[mhiffTranslateMccAllowedUhbApTypeCmdVer1]"
     - "[prvLarSendLariChangeConfig]: : oemUhbAllowBitMap"
+    - "[biosAccessorGetDsmFunction4DataFromBiosAPI]"
+    - "Read DSM Function 4 from BIOS:"
     # - " DSM"
     # - "ACPIBiosAccessor"
   expert_rules: |
@@ -195,6 +197,10 @@ bios_dsm_configuration:
     3-1. Print bit27 value (0 or 1) VLP Soft AP/Active Scan in UHB in Japan
     3-2. Print bit29 value (0 or 1) VLP Follow country by country table for VLP
     3-3. Print bit30 value (0 or 1) Follow country by country table for AFC
+    Check bit26 for 6 GHz DSM function 4 extention
+    0 = 6 GHz disable DSM function 4
+    1 = 6 GHz enable DSM function 4
+
     bit:1 - UHB in USA,
     bit:2 - UHB in Rest of World,
     bit:3 - UHB in EU,
@@ -207,7 +213,45 @@ bios_dsm_configuration:
     bit:10 - UHB in Mongolia,
     bit:11 - UHB in Malaysia,
     bit:12 - UHB in Saudi Arabia
-    3-4. Print "UHB support in (bit)(country)"
+    bit:13 - UHB in Mexico
+    bit:14 - UHB in Nigeria
+    bit:15 - UHB in Thailand
+    bit:16 - UHB in Singapore
+    bit:17 - UHB in Taiwan
+    bit:18 - UHB in South Africa
+    bit:19 - UHB in Philippines
+    bit:20 - UHB in Serbia
+    bit:21 - UHB in Indonesia
+    bit:22 - UHB in Azerbaijan
+    bit:23 - UHB in Paraguay
+    bit:24 - UHB in Vietnam
+    bit:25 - UHB in India
+    bit:27 - VLP Soft AP/Active Scan in UHB in Japan
+    0 = Not Allow VLP Soft AP/Active Scan in UHB in Japan
+    1 = Allow VLP Soft AP/Active Scan in UHB in Japan if VLP is enabled for Japan
+    
+    3-4. Print "UHB support in (bit)(country)" and enable DSM function 4 or not
+
+    If DSM function 4 is enable, check below value.
+    Check the "BIOS used: UEFI" is exist.
+    [biosAccessorGetDsmFunction4DataFromBiosAPI]: : Read DSM Function 4 from BIOS: <0x" "> convert to binary " "
+    bit:31-28 for Revision
+      Revision 0: bits 0-2 (reserved bits: 3-27)
+      Revision 1: revision 0 bits and bits 8-9 (reserved bits: 3-7, 10-27)
+      Revision 2 (future feature): revision 1 bits and bits 10-11 (reserved bits: 3-7, 12-27)
+      Revision 3 (future feature): revision 2 bits and bit 3 (reserved bits: 4-7, 12-27)
+      Only support Revision 0 and Revision 1 for now.
+    0 = Disable
+    1 = Enable
+    bit:0 - DRS for China Mainland Location,
+    bit:1 - China Mainland BIOS (CB) profile 5.2GHz Active Scan/SoftAP override on indoor confirmation,
+    bit:2 - New China Mainland Regulatory Specification,
+    bit:3 - South Korea 6 GHz LPI Higher PSD (+3 dB),
+    bit:8 - Australia Band extension from 6425 MHz to 6585 MHz,
+    bit:9 - 6 GHz allowed in Bangladesh,
+    bit:10 - 6 GHz allowed in Ukraine,
+    bit:11 - 6 GHz allowed in Cayman Islands,
+    3-5. Print DSM function 4 bits support enable or disable for each function that available with Revision setting.
 
     4. Check DSM function and Print value
     If DSM is not UEFI, DSM use ACPI, skip this.
@@ -897,3 +941,71 @@ OEM Tool CITU Check:
     - Always include exact raw lines with timestamps where available.
     - Do not infer missing error codes.
     - If evidence is insufficient, explicitly state which field is missing.
+
+WiFi_Sensing_Proximity_Proxy_Init_and_Status:
+  name: "WiFi Sensing Proximity Proxy Init and Status"
+  description: "Diagnoses the Wi-Fi sensing proximity proxy initialization parameters and ongoing FW proximity decision notifications, covering config validation, control-mode decode, decision state transitions, seqNum integrity, and ETW statistics pipeline health. Applies when: SENSING_PROX module lines present in the driver log; sensingProxyInitApi appears at session start."
+  keywords:
+    - "SENSING_PROX"
+    - "sensingProxyInitApi"
+    - "SENSING_PROXIMITY_CONFIG_CMD"
+    - "prvSensingProxySetSeqNumAndProxStat"
+    - "sensingProxyHandleSensingStatisticsApi"
+    - "sensingProxyGpHostNotificationHandlerApi"
+  exclusive:
+    - "DP_MON"
+    - "TID_0"
+    - "_RX"
+    - "CNCT_FLOW"
+    - "prvTfdQueueSendCommand"
+    - "[LAR"
+    - "LAR"
+    - "TLC_CONFIG"
+    - "candidate grade"
+  expert_rules: |
+    1. Init parameter check (sensingProxyInitApi lines at session start).
+    - If the log contains sensingProxyInitApi with humanPresenceControlMode, humanPresenceSpdConfigId, humanPresenceSpdConfigId2:
+      For example:  [SENSING_PROX ][02] [S] sensingProxyInitApi: humanPresenceControlMode 0 [SENSING_PROX_CONTROL_ISH_MODE] humanPresenceData 1 humanPresenceConfigId 1, humanPresenceSpdConfigId 88, humanPresenceSpdConfigId2 88
+      Then check:
+      - humanPresenceControlMode:
+        - 0 = Operational mode: decision=1 → monitor ON; decision=0 → monitor OFF. Expected for production.
+        - 2 = Demo mode: decision changes trigger demo tool indication only; no monitor power action. Flag as misconfiguration in a production capture.
+        - Any other value → flag as unknown/unsupported mode.
+      - spdConfigId valid range: 70–133 decimal (0x46–0x85 hex), corresponding to BNR 500–32000.
+        - Default expected value: 88 (0x58), BNR ~9500.
+        - spdConfigId < 70 or > 133 → Error: out-of-range / misconfigured.
+        - spdConfigId = 88 → Expected default.
+        - spdConfigId ≠ 88 but within 70–133 → Note: non-default; verify platform intent.
+        - spdConfigId1 ≠ spdConfigId2 → Flag: asymmetric config.
+
+    2. CONFIG_CMD handshake check.
+    - If the log contains sensingProxySendProxyConfigCmdApi sending SENSING_PROXIMITY_CONFIG_CMD followed by a solicited response:
+      For example: [SENSING_PROX ][03] [S] sensingProxySendProxyConfigCmdApi: sending SENSING_PROXIMITY_CONFIG_CMD with proximityState = TRUE, spdConfigId = 88, spdConfigId2 = 88
+      Then conclude: FW was successfully configured. Confirm spdConfigId values match the init registry values.
+    - If SENSING_PROXIMITY_CONFIG_CMD is never seen after sensingProxyInitApi → Error: FW never configured; report as init failure.
+
+    4. Proximity decision notification check (prvSensingProxySetSeqNumAndProxStat).
+    - If the log contains decision field values:
+      For example: 08/14/2026-14:05:03.032 [SENSING_PROX ][02] [S] prvSensingProxySetSeqNumAndProxStat: Sensing Proximity Decision Notification, decision = 1, seqNum = 2
+      Then:
+      - decision=1 = human present; decision=0 = human absent.
+      - Actionable signal is a state transition: 0→1 or 1→0. Report each transition with its timestamp and seqNum.
+      - Consecutive same-value notifications (e.g., multiple decision=1 in a row) are normal FW periodic confirmations; do not flag.
+      - No minimum sustained duration is required before a transition is considered valid.
+
+    5. seqNum integrity check.
+    - seqNum is monotonically increasing per session. Gaps (non-uniform increments) are normal — they reflect FW internal pacing.
+      For example: seqNum = 2 → 255 → 550 → 822 → ... → 12537 (healthy, monotonic).
+    - If seqNum[n] < seqNum[n-1] (backward jump) → Error: FW restart or session reset; flag immediately with both seqNum values and timestamps.
+
+bios_GLAI:
+  name: "GLAI"
+  description: "Check GLAI configuration in BIOS"
+  keywords:
+    - "GLAI"
+  expert_rules: |
+   1. Check Successful read of table GLAI.
+   2. Show the number of Revision, DomainType, and GuidLockStaus. example: "GLAI table found = Revision 0 DomainType 7 GuidLockStaus 1"
+   3. If the GuidLockStaus is 1, it indicates that the GUID is locked; if 2, it indicates that the GUID is in test mode; if 0, it indicates that the GUID is unlocked.
+   4. Warning when set to 0 (unlocked), All BIOS features settings will not be effective.
+   5. The revision only support Revision 0, and DomainType 7 for WiFi; DomainType 12 for Bluetooth.

@@ -810,11 +810,11 @@ def render_download_result_form():
 
     # --- BT auto-analysis: pick the best BT path when Run Analysis was
     # requested for a BT case. Reuses the same folder-timestamp logic as
-    # bt_chatbot.find_best_log (newest capture-folder timestamp wins).
+    # log_parser.find_best_log (newest capture-folder timestamp wins).
     auto_analysis_bt = None
     if run_analysis_pending and 'bt' in case_context.wifi_or_bt:
         try:
-            from blueprints.bt_chatbot.bt_chatbot_routes import _parse_path_timestamp
+            from blueprints.log_parser.log_parser_routes import _parse_path_timestamp
             bt_paths = []
             for _paths in (file_dicts.get('bt_dict') or {}).values():
                 bt_paths.extend(_paths or [])

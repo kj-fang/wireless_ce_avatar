@@ -43,8 +43,10 @@ def get_auto_analysis_etl(wifi_dict, ddd_dict):
     session['latest_etl_llm'] = None
     
     if any(ddd_dict.values()):
+        # DDD binaries are named ``dddLog_<N>.bin`` — the DDD tab in
+        # download_result.html filters on ``.bin`` for the same reason.
         ddd_files = [f for files in ddd_dict.values() if files for f in files
-                     if f.lower().endswith('.etl') or re.search(r'\.etl\.\d+$', f, re.IGNORECASE)]
+                     if f.lower().endswith('.bin')]
         if ddd_files:
             return max(ddd_files, key=extract_file_number)
     

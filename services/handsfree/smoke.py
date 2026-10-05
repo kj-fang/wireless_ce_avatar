@@ -1098,6 +1098,18 @@ def smoke_checklist() -> None:
           resolve_subcategory("OEM Tools", "", "constant failure when running NDT") == "NDT"
           and resolve_subcategory("OEM Tools", "DRTU", "") == "DRTU"
           and resolve_subcategory("OEM Tools", "", "GNNR dump attached") == "GNNR")
+    # No tool named -> ask which one, never guess another tool's log list.
+    u = CaseAnalysis(case_nbr="4", mode="first_response", ok=True,
+                     subject="Test tool crashes on launch", issue_domain="OEM Tools",
+                     description="The tool exits right after start.")
+    du = compose(u)["plain"]
+    check("S12.r2 OEM Tools with no tool named asks which tool",
+          resolve_subcategory("OEM Tools", "", "the tool exits right after start") == ""
+          and "[ ] Which OEM tool is the issue with (ANT / DRTU / CITU / NDT / GNNR)?" in du
+          and "=== Required Info (OEM Tools) ===" in du
+          and "Ant debug log" not in du and "=== Required Log" not in du
+          and resolve_subcategory("P2P (Miracast)", "", "no hint") == "Connectivity",
+          du[du.find("=== Required"):][:300])
 
     # Deterministic fills must not claim what the pipeline cannot vouch for.
     b = CaseAnalysis(case_nbr="2", mode="request_logs", ok=True,

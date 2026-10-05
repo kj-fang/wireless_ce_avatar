@@ -57,6 +57,8 @@ committed — this JSON is the runtime source of truth.
 - **Renames ripple.** If a domain tab or sub-category is renamed,
   update the alias/keyword maps in `services/handsfree/checklist.py`
   (`_DOMAIN_ALIASES`, `resolve_subcategory`) or classification falls
-  back to `Others`.
+  back to `Others`. `_SUBCAT_ASK` names the domains (today: `OEM Tools`)
+  whose reply asks "which tool?" when the case names none — a renamed
+  tab drops out of it and silently defaults to its first sub-category.
 - Keep the xlsx filename's `RevX_Y` suffix — it is recorded as
   `revision` in the JSON for traceability.

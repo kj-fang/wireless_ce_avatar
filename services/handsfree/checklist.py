@@ -80,11 +80,19 @@ def domain_subcategories(domain: str) -> dict:
     return dict(dom.get("subcategories") or {})
 
 
+# Domains whose sub-categories are peers with no sensible default (value =
+# the noun used in the ask). When the case names none of them the reply
+# ASKS which one applies instead of guessing — a wrong guess would request
+# another tool's logs.
+_SUBCAT_ASK = {"OEM Tools": "OEM tool"}
+
+
 def resolve_subcategory(domain: str, name: str = "", context_text: str = "") -> str:
     """Pick the applicable sub-category for a domain (e.g. Connectivity ->
     Connectivity/Scan/Roaming). Order: explicit name match -> keyword hit in
     the case text -> the sub-category named like the domain -> first one.
-    Returns "" for domains without sub-categories."""
+    Returns "" for domains without sub-categories, and for _SUBCAT_ASK
+    domains when nothing matched (the reply then asks which one)."""
     subs = domain_subcategories(domain)
     if not subs:
         return ""
@@ -119,7 +127,20 @@ def resolve_subcategory(domain: str, name: str = "", context_text: str = "") -> 
     for sub in subs:
         if sub.lower() == domain.lower():
             return sub
+    if domain in _SUBCAT_ASK:
+        return ""
     return next(iter(subs))
+
+
+def subcategory_ask(domain: str, subcat: str) -> str:
+    """The 'which one?' question for a _SUBCAT_ASK domain whose sub-category
+    could not be identified; "" otherwise."""
+    if subcat or domain not in _SUBCAT_ASK:
+        return ""
+    names = " / ".join(domain_subcategories(domain))
+    noun = _SUBCAT_ASK[domain]
+    return (f"Which {noun} is the issue with ({names})? — please provide "
+            f"(the required logs and verification steps differ per {noun})")
 
 
 def _entry_in_subcat(entry: dict, subcat: str) -> bool:
@@ -300,9 +321,12 @@ def render_checklist_body(domain: str, fills: dict, subcat: str = "") -> list[st
     if fills.get("required_log"):
         parts += ["", f"=== Required Log ({label}) ==="]
         parts += _render_entries(fills["required_log"])
-    if fills.get("required_info"):
-        parts += ["", f"=== Required Info ({label}) ==="]
-        parts += _render_entries(fills["required_info"])
+    info_lines = _render_entries(fills.get("required_info", []))
+    ask = subcategory_ask(domain, subcat)
+    if ask:
+        info_lines.insert(0, f"  [ ] {ask}")
+    if info_lines:
+        parts += ["", f"=== Required Info ({label}) ==="] + info_lines
     triage = [e for e in (dom.get("initial_triage") or [])
               if _entry_in_subcat(e, subcat)]
     if triage:

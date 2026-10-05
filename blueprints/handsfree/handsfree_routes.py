@@ -8,10 +8,13 @@ v1 rules enforced here and in the orchestrator:
 
 from __future__ import annotations
 
+import os
+import subprocess
+
 from flask import Blueprint, jsonify, render_template, request
 
 from services.handsfree import orchestrator
-from services.handsfree.queue import HandsfreeStore
+from services.handsfree.queue import HandsfreeStore, decoded_log_dir
 
 handsfree_bp = Blueprint("handsfree", __name__, url_prefix="/handsfree")
 
@@ -91,6 +94,31 @@ def approve(draft_id: str):
 def reject(draft_id: str):
     body = request.get_json(silent=True) or {}
     return jsonify(orchestrator.reject(draft_id, reason=body.get("reason", "")))
+
+
+@handsfree_bp.route("/queue/<draft_id>/open_log_folder", methods=["POST"])
+def open_log_folder(draft_id: str):
+    """Open the folder of the case's decoded WRT log in Explorer (the app
+    runs on the reviewer's own PC), with the .log selected. The path comes
+    from the stored draft record, never from the request."""
+    if request.remote_addr not in ("127.0.0.1", "::1"):
+        return jsonify({"ok": False, "error": "localhost only"}), 403
+    rec = _store().get(draft_id)
+    if rec is None:
+        return jsonify({"ok": False, "error": "not found"}), 404
+    folder = decoded_log_dir(rec)
+    if not folder:
+        return jsonify({"ok": False,
+                        "error": "this case has no decoded log"}), 404
+    if not os.path.isdir(folder):
+        return jsonify({"ok": False,
+                        "error": f"folder no longer exists: {folder}"}), 404
+    log_path = os.path.normpath(rec["analysis"]["log_path"])
+    if os.path.isfile(log_path):
+        subprocess.Popen(["explorer", "/select,", log_path])
+    else:
+        subprocess.Popen(["explorer", folder])
+    return jsonify({"ok": True, "folder": folder})
 
 
 # ---------- config + REST field discovery ----------

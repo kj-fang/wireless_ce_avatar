@@ -167,6 +167,17 @@ def smoke_queue(tmp: Path) -> None:
     check("S3.g config round-trip",
           store.load_config()["owner_name"] == "Charles P Chu"
           and cfg["max_cases_per_run"] == 3)
+    # Queue rows expose the decoded-log folder only when a log was decoded.
+    cap = tmp / "cap" / "WifiDriverIHVSession.etl.001.log"
+    rec_log = store.enqueue(case_nbr="01234568", case_id="500XYZ", subject="s",
+                            draft_plain="body", draft_html="<p>body</p>",
+                            confidence=None, mode="full",
+                            analysis={"log_path": str(cap)})
+    by_id = {i["draft_id"]: i for i in store.list_drafts()}
+    check("S3.h decoded-log folder listed only for decoded cases",
+          by_id[rec_log["draft_id"]]["log_dir"] == str(cap.parent)
+          and by_id[rec["draft_id"]]["log_dir"] == "",
+          str({k: v.get("log_dir") for k, v in by_id.items()}))
 
 
 # ---------------------------------------------------------------- S4

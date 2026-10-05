@@ -32,6 +32,13 @@ def _now_iso() -> str:
     return datetime.now().astimezone().isoformat(timespec="seconds")
 
 
+def decoded_log_dir(rec: dict) -> str:
+    """Folder holding the case's decoded WRT log, or "" when the run never
+    got past decode_etl (analysis.log_path is only set once the .log exists)."""
+    log_path = str(((rec or {}).get("analysis") or {}).get("log_path") or "")
+    return os.path.dirname(os.path.normpath(log_path)) if log_path else ""
+
+
 class HandsfreeStore:
     def __init__(self, root: Path):
         self.root = Path(root)
@@ -190,6 +197,7 @@ class HandsfreeStore:
                     ("draft_id", "status", "created_at", "updated_at",
                      "case_nbr", "case_id", "subject", "mode", "confidence",
                      "post_result")}
+            slim["log_dir"] = decoded_log_dir(rec)
             out.append(slim)
             if len(out) >= limit:
                 break

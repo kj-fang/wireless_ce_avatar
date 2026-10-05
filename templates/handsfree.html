@@ -107,6 +107,7 @@
     #queue-table tbody tr { transition: background 200ms var(--ease); }
     #queue-table tbody tr:hover { background: rgba(69,184,240,0.06); cursor: pointer; }
     td.case-nbr { font-family: var(--mono); font-size: 12.5px; }
+    button.log-folder-btn { height: 26px; padding: 0 10px; font-size: 12px; white-space: nowrap; }
 
     /* ---------- pills ---------- */
     .pill { display: inline-flex; align-items: center; gap: 6px; padding: 2px 9px;
@@ -308,7 +309,7 @@
     <table id="queue-table">
       <thead><tr>
         <th>Case</th><th>Subject</th><th>Mode</th><th>Confidence</th>
-        <th>Status</th><th>Created</th>
+        <th>Status</th><th>Created</th><th>Decoded log</th>
       </tr></thead>
       <tbody></tbody>
     </table>
@@ -601,12 +602,35 @@
         `<td><span class="pill">${esc(it.mode || '')}</span></td>` +
         `<td>${it.confidence != null ? it.confidence + '/100' : '—'}</td>` +
         `<td><span class="pill dot ${statusCls}">${esc(it.status)}</span></td>` +
-        `<td>${esc((it.created_at || '').slice(0, 16))}</td>`;
+        `<td>${esc((it.created_at || '').slice(0, 16))}</td>` +
+        // Only cases whose WRT log was decoded (decode_etl reached) have one.
+        (it.log_dir
+          ? `<td><button class="ghost log-folder-btn" title="${esc(it.log_dir)}">` +
+            `<svg width="12" height="12" viewBox="0 0 24 24" fill="none" stroke="currentColor" ` +
+            `stroke-width="2.2" stroke-linecap="round" stroke-linejoin="round" aria-hidden="true">` +
+            `<path d="M3 7a2 2 0 0 1 2-2h4l2 2h8a2 2 0 0 1 2 2v8a2 2 0 0 1-2 2H5a2 2 0 0 1-2-2z" /></svg>` +
+            `Open folder</button></td>`
+          : `<td style="color:var(--faint);">—</td>`);
       tr.onclick = () => openDraft(it.draft_id);
+      const logBtn = tr.querySelector('.log-folder-btn');
+      if (logBtn) {
+        logBtn.onclick = (ev) => { ev.stopPropagation(); openLogFolder(it.draft_id); };
+      }
       tbody.appendChild(tr);
     });
     if (!(j.items || []).length) {
-      tbody.innerHTML = '<tr><td colspan="6" style="color:var(--muted);">queue is empty — run a check above</td></tr>';
+      tbody.innerHTML = '<tr><td colspan="7" style="color:var(--muted);">queue is empty — run a check above</td></tr>';
+    }
+  }
+
+  async function openLogFolder(draftId) {
+    try {
+      const r = await fetch('/handsfree/queue/' + encodeURIComponent(draftId) + '/open_log_folder',
+                            {method: 'POST'});
+      const j = await r.json();
+      if (!j.ok) alert('Could not open the log folder: ' + (j.error || 'unknown'));
+    } catch (e) {
+      alert('Could not open the log folder: ' + e);
     }
   }
 

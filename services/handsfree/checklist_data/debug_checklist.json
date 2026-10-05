@@ -681,36 +681,222 @@
       "description": "ICPS-related issue"
     },
     "OEM Tools": {
-      "required_log": [],
+      "required_log": [
+        {
+          "item": "Ant debug log",
+          "example": "Example: Y (included) /N (not included) Reference: 600002_Intel_Wi-Fi_Debugging_Guide_Rev1_7",
+          "subcat": "ANT"
+        },
+        {
+          "item": "WPP driver log (for association/scan failure)",
+          "example": "Example: Y/N",
+          "subcat": "ANT"
+        },
+        {
+          "item": "Error/Issue Screenshot",
+          "example": "Example: Y/N",
+          "subcat": "ANT"
+        },
+        {
+          "item": "WPP driver log",
+          "example": "Example: Y/N",
+          "subcat": "DRTU"
+        },
+        {
+          "item": "USC",
+          "example": "Example: Y/N",
+          "subcat": "DRTU"
+        },
+        {
+          "item": "Error/Issue Screenshot",
+          "example": "Example: Y/N",
+          "subcat": "DRTU"
+        },
+        {
+          "item": "DRTU application log (DrtuLog.txt)",
+          "example": "Example: Y/N Reference: 600002_Intel_Wi-Fi_Debugging_Guide_Rev1_7",
+          "subcat": "DRTU"
+        },
+        {
+          "item": "WPP driver log",
+          "example": "Example: Y/N",
+          "subcat": "CITU"
+        },
+        {
+          "item": "USC",
+          "example": "Example: Y/N",
+          "subcat": "CITU"
+        },
+        {
+          "item": "Error/Issue Screenshot",
+          "example": "Example: Y/N",
+          "subcat": "CITU"
+        },
+        {
+          "item": "CITU application log (CITUDebugInfo.txt)",
+          "example": "Example: Y/N Reference: 600002_Intel_Wi-Fi_Debugging_Guide_Rev1_7",
+          "subcat": "CITU"
+        },
+        {
+          "item": "WPP driver log",
+          "example": "Example: Y/N",
+          "subcat": "NDT"
+        },
+        {
+          "item": "Error/Issue Screenshot",
+          "example": "Example: Y/N",
+          "subcat": "NDT"
+        },
+        {
+          "item": "GNNR debug log (wlantest.dmp)",
+          "example": "Example: Y/N Reference: 600002_Intel_Wi-Fi_Debugging_Guide_Rev1_7",
+          "subcat": "GNNR"
+        }
+      ],
       "required_info": [],
       "initial_triage": [
         {
-          "item": "Tool",
-          "example": "Customer Feedback"
+          "item": "If the issue is related to AP association, retest in a clean environment (preferably an RF chamber) and see if the issue still happens",
+          "example": "Check to see if the issue is related to test environment",
+          "subcat": "ANT"
         },
         {
-          "item": "ANT",
-          "example": ""
+          "item": "Ensure that the Wi-Fi driver used is from the same release package",
+          "example": "To avoid compatibility issues",
+          "subcat": "ANT"
         },
         {
-          "item": "DRTU",
-          "example": ""
+          "item": "Ensure that the BIOS settings are correct if the issue is related to reading a wrong value from the SAR table",
+          "example": "Double-check to see if the BIOS settings are correct, if the issue is relevant",
+          "subcat": "ANT"
         },
         {
-          "item": "CITU",
-          "example": ""
+          "item": "Ensure that secure boot is disabled and test mode is enabled",
+          "example": "Test mode shall be enabled",
+          "subcat": "DRTU"
         },
         {
-          "item": "NDT",
-          "example": ""
+          "item": "Ensure that the W-iFi driver is not disabled when using DRTU",
+          "example": "Wi-Fi driver shall not be disabled when DRTU is running",
+          "subcat": "DRTU"
+        },
+        {
+          "item": "Make sure Google Chrome is used, as it is the only web browser that DRTU supports",
+          "example": "Google Chrome shall be the browser to use for DRTU",
+          "subcat": "DRTU"
+        },
+        {
+          "item": "Ensure that the system is not put to sleep while using DRTU",
+          "example": "DRTU does not support sleep",
+          "subcat": "DRTU"
+        },
+        {
+          "item": "Ensure that DRTU is running with administrative privileges",
+          "example": "DRTU shall be running with administrative privileges",
+          "subcat": "DRTU"
+        },
+        {
+          "item": "Ensure that only one instance of DRTU is running",
+          "example": "No more than one instance of DRTU shall be running at a time",
+          "subcat": "DRTU"
+        },
+        {
+          "item": "Ensure that the version of the Wi-Fi driver and USC are the same",
+          "example": "The version of Wi-Fi driver and USC need to be the same",
+          "subcat": "DRTU"
+        },
+        {
+          "item": "Ensure that secure boot is disabled and test mode is enabled",
+          "example": "Test mode shall be enabled",
+          "subcat": "CITU"
+        },
+        {
+          "item": "Ensure that the Wi-Fi driver is not disabled when using CITU",
+          "example": "Wi-Fi driver shall not be disabled when CITU is running",
+          "subcat": "CITU"
+        },
+        {
+          "item": "Make sure Google Chrome is used, as it is the only web browser that CITU supports",
+          "example": "Google Chrome shall be the browser to use for CITU",
+          "subcat": "CITU"
+        },
+        {
+          "item": "Ensure that the system is not put to sleep while using CITU",
+          "example": "CITU does not support sleep",
+          "subcat": "CITU"
+        },
+        {
+          "item": "Ensure that CITU is running with administrative privileges",
+          "example": "CITU shall be running with administrative privileges",
+          "subcat": "CITU"
+        },
+        {
+          "item": "Ensure that only one instance of CITU is running",
+          "example": "No more than one instance of CITU shall be running at a time",
+          "subcat": "CITU"
+        },
+        {
+          "item": "Ensure that the Bluetooth debug tool was installed",
+          "example": "Bluetooth debug tool was requested",
+          "subcat": "CITU"
+        },
+        {
+          "item": "Ensure that the test CITU has a CNVi module",
+          "example": "CITU does not support non-CNVi module",
+          "subcat": "CITU"
+        },
+        {
+          "item": "Ensure thst the version of the Wi-Fi driver and USC are the same",
+          "example": "The version of Wi-Fi driver and USC need to be the same",
+          "subcat": "CITU"
+        },
+        {
+          "item": "Ensure that secure boot is disabled and test mode is enabled",
+          "example": "Test mode shall be enabled",
+          "subcat": "NDT"
+        },
+        {
+          "item": "Ensure that the Wi-Fi driver is not disabled when using NDT",
+          "example": "Wi-Fi driver shall not be disabled when NDT is running",
+          "subcat": "NDT"
+        },
+        {
+          "item": "Make sure Google Chrome is used, as it is the only web browser that NDT supports",
+          "example": "Google Chrome shall be the browser to use for NDT",
+          "subcat": "NDT"
+        },
+        {
+          "item": "Ensure that the system is not put to sleep while using NDT",
+          "example": "NDT does not support sleep",
+          "subcat": "NDT"
+        },
+        {
+          "item": "Ensure that NDT is running with administrative privileges",
+          "example": "NDT shall be running with administrative privileges",
+          "subcat": "NDT"
+        },
+        {
+          "item": "Ensure that only one instance of NDT is running",
+          "example": "No more than one instance of NDT shall be running at a time",
+          "subcat": "NDT"
+        },
+        {
+          "item": "Ensure that the Bluetooth debug tool was installed",
+          "example": "Bluetooth debug tool was requested",
+          "subcat": "NDT"
+        },
+        {
+          "item": "Ensure that the version of the Wi-Fi driver and USC are the same",
+          "example": "The version of Wi-Fi driver and USC need to be the same",
+          "subcat": "NDT"
         }
       ],
       "subcategories": {
-        "ANT": "Ant debug log",
-        "DRTU": "WPP driver log",
-        "CITU": "WPP driver log",
-        "NDT": "WPP driver log",
-        "GNNR": "GNNR debug log (wlantest.dmp)"
+        "ANT": "",
+        "DRTU": "",
+        "CITU": "",
+        "NDT": "",
+        "GNNR": ""
       },
       "description": "Issue related to one of the following OEM tools: * ANT * DRTU * CITU * NDT * GNNR"
     },

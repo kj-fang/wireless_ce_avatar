@@ -231,6 +231,8 @@ class CaseAnalysis:
                                                        #   no_wrt_inside | unreadable_archive
     subcategory: str = ""                              # IPS Core issue subcategory (customer-selected)
     checklist_fills: dict = field(default_factory=dict)  # pre-filled first-response items
+    customer_history: str = ""                         # customer-authored comments only
+                                                       #   (safe source for public fills)
     error: str = ""
 
     @property
@@ -297,6 +299,8 @@ class HandsfreeRunner:
             analysis.wifi_or_bt = case_ctx.wifi_or_bt or "wifi"
             analysis.env_detail = dict(case_ctx.env_detail or {})
             analysis.subcategory = str(case_ctx.subcategory or "")
+            from .case_reader import customer_visible_history
+            analysis.customer_history = customer_visible_history(case_ctx.comments)
         if case_ctx is None or not (analysis.subject or analysis.description):
             analysis.mode = "error"
             analysis.error = "case fetch failed — no subject/description"

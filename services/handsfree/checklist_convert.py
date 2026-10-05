@@ -17,16 +17,21 @@ Sheet structure (verified against Rev1_0):
     "Required Log" / "Required Info" / "Initial Triage"; items in col A with
     example hints in col C. "Check Items" header rows are skipped; preamble
     lines before the first section land in the domain's "notes".
+  * Connectivity / P2P / OEM Tools use a sub-category TABLE per section
+    instead (see _parse_domain) — the header row tells which columns hold
+    the items and the example hints.
 """
 
 from __future__ import annotations
 
 import argparse
 import json
+import posixpath
 import re
 import sys
 import zipfile
 from pathlib import Path
+from typing import Optional
 from xml.etree import ElementTree as ET
 
 _M = "{http://schemas.openxmlformats.org/spreadsheetml/2006/main}"
@@ -57,8 +62,11 @@ def _load_sheets(path: str) -> list[tuple[str, list[dict]]]:
 
     out = []
     for s in wb.find(_M + "sheets"):
+        # Targets are relative to xl/ unless package-absolute ("/xl/...").
         target = relmap[s.get(_R + "id")]
-        ws = ET.fromstring(z.read("xl/" + target.lstrip("/")))
+        member = (target.lstrip("/") if target.startswith("/")
+                  else posixpath.normpath(posixpath.join("xl", target)))
+        ws = ET.fromstring(z.read(member))
         rows = []
         for row in ws.iter(_M + "row"):
             cells: dict = {}
@@ -106,48 +114,67 @@ def _parse_main(rows: list[dict]) -> tuple[list[dict], dict]:
     return general, domains
 
 
+def _table_header(row: dict) -> Optional[dict]:
+    """Column roles of a sub-category table header row, or None. Such a row
+    has 'Check Items' in a column OTHER than A (col A titles the sub-category
+    column: 'Issue Type' / 'Tool'); flat sections title col A itself."""
+    item_col = next((col for col, v in row.items()
+                     if col != "A" and v.lower() == "check items"), None)
+    if not item_col:
+        return None
+    return {"item": item_col,
+            "desc": next((col for col, v in row.items()
+                          if v.lower() == "description"), None),
+            "example": next((col for col, v in row.items()
+                             if "example" in v.lower()), None)}
+
+
 def _parse_domain(rows: list[dict]) -> dict:
     """Two section layouts exist:
 
     * FLAT (most tabs): items in col A, example hint in col C.
-    * SUB-CATEGORY (Connectivity, P2P): header row 'Issue Type |
-      Description | Check Items | ...'; a row with col A starts a
-      sub-category (name=A, description=B, first item=C, example=E);
-      rows with only col C continue the current sub-category's items.
+    * SUB-CATEGORY TABLE, columns read off the header row:
+        Connectivity, P2P: 'Issue Type | Description | Check Items | ... |
+                           ... Example'  (items in C, hints in E)
+        OEM Tools:         'Issue Type|Tool | Check Items | ... | ... Example'
+                           (items in B, hints in D, no description)
+      A row with col A starts a sub-category (name=A); rows without col A
+      continue the current sub-category's items.
     """
     d = {"required_log": [], "required_info": [], "initial_triage": [],
          "notes": [], "subcategories": {}}
     section = None
-    layout = "flat"
+    cols: Optional[dict] = None              # set => sub-category table
     cur_subcat = ""
     for r in rows:
-        a, b = r.get("A", ""), r.get("B", "")
-        c, e = r.get("C", ""), r.get("E", "")
+        a = r.get("A", "")
         key = _SECTION_NAMES.get(a.lower()) if a else None
         if key:
-            section, layout, cur_subcat = key, "flat", ""
+            section, cols, cur_subcat = key, None, ""
             continue
         if a.lower() == "check items":
             continue
-        if a.lower() == "issue type":       # sub-category header row
-            layout = "subcat"
+        header = _table_header(r)
+        if header:
+            cols = header
             continue
         if section is None:
             if a:
                 d["notes"].append(a)
             continue
-        if layout == "subcat":
+        if cols:
             if a:                            # new sub-category
                 cur_subcat = a
-                d["subcategories"].setdefault(a, b)
-                if c:
-                    d[section].append({"item": c, "example": e,
-                                       "subcat": a})
-            elif c:
-                d[section].append({"item": c, "example": e,
-                                   "subcat": cur_subcat})
+                d["subcategories"].setdefault(
+                    a, r.get(cols["desc"], "") if cols["desc"] else "")
+            item = r.get(cols["item"], "")
+            if item:
+                d[section].append({
+                    "item": item,
+                    "example": r.get(cols["example"], "") if cols["example"] else "",
+                    "subcat": cur_subcat})
         elif a:
-            d[section].append({"item": a, "example": c})
+            d[section].append({"item": a, "example": r.get("C", "")})
     for k in ("notes", "subcategories"):
         if not d[k]:
             del d[k]

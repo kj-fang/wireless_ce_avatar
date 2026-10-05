@@ -206,6 +206,9 @@ def smoke_runner(tmp: Path) -> None:
     from services import case_info_service as cis
     from datetime import datetime
     orig_process = cis.CaseService.process_case
+    # The real loader needs app_config.prompt_dir (unset without app boot);
+    # without this stub the triage stage fails and analyze_desc never runs.
+    orig_prompt = cis.CaseService.load_case_summary_prompt
 
     def _fake_process(case_ctx: CaseContext) -> CaseContext:
         case_ctx.id = "500FAKESFID000AAA"
@@ -220,6 +223,8 @@ def smoke_runner(tmp: Path) -> None:
              "Reproduced today at 10:17:30. Uploaded repro_logs.7z (driver log) covering it."],
             [datetime(2026, 6, 21, 8, 0), "Partner",
              "Also uploaded later_capture.zip but device did NOT fail in that run."],
+            [datetime(2026, 6, 21, 9, 0), "Agent",
+             "INTERNAL: suspect FW regression, sighting 12345 - do not share."],
         ]
         case_ctx.attachment_list = [
             ["repro_logs.7z", "https://esft/x?FileName=repro_logs.7z",
@@ -297,6 +302,8 @@ def smoke_runner(tmp: Path) -> None:
 
     try:
         cis.CaseService.process_case = staticmethod(_fake_process)
+        cis.CaseService.load_case_summary_prompt = staticmethod(
+            lambda wifi_or_bt: "prompt_fake.py")
         adl.run_dload_threads = _fake_dload
         adc.process_single_zip = _fake_zip_proc
         ita.organize_issue_context = _fake_org
@@ -333,6 +340,10 @@ def smoke_runner(tmp: Path) -> None:
               f"chosen={analysis.chosen_attachment}")  # .7z proves non-zip archives pass the pick stage
         check("S4.h Salesforce case id captured",
               analysis.case_id == "500FAKESFID000AAA")
+        check("S4.h2 customer history keeps Partner comments, drops Intel-side ones",
+              "Reproduced today at 10:17:30" in analysis.customer_history
+              and "INTERNAL" not in analysis.customer_history,
+              analysis.customer_history)
 
         # queue integration: compose + enqueue like the orchestrator does
         store = HandsfreeStore(tmp / "handsfree_s4")
@@ -384,6 +395,10 @@ def smoke_runner(tmp: Path) -> None:
         check("S4.m reply names the checked archive",
               "repro_logs.7z" in draft3["plain"] and "WRT" in draft3["plain"],
               draft3["plain"][:250])
+        check("S4.m2 checklist never ticks the WRT log the reply asks for",
+              "provided: repro_logs.7z" not in draft3["plain"]
+              and "[ ] 1) WPP driver log" in draft3["plain"],
+              draft3["plain"][-700:])
 
         # --- decompose CRASH must NOT ask the customer for logs -------------
         # (_stage swallows the exception; empty lists must only mean
@@ -425,9 +440,11 @@ def smoke_runner(tmp: Path) -> None:
               and "step-by-step reproduction instructions" in draft5["plain"]
               and draft5["confidence"] is None,
               draft5["plain"][:400])
+        # Reader named no domain -> the triage issue type (Connectivity) is
+        # the fallback, not Others.
         check("S9.b2 request-info reply carries the pre-filled domain checklist",
               "=== General Info ===" in draft5["plain"]
-              and "=== Required Log (Others) ===" in draft5["plain"]
+              and "=== Required Log (Connectivity) ===" in draft5["plain"]
               and "please provide" in draft5["plain"],
               draft5["plain"][-500:])
 
@@ -551,8 +568,34 @@ def smoke_runner(tmp: Path) -> None:
               and "PDB symbol database" in analysis11.error
               and "PDB symbol database" in d11["plain"],
               str(analysis11.error)[:140])
+
+        # --- S14: what the orchestrator queues per case ----------------------
+        from . import orchestrator as orch
+        store14 = HandsfreeStore(tmp / "handsfree_s14")
+        orch._analyze_and_enqueue(store14, "01234567")
+        recs = [store14.get(d["draft_id"])
+                for d in store14.list_drafts(include_closed=True)]
+        fr = [x for x in recs if x.get("mode") == "first_response"]
+        check("S14.a analysis draft + first-response draft queued; the latter's "
+              "stored analysis carries mode first_response (UI visibility chip)",
+              len(recs) == 2 and len(fr) == 1
+              and fr[0]["analysis"].get("mode") == "first_response",
+              str([(x.get("mode"), (x.get("analysis") or {}).get("mode"))
+                   for x in recs]))
+
+        def _fake_process_empty(case_ctx: CaseContext) -> CaseContext:
+            case_ctx = _fake_process(case_ctx)
+            case_ctx.subject = case_ctx.description = ""
+            return case_ctx
+        cis.CaseService.process_case = staticmethod(_fake_process_empty)
+        store14b = HandsfreeStore(tmp / "handsfree_s14b")
+        orch._analyze_and_enqueue(store14b, "01234567")
+        modes = [d.get("mode") for d in store14b.list_drafts(include_closed=True)]
+        check("S14.b failed case fetch queues NO customer-facing first response",
+              modes == ["error"], str(modes))
     finally:
         cis.CaseService.process_case = orig_process
+        cis.CaseService.load_case_summary_prompt = orig_prompt
         adl.run_dload_threads = orig_dload
         adc.process_single_zip = orig_zip
         ita.organize_issue_context = orig_org
@@ -621,6 +664,44 @@ def smoke_orchestrator(tmp: Path) -> None:
               "already exists" not in (res3.get("error") or "")
               and store.get(rec2["draft_id"])["status"] == "post_failed",
               str(res3))
+
+        # Reviewer edited both markers away: they are restored before the
+        # scan/post, so later scans still classify the comment correctly.
+        rec3 = store.enqueue(case_nbr="09999997", case_id="500S5C", subject="s5c",
+                             draft_plain=AI_MARKER + "\n" + CHECKLIST_TAG + "\n\nbody",
+                             draft_html="<p>b</p>", confidence=None,
+                             mode="request_logs", analysis={})
+        orch.approve_and_post(rec3["draft_id"], edited_plain="Hello,\nplease send logs")
+        edited = store.get(rec3["draft_id"])["draft_plain"]
+        check("S5.f edited checklist draft gets AI marker + family tag restored",
+              edited.startswith(AI_MARKER + "\n" + CHECKLIST_TAG + "\n\nHello,"),
+              edited[:120])
+
+        # A request comment posted before CHECKLIST_TAG existed (AI marker +
+        # fixed template text only) still counts as first-response family.
+        class _LegacyRequest(_MarkerNoTag):
+            def get_case_comments(self, case_id):
+                return [{"Id": "C9", "Core_IPS_Rich_Comment__c":
+                         "<p>" + AI_MARKER + "<br/><br/>Hello,<br/>To root-cause it "
+                         "we need the Intel wireless driver WRT logs covering the "
+                         "failure</p>"}]
+        orch.IpsClient = _LegacyRequest
+        rec4 = store.enqueue(case_nbr="09999996", case_id="500S5D", subject="s5d",
+                             draft_plain=AI_MARKER + "\n" + CHECKLIST_TAG + "\n\nbody",
+                             draft_html="<p>b</p>", confidence=None,
+                             mode="first_response", analysis={})
+        res4 = orch.approve_and_post(rec4["draft_id"])
+        rec5 = store.enqueue(case_nbr="09999995", case_id="500S5E", subject="s5e",
+                             draft_plain=AI_MARKER + "\n\nanalysis",
+                             draft_html="<p>a</p>", confidence=None,
+                             mode="full", analysis={})
+        store.save_config({"post_backend": "rest"})   # no Selenium fallback
+        res5 = orch.approve_and_post(rec5["draft_id"])
+        check("S5.g legacy untagged request comment blocks a second first "
+              "response, not the analysis draft",
+              "already exists" in (res4.get("error") or "")
+              and "already exists" not in (res5.get("error") or ""),
+              f"{res4.get('error')} | {res5.get('error')}")
     finally:
         orch._store = orig_store_fn
         orch.IpsClient = orig_ips
@@ -1002,6 +1083,196 @@ def smoke_checklist() -> None:
           any("OS log" in e["item"]
               for e in data["domains"]["Power Consumption (MS)"]["initial_triage"]))
 
+    # OEM Tools: per-tool table (items in col B) -> tool-tagged asks.
+    oem = data["domains"]["OEM Tools"]
+    drtu = _bf("OEM Tools", "DRTU")
+    check("S12.q OEM Tools parsed per tool, no header rows leaking as items",
+          list(oem["subcategories"]) == ["ANT", "DRTU", "CITU", "NDT", "GNNR"]
+          and [e["item"] for e in drtu["required_log"]]
+          == ["WPP driver log", "USC", "Error/Issue Screenshot",
+              "DRTU application log (DrtuLog.txt)"]
+          and all(e.get("subcat") and e["item"] not in ("Tool", "ANT", "DRTU")
+                  for e in oem["initial_triage"]),
+          str([e["item"] for e in drtu["required_log"]]))
+    check("S12.r tool acronyms match as whole words only",
+          resolve_subcategory("OEM Tools", "", "constant failure when running NDT") == "NDT"
+          and resolve_subcategory("OEM Tools", "DRTU", "") == "DRTU"
+          and resolve_subcategory("OEM Tools", "", "GNNR dump attached") == "GNNR")
+
+    # Deterministic fills must not claim what the pipeline cannot vouch for.
+    b = CaseAnalysis(case_nbr="2", mode="request_logs", ok=True,
+                     issue_domain="WowLAN", chosen_attachment="shots.zip",
+                     attachment_time="08/21/2026 09:00",
+                     issue_times=["08/21/2026 09:00"],
+                     env_detail={"Steps to reproduce": "N/A", "Frequency": "none"})
+    fb = _blank_fills("WowLAN")
+    deterministic_fills(b, fb)
+    check("S12.s nothing ticked: request_logs archive, upload-time fallback, "
+          "wake-trigger time, N/A placeholders",
+          not any(e["provided"] for sec in fb.values() for e in sec),
+          str([(e["item"][:30], e["value"]) for sec in fb.values()
+               for e in sec if e["provided"]]))
+
+    # The LLM fill pass reads customer-authored content only (its output is
+    # posted publicly) — never the all-comments clean_description.
+    seen = {}
+    def _capture(messages, system_content=None):
+        seen["prompt"] = messages[0]["content"]
+        return '{"fills": {}}'
+    p = CaseAnalysis(case_nbr="3", mode="full", ok=True, subject="Roaming fails",
+                     issue_domain="Connectivity", description="DUT cannot roam.",
+                     clean_description="SYNTH-FROM-PRIVATE-COMMENTS",
+                     customer_history="(2026-06-20) regression from driver 23.60")
+    build_fills(p, llm=types.SimpleNamespace(chat=_capture))
+    check("S12.t fill prompt: customer history in, all-comments synthesis out",
+          "regression from driver 23.60" in seen.get("prompt", "")
+          and "DUT cannot roam." in seen["prompt"]
+          and "SYNTH-FROM-PRIVATE-COMMENTS" not in seen["prompt"],
+          seen.get("prompt", "")[-300:])
+
+
+# ---------------------------------------------------------------- S15
+def _mini_xlsx(path: Path, sheets: list) -> None:
+    """Minimal workbook from [(sheet_name, [{col: text}, ...])]. Cells
+    alternate between sharedStrings and inline strings; sheet 1 uses a
+    package-absolute relationship target — both forms occur in real files."""
+    import zipfile
+    from xml.sax.saxutils import escape
+    ns = "http://schemas.openxmlformats.org/spreadsheetml/2006/main"
+    rns = "http://schemas.openxmlformats.org/officeDocument/2006/relationships"
+    sst: list[str] = []
+    sheet_xml = []
+    n = 0
+    for _, rows in sheets:
+        out = []
+        for ri, row in enumerate(rows, 1):
+            cells = []
+            for col, text in row.items():
+                n += 1
+                if n % 2:
+                    sst.append(text)
+                    cells.append(f'<c r="{col}{ri}" t="s"><v>{len(sst) - 1}</v></c>')
+                else:
+                    cells.append(f'<c r="{col}{ri}" t="inlineStr"><is><t>'
+                                 f'{escape(text)}</t></is></c>')
+            out.append(f'<row r="{ri}">{"".join(cells)}</row>')
+        sheet_xml.append(f'<worksheet xmlns="{ns}"><sheetData>{"".join(out)}'
+                         '</sheetData></worksheet>')
+    with zipfile.ZipFile(path, "w") as z:
+        z.writestr("xl/workbook.xml",
+                   f'<workbook xmlns="{ns}" xmlns:r="{rns}"><sheets>'
+                   + "".join(f'<sheet name="{name}" sheetId="{i}" r:id="rId{i}"/>'
+                             for i, (name, _) in enumerate(sheets, 1))
+                   + "</sheets></workbook>")
+        z.writestr("xl/_rels/workbook.xml.rels",
+                   '<Relationships xmlns="http://schemas.openxmlformats.org/'
+                   'package/2006/relationships">'
+                   + "".join(f'<Relationship Id="rId{i}" Target="'
+                             f'{"/xl/" if i == 1 else ""}worksheets/sheet{i}.xml"/>'
+                             for i in range(1, len(sheets) + 1))
+                   + "</Relationships>")
+        z.writestr("xl/sharedStrings.xml",
+                   f'<sst xmlns="{ns}">'
+                   + "".join(f"<si><t>{escape(s)}</t></si>" for s in sst) + "</sst>")
+        for i, x in enumerate(sheet_xml, 1):
+            z.writestr(f"xl/worksheets/sheet{i}.xml", x)
+
+
+def smoke_checklist_convert(tmp: Path) -> None:
+    print("[S15] Checklist xlsx converter (fixture workbook)")
+    from .checklist_convert import convert
+
+    table_hdr = {"A": "Issue Type", "B": "Description", "C": "Check Items",
+                 "D": "Customer Feedback", "E": "Comments and Feedback Example"}
+    tool_hdr = {"B": "Check Items", "C": "Customer Feedback",
+                "D": "Comments and Feedback Example"}
+    xlsx = tmp / "fixture_Checklist_Rev9_9.xlsx"
+    _mini_xlsx(xlsx, [
+        ("Main", [
+            {"A": "Step1: general info"},
+            {"B": "Check Items", "D": "Example"},
+            {"B": "Is this a regression issue?", "D": "Example: Y/N"},
+            {"A": "Step2: issue domain"},
+            {"B": "FlatDom", "C": "flat domain"},
+            {"B": "tabledom", "C": "table domain"},
+            {"A": "Step3: done"},
+            {"B": "ignored after step3"},
+        ]),
+        ("FlatDom", [
+            {"A": "Capture these logs first:"},
+            {"A": "Required Log"},
+            {"A": "Check Items", "C": "Comments and Feedback Example"},
+            {"A": "WRT Log", "C": "Example: Y/N"},
+            {"A": "Air sniffer log", "C": "Example: Y/N"},
+            {"A": "Required Info"},
+            {"A": "What is the wake method?", "C": "Example: magic packet"},
+            {"A": "Initial Triage"},
+            {"A": "Check if firewall is disabled", "C": "shall be disabled"},
+        ]),
+        ("TableDom", [
+            {"A": "Required Log"},
+            table_hdr,
+            {"A": "Roaming", "B": "roam issues", "C": "WRT Log", "E": "Example: Y/N"},
+            {"C": "Air sniffer log", "E": "Example: Y/N"},
+            {"A": "Performance", "B": "throughput", "C": "Air sniffer log",
+             "E": "Example: Y/N"},
+        ]),
+        ("ToolDom", [
+            {"A": "Required Log"},
+            dict(tool_hdr, A="Issue Type"),
+            {"A": "DRTU", "B": "WPP driver log", "D": "Example: Y/N"},
+            {"B": "DRTU application log", "D": "Example: Y/N"},
+            {"A": "Initial Triage"},
+            dict(tool_hdr, A="Tool"),
+            {"A": "DRTU", "B": "Ensure test mode is enabled",
+             "D": "Test mode shall be enabled"},
+        ]),
+        ("Revisions", [{"A": "Required Log"}, {"A": "not a domain"}]),
+    ])
+    data = convert(str(xlsx))
+    doms = data["domains"]
+    check("S15.a main tab: revision, general info, domain set (abs + rel "
+          "sheet targets, shared + inline strings)",
+          data["revision"] == "Rev9_9"
+          and data["general_info"] == [{"item": "Is this a regression issue?",
+                                        "example": "Example: Y/N"}]
+          and list(doms) == ["FlatDom", "TableDom", "ToolDom"],
+          f"rev={data['revision']} gi={data['general_info']} doms={list(doms)}")
+    flat = doms.get("FlatDom", {})
+    check("S15.b flat tab: sections, notes, example hints, policy drop",
+          flat.get("notes") == ["Capture these logs first:"]
+          and flat.get("required_log") == [{"item": "WRT Log", "example": "Example: Y/N"}]
+          and flat.get("required_info") == [{"item": "What is the wake method?",
+                                             "example": "Example: magic packet"}]
+          and flat.get("initial_triage") == [{"item": "Check if firewall is disabled",
+                                              "example": "shall be disabled"}]
+          and flat.get("description") == "flat domain"
+          and "subcategories" not in flat,
+          str(flat))
+    table = doms.get("TableDom", {})
+    check("S15.c table tab (items col C): sub-categories + descriptions; Air "
+          "sniffer kept only under Performance; Step-2 name matched caselessly",
+          table.get("subcategories") == {"Roaming": "roam issues",
+                                         "Performance": "throughput"}
+          and table.get("required_log") == [
+              {"item": "WRT Log", "example": "Example: Y/N", "subcat": "Roaming"},
+              {"item": "Air sniffer log", "example": "Example: Y/N",
+               "subcat": "Performance"}]
+          and table.get("description") == "table domain",
+          str(table))
+    tool = doms.get("ToolDom", {})
+    check("S15.d tool tab (items col B, 'Tool' header): tagged asks, header "
+          "rows never become items",
+          tool.get("subcategories") == {"DRTU": ""}
+          and tool.get("required_log") == [
+              {"item": "WPP driver log", "example": "Example: Y/N", "subcat": "DRTU"},
+              {"item": "DRTU application log", "example": "Example: Y/N",
+               "subcat": "DRTU"}]
+          and tool.get("initial_triage") == [
+              {"item": "Ensure test mode is enabled",
+               "example": "Test mode shall be enabled", "subcat": "DRTU"}],
+          str(tool))
+
 
 def run_smoke() -> int:
     tmp = Path(tempfile.mkdtemp(prefix="handsfree_smoke_"))
@@ -1017,6 +1288,7 @@ def run_smoke() -> int:
         smoke_yb_etl_pick()
         smoke_env_detail()
         smoke_checklist()
+        smoke_checklist_convert(tmp)
     finally:
         shutil.rmtree(tmp, ignore_errors=True)
     print(f"\nsmoke result: {'ALL PASS' if not PASS_FAIL else 'FAILURES: ' + ', '.join(PASS_FAIL)}")

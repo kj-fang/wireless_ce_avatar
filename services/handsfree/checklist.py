@@ -88,16 +88,33 @@ def resolve_subcategory(domain: str, name: str = "", context_text: str = "") -> 
     subs = domain_subcategories(domain)
     if not subs:
         return ""
+
+    def _word(sub: str, text: str) -> bool:
+        return bool(re.search(rf"\b{re.escape(sub.lower())}\b", text))
+
     raw = re.sub(r"\s+", " ", str(name or "")).strip().lower()
     for sub in subs:
-        if raw and (sub.lower() == raw or sub.lower() in raw or raw in sub.lower()):
+        if not raw:
+            break
+        # Acronym sub-categories (OEM tools: ANT, DRTU, ...) match as whole
+        # words only — "ant" must not hit "constant" / "antenna".
+        if sub.isupper():
+            if _word(sub, raw):
+                return sub
+        elif sub.lower() == raw or sub.lower() in raw or raw in sub.lower():
             return sub
     text = str(context_text or "").lower()
     if text:
         # most-specific keyword first (e.g. "roam"/"scan" beat generic connect)
         for sub in subs:
+            if sub.lower() == domain.lower():
+                continue
+            if sub.isupper():
+                if _word(sub, text):
+                    return sub
+                continue
             root = sub.lower().rstrip("gmi")[:4] if len(sub) > 4 else sub.lower()
-            if sub.lower() != domain.lower() and root and root in text:
+            if root and root in text:
                 return sub
     for sub in subs:
         if sub.lower() == domain.lower():
@@ -128,6 +145,10 @@ def _blank_fills(domain: str, subcat: str = "") -> dict:
     return out
 
 
+# Form answers that mean "not provided" (same set the runner rejects).
+_PLACEHOLDER_ANSWERS = {"na", "n/a", "none"}
+
+
 def deterministic_fills(analysis, fills: dict) -> None:
     """Mark items the PIPELINE itself can vouch for. Mutates `fills`."""
     def mark(section: str, pattern: str, value: str):
@@ -139,18 +160,25 @@ def deterministic_fills(analysis, fills: dict) -> None:
 
     chosen = getattr(analysis, "chosen_attachment", "") or ""
     log_ok = bool(getattr(analysis, "log_path", "") or "")
-    if chosen:
+    # mode request_logs = the pipeline itself found the logs missing or the
+    # archive unreadable — never tick the item that same reply asks for.
+    if chosen and getattr(analysis, "mode", "") != "request_logs":
         note = chosen + (" (WRT logs extracted)" if log_ok else " (attached)")
         mark("required_log", r"WRT Log|WPP driver log", note)
-    times = getattr(analysis, "issue_times", None) or []
+    # issue_times may be the runner's last-resort fallback to the attachment
+    # upload time — that is not a customer-stated reproduction time. Domain
+    # "exact time" questions (e.g. WowLAN wake-trigger time) are a different
+    # fact from the failure time: left to the LLM pass.
+    att_time = str(getattr(analysis, "attachment_time", "") or "")
+    times = [str(t) for t in (getattr(analysis, "issue_times", None) or [])
+             if str(t) != att_time]
     if times:
         mark("general_info", r"reproduction time|issue reproduction time",
-             ", ".join(map(str, times[:3])))
-        mark("required_info", r"exact time|time when", ", ".join(map(str, times[:3])))
+             ", ".join(times[:3]))
     env = getattr(analysis, "env_detail", None) or {}
     for q, a in env.items():
         a = str(a or "").strip()
-        if not a or a.upper() == "NA":
+        if not a or a.lower() in _PLACEHOLDER_ANSWERS:
             continue
         if re.search(r"steps to reproduce", str(q), re.IGNORECASE):
             mark("general_info", r"reproduction steps", a[:200])
@@ -163,6 +191,8 @@ You are reviewing an Intel Wi-Fi support case to pre-fill a debug checklist
 for the customer. For EVERY numbered item below, decide whether the case
 content ALREADY answers it. Only mark provided=true when the case clearly
 states the answer; copy the answer concisely (<=160 chars). Do not guess.
+Customer comments are listed oldest first — a later comment supersedes the
+original description.
 
 Output ONLY valid JSON: {{"fills": {{"<number>": {{"provided": true, "value": "<answer>"}}, ...}}}}
 List only the items that ARE provided.
@@ -225,12 +255,17 @@ def build_fills(analysis, llm=None) -> dict:
         pass
     fills = _blank_fills(domain, subcat)
     deterministic_fills(analysis, fills)
+    # The filled values post PUBLICLY, so the fill pass may only read what
+    # the customer wrote: subject, description, the Environment Details form
+    # and customer-authored comments. NOT clean_description — the reader
+    # synthesizes it from ALL comments, Private-to-Intel ones included.
+    history = str(getattr(analysis, "customer_history", "") or "")
     material = "\n".join(filter(None, [
         str(getattr(analysis, "subject", "") or ""),
-        str(getattr(analysis, "clean_description", "") or ""),
-        str(getattr(analysis, "description", "") or ""),
+        str(getattr(analysis, "description", "") or "")[:2500],
         "\n".join(f"{q}: {a}" for q, a in
-                  (getattr(analysis, "env_detail", None) or {}).items() if a),
+                  (getattr(analysis, "env_detail", None) or {}).items() if a)[:1000],
+        ("=== CUSTOMER COMMENTS (oldest first) ===\n" + history) if history else "",
     ]))
     llm_fill(llm, fills, material)
     return fills

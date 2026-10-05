@@ -147,6 +147,31 @@ def _format_comments(rows: list[dict]) -> str:
     return "\n".join(out)
 
 
+# Comment author types (CORE_IPS_COMMENT_AUTHOR_TYPE_TXT) written by the
+# customer side: "Partner", "Partner - Agent", "Partner - DFAE", "Customer".
+# Intel-side rows ("Agent", "FAE", "Backend Integration", "System") may be
+# Private-to-Intel — the comment rows carry no visibility flag, so only an
+# allowlisted customer author proves a comment is customer-visible.
+_CUSTOMER_AUTHOR_PREFIXES = ("partner", "customer")
+_MAX_CUSTOMER_COMMENTS = 12
+_MAX_CUSTOMER_COMMENT_CHARS = 400
+
+
+def customer_visible_history(comments: Any) -> str:
+    """Customer-authored comments only, chronological, bounded — the one
+    slice of the comment history that is safe to quote in a PUBLIC reply.
+    Unknown / empty author types are excluded (fail closed)."""
+    rows = [r for r in _normalize_comments(comments)
+            if r["author"].strip().lower().startswith(_CUSTOMER_AUTHOR_PREFIXES)]
+    out = []
+    for r in rows[-_MAX_CUSTOMER_COMMENTS:]:
+        text = r["text"]
+        if len(text) > _MAX_CUSTOMER_COMMENT_CHARS:
+            text = text[:_MAX_CUSTOMER_COMMENT_CHARS] + " …[truncated]"
+        out.append((f"({r['ts']}) " if r["ts"] else "") + text)
+    return "\n".join(out)
+
+
 _MAX_ENV_ENTRIES = 25
 _MAX_ENV_VALUE_CHARS = 300
 

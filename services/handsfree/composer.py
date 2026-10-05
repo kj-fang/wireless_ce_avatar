@@ -104,15 +104,11 @@ def _checklist_fills(analysis: CaseAnalysis) -> dict:
     fills = getattr(analysis, "checklist_fills", None)
     if fills:
         return fills
-    from .checklist import (FALLBACK_DOMAIN, _blank_fills,
-                            deterministic_fills, resolve_subcategory)
-    domain = getattr(analysis, "issue_domain", "") or FALLBACK_DOMAIN
-    subcat = resolve_subcategory(
-        domain, getattr(analysis, "issue_subcategory", ""),
-        str(getattr(analysis, "clean_description", "") or ""))
-    fills = _blank_fills(domain, subcat)
-    deterministic_fills(analysis, fills)
-    return fills
+    # llm=None: deterministic fills only. build_fills also settles
+    # analysis.issue_subcategory, which the renderers read afterwards — the
+    # items and the section label/triage steps must use the same pick.
+    from .checklist import build_fills
+    return build_fills(analysis)
 
 
 def _checklist_body(analysis: CaseAnalysis) -> list[str]:

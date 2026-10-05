@@ -251,6 +251,22 @@ def _restore(path: Path, snapshot: str | None) -> None:
         print(f"⚠️  [personal_token] rollback of {path} failed: {e}")
 
 
+@llm_bp.route('/personal_token/pending', methods=['GET'])
+def personal_token_pending():
+    """Polling backstop for the expiry modal.
+
+    The real-time Socket.IO emit (see set_up_app._make_personal_token_expired_hook)
+    can be missed if the client's connection was starved mid-request by a slow
+    synchronous route. The frontend polls this endpoint every few seconds so a
+    pending expiry is caught on the next tick regardless of socket timing.
+    """
+    login = _login()
+    pending = bool(login) and bool(app_config.personal_token_expired_pending.get(login))
+    if pending:
+        print(f"📥 [LLM] /personal_token/pending poll for '{login}' -> pending=True")
+    return jsonify({"pending": pending, "login": login})
+
+
 @llm_bp.route('/personal_token/update', methods=['POST'])
 def update_personal_token():
     """Strict all-or-nothing refresh of the current user's personal gnaigpt token.
@@ -324,6 +340,7 @@ def update_personal_token():
             _update_keys_module_personal_token(key_module, login, new_token)
             configure_llm_personal_token(llm_helper, key_module, avatarfiles_dir)
             print(f"✅ [Hot-Swap] Token successfully refreshed and hot-swapped for '{login}'")
+            app_config.personal_token_expired_pending.pop(login, None)
 
         except Exception as e:
             if keys_updated:
@@ -334,6 +351,20 @@ def update_personal_token():
                 "reason": "hot_swap_failed",
                 "message": f"Files written but live token swap failed — rolled back. {e}",
             }), 500
+
+        # Best-effort: a 401 on the old personal token may have left
+        # session['_issue_ai_quick'] holding the regex-only fallback from
+        # organize_issue_context. Re-run it now with the freshly hot-swapped
+        # client so the AI-based issue time/description is restored without
+        # requiring the user to redo select_attachments or Run Analysis.
+        try:
+            raw_case_context = session.get("case_context")
+            if raw_case_context:
+                from models.models import CaseContext
+                from blueprints.main.main_routes import _prime_issue_ai_cache
+                _prime_issue_ai_cache(CaseContext.from_session(raw_case_context))
+        except Exception as e:
+            print(f"⚠️  [personal_token] issue-AI re-prime skipped: {e}")
 
         return jsonify({"ok": True})
 

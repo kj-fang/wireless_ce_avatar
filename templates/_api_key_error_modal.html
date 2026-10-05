@@ -22,7 +22,7 @@
     </p>
     <p class="ake-link-row">
       {# GNAI API token generation link #}
-      <a id="akeGenerateLink" href="https://gfx-assets.intel.com/auth/oauth2/sso" target="_blank" rel="noopener noreferrer">
+      <a id="akeGenerateLink" class="ake-generate-btn" href="https://gfx-assets.intel.com/auth/oauth2/sso" target="_blank" rel="noopener noreferrer">
         Generate new token &rarr;
       </a>
     </p>
@@ -57,9 +57,23 @@
   }
   .ake-title { margin: 0 0 12px; font-size: 1.15rem; color: #b00020; }
   .ake-body { margin: 0 0 12px; font-size: 0.92rem; line-height: 1.45; }
-  .ake-link-row { margin: 8px 0 6px; font-size: 0.92rem; }
-  .ake-link-row a { color: #0067b8; text-decoration: none; }
-  .ake-link-row a:hover { text-decoration: underline; }
+  .ake-link-row { margin: 10px 0 14px; font-size: 0.92rem; }
+  .ake-generate-btn {
+    display: inline-block;
+    background: #0067b8; color: #fff !important;
+    text-decoration: none; font-weight: 600;
+    padding: 10px 18px; border-radius: 6px;
+    box-shadow: 0 2px 8px rgba(0, 103, 184, 0.4);
+    animation: ake-pulse 1.8s ease-in-out infinite;
+    transition: background 0.15s, transform 0.15s;
+  }
+  .ake-generate-btn:hover {
+    background: #005a9e; transform: translateY(-1px);
+  }
+  @keyframes ake-pulse {
+    0%, 100% { box-shadow: 0 2px 8px rgba(0, 103, 184, 0.4); }
+    50% { box-shadow: 0 2px 16px rgba(0, 103, 184, 0.75); }
+  }
   .ake-login-row { margin: 4px 0 10px; font-size: 0.88rem; color: #555; }
   .ake-input {
     width: 100%; box-sizing: border-box;
@@ -73,10 +87,23 @@
   .ake-status {
     min-height: 1.4em; margin: 8px 0 4px;
     font-size: 0.85rem;
+    display: flex; align-items: center; gap: 8px;
   }
   .ake-status.ake-error { color: #b00020; }
   .ake-status.ake-success { color: #107c10; }
   .ake-status.ake-info { color: #555; }
+  .ake-loader {
+    width: 14px; aspect-ratio: 1; flex: none;
+    --_c: no-repeat radial-gradient(farthest-side, #25b09b 92%, #0000);
+    background:
+      var(--_c) top,
+      var(--_c) left,
+      var(--_c) right,
+      var(--_c) bottom;
+    background-size: 4px 4px;
+    animation: ake-loader-spin 1s infinite;
+  }
+  @keyframes ake-loader-spin { to { transform: rotate(.5turn); } }
   .ake-actions {
     display: flex; justify-content: flex-end; gap: 8px; margin-top: 8px;
   }
@@ -131,7 +158,8 @@
       return;
     }
     submitBtn.disabled = true;
-    setStatus('Updating…', 'info');
+    status.innerHTML = '<span class="ake-loader"></span><span>Updating…</span>';
+    status.className = 'ake-status ake-info';
     fetch('/llm/personal_token/update', {
       method: 'POST',
       headers: {'Content-Type': 'application/json'},
@@ -144,7 +172,16 @@
     })
     .then(function (result) {
       if (result.ok && result.body && result.body.ok) {
-        setStatus('Token updated. You can close this window.', 'success');
+        // Some pages (e.g. download_result) re-prime server-side AI caches
+        // (like the issue-time pick) right after a successful token swap —
+        // reload so the page picks up the refreshed session data instead of
+        // showing the stale pre-401 values.
+        if (window.__akeReloadOnSuccess) {
+          setStatus('Token updated. Reloading to refresh AI results…', 'success');
+          setTimeout(function () { window.location.reload(); }, 1200);
+        } else {
+          setStatus('Token updated. You can close this window.', 'success');
+        }
         input.value = '';
       } else {
         var msg = (result.body && result.body.message) || 'Update failed.';
@@ -169,6 +206,21 @@
     } catch (e) {
       console.warn('[api_key_error_modal] socket wiring failed', e);
     }
+  }
+
+  // Polling backstop — the real-time socket emit above can be missed if a
+  // slow synchronous route (Snowflake/network-share/LLM I/O) starved the
+  // socket's keep-alive right when the hook fired. Opt-in, one-shot check
+  // (set window.__akeCheckPendingOnce = true before this include) so pages
+  // that land right after such a flow (e.g. download_result) catch a missed
+  // expiry without polling repeatedly on every page.
+  if (window.__akeCheckPendingOnce) {
+    fetch('/llm/personal_token/pending')
+      .then(function (resp) { return resp.json(); })
+      .then(function (data) {
+        if (data && data.pending) openModal(data);
+      })
+      .catch(function () {});
   }
 })();
 </script>

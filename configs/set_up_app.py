@@ -127,6 +127,12 @@ def _make_personal_token_expired_hook(login: str):
     """
     def _hook():
         sio = getattr(app_config, "socketio", None)
+        # Polling backstop: the real-time emit below can be missed if the
+        # client's socket was starved mid-request (see llm_routes.py's
+        # /personal_token/pending). Set this unconditionally so the next
+        # poll catches it even when nobody was connected at emit time.
+        app_config.personal_token_expired_pending[login] = True
+        print(f"📌 [LLM] personal_token_expired_pending['{login}'] = True")
         if sio is None:
             print("⚠️  [LLM] personal-token expiry hook fired but socketio not ready")
             return

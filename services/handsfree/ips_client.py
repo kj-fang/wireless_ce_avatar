@@ -241,7 +241,11 @@ class IpsClient:
              "private_value": false,     # value meaning Private-to-Intel —
                                          # NOTE: Core_IPS_Public__c is a
                                          # PUBLIC flag, so private == False
-             "extra_fields":  {"Core_IPS_Case_Comment_Source__c": "..."}}
+             "extra_fields":  {"Core_IPS_Case_Comment_Source__c": "..."},
+             # values for PUBLIC posts; required for every extra_fields
+             # entry whose value is private-flavored ("Private to Intel"):
+             "public_extra_fields":
+                 {"Core_IPS_Case_Comment_Type__c": "Public to Customers"}}
         """
         fm = field_map or {}
         body_field = fm.get("body_field") or IpsClient.FIELD_RICH_BODY
@@ -276,12 +280,27 @@ class IpsClient:
                     payload.setdefault(k, v)
         extra = fm.get("extra_fields")
         if isinstance(extra, dict):
+            unset = []
             for k, v in extra.items():
                 # Never stamp private-flavored metadata (e.g. comment type
                 # 'Private to Intel') onto a public customer reply.
                 if not private and isinstance(v, str) and "private" in v.lower():
+                    if k not in payload:
+                        unset.append(k)
                     continue
                 payload.setdefault(k, v)
+            if unset:
+                # A field that marks private posts as private needs an
+                # explicit public value too. Seen live (case 01032011): with
+                # Core_IPS_Case_Comment_Type__c left empty the insert
+                # succeeds, but IPS shows the comment nowhere — the picklist,
+                # not the Public flag, is what the IPS comment feed goes by.
+                raise PostUnsupported(
+                    "No public value configured for " + ", ".join(unset)
+                    + " — add it under rest_field_map.public_extra_fields "
+                    "(e.g. Core_IPS_Case_Comment_Type__c: 'Public to "
+                    "Customers'); refusing to post a customer reply that "
+                    "IPS would not display.")
         return payload
 
     def post_comment(self, case_id: str, rich_body: str, *,

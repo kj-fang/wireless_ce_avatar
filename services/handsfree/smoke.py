@@ -69,13 +69,29 @@ def smoke_soql() -> None:
     fm_pub = dict(fm, extra_fields={
         "Core_IPS_Case_Comment_Type__c": "Private to Intel",
         "Core_IPS_Comment_Author_Type__c": "Agent"})
+    # The comment type marks private posts as private, so a public post needs
+    # its own value: with the type left empty IPS accepts the insert but
+    # shows the comment nowhere (seen live on case 01032011).
+    try:
+        IpsClient.build_comment_payload("500XYZ", "<p>r</p>",
+                                        field_map=fm_pub, private=False)
+        check("S1.g2 public refused without a public comment type", False)
+    except PostUnsupported as e:
+        check("S1.g2 public refused without a public comment type",
+              "Core_IPS_Case_Comment_Type__c" in str(e), str(e))
+    fm_pub["public_extra_fields"] = {
+        "Core_IPS_Case_Comment_Type__c": "Public to Customers"}
     p = IpsClient.build_comment_payload("500XYZ", "<p>r</p>",
                                         field_map=fm_pub, private=False)
     check("S1.g public payload: Public=True explicitly",
           p["Core_IPS_Public__c"] is True, str(p))
-    check("S1.h public payload drops private-flavored extras",
-          "Core_IPS_Case_Comment_Type__c" not in p
+    check("S1.h public payload: public comment type, never the private one",
+          p.get("Core_IPS_Case_Comment_Type__c") == "Public to Customers"
           and p.get("Core_IPS_Comment_Author_Type__c") == "Agent", str(p))
+    p_priv = IpsClient.build_comment_payload("500XYZ", "<p>r</p>", field_map=fm_pub)
+    check("S1.h2 private payload keeps the private comment type",
+          p_priv.get("Core_IPS_Case_Comment_Type__c") == "Private to Intel"
+          and p_priv["Core_IPS_Public__c"] is False, str(p_priv))
     try:
         IpsClient.build_comment_payload("500XYZ", "<p>r</p>",
                                         field_map={"body_field": "B__c"},

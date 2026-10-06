@@ -194,10 +194,17 @@ def smoke_queue(tmp: Path) -> None:
           by_id[rec_log["draft_id"]]["log_dir"] == str(cap.parent)
           and by_id[rec["draft_id"]]["log_dir"] == "",
           str({k: v.get("log_dir") for k, v in by_id.items()}))
+    from .case_reader import normalize_action_owner as nao
+    check("S3.i action owner normalized: intel / customer / unknown",
+          nao("Intel") == "intel" and nao("case owner (Intel FAE)") == "intel"
+          and nao("Customer") == "customer" and nao("partner / OEM") == "customer"
+          and nao("unknown") == "" and nao(None) == ""
+          and by_id[rec["draft_id"]]["action_owner"] == "")
 
 
 # ---------------------------------------------------------------- S4
 def smoke_runner(tmp: Path) -> None:
+    from .composer import CHECKLIST_TAG
     print("[S4] Runner end-to-end (all externals mocked, fake agent)")
     import types
     from configs.global_configs import app_config
@@ -308,6 +315,8 @@ def smoke_runner(tmp: Path) -> None:
         "reasoning": "Comment #2 supersedes the vague description; comment #3 rules out the newer capture.",
         "missing_info": [{"item": "repro_steps",
                           "reason": "no reproduction steps mentioned anywhere"}],
+        "action_owner": "Intel",
+        "next_action": "Intel to analyze repro_logs.7z for the 10:17:30 failure",
     })
     fake_llm = types.SimpleNamespace(
         client=FakeAgentClient(report, report),   # same report either way
@@ -367,6 +376,10 @@ def smoke_runner(tmp: Path) -> None:
               f"chosen={analysis.chosen_attachment}")  # .7z proves non-zip archives pass the pick stage
         check("S4.h Salesforce case id captured",
               analysis.case_id == "500FAKESFID000AAA")
+        check("S4.d2 next action + owner read from the thread, owner normalized",
+              analysis.action_owner == "intel"
+              and analysis.next_action.startswith("Intel to analyze repro_logs.7z"),
+              f"{analysis.action_owner!r} {analysis.next_action!r}")
         check("S4.h2 customer history keeps Partner comments, drops Intel-side ones",
               "Reproduced today at 10:17:30" in analysis.customer_history
               and "INTERNAL" not in analysis.customer_history,
@@ -382,6 +395,14 @@ def smoke_runner(tmp: Path) -> None:
                             analysis=analysis.to_dict())
         check("S4.f draft queued pending_review",
               rec["status"] == "pending_review" and "AP-initiated" in rec["draft_plain"])
+        check("S4.f3 private draft states the next action and its owner",
+              "Next action — Intel (case owner): Intel to analyze repro_logs.7z"
+              in rec["draft_plain"],
+              rec["draft_plain"][:300])
+        slim = next(i for i in store.list_drafts() if i["draft_id"] == rec["draft_id"])
+        check("S4.f4 queue row carries action owner + next action",
+              slim["action_owner"] == "intel"
+              and slim["next_action"].startswith("Intel to analyze"), str(slim))
         check("S4.f2 minor info gap -> best-effort analysis + clarification section",
               analysis.mode == "full"
               and [m["item"] for m in analysis.missing_info] == ["repro_steps"]
@@ -620,6 +641,49 @@ def smoke_runner(tmp: Path) -> None:
         modes = [d.get("mode") for d in store14b.list_drafts(include_closed=True)]
         check("S14.b failed case fetch queues NO customer-facing first response",
               modes == ["error"], str(modes))
+
+        # Ball with the customer: no analysis, no request, no checklist —
+        # one private reviewer note only.
+        cis.CaseService.process_case = staticmethod(_fake_process)
+        waiting_reply = json.loads(reader_reply)
+        waiting_reply.update({
+            "action_owner": "customer",
+            "next_action": "Customer to upload the WRT log Intel asked for in comment #3"})
+        fake_llm.chat = lambda messages, system_content=None: json.dumps(waiting_reply)
+        store14c = HandsfreeStore(tmp / "handsfree_s14c")
+        orch._analyze_and_enqueue(store14c, "01234567")
+        drafts = [store14c.get(d["draft_id"])
+                  for d in store14c.list_drafts(include_closed=True)]
+        a14 = drafts[0]["analysis"] if drafts else {}
+        check("S14.c customer owns the action -> waiting_customer note only, "
+              "pipeline stopped before pick_zip",
+              [d["mode"] for d in drafts] == ["waiting_customer"]
+              and "pick_zip" not in [s["name"] for s in a14.get("stages", [])]
+              and "Waiting on the customer" in drafts[0]["draft_plain"]
+              and "Customer to upload the WRT log" in drafts[0]["draft_plain"]
+              and drafts[0]["confidence"] is None,
+              str([(d["mode"], d["draft_plain"][:80]) for d in drafts]))
+        fake_llm.chat = lambda messages, system_content=None: reader_reply
+
+        # Later round (first response already sent on the case): no second
+        # overview draft, and a request reply carries only its targeted ask.
+        store14d = HandsfreeStore(tmp / "handsfree_s14d")
+        store14d.mark_posted("01234567", comment_id="CMT-FR", first_response=True)
+        orch._analyze_and_enqueue(store14d, "01234567")
+        modes14d = [d.get("mode") for d in store14d.list_drafts(include_closed=True)]
+        cis.CaseService.process_case = staticmethod(_fake_process_no_logs)
+        store14e = HandsfreeStore(tmp / "handsfree_s14e")
+        store14e.mark_posted("01234567", comment_id="CMT-FR", first_response=True)
+        rec14e = orch._analyze_and_enqueue(store14e, "01234567")
+        cis.CaseService.process_case = staticmethod(_fake_process)
+        check("S14.d later round: analysis only (no second overview); request reply "
+              "asks for the logs without the checklist",
+              modes14d == ["full"]
+              and rec14e["mode"] == "request_logs"
+              and "WRT logs" in rec14e["draft_plain"]
+              and "=== General Info ===" not in rec14e["draft_plain"]
+              and CHECKLIST_TAG in rec14e["draft_plain"],
+              f"{modes14d} {rec14e['mode']} {rec14e['draft_plain'][-200:]}")
     finally:
         cis.CaseService.process_case = orig_process
         cis.CaseService.load_case_summary_prompt = orig_prompt
@@ -634,104 +698,177 @@ def smoke_runner(tmp: Path) -> None:
 
 # ---------------------------------------------------------------- S5
 def smoke_orchestrator(tmp: Path) -> None:
-    print("[S5] Approve/post guards (scan failure aborts; marker dedups)")
+    print("[S5] Approve/post policy (first response once per case; analyses per round)")
     from . import orchestrator as orch
     from .composer import AI_MARKER, CHECKLIST_TAG
+    from .ips_client import PostResult
     from .queue import HandsfreeStore
 
     store = HandsfreeStore(tmp / "handsfree_s5")
-    rec = store.enqueue(case_nbr="09999999", case_id="500S5FAKE", subject="s5",
-                        draft_plain=AI_MARKER + "\n\nbody", draft_html="<p>b</p>",
-                        confidence=None, mode="full", analysis={})
-    draft_id = rec["draft_id"]
+    store.save_config({"post_backend": "rest"})   # never the Selenium fallback
 
-    class _ScanBoom:
+    class _Ips:
+        """Configurable fake: comments on the case + post outcome."""
         FIELD_RICH_BODY = "Core_IPS_Rich_Comment__c"
-        def get_case_comments(self, case_id):
-            raise RuntimeError("IPS unreachable")
+        comments: list = []
+        scan_raises = False
+        post_ok = False
+        posted: list = []
 
-    class _HasMarker:
-        FIELD_RICH_BODY = "Core_IPS_Rich_Comment__c"
         def get_case_comments(self, case_id):
-            return [{"Id": "C1",
-                     "Core_IPS_Rich_Comment__c": AI_MARKER + " posted earlier"}]
+            if self.scan_raises:
+                raise RuntimeError("IPS unreachable")
+            return list(self.comments)
+
+        def post_comment(self, case_id, rich_body, **kw):
+            self.posted.append((case_id, kw.get("private")))
+            if self.post_ok:
+                return PostResult(ok=True, backend="rest",
+                                  comment_id=f"CMT{len(self.posted)}")
+            return PostResult(ok=False, backend="rest", error="rest down")
+
+    def enqueue(case, mode, body="body"):
+        tag = ("\n" + CHECKLIST_TAG) if mode in orch._CHECKLIST_MODES else ""
+        return store.enqueue(case_nbr=case, case_id="500" + case, subject="s",
+                             draft_plain=AI_MARKER + tag + "\n\n" + body,
+                             draft_html="<p>b</p>", confidence=None, mode=mode,
+                             analysis={})["draft_id"]
 
     orig_store_fn, orig_ips = orch._store, orch.IpsClient
     try:
         orch._store = lambda: store
-        orch.IpsClient = _ScanBoom
-        res = orch.approve_and_post(draft_id)
-        check("S5.a scan failure aborts the post",
-              res["ok"] is False and "scan failed" in res["error"], str(res))
-        check("S5.b draft still pending_review after abort (retryable)",
-              store.get(draft_id)["status"] == "pending_review")
+        orch.IpsClient = _Ips
 
-        orch.IpsClient = _HasMarker
-        res2 = orch.approve_and_post(draft_id)
-        check("S5.c existing AI comment -> refuse + mark posted",
-              res2["ok"] is False and store.get(draft_id)["status"] == "posted",
-              str(res2))
-        check("S5.d second approve of posted draft refused",
-              orch.approve_and_post(draft_id)["error"] == "draft already posted")
+        # An existing AI analysis comment no longer blocks another analysis
+        # (one per round), and a scan failure never aborts a post.
+        _Ips.comments = [{"Id": "C1", "Core_IPS_Rich_Comment__c": AI_MARKER + " earlier"}]
+        d1 = enqueue("09999999", "full")
+        res = orch.approve_and_post(d1)
+        check("S5.a analysis draft posts even though an AI analysis exists on the case",
+              "already" not in (res.get("error") or "")
+              and store.get(d1)["status"] == "post_failed", str(res))
+        _Ips.scan_raises = True
+        d2 = enqueue("09999998", "first_response")
+        res = orch.approve_and_post(d2)
+        check("S5.b first response: a failed IPS scan is skipped, post attempted",
+              "scan failed" not in (res.get("error") or "")
+              and store.get(d2)["status"] == "post_failed", str(res))
+        _Ips.scan_raises = False
 
-        # Family-aware dedup: an ANALYSIS comment on the case must not block
-        # a first-response draft (and vice versa).
-        rec2 = store.enqueue(case_nbr="09999998", case_id="500S5B", subject="s5b",
-                             draft_plain=AI_MARKER + "\n" + CHECKLIST_TAG + "\n\nbody",
-                             draft_html="<p>b</p>", confidence=None,
-                             mode="first_response", analysis={})
+        # First response once per case, tracked in OUR ledger (reviewers edit
+        # the text, so body markers are not what decides).
+        _Ips.comments, _Ips.post_ok = [], True
+        d3 = enqueue("09999997", "request_logs")
+        res = orch.approve_and_post(d3)
+        check("S5.c first-round request reply posts PUBLIC and records the first response",
+              res["ok"] and _Ips.posted[-1][1] is False
+              and store.first_response_posted("09999997"), str(res))
+        fr_comment_id = (res.get("result") or {}).get("comment_id")
+        d4 = enqueue("09999997", "first_response")
+        res = orch.approve_and_post(d4)
+        check("S5.d second first-response on the case refused + marked posted",
+              res["ok"] is False and "once" in res["error"]
+              and store.get(d4)["status"] == "posted", str(res))
+        check("S5.d2 second approve of a posted draft refused",
+              orch.approve_and_post(d4)["error"] == "draft already posted")
+        d5 = enqueue("09999997", "request_logs")
+        res = orch.approve_and_post(d5)
+        d6 = enqueue("09999997", "full")
+        res6 = orch.approve_and_post(d6)
+        entry = store.ledger_entry("09999997")
+        check("S5.e later-round request reply and analysis both post; first-response "
+              "record keeps the ORIGINAL comment id",
+              res["ok"] and res6["ok"] and _Ips.posted[-1][1] is True
+              and entry["first_response_comment_id"] == fr_comment_id
+              and entry["comment_id"] != fr_comment_id, str(entry))
 
-        class _MarkerNoTag(_HasMarker):
-            def post_comment(self, *a, **k):
-                from .ips_client import PostResult
-                return PostResult(ok=False, backend="rest", error="rest down")
-        orch.IpsClient = _MarkerNoTag
-        res3 = orch.approve_and_post(rec2["draft_id"])
-        check("S5.e analysis-family comment does not block first_response draft",
-              "already exists" not in (res3.get("error") or "")
-              and store.get(rec2["draft_id"])["status"] == "post_failed",
-              str(res3))
-
-        # Reviewer edited both markers away: they are restored before the
-        # scan/post, so later scans still classify the comment correctly.
-        rec3 = store.enqueue(case_nbr="09999997", case_id="500S5C", subject="s5c",
-                             draft_plain=AI_MARKER + "\n" + CHECKLIST_TAG + "\n\nbody",
-                             draft_html="<p>b</p>", confidence=None,
-                             mode="request_logs", analysis={})
-        orch.approve_and_post(rec3["draft_id"], edited_plain="Hello,\nplease send logs")
-        edited = store.get(rec3["draft_id"])["draft_plain"]
+        # Reviewer edited both markers away: restored before the post.
+        _Ips.post_ok = False
+        d7 = enqueue("09999996", "request_logs")
+        orch.approve_and_post(d7, edited_plain="Hello,\nplease send logs")
+        edited = store.get(d7)["draft_plain"]
         check("S5.f edited checklist draft gets AI marker + family tag restored",
               edited.startswith(AI_MARKER + "\n" + CHECKLIST_TAG + "\n\nHello,"),
               edited[:120])
 
-        # A request comment posted before CHECKLIST_TAG existed (AI marker +
-        # fixed template text only) still counts as first-response family.
-        class _LegacyRequest(_MarkerNoTag):
-            def get_case_comments(self, case_id):
-                return [{"Id": "C9", "Core_IPS_Rich_Comment__c":
-                         "<p>" + AI_MARKER + "<br/><br/>Hello,<br/>To root-cause it "
-                         "we need the Intel wireless driver WRT logs covering the "
-                         "failure</p>"}]
-        orch.IpsClient = _LegacyRequest
-        rec4 = store.enqueue(case_nbr="09999996", case_id="500S5D", subject="s5d",
-                             draft_plain=AI_MARKER + "\n" + CHECKLIST_TAG + "\n\nbody",
-                             draft_html="<p>b</p>", confidence=None,
-                             mode="first_response", analysis={})
-        res4 = orch.approve_and_post(rec4["draft_id"])
-        rec5 = store.enqueue(case_nbr="09999995", case_id="500S5E", subject="s5e",
-                             draft_plain=AI_MARKER + "\n\nanalysis",
-                             draft_html="<p>a</p>", confidence=None,
-                             mode="full", analysis={})
-        store.save_config({"post_backend": "rest"})   # no Selenium fallback
-        res5 = orch.approve_and_post(rec5["draft_id"])
-        check("S5.g legacy untagged request comment blocks a second first "
-              "response, not the analysis draft",
-              "already exists" in (res4.get("error") or "")
-              and "already exists" not in (res5.get("error") or ""),
-              f"{res4.get('error')} | {res5.get('error')}")
+        # Overview posted before the ledger tracked it (legacy, untagged
+        # request template): the IPS scan backfills the ledger once.
+        _Ips.comments = [{"Id": "C9", "Core_IPS_Rich_Comment__c":
+                          "<p>" + AI_MARKER + "<br/><br/>Hello,<br/>To root-cause it "
+                          "we need the Intel wireless driver WRT logs covering the "
+                          "failure</p>"}]
+        d8 = enqueue("09999995", "first_response")
+        res = orch.approve_and_post(d8)
+        check("S5.g legacy request comment counts as the first response (ledger backfilled)",
+              res["ok"] is False and "once" in res["error"]
+              and store.ledger_entry("09999995").get("first_response_comment_id") == "C9",
+              str(res))
     finally:
         orch._store = orig_store_fn
         orch.IpsClient = orig_ips
+
+
+# ---------------------------------------------------------------- S16
+def smoke_auto_scan(tmp: Path) -> None:
+    print("[S16] Automatic analysis: work selection + schedule timing")
+    from datetime import datetime, timezone
+    from .ips_client import (CaseRef, build_open_cases_soql,
+                             build_customer_updates_soql)
+    from .orchestrator import select_auto_work, _parse_iso
+    from .scheduler import next_run_after
+
+    q = build_open_cases_soql("O'Neil")
+    check("S16.a open-cases SOQL: owner escaped, open only, newest activity first",
+          "Owner.Name = 'O\\'Neil'" in q and "IsClosed = false" in q
+          and "ORDER BY LastModifiedDate DESC" in q, q)
+    q2 = build_customer_updates_soql(["500A", "500B"], "2026-10-05T00:00:00Z")
+    check("S16.b customer-updates SOQL: bounded by case ids, time and customer authors",
+          "IN ('500A', '500B')" in q2 and "CreatedDate > 2026-10-05T00:00:00Z" in q2
+          and "'Partner'" in q2 and "'Agent'" not in q2, q2)
+    try:
+        build_customer_updates_soql(["500A"], "yesterday")
+        check("S16.c bad since rejected", False)
+    except ValueError:
+        check("S16.c bad since rejected", True)
+
+    since = "2026-10-05T00:00:00Z"
+    cases = [
+        CaseRef("1", "500N", "new case", created="2026-10-05T08:00:00.000+0000"),
+        CaseRef("2", "500U", "updated", created="2026-09-01T08:00:00.000+0000"),
+        CaseRef("3", "500S", "same update again", created="2026-09-01T08:00:00.000+0000"),
+        CaseRef("4", "500Q", "quiet old case", created="2026-09-01T08:00:00.000+0000"),
+        CaseRef("5", "500O", "update older than our analysis", created="2026-09-01T08:00:00.000+0000"),
+    ]
+    updates = {"500U": "2026-10-05T12:00:00.000+0000",
+               "500S": "2026-10-05T11:00:00.000+0000",
+               "500O": "2026-10-05T09:00:00.000+0000"}
+    ledger = {
+        "2": {"analyzed_at": "2026-10-04T10:00:00+08:00"},
+        "3": {"analyzed_at": "2026-10-05T20:00:00+08:00",
+              "last_customer_update": "2026-10-05T11:00:00.000+0000"},
+        "4": {"analyzed_at": "2026-09-02T10:00:00+08:00"},
+        "5": {"analyzed_at": "2026-10-05T19:00:00+08:00"},   # = 11:00Z, after 09:00Z
+    }
+    work = select_auto_work(cases, updates, lambda n: ledger.get(n), since)
+    check("S16.d work = customer update newer than our analysis + new case, newest first; "
+          "repeated/old updates and quiet cases skipped",
+          [(w[0].case_nbr, w[1].split(" at ")[0]) for w in work]
+          == [("2", "customer update"), ("1", "new case")],
+          str([(w[0].case_nbr, w[1]) for w in work]))
+    check("S16.e ISO parsing: Salesforce +0000, Z, local offsets, garbage",
+          _parse_iso("2026-10-05T10:07:12.000+0000") == _parse_iso("2026-10-05T10:07:12Z")
+          and _parse_iso("2026-10-05T18:07:12+08:00") == _parse_iso("2026-10-05T10:07:12Z")
+          and _parse_iso("nope") is None and _parse_iso("") is None)
+
+    tz = timezone.utc
+    t = datetime(2026, 10, 6, 9, 30, tzinfo=tz)
+    check("S16.f schedule: nightly -> next 23:00 (same day before, next day after); "
+          "4h/8h start now, then +interval",
+          next_run_after("nightly", t) == datetime(2026, 10, 6, 23, 0, tzinfo=tz)
+          and next_run_after("nightly", datetime(2026, 10, 6, 23, 5, tzinfo=tz))
+          == datetime(2026, 10, 7, 23, 0, tzinfo=tz)
+          and next_run_after("4h", t, first=True) == t
+          and next_run_after("8h", t) == datetime(2026, 10, 6, 17, 30, tzinfo=tz))
 
 
 # ---------------------------------------------------------------- S6
@@ -1328,6 +1465,7 @@ def run_smoke() -> int:
         smoke_env_detail()
         smoke_checklist()
         smoke_checklist_convert(tmp)
+        smoke_auto_scan(tmp)
     finally:
         shutil.rmtree(tmp, ignore_errors=True)
     print(f"\nsmoke result: {'ALL PASS' if not PASS_FAIL else 'FAILURES: ' + ', '.join(PASS_FAIL)}")

@@ -51,6 +51,50 @@ def status():
     return jsonify(orchestrator.get_run_state())
 
 
+# ---------- automatic analysis (scheduler) ----------
+
+@handsfree_bp.record_once
+def _resume_scheduler(_state):
+    """After an app restart, resume a previously enabled schedule without
+    waiting for someone to open the page. The thread reads the config on
+    every tick, so a not-yet-booted app_config just means a skipped tick."""
+    try:
+        from services.handsfree import scheduler
+        scheduler.ensure_started()
+    except Exception as e:
+        print(f"[handsfree] scheduler not started: {e}")
+
+
+@handsfree_bp.route("/auto", methods=["GET", "POST"])
+def auto_check():
+    from services.handsfree import scheduler
+    if request.method == "GET":
+        return jsonify(scheduler.status())
+    body = request.get_json(silent=True) or {}
+    try:
+        return jsonify(scheduler.configure(
+            enabled=bool(body.get("enabled")),
+            mode=str(body.get("mode") or "nightly"),
+            max_cases=body.get("max_cases")))
+    except ValueError as e:
+        return jsonify({"ok": False, "error": str(e)}), 400
+
+
+@handsfree_bp.route("/auto/run_now", methods=["POST"])
+def auto_run_now():
+    """One automatic round right away (same scan the schedule performs)."""
+    import threading
+    from services.handsfree import scheduler
+    if orchestrator._run_lock.locked():
+        return jsonify({"ok": False, "error": "a run is already in progress"})
+    cfg = _store().load_config()
+    if not (cfg.get("owner_name") or "").strip():
+        return jsonify({"ok": False, "error": "no owner name configured"})
+    threading.Thread(target=scheduler.run_once, kwargs={"trigger": "manual"},
+                     daemon=True, name="handsfree-auto-now").start()
+    return jsonify({"ok": True})
+
+
 # ---------- queue ----------
 
 @handsfree_bp.route("/queue")

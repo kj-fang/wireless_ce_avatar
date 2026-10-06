@@ -205,7 +205,8 @@ class CaseAnalysis:
     case_nbr: str
     case_id: str = ""                # Salesforce 18-char id (for posting)
     ok: bool = False
-    mode: str = ""                   # full | triage_only | error
+    mode: str = ""                   # full | triage_only | error | request_logs |
+                                     #   request_info | first_response | waiting_customer
     subject: str = ""
     description: str = ""
     clean_description: str = ""
@@ -233,6 +234,10 @@ class CaseAnalysis:
     checklist_fills: dict = field(default_factory=dict)  # pre-filled first-response items
     customer_history: str = ""                         # customer-authored comments only
                                                        #   (safe source for public fills)
+    action_owner: str = ""                             # who acts next: intel | customer | ""
+    next_action: str = ""                              # reader's one-sentence next step
+    first_response_done: bool = False                  # overview checklist already sent on
+                                                       #   this case (later rounds skip it)
     error: str = ""
 
     @property
@@ -356,11 +361,18 @@ class HandsfreeRunner:
                     analysis.clean_description = reader["clean_description"]
                 if reader.get("issue_times"):
                     analysis.issue_times = reader["issue_times"][:max_incidents]
+                analysis.action_owner = reader.get("action_owner") or ""
+                analysis.next_action = reader.get("next_action") or ""
                 self.progress(
                     "read_case_history",
                     f"issue_times={reader.get('issue_times')} "
                     f"attachment={reader.get('attachment_name') or '(none)'} "
                     f"({reader.get('issue_time_source') or 'no source'})")
+                if analysis.next_action:
+                    self.progress(
+                        "read_case_history",
+                        f"next action [{analysis.action_owner or 'owner unknown'}]: "
+                        f"{analysis.next_action}")
 
         # Upgrade the provisional domain with the reader's informed pick
         # (a reader "Others" never shadows a specific subcategory domain).
@@ -372,6 +384,21 @@ class HandsfreeRunner:
         # resolved inside checklist.build_fills at compose time.
         analysis.issue_subcategory = str(
             (analysis.case_reader or {}).get("issue_subcategory") or "")
+
+        # Ball with the customer (Intel already asked for logs / info / repro
+        # and nothing came back): nothing to analyze and nothing to ask.
+        # Policy (2026-10-06): note it for the reviewer and stop here — no
+        # analysis, no request reply, no first-response checklist.
+        if analysis.action_owner == "customer":
+            with self._stage(analysis, "check_case_info"):
+                self.progress("check_case_info",
+                              "waiting on the customer — analysis and "
+                              f"requests skipped ({analysis.next_action})")
+            analysis.mode = "waiting_customer"
+            analysis.ok = True
+            analysis.error = ("waiting on the customer — analysis and "
+                              "request replies skipped")
+            return analysis
 
         # -- 3a. is the case information usable? -------------------------------
         # LLM-judged completeness (description clarity / issue time / repro
@@ -402,6 +429,21 @@ class HandsfreeRunner:
                 "check_case_info",
                 ("missing/unclear: " + ", ".join(m["item"] for m in missing))
                 if missing else "all case info present")
+            # Ball with Intel (customer provided logs/info, or asked): say
+            # explicitly what the LATEST provided material is before the
+            # gates below — any gap falls into the same request_info /
+            # request_logs rules as a fresh case.
+            if analysis.action_owner == "intel":
+                archives = [str(a[0]) for a in (case_ctx.attachment_list or [])
+                            if str(a[0]).lower().endswith(_ARCHIVE_EXTS)]
+                nominated = (analysis.case_reader or {}).get("attachment_name") or ""
+                self.progress(
+                    "check_case_info",
+                    "Intel to act — latest provided info: issue time "
+                    + (f"{analysis.issue_times[0]}" if analysis.issue_times else "MISSING")
+                    + "; log archive "
+                    + (f"{nominated}" if nominated else
+                       (f"newest of {len(archives)}" if archives else "MISSING")))
 
         # Severe gap: neither an understandable description nor an issue time
         # — there is nothing to anchor an analysis on. Draft a request-info

@@ -148,6 +148,17 @@
     .controls.tight { margin-bottom: 0; }
     .divider { border-top: 1px solid var(--border); padding-top: 14px; }
 
+    /* ---------- step-1 tabs ---------- */
+    .tabs { display: flex; gap: 2px; border-bottom: 1px solid var(--border); margin: 0 0 14px; }
+    .tab { background: transparent; border: none; color: var(--muted); padding: 8px 14px;
+           font-size: 13.5px; font-weight: 600; cursor: pointer; border-radius: 6px 6px 0 0;
+           border-bottom: 2px solid transparent; margin-bottom: -1px;
+           transition: color 200ms var(--ease), border-color 200ms var(--ease); }
+    .tab:hover { color: var(--fg); }
+    .tab.active { color: var(--fg); border-bottom-color: var(--accent); }
+    .hint { font-size: 12.5px; color: var(--faint); line-height: 1.55; max-width: 760px;
+            margin-bottom: 12px; }
+
     /* ---------- settings ---------- */
     #settings-panel { padding-top: 15px; padding-bottom: 15px; }
     #settings-panel h3 { cursor: pointer; user-select: none; margin-bottom: 0; color: var(--muted);
@@ -247,34 +258,65 @@
 
   <div class="panel">
     <div class="eyebrow">Step 1 · Detect &amp; analyze</div>
-    <h3>Check for new cases</h3>
-    <div class="controls">
-      <label>Case owner:
-        <input type="text" id="owner-name" value="{{ config.owner_name or '' }}"
-               placeholder="e.g. Charles P Chu" style="width: 220px;">
-      </label>
-      <button class="primary" id="check-btn" onclick="checkNow()">
-        <svg width="11" height="11" viewBox="0 0 24 24" fill="currentColor" aria-hidden="true">
-          <path d="M6 4.5l14 7.5-14 7.5z" /></svg>
-        Check for new cases</button>
-      <span class="status-line" id="run-status">idle</span>
-      <span class="status-line" style="margin-left:auto;">
-        posting backend: <b id="backend-name">{{ config.post_backend }}</b>
-        <span id="dry-run-badge" class="pill warn"
-              {% if not config.dry_run %}style="display:none;"{% endif %}>DRY RUN — posting disabled</span>
-      </span>
+    <div class="tabs" role="tablist">
+      <button class="tab active" id="tab-btn-new" role="tab" onclick="showTab('new')">Check for new cases</button>
+      <button class="tab" id="tab-btn-auto" role="tab" onclick="showTab('auto')">Start automatic analysis</button>
     </div>
-    <div class="controls divider">
-      <label>…or analyze one specific case:
-        <input type="text" id="case-nbr" placeholder="IPS case number, e.g. 01009610"
-               style="width: 210px; font-family: var(--mono); font-size: 12.5px;"
-               onkeydown="if(event.key==='Enter')runCase()">
-      </label>
-      <button class="primary" id="run-case-btn" onclick="runCase()"
-              title="Runs the full pipeline for this one case regardless of owner/date">
-        <svg width="11" height="11" viewBox="0 0 24 24" fill="currentColor" aria-hidden="true">
-          <path d="M6 4.5l14 7.5-14 7.5z" /></svg>
-        Analyze this case</button>
+    <div id="tab-new">
+      <div class="controls">
+        <label>Case owner:
+          <input type="text" id="owner-name" value="{{ config.owner_name or '' }}"
+                 placeholder="e.g. Charles P Chu" style="width: 220px;">
+        </label>
+        <button class="primary" id="check-btn" onclick="checkNow()">
+          <svg width="11" height="11" viewBox="0 0 24 24" fill="currentColor" aria-hidden="true">
+            <path d="M6 4.5l14 7.5-14 7.5z" /></svg>
+          Check for new cases</button>
+        <span class="status-line" id="run-status">idle</span>
+        <span class="status-line" style="margin-left:auto;">
+          posting backend: <b id="backend-name">{{ config.post_backend }}</b>
+          <span id="dry-run-badge" class="pill warn"
+                {% if not config.dry_run %}style="display:none;"{% endif %}>DRY RUN — posting disabled</span>
+        </span>
+      </div>
+      <div class="controls divider">
+        <label>…or analyze one specific case:
+          <input type="text" id="case-nbr" placeholder="IPS case number, e.g. 01009610"
+                 style="width: 210px; font-family: var(--mono); font-size: 12.5px;"
+                 onkeydown="if(event.key==='Enter')runCase()">
+        </label>
+        <button class="primary" id="run-case-btn" onclick="runCase()"
+                title="Runs the full pipeline for this one case regardless of owner/date">
+          <svg width="11" height="11" viewBox="0 0 24 24" fill="currentColor" aria-hidden="true">
+            <path d="M6 4.5l14 7.5-14 7.5z" /></svg>
+          Analyze this case</button>
+      </div>
+    </div>
+    <div id="tab-auto" style="display:none;">
+      <div class="hint">Each round looks at the open IPS cases of the case owner (from Settings) for
+        either new cases OR new customer comments since the previous round (one of the two is enough), runs the handsfree pipeline
+        for each, and queues the drafts below for review. Nothing is posted automatically — Approve
+        still decides.</div>
+      <div class="controls">
+        <label>Case owner: <b id="auto-owner" style="color: var(--fg);">{{ config.owner_name or '—' }}</b></label>
+        <label>Frequency:
+          <select id="auto-mode">
+            <option value="4h">Every 4 hours</option>
+            <option value="8h">Every 8 hours</option>
+            <option value="nightly">Once overnight (11 PM)</option>
+          </select>
+        </label>
+        <label>Max cases per round:
+          <input type="number" id="auto-max" min="1" max="50" step="1" value="10" style="width: 64px;">
+        </label>
+        <button class="primary" id="auto-toggle-btn" onclick="toggleAuto()">
+          <svg width="11" height="11" viewBox="0 0 24 24" fill="currentColor" aria-hidden="true">
+            <path d="M6 4.5l14 7.5-14 7.5z" /></svg>
+          <span id="auto-toggle-text">Start automatic analysis</span></button>
+        <button class="ghost" id="auto-run-btn" onclick="autoRunNow()"
+                title="Run one round right now with the settings above">Run now</button>
+        <span class="status-line" id="auto-status"></span>
+      </div>
     </div>
     <div class="row" id="progress-row">
       <div class="col log-col">
@@ -309,7 +351,7 @@
     <table id="queue-table">
       <thead><tr>
         <th>Case</th><th>Subject</th><th>Mode</th><th>Confidence</th>
-        <th>Status</th><th>Created</th><th>Decoded log</th>
+        <th>Status</th><th>Action owner</th><th>Created</th><th>Decoded log</th>
       </tr></thead>
       <tbody></tbody>
     </table>
@@ -365,6 +407,7 @@
 
   function fillConfigForm(cfg) {
     document.getElementById('cfg-owner').value = cfg.owner_name || '';
+    document.getElementById('auto-owner').textContent = cfg.owner_name || '—';
     document.getElementById('cfg-max-cases').value = cfg.max_cases_per_run ?? 3;
     document.getElementById('cfg-dry-run').checked = !!cfg.dry_run;
     document.getElementById('cfg-backend').value = cfg.post_backend || 'auto';
@@ -431,8 +474,82 @@
     }
   }
 
+  // ---------- step-1 tabs + automatic analysis ----------
+
+  function showTab(name) {
+    ['new', 'auto'].forEach(t => {
+      document.getElementById('tab-' + t).style.display = t === name ? '' : 'none';
+      document.getElementById('tab-btn-' + t).classList.toggle('active', t === name);
+    });
+    if (name === 'auto') loadAuto();
+  }
+
+  let autoEnabled = false;
+
+  function renderAuto(a) {
+    if (!a || a.error) {
+      document.getElementById('auto-status').textContent = a && a.error ? 'unavailable: ' + a.error : '';
+      return;
+    }
+    autoEnabled = !!a.enabled;
+    const modeSel = document.getElementById('auto-mode');
+    if (document.activeElement !== modeSel) modeSel.value = a.mode || 'nightly';
+    const maxEl = document.getElementById('auto-max');
+    if (document.activeElement !== maxEl) maxEl.value = a.max_cases || 10;
+    document.getElementById('auto-toggle-text').textContent =
+      autoEnabled ? 'Stop automatic analysis' : 'Start automatic analysis';
+    document.getElementById('auto-toggle-btn').className = autoEnabled ? 'danger' : 'primary';
+    const bits = [];
+    bits.push(autoEnabled ? 'ON · ' + (a.mode_label || a.mode) : 'off');
+    if (autoEnabled && a.next_run_at) bits.push('next round ' + a.next_run_at.slice(0, 16).replace('T', ' '));
+    if (a.last_scan_at) bits.push('last round ' + a.last_scan_at.slice(0, 16).replace('T', ' ') + ' UTC');
+    if (a.last_result) bits.push(a.last_result);
+    if (a.running) bits.push('running now');
+    const el = document.getElementById('auto-status');
+    el.textContent = bits.join(' · ');
+    el.className = 'status-line ' + (a.running ? 'running' : autoEnabled ? 'done' : '');
+  }
+
+  async function loadAuto() {
+    try {
+      const r = await fetch('/handsfree/auto');
+      renderAuto(await r.json());
+    } catch (e) {
+      document.getElementById('auto-status').textContent = 'status unavailable: ' + e;
+    }
+  }
+
+  async function toggleAuto() {
+    const body = {
+      enabled: !autoEnabled,
+      mode: document.getElementById('auto-mode').value,
+      max_cases: parseInt(document.getElementById('auto-max').value, 10) || 10,
+    };
+    const r = await fetch('/handsfree/auto', {
+      method: 'POST', headers: {'Content-Type': 'application/json'},
+      body: JSON.stringify(body),
+    });
+    const j = await r.json();
+    if (j.error) { alert('Failed: ' + j.error); return; }
+    renderAuto(j);
+    if (j.enabled && j.mode !== 'nightly') startPolling();   // interval modes run right away
+  }
+
+  async function autoRunNow() {
+    setRunButtons(true);
+    const r = await fetch('/handsfree/auto/run_now', {method: 'POST'});
+    const j = await r.json();
+    if (!j.ok) {
+      alert('Failed to start: ' + (j.error || 'unknown'));
+      setRunButtons(false);
+      return;
+    }
+    stageCasePinned = null;
+    startPolling();
+  }
+
   function setRunButtons(disabled) {
-    ['check-btn', 'run-case-btn'].forEach(id => {
+    ['check-btn', 'run-case-btn', 'auto-run-btn'].forEach(id => {
       const el = document.getElementById(id);
       if (el) el.disabled = disabled;
     });
@@ -577,12 +694,15 @@
     }).join('');
     log.scrollTop = log.scrollHeight;
     renderStageTable(s.events);
+    if (s.auto) renderAuto(s.auto);
     if (s.status !== 'running') {
       setRunButtons(false);
       if (pollTimer && s.status !== 'idle') { clearInterval(pollTimer); pollTimer = null; }
       if (s.status === 'done') loadQueue();
     }
   }
+
+  const ACTION_OWNER_TEXT = {intel: 'Intel (case owner)', customer: 'Customer'};
 
   async function loadQueue() {
     const showClosed = document.getElementById('show-closed').checked;
@@ -602,6 +722,11 @@
         `<td><span class="pill">${esc(it.mode || '')}</span></td>` +
         `<td>${it.confidence != null ? it.confidence + '/100' : '—'}</td>` +
         `<td><span class="pill dot ${statusCls}">${esc(it.status)}</span></td>` +
+        // Who acts next, as read from the comment thread (hover = the step).
+        (it.action_owner
+          ? `<td><span class="pill ${it.action_owner === 'intel' ? 'warn' : ''}" ` +
+            `title="${esc(it.next_action || '')}">${esc(ACTION_OWNER_TEXT[it.action_owner] || it.action_owner)}</span></td>`
+          : `<td style="color:var(--faint);">—</td>`) +
         `<td>${esc((it.created_at || '').slice(0, 16))}</td>` +
         // Only cases whose WRT log was decoded (decode_etl reached) have one.
         (it.log_dir
@@ -619,7 +744,7 @@
       tbody.appendChild(tr);
     });
     if (!(j.items || []).length) {
-      tbody.innerHTML = '<tr><td colspan="7" style="color:var(--muted);">queue is empty — run a check above</td></tr>';
+      tbody.innerHTML = '<tr><td colspan="8" style="color:var(--muted);">queue is empty — run a check above</td></tr>';
     }
   }
 
@@ -653,6 +778,12 @@
     if (['request_logs', 'request_info', 'first_response'].includes(analysis.mode)) {
       chips.push({label: 'visibility', text: 'public reply to customer', cls: 'warn',
                   title: 'Approving posts this as a customer-visible comment (not Private to Intel)'});
+    }
+    if (analysis.next_action) {
+      chips.push({label: 'next action',
+                  text: (ACTION_OWNER_TEXT[analysis.action_owner] || 'owner unclear') + ' — ' + analysis.next_action,
+                  cls: analysis.action_owner === 'intel' ? 'warn' : '',
+                  title: 'Summarized from the IPS comment thread in time order'});
     }
     if (analysis.issue_domain) {
       const sub = (analysis.issue_subcategory && analysis.issue_subcategory !== analysis.issue_domain)
@@ -775,6 +906,7 @@
   loadConfig();
   loadQueue();
   refreshStatus();
+  loadAuto();
 </script>
 </body>
 </html>

@@ -97,21 +97,38 @@ class HandsfreeStore:
     def is_processed(self, case_nbr: str) -> bool:
         return str(case_nbr) in self._load_ledger()
 
-    def mark_analyzed(self, case_nbr: str, draft_id: str) -> None:
+    def ledger_entry(self, case_nbr: str) -> dict:
+        return dict(self._load_ledger().get(str(case_nbr)) or {})
+
+    def _update_ledger(self, case_nbr: str, **fields) -> None:
         with _LOCK:
             ledger = self._load_ledger()
             entry = ledger.get(str(case_nbr), {})
-            entry.update({"analyzed_at": _now_iso(), "draft_id": draft_id})
+            entry.update(fields)
             ledger[str(case_nbr)] = entry
             self._save_ledger(ledger)
 
-    def mark_posted(self, case_nbr: str, comment_id: str = "") -> None:
-        with _LOCK:
-            ledger = self._load_ledger()
-            entry = ledger.get(str(case_nbr), {})
-            entry.update({"posted_at": _now_iso(), "comment_id": comment_id})
-            ledger[str(case_nbr)] = entry
-            self._save_ledger(ledger)
+    def mark_analyzed(self, case_nbr: str, draft_id: str) -> None:
+        self._update_ledger(case_nbr, analyzed_at=_now_iso(), draft_id=draft_id)
+
+    def mark_customer_update(self, case_nbr: str, update_iso: str) -> None:
+        """Remember the customer comment (IPS CreatedDate) a round was run
+        for, so the auto-scan does not re-run the same update."""
+        self._update_ledger(case_nbr, last_customer_update=update_iso)
+
+    def mark_posted(self, case_nbr: str, comment_id: str = "",
+                    first_response: bool = False) -> None:
+        """Record a post. The first customer-facing overview (checklist /
+        request reply carrying it) is remembered separately: it is sent at
+        most ONCE per case, while analyses may post once per round."""
+        fields = {"posted_at": _now_iso(), "comment_id": comment_id}
+        if first_response and not self.first_response_posted(case_nbr):
+            fields.update({"first_response_posted_at": _now_iso(),
+                           "first_response_comment_id": comment_id})
+        self._update_ledger(case_nbr, **fields)
+
+    def first_response_posted(self, case_nbr: str) -> bool:
+        return bool(self.ledger_entry(case_nbr).get("first_response_posted_at"))
 
     # ------------------------------------------------------------------
     # queue
@@ -198,6 +215,9 @@ class HandsfreeStore:
                      "case_nbr", "case_id", "subject", "mode", "confidence",
                      "post_result")}
             slim["log_dir"] = decoded_log_dir(rec)
+            analysis = rec.get("analysis") or {}
+            slim["action_owner"] = str(analysis.get("action_owner") or "")
+            slim["next_action"] = str(analysis.get("next_action") or "")
             out.append(slim)
             if len(out) >= limit:
                 break

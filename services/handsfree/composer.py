@@ -112,6 +112,10 @@ def _checklist_fills(analysis: CaseAnalysis) -> dict:
 
 
 def _checklist_body(analysis: CaseAnalysis) -> list[str]:
+    """The pre-filled domain checklist — the customer gets it ONCE per case
+    (first round); later request replies carry only their targeted ask."""
+    if getattr(analysis, "first_response_done", False):
+        return []
     from .checklist import FALLBACK_DOMAIN, render_checklist_body
     domain = getattr(analysis, "issue_domain", "") or FALLBACK_DOMAIN
     return render_checklist_body(domain, _checklist_fills(analysis),
@@ -142,7 +146,9 @@ def _request_info_lines(analysis: CaseAnalysis) -> list[str]:
         "case. Could you please provide:",
     ]
     parts += _info_ask_bullets(analysis)
-    parts += [""] + _checklist_body(analysis)
+    checklist = _checklist_body(analysis)
+    if checklist:
+        parts += [""] + checklist
     parts += ["",
               "We will proceed with the analysis as soon as this information "
               "is available. Thank you!"]
@@ -192,7 +198,9 @@ def _request_logs_lines(analysis: CaseAnalysis) -> list[str]:
         parts += ["",
                   "In addition, to speed up the analysis please also provide:"]
         parts += info
-    parts += [""] + _checklist_body(analysis)
+    checklist = _checklist_body(analysis)
+    if checklist:
+        parts += [""] + checklist
     parts += ["", tail]
     return parts
 
@@ -217,6 +225,20 @@ def compose_plain(analysis: CaseAnalysis) -> str:
             text = text.replace("\n\n\n", "\n\n")
         return text.strip() + "\n"
 
+    if analysis.mode == "waiting_customer":
+        # Private reviewer note only: the thread shows Intel is waiting on
+        # the customer, so no analysis ran and no request was drafted.
+        parts += [
+            f"Case {analysis.case_nbr}"
+            + (f" — {analysis.subject}" if analysis.subject else ""),
+            "Waiting on the customer — no analysis run, no request sent.",
+            f"Next action — customer: {analysis.next_action or '(not stated)'}",
+            "The issue-time / log checks run once the customer replies.",
+            "",
+            _FOOTER,
+        ]
+        return "\n".join(parts).strip() + "\n"
+
     # Time-coverage warning first — the reviewer must see it before the
     # findings, because findings from a log that does not cover the reported
     # issue time may describe a DIFFERENT occurrence.
@@ -231,6 +253,15 @@ def compose_plain(analysis: CaseAnalysis) -> str:
             "a WRT log captured at the issue time.",
             "",
         ]
+
+    # Where the case stands after reading the comment thread: who acts next
+    # and what the step is (reader output; Private-to-Intel drafts only).
+    next_action = getattr(analysis, "next_action", "") or ""
+    if next_action:
+        from .case_reader import ACTION_OWNER_LABELS
+        who = ACTION_OWNER_LABELS.get(getattr(analysis, "action_owner", ""),
+                                      "owner unclear")
+        parts += [f"Next action — {who}: {next_action}", ""]
 
     # Case-info gaps that didn't block the analysis: give the reviewer a
     # forwardable clarification request (this draft posts Private-to-Intel).

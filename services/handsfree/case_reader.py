@@ -17,6 +17,7 @@ pick_etl + agent prompts.
 from __future__ import annotations
 
 import json
+import re
 from typing import Any, Optional
 
 # Caps so a comment-heavy case can't blow the prompt.
@@ -66,6 +67,18 @@ Your tasks:
     When the chosen domain has sub-categories, also pick the ONE
     "issue_subcategory" that fits best (empty string for other domains):
 {subcats_block}
+ 6. From the LATEST state of the thread, state the NEXT ACTION on the case
+    in one sentence and who owns it. Comment authors tagged [Partner],
+    [Customer], [Partner - ...] are the customer side; [Agent] and [FAE]
+    are Intel (the case owner).
+    - "action_owner": "intel" when Intel must act next (e.g. the customer
+      has provided the requested logs/information or asked a question that
+      is still unanswered); "customer" when Intel is waiting on the
+      customer (e.g. Intel asked for logs/repro/time and nothing came
+      back yet); "unknown" when the thread does not tell.
+    - "next_action": e.g. "Intel to analyze the WRT log uploaded in
+      comment #4 for the 10:17 failure" or "Customer to provide the
+      failure time and WRT logs Intel asked for in comment #2".
 
 Output ONLY a valid JSON object (no markdown, no code fences):
 {{
@@ -78,7 +91,9 @@ Output ONLY a valid JSON object (no markdown, no code fences):
   "missing_info": [{{"item": "issue_description|issue_time|repro_steps",
                      "reason": "<one short sentence why it is missing/unclear>"}}],
   "issue_domain": "<one domain name from the list, verbatim>",
-  "issue_subcategory": "<sub-category name, or ''>"
+  "issue_subcategory": "<sub-category name, or ''>",
+  "action_owner": "<'intel' | 'customer' | 'unknown'>",
+  "next_action": "<one sentence>"
 }}
 
 === SUBJECT ===
@@ -96,6 +111,20 @@ Output ONLY a valid JSON object (no markdown, no code fences):
 === ATTACHMENTS (candidate log uploads) ===
 {attachments_block}
 """
+
+
+ACTION_OWNER_LABELS = {"intel": "Intel (case owner)", "customer": "customer"}
+
+
+def normalize_action_owner(raw: Any) -> str:
+    """'intel' | 'customer' | '' (unknown) from the reader's free-form value
+    ('Intel', 'case owner', 'OEM', 'partner' ... all tolerated)."""
+    low = str(raw or "").strip().lower()
+    if any(k in low for k in ("intel", "agent", "case owner", "fae")):
+        return "intel"
+    if any(k in low for k in ("customer", "partner", "oem", "odm")):
+        return "customer"
+    return ""
 
 
 def _normalize_comments(comments: Any) -> list[dict]:
@@ -270,6 +299,8 @@ def read_case_history(llm, *, subject: str, description: str,
                         "reason": str(entry.get("reason") or "").strip()[:200]})
 
     return {
+        "action_owner": normalize_action_owner(res.get("action_owner")),
+        "next_action": re.sub(r"\s+", " ", str(res.get("next_action") or "")).strip()[:300],
         "clean_description": str(res.get("clean_description") or "").strip(),
         "issue_times": times[:3],
         "issue_time_source": str(res.get("issue_time_source") or ""),

@@ -88,6 +88,42 @@ def build_new_cases_soql(owner_name: str, since_iso: Optional[str] = None,
     )
 
 
+# Comment author types written by the customer side (Snowflake / REST share
+# the picklist): an "update from the customer" is a comment by one of these.
+CUSTOMER_AUTHOR_TYPES = ("Partner", "Customer", "Partner - Agent", "Partner - DFAE")
+
+
+def build_open_cases_soql(owner_name: str, limit: int = 200) -> str:
+    """Open cases owned by `owner_name`, most recently modified first."""
+    return (
+        "SELECT Id, CaseNumber, Subject, Status, CreatedDate, Owner.Name "
+        "FROM Case "
+        f"WHERE Owner.Name = '{_soql_quote(owner_name)}' AND IsClosed = false "
+        "ORDER BY LastModifiedDate DESC "
+        f"LIMIT {int(limit)}"
+    )
+
+
+def build_customer_updates_soql(case_ids: list[str], since_iso: str,
+                                limit: int = 500) -> str:
+    """Customer-side comments on the given cases created after `since_iso`
+    (ISO-8601 UTC). Bounded by case ids AND time so the huge comment table
+    stays selective."""
+    if not re.match(r"^\d{4}-\d{2}-\d{2}T\d{2}:\d{2}:\d{2}(\.\d+)?(Z|[+-]\d{2}:?\d{2})$",
+                    since_iso or ""):
+        raise ValueError(f"since_iso is not ISO-8601: {since_iso!r}")
+    ids = ", ".join(f"'{_soql_quote(i)}'" for i in case_ids)
+    authors = ", ".join(f"'{_soql_quote(a)}'" for a in CUSTOMER_AUTHOR_TYPES)
+    return (
+        "SELECT Core_IPS_Case__c, CreatedDate, Core_IPS_Comment_Author_Type__c "
+        "FROM Core_IPS_Case_Comments__c "
+        f"WHERE Core_IPS_Case__c IN ({ids}) AND CreatedDate > {since_iso} "
+        f"AND Core_IPS_Comment_Author_Type__c IN ({authors}) "
+        "ORDER BY CreatedDate DESC "
+        f"LIMIT {int(limit)}"
+    )
+
+
 class IpsClient:
     """Thin REST layer over the existing CaseService Salesforce session."""
 
@@ -149,10 +185,7 @@ class IpsClient:
     # ------------------------------------------------------------------
     # detection
     # ------------------------------------------------------------------
-    def find_new_cases(self, owner_name: str, since_iso: Optional[str] = None,
-                       limit: int = 20) -> list[CaseRef]:
-        """Cases assigned to `owner_name`, created today (or since `since_iso`)."""
-        soql = build_new_cases_soql(owner_name, since_iso, limit)
+    def _query_cases(self, soql: str) -> list[CaseRef]:
         resp = self._request("GET", "/services/data/v{ver}/query",
                              params={"q": soql})
         resp.raise_for_status()
@@ -168,6 +201,34 @@ class IpsClient:
                 owner_name=owner,
             ))
         return out
+
+    def find_new_cases(self, owner_name: str, since_iso: Optional[str] = None,
+                       limit: int = 20) -> list[CaseRef]:
+        """Cases assigned to `owner_name`, created today (or since `since_iso`)."""
+        return self._query_cases(build_new_cases_soql(owner_name, since_iso, limit))
+
+    def find_open_cases(self, owner_name: str, limit: int = 200) -> list[CaseRef]:
+        """All open cases assigned to `owner_name` (auto-scan candidates)."""
+        return self._query_cases(build_open_cases_soql(owner_name, limit))
+
+    def find_customer_updates(self, case_ids: list[str],
+                              since_iso: str) -> dict[str, str]:
+        """{case_id: CreatedDate of the LATEST customer comment after
+        since_iso} for the cases that have one. Chunked: SOQL IN-lists of a
+        few hundred ids stay within the query length limit."""
+        latest: dict[str, str] = {}
+        ids = [i for i in case_ids if i]
+        for start in range(0, len(ids), 150):
+            soql = build_customer_updates_soql(ids[start:start + 150], since_iso)
+            resp = self._request("GET", "/services/data/v{ver}/query",
+                                 params={"q": soql}, timeout=60)
+            resp.raise_for_status()
+            for rec in resp.json().get("records", []):
+                cid = rec.get("Core_IPS_Case__c") or ""
+                ts = rec.get("CreatedDate") or ""
+                if cid and ts > latest.get(cid, ""):
+                    latest[cid] = ts
+        return latest
 
     def get_case_comments(self, case_id: str) -> list[dict]:
         """Existing comments on a case. Used to (a) detect our own prior post

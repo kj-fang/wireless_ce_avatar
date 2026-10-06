@@ -1,5 +1,6 @@
 from logging import log
 
+import random
 import requests
 import json
 import re
@@ -306,7 +307,7 @@ class AnthropicOpenAIAdapter:
             except Exception:
                 pass
 
-    def hot_swap_token(self, new_token, new_pool_entries=None):
+    def hot_swap_token(self, new_token, new_pool_entries=None, random_start=False):
         """In-place update of underlying client and token pool.
 
         Preserves adapter instance identity so all upstream references
@@ -315,9 +316,13 @@ class AnthropicOpenAIAdapter:
         """
         if new_pool_entries is not None:
             if self._pool is not None:
-                self._pool.reset_entries(new_pool_entries)
+                self._pool.reset_entries(new_pool_entries, random_start=random_start)
             else:
-                self._pool = TokenPool(new_pool_entries)
+                self._pool = TokenPool(new_pool_entries, random_start=random_start)
+            # The pool (not ``new_token``) is the source of truth once a
+            # random start is possible — index 0 is no longer guaranteed
+            # to be the active entry.
+            new_token = self._pool.current()[1]
         self._rebuild_underlying(new_token)
 
 
@@ -354,23 +359,23 @@ class TokenPool:
     on the same key.
     """
 
-    def __init__(self, entries):
+    def __init__(self, entries, random_start=False):
         cleaned = [(str(label), tok) for label, tok in entries if tok]
         if not cleaned:
             raise ValueError("TokenPool requires at least one non-empty token")
         self._entries = cleaned
-        self._index = 0
+        self._index = random.randrange(len(cleaned)) if random_start else 0
         self._dead = set()
         self._lock = threading.Lock()
 
-    def reset_entries(self, entries):
+    def reset_entries(self, entries, random_start=False):
         """Replace the pool's token entries in-place and clear dead states."""
         cleaned = [(str(label), tok) for label, tok in entries if tok]
         if not cleaned:
             raise ValueError("TokenPool requires at least one non-empty token")
         with self._lock:
             self._entries = cleaned
-            self._index = 0
+            self._index = random.randrange(len(cleaned)) if random_start else 0
             self._dead = set()
 
     def current(self):
@@ -378,10 +383,12 @@ class TokenPool:
             return self._entries[self._index]
 
     def mark_dead_and_advance(self, dying_token):
-        """Advance past ``dying_token`` if it is still current; else no-op.
+        """Mark ``dying_token`` dead and jump to a uniformly random survivor.
 
         Returns the new active ``(label, token)`` or ``None`` when the whole
-        pool is exhausted.
+        pool is exhausted. Candidates are every entry not yet in ``self._dead``
+        (position/order no longer matters, so personal and shared tokens are
+        treated identically here).
         """
         with self._lock:
             current_label, current_token = self._entries[self._index]
@@ -389,14 +396,14 @@ class TokenPool:
                 # Another thread already rotated past this token; just report current.
                 return self._entries[self._index]
             self._dead.add(self._index)
-            for next_i in range(self._index + 1, len(self._entries)):
-                if next_i not in self._dead:
-                    self._index = next_i
-                    new_label = self._entries[next_i][0]
-                    print(f"⚠️  [TokenPool] '{current_label}' exhausted (cost limit) → rotated to '{new_label}'")
-                    return self._entries[next_i]
-            print(f"❌ [TokenPool] '{current_label}' exhausted — all {len(self._entries)} tokens dead")
-            return None
+            survivors = [i for i in range(len(self._entries)) if i not in self._dead]
+            if not survivors:
+                print(f"❌ [TokenPool] '{current_label}' exhausted — all {len(self._entries)} tokens dead")
+                return None
+            self._index = random.choice(survivors)
+            new_label = self._entries[self._index][0]
+            print(f"⚠️  [TokenPool] '{current_label}' exhausted → 🤡randomly rotated to '{new_label}'")
+            return self._entries[self._index]
 
 
 
@@ -467,11 +474,15 @@ class LLM_helper:
         return target
 
     def set_up(self, gpt_token, gpt_url, model="gpt-4.1", classifitation_path=None,
-               token_pool=None, personal_token=None, on_personal_token_expired=None):
+               token_pool=None, personal_token=None, on_personal_token_expired=None,
+               random_start=False):
         # ``token_pool``: optional list of (label, token) tuples enabling
         # transparent rotation on daily-cost-limit 429s (Anthropic path only).
         # When supplied, ``gpt_token`` should equal the pool's first entry so
-        # the initial client and pool head agree.
+        # the initial client and pool head agree (unless ``random_start``).
+        # ``random_start``: pick the initial active pool entry uniformly at
+        # random instead of always index 0 — used for users with no personal
+        # token so they don't all pile onto the same shared-pool entry.
         # ``personal_token`` / ``on_personal_token_expired``: when a 401 on
         # the retry loop matches ``personal_token`` (string equality), the
         # hook is fired so the frontend can prompt the user to refresh it.
@@ -489,12 +500,11 @@ class LLM_helper:
                 # reallocating the adapter, so all agents holding this adapter reference
                 # (e.g. WifiLogAgentSystem in Log Chatbot) seamlessly see the new key.
                 self.client._client_factory = _make_anthropic
-                initial_token = (token_pool[0][1] if token_pool else gpt_token)
-                self.client.hot_swap_token(initial_token, new_pool_entries=token_pool)
+                self.client.hot_swap_token(gpt_token, new_pool_entries=token_pool, random_start=random_start)
                 if self.client._pool is not None:
                     print(f"🔑 [TokenPool] hot-swapped active token: '{self.client._pool.current()[0]}' ({len(self.client._pool._entries)} in pool)")
             else:
-                pool = TokenPool(token_pool) if token_pool else None
+                pool = TokenPool(token_pool, random_start=random_start) if token_pool else None
                 initial_token = pool.current()[1] if pool is not None else gpt_token
                 self.client = AnthropicOpenAIAdapter(
                     _make_anthropic(initial_token),

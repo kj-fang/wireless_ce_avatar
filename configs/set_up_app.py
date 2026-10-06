@@ -91,10 +91,13 @@ def _resolve_personal_token(login: str, avatarfiles_dir: str, key_module=None) -
     local_file = local_dir / filename
 
     if local_file.exists():
-        mod = helpers.load_module(str(local_file), f"user_key_{login}")
-        token = _read_token_map(mod).get(login)
-        if token:
-            return token
+        try:
+            mod = helpers.load_module(str(local_file), f"user_key_{login}")
+            token = _read_token_map(mod).get(login)
+            if token:
+                return token
+        except Exception as e:
+            print(f"⚠️  [LLM] failed to load local personal-token cache: {e}")
 
     if key_module is not None:
         token = _read_token_map(key_module).get(login)
@@ -191,9 +194,13 @@ def configure_llm_personal_token(llm_helper, key_module, avatarfiles_dir: str) -
         return personal_token
 
     fallback_pool = deduped or None
+    # random_start: no personal token means this user shares the common pool
+    # with everyone else — without randomizing the starting pick, everyone
+    # would always open on the same first-listed entry until it dies.
     llm_helper.set_up(
         fallback_pool[0][1], key_module.gnaigpt_url, key_module.gnaigpt_model, CLASSIFY_PATH,
         token_pool=fallback_pool,
+        random_start=True,
     )
     return None
 

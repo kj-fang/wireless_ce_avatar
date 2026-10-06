@@ -851,6 +851,12 @@
     </script>
 
     <script src="https://cdn.socket.io/4.6.1/socket.io.min.js"></script>
+    <script>
+        // 401 may hit while this page's submit is still processing server-side
+        // (prime_issue_ai_cache) — reload on a successful key update so any
+        // stale state here picks up the freshly hot-swapped LLM client.
+        window.__akeReloadOnSuccess = true;
+    </script>
     {% include "_api_key_error_modal.html" %}
 </body>
 </html>

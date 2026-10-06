@@ -826,8 +826,9 @@ def render_download_result_form():
             print(f"⚠️ AI-time ETL pick failed, keeping newest-by-number: {e}")
 
     # --- BT auto-analysis: pick the best BT path when Run Analysis was
-    # requested for a BT case. Reuses the same folder-timestamp logic as
-    # log_parser.find_best_log (newest capture-folder timestamp wins).
+    # requested for a BT case. Uses find_best_log's capture-folder timestamp
+    # parser (_parse_path_timestamp) and picks the newest. Unlike
+    # find_best_log it does not tie-break same-time captures by size.
     auto_analysis_bt = None
     if run_analysis_pending and 'bt' in case_context.wifi_or_bt:
         try:

@@ -5,21 +5,22 @@ Until now ``blueprints/log_chatbot/log_chatbot_routes.py`` and
 handlers were the same code twice. Of ~1,500 lines each, about 1,080 were
 identical; what genuinely differed was a set of values (which ``app_config``
 slot holds the app-level agent, which history domain key partitions the saved
-conversations, which agent class to instantiate) plus four real behaviour
-differences, listed in :class:`AgentRouteProfile`.
+conversations, which agent class to instantiate) plus eleven behaviour
+switches: three the UI config already declared, and eight explicit fields on
+:class:`AgentRouteProfile`.
 
 This module is the same move the refactor already made for the engine and for
 ``services/chatbot/shared_routes.py``, applied one layer out:
 
     the handler bodies are written ONCE, and a profile supplies the data.
 
-:class:`AgentRouteProfile` is that data. :func:`build_agent_handlers` closes
+:class:`AgentRouteProfile` is that data. :func:`build_agent_adapter` closes
 over one profile and returns the adapter map ``handler_map()`` validates, so a
 missing handler still fails at import time rather than 404-ing in production.
 
 Reading the differences from ``configs/chatbot_ui.py``
 -----------------------------------------------------
-Three of the four behaviour differences were ALREADY declared as data — the UI
+Three of the behaviour differences were ALREADY declared as data — the UI
 config has driven the frontend with them all along:
 
     ``ui["issue_time"]["customer_timezone"]``  Wi-Fi logs carry a customer
@@ -170,7 +171,7 @@ class AgentRouteProfile:
     #: "wifi". Same trap ``SharedRouteContext.gather_domain`` documents.
     gather_domain: str
 
-    # ---- behaviour differences (four of them, each one real) ------
+    # ---- behaviour differences (each one a real divergence) ------
     #: Server-side hard cap on ``issue_time_window_minutes``. The frontend
     #: already caps the slider at the log's own span, so this only bounds a
     #: bypassed / buggy client. Wi-Fi chose 24 h; BT left it effectively open.
@@ -955,6 +956,12 @@ def build_agent_adapter(profile: AgentRouteProfile) -> AgentAdapter:
         if not user_message:
             return jsonify({"success": False, "error": "message is required"}), 400
 
+        # 428 Precondition Required: the log has no case number yet. The client
+        # opens the prompt and replays this request once it has one. Gated on
+        # the log this profile's session agent actually holds: prepare() moves
+        # the agent to a new log without touching session['chatbot_log_path'],
+        # so the no-argument form could check a stale, already-answered path.
+        # (#165 made the same call for NW.)
         sid = session.get("chatbot_session_id", "")
         active_agent = session_agents.get(sid) if sid else None
         active_log = str(getattr(active_agent, "current_log_path", "") or "")

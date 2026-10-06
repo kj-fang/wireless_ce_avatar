@@ -1527,11 +1527,12 @@ def build_agent_adapter(profile: AgentRouteProfile) -> AgentAdapter:
         # clean problem statement + (possibly multiple) issue time points. Cached
         # per-description so repeat fetches don't re-call the LLM; falls back to
         # the regex extractor + concise composer when no LLM is configured.
-        # log_path travels only for the profiles that resolve time-only logs
-        # against the capture file.
+        # log_path travels only for profiles that reconcile customer time:
+        # realign_times_to_log uses it to detect the customer's timezone and
+        # capture date, nothing else.
         organized = _issue_context_organized(
             ctx.get("description", "") or "", first_ts, last_ts,
-            log_path if profile.allow_time_only else "")
+            log_path if profile.customer_timezone else "")
         clean_desc = organized.get("clean_description") or _compose_concise_description(ctx)
         issue_times = organized.get("issue_times") or []
 

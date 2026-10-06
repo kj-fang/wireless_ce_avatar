@@ -23,8 +23,9 @@ def organized_issue_context(raw_desc: str, first_ts, last_ts, log_path: str = ""
     Falls back to organizing now (e.g. direct chatbot entry with no prior step).
 
     ``llm_client_model`` is the profile's zero-arg accessor returning
-    ``(client, model)``; ``log_path`` is optional because only the profiles that
-    resolve time-only logs against the capture file pass it.
+    ``(client, model)``. ``log_path`` is optional: ``realign_times_to_log`` uses
+    it only to detect the customer's timezone and capture date, so only the
+    profiles that reconcile customer time against the log pass it.
     """
     # Imported lazily: utils.issue_time_ai pulls in the LLM stack, which the
     # cheap context helpers above must not drag in at import time.

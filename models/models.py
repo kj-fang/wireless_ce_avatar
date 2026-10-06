@@ -25,6 +25,10 @@ class CaseContext:
 
     ##----- case attribute -----##
     wifi_or_bt: Optional[str] = None
+    # How case_nbr was obtained: explicit / derived_from_path / skipped /
+    # absent. Telemetry keeps it so "this log has no case" stays
+    # distinguishable from "nobody was asked".
+    case_ref_source: Optional[str] = None
     # True when the downloaded attachments contain both BT and WiFi ETL logs
     # simultaneously. Set at render_download_result_form time from result_data.
     files_coexist: Optional[bool] = None

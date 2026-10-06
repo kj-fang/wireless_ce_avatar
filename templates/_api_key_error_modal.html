@@ -1,0 +1,226 @@
+<!--
+  Personal gnaigpt token refresh modal.
+  Included by every LLM-using template; each parent page must already load
+  the Socket.IO client (`<script src="https://cdn.socket.io/...">`) — this
+  partial does not load it itself so it stays version-agnostic.
+
+  Flow:
+    1. Backend fires `personal_token_expired` on the `/api_key_error`
+       namespace when the retry loop sees a 401 on the personal token.
+    2. This modal opens, shows the current login, and offers a textarea.
+    3. On submit, POSTs the new JWT to `/llm/personal_token/update`.
+    4. On success, the modal shows a success message; the user closes it
+       manually (no auto-dismiss).
+-->
+<div id="apiKeyErrorModal" class="ake-overlay" style="display:none;">
+  <div class="ake-dialog" role="dialog" aria-labelledby="akeTitle" aria-modal="true">
+    <h2 id="akeTitle" class="ake-title">Personal gnaigpt token expired</h2>
+    <p class="ake-body">
+      Your personal gnaigpt token failed authentication (HTTP 401).
+      Generate a new one at the link below and paste it here to refresh
+      your local, share, and in-memory copies.
+    </p>
+    <p class="ake-link-row">
+      {# GNAI API token generation link #}
+      <a id="akeGenerateLink" class="ake-generate-btn" href="https://gfx-assets.intel.com/auth/oauth2/sso" target="_blank" rel="noopener noreferrer">
+        Generate new token &rarr;
+      </a>
+    </p>
+    <p class="ake-login-row">
+      Logged in as: <strong id="akeLogin">&mdash;</strong>
+    </p>
+    <textarea id="akeTokenInput" class="ake-input"
+              placeholder="Paste new JWT here"
+              spellcheck="false" autocomplete="off" rows="4"></textarea>
+    <div id="akeStatus" class="ake-status" role="status"></div>
+    <div class="ake-actions">
+      <button type="button" id="akeCloseBtn" class="ake-btn ake-btn-secondary">Close</button>
+      <button type="button" id="akeSubmitBtn" class="ake-btn ake-btn-primary">Update</button>
+    </div>
+  </div>
+</div>
+
+<style>
+  .ake-overlay {
+    position: fixed; inset: 0;
+    background: rgba(0, 0, 0, 0.55);
+    z-index: 100000;
+    display: flex; align-items: center; justify-content: center;
+    font-family: inherit;
+  }
+  .ake-dialog {
+    background: #fff; color: #222;
+    width: min(560px, 92vw);
+    padding: 24px 24px 20px;
+    border-radius: 10px;
+    box-shadow: 0 12px 40px rgba(0, 0, 0, 0.35);
+  }
+  .ake-title { margin: 0 0 12px; font-size: 1.15rem; color: #b00020; }
+  .ake-body { margin: 0 0 12px; font-size: 0.92rem; line-height: 1.45; }
+  .ake-link-row { margin: 10px 0 14px; font-size: 0.92rem; }
+  .ake-generate-btn {
+    display: inline-block;
+    background: #0067b8; color: #fff !important;
+    text-decoration: none; font-weight: 600;
+    padding: 10px 18px; border-radius: 6px;
+    box-shadow: 0 2px 8px rgba(0, 103, 184, 0.4);
+    animation: ake-pulse 1.8s ease-in-out infinite;
+    transition: background 0.15s, transform 0.15s;
+  }
+  .ake-generate-btn:hover {
+    background: #005a9e; transform: translateY(-1px);
+  }
+  @keyframes ake-pulse {
+    0%, 100% { box-shadow: 0 2px 8px rgba(0, 103, 184, 0.4); }
+    50% { box-shadow: 0 2px 16px rgba(0, 103, 184, 0.75); }
+  }
+  .ake-login-row { margin: 4px 0 10px; font-size: 0.88rem; color: #555; }
+  .ake-input {
+    width: 100%; box-sizing: border-box;
+    font-family: ui-monospace, "Cascadia Code", Consolas, monospace;
+    font-size: 0.85rem; line-height: 1.35;
+    padding: 8px 10px; border: 1px solid #bbb; border-radius: 6px;
+    resize: vertical; min-height: 90px;
+    white-space: pre; overflow-x: auto;
+  }
+  .ake-input:focus { outline: 2px solid #0067b8; outline-offset: 1px; }
+  .ake-status {
+    min-height: 1.4em; margin: 8px 0 4px;
+    font-size: 0.85rem;
+    display: flex; align-items: center; gap: 8px;
+  }
+  .ake-status.ake-error { color: #b00020; }
+  .ake-status.ake-success { color: #107c10; }
+  .ake-status.ake-info { color: #555; }
+  .ake-loader {
+    width: 14px; aspect-ratio: 1; flex: none;
+    --_c: no-repeat radial-gradient(farthest-side, #25b09b 92%, #0000);
+    background:
+      var(--_c) top,
+      var(--_c) left,
+      var(--_c) right,
+      var(--_c) bottom;
+    background-size: 4px 4px;
+    animation: ake-loader-spin 1s infinite;
+  }
+  @keyframes ake-loader-spin { to { transform: rotate(.5turn); } }
+  .ake-actions {
+    display: flex; justify-content: flex-end; gap: 8px; margin-top: 8px;
+  }
+  .ake-btn {
+    padding: 7px 16px; border-radius: 6px; border: 1px solid transparent;
+    font-size: 0.9rem; cursor: pointer;
+  }
+  .ake-btn-primary { background: #0067b8; color: #fff; }
+  .ake-btn-primary:hover { background: #005a9e; }
+  .ake-btn-primary:disabled { background: #7fa8cf; cursor: not-allowed; }
+  .ake-btn-secondary { background: #f2f2f2; color: #222; border-color: #bbb; }
+  .ake-btn-secondary:hover { background: #e6e6e6; }
+</style>
+
+<script>
+(function () {
+  if (window.__apiKeyErrorModalWired) return;
+  window.__apiKeyErrorModalWired = true;
+
+  var modal      = document.getElementById('apiKeyErrorModal');
+  var loginEl    = document.getElementById('akeLogin');
+  var input      = document.getElementById('akeTokenInput');
+  var status     = document.getElementById('akeStatus');
+  var submitBtn  = document.getElementById('akeSubmitBtn');
+  var closeBtn   = document.getElementById('akeCloseBtn');
+  if (!modal || !submitBtn || !closeBtn) return;
+
+  function setStatus(text, cls) {
+    status.textContent = text || '';
+    status.className = 'ake-status' + (cls ? ' ake-' + cls : '');
+  }
+
+  function openModal(payload) {
+    if (payload && payload.login) loginEl.textContent = payload.login;
+    setStatus('', '');
+    submitBtn.disabled = false;
+    modal.style.display = 'flex';
+    // Focus is nice but only if not already focused elsewhere.
+    setTimeout(function () { try { input.focus(); } catch (e) {} }, 40);
+  }
+
+  function closeModal() {
+    modal.style.display = 'none';
+  }
+
+  closeBtn.addEventListener('click', closeModal);
+
+  submitBtn.addEventListener('click', function () {
+    var token = (input.value || '').trim();
+    if (!token) {
+      setStatus('Please paste a token first.', 'error');
+      return;
+    }
+    submitBtn.disabled = true;
+    status.innerHTML = '<span class="ake-loader"></span><span>Updating…</span>';
+    status.className = 'ake-status ake-info';
+    fetch('/llm/personal_token/update', {
+      method: 'POST',
+      headers: {'Content-Type': 'application/json'},
+      body: JSON.stringify({token: token}),
+    })
+    .then(function (resp) {
+      return resp.json().then(function (body) {
+        return {ok: resp.ok, body: body};
+      });
+    })
+    .then(function (result) {
+      if (result.ok && result.body && result.body.ok) {
+        // Some pages (e.g. download_result) re-prime server-side AI caches
+        // (like the issue-time pick) right after a successful token swap —
+        // reload so the page picks up the refreshed session data instead of
+        // showing the stale pre-401 values.
+        if (window.__akeReloadOnSuccess) {
+          setStatus('Token updated. Reloading to refresh AI results…', 'success');
+          setTimeout(function () { window.location.reload(); }, 1200);
+        } else {
+          setStatus('Token updated. You can close this window.', 'success');
+        }
+        input.value = '';
+      } else {
+        var msg = (result.body && result.body.message) || 'Update failed.';
+        setStatus(msg, 'error');
+        submitBtn.disabled = false;
+      }
+    })
+    .catch(function (err) {
+      setStatus('Network error: ' + err, 'error');
+      submitBtn.disabled = false;
+    });
+  });
+
+  // Socket.IO wiring — the parent page loads the client, we just connect
+  // to the dedicated /api_key_error namespace and listen.
+  if (typeof io === 'function') {
+    try {
+      var sock = io('/api_key_error');
+      sock.on('personal_token_expired', function (payload) {
+        openModal(payload || {});
+      });
+    } catch (e) {
+      console.warn('[api_key_error_modal] socket wiring failed', e);
+    }
+  }
+
+  // Polling backstop — the real-time socket emit above can be missed if a
+  // slow synchronous route (Snowflake/network-share/LLM I/O) starved the
+  // socket's keep-alive right when the hook fired. Opt-in, one-shot check
+  // (set window.__akeCheckPendingOnce = true before this include) so pages
+  // that land right after such a flow (e.g. download_result) catch a missed
+  // expiry without polling repeatedly on every page.
+  if (window.__akeCheckPendingOnce) {
+    fetch('/llm/personal_token/pending')
+      .then(function (resp) { return resp.json(); })
+      .then(function (data) {
+        if (data && data.pending) openModal(data);
+      })
+      .catch(function () {});
+  }
+})();
+</script>

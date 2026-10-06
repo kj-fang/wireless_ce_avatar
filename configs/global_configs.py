@@ -50,6 +50,13 @@ class GlobalConfig:
         # Last log path analysed by LogParserService (shared with chatbot)
         self.last_analyzed_log_path: Optional[str] = None
 
+        # Logins whose personal gnaigpt token hit a 401 and are waiting on a
+        # refresh. The retry loop's hook sets this; the frontend modal polls
+        # a tiny status endpoint instead of relying solely on the real-time
+        # Socket.IO emit, which can be missed if a slow synchronous route
+        # (Snowflake/network-share/LLM I/O) starves the socket's keep-alive.
+        self.personal_token_expired_pending: Dict[str, bool] = {}
+
     # SocketIO management
     def set_socketio(self, socketio: SocketIO) -> None:
         self.socketio = socketio

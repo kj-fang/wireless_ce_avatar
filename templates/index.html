@@ -1529,5 +1529,7 @@
          title="Build: {{ app_build_date }}&#10;Branch: {{ app_git_branch }}&#10;Commit: {{ app_git_hash }}">
         v{{ app_version }}
     </div>
+
+    {% include "_api_key_error_modal.html" %}
 </body>
 </html>

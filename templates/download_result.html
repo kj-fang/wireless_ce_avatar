@@ -3537,5 +3537,17 @@
 </div>
 <!-- ===== /Parse Progress Modal ===== -->
 
+<script>
+    // Token refresh re-primes session['_issue_ai_quick'] server-side, but this
+    // page's llm_issue_time was already baked into the HTML on render — reload
+    // so the refreshed AI issue time/auto-pick actually shows up.
+    window.__akeReloadOnSuccess = true;
+    // A 401 may have happened (and been missed by the real-time socket) on
+    // an earlier page in the flow (select_attachments / attachment download) —
+    // check once on arrival here instead of polling repeatedly.
+    window.__akeCheckPendingOnce = true;
+</script>
+{% include "_api_key_error_modal.html" %}
+
 </body>
 </html>

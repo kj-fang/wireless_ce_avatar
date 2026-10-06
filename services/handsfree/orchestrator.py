@@ -18,7 +18,7 @@ import traceback
 from pathlib import Path
 from typing import Optional
 
-from .composer import compose, AI_MARKER
+from .composer import compose, AI_MARKER, CHECKLIST_TAG
 from .ips_client import IpsClient, PostUnsupported
 from .queue import HandsfreeStore
 from .runner import HandsfreeRunner
@@ -87,6 +87,23 @@ def _analyze_and_enqueue(store: HandsfreeStore, case_nbr: str,
 
     runner = HandsfreeRunner(progress_cb=_progress)
     analysis = runner.analyze_case(case_nbr)
+
+    # Pre-fill the first-response checklist: pipeline facts first, then one
+    # LLM pass over the rest. Failure never blocks the drafts.
+    try:
+        from .checklist import build_fills
+        from configs.global_configs import app_config
+        analysis.checklist_fills = build_fills(
+            analysis, llm=getattr(app_config, "llm_helper", None))
+        filled = sum(1 for sec in analysis.checklist_fills.values()
+                     for e in sec if e.get("provided"))
+        total = sum(len(sec) for sec in analysis.checklist_fills.values())
+        _log_event(f"[{case_nbr}] first response: domain "
+                   f"'{analysis.issue_domain or 'Others'}', pre-filled "
+                   f"{filled}/{total} checklist items")
+    except Exception as e:
+        print(f"[handsfree] checklist fill failed (continuing): {e}")
+
     draft = compose(analysis)
     rec = store.enqueue(
         case_nbr=case_nbr,
@@ -101,6 +118,29 @@ def _analyze_and_enqueue(store: HandsfreeStore, case_nbr: str,
     _log_event(
         f"[{case_nbr}] queued draft {rec['draft_id']} "
         f"(mode={analysis.mode}, confidence={draft['confidence']})")
+
+    # Every case also gets a first-response checklist reply — except when the
+    # primary draft already IS the first response (the request modes render
+    # the same pre-filled checklist themselves), or the case could not even
+    # be fetched (mode "error": nothing to base a customer reply on).
+    if analysis.mode not in ("request_logs", "request_info", "error"):
+        from dataclasses import replace
+        fr = replace(analysis, mode="first_response")
+        fr_draft = compose(fr)
+        fr_rec = store.enqueue(
+            case_nbr=case_nbr,
+            case_id=case_id or analysis.case_id,
+            subject=subject or analysis.subject,
+            draft_plain=fr_draft["plain"],
+            draft_html=fr_draft["html"],
+            confidence=None,
+            mode="first_response",
+            # fr, not analysis: the review UI reads analysis.mode for the
+            # "public reply to customer" visibility chip.
+            analysis=fr.to_dict(),
+        )
+        _log_event(f"[{case_nbr}] queued first-response checklist draft "
+                   f"{fr_rec['draft_id']}")
     return rec
 
 
@@ -182,6 +222,23 @@ def start_case_run(case_nbr: str) -> dict:
 
 _post_lock = threading.Lock()
 
+# Customer-facing first-response family (posted PUBLIC, tagged CHECKLIST_TAG).
+_CHECKLIST_MODES = ("request_logs", "request_info", "first_response")
+
+# request_logs / request_info replies posted before CHECKLIST_TAG existed
+# carry only AI_MARKER — recognized by their fixed template sentences.
+_LEGACY_REQUEST_PHRASES = (
+    "we need the Intel wireless driver WRT logs covering",
+    "To start the analysis we need some additional information about the",
+)
+
+
+def _is_checklist_comment(body: str) -> bool:
+    """Is this posted AI comment of the first-response family (vs analysis)?"""
+    if CHECKLIST_TAG in body:
+        return True
+    return any(p in body for p in _LEGACY_REQUEST_PHRASES)
+
 
 def approve_and_post(draft_id: str, edited_plain: Optional[str] = None) -> dict:
     """Human clicked Approve. Post the (possibly edited) draft to IPS.
@@ -206,12 +263,18 @@ def _approve_and_post_locked(draft_id: str, edited_plain: Optional[str]) -> dict
     if cfg.get("dry_run"):
         return {"ok": False, "error": "dry_run is enabled in config — posting disabled"}
 
-    # Apply reviewer edits.
+    draft_is_checklist = rec.get("mode") in _CHECKLIST_MODES
+
+    # Apply reviewer edits. Both markers are restored when edited away: the
+    # duplicate scan below (and every later one) tells the comment families
+    # apart by them.
     if edited_plain is not None and edited_plain.strip():
         from .composer import compose_html
         plain = edited_plain
         if AI_MARKER not in plain:
             plain = AI_MARKER + "\n\n" + plain
+        if draft_is_checklist and CHECKLIST_TAG not in plain:
+            plain = plain.replace(AI_MARKER, AI_MARKER + "\n" + CHECKLIST_TAG, 1)
         rec = store.update(draft_id, draft_plain=plain,
                            draft_html=compose_html(plain))
 
@@ -221,18 +284,23 @@ def _approve_and_post_locked(draft_id: str, edited_plain: Optional[str]) -> dict
     # scan ABORTS the post — posting blind could duplicate an AI comment we
     # simply couldn't see. The draft stays pending_review; approve again once
     # IPS is reachable.
+    # Family-aware dedup: one first-response-family comment (checklist /
+    # request) AND one analysis comment may each post once per case.
     try:
         for c in ips.get_case_comments(rec["case_id"]):
             body = str(c.get(IpsClient.FIELD_RICH_BODY) or "")
-            if AI_MARKER in body:
-                store.update(draft_id, status="posted",
-                             post_result={"ok": False, "backend": "none",
-                                          "error": "AI comment already present on case"})
-                store.mark_posted(rec["case_nbr"], comment_id=c.get("Id", ""))
-                return {"ok": False,
-                        "error": "an AI-Avatar comment already exists on this case; "
-                                 "marked as posted to avoid a duplicate",
-                        "draft": store.get(draft_id)}
+            if AI_MARKER not in body:
+                continue
+            if _is_checklist_comment(body) != draft_is_checklist:
+                continue   # other family — does not block this draft
+            store.update(draft_id, status="posted",
+                         post_result={"ok": False, "backend": "none",
+                                      "error": "AI comment already present on case"})
+            store.mark_posted(rec["case_nbr"], comment_id=c.get("Id", ""))
+            return {"ok": False,
+                    "error": "an AI-Avatar comment of this kind already exists "
+                             "on this case; marked as posted to avoid a duplicate",
+                    "draft": store.get(draft_id)}
     except Exception as e:
         msg = (f"duplicate-comment scan failed ({type(e).__name__}: {e}) — "
                "post aborted; draft left in the review queue, approve again to retry")
@@ -242,9 +310,9 @@ def _approve_and_post_locked(draft_id: str, edited_plain: Optional[str]) -> dict
     backend = (cfg.get("post_backend") or "auto").lower()
     result = None
 
-    # request_logs / request_info drafts are customer-facing: post PUBLIC
+    # First-response-family drafts are customer-facing: post PUBLIC
     # (visible to the customer). Everything else stays Private-to-Intel.
-    is_public_reply = (rec.get("mode") in ("request_logs", "request_info"))
+    is_public_reply = draft_is_checklist
 
     if backend in ("rest", "auto"):
         try:

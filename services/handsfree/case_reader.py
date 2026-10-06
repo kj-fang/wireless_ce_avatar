@@ -46,14 +46,26 @@ Your tasks:
     and the attachment subtitle. Prefer .zip driver-log captures over
     screenshots/documents.
  4. Assess whether the case gives an engineer enough to analyze, judged
-    over the description AND all comments together (a later comment can
-    fill a gap in the description). Report what is missing or too vague:
+    over the description, all comments AND the ENVIRONMENT DETAILS form
+    together (a later comment or a filled form field can fill a gap in the
+    description — a filled "Steps to reproduce" form field means repro steps
+    are NOT missing; form dates such as "HDD Lock" or "Found In Build" are
+    context, not the issue occurrence time). CAUTION: the "Assert Error"
+    form field is customer-filled from Windows Event Viewer — its value is
+    NOT a driver/firmware assert code; never treat it as one. Report what
+    is missing or too vague:
     - "issue_description": no understandable statement of what fails /
       expected vs actual behavior.
     - "issue_time": no failure date/time stated anywhere.
     - "repro_steps": no reproduction steps and no frequency information.
     Report ONLY genuinely missing/unclear items — an item that is stated
     anywhere, even briefly, is NOT missing.
+ 5. Classify the issue into exactly ONE debugging domain from this list
+    (name must match verbatim; use "Others" when nothing fits):
+{domains_block}
+    When the chosen domain has sub-categories, also pick the ONE
+    "issue_subcategory" that fits best (empty string for other domains):
+{subcats_block}
 
 Output ONLY a valid JSON object (no markdown, no code fences):
 {{
@@ -64,11 +76,16 @@ Output ONLY a valid JSON object (no markdown, no code fences):
   "attachment_reason": "<one sentence: why this attachment matches the issue time>",
   "reasoning": "<2-4 sentences tracing how the comments changed the picture>",
   "missing_info": [{{"item": "issue_description|issue_time|repro_steps",
-                     "reason": "<one short sentence why it is missing/unclear>"}}]
+                     "reason": "<one short sentence why it is missing/unclear>"}}],
+  "issue_domain": "<one domain name from the list, verbatim>",
+  "issue_subcategory": "<sub-category name, or ''>"
 }}
 
 === SUBJECT ===
 {subject}
+
+=== ENVIRONMENT DETAILS (structured Q&A form filled by the customer) ===
+{env_block}
 
 === ISSUE DESCRIPTION ===
 {description}
@@ -130,6 +147,52 @@ def _format_comments(rows: list[dict]) -> str:
     return "\n".join(out)
 
 
+# Comment author types (CORE_IPS_COMMENT_AUTHOR_TYPE_TXT) written by the
+# customer side: "Partner", "Partner - Agent", "Partner - DFAE", "Customer".
+# Intel-side rows ("Agent", "FAE", "Backend Integration", "System") may be
+# Private-to-Intel — the comment rows carry no visibility flag, so only an
+# allowlisted customer author proves a comment is customer-visible.
+_CUSTOMER_AUTHOR_PREFIXES = ("partner", "customer")
+_MAX_CUSTOMER_COMMENTS = 12
+_MAX_CUSTOMER_COMMENT_CHARS = 400
+
+
+def customer_visible_history(comments: Any) -> str:
+    """Customer-authored comments only, chronological, bounded — the one
+    slice of the comment history that is safe to quote in a PUBLIC reply.
+    Unknown / empty author types are excluded (fail closed)."""
+    rows = [r for r in _normalize_comments(comments)
+            if r["author"].strip().lower().startswith(_CUSTOMER_AUTHOR_PREFIXES)]
+    out = []
+    for r in rows[-_MAX_CUSTOMER_COMMENTS:]:
+        text = r["text"]
+        if len(text) > _MAX_CUSTOMER_COMMENT_CHARS:
+            text = text[:_MAX_CUSTOMER_COMMENT_CHARS] + " …[truncated]"
+        out.append((f"({r['ts']}) " if r["ts"] else "") + text)
+    return "\n".join(out)
+
+
+_MAX_ENV_ENTRIES = 25
+_MAX_ENV_VALUE_CHARS = 300
+
+
+def _format_env_detail(env: Any) -> str:
+    """Render the IPS Environment Details Q&A dict as 'Q: A' lines.
+    Empty/whitespace responses are skipped (the form always lists every
+    question; only filled answers carry information)."""
+    if not isinstance(env, dict) or not env:
+        return "(none)"
+    out = []
+    for q, a in list(env.items())[:_MAX_ENV_ENTRIES]:
+        a = str(a or "").strip()
+        if not a:
+            continue
+        if len(a) > _MAX_ENV_VALUE_CHARS:
+            a = a[:_MAX_ENV_VALUE_CHARS] + " …[truncated]"
+        out.append(f"{str(q).strip()}: {a}")
+    return "\n".join(out) or "(none)"
+
+
 def _format_attachments(attachment_list: Any) -> str:
     if not attachment_list:
         return "(no attachments)"
@@ -149,16 +212,32 @@ def _format_attachments(attachment_list: Any) -> str:
 
 
 def read_case_history(llm, *, subject: str, description: str,
-                      comments: Any, attachment_list: Any) -> Optional[dict]:
+                      comments: Any, attachment_list: Any,
+                      env_detail: Any = None) -> Optional[dict]:
     """One LLM call. Returns the parsed reader dict, or None on any failure
     (callers fall back to description-only organize_issue_context)."""
     from services.ace.roles import _extract_json
 
+    from .checklist import load_checklist, resolve_domain
+
+    checklist = load_checklist()
+    domains_block = "\n".join(
+        f"    - {name}" + (f": {d.get('description', '')}" if d.get("description") else "")
+        for name, d in checklist["domains"].items())
+    subcats_block = "\n".join(
+        f"      * {name}: " + "; ".join(
+            f"{sub} ({desc})" if desc else sub
+            for sub, desc in d["subcategories"].items())
+        for name, d in checklist["domains"].items()
+        if d.get("subcategories")) or "      (none)"
     prompt = READER_PROMPT.format(
         subject=(subject or "").strip()[:500],
+        env_block=_format_env_detail(env_detail),
         description=(description or "").strip()[:_MAX_DESC_CHARS] or "(empty)",
         comments_block=_format_comments(_normalize_comments(comments)),
         attachments_block=_format_attachments(attachment_list),
+        domains_block=domains_block,
+        subcats_block=subcats_block,
     )
     try:
         raw = llm.chat(
@@ -198,6 +277,8 @@ def read_case_history(llm, *, subject: str, description: str,
         "attachment_reason": str(res.get("attachment_reason") or ""),
         "reasoning": str(res.get("reasoning") or ""),
         "missing_info": missing,
+        "issue_domain": resolve_domain(res.get("issue_domain")),
+        "issue_subcategory": str(res.get("issue_subcategory") or "").strip(),
     }
 
 

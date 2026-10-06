@@ -60,7 +60,8 @@
             if (data.success) {
                 showStatus(statusEl, '✔ ' + (data.message || 'Sleepstudy file loaded.'), 'ok');
                 // Run the dedicated sleepstudy analyzer pipeline
-                runSleepstudyAnalysis(path);
+                if (window.IpsPrompt) { await window.IpsPrompt.handleSetLog(data); }
+                await runSleepstudyAnalysis(path);
             } else {
                 showStatus(statusEl, '✘ ' + data.error, 'err');
             }

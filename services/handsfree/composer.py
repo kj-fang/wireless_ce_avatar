@@ -92,6 +92,32 @@ _INFO_ASKS = {
 }
 
 
+# Tag line distinguishing customer-facing first-response/request comments
+# from analysis comments in the approve-time duplicate scan: one of each may
+# post on a case, never two of the same kind.
+CHECKLIST_TAG = "[AI-Avatar first-response]"
+
+
+def _checklist_fills(analysis: CaseAnalysis) -> dict:
+    """Fills computed by the orchestrator (deterministic + LLM) when present;
+    otherwise a deterministic-only build so composing never needs an LLM."""
+    fills = getattr(analysis, "checklist_fills", None)
+    if fills:
+        return fills
+    # llm=None: deterministic fills only. build_fills also settles
+    # analysis.issue_subcategory, which the renderers read afterwards — the
+    # items and the section label/triage steps must use the same pick.
+    from .checklist import build_fills
+    return build_fills(analysis)
+
+
+def _checklist_body(analysis: CaseAnalysis) -> list[str]:
+    from .checklist import FALLBACK_DOMAIN, render_checklist_body
+    domain = getattr(analysis, "issue_domain", "") or FALLBACK_DOMAIN
+    return render_checklist_body(domain, _checklist_fills(analysis),
+                                 getattr(analysis, "issue_subcategory", ""))
+
+
 def _info_ask_bullets(analysis: CaseAnalysis, numbered: bool = False) -> list[str]:
     out = []
     for n, m in enumerate((analysis.missing_info or []), 1):
@@ -116,6 +142,7 @@ def _request_info_lines(analysis: CaseAnalysis) -> list[str]:
         "case. Could you please provide:",
     ]
     parts += _info_ask_bullets(analysis)
+    parts += [""] + _checklist_body(analysis)
     parts += ["",
               "We will proceed with the analysis as soon as this information "
               "is available. Thank you!"]
@@ -125,7 +152,14 @@ def _request_info_lines(analysis: CaseAnalysis) -> list[str]:
 def _request_logs_lines(analysis: CaseAnalysis) -> list[str]:
     """Customer-facing reply asking for the missing WRT logs. Deliberately a
     fixed template (no LLM text): this draft posts PUBLICLY once approved."""
-    if analysis.chosen_attachment:
+    if getattr(analysis, "log_request_reason", "") == "unreadable_archive":
+        # Archive selection crashed or the download failed twice — the upload
+        # is likely corrupted/incomplete; ask for a re-upload.
+        name = f" ({analysis.chosen_attachment})" if analysis.chosen_attachment else ""
+        missing = (f"we were unable to download or open the attached log "
+                   f"archive{name} — the file may be corrupted or the upload "
+                   "incomplete, so please RE-UPLOAD the log archive")
+    elif analysis.chosen_attachment:
         # An archive was attached, but after extraction it held no WRT ETLs.
         missing = (f"we checked the attached archive "
                    f"({analysis.chosen_attachment}) but could not find WRT "
@@ -150,15 +184,16 @@ def _request_logs_lines(analysis: CaseAnalysis) -> list[str]:
         "We will start the analysis as soon as the logs are available. "
         "Thank you!",
     ]
-    # One combined public reply: if case info is also missing, ask for it
-    # here rather than drafting a second request.
+    # One combined public reply: targeted info asks (when any), then the full
+    # pre-filled domain checklist, then the closing line.
+    tail = parts.pop()
     info = _info_ask_bullets(analysis)
     if info:
-        tail = parts.pop()
         parts += ["",
                   "In addition, to speed up the analysis please also provide:"]
         parts += info
-        parts += ["", tail]
+    parts += [""] + _checklist_body(analysis)
+    parts += ["", tail]
     return parts
 
 
@@ -166,10 +201,17 @@ def compose_plain(analysis: CaseAnalysis) -> str:
     """Plain-text draft (editable in the review UI)."""
     parts: list[str] = [AI_MARKER, ""]
 
-    if analysis.mode in ("request_logs", "request_info"):
-        parts.extend(_request_logs_lines(analysis)
-                     if analysis.mode == "request_logs"
-                     else _request_info_lines(analysis))
+    if analysis.mode in ("request_logs", "request_info", "first_response"):
+        # Customer-facing first-response family: tagged so the approve-time
+        # duplicate scan distinguishes them from analysis comments.
+        parts.insert(1, CHECKLIST_TAG)
+        if analysis.mode == "request_logs":
+            parts.extend(_request_logs_lines(analysis))
+        elif analysis.mode == "request_info":
+            parts.extend(_request_info_lines(analysis))
+        else:
+            from .checklist import render_first_response
+            parts.extend(render_first_response(analysis, _checklist_fills(analysis)))
         text = "\n".join(parts)
         while "\n\n\n" in text:
             text = text.replace("\n\n\n", "\n\n")

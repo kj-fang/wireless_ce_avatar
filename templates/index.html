@@ -7,6 +7,11 @@
     <link href="https://stackpath.bootstrapcdn.com/bootstrap/4.5.2/css/bootstrap.min.css" rel="stylesheet">
     <link href="https://fonts.googleapis.com/css2?family=Press+Start+2P&display=swap" rel="stylesheet">
     <script src="https://cdn.socket.io/3.1.3/socket.io.min.js" crossorigin="anonymous"></script>
+    <!-- Loaded before the page's own scripts: it wraps fetch to catch the
+         server's 428 "case number required" and replay the request. The local
+         upload on this page posts a path rather than the file, so the replay
+         does not re-send anything large. -->
+    <script src="{{ url_for('static', filename='js/check_ips_prompt.js') }}"></script>
     <style>
         * {
             font-family: 'Inter', sans-serif !important;
@@ -903,6 +908,8 @@
         });
     </script>
 
+    <script id="case-error-messages" type="application/json">{{ get_flashed_messages() | list | tojson }}</script>
+
     <!-- Main functionality script -->
     <script>
         const QUICK_KNOWLEDGE = {{ wireless_topics|tojson }};
@@ -1223,6 +1230,10 @@
 
         // Auto-fill from clipboard and zero-padding
         document.addEventListener("DOMContentLoaded", () => {
+            const caseErrorsEl = document.getElementById('case-error-messages');
+            const allFlashes = caseErrorsEl ? JSON.parse(caseErrorsEl.textContent) : [];
+            allFlashes.filter(msg => msg.includes('link of case')).forEach(() => alert('Case not found, please check the case number.'));
+
             const input = document.getElementById("case_number");
             const caseSubmitBtn = document.getElementById('case-submit-btn');
             if (!input) {

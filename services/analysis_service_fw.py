@@ -163,7 +163,7 @@ class FWAnalysisService():
                         namespace='/progress'
                     )
 
-                    if 'bt' in wifi_or_bt:
+                    if 'bt' in wifi_or_bt and not app_config.silent_mode:
                         opened = open_sysmon_with_tool(file_path, on_log=self.emit_tool_log, on_close=self.emit_tool_closed)
                         if not opened:
                             app_config.socketio.emit(

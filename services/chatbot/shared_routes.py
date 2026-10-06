@@ -25,6 +25,7 @@ from flask import Response, jsonify, redirect, request, session, url_for
 
 from configs.global_configs import app_config
 from services import history_service
+from services import check_ips_service
 from services import gather_service
 from services.chatbot.issue_context import extract_issue_context
 from services.chatbot import job_runtime as chat_jobs
@@ -102,6 +103,8 @@ def leave_chatbot(session_agents: dict):
         "feedback_conversation_id",   # the next visit starts a fresh conversation
     ):
         session.pop(key, None)
+
+    check_ips_service.start_new_session()
 
     # 3) Clear the global "last analyzed log" hint so the chatbot page doesn't
     #    pre-fill the previous run's log path.

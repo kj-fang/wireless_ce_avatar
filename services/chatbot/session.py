@@ -21,6 +21,24 @@ from services.chatbot import job_runtime
 # Flask session coordination shared by the full BT and Wi-Fi agents
 # --------------------------------------------------------------------------
 
+_session_agent_stores: dict[str, MutableMapping[str, Any]] = {}
+
+
+def register_session_agent_store(profile: str, instances: MutableMapping[str, Any]) -> None:
+    """Register a profile-owned store without making services import routes."""
+    _session_agent_stores[profile] = instances
+
+
+def agents_for_session(session_id: str) -> list[Any]:
+    """Existing clones only: never create an agent or reset its conversation."""
+    agents = []
+    if session_id:
+        for instances in _session_agent_stores.values():
+            agent = instances.get(session_id)
+            if agent is not None and all(agent is not held for held in agents):
+                agents.append(agent)
+    return agents
+
 
 def ensure_feedback_conversation_id(*, rotate: bool = False) -> str:
     if rotate or not session.get("feedback_conversation_id"):

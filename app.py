@@ -53,7 +53,7 @@ from configs.version import __version__, BUILD_DATE, GIT_HASH, GIT_BRANCH
 #from blueprints.main import main_bp
 #from blueprints.attachment import attachment_bp
 #from blueprints.log_analysis import log_bp
-from blueprints import automation_bp, main_bp, llm_bp, download_bp, analysis_etl_bp, bsod_bp, log_parser_bp, log_chatbot_bp, bt_chatbot_bp, nw_analysis_bp, feedback_bp, handsfree_bp # , attachment_bp, log_bp,
+from blueprints import automation_bp, main_bp, llm_bp, download_bp, analysis_etl_bp, bsod_bp, log_parser_bp, log_chatbot_bp, bt_chatbot_bp, nw_analysis_bp, feedback_bp, handsfree_bp, check_ips_bp # , attachment_bp, log_bp,
 import blueprints.download.download_routes
 
 def _bring_chrome_to_front(server_pid):
@@ -195,6 +195,12 @@ def create_app():
     app.config['SESSION_FILE_DIR'] = _session_dir
     app.config['SESSION_PERMANENT'] = False
     app.config['SESSION_USE_SIGNER'] = True   # sign the session-ID cookie for integrity
+    # False = write the session back only when the request changed it, so a
+    # slow request that touched nothing can't overwrite a case answer saved
+    # while it was in flight. (A request that *did* change the session still
+    # writes its stale copy; the answer survives because check_ips_service also keeps
+    # it per log file. Don't rely on this setting for other racy session state.)
+    app.config['SESSION_REFRESH_EACH_REQUEST'] = False
     Session(app)
 
     @app.context_processor
@@ -222,6 +228,7 @@ def create_app():
     app.register_blueprint(nw_analysis_bp)
     app.register_blueprint(feedback_bp)
     app.register_blueprint(handsfree_bp)
+    app.register_blueprint(check_ips_bp)
 
     # Register socketio
     blueprints.download.download_routes.register_socketio_handlers(socketio)
@@ -241,10 +248,13 @@ if __name__ == "__main__":
     parser.add_argument('--port', type=int, default=None, help='Override the port for this run only (not persisted). Defaults to the machine-local persisted port (initially 48596).')
     parser.add_argument('--no-tray', action='store_true', help='Disable tray manager')
     parser.add_argument('--tray-mode', action='store_true', help='Run as tray manager')
+    parser.add_argument('--silent-mode', action='store_true', default=False, help='Disable auto-opening analysis windows (TextAnalysisTool / Explorer) after parsing.')
     parser.add_argument('--sendto-token', type=str, default=None, help='SendTo security token (auto-set by shortcut, not for manual use).')
     parser.add_argument('input_paths', nargs='*', help='Optional local analysis file paths passed from Windows SendTo.')
     args = parser.parse_args()
     startup_path = _build_startup_path(args.input_paths, sendto_token=args.sendto_token)
+    from configs.global_configs import app_config
+    app_config.silent_mode = args.silent_mode
     
     # Check whether to run in tray mode
     if args.tray_mode:

@@ -17,6 +17,7 @@ from services.chatbot.job_runtime import (
 from services.chatbot.session import (
     ensure_feedback_conversation_id as _shared_feedback_conversation_id,
     resume_agent_for as _shared_resume_agent_for,
+    register_session_agent_store,
 )
 from services.chatbot.issue_context import (
     compose_concise_description as _compose_concise_description,
@@ -69,6 +70,7 @@ from utils.timezone_utils import (
     VALID_ISSUE_TIME_BASES,
 )
 from services import feedback_service
+from services import check_ips_service
 from services import history_service
 from services.chatbot import job_runtime as chat_jobs
 from services import gather_service
@@ -76,6 +78,9 @@ from services import gather_service
 
 # Server-side store: session_id -> WifiLogAgentSystem instance
 _chatbot_instances: dict = {}
+# Registered so check_ips_service can update this profile's primed agents
+# when the user attaches a different case number (#165).
+register_session_agent_store("log_chatbot", _chatbot_instances)
 
 
 # ------------------------------------------------------------------
@@ -392,6 +397,9 @@ def set_log():
             "log_last_time": log_last_time,
             "log_has_date": log_has_date,
             "evtx_path": evtx_path,
+            # Whether the client must ask for a case number before the
+            # first question; carries the candidates for the prompt.
+            **check_ips_service.prompt_state(log_path),
             # Hints for the client to clear chat history + show the toast.
             "rotated": rotated,
             "previous_log_path": prev_log_path if rotated else "",
@@ -486,6 +494,19 @@ def chat():
     user_message = (data.get("message") or "").strip()
     if not user_message:
         return jsonify({"success": False, "error": "message is required"}), 400
+
+    # 428 Precondition Required: the log has no case number yet. The client
+    # opens the prompt and replays this request once it has one. Gated on the
+    # log this profile's session agent actually holds: prepare() moves the
+    # agent to a new log without touching session['chatbot_log_path'], so the
+    # no-argument form could check a stale, already-answered path instead.
+    # (#165 made the same call for NW.)
+    sid = session.get("chatbot_session_id", "")
+    active_agent = _chatbot_instances.get(sid) if sid else None
+    active_log = str(getattr(active_agent, "current_log_path", "") or "")
+    blocked = check_ips_service.blocking_state(active_log or None)
+    if blocked:
+        return jsonify(blocked), 428
 
     try:
         temperature = float(data.get("temperature", 0.2))
@@ -610,6 +631,12 @@ def chat():
             _issue_ctx_for_snapshot = _extract_issue_context()
         except Exception:
             _issue_ctx_for_snapshot = {}
+
+        feedback_service.begin_turn(
+            conversation_id,
+            issue=_issue_ctx_for_snapshot,
+            log_path=getattr(agent, "current_log_path", "") or "",
+        )
 
         # Usage analytics: on every Send, capture the entry session (user name,
         # date, CASE NUMBER + case summary) and the asked question into the
@@ -812,6 +839,9 @@ def history_load():
         session["feedback_conversation_id"] = conversation_id
 
         conv = conv or {}
+        # Feedback on a reloaded conversation is stamped with the case it
+        # was recorded under, not whatever case the session holds now.
+        feedback_service.remember_conversation_case(conversation_id, conv)
         running = bool(job is not None and job.status == "running")
         issue = conv.get("issue") if isinstance(conv.get("issue"), dict) else {}
         turns = conv.get("turns") or []
@@ -1500,4 +1530,7 @@ log_chatbot_bp = create_chatbot_blueprint(ChatbotBlueprintConfig(
     capabilities=_LOG_CHATBOT_CAPABILITIES,
     get_agent=_get_or_create_agent,
     handlers=_LOG_CHATBOT_HANDLERS,
+    # A reset starts a new conversation, so the case number is asked for
+    # again rather than inherited (#165).
+    on_reset=check_ips_service.start_new_session,
 ))

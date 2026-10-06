@@ -1,6 +1,7 @@
 from flask import render_template, request, session, jsonify, Response, copy_current_request_context
 from services.chatbot.issue_context import extract_disconnect_time as _extract_disconnect_time
 from services.chatbot.shared_routes import leave_chatbot as _leave_chatbot
+from services.chatbot.session import register_session_agent_store
 from services.skill_editor.controller import (
     SkillAppendContext,
     build_profile_yaml_helpers,
@@ -39,12 +40,14 @@ from services.chatbot.engine.network_experience import NwAnalysisAgentSystem
 from services.chatbot.engine.system import load_skills_from_yaml
 from services.sleepstudy_analyzer import analyze_sleepstudy_stream
 from services import gather_service
+from services import check_ips_service
 from utils.etl_utils import extract_time_from_description
 from utils.event_log_utils import find_event_log_for_log
 
 
 # Server-side store: session_id -> NwAnalysisAgentSystem instance
 _chatbot_instances: dict = {}
+register_session_agent_store("nw_analysis", _chatbot_instances)
 
 # Gather analytics domain for this blueprint. Kept as a constant so the NW
 # records stay distinguishable from the wifi ones even though both are driven
@@ -327,6 +330,7 @@ def set_log():
             "message": f"Log file set: {log_path}",
             "skills": agent.get_skill_descriptions(),
             "evtx_path": event_log_path,
+            **check_ips_service.prompt_state(log_path),
         })
     except Exception as e:
         return jsonify({"success": False, "error": str(e)}), 500
@@ -353,6 +357,7 @@ def set_log_sleepstudy():
         return jsonify({
             "success": True,
             "message": f"Sleepstudy file set: {log_path}",
+            **check_ips_service.prompt_state(log_path),
         })
     except Exception as e:
         return jsonify({"success": False, "error": str(e)}), 500
@@ -375,6 +380,16 @@ def analyze_sleepstudy():
         def _err():
             yield f"data: {json.dumps({'type': 'error', 'content': 'log_path is required'})}\n\n"
         return Response(_err(), mimetype="text/event-stream")
+
+    # 428 Precondition Required. set_log_sleepstudy only advertises needs_ips,
+    # and the page starts this analysis straight afterwards, so without a gate
+    # here a case-less sleepstudy runs anyway -- and so does any direct caller
+    # or a client whose prompt never loaded. Checked before the SSE stream
+    # opens, because a 428 inside an event stream is not a status the client
+    # can act on.
+    blocked = check_ips_service.blocking_state(sleep_path)
+    if blocked:
+        return jsonify(blocked), 428
 
     if not os.path.exists(sleep_path):
         def _missing():
@@ -493,6 +508,14 @@ def chat():
     user_message = (data.get("message") or "").strip()
     if not user_message:
         return jsonify({"success": False, "error": "message is required"}), 400
+
+    # Gate against this profile's actual log, not a stale shared session path.
+    sid = session.get("chatbot_session_id", "")
+    nw_agent = _chatbot_instances.get(sid) if sid else None
+    nw_log = str(getattr(nw_agent, "current_log_path", "") or "")
+    blocked = check_ips_service.blocking_state(nw_log or None)
+    if blocked:
+        return jsonify(blocked), 428
 
     try:
         temperature = float(data.get("temperature", 0.2))
@@ -1011,5 +1034,8 @@ nw_analysis_bp = create_chatbot_blueprint(ChatbotBlueprintConfig(
     handlers=_NW_ANALYSIS_HANDLERS,
     # Gather records are keyed by nw_conversation_id, so a reset must start a
     # new one instead of appending this turn to the previous conversation.
-    on_reset=lambda: _ensure_nw_conversation_id(rotate=True),
+    on_reset=lambda: (
+        _ensure_nw_conversation_id(rotate=True),
+        check_ips_service.start_new_session(),
+    ),
 ))

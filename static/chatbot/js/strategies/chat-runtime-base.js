@@ -584,6 +584,7 @@
             showStatus(statusEl, '✔ Log loaded', 'ok', 3000);
             renderSkills(data.skills);
             logLoaded = true;
+            if (window.IpsPrompt) { window.IpsPrompt.handleSetLog(data); }
             // Enables the (collapsed) System Event Log panel when the capture
             // folder ships an .evt / .evtx next to the log.
             if (typeof updateEvtButton === 'function') {

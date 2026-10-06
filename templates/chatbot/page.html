@@ -105,6 +105,7 @@
     // Domain configuration consumed by the static chatbot scripts.
     window.CHATBOT = {{ ui | tojson }};
 </script>
+<script src="/static/js/check_ips_prompt.js"></script>
 <script src="/static/chatbot/js/core.js"></script>
 {% if ui.runtime_strategy_script %}
 <script src="/static/chatbot/js/strategies/chat-runtime-base.js"></script>

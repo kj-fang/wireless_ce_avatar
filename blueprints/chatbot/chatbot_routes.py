@@ -14,9 +14,10 @@ This module is the same move the refactor already made for the engine and for
 
     the handler bodies are written ONCE, and a profile supplies the data.
 
-:class:`AgentRouteProfile` is that data. :func:`build_agent_adapter` closes
-over one profile and returns the adapter map ``handler_map()`` validates, so a
-missing handler still fails at import time rather than 404-ing in production.
+:class:`AgentRouteProfile` is that data. :class:`AgentRoutes` builds one
+profile's handlers as methods and hands ``handler_map()`` the adapter map it
+validates, so a missing handler still fails at import time rather than
+404-ing in production.
 
 Reading the differences from ``configs/chatbot_ui.py``
 -----------------------------------------------------
@@ -523,39 +524,38 @@ def _guard_times_inside_log_range(first_ts, last_ts, attachment_time,
 # ==================================================================
 # The handlers, written once
 # ==================================================================
-@dataclass(frozen=True)
-class AgentAdapter:
-    """One profile's built route layer.
+class AgentRoutes:
+    """One profile's complete route layer.
+
+    Every handler is written once, as a method, and reads its profile's data
+    from ``self.profile`` — the two route files this module replaces satisfied
+    the same contract with two copies of this code.
 
     ``handlers`` is what ``handler_map()`` validates against the profile's
-    enabled capabilities; ``get_agent`` is the same per-session accessor those
-    handlers close over, which the factory's own three use cases (/reset,
-    /skills, /browse_yaml) also need.
+    enabled capabilities. ``get_agent`` is the per-session accessor those
+    handlers use, which the factory's own three use cases (/reset, /skills,
+    /browse_yaml) also need.
+
+    Methods rather than closures, so a handler can be imported, patched and
+    named in a stack trace like any other method, and a test can reach the
+    session store as ``routes.session_agents`` instead of digging through
+    ``__closure__``.
     """
 
-    handlers: dict[str, Callable[..., Any]]
-    get_agent: Callable[..., Any]
-
-
-def build_agent_adapter(profile: AgentRouteProfile) -> AgentAdapter:
-    """Build one profile's complete route layer.
-
-    Every handler below is written once and reads its profile's data, which is
-    the whole point of this module — the two route files it replaces satisfied
-    the same contract with two copies of this code.
-    """
-    # Per-profile server-side store: session_id -> agent instance. One dict per
-    # profile, NOT one shared dict: both profiles key it by the same Flask
-    # session id, so sharing it would hand the BT page the Wi-Fi agent.
-    session_agents: dict = {}
-    register_session_agent_store(profile.name, session_agents)
-
-    yu = profile.yaml_utils
+    def __init__(self, profile: AgentRouteProfile):
+        self.profile = profile
+        # Per-profile server-side store: session_id -> agent instance. One dict
+        # per profile, NOT one shared dict: both profiles key it by the same
+        # Flask session id, so sharing it would hand the BT page the Wi-Fi agent.
+        self.session_agents: dict = {}
+        register_session_agent_store(profile.name, self.session_agents)
+        self.get_agent = self._get_or_create_agent
+        self.handlers = self._build_handlers()
 
     # ------------------------------------------------------------------
     # Feedback sidecar helpers (anonymous, side-car, never blocks chat)
     # ------------------------------------------------------------------
-    def _ensure_feedback_conversation_id(*, rotate: bool = False) -> str:
+    def _ensure_feedback_conversation_id(self, *, rotate: bool = False) -> str:
         """
         Return the current feedback conversation_id, creating one if missing
         or if `rotate=True` (e.g. on set_log / prepare — a new log = new case).
@@ -563,7 +563,7 @@ def build_agent_adapter(profile: AgentRouteProfile) -> AgentAdapter:
         """
         return _shared_feedback_conversation_id(rotate=rotate)
 
-    def _get_or_create_agent(skip_prime: bool = False):
+    def _get_or_create_agent(self, skip_prime: bool = False):
         """
         Return a per-session agent for this profile.
         Borrows client/model from the app-level agent in
@@ -574,12 +574,12 @@ def build_agent_adapter(profile: AgentRouteProfile) -> AgentAdapter:
                     Use this when the caller will immediately call prime_with_context itself.
         """
         sid = session.get("chatbot_session_id")
-        if not sid or sid not in session_agents:
+        if not sid or sid not in self.session_agents:
             sid = str(uuid.uuid4())
             session["chatbot_session_id"] = sid
 
-        if sid not in session_agents:
-            base = getattr(app_config, profile.agent_config_attr, None)
+        if sid not in self.session_agents:
+            base = getattr(app_config, self.profile.agent_config_attr, None)
             if base is None:
                 # Fallback: try to build from llm_helper directly
                 llm_helper = app_config.llm_helper
@@ -588,7 +588,7 @@ def build_agent_adapter(profile: AgentRouteProfile) -> AgentAdapter:
                         "Log Chatbot Agent is not available. "
                         "The app may not have an API key configured."
                     )
-                base = profile.agent_class(
+                base = self.profile.agent_class(
                     client=llm_helper.client,
                     model=getattr(llm_helper, "model", "gpt-4.1"),
                     skills=getattr(llm_helper, "skills", None),
@@ -638,11 +638,11 @@ def build_agent_adapter(profile: AgentRouteProfile) -> AgentAdapter:
                         agent.prime_with_context(**ctx)
                 except Exception:
                     pass  # session may not have case context (standalone chatbot)
-            session_agents[sid] = agent
+            self.session_agents[sid] = agent
 
-        return session_agents[sid]
+        return self.session_agents[sid]
 
-    def _export_agent_context(agent) -> list:
+    def _export_agent_context(self, agent) -> list:
         """Snapshot the agent's model-facing conversation. Never raises.
 
         Persisting the context is a convenience — without it a conversation
@@ -657,7 +657,7 @@ def build_agent_adapter(profile: AgentRouteProfile) -> AgentAdapter:
             print(f"[history] context export failed: {e}")
             return []
 
-    def _resume_agent_for(conversation_id: str):
+    def _resume_agent_for(self, conversation_id: str):
         """
         Return the agent to use for ``conversation_id``.
 
@@ -670,25 +670,25 @@ def build_agent_adapter(profile: AgentRouteProfile) -> AgentAdapter:
         """
         return _shared_resume_agent_for(
             conversation_id,
-            session_agents,
-            _get_or_create_agent,
+            self.session_agents,
+            self._get_or_create_agent,
         )
 
-    def _get_llm_client_model():
-        return _llm_client_model(profile.agent_config_attr)
+    def _get_llm_client_model(self):
+        return _llm_client_model(self.profile.agent_config_attr)
 
-    def _issue_context_organized(raw_desc: str, first_ts, last_ts,
+    def _issue_context_organized(self, raw_desc: str, first_ts, last_ts,
                                  log_path: str = "") -> dict:
         return _organized_issue_context(
             raw_desc, first_ts, last_ts, log_path,
-            llm_client_model=_get_llm_client_model,
-            domain=profile.gather_domain,
+            llm_client_model=self._get_llm_client_model,
+            domain=self.profile.gather_domain,
         )
 
     # ------------------------------------------------------------------
     # Pages
     # ------------------------------------------------------------------
-    def index():
+    def index(self):
         suggested_log = app_config.last_analyzed_log_path or ""
         issue_desc = ""
         ctx: dict = {}
@@ -710,18 +710,18 @@ def build_agent_adapter(profile: AgentRouteProfile) -> AgentAdapter:
         # LLM wait (if any) now happens during the page-render request (browser
         # shows its native loading bar) instead of as a post-load spinner.
         # Best-effort: never let a warm failure block the page.
-        if profile.prewarm_issue_ai_on_index:
+        if self.profile.prewarm_issue_ai_on_index:
             try:
                 if suggested_log and not session.get("_issue_ai_quick"):
                     _first_ts, _last_ts = read_log_time_range(suggested_log)
-                    _issue_context_organized(
+                    self._issue_context_organized(
                         ctx.get("description", "") or "", _first_ts, _last_ts)
             except Exception as _warm_err:
-                print(f"⚠️ {profile.name} index pre-warm skipped: {_warm_err}")
+                print(f"⚠️ {self.profile.name} index pre-warm skipped: {_warm_err}")
 
         return render_template(
             "chatbot/page.html",
-            ui=profile.ui,
+            ui=self.profile.ui,
             suggested_log=suggested_log,
             issue_description=issue_desc,
         )
@@ -729,7 +729,7 @@ def build_agent_adapter(profile: AgentRouteProfile) -> AgentAdapter:
     # ------------------------------------------------------------------
     # API: set log file path
     # ------------------------------------------------------------------
-    def set_log():
+    def set_log(self):
         data = request.get_json(silent=True) or {}
         log_path = data.get("log_path", "").strip()
         if not log_path:
@@ -753,7 +753,7 @@ def build_agent_adapter(profile: AgentRouteProfile) -> AgentAdapter:
             # file has not changed.
             same_log = bool(prev_log_path) and prev_log_path == log_path
 
-            agent = _get_or_create_agent(skip_prime=True)
+            agent = self._get_or_create_agent(skip_prime=True)
             agent.current_log_path = log_path
             if not same_log:
                 agent.reset_conversation()      # fresh conversation for a new file
@@ -773,7 +773,7 @@ def build_agent_adapter(profile: AgentRouteProfile) -> AgentAdapter:
             # eagerly create the snapshot file so issue context is captured even
             # if the user never sends a message); keep it for a same-file re-load
             # so the next turn appends to the conversation already on screen.
-            new_conv_id = _ensure_feedback_conversation_id(rotate=not same_log)
+            new_conv_id = self._ensure_feedback_conversation_id(rotate=not same_log)
 
             if same_log:
                 if preserved_history:
@@ -786,7 +786,7 @@ def build_agent_adapter(profile: AgentRouteProfile) -> AgentAdapter:
                     # continuity a History click gets.
                     try:
                         stored = history_service.get_context(
-                            new_conv_id, domain=profile.history_domain)
+                            new_conv_id, domain=self.profile.history_domain)
                         if stored:
                             agent.import_conversation_context(stored)
                     except Exception as _e:
@@ -796,7 +796,7 @@ def build_agent_adapter(profile: AgentRouteProfile) -> AgentAdapter:
                 session_id=session.get("chatbot_session_id", ""),
                 issue=ctx,
                 log_path=log_path,
-                domain=profile.history_domain,
+                domain=self.profile.history_domain,
             )
 
             # Whole-minute span of the log so the sidebar can cap the
@@ -824,7 +824,7 @@ def build_agent_adapter(profile: AgentRouteProfile) -> AgentAdapter:
                 _first_ts, _last_ts = read_log_time_range(log_path)
                 if _last_ts:
                     log_last_time = format_issue_time(_last_ts)
-                elif profile.allow_time_only and log_has_date is False:
+                elif self.profile.allow_time_only and log_has_date is False:
                     log_last_time = _time_only_log_last_time(agent)
             except Exception as _e:
                 print(f"⚠️  log_last_time lookup failed: {_e}")
@@ -858,7 +858,7 @@ def build_agent_adapter(profile: AgentRouteProfile) -> AgentAdapter:
     # ------------------------------------------------------------------
     # API: suggest issue time(s) via LLM
     # ------------------------------------------------------------------
-    def suggest_issue_times():
+    def suggest_issue_times(self):
         """Suggest issue time(s) from the user's typed description + a rough browse
         of the loaded log. User-first (explicit times bypass the LLM). The frontend
         must obtain the user's consent before calling this route. The heavy lifting
@@ -872,7 +872,7 @@ def build_agent_adapter(profile: AgentRouteProfile) -> AgentAdapter:
         source_filter = str(data.get("source_filter") or "all").strip() or "all"
         level_filter = str(data.get("level_filter") or "warning_error").strip() or "warning_error"
         try:
-            agent = _get_or_create_agent()
+            agent = self._get_or_create_agent()
             log_path = agent.current_log_path or ""
             first_ts, last_ts = read_log_time_range(log_path) if log_path else (None, None)
 
@@ -886,7 +886,7 @@ def build_agent_adapter(profile: AgentRouteProfile) -> AgentAdapter:
 
             event_log_events = (
                 _event_log_anchor_events(log_path, source_filter, level_filter)
-                if profile.event_log_anchor else []
+                if self.profile.event_log_anchor else []
             )
 
             # An empty description is allowed — the AI can still infer the issue
@@ -897,7 +897,7 @@ def build_agent_adapter(profile: AgentRouteProfile) -> AgentAdapter:
                                 "error": "Type a problem description or load a log first."}), 400
 
             extra: dict = {}
-            if profile.allow_time_only:
+            if self.profile.allow_time_only:
                 # Detect whether the loaded log carries dates or is time-only
                 # (DDD / tracefmt). Threading this into
                 # build_issue_time_suggestions makes the LLM prompt + the
@@ -908,7 +908,7 @@ def build_agent_adapter(profile: AgentRouteProfile) -> AgentAdapter:
                     extra["log_has_date"] = agent._log_has_date()
                 except Exception:
                     extra["log_has_date"] = None
-            if profile.customer_timezone:
+            if self.profile.customer_timezone:
                 # The log's first/last timestamps stay in the log frame (decoder
                 # host clock) — the same frame the LLM sees in the digest. So no
                 # shift is needed before the model call and only the tz LABEL
@@ -917,7 +917,7 @@ def build_agent_adapter(profile: AgentRouteProfile) -> AgentAdapter:
                 extra["log_frame_last_ts"] = None
                 _tz_name = get_effective_timezone(log_path) if log_path else ""
                 extra["tz_label"] = format_tz_label(_tz_name) if _tz_name else ""
-            if profile.event_log_anchor:
+            if self.profile.event_log_anchor:
                 extra["event_log_events"] = event_log_events
 
             payload = build_issue_time_suggestions(
@@ -950,7 +950,7 @@ def build_agent_adapter(profile: AgentRouteProfile) -> AgentAdapter:
     # been one shared implementation since the engine refactor. Same name, two
     # layers: seeing agent.chat() in here is not what makes this shared.
     # ------------------------------------------------------------------
-    def chat():
+    def chat(self):
         data = request.get_json(silent=True) or {}
         user_message = (data.get("message") or "").strip()
         if not user_message:
@@ -963,7 +963,7 @@ def build_agent_adapter(profile: AgentRouteProfile) -> AgentAdapter:
         # so the no-argument form could check a stale, already-answered path.
         # (#165 made the same call for NW.)
         sid = session.get("chatbot_session_id", "")
-        active_agent = session_agents.get(sid) if sid else None
+        active_agent = self.session_agents.get(sid) if sid else None
         active_log = str(getattr(active_agent, "current_log_path", "") or "")
         blocked = check_ips_service.blocking_state(active_log or None)
         if blocked:
@@ -997,7 +997,7 @@ def build_agent_adapter(profile: AgentRouteProfile) -> AgentAdapter:
         if "issue_time_window_minutes" in data:
             try:
                 issue_time_window_minutes = max(0, min(
-                    profile.window_minutes_cap,
+                    self.profile.window_minutes_cap,
                     int(data.get("issue_time_window_minutes")),
                 ))
             except (TypeError, ValueError):
@@ -1011,8 +1011,8 @@ def build_agent_adapter(profile: AgentRouteProfile) -> AgentAdapter:
             # detaches the agent from the session slot and a bare
             # _get_or_create_agent() would hand the very next follow-up a
             # brand-new, context-less agent.
-            conversation_id = _ensure_feedback_conversation_id()
-            agent = _resume_agent_for(conversation_id)
+            conversation_id = self._ensure_feedback_conversation_id()
+            agent = self._resume_agent_for(conversation_id)
             if issue_time_window_minutes is not None:
                 agent.issue_time_window_minutes = issue_time_window_minutes
             # Backstop: if the resolved agent lost its log path (e.g. a fresh
@@ -1051,7 +1051,7 @@ def build_agent_adapter(profile: AgentRouteProfile) -> AgentAdapter:
                     parsed, is_time_only = parse_issue_time_string(raw_it)
                     agent.issue_time = parsed
                     agent._issue_time_time_only = is_time_only
-                    if profile.customer_timezone:
+                    if self.profile.customer_timezone:
                         _sync_customer_issue_time(agent, parsed, is_time_only)
                 elif explicitly_cleared:
                     # Explicit "no time": clear agent state and neutralise
@@ -1103,7 +1103,7 @@ def build_agent_adapter(profile: AgentRouteProfile) -> AgentAdapter:
                     log_path=getattr(agent, "current_log_path", "") or "",
                     issue_time=format_issue_time(agent.issue_time),
                     issue_time_window_minutes=getattr(agent, "issue_time_window_minutes", None),
-                    domain=profile.gather_domain,
+                    domain=self.profile.gather_domain,
                     turn_id=turn_id,
                 )
             except Exception:
@@ -1121,10 +1121,10 @@ def build_agent_adapter(profile: AgentRouteProfile) -> AgentAdapter:
                 turn_id=turn_id,
                 title=user_message,
                 agent=agent,
-                domain=profile.history_domain,
+                domain=self.profile.history_domain,
             )
             if session_id:
-                session_agents.pop(session_id, None)
+                self.session_agents.pop(session_id, None)
 
             def step_cb(step):
                 try:
@@ -1160,7 +1160,7 @@ def build_agent_adapter(profile: AgentRouteProfile) -> AgentAdapter:
                             model=getattr(agent, "model", "") or "",
                             usage=getattr(agent, "last_turn_usage", None),
                             issue=_issue_ctx_for_snapshot,
-                            domain=profile.gather_domain,
+                            domain=self.profile.gather_domain,
                             turn_id=turn_id,
                             latency_ms=int((datetime.now() - turn_started_at).total_seconds() * 1000),
                         )
@@ -1181,7 +1181,7 @@ def build_agent_adapter(profile: AgentRouteProfile) -> AgentAdapter:
                         issue=_issue_ctx_for_snapshot,
                         log_path=getattr(agent, "current_log_path", "") or "",
                         parent_message_id=parent_message_id,
-                        domain=profile.history_domain,
+                        domain=self.profile.history_domain,
                     )
                     history_service.record_turn(
                         conversation_id=conversation_id,
@@ -1193,7 +1193,7 @@ def build_agent_adapter(profile: AgentRouteProfile) -> AgentAdapter:
                         issue=_issue_ctx_for_snapshot,
                         log_path=getattr(agent, "current_log_path", "") or "",
                         issue_time=format_issue_time(agent.issue_time),
-                        domain=profile.history_domain,
+                        domain=self.profile.history_domain,
                         # Keep the reasoning trace too, so reopening this
                         # conversation shows how the answer was reached and
                         # not only what it was.
@@ -1201,7 +1201,7 @@ def build_agent_adapter(profile: AgentRouteProfile) -> AgentAdapter:
                         # And the model-facing conversation, so a follow-up
                         # asked tomorrow is answered by something that still
                         # has the evidence, not just the conclusions.
-                        agent_context=_export_agent_context(agent),
+                        agent_context=self._export_agent_context(agent),
                     )
                     chat_jobs.finish_job(job, result)
                 except Exception as exc:
@@ -1214,7 +1214,7 @@ def build_agent_adapter(profile: AgentRouteProfile) -> AgentAdapter:
                             status="failed",
                             workflow_id=session.get("gather_workflow_id", ""),
                             issue=_issue_ctx_for_snapshot,
-                            domain=profile.gather_domain,
+                            domain=self.profile.gather_domain,
                             latency_ms=int((datetime.now() - turn_started_at).total_seconds() * 1000),
                             error_code=type(exc).__name__,
                         )
@@ -1244,7 +1244,7 @@ def build_agent_adapter(profile: AgentRouteProfile) -> AgentAdapter:
                         status="failed",
                         workflow_id=session.get("gather_workflow_id", ""),
                         issue=locals().get("_issue_ctx_for_snapshot") or {},
-                        domain=profile.gather_domain,
+                        domain=self.profile.gather_domain,
                         error_code=type(e).__name__,
                     )
             except Exception:
@@ -1264,7 +1264,7 @@ def build_agent_adapter(profile: AgentRouteProfile) -> AgentAdapter:
     # profile modules because the resume path reads that key in more places; it
     # is now written once here too.
     # ------------------------------------------------------------------
-    def history_load():
+    def history_load(self):
         """
         Resume a saved conversation: re-point the session at its id, restore the
         log file + issue context into the per-session agent (so follow-up
@@ -1282,12 +1282,12 @@ def build_agent_adapter(profile: AgentRouteProfile) -> AgentAdapter:
         # anything not tagged with this one's domain — otherwise the other
         # bot's conversation id would adopt its job and its agent here.
         job = chat_jobs.get_job(conversation_id)
-        if job is not None and getattr(job, "domain", "") != profile.history_domain:
+        if job is not None and getattr(job, "domain", "") != self.profile.history_domain:
             job = None
         # with_steps: the client re-renders each saved turn's reasoning trace, the
         # same card the live stream drew while the turn was running.
         conv = history_service.get_conversation(
-            conversation_id, domain=profile.history_domain, with_steps=True)
+            conversation_id, domain=self.profile.history_domain, with_steps=True)
         if conv is None and job is None:
             return jsonify({"success": False, "error": "Conversation not found"}), 404
 
@@ -1319,9 +1319,9 @@ def build_agent_adapter(profile: AgentRouteProfile) -> AgentAdapter:
                     if not sid:
                         sid = str(uuid.uuid4())
                         session["chatbot_session_id"] = sid
-                    session_agents[sid] = agent
+                    self.session_agents[sid] = agent
             else:
-                agent = _get_or_create_agent(skip_prime=True)
+                agent = self._get_or_create_agent(skip_prime=True)
                 agent.reset_conversation()
 
             log_exists = bool(log_path) and os.path.exists(log_path)
@@ -1359,7 +1359,7 @@ def build_agent_adapter(profile: AgentRouteProfile) -> AgentAdapter:
                 # it for a live job avoid reading that pair mid-write; the cheap
                 # default (True) just means the sidebar briefly uses the original
                 # datetime windowing until the job finishes and the page reloads.
-                if profile.read_log_has_date_while_running or not running:
+                if self.profile.read_log_has_date_while_running or not running:
                     try:
                         log_has_date = agent._log_has_date()
                     except Exception:
@@ -1400,7 +1400,7 @@ def build_agent_adapter(profile: AgentRouteProfile) -> AgentAdapter:
             context_restored = 0
             if not adopted:
                 stored_context = history_service.get_context(
-                    conversation_id, domain=profile.history_domain)
+                    conversation_id, domain=self.profile.history_domain)
                 if stored_context:
                     try:
                         context_restored = agent.import_conversation_context(stored_context)
@@ -1447,7 +1447,7 @@ def build_agent_adapter(profile: AgentRouteProfile) -> AgentAdapter:
     # ------------------------------------------------------------------
     # API: prepare chatbot from download_result (set log path + case context)
     # ------------------------------------------------------------------
-    def prepare():
+    def prepare(self):
         """
         Called from download_result when the user clicks the analysis button.
         1. Derives the log path from the given etl_path.
@@ -1466,7 +1466,7 @@ def build_agent_adapter(profile: AgentRouteProfile) -> AgentAdapter:
         # log file. Mirrors the log_parser entry handling. Everyone else follows
         # the wpp_ddd convention and appends ".log".
         lower = etl_path.lower()
-        if (profile.accepts_direct_log_path and os.path.exists(etl_path)
+        if (self.profile.accepts_direct_log_path and os.path.exists(etl_path)
                 and (lower.endswith(".log") or lower.endswith(".txt"))):
             log_path = etl_path
         else:
@@ -1474,12 +1474,12 @@ def build_agent_adapter(profile: AgentRouteProfile) -> AgentAdapter:
         if not os.path.exists(log_path):
             # A profile that can only ever derive "<etl>.log" says so; one that
             # also accepts a direct path can't promise which extension it wanted.
-            missing = "Log file" if profile.accepts_direct_log_path else ".log file"
+            missing = "Log file" if self.profile.accepts_direct_log_path else ".log file"
             return jsonify({"success": False,
                             "error": f"{missing} not found: {log_path}"}), 404
 
         try:
-            if profile.purge_issue_caches_on_prepare:
+            if self.profile.purge_issue_caches_on_prepare:
                 # Entering a NEW analysis from download_result. Purge the derived
                 # issue-context caches FIRST so the context below is rebuilt from
                 # this run's selected_files / case_context — not a previous run's
@@ -1487,7 +1487,7 @@ def build_agent_adapter(profile: AgentRouteProfile) -> AgentAdapter:
                 # second analysis is started without going through "Back to
                 # Avatar".)
                 _invalidate_issue_context_caches()
-            if profile.download_result_handoff:
+            if self.profile.download_result_handoff:
                 _clear_carried_issue_time()
                 if carried_issue_time:
                     _validate_carried_issue_time(carried_issue_time, log_path)
@@ -1500,9 +1500,9 @@ def build_agent_adapter(profile: AgentRouteProfile) -> AgentAdapter:
 
             # Get/create per-session agent and prime it
             # skip_prime=True: we call prime_with_context explicitly below (after setting log path)
-            agent = _get_or_create_agent(skip_prime=True)
+            agent = self._get_or_create_agent(skip_prime=True)
             agent.current_log_path = log_path
-            if profile.reset_conversation_on_prepare:
+            if self.profile.reset_conversation_on_prepare:
                 agent.reset_conversation()      # fresh conversation for a new file
             agent.prime_with_context(**ctx)
 
@@ -1512,18 +1512,18 @@ def build_agent_adapter(profile: AgentRouteProfile) -> AgentAdapter:
             # calling the LLM a second time. Never let it fail the prepare step.
             try:
                 _first_ts, _last_ts = read_log_time_range(log_path)
-                _issue_context_organized(ctx.get("description", "") or "", _first_ts, _last_ts)
+                self._issue_context_organized(ctx.get("description", "") or "", _first_ts, _last_ts)
             except Exception as _org_err:
                 print(f"⚠️ Chatbot prepare: issue-context organize skipped: {_org_err}")
 
             # Sidecar: prepare = entering a new analysis = new conversation.
-            new_conv_id = _ensure_feedback_conversation_id(rotate=True)
+            new_conv_id = self._ensure_feedback_conversation_id(rotate=True)
             feedback_service.ensure_conversation(
                 conversation_id=new_conv_id,
                 session_id=session.get("chatbot_session_id", ""),
                 issue=ctx,
                 log_path=log_path,
-                domain=profile.history_domain,
+                domain=self.profile.history_domain,
             )
 
             return jsonify({"success": True})
@@ -1535,7 +1535,7 @@ def build_agent_adapter(profile: AgentRouteProfile) -> AgentAdapter:
     # ------------------------------------------------------------------
     # API: consolidated issue context for the sidebar
     # ------------------------------------------------------------------
-    def get_issue_context():
+    def get_issue_context(self):
         try:
             ctx = _extract_issue_context()
             attachment_time = ctx.get("attachment_time", "")
@@ -1546,7 +1546,7 @@ def build_agent_adapter(profile: AgentRouteProfile) -> AgentAdapter:
         log_path = session.get("chatbot_log_path") or app_config.last_analyzed_log_path or ""
         first_ts, last_ts = read_log_time_range(log_path) if log_path else (None, None)
 
-        if profile.customer_timezone and attachment_time:
+        if self.profile.customer_timezone and attachment_time:
             # Frame-correct a time-only attachment_time up front. A bare clock
             # like "16:45:00" (the customer wall clock parsed from the
             # attachment subtitle) must be anchored to the customer capture
@@ -1567,9 +1567,9 @@ def build_agent_adapter(profile: AgentRouteProfile) -> AgentAdapter:
         # log_path travels only for profiles that reconcile customer time:
         # realign_times_to_log uses it to detect the customer's timezone and
         # capture date, nothing else.
-        organized = _issue_context_organized(
+        organized = self._issue_context_organized(
             ctx.get("description", "") or "", first_ts, last_ts,
-            log_path if profile.customer_timezone else "")
+            log_path if self.profile.customer_timezone else "")
         clean_desc = organized.get("clean_description") or _compose_concise_description(ctx)
         issue_times = organized.get("issue_times") or []
 
@@ -1578,7 +1578,7 @@ def build_agent_adapter(profile: AgentRouteProfile) -> AgentAdapter:
         # or deliberately supplies no value after validation failed. In the latter
         # case do not silently fall back to a fresh LLM/attachment/log-latest guess.
         carried_present = bool(
-            profile.download_result_handoff
+            self.profile.download_result_handoff
             and session.get("_carried_issue_time_present")
         )
         carried_issue_time = (session.get("_carried_issue_time") or "").strip()
@@ -1593,7 +1593,7 @@ def build_agent_adapter(profile: AgentRouteProfile) -> AgentAdapter:
             issue_time_str = issue_times[0]
         elif carried_present:
             issue_time_str = ""
-        elif profile.customer_timezone:
+        elif self.profile.customer_timezone:
             # attachment_time is already frame-corrected above; use it directly.
             # When absent, fall back to the cached log-latest resolution.
             issue_time_str = attachment_time or _resolved_issue_time_for(log_path, attachment_time)
@@ -1608,7 +1608,7 @@ def build_agent_adapter(profile: AgentRouteProfile) -> AgentAdapter:
             "interpretation": organized.get("interpretation", ""),
         }
 
-        if profile.customer_timezone:
+        if self.profile.customer_timezone:
             (attachment_time, issue_time_str, issue_times,
              customer_tz_for_ui, customer_annotations) = _align_times_to_log_frame(
                 log_path, first_ts, last_ts, attachment_time, issue_time_str, issue_times)
@@ -1633,7 +1633,7 @@ def build_agent_adapter(profile: AgentRouteProfile) -> AgentAdapter:
             })
 
         range_blocked, range_warning = False, ""
-        if profile.guard_issue_times_to_log_range:
+        if self.profile.guard_issue_times_to_log_range:
             (attachment_time, issue_time_str, issue_times,
              range_blocked, range_warning) = _guard_times_inside_log_range(
                 first_ts, last_ts, attachment_time, issue_time_str, issue_times,
@@ -1646,7 +1646,7 @@ def build_agent_adapter(profile: AgentRouteProfile) -> AgentAdapter:
                 "log_last_time": format_issue_time(last_ts),
             })
 
-        if profile.download_result_handoff or profile.guard_issue_times_to_log_range:
+        if self.profile.download_result_handoff or self.profile.guard_issue_times_to_log_range:
             # Why the picker was left empty: a hand-off that failed
             # validation, or every auto-filled time fell outside the log.
             payload.update({
@@ -1674,60 +1674,59 @@ def build_agent_adapter(profile: AgentRouteProfile) -> AgentAdapter:
     # anchored at [A-Za-z0-9_] and widened to accept the real skill IDs in this
     # codebase that contain "/" ("VLP/UHB/AFC", "WRDS/WGDS/EWRD/SGOM" — see
     # each engine module's SKILL_FILE_MAP).
-    _yaml_helpers = build_profile_yaml_helpers(
-        user_local_dir=yu.local_user_overrides_dir,
-        today_yaml_filename=yu.today_dated_filename,
-        user_yaml_prefix=profile.user_yaml_prefix,
-        latest_cloud_baseline=yu.find_latest_cloud_baseline_yaml,
-        latest_user_yaml=yu.find_latest_user_yaml,
-        write_yaml_file=_write_yaml_file,
-        load_skills_from_yaml=load_skills_from_yaml,
-        get_agent=_get_or_create_agent,
-        agent_config_attr=profile.agent_config_attr,
-    )
+    def _build_handlers(self) -> dict[str, Callable[..., Any]]:
+        profile, yu = self.profile, self.profile.yaml_utils
+        _yaml_helpers = build_profile_yaml_helpers(
+            user_local_dir=yu.local_user_overrides_dir,
+            today_yaml_filename=yu.today_dated_filename,
+            user_yaml_prefix=profile.user_yaml_prefix,
+            latest_cloud_baseline=yu.find_latest_cloud_baseline_yaml,
+            latest_user_yaml=yu.find_latest_user_yaml,
+            write_yaml_file=_write_yaml_file,
+            load_skills_from_yaml=load_skills_from_yaml,
+            get_agent=self._get_or_create_agent,
+            agent_config_attr=profile.agent_config_attr,
+        )
 
-    skill_editor_handlers = build_skill_editor_handlers(SkillEditorContext(
-        activate_yaml=_yaml_helpers["activate_yaml"],
-        get_active_source=yu.get_active_source,
-        get_or_create_agent=_get_or_create_agent,
-        latest_cloud_baseline=yu.find_latest_cloud_baseline_yaml,
-        latest_user_yaml=yu.find_latest_user_yaml,
-        persist_user_yaml_snapshot=_yaml_helpers["persist_user_yaml_snapshot"],
-        read_yaml_file=_read_yaml_file,
-        refresh_cloud_baseline=yu.refresh_local_cloud_baseline,
-        resolve_cloud_skills_dir=yu.resolve_cloud_skills_dir,
-        sanitise_skill_payload=_sanitise_skill_payload,
-        set_active_source=yu.set_active_source,
-        skills_yaml_status_payload=yu.skills_yaml_status,
-    ))
-    shared_handlers = build_shared_handlers(SharedRouteContext(
-        domain=profile.history_domain,
-        agent_config_attr=profile.agent_config_attr,
-        get_agent=_get_or_create_agent,
-        session_agents=session_agents,
-        browse_filetypes=profile.browse_filetypes,
-        load_skills_from_yaml=load_skills_from_yaml,
-        gather_domain=profile.gather_domain,
-    ))
+        skill_editor_handlers = build_skill_editor_handlers(SkillEditorContext(
+            activate_yaml=_yaml_helpers["activate_yaml"],
+            get_active_source=yu.get_active_source,
+            get_or_create_agent=self._get_or_create_agent,
+            latest_cloud_baseline=yu.find_latest_cloud_baseline_yaml,
+            latest_user_yaml=yu.find_latest_user_yaml,
+            persist_user_yaml_snapshot=_yaml_helpers["persist_user_yaml_snapshot"],
+            read_yaml_file=_read_yaml_file,
+            refresh_cloud_baseline=yu.refresh_local_cloud_baseline,
+            resolve_cloud_skills_dir=yu.resolve_cloud_skills_dir,
+            sanitise_skill_payload=_sanitise_skill_payload,
+            set_active_source=yu.set_active_source,
+            skills_yaml_status_payload=yu.skills_yaml_status,
+        ))
+        shared_handlers = build_shared_handlers(SharedRouteContext(
+            domain=profile.history_domain,
+            agent_config_attr=profile.agent_config_attr,
+            get_agent=self._get_or_create_agent,
+            session_agents=self.session_agents,
+            browse_filetypes=profile.browse_filetypes,
+            load_skills_from_yaml=load_skills_from_yaml,
+            gather_domain=profile.gather_domain,
+        ))
 
-    return AgentAdapter(
-        handlers={
-            "chat": chat,
-            "get_issue_context": get_issue_context,
-            "history_load": history_load,
-            "index": index,
-            "prepare": prepare,
-            "set_log": set_log,
-            "suggest_issue_times": suggest_issue_times,
+        return {
+            "chat": self.chat,
+            "get_issue_context": self.get_issue_context,
+            "history_load": self.history_load,
+            "index": self.index,
+            "prepare": self.prepare,
+            "set_log": self.set_log,
+            "suggest_issue_times": self.suggest_issue_times,
             **shared_handlers,
             **skill_editor_handlers,
-        },
-        get_agent=_get_or_create_agent,
-    )
+        }
 
 
 def create_agent_blueprint(profile: AgentRouteProfile):
-    """Build one profile's Blueprint from its adapter + the route contract.
+    """Build one profile's Blueprint from its route layer + the route contract.
 
     ``get_agent`` has to be THIS profile's session-agent accessor, because the
     factory's own three use cases (/reset, /skills, /browse_yaml) call it — and
@@ -1735,14 +1734,14 @@ def create_agent_blueprint(profile: AgentRouteProfile):
     share one.
     """
     capabilities = profile.capabilities
-    adapter = build_agent_adapter(profile)
+    routes = AgentRoutes(profile)
     return create_chatbot_blueprint(ChatbotBlueprintConfig(
         name=profile.name,
         import_name=__name__,
         url_prefix=profile.url_prefix,
         capabilities=capabilities,
-        get_agent=adapter.get_agent,
-        handlers=handler_map(adapter.handlers, capabilities),
+        get_agent=routes.get_agent,
+        handlers=handler_map(routes.handlers, capabilities),
         on_reset=check_ips_service.start_new_session,
     ))
 

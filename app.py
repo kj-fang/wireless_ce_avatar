@@ -250,11 +250,11 @@ if __name__ == "__main__":
     app_config.silent_mode = args.silent_mode
     
     # Check whether to run in tray mode
-    if args.tray_mode:
-        from tray_manager import TrayManager
-        manager = TrayManager()
-        manager.run()
-        sys.exit(0)
+    # if args.tray_mode:
+    #     from tray_manager import TrayManager
+    #     manager = TrayManager()
+    #     manager.run()
+    #     sys.exit(0)
 
     # Single-instance enforcement (must happen BEFORE shortcut/tray setup so that
     # short-lived SendTo instances don't overwrite the .lnk with a new token)

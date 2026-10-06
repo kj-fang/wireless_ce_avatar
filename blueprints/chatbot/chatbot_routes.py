@@ -177,10 +177,25 @@ class AgentRouteProfile:
     #: TODO(team): one value would do — 1440 is above any real single event.
     window_minutes_cap: int
     #: ``/prepare`` receives a resolved, range-checked issue time from
-    #: download_result and purges the derived issue-context caches before
-    #: rebuilding them for the new analysis. Wi-Fi only: BT's download_result
-    #: flow posts ``etl_path`` alone.
+    #: download_result and carries it into the new analysis. Wi-Fi only:
+    #: BT's download_result flow posts ``etl_path`` alone.
     download_result_handoff: bool
+    #: ``/prepare`` drops the DERIVED issue-context caches (attachment time,
+    #: resolved issue time, LLM-organized description) before rebuilding
+    #: them, so a second analysis started without "Back to Avatar" cannot
+    #: inherit the previous run's. Wi-Fi only.
+    #: TODO(team): a BT /prepare is a new analysis too. #165's
+    #: check_ips_service already drops these caches whenever the case
+    #: number changes, which covers most of BT's exposure; a second BT run
+    #: on the SAME case is the part still open. Unverified, so unchanged.
+    purge_issue_caches_on_prepare: bool
+    #: ``/get_issue_context`` drops any auto-filled issue time that falls
+    #: outside the selected log (an LLM can pick the wrong date when a log
+    #: spans midnight) and says why in ``issue_time_blocked`` /
+    #: ``issue_time_warning``. Wi-Fi only. Deliberately NOT tied to
+    #: ``customer_timezone``: that flag lives in the UI config, and turning
+    #: off a display feature must not remove a server-side safety net.
+    guard_issue_times_to_log_range: bool
     #: ``/prepare`` resets the conversation before priming. Wi-Fi only.
     #: TODO(team): BT reaching /prepare is also a new analysis, so this looks
     #: like drift rather than policy — confirm before unifying.
@@ -391,7 +406,20 @@ def _invalidate_issue_context_caches() -> None:
         "_attachment_time_cache",      # parsed attachment subtitle time
         "_resolved_issue_time_cache",  # log_path -> resolved issue_time
         "_issue_ai_quick",             # LLM-organized description + issue times
-        "_carried_issue_time",         # download_result -> chatbot hand-off
+    ):
+        session.pop(key, None)
+
+
+def _clear_carried_issue_time() -> None:
+    """Forget the previous run's download_result hand-off.
+
+    A run that carries no issue time must not inherit the last run's, and a
+    run that carries one re-validates it from scratch. Kept apart from the
+    derived-cache purge above, the same split check_ips_service makes: these
+    keys are a time the user picked, not something derived from the case.
+    """
+    for key in (
+        "_carried_issue_time",          # download_result -> chatbot hand-off
         "_carried_issue_time_warning",  # failed hand-off range validation
         "_carried_issue_time_present",  # blocks a second date guess on failure
     ):
@@ -1444,7 +1472,7 @@ def build_agent_adapter(profile: AgentRouteProfile) -> AgentAdapter:
                             "error": f"{missing} not found: {log_path}"}), 404
 
         try:
-            if profile.download_result_handoff:
+            if profile.purge_issue_caches_on_prepare:
                 # Entering a NEW analysis from download_result. Purge the derived
                 # issue-context caches FIRST so the context below is rebuilt from
                 # this run's selected_files / case_context — not a previous run's
@@ -1452,6 +1480,8 @@ def build_agent_adapter(profile: AgentRouteProfile) -> AgentAdapter:
                 # second analysis is started without going through "Back to
                 # Avatar".)
                 _invalidate_issue_context_caches()
+            if profile.download_result_handoff:
+                _clear_carried_issue_time()
                 if carried_issue_time:
                     _validate_carried_issue_time(carried_issue_time, log_path)
 
@@ -1571,42 +1601,53 @@ def build_agent_adapter(profile: AgentRouteProfile) -> AgentAdapter:
             "interpretation": organized.get("interpretation", ""),
         }
 
-        if not profile.customer_timezone:
-            return jsonify(payload)
+        if profile.customer_timezone:
+            (attachment_time, issue_time_str, issue_times,
+             customer_tz_for_ui, customer_annotations) = _align_times_to_log_frame(
+                log_path, first_ts, last_ts, attachment_time, issue_time_str, issue_times)
+            payload.update({
+                "attachment_time": attachment_time,
+                "issue_time": issue_time_str,
+                "issue_times": issue_times,
+                # Customer-tz annotation: same instant viewed from the customer's
+                # wall clock. The picker shows the log-frame value (matches .log
+                # content) and surfaces this map underneath so the engineer also
+                # sees what time it was on the customer's side. tz label is the
+                # detected system_info / sidecar value; empty string when nothing
+                # could be detected (chatbot then hides the annotation row).
+                "customer_tz": customer_tz_for_ui,
+                "customer_annotations": customer_annotations,
+                # IANA id for the customer tz (e.g. "America/Los_Angeles") so the
+                # browser can recompute the customer wall clock DST-correctly for
+                # any date typed into the picker. Empty when only a fixed offset
+                # is known — the frontend then falls back to the label's
+                # standard offset.
+                "customer_iana": to_iana_timezone(customer_tz_for_ui) if customer_tz_for_ui else "",
+            })
 
-        (attachment_time, issue_time_str, issue_times,
-         customer_tz_for_ui, customer_annotations) = _align_times_to_log_frame(
-            log_path, first_ts, last_ts, attachment_time, issue_time_str, issue_times)
+        range_blocked, range_warning = False, ""
+        if profile.guard_issue_times_to_log_range:
+            (attachment_time, issue_time_str, issue_times,
+             range_blocked, range_warning) = _guard_times_inside_log_range(
+                first_ts, last_ts, attachment_time, issue_time_str, issue_times,
+                carried_present)
+            payload.update({
+                "attachment_time": attachment_time,
+                "issue_time": issue_time_str,
+                "issue_times": issue_times,
+                "log_first_time": format_issue_time(first_ts),
+                "log_last_time": format_issue_time(last_ts),
+            })
 
-        (attachment_time, issue_time_str, issue_times,
-         range_blocked, range_warning) = _guard_times_inside_log_range(
-            first_ts, last_ts, attachment_time, issue_time_str, issue_times,
-            carried_present)
-
-        payload.update({
-            "attachment_time": attachment_time,
-            "issue_time": issue_time_str,
-            "issue_times": issue_times,
-            # Customer-tz annotation: same instant viewed from the customer's
-            # wall clock. The picker shows the log-frame value (matches .log
-            # content) and surfaces this map underneath so the engineer also
-            # sees what time it was on the customer's side. tz label is the
-            # detected system_info / sidecar value; empty string when nothing
-            # could be detected (chatbot then hides the annotation row).
-            "customer_tz": customer_tz_for_ui,
-            "customer_annotations": customer_annotations,
-            # IANA id for the customer tz (e.g. "America/Los_Angeles") so the
-            # browser can recompute the customer wall clock DST-correctly for any
-            # date typed into the picker. Empty when only a fixed offset is known —
-            # the frontend then falls back to the label's standard offset.
-            "customer_iana": to_iana_timezone(customer_tz_for_ui) if customer_tz_for_ui else "",
-            "issue_time_blocked": bool(
-                (carried_present and not carried_issue_time) or range_blocked
-            ),
-            "issue_time_warning": carried_warning or range_warning,
-            "log_first_time": format_issue_time(first_ts),
-            "log_last_time": format_issue_time(last_ts),
-        })
+        if profile.download_result_handoff or profile.guard_issue_times_to_log_range:
+            # Why the picker was left empty: a hand-off that failed
+            # validation, or every auto-filled time fell outside the log.
+            payload.update({
+                "issue_time_blocked": bool(
+                    (carried_present and not carried_issue_time) or range_blocked
+                ),
+                "issue_time_warning": carried_warning or range_warning,
+            })
         return jsonify(payload)
 
     # ==================================================================
@@ -1713,6 +1754,8 @@ WIFI_PROFILE = AgentRouteProfile(
     gather_domain="wifi",
     window_minutes_cap=1440,
     download_result_handoff=True,
+    purge_issue_caches_on_prepare=True,
+    guard_issue_times_to_log_range=True,
     reset_conversation_on_prepare=True,
     accepts_direct_log_path=False,
     read_log_has_date_while_running=True,
@@ -1730,6 +1773,8 @@ BT_PROFILE = AgentRouteProfile(
     gather_domain="bt",
     window_minutes_cap=100000,
     download_result_handoff=False,
+    purge_issue_caches_on_prepare=False,
+    guard_issue_times_to_log_range=False,
     reset_conversation_on_prepare=False,
     accepts_direct_log_path=True,
     read_log_has_date_while_running=False,

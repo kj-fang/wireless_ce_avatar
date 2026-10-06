@@ -28,6 +28,7 @@ from __future__ import annotations
 import json
 import re
 import os
+from pathlib import Path
 import time
 import traceback
 from dataclasses import dataclass, field, asdict
@@ -236,6 +237,8 @@ class CaseAnalysis:
                                                        #   (safe source for public fills)
     action_owner: str = ""                             # who acts next: intel | customer | ""
     next_action: str = ""                              # reader's one-sentence next step
+    comment_images: list = field(default_factory=list)  # [{comment_id, date, author,
+                                                       #   count, descriptions}]
     first_response_done: bool = False                  # overview checklist already sent on
                                                        #   this case (later rounds skip it)
     error: str = ""
@@ -338,6 +341,34 @@ class HandsfreeRunner:
             analysis.error = ("BT case — v1 runs description triage only"
                               if analysis.ok else "triage failed")
             return analysis
+
+        # -- 2b. images embedded in comments (screenshots) ----------------------
+        # Snowflake keeps the plain text only; the rich-text comments in IPS
+        # still link the images. Download + describe them (vision) and add
+        # the descriptions as comment rows, so the reader, the checklist
+        # fill and the customer history see what the pictures say. Failure
+        # or no images: the rows stay as they were.
+        with self._stage(analysis, "read_images"):
+            from .comment_images import annotate_case_comments
+            from .composer import AI_MARKER
+            from .ips_client import IpsClient
+            cache = (Path(app_config.avatarfiles_dir) / "handsfree"
+                     / "image_descriptions.json"
+                     if getattr(app_config, "avatarfiles_dir", None) else None)
+            rows, info = annotate_case_comments(
+                IpsClient(), app_config.llm_helper, analysis.case_id,
+                case_ctx.comments, cache_path=cache, skip_marker=AI_MARKER,
+                progress=lambda m: self.progress("read_images", m))
+            analysis.comment_images = info
+            if info:
+                case_ctx.comments = rows
+                from .case_reader import customer_visible_history
+                analysis.customer_history = customer_visible_history(rows)
+                self.progress("read_images",
+                              f"{sum(len(i['descriptions']) for i in info)} image(s) "
+                              f"described across {len(info)} comment(s)")
+            else:
+                self.progress("read_images", "no images in the comments")
 
         # -- 3. read the case history (description + comments, chronological) --
         # The reader mirrors how an engineer works the case: description

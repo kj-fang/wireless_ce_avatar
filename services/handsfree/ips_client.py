@@ -247,6 +247,30 @@ class IpsClient:
         resp.raise_for_status()
         return resp.json().get("records", [])
 
+    def fetch_binary(self, url: str, max_bytes: int = 5 * 1024 * 1024
+                     ) -> Optional[tuple[str, bytes]]:
+        """Download a file the comment body links to (rich-text images on
+        the force.com image servlet) with the Salesforce session. Returns
+        (content_type, bytes) or None (non-200, non-image, too big)."""
+        vf_session, headers, _ver = self._auth()
+        try:
+            resp = _requests.get(url, headers=headers, cookies=vf_session.cookies,
+                                 proxies=vf_session.proxies, timeout=30, stream=True)
+            if resp.status_code != 200:
+                return None
+            ctype = (resp.headers.get("Content-Type") or "").split(";")[0].strip().lower()
+            if not ctype.startswith("image/"):
+                return None
+            data = b""
+            for chunk in resp.iter_content(65536):
+                data += chunk
+                if len(data) > max_bytes:
+                    return None
+            return ctype, data
+        except Exception as e:
+            print(f"[handsfree.ips] image download failed: {e}")
+            return None
+
     # ------------------------------------------------------------------
     # field discovery + posting
     # ------------------------------------------------------------------

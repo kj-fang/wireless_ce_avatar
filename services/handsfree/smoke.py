@@ -332,11 +332,43 @@ def smoke_runner(tmp: Path) -> None:
         },
         chat=lambda messages, system_content=None: reader_reply,
     )
+    # Vision-aware wrapper: a content LIST (image blocks) gets the image
+    # description reply; plain text prompts go to whatever `chat` is set to
+    # at that moment (the tests swap it). The last text prompt is kept so a
+    # test can assert what the reader was shown.
+    seen_prompts = {}
+    _plain_chat = lambda messages, system_content=None: fake_llm.chat_text(messages, system_content)
+    def _vision_or_text(messages, system_content=None):
+        content = messages[0]["content"]
+        if isinstance(content, list):
+            seen_prompts["vision_blocks"] = content
+            return '{"images": ["WRT tool screenshot: Dump & Collect button highlighted, preset Alnair applied; annotation: press after issue happens"]}'
+        seen_prompts["text"] = content
+        return fake_llm.chat_text(messages, system_content)
+    fake_llm.chat_text = fake_llm.chat
+    fake_llm.chat = _vision_or_text
     orig_llm = getattr(app_config, "llm_helper", None)
     orig_agent = getattr(app_config, "log_chatbot_agent", None)
     orig_files_dir = getattr(app_config, "avatarfiles_dir", None)
 
+    from . import ips_client as ipc_mod
+    orig_ipc = ipc_mod.IpsClient
+
+    class _FakeIps:
+        """One Partner comment with an embedded screenshot (force.com URL)."""
+        FIELD_RICH_BODY = "Core_IPS_Rich_Comment__c"
+        fetched: list = []
+        def get_case_comments(self, case_id):
+            return [{"Id": "CIMG1", "CreatedDate": "2026-06-20T03:05:00.000+0000",
+                     "Core_IPS_Comment_Author_Type__c": "Partner",
+                     "Core_IPS_Rich_Comment__c":
+                         '<p>Repro steps attached as screenshot.<br/><img src="https://intel.file.force.com/servlet/rtaImage?eid=1&amp;refid=2"></p>'}]
+        def fetch_binary(self, url, max_bytes=0):
+            _FakeIps.fetched.append(url)
+            return ("image/png", b"PNG fake")
+
     try:
+        ipc_mod.IpsClient = _FakeIps
         cis.CaseService.process_case = staticmethod(_fake_process)
         cis.CaseService.load_case_summary_prompt = staticmethod(
             lambda wifi_or_bt: "prompt_fake.py")
@@ -380,6 +412,17 @@ def smoke_runner(tmp: Path) -> None:
               analysis.action_owner == "intel"
               and analysis.next_action.startswith("Intel to analyze repro_logs.7z"),
               f"{analysis.action_owner!r} {analysis.next_action!r}")
+        check("S4.i2 comment screenshot downloaded, described, fed to the reader "
+              "and the customer history; stage recorded OK",
+              len(analysis.comment_images) == 1
+              and "Dump & Collect" in analysis.comment_images[0]["descriptions"][0]
+              and "Dump & Collect" in analysis.customer_history
+              and "[Images embedded in the comment of 2026-06-20" in seen_prompts.get("text", "")
+              and _FakeIps.fetched == ["https://intel.file.force.com/servlet/rtaImage?eid=1&refid=2"]
+              and any(st.name == "read_images" and st.ok for st in analysis.stages)
+              and seen_prompts["vision_blocks"][2]["type"] == "image_url",
+              f"images={analysis.comment_images} fetched={_FakeIps.fetched} "
+              f"stages={[(st.name, st.ok, st.detail) for st in analysis.stages if st.name == 'read_images']}")
         check("S4.h2 customer history keeps Partner comments, drops Intel-side ones",
               "Reproduced today at 10:17:30" in analysis.customer_history
               and "INTERNAL" not in analysis.customer_history,
@@ -472,7 +515,7 @@ def smoke_runner(tmp: Path) -> None:
                 {"item": "repro_steps", "reason": "no repro steps"},
             ],
         })
-        fake_llm.chat = lambda messages, system_content=None: severe_reply
+        fake_llm.chat_text = lambda messages, system_content=None: severe_reply
         analysis5 = r.analyze_case("01234567")
         stage_names5 = [s.name for s in analysis5.stages]
         check("S9.a severe info gap -> request_info, stops before pick_zip",
@@ -506,7 +549,7 @@ def smoke_runner(tmp: Path) -> None:
             "missing_info": [{"item": "issue_time",
                               "reason": "no failure time stated"}],
         })
-        fake_llm.chat = lambda messages, system_content=None: time_gap_reply
+        fake_llm.chat_text = lambda messages, system_content=None: time_gap_reply
         adc.process_single_zip = _fake_zip_proc
         analysis6 = r.analyze_case("01234567")
         check("S9.c fallback-found issue time retracts the gap",
@@ -535,7 +578,7 @@ def smoke_runner(tmp: Path) -> None:
                 "Steps to reproduce": "1. Run Burn-in stress 2. Check device status in Device Manager"}
             return case_ctx
         cis.CaseService.process_case = staticmethod(_fake_process_env_steps)
-        fake_llm.chat = lambda messages, system_content=None: reader_reply
+        fake_llm.chat_text = lambda messages, system_content=None: reader_reply
         analysis7 = r.analyze_case("01234567")
         check("S11.e env-form repro steps retract the reader-flagged gap",
               analysis7.mode == "full" and analysis7.missing_info == []
@@ -649,7 +692,7 @@ def smoke_runner(tmp: Path) -> None:
         waiting_reply.update({
             "action_owner": "customer",
             "next_action": "Customer to upload the WRT log Intel asked for in comment #3"})
-        fake_llm.chat = lambda messages, system_content=None: json.dumps(waiting_reply)
+        fake_llm.chat_text = lambda messages, system_content=None: json.dumps(waiting_reply)
         store14c = HandsfreeStore(tmp / "handsfree_s14c")
         orch._analyze_and_enqueue(store14c, "01234567")
         drafts = [store14c.get(d["draft_id"])
@@ -663,7 +706,7 @@ def smoke_runner(tmp: Path) -> None:
               and "Customer to upload the WRT log" in drafts[0]["draft_plain"]
               and drafts[0]["confidence"] is None,
               str([(d["mode"], d["draft_plain"][:80]) for d in drafts]))
-        fake_llm.chat = lambda messages, system_content=None: reader_reply
+        fake_llm.chat_text = lambda messages, system_content=None: reader_reply
 
         # Later round (first response already sent on the case): no second
         # overview draft, and a request reply carries only its targeted ask.
@@ -685,6 +728,7 @@ def smoke_runner(tmp: Path) -> None:
               and CHECKLIST_TAG in rec14e["draft_plain"],
               f"{modes14d} {rec14e['mode']} {rec14e['draft_plain'][-200:]}")
     finally:
+        ipc_mod.IpsClient = orig_ipc
         cis.CaseService.process_case = orig_process
         cis.CaseService.load_case_summary_prompt = orig_prompt
         adl.run_dload_threads = orig_dload
@@ -1450,6 +1494,78 @@ def smoke_checklist_convert(tmp: Path) -> None:
           str(tool))
 
 
+# ---------------------------------------------------------------- S17
+def smoke_comment_images(tmp: Path) -> None:
+    print("[S17] Comment images: extraction, blocks, annotation, cache")
+    import types
+    from .comment_images import (annotate_case_comments, extract_image_urls,
+                                 image_blocks, MAX_IMAGES_PER_CASE)
+
+    urls = extract_image_urls(
+        '<p>x</p><img alt="a" src="https://intel.file.force.com/servlet/rtaImage?eid=1&amp;refid=2">'
+        "<IMG SRC='https://evil.example.com/x.png'>")
+    check("S17.a img src extracted (both quote styles), entities decoded",
+          urls == ["https://intel.file.force.com/servlet/rtaImage?eid=1&refid=2",
+                   "https://evil.example.com/x.png"], str(urls))
+    b_claude = image_blocks([("image/png", b"abc")], "claude-4-6-sonnet")
+    b_gpt = image_blocks([("image/png", b"abc")], "gpt-4.1")
+    check("S17.b image blocks: Anthropic base64 for claude-*, data URL otherwise",
+          b_claude[1]["type"] == "image" and b_claude[1]["source"]["media_type"] == "image/png"
+          and b_gpt[1]["type"] == "image_url"
+          and b_gpt[1]["image_url"]["url"].startswith("data:image/png;base64,"))
+
+    calls = {"vision": 0, "fetch": []}
+
+    class _Ips:
+        FIELD_RICH_BODY = "Core_IPS_Rich_Comment__c"
+        def get_case_comments(self, case_id):
+            img = lambda n: f'<img src="https://intel.file.force.com/servlet/rtaImage?refid={n}">'
+            return [
+                {"Id": "C3", "CreatedDate": "2026-06-22T01:00:00.000+0000",
+                 "Core_IPS_Comment_Author_Type__c": "Agent",
+                 "Core_IPS_Rich_Comment__c": "[AI-Avatar preliminary analysis]" + img("ai")},
+                {"Id": "C2", "CreatedDate": "2026-06-21T01:00:00.000+0000",
+                 "Core_IPS_Comment_Author_Type__c": "Agent",
+                 "Core_IPS_Rich_Comment__c": "<p>see</p>" + img("a") + img("b")
+                 + '<img src="https://evil.example.com/x.png">'},
+                {"Id": "C1", "CreatedDate": "2026-06-20T01:00:00.000+0000",
+                 "Core_IPS_Comment_Author_Type__c": "Partner",
+                 "Core_IPS_Rich_Comment__c": "<p>no images here</p>"},
+            ]
+        def fetch_binary(self, url, max_bytes=0):
+            calls["fetch"].append(url)
+            return ("image/png", b"png") if "refid=a" in url else ("text/html", b"nope")
+
+    def _chat(messages, system_content=None):
+        calls["vision"] += 1
+        return '{"images": ["screen A"]}'
+    llm = types.SimpleNamespace(model="claude-4-6-sonnet", chat=_chat)
+    cache = tmp / "imgcache" / "image_descriptions.json"
+    base = [["2026-06-20 09:00:00", "Partner", "original row"]]
+    rows, info = annotate_case_comments(_Ips(), llm, "500X", base, cache_path=cache,
+                                        skip_marker="[AI-Avatar preliminary analysis]")
+    check("S17.c AI comment skipped, foreign host skipped, non-image download dropped, "
+          "one synthetic row appended after the originals",
+          len(rows) == 2 and rows[0] == base[0]
+          and rows[1][1] == "Agent" and "1) screen A" in rows[1][2]
+          and "evil.example.com" not in " ".join(calls["fetch"])
+          and len(calls["fetch"]) == 2 and calls["vision"] == 1
+          and info[0]["comment_id"] == "C2" and info[0]["count"] == 2,
+          f"rows={rows} fetch={calls['fetch']} info={info}")
+    rows2, info2 = annotate_case_comments(_Ips(), llm, "500X", base, cache_path=cache,
+                                          skip_marker="[AI-Avatar preliminary analysis]")
+    check("S17.d second run served from the cache (no download, no vision call)",
+          calls["vision"] == 1 and len(calls["fetch"]) == 2 and rows2[1][2] == rows[1][2]
+          and cache.exists(), str(calls))
+    check("S17.e budget constant sane", 1 <= MAX_IMAGES_PER_CASE <= 20)
+    from .comment_images import sniff_media_type
+    check("S17.f media type sniffed from magic bytes (servlet lies: png header, jpeg bytes)",
+          sniff_media_type(b"\xff\xd8\xff\xe0xx", "image/png") == "image/jpeg"
+          and sniff_media_type(b"\x89PNG\r\n\x1a\nxx", "image/jpeg") == "image/png"
+          and sniff_media_type(b"RIFF....WEBPVP8 ", "") == "image/webp"
+          and sniff_media_type(b"nothing", "image/gif") == "image/gif")
+
+
 def run_smoke() -> int:
     tmp = Path(tempfile.mkdtemp(prefix="handsfree_smoke_"))
     try:
@@ -1466,6 +1582,7 @@ def run_smoke() -> int:
         smoke_checklist()
         smoke_checklist_convert(tmp)
         smoke_auto_scan(tmp)
+        smoke_comment_images(tmp)
     finally:
         shutil.rmtree(tmp, ignore_errors=True)
     print(f"\nsmoke result: {'ALL PASS' if not PASS_FAIL else 'FAILURES: ' + ', '.join(PASS_FAIL)}")

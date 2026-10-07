@@ -21,10 +21,16 @@ from utils.bt_skills_yaml_utils import (
     refresh_local_cloud_baseline as bt_refresh_local_cloud_baseline,
     set_active_source as bt_set_active_source,
 )
+from utils.linux_skills_yaml_utils import (
+    current_active_yaml as linux_current_active_yaml,
+    refresh_local_cloud_baseline as linux_refresh_local_cloud_baseline,
+    set_active_source as linux_set_active_source,
+)
 from services.llm_service import LLM_helper
 from services.chatbot.engine.system import WifiLogAgentSystem, sync_to_local, load_skills_from_yaml
 from services.chatbot.engine.network_experience import NwAnalysisAgentSystem
 from services.chatbot.engine.bluetooth import BtLogAgentSystem
+from services.chatbot.engine.linux import LinuxLogAgentSystem
 
 from configs.global_configs import app_config
 
@@ -361,6 +367,61 @@ def set_up(socketio):
         bt_chatbot_agent = None
         print("⚠️  BT Chatbot Agent skipped — LLM client not configured (no API key).")
     app_config.set_bt_chatbot_agent(bt_chatbot_agent)
+
+    # ------------------------------------------------------------------
+    # Linux Chatbot Agent — Linux Wi-Fi driver (dmesg/journalctl) log analysis
+    # ------------------------------------------------------------------
+    # Linux skills follow the SAME user/cloud lifecycle as WiFi/BT but file
+    # names carry a `linux_skills_` prefix so all three domains share the
+    # same skills_config sub-folders without collision.
+    #
+    # Loading sequence mirrors the BT block above:
+    #   1. Reset Linux active source to "cloud" on every restart.
+    #   2. Refresh local `cloud/` mirror from share's linux_skills_*.yaml
+    #      (best-effort; off-VPN runs simply skip this).
+    #   3. Resolve and load whichever YAML `linux_current_active_yaml()`
+    #      picks (user override > cloud baseline > legacy un-dated).
+    #   4. If none reachable, fall back to the WiFi skills so the Linux page
+    #      remains usable until a Linux skills YAML is published.
+    linux_skills = None
+    linux_set_active_source("cloud")
+    try:
+        linux_refreshed_path, linux_refreshed_date = linux_refresh_local_cloud_baseline()
+        if linux_refreshed_path is not None:
+            print(f"📥 Refreshed local Linux cloud baseline → {linux_refreshed_path} "
+                  f"(date={linux_refreshed_date})")
+        else:
+            print("ℹ️  Linux cloud baseline refresh skipped — share folder unreachable.")
+    except Exception as e:
+        print(f"⚠️  Linux cloud baseline refresh failed: {e}")
+
+    linux_chosen_yaml, linux_chosen_date, linux_chosen_source = linux_current_active_yaml()
+    if linux_chosen_yaml is not None and linux_chosen_yaml.exists():
+        try:
+            linux_skills = load_skills_from_yaml(str(linux_chosen_yaml))
+            print(f"✅  {len(linux_skills)} Linux skills loaded from "
+                  f"{linux_chosen_source} YAML: {linux_chosen_yaml} (date={linux_chosen_date})")
+        except Exception as e:
+            print(f"⚠️  Failed to load Linux skills from YAML ({e}); Linux chatbot will reuse WiFi skills.")
+    else:
+        print("ℹ️  No Linux skills YAML found (cloud/user/share all empty) — "
+              "Linux chatbot will reuse WiFi skills.")
+
+    if llm_helper.client is not None:
+        model = getattr(llm_helper, 'model', 'gpt-4.1')
+        linux_chatbot_agent = LinuxLogAgentSystem(
+            client=llm_helper.client,
+            model=model,
+            skills=linux_skills if linux_skills else llm_helper.skills,
+        )
+        print(f"🐧 Linux Chatbot Agent loaded (model={model})")
+        # No ACE playbook namespace exists for Linux yet (services/ace/sync_utils.py
+        # only defines "wifi" and "bt") — skipped rather than invent a share path;
+        # the agent works fine without it, same as a failed attach above degrades.
+    else:
+        linux_chatbot_agent = None
+        print("⚠️  Linux Chatbot Agent skipped — LLM client not configured (no API key).")
+    app_config.set_linux_chatbot_agent(linux_chatbot_agent)
 
     # socketio
     app_config.set_socketio(socketio)

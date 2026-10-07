@@ -205,6 +205,14 @@ BT_AGENT_POLICY = AgentCapabilityPolicy(
     disabled_tools=frozenset({"lookup_assert_code", "softAP_supported_channel"}),
     follow_up_max_steps=None,
 )
+# Linux Wi-Fi driver logs (dmesg/journalctl) have no Windows DSM/BIOS or
+# System-Event-Log concepts, so the tools that read those are disabled.
+# Everything else mirrors Wi-Fi defaults, matching the Wi-Fi profile this
+# agent was built closest to.
+LINUX_AGENT_POLICY = AgentCapabilityPolicy(
+    profile="linux",
+    disabled_tools=frozenset({"lookup_assert_code", "softAP_supported_channel"}),
+)
 
 
 # ---------------------------------------------------------
@@ -443,7 +451,7 @@ from services.chatbot.engine.tool_execution import (
 # the same import-time guard handler_map() applies to route endpoints. The
 # policies are declared before this import can happen (tool_execution imports
 # nothing from here), so this is the first point where both are visible.
-for _policy in (WIFI_AGENT_POLICY, NW_AGENT_POLICY, BT_AGENT_POLICY):
+for _policy in (WIFI_AGENT_POLICY, NW_AGENT_POLICY, BT_AGENT_POLICY, LINUX_AGENT_POLICY):
     _validate_disabled_tools(_policy.profile, _policy.disabled_tools)
 
 

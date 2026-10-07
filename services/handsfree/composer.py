@@ -165,6 +165,18 @@ def _request_logs_lines(analysis: CaseAnalysis) -> list[str]:
         missing = (f"we were unable to download or open the attached log "
                    f"archive{name} — the file may be corrupted or the upload "
                    "incomplete, so please RE-UPLOAD the log archive")
+    elif getattr(analysis, "log_request_reason", "") == "log_not_covering":
+        # The log decoded fine but was captured at another time: the issue
+        # time is what the analysis anchors on (policy 2026-10-07).
+        tm = analysis.time_mismatch or {}
+        name = f" ({analysis.chosen_attachment})" if analysis.chosen_attachment else ""
+        missing = (f"we checked the attached archive{name}: the WRT log inside "
+                   f"covers {tm.get('log_first', '?')} – {tm.get('log_last', '?')}, "
+                   f"but the reported issue time is {', '.join(tm.get('issue_times', []))}"
+                   + (f" (we also tried {tm['also_tried']} other capture folder(s) "
+                      "in the archive)" if tm.get("also_tried") else "")
+                   + ". Please provide a WRT log captured at the issue time, or "
+                   "confirm the exact failure time if it differs from the one reported")
     elif analysis.chosen_attachment:
         # An archive was attached, but after extraction it held no driver
         # WPP ETL. Say what it DID contain: an autologger capture with

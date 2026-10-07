@@ -39,7 +39,12 @@ Your tasks:
     - Prefer the most recent explicitly reported failure time.
     - Copy times EXACTLY as written in the case (do not convert timezones
       or reformat); include the date when stated.
-    - Up to 3 times, most relevant first. Empty list if none is stated.
+    - ONLY a time stated to the minute qualifies (a clock time such as
+      12:14 or 13-54-47, with its date). A bare date ("June 2nd",
+      "2026-09-04"), "yesterday", "this morning" or a log upload date is
+      NOT an issue time — leave such entries out. When nothing qualifies,
+      return an empty list and report "issue_time" as missing.
+    - Up to 3 times, most relevant first.
  3. Choose which ONE attachment most likely contains the driver log that
     covers the issue time. Judge by: the comment that mentions the upload,
     upload timestamp vs issue time (log must be captured AT/AFTER the
@@ -115,6 +120,21 @@ Output ONLY a valid JSON object (no markdown, no code fences):
 === ATTACHMENTS (candidate log uploads) ===
 {attachments_block}
 """
+
+
+# A usable issue time states the clock time to the minute: "12:14",
+# "16:31/12/13/2025", "09/04/2026-20:58:52", WRT-style "2026-1-14-13-54-47"
+# or "14-01-2026_13-54-37". A bare date or "June 2nd" does not qualify.
+_MINUTE_TIME_RES = (
+    re.compile(r"(?<!\d)\d{1,2}:\d{2}(?!\d)"),                       # clock HH:MM
+    re.compile(r"\d{4}-\d{1,2}-\d{1,2}-\d{1,2}-\d{2}(?:-\d{2})?"),  # YYYY-M-D-H-MM(-SS)
+    re.compile(r"\d{1,2}-\d{1,2}-\d{4}[_ T-]\d{1,2}-\d{2}(?:-\d{2})?"),  # D-M-YYYY_H-MM(-SS)
+)
+
+
+def has_minute_precision(value: str) -> bool:
+    s = str(value or "")
+    return any(r.search(s) for r in _MINUTE_TIME_RES)
 
 
 ACTION_OWNER_LABELS = {"intel": "Intel (case owner)", "customer": "customer"}
@@ -298,7 +318,11 @@ def read_case_history(llm, *, subject: str, description: str,
         print(f"[handsfree.case_reader] reader failed: {e}")
         return None
 
-    times = [str(t).strip() for t in (res.get("issue_times") or []) if str(t).strip()]
+    raw_times = [str(t).strip() for t in (res.get("issue_times") or []) if str(t).strip()]
+    times = [t for t in raw_times if has_minute_precision(t)]
+    vague = [t for t in raw_times if t not in times]
+    if vague:
+        print(f"[handsfree.case_reader] ignored vague issue time(s): {vague}")
 
     # Normalize the completeness assessment: known items only, deduped,
     # reasons capped. Tolerates bare-string entries ("repro_steps").
@@ -318,6 +342,7 @@ def read_case_history(llm, *, subject: str, description: str,
                         "reason": str(entry.get("reason") or "").strip()[:200]})
 
     return {
+        "vague_times": vague,
         "action_owner": normalize_action_owner(res.get("action_owner")),
         "next_action": re.sub(r"\s+", " ", str(res.get("next_action") or "")).strip()[:300],
         "clean_description": str(res.get("clean_description") or "").strip(),

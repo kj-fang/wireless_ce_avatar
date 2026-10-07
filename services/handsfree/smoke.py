@@ -555,21 +555,50 @@ def smoke_runner(tmp: Path) -> None:
               draft5["plain"][-500:])
 
         # Fallback-found issue time retracts the gap (stage-7 refinement).
+        # No minute-precise issue time (the reader only found "June 2nd"):
+        # ask for the exact time first — no download, no decode, no agent.
         time_gap_reply = json.dumps({
             "clean_description": "Device disconnects after association",
-            "issue_times": [], "issue_time_source": "",
+            "issue_times": ["June 2nd"], "issue_time_source": "comment #3",
             "attachment_name": "repro_logs.7z",
             "attachment_reason": "only driver log upload",
-            "reasoning": "time never stated; org fallback should find it",
-            "missing_info": [{"item": "issue_time",
-                              "reason": "no failure time stated"}],
+            "reasoning": "only a date was stated",
+            "missing_info": [],
         })
         fake_llm.chat_text = lambda messages, system_content=None: time_gap_reply
         adc.process_single_zip = _fake_zip_proc
         analysis6 = r.analyze_case("01234567")
-        check("S9.c fallback-found issue time retracts the gap",
-              analysis6.mode == "full" and analysis6.missing_info == [],
-              f"mode={analysis6.mode} missing={analysis6.missing_info}")
+        d6 = compose(analysis6)
+        check("S9.c vague issue time only -> request_info before any download; "
+              "exact time asked for, nothing ticked as the reproduction time",
+              analysis6.mode == "request_info"
+              and analysis6.issue_times == []
+              and analysis6.case_reader.get("vague_times") == ["June 2nd"]
+              and [m["item"] for m in analysis6.missing_info] == ["issue_time"]
+              and "download" not in [s.name for s in analysis6.stages]
+              and "exact date and time (with timezone)" in d6["plain"]
+              and "June 2nd" not in d6["plain"],
+              f"mode={analysis6.mode} times={analysis6.issue_times} "
+              f"missing={analysis6.missing_info} stages={[s.name for s in analysis6.stages]}")
+
+        # Precise time, but the only log covers another window (fixture log
+        # is 06/20 10:16-10:44): public request for a matching log, no agent.
+        wrong_time_reply = json.loads(reader_reply)
+        wrong_time_reply.update({"issue_times": ["06/20/2026-08:00:00"]})
+        fake_llm.chat_text = lambda messages, system_content=None: json.dumps(wrong_time_reply)
+        analysis6b = r.analyze_case("01234567")
+        d6b = compose(analysis6b)
+        check("S9.c2 log does not cover the issue time -> request_logs with the "
+              "covering window, no agent / Echo run",
+              analysis6b.mode == "request_logs"
+              and analysis6b.log_request_reason == "log_not_covering"
+              and "agent_analysis" not in [s.name for s in analysis6b.stages]
+              and "echo_kb" not in [s.name for s in analysis6b.stages]
+              and "covers 06/20/2026-10:16:01" in d6b["plain"]
+              and "reported issue time is 06/20/2026-08:00:00" in d6b["plain"]
+              and "captured at the issue time" in d6b["plain"],
+              f"mode={analysis6b.mode} reason={analysis6b.log_request_reason} "
+              f"{d6b['plain'][:500]}")
 
         # request_logs + info gaps merge into ONE public reply.
         analysis2.missing_info = [{"item": "issue_time", "reason": ""}]
@@ -1143,6 +1172,70 @@ def smoke_time_coverage(tmp: Path) -> None:
           "TIME MISMATCH" in plain
           and "please help provide a WRT log captured at the issue time" in plain,
           plain[:300])
+
+    # Customer / WRT time spellings parse as full datetimes (coverage check
+    # and assert window depend on it) and the minute-precision filter.
+    from utils.issue_time_utils import parse_issue_time_string as pits
+    from .case_reader import has_minute_precision as hmp
+    check("S8.f customer time spellings parse as full datetimes",
+          pits("16:31/12/13/2025")[0] is not None
+          and pits("2026-1-14-13-54-47")[0] is not None
+          and pits("14-01-2026_13-54-37")[0] is not None
+          and pits("June 2nd") == (None, False))
+    check("S8.g minute precision: clock times and WRT stamps yes; dates and words no",
+          all(hmp(t) for t in ("04/13/2026 12:14:00", "16:31/12/13/2025",
+                               "2026-1-14-13-54-47", "09/04/2026-20:58:52.654", "10:17"))
+          and not any(hmp(t) for t in ("June 2nd", "2026-09-04", "yesterday morning",
+                                       "2026-06-20", "")))
+
+    # Gate: the decoded log does not cover the issue time -> try the capture
+    # closest to it; still no coverage -> public request, no agent, no Echo.
+    from .runner import _folder_timestamp
+    cap_far = tmp / "s8" / "DUT_27-05-2026_17-51-23_656_4_5002_0x0_0x0_0x0" / "WifiDriverIHVSession.etl.002"
+    cap_near = tmp / "s8" / "DUT_13-04-2026_12-10-05_100_9_6050_0x0_0x0_0x0" / "WifiDriverIHVSession.etl.001"
+    for p in (cap_far, cap_near):
+        p.parent.mkdir(parents=True, exist_ok=True)
+        p.write_bytes(b"x")
+    check("S8.h capture folder stamp parsed from the WRT folder name",
+          _folder_timestamp(str(cap_far)).strftime("%Y-%m-%d %H:%M:%S") == "2026-05-27 17:51:23"
+          and _folder_timestamp(str(tmp / "s8" / "x.etl")) is None)
+    alts = HandsfreeRunner._alternate_etls([str(cap_far), str(cap_near)], [],
+                                           ["04/13/2026 12:14:00"], {str(cap_far)})
+    check("S8.i alternate captures ordered by closeness to the issue time",
+          alts == [str(cap_near)], str(alts))
+
+    # Clock frames: the DUT's folder stamp (13:54:37) and the log's last line
+    # (21:55:01) are the same moment, so the issue time 13:54:47 is INSIDE
+    # the 21:29–21:55 log window once shifted (00994274).
+    fcap = tmp / "s8" / "LAPTOP_14-01-2026_13-54-37_127_9_6050_0x0_0x0_0x0" / "WifiDriverIHVSession.etl.003.log"
+    fcap.parent.mkdir(parents=True, exist_ok=True)
+    fcap.write_text("01/14/2026-21:29:56.906 [0] first\n01/14/2026-21:55:01.000 [0] last\n",
+                    encoding="utf-8")
+    e = CaseAnalysis(case_nbr="6", mode="full", log_path=str(fcap),
+                     issue_times=["2026-1-14-13-54-47"])
+    r._check_time_coverage(e)
+    e2 = CaseAnalysis(case_nbr="7", mode="full", log_path=str(fcap),
+                      issue_times=["2026-1-14-09-00-00"])
+    r._check_time_coverage(e2)
+    check("S8.k folder-stamp clock offset: 13:54 DUT time covered by the 21:29–21:55 log; "
+          "09:00 still outside",
+          e.time_mismatch == {} and e2.time_mismatch.get("issue_times") == ["2026-1-14-09-00-00"],
+          f"{e.time_mismatch} {e2.time_mismatch}")
+
+    # Assert window: an assert 2 h before the issue time is not evidence.
+    from .echo_client import find_assert_evidence
+    wlog = tmp / "s8" / "w.etl.log"
+    wlog.write_text(
+        "06/20/2026-08:00:00.000 [1] [NIC_DEBUG] [ERROR] [x]:FATAL_ERROR: uCode ASSERT(UMAC, rtStatus = 0x20101F01, data1 = 0x0)\n"
+        "06/20/2026-10:16:30.000 [1] [NIC_DEBUG] [ERROR] [x]:FATAL_ERROR: uCode ASSERT(LMAC, rtStatus = 0x00001234, data1 = 0x1)\n",
+        encoding="utf-8")
+    w = CaseAnalysis(case_nbr="5", mode="full", log_path=str(wlog),
+                     issue_times=["06/20/2026-10:17:30"])
+    win = HandsfreeRunner(progress_cb=lambda s, d: None)._assert_window(w)
+    ev = find_assert_evidence(w, window=win)
+    check("S8.j asserts outside the issue-time window ignored, inside kept",
+          win is not None and ev["assert_codes"] == ["0x00001234"]
+          and ev["ignored_outside_window"] == 1, str(ev))
 
 
 # ---------------------------------------------------------------- S10

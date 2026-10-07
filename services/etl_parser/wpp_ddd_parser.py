@@ -83,6 +83,14 @@ DRIVER_PATH_LIST = ["zip_listener_path", "jer_server_path", "dfs_path"]
 POTATO_FARM_SITE_LIST = ["potatofarm.intel.com", "potatofarm-pre.intel.com"]
 
 
+def _persistent_cache_dir() -> str:
+    """Folder that survives temp cleanup for PDB / DDD-player copies:
+    <avatarfiles_dir>\\pdb_cache (falls back to %LOCALAPPDATA%\\IntelAvatar)."""
+    base = getattr(app_config, "avatarfiles_dir", None) or os.path.join(
+        os.environ.get("LOCALAPPDATA") or os.environ["tmp"], "IntelAvatar")
+    return os.path.join(base, "pdb_cache")
+
+
 class CacheManager:
     """
     class responsible for caching artifacts, such as PDB, DDDPlayer locally,
@@ -432,15 +440,31 @@ class Parser:
         # directory cannot have multiple PDBs with same name, therefore, add _build suffix
         local_pdb_name = file_name.replace(".pdb", f"_{jenkins_build_id}.pdb")
 
-        # copy file to local workspace
-        emit_and_log(f"{file_name} was found. Copying .. this might take several seconds")
+        # Keep a persistent local copy per build: the cache used to point
+        # into the per-run %TEMP% workspace, which temp cleanup removes, so
+        # the 40 MB PDB came over the network share again on most runs.
+        persistent = os.path.join(_persistent_cache_dir(), str(jenkins_build_id),
+                                  os_type, local_pdb_name)
+        if os.path.normcase(os.path.abspath(str(file_path))) != os.path.normcase(persistent):
+            emit_and_log(f"{file_name} was found. Copying .. this might take several seconds")
+            try:
+                os.makedirs(os.path.dirname(persistent), exist_ok=True)
+                shutil.copyfile(str(file_path), persistent)
+                file_path = persistent
+            except Exception as e:
+                log.warning(f"could not store {file_name} in the persistent cache: {e}")
+        else:
+            emit_and_log(f"{file_name} served from the local cache")
 
+        # copy file to local workspace (local disk -> fast)
         shutil.copyfile(str(file_path), local_pdb_name)
         emit_and_log("file was successfully copied to local workspace")
 
-        # store in cache
+        # store in cache (the persistent copy when we have one)
         self.pdb_name_list.append(local_pdb_name)
-        cache_manager.store_binary_path(os.path.join(self.workspace, local_pdb_name))
+        cache_manager.store_binary_path(
+            str(file_path) if str(file_path) == persistent
+            else os.path.join(self.workspace, local_pdb_name))
 
         del cache_manager
 

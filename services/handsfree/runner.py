@@ -28,6 +28,7 @@ from __future__ import annotations
 import json
 import re
 import os
+import threading
 from pathlib import Path
 import time
 import traceback
@@ -132,6 +133,45 @@ def _pick_etl_yb_earliest(wifi_files: list, ddd_files: list):
 _ENV_REPRO_KEY_RE = re.compile(r"(?i)steps to reproduce|repro")
 _ENV_BRIEF_KEY_RE = re.compile(
     r"(?i)platform|found in build|operating system|frequency|tested hardware|computer model")
+
+
+class _Prefetch(threading.Thread):
+    """Background download of one attachment (same run_dload_threads call
+    the download stage uses). Results in .items, failure in .error."""
+
+    def __init__(self, zip_item, download_dir: str):
+        super().__init__(daemon=True, name="handsfree-prefetch")
+        self.zip_item = zip_item
+        self.attachment_name = str(zip_item[0])
+        self.download_dir = download_dir
+        self.items: list = []
+        self.error = None
+
+    def run(self) -> None:
+        try:
+            from utils.attachment_download import run_dload_threads
+            for item in run_dload_threads([self.zip_item], self.download_dir,
+                                          socketio=None):
+                self.items.append(item)
+        except Exception as e:   # reported by the download stage
+            self.error = e
+
+
+_FOLDER_STAMP_RE = re.compile(r"(\d{2})-(\d{2})-(\d{4})_(\d{2})-(\d{2})-(\d{2})")
+
+
+def _folder_timestamp(etl_path: str):
+    """Capture time from the WRT folder name of an ETL
+    (..._27-05-2026_17-51-23_656_...) -> datetime, or None."""
+    from datetime import datetime
+    m = _FOLDER_STAMP_RE.search(os.path.basename(os.path.dirname(str(etl_path))))
+    if not m:
+        return None
+    d, mo, y, h, mi, s = (int(x) for x in m.groups())
+    try:
+        return datetime(y, mo, d, h, mi, s)
+    except ValueError:
+        return None
 
 
 def _resolve_issue_domain(reader_domain: str, subcategory: str,
@@ -316,6 +356,23 @@ class HandsfreeRunner:
             analysis.error = "case fetch failed — no subject/description"
             return analysis
 
+        # Start fetching the newest log archive now: triage + reader take
+        # ~40 s of LLM time during which the download would otherwise wait.
+        # The reader usually nominates the newest upload; when it picks
+        # another file the normal download runs and this one is discarded.
+        prefetch = None
+        if analysis.wifi_or_bt == "wifi":
+            try:
+                newest = _pick_latest_archive(case_ctx.attachment_list)
+                if newest is not None:
+                    prefetch = _Prefetch(newest, case_ctx.case_download_dir)
+                    prefetch.start()
+                    self.progress("fetch_case",
+                                  f"prefetching {prefetch.attachment_name} in the background")
+            except Exception as e:
+                print(f"[handsfree.runner] prefetch not started: {e}")
+                prefetch = None
+
         # -- 2. description triage (always runs; also the no-log fallback) ----
         with self._stage(analysis, "triage"):
             from services.case_info_service import CaseService
@@ -490,16 +547,20 @@ class HandsfreeRunner:
                     + (f"{nominated}" if nominated else
                        (f"newest of {len(archives)}" if archives else "MISSING")))
 
-        # Severe gap: neither an understandable description nor an issue time
-        # — there is nothing to anchor an analysis on. Draft a request-info
-        # reply (mode "request_info": human-approved, posted PUBLIC like
-        # request_logs) instead of burning the log pipeline.
+        # No minute-precise issue time anywhere (policy 2026-10-07: the issue
+        # time is what the analysis anchors on; a bare date or an upload time
+        # is not one) — or no understandable description either: ask for it
+        # first and stop. Mode "request_info" (human-approved, posted PUBLIC
+        # like request_logs); the log pipeline runs on the next round.
         gap_items = {m.get("item") for m in analysis.missing_info}
-        if "issue_description" in gap_items and "issue_time" in gap_items:
+        if "issue_time" in gap_items:
             analysis.mode = "request_info"
             analysis.ok = True
-            analysis.error = ("case lacks both an understandable description and "
-                              "an issue time — drafted a request-info reply")
+            analysis.error = (
+                "case lacks both an understandable description and an issue time"
+                if "issue_description" in gap_items else
+                "no minute-precise issue time stated anywhere in the case"
+            ) + " — drafted a request-info reply"
             return analysis
 
         # -- 4. pick the log-archive attachment --------------------------------
@@ -559,7 +620,21 @@ class HandsfreeRunner:
         downloaded = []   # [file_path, name, already_dload]
         with self._stage(analysis, "download"):
             from utils.attachment_download import run_dload_threads
+            # The newest archive was prefetched during triage + reader; use
+            # it when the reader chose that same file.
+            if prefetch is not None and prefetch.attachment_name == str(zip_item[0]):
+                self.progress("download",
+                              f"waiting for the prefetched {prefetch.attachment_name}")
+                prefetch.join()
+                if prefetch.items and not prefetch.error:
+                    downloaded.extend(prefetch.items)
+                    self.progress("download", "prefetched during triage/reader")
+                else:
+                    self.progress("download",
+                                  f"prefetch failed ({prefetch.error}); downloading normally")
             for attempt in (1, 2):
+                if downloaded:
+                    break
                 try:
                     for item in run_dload_threads([zip_item],
                                                   case_ctx.case_download_dir,
@@ -628,10 +703,13 @@ class HandsfreeRunner:
             return analysis
 
         # -- 7. issue times -----------------------------------------------------
-        # Primary source: the case-history reader (description + comments).
-        # Fallback: description-only AI organization, then attachment subtitle.
+        # The reader (description + comments) is the only source of issue
+        # times: a case without a minute-precise one stopped at 3a. The
+        # description-only organizer is kept just as a clean_description
+        # fallback when the reader failed; an attachment upload time is
+        # never used as the issue time.
         with self._stage(analysis, "issue_time"):
-            if not analysis.issue_times:
+            if not analysis.clean_description:
                 from utils.issue_time_ai import organize_issue_context
                 llm = app_config.llm_helper
                 organized = organize_issue_context(
@@ -639,20 +717,12 @@ class HandsfreeRunner:
                     llm_client=getattr(llm, "client", None),
                     llm_model=getattr(llm, "model", None),
                 ) or {}
-                if not analysis.clean_description:
-                    analysis.clean_description = (organized.get("clean_description")
-                                                  or "").strip()
-                times = [str(t).strip() for t in (organized.get("issue_times") or [])
-                         if str(t).strip()]
-                if not times and analysis.attachment_time:
-                    times = [analysis.attachment_time]
-                analysis.issue_times = times[:max_incidents]
+                analysis.clean_description = (organized.get("clean_description")
+                                              or "").strip()
+            self.progress("issue_time",
+                          "anchoring on " + ", ".join(analysis.issue_times[:3]))
         if not analysis.clean_description:
             analysis.clean_description = analysis.description or analysis.subject
-        if analysis.issue_times and analysis.missing_info:
-            # A fallback source produced a time after all — retract the gap.
-            analysis.missing_info = [m for m in analysis.missing_info
-                                     if m.get("item") != "issue_time"]
 
         # -- 8. pick the ETL ----------------------------------------------------
         etl_path = None
@@ -716,12 +786,50 @@ class HandsfreeRunner:
 
         # -- 9b. does the log actually cover the reported issue time? ----------
         # e.g. case 01025350: issue stated at 17:14, capture covered
-        # 17:39–17:44. The agent may still find an assert, but the reviewer
-        # (and the customer) must know the log is from a different time.
+        # 17:39–17:44. Policy (2026-10-07): a log that does not cover the
+        # issue time is not evidence for this issue. Try the other captures
+        # in the archive whose folder stamp is closest to the issue time
+        # (at most 2 extra decodes); if none covers it, ask the customer for
+        # a log captured at the issue time — no agent run, no Echo.
         try:
             self._check_time_coverage(analysis)
         except Exception as e:
             print(f"[handsfree.runner] time-coverage check failed (non-fatal): {e}")
+        if analysis.time_mismatch:
+            also_tried = 0
+            for alt in self._alternate_etls(wifi_files, ddd_files,
+                                            analysis.issue_times, {etl_path})[:2]:
+                alt_log = alt + ".log"
+                with self._stage(analysis, "decode_etl"):
+                    self.progress("decode_etl",
+                                  "trying the capture closest to the issue time: "
+                                  f"{os.path.basename(os.path.dirname(alt))}")
+                    if not os.path.exists(alt_log):
+                        self._decode_etl(alt)
+                if not os.path.exists(alt_log):
+                    continue
+                also_tried += 1
+                analysis.time_mismatch = {}
+                analysis.etl_path, analysis.log_path = alt, alt_log
+                try:
+                    self._check_time_coverage(analysis)
+                except Exception as e:
+                    print(f"[handsfree.runner] time-coverage check failed (non-fatal): {e}")
+                if not analysis.time_mismatch:
+                    break
+            if analysis.time_mismatch and also_tried:
+                analysis.time_mismatch["also_tried"] = also_tried
+        if analysis.time_mismatch:
+            analysis.mode = "request_logs"
+            analysis.log_request_reason = "log_not_covering"
+            analysis.ok = True
+            analysis.error = (
+                f"attached WRT log covers {analysis.time_mismatch['log_first']} – "
+                f"{analysis.time_mismatch['log_last']}, the reported issue time "
+                f"{', '.join(analysis.time_mismatch['issue_times'])} is outside — "
+                "drafted a request for a log captured at the issue time")
+            self.progress("decode_etl", analysis.error)
+            return analysis
 
         # -- 10. agentic analysis (one run per incident time) --------------------
         with self._stage(analysis, "agent_analysis"):
@@ -736,7 +844,13 @@ class HandsfreeRunner:
         with self._stage(analysis, "echo_kb"):
             from .echo_client import (EchoUnavailable, ask_echo_kb,
                                       collect_echo_insights, find_assert_evidence)
-            evidence = find_assert_evidence(analysis)
+            # Only asserts around the issue time are this issue's evidence.
+            evidence = find_assert_evidence(
+                analysis, window=self._assert_window(analysis))
+            if evidence.get("ignored_outside_window"):
+                self.progress("echo_kb",
+                              f"ignored {evidence['ignored_outside_window']} assert(s) "
+                              "outside the issue-time window")
             if evidence["assert_codes"] or evidence["yellow_bang"]:
                 src = {"wrt_log": "from WRT log", "agent_text": "from agent text",
                        "env_detail": "from IPS Environment Details form",
@@ -804,17 +918,12 @@ class HandsfreeRunner:
             dt, time_only = parse_issue_time_string(str(raw))
             if dt is None or time_only:
                 continue
-            # Resolve customer-vs-log frame when tz anchors are available
-            # (system_info.txt / folder timestamp); harmless no-op otherwise.
-            try:
-                from utils.issue_time_ai import determine_issue_time_frames
-                dt = determine_issue_time_frames(
-                    dt, [analysis.log_path], first, last).get("log_frame") or dt
-            except Exception:
-                pass
             checked.append(str(raw))
-            if first - grace <= dt <= last + grace:
-                covered = True
+            for cand in self._log_frame_candidates(dt, analysis.log_path, first, last):
+                if first - grace <= cand <= last + grace:
+                    covered = True
+                    break
+            if covered:
                 break
 
         if checked and not covered:
@@ -829,6 +938,99 @@ class HandsfreeRunner:
                 f"WARNING: log covers {analysis.time_mismatch['log_first']} – "
                 f"{analysis.time_mismatch['log_last']} but the reported issue "
                 f"time(s) {', '.join(checked)} are OUTSIDE this window")
+
+    # Asserts count as evidence for THIS issue only inside this window
+    # around the reported time (minutes before / after).
+    ASSERT_WINDOW_BEFORE_MIN = 30
+    ASSERT_WINDOW_AFTER_MIN = 10
+
+    @staticmethod
+    def _log_frame_candidates(dt, log_path: str, first, last) -> list:
+        """The reported issue time expressed in the decoded log's clock.
+
+        Two anchors, both kept as candidates (a match on either counts):
+          * the tz helper (system_info.txt time zone vs the decode host) —
+            a no-op when both are GMT+8;
+          * the capture folder stamp: WRT names the folder with the DUT's
+            clock at dump time, and the log's last line is that same moment
+            in the log's clock, so (last line − folder stamp) is the actual
+            offset between the two clocks for THIS capture. Seen on
+            00994274: tz says GMT+8 = GMT+8, yet the log ran 8 h ahead of
+            the DUT clock; the helper alone rejected a log that covered the
+            issue.
+        """
+        from datetime import timedelta
+        cands = [dt]
+        try:
+            from utils.issue_time_ai import determine_issue_time_frames
+            mapped = determine_issue_time_frames(
+                dt, [log_path], first, last).get("log_frame")
+            if mapped and mapped not in cands:
+                cands.append(mapped)
+        except Exception:
+            pass
+        folder_ts = _folder_timestamp(log_path)
+        if folder_ts is not None and last is not None:
+            offset = last - folder_ts
+            if abs(offset) <= timedelta(hours=26) and abs(offset) >= timedelta(minutes=20):
+                shifted = dt + offset
+                if shifted not in cands:
+                    cands.append(shifted)
+        return cands
+
+    def _issue_datetime_in_log_frame(self, analysis: CaseAnalysis):
+        """First reported issue time as a full datetime in the log's clock:
+        the candidate that falls inside the log window wins, else the tz
+        helper's mapping. None when no full datetime is known."""
+        from utils.issue_time_utils import (parse_issue_time_string,
+                                            read_log_time_range)
+        if not analysis.issue_times or not analysis.log_path:
+            return None
+        first, last = read_log_time_range(analysis.log_path)
+        for raw in analysis.issue_times:
+            dt, time_only = parse_issue_time_string(str(raw))
+            if dt is None or time_only:
+                continue
+            cands = self._log_frame_candidates(dt, analysis.log_path, first, last)
+            if first and last:
+                for cand in cands:
+                    if first <= cand <= last:
+                        return cand
+            return cands[1] if len(cands) > 1 else cands[0]
+        return None
+
+    def _assert_window(self, analysis: CaseAnalysis):
+        from datetime import timedelta
+        dt = self._issue_datetime_in_log_frame(analysis)
+        if dt is None:
+            return None
+        return (dt - timedelta(minutes=self.ASSERT_WINDOW_BEFORE_MIN),
+                dt + timedelta(minutes=self.ASSERT_WINDOW_AFTER_MIN))
+
+    @staticmethod
+    def _alternate_etls(wifi_files: list, ddd_files: list, issue_times: list,
+                        tried: set) -> list:
+        """Other ETLs in the archive, closest capture-folder stamp first
+        (WRT folders are named ..._DD-MM-YYYY_HH-MM-SS_...). Files whose
+        folder carries no stamp go last."""
+        from utils.issue_time_utils import parse_issue_time_string
+        issue_dt = None
+        for raw in issue_times or []:
+            dt, time_only = parse_issue_time_string(str(raw))
+            if dt is not None and not time_only:
+                issue_dt = dt
+                break
+        stamped, unstamped = [], []
+        for p in list(wifi_files or []) + list(ddd_files or []):
+            if p in tried:
+                continue
+            ts = _folder_timestamp(p)
+            if ts is None or issue_dt is None:
+                unstamped.append(p)
+            else:
+                stamped.append((abs((ts - issue_dt).total_seconds()), p))
+        stamped.sort(key=lambda x: x[0])
+        return [p for _, p in stamped] + unstamped
 
     # ------------------------------------------------------------------
     def _pick_etl(self, wifi_files: list, ddd_files: list,

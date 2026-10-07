@@ -45,6 +45,15 @@ BT_SKILLS_YAML_DATED_GLOB = "bt_skills_*.yaml"                # e.g. bt_skills_2
 BT_SKILLS_YAML_DATED_RE = r"^bt_skills_(\d{4}-\d{2}-\d{2})\.yaml$"
 BT_SKILLS_YAML_DATED_TEMPLATE = "bt_skills_{date}.yaml"       # date = YYYY-MM-DD
 
+# Linux skills YAML — same shared skills_config dir, `linux_` prefix so the
+# three domains coexist without name collisions. Loaded at startup by
+# set_up_app to populate the linux_chatbot_agent. Falls back to the WiFi
+# skills (skills.yaml) when this file is missing.
+LINUX_SKILLS_YAML_FILENAME = "linux_skills.yaml"                  # legacy un-dated file
+LINUX_SKILLS_YAML_DATED_GLOB = "linux_skills_*.yaml"              # e.g. linux_skills_2026-06-02.yaml
+LINUX_SKILLS_YAML_DATED_RE = r"^linux_skills_(\d{4}-\d{2}-\d{2})\.yaml$"
+LINUX_SKILLS_YAML_DATED_TEMPLATE = "linux_skills_{date}.yaml"     # date = YYYY-MM-DD
+
 # Wireless knowledge topics used by the home page.
 WIRELESS_TOPICS_DIR = rf"\\infs089.iil.intel.com\HOME\WirelessCE\Intel_WirelessCE_Avatar\WiFi_BT_knowledge_yaml"
 

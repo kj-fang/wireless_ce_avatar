@@ -114,6 +114,10 @@ def _analyze_and_enqueue(store: HandsfreeStore, case_nbr: str,
     # rounds (customer replied, new logs) get targeted asks only.
     analysis.first_response_done = store.first_response_posted(case_nbr)
 
+    # Trial mode (Settings): tuning on historical / closed cases — every
+    # draft is flagged and can never be posted.
+    trial = bool(store.load_config().get("trial_mode"))
+
     draft = compose(analysis)
     rec = store.enqueue(
         case_nbr=case_nbr,
@@ -124,10 +128,12 @@ def _analyze_and_enqueue(store: HandsfreeStore, case_nbr: str,
         confidence=draft["confidence"],
         mode=analysis.mode,
         analysis=analysis.to_dict(),
+        trial=trial,
     )
     _log_event(
         f"[{case_nbr}] queued draft {rec['draft_id']} "
-        f"(mode={analysis.mode}, confidence={draft['confidence']})")
+        f"(mode={analysis.mode}, confidence={draft['confidence']}"
+        + (", TRIAL — posting disabled" if trial else "") + ")")
 
     # Every case also gets a first-response checklist reply — except when the
     # primary draft already IS the first response (the request modes render
@@ -152,6 +158,7 @@ def _analyze_and_enqueue(store: HandsfreeStore, case_nbr: str,
             # fr, not analysis: the review UI reads analysis.mode for the
             # "public reply to customer" visibility chip.
             analysis=fr.to_dict(),
+            trial=trial,
         )
         _log_event(f"[{case_nbr}] queued first-response checklist draft "
                    f"{fr_rec['draft_id']}")
@@ -302,6 +309,85 @@ def run_auto_scan(store: HandsfreeStore, owner: str, max_cases: int = 10,
     return summary
 
 
+def select_trial_cases(refs: list, ledger_lookup, max_cases: int,
+                       skip_analyzed: bool = True) -> list:
+    """Which list-view cases a trial batch runs: in list order, skipping the
+    ones already analyzed (ledger) so repeated batches walk through the
+    historical list, capped. Pure."""
+    out = []
+    for ref in refs:
+        if skip_analyzed and ledger_lookup(ref.case_nbr):
+            continue
+        out.append(ref)
+        if len(out) >= max_cases:
+            break
+    return out
+
+
+def run_trial_batch(store: HandsfreeStore, list_view: str, max_cases: int,
+                    skip_analyzed: bool = True) -> dict:
+    """Tuning run on the cases of an IPS list view (open or closed), one
+    after another; drafts land in the queue flagged "trial" (never posted).
+    Caller holds _run_lock."""
+    _set_state(status="running", owner=None, mode="trial-batch",
+               started_at=time.time(), events=[], cases=[], error=None)
+    summary: dict = {"ok": True, "cases": []}
+    try:
+        _log_event(f"trial batch: reading IPS list view '{list_view}'")
+        refs = IpsClient().list_view_cases(list_view)
+        work = select_trial_cases(refs, store.ledger_entry, max_cases, skip_analyzed)
+        _log_event(f"{len(refs)} case(s) in the list view, "
+                   f"{len(work)} to run this batch"
+                   + (" (already-analyzed cases skipped)" if skip_analyzed else ""))
+        _set_state(cases=[r.to_dict() for r in work])
+        for ref in work:
+            _log_event(f"analyzing case {ref.case_nbr} [{ref.status or 'state ?'}] — "
+                       f"{ref.subject[:60]}")
+            try:
+                rec = _analyze_and_enqueue(store, ref.case_nbr,
+                                           case_id=ref.case_id, subject=ref.subject)
+                summary["cases"].append({"case_nbr": ref.case_nbr, "mode": rec.get("mode")})
+            except Exception as e:
+                print(f"[handsfree] trial case {ref.case_nbr} failed:\n"
+                      f"{traceback.format_exc()}")
+                _log_event(f"[{ref.case_nbr}] FAILED: {type(e).__name__}: {e}")
+                summary["cases"].append({"case_nbr": ref.case_nbr, "mode": "error"})
+        _set_state(status="done", finished_at=time.time())
+        _log_event("trial batch complete — review the queue below (trial drafts "
+                   "cannot be posted)")
+    except Exception as e:
+        print(f"[handsfree] trial batch failed:\n{traceback.format_exc()}")
+        summary.update(ok=False, error=f"{type(e).__name__}: {e}")
+        _set_state(status="error", error=f"{type(e).__name__}: {e}",
+                   finished_at=time.time())
+        _log_event(f"trial batch FAILED: {e}")
+    return summary
+
+
+def start_trial_run(list_view: str = "", max_cases: int = 0,
+                    skip_analyzed: bool = True) -> dict:
+    """UI trigger for a trial batch (Settings → Run trial batch)."""
+    store = _store()
+    cfg = store.load_config()
+    if not cfg.get("trial_mode"):
+        return {"ok": False, "error": "enable trial mode in Settings first"}
+    list_view = (list_view or cfg.get("trial_list_view") or "").strip()
+    if not list_view:
+        return {"ok": False, "error": "no list view name configured"}
+    max_cases = int(max_cases or cfg.get("trial_max_cases") or 5)
+    if not _run_lock.acquire(blocking=False):
+        return {"ok": False, "error": "a run is already in progress"}
+
+    def _run():
+        try:
+            run_trial_batch(store, list_view, max_cases, skip_analyzed)
+        finally:
+            _run_lock.release()
+
+    threading.Thread(target=_run, daemon=True, name="handsfree-trial").start()
+    return {"ok": True, "list_view": list_view, "max_cases": max_cases}
+
+
 def start_case_run(case_nbr: str) -> dict:
     """Manual trigger: analyze ONE explicitly chosen case number.
 
@@ -387,6 +473,9 @@ def _approve_and_post_locked(draft_id: str, edited_plain: Optional[str]) -> dict
         return {"ok": False, "error": "draft already posted", "draft": rec}
     if cfg.get("dry_run"):
         return {"ok": False, "error": "dry_run is enabled in config — posting disabled"}
+    if rec.get("trial"):
+        return {"ok": False, "error": "trial draft (tuning run on a historical case) — "
+                                      "posting is disabled for trial drafts", "draft": rec}
 
     draft_is_checklist = rec.get("mode") in _CHECKLIST_MODES
 

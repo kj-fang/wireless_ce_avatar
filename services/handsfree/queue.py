@@ -56,6 +56,12 @@ class HandsfreeStore:
         "post_backend": "auto",        # rest | ui | auto (rest first, ui fallback)
         "max_cases_per_run": 3,
         "dry_run": False,              # analyze + queue, posting disabled
+        # Trial / tuning on historical (closed) cases: every run's drafts are
+        # flagged "trial" and can never be posted; "Run trial batch" pulls
+        # cases from an IPS list view regardless of their state.
+        "trial_mode": False,
+        "trial_list_view": "Handsfree_replier_test_case",
+        "trial_max_cases": 5,
         # Verified by a human after describe_comment_fields():
         #   {"body_field": "...", "private_field": "...", "private_value": true}
         "rest_field_map": None,
@@ -136,11 +142,12 @@ class HandsfreeStore:
     def enqueue(self, *, case_nbr: str, case_id: str, subject: str,
                 draft_plain: str, draft_html: str,
                 confidence: Optional[int], mode: str,
-                analysis: dict) -> dict:
+                analysis: dict, trial: bool = False) -> dict:
         draft_id = f"{case_nbr}__{datetime.now().strftime('%Y%m%dT%H%M%S')}_{uuid.uuid4().hex[:6]}"
         record = {
             "draft_id": draft_id,
             "status": "pending_review",
+            "trial": bool(trial),              # tuning run: never posted
             "created_at": _now_iso(),
             "updated_at": _now_iso(),
             "case_nbr": str(case_nbr),
@@ -213,7 +220,7 @@ class HandsfreeStore:
             slim = {k: rec.get(k) for k in
                     ("draft_id", "status", "created_at", "updated_at",
                      "case_nbr", "case_id", "subject", "mode", "confidence",
-                     "post_result")}
+                     "post_result", "trial")}
             slim["log_dir"] = decoded_log_dir(rec)
             analysis = rec.get("analysis") or {}
             slim["action_owner"] = str(analysis.get("action_owner") or "")

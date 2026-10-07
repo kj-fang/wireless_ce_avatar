@@ -207,6 +207,42 @@ class IpsClient:
         """Cases assigned to `owner_name`, created today (or since `since_iso`)."""
         return self._query_cases(build_new_cases_soql(owner_name, since_iso, limit))
 
+    def list_view_cases(self, list_view_name: str, limit: int = 200) -> list[CaseRef]:
+        """Cases of a Salesforce Case list view (by developer name), open or
+        closed — used by trial runs on historical cases for tuning."""
+        lv_id, url, params = None, "/services/data/v{ver}/sobjects/Case/listviews", \
+            {"limit": 200}
+        while url and lv_id is None:
+            resp = self._request("GET", url, params=params)
+            resp.raise_for_status()
+            d = resp.json()
+            for lv in d.get("listviews", []):
+                if lv.get("developerName") == list_view_name:
+                    lv_id = lv.get("id")
+                    break
+            url, params = d.get("nextRecordsUrl"), None
+        if not lv_id:
+            raise LookupError(f"list view not found: {list_view_name}")
+        resp = self._request(
+            "GET", "/services/data/v{ver}/sobjects/Case/listviews/" + lv_id + "/results",
+            params={"limit": int(limit)})
+        resp.raise_for_status()
+        out: list[CaseRef] = []
+        for rec in resp.json().get("records", []):
+            cols = {c.get("fieldNameOrPath"): c.get("value")
+                    for c in rec.get("columns", [])}
+            if not cols.get("CaseNumber"):
+                continue
+            out.append(CaseRef(
+                case_nbr=str(cols.get("CaseNumber")),
+                case_id=str(cols.get("Id") or ""),
+                subject=str(cols.get("Subject") or ""),
+                status=str(cols.get("Status") or ""),
+                created=str(cols.get("CreatedDate") or ""),
+                owner_name=str(cols.get("Owner.Name") or cols.get("OwnerId") or ""),
+            ))
+        return out
+
     def find_open_cases(self, owner_name: str, limit: int = 200) -> list[CaseRef]:
         """All open cases assigned to `owner_name` (auto-scan candidates)."""
         return self._query_cases(build_open_cases_soql(owner_name, limit))

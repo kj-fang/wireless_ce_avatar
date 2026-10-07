@@ -785,6 +785,52 @@ def smoke_runner(tmp: Path) -> None:
         store14e.mark_posted("01234567", comment_id="CMT-FR", first_response=True)
         rec14e = orch._analyze_and_enqueue(store14e, "01234567")
         cis.CaseService.process_case = staticmethod(_fake_process)
+        # Trial mode (Settings): tuning on historical / closed cases — a
+        # list-view batch runs the not-yet-analyzed cases in order, every
+        # draft is flagged trial and Approve refuses to post it.
+        from .ips_client import CaseRef
+        store14g = HandsfreeStore(tmp / "handsfree_s14g")
+        store14g.save_config({"trial_mode": True, "post_backend": "rest"})
+        store14g.mark_analyzed("00000001", "old-draft")   # already analyzed -> skipped
+
+        class _ListViewIps:
+            def list_view_cases(self, name, limit=200):
+                assert name == "Handsfree_replier_test_case"
+                return [CaseRef("00000001", "500A", "done before", status="Closed"),
+                        CaseRef("01234567", "500B", "historical closed case", status="Closed"),
+                        CaseRef("00000003", "500C", "would be third", status="Open")]
+        orig_ips_cls = orch.IpsClient
+        orch.IpsClient = _ListViewIps
+        try:
+            picked = orch.select_trial_cases(
+                _ListViewIps().list_view_cases("Handsfree_replier_test_case"),
+                store14g.ledger_entry, max_cases=1)
+            summary = orch.run_trial_batch(store14g, "Handsfree_replier_test_case",
+                                           max_cases=1)
+        finally:
+            orch.IpsClient = orig_ips_cls
+        trial_drafts = store14g.list_drafts(include_closed=True)
+        res_trial = None
+        if trial_drafts:
+            orig_store_fn = orch._store
+            orch._store = lambda: store14g
+            try:
+                res_trial = orch.approve_and_post(trial_drafts[0]["draft_id"])
+            finally:
+                orch._store = orig_store_fn
+        check("S14.f trial batch: analyzed case skipped, next list-view case run, "
+              "drafts flagged TRIAL, Approve refuses to post them",
+              [r.case_nbr for r in picked] == ["01234567"]
+              and summary["ok"] and [c["case_nbr"] for c in summary["cases"]] == ["01234567"]
+              and trial_drafts and all(d.get("trial") for d in trial_drafts)
+              and res_trial is not None and res_trial["ok"] is False
+              and "trial draft" in res_trial["error"],
+              f"picked={[r.case_nbr for r in picked]} summary={summary} "
+              f"trial={[d.get('trial') for d in trial_drafts]} res={res_trial}")
+        check("S14.f2 trial mode off -> drafts are not flagged",
+              not any(store14d.get(d['draft_id']).get('trial')
+                      for d in store14d.list_drafts(include_closed=True)))
+
         check("S14.d later round: analysis only (no second overview); request reply "
               "asks for the logs without the checklist",
               modes14d == ["full"]

@@ -51,6 +51,17 @@ def status():
     return jsonify(orchestrator.get_run_state())
 
 
+@handsfree_bp.route("/trial_run", methods=["POST"])
+def trial_run():
+    """Tuning batch on an IPS list view (open or closed cases); needs trial
+    mode in Settings. Drafts are flagged trial and can never be posted."""
+    body = request.get_json(silent=True) or {}
+    return jsonify(orchestrator.start_trial_run(
+        list_view=str(body.get("list_view") or ""),
+        max_cases=int(body.get("max_cases") or 0),
+        skip_analyzed=bool(body.get("skip_analyzed", True))))
+
+
 # ---------- automatic analysis (scheduler) ----------
 
 @handsfree_bp.record_once
@@ -174,7 +185,8 @@ def config():
         return jsonify(store.load_config())
     body = request.get_json(silent=True) or {}
     allowed = {"owner_name", "post_backend", "max_cases_per_run",
-               "dry_run", "rest_field_map", "ui_locators"}
+               "dry_run", "rest_field_map", "ui_locators",
+               "trial_mode", "trial_list_view", "trial_max_cases"}
     updates = {k: v for k, v in body.items() if k in allowed}
     return jsonify(store.save_config(updates))
 

@@ -37,7 +37,15 @@ def get_llm_analysis():
                 return_usage = True,
             )
             if type(ai_analysis) == dict:
-                session['classification'] = ai_analysis["Classification"]
+                # Some dict responses may omit Classification; downstream session consumers still expect this shape.
+                session['classification'] = ai_analysis.get(
+                    "Classification",
+                    {
+                        "issue_type": "Unclassified",
+                        "confidence": 0,
+                        "keywords_found": [],
+                    },
+                )
         else:
             ai_analysis = "LLM helper currently not available"
         

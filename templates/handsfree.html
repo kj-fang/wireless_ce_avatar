@@ -179,6 +179,10 @@
                    margin-bottom: 12px; padding: 12px 14px; background: var(--panel2);
                    border: 1px solid var(--border); border-radius: 8px; }
     #draft-chips .pill { background: var(--field); font-size: 12px; padding: 3px 10px; }
+    /* the next-action line is the one sentence a reviewer reads first */
+    #draft-chips .pill.next-action { flex-basis: 100%; white-space: normal; line-height: 1.5;
+                                     font-size: 15px; font-weight: 600; padding: 8px 12px;
+                                     border-radius: 8px; }
     #draft-chips .chip-label { font-size: 10.5px; font-weight: 650; letter-spacing: 0.08em;
                                text-transform: uppercase; color: var(--faint); margin-right: -3px; }
     details { margin-top: 14px; }
@@ -846,7 +850,7 @@
     if (analysis.next_action) {
       chips.push({label: 'next action',
                   text: (ACTION_OWNER_TEXT[analysis.action_owner] || 'owner unclear') + ' — ' + analysis.next_action,
-                  cls: analysis.action_owner === 'intel' ? 'warn' : '',
+                  cls: 'next-action ' + (analysis.action_owner === 'intel' ? 'warn' : ''),
                   title: 'Summarized from the IPS comment thread in time order'});
     }
     const imgs = analysis.comment_images || [];

@@ -277,6 +277,8 @@ class CaseAnalysis:
                                                        #   (safe source for public fills)
     action_owner: str = ""                             # who acts next: intel | customer | ""
     next_action: str = ""                              # reader's one-sentence next step
+    yb_case: bool = False                              # yellow bang / assert issue:
+                                                       #   any assert in the log counts
     archive_contents: dict = field(default_factory=dict)  # decompose counts: wifi_wpp,
                                                        #   ddd, event_logs, bt, fw
     comment_images: list = field(default_factory=list)  # [{comment_id, date, author,
@@ -735,6 +737,7 @@ class HandsfreeRunner:
                 " ".join([analysis.issue_type or "", analysis.subject or "",
                           analysis.clean_description or "",
                           analysis.description or ""])))
+            analysis.yb_case = yb_assert or analysis.issue_domain == "Yellow Bang"
             if yb_assert:
                 etl_path = _pick_etl_yb_earliest(wifi_files, ddd_files)
                 if etl_path:
@@ -819,7 +822,20 @@ class HandsfreeRunner:
                     break
             if analysis.time_mismatch and also_tried:
                 analysis.time_mismatch["also_tried"] = also_tried
-        if analysis.time_mismatch:
+        if analysis.time_mismatch and analysis.yb_case:
+            # Exception (Charles, 2026-10-07): for a yellow-bang / assert
+            # issue, any assert inside the given log is the evidence that
+            # matters — the capture explains the YB whenever it happened.
+            # Continue the analysis (the draft still carries the mismatch
+            # warning) instead of asking for another log.
+            from .echo_client import scan_wrt_log_for_asserts
+            codes = [a["code"] for a in scan_wrt_log_for_asserts(analysis.log_path)]
+            if codes:
+                analysis.time_mismatch["yb_assert_override"] = codes
+                self.progress("decode_etl",
+                              f"YB case: assert(s) {', '.join(codes)} found in the "
+                              "log — continuing despite the issue-time mismatch")
+        if analysis.time_mismatch and not analysis.time_mismatch.get("yb_assert_override"):
             analysis.mode = "request_logs"
             analysis.log_request_reason = "log_not_covering"
             analysis.ok = True
@@ -1001,6 +1017,8 @@ class HandsfreeRunner:
 
     def _assert_window(self, analysis: CaseAnalysis):
         from datetime import timedelta
+        if getattr(analysis, "yb_case", False):
+            return None          # YB / assert issue: every assert in the log counts
         dt = self._issue_datetime_in_log_frame(analysis)
         if dt is None:
             return None

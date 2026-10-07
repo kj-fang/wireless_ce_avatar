@@ -268,10 +268,17 @@ def compose_plain(analysis: CaseAnalysis) -> str:
             "issue time ***",
             f"Reported issue time: {', '.join(tm.get('issue_times', []))}. "
             f"Attached WRT log covers {tm['log_first']} – {tm.get('log_last')}.",
-            "Log time is not the same as the issue time — please help provide "
-            "a WRT log captured at the issue time.",
-            "",
         ]
+        if tm.get("yb_assert_override"):
+            parts.append(
+                "Yellow-bang case: assert(s) "
+                + ", ".join(tm["yb_assert_override"])
+                + " found in this log — analysis continued on the assert "
+                "evidence despite the time mismatch.")
+        else:
+            parts.append("Log time is not the same as the issue time — please "
+                         "help provide a WRT log captured at the issue time.")
+        parts.append("")
 
     # Where the case stands after reading the comment thread: who acts next
     # and what the step is (reader output; Private-to-Intel drafts only).

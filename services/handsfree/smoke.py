@@ -600,6 +600,33 @@ def smoke_runner(tmp: Path) -> None:
               f"mode={analysis6b.mode} reason={analysis6b.log_request_reason} "
               f"{d6b['plain'][:500]}")
 
+        # YB exception (2026-10-07): same mismatch, but a yellow-bang case
+        # whose log holds an assert continues on the assert evidence.
+        etl_yb = case_dir / "capture_yb_20-06-2026_10-20-00_5_5055_0x20101f01_0x0_0x0" / "WifiDriverIHVSession.etl.001"
+        etl_yb.parent.mkdir(parents=True, exist_ok=True)
+        etl_yb.write_bytes(b"\x00fake")
+        Path(str(etl_yb) + ".log").write_text("\n".join(log_lines[:1] + [
+            "06/20/2026-10:20:00.000 [17] [NIC_DEBUG] [ERROR] [x]:FATAL_ERROR: uCode ASSERT(UMAC, rtStatus = 0x20101F01, data1 = 0x0, data2 = 0x0)",
+        ] + log_lines[-1:]), encoding="utf-8")
+        yb_reply = dict(wrong_time_reply, issue_domain="Yellow Bang")
+        fake_llm.chat_text = lambda messages, system_content=None: json.dumps(yb_reply)
+        adc.process_single_zip = lambda *a, **k: ([str(etl_yb)], [], [], [], [])
+        analysis6c = r.analyze_case("01234567")
+        adc.process_single_zip = _fake_zip_proc
+        d6c = compose(analysis6c)
+        check("S9.c3 YB case + assert in the log -> analysis continues despite the "
+              "time mismatch; draft explains it",
+              analysis6c.yb_case
+              and analysis6c.time_mismatch.get("yb_assert_override") == ["0x20101F01"]
+              and analysis6c.mode in ("full", "triage_only")
+              and "agent_analysis" in [s.name for s in analysis6c.stages]
+              and "echo_kb" in [s.name for s in analysis6c.stages]
+              and "TIME MISMATCH" in d6c["plain"]
+              and "assert(s) 0x20101F01 found in this log" in d6c["plain"]
+              and "please help provide a WRT log" not in d6c["plain"],
+              f"mode={analysis6c.mode} yb={analysis6c.yb_case} tm={analysis6c.time_mismatch} "
+              f"stages={[s.name for s in analysis6c.stages]} {d6c['plain'][:300]}")
+
         # request_logs + info gaps merge into ONE public reply.
         analysis2.missing_info = [{"item": "issue_time", "reason": ""}]
         draft2b = compose(analysis2)

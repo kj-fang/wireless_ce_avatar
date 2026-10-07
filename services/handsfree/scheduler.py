@@ -109,6 +109,10 @@ def run_once(trigger: str = "manual") -> dict:
 def _loop() -> None:
     while True:
         try:
+            from configs.global_configs import app_config
+            if not getattr(app_config, "avatarfiles_dir", None):
+                time.sleep(_TICK_S)      # app still booting (set_up not run yet)
+                continue
             cfg = _store().load_config()
             if cfg.get("auto_check_enabled") and cfg.get("auto_next_run_at"):
                 due = datetime.fromisoformat(cfg["auto_next_run_at"])

@@ -797,8 +797,12 @@ def chat():
         except Exception:
             pass
 
+        # Python unbinds `e` when this except block ends, and the generator
+        # below only runs once Flask starts streaming -- so read the message now.
+        error_text = str(e)
+
         def generate_error():
-            yield f"data: {json.dumps({'type': 'error', 'content': str(e)}, ensure_ascii=False)}\n\n"
+            yield f"data: {json.dumps({'type': 'error', 'content': error_text}, ensure_ascii=False)}\n\n"
 
         return Response(generate_error(), mimetype="text/event-stream")
 

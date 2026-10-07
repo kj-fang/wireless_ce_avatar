@@ -5,8 +5,8 @@ Until now ``blueprints/log_chatbot/log_chatbot_routes.py`` and
 handlers were the same code twice. Of ~1,500 lines each, about 1,080 were
 identical; what genuinely differed was a set of values (which ``app_config``
 slot holds the app-level agent, which history domain key partitions the saved
-conversations, which agent class to instantiate) plus eleven behaviour
-switches: three the UI config already declared, and eight explicit fields on
+conversations, which agent class to instantiate) plus nine behaviour
+switches: three the UI config already declared, and six explicit fields on
 :class:`AgentRouteProfile`.
 
 This module is the same move the refactor already made for the engine and for
@@ -178,10 +178,6 @@ class AgentRouteProfile:
     #: bypassed / buggy client. Wi-Fi chose 24 h; BT left it effectively open.
     #: TODO(team): one value would do — 1440 is above any real single event.
     window_minutes_cap: int
-    #: ``/prepare`` receives a resolved, range-checked issue time from
-    #: download_result and carries it into the new analysis. Wi-Fi only:
-    #: BT's download_result flow posts ``etl_path`` alone.
-    download_result_handoff: bool
     #: ``/prepare`` drops the DERIVED issue-context caches (attachment time,
     #: resolved issue time, LLM-organized description) before rebuilding
     #: them, so a second analysis started without "Back to Avatar" cannot
@@ -191,13 +187,6 @@ class AgentRouteProfile:
     #: number changes, which covers most of BT's exposure; a second BT run
     #: on the SAME case is the part still open. Unverified, so unchanged.
     purge_issue_caches_on_prepare: bool
-    #: ``/get_issue_context`` drops any auto-filled issue time that falls
-    #: outside the selected log (an LLM can pick the wrong date when a log
-    #: spans midnight) and says why in ``issue_time_blocked`` /
-    #: ``issue_time_warning``. Wi-Fi only. Deliberately NOT tied to
-    #: ``customer_timezone``: that flag lives in the UI config, and turning
-    #: off a display feature must not remove a server-side safety net.
-    guard_issue_times_to_log_range: bool
     #: ``/prepare`` resets the conversation before priming. Wi-Fi only.
     #: TODO(team): BT reaching /prepare is also a new analysis, so this looks
     #: like drift rather than policy — confirm before unifying.
@@ -1487,10 +1476,14 @@ class AgentRoutes:
                 # second analysis is started without going through "Back to
                 # Avatar".)
                 _invalidate_issue_context_caches()
-            if self.profile.download_result_handoff:
-                _clear_carried_issue_time()
-                if carried_issue_time:
-                    _validate_carried_issue_time(carried_issue_time, log_path)
+            # download_result already resolved the issue time against the
+            # capture the user picked. Carry that exact value over, checked
+            # against this log's range, instead of re-guessing it. Both
+            # profiles: BT's decoded .hci.txt carries the same dated
+            # timestamps, so the range check works for it too.
+            _clear_carried_issue_time()
+            if carried_issue_time:
+                _validate_carried_issue_time(carried_issue_time, log_path)
 
             # Pull consolidated issue context from all session sources
             ctx = _extract_issue_context()
@@ -1546,17 +1539,20 @@ class AgentRoutes:
         log_path = session.get("chatbot_log_path") or app_config.last_analyzed_log_path or ""
         first_ts, last_ts = read_log_time_range(log_path) if log_path else (None, None)
 
-        if self.profile.customer_timezone and attachment_time:
-            # Frame-correct a time-only attachment_time up front. A bare clock
-            # like "16:45:00" (the customer wall clock parsed from the
-            # attachment subtitle) must be anchored to the customer capture
-            # date and converted to the log frame HERE. Otherwise the frontend
-            # picker — which prefers attachment_time over the resolved
-            # issue_time — stamps the clock straight onto the log date and
-            # mixes frames (showing e.g. 06/03 16:45 instead of log-frame 06/03
-            # 05:45). Full datetimes pass through unchanged (handled by
-            # _align_times_to_log_frame).
-            _aligned_at = realign_times_to_log([attachment_time], first_ts, last_ts, log_path)
+        if attachment_time:
+            # Date a clock-only attachment_time up front, so the log-range
+            # check below can judge it instead of discarding it as undated.
+            # With customer_timezone the bare clock ("16:45:00", the customer
+            # wall clock from the attachment subtitle) is also anchored to the
+            # customer capture date and converted to the log frame — otherwise
+            # the picker, which prefers attachment_time, would mix frames (e.g.
+            # 06/03 16:45 instead of log-frame 06/03 05:45). Without it the
+            # clock is stamped onto the log's date, the same treatment the
+            # organizer gives that profile's issue times. Full datetimes pass
+            # through unchanged (handled by _align_times_to_log_frame).
+            _aligned_at = realign_times_to_log(
+                [attachment_time], first_ts, last_ts,
+                log_path if self.profile.customer_timezone else "")
             if _aligned_at:
                 attachment_time = _aligned_at[0]
 
@@ -1577,10 +1573,7 @@ class AgentRoutes:
         # supplies the already-resolved, range-checked value from download_result,
         # or deliberately supplies no value after validation failed. In the latter
         # case do not silently fall back to a fresh LLM/attachment/log-latest guess.
-        carried_present = bool(
-            self.profile.download_result_handoff
-            and session.get("_carried_issue_time_present")
-        )
+        carried_present = bool(session.get("_carried_issue_time_present"))
         carried_issue_time = (session.get("_carried_issue_time") or "").strip()
         carried_warning = (session.get("_carried_issue_time_warning") or "").strip()
         if carried_present:
@@ -1632,29 +1625,27 @@ class AgentRoutes:
                 "customer_iana": to_iana_timezone(customer_tz_for_ui) if customer_tz_for_ui else "",
             })
 
-        range_blocked, range_warning = False, ""
-        if self.profile.guard_issue_times_to_log_range:
-            (attachment_time, issue_time_str, issue_times,
-             range_blocked, range_warning) = _guard_times_inside_log_range(
-                first_ts, last_ts, attachment_time, issue_time_str, issue_times,
-                carried_present)
-            payload.update({
-                "attachment_time": attachment_time,
-                "issue_time": issue_time_str,
-                "issue_times": issue_times,
-                "log_first_time": format_issue_time(first_ts),
-                "log_last_time": format_issue_time(last_ts),
-            })
-
-        if self.profile.download_result_handoff or self.profile.guard_issue_times_to_log_range:
+        # Final safety net, for every profile: never put an auto-filled time
+        # in the picker unless it falls inside the selected log (an LLM can
+        # pick the wrong date when a log spans midnight). Deliberately not
+        # tied to customer_timezone, which is a UI display flag.
+        (attachment_time, issue_time_str, issue_times,
+         range_blocked, range_warning) = _guard_times_inside_log_range(
+            first_ts, last_ts, attachment_time, issue_time_str, issue_times,
+            carried_present)
+        payload.update({
+            "attachment_time": attachment_time,
+            "issue_time": issue_time_str,
+            "issue_times": issue_times,
+            "log_first_time": format_issue_time(first_ts),
+            "log_last_time": format_issue_time(last_ts),
             # Why the picker was left empty: a hand-off that failed
             # validation, or every auto-filled time fell outside the log.
-            payload.update({
-                "issue_time_blocked": bool(
-                    (carried_present and not carried_issue_time) or range_blocked
-                ),
-                "issue_time_warning": carried_warning or range_warning,
-            })
+            "issue_time_blocked": bool(
+                (carried_present and not carried_issue_time) or range_blocked
+            ),
+            "issue_time_warning": carried_warning or range_warning,
+        })
         return jsonify(payload)
 
     # ==================================================================
@@ -1759,9 +1750,7 @@ WIFI_PROFILE = AgentRouteProfile(
     browse_filetypes=(("Log files", "*.log"), ("All files", "*.*")),
     gather_domain="wifi",
     window_minutes_cap=1440,
-    download_result_handoff=True,
     purge_issue_caches_on_prepare=True,
-    guard_issue_times_to_log_range=True,
     reset_conversation_on_prepare=True,
     accepts_direct_log_path=False,
     read_log_has_date_while_running=True,
@@ -1778,9 +1767,7 @@ BT_PROFILE = AgentRouteProfile(
     browse_filetypes=(("hci.txt files", "*.hci.txt"), ("All files", "*.*")),
     gather_domain="bt",
     window_minutes_cap=100000,
-    download_result_handoff=False,
     purge_issue_caches_on_prepare=False,
-    guard_issue_times_to_log_range=False,
     reset_conversation_on_prepare=False,
     accepts_direct_log_path=True,
     read_log_has_date_while_running=False,

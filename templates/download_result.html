@@ -2179,15 +2179,19 @@
 
         // Bluetooth Analysis Agent flow: prepare the bt_chatbot agent
         // server-side, then jump to /bt_chatbot/. msg.hci_path is the
-        // decoded HCI path; bt_chatbot.prepare appends ".log" internally —
-        // same convention the (now-removed) log_parser redirect used.
+        // decoded HCI path, which bt_chatbot.prepare accepts as-is. The
+        // issue time this page already resolved goes along, as it does for
+        // Wi-Fi, so the agent is checked against the log instead of guessing.
         appendLog(`✅ HCI decode done — preparing Bluetooth Analysis Agent...\n`);
         button.innerText = '⏳ Preparing UI...';
 
         fetch(BT_CHATBOT_PREPARE_URL, {
             method: 'POST',
             headers: { 'Content-Type': 'application/json' },
-            body: JSON.stringify({ etl_path: msg.hci_path })
+            body: JSON.stringify({
+                etl_path: msg.hci_path,
+                issue_time: window.__llmIssueTime || ''
+            })
         })
         .then(res => res.json())
         .then(data => {

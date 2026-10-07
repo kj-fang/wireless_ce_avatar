@@ -3,6 +3,7 @@ import shutil
 import subprocess
 import requests
 import platform
+from contextlib import contextmanager
 from tqdm import tqdm
 import zipfile
 import threading
@@ -11,6 +12,35 @@ import signal
 import traceback
 import warnings
 import logging
+
+
+_PROXY_ENV_VARS = ("HTTP_PROXY", "HTTPS_PROXY", "NO_PROXY")
+
+
+@contextmanager
+def without_proxy_env():
+    """Hide the corporate proxy from Chrome/ChromeDriver, then put it back.
+
+    Chrome and the driver downloader must not go through the proxy, but they
+    only read the environment when they are launched. Deleting the variables
+    outright leaks that state into the rest of the process: urllib3 (which the
+    Snowflake connector vendors) reads them per request, so an already-open
+    Snowflake connection starts dialling snowflakecomputing.com directly and
+    stalls for the full 60s connect timeout.
+
+    Scoping the removal to the launch keeps both sides working.
+    """
+    saved = {name: os.environ.get(name) for name in _PROXY_ENV_VARS}
+    for name in _PROXY_ENV_VARS:
+        os.environ.pop(name, None)
+    try:
+        yield
+    finally:
+        for name, value in saved.items():
+            if value is None:
+                os.environ.pop(name, None)
+            else:
+                os.environ[name] = value
 
 
 from selenium import webdriver
@@ -85,8 +115,6 @@ class DriverManager:
 
     def create_download_driver(self, download_path, additional_prefs=None , 
                                additional_args=None, performance_logging=False, headless=True):
-        for proxy_var in ["HTTP_PROXY", "HTTPS_PROXY", "NO_PROXY"]:
-            os.environ.pop(proxy_var, None)
         warnings.simplefilter(action='ignore', category=ResourceWarning)
         logging.basicConfig(level=logging.ERROR)
 
@@ -129,7 +157,10 @@ class DriverManager:
             options.set_capability("goog:loggingPrefs", {"performance": "ALL"})
 
         service = Service(self.chrome_driver_path )
-        driver = webdriver.Chrome(service=service, options=options)
+        # Chrome inherits the environment at spawn, so hiding the proxy only for
+        # the launch is enough — and it leaves it in place for everything else.
+        with without_proxy_env():
+            driver = webdriver.Chrome(service=service, options=options)
         self.all_drivers.append(driver)
         return driver
         
@@ -137,10 +168,9 @@ class DriverManager:
     def setup_chromedriver(self, driver_dir):
         """set ChromeDriver"""
         try:
-            for proxy_var in ["HTTP_PROXY", "HTTPS_PROXY", "NO_PROXY"]:
-                os.environ.pop(proxy_var, None)
             print("🔄 Setting up ChromeDriver...")
-            driver_path = self.chrome_driver_init(driver_dir)
+            with without_proxy_env():
+                driver_path = self.chrome_driver_init(driver_dir)
             print(f"✅ ChromeDriver installed: {driver_path}")
             return driver_path
         except Exception as e:
@@ -148,8 +178,6 @@ class DriverManager:
             return None
 
     def open_browser(self, port, startup_path='/'):
-        for proxy_var in ["HTTP_PROXY", "HTTPS_PROXY", "NO_PROXY"]:
-            os.environ.pop(proxy_var, None)
         options = webdriver.ChromeOptions()
         if self.chrome_binary_path:
             options.binary_location = self.chrome_binary_path
@@ -163,7 +191,8 @@ class DriverManager:
             self.chrome_driver_path = self.setup_chromedriver(self._driver_dir)
             print(f"✅ ChromeDriver ready: {self.chrome_driver_path}")
         
-        self.main_driver = webdriver.Chrome(service=Service(self.chrome_driver_path), options=options)
+        with without_proxy_env():
+            self.main_driver = webdriver.Chrome(service=Service(self.chrome_driver_path), options=options)
         # set a longer timeout for slow-loading pages, default is 120s.
         self.main_driver.set_page_load_timeout(300)
         base_url = f"http://localhost:{port}/"

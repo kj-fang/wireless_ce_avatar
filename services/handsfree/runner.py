@@ -797,7 +797,7 @@ class HandsfreeRunner:
         """Fresh agent per case; borrows client/model/skills (and the ACE
         runner, so learned playbooks apply) from the boot-time base agent."""
         from configs.global_configs import app_config
-        from services.log_chatbot_service import WifiLogAgentSystem
+        from services.chatbot.engine.system import WifiLogAgentSystem
 
         base = getattr(app_config, "log_chatbot_agent", None)
         llm = app_config.llm_helper

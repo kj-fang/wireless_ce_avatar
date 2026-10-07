@@ -175,7 +175,7 @@ def smoke_runner(tmp: Path) -> None:
     import types
     from configs.global_configs import app_config
     from models.models import CaseContext
-    from services.log_chatbot_service import Skill
+    from services.chatbot.engine.system import Skill
     from services.ace.eval.fakes import FakeAgentClient
     from . import runner as runner_mod
     from .composer import compose

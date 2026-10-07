@@ -125,7 +125,7 @@ def _wait_for_cancel_children_to_exit(timeout: float = 10.0) -> None:
 
 
 def _force_rmtree(path: str, retries: int = 6, delay: float = 0.5) -> bool:
-    """Aggressively delete a directory tree. Handles Windows extended-length
+    r"""Aggressively delete a directory tree. Handles Windows extended-length
     paths, read-only bits, and files whose handles are only just being
     released. Returns True if the path is gone at the end. Never raises.
 

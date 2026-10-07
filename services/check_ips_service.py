@@ -10,7 +10,6 @@ over the top of it.
 
 import json
 import os
-import sys
 import threading
 from concurrent.futures import ThreadPoolExecutor, TimeoutError as FutureTimeoutError
 from datetime import datetime, timezone
@@ -20,6 +19,7 @@ from typing import List, Optional
 from flask import session
 
 from configs.global_configs import app_config
+from services.chatbot.session import agents_for_session
 from models.models import CaseContext
 from utils import check_ips_utils, helpers
 
@@ -670,32 +670,17 @@ def enrich_attached_case(case_nbr) -> bool:
     return True
 
 
-_CHATBOT_ROUTE_MODULES = (
-    "blueprints.log_chatbot.log_chatbot_routes",
-    "blueprints.bt_chatbot.bt_chatbot_routes",
-    "blueprints.nw_analysis.nw_analysis_routes",
-)
-
-
 def _primed_agents() -> list:
     """Every agent that may be holding this session's case summary.
 
     The agents on app_config are boot-time templates. What /set_log actually
-    primes is each chatbot's per-session clone in its module-level
-    _chatbot_instances, keyed by session['chatbot_session_id'] -- the same map
-    a finished background job's agent is adopted into. Clearing only the
-    templates left the clone the next chat really uses still holding the old
-    case. Modules are read from sys.modules rather than imported: one that
-    has not been loaded has no agents to clear, and importing it here would
-    drag a whole chatbot in from the service layer.
+    primes is each profile's per-session clone, keyed by chatbot_session_id.
+    The shared registry exposes those existing clones without importing route
+    modules or depending on their filenames. Boot-time templates alone would
+    leave the clone used by the next chat holding the previous case's notes.
     """
-    agents = []
     sid = session.get("chatbot_session_id")
-    if sid:
-        for module_name in _CHATBOT_ROUTE_MODULES:
-            instances = getattr(sys.modules.get(module_name), "_chatbot_instances", None)
-            if isinstance(instances, dict) and instances.get(sid) is not None:
-                agents.append(instances[sid])
+    agents = agents_for_session(sid or "")
     for name in ("log_chatbot_agent", "bt_chatbot_agent", "nw_analysis_agent"):
         agent = getattr(app_config, name, None)
         if agent is not None and all(agent is not a for a in agents):
@@ -727,7 +712,7 @@ def _forget_case_on_agents(canonical: str) -> None:
     # otherwise prime the next agent with. The _carried_issue_time* keys are
     # left alone -- they are the time the user picked for this log, not
     # something the old case supplied. Kept in step with
-    # log_chatbot_routes._invalidate_issue_context_caches.
+    # the shared chatbot adapter's issue-context cache invalidation.
     for key in ("_attachment_time_cache", "_resolved_issue_time_cache",
                 "_issue_ai_quick", "classification", "ai_ips_analysis"):
         session.pop(key, None)

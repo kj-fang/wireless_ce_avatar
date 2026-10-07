@@ -5,8 +5,8 @@ Until now ``blueprints/log_chatbot/log_chatbot_routes.py`` and
 handlers were the same code twice. Of ~1,500 lines each, about 1,080 were
 identical; what genuinely differed was a set of values (which ``app_config``
 slot holds the app-level agent, which history domain key partitions the saved
-conversations, which agent class to instantiate) plus nine behaviour
-switches: three the UI config already declared, and six explicit fields on
+conversations, which agent class to instantiate) plus seven behaviour
+switches: three the UI config already declared, and four explicit fields on
 :class:`AgentRouteProfile`.
 
 This module is the same move the refactor already made for the engine and for
@@ -178,15 +178,6 @@ class AgentRouteProfile:
     #: bypassed / buggy client. Wi-Fi chose 24 h; BT left it effectively open.
     #: TODO(team): one value would do — 1440 is above any real single event.
     window_minutes_cap: int
-    #: ``/prepare`` drops the DERIVED issue-context caches (attachment time,
-    #: resolved issue time, LLM-organized description) before rebuilding
-    #: them, so a second analysis started without "Back to Avatar" cannot
-    #: inherit the previous run's. Wi-Fi only.
-    #: TODO(team): a BT /prepare is a new analysis too. #165's
-    #: check_ips_service already drops these caches whenever the case
-    #: number changes, which covers most of BT's exposure; a second BT run
-    #: on the SAME case is the part still open. Unverified, so unchanged.
-    purge_issue_caches_on_prepare: bool
     #: ``/prepare`` resets the conversation before priming. Wi-Fi only.
     #: TODO(team): BT reaching /prepare is also a new analysis, so this looks
     #: like drift rather than policy — confirm before unifying.
@@ -201,10 +192,6 @@ class AgentRouteProfile:
     #: analysis thread mutates the ``_raw_log_cache`` pair that call reads.
     #: TODO(team): the guard is right for both — Wi-Fi just never got it.
     read_log_has_date_while_running: bool
-    #: Pre-warm the issue-AI cache during the page render so the page's
-    #: /get_issue_context AJAX hits a hot cache instead of spinning on a
-    #: synchronous LLM organize. BT only.
-    prewarm_issue_ai_on_index: bool
 
     # ---- derived: read the flags the UI config already declares ----
     @property
@@ -699,14 +686,13 @@ class AgentRoutes:
         # LLM wait (if any) now happens during the page-render request (browser
         # shows its native loading bar) instead of as a post-load spinner.
         # Best-effort: never let a warm failure block the page.
-        if self.profile.prewarm_issue_ai_on_index:
-            try:
-                if suggested_log and not session.get("_issue_ai_quick"):
-                    _first_ts, _last_ts = read_log_time_range(suggested_log)
-                    self._issue_context_organized(
-                        ctx.get("description", "") or "", _first_ts, _last_ts)
-            except Exception as _warm_err:
-                print(f"⚠️ {self.profile.name} index pre-warm skipped: {_warm_err}")
+        try:
+            if suggested_log and not session.get("_issue_ai_quick"):
+                _first_ts, _last_ts = read_log_time_range(suggested_log)
+                self._issue_context_organized(
+                    ctx.get("description", "") or "", _first_ts, _last_ts)
+        except Exception as _warm_err:
+            print(f"⚠️ {self.profile.name} index pre-warm skipped: {_warm_err}")
 
         return render_template(
             "chatbot/page.html",
@@ -1468,14 +1454,13 @@ class AgentRoutes:
                             "error": f"{missing} not found: {log_path}"}), 404
 
         try:
-            if self.profile.purge_issue_caches_on_prepare:
-                # Entering a NEW analysis from download_result. Purge the derived
-                # issue-context caches FIRST so the context below is rebuilt from
-                # this run's selected_files / case_context — not a previous run's
-                # leftovers. (Fixes stale attachment time / description when a
-                # second analysis is started without going through "Back to
-                # Avatar".)
-                _invalidate_issue_context_caches()
+            # Entering a NEW analysis from download_result. Purge the derived
+            # issue-context caches FIRST so the context below is rebuilt from
+            # this run's selected_files / case_context — not a previous run's
+            # leftovers. (Fixes stale attachment time / description when a
+            # second analysis is started without going through "Back to
+            # Avatar".)
+            _invalidate_issue_context_caches()
             # download_result already resolved the issue time against the
             # capture the user picked. Carry that exact value over, checked
             # against this log's range, instead of re-guessing it. Both
@@ -1750,11 +1735,9 @@ WIFI_PROFILE = AgentRouteProfile(
     browse_filetypes=(("Log files", "*.log"), ("All files", "*.*")),
     gather_domain="wifi",
     window_minutes_cap=1440,
-    purge_issue_caches_on_prepare=True,
     reset_conversation_on_prepare=True,
     accepts_direct_log_path=False,
     read_log_has_date_while_running=True,
-    prewarm_issue_ai_on_index=False,
 )
 
 BT_PROFILE = AgentRouteProfile(
@@ -1767,11 +1750,9 @@ BT_PROFILE = AgentRouteProfile(
     browse_filetypes=(("hci.txt files", "*.hci.txt"), ("All files", "*.*")),
     gather_domain="bt",
     window_minutes_cap=100000,
-    purge_issue_caches_on_prepare=False,
     reset_conversation_on_prepare=False,
     accepts_direct_log_path=True,
     read_log_has_date_while_running=False,
-    prewarm_issue_ai_on_index=True,
 )
 
 log_chatbot_bp = create_agent_blueprint(WIFI_PROFILE)

@@ -505,7 +505,11 @@ class WppParser(Parser):
         pdbs_str = ";".join(self.pdb_name_list)
 
         # prepare the command
-        cmd = f"tracefmt.exe {self.local_log_file_name} -o {OUTPUT_TXT_NAME} -nosummary -pdb {pdbs_str}"
+        # Absolute path: a bare "tracefmt.exe" relies on CreateProcess searching
+        # the current directory, which NoDefaultCurrentDirectoryInExePath=1
+        # (set by some launchers/harnesses) disables -> WinError 2.
+        tracefmt = os.path.join(self.workspace, "tracefmt.exe")
+        cmd = f'"{tracefmt}" {self.local_log_file_name} -o {OUTPUT_TXT_NAME} -nosummary -pdb {pdbs_str}'
 
         # run the process sync
         emit_and_log("run tracefmt to parse the ETL")
@@ -647,7 +651,7 @@ class DddParser(Parser):
         # run the DDD player on the binary to extract the actual sha1 and OS type
         # it is OK to run the 'info' command on winA using winT DDD player
         # id is 0, since when binary is copied, it is renamed to be 0
-        cmd = f"{DDD_PLAYER_NAME} -bin . -id 0 -info"
+        cmd = f'"{os.path.join(self.workspace, DDD_PLAYER_NAME)}" -bin . -id 0 -info'
         proc = subprocess.Popen(cmd, stdout=subprocess.PIPE)
         res = proc.stdout.read().decode("utf-8")
 
@@ -713,7 +717,7 @@ class DddParser(Parser):
         """
         function parses DDD binary to TXT by running DDDPlayer.exe
         """
-        cmd = f"{DDD_PLAYER_NAME} -bin . -id 0 -l FFFF07 -o ."
+        cmd = f'"{os.path.join(self.workspace, DDD_PLAYER_NAME)}" -bin . -id 0 -l FFFF07 -o .'
         proc = subprocess.Popen(cmd, stdout=subprocess.PIPE)
         res = proc.stdout.read().decode("utf-8")
 

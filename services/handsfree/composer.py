@@ -166,10 +166,17 @@ def _request_logs_lines(analysis: CaseAnalysis) -> list[str]:
                    f"archive{name} — the file may be corrupted or the upload "
                    "incomplete, so please RE-UPLOAD the log archive")
     elif analysis.chosen_attachment:
-        # An archive was attached, but after extraction it held no WRT ETLs.
-        missing = (f"we checked the attached archive "
-                   f"({analysis.chosen_attachment}) but could not find WRT "
-                   "logs inside it")
+        # An archive was attached, but after extraction it held no driver
+        # WPP ETL. Say what it DID contain: an autologger capture with
+        # firmware / event logs is not "no WRT logs" (00991735).
+        found = getattr(analysis, "archive_contents", None) or {}
+        parts_found = [label for key, label in (
+            ("fw", "firmware (wrt-fw) traces"), ("event_logs", "Windows event logs"),
+            ("bt", "Bluetooth traces")) if found.get(key)]
+        missing = (f"we checked the attached archive ({analysis.chosen_attachment})"
+                   + (f" — it contains {', '.join(parts_found)}" if parts_found else "")
+                   + " but no Intel Wi-Fi driver WPP log (WifiDriverIHVSession.etl), "
+                   "which is the trace the analysis needs")
     else:
         missing = "we could not find a WRT log archive attached to this case"
     parts = [

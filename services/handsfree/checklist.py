@@ -226,12 +226,20 @@ List only the items that ARE provided.
 """
 
 
-def llm_fill(llm, fills: dict, case_material: str) -> None:
+_WRT_ITEM_RE = re.compile(r"WRT Log|WPP driver log", re.IGNORECASE)
+
+
+def llm_fill(llm, fills: dict, case_material: str, *,
+             lock_wrt_items: bool = False) -> None:
     """One LLM pass over the still-unfilled items. Mutates `fills`; any
-    failure leaves items unfilled (the customer is simply asked again)."""
+    failure leaves items unfilled (the customer is simply asked again).
+    lock_wrt_items: the pipeline established that no usable WRT/WPP log was
+    provided (request_logs) — the text pass must not tick those items from
+    an attachment label, or the reply would contradict itself."""
     todo: list[tuple[str, dict]] = [
         (sec, e) for sec in ("general_info", "required_log", "required_info")
-        for e in fills.get(sec, []) if not e["provided"]]
+        for e in fills.get(sec, []) if not e["provided"]
+        and not (lock_wrt_items and _WRT_ITEM_RE.search(e["item"]))]
     if not todo or llm is None:
         return
     items_block = "\n".join(f"{i + 1}. {e['item']}" for i, (_, e) in enumerate(todo))
@@ -288,7 +296,8 @@ def build_fills(analysis, llm=None) -> dict:
                   (getattr(analysis, "env_detail", None) or {}).items() if a)[:1000],
         ("=== CUSTOMER COMMENTS (oldest first) ===\n" + history) if history else "",
     ]))
-    llm_fill(llm, fills, material)
+    llm_fill(llm, fills, material,
+             lock_wrt_items=getattr(analysis, "mode", "") == "request_logs")
     return fills
 
 

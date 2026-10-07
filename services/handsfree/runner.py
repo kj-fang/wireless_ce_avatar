@@ -237,6 +237,8 @@ class CaseAnalysis:
                                                        #   (safe source for public fills)
     action_owner: str = ""                             # who acts next: intel | customer | ""
     next_action: str = ""                              # reader's one-sentence next step
+    archive_contents: dict = field(default_factory=dict)  # decompose counts: wifi_wpp,
+                                                       #   ddd, event_logs, bt, fw
     comment_images: list = field(default_factory=list)  # [{comment_id, date, author,
                                                        #   count, descriptions}]
     first_response_done: bool = False                  # overview checklist already sent on
@@ -421,6 +423,18 @@ class HandsfreeRunner:
         # Policy (2026-10-06): note it for the reviewer and stop here — no
         # analysis, no request reply, no first-response checklist.
         if analysis.action_owner == "customer":
+            # Backstop: the reader sometimes says "customer to provide logs"
+            # when nobody has asked yet (seen on 01022663: no attachments, no
+            # Intel comment). Waiting is only possible after Intel spoke —
+            # otherwise Intel owns the next step (the request below).
+            from .case_reader import intel_has_asked
+            from .composer import AI_MARKER
+            if not intel_has_asked(case_ctx.comments, ai_marker=AI_MARKER):
+                self.progress("read_case_history",
+                              "owner corrected to Intel: no Intel comment has asked "
+                              "the customer for anything yet")
+                analysis.action_owner = "intel"
+        if analysis.action_owner == "customer":
             with self._stage(analysis, "check_case_info"):
                 self.progress("check_case_info",
                               "waiting on the customer — analysis and "
@@ -578,6 +592,10 @@ class HandsfreeRunner:
             file_path, _name, already = downloaded[0]
             wifi_files, ddd_files, _evt, _bt, _fw = process_single_zip(
                 file_path, case_ctx.case_download_dir, already)
+            analysis.archive_contents = {
+                "wifi_wpp": len(wifi_files or []), "ddd": len(ddd_files or []),
+                "event_logs": len(_evt or []), "bt": len(_bt or []),
+                "fw": len(_fw or [])}
             decompose_ok = True
         if not decompose_ok:
             # decompose CRASHED (_stage swallowed the exception): the archive
@@ -603,9 +621,10 @@ class HandsfreeRunner:
                               "WRT/DDD ETL logs")
         if not wifi_files and not ddd_files:
             analysis.mode = "request_logs"
+            analysis.log_request_reason = "no_wrt_inside"
             analysis.ok = True
             analysis.error = (f"attachment '{analysis.chosen_attachment}' contains "
-                              "no WRT ETL logs — drafted a request-logs reply")
+                              "no WRT driver (WPP) ETL logs — drafted a request-logs reply")
             return analysis
 
         # -- 7. issue times -----------------------------------------------------

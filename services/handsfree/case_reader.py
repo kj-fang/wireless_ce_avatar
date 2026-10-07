@@ -73,9 +73,13 @@ Your tasks:
     are Intel (the case owner).
     - "action_owner": "intel" when Intel must act next (e.g. the customer
       has provided the requested logs/information or asked a question that
-      is still unanswered); "customer" when Intel is waiting on the
-      customer (e.g. Intel asked for logs/repro/time and nothing came
-      back yet); "unknown" when the thread does not tell.
+      is still unanswered); "customer" ONLY when an Intel comment in the
+      thread already asked the customer for something (logs, repro, time,
+      a test) and nothing came back yet; "unknown" when the thread does
+      not tell. If logs or information are missing but no Intel comment
+      has asked for them, the owner is "intel" — Intel's next action is
+      to request them. Comments starting with "[AI-Avatar" are automated
+      Intel notes, not requests to the customer.
     - "next_action": e.g. "Intel to analyze the WRT log uploaded in
       comment #4 for the 10:17 failure" or "Customer to provide the
       failure time and WRT logs Intel asked for in comment #2".
@@ -114,6 +118,21 @@ Output ONLY a valid JSON object (no markdown, no code fences):
 
 
 ACTION_OWNER_LABELS = {"intel": "Intel (case owner)", "customer": "customer"}
+
+_INTEL_AUTHOR_PREFIXES = ("agent", "fae")
+
+
+def intel_has_asked(comments: Any, ai_marker: str = "") -> bool:
+    """Is there an Intel-written comment in the thread at all (an automated
+    AI note does not count)? "Waiting on the customer" is only possible
+    after Intel actually said something to them."""
+    for r in _normalize_comments(comments):
+        if not r["author"].strip().lower().startswith(_INTEL_AUTHOR_PREFIXES):
+            continue
+        if ai_marker and ai_marker in r["text"]:
+            continue
+        return True
+    return False
 
 
 def normalize_action_owner(raw: Any) -> str:

@@ -490,6 +490,21 @@ def smoke_runner(tmp: Path) -> None:
               "provided: repro_logs.7z" not in draft3["plain"]
               and "[ ] 1) WPP driver log" in draft3["plain"],
               draft3["plain"][-700:])
+        # Autologger-style archive: firmware + event logs but no driver WPP
+        # ETL — the reply says what was found instead of "no WRT logs".
+        adc.process_single_zip = lambda *a, **k: ([], [], ["sys.evt"], [], ["wrt-fw.etl"])
+        analysis3b = r.analyze_case("01234567")
+        draft3b = compose(analysis3b)
+        check("S4.m3 archive with fw/event logs only: reply names what it holds and asks "
+              "for the WPP driver log",
+              analysis3b.mode == "request_logs"
+              and analysis3b.log_request_reason == "no_wrt_inside"
+              and analysis3b.archive_contents == {"wifi_wpp": 0, "ddd": 0, "event_logs": 1,
+                                                  "bt": 0, "fw": 1}
+              and "it contains firmware (wrt-fw) traces, Windows event logs but no Intel "
+                  "Wi-Fi driver WPP log (WifiDriverIHVSession.etl)" in draft3b["plain"],
+              f"reason={analysis3b.log_request_reason} contents={analysis3b.archive_contents} "
+              f"{draft3b['plain'][:400]}")
 
         # --- decompose CRASH must NOT ask the customer for logs -------------
         # (_stage swallows the exception; empty lists must only mean
@@ -706,6 +721,28 @@ def smoke_runner(tmp: Path) -> None:
               and "Customer to upload the WRT log" in drafts[0]["draft_plain"]
               and drafts[0]["confidence"] is None,
               str([(d["mode"], d["draft_plain"][:80]) for d in drafts]))
+
+        # Reader says "customer to provide logs" although NO Intel comment
+        # ever asked (only customer rows + our own AI note): Intel owns the
+        # next step, the pipeline continues and requests as usual.
+        def _fake_process_unasked(case_ctx: CaseContext) -> CaseContext:
+            case_ctx = _fake_process(case_ctx)
+            case_ctx.comments = [
+                [datetime(2026, 6, 19, 9, 0), "Partner", "Initial report: disconnects."],
+                [datetime(2026, 6, 20, 9, 0), "Agent",
+                 "[AI-Avatar preliminary analysis] Automated triage ..."],
+            ]
+            case_ctx.attachment_list = []
+            return case_ctx
+        cis.CaseService.process_case = staticmethod(_fake_process_unasked)
+        store14f = HandsfreeStore(tmp / "handsfree_s14f")
+        rec14f = orch._analyze_and_enqueue(store14f, "01234567")
+        cis.CaseService.process_case = staticmethod(_fake_process)
+        check("S14.e 'customer owns' without any Intel ask -> owner corrected to Intel, "
+              "request-logs reply drafted",
+              rec14f["mode"] == "request_logs"
+              and rec14f["analysis"]["action_owner"] == "intel",
+              f"mode={rec14f['mode']} owner={rec14f['analysis']['action_owner']}")
         fake_llm.chat_text = lambda messages, system_content=None: reader_reply
 
         # Later round (first response already sent on the case): no second
@@ -1349,6 +1386,18 @@ def smoke_checklist() -> None:
           and "DUT cannot roam." in seen["prompt"]
           and "SYNTH-FROM-PRIVATE-COMMENTS" not in seen["prompt"],
           seen.get("prompt", "")[-300:])
+    # request_logs: the pipeline found no usable WRT log, so the text pass
+    # may not tick WRT/WPP items from an attachment label (00991735 did).
+    q = CaseAnalysis(case_nbr="5", mode="request_logs", ok=True, subject="YB code 10",
+                     issue_domain="Yellow Bang", description="WRT & event logs attached",
+                     chosen_attachment="logs.7z")
+    seen.clear()
+    build_fills(q, llm=types.SimpleNamespace(chat=_capture))
+    check("S12.u request_logs locks the WRT/WPP items out of the LLM fill pass",
+          "WPP driver log" not in seen.get("prompt", "")
+          and "WRT Log" not in seen.get("prompt", "")
+          and "FW usniffer" in seen.get("prompt", ""),
+          seen.get("prompt", "")[:400])
 
 
 # ---------------------------------------------------------------- S15

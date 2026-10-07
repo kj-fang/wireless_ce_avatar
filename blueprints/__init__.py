@@ -6,8 +6,9 @@ from .automation import automation_bp
 from .download import download_bp
 from .log_parser import log_parser_bp
 from .nw_analysis import nw_analysis_bp
-from .log_chatbot import log_chatbot_bp
-from .bt_chatbot import bt_chatbot_bp
+# Both full log-analysis agents come from one route module now — see
+# blueprints/chatbot/chatbot_routes.py.
+from .chatbot import bt_chatbot_bp, log_chatbot_bp
 from .feedback import feedback_bp
 from .handsfree import handsfree_bp
 from .check_ips import check_ips_bp

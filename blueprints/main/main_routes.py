@@ -826,12 +826,13 @@ def render_download_result_form():
             print(f"⚠️ AI-time ETL pick failed, keeping newest-by-number: {e}")
 
     # --- BT auto-analysis: pick the best BT path when Run Analysis was
-    # requested for a BT case. Reuses the same folder-timestamp logic as
-    # bt_chatbot.find_best_log (newest capture-folder timestamp wins).
+    # requested for a BT case. Uses find_best_log's capture-folder timestamp
+    # parser (_parse_path_timestamp) and picks the newest. Unlike
+    # find_best_log it does not tie-break same-time captures by size.
     auto_analysis_bt = None
     if run_analysis_pending and 'bt' in case_context.wifi_or_bt:
         try:
-            from blueprints.bt_chatbot.bt_chatbot_routes import _parse_path_timestamp
+            from blueprints.log_parser.log_parser_routes import _parse_path_timestamp
             bt_paths = []
             for _paths in (file_dicts.get('bt_dict') or {}).values():
                 bt_paths.extend(_paths or [])

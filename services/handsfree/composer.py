@@ -104,18 +104,18 @@ def _checklist_fills(analysis: CaseAnalysis) -> dict:
     fills = getattr(analysis, "checklist_fills", None)
     if fills:
         return fills
-    from .checklist import (FALLBACK_DOMAIN, _blank_fills,
-                            deterministic_fills, resolve_subcategory)
-    domain = getattr(analysis, "issue_domain", "") or FALLBACK_DOMAIN
-    subcat = resolve_subcategory(
-        domain, getattr(analysis, "issue_subcategory", ""),
-        str(getattr(analysis, "clean_description", "") or ""))
-    fills = _blank_fills(domain, subcat)
-    deterministic_fills(analysis, fills)
-    return fills
+    # llm=None: deterministic fills only. build_fills also settles
+    # analysis.issue_subcategory, which the renderers read afterwards — the
+    # items and the section label/triage steps must use the same pick.
+    from .checklist import build_fills
+    return build_fills(analysis)
 
 
 def _checklist_body(analysis: CaseAnalysis) -> list[str]:
+    """The pre-filled domain checklist — the customer gets it ONCE per case
+    (first round); later request replies carry only their targeted ask."""
+    if getattr(analysis, "first_response_done", False):
+        return []
     from .checklist import FALLBACK_DOMAIN, render_checklist_body
     domain = getattr(analysis, "issue_domain", "") or FALLBACK_DOMAIN
     return render_checklist_body(domain, _checklist_fills(analysis),
@@ -146,7 +146,9 @@ def _request_info_lines(analysis: CaseAnalysis) -> list[str]:
         "case. Could you please provide:",
     ]
     parts += _info_ask_bullets(analysis)
-    parts += [""] + _checklist_body(analysis)
+    checklist = _checklist_body(analysis)
+    if checklist:
+        parts += [""] + checklist
     parts += ["",
               "We will proceed with the analysis as soon as this information "
               "is available. Thank you!"]
@@ -156,11 +158,37 @@ def _request_info_lines(analysis: CaseAnalysis) -> list[str]:
 def _request_logs_lines(analysis: CaseAnalysis) -> list[str]:
     """Customer-facing reply asking for the missing WRT logs. Deliberately a
     fixed template (no LLM text): this draft posts PUBLICLY once approved."""
-    if analysis.chosen_attachment:
-        # An archive was attached, but after extraction it held no WRT ETLs.
-        missing = (f"we checked the attached archive "
-                   f"({analysis.chosen_attachment}) but could not find WRT "
-                   "logs inside it")
+    if getattr(analysis, "log_request_reason", "") == "unreadable_archive":
+        # Archive selection crashed or the download failed twice — the upload
+        # is likely corrupted/incomplete; ask for a re-upload.
+        name = f" ({analysis.chosen_attachment})" if analysis.chosen_attachment else ""
+        missing = (f"we were unable to download or open the attached log "
+                   f"archive{name} — the file may be corrupted or the upload "
+                   "incomplete, so please RE-UPLOAD the log archive")
+    elif getattr(analysis, "log_request_reason", "") == "log_not_covering":
+        # The log decoded fine but was captured at another time: the issue
+        # time is what the analysis anchors on (policy 2026-10-07).
+        tm = analysis.time_mismatch or {}
+        name = f" ({analysis.chosen_attachment})" if analysis.chosen_attachment else ""
+        missing = (f"we checked the attached archive{name}: the WRT log inside "
+                   f"covers {tm.get('log_first', '?')} – {tm.get('log_last', '?')}, "
+                   f"but the reported issue time is {', '.join(tm.get('issue_times', []))}"
+                   + (f" (we also tried {tm['also_tried']} other capture folder(s) "
+                      "in the archive)" if tm.get("also_tried") else "")
+                   + ". Please provide a WRT log captured at the issue time, or "
+                   "confirm the exact failure time if it differs from the one reported")
+    elif analysis.chosen_attachment:
+        # An archive was attached, but after extraction it held no driver
+        # WPP ETL. Say what it DID contain: an autologger capture with
+        # firmware / event logs is not "no WRT logs" (00991735).
+        found = getattr(analysis, "archive_contents", None) or {}
+        parts_found = [label for key, label in (
+            ("fw", "firmware (wrt-fw) traces"), ("event_logs", "Windows event logs"),
+            ("bt", "Bluetooth traces")) if found.get(key)]
+        missing = (f"we checked the attached archive ({analysis.chosen_attachment})"
+                   + (f" — it contains {', '.join(parts_found)}" if parts_found else "")
+                   + " but no Intel Wi-Fi driver WPP log (WifiDriverIHVSession.etl), "
+                   "which is the trace the analysis needs")
     else:
         missing = "we could not find a WRT log archive attached to this case"
     parts = [
@@ -189,7 +217,9 @@ def _request_logs_lines(analysis: CaseAnalysis) -> list[str]:
         parts += ["",
                   "In addition, to speed up the analysis please also provide:"]
         parts += info
-    parts += [""] + _checklist_body(analysis)
+    checklist = _checklist_body(analysis)
+    if checklist:
+        parts += [""] + checklist
     parts += ["", tail]
     return parts
 
@@ -214,6 +244,20 @@ def compose_plain(analysis: CaseAnalysis) -> str:
             text = text.replace("\n\n\n", "\n\n")
         return text.strip() + "\n"
 
+    if analysis.mode == "waiting_customer":
+        # Private reviewer note only: the thread shows Intel is waiting on
+        # the customer, so no analysis ran and no request was drafted.
+        parts += [
+            f"Case {analysis.case_nbr}"
+            + (f" — {analysis.subject}" if analysis.subject else ""),
+            "Waiting on the customer — no analysis run, no request sent.",
+            f"Next action — customer: {analysis.next_action or '(not stated)'}",
+            "The issue-time / log checks run once the customer replies.",
+            "",
+            _FOOTER,
+        ]
+        return "\n".join(parts).strip() + "\n"
+
     # Time-coverage warning first — the reviewer must see it before the
     # findings, because findings from a log that does not cover the reported
     # issue time may describe a DIFFERENT occurrence.
@@ -224,10 +268,26 @@ def compose_plain(analysis: CaseAnalysis) -> str:
             "issue time ***",
             f"Reported issue time: {', '.join(tm.get('issue_times', []))}. "
             f"Attached WRT log covers {tm['log_first']} – {tm.get('log_last')}.",
-            "Log time is not the same as the issue time — please help provide "
-            "a WRT log captured at the issue time.",
-            "",
         ]
+        if tm.get("yb_assert_override"):
+            parts.append(
+                "Yellow-bang case: assert(s) "
+                + ", ".join(tm["yb_assert_override"])
+                + " found in this log — analysis continued on the assert "
+                "evidence despite the time mismatch.")
+        else:
+            parts.append("Log time is not the same as the issue time — please "
+                         "help provide a WRT log captured at the issue time.")
+        parts.append("")
+
+    # Where the case stands after reading the comment thread: who acts next
+    # and what the step is (reader output; Private-to-Intel drafts only).
+    next_action = getattr(analysis, "next_action", "") or ""
+    if next_action:
+        from .case_reader import ACTION_OWNER_LABELS
+        who = ACTION_OWNER_LABELS.get(getattr(analysis, "action_owner", ""),
+                                      "owner unclear")
+        parts += [f"Next action — {who}: {next_action}", ""]
 
     # Case-info gaps that didn't block the analysis: give the reviewer a
     # forwardable clarification request (this draft posts Private-to-Intel).

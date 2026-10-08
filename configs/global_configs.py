@@ -35,6 +35,7 @@ class GlobalConfig:
         self.driver_dir: Optional[str] = None
         self.prompt_dir: Optional[str] = None
         self.project_root: Optional[str] = None
+        self.silent_mode: bool = False
         # Download results storage
         self.download_results: Dict[str, Dict[str, Any]] = {}
     

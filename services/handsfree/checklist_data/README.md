@@ -33,11 +33,15 @@ committed — this JSON is the runtime source of truth.
 - **Flat tabs** (WowLAN, Yellow Bang, …): item text in column A,
   example hint in column C. Lines starting with `Note:` render as
   plain notes (no checkbox).
-- **Sub-category tabs** (Connectivity, UEFI, P2P): the
-  `Issue Type | Description | Check Items | … | Comments` table —
-  a row with column A filled starts a sub-category (name = A,
-  description = B, first item = C, example = E); rows with only
-  column C continue that sub-category's items.
+- **Sub-category tabs** (Connectivity, UEFI, P2P, OEM Tools): a table
+  whose header row names the columns — the converter reads the items
+  from the column titled `Check Items` and the hints from the column
+  whose title contains `Example`, so keep those two titles.
+  Connectivity-style: `Issue Type | Description | Check Items | … |
+  Comments and Feedback Example`; OEM-Tools-style (no description):
+  `Issue Type` or `Tool` `| Check Items | … | Comments and Feedback
+  Example`. A row with column A filled starts a sub-category (name = A);
+  rows with column A empty continue that sub-category's items.
 - **Main tab**: Step 1 rows = General Info questions (col B, example
   col D); Step 2 rows = domain name (col B) + description (col C).
   A new domain needs BOTH a Step-2 row and a tab with the same name.
@@ -53,6 +57,8 @@ committed — this JSON is the runtime source of truth.
 - **Renames ripple.** If a domain tab or sub-category is renamed,
   update the alias/keyword maps in `services/handsfree/checklist.py`
   (`_DOMAIN_ALIASES`, `resolve_subcategory`) or classification falls
-  back to `Others`.
+  back to `Others`. `_SUBCAT_ASK` names the domains (today: `OEM Tools`)
+  whose reply asks "which tool?" when the case names none — a renamed
+  tab drops out of it and silently defaults to its first sub-category.
 - Keep the xlsx filename's `RevX_Y` suffix — it is recorded as
   `revision` in the JSON for traceability.

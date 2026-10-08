@@ -80,29 +80,67 @@ def domain_subcategories(domain: str) -> dict:
     return dict(dom.get("subcategories") or {})
 
 
+# Domains whose sub-categories are peers with no sensible default (value =
+# the noun used in the ask). When the case names none of them the reply
+# ASKS which one applies instead of guessing — a wrong guess would request
+# another tool's logs.
+_SUBCAT_ASK = {"OEM Tools": "OEM tool"}
+
+
 def resolve_subcategory(domain: str, name: str = "", context_text: str = "") -> str:
     """Pick the applicable sub-category for a domain (e.g. Connectivity ->
     Connectivity/Scan/Roaming). Order: explicit name match -> keyword hit in
     the case text -> the sub-category named like the domain -> first one.
-    Returns "" for domains without sub-categories."""
+    Returns "" for domains without sub-categories, and for _SUBCAT_ASK
+    domains when nothing matched (the reply then asks which one)."""
     subs = domain_subcategories(domain)
     if not subs:
         return ""
+
+    def _word(sub: str, text: str) -> bool:
+        return bool(re.search(rf"\b{re.escape(sub.lower())}\b", text))
+
     raw = re.sub(r"\s+", " ", str(name or "")).strip().lower()
     for sub in subs:
-        if raw and (sub.lower() == raw or sub.lower() in raw or raw in sub.lower()):
+        if not raw:
+            break
+        # Acronym sub-categories (OEM tools: ANT, DRTU, ...) match as whole
+        # words only — "ant" must not hit "constant" / "antenna".
+        if sub.isupper():
+            if _word(sub, raw):
+                return sub
+        elif sub.lower() == raw or sub.lower() in raw or raw in sub.lower():
             return sub
     text = str(context_text or "").lower()
     if text:
         # most-specific keyword first (e.g. "roam"/"scan" beat generic connect)
         for sub in subs:
+            if sub.lower() == domain.lower():
+                continue
+            if sub.isupper():
+                if _word(sub, text):
+                    return sub
+                continue
             root = sub.lower().rstrip("gmi")[:4] if len(sub) > 4 else sub.lower()
-            if sub.lower() != domain.lower() and root and root in text:
+            if root and root in text:
                 return sub
     for sub in subs:
         if sub.lower() == domain.lower():
             return sub
+    if domain in _SUBCAT_ASK:
+        return ""
     return next(iter(subs))
+
+
+def subcategory_ask(domain: str, subcat: str) -> str:
+    """The 'which one?' question for a _SUBCAT_ASK domain whose sub-category
+    could not be identified; "" otherwise."""
+    if subcat or domain not in _SUBCAT_ASK:
+        return ""
+    names = " / ".join(domain_subcategories(domain))
+    noun = _SUBCAT_ASK[domain]
+    return (f"Which {noun} is the issue with ({names})? — please provide "
+            f"(the required logs and verification steps differ per {noun})")
 
 
 def _entry_in_subcat(entry: dict, subcat: str) -> bool:
@@ -128,6 +166,10 @@ def _blank_fills(domain: str, subcat: str = "") -> dict:
     return out
 
 
+# Form answers that mean "not provided" (same set the runner rejects).
+_PLACEHOLDER_ANSWERS = {"na", "n/a", "none"}
+
+
 def deterministic_fills(analysis, fills: dict) -> None:
     """Mark items the PIPELINE itself can vouch for. Mutates `fills`."""
     def mark(section: str, pattern: str, value: str):
@@ -139,18 +181,25 @@ def deterministic_fills(analysis, fills: dict) -> None:
 
     chosen = getattr(analysis, "chosen_attachment", "") or ""
     log_ok = bool(getattr(analysis, "log_path", "") or "")
-    if chosen:
+    # mode request_logs = the pipeline itself found the logs missing or the
+    # archive unreadable — never tick the item that same reply asks for.
+    if chosen and getattr(analysis, "mode", "") != "request_logs":
         note = chosen + (" (WRT logs extracted)" if log_ok else " (attached)")
         mark("required_log", r"WRT Log|WPP driver log", note)
-    times = getattr(analysis, "issue_times", None) or []
+    # issue_times may be the runner's last-resort fallback to the attachment
+    # upload time — that is not a customer-stated reproduction time. Domain
+    # "exact time" questions (e.g. WowLAN wake-trigger time) are a different
+    # fact from the failure time: left to the LLM pass.
+    att_time = str(getattr(analysis, "attachment_time", "") or "")
+    times = [str(t) for t in (getattr(analysis, "issue_times", None) or [])
+             if str(t) != att_time]
     if times:
         mark("general_info", r"reproduction time|issue reproduction time",
-             ", ".join(map(str, times[:3])))
-        mark("required_info", r"exact time|time when", ", ".join(map(str, times[:3])))
+             ", ".join(times[:3]))
     env = getattr(analysis, "env_detail", None) or {}
     for q, a in env.items():
         a = str(a or "").strip()
-        if not a or a.upper() == "NA":
+        if not a or a.lower() in _PLACEHOLDER_ANSWERS:
             continue
         if re.search(r"steps to reproduce", str(q), re.IGNORECASE):
             mark("general_info", r"reproduction steps", a[:200])
@@ -163,6 +212,8 @@ You are reviewing an Intel Wi-Fi support case to pre-fill a debug checklist
 for the customer. For EVERY numbered item below, decide whether the case
 content ALREADY answers it. Only mark provided=true when the case clearly
 states the answer; copy the answer concisely (<=160 chars). Do not guess.
+Customer comments are listed oldest first — a later comment supersedes the
+original description.
 
 Output ONLY valid JSON: {{"fills": {{"<number>": {{"provided": true, "value": "<answer>"}}, ...}}}}
 List only the items that ARE provided.
@@ -175,12 +226,20 @@ List only the items that ARE provided.
 """
 
 
-def llm_fill(llm, fills: dict, case_material: str) -> None:
+_WRT_ITEM_RE = re.compile(r"WRT Log|WPP driver log", re.IGNORECASE)
+
+
+def llm_fill(llm, fills: dict, case_material: str, *,
+             lock_wrt_items: bool = False) -> None:
     """One LLM pass over the still-unfilled items. Mutates `fills`; any
-    failure leaves items unfilled (the customer is simply asked again)."""
+    failure leaves items unfilled (the customer is simply asked again).
+    lock_wrt_items: the pipeline established that no usable WRT/WPP log was
+    provided (request_logs) — the text pass must not tick those items from
+    an attachment label, or the reply would contradict itself."""
     todo: list[tuple[str, dict]] = [
         (sec, e) for sec in ("general_info", "required_log", "required_info")
-        for e in fills.get(sec, []) if not e["provided"]]
+        for e in fills.get(sec, []) if not e["provided"]
+        and not (lock_wrt_items and _WRT_ITEM_RE.search(e["item"]))]
     if not todo or llm is None:
         return
     items_block = "\n".join(f"{i + 1}. {e['item']}" for i, (_, e) in enumerate(todo))
@@ -225,14 +284,20 @@ def build_fills(analysis, llm=None) -> dict:
         pass
     fills = _blank_fills(domain, subcat)
     deterministic_fills(analysis, fills)
+    # The filled values post PUBLICLY, so the fill pass may only read what
+    # the customer wrote: subject, description, the Environment Details form
+    # and customer-authored comments. NOT clean_description — the reader
+    # synthesizes it from ALL comments, Private-to-Intel ones included.
+    history = str(getattr(analysis, "customer_history", "") or "")
     material = "\n".join(filter(None, [
         str(getattr(analysis, "subject", "") or ""),
-        str(getattr(analysis, "clean_description", "") or ""),
-        str(getattr(analysis, "description", "") or ""),
+        str(getattr(analysis, "description", "") or "")[:2500],
         "\n".join(f"{q}: {a}" for q, a in
-                  (getattr(analysis, "env_detail", None) or {}).items() if a),
+                  (getattr(analysis, "env_detail", None) or {}).items() if a)[:1000],
+        ("=== CUSTOMER COMMENTS (oldest first) ===\n" + history) if history else "",
     ]))
-    llm_fill(llm, fills, material)
+    llm_fill(llm, fills, material,
+             lock_wrt_items=getattr(analysis, "mode", "") == "request_logs")
     return fills
 
 
@@ -265,9 +330,12 @@ def render_checklist_body(domain: str, fills: dict, subcat: str = "") -> list[st
     if fills.get("required_log"):
         parts += ["", f"=== Required Log ({label}) ==="]
         parts += _render_entries(fills["required_log"])
-    if fills.get("required_info"):
-        parts += ["", f"=== Required Info ({label}) ==="]
-        parts += _render_entries(fills["required_info"])
+    info_lines = _render_entries(fills.get("required_info", []))
+    ask = subcategory_ask(domain, subcat)
+    if ask:
+        info_lines.insert(0, f"  [ ] {ask}")
+    if info_lines:
+        parts += ["", f"=== Required Info ({label}) ==="] + info_lines
     triage = [e for e in (dom.get("initial_triage") or [])
               if _entry_in_subcat(e, subcat)]
     if triage:

@@ -107,6 +107,7 @@
     #queue-table tbody tr { transition: background 200ms var(--ease); }
     #queue-table tbody tr:hover { background: rgba(69,184,240,0.06); cursor: pointer; }
     td.case-nbr { font-family: var(--mono); font-size: 12.5px; }
+    button.log-folder-btn { height: 26px; padding: 0 10px; font-size: 12px; white-space: nowrap; }
 
     /* ---------- pills ---------- */
     .pill { display: inline-flex; align-items: center; gap: 6px; padding: 2px 9px;
@@ -147,6 +148,17 @@
     .controls.tight { margin-bottom: 0; }
     .divider { border-top: 1px solid var(--border); padding-top: 14px; }
 
+    /* ---------- step-1 tabs ---------- */
+    .tabs { display: flex; gap: 2px; border-bottom: 1px solid var(--border); margin: 0 0 14px; }
+    .tab { background: transparent; border: none; color: var(--muted); padding: 8px 14px;
+           font-size: 13.5px; font-weight: 600; cursor: pointer; border-radius: 6px 6px 0 0;
+           border-bottom: 2px solid transparent; margin-bottom: -1px;
+           transition: color 200ms var(--ease), border-color 200ms var(--ease); }
+    .tab:hover { color: var(--fg); }
+    .tab.active { color: var(--fg); border-bottom-color: var(--accent); }
+    .hint { font-size: 12.5px; color: var(--faint); line-height: 1.55; max-width: 760px;
+            margin-bottom: 12px; }
+
     /* ---------- settings ---------- */
     #settings-panel { padding-top: 15px; padding-bottom: 15px; }
     #settings-panel h3 { cursor: pointer; user-select: none; margin-bottom: 0; color: var(--muted);
@@ -167,6 +179,10 @@
                    margin-bottom: 12px; padding: 12px 14px; background: var(--panel2);
                    border: 1px solid var(--border); border-radius: 8px; }
     #draft-chips .pill { background: var(--field); font-size: 12px; padding: 3px 10px; }
+    /* the next-action line is the one sentence a reviewer reads first */
+    #draft-chips .pill.next-action { flex-basis: 100%; white-space: normal; line-height: 1.5;
+                                     font-size: 15px; font-weight: 600; padding: 8px 12px;
+                                     border-radius: 8px; }
     #draft-chips .chip-label { font-size: 10.5px; font-weight: 650; letter-spacing: 0.08em;
                                text-transform: uppercase; color: var(--faint); margin-right: -3px; }
     details { margin-top: 14px; }
@@ -231,6 +247,25 @@
         <button class="primary" onclick="saveConfig()">Save settings</button>
         <span class="status-line" id="cfg-status"></span>
       </div>
+      <div class="controls divider">
+        <label title="Tuning on historical IPS cases: every run's drafts are flagged TRIAL and can never be posted; the batch below takes cases from an IPS list view whether they are open or closed">
+          <input type="checkbox" id="cfg-trial" onchange="applyTrialUi()"> trial mode (closed / historical cases, posting disabled)
+        </label>
+        <span id="trial-controls" style="display: none; gap: 10px; align-items: center; flex-wrap: wrap;">
+          <label>IPS list view:
+            <input type="text" id="cfg-trial-list" style="width: 240px; font-family: var(--mono); font-size: 12.5px;"
+                   placeholder="developer name, e.g. Handsfree_replier_test_case">
+          </label>
+          <label>Cases per batch:
+            <input type="number" id="cfg-trial-max" min="1" max="50" step="1" style="width: 64px;">
+          </label>
+          <label title="Cases already analyzed (in the ledger) are skipped, so repeated batches walk through the list">
+            <input type="checkbox" id="cfg-trial-skip" checked> skip already-analyzed
+          </label>
+          <button class="ghost" id="trial-run-btn" onclick="runTrialBatch()"
+                  title="Saves these settings, then analyzes the next cases of the list view">Run trial batch</button>
+        </span>
+      </div>
       <div style="margin-top: 12px;">
         <div class="controls">
           <span class="field-map-note">rest_field_map (read-only — saving it still requires the DevTools
@@ -246,34 +281,67 @@
 
   <div class="panel">
     <div class="eyebrow">Step 1 · Detect &amp; analyze</div>
-    <h3>Check for new cases</h3>
-    <div class="controls">
-      <label>Case owner:
-        <input type="text" id="owner-name" value="{{ config.owner_name or '' }}"
-               placeholder="e.g. Charles P Chu" style="width: 220px;">
-      </label>
-      <button class="primary" id="check-btn" onclick="checkNow()">
-        <svg width="11" height="11" viewBox="0 0 24 24" fill="currentColor" aria-hidden="true">
-          <path d="M6 4.5l14 7.5-14 7.5z" /></svg>
-        Check for new cases</button>
-      <span class="status-line" id="run-status">idle</span>
-      <span class="status-line" style="margin-left:auto;">
-        posting backend: <b id="backend-name">{{ config.post_backend }}</b>
-        <span id="dry-run-badge" class="pill warn"
-              {% if not config.dry_run %}style="display:none;"{% endif %}>DRY RUN — posting disabled</span>
-      </span>
+    <div class="tabs" role="tablist">
+      <button class="tab active" id="tab-btn-new" role="tab" onclick="showTab('new')">Check for new cases</button>
+      <button class="tab" id="tab-btn-auto" role="tab" onclick="showTab('auto')">Start automatic analysis</button>
     </div>
-    <div class="controls divider">
-      <label>…or analyze one specific case:
-        <input type="text" id="case-nbr" placeholder="IPS case number, e.g. 01009610"
-               style="width: 210px; font-family: var(--mono); font-size: 12.5px;"
-               onkeydown="if(event.key==='Enter')runCase()">
-      </label>
-      <button class="primary" id="run-case-btn" onclick="runCase()"
-              title="Runs the full pipeline for this one case regardless of owner/date">
-        <svg width="11" height="11" viewBox="0 0 24 24" fill="currentColor" aria-hidden="true">
-          <path d="M6 4.5l14 7.5-14 7.5z" /></svg>
-        Analyze this case</button>
+    <div id="tab-new">
+      <div class="controls">
+        <label>Case owner:
+          <input type="text" id="owner-name" value="{{ config.owner_name or '' }}"
+                 placeholder="e.g. Charles P Chu" style="width: 220px;">
+        </label>
+        <button class="primary" id="check-btn" onclick="checkNow()">
+          <svg width="11" height="11" viewBox="0 0 24 24" fill="currentColor" aria-hidden="true">
+            <path d="M6 4.5l14 7.5-14 7.5z" /></svg>
+          Check for new cases</button>
+        <span class="status-line" id="run-status">idle</span>
+        <span class="status-line" style="margin-left:auto;">
+          posting backend: <b id="backend-name">{{ config.post_backend }}</b>
+          <span id="dry-run-badge" class="pill warn"
+                {% if not config.dry_run %}style="display:none;"{% endif %}>DRY RUN — posting disabled</span>
+          <span id="trial-badge" class="pill warn" title="Tuning on historical cases: drafts are flagged TRIAL and cannot be posted"
+                {% if not config.trial_mode %}style="display:none;"{% endif %}>TRIAL MODE</span>
+        </span>
+      </div>
+      <div class="controls divider">
+        <label>…or analyze one specific case:
+          <input type="text" id="case-nbr" placeholder="IPS case number, e.g. 01009610"
+                 style="width: 210px; font-family: var(--mono); font-size: 12.5px;"
+                 onkeydown="if(event.key==='Enter')runCase()">
+        </label>
+        <button class="primary" id="run-case-btn" onclick="runCase()"
+                title="Runs the full pipeline for this one case regardless of owner/date">
+          <svg width="11" height="11" viewBox="0 0 24 24" fill="currentColor" aria-hidden="true">
+            <path d="M6 4.5l14 7.5-14 7.5z" /></svg>
+          Analyze this case</button>
+      </div>
+    </div>
+    <div id="tab-auto" style="display:none;">
+      <div class="hint">Each round looks at the open IPS cases of the case owner (from Settings) for
+        either new cases OR new customer comments since the previous round (one of the two is enough), runs the handsfree pipeline
+        for each, and queues the drafts below for review. Nothing is posted automatically — Approve
+        still decides.</div>
+      <div class="controls">
+        <label>Case owner: <b id="auto-owner" style="color: var(--fg);">{{ config.owner_name or '—' }}</b></label>
+        <label>Frequency:
+          <select id="auto-mode">
+            <option value="4h">Every 4 hours</option>
+            <option value="8h">Every 8 hours</option>
+            <option value="nightly">Once overnight (11 PM)</option>
+          </select>
+        </label>
+        <label>Max cases per round:
+          <input type="number" id="auto-max" min="1" max="50" step="1" value="10" style="width: 64px;">
+        </label>
+        <button class="primary" id="auto-toggle-btn" onclick="toggleAuto()">
+          <svg width="11" height="11" viewBox="0 0 24 24" fill="currentColor" aria-hidden="true">
+            <path d="M6 4.5l14 7.5-14 7.5z" /></svg>
+          <span id="auto-toggle-text">Start automatic analysis</span></button>
+        <button class="ghost" id="auto-run-btn" onclick="autoRunNow()"
+                title="Run one round right now with the settings above">Run now</button>
+        <span class="status-line" id="auto-status"></span>
+      </div>
     </div>
     <div class="row" id="progress-row">
       <div class="col log-col">
@@ -312,8 +380,8 @@
     </h3>
     <table id="queue-table">
       <thead><tr>
-        <th>Case</th><th>Owner</th><th>Subject</th><th>Mode</th><th>Confidence</th>
-        <th>Status</th><th>Created</th>
+  <th>Case</th><th>Owner</th><th>Subject</th><th>Mode</th><th>Confidence</th>
+  <th>Status</th><th>Action owner</th><th>Created</th><th>Decoded log</th>
       </tr></thead>
       <tbody></tbody>
     </table>
@@ -364,14 +432,20 @@
   function applyConfigBadge(cfg) {
     document.getElementById('backend-name').textContent = cfg.post_backend || 'auto';
     document.getElementById('dry-run-badge').style.display = cfg.dry_run ? '' : 'none';
+    document.getElementById('trial-badge').style.display = cfg.trial_mode ? '' : 'none';
     if (cfg.owner_name) document.getElementById('owner-name').value = cfg.owner_name;
   }
 
   function fillConfigForm(cfg) {
     document.getElementById('cfg-owner').value = cfg.owner_name || '';
+    document.getElementById('auto-owner').textContent = cfg.owner_name || '—';
     document.getElementById('cfg-max-cases').value = cfg.max_cases_per_run ?? 3;
     document.getElementById('cfg-dry-run').checked = !!cfg.dry_run;
     document.getElementById('cfg-backend').value = cfg.post_backend || 'auto';
+    document.getElementById('cfg-trial').checked = !!cfg.trial_mode;
+    document.getElementById('cfg-trial-list').value = cfg.trial_list_view || '';
+    document.getElementById('cfg-trial-max').value = cfg.trial_max_cases ?? 5;
+    applyTrialUi();
     document.getElementById('cfg-field-map').textContent =
       JSON.stringify(cfg.rest_field_map || {}, null, 2);
     applyConfigBadge(cfg);
@@ -386,15 +460,42 @@
     }
   }
 
-  async function saveConfig() {
-    const status = document.getElementById('cfg-status');
+  function applyTrialUi() {
+    const on = document.getElementById('cfg-trial').checked;
+    document.getElementById('trial-controls').style.display = on ? 'inline-flex' : 'none';
+    const badge = document.getElementById('trial-badge');
+    if (badge) badge.style.display = on ? '' : 'none';
+  }
+
+  function configBody() {
     const maxRaw = parseInt(document.getElementById('cfg-max-cases').value, 10);
-    const body = {
+    const trialMaxRaw = parseInt(document.getElementById('cfg-trial-max').value, 10);
+    return {
       owner_name: document.getElementById('cfg-owner').value.trim(),
       max_cases_per_run: Math.min(15, Math.max(1, isNaN(maxRaw) ? 3 : maxRaw)),
       dry_run: document.getElementById('cfg-dry-run').checked,
       post_backend: document.getElementById('cfg-backend').value,
+      trial_mode: document.getElementById('cfg-trial').checked,
+      trial_list_view: document.getElementById('cfg-trial-list').value.trim(),
+      trial_max_cases: Math.min(50, Math.max(1, isNaN(trialMaxRaw) ? 5 : trialMaxRaw)),
     };
+  }
+
+  async function runTrialBatch() {
+    // Persist the trial settings first so the server sees the same values.
+    try {
+      await postJson('/handsfree/config', configBody());
+    } catch (e) { serverUnreachable(e); return; }
+    await startRun('/handsfree/trial_run', {
+      list_view: document.getElementById('cfg-trial-list').value.trim(),
+      max_cases: parseInt(document.getElementById('cfg-trial-max').value, 10) || 5,
+      skip_analyzed: document.getElementById('cfg-trial-skip').checked,
+    });
+  }
+
+  async function saveConfig() {
+    const status = document.getElementById('cfg-status');
+    const body = configBody();
     status.textContent = 'saving…';
     try {
       const r = await fetch('/handsfree/config', {
@@ -435,8 +536,108 @@
     }
   }
 
+  // ---------- step-1 tabs + automatic analysis ----------
+
+  function showTab(name) {
+    ['new', 'auto'].forEach(t => {
+      document.getElementById('tab-' + t).style.display = t === name ? '' : 'none';
+      document.getElementById('tab-btn-' + t).classList.toggle('active', t === name);
+    });
+    if (name === 'auto') loadAuto();
+  }
+
+  let autoEnabled = false;
+
+  function renderAuto(a) {
+    if (!a || a.error) {
+      document.getElementById('auto-status').textContent = a && a.error ? 'unavailable: ' + a.error : '';
+      return;
+    }
+    autoEnabled = !!a.enabled;
+    const modeSel = document.getElementById('auto-mode');
+    if (document.activeElement !== modeSel) modeSel.value = a.mode || 'nightly';
+    const maxEl = document.getElementById('auto-max');
+    if (document.activeElement !== maxEl) maxEl.value = a.max_cases || 10;
+    document.getElementById('auto-toggle-text').textContent =
+      autoEnabled ? 'Stop automatic analysis' : 'Start automatic analysis';
+    document.getElementById('auto-toggle-btn').className = autoEnabled ? 'danger' : 'primary';
+    const bits = [];
+    bits.push(autoEnabled ? 'ON · ' + (a.mode_label || a.mode) : 'off');
+    if (autoEnabled && a.next_run_at) bits.push('next round ' + a.next_run_at.slice(0, 16).replace('T', ' '));
+    if (a.last_scan_at) bits.push('last round ' + a.last_scan_at.slice(0, 16).replace('T', ' ') + ' UTC');
+    if (a.last_result) bits.push(a.last_result);
+    if (a.running) bits.push('running now');
+    const el = document.getElementById('auto-status');
+    el.textContent = bits.join(' · ');
+    el.className = 'status-line ' + (a.running ? 'running' : autoEnabled ? 'done' : '');
+  }
+
+  async function loadAuto() {
+    try {
+      const r = await fetch('/handsfree/auto');
+      renderAuto(await r.json());
+    } catch (e) {
+      document.getElementById('auto-status').textContent = 'status unavailable: ' + e;
+    }
+  }
+
+  async function toggleAuto() {
+    const body = {
+      enabled: !autoEnabled,
+      mode: document.getElementById('auto-mode').value,
+      max_cases: parseInt(document.getElementById('auto-max').value, 10) || 10,
+    };
+    const r = await fetch('/handsfree/auto', {
+      method: 'POST', headers: {'Content-Type': 'application/json'},
+      body: JSON.stringify(body),
+    });
+    const j = await r.json();
+    if (j.error) { alert('Failed: ' + j.error); return; }
+    renderAuto(j);
+    if (j.enabled && j.mode !== 'nightly') startPolling();   // interval modes run right away
+  }
+
+  // A request that never gets an answer (the app was restarted and this tab
+  // still points at the old instance/port, or the server is down) used to
+  // leave the buttons disabled forever. Surface it and re-enable instead.
+  async function postJson(url, body) {
+    const r = await fetch(url, {
+      method: 'POST', headers: {'Content-Type': 'application/json'},
+      body: JSON.stringify(body || {}),
+    });
+    return await r.json();
+  }
+
+  function serverUnreachable(e) {
+    setRunButtons(false);
+    const line = document.getElementById('run-status');
+    line.textContent = 'server unreachable (' + e + ') — the app may have been restarted; reload this page';
+    line.className = 'status-line error';
+  }
+
+  async function startRun(url, body) {
+    setRunButtons(true);
+    let j;
+    try {
+      j = await postJson(url, body);
+    } catch (e) {
+      serverUnreachable(e);
+      return;
+    }
+    if (!j.ok) {
+      alert('Failed to start: ' + (j.error || 'unknown'));
+      setRunButtons(false);
+      return;
+    }
+    stageCasePinned = null;
+    startPolling();
+  }
+
+  async function autoRunNow() {
+    await startRun('/handsfree/auto/run_now', {});
+  }
   function setRunButtons(disabled) {
-    ['check-btn', 'run-case-btn'].forEach(id => {
+    ['check-btn', 'run-case-btn', 'auto-run-btn', 'trial-run-btn'].forEach(id => {
       const el = document.getElementById(id);
       if (el) el.disabled = disabled;
     });
@@ -444,37 +645,13 @@
 
   async function checkNow() {
     const owner = document.getElementById('owner-name').value.trim();
-    setRunButtons(true);
-    const r = await fetch('/handsfree/check_now', {
-      method: 'POST', headers: {'Content-Type': 'application/json'},
-      body: JSON.stringify({owner_name: owner}),
-    });
-    const j = await r.json();
-    if (!j.ok) {
-      alert('Failed to start: ' + (j.error || 'unknown'));
-      setRunButtons(false);
-      return;
-    }
-    stageCasePinned = null;
-    startPolling();
+    await startRun('/handsfree/check_now', {owner_name: owner});
   }
 
   async function runCase() {
     const caseNbr = document.getElementById('case-nbr').value.trim();
     if (!caseNbr) { alert('Enter an IPS case number.'); return; }
-    setRunButtons(true);
-    const r = await fetch('/handsfree/run_case', {
-      method: 'POST', headers: {'Content-Type': 'application/json'},
-      body: JSON.stringify({case_nbr: caseNbr}),
-    });
-    const j = await r.json();
-    if (!j.ok) {
-      alert('Failed to start: ' + (j.error || 'unknown'));
-      setRunButtons(false);
-      return;
-    }
-    stageCasePinned = null;
-    startPolling();
+    await startRun('/handsfree/run_case', {case_nbr: caseNbr});
   }
 
   function startPolling() {
@@ -485,7 +662,7 @@
 
   // ---------- per-case stage table ----------
 
-  const STAGES = ['fetch_case', 'triage', 'read_case_history', 'check_case_info',
+  const STAGES = ['fetch_case', 'triage', 'read_images', 'read_case_history', 'check_case_info',
                   'pick_zip', 'download', 'decompose', 'check_wrt_log', 'check_bt_log',
                   'issue_time', 'pick_etl', 'decode_etl', 'decode_bt', 'agent_analysis',
                   'echo_kb'];
@@ -567,8 +744,15 @@
   }
 
   async function refreshStatus() {
-    const r = await fetch('/handsfree/status');
-    const s = await r.json();
+    let s;
+    try {
+      const r = await fetch('/handsfree/status');
+      s = await r.json();
+    } catch (e) {
+      if (pollTimer) { clearInterval(pollTimer); pollTimer = null; }
+      serverUnreachable(e);
+      return;
+    }
     const line = document.getElementById('run-status');
     line.textContent = s.status + (s.error ? ' · ' + s.error : '');
     line.className = 'status-line ' + (s.status === 'running' ? 'running'
@@ -581,12 +765,15 @@
     }).join('');
     log.scrollTop = log.scrollHeight;
     renderStageTable(s.events);
+    if (s.auto) renderAuto(s.auto);
     if (s.status !== 'running') {
       setRunButtons(false);
       if (pollTimer && s.status !== 'idle') { clearInterval(pollTimer); pollTimer = null; }
       if (s.status === 'done') loadQueue();
     }
   }
+
+  const ACTION_OWNER_TEXT = {intel: 'Intel (case owner)', customer: 'Customer'};
 
   async function loadQueue() {
     const showClosed = document.getElementById('show-closed').checked;
@@ -609,15 +796,45 @@
         `<td class="case-nbr">${esc(it.case_nbr)}</td>` +
         `<td>${esc(it.owner_name || '—')}</td>` +
         `<td>${esc((it.subject || '').slice(0, 70))}</td>` +
-        `<td><span class="pill">${esc(it.mode || '')}</span></td>` +
+        `<td><span class="pill">${esc(it.mode || '')}</span>` +
+        (it.trial ? ` <span class="pill warn" title="tuning run on a historical case — cannot be posted">TRIAL</span>` : '') +
+        `</td>` +
         `<td>${it.confidence != null ? it.confidence + '/100' : '—'}</td>` +
         `<td><span class="pill dot ${statusCls}">${esc(it.status)}</span></td>` +
-        `<td>${esc((it.created_at || '').slice(0, 16))}</td>`;
+        // Who acts next, as read from the comment thread (hover = the step).
+        (it.action_owner
+          ? `<td><span class="pill ${it.action_owner === 'intel' ? 'warn' : ''}" ` +
+            `title="${esc(it.next_action || '')}">${esc(ACTION_OWNER_TEXT[it.action_owner] || it.action_owner)}</span></td>`
+          : `<td style="color:var(--faint);">—</td>`) +
+        `<td>${esc((it.created_at || '').slice(0, 16))}</td>` +
+        // Only cases whose WRT log was decoded (decode_etl reached) have one.
+        (it.log_dir
+          ? `<td><button class="ghost log-folder-btn" title="${esc(it.log_dir)}">` +
+            `<svg width="12" height="12" viewBox="0 0 24 24" fill="none" stroke="currentColor" ` +
+            `stroke-width="2.2" stroke-linecap="round" stroke-linejoin="round" aria-hidden="true">` +
+            `<path d="M3 7a2 2 0 0 1 2-2h4l2 2h8a2 2 0 0 1 2 2v8a2 2 0 0 1-2 2H5a2 2 0 0 1-2-2z" /></svg>` +
+            `Open folder</button></td>`
+          : `<td style="color:var(--faint);">—</td>`);
       tr.onclick = () => openDraft(it.draft_id);
+      const logBtn = tr.querySelector('.log-folder-btn');
+      if (logBtn) {
+        logBtn.onclick = (ev) => { ev.stopPropagation(); openLogFolder(it.draft_id); };
+      }
       tbody.appendChild(tr);
     });
     if (!(j.items || []).length) {
-      tbody.innerHTML = '<tr><td colspan="7" style="color:var(--muted);">queue is empty — run a check above</td></tr>';
+      tbody.innerHTML = '<tr><td colspan="9" style="color:var(--muted);">queue is empty — run a check above</td></tr>';
+    }
+  }
+
+  async function openLogFolder(draftId) {
+    try {
+      const r = await fetch('/handsfree/queue/' + encodeURIComponent(draftId) + '/open_log_folder',
+                            {method: 'POST'});
+      const j = await r.json();
+      if (!j.ok) alert('Could not open the log folder: ' + (j.error || 'unknown'));
+    } catch (e) {
+      alert('Could not open the log folder: ' + e);
     }
   }
 
@@ -640,6 +857,20 @@
     if (['request_logs', 'request_info', 'first_response'].includes(analysis.mode)) {
       chips.push({label: 'visibility', text: 'public reply to customer', cls: 'warn',
                   title: 'Approving posts this as a customer-visible comment (not Private to Intel)'});
+    }
+    if (analysis.next_action) {
+      chips.push({label: 'next action',
+                  text: (ACTION_OWNER_TEXT[analysis.action_owner] || 'owner unclear') + ' — ' + analysis.next_action,
+                  cls: 'next-action ' + (analysis.action_owner === 'intel' ? 'warn' : ''),
+                  title: 'Summarized from the IPS comment thread in time order'});
+    }
+    const imgs = analysis.comment_images || [];
+    if (imgs.length) {
+      const n = imgs.reduce((a, i) => a + (i.descriptions || []).length, 0);
+      chips.push({label: 'images', text: n + ' screenshot' + (n > 1 ? 's' : '') + ' read',
+                  cls: 'good',
+                  title: imgs.map(i => (i.date || '').slice(0, 10) + ' ' + (i.author || '') + ': '
+                                   + (i.descriptions || []).join(' | ')).join('\n')});
     }
     if (analysis.issue_domain) {
       const sub = (analysis.issue_subcategory && analysis.issue_subcategory !== analysis.issue_domain)
@@ -762,6 +993,7 @@
   loadConfig();
   loadQueue();
   refreshStatus();
+  loadAuto();
 </script>
 </body>
 </html>

@@ -12,6 +12,7 @@ and is deliberately not consulted anywhere yet.
 
 from __future__ import annotations
 
+import re
 import threading
 import time
 import traceback
@@ -41,7 +42,12 @@ def get_run_state() -> dict:
             s["events"] = [dict(e) for e in s["events"]]
         if isinstance(s.get("cases"), list):
             s["cases"] = [dict(c) for c in s["cases"]]
-        return s
+    try:
+        from . import scheduler
+        s["auto"] = scheduler.status()
+    except Exception as e:
+        s["auto"] = {"error": f"{type(e).__name__}: {e}"}
+    return s
 
 def _set_state(**fields) -> None:
     with _state_lock:
@@ -111,6 +117,14 @@ def _analyze_and_enqueue(store: HandsfreeStore, case_nbr: str,
     except Exception as e:
         print(f"[handsfree] checklist fill failed (continuing): {e}")
 
+    # The customer-facing overview checklist goes out once per case: later
+    # rounds (customer replied, new logs) get targeted asks only.
+    analysis.first_response_done = store.first_response_posted(case_nbr)
+
+    # Trial mode (Settings): tuning on historical / closed cases — every
+    # draft is flagged and can never be posted.
+    trial = bool(store.load_config().get("trial_mode"))
+
     draft = compose(analysis)
     rec = store.enqueue(
         case_nbr=case_nbr,
@@ -122,15 +136,22 @@ def _analyze_and_enqueue(store: HandsfreeStore, case_nbr: str,
         mode=analysis.mode,
         analysis=analysis.to_dict(),
         owner_name=owner_name,
+        trial=trial,
     )
     _log_event(
         f"[{case_nbr}] queued draft {rec['draft_id']} "
-        f"(mode={analysis.mode}, confidence={draft['confidence']})")
+        f"(mode={analysis.mode}, confidence={draft['confidence']}"
+        + (", TRIAL — posting disabled" if trial else "") + ")")
 
     # Every case also gets a first-response checklist reply — except when the
     # primary draft already IS the first response (the request modes render
-    # the same pre-filled checklist themselves).
-    if analysis.mode not in ("request_logs", "request_info"):
+    # the same pre-filled checklist themselves), the case could not even be
+    # fetched (mode "error": nothing to base a customer reply on), Intel is
+    # waiting on the customer (nothing to ask), or the overview was already
+    # sent in an earlier round.
+    if (analysis.mode not in ("request_logs", "request_info", "error",
+                              "waiting_customer")
+            and not analysis.first_response_done):
         from dataclasses import replace
         fr = replace(analysis, mode="first_response")
         fr_draft = compose(fr)
@@ -142,8 +163,11 @@ def _analyze_and_enqueue(store: HandsfreeStore, case_nbr: str,
             draft_html=fr_draft["html"],
             confidence=None,
             mode="first_response",
-            analysis=analysis.to_dict(),
-            owner_name=owner_name,
+            # fr, not analysis: the review UI reads analysis.mode for the
+            # "public reply to customer" visibility chip.
+            analysis=fr.to_dict(),
+            trial=trial,
+                owner_name=owner_name,
         )
         _log_event(f"[{case_nbr}] queued first-response checklist draft "
                    f"{fr_rec['draft_id']}")
@@ -185,6 +209,196 @@ def _run_check(owner: str, store: HandsfreeStore,
         _log_event(f"check run FAILED: {e}")
     finally:
         _run_lock.release()
+
+
+# ---------------------------------------------------------------------------
+# automatic scan: new cases + customer updates on open cases
+# ---------------------------------------------------------------------------
+
+def _parse_iso(s: str):
+    """Salesforce ('2026-10-05T10:07:12.000+0000') and our own local ISO
+    stamps -> aware datetime; None when unparseable."""
+    from datetime import datetime, timezone
+    raw = str(s or "").strip()
+    if not raw:
+        return None
+    raw = re.sub(r"([+-]\d{2})(\d{2})$", r"\1:\2", raw.replace("Z", "+00:00"))
+    try:
+        dt = datetime.fromisoformat(raw)
+    except ValueError:
+        return None
+    return dt if dt.tzinfo else dt.replace(tzinfo=timezone.utc)
+
+
+def select_auto_work(open_cases: list, updates: dict, ledger_lookup,
+                     since_iso: str) -> list[tuple]:
+    """Which open cases need a round, newest first. Pure (unit-testable).
+
+    open_cases:    [CaseRef]           updates: {case_id: latest customer
+    comment ISO}   ledger_lookup(case_nbr) -> ledger entry dict
+    Returns [(CaseRef, reason, update_iso)] — a case qualifies on EITHER
+    condition (new case OR new customer comment), not both:
+      * a case created after `since_iso` that was never analyzed -> new case
+      * a customer comment newer than the case's last analysis (and not the
+        update already run for) -> customer update
+    """
+    since = _parse_iso(since_iso)
+    work = []
+    for ref in open_cases:
+        entry = ledger_lookup(ref.case_nbr) or {}
+        upd = updates.get(ref.case_id, "")
+        analyzed = _parse_iso(entry.get("analyzed_at", ""))
+        if upd and upd != entry.get("last_customer_update"):
+            upd_dt = _parse_iso(upd)
+            if analyzed is None or (upd_dt and upd_dt > analyzed):
+                work.append((ref, f"customer update at {upd}", upd))
+                continue
+        created = _parse_iso(ref.created)
+        if not entry and created and since and created >= since:
+            work.append((ref, "new case", ref.created))
+    work.sort(key=lambda w: w[2], reverse=True)
+    return work
+
+
+def run_auto_scan(store: HandsfreeStore, owner: str, max_cases: int = 10,
+                  trigger: str = "scheduled") -> dict:
+    """One automatic round: find the owner's open cases with new customer
+    activity since the last scan, run the per-case pipeline for each (drafts
+    land in the review queue — nothing posts), remember the scan time.
+    Returns a summary; {"ok": False} when a run is already in progress."""
+    from datetime import datetime, timedelta, timezone
+
+    if not _run_lock.acquire(blocking=False):
+        return {"ok": False, "error": "a run is already in progress"}
+    started = datetime.now(timezone.utc)
+    summary: dict = {"ok": True, "trigger": trigger, "started_at": started.isoformat(),
+                     "cases": []}
+    try:
+        _set_state(status="running", owner=owner, mode=f"auto-scan ({trigger})",
+                   started_at=time.time(), events=[], cases=[], error=None)
+        cfg = store.load_config()
+        since_iso = cfg.get("auto_last_scan_at") or (
+            started - timedelta(hours=24)).strftime("%Y-%m-%dT%H:%M:%SZ")
+        _log_event(f"auto-scan ({trigger}): open cases of '{owner}' with customer "
+                   f"activity since {since_iso}")
+        ips = IpsClient()
+        open_cases = ips.find_open_cases(owner)
+        updates = ips.find_customer_updates([c.case_id for c in open_cases], since_iso)
+        work = select_auto_work(open_cases, updates, store.ledger_entry, since_iso)
+        _log_event(f"{len(open_cases)} open case(s), {len(updates)} with customer "
+                   f"comments since then, {len(work)} to run")
+        if len(work) > max_cases:
+            _log_event(f"capped to {max_cases} case(s) this round (newest first)")
+            work = work[:max_cases]
+        _set_state(cases=[w[0].to_dict() for w in work])
+        for ref, reason, upd in work:
+            _log_event(f"analyzing case {ref.case_nbr} — {reason} — {ref.subject[:60]}")
+            try:
+                rec = _analyze_and_enqueue(store, ref.case_nbr,
+                                           case_id=ref.case_id, subject=ref.subject)
+                if upd and reason.startswith("customer update"):
+                    store.mark_customer_update(ref.case_nbr, upd)
+                summary["cases"].append({"case_nbr": ref.case_nbr, "reason": reason,
+                                         "mode": rec.get("mode")})
+            except Exception as e:
+                print(f"[handsfree] auto-scan case {ref.case_nbr} failed:\n"
+                      f"{traceback.format_exc()}")
+                _log_event(f"[{ref.case_nbr}] FAILED: {type(e).__name__}: {e}")
+                summary["cases"].append({"case_nbr": ref.case_nbr, "reason": reason,
+                                         "mode": "error"})
+        store.save_config({"auto_last_scan_at": started.strftime("%Y-%m-%dT%H:%M:%SZ"),
+                           "auto_last_result": f"{len(work)} case(s) run"})
+        _set_state(status="done", finished_at=time.time())
+        _log_event("auto-scan complete — review the queue below")
+    except Exception as e:
+        print(f"[handsfree] auto-scan failed:\n{traceback.format_exc()}")
+        summary.update(ok=False, error=f"{type(e).__name__}: {e}")
+        store.save_config({"auto_last_result": f"failed: {type(e).__name__}: {e}"})
+        _set_state(status="error", error=f"{type(e).__name__}: {e}",
+                   finished_at=time.time())
+        _log_event(f"auto-scan FAILED: {e}")
+    finally:
+        _run_lock.release()
+    return summary
+
+
+def select_trial_cases(refs: list, ledger_lookup, max_cases: int,
+                       skip_analyzed: bool = True) -> list:
+    """Which list-view cases a trial batch runs: in list order, skipping the
+    ones already analyzed (ledger) so repeated batches walk through the
+    historical list, capped. Pure."""
+    out = []
+    for ref in refs:
+        if skip_analyzed and ledger_lookup(ref.case_nbr):
+            continue
+        out.append(ref)
+        if len(out) >= max_cases:
+            break
+    return out
+
+
+def run_trial_batch(store: HandsfreeStore, list_view: str, max_cases: int,
+                    skip_analyzed: bool = True) -> dict:
+    """Tuning run on the cases of an IPS list view (open or closed), one
+    after another; drafts land in the queue flagged "trial" (never posted).
+    Caller holds _run_lock."""
+    _set_state(status="running", owner=None, mode="trial-batch",
+               started_at=time.time(), events=[], cases=[], error=None)
+    summary: dict = {"ok": True, "cases": []}
+    try:
+        _log_event(f"trial batch: reading IPS list view '{list_view}'")
+        refs = IpsClient().list_view_cases(list_view)
+        work = select_trial_cases(refs, store.ledger_entry, max_cases, skip_analyzed)
+        _log_event(f"{len(refs)} case(s) in the list view, "
+                   f"{len(work)} to run this batch"
+                   + (" (already-analyzed cases skipped)" if skip_analyzed else ""))
+        _set_state(cases=[r.to_dict() for r in work])
+        for ref in work:
+            _log_event(f"analyzing case {ref.case_nbr} [{ref.status or 'state ?'}] — "
+                       f"{ref.subject[:60]}")
+            try:
+                rec = _analyze_and_enqueue(store, ref.case_nbr,
+                                           case_id=ref.case_id, subject=ref.subject)
+                summary["cases"].append({"case_nbr": ref.case_nbr, "mode": rec.get("mode")})
+            except Exception as e:
+                print(f"[handsfree] trial case {ref.case_nbr} failed:\n"
+                      f"{traceback.format_exc()}")
+                _log_event(f"[{ref.case_nbr}] FAILED: {type(e).__name__}: {e}")
+                summary["cases"].append({"case_nbr": ref.case_nbr, "mode": "error"})
+        _set_state(status="done", finished_at=time.time())
+        _log_event("trial batch complete — review the queue below (trial drafts "
+                   "cannot be posted)")
+    except Exception as e:
+        print(f"[handsfree] trial batch failed:\n{traceback.format_exc()}")
+        summary.update(ok=False, error=f"{type(e).__name__}: {e}")
+        _set_state(status="error", error=f"{type(e).__name__}: {e}",
+                   finished_at=time.time())
+        _log_event(f"trial batch FAILED: {e}")
+    return summary
+
+
+def start_trial_run(list_view: str = "", max_cases: int = 0,
+                    skip_analyzed: bool = True) -> dict:
+    """UI trigger for a trial batch (Settings → Run trial batch)."""
+    store = _store()
+    cfg = store.load_config()
+    if not cfg.get("trial_mode"):
+        return {"ok": False, "error": "enable trial mode in Settings first"}
+    list_view = (list_view or cfg.get("trial_list_view") or "").strip()
+    if not list_view:
+        return {"ok": False, "error": "no list view name configured"}
+    max_cases = int(max_cases or cfg.get("trial_max_cases") or 5)
+    if not _run_lock.acquire(blocking=False):
+        return {"ok": False, "error": "a run is already in progress"}
+
+    def _run():
+        try:
+            run_trial_batch(store, list_view, max_cases, skip_analyzed)
+        finally:
+            _run_lock.release()
+
+    threading.Thread(target=_run, daemon=True, name="handsfree-trial").start()
+    return {"ok": True, "list_view": list_view, "max_cases": max_cases}
 
 
 def start_case_run(case_nbr: str) -> dict:
@@ -232,6 +446,23 @@ def start_case_run(case_nbr: str) -> dict:
 
 _post_lock = threading.Lock()
 
+# Customer-facing first-response family (posted PUBLIC, tagged CHECKLIST_TAG).
+_CHECKLIST_MODES = ("request_logs", "request_info", "first_response")
+
+# request_logs / request_info replies posted before CHECKLIST_TAG existed
+# carry only AI_MARKER — recognized by their fixed template sentences.
+_LEGACY_REQUEST_PHRASES = (
+    "we need the Intel wireless driver WRT logs covering",
+    "To start the analysis we need some additional information about the",
+)
+
+
+def _is_checklist_comment(body: str) -> bool:
+    """Is this posted AI comment of the first-response family (vs analysis)?"""
+    if CHECKLIST_TAG in body:
+        return True
+    return any(p in body for p in _LEGACY_REQUEST_PHRASES)
+
 
 def approve_and_post(draft_id: str, edited_plain: Optional[str] = None) -> dict:
     """Human clicked Approve. Post the (possibly edited) draft to IPS.
@@ -255,55 +486,63 @@ def _approve_and_post_locked(draft_id: str, edited_plain: Optional[str]) -> dict
         return {"ok": False, "error": "draft already posted", "draft": rec}
     if cfg.get("dry_run"):
         return {"ok": False, "error": "dry_run is enabled in config — posting disabled"}
+    if rec.get("trial"):
+        return {"ok": False, "error": "trial draft (tuning run on a historical case) — "
+                                      "posting is disabled for trial drafts", "draft": rec}
 
-    # Apply reviewer edits.
+    draft_is_checklist = rec.get("mode") in _CHECKLIST_MODES
+
+    # Apply reviewer edits. Both markers are restored when edited away: the
+    # duplicate scan below (and every later one) tells the comment families
+    # apart by them.
     if edited_plain is not None and edited_plain.strip():
         from .composer import compose_html
         plain = edited_plain
         if AI_MARKER not in plain:
             plain = AI_MARKER + "\n\n" + plain
+        if draft_is_checklist and CHECKLIST_TAG not in plain:
+            plain = plain.replace(AI_MARKER, AI_MARKER + "\n" + CHECKLIST_TAG, 1)
         rec = store.update(draft_id, draft_plain=plain,
                            draft_html=compose_html(plain))
 
     ips = IpsClient()
 
-    # Never double-comment: scan existing comments for our marker. A failed
-    # scan ABORTS the post — posting blind could duplicate an AI comment we
-    # simply couldn't see. The draft stays pending_review; approve again once
-    # IPS is reachable.
-    # Family-aware dedup: one first-response-family comment (checklist /
-    # request, tagged CHECKLIST_TAG) AND one analysis comment (untagged;
-    # legacy comments count as analysis) may each post once per case.
-    draft_is_checklist = rec.get("mode") in ("request_logs", "request_info",
-                                             "first_response")
-    try:
-        for c in ips.get_case_comments(rec["case_id"]):
-            body = str(c.get(IpsClient.FIELD_RICH_BODY) or "")
-            if AI_MARKER not in body:
-                continue
-            if (CHECKLIST_TAG in body) != draft_is_checklist:
-                continue   # other family — does not block this draft
+    # Duplicate policy (2026-10-06): analyses may post once per round (a
+    # case gets a new round whenever the customer replies), request replies
+    # are per-round asks — neither is blocked. The customer-facing OVERVIEW
+    # (first_response) goes out once per case, tracked in our own ledger
+    # rather than by the body markers (reviewers edit the text). The IPS
+    # scan for the family tag only backfills the ledger for cases whose
+    # overview was posted before the ledger tracked it; a failed scan does
+    # not block.
+    if rec.get("mode") == "first_response":
+        sent = store.first_response_posted(rec["case_nbr"])
+        if not sent:
+            try:
+                for c in ips.get_case_comments(rec["case_id"]):
+                    body = str(c.get(IpsClient.FIELD_RICH_BODY) or "")
+                    if AI_MARKER in body and _is_checklist_comment(body):
+                        store.mark_posted(rec["case_nbr"], comment_id=c.get("Id", ""),
+                                          first_response=True)
+                        sent = True
+                        break
+            except Exception as e:
+                print(f"[handsfree] first-response scan skipped ({type(e).__name__}: {e})")
+        if sent:
             store.update(draft_id, status="posted",
                          post_result={"ok": False, "backend": "none",
-                                      "error": "AI comment already present on case"})
-            store.mark_posted(rec["case_nbr"], comment_id=c.get("Id", ""))
+                                      "error": "first response already sent on this case"})
             return {"ok": False,
-                    "error": "an AI-Avatar comment of this kind already exists "
-                             "on this case; marked as posted to avoid a duplicate",
+                    "error": "the first-response overview was already sent on this "
+                             "case (it goes out once); marked as posted",
                     "draft": store.get(draft_id)}
-    except Exception as e:
-        msg = (f"duplicate-comment scan failed ({type(e).__name__}: {e}) — "
-               "post aborted; draft left in the review queue, approve again to retry")
-        print(f"[handsfree] {msg}")
-        return {"ok": False, "error": msg, "draft": rec}
 
     backend = (cfg.get("post_backend") or "auto").lower()
     result = None
 
     # First-response-family drafts are customer-facing: post PUBLIC
     # (visible to the customer). Everything else stays Private-to-Intel.
-    is_public_reply = (rec.get("mode") in ("request_logs", "request_info",
-                                           "first_response"))
+    is_public_reply = draft_is_checklist
 
     if backend in ("rest", "auto"):
         try:
@@ -334,7 +573,11 @@ def _approve_and_post_locked(draft_id: str, edited_plain: Optional[str]) -> dict
 
     if result.ok:
         store.update(draft_id, status="posted", post_result=result.to_dict())
-        store.mark_posted(rec["case_nbr"], comment_id=result.comment_id)
+        # A request reply carries the overview checklist only on the first
+        # round, so it counts as the first response exactly when no first
+        # response was recorded before (mark_posted keeps the first record).
+        store.mark_posted(rec["case_nbr"], comment_id=result.comment_id,
+                          first_response=draft_is_checklist)
         return {"ok": True, "draft": store.get(draft_id), "result": result.to_dict()}
 
     store.update(draft_id, status="post_failed", post_result=result.to_dict())

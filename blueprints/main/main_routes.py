@@ -146,7 +146,7 @@ def handle_case_submission():
     try:
         case_context = CaseService.process_case(case_context=case_context)
         if case_context.error_message:
-            flash("Invalid case number or unable to retrieve data. Please try again.", "danger")
+            flash(case_context.error_message, "danger")
             case_context.error_message = None
             return redirect(url_for('main.index'))
         
@@ -182,8 +182,9 @@ def start_latest_etl_llm():
     try:
         case_context = CaseService.process_case(case_context=case_context)
         if case_context.error_message:
+            msg = case_context.error_message
             case_context.error_message = None
-            return jsonify({'success': False, 'message': 'Invalid case number or unable to retrieve data.'}), 400
+            return jsonify({'success': False, 'message': msg}), 400
 
         selected_latest = pick_latest_zip_attachment(case_context.attachment_list)
         if not selected_latest:
@@ -766,7 +767,12 @@ def render_download_result_form():
                         continue
                     for _p in _paths:
                         _pl = str(_p)
-                        if _pl.lower().endswith('.etl') or _re.search(r'\.etl\.\d+$', _pl, _re.IGNORECASE):
+                        # Mirror get_auto_analysis_etl: DDD .bin is a valid
+                        # auto-pick candidate too, otherwise a DDD-only case
+                        # entering the recovery path never launches.
+                        if (_pl.lower().endswith('.etl')
+                                or _re.search(r'\.etl\.\d+$', _pl, _re.IGNORECASE)
+                                or (_dn == 'ddd_dict' and _pl.lower().endswith('.bin'))):
                             _cands.append(_pl)
                 if _cands:
                     auto_analysis_etl = max(_cands, key=extract_file_number)
@@ -784,7 +790,11 @@ def render_download_result_form():
     # `auto_analysis_etl OR run_analysis_pending` so the override fires even
     # when upstream returned None (now backed by the recovery above). Purely
     # additive — falls back to the existing pick on any failure.
-    if llm_issue_time and (auto_analysis_etl or run_analysis_pending):
+    # Skip when upstream already chose a DDD .bin: pick_etl_by_ai_time only
+    # collects .etl / .etl.N, so running it would silently clobber the DDD
+    # choice with a Wi-Fi ETL whenever both coexist.
+    _is_ddd_pick = bool(auto_analysis_etl and auto_analysis_etl.lower().endswith('.bin'))
+    if llm_issue_time and (auto_analysis_etl or run_analysis_pending) and not _is_ddd_pick:
         try:
             from utils.issue_time_ai import pick_etl_by_ai_time
             # Picker expects ``issue_time`` in the customer frame (folder

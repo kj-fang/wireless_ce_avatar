@@ -17,6 +17,7 @@ pick_etl + agent prompts.
 from __future__ import annotations
 
 import json
+import re
 from typing import Any, Optional
 
 # Caps so a comment-heavy case can't blow the prompt.
@@ -38,7 +39,12 @@ Your tasks:
     - Prefer the most recent explicitly reported failure time.
     - Copy times EXACTLY as written in the case (do not convert timezones
       or reformat); include the date when stated.
-    - Up to 3 times, most relevant first. Empty list if none is stated.
+    - ONLY a time stated to the minute qualifies (a clock time such as
+      12:14 or 13-54-47, with its date). A bare date ("June 2nd",
+      "2026-09-04"), "yesterday", "this morning" or a log upload date is
+      NOT an issue time — leave such entries out. When nothing qualifies,
+      return an empty list and report "issue_time" as missing.
+    - Up to 3 times, most relevant first.
  3. Choose which ONE attachment most likely contains the driver log that
     covers the issue time. Judge by: the comment that mentions the upload,
     upload timestamp vs issue time (log must be captured AT/AFTER the
@@ -66,6 +72,22 @@ Your tasks:
     When the chosen domain has sub-categories, also pick the ONE
     "issue_subcategory" that fits best (empty string for other domains):
 {subcats_block}
+ 6. From the LATEST state of the thread, state the NEXT ACTION on the case
+    in one sentence and who owns it. Comment authors tagged [Partner],
+    [Customer], [Partner - ...] are the customer side; [Agent] and [FAE]
+    are Intel (the case owner).
+    - "action_owner": "intel" when Intel must act next (e.g. the customer
+      has provided the requested logs/information or asked a question that
+      is still unanswered); "customer" ONLY when an Intel comment in the
+      thread already asked the customer for something (logs, repro, time,
+      a test) and nothing came back yet; "unknown" when the thread does
+      not tell. If logs or information are missing but no Intel comment
+      has asked for them, the owner is "intel" — Intel's next action is
+      to request them. Comments starting with "[AI-Avatar" are automated
+      Intel notes, not requests to the customer.
+    - "next_action": e.g. "Intel to analyze the WRT log uploaded in
+      comment #4 for the 10:17 failure" or "Customer to provide the
+      failure time and WRT logs Intel asked for in comment #2".
 
 Output ONLY a valid JSON object (no markdown, no code fences):
 {{
@@ -78,7 +100,9 @@ Output ONLY a valid JSON object (no markdown, no code fences):
   "missing_info": [{{"item": "issue_description|issue_time|repro_steps",
                      "reason": "<one short sentence why it is missing/unclear>"}}],
   "issue_domain": "<one domain name from the list, verbatim>",
-  "issue_subcategory": "<sub-category name, or ''>"
+  "issue_subcategory": "<sub-category name, or ''>",
+  "action_owner": "<'intel' | 'customer' | 'unknown'>",
+  "next_action": "<one sentence>"
 }}
 
 === SUBJECT ===
@@ -96,6 +120,50 @@ Output ONLY a valid JSON object (no markdown, no code fences):
 === ATTACHMENTS (candidate log uploads) ===
 {attachments_block}
 """
+
+
+# A usable issue time states the clock time to the minute: "12:14",
+# "16:31/12/13/2025", "09/04/2026-20:58:52", WRT-style "2026-1-14-13-54-47"
+# or "14-01-2026_13-54-37". A bare date or "June 2nd" does not qualify.
+_MINUTE_TIME_RES = (
+    re.compile(r"(?<!\d)\d{1,2}:\d{2}(?!\d)"),                       # clock HH:MM
+    re.compile(r"\d{4}-\d{1,2}-\d{1,2}-\d{1,2}-\d{2}(?:-\d{2})?"),  # YYYY-M-D-H-MM(-SS)
+    re.compile(r"\d{1,2}-\d{1,2}-\d{4}[_ T-]\d{1,2}-\d{2}(?:-\d{2})?"),  # D-M-YYYY_H-MM(-SS)
+)
+
+
+def has_minute_precision(value: str) -> bool:
+    s = str(value or "")
+    return any(r.search(s) for r in _MINUTE_TIME_RES)
+
+
+ACTION_OWNER_LABELS = {"intel": "Intel (case owner)", "customer": "customer"}
+
+_INTEL_AUTHOR_PREFIXES = ("agent", "fae")
+
+
+def intel_has_asked(comments: Any, ai_marker: str = "") -> bool:
+    """Is there an Intel-written comment in the thread at all (an automated
+    AI note does not count)? "Waiting on the customer" is only possible
+    after Intel actually said something to them."""
+    for r in _normalize_comments(comments):
+        if not r["author"].strip().lower().startswith(_INTEL_AUTHOR_PREFIXES):
+            continue
+        if ai_marker and ai_marker in r["text"]:
+            continue
+        return True
+    return False
+
+
+def normalize_action_owner(raw: Any) -> str:
+    """'intel' | 'customer' | '' (unknown) from the reader's free-form value
+    ('Intel', 'case owner', 'OEM', 'partner' ... all tolerated)."""
+    low = str(raw or "").strip().lower()
+    if any(k in low for k in ("intel", "agent", "case owner", "fae")):
+        return "intel"
+    if any(k in low for k in ("customer", "partner", "oem", "odm")):
+        return "customer"
+    return ""
 
 
 def _normalize_comments(comments: Any) -> list[dict]:
@@ -144,6 +212,31 @@ def _format_comments(rows: list[dict]) -> str:
         who = f" [{r['author']}]" if r["author"] else ""
         ts = f" ({r['ts']})" if r["ts"] else ""
         out.append(f"#{i}{ts}{who}: {text}")
+    return "\n".join(out)
+
+
+# Comment author types (CORE_IPS_COMMENT_AUTHOR_TYPE_TXT) written by the
+# customer side: "Partner", "Partner - Agent", "Partner - DFAE", "Customer".
+# Intel-side rows ("Agent", "FAE", "Backend Integration", "System") may be
+# Private-to-Intel — the comment rows carry no visibility flag, so only an
+# allowlisted customer author proves a comment is customer-visible.
+_CUSTOMER_AUTHOR_PREFIXES = ("partner", "customer")
+_MAX_CUSTOMER_COMMENTS = 12
+_MAX_CUSTOMER_COMMENT_CHARS = 400
+
+
+def customer_visible_history(comments: Any) -> str:
+    """Customer-authored comments only, chronological, bounded — the one
+    slice of the comment history that is safe to quote in a PUBLIC reply.
+    Unknown / empty author types are excluded (fail closed)."""
+    rows = [r for r in _normalize_comments(comments)
+            if r["author"].strip().lower().startswith(_CUSTOMER_AUTHOR_PREFIXES)]
+    out = []
+    for r in rows[-_MAX_CUSTOMER_COMMENTS:]:
+        text = r["text"]
+        if len(text) > _MAX_CUSTOMER_COMMENT_CHARS:
+            text = text[:_MAX_CUSTOMER_COMMENT_CHARS] + " …[truncated]"
+        out.append((f"({r['ts']}) " if r["ts"] else "") + text)
     return "\n".join(out)
 
 
@@ -225,7 +318,11 @@ def read_case_history(llm, *, subject: str, description: str,
         print(f"[handsfree.case_reader] reader failed: {e}")
         return None
 
-    times = [str(t).strip() for t in (res.get("issue_times") or []) if str(t).strip()]
+    raw_times = [str(t).strip() for t in (res.get("issue_times") or []) if str(t).strip()]
+    times = [t for t in raw_times if has_minute_precision(t)]
+    vague = [t for t in raw_times if t not in times]
+    if vague:
+        print(f"[handsfree.case_reader] ignored vague issue time(s): {vague}")
 
     # Normalize the completeness assessment: known items only, deduped,
     # reasons capped. Tolerates bare-string entries ("repro_steps").
@@ -245,6 +342,9 @@ def read_case_history(llm, *, subject: str, description: str,
                         "reason": str(entry.get("reason") or "").strip()[:200]})
 
     return {
+        "vague_times": vague,
+        "action_owner": normalize_action_owner(res.get("action_owner")),
+        "next_action": re.sub(r"\s+", " ", str(res.get("next_action") or "")).strip()[:300],
         "clean_description": str(res.get("clean_description") or "").strip(),
         "issue_times": times[:3],
         "issue_time_source": str(res.get("issue_time_source") or ""),

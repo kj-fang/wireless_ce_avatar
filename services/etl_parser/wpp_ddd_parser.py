@@ -83,6 +83,14 @@ DRIVER_PATH_LIST = ["zip_listener_path", "jer_server_path", "dfs_path"]
 POTATO_FARM_SITE_LIST = ["potatofarm.intel.com", "potatofarm-pre.intel.com"]
 
 
+def _persistent_cache_dir() -> str:
+    """Folder that survives temp cleanup for PDB / DDD-player copies:
+    <avatarfiles_dir>\\pdb_cache (falls back to %LOCALAPPDATA%\\IntelAvatar)."""
+    base = getattr(app_config, "avatarfiles_dir", None) or os.path.join(
+        os.environ.get("LOCALAPPDATA") or os.environ["tmp"], "IntelAvatar")
+    return os.path.join(base, "pdb_cache")
+
+
 class CacheManager:
     """
     class responsible for caching artifacts, such as PDB, DDDPlayer locally,
@@ -432,15 +440,31 @@ class Parser:
         # directory cannot have multiple PDBs with same name, therefore, add _build suffix
         local_pdb_name = file_name.replace(".pdb", f"_{jenkins_build_id}.pdb")
 
-        # copy file to local workspace
-        emit_and_log(f"{file_name} was found. Copying .. this might take several seconds")
+        # Keep a persistent local copy per build: the cache used to point
+        # into the per-run %TEMP% workspace, which temp cleanup removes, so
+        # the 40 MB PDB came over the network share again on most runs.
+        persistent = os.path.join(_persistent_cache_dir(), str(jenkins_build_id),
+                                  os_type, local_pdb_name)
+        if os.path.normcase(os.path.abspath(str(file_path))) != os.path.normcase(persistent):
+            emit_and_log(f"{file_name} was found. Copying .. this might take several seconds")
+            try:
+                os.makedirs(os.path.dirname(persistent), exist_ok=True)
+                shutil.copyfile(str(file_path), persistent)
+                file_path = persistent
+            except Exception as e:
+                log.warning(f"could not store {file_name} in the persistent cache: {e}")
+        else:
+            emit_and_log(f"{file_name} served from the local cache")
 
+        # copy file to local workspace (local disk -> fast)
         shutil.copyfile(str(file_path), local_pdb_name)
         emit_and_log("file was successfully copied to local workspace")
 
-        # store in cache
+        # store in cache (the persistent copy when we have one)
         self.pdb_name_list.append(local_pdb_name)
-        cache_manager.store_binary_path(os.path.join(self.workspace, local_pdb_name))
+        cache_manager.store_binary_path(
+            str(file_path) if str(file_path) == persistent
+            else os.path.join(self.workspace, local_pdb_name))
 
         del cache_manager
 
@@ -505,7 +529,11 @@ class WppParser(Parser):
         pdbs_str = ";".join(self.pdb_name_list)
 
         # prepare the command
-        cmd = f"tracefmt.exe {self.local_log_file_name} -o {OUTPUT_TXT_NAME} -nosummary -pdb {pdbs_str}"
+        # Absolute path: a bare "tracefmt.exe" relies on CreateProcess searching
+        # the current directory, which NoDefaultCurrentDirectoryInExePath=1
+        # (set by some launchers/harnesses) disables -> WinError 2.
+        tracefmt = os.path.join(self.workspace, "tracefmt.exe")
+        cmd = f'"{tracefmt}" {self.local_log_file_name} -o {OUTPUT_TXT_NAME} -nosummary -pdb {pdbs_str}'
 
         # run the process sync
         emit_and_log("run tracefmt to parse the ETL")
@@ -647,7 +675,7 @@ class DddParser(Parser):
         # run the DDD player on the binary to extract the actual sha1 and OS type
         # it is OK to run the 'info' command on winA using winT DDD player
         # id is 0, since when binary is copied, it is renamed to be 0
-        cmd = f"{DDD_PLAYER_NAME} -bin . -id 0 -info"
+        cmd = f'"{os.path.join(self.workspace, DDD_PLAYER_NAME)}" -bin . -id 0 -info'
         proc = subprocess.Popen(cmd, stdout=subprocess.PIPE)
         res = proc.stdout.read().decode("utf-8")
 
@@ -713,7 +741,7 @@ class DddParser(Parser):
         """
         function parses DDD binary to TXT by running DDDPlayer.exe
         """
-        cmd = f"{DDD_PLAYER_NAME} -bin . -id 0 -l FFFF07 -o ."
+        cmd = f'"{os.path.join(self.workspace, DDD_PLAYER_NAME)}" -bin . -id 0 -l FFFF07 -o .'
         proc = subprocess.Popen(cmd, stdout=subprocess.PIPE)
         res = proc.stdout.read().decode("utf-8")
 
@@ -763,7 +791,7 @@ def parse_single_binary(parser: object) -> None:
     # GUI conveniences for the interactive desktop flow. Skipped when the
     # decode runs headlessly (Handsfree Replyer sets AVATAR_HEADLESS_DECODE=1)
     # so no TextAnalysisTool / Explorer window pops on an unattended machine.
-    if os.environ.get("AVATAR_HEADLESS_DECODE") != "1":
+    if os.environ.get("AVATAR_HEADLESS_DECODE") != "1" and not app_config.silent_mode:
         # open text analysis
         parser.open_log_in_text_analysis()
 

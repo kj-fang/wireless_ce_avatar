@@ -238,9 +238,19 @@ class _AnthropicCompletions:
                     client_snapshot.messages.create(**params)
                 )
             except Exception as e:
-                if pool is None or not _is_daily_cost_limit_error(e):
+                if pool is None:
                     raise
-                next_entry = pool.mark_dead_and_advance(used_token)
+                if _is_daily_cost_limit_error(e):
+                    reason = "daily cost limit"
+                elif _is_auth_error(e):
+                    # The gateway rejected the token itself (expired / revoked
+                    # / not entitled) — seen 2026-10-08: 5 of 7 pool tokens
+                    # answered 401/403 and every LLM feature failed on the
+                    # first one. Such a token is as dead as an exhausted one.
+                    reason = f"auth error {getattr(e, 'status_code', '?')}"
+                else:
+                    raise
+                next_entry = pool.mark_dead_and_advance(used_token, reason=reason)
                 if next_entry is None:
                     raise
                 self._adapter._rebuild_underlying(next_entry[1])
@@ -296,6 +306,14 @@ def _is_daily_cost_limit_error(exc):
     return "daily cost limit" in str(exc).lower()
 
 
+def _is_auth_error(exc):
+    """True when the gateway refuses the token: HTTP 401 (nginx
+    "401 Authorization Required" for an expired/revoked gnaigpt token) or
+    403 ("Permission denied. You do not belong to any ..."). Narrow on
+    purpose: other 4xx (bad request, overload) are not token problems."""
+    return getattr(exc, "status_code", None) in (401, 403)
+
+
 class TokenPool:
     """Ordered, thread-safe pool of (label, token) pairs with sequential failover.
 
@@ -320,11 +338,11 @@ class TokenPool:
         with self._lock:
             return self._entries[self._index]
 
-    def mark_dead_and_advance(self, dying_token):
+    def mark_dead_and_advance(self, dying_token, reason="daily cost limit"):
         """Advance past ``dying_token`` if it is still current; else no-op.
 
         Returns the new active ``(label, token)`` or ``None`` when the whole
-        pool is exhausted.
+        pool is exhausted. ``reason`` is only for the log line.
         """
         with self._lock:
             current_label, current_token = self._entries[self._index]
@@ -336,9 +354,9 @@ class TokenPool:
                 if next_i not in self._dead:
                     self._index = next_i
                     new_label = self._entries[next_i][0]
-                    print(f"⚠️  [TokenPool] '{current_label}' exhausted (daily cost limit) → rotated to '{new_label}'")
+                    print(f"⚠️  [TokenPool] '{current_label}' dropped ({reason}) → rotated to '{new_label}'")
                     return self._entries[next_i]
-            print(f"❌ [TokenPool] '{current_label}' exhausted — all {len(self._entries)} tokens dead")
+            print(f"❌ [TokenPool] '{current_label}' dropped ({reason}) — all {len(self._entries)} tokens dead")
             return None
 
 

@@ -362,7 +362,12 @@ class HandsfreeRunner:
             analysis.subject = case_ctx.subject or ""
             analysis.description = case_ctx.description or ""
             analysis.subcategory = str(case_ctx.subcategory or "")
-            analysis.wifi_or_bt = _classify_wireless_domain(analysis.subcategory)
+            # Explicit IPS subcategory wins; otherwise keep CaseService's
+            # legacy derivation (non-"wifi" -> bt) so cases such as "OEM
+            # Tools" still get the BT-gated triage + first-response checklist
+            # validated on 2026-10-01 instead of being skipped as unsupported.
+            analysis.wifi_or_bt = (_classify_wireless_domain(analysis.subcategory)
+                                   or str(case_ctx.wifi_or_bt or ""))
             analysis.env_detail = dict(case_ctx.env_detail or {})
             from .case_reader import customer_visible_history
             analysis.customer_history = customer_visible_history(case_ctx.comments)
@@ -683,7 +688,7 @@ class HandsfreeRunner:
                 file_path, case_ctx.case_download_dir, already)
             analysis.archive_contents = {
                 "wifi_wpp": len(wifi_files or []), "ddd": len(ddd_files or []),
-                "event_logs": len(_evt or []), "bt": len(_bt or []),
+                "event_logs": len(_evt or []), "bt": len(bt_files or []),
                 "fw": len(_fw or [])}
             decompose_ok = True
         if not decompose_ok:

@@ -277,7 +277,12 @@ def run_auto_scan(store: HandsfreeStore, owner: str, max_cases: int = 10,
         _set_state(status="running", owner=owner, mode=f"auto-scan ({trigger})",
                    started_at=time.time(), events=[], cases=[], error=None)
         cfg = store.load_config()
-        since_iso = cfg.get("auto_last_scan_at") or (
+        scan_times = dict(cfg.get("auto_last_scan_by_owner") or {})
+        owner_key = owner.casefold()
+        # Older configs kept one stamp, valid only for the configured owner.
+        legacy_since = (cfg.get("auto_last_scan_at") or ""
+                        if owner_key == str(cfg.get("owner_name") or "").casefold() else "")
+        since_iso = scan_times.get(owner_key) or legacy_since or (
             started - timedelta(hours=24)).strftime("%Y-%m-%dT%H:%M:%SZ")
         _log_event(f"auto-scan ({trigger}): open cases of '{owner}' with customer "
                    f"activity since {since_iso}")
@@ -287,27 +292,41 @@ def run_auto_scan(store: HandsfreeStore, owner: str, max_cases: int = 10,
         work = select_auto_work(open_cases, updates, store.ledger_entry, since_iso)
         _log_event(f"{len(open_cases)} open case(s), {len(updates)} with customer "
                    f"comments since then, {len(work)} to run")
-        if len(work) > max_cases:
+        capped = len(work) > max_cases
+        if capped:
             _log_event(f"capped to {max_cases} case(s) this round (newest first)")
             work = work[:max_cases]
         _set_state(cases=[w[0].to_dict() for w in work])
+        failed = 0
         for ref, reason, upd in work:
             _log_event(f"analyzing case {ref.case_nbr} — {reason} — {ref.subject[:60]}")
             try:
                 rec = _analyze_and_enqueue(store, ref.case_nbr,
-                                           case_id=ref.case_id, subject=ref.subject)
+                                           case_id=ref.case_id, subject=ref.subject,
+                                           owner_name=owner)
                 if upd and reason.startswith("customer update"):
                     store.mark_customer_update(ref.case_nbr, upd)
                 summary["cases"].append({"case_nbr": ref.case_nbr, "reason": reason,
-                                         "mode": rec.get("mode")})
+                                         "mode": rec.get("mode") if rec else "unsupported"})
             except Exception as e:
                 print(f"[handsfree] auto-scan case {ref.case_nbr} failed:\n"
                       f"{traceback.format_exc()}")
                 _log_event(f"[{ref.case_nbr}] FAILED: {type(e).__name__}: {e}")
+                failed += 1
                 summary["cases"].append({"case_nbr": ref.case_nbr, "reason": reason,
                                          "mode": "error"})
-        store.save_config({"auto_last_scan_at": started.strftime("%Y-%m-%dT%H:%M:%SZ"),
-                           "auto_last_result": f"{len(work)} case(s) run"})
+        result = f"{len(work)} case(s) run"
+        if capped or failed:
+            # Keep the window: the next round re-queries it and the ledger skips finished cases.
+            result += " (capped/failed — window kept for the next round)"
+            store.save_config({"auto_last_result": result})
+        else:
+            stamp = started.strftime("%Y-%m-%dT%H:%M:%SZ")
+            scan_times = dict(store.load_config().get("auto_last_scan_by_owner") or {})
+            scan_times[owner_key] = stamp
+            store.save_config({"auto_last_scan_at": stamp,
+                               "auto_last_scan_by_owner": scan_times,
+                               "auto_last_result": result})
         _set_state(status="done", finished_at=time.time())
         _log_event("auto-scan complete — review the queue below")
     except Exception as e:
@@ -359,7 +378,8 @@ def run_trial_batch(store: HandsfreeStore, list_view: str, max_cases: int,
             try:
                 rec = _analyze_and_enqueue(store, ref.case_nbr,
                                            case_id=ref.case_id, subject=ref.subject)
-                summary["cases"].append({"case_nbr": ref.case_nbr, "mode": rec.get("mode")})
+                summary["cases"].append({"case_nbr": ref.case_nbr,
+                                         "mode": rec.get("mode") if rec else "unsupported"})
             except Exception as e:
                 print(f"[handsfree] trial case {ref.case_nbr} failed:\n"
                       f"{traceback.format_exc()}")

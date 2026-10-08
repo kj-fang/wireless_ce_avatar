@@ -5,8 +5,9 @@ Examples:
     python -m services.handsfree.cli --owner "Charles P Chu" --interval 300
 
 This starts the application services needed by the analysis pipeline, but it
-never starts Flask, Socket.IO, a browser, or the Handsfree UI. New cases are
-analyzed into the on-disk review queue. Posting remains a separate explicit
+never starts Flask, Socket.IO, a browser, or the Handsfree UI. Each owner's
+new cases and open cases with new customer comments are analyzed into the
+on-disk review queue. Posting remains a separate explicit
 Approve operation from the UI or another trusted caller.
 """
 
@@ -53,13 +54,7 @@ def _build_parser() -> argparse.ArgumentParser:
         "--max-cases",
         type=int,
         default=None,
-        help="Override the maximum number of new cases per check.",
-    )
-    parser.add_argument(
-        "--created-date",
-        choices=("TODAY", "YESTERDAY"),
-        default="TODAY",
-        help="Case CreatedDate SOQL literal (default: TODAY; YESTERDAY is for testing).",
+        help="Override the maximum number of cases analyzed per owner per round.",
     )
     parser.add_argument(
         "--once",
@@ -102,19 +97,19 @@ def _wait_for_run() -> dict:
         time.sleep(1)
 
 
-def _run_once(owner: str, created_date: str = "TODAY") -> int:
+def _run_once(owner: str) -> int:
     from . import orchestrator
 
-    result = orchestrator.start_check_now(owner, created_date=created_date)
-    if not result.get("ok"):
-        print(f"[handsfree-cli] check could not start: {result.get('error')}")
+    store = _store()
+    max_cases = int(store.load_config().get("max_cases_per_run") or 3)
+    summary = orchestrator.run_auto_scan(store, owner, max_cases, trigger="cli")
+    if not summary.get("ok"):
+        print(f"[handsfree-cli] scan failed: {summary.get('error')}")
         return 1
-    state = _wait_for_run()
-    status = state.get("status")
-    print(f"[handsfree-cli] check finished with status={status}")
-    if state.get("error"):
-        print(f"[handsfree-cli] error: {state['error']}")
-    return 0 if status == "done" else 1
+    errors = [c["case_nbr"] for c in summary["cases"] if c.get("mode") == "error"]
+    print(f"[handsfree-cli] scan finished: {len(summary['cases'])} case(s) run"
+          + (f", failed: {', '.join(errors)}" if errors else ""))
+    return 1 if errors else 0
 
 
 def _run_case_once(case_nbr: str) -> int:
@@ -155,11 +150,11 @@ def _load_owners(args) -> list[str]:
     return unique
 
 
-def _run_owners(owners: list[str], created_date: str = "TODAY") -> int:
+def _run_owners(owners: list[str]) -> int:
     failures = []
     for owner in owners:
         print(f"[handsfree-cli] checking owner {owner!r}")
-        if _run_once(owner, created_date) != 0:
+        if _run_once(owner) != 0:
             failures.append(owner)
     if failures:
         print("[handsfree-cli] failed owner check(s): " + ", ".join(failures))
@@ -178,10 +173,6 @@ def main(argv: Optional[list[str]] = None) -> int:
         return 2
     if args.case_number is not None and not args.once:
         print("[handsfree-cli] --case-number requires --once", file=sys.stderr)
-        return 2
-    if args.case_number is not None and args.created_date != "TODAY":
-        print("[handsfree-cli] --created-date does not apply with --case-number",
-              file=sys.stderr)
         return 2
     if args.case_number is not None and not any(ch.isalnum() for ch in args.case_number):
         print("[handsfree-cli] --case-number must contain letters or digits",
@@ -217,14 +208,13 @@ def main(argv: Optional[list[str]] = None) -> int:
         return _run_case_once(args.case_number)
 
     if args.once:
-        return _run_owners(owners, args.created_date)
+        return _run_owners(owners)
 
-    print(f"[handsfree-cli] polling {len(owners)} owner(s) for "
-          f"CreatedDate={args.created_date} every "
-          f"{args.interval:g}s; press Ctrl+C to stop")
+    print(f"[handsfree-cli] polling {len(owners)} owner(s) for new cases and "
+          f"customer updates every {args.interval:g}s; press Ctrl+C to stop")
     try:
         while True:
-            _run_owners(owners, args.created_date)
+            _run_owners(owners)
             time.sleep(args.interval)
     except KeyboardInterrupt:
         print("\n[handsfree-cli] stopped")

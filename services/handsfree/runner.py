@@ -133,6 +133,16 @@ _ENV_BRIEF_KEY_RE = re.compile(
     r"(?i)platform|found in build|operating system|frequency|tested hardware|computer model")
 
 
+def _classify_wireless_domain(subcategory: str) -> str:
+    """Return wifi/bt only when the IPS subcategory explicitly identifies it."""
+    value = str(subcategory or "").strip().lower()
+    if "wifi" in value or "wi-fi" in value:
+        return "wifi"
+    if "bluetooth" in value or re.search(r"\bbt\b", value):
+        return "bt"
+    return ""
+
+
 def _resolve_issue_domain(reader_domain: str, subcategory: str,
                           issue_type: str) -> str:
     """Debug-checklist domain with graceful fallbacks: the reader's informed
@@ -205,7 +215,7 @@ class CaseAnalysis:
     case_nbr: str
     case_id: str = ""                # Salesforce 18-char id (for posting)
     ok: bool = False
-    mode: str = ""                   # full | triage_only | error
+    mode: str = ""                   # full | triage_only | unsupported | error
     subject: str = ""
     description: str = ""
     clean_description: str = ""
@@ -293,12 +303,18 @@ class HandsfreeRunner:
             analysis.case_id = case_ctx.id or ""
             analysis.subject = case_ctx.subject or ""
             analysis.description = case_ctx.description or ""
-            analysis.wifi_or_bt = case_ctx.wifi_or_bt or "wifi"
-            analysis.env_detail = dict(case_ctx.env_detail or {})
             analysis.subcategory = str(case_ctx.subcategory or "")
+            analysis.wifi_or_bt = _classify_wireless_domain(analysis.subcategory)
+            analysis.env_detail = dict(case_ctx.env_detail or {})
         if case_ctx is None or not (analysis.subject or analysis.description):
             analysis.mode = "error"
             analysis.error = "case fetch failed — no subject/description"
+            return analysis
+        if not analysis.wifi_or_bt:
+            analysis.mode = "unsupported"
+            analysis.error = (f"unsupported IPS subcategory: "
+                              f"{analysis.subcategory or '(empty)'}")
+            self.progress("fetch_case", analysis.error)
             return analysis
 
         # -- 2. description triage (always runs; also the no-log fallback) ----

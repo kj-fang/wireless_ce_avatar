@@ -106,6 +106,16 @@ class HandsfreeStore:
             ledger[str(case_nbr)] = entry
             self._save_ledger(ledger)
 
+    def mark_skipped(self, case_nbr: str, reason: str,
+                     owner_name: str = "") -> None:
+        with _LOCK:
+            ledger = self._load_ledger()
+            entry = ledger.get(str(case_nbr), {})
+            entry.update({"skipped_at": _now_iso(), "skip_reason": reason,
+                          "owner_name": owner_name})
+            ledger[str(case_nbr)] = entry
+            self._save_ledger(ledger)
+
     # ------------------------------------------------------------------
     # queue
     # ------------------------------------------------------------------

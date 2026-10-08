@@ -64,11 +64,11 @@ def _soql_quote(value: str) -> str:
 
 
 def build_new_cases_soql(owner_name: str, since_iso: Optional[str] = None,
-                         limit: int = 20) -> str:
+                         limit: int = 20, created_date: str = "TODAY") -> str:
     """Pure builder (unit-testable, no network).
 
     since_iso: an ISO-8601 UTC datetime ('2026-07-15T00:00:00Z'). When None,
-    uses the SOQL date literal TODAY (org-timezone day).
+    uses `created_date` (TODAY by default; YESTERDAY for targeted testing).
     """
     owner = _soql_quote(owner_name)
     if since_iso:
@@ -78,7 +78,10 @@ def build_new_cases_soql(owner_name: str, since_iso: Optional[str] = None,
             raise ValueError(f"since_iso is not ISO-8601: {since_iso!r}")
         created_clause = f"CreatedDate >= {since_iso}"
     else:
-        created_clause = "CreatedDate = TODAY"
+        date_literal = str(created_date or "TODAY").strip().upper()
+        if date_literal not in {"TODAY", "YESTERDAY"}:
+            raise ValueError("created_date must be TODAY or YESTERDAY")
+        created_clause = f"CreatedDate = {date_literal}"
     return (
         "SELECT Id, CaseNumber, Subject, Status, CreatedDate, Owner.Name "
         "FROM Case "
@@ -150,9 +153,10 @@ class IpsClient:
     # detection
     # ------------------------------------------------------------------
     def find_new_cases(self, owner_name: str, since_iso: Optional[str] = None,
-                       limit: int = 20) -> list[CaseRef]:
+                       limit: int = 20,
+                       created_date: str = "TODAY") -> list[CaseRef]:
         """Cases assigned to `owner_name`, created today (or since `since_iso`)."""
-        soql = build_new_cases_soql(owner_name, since_iso, limit)
+        soql = build_new_cases_soql(owner_name, since_iso, limit, created_date)
         resp = self._request("GET", "/services/data/v{ver}/query",
                              params={"q": soql})
         resp.raise_for_status()

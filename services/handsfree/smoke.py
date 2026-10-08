@@ -35,6 +35,14 @@ def smoke_soql() -> None:
     q = build_new_cases_soql("Charles P Chu")
     check("S1.a owner + TODAY",
           "Owner.Name = 'Charles P Chu'" in q and "CreatedDate = TODAY" in q, q)
+    yesterday = build_new_cases_soql("Charles P Chu", created_date="YESTERDAY")
+    check("S1.a2 YESTERDAY test date selectable",
+          "CreatedDate = YESTERDAY" in yesterday, yesterday)
+    try:
+        build_new_cases_soql("x", created_date="ALL TIME")
+        check("S1.a3 unsupported date literal rejected", False)
+    except ValueError:
+        check("S1.a3 unsupported date literal rejected", True)
     q2 = build_new_cases_soql("O'Brien \\ Team", since_iso="2026-07-15T00:00:00Z")
     check("S1.b escaping + since",
           "O\\'Brien \\\\ Team" in q2 and "CreatedDate >= 2026-07-15T00:00:00Z" in q2, q2)

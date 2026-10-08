@@ -57,7 +57,8 @@ def _log_event(message: str) -> None:
     print(f"[handsfree] {message}")
 
 
-def start_check_now(owner_name: Optional[str] = None) -> dict:
+def start_check_now(owner_name: Optional[str] = None,
+                    created_date: str = "TODAY") -> dict:
     """Kick off a background check run. Returns {ok, error?}."""
     if not _run_lock.acquire(blocking=False):
         return {"ok": False, "error": "a check run is already in progress"}
@@ -70,10 +71,11 @@ def start_check_now(owner_name: Optional[str] = None) -> dict:
     if owner_name and owner != cfg.get("owner_name"):
         store.save_config({"owner_name": owner})
 
-    _set_state(status="running", owner=owner, started_at=time.time(),
+    _set_state(status="running", owner=owner, created_date=created_date,
+               started_at=time.time(),
                events=[], cases=[], error=None)
 
-    t = threading.Thread(target=_run_check, args=(owner, store),
+    t = threading.Thread(target=_run_check, args=(owner, store, created_date),
                          daemon=True, name="handsfree-check")
     t.start()
     return {"ok": True, "owner": owner}
@@ -81,13 +83,17 @@ def start_check_now(owner_name: Optional[str] = None) -> dict:
 
 def _analyze_and_enqueue(store: HandsfreeStore, case_nbr: str,
                          case_id: str = "", subject: str = "",
-                         owner_name: str = "") -> dict:
+                         owner_name: str = "") -> Optional[dict]:
     """Shared per-case body for check runs and manual single-case runs."""
     def _progress(stage, detail, _c=case_nbr):
         _log_event(f"[{_c}] {stage}: {detail}")
 
     runner = HandsfreeRunner(progress_cb=_progress)
     analysis = runner.analyze_case(case_nbr)
+    if analysis.mode == "unsupported":
+        store.mark_skipped(case_nbr, analysis.error, owner_name=owner_name)
+        _log_event(f"[{case_nbr}] skipped: {analysis.error}")
+        return None
 
     # Pre-fill the first-response checklist: pipeline facts first, then one
     # LLM pass over the rest. Failure never blocks the drafts.
@@ -144,15 +150,18 @@ def _analyze_and_enqueue(store: HandsfreeStore, case_nbr: str,
     return rec
 
 
-def _run_check(owner: str, store: HandsfreeStore) -> None:
+def _run_check(owner: str, store: HandsfreeStore,
+               created_date: str = "TODAY") -> None:
     try:
         cfg = store.load_config()
         max_cases = int(cfg.get("max_cases_per_run") or 3)
 
-        _log_event(f"querying IPS for cases assigned to '{owner}' today…")
+        _log_event(f"querying IPS for cases assigned to '{owner}' "
+               f"created {created_date.lower()}…")
         ips = IpsClient()
-        refs = ips.find_new_cases(owner)
-        _log_event(f"found {len(refs)} case(s) created today for this owner")
+        refs = ips.find_new_cases(owner, created_date=created_date)
+        _log_event(f"found {len(refs)} case(s) created {created_date.lower()} "
+               "for this owner")
 
         fresh = [r for r in refs if not store.is_processed(r.case_nbr)]
         skipped = len(refs) - len(fresh)

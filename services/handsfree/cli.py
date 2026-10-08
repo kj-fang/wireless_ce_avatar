@@ -29,15 +29,19 @@ def _build_parser() -> argparse.ArgumentParser:
     parser = argparse.ArgumentParser(
         description="Run Handsfree case detection and analysis without the web UI."
     )
-    owners = parser.add_mutually_exclusive_group(required=True)
-    owners.add_argument(
+    targets = parser.add_mutually_exclusive_group(required=True)
+    targets.add_argument(
         "--owner",
         help="One IPS/Salesforce Owner.Name to monitor.",
     )
-    owners.add_argument(
+    targets.add_argument(
         "--owners-file",
         type=Path,
         help="UTF-8 text file with one Owner.Name per line; blank lines and # comments are ignored.",
+    )
+    targets.add_argument(
+        "--case-number",
+        help="Analyze one explicit case, bypassing owner/date and processed-case checks; requires --once.",
     )
     parser.add_argument(
         "--interval",
@@ -50,6 +54,12 @@ def _build_parser() -> argparse.ArgumentParser:
         type=int,
         default=None,
         help="Override the maximum number of new cases per check.",
+    )
+    parser.add_argument(
+        "--created-date",
+        choices=("TODAY", "YESTERDAY"),
+        default="TODAY",
+        help="Case CreatedDate SOQL literal (default: TODAY; YESTERDAY is for testing).",
     )
     parser.add_argument(
         "--once",
@@ -92,16 +102,31 @@ def _wait_for_run() -> dict:
         time.sleep(1)
 
 
-def _run_once(owner: str) -> int:
+def _run_once(owner: str, created_date: str = "TODAY") -> int:
     from . import orchestrator
 
-    result = orchestrator.start_check_now(owner)
+    result = orchestrator.start_check_now(owner, created_date=created_date)
     if not result.get("ok"):
         print(f"[handsfree-cli] check could not start: {result.get('error')}")
         return 1
     state = _wait_for_run()
     status = state.get("status")
     print(f"[handsfree-cli] check finished with status={status}")
+    if state.get("error"):
+        print(f"[handsfree-cli] error: {state['error']}")
+    return 0 if status == "done" else 1
+
+
+def _run_case_once(case_nbr: str) -> int:
+    from . import orchestrator
+
+    result = orchestrator.start_case_run(case_nbr)
+    if not result.get("ok"):
+        print(f"[handsfree-cli] case run could not start: {result.get('error')}")
+        return 1
+    state = _wait_for_run()
+    status = state.get("status")
+    print(f"[handsfree-cli] case {result['case_nbr']} finished with status={status}")
     if state.get("error"):
         print(f"[handsfree-cli] error: {state['error']}")
     return 0 if status == "done" else 1
@@ -130,11 +155,11 @@ def _load_owners(args) -> list[str]:
     return unique
 
 
-def _run_owners(owners: list[str]) -> int:
+def _run_owners(owners: list[str], created_date: str = "TODAY") -> int:
     failures = []
     for owner in owners:
         print(f"[handsfree-cli] checking owner {owner!r}")
-        if _run_once(owner) != 0:
+        if _run_once(owner, created_date) != 0:
             failures.append(owner)
     if failures:
         print("[handsfree-cli] failed owner check(s): " + ", ".join(failures))
@@ -151,8 +176,19 @@ def main(argv: Optional[list[str]] = None) -> int:
     if args.max_cases is not None and not 1 <= args.max_cases <= 15:
         print("[handsfree-cli] --max-cases must be between 1 and 15", file=sys.stderr)
         return 2
+    if args.case_number is not None and not args.once:
+        print("[handsfree-cli] --case-number requires --once", file=sys.stderr)
+        return 2
+    if args.case_number is not None and args.created_date != "TODAY":
+        print("[handsfree-cli] --created-date does not apply with --case-number",
+              file=sys.stderr)
+        return 2
+    if args.case_number is not None and not any(ch.isalnum() for ch in args.case_number):
+        print("[handsfree-cli] --case-number must contain letters or digits",
+              file=sys.stderr)
+        return 2
     try:
-        owners = _load_owners(args)
+        owners = [] if args.case_number is not None else _load_owners(args)
     except ValueError as e:
         print(f"[handsfree-cli] {e}", file=sys.stderr)
         return 2
@@ -169,19 +205,26 @@ def main(argv: Optional[list[str]] = None) -> int:
         updates["dry_run"] = True
     cfg = store.save_config(updates)
     print(
-        f"[handsfree-cli] owners={len(owners)}, "
+        (f"[handsfree-cli] case_number={args.case_number!r}, "
+         f"max_cases={cfg['max_cases_per_run']}, dry_run={cfg['dry_run']}"
+         if args.case_number is not None else
+         f"[handsfree-cli] owners={len(owners)}, "
         f"max_cases={cfg['max_cases_per_run']}, "
-        f"dry_run={cfg['dry_run']}"
+         f"dry_run={cfg['dry_run']}")
     )
 
-    if args.once:
-        return _run_owners(owners)
+    if args.case_number is not None:
+        return _run_case_once(args.case_number)
 
-    print(f"[handsfree-cli] polling {len(owners)} owner(s) every "
+    if args.once:
+        return _run_owners(owners, args.created_date)
+
+    print(f"[handsfree-cli] polling {len(owners)} owner(s) for "
+          f"CreatedDate={args.created_date} every "
           f"{args.interval:g}s; press Ctrl+C to stop")
     try:
         while True:
-            _run_owners(owners)
+            _run_owners(owners, args.created_date)
             time.sleep(args.interval)
     except KeyboardInterrupt:
         print("\n[handsfree-cli] stopped")

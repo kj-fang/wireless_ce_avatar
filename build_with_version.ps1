@@ -1,10 +1,10 @@
 # Local build script — mirrors the same 4-scenario version logic as CI:
 #
 #  Scenario 1 (PR build / local dev):  feature/* or fix/* branch
-#    → version: 99.2.<cycle_count>-dev.<sha1>   BUILD_TYPE: DEV
+#    → version: 99.3.<cycle_count>-dev.<sha1>   BUILD_TYPE: DEV
 #
 #  Scenario 2 (nightly):  main branch
-#    → version: 99.2.<cycle_count>               BUILD_TYPE: NIGHTLY
+#    → version: 99.3.<cycle_count>               BUILD_TYPE: NIGHTLY
 #
 #  Scenario 3 & 4 (release candidate):  release/X.Y branch
 #    → version: X.Y.<commit_count_on_branch>   BUILD_TYPE: RELEASE
@@ -19,8 +19,8 @@ param(
 # To start a new nightly cycle, update $NightlyMinor and $NightlyBaseRef together.
 # build.yml has matching NIGHTLY_MAJOR, NIGHTLY_MINOR, and NIGHTLY_BASE_REF values.
 $NightlyMajor = 99
-$NightlyMinor = 2
-$NightlyBaseRef = "release/1.2"
+$NightlyMinor = 3
+$NightlyBaseRef = "release/1.3"
 # ─────────────────────────────────────────────────────────────────────────────
 
 Write-Host "===== IntelAvatar Build Script with Version Control =====" -ForegroundColor Cyan
@@ -36,7 +36,7 @@ try {
 
     if ($currentBranch -eq $Branch) {
         # ---- NIGHTLY build: on main branch ----
-        # Version 99.2.x — the third number counts check-ins in this nightly cycle.
+        # Version 99.3.x — the third number counts check-ins in this nightly cycle.
         git fetch origin $NightlyBaseRef --no-tags 2>$null
         $nightlyBase = git merge-base $Branch "origin/$NightlyBaseRef" 2>$null
         if ($LASTEXITCODE -ne 0 -or -not $nightlyBase) { throw "nightly cycle base unavailable" }
@@ -63,7 +63,7 @@ try {
         $buildType = "RELEASE"
     } else {
         # ---- DEV build: on a feature/fix branch ----
-        # Version 99.2.<cycle_count>-dev.<sha1>
+        # Version 99.3.<cycle_count>-dev.<sha1>
         # cycle_count = commits in the nightly cycle at the branch point.
         try {
             $mergeBase = git merge-base HEAD $Branch 2>$null

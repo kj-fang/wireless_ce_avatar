@@ -1,10 +1,10 @@
 # Scenario 1: Developer PR  → feature branch pushed, PR opened against main
 #   - Builds + runs linter, uploads artifact, posts version comment on PR
-#   - Version: 99.2.<cycle_count>-dev.<sha1>  (DEV)
+#   - Version: 99.3.<cycle_count>-dev.<sha1>  (DEV)
 #
 # Scenario 2: Merge to main  → PR merged (push to main)
 #   - Nightly build, uploads artifact, NO GitHub Release
-#   - Version: 99.2.<cycle_count>  (NIGHTLY)
+#   - Version: 99.3.<cycle_count>  (NIGHTLY)
 
 name: Build and Test
 
@@ -20,8 +20,8 @@ on:
 # build_with_version.ps1 has its own matching variables at the top of the file.
 env:
   NIGHTLY_MAJOR: '99'
-  NIGHTLY_MINOR: '2'
-  NIGHTLY_BASE_REF: 'release/1.2'
+  NIGHTLY_MINOR: '3'
+  NIGHTLY_BASE_REF: 'release/1.3'
 # ─────────────────────────────────────────────────────────────────────────────
 
 permissions:

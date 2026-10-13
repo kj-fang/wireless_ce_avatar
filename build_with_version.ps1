@@ -23,6 +23,19 @@ $NightlyMinor = 3
 $NightlyBaseRef = "release/1.3"
 # ─────────────────────────────────────────────────────────────────────────────
 
+function Get-NightlyBase {
+    git fetch origin $NightlyBaseRef --no-tags 2>$null
+    $baseRef = "origin/$NightlyBaseRef"
+    git show-ref --verify --quiet "refs/remotes/$baseRef"
+    if ($LASTEXITCODE -ne 0) {
+        Write-Host "Nightly base $NightlyBaseRef is not yet available; using $Branch" -ForegroundColor Yellow
+        $baseRef = $Branch
+    }
+    $nightlyBase = git merge-base $Branch $baseRef 2>$null
+    if ($LASTEXITCODE -ne 0 -or -not $nightlyBase) { throw "nightly cycle base unavailable" }
+    return $nightlyBase
+}
+
 Write-Host "===== IntelAvatar Build Script with Version Control =====" -ForegroundColor Cyan
 
 # Get git information
@@ -37,9 +50,7 @@ try {
     if ($currentBranch -eq $Branch) {
         # ---- NIGHTLY build: on main branch ----
         # Version 99.3.x — the third number counts check-ins in this nightly cycle.
-        git fetch origin $NightlyBaseRef --no-tags 2>$null
-        $nightlyBase = git merge-base $Branch "origin/$NightlyBaseRef" 2>$null
-        if ($LASTEXITCODE -ne 0 -or -not $nightlyBase) { throw "nightly cycle base unavailable" }
+        $nightlyBase = Get-NightlyBase
         $commitCount = git rev-list --count "${nightlyBase}..HEAD"
         $version = "$NightlyMajor.$NightlyMinor.$commitCount"
         $buildType = "NIGHTLY"
@@ -68,16 +79,12 @@ try {
         try {
             $mergeBase = git merge-base HEAD $Branch 2>$null
             if ($LASTEXITCODE -ne 0 -or -not $mergeBase) { throw "merge-base failed" }
-            git fetch origin $NightlyBaseRef --no-tags 2>$null
-            $nightlyBase = git merge-base $Branch "origin/$NightlyBaseRef" 2>$null
-            if ($LASTEXITCODE -ne 0 -or -not $nightlyBase) { throw "nightly cycle base failed" }
+            $nightlyBase = Get-NightlyBase
             $baseCommitCount = git rev-list --count "${nightlyBase}..${mergeBase}"
         } catch {
             # Fallback: use the current main tip as the branch point.
             $mergeBase = git rev-parse $Branch
-            git fetch origin $NightlyBaseRef --no-tags 2>$null
-            $nightlyBase = git merge-base $Branch "origin/$NightlyBaseRef" 2>$null
-            if ($LASTEXITCODE -ne 0 -or -not $nightlyBase) { throw "nightly cycle base failed" }
+            $nightlyBase = Get-NightlyBase
             $baseCommitCount = git rev-list --count "${nightlyBase}..${mergeBase}"
             Write-Host "⚠️  Could not determine branch point — using tip of '$Branch' as fallback (version may be approximate)" -ForegroundColor Yellow
         }

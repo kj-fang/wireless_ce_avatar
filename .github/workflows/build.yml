@@ -54,7 +54,13 @@ jobs:
         git fetch origin main --no-tags 2>$null
         git fetch origin "$env:NIGHTLY_BASE_REF" --no-tags 2>$null
 
-        $nightlyBase = git merge-base origin/main "origin/$env:NIGHTLY_BASE_REF" 2>$null
+        $baseRef = "origin/$env:NIGHTLY_BASE_REF"
+        git show-ref --verify --quiet "refs/remotes/$baseRef"
+        if ($LASTEXITCODE -ne 0) {
+          Write-Host "::warning::$env:NIGHTLY_BASE_REF is not yet available; using origin/main as the cycle base"
+          $baseRef = 'origin/main'
+        }
+        $nightlyBase = git merge-base origin/main $baseRef 2>$null
         if ($LASTEXITCODE -ne 0 -or -not $nightlyBase) {
           Write-Host "::error::Could not determine the nightly cycle base from $env:NIGHTLY_BASE_REF"
           exit 1

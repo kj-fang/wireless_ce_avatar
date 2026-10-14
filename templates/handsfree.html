@@ -248,23 +248,9 @@
         <span class="status-line" id="cfg-status"></span>
       </div>
       <div class="controls divider">
-        <label title="Tuning on historical IPS cases: every run's drafts are flagged TRIAL and can never be posted; the batch below takes cases from an IPS list view whether they are open or closed">
-          <input type="checkbox" id="cfg-trial" onchange="applyTrialUi()"> trial mode (closed / historical cases, posting disabled)
+        <label title="Tuning on historical IPS cases: closed cases of the automatic-analysis list view are included, and every run's drafts are flagged TRIAL and can never be posted">
+          <input type="checkbox" id="cfg-trial" onchange="applyTrialUi()"> trial mode (include closed cases, posting disabled)
         </label>
-        <span id="trial-controls" style="display: none; gap: 10px; align-items: center; flex-wrap: wrap;">
-          <label>IPS list view:
-            <input type="text" id="cfg-trial-list" style="width: 240px; font-family: var(--mono); font-size: 12.5px;"
-                   placeholder="developer name, e.g. Handsfree_replier_test_case">
-          </label>
-          <label>Cases per batch:
-            <input type="number" id="cfg-trial-max" min="1" max="50" step="1" style="width: 64px;">
-          </label>
-          <label title="Cases already analyzed (in the ledger) are skipped, so repeated batches walk through the list">
-            <input type="checkbox" id="cfg-trial-skip" checked> skip already-analyzed
-          </label>
-          <button class="ghost" id="trial-run-btn" onclick="runTrialBatch()"
-                  title="Saves these settings, then analyzes the next cases of the list view">Run trial batch</button>
-        </span>
       </div>
       <div style="margin-top: 12px;">
         <div class="controls">
@@ -318,10 +304,11 @@
       </div>
     </div>
     <div id="tab-auto" style="display:none;">
-      <div class="hint">Each round looks at the open IPS cases of the case owner (from Settings) for
-        either new cases OR new customer comments since the previous round (one of the two is enough), runs the handsfree pipeline
-        for each, and queues the drafts below for review. Nothing is posted automatically — Approve
-        still decides.</div>
+      <div class="hint">Each round scans one source: the open IPS cases of the case owner (from Settings) for
+        either new cases OR new customer comments since the previous round (one of the two is enough), or the cases of an
+        IPS list view that were not analyzed yet or have new customer comments. The handsfree pipeline runs for each and the
+        drafts queue below for review. Nothing is posted automatically — Approve still decides. Closed cases of a list view
+        run only in trial mode (Settings).</div>
       <div class="controls">
         <label>Case owner: <b id="auto-owner" style="color: var(--fg);">{{ config.owner_name or '—' }}</b></label>
         <label>Frequency:
@@ -341,6 +328,19 @@
         <button class="ghost" id="auto-run-btn" onclick="autoRunNow()"
                 title="Run one round right now with the settings above">Run now</button>
         <span class="status-line" id="auto-status"></span>
+      </div>
+      <div class="controls">
+        <label>Source:
+          <select id="auto-source" onchange="applyAutoSourceUi()">
+            <option value="owner">Open cases of the case owner</option>
+            <option value="list_view">IPS list view</option>
+          </select>
+        </label>
+        <label>IPS list view:
+          <input type="text" id="auto-list-view" style="width: 240px; font-family: var(--mono); font-size: 12.5px;"
+                 placeholder="developer name, e.g. Handsfree_replier_test_case">
+        </label>
+        <span class="status-line" id="auto-source-note"></span>
       </div>
     </div>
     <div class="row" id="progress-row">
@@ -443,8 +443,6 @@
     document.getElementById('cfg-dry-run').checked = !!cfg.dry_run;
     document.getElementById('cfg-backend').value = cfg.post_backend || 'auto';
     document.getElementById('cfg-trial').checked = !!cfg.trial_mode;
-    document.getElementById('cfg-trial-list').value = cfg.trial_list_view || '';
-    document.getElementById('cfg-trial-max').value = cfg.trial_max_cases ?? 5;
     applyTrialUi();
     document.getElementById('cfg-field-map').textContent =
       JSON.stringify(cfg.rest_field_map || {}, null, 2);
@@ -462,35 +460,29 @@
 
   function applyTrialUi() {
     const on = document.getElementById('cfg-trial').checked;
-    document.getElementById('trial-controls').style.display = on ? 'inline-flex' : 'none';
     const badge = document.getElementById('trial-badge');
     if (badge) badge.style.display = on ? '' : 'none';
+    applyAutoSourceUi();
+  }
+
+  function applyAutoSourceUi() {
+    const lv = document.getElementById('auto-source').value === 'list_view';
+    document.getElementById('auto-list-view').disabled = !lv;
+    const trial = document.getElementById('cfg-trial').checked;
+    document.getElementById('auto-source-note').textContent = !lv ? '' : trial
+      ? 'trial mode: closed cases included, drafts cannot be posted'
+      : 'open cases only — enable trial mode in Settings to include closed cases';
   }
 
   function configBody() {
     const maxRaw = parseInt(document.getElementById('cfg-max-cases').value, 10);
-    const trialMaxRaw = parseInt(document.getElementById('cfg-trial-max').value, 10);
     return {
       owner_name: document.getElementById('cfg-owner').value.trim(),
       max_cases_per_run: Math.min(15, Math.max(1, isNaN(maxRaw) ? 3 : maxRaw)),
       dry_run: document.getElementById('cfg-dry-run').checked,
       post_backend: document.getElementById('cfg-backend').value,
       trial_mode: document.getElementById('cfg-trial').checked,
-      trial_list_view: document.getElementById('cfg-trial-list').value.trim(),
-      trial_max_cases: Math.min(50, Math.max(1, isNaN(trialMaxRaw) ? 5 : trialMaxRaw)),
     };
-  }
-
-  async function runTrialBatch() {
-    // Persist the trial settings first so the server sees the same values.
-    try {
-      await postJson('/handsfree/config', configBody());
-    } catch (e) { serverUnreachable(e); return; }
-    await startRun('/handsfree/trial_run', {
-      list_view: document.getElementById('cfg-trial-list').value.trim(),
-      max_cases: parseInt(document.getElementById('cfg-trial-max').value, 10) || 5,
-      skip_analyzed: document.getElementById('cfg-trial-skip').checked,
-    });
   }
 
   async function saveConfig() {
@@ -558,11 +550,17 @@
     if (document.activeElement !== modeSel) modeSel.value = a.mode || 'nightly';
     const maxEl = document.getElementById('auto-max');
     if (document.activeElement !== maxEl) maxEl.value = a.max_cases || 10;
+    const srcEl = document.getElementById('auto-source');
+    if (document.activeElement !== srcEl) srcEl.value = a.source || 'owner';
+    const lvEl = document.getElementById('auto-list-view');
+    if (document.activeElement !== lvEl) lvEl.value = a.list_view || '';
+    applyAutoSourceUi();
     document.getElementById('auto-toggle-text').textContent =
       autoEnabled ? 'Stop automatic analysis' : 'Start automatic analysis';
     document.getElementById('auto-toggle-btn').className = autoEnabled ? 'danger' : 'primary';
     const bits = [];
-    bits.push(autoEnabled ? 'ON · ' + (a.mode_label || a.mode) : 'off');
+    bits.push(autoEnabled ? 'ON · ' + (a.mode_label || a.mode)
+      + (a.source === 'list_view' ? ' · list view ' + (a.list_view || '?') : '') : 'off');
     if (autoEnabled && a.next_run_at) bits.push('next round ' + a.next_run_at.slice(0, 16).replace('T', ' '));
     if (a.last_scan_at) bits.push('last round ' + a.last_scan_at.slice(0, 16).replace('T', ' ') + ' UTC');
     if (a.last_result) bits.push(a.last_result);
@@ -581,12 +579,19 @@
     }
   }
 
+  function autoRoundSettings() {
+    return {
+      max_cases: parseInt(document.getElementById('auto-max').value, 10) || 10,
+      source: document.getElementById('auto-source').value,
+      list_view: document.getElementById('auto-list-view').value.trim(),
+    };
+  }
+
   async function toggleAuto() {
-    const body = {
+    const body = Object.assign({
       enabled: !autoEnabled,
       mode: document.getElementById('auto-mode').value,
-      max_cases: parseInt(document.getElementById('auto-max').value, 10) || 10,
-    };
+    }, autoRoundSettings());
     const r = await fetch('/handsfree/auto', {
       method: 'POST', headers: {'Content-Type': 'application/json'},
       body: JSON.stringify(body),
@@ -634,10 +639,11 @@
   }
 
   async function autoRunNow() {
-    await startRun('/handsfree/auto/run_now', {});
+    await startRun('/handsfree/auto/run_now', autoRoundSettings());
+    loadAuto();
   }
   function setRunButtons(disabled) {
-    ['check-btn', 'run-case-btn', 'auto-run-btn', 'trial-run-btn'].forEach(id => {
+    ['check-btn', 'run-case-btn', 'auto-run-btn'].forEach(id => {
       const el = document.getElementById(id);
       if (el) el.disabled = disabled;
     });

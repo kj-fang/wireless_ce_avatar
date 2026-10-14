@@ -56,12 +56,14 @@ class HandsfreeStore:
         "post_backend": "auto",        # rest | ui | auto (rest first, ui fallback)
         "max_cases_per_run": 3,
         "dry_run": False,              # analyze + queue, posting disabled
-        # Trial / tuning on historical (closed) cases: every run's drafts are
-        # flagged "trial" and can never be posted; "Run trial batch" pulls
-        # cases from an IPS list view regardless of their state.
+        # Trial / tuning on historical cases: every run's drafts are flagged
+        # "trial" and can never be posted, and closed cases of the automatic
+        # analysis' list-view source are included instead of skipped.
         "trial_mode": False,
-        "trial_list_view": "Handsfree_replier_test_case",
-        "trial_max_cases": 5,
+        # Automatic analysis source: the owner's open cases, or an IPS list
+        # view (auto_source "list_view" + auto_list_view developer name).
+        "auto_source": "owner",
+        "auto_list_view": "Handsfree_replier_test_case",
         # Verified by a human after describe_comment_fields():
         #   {"body_field": "...", "private_field": "...", "private_value": true}
         "rest_field_map": None,

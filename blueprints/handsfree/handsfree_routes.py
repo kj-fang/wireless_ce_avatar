@@ -51,17 +51,6 @@ def status():
     return jsonify(orchestrator.get_run_state())
 
 
-@handsfree_bp.route("/trial_run", methods=["POST"])
-def trial_run():
-    """Tuning batch on an IPS list view (open or closed cases); needs trial
-    mode in Settings. Drafts are flagged trial and can never be posted."""
-    body = request.get_json(silent=True) or {}
-    return jsonify(orchestrator.start_trial_run(
-        list_view=str(body.get("list_view") or ""),
-        max_cases=int(body.get("max_cases") or 0),
-        skip_analyzed=bool(body.get("skip_analyzed", True))))
-
-
 # ---------- automatic analysis (scheduler) ----------
 
 @handsfree_bp.record_once
@@ -86,21 +75,29 @@ def auto_check():
         return jsonify(scheduler.configure(
             enabled=bool(body.get("enabled")),
             mode=str(body.get("mode") or "nightly"),
-            max_cases=body.get("max_cases")))
+            max_cases=body.get("max_cases"),
+            source=body.get("source"),
+            list_view=body.get("list_view")))
     except ValueError as e:
         return jsonify({"ok": False, "error": str(e)}), 400
 
 
 @handsfree_bp.route("/auto/run_now", methods=["POST"])
 def auto_run_now():
-    """One automatic round right away (same scan the schedule performs)."""
+    """One automatic round right away (same scan the schedule performs),
+    with the round settings from the page (source, list view, max cases)
+    saved first — the schedule itself is left alone."""
     import threading
     from services.handsfree import scheduler
     if orchestrator._run_lock.locked():
         return jsonify({"ok": False, "error": "a run is already in progress"})
-    cfg = _store().load_config()
-    if not (cfg.get("owner_name") or "").strip():
-        return jsonify({"ok": False, "error": "no owner name configured"})
+    body = request.get_json(silent=True) or {}
+    cfg = scheduler.save_settings(max_cases=body.get("max_cases"),
+                                  source=body.get("source"),
+                                  list_view=body.get("list_view"))
+    target = scheduler.scan_target(cfg)
+    if target["error"]:
+        return jsonify({"ok": False, "error": target["error"]})
     threading.Thread(target=scheduler.run_once, kwargs={"trigger": "manual"},
                      daemon=True, name="handsfree-auto-now").start()
     return jsonify({"ok": True})
@@ -187,8 +184,7 @@ def config():
         return jsonify(store.load_config())
     body = request.get_json(silent=True) or {}
     allowed = {"owner_name", "post_backend", "max_cases_per_run",
-               "dry_run", "rest_field_map", "ui_locators",
-               "trial_mode", "trial_list_view", "trial_max_cases"}
+               "dry_run", "rest_field_map", "ui_locators", "trial_mode"}
     updates = {k: v for k, v in body.items() if k in allowed}
     return jsonify(store.save_config(updates))
 

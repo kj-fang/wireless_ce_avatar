@@ -260,41 +260,101 @@ def select_auto_work(open_cases: list, updates: dict, ledger_lookup,
     return work
 
 
-def run_auto_scan(store: HandsfreeStore, owner: str, max_cases: int = 10,
-                  trigger: str = "scheduled") -> dict:
-    """One automatic round: find the owner's open cases with new customer
-    activity since the last scan, run the per-case pipeline for each (drafts
-    land in the review queue — nothing posts), remember the scan time.
-    Returns a summary; {"ok": False} when a run is already in progress."""
+def _is_closed(ref) -> bool:
+    """Closed state of a CaseRef: IsClosed when the client could query it,
+    else the Status text."""
+    closed = getattr(ref, "closed", None)
+    if closed is not None:
+        return bool(closed)
+    return str(getattr(ref, "status", "") or "").strip().lower().startswith("closed")
+
+
+def select_list_view_work(refs: list, updates: dict, ledger_lookup,
+                          include_closed: bool) -> tuple:
+    """Which cases of an IPS list view need a round, in list order. Pure.
+
+    A case qualifies when it was never analyzed (new to the list) or a
+    customer comment is newer than its last analysis (same rule as the
+    owner source). Closed cases are skipped unless include_closed (trial
+    mode in Settings); the number skipped comes back too so the run log can
+    say why nothing ran. Returns ([(CaseRef, reason, stamp)], skipped_closed).
+    """
+    work, skipped_closed = [], 0
+    for ref in refs:
+        if not include_closed and _is_closed(ref):
+            skipped_closed += 1
+            continue
+        entry = ledger_lookup(ref.case_nbr) or {}
+        if not entry:
+            work.append((ref, "not analyzed yet", ref.created))
+            continue
+        upd = updates.get(ref.case_id, "")
+        if upd and upd != entry.get("last_customer_update"):
+            upd_dt = _parse_iso(upd)
+            analyzed = _parse_iso(entry.get("analyzed_at", ""))
+            if analyzed is None or (upd_dt and upd_dt > analyzed):
+                work.append((ref, f"customer update at {upd}", upd))
+    return work, skipped_closed
+
+
+def run_auto_scan(store: HandsfreeStore, owner: str = "", max_cases: int = 10,
+                  trigger: str = "scheduled", list_view: str = "") -> dict:
+    """One automatic round. Source: the owner's open cases with new customer
+    activity since the last scan (default), or — when list_view is given —
+    the cases of that IPS list view not yet analyzed or with new customer
+    comments (closed ones only in trial mode). The per-case pipeline runs
+    for each; drafts land in the review queue — nothing posts. Remembers the
+    scan time per source. Returns a summary; {"ok": False} when a run is
+    already in progress."""
     from datetime import datetime, timedelta, timezone
 
     if not _run_lock.acquire(blocking=False):
         return {"ok": False, "error": "a run is already in progress"}
     started = datetime.now(timezone.utc)
+    owner = (owner or "").strip()
+    list_view = (list_view or "").strip()
+    source = f"IPS list view '{list_view}'" if list_view else f"open cases of '{owner}'"
     summary: dict = {"ok": True, "trigger": trigger, "started_at": started.isoformat(),
-                     "cases": []}
+                     "source": source, "cases": []}
     try:
-        _set_state(status="running", owner=owner, mode=f"auto-scan ({trigger})",
+        _set_state(status="running", owner=owner or None, mode=f"auto-scan ({trigger})",
                    started_at=time.time(), events=[], cases=[], error=None)
         cfg = store.load_config()
+        trial = bool(cfg.get("trial_mode"))
         scan_times = dict(cfg.get("auto_last_scan_by_owner") or {})
-        owner_key = owner.casefold()
+        scan_key = f"listview:{list_view.casefold()}" if list_view else owner.casefold()
         # Older configs kept one stamp, valid only for the configured owner.
         legacy_since = (cfg.get("auto_last_scan_at") or ""
-                        if owner_key == str(cfg.get("owner_name") or "").casefold() else "")
-        since_iso = scan_times.get(owner_key) or legacy_since or (
+                        if not list_view
+                        and owner.casefold() == str(cfg.get("owner_name") or "").casefold()
+                        else "")
+        since_iso = scan_times.get(scan_key) or legacy_since or (
             started - timedelta(hours=24)).strftime("%Y-%m-%dT%H:%M:%SZ")
-        _log_event(f"auto-scan ({trigger}): open cases of '{owner}' with customer "
-                   f"activity since {since_iso}")
+        _log_event(f"auto-scan ({trigger}): {source}, customer activity since {since_iso}")
         ips = IpsClient()
-        open_cases = ips.find_open_cases(owner)
-        updates = ips.find_customer_updates([c.case_id for c in open_cases], since_iso)
-        work = select_auto_work(open_cases, updates, store.ledger_entry, since_iso)
-        _log_event(f"{len(open_cases)} open case(s), {len(updates)} with customer "
-                   f"comments since then, {len(work)} to run")
+        if list_view:
+            refs = ips.list_view_cases(list_view)
+            updates = ips.find_customer_updates([c.case_id for c in refs], since_iso)
+            work, skipped_closed = select_list_view_work(
+                refs, updates, store.ledger_entry, include_closed=trial)
+            line = (f"{len(refs)} case(s) in the list view, {len(updates)} with customer "
+                    f"comments since then, {len(work)} to run")
+            if skipped_closed:
+                line += (f" — {skipped_closed} closed case(s) skipped (enable trial mode "
+                         "in Settings to include closed cases)")
+            if trial:
+                line += " — trial mode: closed cases included, drafts cannot be posted"
+            _log_event(line)
+        else:
+            open_cases = ips.find_open_cases(owner)
+            updates = ips.find_customer_updates([c.case_id for c in open_cases], since_iso)
+            work = select_auto_work(open_cases, updates, store.ledger_entry, since_iso)
+            _log_event(f"{len(open_cases)} open case(s), {len(updates)} with customer "
+                       f"comments since then, {len(work)} to run")
         capped = len(work) > max_cases
         if capped:
-            _log_event(f"capped to {max_cases} case(s) this round (newest first)")
+            _log_event(f"capped to {max_cases} case(s) this round"
+                       + ("" if list_view else " (newest first)"))
             work = work[:max_cases]
         _set_state(cases=[w[0].to_dict() for w in work])
         failed = 0
@@ -303,7 +363,7 @@ def run_auto_scan(store: HandsfreeStore, owner: str, max_cases: int = 10,
             try:
                 rec = _analyze_and_enqueue(store, ref.case_nbr,
                                            case_id=ref.case_id, subject=ref.subject,
-                                           owner_name=owner)
+                                           owner_name=owner or getattr(ref, "owner_name", ""))
                 if upd and reason.startswith("customer update"):
                     store.mark_customer_update(ref.case_nbr, upd)
                 summary["cases"].append({"case_nbr": ref.case_nbr, "reason": reason,
@@ -323,12 +383,14 @@ def run_auto_scan(store: HandsfreeStore, owner: str, max_cases: int = 10,
         else:
             stamp = started.strftime("%Y-%m-%dT%H:%M:%SZ")
             scan_times = dict(store.load_config().get("auto_last_scan_by_owner") or {})
-            scan_times[owner_key] = stamp
-            store.save_config({"auto_last_scan_at": stamp,
-                               "auto_last_scan_by_owner": scan_times,
-                               "auto_last_result": result})
+            scan_times[scan_key] = stamp
+            updates_cfg = {"auto_last_scan_by_owner": scan_times, "auto_last_result": result}
+            if not list_view:
+                updates_cfg["auto_last_scan_at"] = stamp
+            store.save_config(updates_cfg)
         _set_state(status="done", finished_at=time.time())
-        _log_event("auto-scan complete — review the queue below")
+        _log_event("auto-scan complete — review the queue below"
+                   + (" (trial drafts cannot be posted)" if trial else ""))
     except Exception as e:
         print(f"[handsfree] auto-scan failed:\n{traceback.format_exc()}")
         summary.update(ok=False, error=f"{type(e).__name__}: {e}")
@@ -339,86 +401,6 @@ def run_auto_scan(store: HandsfreeStore, owner: str, max_cases: int = 10,
     finally:
         _run_lock.release()
     return summary
-
-
-def select_trial_cases(refs: list, ledger_lookup, max_cases: int,
-                       skip_analyzed: bool = True) -> list:
-    """Which list-view cases a trial batch runs: in list order, skipping the
-    ones already analyzed (ledger) so repeated batches walk through the
-    historical list, capped. Pure."""
-    out = []
-    for ref in refs:
-        if skip_analyzed and ledger_lookup(ref.case_nbr):
-            continue
-        out.append(ref)
-        if len(out) >= max_cases:
-            break
-    return out
-
-
-def run_trial_batch(store: HandsfreeStore, list_view: str, max_cases: int,
-                    skip_analyzed: bool = True) -> dict:
-    """Tuning run on the cases of an IPS list view (open or closed), one
-    after another; drafts land in the queue flagged "trial" (never posted).
-    Caller holds _run_lock."""
-    _set_state(status="running", owner=None, mode="trial-batch",
-               started_at=time.time(), events=[], cases=[], error=None)
-    summary: dict = {"ok": True, "cases": []}
-    try:
-        _log_event(f"trial batch: reading IPS list view '{list_view}'")
-        refs = IpsClient().list_view_cases(list_view)
-        work = select_trial_cases(refs, store.ledger_entry, max_cases, skip_analyzed)
-        _log_event(f"{len(refs)} case(s) in the list view, "
-                   f"{len(work)} to run this batch"
-                   + (" (already-analyzed cases skipped)" if skip_analyzed else ""))
-        _set_state(cases=[r.to_dict() for r in work])
-        for ref in work:
-            _log_event(f"analyzing case {ref.case_nbr} [{ref.status or 'state ?'}] — "
-                       f"{ref.subject[:60]}")
-            try:
-                rec = _analyze_and_enqueue(store, ref.case_nbr,
-                                           case_id=ref.case_id, subject=ref.subject)
-                summary["cases"].append({"case_nbr": ref.case_nbr,
-                                         "mode": rec.get("mode") if rec else "unsupported"})
-            except Exception as e:
-                print(f"[handsfree] trial case {ref.case_nbr} failed:\n"
-                      f"{traceback.format_exc()}")
-                _log_event(f"[{ref.case_nbr}] FAILED: {type(e).__name__}: {e}")
-                summary["cases"].append({"case_nbr": ref.case_nbr, "mode": "error"})
-        _set_state(status="done", finished_at=time.time())
-        _log_event("trial batch complete — review the queue below (trial drafts "
-                   "cannot be posted)")
-    except Exception as e:
-        print(f"[handsfree] trial batch failed:\n{traceback.format_exc()}")
-        summary.update(ok=False, error=f"{type(e).__name__}: {e}")
-        _set_state(status="error", error=f"{type(e).__name__}: {e}",
-                   finished_at=time.time())
-        _log_event(f"trial batch FAILED: {e}")
-    return summary
-
-
-def start_trial_run(list_view: str = "", max_cases: int = 0,
-                    skip_analyzed: bool = True) -> dict:
-    """UI trigger for a trial batch (Settings → Run trial batch)."""
-    store = _store()
-    cfg = store.load_config()
-    if not cfg.get("trial_mode"):
-        return {"ok": False, "error": "enable trial mode in Settings first"}
-    list_view = (list_view or cfg.get("trial_list_view") or "").strip()
-    if not list_view:
-        return {"ok": False, "error": "no list view name configured"}
-    max_cases = int(max_cases or cfg.get("trial_max_cases") or 5)
-    if not _run_lock.acquire(blocking=False):
-        return {"ok": False, "error": "a run is already in progress"}
-
-    def _run():
-        try:
-            run_trial_batch(store, list_view, max_cases, skip_analyzed)
-        finally:
-            _run_lock.release()
-
-    threading.Thread(target=_run, daemon=True, name="handsfree-trial").start()
-    return {"ok": True, "list_view": list_view, "max_cases": max_cases}
 
 
 def start_case_run(case_nbr: str) -> dict:

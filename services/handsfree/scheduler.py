@@ -5,6 +5,9 @@ Config (HandsfreeStore config.json):
     auto_check_enabled   bool
     auto_check_mode      "4h" | "8h" | "nightly"   (nightly = every day 23:00 local)
     auto_check_max_cases int                        cases per round (newest first)
+    auto_source          "owner" | "list_view"      what a round scans (default owner)
+    auto_list_view       str                        IPS list view developer name
+                                                    (closed cases run only in trial mode)
     auto_next_run_at     ISO local                  persisted so a restart resumes
     auto_last_scan_at    ISO UTC                    written by run_auto_scan
     auto_last_result     str                        "<n> case(s) run" / "failed: …"
@@ -48,6 +51,29 @@ def _store():
     return orchestrator_store()
 
 
+def _source(cfg: dict) -> str:
+    return "list_view" if cfg.get("auto_source") == "list_view" else "owner"
+
+
+def _list_view(cfg: dict) -> str:
+    # trial_list_view: where the name lived while the list view was a
+    # Settings/trial-batch thing (before 2026-10-14).
+    return str(cfg.get("auto_list_view") or cfg.get("trial_list_view") or "").strip()
+
+
+def scan_target(cfg: dict) -> dict:
+    """What a round scans, from the config:
+    {"owner": str, "list_view": str, "error": str} — error set when the
+    chosen source is not configured."""
+    if _source(cfg) == "list_view":
+        lv = _list_view(cfg)
+        return {"owner": "", "list_view": lv,
+                "error": "" if lv else "no IPS list view name configured"}
+    owner = (cfg.get("owner_name") or "").strip()
+    return {"owner": owner, "list_view": "",
+            "error": "" if owner else "no owner name configured"}
+
+
 def status(cfg: Optional[dict] = None) -> dict:
     cfg = cfg if cfg is not None else _store().load_config()
     return {
@@ -55,6 +81,8 @@ def status(cfg: Optional[dict] = None) -> dict:
         "mode": cfg.get("auto_check_mode") or "nightly",
         "mode_label": MODES.get(cfg.get("auto_check_mode") or "nightly", ""),
         "max_cases": int(cfg.get("auto_check_max_cases") or 10),
+        "source": _source(cfg),
+        "list_view": _list_view(cfg),
         "next_run_at": cfg.get("auto_next_run_at") or "",
         "last_scan_at": cfg.get("auto_last_scan_at") or "",
         "last_result": cfg.get("auto_last_result") or "",
@@ -63,15 +91,37 @@ def status(cfg: Optional[dict] = None) -> dict:
     }
 
 
-def configure(enabled: bool, mode: str, max_cases: Optional[int] = None) -> dict:
-    """Start / stop / re-cadence from the UI. Returns the new status."""
+def _settings_updates(max_cases=None, source=None, list_view=None) -> dict:
+    updates: dict = {}
+    if max_cases is not None:
+        updates["auto_check_max_cases"] = max(1, min(50, int(max_cases)))
+    if source is not None:
+        updates["auto_source"] = "list_view" if str(source) == "list_view" else "owner"
+    if list_view is not None:
+        updates["auto_list_view"] = str(list_view).strip()
+    return updates
+
+
+def save_settings(max_cases=None, source=None, list_view=None) -> dict:
+    """Persist the round settings without touching the schedule (UI 'Run
+    now' with edited fields). Returns the config."""
+    return _store().save_config(_settings_updates(max_cases, source, list_view))
+
+
+def configure(enabled: bool, mode: str, max_cases: Optional[int] = None,
+              source=None, list_view=None) -> dict:
+    """Start / stop / re-cadence from the UI. Returns the new status.
+    Raises ValueError for an unknown mode or, when starting, an unconfigured
+    source (no owner name / no list view name)."""
     store = _store()
     if mode not in MODES:
         raise ValueError(f"unknown mode: {mode}")
     updates: dict = {"auto_check_enabled": bool(enabled), "auto_check_mode": mode}
-    if max_cases is not None:
-        updates["auto_check_max_cases"] = max(1, min(50, int(max_cases)))
+    updates.update(_settings_updates(max_cases, source, list_view))
     if enabled:
+        target = scan_target({**store.load_config(), **updates})
+        if target["error"]:
+            raise ValueError(target["error"])
         updates["auto_next_run_at"] = next_run_after(
             mode, datetime.now().astimezone(), first=True).isoformat(timespec="seconds")
     else:
@@ -87,13 +137,14 @@ def run_once(trigger: str = "manual") -> dict:
     from .orchestrator import run_auto_scan
     store = _store()
     cfg = store.load_config()
-    owner = (cfg.get("owner_name") or "").strip()
-    if not owner:
-        return {"ok": False, "error": "no owner name configured"}
+    target = scan_target(cfg)
+    if target["error"]:
+        return {"ok": False, "error": target["error"]}
     _running.set()
     try:
-        res = run_auto_scan(store, owner, int(cfg.get("auto_check_max_cases") or 10),
-                            trigger=trigger)
+        res = run_auto_scan(store, target["owner"],
+                            int(cfg.get("auto_check_max_cases") or 10),
+                            trigger=trigger, list_view=target["list_view"])
     finally:
         _running.clear()
     busy = not res.get("ok") and "already in progress" in str(res.get("error", ""))

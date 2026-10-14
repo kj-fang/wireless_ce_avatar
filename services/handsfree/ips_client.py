@@ -41,6 +41,7 @@ class CaseRef:
     status: str = ""
     created: str = ""       # ISO from Salesforce
     owner_name: str = ""
+    closed: object = None   # True/False when known (IsClosed), None otherwise
 
     def to_dict(self) -> dict:
         return asdict(self)
@@ -215,7 +216,7 @@ class IpsClient:
 
     def list_view_cases(self, list_view_name: str, limit: int = 200) -> list[CaseRef]:
         """Cases of a Salesforce Case list view (by developer name), open or
-        closed — used by trial runs on historical cases for tuning."""
+        closed — the list-view source of the automatic analysis."""
         lv_id, url, params = None, "/services/data/v{ver}/sobjects/Case/listviews", \
             {"limit": 200}
         while url and lv_id is None:
@@ -247,7 +248,34 @@ class IpsClient:
                 created=str(cols.get("CreatedDate") or ""),
                 owner_name=str(cols.get("Owner.Name") or cols.get("OwnerId") or ""),
             ))
+        self._fill_case_states(out)
         return out
+
+    def _fill_case_states(self, refs: list) -> None:
+        """Open/closed state (+ Status, CreatedDate) of list-view cases: a
+        list view only returns the columns it displays, so query the Case
+        object for them. Best effort — on failure the refs keep closed=None
+        and callers fall back to the Status text."""
+        by_id = {r.case_id: r for r in refs if r.case_id}
+        ids = list(by_id)
+        for start in range(0, len(ids), 150):
+            chunk = ", ".join(f"'{_soql_quote(i)}'" for i in ids[start:start + 150])
+            soql = f"SELECT Id, IsClosed, Status, CreatedDate FROM Case WHERE Id IN ({chunk})"
+            try:
+                resp = self._request("GET", "/services/data/v{ver}/query",
+                                     params={"q": soql}, timeout=60)
+                resp.raise_for_status()
+                records = resp.json().get("records", [])
+            except Exception as e:
+                print(f"[handsfree.ips] case state lookup failed: {e}")
+                return
+            for rec in records:
+                ref = by_id.get(str(rec.get("Id") or ""))
+                if ref is None:
+                    continue
+                ref.closed = bool(rec.get("IsClosed"))
+                ref.status = str(rec.get("Status") or ref.status)
+                ref.created = str(rec.get("CreatedDate") or ref.created)
 
     def find_open_cases(self, owner_name: str, limit: int = 200) -> list[CaseRef]:
         """All open cases assigned to `owner_name` (auto-scan candidates)."""

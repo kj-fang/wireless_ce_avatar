@@ -860,9 +860,9 @@ def smoke_runner(tmp: Path) -> None:
         store14e.mark_posted("01234567", comment_id="CMT-FR", first_response=True)
         rec14e = orch._analyze_and_enqueue(store14e, "01234567")
         cis.CaseService.process_case = staticmethod(_fake_process)
-        # Trial mode (Settings): tuning on historical / closed cases — a
-        # list-view batch runs the not-yet-analyzed cases in order, every
-        # draft is flagged trial and Approve refuses to post it.
+        # Trial mode (Settings) + the list-view source of the automatic
+        # analysis: already-analyzed cases are skipped, closed cases run only
+        # in trial mode, trial drafts are flagged and Approve refuses them.
         from .ips_client import CaseRef
         store14g = HandsfreeStore(tmp / "handsfree_s14g")
         store14g.save_config({"trial_mode": True, "post_backend": "rest"})
@@ -873,15 +873,19 @@ def smoke_runner(tmp: Path) -> None:
                 assert name == "Handsfree_replier_test_case"
                 return [CaseRef("00000001", "500A", "done before", status="Closed"),
                         CaseRef("01234567", "500B", "historical closed case", status="Closed"),
-                        CaseRef("00000003", "500C", "would be third", status="Open")]
+                        CaseRef("00000003", "500C", "open one", status="Open", closed=False)]
+
+            def find_customer_updates(self, case_ids, since_iso):
+                return {}
         orig_ips_cls = orch.IpsClient
         orch.IpsClient = _ListViewIps
         try:
-            picked = orch.select_trial_cases(
-                _ListViewIps().list_view_cases("Handsfree_replier_test_case"),
-                store14g.ledger_entry, max_cases=1)
-            summary = orch.run_trial_batch(store14g, "Handsfree_replier_test_case",
-                                           max_cases=1)
+            summary = orch.run_auto_scan(store14g, "", max_cases=1, trigger="manual",
+                                         list_view="Handsfree_replier_test_case")
+            store14h = HandsfreeStore(tmp / "handsfree_s14h")      # trial mode OFF
+            store14h.save_config({"trial_mode": False, "post_backend": "rest"})
+            summary_h = orch.run_auto_scan(store14h, "", max_cases=5, trigger="manual",
+                                           list_view="Handsfree_replier_test_case")
         finally:
             orch.IpsClient = orig_ips_cls
         trial_drafts = store14g.list_drafts(include_closed=True)
@@ -893,18 +897,22 @@ def smoke_runner(tmp: Path) -> None:
                 res_trial = orch.approve_and_post(trial_drafts[0]["draft_id"])
             finally:
                 orch._store = orig_store_fn
-        check("S14.f trial batch: analyzed case skipped, next list-view case run, "
-              "drafts flagged TRIAL, Approve refuses to post them",
-              [r.case_nbr for r in picked] == ["01234567"]
-              and summary["ok"] and [c["case_nbr"] for c in summary["cases"]] == ["01234567"]
+        check("S14.f list-view round in trial mode: analyzed case skipped, next (closed) "
+              "case run, drafts flagged TRIAL, Approve refuses to post them",
+              summary["ok"] and [c["case_nbr"] for c in summary["cases"]] == ["01234567"]
               and trial_drafts and all(d.get("trial") for d in trial_drafts)
               and res_trial is not None and res_trial["ok"] is False
               and "trial draft" in res_trial["error"],
-              f"picked={[r.case_nbr for r in picked]} summary={summary} "
-              f"trial={[d.get('trial') for d in trial_drafts]} res={res_trial}")
-        check("S14.f2 trial mode off -> drafts are not flagged",
-              not any(store14d.get(d['draft_id']).get('trial')
-                      for d in store14d.list_drafts(include_closed=True)))
+              f"summary={summary} trial={[d.get('trial') for d in trial_drafts]} res={res_trial}")
+        check("S14.f2 trial mode off: closed list-view cases skipped, the open one runs, "
+              "drafts not flagged; scan stamp kept per list view",
+              summary_h["ok"] and [c["case_nbr"] for c in summary_h["cases"]] == ["00000003"]
+              and not any(d.get("trial") for d in store14h.list_drafts(include_closed=True))
+              and "listview:handsfree_replier_test_case"
+              in (store14h.load_config().get("auto_last_scan_by_owner") or {})
+              and not any(store14d.get(d['draft_id']).get('trial')
+                          for d in store14d.list_drafts(include_closed=True)),
+              f"summary={summary_h} cfg={store14h.load_config().get('auto_last_scan_by_owner')}")
 
         check("S14.d later round: analysis only (no second overview); request reply "
               "asks for the logs without the checklist",
@@ -1091,6 +1099,38 @@ def smoke_auto_scan(tmp: Path) -> None:
           _parse_iso("2026-10-05T10:07:12.000+0000") == _parse_iso("2026-10-05T10:07:12Z")
           and _parse_iso("2026-10-05T18:07:12+08:00") == _parse_iso("2026-10-05T10:07:12Z")
           and _parse_iso("nope") is None and _parse_iso("") is None)
+
+    from .orchestrator import select_list_view_work
+    lv_cases = [
+        CaseRef("1", "500N", "never analyzed, open", status="Open"),
+        CaseRef("2", "500U", "analyzed, customer replied", status="Closed", closed=False),
+        CaseRef("3", "500Q", "analyzed, quiet", status="Open"),
+        CaseRef("4", "500C", "never analyzed, closed", status="Closed"),
+        CaseRef("5", "500X", "IsClosed wins over Status text", status="Open", closed=True),
+    ]
+    lv_ledger = {"2": {"analyzed_at": "2026-10-04T10:00:00+08:00"},
+                 "3": {"analyzed_at": "2026-10-04T10:00:00+08:00"}}
+    lv_work, lv_skipped = select_list_view_work(
+        lv_cases, {"500U": "2026-10-05T12:00:00.000+0000"}, lambda n: lv_ledger.get(n),
+        include_closed=False)
+    lv_work_all, lv_skipped_all = select_list_view_work(
+        lv_cases, {}, lambda n: lv_ledger.get(n), include_closed=True)
+    check("S16.d2 list-view source: never-analyzed + customer-updated cases in list order, "
+          "closed ones skipped unless trial mode (IsClosed beats the Status text)",
+          [(w[0].case_nbr, w[1].split(" at ")[0]) for w in lv_work]
+          == [("1", "not analyzed yet"), ("2", "customer update")] and lv_skipped == 2
+          and [w[0].case_nbr for w in lv_work_all] == ["1", "4", "5"] and lv_skipped_all == 0,
+          f"{[(w[0].case_nbr, w[1]) for w in lv_work]} skipped={lv_skipped} "
+          f"all={[w[0].case_nbr for w in lv_work_all]}")
+    from .scheduler import scan_target
+    check("S16.d3 scheduler target: owner by default, list view when chosen (legacy "
+          "trial_list_view honoured), errors when the chosen source is unconfigured",
+          scan_target({"owner_name": "Charles"}) == {"owner": "Charles", "list_view": "", "error": ""}
+          and scan_target({"auto_source": "list_view", "trial_list_view": "Old_view"})["list_view"] == "Old_view"
+          and scan_target({"auto_source": "list_view", "auto_list_view": "LV"})
+          == {"owner": "", "list_view": "LV", "error": ""}
+          and scan_target({"auto_source": "list_view"})["error"]
+          and scan_target({"auto_source": "owner"})["error"])
 
     tz = timezone.utc
     t = datetime(2026, 10, 6, 9, 30, tzinfo=tz)

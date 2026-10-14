@@ -203,6 +203,11 @@ def _apply_stored_answer(log_path) -> None:
     answer on its way out. The file keyed by log path is the durable record.
     """
     record = answer_for(log_path)
+    if _from_answered_upload(log_path):
+        # The upload this log came from was answered in this conversation, so
+        # that answer applies -- including over one stored against the log in
+        # an earlier conversation, which it is newer than.
+        record = answer_for(session.get("uploaded_source_path")) or record
     source = record.get("source")
     if source in (SKIPPED, EXPLICIT, DERIVED_FROM_PATH):
         # The restored answer is now this session's answer about this log.
@@ -331,11 +336,32 @@ def source_for_answer(case_nbr, claimed: str, log_path) -> str:
     return EXPLICIT
 
 
+def _from_answered_upload(log_path) -> bool:
+    """Whether this log came out of a local upload answered in this conversation.
+
+    The case is asked for once, where the work starts. A local upload or Send To
+    is answered about the file that was sent, but the chatbot then loads a file
+    made from it -- one extracted from the zip, the .log decoded from an .etl,
+    the .hci.txt of a BT log -- under a path nobody was asked about, so the same
+    question came up a second time inside the same piece of work.
+    """
+    uploaded = session.get("uploaded_source_path")
+    key = _log_key(uploaded)
+    return bool(key and key in _answered_this_session and _placeholder_is_for(log_path))
+
+
 def needs_ips(log_path) -> bool:
     """Whether the modal should block this log."""
     key = _log_key(log_path)
     if key and key in _answered_this_session:
         # Answered in this conversation, so only the session can have lost it.
+        _apply_stored_answer(log_path)
+        return False
+    if key and _from_answered_upload(log_path):
+        # The upload's answer is this log's answer for this conversation. It is
+        # not stored against the log: a skip stored that way would outlive the
+        # conversation and override a case given for the same upload later.
+        _mark_answered(key)
         _apply_stored_answer(log_path)
         return False
     if key and answer_for(log_path).get("source") == SKIPPED:

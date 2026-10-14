@@ -337,7 +337,12 @@
           </select>
         </label>
         <label>IPS list view:
-          <input type="text" id="auto-list-view" style="width: 240px; font-family: var(--mono); font-size: 12.5px;"
+          <select id="auto-list-view" style="max-width: 320px;" onchange="applyAutoListViewUi()"
+                  title="Case list views visible to the current IPS login">
+            <option value="">loading…</option>
+            <option value="__other__">other…</option>
+          </select>
+          <input type="text" id="auto-list-view-other" style="width: 240px; font-family: var(--mono); font-size: 12.5px; display: none;"
                  placeholder="developer name, e.g. Handsfree_replier_test_case">
         </label>
         <span class="status-line" id="auto-source-note"></span>
@@ -468,6 +473,7 @@
   function applyAutoSourceUi() {
     const lv = document.getElementById('auto-source').value === 'list_view';
     document.getElementById('auto-list-view').disabled = !lv;
+    document.getElementById('auto-list-view-other').disabled = !lv;
     const trial = document.getElementById('cfg-trial').checked;
     document.getElementById('auto-source-note').textContent = !lv ? '' : trial
       ? 'trial mode: closed cases included, drafts cannot be posted'
@@ -552,8 +558,7 @@
     if (document.activeElement !== maxEl) maxEl.value = a.max_cases || 10;
     const srcEl = document.getElementById('auto-source');
     if (document.activeElement !== srcEl) srcEl.value = a.source || 'owner';
-    const lvEl = document.getElementById('auto-list-view');
-    if (document.activeElement !== lvEl) lvEl.value = a.list_view || '';
+    setAutoListView(a.list_view || '');
     applyAutoSourceUi();
     document.getElementById('auto-toggle-text').textContent =
       autoEnabled ? 'Stop automatic analysis' : 'Start automatic analysis';
@@ -577,13 +582,76 @@
     } catch (e) {
       document.getElementById('auto-status').textContent = 'status unavailable: ' + e;
     }
+    loadListViews();
+  }
+
+  // ---------- IPS list view dropdown (+ "other…" typed fallback) ----------
+
+  let listViewsLoaded = false;
+
+  function currentAutoListView() {
+    const sel = document.getElementById('auto-list-view');
+    return sel.value === '__other__'
+      ? document.getElementById('auto-list-view-other').value.trim()
+      : sel.value;
+  }
+
+  // Select `name` in the dropdown; a name the listing does not know (or an
+  // unloaded listing) goes to the "other…" text input so it is never lost.
+  function setAutoListView(name) {
+    const sel = document.getElementById('auto-list-view');
+    const other = document.getElementById('auto-list-view-other');
+    if (document.activeElement === sel || document.activeElement === other) return;
+    const known = Array.from(sel.options).some(o => o.value === name && o.value !== '__other__');
+    if (name && !known) {
+      sel.value = '__other__';
+      other.value = name;
+    } else {
+      sel.value = name;
+      if (sel.value !== name) sel.value = sel.options.length ? sel.options[0].value : '';
+    }
+    applyAutoListViewUi();
+  }
+
+  function applyAutoListViewUi() {
+    const sel = document.getElementById('auto-list-view');
+    document.getElementById('auto-list-view-other').style.display =
+      sel.value === '__other__' ? '' : 'none';
+  }
+
+  function fillListViews(items, errorText) {
+    const sel = document.getElementById('auto-list-view');
+    const keep = currentAutoListView();
+    sel.innerHTML = '';
+    const add = (value, text) => {
+      const o = document.createElement('option');
+      o.value = value; o.textContent = text; sel.appendChild(o);
+    };
+    if (errorText) add('', 'list views unavailable: ' + errorText);
+    else if (!items.length) add('', 'no Case list views visible to this login');
+    items.forEach(v => add(v.developer_name, v.label + ' (' + v.developer_name + ')'));
+    add('__other__', 'other…');
+    setAutoListView(keep);
+  }
+
+  async function loadListViews() {
+    if (listViewsLoaded) return;
+    try {
+      const r = await fetch('/handsfree/list_views');
+      const j = await r.json();
+      if (j.error) { fillListViews([], j.error); return; }
+      fillListViews(j.items || []);
+      listViewsLoaded = true;
+    } catch (e) {
+      fillListViews([], String(e));
+    }
   }
 
   function autoRoundSettings() {
     return {
       max_cases: parseInt(document.getElementById('auto-max').value, 10) || 10,
       source: document.getElementById('auto-source').value,
-      list_view: document.getElementById('auto-list-view').value.trim(),
+      list_view: currentAutoListView(),
     };
   }
 

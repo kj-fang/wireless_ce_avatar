@@ -214,20 +214,34 @@ class IpsClient:
         return self._query_cases(
             build_new_cases_soql(owner_name, since_iso, limit, created_date))
 
-    def list_view_cases(self, list_view_name: str, limit: int = 200) -> list[CaseRef]:
-        """Cases of a Salesforce Case list view (by developer name), open or
-        closed — the list-view source of the automatic analysis."""
-        lv_id, url, params = None, "/services/data/v{ver}/sobjects/Case/listviews", \
-            {"limit": 200}
-        while url and lv_id is None:
+    def list_case_views(self, developer_name: Optional[str] = None) -> list[dict]:
+        """Case list views visible to the current login, as
+        [{"developer_name", "label", "id"}] in Salesforce order. Pages through
+        /sobjects/Case/listviews; with `developer_name` it stops at the first
+        page containing that view (the lookup list_view_cases needs)."""
+        out: list[dict] = []
+        url: Optional[str] = "/services/data/v{ver}/sobjects/Case/listviews"
+        params: Optional[dict] = {"limit": 200}
+        while url:
             resp = self._request("GET", url, params=params)
             resp.raise_for_status()
             d = resp.json()
             for lv in d.get("listviews", []):
-                if lv.get("developerName") == list_view_name:
-                    lv_id = lv.get("id")
-                    break
+                if not lv.get("id"):
+                    continue
+                out.append({"developer_name": str(lv.get("developerName") or ""),
+                            "label": str(lv.get("label") or lv.get("developerName") or ""),
+                            "id": str(lv.get("id"))})
+                if developer_name and out[-1]["developer_name"] == developer_name:
+                    return out
             url, params = d.get("nextRecordsUrl"), None
+        return out
+
+    def list_view_cases(self, list_view_name: str, limit: int = 200) -> list[CaseRef]:
+        """Cases of a Salesforce Case list view (by developer name), open or
+        closed — the list-view source of the automatic analysis."""
+        lv_id = next((v["id"] for v in self.list_case_views(list_view_name)
+                      if v["developer_name"] == list_view_name), None)
         if not lv_id:
             raise LookupError(f"list view not found: {list_view_name}")
         resp = self._request(

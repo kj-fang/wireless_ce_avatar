@@ -82,6 +82,17 @@ def auto_check():
         return jsonify({"ok": False, "error": str(e)}), 400
 
 
+@handsfree_bp.route("/list_views")
+def list_views():
+    """Case list views visible to the current IPS login, for the automatic-
+    analysis source dropdown. Never raises: {"items": [...]} or {"error": ...}."""
+    try:
+        from services.handsfree.ips_client import IpsClient
+        return jsonify({"items": IpsClient().list_case_views()})
+    except Exception as e:
+        return jsonify({"error": f"{type(e).__name__}: {e}"})
+
+
 @handsfree_bp.route("/auto/run_now", methods=["POST"])
 def auto_run_now():
     """One automatic round right away (same scan the schedule performs),

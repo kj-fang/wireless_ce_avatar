@@ -1132,6 +1132,48 @@ def smoke_auto_scan(tmp: Path) -> None:
           and scan_target({"auto_source": "list_view"})["error"]
           and scan_target({"auto_source": "owner"})["error"])
 
+    from .ips_client import IpsClient
+
+    class _Resp:
+        def __init__(self, body): self._body = body
+        def raise_for_status(self): pass
+        def json(self): return self._body
+
+    class _ListViewsIps(IpsClient):
+        pages = {
+            "/services/data/v{ver}/sobjects/Case/listviews": {
+                "listviews": [{"id": "00B1", "developerName": "My_cases", "label": "My cases"},
+                              {"id": "", "developerName": "ghost", "label": "no id"}],
+                "nextRecordsUrl": "/services/data/v{ver}/sobjects/Case/listviews?offset=2"},
+            "/services/data/v{ver}/sobjects/Case/listviews?offset=2": {
+                "listviews": [{"id": "00B2", "developerName": "Handsfree_replier_test_case"},
+                              {"id": "00B3", "developerName": "All", "label": "All"}]},
+        }
+        def __init__(self):
+            super().__init__()
+            self.calls = []
+        def _request(self, method, path, *, params=None, **kw):
+            self.calls.append((method, path, params))
+            return _Resp(self.pages[path])
+    lv_ips = _ListViewsIps()
+    views = lv_ips.list_case_views()
+    lv_ips2 = _ListViewsIps()
+    try:
+        lv_ips2.list_view_cases("Nope")
+        lv_err = ""
+    except LookupError as e:
+        lv_err = str(e)
+    check("S16.g list_case_views: pages through listviews, label falls back to the developer "
+          "name, id-less entries dropped; list_view_cases stops at the page holding the view "
+          "and still raises 'list view not found'",
+          [v["developer_name"] for v in views] == ["My_cases", "Handsfree_replier_test_case", "All"]
+          and views[1]["label"] == "Handsfree_replier_test_case" and views[0]["id"] == "00B1"
+          and len(lv_ips.calls) == 2 and lv_ips.calls[0][2] == {"limit": 200}
+          and lv_ips.calls[1][2] is None
+          and len(_ListViewsIps().list_case_views("My_cases")) == 1
+          and "list view not found: Nope" in lv_err and len(lv_ips2.calls) == 2,
+          f"views={views} calls={lv_ips.calls} err={lv_err!r}")
+
     tz = timezone.utc
     t = datetime(2026, 10, 6, 9, 30, tzinfo=tz)
     check("S16.f schedule: nightly -> next 23:00 (same day before, next day after); "

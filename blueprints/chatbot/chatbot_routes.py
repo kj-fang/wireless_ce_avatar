@@ -1858,7 +1858,9 @@ LINUX_PROFILE = AgentRouteProfile(
     agent_config_attr="linux_chatbot_agent",
     yaml_utils=_linux_yaml_utils,
     user_yaml_prefix="linux_skills_",
-    browse_filetypes=(("Log files", "*.log"), ("Text files", "*.txt"),
+    # First entry is the dialog's default filter: rotated logs (kern.log.1),
+    # logcat dumps (.txt) and extension-less syslog / messages must all show.
+    browse_filetypes=(("Linux logs", "*.log *.log.* *.txt syslog* messages* kern* dmesg* journal*"),
                       ("All files", "*.*")),
     gather_domain="linux",
     window_minutes_cap=100000,

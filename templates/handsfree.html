@@ -107,6 +107,8 @@
     #queue-table tbody tr { transition: background 200ms var(--ease); }
     #queue-table tbody tr:hover { background: rgba(69,184,240,0.06); cursor: pointer; }
     td.case-nbr { font-family: var(--mono); font-size: 12.5px; }
+    a.case-link { color: var(--accent, #4ea1ff); text-decoration: none; border-bottom: 1px dotted currentColor; }
+    a.case-link:hover { text-decoration: none; border-bottom-style: solid; }
     button.log-folder-btn { height: 26px; padding: 0 10px; font-size: 12px; white-space: nowrap; }
 
     /* ---------- pills ---------- */
@@ -426,6 +428,16 @@
   function esc(s) {
     return String(s ?? '').replace(/[&<>"']/g,
       c => ({'&':'&amp;','<':'&lt;','>':'&gt;','"':'&quot;',"'":'&#39;'}[c]));
+  }
+
+  // The IPS case page (same URL the UI poster opens). Only a real Salesforce
+  // case id (15/18 chars starting with 500) makes a link; otherwise plain text.
+  const IPS_CASE_URL = 'https://intel.lightning.force.com/lightning/r/Case/{id}/view';
+  function caseLink(caseNbr, caseId) {
+    const id = String(caseId || '');
+    if (!/^500[A-Za-z0-9]{12}([A-Za-z0-9]{3})?$/.test(id)) return esc(caseNbr);
+    return `<a class="case-link" href="${IPS_CASE_URL.replace('{id}', id)}" target="_blank" rel="noopener" ` +
+           `title="Open case ${esc(caseNbr)} in IPS" onclick="event.stopPropagation()">${esc(caseNbr)}</a>`;
   }
 
   // ---------- settings ----------
@@ -867,7 +879,7 @@
                       : it.status === 'pending_review' ? 'warn' : '';
       const tr = document.createElement('tr');
       tr.innerHTML =
-        `<td class="case-nbr">${esc(it.case_nbr)}</td>` +
+        `<td class="case-nbr">${caseLink(it.case_nbr, it.case_id)}</td>` +
         `<td>${esc(it.owner_name || '—')}</td>` +
         `<td>${esc((it.subject || '').slice(0, 70))}</td>` +
         `<td><span class="pill">${esc(it.mode || '')}</span>` +
@@ -1009,8 +1021,8 @@
     currentDraftId = d.draft_id;
     currentDraftMode = d.mode || null;
     document.getElementById('draft-panel').style.display = '';
-    document.getElementById('draft-title').textContent =
-      `case ${d.case_nbr} · ${d.mode} · ${d.status}`;
+    document.getElementById('draft-title').innerHTML =
+      `case ${caseLink(d.case_nbr, d.case_id)} · ${esc(d.mode)} · ${esc(d.status)}`;
     document.getElementById('draft-status').textContent =
       d.post_result && d.post_result.error ? ('last post attempt: ' + d.post_result.error) : '';
     document.getElementById('draft-text').value = d.draft_plain || '';

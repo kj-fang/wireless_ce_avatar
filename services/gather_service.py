@@ -83,6 +83,7 @@ from configs.llm_pricing import cost_for
 from configs.path_configs import GATHER_DIR_prim, GATHER_DIR_bkup
 from configs.version import __version__ as APP_VERSION
 from utils import helpers
+from utils import check_ips_utils
 
 
 # Bump when the record structure changes (downstream ETL keys off this).
@@ -451,6 +452,106 @@ def _case_domain(issue: Optional[dict], explicit: str = "") -> str:
     return value if value in {"wifi", "bt"} else UNKNOWN_DOMAIN
 
 
+_CASE_REF_SOURCES = {"explicit", "derived_from_path", "skipped", "absent"}
+
+
+def _with_case_ref(issue: Optional[dict]) -> Optional[dict]:
+    """The issue, with the session's case answer attached if it names none.
+
+    Most callers pass a chatbot's issue context, which carries case_nbr but
+    never case_ref_source -- it cannot, because the same dict is splatted into
+    prime_with_context(), which takes five fixed arguments. So a confirmed
+    "no case" never reached a Gather record: the source was inferred as
+    'absent', and the collector then fell back to reading a case folder out
+    of the log path, overriding the user's answer. The answer lives on the
+    session, and Gather writes happen on worker threads that cannot read it,
+    so it is taken here, on the calling request, before the work is handed
+    off. The caller's dict is copied, never changed.
+    """
+    if not isinstance(issue, dict) or issue.get("case_ref_source"):
+        return issue
+    try:
+        from flask import has_request_context
+        if not has_request_context():
+            return issue
+        from services import check_ips_service
+        if check_ips_service.current_source() == check_ips_service.SKIPPED:
+            return {**issue, "case_ref_source": "skipped"}
+        attached = check_ips_service.current_case_nbr()
+        if attached and attached == check_ips_utils.normalise_ips(issue.get("case_nbr")):
+            return {**issue, "case_ref_source": check_ips_service.attributed_source()}
+    except Exception:
+        pass
+    return issue
+
+
+def _carries_case_ref(fn):
+    """Decorate a public record_* entry point so its issue carries the answer."""
+    import functools
+    import inspect
+    signature = inspect.signature(fn)
+
+    @functools.wraps(fn)
+    def wrapper(*args, **kwargs):
+        # Only the binding is guarded. A TypeError raised by the recorder
+        # itself is a real failure, and catching it here would call the
+        # recorder a second time and write the record twice.
+        try:
+            bound = signature.bind_partial(*args, **kwargs)
+        except TypeError:
+            return fn(*args, **kwargs)
+        if "issue" in bound.arguments:
+            bound.arguments["issue"] = _with_case_ref(bound.arguments["issue"])
+        return fn(*bound.args, **bound.kwargs)
+    return wrapper
+
+
+def _refresh_case(record: dict, issue: Optional[dict], log_path: str = "") -> None:
+    """Rewrite a record's case and keep its case_ref_source in step with it.
+
+    Records are refreshed with the latest issue on later calls, and the case
+    used to be replaced while the source was left alone -- so a case could
+    change under a source describing a different one. The rule: a source the
+    issue states wins; if the case number changed, the source is inferred
+    again for the new one; otherwise the known source stays, because a later
+    call's issue (a chatbot's, say) usually states none and inferring from it
+    would replace a known answer with a guess.
+    """
+    if not issue:
+        return
+    previous = str((record.get("case") or {}).get("case_nbr") or "")
+    record["case"] = _clean_case(issue)
+    declared = str(issue.get("case_ref_source") or "").strip().lower() \
+        if isinstance(issue, dict) else ""
+    if declared in _CASE_REF_SOURCES:
+        record["case_ref_source"] = declared
+    elif not record.get("case_ref_source") or record["case"]["case_nbr"] != previous:
+        record["case_ref_source"] = _case_ref_source(
+            issue, log_path or record.get("log_path") or "")
+
+
+def _case_ref_source(issue: Optional[dict], log_path: str = "") -> str:
+    """
+    How this session came to be attached to its case number.
+
+    Kept alongside the number itself because "no case" and "a case we guessed
+    from the folder name" are not the same claim, and only the first should
+    count against the share of work that went untracked.
+    """
+    issue = issue if isinstance(issue, dict) else {}
+    declared = str(issue.get("case_ref_source") or "").strip().lower()
+    if declared in _CASE_REF_SOURCES:
+        return declared
+
+    nbr = str(issue.get("case_nbr") or "").strip()
+    if not nbr or check_ips_utils.is_synthetic_case_nbr(nbr):
+        return "absent"
+    canonical = check_ips_utils.normalise_ips(nbr)
+    if canonical and canonical == check_ips_utils.derive_ips_from_path(log_path):
+        return "derived_from_path"
+    return "explicit"
+
+
 def _clean_case(issue: Optional[dict]) -> dict:
     """Pull a tidy, compact case summary out of the issue context dict."""
     issue = issue if isinstance(issue, dict) else {}
@@ -458,7 +559,11 @@ def _clean_case(issue: Optional[dict]) -> dict:
     if len(desc) > _MAX_DESC_CHARS:
         desc = desc[:_MAX_DESC_CHARS] + "…"
     return {
-        "case_nbr": str(issue.get("case_nbr") or "").strip(),
+        # Zero-padded, so 1010628 and 01010628 are one case in the warehouse
+        # rather than two rows that every GROUP BY splits apart. Anything that
+        # is not a case number (a local_upload_ placeholder) is left alone.
+        "case_nbr": check_ips_utils.normalise_ips(issue.get("case_nbr"))
+                    or str(issue.get("case_nbr") or "").strip(),
         "subject": str(issue.get("subject") or "").strip(),
         "issue_type": str(issue.get("issue_type") or "").strip(),
         "description": desc,
@@ -494,6 +599,7 @@ def _new_record(
         "agent_domain": _agent_domain(domain),
         "case_domain": _case_domain(issue),
         "case": _clean_case(issue),
+        "case_ref_source": _case_ref_source(issue, log_path),
         "log_path": log_path or "",
         "issue_time": issue_time or "",
         # ±minutes window around issue_time used for the Segment2 log slice
@@ -761,8 +867,12 @@ def _load_or_new_workflow(
             record = None
     if not isinstance(record, dict):
         record = _new_workflow_record(workflow_id, user, issue, domain, attachment_list)
-    if issue:
-        record["case"] = _clean_case(issue)
+    # How the case was obtained, as on session records. Only sessions carried
+    # it, and every analysis -- Send To included -- is a workflow, so a run the
+    # user confirmed has no case was indistinguishable from one nobody asked
+    # about. Later calls (a chatbot invocation) pass an issue that states no
+    # source, so _refresh_case keeps the known one rather than re-inferring.
+    _refresh_case(record, issue)
     # Write-once. record_workflow_start runs first, on case load, and sets the
     # CASE's technology (wifi/bt). Everything after it — feature usage, the
     # conversation link — passes the domain of whichever AGENT is running, and
@@ -817,6 +927,7 @@ def _do_record_workflow_start(
     _maybe_rebuild_aggregates_async()
 
 
+@_carries_case_ref
 def record_workflow_start(
     *,
     workflow_id: str,
@@ -871,6 +982,7 @@ def _do_record_attachment_selection(
     _maybe_rebuild_aggregates_async()
 
 
+@_carries_case_ref
 def record_attachment_selection(
     *, workflow_id: str, selected_files: Optional[list] = None,
     issue: Optional[dict] = None, domain: str = "",
@@ -921,6 +1033,7 @@ def _do_record_attachment_declaration(
     _maybe_rebuild_aggregates_async()
 
 
+@_carries_case_ref
 def record_attachment_declaration(
     *, workflow_id: str, declared: Optional[bool] = None, source: str = "ai_summary",
     issue: Optional[dict] = None, domain: str = "",
@@ -1126,6 +1239,7 @@ def _do_record_attachment_download_result(
     _maybe_rebuild_aggregates_async()
 
 
+@_carries_case_ref
 def record_attachment_download_result(
     *, workflow_id: str, name: str, status: str,
     byte_count: Optional[int] = None, latency_ms: Optional[int] = None,
@@ -1202,6 +1316,7 @@ def _do_record_feature_usage(
     _maybe_rebuild_aggregates_async()
 
 
+@_carries_case_ref
 def record_feature_usage(
     *, workflow_id: str, feature_code: str, model: str = "",
     usage: Optional[dict] = None, issue: Optional[dict] = None,
@@ -1267,10 +1382,10 @@ def _do_record(
 
         # Refresh latest context (the user may have loaded a log / set a time
         # after the conversation started).
-        if issue:
-            record["case"] = _clean_case(issue)
         if log_path:
             record["log_path"] = log_path
+        # The case and its source move together; see _refresh_case.
+        _refresh_case(record, issue, log_path)
         if issue_time:
             record["issue_time"] = issue_time
         if issue_time_window_minutes is not None:
@@ -1380,6 +1495,7 @@ def _link_conversation_to_workflow(
         print(f"[gather] conversation link failed (workflow={workflow_id}): {e}")
 
 
+@_carries_case_ref
 def record_send(
     *,
     conversation_id: str,
@@ -1583,6 +1699,7 @@ def _do_record_usage(
     _maybe_rebuild_aggregates_async()
 
 
+@_carries_case_ref
 def record_usage(
     *,
     conversation_id: str,
@@ -1726,6 +1843,7 @@ def _do_record_turn_status(
     # and the record_usage that settles the same turn schedules one anyway.
 
 
+@_carries_case_ref
 def record_turn_status(
     *,
     conversation_id: str,
@@ -1797,6 +1915,7 @@ def _do_record_feedback_submit(
     # time, and Submit lands right after a turn that already scheduled one.
 
 
+@_carries_case_ref
 def record_feedback_submit(
     *,
     feedback_event_id: str,

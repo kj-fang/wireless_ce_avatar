@@ -7,6 +7,11 @@
     <link href="https://stackpath.bootstrapcdn.com/bootstrap/4.5.2/css/bootstrap.min.css" rel="stylesheet">
     <link href="https://fonts.googleapis.com/css2?family=Press+Start+2P&display=swap" rel="stylesheet">
     <script src="https://cdn.socket.io/3.1.3/socket.io.min.js" crossorigin="anonymous"></script>
+    <!-- Loaded before the page's own scripts: it wraps fetch to catch the
+         server's 428 "case number required" and replay the request. The local
+         upload on this page posts a path rather than the file, so the replay
+         does not re-send anything large. -->
+    <script src="{{ url_for('static', filename='js/check_ips_prompt.js') }}"></script>
     <style>
         * {
             font-family: 'Inter', sans-serif !important;
@@ -1524,5 +1529,7 @@
          title="Build: {{ app_build_date }}&#10;Branch: {{ app_git_branch }}&#10;Commit: {{ app_git_hash }}">
         v{{ app_version }}
     </div>
+
+    {% include "_api_key_error_modal.html" %}
 </body>
 </html>

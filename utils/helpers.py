@@ -13,6 +13,8 @@ import threading
 from pathlib import Path
 from typing import List
 
+from utils import check_ips_utils
+
 
 def to_long_path(path: str) -> str:
     """Return a Windows extended-length path to bypass the 260-char MAX_PATH limit.
@@ -100,12 +102,11 @@ def init_download_dir():
 
 def get_clipboard_case_number():
     text = pyperclip.paste()
-    text = text.strip().replace(" ", "")  # 
-
-    pattern = r"^\d{8}$"  # 
-    if not text or not re.match(pattern, text):
-        text = ""
-    return text.strip()
+    # normalise_ips also pads the seven-digit form people actually type, and
+    # rejects a YYYYMMDD date such as 20260923, which the previous ^\d{8}$
+    # accepted. A zero-led MMDDYYYY date still passes: it cannot be told from
+    # a real case number (see utils/check_ips_utils.py).
+    return check_ips_utils.normalise_ips(text)
 
 def detect_user_email():
     try:

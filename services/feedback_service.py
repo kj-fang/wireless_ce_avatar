@@ -32,6 +32,7 @@ from configs.global_configs import app_config
 from configs.path_configs import FEEDBACK_DIR_prim, FEEDBACK_DIR_bkup
 from configs.version import __version__ as APP_VERSION
 from utils import helpers
+from utils import check_ips_utils
 
 
 # ---------------------------------------------------------------------------
@@ -68,8 +69,15 @@ from utils import helpers
 #         counters, plus the packaged app_version that emitted the record.
 #   v6  - Added `submitted_by_email` (best-effort UPN/email attribution) on
 #         snapshot roots and all JSONL feedback events.
+#   v7  - Added `case_nbr` and `case_ref_source` on snapshot roots and all
+#         JSONL feedback events. Feedback never named the case it was about,
+#         so the warehouse had to look the conversation up in the snapshot and
+#         read a case folder out of its log_path -- which works for 172 of 203
+#         conversations and cannot distinguish a confirmed "no case" from one
+#         nobody asked about. Both fields are optional to readers: v6 and
+#         earlier records simply lack them.
 # ---------------------------------------------------------------------------
-RECORD_SCHEMA_VERSION = 6
+RECORD_SCHEMA_VERSION = 7
 
 
 # --- Storage location ----------------------------------------------------
@@ -296,6 +304,181 @@ def _resolve_domain(conversation_id: str, domain_hint: Any) -> str:
         if snap and "_domain" in snap:
             return snap["_domain"]
     return _norm_domain(domain_hint)
+
+
+def _case_ref(issue: Optional[dict] = None, log_path: str = "") -> dict:
+    """
+    The case this feedback is about, named at the moment it is given.
+
+    Nothing written here used to carry a case number, so the warehouse had to
+    recover one afterwards: look the conversation up in the snapshot file, read
+    a case folder out of its log_path, hope there is one. That works for 172 of
+    203 conversations and silently loses the rest, and it cannot tell a case
+    somebody confirmed from a case inferred off a folder name.
+
+    The session comes first because that is where the prompt puts the answer.
+    ``issue`` and ``log_path`` are fallbacks for calls made outside a request,
+    where there is no session to read -- a background flush, for instance.
+    """
+    try:
+        from services import check_ips_service
+        case_nbr = check_ips_service.current_case_nbr()
+        if case_nbr:
+            # attributed_source, not current_source: the latter answers "did
+            # the prompt set this", which is 'absent' for a case typed into
+            # the case search -- and the collector drops the number whenever
+            # the source says absent.
+            return {"case_nbr": case_nbr,
+                    "case_ref_source": check_ips_service.attributed_source()}
+        if check_ips_service.current_source() == check_ips_service.SKIPPED:
+            return {"case_nbr": "", "case_ref_source": check_ips_service.SKIPPED}
+    except Exception:
+        # No request context, or the session is unreadable. Fall through to
+        # the evidence that travelled with the record itself.
+        pass
+    return _case_ref_from_evidence(issue, log_path)
+
+
+def _case_ref_from_evidence(issue: Optional[dict] = None, log_path: str = "") -> dict:
+    """The case a record names by its own content, ignoring the session."""
+    issue = issue if isinstance(issue, dict) else {}
+    stated = check_ips_utils.normalise_ips(issue.get("case_nbr"))
+    if stated:
+        # A number that matches the folder the log sits in was not typed by
+        # anyone, so it is not an explicit claim.
+        derived = check_ips_utils.derive_ips_from_path(log_path)
+        return {"case_nbr": stated,
+                "case_ref_source": "derived_from_path" if stated == derived else "explicit"}
+
+    derived = check_ips_utils.derive_ips_from_path(log_path)
+    if derived:
+        return {"case_nbr": derived, "case_ref_source": "derived_from_path"}
+    return {"case_nbr": "", "case_ref_source": "absent"}
+
+
+# ---------------------------------------------------------------------------
+# Which case each conversation belongs to
+# ---------------------------------------------------------------------------
+# The session holds the case the user is working on *now*. Feedback is often
+# about a conversation that is not the current one -- a vote on a reloaded
+# history entry, or on the previous log after a new one was opened -- and
+# reading the session then stamps that feedback with the wrong case, or with
+# none. So each conversation's case is pinned the first time a turn is
+# recorded for it (and again when history is reloaded), and every feedback
+# record about that conversation reads the pin. The session is only the
+# fallback for a conversation nothing has been pinned for yet. New turns pin
+# synchronously before their work can move to a background thread.
+_conversation_case: dict = {}        # conversation_id -> {case_nbr, case_ref_source}
+_conversation_case_lock = threading.Lock()
+_MAX_PINNED_CONVERSATIONS = 2000
+
+
+def _pin_conversation_case(conversation_id: str, ref: dict) -> None:
+    if not conversation_id or not isinstance(ref, dict):
+        return
+    with _conversation_case_lock:
+        _conversation_case[conversation_id] = {
+            "case_nbr": str(ref.get("case_nbr") or ""),
+            "case_ref_source": str(ref.get("case_ref_source") or "absent"),
+        }
+        # Bounded: a long-running desktop session must not grow this forever.
+        while len(_conversation_case) > _MAX_PINNED_CONVERSATIONS:
+            _conversation_case.pop(next(iter(_conversation_case)))
+
+
+def pin_conversation_case_if_unset(conversation_id: str, ref: dict) -> None:
+    """Pin a conversation unless it is already pinned to a real answer."""
+    if not conversation_id or not isinstance(ref, dict):
+        return
+    with _conversation_case_lock:
+        held = dict(_conversation_case.get(conversation_id) or {})
+        if held.get("case_ref_source") not in (None, "", "absent"):
+            return
+        _conversation_case[conversation_id] = {
+            "case_nbr": str(ref.get("case_nbr") or ""),
+            "case_ref_source": str(ref.get("case_ref_source") or "absent"),
+        }
+        while len(_conversation_case) > _MAX_PINNED_CONVERSATIONS:
+            _conversation_case.pop(next(iter(_conversation_case)))
+
+
+def _case_ref_for(conversation_id: str, issue: Optional[dict] = None,
+                  log_path: str = "") -> dict:
+    """The case a record about this conversation belongs to.
+
+    A pin that names a case, or a confirmed skip, wins over the session. An
+    'absent' pin does not: the case may have been answered since.
+    """
+    with _conversation_case_lock:
+        pinned = dict(_conversation_case.get(conversation_id) or {})
+    if pinned.get("case_ref_source") not in (None, "", "absent"):
+        return pinned
+    return _case_ref(issue, log_path)
+
+
+def remember_conversation_case(conversation_id: str, conversation: Optional[dict]) -> None:
+    """Pin a reloaded conversation to the case it was recorded under.
+
+    Called when history is reloaded, which puts the conversation's issue back
+    on the agent but not its case on the session. Without this, a vote on the
+    reloaded conversation would be stamped with whatever case the session
+    happens to hold.
+    """
+    conv = conversation if isinstance(conversation, dict) else {}
+    stated_nbr = check_ips_utils.normalise_ips(conv.get("case_nbr"))
+    stated_source = str(conv.get("case_ref_source") or "").strip().lower()
+    if stated_source == "skipped":
+        ref = {"case_nbr": "", "case_ref_source": "skipped"}
+    elif stated_nbr and stated_source in ("explicit", "derived_from_path"):
+        ref = {"case_nbr": stated_nbr, "case_ref_source": stated_source}
+    else:
+        # The reloaded snapshot states no source -- history snapshots do not
+        # carry the v7 root fields, and their issue comes from a chatbot's
+        # context, which never does. Inferring from it turned a confirmed skip
+        # into 'absent', or into the case folder the log sits under, and the
+        # unconditional re-pin then threw away the right answer. Better
+        # evidence comes first: a pin this process already holds, then the
+        # answer stored against the log, which survives a restart.
+        with _conversation_case_lock:
+            held = dict(_conversation_case.get(conversation_id) or {})
+        if held.get("case_ref_source") not in (None, "", "absent"):
+            return
+        ref = _stored_answer_ref(conv.get("log_path", ""),
+                                 not_after=conv.get("updated_at")) or \
+            _case_ref_from_evidence(conv.get("issue"), conv.get("log_path", ""))
+    _pin_conversation_case(conversation_id, ref)
+
+
+def _stored_answer_ref(log_path: str, not_after=None) -> dict:
+    """The answer the prompt stored for this log, as a case reference, or {}.
+
+    The store is keyed by log path and overwritten when the same log is later
+    attached to a different case. So for a reloaded conversation it is only
+    evidence if it was given before that conversation last changed
+    (``not_after``); a later answer belongs to a later conversation, and taking
+    it would stamp this one's feedback with the wrong case. Without a usable
+    time on either side it is not used at all.
+    """
+    try:
+        from services import check_ips_service
+        record = check_ips_service.answer_for(log_path)
+    except Exception:
+        return {}
+    if not_after is not None:
+        try:
+            given = datetime.fromisoformat(str(record.get("at")))
+            limit = datetime.fromisoformat(str(not_after))
+            if given.tzinfo is None or limit.tzinfo is None or given > limit:
+                return {}
+        except (TypeError, ValueError):
+            return {}
+    source = record.get("source")
+    if source == "skipped":
+        return {"case_nbr": "", "case_ref_source": "skipped"}
+    nbr = check_ips_utils.normalise_ips(record.get("case_nbr"))
+    if nbr and source in ("explicit", "derived_from_path"):
+        return {"case_nbr": nbr, "case_ref_source": source}
+    return {}
 
 
 def _feedback_log_path(domain: str = "") -> Path:
@@ -679,6 +862,11 @@ def _new_snapshot(conversation_id: str, session_id: str,
         "ended_at": _now_iso(),
         "log_path": _scrub_user_path(log_path or ""),
         "issue": issue or {},
+        # The snapshot is the record the warehouse used to reverse-engineer a
+        # case number from. It still carries the evidence, but it now states
+        # the conclusion too, and can do so outside a request because the
+        # issue dict and the log path travel with it.
+        **_case_ref_for(conversation_id, issue, log_path),
         "turns": [],
         "skill_set_summary": [],
     }
@@ -739,6 +927,28 @@ def ensure_conversation(
             )
     except Exception as e:
         print(f"[feedback] ensure_conversation failed: {e}")
+
+
+def begin_turn(conversation_id: str, issue: Optional[dict] = None,
+               log_path: str = "") -> None:
+    """Freeze the case reference before a turn can move to a worker thread.
+
+    A later request may attach a different log while this turn is still
+    running. Recording the case only when the worker finishes would then read
+    that newer session and attribute the old turn to the wrong case.
+    """
+    if not conversation_id:
+        return
+    try:
+        pin_conversation_case_if_unset(
+            conversation_id, _case_ref(issue, log_path))
+        ref = _case_ref_for(conversation_id, issue, log_path)
+        with _pending_lock:
+            snap = _pending_buffer.get(conversation_id)
+            if snap is not None:
+                snap.update(ref)
+    except Exception as e:
+        print(f"[feedback] begin_turn failed: {e}")
 
 
 def record_turn(
@@ -815,6 +1025,15 @@ def record_turn(
                 snap["domain"] = norm or "wifi"
             if issue:
                 snap["issue"] = issue
+            # The snapshot is created by /set_log, which runs before the user
+            # answers the case prompt, so its root case fields were written as
+            # 'absent' and never revisited -- leaving the one record this whole
+            # change exists to make traceable with no case on it. Refresh them
+            # on every turn, while there is still a request to read them from.
+            _turn_ref = _case_ref_for(conversation_id, snap.get("issue"),
+                                      snap.get("log_path", ""))
+            snap.update(_turn_ref)
+            _pin_conversation_case(conversation_id, _turn_ref)
             if log_path:
                 snap["log_path"] = _scrub_user_path(log_path)
             snap["ended_at"] = _now_iso()
@@ -861,12 +1080,24 @@ def record_vote(
 
     eff_domain = _resolve_domain(conversation_id, domain)
     weight = _feedback_weight(has_detail=False, yaml_modified=bool(yaml_modified))
+    # Resolved once, so the JSONL event and the snapshot cannot disagree about
+    # which case this vote was about. The snapshot's own issue and log path are
+    # the evidence if the conversation was never pinned.
+    with _pending_lock:
+        _snap = _pending_buffer.get(conversation_id) or {}
+        _evidence = (dict(_snap.get("issue") or {}), str(_snap.get("log_path") or ""))
+    ref = _case_ref_for(conversation_id, *_evidence)
     event = {
         "schema_version": RECORD_SCHEMA_VERSION,
         "ts": _now_iso(),
         "session_id": session_id or "",
         "submitted_by": _current_user(),
         "submitted_by_email": _current_user_email() or None,
+        # Which case this feedback is about. Written here rather than
+        # recovered downstream from the log path, which cannot see a
+        # case the user typed and cannot tell a confirmed "no case"
+        # from one nobody asked about.
+        **ref,
         "domain": eff_domain or "wifi",
         "conversation_id": conversation_id,
         "turn_id": turn_id,
@@ -880,6 +1111,10 @@ def record_vote(
     with _pending_lock:
         snap = _pending_buffer.get(conversation_id)
         if snap is not None:
+            # A vote is the usual trigger for the flush that writes this
+            # snapshot to disk. Stamp it with the conversation's case -- not
+            # the session's, which may by now be about a different log.
+            snap.update(ref)
             for t in snap.get("turns", []):
                 if t.get("turn_id") == turn_id:
                     if vote == 0:
@@ -1309,6 +1544,11 @@ def record_detail(
         "session_id": session_id or "",
         "submitted_by": _current_user(),
         "submitted_by_email": _current_user_email() or None,
+        # Which case this feedback is about. Written here rather than
+        # recovered downstream from the log path, which cannot see a
+        # case the user typed and cannot tell a confirmed "no case"
+        # from one nobody asked about.
+        **_case_ref_for(conversation_id),
         "domain": eff_domain or "wifi",
         "conversation_id": conversation_id,
         "turn_id": turn_id,
@@ -1495,6 +1735,11 @@ def record_step_vote(
         "session_id": session_id or "",
         "submitted_by": _current_user(),
         "submitted_by_email": _current_user_email() or None,
+        # Which case this feedback is about. Written here rather than
+        # recovered downstream from the log path, which cannot see a
+        # case the user typed and cannot tell a confirmed "no case"
+        # from one nobody asked about.
+        **_case_ref_for(conversation_id),
         "domain": eff_domain or "wifi",
         "conversation_id": conversation_id,
         "turn_id": turn_id,
@@ -1558,6 +1803,11 @@ def record_helpful_skill(
         "session_id": session_id or "",
         "submitted_by": _current_user(),
         "submitted_by_email": _current_user_email() or None,
+        # Which case this feedback is about. Written here rather than
+        # recovered downstream from the log path, which cannot see a
+        # case the user typed and cannot tell a confirmed "no case"
+        # from one nobody asked about.
+        **_case_ref_for(conversation_id),
         "domain": eff_domain or "wifi",
         "conversation_id": conversation_id,
         "turn_id": turn_id,
@@ -1631,6 +1881,11 @@ def record_skill_assessment(
         "session_id": session_id or "",
         "submitted_by": _current_user(),
         "submitted_by_email": _current_user_email() or None,
+        # Which case this feedback is about. Written here rather than
+        # recovered downstream from the log path, which cannot see a
+        # case the user typed and cannot tell a confirmed "no case"
+        # from one nobody asked about.
+        **_case_ref_for(conversation_id),
         "domain": eff_domain or "wifi",
         "conversation_id": conversation_id,
         "turn_id": turn_id,

@@ -53,8 +53,9 @@ from configs.version import __version__, BUILD_DATE, GIT_HASH, GIT_BRANCH
 #from blueprints.main import main_bp
 #from blueprints.attachment import attachment_bp
 #from blueprints.log_analysis import log_bp
-from blueprints import automation_bp, main_bp, llm_bp, download_bp, analysis_etl_bp, bsod_bp, log_parser_bp, log_chatbot_bp, bt_chatbot_bp, nw_analysis_bp, feedback_bp, handsfree_bp # , attachment_bp, log_bp,
+from blueprints import automation_bp, main_bp, llm_bp, download_bp, analysis_etl_bp, bsod_bp, log_parser_bp, log_chatbot_bp, bt_chatbot_bp, nw_analysis_bp, feedback_bp, handsfree_bp, check_ips_bp # , attachment_bp, log_bp,
 import blueprints.download.download_routes
+import blueprints.llm.llm_routes
 
 def _bring_chrome_to_front(server_pid):
     """Bring Avatar's Chrome browser to the foreground.
@@ -195,6 +196,12 @@ def create_app():
     app.config['SESSION_FILE_DIR'] = _session_dir
     app.config['SESSION_PERMANENT'] = False
     app.config['SESSION_USE_SIGNER'] = True   # sign the session-ID cookie for integrity
+    # False = write the session back only when the request changed it, so a
+    # slow request that touched nothing can't overwrite a case answer saved
+    # while it was in flight. (A request that *did* change the session still
+    # writes its stale copy; the answer survives because check_ips_service also keeps
+    # it per log file. Don't rely on this setting for other racy session state.)
+    app.config['SESSION_REFRESH_EACH_REQUEST'] = False
     Session(app)
 
     @app.context_processor
@@ -222,11 +229,13 @@ def create_app():
     app.register_blueprint(nw_analysis_bp)
     app.register_blueprint(feedback_bp)
     app.register_blueprint(handsfree_bp)
+    app.register_blueprint(check_ips_bp)
 
     # Register socketio
     blueprints.download.download_routes.register_socketio_handlers(socketio)
     blueprints.log_parser.log_parser_routes.register_socketio_handlers(socketio)
     blueprints.automation.automation_routes.register_socketio_handlers(socketio)
+    blueprints.llm.llm_routes.register_socketio_handlers(socketio)
 
     print("📋 Registered routes:")
     for rule in app.url_map.iter_rules():

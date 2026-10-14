@@ -209,6 +209,9 @@ BT_AGENT_POLICY = AgentCapabilityPolicy(
     profile="bt",
     disabled_tools=frozenset({"lookup_assert_code", "softAP_supported_channel"}),
     follow_up_max_steps=None,
+    # .hci.txt keeps the customer's clock. Unread today: BtLogAgentSystem
+    # overrides prime_with_context without calling super().
+    log_in_decode_host_clock=False,
 )
 # Linux Wi-Fi driver logs (dmesg/journalctl) have no Windows DSM/BIOS or
 # System-Event-Log concepts, so the tools that read those are disabled.

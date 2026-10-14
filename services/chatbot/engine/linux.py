@@ -16,13 +16,12 @@ Why not a thin re-export?
     ``BtLogAgentSystem`` — and relies on the domain-agnostic parts of the
     pipeline (Segment2 issue-time window + the skill keyword filter).
 
-Unlike BT's ``.hci.txt`` captures (already in the customer's local time) and
-Wi-Fi's ETL decode-host captures (always GMT+8, needing a customer-frame
-conversion), a Linux dmesg/journalctl capture is read straight off the
-reporting machine with no separate decode step, so it carries no decode-host
-offset either. ``prime_with_context`` is therefore NOT overridden here: the
-base class's timezone handling already degrades to a no-op when it can't
-detect a decode-host/customer split, which is exactly the Linux case.
+Unlike Wi-Fi's ETL decode-host captures (always GMT+8, needing a
+customer-frame conversion), a Linux dmesg/journalctl capture is read straight
+off the reporting machine with no separate decode step: its timestamps are
+the customer's clock, the same clock IPS reports. ``LINUX_AGENT_POLICY`` sets
+``log_in_decode_host_clock=False`` so ``prime_with_context`` never converts,
+even when a system_info.txt from the same case names a timezone.
 """
 
 from services.chatbot.engine.system import (

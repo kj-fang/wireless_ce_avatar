@@ -178,6 +178,11 @@ class AgentCapabilityPolicy:
     # cap them; BT never did, and matching that is deliberate rather than
     # an oversight — its .hci.txt follow-ups routinely re-fetch.
     follow_up_max_steps: int | None = 4
+    # Wi-Fi's .log is written in the ETL decode host's clock (GMT+8), so a
+    # customer-clock issue time is shifted into it. A log already in the
+    # customer's clock must be read as-is, even when a system_info.txt from
+    # the same case would name a timezone.
+    log_in_decode_host_clock: bool = True
 
 
 WIFI_AGENT_POLICY = AgentCapabilityPolicy()
@@ -207,11 +212,12 @@ BT_AGENT_POLICY = AgentCapabilityPolicy(
 )
 # Linux Wi-Fi driver logs (dmesg/journalctl) have no Windows DSM/BIOS or
 # System-Event-Log concepts, so the tools that read those are disabled.
-# Everything else mirrors Wi-Fi defaults, matching the Wi-Fi profile this
-# agent was built closest to.
+# They are read off the customer's machine with no decode step, so their
+# timestamps are already the customer's clock -- the same clock IPS reports.
 LINUX_AGENT_POLICY = AgentCapabilityPolicy(
     profile="linux",
     disabled_tools=frozenset({"lookup_assert_code", "softAP_supported_channel"}),
+    log_in_decode_host_clock=False,
 )
 
 
@@ -846,7 +852,8 @@ class WifiLogAgentSystem(
         aligned_attachment_time = attachment_time
         self.issue_time_customer = None
         self.issue_time_tz = ""
-        if attachment_time and self.current_log_path:
+        if (attachment_time and self.current_log_path
+                and self.capabilities.log_in_decode_host_clock):
             try:
                 from utils.issue_time_ai import determine_issue_time_frames
                 parsed_dt, is_time_only = parse_issue_time_string(attachment_time)

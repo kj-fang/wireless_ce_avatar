@@ -122,6 +122,8 @@ from utils import log_time_format
 from utils import skills_yaml_utils as _wifi_yaml_utils
 from utils.event_log_utils import find_event_log_for_log
 from utils.issue_time_ai import (
+    LINUX_WIFI_FOCUS,
+    IssueTimeFocus,
     build_issue_time_suggestions,
     find_nearest_event_error,
     realign_times_to_log,
@@ -208,6 +210,9 @@ class AgentRouteProfile:
     #: analysis thread mutates the ``_raw_log_cache`` pair that call reads.
     #: TODO(team): the guard is right for both — Wi-Fi just never got it.
     read_log_has_date_while_running: bool
+    #: What the AI issue-time suggestion samples first (``utils.issue_time_ai``).
+    #: ``None`` keeps the generic digest, which suits our own short decodes.
+    issue_time_focus: IssueTimeFocus | None = None
 
     # ---- derived: read the flags the UI config already declares ----
     @property
@@ -973,6 +978,9 @@ class AgentRoutes:
                 extra["tz_label"] = format_tz_label(_tz_name) if _tz_name else ""
             if self.profile.event_log_anchor:
                 extra["event_log_events"] = event_log_events
+            if self.profile.issue_time_focus is not None and log_path:
+                extra["focus"] = self.profile.issue_time_focus
+                extra["log_format"] = log_time_format.detect(log_path)
 
             payload = build_issue_time_suggestions(
                 text=text,
@@ -1867,6 +1875,8 @@ LINUX_PROFILE = AgentRouteProfile(
     reset_conversation_on_prepare=False,
     direct_log_suffixes=(),
     read_log_has_date_while_running=False,
+    # A multi-day kern.log or logcat: sample the Wi-Fi stack, not boot noise.
+    issue_time_focus=LINUX_WIFI_FOCUS,
 )
 
 log_chatbot_bp = create_agent_blueprint(WIFI_PROFILE)

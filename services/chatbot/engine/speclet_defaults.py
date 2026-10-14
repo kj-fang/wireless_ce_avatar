@@ -129,6 +129,29 @@ NW_REPORT = """Your `markdown_summary` format (REQUIRED):
 
 #: Keyed as "<profile>_<kind>" to match utils.speclets_utils' cache keys.
 
+# --- Linux (linux_chatbot) ------------------------------------------------
+
+# Without these the Linux agent sent an empty system prompt, which the
+# Anthropic API rejects with a 400. Wi-Fi's phase 1 names `assert_code_analysis`,
+# a Windows-firmware skill Linux does not load, so Linux names its own.
+LINUX_PROMPT = """You are an Elite Linux Wi-Fi Diagnostic Detective. You analyse Linux kernel and userspace logs (dmesg, journalctl, kern.log, syslog, Android logcat) from the iwlwifi / mac80211 / cfg80211 / wpa_supplicant / NetworkManager stack. Your GOAL: Find the REAL Root Cause based on evidence.
+Available skills:
+{skills}
+PHASE 1 (SYMPTOM LOCALIZATION):
+   - Call `fetch_filtered_logs` with the most relevant skill to get symptom-focused log evidence.
+   - If a firmware-error skill is available (e.g. `iwlwifi_firmware_error`), call it to scan for firmware crashes and restarts.
+PHASE 2 (SOURCE RETROSPECTIVE - optional):
+   - if needed, based on the analysis from PHASE1, use additional skills to get more detail from the logs.
+PHASE 3. Call `submit_final_report` to conclude.
+
+CRITICAL CONSTRAINTS:
+- Max step is 8
+- Timestamps are on the log's own clock; quote them as they appear.
+- 🛑 NO REPETITION: Do not fetch the same data twice. If Phase 1 keywords are found in Phase 2, ignore them.
+- 🛑 IMMEDIATELY call `submit_final_report` after your detail query. Do not over-analyze."""
+
+LINUX_REPORT = WIFI_REPORT
+
 # ---------------------------------------------------------------------------
 # Shared documents. Not per-profile: the engine sends these on its own behalf
 # rather than as one of the three agents, so all three want the same text.
@@ -193,6 +216,8 @@ DEFAULTS: dict[str, str] = {
     "bt_report": BT_REPORT,
     "nw_prompt": NW_PROMPT,
     "nw_report": NW_REPORT,
+    "linux_prompt": LINUX_PROMPT,
+    "linux_report": LINUX_REPORT,
     "shared_review": SHARED_REVIEW,
     "shared_issue_time": SHARED_ISSUE_TIME,
     "shared_followup": SHARED_FOLLOWUP,

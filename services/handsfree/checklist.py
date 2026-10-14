@@ -186,6 +186,16 @@ def deterministic_fills(analysis, fills: dict) -> None:
     if chosen and getattr(analysis, "mode", "") != "request_logs":
         note = chosen + (" (WRT logs extracted)" if log_ok else " (attached)")
         mark("required_log", r"WRT Log|WPP driver log", note)
+    # BSOD branch: the crash dump upload(s) the pipeline found (never when
+    # the reply itself asks for the dump).
+    dumps = list((getattr(analysis, "bsod", None) or {}).get("dumps") or [])
+    if dumps and getattr(analysis, "log_request_reason", "") != "no_dump":
+        mark("required_log", _DUMP_ITEM_RE.pattern,
+             "Y (included): " + ", ".join(dumps[:4]))
+        # The crash dump carries the crash time: never ask a BSOD reporter
+        # for a reproduction time when the dump is there (Charles, 2026-10-14).
+        mark("general_info", r"reproduction time|issue reproduction time",
+             "not required — the crash dump carries the crash time")
     # issue_times may be the runner's last-resort fallback to the attachment
     # upload time — that is not a customer-stated reproduction time. Domain
     # "exact time" questions (e.g. WowLAN wake-trigger time) are a different
@@ -227,19 +237,22 @@ List only the items that ARE provided.
 
 
 _WRT_ITEM_RE = re.compile(r"WRT Log|WPP driver log", re.IGNORECASE)
+_DUMP_ITEM_RE = re.compile(r"Kernel Dump|memory dump|minidump|crash dump", re.IGNORECASE)
 
 
 def llm_fill(llm, fills: dict, case_material: str, *,
-             lock_wrt_items: bool = False) -> None:
+             lock_wrt_items: bool = False, lock_dump_items: bool = False) -> None:
     """One LLM pass over the still-unfilled items. Mutates `fills`; any
     failure leaves items unfilled (the customer is simply asked again).
     lock_wrt_items: the pipeline established that no usable WRT/WPP log was
     provided (request_logs) — the text pass must not tick those items from
-    an attachment label, or the reply would contradict itself."""
+    an attachment label, or the reply would contradict itself.
+    lock_dump_items: same for the BSOD dump when the reply asks for it."""
     todo: list[tuple[str, dict]] = [
         (sec, e) for sec in ("general_info", "required_log", "required_info")
         for e in fills.get(sec, []) if not e["provided"]
-        and not (lock_wrt_items and _WRT_ITEM_RE.search(e["item"]))]
+        and not (lock_wrt_items and _WRT_ITEM_RE.search(e["item"]))
+        and not (lock_dump_items and _DUMP_ITEM_RE.search(e["item"]))]
     if not todo or llm is None:
         return
     items_block = "\n".join(f"{i + 1}. {e['item']}" for i, (_, e) in enumerate(todo))
@@ -297,7 +310,8 @@ def build_fills(analysis, llm=None) -> dict:
         ("=== CUSTOMER COMMENTS (oldest first) ===\n" + history) if history else "",
     ]))
     llm_fill(llm, fills, material,
-             lock_wrt_items=getattr(analysis, "mode", "") == "request_logs")
+             lock_wrt_items=getattr(analysis, "mode", "") == "request_logs",
+             lock_dump_items=getattr(analysis, "log_request_reason", "") == "no_dump")
     return fills
 
 

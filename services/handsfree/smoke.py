@@ -914,6 +914,172 @@ def smoke_runner(tmp: Path) -> None:
                           for d in store14d.list_drafts(include_closed=True)),
               f"summary={summary_h} cfg={store14h.load_config().get('auto_last_scan_by_owner')}")
 
+        # --- S18 BSOD branch (Charles, 2026-10-14): a BSOD case with a dump
+        # upload needs no issue time; the dumps go to the BSOD share and
+        # PotatoFarm is triggered (Avatar's BSOD flow); later rounds don't
+        # resubmit; without a dump the public reply asks for the dump.
+        print("[S18] BSOD branch")
+        from . import bsod as bsod_mod
+        bsod_dir = tmp / "bsod_share"
+        bsod_calls: list = []
+        orig_bsod = (bsod_mod.share_case_dir, bsod_mod.submit_to_potatofarm,
+                     bsod_mod._submissions_path, bsod_mod.handsfree_config)
+        bsod_cfg = {"trial_mode": False, "bsod_email": "owner@example.com",
+                    "bsod_result_wait_min": 0.05}
+        bsod_mod.share_case_dir = lambda case_nbr, backend_id="": str(bsod_dir / case_nbr)
+        parser_json = {"01032878_sku6_0x1a_memory": {
+            "bugcheck_str": "MEMORY_MANAGEMENT (1a)     # Any other values ...",
+            "bugcheck_code": "1a", "failure_bucket_id": "0x1a_41792_nt!MiDecommitHandlePageFileFormatPte",
+            "process_name": "backgroundTaskHost.exe", "dump_time": "2026-09-29T03:09:40.640000",
+            "version": "24.70.0.3", "drv_branch": "core24.70", "is_verifier_enabled": False,
+            "num_of_fw_asserts": 0, "is_driver_on_stack": False,
+            "is_wifi_driver_fault": False, "is_bt_driver_fault": False,
+            "stacks": [{"2": ["nt!KeBugCheckEx", "nt!MiDecommitHandlePageFileFormatPte", "nt!MiDeleteVa"]}],
+            "jira_id": None, "jira_decision": "no_update:JIRA filing not requested"}}
+
+        def _fake_submit(dumps_path, email, key=None):
+            bsod_calls.append((dumps_path, email))
+            Path(dumps_path).mkdir(parents=True, exist_ok=True)
+            (Path(dumps_path) / bsod_mod.RESULT_JSON).write_text(json.dumps(parser_json), encoding="utf-8")
+            (Path(dumps_path) / bsod_mod.RESULT_HTML).write_text("<html>report</html>", encoding="utf-8")
+            return {"ok": True, "status": 200, "detail": "queued"}
+        bsod_mod.submit_to_potatofarm = _fake_submit
+        bsod_mod._submissions_path = lambda: tmp / "bsod_submissions.json"
+        bsod_mod.handsfree_config = lambda: dict(bsod_cfg)
+
+        def _fake_process_bsod(case_ctx: CaseContext) -> CaseContext:
+            case_ctx = _fake_process(case_ctx)
+            case_ctx.subject = "[lenovo_wcl][WCL] BSOD related to WLAN driver"
+            case_ctx.description = ("Set Long Run on the test machine, and then "
+                                    "encounter BSOD with multiple error code.")
+            case_ctx.attachment_list = [
+                ["SKU15_0x9F_MEMORY.zip", "https://esft/x?FileName=SKU15_0x9F_MEMORY.zip",
+                 ["10/13/2026 11:44", "SKU15_0x9F_MEMORY.zip"]],
+                ["SKU6_0x1A_MEMORY.zip", "https://esft/x?FileName=SKU6_0x1A_MEMORY.zip",
+                 ["10/13/2026 09:01", "SKU6_0x1A_MEMORY.zip"]],
+            ]
+            case_ctx.env_detail = {"Computer Model": "WCL",
+                                   "Assert Error (32-bit value or NA)": "0x139/0x1E/0x9F/0x1A"}
+            return case_ctx
+
+        def _fake_process_bsod_nodump(case_ctx: CaseContext) -> CaseContext:
+            case_ctx = _fake_process_bsod(case_ctx)
+            case_ctx.attachment_list = []
+            return case_ctx
+
+        bsod_reader = json.dumps({
+            "clean_description": "BSOD during a long-run test, several bug checks.",
+            "issue_times": [], "issue_time_source": "",
+            "attachment_name": "SKU15_0x9F_MEMORY.zip", "attachment_reason": "memory dump",
+            "reasoning": "", "issue_domain": "BSOD", "issue_subcategory": "",
+            "missing_info": [{"item": "issue_time", "reason": "no failure time stated"}],
+            "action_owner": "Intel", "next_action": "Intel to analyze the dumps",
+        })
+
+        def _fake_dload_bsod(att_list, download_path, socketio):
+            Path(download_path).mkdir(parents=True, exist_ok=True)
+            for it in att_list:
+                target = Path(download_path) / it[0]
+                target.write_bytes(b"dump")
+                yield [str(target), it[0], False]
+
+        cis.CaseService.process_case = staticmethod(_fake_process_bsod)
+        fake_llm.chat_text = lambda messages, system_content=None: bsod_reader
+        adl.run_dload_threads = _fake_dload_bsod
+        try:
+            a_b1 = r.analyze_case("01032878")
+            a_b2 = r.analyze_case("01032878")          # same uploads -> no resubmit
+            bsod_cfg["trial_mode"] = True
+            bsod_mod._submissions_path = lambda: tmp / "bsod_submissions_trial.json"
+            a_b3 = r.analyze_case("01032878")          # trial: PotatoFarm not triggered
+            bsod_cfg["trial_mode"] = False
+            cis.CaseService.process_case = staticmethod(_fake_process_bsod_nodump)
+            a_b4 = r.analyze_case("01032878")          # no dump -> ask for it
+            # One upload's download stalls every round: retried once, then
+            # given up (never a multi-hour fetch on every round).
+            bsod_calls_b4 = list(bsod_calls)            # calls so far (S18.a-c)
+            cis.CaseService.process_case = staticmethod(_fake_process_bsod)
+            bsod_mod._submissions_path = lambda: tmp / "bsod_submissions_fail.json"
+            def _fake_dload_sku15_stalls(att_list, download_path, socketio):
+                ok_items = [it for it in att_list if "SKU15" not in str(it[0])]
+                for item in _fake_dload_bsod(ok_items, download_path, socketio):
+                    yield item
+            adl.run_dload_threads = _fake_dload_sku15_stalls
+            a_b5 = r.analyze_case("01032878")          # SKU6 submitted, SKU15 fails (1)
+            a_b6 = r.analyze_case("01032878")          # SKU15 retried, fails (2)
+            a_b7 = r.analyze_case("01032878")          # given up -> pending, no fetch
+        finally:
+            (bsod_mod.share_case_dir, bsod_mod.submit_to_potatofarm,
+             bsod_mod._submissions_path, bsod_mod.handsfree_config) = orig_bsod
+            cis.CaseService.process_case = staticmethod(_fake_process)
+            fake_llm.chat_text = lambda messages, system_content=None: reader_reply
+            adl.run_dload_threads = _fake_dload
+        from .composer import compose as compose_fn
+        from .checklist import build_fills as build_fills_fn
+        d_b1, d_b2, d_b3, d_b4 = (compose_fn(a)["plain"] for a in (a_b1, a_b2, a_b3, a_b4))
+        fills_b1 = build_fills_fn(a_b1)                  # llm=None -> deterministic only
+        dump_item = next((e for e in fills_b1.get("required_log", [])
+                          if "Kernel Dump" in e["item"]), {})
+        dump_item_b4 = next((e for e in build_fills_fn(a_b4).get("required_log", [])
+                             if "Kernel Dump" in e["item"]), {})
+        check("S18.a BSOD + dump upload: issue time not required, dumps downloaded to the "
+              "BSOD share and submitted to PotatoFarm once, private draft says so",
+              a_b1.mode == "bsod_submitted" and a_b1.bsod_case and a_b1.ok
+              and not any(m.get("item") == "issue_time" for m in a_b1.missing_info)
+              and a_b1.bsod.get("submitted")
+              and a_b1.bsod["dumps"] == ["SKU15_0x9F_MEMORY.zip", "SKU6_0x1A_MEMORY.zip"]
+              and bsod_calls_b4 == [(str(bsod_dir / "01032878"), "owner@example.com")]
+              and (bsod_dir / "01032878" / "SKU6_0x1A_MEMORY.zip").exists()
+              and [st.name for st in a_b1.stages if st.name.startswith("bsod")]
+              == ["bsod_dumps", "bsod_download", "bsod_submit", "bsod_result"]
+              and "PotatoFarm" in d_b1 and "owner@example.com" in d_b1 and "0x139" in d_b1,
+              f"mode={a_b1.mode} bsod={a_b1.bsod} calls={bsod_calls} "
+              f"missing={a_b1.missing_info} stages={[st.name for st in a_b1.stages]}")
+        check("S18.b second round, same uploads: no resubmission (bsod_pending)",
+              a_b2.mode == "bsod_pending" and len(bsod_calls_b4) == 1
+              and "already submitted" in d_b2.lower(),
+              f"mode={a_b2.mode} calls={len(bsod_calls)} draft={d_b2[:300]}")
+        check("S18.c trial mode: dumps downloaded but PotatoFarm not triggered",
+              a_b3.mode == "bsod_submitted" and not a_b3.bsod.get("submitted")
+              and "trial" in a_b3.bsod.get("skipped", "") and len(bsod_calls_b4) == 1
+              and "NOT triggered" in d_b3,
+              f"mode={a_b3.mode} bsod={a_b3.bsod} calls={len(bsod_calls)}")
+        check("S18.d BSOD without a dump: public reply asks for the memory dump (+ the "
+              "issue-time ask), not for WRT logs; the dump item is not ticked",
+              a_b4.mode == "request_logs" and a_b4.log_request_reason == "no_dump"
+              and "MEMORY.DMP" in d_b4 and "exact date and time" in d_b4
+              and "Intel wireless driver WRT logs" not in d_b4
+              and not dump_item_b4.get("provided"),
+              f"mode={a_b4.mode} reason={a_b4.log_request_reason} draft={d_b4[:400]}")
+        time_item = next((e for e in fills_b1.get("general_info", [])
+                          if "reproduction time" in e["item"].lower()), {})
+        check("S18.e first-response checklist ticks 'Kernel Dump' with the upload names and "
+              "does not ask for the reproduction time",
+              dump_item.get("provided") and "SKU15_0x9F_MEMORY.zip" in dump_item.get("value", "")
+              and time_item.get("provided") and "not required" in time_item.get("value", ""),
+              f"{dump_item} {time_item}")
+        res_b1 = a_b1.bsod.get("results") or []
+        check("S18.f PotatoFarm result picked up from the dump folder: bugcheck, bucket, "
+              "driver verdict and assessment in the private draft (also on the pending round)",
+              len(res_b1) == 1 and res_b1[0]["failure_bucket_id"].startswith("0x1a_41792")
+              and res_b1[0]["wifi_fault"] is False
+              and [st.name for st in a_b1.stages if st.name.startswith("bsod")]
+              == ["bsod_dumps", "bsod_download", "bsod_submit", "bsod_result"]
+              and "0x1a_41792_nt!MiDecommitHandlePageFileFormatPte" in d_b1
+              and "not at fault" in d_b1 and "not a WLAN driver issue" in d_b1
+              and "0x1a_41792" in d_b2 and (a_b2.bsod.get("results") or []),
+              f"results={res_b1} stages={[st.name for st in a_b1.stages]} d_b2={d_b2[:400]}")
+        d_b7 = compose_fn(a_b7)["plain"]
+        check("S18.g stalled download: the other upload is submitted, the stalled one is "
+              "retried once, then given up (named in the draft, never fetched again)",
+              a_b5.mode == "bsod_submitted" and a_b5.bsod.get("submitted")
+              and a_b6.mode == "bsod_pending" and a_b6.bsod.get("failed") == ["SKU15_0x9F_MEMORY.zip"]
+              and a_b7.mode == "bsod_pending"
+              and a_b7.bsod.get("failed") == ["SKU15_0x9F_MEMORY.zip"]
+              and "GAVE UP" in d_b7 and len(bsod_calls) == 2,
+              f"modes={a_b5.mode}/{a_b6.mode}/{a_b7.mode} failed6={a_b6.bsod.get('failed')} "
+              f"failed7={a_b7.bsod.get('failed')} calls={len(bsod_calls)} draft={d_b7[:300]}")
+
         check("S14.d later round: analysis only (no second overview); request reply "
               "asks for the logs without the checklist",
               modes14d == ["full"]

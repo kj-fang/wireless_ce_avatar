@@ -155,9 +155,114 @@ def _request_info_lines(analysis: CaseAnalysis) -> list[str]:
     return parts
 
 
+def _request_dump_lines(analysis: CaseAnalysis) -> list[str]:
+    """BSOD case without a crash dump: ask for the kernel/memory dump — the
+    PotatoFarm BSOD parser works on it; a WRT log is not what a BSOD needs.
+    Fixed template (posts PUBLICLY once approved)."""
+    parts = [
+        "Hello,",
+        "",
+        "Thank you for reporting this issue"
+        + (f" ({analysis.subject})" if analysis.subject else "") + ".",
+        "",
+        "To root-cause a BSOD we need the Windows crash dump of the failure — "
+        "it is what the kernel debugger analysis works on, and we could not "
+        "find one attached to this case.",
+        "",
+        "Could you please:",
+        "  1. Attach the kernel memory dump of the crash (C:\\Windows\\MEMORY.DMP), "
+        "or the minidumps from C:\\Windows\\Minidump, zipped — one archive per "
+        "failing system / SKU is ideal,",
+        "  2. Note the bug check (stop) code shown on the blue screen for each dump,",
+        "  3. Attach the archive(s) to this case.",
+        "",
+        "We will start the analysis as soon as the dump is available. Thank you!",
+    ]
+    tail = parts.pop()
+    info = _info_ask_bullets(analysis)
+    if info:
+        parts += ["",
+                  "In addition, to speed up the analysis please also provide:"]
+        parts += info
+    checklist = _checklist_body(analysis)
+    if checklist:
+        parts += [""] + checklist
+    parts += ["", tail]
+    return parts
+
+
+def _bsod_lines(analysis: CaseAnalysis) -> list[str]:
+    """Private reviewer note for the BSOD branch: what went to the BSOD share
+    and whether PotatoFarm was triggered (its analysis arrives by e-mail)."""
+    b = getattr(analysis, "bsod", None) or {}
+    parts = [
+        f"Case {analysis.case_nbr}"
+        + (f" — {analysis.subject}" if analysis.subject else ""),
+        "BSOD case — a crash dump is attached, so no issue time was requested; "
+        "the dump went through Avatar's BSOD flow (PotatoFarm parser).",
+    ]
+    if b.get("bugcheck_codes"):
+        parts.append(f"Bug check codes (IPS form): {b['bugcheck_codes']}")
+    parts.append("Dump upload(s): " + ", ".join(b.get("dumps") or []))
+    if b.get("failed"):
+        parts.append("Download GAVE UP (stalled twice — fetch manually or ask for a "
+                     "smaller upload): " + ", ".join(b["failed"]))
+    if analysis.mode == "bsod_pending":
+        last = next((p_ for p_ in reversed(b.get("previous") or [])
+                     if p_.get("attachments")), {})
+        parts.append(
+            f"Already submitted on {last.get('submitted_at', '?')} "
+            f"({', '.join(last.get('attachments') or [])}); no new dump upload since.")
+    else:
+        if b.get("dumps_path"):
+            parts.append(f"Downloaded to: {b['dumps_path']}")
+        if b.get("submitted"):
+            parts.append(
+                "Submitted to the PotatoFarm BSOD parser (result also e-mailed to "
+                f"{b.get('email') or '?'}).")
+        elif b.get("skipped"):
+            parts.append(f"PotatoFarm NOT triggered: {b['skipped']}. Submit manually "
+                         "from Avatar (BSOD toggle) if needed.")
+        else:
+            parts.append(f"PotatoFarm submission FAILED (HTTP {b.get('status') or '?'}): "
+                         f"{b.get('detail') or 'no detail'}. Submit manually from Avatar "
+                         "(BSOD toggle).")
+    results = b.get("results") or []
+    if results:
+        from .bsod import assessment
+        parts += ["", "PotatoFarm BSOD parser result"
+                  + (f" ({b['result_html']})" if b.get("result_html") else "") + ":"]
+        for r in results:
+            parts.append(
+                f"  - {r.get('dump')}: bugcheck 0x{r.get('bugcheck_code')} "
+                f"{r.get('bugcheck_str')}; bucket {r.get('failure_bucket_id') or '?'}; "
+                f"process {r.get('process_name') or '?'}; dump time {r.get('dump_time') or '?'}")
+            parts.append(
+                f"      Intel Wi-Fi driver: {'AT FAULT' if r.get('wifi_fault') else 'not at fault'}"
+                f"{' (on the stack)' if r.get('driver_on_stack') else ''}; "
+                f"BT driver: {'AT FAULT' if r.get('bt_fault') else 'not at fault'}; "
+                f"driver {r.get('driver_version') or '?'} ({r.get('driver_branch') or '?'}); "
+                f"verifier {'on' if r.get('verifier') else 'off'}; "
+                f"FW asserts {r.get('fw_asserts') if r.get('fw_asserts') is not None else '?'}"
+                + ("; DUMP CORRUPTED" if r.get("corrupted") else "")
+                + (f"; JIRA {r['jira_id']}" if r.get("jira_id") else ""))
+            if r.get("stack"):
+                parts.append("      stack: " + " <- ".join(r["stack"][:6]))
+        parts.append(f"  Assessment: {assessment(results)}")
+    elif b.get("submitted") or analysis.mode == "bsod_pending":
+        parts.append(
+            "PotatoFarm result not in the dump folder yet (bsod_parse_output.json / "
+            "bsod_report.html appear there when the parser finishes; the next round "
+            "picks them up).")
+    parts.append("")
+    return parts
+
+
 def _request_logs_lines(analysis: CaseAnalysis) -> list[str]:
     """Customer-facing reply asking for the missing WRT logs. Deliberately a
     fixed template (no LLM text): this draft posts PUBLICLY once approved."""
+    if getattr(analysis, "log_request_reason", "") == "no_dump":
+        return _request_dump_lines(analysis)
     if getattr(analysis, "log_request_reason", "") == "unreadable_archive":
         # Archive selection crashed or the download failed twice — the upload
         # is likely corrupted/incomplete; ask for a re-upload.
@@ -279,6 +384,10 @@ def compose_plain(analysis: CaseAnalysis) -> str:
             parts.append("Log time is not the same as the issue time — please "
                          "help provide a WRT log captured at the issue time.")
         parts.append("")
+
+    # BSOD branch: what went to the BSOD share / PotatoFarm (private note).
+    if analysis.mode in ("bsod_submitted", "bsod_pending"):
+        parts += _bsod_lines(analysis)
 
     # Where the case stands after reading the comment thread: who acts next
     # and what the step is (reader output; Private-to-Intel drafts only).

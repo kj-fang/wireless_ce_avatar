@@ -35,6 +35,8 @@ import traceback
 from dataclasses import dataclass, field, asdict
 from typing import Callable, Optional
 
+from . import bsod as _bsod
+
 # Cap agent runs per case: the UI chains one run per detected incident time;
 # headless we keep the two most relevant to bound cost.
 MAX_INCIDENTS = 2
@@ -298,6 +300,10 @@ class CaseAnalysis:
                                                        #   count, descriptions}]
     first_response_done: bool = False                  # overview checklist already sent on
                                                        #   this case (later rounds skip it)
+    bsod_case: bool = False                            # BSOD issue: the crash dump replaces
+                                                       #   the issue time (no WRT pipeline)
+    bsod: dict = field(default_factory=dict)           # dumps, dumps_path, email, submitted,
+                                                       #   status/detail, skipped, previous
     error: str = ""
 
     @property
@@ -387,7 +393,11 @@ class HandsfreeRunner:
         # The reader usually nominates the newest upload; when it picks
         # another file the normal download runs and this one is discarded.
         prefetch = None
-        if analysis.wifi_or_bt == "wifi":
+        if _bsod.quick_hint(analysis.subject, analysis.subcategory, analysis.description):
+            # A BSOD case's newest archive is a memory dump (GBs), not a WRT
+            # capture — the BSOD branch downloads it to the BSOD share instead.
+            self.progress("fetch_case", "BSOD wording in the case — WRT prefetch skipped")
+        elif analysis.wifi_or_bt == "wifi":
             try:
                 newest = _pick_latest_archive(case_ctx.attachment_list)
                 if newest is not None:
@@ -523,6 +533,7 @@ class HandsfreeRunner:
         # -- 3a. is the case information usable? -------------------------------
         # LLM-judged completeness (description clarity / issue time / repro
         # steps) with deterministic backstops for outright-empty fields.
+        dump_items: list = []
         with self._stage(analysis, "check_case_info"):
             missing = list((analysis.case_reader or {}).get("missing_info") or [])
             flagged = {m.get("item") for m in missing}
@@ -544,6 +555,21 @@ class HandsfreeRunner:
                     self.progress("check_case_info",
                                   "repro steps found in the Environment "
                                   "Details form — gap retracted")
+            # BSOD with a crash dump uploaded: the dump carries the crash, so
+            # no issue time is needed (Charles, 2026-10-14) — retract that gap
+            # instead of asking the customer; the BSOD branch below runs.
+            analysis.bsod_case = _bsod.is_bsod_case(
+                issue_domain=analysis.issue_domain, issue_type=analysis.issue_type,
+                subject=analysis.subject, description=analysis.description,
+                subcategory=analysis.subcategory)
+            if analysis.bsod_case:
+                dump_items = _bsod.find_dump_attachments(case_ctx.attachment_list)
+                if dump_items and any(m.get("item") == "issue_time" for m in missing):
+                    missing = [m for m in missing if m.get("item") != "issue_time"]
+                    self.progress("check_case_info",
+                                  "BSOD case with dump upload(s) "
+                                  f"{', '.join(str(i[0]) for i in dump_items)} — "
+                                  "issue time not required, gap retracted")
             analysis.missing_info = missing
             self.progress(
                 "check_case_info",
@@ -570,6 +596,12 @@ class HandsfreeRunner:
         # is not one) — or no understandable description either: ask for it
         # first and stop. Mode "request_info" (human-approved, posted PUBLIC
         # like request_logs); the log pipeline runs on the next round.
+        # -- 3b. BSOD: dumps to the BSOD share + PotatoFarm (Avatar's flow) ----
+        # Before the info gate: a BSOD case without a dump asks for the DUMP
+        # (the info asks ride along in that same reply), not for a time.
+        if analysis.bsod_case:
+            return self._run_bsod_branch(analysis, case_ctx, dump_items)
+
         gap_items = {m.get("item") for m in analysis.missing_info}
         if "issue_time" in gap_items:
             analysis.mode = "request_info"
@@ -1062,6 +1094,184 @@ class HandsfreeRunner:
                         return cand
             return cands[1] if len(cands) > 1 else cands[0]
         return None
+
+    def _run_bsod_branch(self, analysis: CaseAnalysis, case_ctx,
+                         dump_items: list) -> CaseAnalysis:
+        """BSOD case: no WRT pipeline. The dump upload(s) go to the BSOD
+        share and the PotatoFarm parser is triggered — what Avatar's manual
+        BSOD flow does (index toggle -> download -> bsod_submit). PotatoFarm
+        e-mails the result; the draft tells the reviewer what was submitted.
+        Uploads already submitted on an earlier round are not resubmitted."""
+        names = [str(it[0]) for it in dump_items]
+        codes = ""
+        for q, a in (analysis.env_detail or {}).items():
+            if (re.search(r"assert error", str(q), re.IGNORECASE)
+                    and str(a or "").strip().lower() not in ("", "na", "n/a", "none")):
+                codes = str(a).strip()
+        analysis.bsod = {"dumps": names, "bugcheck_codes": codes, "dumps_path": "",
+                         "email": "", "submitted": False, "status": "", "detail": "",
+                         "skipped": "", "previous": [], "failed": [],
+                         "results": [], "result_html": "", "result_waited_s": 0}
+        prev: list = []
+        with self._stage(analysis, "bsod_dumps"):
+            prev = _bsod.submissions(analysis.case_nbr)
+            analysis.bsod["previous"] = [{"submitted_at": p_.get("submitted_at"),
+                                         "attachments": p_.get("attachments")}
+                                        for p_ in prev]
+            self.progress("bsod_dumps",
+                          f"dump upload(s): {', '.join(names) or 'none'}"
+                          + (f"; bug check codes from the IPS form: {codes}" if codes else "")
+                          + (f"; {len(prev)} earlier submission(s)" if prev else ""))
+        if not names:
+            analysis.mode = "request_logs"
+            analysis.log_request_reason = "no_dump"
+            analysis.ok = True
+            analysis.error = ("BSOD case without a kernel/memory dump attached — "
+                              "drafted a request for the dump")
+            return analysis
+        skip = _bsod.names_to_skip(analysis.case_nbr)
+        new_items = [it for it in dump_items if str(it[0]) not in skip]
+        analysis.bsod["failed"] = sorted(
+            n for n, c in _bsod.failed_names(analysis.case_nbr).items()
+            if c >= _bsod.MAX_DOWNLOAD_ROUNDS and n in names)
+        if not new_items:
+            return self._bsod_pending(analysis, case_ctx, prev,
+                                      "no new dump upload since")
+
+        downloaded: list = []
+        with self._stage(analysis, "bsod_download"):
+            dest = _bsod.share_case_dir(analysis.case_nbr,
+                                        getattr(case_ctx, "backend_id", "") or "")
+            analysis.bsod["dumps_path"] = dest
+            if not dest:
+                raise RuntimeError("BSOD dump share unreachable")
+            from utils.attachment_download import run_dload_threads
+            for attempt in (1, 2):
+                try:
+                    for item in run_dload_threads(new_items, dest, socketio=None):
+                        downloaded.append(item)
+                except Exception as e:
+                    self.progress("bsod_download",
+                                  f"attempt {attempt} failed: {type(e).__name__}: {e}")
+                if downloaded:
+                    break
+            self.progress("bsod_download",
+                          f"{len(downloaded)}/{len(new_items)} dump upload(s) in {dest}")
+        if not analysis.bsod["dumps_path"]:
+            analysis.mode = "triage_only"
+            analysis.ok = bool(analysis.triage)
+            analysis.error = ("BSOD dump share unreachable — dumps not submitted to "
+                              "PotatoFarm (submit manually via Avatar's BSOD flow)")
+            return analysis
+        got_names = [str(it[1]) for it in downloaded]
+        failed_now = [str(it[0]) for it in new_items if str(it[0]) not in got_names]
+        if failed_now:
+            self.progress("bsod_download",
+                          f"download FAILED for {', '.join(failed_now)} — retried on the "
+                          f"next round, given up after {_bsod.MAX_DOWNLOAD_ROUNDS} rounds")
+        if not downloaded:
+            if prev:
+                # Earlier rounds already submitted the other upload(s): just
+                # remember this failure (no resubmission of an unchanged folder).
+                _bsod.record_submission(analysis.case_nbr, [], analysis.bsod["dumps_path"],
+                                        "", "download_failed", failed=failed_now)
+                analysis.bsod["failed"] = sorted(
+                    n for n, c in _bsod.failed_names(analysis.case_nbr).items()
+                    if c >= _bsod.MAX_DOWNLOAD_ROUNDS and n in names)
+                return self._bsod_pending(analysis, case_ctx, prev,
+                                          f"download failed for {', '.join(failed_now)}")
+            analysis.mode = "request_logs"
+            analysis.log_request_reason = "unreadable_archive"
+            analysis.chosen_attachment = str(new_items[0][0])
+            analysis.ok = True
+            analysis.error = "dump download failed twice — drafted a re-upload request"
+            return analysis
+
+        cfg = {}
+        prev_mtime = 0.0
+        with self._stage(analysis, "bsod_submit"):
+            cfg = _bsod.handsfree_config()
+            email = _bsod.resolve_email(cfg)
+            analysis.bsod["email"] = email
+            prev_mtime = _bsod.result_mtime(dest)
+            if cfg.get("trial_mode"):
+                analysis.bsod["skipped"] = "trial mode — PotatoFarm not triggered"
+            elif not email:
+                analysis.bsod["skipped"] = ("no e-mail for the PotatoFarm result (set "
+                                            "bsod_email in the handsfree config)")
+            if analysis.bsod["skipped"]:
+                self.progress("bsod_submit", analysis.bsod["skipped"])
+            else:
+                res = _bsod.submit_to_potatofarm(dest, email)
+                analysis.bsod.update(submitted=bool(res.get("ok")),
+                                     status=str(res.get("status") or ""),
+                                     detail=str(res.get("detail") or ""))
+                if res.get("ok"):
+                    _bsod.record_submission(analysis.case_nbr, got_names, dest, email,
+                                            res.get("status"), failed=failed_now)
+                    self.progress("bsod_submit",
+                                  f"PotatoFarm accepted {dest} — result goes to {email}")
+                else:
+                    self.progress("bsod_submit",
+                                  f"PotatoFarm refused: HTTP {res.get('status')} "
+                                  f"{res.get('detail')}")
+        if analysis.bsod.get("submitted"):
+            # The parser writes bsod_parse_output.json / bsod_report.html into
+            # the same folder a few minutes later: wait for it so the draft
+            # carries the verdict (the e-mail is only a copy).
+            with self._stage(analysis, "bsod_result"):
+                wait_min = float(cfg.get("bsod_result_wait_min", 10) or 0)
+                self._collect_bsod_results(analysis, dest, newer_than=prev_mtime,
+                                           wait_s=wait_min * 60)
+        analysis.mode = "bsod_submitted"
+        analysis.ok = True
+        if analysis.bsod.get("submitted"):
+            analysis.error = ""
+        else:
+            analysis.error = (analysis.bsod.get("skipped")
+                              or f"PotatoFarm submission failed: {analysis.bsod.get('detail')}")
+        return analysis
+
+    def _bsod_pending(self, analysis: CaseAnalysis, case_ctx, prev: list,
+                      why: str) -> CaseAnalysis:
+        """Nothing new to submit this round: report the last submission and
+        pick up the parser result if it has landed in the folder since."""
+        last = next((p_ for p_ in reversed(prev) if p_.get("attachments")),
+                    prev[-1] if prev else {})
+        analysis.mode = "bsod_pending"
+        analysis.ok = True
+        analysis.error = (f"dump(s) already submitted to PotatoFarm on "
+                          f"{last.get('submitted_at', '?')} — {why}")
+        with self._stage(analysis, "bsod_result"):
+            dest = str(last.get("dumps_path") or "") or _bsod.share_case_dir(
+                analysis.case_nbr, getattr(case_ctx, "backend_id", "") or "")
+            analysis.bsod["dumps_path"] = dest
+            self.progress("bsod_result", analysis.error)
+            self._collect_bsod_results(analysis, dest, newer_than=0.0, wait_s=0)
+        return analysis
+
+    def _collect_bsod_results(self, analysis: CaseAnalysis, dest: str,
+                              newer_than: float, wait_s: float) -> None:
+        t0 = time.time()
+        results = _bsod.wait_for_results(
+            dest, newer_than, wait_s,
+            progress=lambda msg: self.progress("bsod_result", msg)) if dest else []
+        analysis.bsod["result_waited_s"] = int(time.time() - t0)
+        analysis.bsod["results"] = results
+        html = os.path.join(dest, _bsod.RESULT_HTML) if dest else ""
+        analysis.bsod["result_html"] = html if html and os.path.exists(html) else ""
+        if results:
+            for r_ in results:
+                self.progress("bsod_result",
+                              f"{r_['dump']}: bugcheck 0x{r_['bugcheck_code']} "
+                              f"{r_['bugcheck_str']}; bucket {r_['failure_bucket_id']}; "
+                              f"Wi-Fi driver fault={r_['wifi_fault']} BT fault={r_['bt_fault']} "
+                              f"on stack={r_['driver_on_stack']}")
+            self.progress("bsod_result", _bsod.assessment(results))
+        else:
+            self.progress("bsod_result",
+                          "no PotatoFarm result in the folder yet — the next round "
+                          "picks it up (the parser also e-mails it)")
 
     def _assert_window(self, analysis: CaseAnalysis):
         from datetime import timedelta

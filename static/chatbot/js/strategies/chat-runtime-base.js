@@ -148,7 +148,9 @@
         const wrapper = document.createElement('div');
         wrapper.className = 'msg-row assistant';
         wrapper.style.maxWidth = '95%';
-        wrapper.innerHTML = `<div class="avatar-icon">🤖</div><div style="flex:1;">${html}${turnId ? renderFeedbackWidget(turnId) : ''}</div>`;
+        // min-width:0 lets a wide code block scroll inside the card instead of
+        // stretching the whole report past the chat column.
+        wrapper.innerHTML = `<div class="avatar-icon">🤖</div><div style="flex:1;min-width:0;">${html}${turnId ? renderFeedbackWidget(turnId) : ''}</div>`;
         document.getElementById('chat-window').appendChild(wrapper);
         scrollBottom();
 

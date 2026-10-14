@@ -321,6 +321,7 @@
         border-top: 1px solid #eee;
         padding-top: 10px;
         margin-top: 10px;
+        overflow-wrap: anywhere;
     }
 
     .markdown-section h2, .markdown-section h3 {

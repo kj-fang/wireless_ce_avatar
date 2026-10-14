@@ -601,7 +601,7 @@
         }
 
         .chatbot-shortcut-section {
-            width: 70%;
+            width: 90%;
             margin: -60px auto 30px;
             text-align: center;
         }
@@ -640,7 +640,12 @@
             display: flex;
             justify-content: center;
             gap: 10px;
-            flex-wrap: wrap;
+            flex-wrap: nowrap;
+        }
+
+        /* Only a genuinely narrow window wraps, rather than overflowing it. */
+        @media (max-width: 900px) {
+            .chatbot-shortcut-links { flex-wrap: wrap; }
         }
 
         .chatbot-tech-btn {
@@ -648,6 +653,8 @@
             align-items: center;
             justify-content: center;
             gap: 6px;
+            white-space: nowrap;
+            flex: 0 0 auto;
 
             min-height: 38px;
             padding: 7px 14px;

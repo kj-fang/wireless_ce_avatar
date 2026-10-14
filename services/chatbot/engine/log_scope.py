@@ -4,7 +4,6 @@ from __future__ import annotations
 
 import hashlib
 import re
-from bisect import bisect_left, bisect_right
 from datetime import datetime, timedelta
 from pathlib import Path
 from typing import List, Optional, Tuple
@@ -77,6 +76,29 @@ class LogScopeMixin:
         except Exception as e:
             return f"Error reading log file: {e}"
 
+    #: Detected formats whose DATES the dated Segment2 path may use.
+    #:   * ``wifi_etl``  — the only format this check has ever said yes to.
+    #:   * the Linux shapes — the reason the detection exists: a dmesg,
+    #:     logcat or journal capture used to read as "no timestamps" and lost
+    #:     its issue-time window entirely.
+    #: ``bt_hci`` (the ``YYYY/MM/DD`` .hci.txt variant) is deliberately absent:
+    #: BT reaches Segment2 through the time-of-day path today, and moving it to
+    #: dated windowing changes BT's analysis, which belongs in its own change
+    #: rather than riding along with the Linux profile.
+    #: TODO(team): confirm the dates in those .hci.txt dumps, then add it here.
+    _DATED_WINDOW_FORMATS = frozenset({
+        "wifi_etl", "rfc3339", "iso_space", "logcat", "syslog",
+        "dmesg_ctime", "epoch", "monotonic", "llm",
+    })
+
+    def _log_time_format(self):
+        """The detected timestamp format of the loaded log (cached per file)."""
+        from utils import log_time_format
+
+        if not self.current_log_path:
+            return log_time_format.LogTimeFormat()
+        return log_time_format.detect(self.current_log_path)
+
     def _log_has_date(self) -> bool:
         """Whether the loaded log's timestamps carry a DATE
         (MM/DD/YYYY-HH:MM:SS.mmm) or are time-only (e.g. DDD / tracefmt logs:
@@ -100,24 +122,12 @@ class LogScopeMixin:
                 and getattr(self, "_log_has_date_cache", None) is not None:
             return self._log_has_date_cache
 
-        full_re = re.compile(r'\d{2}/\d{2}/\d{4}-\d{2}:\d{2}:\d{2}\.\d{3}')
-
-        # Prefer the in-memory cache if it's already for this path; else peek
-        # the file head via a streaming read (no full load).
-        if self._raw_log_cache_path == self.current_log_path and self._raw_log_cache:
-            sample = self._raw_log_cache[:2000]
-        else:
-            sample = []
-            try:
-                with open(self.current_log_path, "r", encoding="utf-8", errors="replace") as f:
-                    for i, line in enumerate(f):
-                        if i >= 2000:
-                            break
-                        sample.append(line)
-            except Exception:
-                return True  # read error → assume dated (keep original path)
-
-        has_date = any(full_re.search(line) for line in sample)
+        # The format is detected rather than assumed (see
+        # utils/log_time_format.py): same answer as the old literal regex for a
+        # Wi-Fi log, and a real answer for a Linux capture, whose timestamps
+        # that regex never matched.
+        fmt = self._log_time_format()
+        has_date = fmt.name in self._DATED_WINDOW_FORMATS and fmt.has_absolute_time
         self._log_has_date_cache = has_date
         self._log_has_date_cache_path = self.current_log_path
         return has_date
@@ -147,6 +157,13 @@ class LogScopeMixin:
         distinct entries together.
         """
         if self._log_has_date():
+            return
+        # A log whose entries do not START with a clock has no wrap of this
+        # shape, and the rule "a line without a leading clock continues the one
+        # before it" would eat the file. A dmesg is exactly that: its lines
+        # begin with seconds since boot, so 1,530 of a 1,532-line capture were
+        # merged into 2 entries before this guard.
+        if self._log_time_format().kind == "relative":
             return
         lines = self._raw_log_cache or []
         # ``<?`` makes the angle-bracket prefix optional, covering both the
@@ -301,13 +318,31 @@ class LogScopeMixin:
         seg2_lines: List[str] = []
         seg2_start_idx: int = -1
         seg2_end_idx:   int = -1
+        # Read once for every branch below, including the ones that only report
+        # the window they could not apply.
+        _win = self._effective_issue_window()
 
-        if (self.issue_time and self.capabilities.scope_time_only_logs
+        _fmt = self._log_time_format()
+        # A file whose timestamps cannot be placed on a calendar AND are not a
+        # clock either — a dmesg counting seconds since boot, with no sibling
+        # log to date that boot — has nothing an issue time can select. Say so
+        # once, here, instead of letting the time-of-day scan below match
+        # whatever "HH:MM:SS" happens to appear inside a message (on a real
+        # dmesg that was 4 hits in 2,000 lines, one of them a kernel build
+        # date). The fallback below analyses the file whole, keyword-filtered.
+        _no_time_axis = _fmt.recognised and not _fmt.supports_windowing
+
+        if self.issue_time and _no_time_axis:
+            print(
+                f"[PreScan] ⚠️  {_fmt.label} — the log carries no absolute time, "
+                f"so the issue-time window cannot be applied. Falling back to "
+                f"whole-file analysis with keyword filtering."
+            )
+        elif (self.issue_time and self.capabilities.scope_time_only_logs
                 and not self._log_has_date()):
             # --- 2A (TIME-ONLY logs, e.g. DDD/tracefmt with no date) ---
             # The log carries no date, so match the issue_time's TIME-OF-DAY
             # only (seconds-of-day). issue_time's date part (if any) is ignored.
-            _win = self._effective_issue_window()
             issue_sod = (self.issue_time.hour * 3600 + self.issue_time.minute * 60
                          + self.issue_time.second)
             win_sec = _win * 60
@@ -332,6 +367,27 @@ class LogScopeMixin:
                     # Window wraps midnight — split into two valid ranges.
                     _in_window = lambda sod: sod >= lo_norm or sod <= hi_norm
             _time_re = re.compile(r'\b(\d{1,2}):(\d{2}):(\d{2})')
+
+            def _seconds_of_day(text: str) -> Optional[int]:
+                """Clock position of a line, or None when it carries no clock.
+
+                A recognised clock-only format knows where its timestamp sits,
+                so use it. The loose search is only for a file no format
+                matched: it also hits clocks printed INSIDE messages, and since
+                the window below spans the first hit to the last one, two stray
+                matches at opposite ends of a file widen it to the whole file.
+                """
+                if _fmt.kind == "time_only":
+                    stamp = _fmt.parse(text)
+                    if stamp is None:
+                        return None
+                    return stamp.hour * 3600 + stamp.minute * 60 + stamp.second
+                found = _time_re.search(text)
+                if not found:
+                    return None
+                return (int(found.group(1)) * 3600 + int(found.group(2)) * 60
+                        + int(found.group(3)))
+
             # Track only first/last matching indices instead of every match.
             # On a multi-hour DDD trace a wide capture window can land
             # thousands of hits — accumulating them all into a List[int]
@@ -340,10 +396,9 @@ class LogScopeMixin:
             seg2_first_hit: Optional[int] = None
             seg2_last_hit: Optional[int] = None
             for i, line in enumerate(self._raw_log_cache):
-                m = _time_re.search(line)
-                if not m:
+                sod = _seconds_of_day(line)
+                if sod is None:
                     continue
-                sod = int(m.group(1)) * 3600 + int(m.group(2)) * 60 + int(m.group(3))
                 if _in_window(sod):
                     if seg2_first_hit is None:
                         seg2_first_hit = i
@@ -366,19 +421,16 @@ class LogScopeMixin:
 
         elif self.issue_time:
             # --- 2A: issue_time ±N min (timestamp indices + contiguous slice) ---
-            _win = self._effective_issue_window()
             window_start = self.issue_time - timedelta(minutes=_win)
             window_end   = self.issue_time + timedelta(minutes=_win)
 
-            ts_points: List[Tuple[datetime, int]] = []
-            for i, line in enumerate(self._raw_log_cache):
-                m = TS_RE.search(line)
-                if m:
-                    try:
-                        t = datetime.strptime(m.group(1), "%m/%d/%Y-%H:%M:%S.%f")
-                        ts_points.append((t, i))
-                    except ValueError:
-                        pass
+            # Read the timestamps through the detected format, so this window
+            # works on a Linux capture (RFC 3339 with its own UTC offset,
+            # logcat with no year) as well as on a Wi-Fi decode. The format
+            # also resolves a New-Year rollover inside a yearless log.
+            ts_points: List[Tuple[datetime, int]] = [
+                (t, i) for i, t in _fmt.iter_timestamps(self._raw_log_cache)
+            ]
 
             # --- Sanity check: verify attachment issue_time falls within log's actual time range ---
             if ts_points:
@@ -416,12 +468,14 @@ class LogScopeMixin:
                     # Clear issue_time so Segment2 falls through to 2B fallback
                     self.issue_time = None
                 else:
-                    ts_values = [x[0] for x in ts_points]
-                    left = bisect_left(ts_values, window_start)
-                    right = bisect_right(ts_values, window_end) - 1
-                    if left <= right:
-                        seg2_start_idx = ts_points[left][1]
-                        seg2_end_idx = ts_points[right][1]
+                    # A scan, not a bisect: a log need not be in time order. A
+                    # real Android logcat interleaves kernel lines on a second
+                    # clock (~5% at 14:xx among userspace at 10:xx), and bisect
+                    # on that lands mid-file. On a sorted log both agree.
+                    in_window = [i for t, i in ts_points if window_start <= t <= window_end]
+                    if in_window:
+                        seg2_start_idx = in_window[0]
+                        seg2_end_idx = in_window[-1]
                         seg2_lines = self._raw_log_cache[seg2_start_idx:seg2_end_idx + 1]
 
             if seg2_lines and seg2_start_idx >= 0 and seg2_end_idx >= 0:
@@ -491,7 +545,12 @@ class LogScopeMixin:
             f"[PreScan] 📦 Scoped segments merged: {len(merged)} lines "
             f"(Seg1: {len(self._driver_init_lines)} + Seg2: {len(seg2_lines)} — overlap: {overlap})"
         )
-        if self.issue_time:
+        if self.issue_time and _no_time_axis:
+            # Saying "±N min window" here would describe a window this file
+            # cannot have.
+            print(f"[PreScan]  Skill filter will use: scoped {len(merged)} lines "
+                  f"(whole file — {_fmt.label} has no absolute time to window on)")
+        elif self.issue_time:
             print(f"[PreScan]  Skill filter will use: scoped {len(merged)} lines (±{_win} min window around issue_time)")
         else:
             print(

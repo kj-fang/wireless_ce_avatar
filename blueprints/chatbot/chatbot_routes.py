@@ -118,6 +118,7 @@ from services.skill_editor.yaml_service import (
 )
 from utils import bt_skills_yaml_utils as _bt_yaml_utils
 from utils import linux_skills_yaml_utils as _linux_yaml_utils
+from utils import log_time_format
 from utils import skills_yaml_utils as _wifi_yaml_utils
 from utils.event_log_utils import find_event_log_for_log
 from utils.issue_time_ai import (
@@ -245,6 +246,34 @@ class AgentRouteProfile:
 # a profile: they take what they need as arguments. That keeps the handler
 # bodies below readable as flow, with the profile's extra work named at the
 # point where it happens.
+
+
+def _log_time_format_note(log_path: str) -> dict:
+    """What the sidebar prints about the loaded log's timestamps.
+
+    One sentence, server-side, for every profile. The user always types the one
+    canonical issue-time format; this is the other half of that contract — what
+    the value is about to be compared against. A Linux capture makes it worth
+    showing: an RFC 3339 journal names its own UTC offset, a logcat has no year
+    in it, and a dmesg counting seconds since boot has no absolute time at all,
+    which is the difference between "your time selects a window" and "the whole
+    file is analysed".
+    """
+    if not log_path:
+        return {}
+    try:
+        fmt = log_time_format.detect(log_path)
+        if not fmt.recognised:
+            return {}
+        first_ts, last_ts = read_log_time_range(log_path)
+        return {
+            "name": fmt.name,
+            "note": fmt.describe(first_ts, last_ts),
+            "supports_windowing": fmt.supports_windowing,
+        }
+    except Exception as e:
+        print(f"⚠️  log time-format note failed for {log_path}: {e}")
+        return {}
 
 
 def _time_only_log_last_time(agent) -> str:
@@ -801,6 +830,32 @@ class AgentRoutes:
             except Exception:
                 log_span_minutes = 0
 
+            # Detect the log's timestamp format once, here, while the user is
+            # already waiting on this request: everything below — the date
+            # fields, the log range, Segment2 — reads the cached answer.
+            # This is also the one place the LLM may be asked, and only for a
+            # file no known format fits; its description is then verified
+            # against the file before anything uses it (see log_time_format).
+            try:
+                _client, _model = self._get_llm_client_model()
+                _workflow_id = session.get("gather_workflow_id", "")
+
+                def _record_probe_usage(usage: dict) -> None:
+                    gather_service.record_feature_usage(
+                        workflow_id=_workflow_id, feature_code="log_time_format_probe",
+                        model=_model or "", usage=usage,
+                        domain=self.profile.gather_domain, trigger="set_log",
+                    )
+
+                log_time_format.detect_with_llm_fallback(
+                    log_path,
+                    probe=(log_time_format.llm_format_probe(
+                        _client, _model, on_usage=_record_probe_usage)
+                        if _client is not None else None),
+                )
+            except Exception as _e:
+                print(f"⚠️  log time-format detection skipped: {_e}")
+
             # Whether this log carries dates. Time-only logs (e.g. DDD) let the
             # sidebar leave the date fields blank and match Segment2 by
             # time-of-day. Computed before log_last_time because the time-only
@@ -837,6 +892,12 @@ class AgentRoutes:
                 "log_span_minutes": log_span_minutes,
                 "log_last_time": log_last_time,
                 "log_has_date": log_has_date,
+                # What the timestamps in THIS file look like, in one sentence
+                # the sidebar prints under the issue-time format hint. The user
+                # keeps typing one canonical format; this says what it will be
+                # matched against — including "this file has no absolute time,
+                # so the window cannot be applied".
+                "log_time_format": _log_time_format_note(log_path),
                 "evtx_path": evtx_path,
                 **check_ips_service.prompt_state(log_path),
                 # Hints for the client to clear chat history + show the toast.
@@ -1651,6 +1712,10 @@ class AgentRoutes:
             "issue_times": issue_times,
             "log_first_time": format_issue_time(first_ts),
             "log_last_time": format_issue_time(last_ts),
+            # Same sentence /set_log sends: this request also lands on a page
+            # that may have been opened straight from download_result, where
+            # /set_log never ran.
+            "log_time_format": _log_time_format_note(log_path),
             # Why the picker was left empty: a hand-off that failed
             # validation, or every auto-filled time fell outside the log.
             "issue_time_blocked": bool(

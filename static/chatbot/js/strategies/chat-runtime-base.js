@@ -16,6 +16,27 @@
         }
     }
 
+    // One line under the issue-time format hint: what the server detected
+    // about the loaded log's own timestamps. Defined here rather than in
+    // issue-time-controller.js because every profile's setLog calls it, and NW
+    // never loads that controller. A sidebar without the element (NW) and a
+    // file whose format was not recognised both just leave it hidden.
+    function showLogTimeFormat(info) {
+        const el = document.getElementById('it-log-format');
+        if (!el) return;
+        const note = (info && info.note) ? String(info.note) : '';
+        el.textContent = note;
+        el.style.display = note ? 'block' : 'none';
+        // A file with no absolute time cannot have a window applied, so the
+        // line is a warning rather than a detail.
+        const blocked = !!(info && info.supports_windowing === false);
+        el.style.color = blocked ? '#92400e' : '#666';
+        el.style.background = blocked ? '#fff7ed' : 'transparent';
+        el.style.border = blocked ? '1px solid #fdba74' : 'none';
+        el.style.padding = blocked ? '5px 8px' : '0';
+        el.style.borderRadius = blocked ? '6px' : '0';
+    }
+
     ChatRuntimeStrategyBase.prototype.appendIncidentTag = function (idx, total, timeObj) {
         if (!total || total <= 1) return;
         const fmt = _formatEitRowString(timeObj);
@@ -607,6 +628,10 @@
             // Whether this log has dates. Time-only logs (e.g. DDD) make the
             // sidebar's date fields optional (time-only issue time is valid).
             window.__logHasDate = (data.log_has_date !== false);
+            // What the server detected about THIS file's timestamps. The input
+            // format never changes; this says what the typed value is matched
+            // against, and when a file has no absolute time to match at all.
+            showLogTimeFormat(data.log_time_format);
             if (typeof refreshIssueTimeDateOptional === 'function') refreshIssueTimeDateOptional();
             this._afterDateOptionalRefresh();
 
@@ -659,6 +684,9 @@
             const issueTimes = Array.isArray(contextData.issue_times)
                 ? contextData.issue_times.filter(Boolean) : [];
             this._onIssueContextLoaded(contextData);
+            // A page opened straight from download_result never ran setLog, so
+            // this is where it learns what the log's timestamps look like.
+            showLogTimeFormat(contextData.log_time_format);
 
             // Pre-fill input but DO NOT auto-send.  The user reviews / edits
             // the issue context (especially the timestamp) and clicks Send.

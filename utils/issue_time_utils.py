@@ -94,9 +94,9 @@ def read_log_time_range(log_path: str) -> Tuple[Optional[datetime], Optional[dat
         if not fmt.has_absolute_time:
             return None, None
         with open(log_path, "r", encoding="utf-8", errors="ignore") as f:
-            for i, line in enumerate(f):
-                if i > 200:
-                    break
+            # No line cap: a decode can open with a long header, and the format
+            # was recognised, so a timestamp does exist further down.
+            for line in f:
                 dt = fmt.parse(line)
                 if dt:
                     first_ts = dt

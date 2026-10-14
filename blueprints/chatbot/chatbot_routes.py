@@ -263,8 +263,8 @@ def _log_time_format_note(log_path: str) -> dict:
         return {}
     try:
         fmt = log_time_format.detect(log_path)
-        if not fmt.recognised:
-            return {}
+        # An unrecognised format is reported too: "no window can be applied"
+        # is exactly what the user needs to know before choosing a time.
         first_ts, last_ts = read_log_time_range(log_path)
         return {
             "name": fmt.name,

@@ -47,17 +47,30 @@ Rules that are about the Linux world, not about parsing
   in the future. A log whose first line falls later in the calendar than its
   last crossed New Year, so it starts one year earlier; each line then takes
   the year its month and day belong to, so any line can be read on its own.
+  The modification time is when the file was collected, not captured, so the
+  year stays an assumption and the sidebar says so.
 * **A declared offset** (RFC 3339): every timestamp is normalised to the offset
-  the file ENDS on, which is the machine's current configuration. This is what
-  makes the kern.log above comparable to itself, and it means a customer-clock
-  issue time needs no conversion: a Linux log is written by the machine the
-  customer is reporting from.
-* **Seconds since boot** (dmesg): there is no wall clock to convert to. We look
-  for one anchor, and only a real one: a sibling file in the same folder whose
-  first line is the same ``Linux version ...`` boot banner carries that boot's
-  wall-clock time. Without it the file has no absolute time, and the honest
-  answer is to say so — a guess from the file's mtime would be wrong by however
-  long the capture sat before it was collected.
+  the file ENDS on, the machine's latest configuration. That makes the file
+  comparable to itself when the offset changes mid-file, and it is the
+  default reading of a customer-clock issue time. It is an assumption, not a
+  fact — the customer may have reported on an earlier clock — and the sidebar
+  says so.
+* **Seconds since boot** (dmesg): placing it on a calendar needs proof that
+  the evidence belongs to THIS boot. A ``Linux version`` banner is not proof:
+  every boot of the same kernel prints the same one (a real kern.log here has
+  six identical banners). Two facts together are:
+
+    1. the dmesg's own ``rtc_cmos ...: setting system clock to <UTC>`` line,
+       which pins this boot to a UTC instant; and
+    2. a sibling log in the same folder with the same full banner, stamped
+       within two minutes of that instant, which supplies the local offset.
+
+  The RTC line alone gives UTC only, and nothing in a dmesg names the local
+  timezone, so without (2) the file is still reported as having no usable
+  time. A guess from the file's mtime is never used.
+* **Out of order**: a logcat can interleave kernel lines on a second clock.
+  Segment2 keeps only the lines whose own timestamp is in the window, so the
+  other clock is not carried along.
 """
 
 from __future__ import annotations
@@ -131,12 +144,14 @@ _SHAPES: Tuple[_Shape, ...] = (
     _Shape("monotonic", "Seconds since boot (dmesg)",
            re.compile(r"^\[\s*(\d+\.\d+)\]"),
            (), "relative"),
-    # DDD / tracefmt: a clock with no date. Anchored, so it cannot steal a line
-    # that starts with a date (logcat, RFC 3339) or a message that merely
+    # DDD / tracefmt / BT HCI without dates: a clock with no date, optionally
+    # after a sequence number and inside <...> -- the four entry forms
+    # LogScopeMixin._merge_wrapped_lines_if_needed documents. Anchored, so it
+    # cannot steal a line that starts with a date or a message that merely
     # contains a clock.
-    _Shape("ddd_time_only", "Clock only, no date (DDD / tracefmt)",
-           re.compile(r"^\s*(\d{2}:\d{2}:\d{2}\.\d{3,7})"),
-           ("%H:%M:%S.%f",), "time_only", has_year=False),
+    _Shape("ddd_time_only", "Clock only, no date (DDD / tracefmt / BT HCI)",
+           re.compile(r"^\s*<?(?:\d+\s+)?(\d{1,2}:\d{2}:\d{2}(?:\.\d{1,7})?)>?"),
+           ("%H:%M:%S.%f", "%H:%M:%S"), "time_only", has_year=False),
 )
 
 _UNKNOWN_LABEL = "no recognised timestamps"
@@ -155,16 +170,23 @@ class LogTimeFormat:
     has_year: bool = True
     #: "-07:00" / "+00:00" when the file names its offset, else "".
     offset_label: str = ""
+    #: The offset the file STARTS on, when it differs from ``offset_label``.
+    first_offset_label: str = ""
     #: Year of the FIRST line, for a format that omits it.
     year: int = 0
     #: Year of the last line; one more than ``year`` when the log crosses New Year.
     end_year: int = 0
     #: (month, day) of the first line: a line before it in the calendar is in ``end_year``.
     _first_md: Optional[Tuple[int, int]] = field(default=None, repr=False)
-    #: Wall-clock boot time for a "relative" file, when a sibling log proved it.
+    #: Local wall-clock boot time for a "relative" file, once proven (see above).
     anchor: Optional[datetime] = None
-    #: How the anchor was found, for the UI line.
+    #: How the anchor was proven, for the UI line.
     anchor_source: str = ""
+    #: Why a "relative" file has no anchor, for the UI line.
+    anchor_missing: str = ""
+    #: The machine suspended during the boot; seconds since boot stop counting
+    #: while suspended, so times after it drift from the wall clock.
+    suspended: bool = False
     _shape: Optional[_Shape] = field(default=None, repr=False)
     _utcoffset: Optional[timedelta] = field(default=None, repr=False)
 
@@ -214,9 +236,10 @@ class LogTimeFormat:
                 return None
 
         if shape.kind == "epoch":
+            # Seconds since 1970 are UTC; never the analyst machine's zone.
             try:
-                return datetime.fromtimestamp(float(token))
-            except (ValueError, OSError):
+                return datetime.fromtimestamp(float(token), timezone.utc).replace(tzinfo=None)
+            except (ValueError, OSError, OverflowError):
                 return None
 
         if shape.declares_offset:
@@ -260,41 +283,50 @@ class LogTimeFormat:
     # ---- what the sidebar shows ------------------------------------------
     def describe(self, first: Optional[datetime] = None,
                  last: Optional[datetime] = None) -> str:
-        """One line stating what was detected, and what follows from it."""
+        """What was detected, what was assumed, and what follows from it."""
+        no_window = (" The issue-time window cannot be applied, so the whole "
+                     "file is analysed with keyword filtering.")
         if not self.recognised:
-            return ("Detected: no recognised timestamp format — the issue-time "
-                    "window cannot be applied, so the whole file is analysed "
-                    "with keyword filtering.")
-        bits = [self.label]
-        if self.offset_label:
-            bits.append(f"offset {self.offset_label}")
-        if self.kind == "time_only":
-            bits.append("clock only, no dates")
-        elif not self._shape.has_year and self.has_absolute_time:
-            if self.end_year and self.end_year != self.year:
-                bits.append(f"years taken as {self.year}–{self.end_year}")
-            else:
-                bits.append(f"year taken as {self.year}")
-        elif self.has_absolute_time:
-            bits.append("dates present")
-        head = "Detected: " + ", ".join(bits)
+            return "Detected: no recognised timestamp format." + no_window
 
-        if self.kind == "relative" and self.anchor is None:
-            return (head + " — no absolute time in the file, so the issue-time "
-                    "window cannot be applied; the whole file is analysed with "
-                    "keyword filtering.")
+        facts = [self.label]
+        assumed = []
+        if self.offset_label:
+            if self.first_offset_label:
+                facts.append(f"offset changes {self.first_offset_label} → {self.offset_label}")
+            else:
+                facts.append(f"offset {self.offset_label}")
+            assumed.append(f"the issue time is on the log's latest clock ({self.offset_label})")
+        if self.kind == "time_only":
+            facts.append("clock only, no dates")
+        elif not self._shape.has_year and self.has_absolute_time:
+            years = (f"{self.year}–{self.end_year}"
+                     if self.end_year and self.end_year != self.year else f"{self.year}")
+            assumed.append(f"year {years}, from the file date (the log has no year)")
+        if self.kind == "epoch":
+            assumed.append("the issue time is in UTC (the log names no timezone)")
         if self.anchor is not None:
-            head += f", boot time from {self.anchor_source}"
+            facts.append(f"boot time from {self.anchor_source}")
+        if self.suspended and self.anchor is not None:
+            assumed.append("times after the first suspend may lag the real clock")
+
+        text = "Detected: " + ", ".join(facts) + "."
+        if self.kind == "relative" and self.anchor is None:
+            return text + " " + (self.anchor_missing or "No absolute time in the file.") + no_window
+        if assumed:
+            text += " Assumed: " + "; ".join(assumed) + "."
         if first and last:
             fmt = "%H:%M:%S" if self.kind == "time_only" else "%Y-%m-%d %H:%M"
-            head += f" — log covers {first.strftime(fmt)} to {last.strftime(fmt)}"
-        return head
+            text += f" Log covers {first.strftime(fmt)} to {last.strftime(fmt)}."
+        return text
 
 
 # ---------------------------------------------------------------------------
 # Detection
 # ---------------------------------------------------------------------------
 _cache: dict[tuple, LogTimeFormat] = {}
+# Files the LLM was already asked about, whatever it answered.
+_llm_tried: set = set()
 
 
 def _with_year(dt: datetime, year: int) -> datetime:
@@ -335,21 +367,29 @@ def _pick_shape(head: list[str]) -> Tuple[Optional[_Shape], int]:
     return best, best_hits
 
 
-def _prevailing_offset(shape: _Shape, head: list[str],
-                       tail: list[str]) -> Tuple[Optional[timedelta], str]:
-    """The offset the file ends on — the machine's current configuration."""
+def _offsets(shape: _Shape, head: list[str],
+             tail: list[str]) -> Tuple[Optional[timedelta], str, str]:
+    """``(last offset, its label, first label if it differs)`` for a file naming its offset."""
     if not shape.declares_offset:
-        return None, ""
-    for line in reversed(tail) or reversed(head):
-        m = shape.rx.search(line)
-        if m:
-            raw = m.group(2)
-            if raw == "Z":
-                return timedelta(0), "+00:00"
-            sign = -1 if raw[0] == "-" else 1
-            hours, minutes = int(raw[1:3]), int(raw[4:6])
-            return sign * timedelta(hours=hours, minutes=minutes), raw
-    return None, ""
+        return None, "", ""
+
+    def _first(lines) -> str:
+        for line in lines:
+            m = shape.rx.search(line)
+            if m:
+                return "+00:00" if m.group(2) == "Z" else m.group(2)
+        return ""
+
+    last = _first(reversed(tail)) or _first(reversed(head))
+    if not last:
+        return None, "", ""
+    first = _first(head)
+    return _offset_td(last), last, (first if first and first != last else "")
+
+
+def _offset_td(label: str) -> timedelta:
+    sign = -1 if label[0] == "-" else 1
+    return sign * timedelta(hours=int(label[1:3]), minutes=int(label[4:6]))
 
 
 def _infer_years(fmt: LogTimeFormat, shape: _Shape, head: list[str],
@@ -393,56 +433,99 @@ def _infer_years(fmt: LogTimeFormat, shape: _Shape, head: list[str],
         fmt._first_md = (first.month, first.day)
 
 
-_BANNER = re.compile(r"(Linux version [^\s]+ )")
-_SIBLING_HINTS = ("kern", "syslog", "messages", "journal", "dmesg")
+_BANNER = re.compile(r"(Linux version \S+ .*?)\s*$")
+_RTC = re.compile(r"^\[\s*(\d+\.\d+)\].*setting system clock to "
+                  r"(\d{4}-\d{2}-\d{2}T\d{2}:\d{2}:\d{2}) UTC")
+_SUSPEND = re.compile(r"PM: suspend entry")
+_SIBLING_HINTS = ("kern", "syslog", "messages", "journal")
+# rsyslog stamps the boot banner when it starts reading the kernel buffer, a
+# few seconds to a minute after the RTC set.
+_SAME_BOOT_TOLERANCE = timedelta(minutes=2)
+_DMESG_SCAN_BYTES = 64 * 1024 * 1024
 
 
-def _find_boot_anchor(log_path: str, head: list[str]) -> Tuple[Optional[datetime], str]:
-    """Wall-clock boot time for a seconds-since-boot file, from a sibling log.
+def _find_boot_anchor(log_path: str) -> Tuple[Optional[datetime], str, str, bool]:
+    """``(local boot time, source, why missing, suspended)`` for a dmesg.
 
-    A dmesg and the kern.log / journal of the same boot both open with the same
-    ``Linux version ...`` banner, and the sibling stamps it with a real clock.
-    That is a fact about the capture, not a guess: if no sibling carries the
-    same banner we return nothing, and the file stays without absolute time.
+    See the module docstring: the RTC line pins the boot in UTC, and a sibling
+    log with the same full banner stamped within ``_SAME_BOOT_TOLERANCE`` of it
+    proves the boot and supplies the local offset. Anything less is reported
+    as missing rather than guessed.
     """
-    banner = None
-    for line in head[:40]:
-        m = _BANNER.search(line)
-        if m:
-            banner = m.group(1)
-            break
+    banner = rtc_mono = rtc_utc = None
+    suspended = False
+    read = 0
+    try:
+        with open(log_path, "r", encoding="utf-8", errors="replace") as f:
+            for line in f:
+                read += len(line)
+                if banner is None:
+                    m = _BANNER.search(line)
+                    if m:
+                        banner = m.group(1)
+                if rtc_utc is None:
+                    m = _RTC.search(line)
+                    if m:
+                        rtc_mono = float(m.group(1))
+                        rtc_utc = datetime.fromisoformat(m.group(2))
+                if not suspended and _SUSPEND.search(line):
+                    suspended = True
+                if read > _DMESG_SCAN_BYTES:
+                    break
+    except (OSError, ValueError):
+        return None, "", "The file could not be read.", False
+
+    if rtc_utc is None:
+        return None, "", ("No 'setting system clock' line, so this boot cannot be "
+                           "placed on a calendar (a kernel banner alone does not "
+                           "identify a boot)."), suspended
+    boot_utc = rtc_utc - timedelta(seconds=rtc_mono)
+    utc_text = boot_utc.strftime("%Y-%m-%d %H:%M:%S")
+    missing = (f"The boot started at {utc_text} UTC, but no log in the same folder "
+               f"comes from that boot, so the local timezone is unknown.")
     if banner is None:
-        return None, ""
+        return None, "", missing, suspended
+
     folder = os.path.dirname(os.path.abspath(log_path))
     try:
         names = sorted(os.listdir(folder))
     except OSError:
-        return None, ""
+        return None, "", missing, suspended
+    matches = []
     for name in names:
         candidate = os.path.join(folder, name)
         if (os.path.abspath(candidate) == os.path.abspath(log_path)
                 or not os.path.isfile(candidate)
                 or not any(h in name.lower() for h in _SIBLING_HINTS)):
             continue
-        try:
-            if os.path.getsize(candidate) > 256 * 1024 * 1024:
-                continue
-            with open(candidate, "r", encoding="utf-8", errors="replace") as f:
-                sibling_head = [next(f, "") for _ in range(40)]
-        except OSError:
-            continue
-        if not any(banner in l for l in sibling_head):
-            continue
         sibling = detect(candidate)
-        if not sibling.has_absolute_time:
+        if not sibling._shape or not sibling._shape.declares_offset:
             continue
-        for line in sibling_head:
-            if banner not in line:
-                continue
-            stamp = sibling.parse(line)
-            if stamp is not None:
-                return stamp, name
-    return None, ""
+        try:
+            with open(candidate, "r", encoding="utf-8", errors="replace") as f:
+                for line in f:
+                    if banner not in line:
+                        continue
+                    m = sibling._shape.rx.search(line)
+                    if not m:
+                        continue
+                    raw = m.group(1) + ("+00:00" if m.group(2) == "Z" else m.group(2))
+                    stamp_utc = datetime.fromisoformat(raw).astimezone(timezone.utc)
+                    gap = abs(stamp_utc.replace(tzinfo=None) - boot_utc)
+                    if gap <= _SAME_BOOT_TOLERANCE:
+                        matches.append((gap, name, sibling))
+        except (OSError, ValueError):
+            continue
+    if not matches:
+        return None, "", missing, suspended
+    matches.sort(key=lambda x: x[0])
+    if len(matches) > 1 and matches[1][0] - matches[0][0] < timedelta(seconds=10):
+        return None, "", (f"The boot started at {utc_text} UTC, and more than one boot "
+                          f"in the folder's logs fits it, so it cannot be told apart."), suspended
+    _, name, sibling = matches[0]
+    offset = sibling._utcoffset or timedelta(0)
+    return (boot_utc + offset, f"{name} (same kernel banner, boot within "
+            f"{int(matches[0][0].total_seconds())} s of the RTC line)", "", suspended)
 
 
 def detect(log_path: str) -> LogTimeFormat:
@@ -472,16 +555,20 @@ def detect(log_path: str) -> LogTimeFormat:
     if shape is None:
         fmt = LogTimeFormat()
     else:
-        offset, offset_label = _prevailing_offset(shape, head, tail)
+        offset, offset_label, first_offset_label = _offsets(shape, head, tail)
         fmt = LogTimeFormat(
             name=shape.name, label=shape.label, kind=shape.kind,
             has_year=shape.has_year, offset_label=offset_label,
+            first_offset_label=first_offset_label,
             _shape=shape, _utcoffset=offset,
         )
         if shape.kind == "absolute" and not shape.has_year:
             _infer_years(fmt, shape, head, tail, log_path)
         if shape.kind == "relative":
-            fmt.anchor, fmt.anchor_source = _find_boot_anchor(log_path, head)
+            # Cached first: the sibling search calls detect() on its neighbours.
+            _cache[key] = fmt
+            (fmt.anchor, fmt.anchor_source,
+             fmt.anchor_missing, fmt.suspended) = _find_boot_anchor(log_path)
         print(f"[log_time_format] {os.path.basename(log_path)}: {shape.name} "
               f"({hits}/{len(head) + len(tail)} sample lines)"
               + (f", offset {offset_label}" if offset_label else "")
@@ -586,8 +673,10 @@ def detect_with_llm_fallback(
     except OSError:
         return fmt
 
-    if probe is None:
+    if probe is None or key in _llm_tried:
         return fmt
+    # Marked before the call: a failed or rejected answer is not retried.
+    _llm_tried.add(key)
     described = probe("".join(head[:60]))
     if not described or not described.get("regex"):
         return fmt
@@ -622,3 +711,4 @@ def detect_with_llm_fallback(
 def clear_cache() -> None:
     """Forget detected formats (tests, and a file rewritten in place)."""
     _cache.clear()
+    _llm_tried.clear()

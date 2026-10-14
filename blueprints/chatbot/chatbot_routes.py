@@ -1,4 +1,4 @@
-"""One route module for both full log-analysis agents: Wi-Fi and Bluetooth.
+"""One route module for every full log-analysis agent: Wi-Fi, Bluetooth, Linux.
 
 Until now ``blueprints/log_chatbot/log_chatbot_routes.py`` and
 ``blueprints/bt_chatbot/bt_chatbot_routes.py`` were two 1,500-line files whose
@@ -8,6 +8,13 @@ slot holds the app-level agent, which history domain key partitions the saved
 conversations, which agent class to instantiate) plus seven behaviour
 switches: three the UI config already declared, and four explicit fields on
 :class:`AgentRouteProfile`.
+
+``blueprints/linux_chatbot/linux_chatbot_routes.py`` was the third copy — 1,223
+lines of which 1,093 matched the Wi-Fi file once names were normalised. It
+asked for no new handler and no new behaviour switch: a fourth profile card
+covers it, and the three safety nets it was missing (log-range guard, the
+``/prepare`` cache purge, the index pre-warm) are unconditional here, so it
+gains them by being folded in rather than by growing another flag.
 
 This module is the same move the refactor already made for the engine and for
 ``services/chatbot/shared_routes.py``, applied one layer out:
@@ -67,7 +74,7 @@ from flask import (
     session,
 )
 
-from configs.chatbot_ui import BT_UI, LOG_CHATBOT_UI
+from configs.chatbot_ui import BT_UI, LINUX_UI, LOG_CHATBOT_UI
 from configs.global_configs import app_config
 from services import feedback_service
 from services import check_ips_service
@@ -75,6 +82,7 @@ from services import gather_service
 from services import history_service
 from services.chatbot import job_runtime as chat_jobs
 from services.chatbot.engine.bluetooth import BtLogAgentSystem
+from services.chatbot.engine.linux import LinuxLogAgentSystem
 from services.chatbot.engine.system import WifiLogAgentSystem, load_skills_from_yaml
 from services.chatbot.factory import (
     ChatbotBlueprintConfig,
@@ -109,6 +117,7 @@ from services.skill_editor.yaml_service import (
     write_yaml_file as _write_yaml_file,
 )
 from utils import bt_skills_yaml_utils as _bt_yaml_utils
+from utils import linux_skills_yaml_utils as _linux_yaml_utils
 from utils import skills_yaml_utils as _wifi_yaml_utils
 from utils.event_log_utils import find_event_log_for_log
 from utils.issue_time_ai import (
@@ -182,11 +191,17 @@ class AgentRouteProfile:
     #: TODO(team): BT reaching /prepare is also a new analysis, so this looks
     #: like drift rather than policy — confirm before unifying.
     reset_conversation_on_prepare: bool
-    #: ``/prepare`` accepts a path that is ALREADY a log file (``.log`` /
-    #: ``.txt``, including ``.hci.txt``) instead of appending ``.log``. BT's
-    #: HCI decode writes ``<etl>.hci.txt`` directly; Wi-Fi's wpp_ddd flow
-    #: always produces ``<etl>.log``.
-    accepts_direct_log_path: bool
+    #: Suffixes that let ``/prepare`` treat an EXISTING path as the log
+    #: itself instead of appending ``.log``.
+    #:   ``None``        never — the decode always writes ``<etl>.log``
+    #:                   (Wi-Fi's wpp_ddd flow).
+    #:   a tuple         only these — BT's HCI decode writes
+    #:                   ``<etl>.hci.txt`` next to the ``.etl`` it came from,
+    #:                   so the suffix is what tells the two apart.
+    #:   ``()``          any existing file — a capture that was never decoded
+    #:                   at all, so its name proves nothing (Linux dmesg /
+    #:                   journalctl: ``syslog``, ``kern.log.1``, ``messages``).
+    direct_log_suffixes: tuple[str, ...] | None
     #: ``/history/load`` reads ``_log_has_date()`` even while the conversation's
     #: background analysis is still running. False (BT) skips it, because the
     #: analysis thread mutates the ``_raw_log_cache`` pair that call reads.
@@ -1444,16 +1459,17 @@ class AgentRoutes:
         # <etl>.hci.txt, with no separate .log) accepts a path that IS already a
         # log file. Mirrors the log_parser entry handling. Everyone else follows
         # the wpp_ddd convention and appends ".log".
-        lower = etl_path.lower()
-        if (self.profile.accepts_direct_log_path and os.path.exists(etl_path)
-                and (lower.endswith(".log") or lower.endswith(".txt"))):
+        suffixes = self.profile.direct_log_suffixes
+        accepts_direct = suffixes is not None
+        if (accepts_direct and os.path.exists(etl_path)
+                and (not suffixes or etl_path.lower().endswith(suffixes))):
             log_path = etl_path
         else:
             log_path = etl_path + ".log"
         if not os.path.exists(log_path):
             # A profile that can only ever derive "<etl>.log" says so; one that
             # also accepts a direct path can't promise which extension it wanted.
-            missing = "Log file" if self.profile.accepts_direct_log_path else ".log file"
+            missing = "Log file" if accepts_direct else ".log file"
             return jsonify({"success": False,
                             "error": f"{missing} not found: {log_path}"}), 404
 
@@ -1727,7 +1743,7 @@ def create_agent_blueprint(profile: AgentRouteProfile):
 
 
 # ==================================================================
-# The two profiles
+# The three profiles
 # ==================================================================
 WIFI_PROFILE = AgentRouteProfile(
     name="log_chatbot",
@@ -1740,7 +1756,7 @@ WIFI_PROFILE = AgentRouteProfile(
     gather_domain="wifi",
     window_minutes_cap=1440,
     reset_conversation_on_prepare=True,
-    accepts_direct_log_path=False,
+    direct_log_suffixes=None,
     read_log_has_date_while_running=True,
 )
 
@@ -1755,9 +1771,30 @@ BT_PROFILE = AgentRouteProfile(
     gather_domain="bt",
     window_minutes_cap=100000,
     reset_conversation_on_prepare=False,
-    accepts_direct_log_path=True,
+    direct_log_suffixes=(".log", ".txt"),
+    read_log_has_date_while_running=False,
+)
+
+# Linux reads dmesg / journalctl text, which no decoder produced: there is no
+# ETL step, so /prepare is handed the log itself under whatever name the
+# distro uses, and the engine turns off the Windows driver-init markers
+# (see LinuxLogAgentSystem). Everything else it wanted was already a field.
+LINUX_PROFILE = AgentRouteProfile(
+    name="linux_chatbot",
+    ui=LINUX_UI,
+    agent_class=LinuxLogAgentSystem,
+    agent_config_attr="linux_chatbot_agent",
+    yaml_utils=_linux_yaml_utils,
+    user_yaml_prefix="linux_skills_",
+    browse_filetypes=(("Log files", "*.log"), ("Text files", "*.txt"),
+                      ("All files", "*.*")),
+    gather_domain="linux",
+    window_minutes_cap=100000,
+    reset_conversation_on_prepare=False,
+    direct_log_suffixes=(),
     read_log_has_date_while_running=False,
 )
 
 log_chatbot_bp = create_agent_blueprint(WIFI_PROFILE)
 bt_chatbot_bp = create_agent_blueprint(BT_PROFILE)
+linux_chatbot_bp = create_agent_blueprint(LINUX_PROFILE)

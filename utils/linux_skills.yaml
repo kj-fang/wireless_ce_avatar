@@ -1,0 +1,101 @@
+# skill features:
+#   name: skill name
+#   description: a brief description of the skill
+#   keywords: use "-" to represent each keyword
+#   expert_rules: use "|" to start a multi-line string
+#
+# Placeholder skill set for the Linux Wi-Fi driver chatbot (dmesg / journalctl
+# captures covering iwlwifi, cfg80211/mac80211, wpa_supplicant and
+# NetworkManager). Refine keywords/expert_rules as real captures are reviewed.
+
+connection_flow:
+  name: "Connection Flow"
+  description: "Analyze the generic Linux Wi-Fi connect/disconnect flow: scan, authenticate, associate, DHCP, and any deauth/disassoc events."
+  keywords:
+    - "wlan0: authenticate"
+    - "wlan0: send auth"
+    - "wlan0: associate"
+    - "wlan0: associated"
+    - "wlan0: disconnect"
+    - "wlan0: deauthenticat"
+    - "wlan0: disassociat"
+    - "wpa_supplicant"
+    - "CTRL-EVENT-CONNECTED"
+    - "CTRL-EVENT-DISCONNECTED"
+    - "CTRL-EVENT-SSID-TEMP-DISABLED"
+    - "NetworkManager"
+    - "dhclient"
+    - "dhcpcd"
+  exclusive: []
+  expert_rules: |
+    Summarize the connect/disconnect timeline: which SSID/BSSID, how far the
+    handshake progressed (auth/assoc/4-way/DHCP), and the reported reason code
+    for any disconnect/deauth. Call out whether the trigger looks AP-initiated,
+    supplicant/NetworkManager-initiated, or driver/firmware-initiated.
+
+driver_firmware_crash:
+  name: "Driver / Firmware Crash"
+  description: "Detect iwlwifi driver errors, firmware crash dumps, and kernel warnings/oops tied to the Wi-Fi driver."
+  keywords:
+    - "iwlwifi"
+    - "Microcode SW error detected"
+    - "Fatal error"
+    - "firmware error"
+    - "iwlwifi 0000"
+    - "FW error in SYSASSERT"
+    - "WARNING: CPU:"
+    - "Call Trace:"
+    - "kernel BUG at"
+    - "iwlwifi.*fail"
+  exclusive: []
+  expert_rules: |
+    Pull the full firmware-error / call-trace block verbatim and identify the
+    triggering subsystem (TX/RX queue, PCIe, thermal, etc.). Note the kernel
+    and driver/firmware version lines if present nearby in the log.
+
+scan_and_roaming:
+  name: "Scan and Roaming"
+  description: "Analyze scan requests/results and roaming decisions between access points."
+  keywords:
+    - "wlan0: scan"
+    - "SME: Trying to authenticate"
+    - "CTRL-EVENT-SCAN-STARTED"
+    - "CTRL-EVENT-SCAN-RESULTS"
+    - "Trying to associate"
+    - "roam"
+  exclusive: []
+  expert_rules: |
+    Summarize how many scans ran, which BSSIDs were candidates, and why the
+    supplicant selected (or rejected) a particular AP, including signal/RSSI
+    values when present.
+
+power_and_suspend_resume:
+  name: "Power / Suspend-Resume"
+  description: "Diagnose Wi-Fi behavior across suspend/resume and power-management transitions."
+  keywords:
+    - "PM: suspend"
+    - "PM: resume"
+    - "iwlwifi.*power"
+    - "rfkill"
+    - "wlan0: down"
+    - "wlan0: up"
+  exclusive: []
+  expert_rules: |
+    Identify whether the issue occurs around a suspend/resume boundary or an
+    rfkill state change, and whether the adapter re-associates successfully
+    afterward.
+
+regulatory_and_country_code:
+  name: "Regulatory / Country Code"
+  description: "Inspect regulatory domain and channel/country-code related restrictions."
+  keywords:
+    - "cfg80211: Calling CRDA"
+    - "cfg80211: Regulatory domain changed"
+    - "regulatory.db"
+    - "channel is disabled"
+    - "DFS"
+  exclusive: []
+  expert_rules: |
+    Report the active regulatory domain/country code and flag any channel
+    restricted or disabled by regulatory or DFS rules that would explain a
+    connection failure.

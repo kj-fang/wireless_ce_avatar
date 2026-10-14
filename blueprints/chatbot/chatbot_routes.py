@@ -334,7 +334,8 @@ def _sync_customer_issue_time(agent, parsed, is_time_only: bool) -> None:
         print(f"[chat] sidebar issue_time customer refresh skipped ({_e})")
 
 
-def _validate_carried_issue_time(carried_issue_time: str, log_path: str) -> None:
+def _validate_carried_issue_time(carried_issue_time: str, log_path: str,
+                                 log_in_customer_clock: bool) -> None:
     """Range-check the issue time download_result carried over, into session.
 
     ``download_result`` has already resolved a time-only case timestamp against
@@ -345,7 +346,9 @@ def _validate_carried_issue_time(carried_issue_time: str, log_path: str) -> None
     """
     session["_carried_issue_time_present"] = True
     _carried_dt, _range_first, _range_last, _range_error = (
-        validate_issue_time_in_log_range(carried_issue_time, log_path)
+        validate_issue_time_in_log_range(
+            carried_issue_time, log_path,
+            log_in_customer_clock=log_in_customer_clock)
     )
     if _carried_dt is not None:
         session["_carried_issue_time"] = format_issue_time(_carried_dt)
@@ -1469,10 +1472,14 @@ class AgentRoutes:
             # capture the user picked. Carry that exact value over, checked
             # against this log's range, instead of re-guessing it. Both
             # profiles: BT's decoded .hci.txt carries the same dated
-            # timestamps, so the range check works for it too.
+            # timestamps, so the range check works for it too. The carried
+            # value is the customer's clock; only a decode-host log (Wi-Fi)
+            # needs it converted before the comparison.
             _clear_carried_issue_time()
             if carried_issue_time:
-                _validate_carried_issue_time(carried_issue_time, log_path)
+                _validate_carried_issue_time(
+                    carried_issue_time, log_path,
+                    log_in_customer_clock=not self.profile.customer_timezone)
 
             # Pull consolidated issue context from all session sources
             ctx = _extract_issue_context()

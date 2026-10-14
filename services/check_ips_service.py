@@ -203,10 +203,11 @@ def _apply_stored_answer(log_path) -> None:
     answer on its way out. The file keyed by log path is the durable record.
     """
     record = answer_for(log_path)
-    if not record and session.get("uploaded_source_path") and _placeholder_is_for(log_path):
-        # A log made from this session's upload has no answer of its own; the
-        # upload's answer is the one that applies to it.
-        record = answer_for(session.get("uploaded_source_path"))
+    if _from_answered_upload(log_path):
+        # The upload this log came from was answered in this conversation, so
+        # that answer applies -- including over one stored against the log in
+        # an earlier conversation, which it is newer than.
+        record = answer_for(session.get("uploaded_source_path")) or record
     source = record.get("source")
     if source in (SKIPPED, EXPLICIT, DERIVED_FROM_PATH):
         # The restored answer is now this session's answer about this log.

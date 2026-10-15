@@ -213,6 +213,9 @@ class AgentRouteProfile:
     #: What the AI issue-time suggestion samples first (``utils.issue_time_ai``).
     #: ``None`` keeps the generic digest, which suits our own short decodes.
     issue_time_focus: IssueTimeFocus | None = None
+    #: Look for a Windows System Event Log next to the log. A Linux capture has
+    #: none, and a ``system.evtx`` elsewhere in the same case is not its own.
+    windows_event_log: bool = True
 
     # ---- derived: read the flags the UI config already declares ----
     @property
@@ -884,10 +887,12 @@ class AgentRoutes:
                 log_last_time = ""
 
             # Locate associated System Event log (.evtx / .evt)
-            try:
-                evtx_path = find_event_log_for_log(log_path)
-            except Exception:
-                evtx_path = ""
+            evtx_path = ""
+            if self.profile.windows_event_log:
+                try:
+                    evtx_path = find_event_log_for_log(log_path)
+                except Exception:
+                    evtx_path = ""
 
             return jsonify({
                 "success": True,
@@ -1877,6 +1882,7 @@ LINUX_PROFILE = AgentRouteProfile(
     read_log_has_date_while_running=False,
     # A multi-day kern.log or logcat: sample the Wi-Fi stack, not boot noise.
     issue_time_focus=LINUX_WIFI_FOCUS,
+    windows_event_log=False,
 )
 
 log_chatbot_bp = create_agent_blueprint(WIFI_PROFILE)

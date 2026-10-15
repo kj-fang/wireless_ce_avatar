@@ -35,6 +35,14 @@ def smoke_soql() -> None:
     q = build_new_cases_soql("Charles P Chu")
     check("S1.a owner + TODAY",
           "Owner.Name = 'Charles P Chu'" in q and "CreatedDate = TODAY" in q, q)
+    yesterday = build_new_cases_soql("Charles P Chu", created_date="YESTERDAY")
+    check("S1.a2 YESTERDAY test date selectable",
+          "CreatedDate = YESTERDAY" in yesterday, yesterday)
+    try:
+        build_new_cases_soql("x", created_date="ALL TIME")
+        check("S1.a3 unsupported date literal rejected", False)
+    except ValueError:
+        check("S1.a3 unsupported date literal rejected", True)
     q2 = build_new_cases_soql("O'Brien \\ Team", since_iso="2026-07-15T00:00:00Z")
     check("S1.b escaping + since",
           "O\\'Brien \\\\ Team" in q2 and "CreatedDate >= 2026-07-15T00:00:00Z" in q2, q2)
@@ -69,13 +77,29 @@ def smoke_soql() -> None:
     fm_pub = dict(fm, extra_fields={
         "Core_IPS_Case_Comment_Type__c": "Private to Intel",
         "Core_IPS_Comment_Author_Type__c": "Agent"})
+    # The comment type marks private posts as private, so a public post needs
+    # its own value: with the type left empty IPS accepts the insert but
+    # shows the comment nowhere (seen live on case 01032011).
+    try:
+        IpsClient.build_comment_payload("500XYZ", "<p>r</p>",
+                                        field_map=fm_pub, private=False)
+        check("S1.g2 public refused without a public comment type", False)
+    except PostUnsupported as e:
+        check("S1.g2 public refused without a public comment type",
+              "Core_IPS_Case_Comment_Type__c" in str(e), str(e))
+    fm_pub["public_extra_fields"] = {
+        "Core_IPS_Case_Comment_Type__c": "Public to Customers"}
     p = IpsClient.build_comment_payload("500XYZ", "<p>r</p>",
                                         field_map=fm_pub, private=False)
     check("S1.g public payload: Public=True explicitly",
           p["Core_IPS_Public__c"] is True, str(p))
-    check("S1.h public payload drops private-flavored extras",
-          "Core_IPS_Case_Comment_Type__c" not in p
+    check("S1.h public payload: public comment type, never the private one",
+          p.get("Core_IPS_Case_Comment_Type__c") == "Public to Customers"
           and p.get("Core_IPS_Comment_Author_Type__c") == "Agent", str(p))
+    p_priv = IpsClient.build_comment_payload("500XYZ", "<p>r</p>", field_map=fm_pub)
+    check("S1.h2 private payload keeps the private comment type",
+          p_priv.get("Core_IPS_Case_Comment_Type__c") == "Private to Intel"
+          and p_priv["Core_IPS_Public__c"] is False, str(p_priv))
     try:
         IpsClient.build_comment_payload("500XYZ", "<p>r</p>",
                                         field_map={"body_field": "B__c"},
@@ -148,9 +172,16 @@ def smoke_queue(tmp: Path) -> None:
     store = HandsfreeStore(tmp / "handsfree")
     rec = store.enqueue(case_nbr="01234567", case_id="500XYZ", subject="s",
                         draft_plain="body", draft_html="<p>body</p>",
-                        confidence=88, mode="full", analysis={"k": 1})
+                        confidence=88, mode="full", analysis={"k": 1},
+                        owner_name="Charles P Chu")
     check("S3.a enqueued pending_review", rec["status"] == "pending_review")
     check("S3.b ledger marks analyzed", store.is_processed("01234567"))
+    owner_items = store.list_drafts(owner_name="charles p chu")
+    check("S3.b2 owner is persisted and filter is case-insensitive",
+          len(owner_items) == 1 and owner_items[0]["owner_name"] == "Charles P Chu",
+          str(owner_items))
+    check("S3.b3 unknown owner filter returns no drafts",
+          store.list_drafts(owner_name="Another Owner") == [])
     upd = store.update(rec["draft_id"], status="posted",
                        post_result={"ok": True, "backend": "rest"})
     check("S3.c status transition", upd["status"] == "posted")
@@ -167,10 +198,28 @@ def smoke_queue(tmp: Path) -> None:
     check("S3.g config round-trip",
           store.load_config()["owner_name"] == "Charles P Chu"
           and cfg["max_cases_per_run"] == 3)
+    # Queue rows expose the decoded-log folder only when a log was decoded.
+    cap = tmp / "cap" / "WifiDriverIHVSession.etl.001.log"
+    rec_log = store.enqueue(case_nbr="01234568", case_id="500XYZ", subject="s",
+                            draft_plain="body", draft_html="<p>body</p>",
+                            confidence=None, mode="full",
+                            analysis={"log_path": str(cap)})
+    by_id = {i["draft_id"]: i for i in store.list_drafts()}
+    check("S3.h decoded-log folder listed only for decoded cases",
+          by_id[rec_log["draft_id"]]["log_dir"] == str(cap.parent)
+          and by_id[rec["draft_id"]]["log_dir"] == "",
+          str({k: v.get("log_dir") for k, v in by_id.items()}))
+    from .case_reader import normalize_action_owner as nao
+    check("S3.i action owner normalized: intel / customer / unknown",
+          nao("Intel") == "intel" and nao("case owner (Intel FAE)") == "intel"
+          and nao("Customer") == "customer" and nao("partner / OEM") == "customer"
+          and nao("unknown") == "" and nao(None) == ""
+          and by_id[rec["draft_id"]]["action_owner"] == "")
 
 
 # ---------------------------------------------------------------- S4
 def smoke_runner(tmp: Path) -> None:
+    from .composer import CHECKLIST_TAG
     print("[S4] Runner end-to-end (all externals mocked, fake agent)")
     import types
     from configs.global_configs import app_config
@@ -240,6 +289,8 @@ def smoke_runner(tmp: Path) -> None:
     from utils import attachment_download as adl
     from utils import attachment_decompose as adc
     orig_dload, orig_zip = adl.run_dload_threads, adc.process_single_zip
+    from services.etl_parser import bt_parser
+    orig_bt_decode = bt_parser.bt_decode_via_cli
 
     def _fake_dload(att_list, download_path, socketio):
         # Serve whichever zip the runner actually selected.
@@ -281,6 +332,8 @@ def smoke_runner(tmp: Path) -> None:
         "reasoning": "Comment #2 supersedes the vague description; comment #3 rules out the newer capture.",
         "missing_info": [{"item": "repro_steps",
                           "reason": "no reproduction steps mentioned anywhere"}],
+        "action_owner": "Intel",
+        "next_action": "Intel to analyze repro_logs.7z for the 10:17:30 failure",
     })
     fake_llm = types.SimpleNamespace(
         client=FakeAgentClient(report, report),   # same report either way
@@ -296,11 +349,43 @@ def smoke_runner(tmp: Path) -> None:
         },
         chat=lambda messages, system_content=None: reader_reply,
     )
+    # Vision-aware wrapper: a content LIST (image blocks) gets the image
+    # description reply; plain text prompts go to whatever `chat` is set to
+    # at that moment (the tests swap it). The last text prompt is kept so a
+    # test can assert what the reader was shown.
+    seen_prompts = {}
+    _plain_chat = lambda messages, system_content=None: fake_llm.chat_text(messages, system_content)
+    def _vision_or_text(messages, system_content=None):
+        content = messages[0]["content"]
+        if isinstance(content, list):
+            seen_prompts["vision_blocks"] = content
+            return '{"images": ["WRT tool screenshot: Dump & Collect button highlighted, preset Alnair applied; annotation: press after issue happens"]}'
+        seen_prompts["text"] = content
+        return fake_llm.chat_text(messages, system_content)
+    fake_llm.chat_text = fake_llm.chat
+    fake_llm.chat = _vision_or_text
     orig_llm = getattr(app_config, "llm_helper", None)
     orig_agent = getattr(app_config, "log_chatbot_agent", None)
     orig_files_dir = getattr(app_config, "avatarfiles_dir", None)
 
+    from . import ips_client as ipc_mod
+    orig_ipc = ipc_mod.IpsClient
+
+    class _FakeIps:
+        """One Partner comment with an embedded screenshot (force.com URL)."""
+        FIELD_RICH_BODY = "Core_IPS_Rich_Comment__c"
+        fetched: list = []
+        def get_case_comments(self, case_id):
+            return [{"Id": "CIMG1", "CreatedDate": "2026-06-20T03:05:00.000+0000",
+                     "Core_IPS_Comment_Author_Type__c": "Partner",
+                     "Core_IPS_Rich_Comment__c":
+                         '<p>Repro steps attached as screenshot.<br/><img src="https://intel.file.force.com/servlet/rtaImage?eid=1&amp;refid=2"></p>'}]
+        def fetch_binary(self, url, max_bytes=0):
+            _FakeIps.fetched.append(url)
+            return ("image/png", b"PNG fake")
+
     try:
+        ipc_mod.IpsClient = _FakeIps
         cis.CaseService.process_case = staticmethod(_fake_process)
         cis.CaseService.load_case_summary_prompt = staticmethod(
             lambda wifi_or_bt: "prompt_fake.py")
@@ -314,6 +399,39 @@ def smoke_runner(tmp: Path) -> None:
 
         r = runner_mod.HandsfreeRunner(
             progress_cb=lambda s, d: print(f"    · {s}: {d}"))
+
+        # BT cases must inspect extracted contents before triage-only exit.
+        # This matches Avatar's local-upload rule: ibtpci-/ibtusb- ETLs are
+        # recognized BT captures.
+        bt_etl = case_dir / "bt_capture" / "ibtpci-driver.etl"
+        bt_etl.parent.mkdir(parents=True, exist_ok=True)
+        bt_etl.write_bytes(b"\x00fake")
+        bt_hci = Path(str(bt_etl) + ".hci.txt")
+        bt_hci.write_text("12:00:00.000 [INFO] Bluetooth capture\n",
+                          encoding="utf-8")
+
+        def _fake_process_bt(case_ctx: CaseContext) -> CaseContext:
+            case_ctx = _fake_process(case_ctx)
+            case_ctx.wifi_or_bt = "bt"
+            return case_ctx
+
+        cis.CaseService.process_case = staticmethod(_fake_process_bt)
+        adc.process_single_zip = lambda *a, **k: ([], [], [], [str(bt_etl)], [])
+        bt_parser.bt_decode_via_cli = lambda *a, **k: str(bt_hci)
+        bt_analysis = r.analyze_case("01234567")
+        bt_stages = [s.name for s in bt_analysis.stages]
+        check("S4.bt valid BT capture is content-checked",
+              bt_analysis.bt_case_valid is True
+              and bt_analysis.mode == "full"
+              and bt_analysis.log_path == str(bt_hci)
+              and "decompose" in bt_stages
+              and "check_bt_log" in bt_stages
+              and "agent_analysis" in bt_stages,
+              f"valid={getattr(bt_analysis, 'bt_case_valid', None)} "
+              f"mode={bt_analysis.mode} log={bt_analysis.log_path} stages={bt_stages}")
+
+        cis.CaseService.process_case = staticmethod(_fake_process)
+        adc.process_single_zip = _fake_zip_proc
         analysis = r.analyze_case("01234567")
 
         check("S4.a mode is full", analysis.mode == "full",
@@ -327,11 +445,9 @@ def smoke_runner(tmp: Path) -> None:
               and analysis.case_reader.get("issue_time_source") == "comment #2")
         stage_names = [s.name for s in analysis.stages]
         check("S4.e all stages recorded",
-              {"fetch_case", "triage", "read_case_history", "check_case_info",
-               "check_wrt_log", "pick_zip", "download", "decompose",
-               "issue_time", "pick_etl", "decode_etl", "agent_analysis",
-               "echo_kb"}
-              <= set(stage_names),
+              {"fetch_case", "triage", "read_case_history", "check_wrt_log",
+               "pick_zip", "download", "decompose", "issue_time", "pick_etl",
+               "agent_analysis", "echo_kb"} <= set(stage_names),
               str(stage_names))
         check("S4.e2 no assert evidence -> Echo never queried",
               analysis.echo_insights == [], str(analysis.echo_insights))
@@ -340,6 +456,21 @@ def smoke_runner(tmp: Path) -> None:
               f"chosen={analysis.chosen_attachment}")  # .7z proves non-zip archives pass the pick stage
         check("S4.h Salesforce case id captured",
               analysis.case_id == "500FAKESFID000AAA")
+        check("S4.d2 next action + owner read from the thread, owner normalized",
+              analysis.action_owner == "intel"
+              and analysis.next_action.startswith("Intel to analyze repro_logs.7z"),
+              f"{analysis.action_owner!r} {analysis.next_action!r}")
+        check("S4.i2 comment screenshot downloaded, described, fed to the reader "
+              "and the customer history; stage recorded OK",
+              len(analysis.comment_images) == 1
+              and "Dump & Collect" in analysis.comment_images[0]["descriptions"][0]
+              and "Dump & Collect" in analysis.customer_history
+              and "[Images embedded in the comment of 2026-06-20" in seen_prompts.get("text", "")
+              and _FakeIps.fetched == ["https://intel.file.force.com/servlet/rtaImage?eid=1&refid=2"]
+              and any(st.name == "read_images" and st.ok for st in analysis.stages)
+              and seen_prompts["vision_blocks"][2]["type"] == "image_url",
+              f"images={analysis.comment_images} fetched={_FakeIps.fetched} "
+              f"stages={[(st.name, st.ok, st.detail) for st in analysis.stages if st.name == 'read_images']}")
         check("S4.h2 customer history keeps Partner comments, drops Intel-side ones",
               "Reproduced today at 10:17:30" in analysis.customer_history
               and "INTERNAL" not in analysis.customer_history,
@@ -355,6 +486,14 @@ def smoke_runner(tmp: Path) -> None:
                             analysis=analysis.to_dict())
         check("S4.f draft queued pending_review",
               rec["status"] == "pending_review" and "AP-initiated" in rec["draft_plain"])
+        check("S4.f3 private draft states the next action and its owner",
+              "Next action — Intel (case owner): Intel to analyze repro_logs.7z"
+              in rec["draft_plain"],
+              rec["draft_plain"][:300])
+        slim = next(i for i in store.list_drafts() if i["draft_id"] == rec["draft_id"])
+        check("S4.f4 queue row carries action owner + next action",
+              slim["action_owner"] == "intel"
+              and slim["next_action"].startswith("Intel to analyze"), str(slim))
         check("S4.f2 minor info gap -> best-effort analysis + clarification section",
               analysis.mode == "full"
               and [m["item"] for m in analysis.missing_info] == ["repro_steps"]
@@ -399,6 +538,21 @@ def smoke_runner(tmp: Path) -> None:
               "provided: repro_logs.7z" not in draft3["plain"]
               and "[ ] 1) WPP driver log" in draft3["plain"],
               draft3["plain"][-700:])
+        # Autologger-style archive: firmware + event logs but no driver WPP
+        # ETL — the reply says what was found instead of "no WRT logs".
+        adc.process_single_zip = lambda *a, **k: ([], [], ["sys.evt"], [], ["wrt-fw.etl"])
+        analysis3b = r.analyze_case("01234567")
+        draft3b = compose(analysis3b)
+        check("S4.m3 archive with fw/event logs only: reply names what it holds and asks "
+              "for the WPP driver log",
+              analysis3b.mode == "request_logs"
+              and analysis3b.log_request_reason == "no_wrt_inside"
+              and analysis3b.archive_contents == {"wifi_wpp": 0, "ddd": 0, "event_logs": 1,
+                                                  "bt": 0, "fw": 1}
+              and "it contains firmware (wrt-fw) traces, Windows event logs but no Intel "
+                  "Wi-Fi driver WPP log (WifiDriverIHVSession.etl)" in draft3b["plain"],
+              f"reason={analysis3b.log_request_reason} contents={analysis3b.archive_contents} "
+              f"{draft3b['plain'][:400]}")
 
         # --- decompose CRASH must NOT ask the customer for logs -------------
         # (_stage swallows the exception; empty lists must only mean
@@ -424,7 +578,7 @@ def smoke_runner(tmp: Path) -> None:
                 {"item": "repro_steps", "reason": "no repro steps"},
             ],
         })
-        fake_llm.chat = lambda messages, system_content=None: severe_reply
+        fake_llm.chat_text = lambda messages, system_content=None: severe_reply
         analysis5 = r.analyze_case("01234567")
         stage_names5 = [s.name for s in analysis5.stages]
         check("S9.a severe info gap -> request_info, stops before pick_zip",
@@ -449,21 +603,77 @@ def smoke_runner(tmp: Path) -> None:
               draft5["plain"][-500:])
 
         # Fallback-found issue time retracts the gap (stage-7 refinement).
+        # No minute-precise issue time (the reader only found "June 2nd"):
+        # ask for the exact time first — no download, no decode, no agent.
         time_gap_reply = json.dumps({
             "clean_description": "Device disconnects after association",
-            "issue_times": [], "issue_time_source": "",
+            "issue_times": ["June 2nd"], "issue_time_source": "comment #3",
             "attachment_name": "repro_logs.7z",
             "attachment_reason": "only driver log upload",
-            "reasoning": "time never stated; org fallback should find it",
-            "missing_info": [{"item": "issue_time",
-                              "reason": "no failure time stated"}],
+            "reasoning": "only a date was stated",
+            "missing_info": [],
         })
-        fake_llm.chat = lambda messages, system_content=None: time_gap_reply
+        fake_llm.chat_text = lambda messages, system_content=None: time_gap_reply
         adc.process_single_zip = _fake_zip_proc
         analysis6 = r.analyze_case("01234567")
-        check("S9.c fallback-found issue time retracts the gap",
-              analysis6.mode == "full" and analysis6.missing_info == [],
-              f"mode={analysis6.mode} missing={analysis6.missing_info}")
+        d6 = compose(analysis6)
+        check("S9.c vague issue time only -> request_info before any download; "
+              "exact time asked for, nothing ticked as the reproduction time",
+              analysis6.mode == "request_info"
+              and analysis6.issue_times == []
+              and analysis6.case_reader.get("vague_times") == ["June 2nd"]
+              and [m["item"] for m in analysis6.missing_info] == ["issue_time"]
+              and "download" not in [s.name for s in analysis6.stages]
+              and "exact date and time (with timezone)" in d6["plain"]
+              and "June 2nd" not in d6["plain"],
+              f"mode={analysis6.mode} times={analysis6.issue_times} "
+              f"missing={analysis6.missing_info} stages={[s.name for s in analysis6.stages]}")
+
+        # Precise time, but the only log covers another window (fixture log
+        # is 06/20 10:16-10:44): public request for a matching log, no agent.
+        wrong_time_reply = json.loads(reader_reply)
+        wrong_time_reply.update({"issue_times": ["06/20/2026-08:00:00"]})
+        fake_llm.chat_text = lambda messages, system_content=None: json.dumps(wrong_time_reply)
+        analysis6b = r.analyze_case("01234567")
+        d6b = compose(analysis6b)
+        check("S9.c2 log does not cover the issue time -> request_logs with the "
+              "covering window, no agent / Echo run",
+              analysis6b.mode == "request_logs"
+              and analysis6b.log_request_reason == "log_not_covering"
+              and "agent_analysis" not in [s.name for s in analysis6b.stages]
+              and "echo_kb" not in [s.name for s in analysis6b.stages]
+              and "covers 06/20/2026-10:16:01" in d6b["plain"]
+              and "reported issue time is 06/20/2026-08:00:00" in d6b["plain"]
+              and "captured at the issue time" in d6b["plain"],
+              f"mode={analysis6b.mode} reason={analysis6b.log_request_reason} "
+              f"{d6b['plain'][:500]}")
+
+        # YB exception (2026-10-07): same mismatch, but a yellow-bang case
+        # whose log holds an assert continues on the assert evidence.
+        etl_yb = case_dir / "capture_yb_20-06-2026_10-20-00_5_5055_0x20101f01_0x0_0x0" / "WifiDriverIHVSession.etl.001"
+        etl_yb.parent.mkdir(parents=True, exist_ok=True)
+        etl_yb.write_bytes(b"\x00fake")
+        Path(str(etl_yb) + ".log").write_text("\n".join(log_lines[:1] + [
+            "06/20/2026-10:20:00.000 [17] [NIC_DEBUG] [ERROR] [x]:FATAL_ERROR: uCode ASSERT(UMAC, rtStatus = 0x20101F01, data1 = 0x0, data2 = 0x0)",
+        ] + log_lines[-1:]), encoding="utf-8")
+        yb_reply = dict(wrong_time_reply, issue_domain="Yellow Bang")
+        fake_llm.chat_text = lambda messages, system_content=None: json.dumps(yb_reply)
+        adc.process_single_zip = lambda *a, **k: ([str(etl_yb)], [], [], [], [])
+        analysis6c = r.analyze_case("01234567")
+        adc.process_single_zip = _fake_zip_proc
+        d6c = compose(analysis6c)
+        check("S9.c3 YB case + assert in the log -> analysis continues despite the "
+              "time mismatch; draft explains it",
+              analysis6c.yb_case
+              and analysis6c.time_mismatch.get("yb_assert_override") == ["0x20101F01"]
+              and analysis6c.mode in ("full", "triage_only")
+              and "agent_analysis" in [s.name for s in analysis6c.stages]
+              and "echo_kb" in [s.name for s in analysis6c.stages]
+              and "TIME MISMATCH" in d6c["plain"]
+              and "assert(s) 0x20101F01 found in this log" in d6c["plain"]
+              and "please help provide a WRT log" not in d6c["plain"],
+              f"mode={analysis6c.mode} yb={analysis6c.yb_case} tm={analysis6c.time_mismatch} "
+              f"stages={[s.name for s in analysis6c.stages]} {d6c['plain'][:300]}")
 
         # request_logs + info gaps merge into ONE public reply.
         analysis2.missing_info = [{"item": "issue_time", "reason": ""}]
@@ -487,7 +697,7 @@ def smoke_runner(tmp: Path) -> None:
                 "Steps to reproduce": "1. Run Burn-in stress 2. Check device status in Device Manager"}
             return case_ctx
         cis.CaseService.process_case = staticmethod(_fake_process_env_steps)
-        fake_llm.chat = lambda messages, system_content=None: reader_reply
+        fake_llm.chat_text = lambda messages, system_content=None: reader_reply
         analysis7 = r.analyze_case("01234567")
         check("S11.e env-form repro steps retract the reader-flagged gap",
               analysis7.mode == "full" and analysis7.missing_info == []
@@ -593,11 +803,298 @@ def smoke_runner(tmp: Path) -> None:
         modes = [d.get("mode") for d in store14b.list_drafts(include_closed=True)]
         check("S14.b failed case fetch queues NO customer-facing first response",
               modes == ["error"], str(modes))
+
+        # Ball with the customer: no analysis, no request, no checklist —
+        # one private reviewer note only.
+        cis.CaseService.process_case = staticmethod(_fake_process)
+        waiting_reply = json.loads(reader_reply)
+        waiting_reply.update({
+            "action_owner": "customer",
+            "next_action": "Customer to upload the WRT log Intel asked for in comment #3"})
+        fake_llm.chat_text = lambda messages, system_content=None: json.dumps(waiting_reply)
+        store14c = HandsfreeStore(tmp / "handsfree_s14c")
+        orch._analyze_and_enqueue(store14c, "01234567")
+        drafts = [store14c.get(d["draft_id"])
+                  for d in store14c.list_drafts(include_closed=True)]
+        a14 = drafts[0]["analysis"] if drafts else {}
+        check("S14.c customer owns the action -> waiting_customer note only, "
+              "pipeline stopped before pick_zip",
+              [d["mode"] for d in drafts] == ["waiting_customer"]
+              and "pick_zip" not in [s["name"] for s in a14.get("stages", [])]
+              and "Waiting on the customer" in drafts[0]["draft_plain"]
+              and "Customer to upload the WRT log" in drafts[0]["draft_plain"]
+              and drafts[0]["confidence"] is None,
+              str([(d["mode"], d["draft_plain"][:80]) for d in drafts]))
+
+        # Reader says "customer to provide logs" although NO Intel comment
+        # ever asked (only customer rows + our own AI note): Intel owns the
+        # next step, the pipeline continues and requests as usual.
+        def _fake_process_unasked(case_ctx: CaseContext) -> CaseContext:
+            case_ctx = _fake_process(case_ctx)
+            case_ctx.comments = [
+                [datetime(2026, 6, 19, 9, 0), "Partner", "Initial report: disconnects."],
+                [datetime(2026, 6, 20, 9, 0), "Agent",
+                 "[AI-Avatar preliminary analysis] Automated triage ..."],
+            ]
+            case_ctx.attachment_list = []
+            return case_ctx
+        cis.CaseService.process_case = staticmethod(_fake_process_unasked)
+        store14f = HandsfreeStore(tmp / "handsfree_s14f")
+        rec14f = orch._analyze_and_enqueue(store14f, "01234567")
+        cis.CaseService.process_case = staticmethod(_fake_process)
+        check("S14.e 'customer owns' without any Intel ask -> owner corrected to Intel, "
+              "request-logs reply drafted",
+              rec14f["mode"] == "request_logs"
+              and rec14f["analysis"]["action_owner"] == "intel",
+              f"mode={rec14f['mode']} owner={rec14f['analysis']['action_owner']}")
+        fake_llm.chat_text = lambda messages, system_content=None: reader_reply
+
+        # Later round (first response already sent on the case): no second
+        # overview draft, and a request reply carries only its targeted ask.
+        store14d = HandsfreeStore(tmp / "handsfree_s14d")
+        store14d.mark_posted("01234567", comment_id="CMT-FR", first_response=True)
+        orch._analyze_and_enqueue(store14d, "01234567")
+        modes14d = [d.get("mode") for d in store14d.list_drafts(include_closed=True)]
+        cis.CaseService.process_case = staticmethod(_fake_process_no_logs)
+        store14e = HandsfreeStore(tmp / "handsfree_s14e")
+        store14e.mark_posted("01234567", comment_id="CMT-FR", first_response=True)
+        rec14e = orch._analyze_and_enqueue(store14e, "01234567")
+        cis.CaseService.process_case = staticmethod(_fake_process)
+        # Trial mode (Settings) + the list-view source of the automatic
+        # analysis: already-analyzed cases are skipped, closed cases run only
+        # in trial mode, trial drafts are flagged and Approve refuses them.
+        from .ips_client import CaseRef
+        store14g = HandsfreeStore(tmp / "handsfree_s14g")
+        store14g.save_config({"trial_mode": True, "post_backend": "rest"})
+        store14g.mark_analyzed("00000001", "old-draft")   # already analyzed -> skipped
+
+        class _ListViewIps:
+            def list_view_cases(self, name, limit=200):
+                assert name == "Handsfree_replier_test_case"
+                return [CaseRef("00000001", "500A", "done before", status="Closed"),
+                        CaseRef("01234567", "500B", "historical closed case", status="Closed"),
+                        CaseRef("00000003", "500C", "open one", status="Open", closed=False)]
+
+            def find_customer_updates(self, case_ids, since_iso):
+                return {}
+        orig_ips_cls = orch.IpsClient
+        orch.IpsClient = _ListViewIps
+        try:
+            summary = orch.run_auto_scan(store14g, "", max_cases=1, trigger="manual",
+                                         list_view="Handsfree_replier_test_case")
+            store14h = HandsfreeStore(tmp / "handsfree_s14h")      # trial mode OFF
+            store14h.save_config({"trial_mode": False, "post_backend": "rest"})
+            summary_h = orch.run_auto_scan(store14h, "", max_cases=5, trigger="manual",
+                                           list_view="Handsfree_replier_test_case")
+        finally:
+            orch.IpsClient = orig_ips_cls
+        trial_drafts = store14g.list_drafts(include_closed=True)
+        res_trial = None
+        if trial_drafts:
+            orig_store_fn = orch._store
+            orch._store = lambda: store14g
+            try:
+                res_trial = orch.approve_and_post(trial_drafts[0]["draft_id"])
+            finally:
+                orch._store = orig_store_fn
+        check("S14.f list-view round in trial mode: analyzed case skipped, next (closed) "
+              "case run, drafts flagged TRIAL, Approve refuses to post them",
+              summary["ok"] and [c["case_nbr"] for c in summary["cases"]] == ["01234567"]
+              and trial_drafts and all(d.get("trial") for d in trial_drafts)
+              and res_trial is not None and res_trial["ok"] is False
+              and "trial draft" in res_trial["error"],
+              f"summary={summary} trial={[d.get('trial') for d in trial_drafts]} res={res_trial}")
+        check("S14.f2 trial mode off: closed list-view cases skipped, the open one runs, "
+              "drafts not flagged; scan stamp kept per list view",
+              summary_h["ok"] and [c["case_nbr"] for c in summary_h["cases"]] == ["00000003"]
+              and not any(d.get("trial") for d in store14h.list_drafts(include_closed=True))
+              and "listview:handsfree_replier_test_case"
+              in (store14h.load_config().get("auto_last_scan_by_owner") or {})
+              and not any(store14d.get(d['draft_id']).get('trial')
+                          for d in store14d.list_drafts(include_closed=True)),
+              f"summary={summary_h} cfg={store14h.load_config().get('auto_last_scan_by_owner')}")
+
+        # --- S18 BSOD branch (Charles, 2026-10-14): a BSOD case with a dump
+        # upload needs no issue time; the dumps go to the BSOD share and
+        # PotatoFarm is triggered (Avatar's BSOD flow); later rounds don't
+        # resubmit; without a dump the public reply asks for the dump.
+        print("[S18] BSOD branch")
+        from . import bsod as bsod_mod
+        bsod_dir = tmp / "bsod_share"
+        bsod_calls: list = []
+        orig_bsod = (bsod_mod.share_case_dir, bsod_mod.submit_to_potatofarm,
+                     bsod_mod._submissions_path, bsod_mod.handsfree_config)
+        bsod_cfg = {"trial_mode": False, "bsod_email": "owner@example.com",
+                    "bsod_result_wait_min": 0.05}
+        bsod_mod.share_case_dir = lambda case_nbr, backend_id="": str(bsod_dir / case_nbr)
+        parser_json = {"01032878_sku6_0x1a_memory": {
+            "bugcheck_str": "MEMORY_MANAGEMENT (1a)     # Any other values ...",
+            "bugcheck_code": "1a", "failure_bucket_id": "0x1a_41792_nt!MiDecommitHandlePageFileFormatPte",
+            "process_name": "backgroundTaskHost.exe", "dump_time": "2026-09-29T03:09:40.640000",
+            "version": "24.70.0.3", "drv_branch": "core24.70", "is_verifier_enabled": False,
+            "num_of_fw_asserts": 0, "is_driver_on_stack": False,
+            "is_wifi_driver_fault": False, "is_bt_driver_fault": False,
+            "stacks": [{"2": ["nt!KeBugCheckEx", "nt!MiDecommitHandlePageFileFormatPte", "nt!MiDeleteVa"]}],
+            "jira_id": None, "jira_decision": "no_update:JIRA filing not requested"}}
+
+        def _fake_submit(dumps_path, email, key=None):
+            bsod_calls.append((dumps_path, email))
+            Path(dumps_path).mkdir(parents=True, exist_ok=True)
+            (Path(dumps_path) / bsod_mod.RESULT_JSON).write_text(json.dumps(parser_json), encoding="utf-8")
+            (Path(dumps_path) / bsod_mod.RESULT_HTML).write_text("<html>report</html>", encoding="utf-8")
+            return {"ok": True, "status": 200, "detail": "queued"}
+        bsod_mod.submit_to_potatofarm = _fake_submit
+        bsod_mod._submissions_path = lambda: tmp / "bsod_submissions.json"
+        bsod_mod.handsfree_config = lambda: dict(bsod_cfg)
+
+        def _fake_process_bsod(case_ctx: CaseContext) -> CaseContext:
+            case_ctx = _fake_process(case_ctx)
+            case_ctx.subject = "[lenovo_wcl][WCL] BSOD related to WLAN driver"
+            case_ctx.description = ("Set Long Run on the test machine, and then "
+                                    "encounter BSOD with multiple error code.")
+            case_ctx.attachment_list = [
+                ["SKU15_0x9F_MEMORY.zip", "https://esft/x?FileName=SKU15_0x9F_MEMORY.zip",
+                 ["10/13/2026 11:44", "SKU15_0x9F_MEMORY.zip"]],
+                ["SKU6_0x1A_MEMORY.zip", "https://esft/x?FileName=SKU6_0x1A_MEMORY.zip",
+                 ["10/13/2026 09:01", "SKU6_0x1A_MEMORY.zip"]],
+            ]
+            case_ctx.env_detail = {"Computer Model": "WCL",
+                                   "Assert Error (32-bit value or NA)": "0x139/0x1E/0x9F/0x1A"}
+            return case_ctx
+
+        def _fake_process_bsod_nodump(case_ctx: CaseContext) -> CaseContext:
+            case_ctx = _fake_process_bsod(case_ctx)
+            case_ctx.attachment_list = []
+            return case_ctx
+
+        bsod_reader = json.dumps({
+            "clean_description": "BSOD during a long-run test, several bug checks.",
+            "issue_times": [], "issue_time_source": "",
+            "attachment_name": "SKU15_0x9F_MEMORY.zip", "attachment_reason": "memory dump",
+            "reasoning": "", "issue_domain": "BSOD", "issue_subcategory": "",
+            "missing_info": [{"item": "issue_time", "reason": "no failure time stated"}],
+            "action_owner": "Intel", "next_action": "Intel to analyze the dumps",
+        })
+
+        def _fake_dload_bsod(att_list, download_path, socketio):
+            Path(download_path).mkdir(parents=True, exist_ok=True)
+            for it in att_list:
+                target = Path(download_path) / it[0]
+                target.write_bytes(b"dump")
+                yield [str(target), it[0], False]
+
+        cis.CaseService.process_case = staticmethod(_fake_process_bsod)
+        fake_llm.chat_text = lambda messages, system_content=None: bsod_reader
+        adl.run_dload_threads = _fake_dload_bsod
+        try:
+            a_b1 = r.analyze_case("01032878")
+            a_b2 = r.analyze_case("01032878")          # same uploads -> no resubmit
+            bsod_cfg["trial_mode"] = True
+            bsod_mod._submissions_path = lambda: tmp / "bsod_submissions_trial.json"
+            a_b3 = r.analyze_case("01032878")          # trial: PotatoFarm not triggered
+            bsod_cfg["trial_mode"] = False
+            cis.CaseService.process_case = staticmethod(_fake_process_bsod_nodump)
+            a_b4 = r.analyze_case("01032878")          # no dump -> ask for it
+            # One upload's download stalls every round: retried once, then
+            # given up (never a multi-hour fetch on every round).
+            bsod_calls_b4 = list(bsod_calls)            # calls so far (S18.a-c)
+            cis.CaseService.process_case = staticmethod(_fake_process_bsod)
+            bsod_mod._submissions_path = lambda: tmp / "bsod_submissions_fail.json"
+            def _fake_dload_sku15_stalls(att_list, download_path, socketio):
+                ok_items = [it for it in att_list if "SKU15" not in str(it[0])]
+                for item in _fake_dload_bsod(ok_items, download_path, socketio):
+                    yield item
+            adl.run_dload_threads = _fake_dload_sku15_stalls
+            a_b5 = r.analyze_case("01032878")          # SKU6 submitted, SKU15 fails (1)
+            a_b6 = r.analyze_case("01032878")          # SKU15 retried, fails (2)
+            a_b7 = r.analyze_case("01032878")          # given up -> pending, no fetch
+        finally:
+            (bsod_mod.share_case_dir, bsod_mod.submit_to_potatofarm,
+             bsod_mod._submissions_path, bsod_mod.handsfree_config) = orig_bsod
+            cis.CaseService.process_case = staticmethod(_fake_process)
+            fake_llm.chat_text = lambda messages, system_content=None: reader_reply
+            adl.run_dload_threads = _fake_dload
+        from .composer import compose as compose_fn
+        from .checklist import build_fills as build_fills_fn
+        d_b1, d_b2, d_b3, d_b4 = (compose_fn(a)["plain"] for a in (a_b1, a_b2, a_b3, a_b4))
+        fills_b1 = build_fills_fn(a_b1)                  # llm=None -> deterministic only
+        dump_item = next((e for e in fills_b1.get("required_log", [])
+                          if "Kernel Dump" in e["item"]), {})
+        dump_item_b4 = next((e for e in build_fills_fn(a_b4).get("required_log", [])
+                             if "Kernel Dump" in e["item"]), {})
+        check("S18.a BSOD + dump upload: issue time not required, dumps downloaded to the "
+              "BSOD share and submitted to PotatoFarm once, private draft says so",
+              a_b1.mode == "bsod_submitted" and a_b1.bsod_case and a_b1.ok
+              and not any(m.get("item") == "issue_time" for m in a_b1.missing_info)
+              and a_b1.bsod.get("submitted")
+              and a_b1.bsod["dumps"] == ["SKU15_0x9F_MEMORY.zip", "SKU6_0x1A_MEMORY.zip"]
+              and bsod_calls_b4 == [(str(bsod_dir / "01032878"), "owner@example.com")]
+              and (bsod_dir / "01032878" / "SKU6_0x1A_MEMORY.zip").exists()
+              and [st.name for st in a_b1.stages if st.name.startswith("bsod")]
+              == ["bsod_dumps", "bsod_download", "bsod_submit", "bsod_result"]
+              and "PotatoFarm" in d_b1 and "owner@example.com" in d_b1 and "0x139" in d_b1,
+              f"mode={a_b1.mode} bsod={a_b1.bsod} calls={bsod_calls} "
+              f"missing={a_b1.missing_info} stages={[st.name for st in a_b1.stages]}")
+        check("S18.b second round, same uploads: no resubmission (bsod_pending)",
+              a_b2.mode == "bsod_pending" and len(bsod_calls_b4) == 1
+              and "already submitted" in d_b2.lower(),
+              f"mode={a_b2.mode} calls={len(bsod_calls)} draft={d_b2[:300]}")
+        check("S18.c trial mode: dumps downloaded but PotatoFarm not triggered",
+              a_b3.mode == "bsod_submitted" and not a_b3.bsod.get("submitted")
+              and "trial" in a_b3.bsod.get("skipped", "") and len(bsod_calls_b4) == 1
+              and "NOT triggered" in d_b3,
+              f"mode={a_b3.mode} bsod={a_b3.bsod} calls={len(bsod_calls)}")
+        check("S18.d BSOD without a dump: public reply asks for the memory dump (+ the "
+              "issue-time ask), not for WRT logs; the dump item is not ticked",
+              a_b4.mode == "request_logs" and a_b4.log_request_reason == "no_dump"
+              and "MEMORY.DMP" in d_b4 and "exact date and time" in d_b4
+              and "Intel wireless driver WRT logs" not in d_b4
+              and not dump_item_b4.get("provided"),
+              f"mode={a_b4.mode} reason={a_b4.log_request_reason} draft={d_b4[:400]}")
+        time_item = next((e for e in fills_b1.get("general_info", [])
+                          if "reproduction time" in e["item"].lower()), {})
+        check("S18.e first-response checklist ticks 'Kernel Dump' with the upload names and "
+              "does not ask for the reproduction time",
+              dump_item.get("provided") and "SKU15_0x9F_MEMORY.zip" in dump_item.get("value", "")
+              and time_item.get("provided") and "not required" in time_item.get("value", ""),
+              f"{dump_item} {time_item}")
+        res_b1 = a_b1.bsod.get("results") or []
+        check("S18.f PotatoFarm result picked up from the dump folder: bugcheck, bucket, "
+              "driver verdict and assessment in the private draft (also on the pending round)",
+              len(res_b1) == 1 and res_b1[0]["failure_bucket_id"].startswith("0x1a_41792")
+              and res_b1[0]["wifi_fault"] is False
+              and [st.name for st in a_b1.stages if st.name.startswith("bsod")]
+              == ["bsod_dumps", "bsod_download", "bsod_submit", "bsod_result"]
+              and "0x1a_41792_nt!MiDecommitHandlePageFileFormatPte" in d_b1
+              and "not at fault" in d_b1 and "not a WLAN driver issue" in d_b1
+              and "0x1a_41792" in d_b2 and (a_b2.bsod.get("results") or []),
+              f"results={res_b1} stages={[st.name for st in a_b1.stages]} d_b2={d_b2[:400]}")
+        d_b7 = compose_fn(a_b7)["plain"]
+        check("S18.g stalled download: the other upload is submitted, the stalled one is "
+              "retried once, then given up (named in the draft, never fetched again)",
+              a_b5.mode == "bsod_submitted" and a_b5.bsod.get("submitted")
+              and a_b6.mode == "bsod_pending" and a_b6.bsod.get("failed") == ["SKU15_0x9F_MEMORY.zip"]
+              and a_b7.mode == "bsod_pending"
+              and a_b7.bsod.get("failed") == ["SKU15_0x9F_MEMORY.zip"]
+              and "GAVE UP" in d_b7 and len(bsod_calls) == 2,
+              f"modes={a_b5.mode}/{a_b6.mode}/{a_b7.mode} failed6={a_b6.bsod.get('failed')} "
+              f"failed7={a_b7.bsod.get('failed')} calls={len(bsod_calls)} draft={d_b7[:300]}")
+
+        check("S14.d later round: analysis only (no second overview); request reply "
+              "asks for the logs without the checklist",
+              modes14d == ["full"]
+              and rec14e["mode"] == "request_logs"
+              and "WRT logs" in rec14e["draft_plain"]
+              and "=== General Info ===" not in rec14e["draft_plain"]
+              and CHECKLIST_TAG in rec14e["draft_plain"],
+              f"{modes14d} {rec14e['mode']} {rec14e['draft_plain'][-200:]}")
     finally:
+        ipc_mod.IpsClient = orig_ipc
         cis.CaseService.process_case = orig_process
         cis.CaseService.load_case_summary_prompt = orig_prompt
         adl.run_dload_threads = orig_dload
         adc.process_single_zip = orig_zip
+        bt_parser.bt_decode_via_cli = orig_bt_decode
         ita.organize_issue_context = orig_org
         app_config.llm_helper = orig_llm
         app_config.log_chatbot_agent = orig_agent
@@ -607,104 +1104,251 @@ def smoke_runner(tmp: Path) -> None:
 
 # ---------------------------------------------------------------- S5
 def smoke_orchestrator(tmp: Path) -> None:
-    print("[S5] Approve/post guards (scan failure aborts; marker dedups)")
+    print("[S5] Approve/post policy (first response once per case; analyses per round)")
     from . import orchestrator as orch
     from .composer import AI_MARKER, CHECKLIST_TAG
+    from .ips_client import PostResult
     from .queue import HandsfreeStore
 
     store = HandsfreeStore(tmp / "handsfree_s5")
-    rec = store.enqueue(case_nbr="09999999", case_id="500S5FAKE", subject="s5",
-                        draft_plain=AI_MARKER + "\n\nbody", draft_html="<p>b</p>",
-                        confidence=None, mode="full", analysis={})
-    draft_id = rec["draft_id"]
+    store.save_config({"post_backend": "rest"})   # never the Selenium fallback
 
-    class _ScanBoom:
+    class _Ips:
+        """Configurable fake: comments on the case + post outcome."""
         FIELD_RICH_BODY = "Core_IPS_Rich_Comment__c"
-        def get_case_comments(self, case_id):
-            raise RuntimeError("IPS unreachable")
+        comments: list = []
+        scan_raises = False
+        post_ok = False
+        posted: list = []
 
-    class _HasMarker:
-        FIELD_RICH_BODY = "Core_IPS_Rich_Comment__c"
         def get_case_comments(self, case_id):
-            return [{"Id": "C1",
-                     "Core_IPS_Rich_Comment__c": AI_MARKER + " posted earlier"}]
+            if self.scan_raises:
+                raise RuntimeError("IPS unreachable")
+            return list(self.comments)
+
+        def post_comment(self, case_id, rich_body, **kw):
+            self.posted.append((case_id, kw.get("private")))
+            if self.post_ok:
+                return PostResult(ok=True, backend="rest",
+                                  comment_id=f"CMT{len(self.posted)}")
+            return PostResult(ok=False, backend="rest", error="rest down")
+
+    def enqueue(case, mode, body="body"):
+        tag = ("\n" + CHECKLIST_TAG) if mode in orch._CHECKLIST_MODES else ""
+        return store.enqueue(case_nbr=case, case_id="500" + case, subject="s",
+                             draft_plain=AI_MARKER + tag + "\n\n" + body,
+                             draft_html="<p>b</p>", confidence=None, mode=mode,
+                             analysis={})["draft_id"]
 
     orig_store_fn, orig_ips = orch._store, orch.IpsClient
     try:
         orch._store = lambda: store
-        orch.IpsClient = _ScanBoom
-        res = orch.approve_and_post(draft_id)
-        check("S5.a scan failure aborts the post",
-              res["ok"] is False and "scan failed" in res["error"], str(res))
-        check("S5.b draft still pending_review after abort (retryable)",
-              store.get(draft_id)["status"] == "pending_review")
+        orch.IpsClient = _Ips
 
-        orch.IpsClient = _HasMarker
-        res2 = orch.approve_and_post(draft_id)
-        check("S5.c existing AI comment -> refuse + mark posted",
-              res2["ok"] is False and store.get(draft_id)["status"] == "posted",
-              str(res2))
-        check("S5.d second approve of posted draft refused",
-              orch.approve_and_post(draft_id)["error"] == "draft already posted")
+        # An existing AI analysis comment no longer blocks another analysis
+        # (one per round), and a scan failure never aborts a post.
+        _Ips.comments = [{"Id": "C1", "Core_IPS_Rich_Comment__c": AI_MARKER + " earlier"}]
+        d1 = enqueue("09999999", "full")
+        res = orch.approve_and_post(d1)
+        check("S5.a analysis draft posts even though an AI analysis exists on the case",
+              "already" not in (res.get("error") or "")
+              and store.get(d1)["status"] == "post_failed", str(res))
+        _Ips.scan_raises = True
+        d2 = enqueue("09999998", "first_response")
+        res = orch.approve_and_post(d2)
+        check("S5.b first response: a failed IPS scan is skipped, post attempted",
+              "scan failed" not in (res.get("error") or "")
+              and store.get(d2)["status"] == "post_failed", str(res))
+        _Ips.scan_raises = False
 
-        # Family-aware dedup: an ANALYSIS comment on the case must not block
-        # a first-response draft (and vice versa).
-        rec2 = store.enqueue(case_nbr="09999998", case_id="500S5B", subject="s5b",
-                             draft_plain=AI_MARKER + "\n" + CHECKLIST_TAG + "\n\nbody",
-                             draft_html="<p>b</p>", confidence=None,
-                             mode="first_response", analysis={})
+        # First response once per case, tracked in OUR ledger (reviewers edit
+        # the text, so body markers are not what decides).
+        _Ips.comments, _Ips.post_ok = [], True
+        d3 = enqueue("09999997", "request_logs")
+        res = orch.approve_and_post(d3)
+        check("S5.c first-round request reply posts PUBLIC and records the first response",
+              res["ok"] and _Ips.posted[-1][1] is False
+              and store.first_response_posted("09999997"), str(res))
+        fr_comment_id = (res.get("result") or {}).get("comment_id")
+        d4 = enqueue("09999997", "first_response")
+        res = orch.approve_and_post(d4)
+        check("S5.d second first-response on the case refused + marked posted",
+              res["ok"] is False and "once" in res["error"]
+              and store.get(d4)["status"] == "posted", str(res))
+        check("S5.d2 second approve of a posted draft refused",
+              orch.approve_and_post(d4)["error"] == "draft already posted")
+        d5 = enqueue("09999997", "request_logs")
+        res = orch.approve_and_post(d5)
+        d6 = enqueue("09999997", "full")
+        res6 = orch.approve_and_post(d6)
+        entry = store.ledger_entry("09999997")
+        check("S5.e later-round request reply and analysis both post; first-response "
+              "record keeps the ORIGINAL comment id",
+              res["ok"] and res6["ok"] and _Ips.posted[-1][1] is True
+              and entry["first_response_comment_id"] == fr_comment_id
+              and entry["comment_id"] != fr_comment_id, str(entry))
 
-        class _MarkerNoTag(_HasMarker):
-            def post_comment(self, *a, **k):
-                from .ips_client import PostResult
-                return PostResult(ok=False, backend="rest", error="rest down")
-        orch.IpsClient = _MarkerNoTag
-        res3 = orch.approve_and_post(rec2["draft_id"])
-        check("S5.e analysis-family comment does not block first_response draft",
-              "already exists" not in (res3.get("error") or "")
-              and store.get(rec2["draft_id"])["status"] == "post_failed",
-              str(res3))
-
-        # Reviewer edited both markers away: they are restored before the
-        # scan/post, so later scans still classify the comment correctly.
-        rec3 = store.enqueue(case_nbr="09999997", case_id="500S5C", subject="s5c",
-                             draft_plain=AI_MARKER + "\n" + CHECKLIST_TAG + "\n\nbody",
-                             draft_html="<p>b</p>", confidence=None,
-                             mode="request_logs", analysis={})
-        orch.approve_and_post(rec3["draft_id"], edited_plain="Hello,\nplease send logs")
-        edited = store.get(rec3["draft_id"])["draft_plain"]
+        # Reviewer edited both markers away: restored before the post.
+        _Ips.post_ok = False
+        d7 = enqueue("09999996", "request_logs")
+        orch.approve_and_post(d7, edited_plain="Hello,\nplease send logs")
+        edited = store.get(d7)["draft_plain"]
         check("S5.f edited checklist draft gets AI marker + family tag restored",
               edited.startswith(AI_MARKER + "\n" + CHECKLIST_TAG + "\n\nHello,"),
               edited[:120])
 
-        # A request comment posted before CHECKLIST_TAG existed (AI marker +
-        # fixed template text only) still counts as first-response family.
-        class _LegacyRequest(_MarkerNoTag):
-            def get_case_comments(self, case_id):
-                return [{"Id": "C9", "Core_IPS_Rich_Comment__c":
-                         "<p>" + AI_MARKER + "<br/><br/>Hello,<br/>To root-cause it "
-                         "we need the Intel wireless driver WRT logs covering the "
-                         "failure</p>"}]
-        orch.IpsClient = _LegacyRequest
-        rec4 = store.enqueue(case_nbr="09999996", case_id="500S5D", subject="s5d",
-                             draft_plain=AI_MARKER + "\n" + CHECKLIST_TAG + "\n\nbody",
-                             draft_html="<p>b</p>", confidence=None,
-                             mode="first_response", analysis={})
-        res4 = orch.approve_and_post(rec4["draft_id"])
-        rec5 = store.enqueue(case_nbr="09999995", case_id="500S5E", subject="s5e",
-                             draft_plain=AI_MARKER + "\n\nanalysis",
-                             draft_html="<p>a</p>", confidence=None,
-                             mode="full", analysis={})
-        store.save_config({"post_backend": "rest"})   # no Selenium fallback
-        res5 = orch.approve_and_post(rec5["draft_id"])
-        check("S5.g legacy untagged request comment blocks a second first "
-              "response, not the analysis draft",
-              "already exists" in (res4.get("error") or "")
-              and "already exists" not in (res5.get("error") or ""),
-              f"{res4.get('error')} | {res5.get('error')}")
+        # Overview posted before the ledger tracked it (legacy, untagged
+        # request template): the IPS scan backfills the ledger once.
+        _Ips.comments = [{"Id": "C9", "Core_IPS_Rich_Comment__c":
+                          "<p>" + AI_MARKER + "<br/><br/>Hello,<br/>To root-cause it "
+                          "we need the Intel wireless driver WRT logs covering the "
+                          "failure</p>"}]
+        d8 = enqueue("09999995", "first_response")
+        res = orch.approve_and_post(d8)
+        check("S5.g legacy request comment counts as the first response (ledger backfilled)",
+              res["ok"] is False and "once" in res["error"]
+              and store.ledger_entry("09999995").get("first_response_comment_id") == "C9",
+              str(res))
     finally:
         orch._store = orig_store_fn
         orch.IpsClient = orig_ips
+
+
+# ---------------------------------------------------------------- S16
+def smoke_auto_scan(tmp: Path) -> None:
+    print("[S16] Automatic analysis: work selection + schedule timing")
+    from datetime import datetime, timezone
+    from .ips_client import (CaseRef, build_open_cases_soql,
+                             build_customer_updates_soql)
+    from .orchestrator import select_auto_work, _parse_iso
+    from .scheduler import next_run_after
+
+    q = build_open_cases_soql("O'Neil")
+    check("S16.a open-cases SOQL: owner escaped, open only, newest activity first",
+          "Owner.Name = 'O\\'Neil'" in q and "IsClosed = false" in q
+          and "ORDER BY LastModifiedDate DESC" in q, q)
+    q2 = build_customer_updates_soql(["500A", "500B"], "2026-10-05T00:00:00Z")
+    check("S16.b customer-updates SOQL: bounded by case ids, time and customer authors",
+          "IN ('500A', '500B')" in q2 and "CreatedDate > 2026-10-05T00:00:00Z" in q2
+          and "'Partner'" in q2 and "'Agent'" not in q2, q2)
+    try:
+        build_customer_updates_soql(["500A"], "yesterday")
+        check("S16.c bad since rejected", False)
+    except ValueError:
+        check("S16.c bad since rejected", True)
+
+    since = "2026-10-05T00:00:00Z"
+    cases = [
+        CaseRef("1", "500N", "new case", created="2026-10-05T08:00:00.000+0000"),
+        CaseRef("2", "500U", "updated", created="2026-09-01T08:00:00.000+0000"),
+        CaseRef("3", "500S", "same update again", created="2026-09-01T08:00:00.000+0000"),
+        CaseRef("4", "500Q", "quiet old case", created="2026-09-01T08:00:00.000+0000"),
+        CaseRef("5", "500O", "update older than our analysis", created="2026-09-01T08:00:00.000+0000"),
+    ]
+    updates = {"500U": "2026-10-05T12:00:00.000+0000",
+               "500S": "2026-10-05T11:00:00.000+0000",
+               "500O": "2026-10-05T09:00:00.000+0000"}
+    ledger = {
+        "2": {"analyzed_at": "2026-10-04T10:00:00+08:00"},
+        "3": {"analyzed_at": "2026-10-05T20:00:00+08:00",
+              "last_customer_update": "2026-10-05T11:00:00.000+0000"},
+        "4": {"analyzed_at": "2026-09-02T10:00:00+08:00"},
+        "5": {"analyzed_at": "2026-10-05T19:00:00+08:00"},   # = 11:00Z, after 09:00Z
+    }
+    work = select_auto_work(cases, updates, lambda n: ledger.get(n), since)
+    check("S16.d work = customer update newer than our analysis + new case, newest first; "
+          "repeated/old updates and quiet cases skipped",
+          [(w[0].case_nbr, w[1].split(" at ")[0]) for w in work]
+          == [("2", "customer update"), ("1", "new case")],
+          str([(w[0].case_nbr, w[1]) for w in work]))
+    check("S16.e ISO parsing: Salesforce +0000, Z, local offsets, garbage",
+          _parse_iso("2026-10-05T10:07:12.000+0000") == _parse_iso("2026-10-05T10:07:12Z")
+          and _parse_iso("2026-10-05T18:07:12+08:00") == _parse_iso("2026-10-05T10:07:12Z")
+          and _parse_iso("nope") is None and _parse_iso("") is None)
+
+    from .orchestrator import select_list_view_work
+    lv_cases = [
+        CaseRef("1", "500N", "never analyzed, open", status="Open"),
+        CaseRef("2", "500U", "analyzed, customer replied", status="Closed", closed=False),
+        CaseRef("3", "500Q", "analyzed, quiet", status="Open"),
+        CaseRef("4", "500C", "never analyzed, closed", status="Closed"),
+        CaseRef("5", "500X", "IsClosed wins over Status text", status="Open", closed=True),
+    ]
+    lv_ledger = {"2": {"analyzed_at": "2026-10-04T10:00:00+08:00"},
+                 "3": {"analyzed_at": "2026-10-04T10:00:00+08:00"}}
+    lv_work, lv_skipped = select_list_view_work(
+        lv_cases, {"500U": "2026-10-05T12:00:00.000+0000"}, lambda n: lv_ledger.get(n),
+        include_closed=False)
+    lv_work_all, lv_skipped_all = select_list_view_work(
+        lv_cases, {}, lambda n: lv_ledger.get(n), include_closed=True)
+    check("S16.d2 list-view source: never-analyzed + customer-updated cases in list order, "
+          "closed ones skipped unless trial mode (IsClosed beats the Status text)",
+          [(w[0].case_nbr, w[1].split(" at ")[0]) for w in lv_work]
+          == [("1", "not analyzed yet"), ("2", "customer update")] and lv_skipped == 2
+          and [w[0].case_nbr for w in lv_work_all] == ["1", "4", "5"] and lv_skipped_all == 0,
+          f"{[(w[0].case_nbr, w[1]) for w in lv_work]} skipped={lv_skipped} "
+          f"all={[w[0].case_nbr for w in lv_work_all]}")
+    from .scheduler import scan_target
+    check("S16.d3 scheduler target: owner by default, list view when chosen (legacy "
+          "trial_list_view honoured), errors when the chosen source is unconfigured",
+          scan_target({"owner_name": "Charles"}) == {"owner": "Charles", "list_view": "", "error": ""}
+          and scan_target({"auto_source": "list_view", "trial_list_view": "Old_view"})["list_view"] == "Old_view"
+          and scan_target({"auto_source": "list_view", "auto_list_view": "LV"})
+          == {"owner": "", "list_view": "LV", "error": ""}
+          and scan_target({"auto_source": "list_view"})["error"]
+          and scan_target({"auto_source": "owner"})["error"])
+
+    from .ips_client import IpsClient
+
+    class _Resp:
+        def __init__(self, body): self._body = body
+        def raise_for_status(self): pass
+        def json(self): return self._body
+
+    class _ListViewsIps(IpsClient):
+        pages = {
+            "/services/data/v{ver}/sobjects/Case/listviews": {
+                "listviews": [{"id": "00B1", "developerName": "My_cases", "label": "My cases"},
+                              {"id": "", "developerName": "ghost", "label": "no id"}],
+                "nextRecordsUrl": "/services/data/v{ver}/sobjects/Case/listviews?offset=2"},
+            "/services/data/v{ver}/sobjects/Case/listviews?offset=2": {
+                "listviews": [{"id": "00B2", "developerName": "Handsfree_replier_test_case"},
+                              {"id": "00B3", "developerName": "All", "label": "All"}]},
+        }
+        def __init__(self):
+            super().__init__()
+            self.calls = []
+        def _request(self, method, path, *, params=None, **kw):
+            self.calls.append((method, path, params))
+            return _Resp(self.pages[path])
+    lv_ips = _ListViewsIps()
+    views = lv_ips.list_case_views()
+    lv_ips2 = _ListViewsIps()
+    try:
+        lv_ips2.list_view_cases("Nope")
+        lv_err = ""
+    except LookupError as e:
+        lv_err = str(e)
+    check("S16.g list_case_views: pages through listviews, label falls back to the developer "
+          "name, id-less entries dropped; list_view_cases stops at the page holding the view "
+          "and still raises 'list view not found'",
+          [v["developer_name"] for v in views] == ["My_cases", "Handsfree_replier_test_case", "All"]
+          and views[1]["label"] == "Handsfree_replier_test_case" and views[0]["id"] == "00B1"
+          and len(lv_ips.calls) == 2 and lv_ips.calls[0][2] == {"limit": 200}
+          and lv_ips.calls[1][2] is None
+          and len(_ListViewsIps().list_case_views("My_cases")) == 1
+          and "list view not found: Nope" in lv_err and len(lv_ips2.calls) == 2,
+          f"views={views} calls={lv_ips.calls} err={lv_err!r}")
+
+    tz = timezone.utc
+    t = datetime(2026, 10, 6, 9, 30, tzinfo=tz)
+    check("S16.f schedule: nightly -> next 23:00 (same day before, next day after); "
+          "4h/8h start now, then +interval",
+          next_run_after("nightly", t) == datetime(2026, 10, 6, 23, 0, tzinfo=tz)
+          and next_run_after("nightly", datetime(2026, 10, 6, 23, 5, tzinfo=tz))
+          == datetime(2026, 10, 7, 23, 0, tzinfo=tz)
+          and next_run_after("4h", t, first=True) == t
+          and next_run_after("8h", t) == datetime(2026, 10, 6, 17, 30, tzinfo=tz))
 
 
 # ---------------------------------------------------------------- S6
@@ -898,6 +1542,70 @@ def smoke_time_coverage(tmp: Path) -> None:
           "TIME MISMATCH" in plain
           and "please help provide a WRT log captured at the issue time" in plain,
           plain[:300])
+
+    # Customer / WRT time spellings parse as full datetimes (coverage check
+    # and assert window depend on it) and the minute-precision filter.
+    from utils.issue_time_utils import parse_issue_time_string as pits
+    from .case_reader import has_minute_precision as hmp
+    check("S8.f customer time spellings parse as full datetimes",
+          pits("16:31/12/13/2025")[0] is not None
+          and pits("2026-1-14-13-54-47")[0] is not None
+          and pits("14-01-2026_13-54-37")[0] is not None
+          and pits("June 2nd") == (None, False))
+    check("S8.g minute precision: clock times and WRT stamps yes; dates and words no",
+          all(hmp(t) for t in ("04/13/2026 12:14:00", "16:31/12/13/2025",
+                               "2026-1-14-13-54-47", "09/04/2026-20:58:52.654", "10:17"))
+          and not any(hmp(t) for t in ("June 2nd", "2026-09-04", "yesterday morning",
+                                       "2026-06-20", "")))
+
+    # Gate: the decoded log does not cover the issue time -> try the capture
+    # closest to it; still no coverage -> public request, no agent, no Echo.
+    from .runner import _folder_timestamp
+    cap_far = tmp / "s8" / "DUT_27-05-2026_17-51-23_656_4_5002_0x0_0x0_0x0" / "WifiDriverIHVSession.etl.002"
+    cap_near = tmp / "s8" / "DUT_13-04-2026_12-10-05_100_9_6050_0x0_0x0_0x0" / "WifiDriverIHVSession.etl.001"
+    for p in (cap_far, cap_near):
+        p.parent.mkdir(parents=True, exist_ok=True)
+        p.write_bytes(b"x")
+    check("S8.h capture folder stamp parsed from the WRT folder name",
+          _folder_timestamp(str(cap_far)).strftime("%Y-%m-%d %H:%M:%S") == "2026-05-27 17:51:23"
+          and _folder_timestamp(str(tmp / "s8" / "x.etl")) is None)
+    alts = HandsfreeRunner._alternate_etls([str(cap_far), str(cap_near)], [],
+                                           ["04/13/2026 12:14:00"], {str(cap_far)})
+    check("S8.i alternate captures ordered by closeness to the issue time",
+          alts == [str(cap_near)], str(alts))
+
+    # Clock frames: the DUT's folder stamp (13:54:37) and the log's last line
+    # (21:55:01) are the same moment, so the issue time 13:54:47 is INSIDE
+    # the 21:29–21:55 log window once shifted (00994274).
+    fcap = tmp / "s8" / "LAPTOP_14-01-2026_13-54-37_127_9_6050_0x0_0x0_0x0" / "WifiDriverIHVSession.etl.003.log"
+    fcap.parent.mkdir(parents=True, exist_ok=True)
+    fcap.write_text("01/14/2026-21:29:56.906 [0] first\n01/14/2026-21:55:01.000 [0] last\n",
+                    encoding="utf-8")
+    e = CaseAnalysis(case_nbr="6", mode="full", log_path=str(fcap),
+                     issue_times=["2026-1-14-13-54-47"])
+    r._check_time_coverage(e)
+    e2 = CaseAnalysis(case_nbr="7", mode="full", log_path=str(fcap),
+                      issue_times=["2026-1-14-09-00-00"])
+    r._check_time_coverage(e2)
+    check("S8.k folder-stamp clock offset: 13:54 DUT time covered by the 21:29–21:55 log; "
+          "09:00 still outside",
+          e.time_mismatch == {} and e2.time_mismatch.get("issue_times") == ["2026-1-14-09-00-00"],
+          f"{e.time_mismatch} {e2.time_mismatch}")
+
+    # Assert window: an assert 2 h before the issue time is not evidence.
+    from .echo_client import find_assert_evidence
+    wlog = tmp / "s8" / "w.etl.log"
+    wlog.write_text(
+        "06/20/2026-08:00:00.000 [1] [NIC_DEBUG] [ERROR] [x]:FATAL_ERROR: uCode ASSERT(UMAC, rtStatus = 0x20101F01, data1 = 0x0)\n"
+        "06/20/2026-10:16:30.000 [1] [NIC_DEBUG] [ERROR] [x]:FATAL_ERROR: uCode ASSERT(LMAC, rtStatus = 0x00001234, data1 = 0x1)\n",
+        encoding="utf-8")
+    w = CaseAnalysis(case_nbr="5", mode="full", log_path=str(wlog),
+                     issue_times=["06/20/2026-10:17:30"])
+    win = HandsfreeRunner(progress_cb=lambda s, d: None)._assert_window(w)
+    ev = find_assert_evidence(w, window=win)
+    check("S8.j asserts outside the issue-time window ignored, inside kept",
+          win is not None and ev["assert_codes"] == ["0x00001234"]
+          and ev["ignored_outside_window"] == 1, str(ev))
 
 
 # ---------------------------------------------------------------- S10
@@ -1141,6 +1849,18 @@ def smoke_checklist() -> None:
           and "DUT cannot roam." in seen["prompt"]
           and "SYNTH-FROM-PRIVATE-COMMENTS" not in seen["prompt"],
           seen.get("prompt", "")[-300:])
+    # request_logs: the pipeline found no usable WRT log, so the text pass
+    # may not tick WRT/WPP items from an attachment label (00991735 did).
+    q = CaseAnalysis(case_nbr="5", mode="request_logs", ok=True, subject="YB code 10",
+                     issue_domain="Yellow Bang", description="WRT & event logs attached",
+                     chosen_attachment="logs.7z")
+    seen.clear()
+    build_fills(q, llm=types.SimpleNamespace(chat=_capture))
+    check("S12.u request_logs locks the WRT/WPP items out of the LLM fill pass",
+          "WPP driver log" not in seen.get("prompt", "")
+          and "WRT Log" not in seen.get("prompt", "")
+          and "FW usniffer" in seen.get("prompt", "")
+          , seen.get("prompt", "")[:400])
 
 
 # ---------------------------------------------------------------- S15
@@ -1286,6 +2006,78 @@ def smoke_checklist_convert(tmp: Path) -> None:
           str(tool))
 
 
+# ---------------------------------------------------------------- S17
+def smoke_comment_images(tmp: Path) -> None:
+    print("[S17] Comment images: extraction, blocks, annotation, cache")
+    import types
+    from .comment_images import (annotate_case_comments, extract_image_urls,
+                                 image_blocks, MAX_IMAGES_PER_CASE)
+
+    urls = extract_image_urls(
+        '<p>x</p><img alt="a" src="https://intel.file.force.com/servlet/rtaImage?eid=1&amp;refid=2">'
+        "<IMG SRC='https://evil.example.com/x.png'>")
+    check("S17.a img src extracted (both quote styles), entities decoded",
+          urls == ["https://intel.file.force.com/servlet/rtaImage?eid=1&refid=2",
+                   "https://evil.example.com/x.png"], str(urls))
+    b_claude = image_blocks([("image/png", b"abc")], "claude-4-6-sonnet")
+    b_gpt = image_blocks([("image/png", b"abc")], "gpt-4.1")
+    check("S17.b image blocks: Anthropic base64 for claude-*, data URL otherwise",
+          b_claude[1]["type"] == "image" and b_claude[1]["source"]["media_type"] == "image/png"
+          and b_gpt[1]["type"] == "image_url"
+          and b_gpt[1]["image_url"]["url"].startswith("data:image/png;base64,"))
+
+    calls = {"vision": 0, "fetch": []}
+
+    class _Ips:
+        FIELD_RICH_BODY = "Core_IPS_Rich_Comment__c"
+        def get_case_comments(self, case_id):
+            img = lambda n: f'<img src="https://intel.file.force.com/servlet/rtaImage?refid={n}">'
+            return [
+                {"Id": "C3", "CreatedDate": "2026-06-22T01:00:00.000+0000",
+                 "Core_IPS_Comment_Author_Type__c": "Agent",
+                 "Core_IPS_Rich_Comment__c": "[AI-Avatar preliminary analysis]" + img("ai")},
+                {"Id": "C2", "CreatedDate": "2026-06-21T01:00:00.000+0000",
+                 "Core_IPS_Comment_Author_Type__c": "Agent",
+                 "Core_IPS_Rich_Comment__c": "<p>see</p>" + img("a") + img("b")
+                 + '<img src="https://evil.example.com/x.png">'},
+                {"Id": "C1", "CreatedDate": "2026-06-20T01:00:00.000+0000",
+                 "Core_IPS_Comment_Author_Type__c": "Partner",
+                 "Core_IPS_Rich_Comment__c": "<p>no images here</p>"},
+            ]
+        def fetch_binary(self, url, max_bytes=0):
+            calls["fetch"].append(url)
+            return ("image/png", b"png") if "refid=a" in url else ("text/html", b"nope")
+
+    def _chat(messages, system_content=None):
+        calls["vision"] += 1
+        return '{"images": ["screen A"]}'
+    llm = types.SimpleNamespace(model="claude-4-6-sonnet", chat=_chat)
+    cache = tmp / "imgcache" / "image_descriptions.json"
+    base = [["2026-06-20 09:00:00", "Partner", "original row"]]
+    rows, info = annotate_case_comments(_Ips(), llm, "500X", base, cache_path=cache,
+                                        skip_marker="[AI-Avatar preliminary analysis]")
+    check("S17.c AI comment skipped, foreign host skipped, non-image download dropped, "
+          "one synthetic row appended after the originals",
+          len(rows) == 2 and rows[0] == base[0]
+          and rows[1][1] == "Agent" and "1) screen A" in rows[1][2]
+          and "evil.example.com" not in " ".join(calls["fetch"])
+          and len(calls["fetch"]) == 2 and calls["vision"] == 1
+          and info[0]["comment_id"] == "C2" and info[0]["count"] == 2,
+          f"rows={rows} fetch={calls['fetch']} info={info}")
+    rows2, info2 = annotate_case_comments(_Ips(), llm, "500X", base, cache_path=cache,
+                                          skip_marker="[AI-Avatar preliminary analysis]")
+    check("S17.d second run served from the cache (no download, no vision call)",
+          calls["vision"] == 1 and len(calls["fetch"]) == 2 and rows2[1][2] == rows[1][2]
+          and cache.exists(), str(calls))
+    check("S17.e budget constant sane", 1 <= MAX_IMAGES_PER_CASE <= 20)
+    from .comment_images import sniff_media_type
+    check("S17.f media type sniffed from magic bytes (servlet lies: png header, jpeg bytes)",
+          sniff_media_type(b"\xff\xd8\xff\xe0xx", "image/png") == "image/jpeg"
+          and sniff_media_type(b"\x89PNG\r\n\x1a\nxx", "image/jpeg") == "image/png"
+          and sniff_media_type(b"RIFF....WEBPVP8 ", "") == "image/webp"
+          and sniff_media_type(b"nothing", "image/gif") == "image/gif")
+
+
 def run_smoke() -> int:
     tmp = Path(tempfile.mkdtemp(prefix="handsfree_smoke_"))
     try:
@@ -1301,6 +2093,8 @@ def run_smoke() -> int:
         smoke_env_detail()
         smoke_checklist()
         smoke_checklist_convert(tmp)
+        smoke_auto_scan(tmp)
+        smoke_comment_images(tmp)
     finally:
         shutil.rmtree(tmp, ignore_errors=True)
     print(f"\nsmoke result: {'ALL PASS' if not PASS_FAIL else 'FAILURES: ' + ', '.join(PASS_FAIL)}")

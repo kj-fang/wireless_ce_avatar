@@ -225,7 +225,8 @@ class _AnthropicCompletions:
                 params["tool_choice"] = tc
 
         # Retry loop: transparently rotate to the next pool token when the
-        # current one hits its daily cost cap OR its JWT expires (401). All
+        # current one hits its daily cost cap OR the gateway refuses the token
+        # (401 expired/revoked JWT, 403 not entitled). All
         # other errors propagate. When the dying token equals the owning
         # helper's ``personal_token``, fire the expiry hook first so the
         # frontend can prompt for a refresh.
@@ -244,19 +245,20 @@ class _AnthropicCompletions:
                 if pool is None:
                     raise
                 is_cost_limit = _is_daily_cost_limit_error(e)
-                is_expired = _is_token_expired_error(e)
-                if not (is_cost_limit or is_expired):
+                is_auth = _is_auth_error(e)
+                if not (is_cost_limit or is_auth):
                     raise
-                if is_expired:
+                if is_auth:
                     helper = self._adapter._helper
                     personal = getattr(helper, "personal_token", None) if helper else None
                     if personal is not None and used_token == personal:
-                        # Personal-token 401: notify the user via the hook and
-                        # let this request fail. The pool is deliberately NOT
-                        # advanced — the user must refresh (via the modal) or
-                        # every retry will silently succeed on a shared token
-                        # and hide the fact that their personal token is dead.
-                        print("🔒 [LLM] personal gnaigpt token 401 — firing expiry hook")
+                        # Personal-token 401/403: notify the user via the hook
+                        # and let this request fail. The pool is deliberately
+                        # NOT advanced — the user must refresh (via the modal)
+                        # or every retry will silently succeed on a shared
+                        # token and hide the fact that their personal token is
+                        # dead.
+                        print(f"🔒 [LLM] personal gnaigpt token {getattr(e, 'status_code', '?')} — firing expiry hook")
                         hook = getattr(helper, "on_personal_token_expired", None)
                         if callable(hook):
                             try:
@@ -264,7 +266,8 @@ class _AnthropicCompletions:
                             except Exception as hook_err:
                                 print(f"⚠️  [LLM] personal-token expiry hook failed: {hook_err}")
                         raise
-                next_entry = pool.mark_dead_and_advance(used_token)
+                reason = "cost limit" if is_cost_limit else f"auth error {getattr(e, 'status_code', '?')}"
+                next_entry = pool.mark_dead_and_advance(used_token, reason=reason)
                 if next_entry is None:
                     raise
                 self._adapter._rebuild_underlying(next_entry[1])
@@ -343,9 +346,18 @@ def _is_daily_cost_limit_error(exc):
     return "cost limit" in str(exc).lower()
 
 
-def _is_token_expired_error(exc):
-    """True for auth failures (JWT expired / invalid): HTTP 401 from the provider."""
-    return getattr(exc, "status_code", None) == 401
+def _is_auth_error(exc):
+    """True when the gateway refuses the token itself: HTTP 401 (nginx
+    "401 Authorization Required" for an expired/revoked gnaigpt JWT) or
+    403 ("Permission denied. You do not belong to any ..."). Seen 2026-10-08:
+    5 of 7 pool tokens answered 401/403 and every LLM feature failed on the
+    first one. Narrow on purpose: other 4xx (bad request, overload) are not
+    token problems."""
+    return getattr(exc, "status_code", None) in (401, 403)
+
+
+# Backwards-compatible alias (main's name for the 401 check).
+_is_token_expired_error = _is_auth_error
 
 
 class TokenPool:
@@ -382,13 +394,13 @@ class TokenPool:
         with self._lock:
             return self._entries[self._index]
 
-    def mark_dead_and_advance(self, dying_token):
+    def mark_dead_and_advance(self, dying_token, reason="cost limit"):
         """Mark ``dying_token`` dead and jump to a uniformly random survivor.
 
         Returns the new active ``(label, token)`` or ``None`` when the whole
         pool is exhausted. Candidates are every entry not yet in ``self._dead``
         (position/order no longer matters, so personal and shared tokens are
-        treated identically here).
+        treated identically here). ``reason`` is only for the log line.
         """
         with self._lock:
             current_label, current_token = self._entries[self._index]
@@ -398,11 +410,11 @@ class TokenPool:
             self._dead.add(self._index)
             survivors = [i for i in range(len(self._entries)) if i not in self._dead]
             if not survivors:
-                print(f"❌ [TokenPool] '{current_label}' exhausted — all {len(self._entries)} tokens dead")
+                print(f"❌ [TokenPool] '{current_label}' dropped ({reason}) — all {len(self._entries)} tokens dead")
                 return None
             self._index = random.choice(survivors)
             new_label = self._entries[self._index][0]
-            print(f"⚠️  [TokenPool] '{current_label}' exhausted → 🤡randomly rotated to '{new_label}'")
+            print(f"⚠️  [TokenPool] '{current_label}' dropped ({reason}) → randomly rotated to '{new_label}'")
             return self._entries[self._index]
 
 

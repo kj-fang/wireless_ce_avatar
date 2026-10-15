@@ -28,10 +28,14 @@ from __future__ import annotations
 import json
 import re
 import os
+import threading
+from pathlib import Path
 import time
 import traceback
 from dataclasses import dataclass, field, asdict
 from typing import Callable, Optional
+
+from . import bsod as _bsod
 
 # Cap agent runs per case: the UI chains one run per detected incident time;
 # headless we keep the two most relevant to bound cost.
@@ -133,6 +137,56 @@ _ENV_BRIEF_KEY_RE = re.compile(
     r"(?i)platform|found in build|operating system|frequency|tested hardware|computer model")
 
 
+def _classify_wireless_domain(subcategory: str) -> str:
+    """Return wifi/bt only when the IPS subcategory explicitly identifies it."""
+    value = str(subcategory or "").strip().lower()
+    if "wifi" in value or "wi-fi" in value:
+        return "wifi"
+    if "bluetooth" in value or re.search(r"\bbt\b", value):
+        return "bt"
+    return ""
+
+
+class _Prefetch(threading.Thread):
+    """Background download of one attachment (same run_dload_threads call
+    the download stage uses). Results in .items, failure in .error."""
+
+    def __init__(self, zip_item, download_dir: str):
+        super().__init__(daemon=True, name="handsfree-prefetch")
+        self.zip_item = zip_item
+        self.attachment_name = str(zip_item[0])
+        self.download_dir = download_dir
+        self.items: list = []
+        self.error = None
+
+    def run(self) -> None:
+        try:
+            from utils.attachment_download import run_dload_threads
+            for item in run_dload_threads([self.zip_item], self.download_dir,
+                                          socketio=None):
+                self.items.append(item)
+        except Exception as e:   # reported by the download stage
+            self.error = e
+
+
+_FOLDER_STAMP_RE = re.compile(r"(\d{2})-(\d{2})-(\d{4})_(\d{2})-(\d{2})-(\d{2})")
+
+
+def _folder_timestamp(etl_path: str):
+    """Capture time from the WRT folder name of an ETL
+    (..._27-05-2026_17-51-23_656_...) -> datetime, or None."""
+    from datetime import datetime
+    m = _FOLDER_STAMP_RE.search(os.path.basename(os.path.dirname(str(etl_path))))
+    if not m:
+        return None
+    d, mo, y, h, mi, s = (int(x) for x in m.groups())
+    try:
+        return datetime(y, mo, d, h, mi, s)
+    except ValueError:
+        return None
+
+
+
 def _resolve_issue_domain(reader_domain: str, subcategory: str,
                           issue_type: str) -> str:
     """Debug-checklist domain with graceful fallbacks: the reader's informed
@@ -205,12 +259,15 @@ class CaseAnalysis:
     case_nbr: str
     case_id: str = ""                # Salesforce 18-char id (for posting)
     ok: bool = False
-    mode: str = ""                   # full | triage_only | error
+    mode: str = ""                   # full | triage_only | unsupported | error |
+                                     # request_logs | request_info | first_response |
+                                     # waiting_customer
     subject: str = ""
     description: str = ""
     clean_description: str = ""
     issue_type: str = ""
     wifi_or_bt: str = ""
+    bt_case_valid: Optional[bool] = None  # True when archive contains BT ETLs
     triage: dict = field(default_factory=dict)       # analyze_desc output
     classification: dict = field(default_factory=dict)
     case_reader: dict = field(default_factory=dict)  # comment-aware reader output
@@ -233,6 +290,20 @@ class CaseAnalysis:
     checklist_fills: dict = field(default_factory=dict)  # pre-filled first-response items
     customer_history: str = ""                         # customer-authored comments only
                                                        #   (safe source for public fills)
+    action_owner: str = ""                             # who acts next: intel | customer | ""
+    next_action: str = ""                              # reader's one-sentence next step
+    yb_case: bool = False                              # yellow bang / assert issue:
+                                                       #   any assert in the log counts
+    archive_contents: dict = field(default_factory=dict)  # decompose counts: wifi_wpp,
+                                                       #   ddd, event_logs, bt, fw
+    comment_images: list = field(default_factory=list)  # [{comment_id, date, author,
+                                                       #   count, descriptions}]
+    first_response_done: bool = False                  # overview checklist already sent on
+                                                       #   this case (later rounds skip it)
+    bsod_case: bool = False                            # BSOD issue: the crash dump replaces
+                                                       #   the issue time (no WRT pipeline)
+    bsod: dict = field(default_factory=dict)           # dumps, dumps_path, email, submitted,
+                                                       #   status/detail, skipped, previous
     error: str = ""
 
     @property
@@ -296,15 +367,47 @@ class HandsfreeRunner:
             analysis.case_id = case_ctx.id or ""
             analysis.subject = case_ctx.subject or ""
             analysis.description = case_ctx.description or ""
-            analysis.wifi_or_bt = case_ctx.wifi_or_bt or "wifi"
-            analysis.env_detail = dict(case_ctx.env_detail or {})
             analysis.subcategory = str(case_ctx.subcategory or "")
+            # Explicit IPS subcategory wins; otherwise keep CaseService's
+            # legacy derivation (non-"wifi" -> bt) so cases such as "OEM
+            # Tools" still get the BT-gated triage + first-response checklist
+            # validated on 2026-10-01 instead of being skipped as unsupported.
+            analysis.wifi_or_bt = (_classify_wireless_domain(analysis.subcategory)
+                                   or str(case_ctx.wifi_or_bt or ""))
+            analysis.env_detail = dict(case_ctx.env_detail or {})
             from .case_reader import customer_visible_history
             analysis.customer_history = customer_visible_history(case_ctx.comments)
         if case_ctx is None or not (analysis.subject or analysis.description):
             analysis.mode = "error"
             analysis.error = "case fetch failed — no subject/description"
             return analysis
+        if not analysis.wifi_or_bt:
+            analysis.mode = "unsupported"
+            analysis.error = (f"unsupported IPS subcategory: "
+                              f"{analysis.subcategory or '(empty)'}")
+            self.progress("fetch_case", analysis.error)
+            return analysis
+
+        # Start fetching the newest log archive now: triage + reader take
+        # ~40 s of LLM time during which the download would otherwise wait.
+        # The reader usually nominates the newest upload; when it picks
+        # another file the normal download runs and this one is discarded.
+        prefetch = None
+        if _bsod.quick_hint(analysis.subject, analysis.subcategory, analysis.description):
+            # A BSOD case's newest archive is a memory dump (GBs), not a WRT
+            # capture — the BSOD branch downloads it to the BSOD share instead.
+            self.progress("fetch_case", "BSOD wording in the case — WRT prefetch skipped")
+        elif analysis.wifi_or_bt == "wifi":
+            try:
+                newest = _pick_latest_archive(case_ctx.attachment_list)
+                if newest is not None:
+                    prefetch = _Prefetch(newest, case_ctx.case_download_dir)
+                    prefetch.start()
+                    self.progress("fetch_case",
+                                  f"prefetching {prefetch.attachment_name} in the background")
+            except Exception as e:
+                print(f"[handsfree.runner] prefetch not started: {e}")
+                prefetch = None
 
         # -- 2. description triage (always runs; also the no-log fallback) ----
         with self._stage(analysis, "triage"):
@@ -326,13 +429,33 @@ class HandsfreeRunner:
         analysis.issue_domain = _resolve_issue_domain(
             "", analysis.subcategory, analysis.issue_type)
 
-        # BT cases: the agentic analyzer is Wi-Fi; deliver triage only (v1).
-        if analysis.wifi_or_bt != "wifi":
-            analysis.mode = "triage_only"
-            analysis.ok = bool(analysis.triage)
-            analysis.error = ("BT case — v1 runs description triage only"
-                              if analysis.ok else "triage failed")
-            return analysis
+        # -- 2b. images embedded in comments (screenshots) ----------------------
+        # Snowflake keeps the plain text only; the rich-text comments in IPS
+        # still link the images. Download + describe them (vision) and add
+        # the descriptions as comment rows, so the reader, the checklist
+        # fill and the customer history see what the pictures say. Failure
+        # or no images: the rows stay as they were.
+        with self._stage(analysis, "read_images"):
+            from .comment_images import annotate_case_comments
+            from .composer import AI_MARKER
+            from .ips_client import IpsClient
+            cache = (Path(app_config.avatarfiles_dir) / "handsfree"
+                     / "image_descriptions.json"
+                     if getattr(app_config, "avatarfiles_dir", None) else None)
+            rows, info = annotate_case_comments(
+                IpsClient(), app_config.llm_helper, analysis.case_id,
+                case_ctx.comments, cache_path=cache, skip_marker=AI_MARKER,
+                progress=lambda m: self.progress("read_images", m))
+            analysis.comment_images = info
+            if info:
+                case_ctx.comments = rows
+                from .case_reader import customer_visible_history
+                analysis.customer_history = customer_visible_history(rows)
+                self.progress("read_images",
+                              f"{sum(len(i['descriptions']) for i in info)} image(s) "
+                              f"described across {len(info)} comment(s)")
+            else:
+                self.progress("read_images", "no images in the comments")
 
         # -- 3. read the case history (description + comments, chronological) --
         # The reader mirrors how an engineer works the case: description
@@ -356,11 +479,18 @@ class HandsfreeRunner:
                     analysis.clean_description = reader["clean_description"]
                 if reader.get("issue_times"):
                     analysis.issue_times = reader["issue_times"][:max_incidents]
+                analysis.action_owner = reader.get("action_owner") or ""
+                analysis.next_action = reader.get("next_action") or ""
                 self.progress(
                     "read_case_history",
                     f"issue_times={reader.get('issue_times')} "
                     f"attachment={reader.get('attachment_name') or '(none)'} "
                     f"({reader.get('issue_time_source') or 'no source'})")
+                if analysis.next_action:
+                    self.progress(
+                        "read_case_history",
+                        f"next action [{analysis.action_owner or 'owner unknown'}]: "
+                        f"{analysis.next_action}")
 
         # Upgrade the provisional domain with the reader's informed pick
         # (a reader "Others" never shadows a specific subcategory domain).
@@ -373,9 +503,37 @@ class HandsfreeRunner:
         analysis.issue_subcategory = str(
             (analysis.case_reader or {}).get("issue_subcategory") or "")
 
+        # Ball with the customer (Intel already asked for logs / info / repro
+        # and nothing came back): nothing to analyze and nothing to ask.
+        # Policy (2026-10-06): note it for the reviewer and stop here — no
+        # analysis, no request reply, no first-response checklist.
+        if analysis.action_owner == "customer":
+            # Backstop: the reader sometimes says "customer to provide logs"
+            # when nobody has asked yet (seen on 01022663: no attachments, no
+            # Intel comment). Waiting is only possible after Intel spoke —
+            # otherwise Intel owns the next step (the request below).
+            from .case_reader import intel_has_asked
+            from .composer import AI_MARKER
+            if not intel_has_asked(case_ctx.comments, ai_marker=AI_MARKER):
+                self.progress("read_case_history",
+                              "owner corrected to Intel: no Intel comment has asked "
+                              "the customer for anything yet")
+                analysis.action_owner = "intel"
+        if analysis.action_owner == "customer":
+            with self._stage(analysis, "check_case_info"):
+                self.progress("check_case_info",
+                              "waiting on the customer — analysis and "
+                              f"requests skipped ({analysis.next_action})")
+            analysis.mode = "waiting_customer"
+            analysis.ok = True
+            analysis.error = ("waiting on the customer — analysis and "
+                              "request replies skipped")
+            return analysis
+
         # -- 3a. is the case information usable? -------------------------------
         # LLM-judged completeness (description clarity / issue time / repro
         # steps) with deterministic backstops for outright-empty fields.
+        dump_items: list = []
         with self._stage(analysis, "check_case_info"):
             missing = list((analysis.case_reader or {}).get("missing_info") or [])
             flagged = {m.get("item") for m in missing}
@@ -397,22 +555,62 @@ class HandsfreeRunner:
                     self.progress("check_case_info",
                                   "repro steps found in the Environment "
                                   "Details form — gap retracted")
+            # BSOD with a crash dump uploaded: the dump carries the crash, so
+            # no issue time is needed (Charles, 2026-10-14) — retract that gap
+            # instead of asking the customer; the BSOD branch below runs.
+            analysis.bsod_case = _bsod.is_bsod_case(
+                issue_domain=analysis.issue_domain, issue_type=analysis.issue_type,
+                subject=analysis.subject, description=analysis.description,
+                subcategory=analysis.subcategory)
+            if analysis.bsod_case:
+                dump_items = _bsod.find_dump_attachments(case_ctx.attachment_list)
+                if dump_items and any(m.get("item") == "issue_time" for m in missing):
+                    missing = [m for m in missing if m.get("item") != "issue_time"]
+                    self.progress("check_case_info",
+                                  "BSOD case with dump upload(s) "
+                                  f"{', '.join(str(i[0]) for i in dump_items)} — "
+                                  "issue time not required, gap retracted")
             analysis.missing_info = missing
             self.progress(
                 "check_case_info",
                 ("missing/unclear: " + ", ".join(m["item"] for m in missing))
                 if missing else "all case info present")
+            # Ball with Intel (customer provided logs/info, or asked): say
+            # explicitly what the LATEST provided material is before the
+            # gates below — any gap falls into the same request_info /
+            # request_logs rules as a fresh case.
+            if analysis.action_owner == "intel":
+                archives = [str(a[0]) for a in (case_ctx.attachment_list or [])
+                            if str(a[0]).lower().endswith(_ARCHIVE_EXTS)]
+                nominated = (analysis.case_reader or {}).get("attachment_name") or ""
+                self.progress(
+                    "check_case_info",
+                    "Intel to act — latest provided info: issue time "
+                    + (f"{analysis.issue_times[0]}" if analysis.issue_times else "MISSING")
+                    + "; log archive "
+                    + (f"{nominated}" if nominated else
+                       (f"newest of {len(archives)}" if archives else "MISSING")))
 
-        # Severe gap: neither an understandable description nor an issue time
-        # — there is nothing to anchor an analysis on. Draft a request-info
-        # reply (mode "request_info": human-approved, posted PUBLIC like
-        # request_logs) instead of burning the log pipeline.
+        # No minute-precise issue time anywhere (policy 2026-10-07: the issue
+        # time is what the analysis anchors on; a bare date or an upload time
+        # is not one) — or no understandable description either: ask for it
+        # first and stop. Mode "request_info" (human-approved, posted PUBLIC
+        # like request_logs); the log pipeline runs on the next round.
+        # -- 3b. BSOD: dumps to the BSOD share + PotatoFarm (Avatar's flow) ----
+        # Before the info gate: a BSOD case without a dump asks for the DUMP
+        # (the info asks ride along in that same reply), not for a time.
+        if analysis.bsod_case:
+            return self._run_bsod_branch(analysis, case_ctx, dump_items)
+
         gap_items = {m.get("item") for m in analysis.missing_info}
-        if "issue_description" in gap_items and "issue_time" in gap_items:
+        if "issue_time" in gap_items:
             analysis.mode = "request_info"
             analysis.ok = True
-            analysis.error = ("case lacks both an understandable description and "
-                              "an issue time — drafted a request-info reply")
+            analysis.error = (
+                "case lacks both an understandable description and an issue time"
+                if "issue_description" in gap_items else
+                "no minute-precise issue time stated anywhere in the case"
+            ) + " — drafted a request-info reply"
             return analysis
 
         # -- 4. pick the log-archive attachment --------------------------------
@@ -472,7 +670,21 @@ class HandsfreeRunner:
         downloaded = []   # [file_path, name, already_dload]
         with self._stage(analysis, "download"):
             from utils.attachment_download import run_dload_threads
+            # The newest archive was prefetched during triage + reader; use
+            # it when the reader chose that same file.
+            if prefetch is not None and prefetch.attachment_name == str(zip_item[0]):
+                self.progress("download",
+                              f"waiting for the prefetched {prefetch.attachment_name}")
+                prefetch.join()
+                if prefetch.items and not prefetch.error:
+                    downloaded.extend(prefetch.items)
+                    self.progress("download", "prefetched during triage/reader")
+                else:
+                    self.progress("download",
+                                  f"prefetch failed ({prefetch.error}); downloading normally")
             for attempt in (1, 2):
+                if downloaded:
+                    break
                 try:
                     for item in run_dload_threads([zip_item],
                                                   case_ctx.case_download_dir,
@@ -499,12 +711,17 @@ class HandsfreeRunner:
         # -- 6. decompose ------------------------------------------------------
         wifi_files: list = []
         ddd_files: list = []
+        bt_files: list = []
         decompose_ok = False
         with self._stage(analysis, "decompose"):
             from utils.attachment_decompose import process_single_zip
             file_path, _name, already = downloaded[0]
-            wifi_files, ddd_files, _evt, _bt, _fw = process_single_zip(
+            wifi_files, ddd_files, _evt, bt_files, _fw = process_single_zip(
                 file_path, case_ctx.case_download_dir, already)
+            analysis.archive_contents = {
+                "wifi_wpp": len(wifi_files or []), "ddd": len(ddd_files or []),
+                "event_logs": len(_evt or []), "bt": len(bt_files or []),
+                "fw": len(_fw or [])}
             decompose_ok = True
         if not decompose_ok:
             # decompose CRASHED (_stage swallowed the exception): the archive
@@ -515,31 +732,55 @@ class HandsfreeRunner:
             analysis.ok = bool(analysis.triage)
             analysis.error = "attachment decompose failed"
             return analysis
-        # -- 6b. confirm WRT logs exist in the unzipped archive ----------------
-        # The archive downloaded and decomposed — now verify it actually
-        # contains driver ETL traces (WRT wifi ETLs / DDD). An archive of
-        # screenshots or dmesg dumps is not analyzable: ask for WRT logs.
-        with self._stage(analysis, "check_wrt_log"):
-            if wifi_files or ddd_files:
-                self.progress("check_wrt_log",
-                              f"ETLs found — wifi(WRT): {len(wifi_files)}, "
-                              f"DDD: {len(ddd_files)}")
-            else:
-                self.progress("check_wrt_log",
-                              f"'{analysis.chosen_attachment}' contains no "
-                              "WRT/DDD ETL logs")
-        if not wifi_files and not ddd_files:
-            analysis.mode = "request_logs"
-            analysis.ok = True
-            analysis.error = (f"attachment '{analysis.chosen_attachment}' contains "
-                              "no WRT ETL logs — drafted a request-logs reply")
-            return analysis
+        # BT classification mirrors Avatar's local-upload rule: an extracted
+        # ibtpci-*.etl or ibtusb-*.etl is returned in bt_files.
+        if analysis.wifi_or_bt == "bt":
+            with self._stage(analysis, "check_bt_log"):
+                analysis.bt_case_valid = bool(bt_files)
+                if bt_files:
+                    self.progress("check_bt_log",
+                                  f"valid BT case: recognized {len(bt_files)} "
+                                  "BT ETL(s)")
+                else:
+                    self.progress("check_bt_log",
+                                  f"'{analysis.chosen_attachment}' contains no "
+                                  "recognized BT ETL (ibtpci-/ibtusb-)")
+            if not analysis.bt_case_valid:
+                analysis.mode = "triage_only"
+                analysis.ok = bool(analysis.triage)
+                analysis.error = "BT case archive contains no recognized BT ETL"
+                return analysis
+
+        if analysis.wifi_or_bt == "wifi":
+            # -- 6b. confirm WRT logs exist in the unzipped archive ------------
+            # The archive downloaded and decomposed — now verify it actually
+            # contains driver ETL traces (WRT wifi ETLs / DDD). An archive of
+            # screenshots or dmesg dumps is not analyzable: ask for WRT logs.
+            with self._stage(analysis, "check_wrt_log"):
+                if wifi_files or ddd_files:
+                    self.progress("check_wrt_log",
+                                  f"ETLs found — wifi(WRT): {len(wifi_files)}, "
+                                  f"DDD: {len(ddd_files)}")
+                else:
+                    self.progress("check_wrt_log",
+                                  f"'{analysis.chosen_attachment}' contains no "
+                                  "WRT/DDD ETL logs")
+            if not wifi_files and not ddd_files:
+                analysis.mode = "request_logs"
+                analysis.log_request_reason = "no_wrt_inside"
+                analysis.ok = True
+                analysis.error = (f"attachment '{analysis.chosen_attachment}' contains "
+                                  "no WRT driver (WPP) ETL logs — drafted a request-logs reply")
+                return analysis
 
         # -- 7. issue times -----------------------------------------------------
-        # Primary source: the case-history reader (description + comments).
-        # Fallback: description-only AI organization, then attachment subtitle.
+        # The reader (description + comments) is the only source of issue
+        # times: a case without a minute-precise one stopped at 3a. The
+        # description-only organizer is kept just as a clean_description
+        # fallback when the reader failed; an attachment upload time is
+        # never used as the issue time.
         with self._stage(analysis, "issue_time"):
-            if not analysis.issue_times:
+            if not analysis.clean_description:
                 from utils.issue_time_ai import organize_issue_context
                 llm = app_config.llm_helper
                 organized = organize_issue_context(
@@ -547,42 +788,38 @@ class HandsfreeRunner:
                     llm_client=getattr(llm, "client", None),
                     llm_model=getattr(llm, "model", None),
                 ) or {}
-                if not analysis.clean_description:
-                    analysis.clean_description = (organized.get("clean_description")
-                                                  or "").strip()
-                times = [str(t).strip() for t in (organized.get("issue_times") or [])
-                         if str(t).strip()]
-                if not times and analysis.attachment_time:
-                    times = [analysis.attachment_time]
-                analysis.issue_times = times[:max_incidents]
+                analysis.clean_description = (organized.get("clean_description")
+                                              or "").strip()
+            self.progress("issue_time",
+                          "anchoring on " + ", ".join(analysis.issue_times[:3]))
         if not analysis.clean_description:
             analysis.clean_description = analysis.description or analysis.subject
-        if analysis.issue_times and analysis.missing_info:
-            # A fallback source produced a time after all — retract the gap.
-            analysis.missing_info = [m for m in analysis.missing_info
-                                     if m.get("item") != "issue_time"]
 
         # -- 8. pick the ETL ----------------------------------------------------
         etl_path = None
         with self._stage(analysis, "pick_etl"):
-            # YB / assert issues: the capture folder whose NAME carries a
-            # nonzero error code (e.g. ..._12_4222_0xa_0x0_0x1fffff) is the
-            # one that recorded the failure — prefer the EARLIEST such folder
-            # (first occurrence) over the AI-time / newest heuristics.
-            yb_assert = bool(_YB_ASSERT_ISSUE_RE.search(
-                " ".join([analysis.issue_type or "", analysis.subject or "",
-                          analysis.clean_description or "",
-                          analysis.description or ""])))
-            if yb_assert:
-                etl_path = _pick_etl_yb_earliest(wifi_files, ddd_files)
-                if etl_path:
-                    self.progress(
-                        "pick_etl",
-                        "YB/assert issue — earliest capture with nonzero "
-                        f"error code in folder name: {os.path.basename(os.path.dirname(etl_path))}")
-            if not etl_path:
-                etl_path = self._pick_etl(wifi_files, ddd_files,
-                                          analysis.issue_times[0] if analysis.issue_times else "")
+            if analysis.wifi_or_bt == "bt":
+                etl_path = self._pick_bt_etl(bt_files)
+            else:
+                # YB / assert issues: the capture folder whose NAME carries a
+                # nonzero error code (e.g. ..._12_4222_0xa_0x0_0x1fffff) is the
+                # one that recorded the failure — prefer the EARLIEST such folder
+                # (first occurrence) over the AI-time / newest heuristics.
+                yb_assert = bool(_YB_ASSERT_ISSUE_RE.search(
+                    " ".join([analysis.issue_type or "", analysis.subject or "",
+                              analysis.clean_description or "",
+                              analysis.description or ""])))
+                analysis.yb_case = yb_assert or analysis.issue_domain == "Yellow Bang"
+                if yb_assert:
+                    etl_path = _pick_etl_yb_earliest(wifi_files, ddd_files)
+                    if etl_path:
+                        self.progress(
+                            "pick_etl",
+                            "YB/assert issue — earliest capture with nonzero "
+                            f"error code in folder name: {os.path.basename(os.path.dirname(etl_path))}")
+                if not etl_path:
+                    etl_path = self._pick_etl(wifi_files, ddd_files,
+                                              analysis.issue_times[0] if analysis.issue_times else "")
             analysis.etl_path = etl_path or ""
         if not etl_path:
             analysis.mode = "triage_only"
@@ -590,18 +827,25 @@ class HandsfreeRunner:
             analysis.error = "could not select an ETL file"
             return analysis
 
-        # -- 9. decode ETL -> .log ----------------------------------------------
-        # Always record the stage: a cached .log (this case analyzed before)
-        # is a fast "done", not a skip — otherwise the stage table shows a
-        # confusing forever-"pending" row on re-runs.
-        log_path = etl_path + ".log"
-        with self._stage(analysis, "decode_etl"):
-            if os.path.exists(log_path):
-                self.progress("decode_etl",
-                              f"reusing existing decoded log "
-                              f"({os.path.basename(log_path)})")
-            else:
-                self._decode_etl(etl_path)
+        # -- 9. decode ETL -> analysis log --------------------------------------
+        if analysis.wifi_or_bt == "bt":
+            from services.etl_parser.bt_parser import find_ready_hci
+            log_path = find_ready_hci(etl_path) or ""
+            if not log_path:
+                with self._stage(analysis, "decode_bt"):
+                    log_path = self._decode_bt(etl_path) or ""
+        else:
+            # Always record the stage: a cached .log (this case analyzed before)
+            # is a fast "done", not a skip — otherwise the stage table shows a
+            # confusing forever-"pending" row on re-runs.
+            log_path = etl_path + ".log"
+            with self._stage(analysis, "decode_etl"):
+                if os.path.exists(log_path):
+                    self.progress("decode_etl",
+                                  f"reusing existing decoded log "
+                                  f"({os.path.basename(log_path)})")
+                else:
+                    self._decode_etl(etl_path)
         if not os.path.exists(log_path):
             analysis.mode = "triage_only"
             analysis.ok = bool(analysis.triage)
@@ -618,18 +862,70 @@ class HandsfreeRunner:
                     "unavailable — the uploaded logs are fine; analysis can "
                     f"re-run after a PDB refresh ({decode_detail[:160]})")
             else:
-                analysis.error = f"ETL decode did not produce {os.path.basename(log_path)}"
+                analysis.error = (
+                    f"BT HCI decode did not produce {os.path.basename(log_path)}"
+                    if analysis.wifi_or_bt == "bt" else
+                    f"ETL decode did not produce {os.path.basename(log_path)}")
             return analysis
         analysis.log_path = log_path
 
         # -- 9b. does the log actually cover the reported issue time? ----------
         # e.g. case 01025350: issue stated at 17:14, capture covered
         # 17:39–17:44. The agent may still find an assert, but the reviewer
-        # (and the customer) must know the log is from a different time.
-        try:
-            self._check_time_coverage(analysis)
-        except Exception as e:
-            print(f"[handsfree.runner] time-coverage check failed (non-fatal): {e}")
+        # and customer must know when the WRT capture does not cover the issue.
+        # This policy relies on WRT .log ranges and must not inspect BT HCI logs.
+        if analysis.wifi_or_bt == "wifi":
+            try:
+                self._check_time_coverage(analysis)
+            except Exception as e:
+                print(f"[handsfree.runner] time-coverage check failed (non-fatal): {e}")
+            also_tried = 0
+            if analysis.time_mismatch:
+                for alt in self._alternate_etls(
+                        wifi_files, ddd_files, analysis.issue_times, {etl_path})[:2]:
+                    alt_log = alt + ".log"
+                    with self._stage(analysis, "decode_etl"):
+                        self.progress("decode_etl",
+                                      "trying the capture closest to the issue time: "
+                                      f"{os.path.basename(os.path.dirname(alt))}")
+                        if not os.path.exists(alt_log):
+                            self._decode_etl(alt)
+                    if not os.path.exists(alt_log):
+                        continue
+                    also_tried += 1
+                    analysis.time_mismatch = {}
+                    analysis.etl_path, analysis.log_path = alt, alt_log
+                    try:
+                        self._check_time_coverage(analysis)
+                    except Exception as e:
+                        print(f"[handsfree.runner] time-coverage check failed (non-fatal): {e}")
+                    if not analysis.time_mismatch:
+                        break
+                if analysis.time_mismatch and also_tried:
+                    analysis.time_mismatch["also_tried"] = also_tried
+            if analysis.time_mismatch and analysis.yb_case:
+                # Yellow-bang/assert logs can be useful even when their timestamps
+                # differ, provided the log contains the relevant assert.
+                from .echo_client import scan_wrt_log_for_asserts
+                codes = [a["code"] for a in
+                         scan_wrt_log_for_asserts(analysis.log_path)]
+                if codes:
+                    analysis.time_mismatch["yb_assert_override"] = codes
+                    self.progress("decode_etl",
+                                  f"YB case: assert(s) {', '.join(codes)} found in the "
+                                  "log — continuing despite the issue-time mismatch")
+            if (analysis.time_mismatch
+                    and not analysis.time_mismatch.get("yb_assert_override")):
+                analysis.mode = "request_logs"
+                analysis.log_request_reason = "log_not_covering"
+                analysis.ok = True
+                analysis.error = (
+                    f"attached WRT log covers {analysis.time_mismatch['log_first']} – "
+                    f"{analysis.time_mismatch['log_last']}, the reported issue time "
+                    f"{', '.join(analysis.time_mismatch['issue_times'])} is outside — "
+                    "drafted a request for a log captured at the issue time")
+                self.progress("decode_etl", analysis.error)
+                return analysis
 
         # -- 10. agentic analysis (one run per incident time) --------------------
         with self._stage(analysis, "agent_analysis"):
@@ -644,7 +940,13 @@ class HandsfreeRunner:
         with self._stage(analysis, "echo_kb"):
             from .echo_client import (EchoUnavailable, ask_echo_kb,
                                       collect_echo_insights, find_assert_evidence)
-            evidence = find_assert_evidence(analysis)
+            # Only asserts around the issue time are this issue's evidence.
+            evidence = find_assert_evidence(
+                analysis, window=self._assert_window(analysis))
+            if evidence.get("ignored_outside_window"):
+                self.progress("echo_kb",
+                              f"ignored {evidence['ignored_outside_window']} assert(s) "
+                              "outside the issue-time window")
             if evidence["assert_codes"] or evidence["yellow_bang"]:
                 src = {"wrt_log": "from WRT log", "agent_text": "from agent text",
                        "env_detail": "from IPS Environment Details form",
@@ -712,17 +1014,12 @@ class HandsfreeRunner:
             dt, time_only = parse_issue_time_string(str(raw))
             if dt is None or time_only:
                 continue
-            # Resolve customer-vs-log frame when tz anchors are available
-            # (system_info.txt / folder timestamp); harmless no-op otherwise.
-            try:
-                from utils.issue_time_ai import determine_issue_time_frames
-                dt = determine_issue_time_frames(
-                    dt, [analysis.log_path], first, last).get("log_frame") or dt
-            except Exception:
-                pass
             checked.append(str(raw))
-            if first - grace <= dt <= last + grace:
-                covered = True
+            for cand in self._log_frame_candidates(dt, analysis.log_path, first, last):
+                if first - grace <= cand <= last + grace:
+                    covered = True
+                    break
+            if covered:
                 break
 
         if checked and not covered:
@@ -738,7 +1035,294 @@ class HandsfreeRunner:
                 f"{analysis.time_mismatch['log_last']} but the reported issue "
                 f"time(s) {', '.join(checked)} are OUTSIDE this window")
 
+    # Asserts count as evidence for THIS issue only inside this window
+    # around the reported time (minutes before / after).
+    ASSERT_WINDOW_BEFORE_MIN = 30
+    ASSERT_WINDOW_AFTER_MIN = 10
+
+    @staticmethod
+    def _log_frame_candidates(dt, log_path: str, first, last) -> list:
+        """The reported issue time expressed in the decoded log's clock.
+
+        Two anchors, both kept as candidates (a match on either counts):
+          * the tz helper (system_info.txt time zone vs the decode host) —
+            a no-op when both are GMT+8;
+          * the capture folder stamp: WRT names the folder with the DUT's
+            clock at dump time, and the log's last line is that same moment
+            in the log's clock, so (last line − folder stamp) is the actual
+            offset between the two clocks for THIS capture. Seen on
+            00994274: tz says GMT+8 = GMT+8, yet the log ran 8 h ahead of
+            the DUT clock; the helper alone rejected a log that covered the
+            issue.
+        """
+        from datetime import timedelta
+        cands = [dt]
+        try:
+            from utils.issue_time_ai import determine_issue_time_frames
+            mapped = determine_issue_time_frames(
+                dt, [log_path], first, last).get("log_frame")
+            if mapped and mapped not in cands:
+                cands.append(mapped)
+        except Exception:
+            pass
+        folder_ts = _folder_timestamp(log_path)
+        if folder_ts is not None and last is not None:
+            offset = last - folder_ts
+            if abs(offset) <= timedelta(hours=26) and abs(offset) >= timedelta(minutes=20):
+                shifted = dt + offset
+                if shifted not in cands:
+                    cands.append(shifted)
+        return cands
+
+    def _issue_datetime_in_log_frame(self, analysis: CaseAnalysis):
+        """First reported issue time as a full datetime in the log's clock:
+        the candidate that falls inside the log window wins, else the tz
+        helper's mapping. None when no full datetime is known."""
+        from utils.issue_time_utils import (parse_issue_time_string,
+                                            read_log_time_range)
+        if not analysis.issue_times or not analysis.log_path:
+            return None
+        first, last = read_log_time_range(analysis.log_path)
+        for raw in analysis.issue_times:
+            dt, time_only = parse_issue_time_string(str(raw))
+            if dt is None or time_only:
+                continue
+            cands = self._log_frame_candidates(dt, analysis.log_path, first, last)
+            if first and last:
+                for cand in cands:
+                    if first <= cand <= last:
+                        return cand
+            return cands[1] if len(cands) > 1 else cands[0]
+        return None
+
+    def _run_bsod_branch(self, analysis: CaseAnalysis, case_ctx,
+                         dump_items: list) -> CaseAnalysis:
+        """BSOD case: no WRT pipeline. The dump upload(s) go to the BSOD
+        share and the PotatoFarm parser is triggered — what Avatar's manual
+        BSOD flow does (index toggle -> download -> bsod_submit). PotatoFarm
+        e-mails the result; the draft tells the reviewer what was submitted.
+        Uploads already submitted on an earlier round are not resubmitted."""
+        names = [str(it[0]) for it in dump_items]
+        codes = ""
+        for q, a in (analysis.env_detail or {}).items():
+            if (re.search(r"assert error", str(q), re.IGNORECASE)
+                    and str(a or "").strip().lower() not in ("", "na", "n/a", "none")):
+                codes = str(a).strip()
+        analysis.bsod = {"dumps": names, "bugcheck_codes": codes, "dumps_path": "",
+                         "email": "", "submitted": False, "status": "", "detail": "",
+                         "skipped": "", "previous": [], "failed": [],
+                         "results": [], "result_html": "", "result_waited_s": 0}
+        prev: list = []
+        with self._stage(analysis, "bsod_dumps"):
+            prev = _bsod.submissions(analysis.case_nbr)
+            analysis.bsod["previous"] = [{"submitted_at": p_.get("submitted_at"),
+                                         "attachments": p_.get("attachments")}
+                                        for p_ in prev]
+            self.progress("bsod_dumps",
+                          f"dump upload(s): {', '.join(names) or 'none'}"
+                          + (f"; bug check codes from the IPS form: {codes}" if codes else "")
+                          + (f"; {len(prev)} earlier submission(s)" if prev else ""))
+        if not names:
+            analysis.mode = "request_logs"
+            analysis.log_request_reason = "no_dump"
+            analysis.ok = True
+            analysis.error = ("BSOD case without a kernel/memory dump attached — "
+                              "drafted a request for the dump")
+            return analysis
+        skip = _bsod.names_to_skip(analysis.case_nbr)
+        new_items = [it for it in dump_items if str(it[0]) not in skip]
+        analysis.bsod["failed"] = sorted(
+            n for n, c in _bsod.failed_names(analysis.case_nbr).items()
+            if c >= _bsod.MAX_DOWNLOAD_ROUNDS and n in names)
+        if not new_items:
+            return self._bsod_pending(analysis, case_ctx, prev,
+                                      "no new dump upload since")
+
+        downloaded: list = []
+        with self._stage(analysis, "bsod_download"):
+            dest = _bsod.share_case_dir(analysis.case_nbr,
+                                        getattr(case_ctx, "backend_id", "") or "")
+            analysis.bsod["dumps_path"] = dest
+            if not dest:
+                raise RuntimeError("BSOD dump share unreachable")
+            from utils.attachment_download import run_dload_threads
+            for attempt in (1, 2):
+                try:
+                    for item in run_dload_threads(new_items, dest, socketio=None):
+                        downloaded.append(item)
+                except Exception as e:
+                    self.progress("bsod_download",
+                                  f"attempt {attempt} failed: {type(e).__name__}: {e}")
+                if downloaded:
+                    break
+            self.progress("bsod_download",
+                          f"{len(downloaded)}/{len(new_items)} dump upload(s) in {dest}")
+        if not analysis.bsod["dumps_path"]:
+            analysis.mode = "triage_only"
+            analysis.ok = bool(analysis.triage)
+            analysis.error = ("BSOD dump share unreachable — dumps not submitted to "
+                              "PotatoFarm (submit manually via Avatar's BSOD flow)")
+            return analysis
+        got_names = [str(it[1]) for it in downloaded]
+        failed_now = [str(it[0]) for it in new_items if str(it[0]) not in got_names]
+        if failed_now:
+            self.progress("bsod_download",
+                          f"download FAILED for {', '.join(failed_now)} — retried on the "
+                          f"next round, given up after {_bsod.MAX_DOWNLOAD_ROUNDS} rounds")
+        if not downloaded:
+            if prev:
+                # Earlier rounds already submitted the other upload(s): just
+                # remember this failure (no resubmission of an unchanged folder).
+                _bsod.record_submission(analysis.case_nbr, [], analysis.bsod["dumps_path"],
+                                        "", "download_failed", failed=failed_now)
+                analysis.bsod["failed"] = sorted(
+                    n for n, c in _bsod.failed_names(analysis.case_nbr).items()
+                    if c >= _bsod.MAX_DOWNLOAD_ROUNDS and n in names)
+                return self._bsod_pending(analysis, case_ctx, prev,
+                                          f"download failed for {', '.join(failed_now)}")
+            analysis.mode = "request_logs"
+            analysis.log_request_reason = "unreadable_archive"
+            analysis.chosen_attachment = str(new_items[0][0])
+            analysis.ok = True
+            analysis.error = "dump download failed twice — drafted a re-upload request"
+            return analysis
+
+        cfg = {}
+        prev_mtime = 0.0
+        with self._stage(analysis, "bsod_submit"):
+            cfg = _bsod.handsfree_config()
+            email = _bsod.resolve_email(cfg)
+            analysis.bsod["email"] = email
+            prev_mtime = _bsod.result_mtime(dest)
+            if cfg.get("trial_mode"):
+                analysis.bsod["skipped"] = "trial mode — PotatoFarm not triggered"
+            elif not email:
+                analysis.bsod["skipped"] = ("no e-mail for the PotatoFarm result (set "
+                                            "bsod_email in the handsfree config)")
+            if analysis.bsod["skipped"]:
+                self.progress("bsod_submit", analysis.bsod["skipped"])
+            else:
+                res = _bsod.submit_to_potatofarm(dest, email)
+                analysis.bsod.update(submitted=bool(res.get("ok")),
+                                     status=str(res.get("status") or ""),
+                                     detail=str(res.get("detail") or ""))
+                if res.get("ok"):
+                    _bsod.record_submission(analysis.case_nbr, got_names, dest, email,
+                                            res.get("status"), failed=failed_now)
+                    self.progress("bsod_submit",
+                                  f"PotatoFarm accepted {dest} — result goes to {email}")
+                else:
+                    self.progress("bsod_submit",
+                                  f"PotatoFarm refused: HTTP {res.get('status')} "
+                                  f"{res.get('detail')}")
+        if analysis.bsod.get("submitted"):
+            # The parser writes bsod_parse_output.json / bsod_report.html into
+            # the same folder a few minutes later: wait for it so the draft
+            # carries the verdict (the e-mail is only a copy).
+            with self._stage(analysis, "bsod_result"):
+                wait_min = float(cfg.get("bsod_result_wait_min", 10) or 0)
+                self._collect_bsod_results(analysis, dest, newer_than=prev_mtime,
+                                           wait_s=wait_min * 60)
+        analysis.mode = "bsod_submitted"
+        analysis.ok = True
+        if analysis.bsod.get("submitted"):
+            analysis.error = ""
+        else:
+            analysis.error = (analysis.bsod.get("skipped")
+                              or f"PotatoFarm submission failed: {analysis.bsod.get('detail')}")
+        return analysis
+
+    def _bsod_pending(self, analysis: CaseAnalysis, case_ctx, prev: list,
+                      why: str) -> CaseAnalysis:
+        """Nothing new to submit this round: report the last submission and
+        pick up the parser result if it has landed in the folder since."""
+        last = next((p_ for p_ in reversed(prev) if p_.get("attachments")),
+                    prev[-1] if prev else {})
+        analysis.mode = "bsod_pending"
+        analysis.ok = True
+        analysis.error = (f"dump(s) already submitted to PotatoFarm on "
+                          f"{last.get('submitted_at', '?')} — {why}")
+        with self._stage(analysis, "bsod_result"):
+            dest = str(last.get("dumps_path") or "") or _bsod.share_case_dir(
+                analysis.case_nbr, getattr(case_ctx, "backend_id", "") or "")
+            analysis.bsod["dumps_path"] = dest
+            self.progress("bsod_result", analysis.error)
+            self._collect_bsod_results(analysis, dest, newer_than=0.0, wait_s=0)
+        return analysis
+
+    def _collect_bsod_results(self, analysis: CaseAnalysis, dest: str,
+                              newer_than: float, wait_s: float) -> None:
+        t0 = time.time()
+        results = _bsod.wait_for_results(
+            dest, newer_than, wait_s,
+            progress=lambda msg: self.progress("bsod_result", msg)) if dest else []
+        analysis.bsod["result_waited_s"] = int(time.time() - t0)
+        analysis.bsod["results"] = results
+        html = os.path.join(dest, _bsod.RESULT_HTML) if dest else ""
+        analysis.bsod["result_html"] = html if html and os.path.exists(html) else ""
+        if results:
+            for r_ in results:
+                self.progress("bsod_result",
+                              f"{r_['dump']}: bugcheck 0x{r_['bugcheck_code']} "
+                              f"{r_['bugcheck_str']}; bucket {r_['failure_bucket_id']}; "
+                              f"Wi-Fi driver fault={r_['wifi_fault']} BT fault={r_['bt_fault']} "
+                              f"on stack={r_['driver_on_stack']}")
+            self.progress("bsod_result", _bsod.assessment(results))
+        else:
+            self.progress("bsod_result",
+                          "no PotatoFarm result in the folder yet — the next round "
+                          "picks it up (the parser also e-mails it)")
+
+    def _assert_window(self, analysis: CaseAnalysis):
+        from datetime import timedelta
+        if getattr(analysis, "yb_case", False):
+            return None          # YB / assert issue: every assert in the log counts
+        dt = self._issue_datetime_in_log_frame(analysis)
+        if dt is None:
+            return None
+        return (dt - timedelta(minutes=self.ASSERT_WINDOW_BEFORE_MIN),
+                dt + timedelta(minutes=self.ASSERT_WINDOW_AFTER_MIN))
+
+    @staticmethod
+    def _alternate_etls(wifi_files: list, ddd_files: list, issue_times: list,
+                        tried: set) -> list:
+        """Other ETLs in the archive, closest capture-folder stamp first
+        (WRT folders are named ..._DD-MM-YYYY_HH-MM-SS_...). Files whose
+        folder carries no stamp go last."""
+        from utils.issue_time_utils import parse_issue_time_string
+        issue_dt = None
+        for raw in issue_times or []:
+            dt, time_only = parse_issue_time_string(str(raw))
+            if dt is not None and not time_only:
+                issue_dt = dt
+                break
+        stamped, unstamped = [], []
+        for p in list(wifi_files or []) + list(ddd_files or []):
+            if p in tried:
+                continue
+            ts = _folder_timestamp(p)
+            if ts is None or issue_dt is None:
+                unstamped.append(p)
+            else:
+                stamped.append((abs((ts - issue_dt).total_seconds()), p))
+        stamped.sort(key=lambda x: x[0])
+        return [p for _, p in stamped] + unstamped
+
     # ------------------------------------------------------------------
+    def _pick_bt_etl(self, bt_files: list) -> Optional[str]:
+        """Pick the newest BT capture, matching the UI's folder-time rule."""
+        if not bt_files:
+            return None
+        try:
+            from blueprints.bt_chatbot.bt_chatbot_routes import _parse_path_timestamp
+            dated = [(path, _parse_path_timestamp(path)) for path in bt_files]
+            dated = [(path, ts) for path, ts in dated if ts is not None]
+            if dated:
+                return max(dated, key=lambda item: item[1])[0]
+        except Exception as e:
+            print(f"[handsfree.runner] BT capture-time pick failed: {e}")
+        return sorted(bt_files)[-1]
+
     def _pick_etl(self, wifi_files: list, ddd_files: list,
                   issue_time_str: str) -> Optional[str]:
         """AI-time pick first; fallback = newest DDD, then newest Wi-Fi ETL.
@@ -793,7 +1377,15 @@ class HandsfreeRunner:
             else:
                 os.environ["AVATAR_HEADLESS_DECODE"] = prev
 
-    def _build_agent(self):
+    def _decode_bt(self, etl_path: str) -> Optional[str]:
+        """Decode one BT ETL with the existing headless CLI decoder."""
+        from services.etl_parser.bt_parser import bt_decode_via_cli
+        return bt_decode_via_cli(
+            os.path.dirname(etl_path), etl_path,
+            emit_callback=lambda message: self.progress("decode_bt", message),
+        )
+
+    def _build_agent(self, domain: str = "wifi"):
         """Fresh agent per case; borrows client/model/skills (and the ACE
         runner, so learned playbooks apply) from the boot-time base agent."""
         from configs.global_configs import app_config
@@ -802,16 +1394,20 @@ class HandsfreeRunner:
         base = getattr(app_config, "log_chatbot_agent", None)
         llm = app_config.llm_helper
         skills = getattr(base, "skills", None) or getattr(llm, "skills", None) or {}
-        agent = WifiLogAgentSystem(client=llm.client,
-                                   model=getattr(llm, "model", "gpt-4.1"),
-                                   skills=skills)
+        agent_cls = WifiLogAgentSystem
+        if domain == "bt":
+            from services.bt_chatbot_service import BtLogAgentSystem
+            agent_cls = BtLogAgentSystem
+        agent = agent_cls(client=llm.client,
+                          model=getattr(llm, "model", "gpt-4.1"),
+                          skills=skills)
         ace_runner = getattr(base, "ace_runner", None)
         if ace_runner is not None:
             agent.attach_ace(ace_runner)
         return agent
 
     def _run_agent(self, analysis: CaseAnalysis, *, max_steps: int) -> None:
-        agent = self._build_agent()
+        agent = self._build_agent(analysis.wifi_or_bt)
         agent.current_log_path = analysis.log_path
         env_brief = _env_brief(analysis.env_detail)
         primed_description = (analysis.clean_description

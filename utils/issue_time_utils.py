@@ -28,6 +28,13 @@ _FULL_FORMATS = (
     "%Y-%m-%d %H:%M:%S",
     "%Y/%m/%d %H:%M:%S",
     "%Y-%m-%d %H:%M",
+    # Customer / WRT spellings seen in IPS cases ("16:31/12/13/2025",
+    # "2026-1-14-13-54-47", WRT folder stamp "14-01-2026_13-54-37").
+    "%H:%M/%m/%d/%Y",
+    "%H:%M:%S/%m/%d/%Y",
+    "%Y-%m-%d-%H-%M-%S",
+    "%Y-%m-%d-%H-%M",
+    "%d-%m-%Y_%H-%M-%S",
 )
 # 24-hour first so "04:45" / "04:45:00" keep their existing meaning; the 12-hour
 # `%p` variants only match when an explicit AM/PM is present (e.g. "04:45 PM").

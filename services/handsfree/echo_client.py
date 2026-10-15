@@ -218,7 +218,23 @@ def _analysis_text_blob(analysis) -> str:
     return "\n".join(texts)
 
 
-def find_assert_evidence(analysis) -> dict:
+_LINE_TS_RE = re.compile(r"^(\d{2})/(\d{2})/(\d{4})-(\d{2}):(\d{2}):(\d{2})")
+
+
+def _line_timestamp(line: str):
+    """datetime of a decoded WRT log line ('MM/DD/YYYY-HH:MM:SS.mmm ...')."""
+    from datetime import datetime
+    m = _LINE_TS_RE.match(str(line or ""))
+    if not m:
+        return None
+    mo, d, y, h, mi, s = (int(x) for x in m.groups())
+    try:
+        return datetime(y, mo, d, h, mi, s)
+    except ValueError:
+        return None
+
+
+def find_assert_evidence(analysis, window=None) -> dict:
     """Find firmware assert codes and yellow-bang evidence for a case.
 
     Source priority:
@@ -227,11 +243,28 @@ def find_assert_evidence(analysis) -> dict:
       2. fallback: assert codes mentioned in the agent's write-up
          (6+ hex digits; Windows event IDs like 5002 rejected).
 
+    window: optional (start, end) datetimes in the log's clock frame — an
+    assert outside it happened at another time and is not this issue's
+    evidence (policy 2026-10-07); such asserts are counted in
+    "ignored_outside_window". Lines without a timestamp are kept.
+
     Returns {"assert_codes": [str], "asserts": [{code, cpu, data, line,
-    source}], "yellow_bang": bool, "source": "wrt_log"|"agent_text"|None}.
+    source}], "yellow_bang": bool, "source": "wrt_log"|"agent_text"|None,
+    "ignored_outside_window": int}.
     """
     asserts = [dict(a, source="wrt_log")
                for a in scan_wrt_log_for_asserts(getattr(analysis, "log_path", "") or "")]
+    ignored = 0
+    if window and asserts:
+        start, end = window
+        kept = []
+        for a in asserts:
+            ts = _line_timestamp(a.get("line", ""))
+            if ts is not None and not (start <= ts <= end):
+                ignored += 1
+                continue
+            kept.append(a)
+        asserts = kept
     source = "wrt_log" if asserts else None
 
     # NOTE deliberately NOT used as assert evidence: the IPS Environment
@@ -261,7 +294,8 @@ def find_assert_evidence(analysis) -> dict:
     yellow = bool(_YELLOW_BANG_RE.search(blob)
                   or _YELLOW_BANG_RE.search(str(getattr(analysis, "issue_type", "") or "")))
     return {"assert_codes": [a["code"] for a in asserts],
-            "asserts": asserts, "yellow_bang": yellow, "source": source}
+            "asserts": asserts, "yellow_bang": yellow, "source": source,
+            "ignored_outside_window": ignored}
 
 
 def build_assert_question(code: str, lookup_text: str, context: str = "",

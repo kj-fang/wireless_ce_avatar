@@ -291,7 +291,7 @@ def _search_dirs_from(any_path: str) -> list[str]:
     return out
 
 
-def _read_system_info_tz(base_dir: str) -> str:
+def _read_system_info_tz(base_dir: str, _depth: int = 0) -> str:
     """Look in ``base_dir`` (or its immediate children) for a system_info file
     and return its "System Time Zone" / "Time Zone:" string. Empty if nothing
     parses.
@@ -316,12 +316,16 @@ def _read_system_info_tz(base_dir: str) -> str:
             print(f"[timezone_utils] read systeminfo.txt failed @ {base_dir}: {e}")
 
     # Check immediate children — the file is sometimes nested one level down.
+    # Bounded to ONE level: the recursion used to be unbounded, so a search
+    # starting near %TEMP% or Downloads walked the whole tree for minutes.
+    if _depth >= 1:
+        return ""
     try:
         for child in os.listdir(base_dir):
             child_dir = os.path.join(base_dir, child)
             if not os.path.isdir(child_dir):
                 continue
-            nested = _read_system_info_tz(child_dir)  # one-shot recurse
+            nested = _read_system_info_tz(child_dir, _depth + 1)  # one-shot recurse
             if nested:
                 return nested
     except Exception:

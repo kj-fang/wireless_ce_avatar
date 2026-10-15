@@ -443,7 +443,7 @@ def _feedback_submission_path(feedback_event_id: str, user: str) -> Path:
 
 def _agent_domain(value: Any) -> str:
     value = str(value or "").strip().lower()
-    return value if value in {"wifi", "nw", "bt"} else UNKNOWN_DOMAIN
+    return value if value in {"wifi", "nw", "bt", "linux"} else UNKNOWN_DOMAIN
 
 
 def _case_domain(issue: Optional[dict], explicit: str = "") -> str:

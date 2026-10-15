@@ -4,6 +4,7 @@ Examples:
     python -m services.handsfree.cli --owner "Charles P Chu" --once
     python -m services.handsfree.cli --owner "Charles P Chu" --interval 300
     python -m services.handsfree.cli --sso-login
+    python -m services.handsfree.cli --sso-check
 
 This starts the application services needed by the analysis pipeline, but it
 never starts Flask, Socket.IO, a browser, or the Handsfree UI. Each owner's
@@ -50,6 +51,11 @@ def _build_parser() -> argparse.ArgumentParser:
         action="store_true",
         help="Sign in to Salesforce once in a visible Chrome and keep the sign-in for unattended runs.",
     )
+    targets.add_argument(
+        "--sso-check",
+        action="store_true",
+        help="Verify the saved sign-in still works unattended (exit 0 = OK, 1 = expired).",
+    )
     parser.add_argument(
         "--interval",
         type=float,
@@ -85,10 +91,9 @@ def _initialize_services() -> None:
     set_up(None)
 
 
-def _sso_login() -> int:
+def _initialize_sso_only() -> None:
     # Not set_up(): its background prewarm would start its own SSO on the same profile.
     from configs.global_configs import app_config
-    from services.case_info_service import CaseService
     from services.driver_manage_service import DriverManager
     from utils import helpers
 
@@ -97,6 +102,11 @@ def _sso_login() -> int:
     if app_config.driver_manager is None:
         app_config.set_driver_manager(DriverManager(avatarfiles_dir))
 
+
+def _sso_login() -> int:
+    from services.case_info_service import CaseService
+
+    _initialize_sso_only()
     print("[handsfree-cli] a Chrome window will open: sign in with your Intel account "
           "(choose 'Stay signed in' if asked). Waiting up to 10 minutes.")
     try:
@@ -106,6 +116,21 @@ def _sso_login() -> int:
         return 1
     print("[handsfree-cli] sign-in saved and verified in the background; profile: "
           f"{CaseService._sso_profile_dir()}")
+    return 0
+
+
+def _sso_check() -> int:
+    from datetime import datetime
+    from services.case_info_service import CaseService
+
+    _initialize_sso_only()
+    try:
+        CaseService.verify_saved_sign_in()
+    except Exception as e:
+        print(f"[handsfree-cli] {datetime.now():%Y-%m-%d %H:%M} SSO check FAILED: {e}")
+        return 1
+    print(f"[handsfree-cli] {datetime.now():%Y-%m-%d %H:%M} SSO check OK "
+          "(Salesforce + esft signed in unattended)")
     return 0
 
 
@@ -197,6 +222,8 @@ def main(argv: Optional[list[str]] = None) -> int:
     args = _build_parser().parse_args(argv)
     if args.sso_login:
         return _sso_login()
+    if args.sso_check:
+        return _sso_check()
     if args.interval <= 0:
         print("[handsfree-cli] --interval must be greater than zero", file=sys.stderr)
         return 2

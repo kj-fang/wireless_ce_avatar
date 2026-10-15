@@ -683,7 +683,7 @@ class HandsfreeRunner:
                 file_path, case_ctx.case_download_dir, already)
             analysis.archive_contents = {
                 "wifi_wpp": len(wifi_files or []), "ddd": len(ddd_files or []),
-                "event_logs": len(_evt or []), "bt": len(_bt or []),
+                "event_logs": len(_evt or []), "bt": len(bt_files or []),
                 "fw": len(_fw or [])}
             decompose_ok = True
         if not decompose_ok:

@@ -79,8 +79,12 @@ class HandsfreeStore:
         return cfg
 
     def save_config(self, cfg: dict) -> dict:
-        merged = {**self.load_config(), **(cfg or {})}
+        # Load + merge + replace under the one lock: the scheduler thread,
+        # a running scan and the /handsfree/config route all write partial
+        # updates, and a merge from a stale snapshot would revert the others'
+        # fields (trial_mode, dry_run, owner, source).
         with _LOCK:
+            merged = {**self.load_config(), **(cfg or {})}
             tmp = self.config_path.with_suffix(".json.tmp")
             tmp.write_text(json.dumps(merged, indent=2), encoding="utf-8")
             os.replace(tmp, self.config_path)
@@ -178,7 +182,11 @@ class HandsfreeStore:
             path = self.queue_dir / f"{draft_id}.json"
             path.write_text(json.dumps(record, indent=2, ensure_ascii=False,
                                        default=str), encoding="utf-8")
-        self.mark_analyzed(case_nbr, draft_id)
+        # An "error" draft means the case could not even be fetched: it is
+        # not an analysis, so it never marks the case processed (the auto
+        # scan must retry it; is_processed must not hide it).
+        if mode != "error":
+            self.mark_analyzed(case_nbr, draft_id)
         return record
 
     def _draft_path(self, draft_id: str) -> Optional[Path]:

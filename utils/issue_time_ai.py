@@ -16,6 +16,7 @@ model name) so the logic is unit-testable in isolation.
 
 import json
 import re
+from dataclasses import dataclass
 from datetime import datetime, timedelta
 from typing import Any, List, Optional, Tuple, Union
 
@@ -202,6 +203,105 @@ def build_log_digest(
     return digest
 
 
+@dataclass(frozen=True)
+class IssueTimeFocus:
+    """What a profile's issue-time suggestion should look at first.
+
+    The generic digest samples lines on lifecycle words, which a multi-day
+    Linux kern.log is full of: on a real one it sent 0 of 1,560 Wi-Fi lines
+    and was truncated before the last day. A focus samples the profile's own
+    subsystem across the whole log instead.
+    """
+
+    #: Lines worth anchoring an issue time on.
+    rx: "re.Pattern[str]"
+    #: Domain briefing added to the suggestion prompt.
+    hint: str
+    #: Name of the subsystem, for the fallback reason shown to the user.
+    label: str
+
+
+LINUX_WIFI_FOCUS = IssueTimeFocus(
+    rx=re.compile(
+        r"iwlwifi|\bwl[a-z0-9]+:|cfg80211|mac80211|wpa_supplicant|NetworkManager"
+        r"|\biwd\b|deauth|disassoc|\brfkill\b|ct-kill|\bWifi\w*|wificond",
+        re.IGNORECASE,
+    ),
+    hint=(
+        "This is a Linux Wi-Fi log: kernel iwlwifi / mac80211 / cfg80211 lines "
+        "and wpa_supplicant / NetworkManager lines. 'deauthenticating from ... by "
+        "local choice' means this machine left the AP; 'deauthenticated from' or "
+        "'disassociated from' means the AP ended it; 'Microcode SW error', "
+        "'NMI_INTERRUPT' and 'FW error' are firmware crashes. A log can span "
+        "several days and boots and contain several separate incidents: suggest "
+        "the distinct incidents that fit the description, best first. Every "
+        "sample line starts with its timestamp already in MM/DD/YYYY-HH:MM:SS.mmm "
+        "on the log's own clock; copy timestamps from there."
+    ),
+    label="Wi-Fi",
+)
+
+_DIGIT_RUN = re.compile(r"\d+")
+
+
+def build_focus_digest(
+    log_lines: List[str],
+    focus: IssueTimeFocus,
+    log_format,
+    max_lines: int = 140,
+    per_message: int = 3,
+    max_chars: int = 12000,
+) -> str:
+    """Focus lines across the whole log, each re-stamped on the log's own clock.
+
+    Repeats of one message (digits ignored) keep at most ``per_message``
+    occurrences, spread over time, so one noisy line cannot fill the budget;
+    the rest is sampled evenly so every day of the log is represented.
+    Returns "" when the log has no focus line or no readable timestamps.
+    """
+    shape = getattr(log_format, "_shape", None)
+    if shape is None:
+        return ""
+    by_message: dict = {}
+    for i, line in enumerate(log_lines or []):
+        if not focus.rx.search(line):
+            continue
+        m = shape.rx.search(line)
+        stamp = log_format.parse(line) if m else None
+        if stamp is None:
+            continue
+        message = line[m.end():].strip()
+        by_message.setdefault(_DIGIT_RUN.sub("#", message), []).append((i, stamp, message))
+    picked = []
+    for hits in by_message.values():
+        if len(hits) <= per_message:
+            picked.extend(hits)
+        else:
+            step = (len(hits) - 1) / (per_message - 1)
+            picked.extend(hits[round(k * step)] for k in range(per_message))
+    if not picked:
+        return ""
+    picked.sort(key=lambda h: h[0])
+    rows = [f"{format_issue_time(s)} | {msg[:180]}" for _, s, msg in picked]
+    # Thin evenly until it fits, so the budget never cuts off the log's end.
+    while len(rows) > 1 and (len(rows) > max_lines
+                             or sum(len(r) + 1 for r in rows) > max_chars):
+        keep = min(max_lines, max(1, int(len(rows) * 0.85)))
+        step = (len(rows) - 1) / max(1, keep - 1)
+        rows = [rows[round(k * step)] for k in range(keep)]
+    return "\n".join(rows)
+
+
+def _last_focus_timestamp(log_lines: List[str], focus: IssueTimeFocus,
+                          log_format) -> Optional[datetime]:
+    for line in reversed(log_lines or []):
+        if focus.rx.search(line):
+            stamp = log_format.parse(line)
+            if stamp is not None:
+                return stamp
+    return None
+
+
 def build_event_log_digest(
     events: Optional[List[dict]],
     max_events: int = 40,
@@ -347,6 +447,7 @@ def llm_suggest(
     log_frame_last_ts: Optional[datetime] = None,
     tz_label: str = "",
     event_digest: Optional[str] = None,
+    domain_hint: str = "",
 ) -> dict:
     """Ask the LLM to infer issue time(s) from the description + log sample.
 
@@ -458,6 +559,7 @@ def llm_suggest(
         "— use the description to decide which lines in the log are "
         "relevant, and pick the timestamp that sits next to one of those "
         "lines. "
+        f"{domain_hint + ' ' if domain_hint else ''}"
         f"{event_priority}"
         f"{rng}{tz_block} {format_rule}\n"
         "Reply with STRICT JSON only (no markdown, no prose) of the form:\n"
@@ -509,6 +611,8 @@ def build_issue_time_suggestions(
     log_frame_last_ts: Optional[datetime] = None,
     tz_label: str = "",
     event_log_events: Optional[List[dict]] = None,
+    focus: Optional[IssueTimeFocus] = None,
+    log_format=None,
 ) -> dict:
     """Full orchestration. Returns a response payload dict ready to ``jsonify``.
 
@@ -528,6 +632,11 @@ def build_issue_time_suggestions(
     to the LLM alongside the raw-log sample — the model weighs them itself
     rather than being forced onto a fault row. Omitting it (Wi-Fi /
     log_chatbot) keeps the original behaviour.
+
+    ``focus`` with ``log_format`` (a ``utils.log_time_format`` result) swaps
+    the generic digest for :func:`build_focus_digest`, briefs the model with
+    ``focus.hint``, and falls back to the last focus event rather than the
+    last log line. Omitting them keeps the original behaviour.
     """
     no_date = log_has_date is False
 
@@ -577,7 +686,11 @@ def build_issue_time_suggestions(
             "message": "LLM is not configured on this server.",
         }
 
-    log_digest = build_log_digest(log_lines or [])
+    log_digest = ""
+    if focus is not None and log_format is not None:
+        log_digest = build_focus_digest(log_lines or [], focus, log_format)
+    if not log_digest:
+        log_digest = build_log_digest(log_lines or [])
     event_digest = build_event_log_digest(event_log_events)
     # Wrap the LLM call so any network / parse / API-error failure degrades
     # gracefully into "no suggestions" instead of a 500 — the log-first
@@ -591,6 +704,7 @@ def build_issue_time_suggestions(
             log_frame_last_ts=log_frame_last_ts,
             tz_label=tz_label,
             event_digest=event_digest,
+            domain_hint=focus.hint if focus is not None else "",
         )
     except Exception as _e:
         print(f"[issue_time_ai] llm_suggest failed, deferring to fallback: {_e}")
@@ -631,6 +745,19 @@ def build_issue_time_suggestions(
     # end). The user still sees "low" confidence + a reason explaining
     # it's a guess, and needs_user_input stays True so they're prompted
     # to confirm or edit.
+    if not suggestions and log_lines and focus is not None and log_format is not None:
+        # A multi-day log's last line is rarely the incident; its last event of
+        # the profile's own subsystem is a far better guess.
+        focus_dt = _last_focus_timestamp(log_lines, focus, log_format)
+        if focus_dt is not None:
+            suggestions.append(make_suggestion(
+                focus_dt, "low",
+                (f"No exact anchor matched the description; using the log's last "
+                 f"{focus.label} event as a starting point. Edit if the issue "
+                 f"happened at another time."),
+                "inferred",
+                log_has_date=not no_date,
+            ))
     if not suggestions and log_lines:
         fallback_dt = _find_last_log_timestamp(log_lines, no_date_log=no_date)
         if fallback_dt is not None:

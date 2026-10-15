@@ -1,6 +1,6 @@
-    // Wi-Fi full-agent chat runtime. The whole set_log / auto-analyze flow
-    // lives in chat-runtime-base.js; only the issue-time policy below is
-    // Wi-Fi-specific.
+    // Wi-Fi full-agent chat runtime, also loaded by the Linux profile. The
+    // whole set_log / auto-analyze flow lives in chat-runtime-base.js; only
+    // the issue-time policy below is specific to these two.
     class WifiChatRuntimeStrategy extends ChatRuntimeStrategyBase {}
 
     WifiChatRuntimeStrategy.prototype._afterDateOptionalRefresh = function () {

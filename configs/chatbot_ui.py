@@ -74,6 +74,7 @@ BT_UI = {
         ["all", "All"],
     ],
     "event_source_default": "pci_bt",
+    "windows_event_log": True,
     "feedback_domain": "bt",
     "feedback_conclusions": BT_FEEDBACK_CONCLUSIONS,
     "allow_modified_yaml_upload": True,
@@ -84,7 +85,7 @@ BT_UI = {
     "runtime_strategy_script": "/static/chatbot/js/strategies/bt-chat-runtime.js",
     "profile_script": "/static/chatbot/js/profiles/bt.js",
     "template_parts": {
-        "sidebar": "chatbot/profiles/bt/_sidebar.html",
+        "sidebar": "chatbot/profiles/_sidebar_customer_clock.html",
         "runtime": "chatbot/features/_issue_time_runtime.html",
     },
     "issue_time": {
@@ -136,6 +137,7 @@ LOG_CHATBOT_UI = {
         ["all", "All"],
     ],
     "event_source_default": "wifi",
+    "windows_event_log": True,
     "feedback_domain": "",
     "feedback_conclusions": WIFI_FEEDBACK_CONCLUSIONS,
     "allow_modified_yaml_upload": False,
@@ -199,6 +201,7 @@ NW_UI = {
         ["all", "All"],
     ],
     "event_source_default": "wifi",
+    "windows_event_log": True,
     "feedback_domain": "",
     "feedback_conclusions": WIFI_FEEDBACK_CONCLUSIONS,
     "allow_modified_yaml_upload": False,
@@ -228,5 +231,74 @@ NW_UI = {
         **_COMMON_FEATURES,
         "skill_append": True,
         "sleepstudy": True,
+    },
+}
+
+# Full Linux Wi-Fi driver analysis agent used by /linux_chatbot. Behaviourally
+# closest to the Wi-Fi profile (optional issue-time, multi-select times, full
+# history/feedback/skill-editor feature set), but the capture is a plain-text
+# dmesg/journalctl log read straight off the reporting machine — there is no
+# ETL decode step and no decode-host clock to reconcile against a customer
+# timezone, so customer_timezone is off (same reasoning as BT's .hci.txt).
+# It runs Wi-Fi's scripts: what they add over Linux's needs is the customer-
+# time card, which stays inert without its sidebar elements and a timezone.
+# The sidebar is BT's, as its log is also on the customer's own clock.
+LINUX_UI = {
+    "domain": "linux",
+    "api": "/linux_chatbot",
+    "title": "Linux Wi-Fi Driver Agent",
+    "back_url": "/linux_chatbot/back_to_avatar",
+    "input_placeholder": "Describe the issue and ask a question about the log.",
+    "accent": "#15803d",
+    "accent_dark": "#14532d",
+    "accent_light": "#22c55e",
+    "accent_soft": "#eafaf0",
+    "accent_border": "#dcf3e4",
+    "accent_hover": "#e8faef",
+    "accent_rgb": "21,128,61",
+    "event_sources": [
+        ["wifi", "Wi-Fi"],
+        ["all", "All"],
+    ],
+    "event_source_default": "wifi",
+    # A Linux capture has no Windows System Event Log.
+    "windows_event_log": False,
+    "feedback_domain": "linux",
+    "feedback_conclusions": WIFI_FEEDBACK_CONCLUSIONS,
+    "allow_modified_yaml_upload": False,
+    "history_reset_before_set_log": True,
+    "stylesheets": ["/static/chatbot/css/full-agent.css"],
+    "runtime_strategy_script": "/static/chatbot/js/strategies/wifi-chat-runtime.js",
+    "profile_script": "/static/chatbot/js/profiles/wifi.js",
+    "template_parts": {
+        "sidebar": "chatbot/profiles/_sidebar_customer_clock.html",
+        "runtime": "chatbot/features/_issue_time_runtime.html",
+    },
+    "issue_time": {
+        "strategy_script": "/static/chatbot/js/strategies/wifi-issue-time.js",
+        # dmesg (no -T) / some journalctl formats have no calendar date, just
+        # an elapsed/clock time, so time-only issue times must be accepted.
+        "allow_time_only": True,
+        # No ETL decode step, so there's no decode-host clock to reconcile
+        # against the customer's wall clock — the capture is already in the
+        # reporting machine's own local time.
+        "customer_timezone": False,
+        "event_refinement": False,
+        "multi_select": True,
+        "prompt_title": "Issue Time needed",
+        "prompt_body": (
+            "An issue-time anchor lets the agent scope the analysis to a "
+            "narrow window of log lines around the event, instead of scanning "
+            "the entire file — faster turns and more focused answers."
+        ),
+    },
+    "features": {
+        **_COMMON_FEATURES,
+        "sidebar_toggle": True,
+        "issue_time": True,
+        "feedback": True,
+        "history": True,
+        "skill_editor": True,
+        "skill_append": True,
     },
 }

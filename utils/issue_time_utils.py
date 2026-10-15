@@ -17,6 +17,8 @@ import re
 from datetime import datetime, timedelta
 from typing import Optional, Tuple
 
+from utils import log_time_format
+
 
 # Strict datetime formats accepted from sidebar / attachment_time / URL.
 _FULL_FORMATS = (
@@ -36,62 +38,9 @@ _TIME_ONLY_FORMATS = (
     "%I:%M:%S %p", "%I:%M %p", "%I:%M:%S%p", "%I:%M%p",
 )
 
-# Recognised in-log timestamp formats (tried per line; first/best match wins).
-# Each entry is (compiled-regex, tuple-of-strptime-formats-to-try).
-#   * Wi-Fi ETL : MM/DD/YYYY-HH:MM:SS.mmm    (date/time joined by '-')
-#   * BT HCI    : YYYY/MM/DD HH:MM:SS(.mmm)  (date/time space-separated, ms optional)
-# The Wi-Fi pattern is kept exactly as before so existing Wi-Fi cases are
-# unaffected; the HCI pattern is purely additive.
-_LOG_TS_SPECS = (
-    (re.compile(r"\d{2}/\d{2}/\d{4}-\d{2}:\d{2}:\d{2}\.\d{3}"),
-     ("%m/%d/%Y-%H:%M:%S.%f",)),
-    (re.compile(r"\d{4}/\d{2}/\d{2}\s\d{2}:\d{2}:\d{2}(?:\.\d{1,3})?"),
-     ("%Y/%m/%d %H:%M:%S.%f", "%Y/%m/%d %H:%M:%S")),
-)
-
-
-def _parse_log_ts_token(token: str, fmts: Tuple[str, ...]) -> Optional[datetime]:
-    """Parse a matched timestamp token against its candidate strptime formats."""
-    for fmt in fmts:
-        try:
-            return datetime.strptime(token, fmt)
-        except ValueError:
-            continue
-    return None
-
-
-def _first_log_ts(text: str) -> Optional[datetime]:
-    """Datetime of the EARLIEST-positioned in-log timestamp in ``text`` (any
-    recognised format), or None."""
-    best_pos: Optional[int] = None
-    best_dt: Optional[datetime] = None
-    for rx, fmts in _LOG_TS_SPECS:
-        m = rx.search(text)
-        if not m:
-            continue
-        if best_pos is None or m.start() < best_pos:
-            dt = _parse_log_ts_token(m.group(0), fmts)
-            if dt:
-                best_pos, best_dt = m.start(), dt
-    return best_dt
-
-
-def _last_log_ts(text: str) -> Optional[datetime]:
-    """Datetime of the LATEST-positioned in-log timestamp in ``text`` (any
-    recognised format), or None."""
-    best_pos: Optional[int] = None
-    best_dt: Optional[datetime] = None
-    for rx, fmts in _LOG_TS_SPECS:
-        last = None
-        for m in rx.finditer(text):
-            last = m
-        if last is None:
-            continue
-        if best_pos is None or last.start() > best_pos:
-            dt = _parse_log_ts_token(last.group(0), fmts)
-            if dt:
-                best_pos, best_dt = last.start(), dt
-    return best_dt
+# The in-log timestamp formats this module used to carry as literals -- Wi-Fi's
+# MM/DD/YYYY-HH:MM:SS.mmm and BT's YYYY/MM/DD HH:MM:SS -- now live in
+# utils/log_time_format.py together with the Linux shapes, detected per file.
 
 
 def parse_issue_time_string(s: str) -> Tuple[Optional[datetime], bool]:
@@ -120,22 +69,35 @@ def parse_issue_time_string(s: str) -> Tuple[Optional[datetime], bool]:
 
 
 def read_log_time_range(log_path: str) -> Tuple[Optional[datetime], Optional[datetime]]:
-    """Return (first_ts, last_ts) parsed from a .log file. Either may be None.
+    """Return (first_ts, last_ts) parsed from a log file. Either may be None.
 
-    Timestamps are returned in the log's own frame (the decoder host's
-    clock — GMT+8 in our deployment). The chatbot keeps ``issue_time``
-    aligned to that same frame for in-log matching, with a customer-tz
-    annotation surfaced separately for the UI.
+    Timestamps are returned in the log's own frame: for our decoders that is
+    the decode host's clock (GMT+8 in our deployment); for a log that names its
+    own UTC offset (Linux rsyslog / journalctl) it is the offset the file ends
+    on, which is the machine the customer reported from. The chatbot keeps
+    ``issue_time`` aligned to that same frame for in-log matching, with a
+    customer-tz annotation surfaced separately for the UI.
+
+    The format is detected per file (``utils.log_time_format``) rather than
+    assumed, so a Linux capture is read as well as a Wi-Fi or BT one. A file
+    whose timestamps cannot be placed on a calendar — a clock-only DDD trace,
+    or a dmesg counting seconds since boot — still returns ``(None, None)``:
+    every caller treats this range as absolute wall-clock time, and a
+    year-1900 or boot-relative value would be compared against a real issue
+    time. Those files are handled by Segment2's time-only path instead.
     """
     if not log_path or not os.path.exists(log_path):
         return None, None
     first_ts = last_ts = None
     try:
+        fmt = log_time_format.detect(log_path)
+        if not fmt.has_absolute_time:
+            return None, None
         with open(log_path, "r", encoding="utf-8", errors="ignore") as f:
-            for i, line in enumerate(f):
-                if i > 200:
-                    break
-                dt = _first_log_ts(line)
+            # No line cap: a decode can open with a long header, and the format
+            # was recognised, so a timestamp does exist further down.
+            for line in f:
+                dt = fmt.parse(line)
                 if dt:
                     first_ts = dt
                     break
@@ -144,8 +106,10 @@ def read_log_time_range(log_path: str) -> Tuple[Optional[datetime], Optional[dat
             file_size = f.tell()
             read_size = min(file_size, 65536)
             f.seek(file_size - read_size)
-            tail = f.read()
-            last_ts = _last_log_ts(tail) or last_ts
+            tail = f.read().splitlines()
+            points = list(fmt.iter_timestamps(tail))
+            if points:
+                last_ts = points[-1][1]
     except Exception as e:
         print(f"[issue_time] read_log_time_range failed for {log_path}: {e}")
     return first_ts, last_ts

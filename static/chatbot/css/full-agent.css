@@ -77,6 +77,13 @@
             border-color: #e53935;
             background: #fff5f5;
         }
+        /* !important: the date-field hooks set inline colours. */
+        .it-axis-off {
+            background: #f3f4f6 !important;
+            color: #9ca3af !important;
+            cursor: not-allowed !important;
+            opacity: 0.6;
+        }
         .it-sep {
             color: #9ca3af;
             font-weight: 700;

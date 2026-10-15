@@ -8,6 +8,7 @@ from concurrent.futures import ThreadPoolExecutor, as_completed
 from tqdm import tqdm
 import json
 from datetime import datetime
+from urllib.parse import urlparse
 from configs.global_configs import app_config
 from services.driver_manage_service import DriverManager
 
@@ -56,7 +57,8 @@ def extract_content_length(logs):
             try:
                 url = log["params"]["response"]["url"]
                 headers = {k.lower(): v for k, v in log["params"]["response"]["headers"].items()}
-                if "esft.intel.com" in url and "content-length" in headers:
+                # Host, not substring: the Microsoft sign-in page carries esft in its redirect_uri.
+                if urlparse(url).hostname == "esft.intel.com" and "content-length" in headers:
                     size = int(headers["content-length"])
                     print("✅ URL:", url)
                     print("📦 Content-Length:", size)
@@ -182,6 +184,10 @@ def download_file(
             if driver_manager.download_cancel_event.is_set():
                 _notify("cancelled", attempt_count=retry + 1, error_code="user_cancelled")
                 return [None, name, already_dload]
+            from services.case_info_service import CaseService
+            sso_cookies = CaseService.sso_browser_cookies()
+            if sso_cookies:
+                driver.execute_cdp_cmd("Network.setCookies", {"cookies": sso_cookies})
             driver.get(url)
 
             if driver_manager.download_cancel_event.is_set():
@@ -191,6 +197,11 @@ def download_file(
             logs = driver.get_log("performance")
             file_size_bytes = extract_content_length(logs)
             if not file_size_bytes:
+                if urlparse(driver.current_url).hostname == "login.microsoftonline.com":
+                    # Cookies may have expired since collection: re-collect on the next attempt.
+                    CaseService.invalidate_sso_browser_cookies()
+                    raise ValueError(f"esft redirected {name} to the Microsoft sign-in page "
+                                     "(this Chrome is not signed in)")
                 raise ValueError(f"Could not get Content-Length for {name}, will retry")
             if socketio:
                 socketio.emit('file_info', {

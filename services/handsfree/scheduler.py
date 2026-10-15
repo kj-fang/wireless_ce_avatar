@@ -6,8 +6,11 @@ Config (HandsfreeStore config.json):
     auto_check_mode      "4h" | "8h" | "nightly"   (nightly = every day 23:00 local)
     auto_check_max_cases int                        cases per round (newest first)
     auto_source          "owner" | "list_view"      what a round scans (default owner)
-    auto_list_view       str                        IPS list view developer name
-                                                    (closed cases run only in trial mode)
+    auto_list_views      [str]                      up to MAX_LIST_VIEWS IPS list view
+                                                    developer names; a round runs the
+                                                    union of their cases (closed cases
+                                                    only in trial mode)
+    auto_list_view       str                        legacy single name (first of the list)
     auto_next_run_at     ISO local                  persisted so a restart resumes
     auto_last_scan_at    ISO UTC                    written by run_auto_scan
     auto_last_result     str                        "<n> case(s) run" / "failed: …"
@@ -51,26 +54,49 @@ def _store():
     return orchestrator_store()
 
 
+MAX_LIST_VIEWS = 3
+
+
 def _source(cfg: dict) -> str:
     return "list_view" if cfg.get("auto_source") == "list_view" else "owner"
 
 
+def _clean_views(values) -> list[str]:
+    """Strip / drop empties / dedupe (order kept) / cap at MAX_LIST_VIEWS."""
+    if isinstance(values, str):
+        values = [values]
+    out: list[str] = []
+    for v in values or []:
+        name = str(v or "").strip()
+        if name and name not in out:
+            out.append(name)
+    return out[:MAX_LIST_VIEWS]
+
+
+def _list_views(cfg: dict) -> list[str]:
+    # auto_list_view / trial_list_view: where the single name lived before
+    # several views could be chosen (2026-10-15 / 2026-10-14).
+    views = _clean_views(cfg.get("auto_list_views"))
+    if not views:
+        views = _clean_views(cfg.get("auto_list_view") or cfg.get("trial_list_view") or "")
+    return views
+
+
 def _list_view(cfg: dict) -> str:
-    # trial_list_view: where the name lived while the list view was a
-    # Settings/trial-batch thing (before 2026-10-14).
-    return str(cfg.get("auto_list_view") or cfg.get("trial_list_view") or "").strip()
+    views = _list_views(cfg)
+    return views[0] if views else ""
 
 
 def scan_target(cfg: dict) -> dict:
     """What a round scans, from the config:
-    {"owner": str, "list_view": str, "error": str} — error set when the
-    chosen source is not configured."""
+    {"owner": str, "list_views": [str], "list_view": str (first), "error": str}
+    — error set when the chosen source is not configured."""
     if _source(cfg) == "list_view":
-        lv = _list_view(cfg)
-        return {"owner": "", "list_view": lv,
-                "error": "" if lv else "no IPS list view name configured"}
+        views = _list_views(cfg)
+        return {"owner": "", "list_views": views, "list_view": views[0] if views else "",
+                "error": "" if views else "no IPS list view configured"}
     owner = (cfg.get("owner_name") or "").strip()
-    return {"owner": owner, "list_view": "",
+    return {"owner": owner, "list_views": [], "list_view": "",
             "error": "" if owner else "no owner name configured"}
 
 
@@ -83,6 +109,8 @@ def status(cfg: Optional[dict] = None) -> dict:
         "max_cases": int(cfg.get("auto_check_max_cases") or 10),
         "source": _source(cfg),
         "list_view": _list_view(cfg),
+        "list_views": _list_views(cfg),
+        "max_list_views": MAX_LIST_VIEWS,
         "next_run_at": cfg.get("auto_next_run_at") or "",
         "last_scan_at": cfg.get("auto_last_scan_at") or "",
         "last_result": cfg.get("auto_last_result") or "",
@@ -91,25 +119,34 @@ def status(cfg: Optional[dict] = None) -> dict:
     }
 
 
-def _settings_updates(max_cases=None, source=None, list_view=None) -> dict:
+def _settings_updates(max_cases=None, source=None, list_view=None,
+                      list_views=None) -> dict:
     updates: dict = {}
     if max_cases is not None:
         updates["auto_check_max_cases"] = max(1, min(50, int(max_cases)))
     if source is not None:
         updates["auto_source"] = "list_view" if str(source) == "list_view" else "owner"
-    if list_view is not None:
-        updates["auto_list_view"] = str(list_view).strip()
+    if list_views is not None:
+        views = _clean_views(list_views)
+    elif list_view is not None:
+        views = _clean_views(list_view)
+    else:
+        views = None
+    if views is not None:
+        updates["auto_list_views"] = views
+        updates["auto_list_view"] = views[0] if views else ""   # legacy readers
     return updates
 
 
-def save_settings(max_cases=None, source=None, list_view=None) -> dict:
+def save_settings(max_cases=None, source=None, list_view=None, list_views=None) -> dict:
     """Persist the round settings without touching the schedule (UI 'Run
     now' with edited fields). Returns the config."""
-    return _store().save_config(_settings_updates(max_cases, source, list_view))
+    return _store().save_config(
+        _settings_updates(max_cases, source, list_view, list_views))
 
 
 def configure(enabled: bool, mode: str, max_cases: Optional[int] = None,
-              source=None, list_view=None) -> dict:
+              source=None, list_view=None, list_views=None) -> dict:
     """Start / stop / re-cadence from the UI. Returns the new status.
     Raises ValueError for an unknown mode or, when starting, an unconfigured
     source (no owner name / no list view name)."""
@@ -117,7 +154,7 @@ def configure(enabled: bool, mode: str, max_cases: Optional[int] = None,
     if mode not in MODES:
         raise ValueError(f"unknown mode: {mode}")
     updates: dict = {"auto_check_enabled": bool(enabled), "auto_check_mode": mode}
-    updates.update(_settings_updates(max_cases, source, list_view))
+    updates.update(_settings_updates(max_cases, source, list_view, list_views))
     if enabled:
         target = scan_target({**store.load_config(), **updates})
         if target["error"]:
@@ -145,7 +182,7 @@ def run_once(trigger: str = "manual", on_start=None) -> dict:
     try:
         res = run_auto_scan(store, target["owner"],
                             int(cfg.get("auto_check_max_cases") or 10),
-                            trigger=trigger, list_view=target["list_view"],
+                            trigger=trigger, list_views=target["list_views"],
                             on_start=on_start)
     finally:
         _running.clear()

@@ -307,11 +307,12 @@ def select_list_view_work(refs: list, updates: dict, ledger_lookup,
 
 def run_auto_scan(store: HandsfreeStore, owner: str = "", max_cases: int = 10,
                   trigger: str = "scheduled", list_view: str = "",
-                  on_start=None) -> dict:
+                  on_start=None, list_views: Optional[list] = None) -> dict:
     """One automatic round. Source: the owner's open cases with new customer
-    activity since the last scan (default), or — when list_view is given —
-    the cases of that IPS list view not yet analyzed or with new customer
-    comments (closed ones only in trial mode). The per-case pipeline runs
+    activity since the last scan (default), or — when list_views (or the
+    single list_view) is given — the union of the cases of those IPS list
+    views (in list order, each case once) not yet analyzed or with new
+    customer comments (closed ones only in trial mode). The per-case pipeline runs
     for each; drafts land in the review queue — nothing posts. Remembers the
     scan time per source. Returns a summary; {"ok": False} when a run is
     already in progress. on_start() is called once the run holds the lock
@@ -322,8 +323,14 @@ def run_auto_scan(store: HandsfreeStore, owner: str = "", max_cases: int = 10,
         return {"ok": False, "error": "a run is already in progress"}
     started = datetime.now(timezone.utc)
     owner = (owner or "").strip()
-    list_view = (list_view or "").strip()
-    source = f"IPS list view '{list_view}'" if list_view else f"open cases of '{owner}'"
+    views: list = []
+    for v in list(list_views or []) + [list_view]:
+        name = str(v or "").strip()
+        if name and name not in views:
+            views.append(name)
+    list_view = views[0] if views else ""          # truthy = list-view source
+    source = (("IPS list view " if len(views) == 1 else "IPS list views ")
+              + ", ".join(f"'{v}'" for v in views)) if views else f"open cases of '{owner}'"
     summary: dict = {"ok": True, "trigger": trigger, "started_at": started.isoformat(),
                      "source": source, "cases": []}
     try:
@@ -334,7 +341,8 @@ def run_auto_scan(store: HandsfreeStore, owner: str = "", max_cases: int = 10,
         cfg = store.load_config()
         trial = bool(cfg.get("trial_mode"))
         scan_times = dict(cfg.get("auto_last_scan_by_owner") or {})
-        scan_key = f"listview:{list_view.casefold()}" if list_view else owner.casefold()
+        scan_key = ("listview:" + "|".join(sorted(v.casefold() for v in views))
+                    if views else owner.casefold())
         # Older configs kept one stamp, valid only for the configured owner.
         legacy_since = (cfg.get("auto_last_scan_at") or ""
                         if not list_view
@@ -345,12 +353,21 @@ def run_auto_scan(store: HandsfreeStore, owner: str = "", max_cases: int = 10,
         _log_event(f"auto-scan ({trigger}): {source}, customer activity since {since_iso}")
         ips = IpsClient()
         if list_view:
-            refs = ips.list_view_cases(list_view)
+            refs, seen_nbrs = [], set()
+            for view in views:
+                view_refs = ips.list_view_cases(view)
+                fresh = [r for r in view_refs if r.case_nbr not in seen_nbrs]
+                seen_nbrs.update(r.case_nbr for r in fresh)
+                refs.extend(fresh)
+                if len(views) > 1:
+                    _log_event(f"list view '{view}': {len(view_refs)} case(s), "
+                               f"{len(fresh)} not already listed by an earlier view")
             updates = ips.find_customer_updates([c.case_id for c in refs], since_iso)
             work, skipped_closed = select_list_view_work(
                 refs, updates, store.ledger_entry, include_closed=trial)
-            line = (f"{len(refs)} case(s) in the list view, {len(updates)} with customer "
-                    f"comments since then, {len(work)} to run")
+            line = (f"{len(refs)} case(s) in "
+                    + ("the list view" if len(views) == 1 else f"{len(views)} list views")
+                    + f", {len(updates)} with customer comments since then, {len(work)} to run")
             if skipped_closed:
                 line += (f" — {skipped_closed} closed case(s) skipped (enable trial mode "
                          "in Settings to include closed cases)")

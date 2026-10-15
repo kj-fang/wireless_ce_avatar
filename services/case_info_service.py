@@ -144,14 +144,28 @@ class CaseService:
             CaseService._collect_profile_cookies(headless=False, wait_s=wait_s)
             # Proves the sign-in persisted in the profile and works unattended.
             try:
-                vf_session = CaseService._sso_via_chrome(headless=True)
-                CaseService._sso_browser_cookies = CaseService._collect_profile_cookies()
+                CaseService._headless_profile_sign_in()
             except Exception as e:
                 raise RuntimeError(
                     "signed in, but the background sign-in with the saved profile "
                     f"failed — unattended runs will not work on this machine: {e}") from e
-            with CaseService._vf_session_lock:
-                CaseService._vf_session = vf_session
+
+    @staticmethod
+    def verify_saved_sign_in() -> None:
+        """Unattended sign-in to Salesforce and esft on the saved profile,
+        bypassing the cookie-file cache. Raises when the sign-in has expired."""
+        if not os.path.isdir(CaseService._sso_profile_dir()):
+            raise RuntimeError("no saved sign-in on this machine; run --sso-login first")
+        with CaseService._sso_lock:
+            CaseService._headless_profile_sign_in()
+
+    @staticmethod
+    def _headless_profile_sign_in() -> None:
+        """Caller holds _sso_lock."""
+        vf_session = CaseService._sso_via_chrome(headless=True)
+        CaseService._sso_browser_cookies = CaseService._collect_profile_cookies()
+        with CaseService._vf_session_lock:
+            CaseService._vf_session = vf_session
 
     @staticmethod
     def sso_browser_cookies() -> list:

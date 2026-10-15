@@ -3,6 +3,7 @@
 Examples:
     python -m services.handsfree.cli --owner "Charles P Chu" --once
     python -m services.handsfree.cli --owner "Charles P Chu" --interval 300
+    python -m services.handsfree.cli --sso-login
 
 This starts the application services needed by the analysis pipeline, but it
 never starts Flask, Socket.IO, a browser, or the Handsfree UI. Each owner's
@@ -44,6 +45,11 @@ def _build_parser() -> argparse.ArgumentParser:
         "--case-number",
         help="Analyze one explicit case, bypassing owner/date and processed-case checks; requires --once.",
     )
+    targets.add_argument(
+        "--sso-login",
+        action="store_true",
+        help="Sign in to Salesforce once in a visible Chrome and keep the sign-in for unattended runs.",
+    )
     parser.add_argument(
         "--interval",
         type=float,
@@ -77,6 +83,30 @@ def _initialize_services() -> None:
     # Wi-Fi/BT agents and skills. Passing None avoids creating a web server;
     # Handsfree analysis itself does not need Socket.IO.
     set_up(None)
+
+
+def _sso_login() -> int:
+    # Not set_up(): its background prewarm would start its own SSO on the same profile.
+    from configs.global_configs import app_config
+    from services.case_info_service import CaseService
+    from services.driver_manage_service import DriverManager
+    from utils import helpers
+
+    avatarfiles_dir, _driver_dir, _prompt_dir = helpers.init_download_dir()
+    app_config.set_avatarfiles_dir(avatarfiles_dir)
+    if app_config.driver_manager is None:
+        app_config.set_driver_manager(DriverManager(avatarfiles_dir))
+
+    print("[handsfree-cli] a Chrome window will open: sign in with your Intel account "
+          "(choose 'Stay signed in' if asked). Waiting up to 10 minutes.")
+    try:
+        CaseService.interactive_sso_login()
+    except Exception as e:
+        print(f"[handsfree-cli] sign-in failed: {e}", file=sys.stderr)
+        return 1
+    print("[handsfree-cli] sign-in saved and verified in the background; profile: "
+          f"{CaseService._sso_profile_dir()}")
+    return 0
 
 
 def _store():
@@ -165,6 +195,8 @@ def _run_owners(owners: list[str]) -> int:
 def main(argv: Optional[list[str]] = None) -> int:
     _configure_output()
     args = _build_parser().parse_args(argv)
+    if args.sso_login:
+        return _sso_login()
     if args.interval <= 0:
         print("[handsfree-cli] --interval must be greater than zero", file=sys.stderr)
         return 2

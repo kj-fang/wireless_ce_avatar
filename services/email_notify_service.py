@@ -1,22 +1,19 @@
 """
 Email Notify Service
 ====================
-SMTP transport for the Report Ingestion Endpoint's completion emails, ported
-from LabHerald Agent Bridge's notify_email.py
-(C:\\Python\\Wireless_AI_Agent_Eco-System\\LabHerald-Agent-Bridge), which
-already implements this same pattern for a sibling automation. Sends HTML
-email directly via smtplib - no local mail client involved.
+SMTP transport for the Report Ingestion Endpoint's completion emails. 
+Sends HTML email directly via smtplib - no local mail client involved.
 
 Recipient resolution follows the `email_list.json` convention documented in
 data/CONTEXT.md: an optional file bundled inside the uploaded archive. If
-absent or unparsable, NO email is sent (unlike LabHerald, there is no
-default-recipient fallback here - see data/CONTEXT.md's email_list.json
-entry).
+absent or unparsable, NO email is sent (there is no default-recipient 
+fallback here - see data/CONTEXT.md's email_list.json entry).
 """
 
 import json
 import os
 import smtplib
+from datetime import datetime
 from email.mime.multipart import MIMEMultipart
 from email.mime.text import MIMEText
 
@@ -83,6 +80,55 @@ def send_html_to(*, to_list: list[str], subject: str, html_body: str, cc_list: l
     print(f"Email sent via SMTP to: {', '.join(to_list)}" + (f" (cc: {', '.join(cc)})" if cc else ''))
 
 
+def _build_analysis_section_html(result: dict | None) -> str:
+    """Build the 'IntelAvatar Analysis' HTML block, mirroring LabHerald's
+    email_draft.py::_build_analysis_section_html but reading from the
+    in-memory job result dict instead of an on-disk llm_report JSON.
+    """
+    data = (result or {}).get('data')
+    if not isinstance(data, dict):
+        return ''
+
+    html = '<hr><p><strong>IntelAvatar Analysis</strong></p>'
+    html += f"<p><strong>Root Cause</strong>: {data.get('root_cause_summary', 'N/A')}</p>"
+    confidence = data.get('confidence_score')
+    if confidence is not None:
+        html += f'<p><strong>Confidence</strong>: {confidence}%</p>'
+    actions = data.get('recommended_actions') or []
+    if actions:
+        html += '<p><strong>Recommended Actions:</strong><ul>'
+        html += ''.join(f'<li>{action}</li>' for action in actions)
+        html += '</ul></p>'
+    html += '<hr>'
+    return html
+
+
+def _build_html_body(source_filename: str, job_id: str, timestamp: str, status: str,
+                      result: dict | None, error_message: str | None) -> str:
+    """Build the completion email body, adapted from LabHerald's
+    email_draft.py::_build_html_body (no archived-folder link - this system
+    deletes uploads immediately instead of moving them to a Completed dir).
+    """
+    if status == 'done':
+        intro = f'<p>The Agent Admin Robot completed analysis at <strong>{timestamp}</strong> for:</p>'
+        status_html = _build_analysis_section_html(result)
+    else:
+        intro = f'<p>The Agent Admin Robot FAILED to analyze the following at <strong>{timestamp}</strong>:</p>'
+        status_html = f"<p><strong>Error</strong>: {error_message or 'unknown error'}</p>"
+
+    return f"""\
+            <html><body>
+            <p>Hi,</p>
+            {intro}
+            <ul><li>{source_filename}</li></ul>
+            <p>Job ID: <code>{job_id}</code></p>
+            {status_html}
+            <p>Please review the IntelAvatar submissions in shared folder if needed.</p>
+            <p>Best regards,<br>Agent Admin Robot</p>
+            </body></html>
+        """
+
+
 def send_job_completion_email(*, extracted_dir: str, job_id: str, source_filename: str,
                                status: str, result: dict | None, error_message: str | None) -> bool:
     """Look for email_list.json under `extracted_dir`; if found with valid
@@ -99,24 +145,12 @@ def send_job_completion_email(*, extracted_dir: str, job_id: str, source_filenam
     if not to_list:
         return False
 
+    now = datetime.now().strftime('%Y-%m-%d %H:%M:%S')
     if status == 'done':
-        subject = f'[Avatar Report Ingestion] Analysis complete: {source_filename}'
-        root_cause = (result or {}).get('data', {}).get('root_cause_summary', 'N/A') \
-            if isinstance((result or {}).get('data'), dict) else 'N/A'
-        body = (
-            f"<html><body>"
-            f"<p>Job <code>{job_id}</code> for <strong>{source_filename}</strong> completed.</p>"
-            f"<p><strong>Root cause summary:</strong> {root_cause}</p>"
-            f"</body></html>"
-        )
+        subject = f'[Agent Admin Robot] Processed Archive: {source_filename} \u2013 {now}'
     else:
-        subject = f'[Avatar Report Ingestion] Analysis FAILED: {source_filename}'
-        body = (
-            f"<html><body>"
-            f"<p>Job <code>{job_id}</code> for <strong>{source_filename}</strong> failed.</p>"
-            f"<p><strong>Error:</strong> {error_message or 'unknown error'}</p>"
-            f"</body></html>"
-        )
+        subject = f'[Agent Admin Robot] Analysis FAILED: {source_filename} \u2013 {now}'
+    body = _build_html_body(source_filename, job_id, now, status, result, error_message)
 
     try:
         send_html_to(to_list=to_list, subject=subject, html_body=body, cc_list=cc_list)

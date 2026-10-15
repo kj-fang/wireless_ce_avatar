@@ -89,8 +89,14 @@ def start_check_now(owner_name: Optional[str] = None,
 
 def _analyze_and_enqueue(store: HandsfreeStore, case_nbr: str,
                          case_id: str = "", subject: str = "",
-                         owner_name: str = "") -> Optional[dict]:
-    """Shared per-case body for check runs and manual single-case runs."""
+                         owner_name: str = "",
+                         trial: Optional[bool] = None) -> Optional[dict]:
+    """Shared per-case body for check runs and manual single-case runs.
+
+    trial: the run's captured trial-mode flag (run_auto_scan fixes it once
+    per round so a Settings change mid-run cannot turn the closed cases it
+    selected into postable drafts); None = read the config now (manual runs).
+    """
     def _progress(stage, detail, _c=case_nbr):
         _log_event(f"[{_c}] {stage}: {detail}")
 
@@ -123,7 +129,9 @@ def _analyze_and_enqueue(store: HandsfreeStore, case_nbr: str,
 
     # Trial mode (Settings): tuning on historical / closed cases — every
     # draft is flagged and can never be posted.
-    trial = bool(store.load_config().get("trial_mode"))
+    if trial is None:
+        trial = bool(store.load_config().get("trial_mode"))
+    trial = bool(trial)
 
     draft = compose(analysis)
     rec = store.enqueue(
@@ -298,14 +306,16 @@ def select_list_view_work(refs: list, updates: dict, ledger_lookup,
 
 
 def run_auto_scan(store: HandsfreeStore, owner: str = "", max_cases: int = 10,
-                  trigger: str = "scheduled", list_view: str = "") -> dict:
+                  trigger: str = "scheduled", list_view: str = "",
+                  on_start=None) -> dict:
     """One automatic round. Source: the owner's open cases with new customer
     activity since the last scan (default), or — when list_view is given —
     the cases of that IPS list view not yet analyzed or with new customer
     comments (closed ones only in trial mode). The per-case pipeline runs
     for each; drafts land in the review queue — nothing posts. Remembers the
     scan time per source. Returns a summary; {"ok": False} when a run is
-    already in progress."""
+    already in progress. on_start() is called once the run holds the lock
+    and the state says "running" (the UI's Run-now handshake)."""
     from datetime import datetime, timedelta, timezone
 
     if not _run_lock.acquire(blocking=False):
@@ -319,6 +329,8 @@ def run_auto_scan(store: HandsfreeStore, owner: str = "", max_cases: int = 10,
     try:
         _set_state(status="running", owner=owner or None, mode=f"auto-scan ({trigger})",
                    started_at=time.time(), events=[], cases=[], error=None)
+        if on_start is not None:
+            on_start()
         cfg = store.load_config()
         trial = bool(cfg.get("trial_mode"))
         scan_times = dict(cfg.get("auto_last_scan_by_owner") or {})
@@ -363,7 +375,20 @@ def run_auto_scan(store: HandsfreeStore, owner: str = "", max_cases: int = 10,
             try:
                 rec = _analyze_and_enqueue(store, ref.case_nbr,
                                            case_id=ref.case_id, subject=ref.subject,
-                                           owner_name=owner or getattr(ref, "owner_name", ""))
+                                           owner_name=owner or getattr(ref, "owner_name", ""),
+                                           trial=trial)
+                if rec is not None and rec.get("mode") == "error":
+                    # The runner could not even fetch the case (IPS/Snowflake
+                    # hiccup): the draft only tells the reviewer. The update
+                    # stays unconsumed and the ledger untouched (enqueue skips
+                    # it for error drafts), so the next round retries.
+                    failed += 1
+                    _log_event(f"[{ref.case_nbr}] FAILED: "
+                               f"{(rec.get('analysis') or {}).get('error') or 'case fetch failed'}"
+                               " — retried next round")
+                    summary["cases"].append({"case_nbr": ref.case_nbr, "reason": reason,
+                                             "mode": "error"})
+                    continue
                 if upd and reason.startswith("customer update"):
                     store.mark_customer_update(ref.case_nbr, upd)
                 summary["cases"].append({"case_nbr": ref.case_nbr, "reason": reason,
@@ -410,9 +435,13 @@ def start_case_run(case_nbr: str) -> dict:
     request means the user wants a fresh analysis even if the case was seen
     before) — duplicate-POST protection still applies at approve time.
     """
-    case_nbr = "".join(ch for ch in str(case_nbr or "").strip() if ch.isalnum())
+    from utils.check_ips_utils import normalise_ips
+    raw = str(case_nbr or "").strip()
+    case_nbr = normalise_ips(raw)
     if not case_nbr:
-        return {"ok": False, "error": "empty case number"}
+        return {"ok": False,
+                "error": (f"{raw!r} is not an IPS case number (six to eight digits, "
+                          "e.g. 01009610)") if raw else "empty case number"}
     if not _run_lock.acquire(blocking=False):
         return {"ok": False, "error": "a run is already in progress"}
 
@@ -517,7 +546,13 @@ def _approve_and_post_locked(draft_id: str, edited_plain: Optional[str]) -> dict
     # scan for the family tag only backfills the ledger for cases whose
     # overview was posted before the ledger tracked it; a failed scan does
     # not block.
-    if rec.get("mode") == "first_response":
+    # A request draft composed while no first response was recorded embeds
+    # the overview too (analysis.first_response_done False at compose time).
+    # Later-round request drafts (True) carry only their targeted ask.
+    embeds_overview = (rec.get("mode") == "first_response"
+                       or (draft_is_checklist
+                           and not (rec.get("analysis") or {}).get("first_response_done")))
+    if embeds_overview:
         sent = store.first_response_posted(rec["case_nbr"])
         if not sent:
             try:
@@ -530,7 +565,7 @@ def _approve_and_post_locked(draft_id: str, edited_plain: Optional[str]) -> dict
                         break
             except Exception as e:
                 print(f"[handsfree] first-response scan skipped ({type(e).__name__}: {e})")
-        if sent:
+        if sent and rec.get("mode") == "first_response":
             store.update(draft_id, status="posted",
                          post_result={"ok": False, "backend": "none",
                                       "error": "first response already sent on this case"})
@@ -538,6 +573,16 @@ def _approve_and_post_locked(draft_id: str, edited_plain: Optional[str]) -> dict
                     "error": "the first-response overview was already sent on this "
                              "case (it goes out once); marked as posted",
                     "draft": store.get(draft_id)}
+        if sent:
+            # Stale first-round request draft (e.g. a manual rerun queued two
+            # before either posted): posting it would send the overview a
+            # second time. A fresh round composes the targeted ask only.
+            err = ("the first-response overview was already sent on this case and "
+                   "this first-round request draft embeds it again — rejected; "
+                   "re-run the case for a targeted request")
+            store.update(draft_id, status="rejected",
+                         post_result={"ok": False, "backend": "none", "error": err})
+            return {"ok": False, "error": err, "draft": store.get(draft_id)}
 
     backend = (cfg.get("post_backend") or "auto").lower()
     result = None

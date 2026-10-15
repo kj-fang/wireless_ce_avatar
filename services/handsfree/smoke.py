@@ -925,6 +925,11 @@ def smoke_runner(tmp: Path) -> None:
 
         class _ListViewIps:
             def list_view_cases(self, name, limit=200):
+                if name == "Second_view":
+                    return [CaseRef("00000003", "500C", "open one (also in view 1)",
+                                    status="Open", closed=False),
+                            CaseRef("00000009", "500D", "only in the second view",
+                                    status="Open", closed=False)]
                 assert name == "Handsfree_replier_test_case"
                 return [CaseRef("00000001", "500A", "done before", status="Closed"),
                         CaseRef("01234567", "500B", "historical closed case", status="Closed"),
@@ -941,6 +946,11 @@ def smoke_runner(tmp: Path) -> None:
             store14h.save_config({"trial_mode": False, "post_backend": "rest"})
             summary_h = orch.run_auto_scan(store14h, "", max_cases=5, trigger="manual",
                                            list_view="Handsfree_replier_test_case")
+            store14m = HandsfreeStore(tmp / "handsfree_s14m")      # two views, union
+            store14m.save_config({"trial_mode": False, "post_backend": "rest"})
+            summary_m = orch.run_auto_scan(
+                store14m, "", max_cases=5, trigger="manual",
+                list_views=["Handsfree_replier_test_case", "Second_view"])
         finally:
             orch.IpsClient = orig_ips_cls
         trial_drafts = store14g.list_drafts(include_closed=True)
@@ -1166,6 +1176,14 @@ def smoke_runner(tmp: Path) -> None:
               and "GAVE UP" in d_b7 and len(bsod_calls) == 2,
               f"modes={a_b5.mode}/{a_b6.mode}/{a_b7.mode} failed6={a_b6.bsod.get('failed')} "
               f"failed7={a_b7.bsod.get('failed')} calls={len(bsod_calls)} draft={d_b7[:300]}")
+
+        check("S14.f3 two list views: union of their cases, each case once, in list order; "
+              "scan stamp keyed by both names",
+              summary_m["ok"] and [c["case_nbr"] for c in summary_m["cases"]] == ["00000003", "00000009"]
+              and "Second_view" in summary_m["source"]
+              and "listview:handsfree_replier_test_case|second_view"
+              in (store14m.load_config().get("auto_last_scan_by_owner") or {}),
+              f"summary={summary_m} cfg={store14m.load_config().get('auto_last_scan_by_owner')}")
 
         check("S14.d later round: analysis only (no second overview); request reply "
               "asks for the logs without the checklist",
@@ -1408,15 +1426,24 @@ def smoke_auto_scan(tmp: Path) -> None:
           and [w[0].case_nbr for w in lv_work_all] == ["1", "4", "5"] and lv_skipped_all == 0,
           f"{[(w[0].case_nbr, w[1]) for w in lv_work]} skipped={lv_skipped} "
           f"all={[w[0].case_nbr for w in lv_work_all]}")
-    from .scheduler import scan_target
-    check("S16.d3 scheduler target: owner by default, list view when chosen (legacy "
-          "trial_list_view honoured), errors when the chosen source is unconfigured",
-          scan_target({"owner_name": "Charles"}) == {"owner": "Charles", "list_view": "", "error": ""}
-          and scan_target({"auto_source": "list_view", "trial_list_view": "Old_view"})["list_view"] == "Old_view"
+    from .scheduler import scan_target, _settings_updates
+    check("S16.d3 scheduler target: owner by default, list views when chosen (legacy "
+          "auto_list_view / trial_list_view honoured), errors when the chosen source is unconfigured",
+          scan_target({"owner_name": "Charles"})
+          == {"owner": "Charles", "list_views": [], "list_view": "", "error": ""}
+          and scan_target({"auto_source": "list_view", "trial_list_view": "Old_view"})["list_views"] == ["Old_view"]
           and scan_target({"auto_source": "list_view", "auto_list_view": "LV"})
-          == {"owner": "", "list_view": "LV", "error": ""}
+          == {"owner": "", "list_views": ["LV"], "list_view": "LV", "error": ""}
+          and scan_target({"auto_source": "list_view", "auto_list_views": ["A", "B"], "auto_list_view": "A"})["list_views"] == ["A", "B"]
           and scan_target({"auto_source": "list_view"})["error"]
           and scan_target({"auto_source": "owner"})["error"])
+    check("S16.d4 list-view settings: stripped, deduped, capped at 3, legacy single name kept in sync",
+          _settings_updates(list_views=[" A ", "B", "A", "", "C", "D"])
+          == {"auto_list_views": ["A", "B", "C"], "auto_list_view": "A"}
+          and _settings_updates(list_view="X") == {"auto_list_views": ["X"], "auto_list_view": "X"}
+          and _settings_updates(list_views=[]) == {"auto_list_views": [], "auto_list_view": ""}
+          and _settings_updates(max_cases=99) == {"auto_check_max_cases": 50},
+          str(_settings_updates(list_views=[" A ", "B", "A", "", "C", "D"])))
 
     from .ips_client import IpsClient
 

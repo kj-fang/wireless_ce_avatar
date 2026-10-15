@@ -306,13 +306,12 @@
       </div>
     </div>
     <div id="tab-auto" style="display:none;">
-      <div class="hint">Each round scans one source: the open IPS cases of the case owner (from Settings) for
-        either new cases OR new customer comments since the previous round (one of the two is enough), or the cases of an
-        IPS list view that were not analyzed yet or have new customer comments. The handsfree pipeline runs for each and the
-        drafts queue below for review. Nothing is posted automatically — Approve still decides. Closed cases of a list view
-        run only in trial mode (Settings).</div>
+      <div class="hint">Each round scans the ONE source chosen below — the open IPS cases of the case owner (from
+        Settings) for either new cases OR new customer comments since the previous round, or the cases of up to three IPS
+        list views (their union) that were not analyzed yet or have new customer comments — and runs the handsfree pipeline
+        for each; the drafts queue below for review. Frequency and max cases per round apply to either source. Nothing is
+        posted automatically — Approve still decides. Closed cases of a list view run only in trial mode (Settings).</div>
       <div class="controls">
-        <label>Case owner: <b id="auto-owner" style="color: var(--fg);">{{ config.owner_name or '—' }}</b></label>
         <label>Frequency:
           <select id="auto-mode">
             <option value="4h">Every 4 hours</option>
@@ -331,22 +330,29 @@
                 title="Run one round right now with the settings above">Run now</button>
         <span class="status-line" id="auto-status"></span>
       </div>
-      <div class="controls">
-        <label>Source:
-          <select id="auto-source" onchange="applyAutoSourceUi()">
-            <option value="owner">Open cases of the case owner</option>
-            <option value="list_view">IPS list view</option>
-          </select>
+      <div class="controls" id="auto-source-row">
+        <span style="color: var(--muted);">Source:</span>
+        <label class="auto-src-opt" style="display: inline-flex; align-items: center; gap: 6px; cursor: pointer;">
+          <input type="radio" name="auto-source" value="owner" onchange="applyAutoSourceUi()">
+          Open cases of case owner <b id="auto-owner" style="color: var(--fg);">{{ config.owner_name or '—' }}</b>
         </label>
-        <label>IPS list view:
-          <select id="auto-list-view" style="max-width: 320px;" onchange="applyAutoListViewUi()"
-                  title="Case list views visible to the current IPS login">
-            <option value="">loading…</option>
-            <option value="__other__">other…</option>
-          </select>
-          <input type="text" id="auto-list-view-other" style="width: 240px; font-family: var(--mono); font-size: 12.5px; display: none;"
-                 placeholder="developer name, e.g. Handsfree_replier_test_case">
+        <label class="auto-src-opt" style="display: inline-flex; align-items: center; gap: 6px; cursor: pointer;">
+          <input type="radio" name="auto-source" value="list_view" onchange="applyAutoSourceUi()">
+          IPS list views <span style="color: var(--faint);">(up to 3, their cases are combined)</span>
         </label>
+      </div>
+      <div class="controls" id="auto-lv-row" style="display: none; padding-left: 58px;">
+        <span id="auto-lv-chips" style="display: inline-flex; gap: 6px; flex-wrap: wrap;"></span>
+        <select id="auto-list-view" style="max-width: 320px;" onchange="applyAutoListViewUi()"
+                title="Case list views visible to the current IPS login">
+          <option value="">loading…</option>
+          <option value="__other__">other…</option>
+        </select>
+        <input type="text" id="auto-list-view-other" style="width: 240px; font-family: var(--mono); font-size: 12.5px; display: none;"
+               placeholder="developer name, e.g. Handsfree_replier_test_case"
+               onkeydown="if(event.key==='Enter')addAutoListView()">
+        <button class="ghost" id="auto-lv-add" onclick="addAutoListView()"
+                title="Add the selected list view (max 3)">Add</button>
         <span class="status-line" id="auto-source-note"></span>
       </div>
     </div>
@@ -509,14 +515,67 @@
     }
   }
 
+  const MAX_AUTO_LIST_VIEWS = 3;
+  let autoListViews = [];          // developer names chosen for the list-view source
+
+  function getAutoSource() {
+    const r = document.querySelector('input[name="auto-source"]:checked');
+    return r ? r.value : 'owner';
+  }
+  function setAutoSource(v) {
+    const r = document.querySelector('input[name="auto-source"][value="' + (v || 'owner') + '"]');
+    if (r) r.checked = true;
+  }
+
+  // Only the chosen source's details are shown, so what will run is never
+  // ambiguous: owner -> its name in the radio label; list views -> the chips.
   function applyAutoSourceUi() {
-    const lv = document.getElementById('auto-source').value === 'list_view';
-    document.getElementById('auto-list-view').disabled = !lv;
-    document.getElementById('auto-list-view-other').disabled = !lv;
+    const lv = getAutoSource() === 'list_view';
+    document.getElementById('auto-lv-row').style.display = lv ? '' : 'none';
+    document.querySelectorAll('.auto-src-opt').forEach(l => {
+      l.style.color = l.querySelector('input').checked ? 'var(--fg)' : 'var(--muted)';
+    });
+    renderAutoListViewChips();
+  }
+
+  function renderAutoListViewChips() {
+    const box = document.getElementById('auto-lv-chips');
+    box.innerHTML = autoListViews.map(name =>
+      `<span class="pill" title="${esc(name)}">${esc(name)} ` +
+      `<a href="#" onclick="removeAutoListView(${JSON.stringify(name).replace(/"/g, '&quot;')});return false;" ` +
+      `style="color: var(--muted); text-decoration: none; margin-left: 2px;" title="Remove">✕</a></span>`
+    ).join('');
+    const full = autoListViews.length >= MAX_AUTO_LIST_VIEWS;
+    document.getElementById('auto-lv-add').disabled = full;
+    document.getElementById('auto-list-view').disabled = full;
+    document.getElementById('auto-list-view-other').disabled = full;
     const trial = document.getElementById('cfg-trial').checked;
-    document.getElementById('auto-source-note').textContent = !lv ? '' : trial
-      ? 'trial mode: closed cases included, drafts cannot be posted'
-      : 'open cases only — enable trial mode in Settings to include closed cases';
+    const note = document.getElementById('auto-source-note');
+    if (getAutoSource() !== 'list_view') { note.textContent = ''; return; }
+    note.textContent = (autoListViews.length ? '' : 'no list view chosen yet — ')
+      + (full ? 'maximum of 3 list views · ' : '')
+      + (trial ? 'trial mode: closed cases included, drafts cannot be posted'
+               : 'open cases only — enable trial mode in Settings to include closed cases');
+  }
+
+  function addAutoListView() {
+    const name = currentAutoListView();
+    if (!name) { alert('Pick a list view first (or type its developer name under "other…").'); return; }
+    if (autoListViews.includes(name)) { alert(name + ' is already in the list.'); return; }
+    if (autoListViews.length >= MAX_AUTO_LIST_VIEWS) { alert('At most ' + MAX_AUTO_LIST_VIEWS + ' list views.'); return; }
+    autoListViews.push(name);
+    document.getElementById('auto-list-view-other').value = '';
+    renderAutoListViewChips();
+  }
+
+  function removeAutoListView(name) {
+    autoListViews = autoListViews.filter(n => n !== name);
+    renderAutoListViewChips();
+  }
+
+  function autoListViewEditing() {
+    const row = document.getElementById('auto-lv-row');
+    return row && row.contains(document.activeElement);
   }
 
   function configBody() {
@@ -595,16 +654,19 @@
     if (document.activeElement !== modeSel) modeSel.value = a.mode || 'nightly';
     const maxEl = document.getElementById('auto-max');
     if (document.activeElement !== maxEl) maxEl.value = a.max_cases || 10;
-    const srcEl = document.getElementById('auto-source');
-    if (document.activeElement !== srcEl) srcEl.value = a.source || 'owner';
-    setAutoListView(a.list_view || '');
+    setAutoSource(a.source || 'owner');
+    if (!autoListViewEditing()) {
+      autoListViews = (a.list_views || (a.list_view ? [a.list_view] : [])).slice(0, MAX_AUTO_LIST_VIEWS);
+    }
     applyAutoSourceUi();
     document.getElementById('auto-toggle-text').textContent =
       autoEnabled ? 'Stop automatic analysis' : 'Start automatic analysis';
     document.getElementById('auto-toggle-btn').className = autoEnabled ? 'danger' : 'primary';
     const bits = [];
-    bits.push(autoEnabled ? 'ON · ' + (a.mode_label || a.mode)
-      + (a.source === 'list_view' ? ' · list view ' + (a.list_view || '?') : '') : 'off');
+    const srcText = a.source === 'list_view'
+      ? 'list view' + ((a.list_views || []).length > 1 ? 's ' : ' ') + ((a.list_views || [a.list_view]).join(', ') || '?')
+      : 'open cases of the owner';
+    bits.push(autoEnabled ? 'ON · ' + (a.mode_label || a.mode) + ' · ' + srcText : 'off');
     if (autoEnabled && a.next_run_at) bits.push('next round ' + a.next_run_at.slice(0, 16).replace('T', ' '));
     if (a.last_scan_at) bits.push('last round ' + a.last_scan_at.slice(0, 16).replace('T', ' ') + ' UTC');
     if (a.last_result) bits.push(a.last_result);
@@ -635,23 +697,6 @@
       : sel.value;
   }
 
-  // Select `name` in the dropdown; a name the listing does not know (or an
-  // unloaded listing) goes to the "other…" text input so it is never lost.
-  function setAutoListView(name) {
-    const sel = document.getElementById('auto-list-view');
-    const other = document.getElementById('auto-list-view-other');
-    if (document.activeElement === sel || document.activeElement === other) return;
-    const known = Array.from(sel.options).some(o => o.value === name && o.value !== '__other__');
-    if (name && !known) {
-      sel.value = '__other__';
-      other.value = name;
-    } else {
-      sel.value = name;
-      if (sel.value !== name) sel.value = sel.options.length ? sel.options[0].value : '';
-    }
-    applyAutoListViewUi();
-  }
-
   function applyAutoListViewUi() {
     const sel = document.getElementById('auto-list-view');
     document.getElementById('auto-list-view-other').style.display =
@@ -660,7 +705,6 @@
 
   function fillListViews(items, errorText) {
     const sel = document.getElementById('auto-list-view');
-    const keep = currentAutoListView();
     sel.innerHTML = '';
     const add = (value, text) => {
       const o = document.createElement('option');
@@ -668,9 +712,11 @@
     };
     if (errorText) add('', 'list views unavailable: ' + errorText);
     else if (!items.length) add('', 'no Case list views visible to this login');
+    else add('', 'choose a list view to add…');
     items.forEach(v => add(v.developer_name, v.label + ' (' + v.developer_name + ')'));
     add('__other__', 'other…');
-    setAutoListView(keep);
+    sel.value = '';
+    applyAutoListViewUi();
   }
 
   async function loadListViews() {
@@ -689,8 +735,8 @@
   function autoRoundSettings() {
     return {
       max_cases: parseInt(document.getElementById('auto-max').value, 10) || 10,
-      source: document.getElementById('auto-source').value,
-      list_view: currentAutoListView(),
+      source: getAutoSource(),
+      list_views: autoListViews.slice(0, MAX_AUTO_LIST_VIEWS),
     };
   }
 

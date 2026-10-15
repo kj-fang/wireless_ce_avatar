@@ -77,7 +77,8 @@ def auto_check():
             mode=str(body.get("mode") or "nightly"),
             max_cases=body.get("max_cases"),
             source=body.get("source"),
-            list_view=body.get("list_view")))
+            list_view=body.get("list_view"),
+            list_views=body.get("list_views")))
     except ValueError as e:
         return jsonify({"ok": False, "error": str(e)}), 400
 
@@ -105,7 +106,8 @@ def auto_run_now():
     body = request.get_json(silent=True) or {}
     cfg = scheduler.save_settings(max_cases=body.get("max_cases"),
                                   source=body.get("source"),
-                                  list_view=body.get("list_view"))
+                                  list_view=body.get("list_view"),
+                                  list_views=body.get("list_views"))
     target = scheduler.scan_target(cfg)
     if target["error"]:
         return jsonify({"ok": False, "error": target["error"]})

@@ -1533,12 +1533,12 @@ class AgentRoutes:
         # the wpp_ddd convention and appends ".log".
         suffixes = self.profile.direct_log_suffixes
         accepts_direct = suffixes is not None
-        if (accepts_direct and os.path.exists(etl_path)
+        if (accepts_direct and os.path.isfile(etl_path)
                 and (not suffixes or etl_path.lower().endswith(suffixes))):
             log_path = etl_path
         else:
             log_path = etl_path + ".log"
-        if not os.path.exists(log_path):
+        if not os.path.isfile(log_path):
             # A profile that can only ever derive "<etl>.log" says so; one that
             # also accepts a direct path can't promise which extension it wanted.
             missing = "Log file" if accepts_direct else ".log file"

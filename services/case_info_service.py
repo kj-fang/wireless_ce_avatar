@@ -32,6 +32,8 @@ class CaseService:
     _VF_COOKIE_FILENAME = "sf_session_cookies.json"
     # Created by `--sso-login`; its presence opts this machine into the persistent profile.
     _SSO_PROFILE_DIRNAME = "sso_chrome_profile"
+    # Sign-in cookies of that profile for fresh download Chromes; None = not collected yet.
+    _sso_browser_cookies: list = None
     _SF_API_BASE_URL = "https://intel.my.salesforce.com"
 
     @staticmethod
@@ -139,15 +141,71 @@ class CaseService:
         os.makedirs(CaseService._sso_profile_dir(), exist_ok=True)
         with CaseService._sso_lock:
             CaseService._sso_via_chrome(headless=False, wait_s=wait_s)
+            CaseService._collect_profile_cookies(headless=False, wait_s=wait_s)
             # Proves the sign-in persisted in the profile and works unattended.
             try:
                 vf_session = CaseService._sso_via_chrome(headless=True)
+                CaseService._sso_browser_cookies = CaseService._collect_profile_cookies()
             except Exception as e:
                 raise RuntimeError(
                     "signed in, but the background sign-in with the saved profile "
                     f"failed — unattended runs will not work on this machine: {e}") from e
             with CaseService._vf_session_lock:
                 CaseService._vf_session = vf_session
+
+    @staticmethod
+    def sso_browser_cookies() -> list:
+        """Sign-in cookies of the persistent SSO profile (Microsoft, esft) as
+        CDP CookieParams for a fresh download Chrome; [] without a profile."""
+        if not os.path.isdir(CaseService._sso_profile_dir()):
+            return []
+        with CaseService._sso_lock:
+            if CaseService._sso_browser_cookies is None:
+                try:
+                    CaseService._sso_browser_cookies = CaseService._collect_profile_cookies()
+                except Exception as e:
+                    print(f"  [SSO] could not collect sign-in cookies for downloads: {e}")
+                    CaseService._sso_browser_cookies = []
+            return CaseService._sso_browser_cookies
+
+    @staticmethod
+    def invalidate_sso_browser_cookies() -> None:
+        CaseService._sso_browser_cookies = None
+
+    @staticmethod
+    def _collect_profile_cookies(headless: bool = True, wait_s: int = 60) -> list:
+        """Sign in to esft on the SSO profile and return all of the browser's
+        cookies as CDP CookieParams. Caller holds _sso_lock."""
+        from urllib.parse import urlparse
+        driver_manager = app_config.driver_manager
+        driver = driver_manager.create_download_driver(
+            os.path.join(app_config.avatarfiles_dir, "_vf_auth_tmp"),
+            headless=headless,
+            user_data_dir=CaseService._sso_profile_dir(),
+        )
+        try:
+            driver.get("https://esft.intel.com/sftservices/")
+            try:
+                WebDriverWait(driver, wait_s).until(
+                    lambda d: urlparse(d.current_url).hostname == "esft.intel.com")
+            except TimeoutException as e:
+                raise RuntimeError(f"esft sign-in did not complete within {wait_s}s "
+                                   f"(stopped at {driver.current_url})") from e
+            time.sleep(2)  # let the sign-in callback set its cookie
+            cookies = driver.execute_cdp_cmd("Network.getAllCookies", {})["cookies"]
+        finally:
+            driver.quit()
+            if driver in driver_manager.all_drivers:
+                driver_manager.all_drivers.remove(driver)
+        keep = ("name", "value", "domain", "path", "secure", "httpOnly", "sameSite")
+        params = []
+        for c in cookies:
+            p = {k: c[k] for k in keep if k in c}
+            if not c.get("session") and c.get("expires", -1) > 0:
+                p["expires"] = c["expires"]
+            params.append(p)
+        print(f"  [SSO] {len(params)} sign-in cookie(s) ready for downloads")
+        return params
 
     @staticmethod
     def _sso_via_chrome(headless: bool = True, wait_s: int = 90) -> _requests.Session:

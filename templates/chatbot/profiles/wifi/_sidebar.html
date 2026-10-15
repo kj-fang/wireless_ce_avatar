@@ -1,0 +1,131 @@
+{% import 'chatbot/profiles/_sidebar_parts.html' as sb with context %}
+{{ sb.switcher() }}
+
+        <!-- View 1: live controls (Log File / Issue Time / Skills / …) -->
+        <div id="sidebar-controls-view">
+
+{{ sb.log_file() }}
+
+{{ sb.event_log() }}
+
+        <!-- Issue Time -->
+        <div class="sidebar-section">
+            <h6 style="display:flex;align-items:center;justify-content:space-between;">
+                <span style="display:flex;align-items:center;gap:6px;flex-wrap:wrap;">
+                    <span>⏰ Issue Time</span>
+                    {# Says where the pre-filled time came from, so a user can tell
+                       an attachment timestamp from one parsed out of the case text. #}
+                    <span id="it-time-source-tag"
+                          style="display:none;font-size:0.6rem;font-weight:600;color:#0071c5;
+                                 background:#eaf3ff;border:1px solid #cfe0fa;border-radius:9px;
+                                 padding:1px 6px;white-space:nowrap;"></span>
+                </span>
+                <button type="button" class="it-clear-top" onclick="clearAllIssueTimes()"
+                        title="Clear the issue time (and any extra rows)">
+                    🗑️<span class="it-clear-top-label">Clear</span>
+                </button>
+            </h6>
+            <div style="font-size:0.72rem;color:#666;margin-bottom:10px;line-height:1.4;">
+                When did the issue happen?
+            </div>
+
+            <!-- Customer wall clock — the human-facing value (what the customer
+                 saw on their OWN clock). Shown ABOVE the editable fields, which
+                 hold the decode-host/log-frame value. Populated by
+                 populateCustomerAnnotation(); hidden until a tz is detected. -->
+            <div id="issue-time-customer-annotation"
+                 style="display:none;margin-bottom:12px;padding:9px 11px;
+                        background:linear-gradient(135deg,#eaf3ff 0%,#f4f9ff 100%);
+                        border:1px solid #cfe0fa;border-left:3px solid var(--accent);
+                        border-radius:10px;box-shadow:0 1px 2px rgba(var(--accent-rgb),0.06);">
+                <div style="display:flex;align-items:center;gap:5px;margin-bottom:3px;">
+                    <span style="font-size:0.9rem;line-height:1;">👤</span>
+                    <span style="font-size:0.64rem;font-weight:700;letter-spacing:0.05em;
+                                 text-transform:uppercase;color:var(--accent);">Customer time</span>
+                </div>
+                <div id="issue-time-customer-value"
+                     style="font-size:1.04rem;font-weight:700;color:#0b2e4f;line-height:1.2;
+                            font-family:'SFMono-Regular',Consolas,monospace;"></div>
+                <div id="issue-time-customer-tz"
+                     style="font-size:0.64rem;color:#7c93ad;margin-top:2px;"></div>
+            </div>
+
+            <!-- The editable fields below hold the issue time in the ETL
+                 DECODE-HOST clock (GMT+8) — the same frame the decoded .log
+                 content is written in and what the agent scans (PreScan ±5 min).
+                 The customer-time card above is that same instant on the
+                 customer's wall clock. -->
+            <div style="font-size:0.66rem;color:#475569;margin-bottom:6px;line-height:1.45;">
+                🖥 <strong>ETL decode-host time</strong> (GMT+8)
+                <span style="display:block;color:#9aa3ad;margin-top:1px;">Format: MM / DD / YYYY &nbsp; HH:MM:SS.mmm</span>
+            </div>
+
+            <!-- Shown when the loaded log has no dates (e.g. DDD): date fields
+                 stay visible but get greyed out + disabled, so the row still
+                 reads as "an issue time has these three parts" without inviting
+                 input that the agent would silently discard. -->
+            <div id="it-nodate-hint" style="display:none;font-size:0.7rem;color:#92400e;background:#fff7ed;border:1px solid #fdba74;border-radius:6px;padding:5px 8px;margin-bottom:8px;line-height:1.3;">
+                ⏱ Time-only log — capturing <strong>H/M/S</strong> only.
+                <span id="it-nodate-lasttime-wrap" style="display:none;">
+                    Log ends at
+                    <a href="#" id="it-nodate-lasttime" onclick="useLogLastTimeFromHint(event)"
+                       title="Use the log's last event time as the issue time"
+                       style="color:#1d4ed8;text-decoration:underline;cursor:pointer;font-weight:600;font-family:'SFMono-Regular',Consolas,monospace;"></a>
+                </span>
+            </div>
+
+{{ sb.time_fields() }}
+
+            <div id="issue-time-error"
+                 style="display:none;font-size:0.7rem;color:#c62828;margin-top:4px;"></div>
+
+            <!-- Issue-time actions (below the picker). Clear now lives as a
+                 trash icon in the section header (top-right). -->
+            <div style="margin-top:14px;border-top:1px solid #eef1f4;padding-top:12px;">
+
+                <!-- AI issue-time assistant: infers issue time(s) from the chat
+                     description + a rough browse of the log, into the capture popup. -->
+                <button type="button" class="it-quick-btn" id="ai-time-btn"
+                        style="display:flex;align-items:center;justify-content:center;gap:6px;width:100%;margin-bottom:6px;background:#eef4ff;border-color:#bcd3f5;"
+                        onclick="suggestIssueTimesWithAI()"
+                        title="Analyze your description + the loaded log with AI to suggest the issue time">
+                    🪄 AI suggest issue time
+                </button>
+                <!-- Non-blocking hint when AI suggest is used with an empty chat box. -->
+                <div id="ai-time-nodesc" style="display:none;font-size:0.7rem;color:#92400e;margin-bottom:6px;line-height:1.35;">
+                    ℹ No description — AI will infer from the log only. Add a problem description in the chat box for better accuracy.
+                </div>
+
+                <!-- Shown when no issue time could be auto-detected. -->
+                <div id="it-unknown-warn" style="display:none;font-size:0.7rem;color:#92400e;background:#fff7ed;border:1px solid #fdba74;border-radius:6px;padding:5px 8px;line-height:1.3;">
+                    ⚠️ <strong>Unknown time.</strong> Couldn't auto-detect the issue time — please fill it in above.
+                </div>
+            </div>
+
+            <!-- Master toggle: hide additional issue times unless the user
+                 opts in. AI auto-fill / popup-apply may add extras into
+                 the DOM, but they only appear (and only count) once
+                 this is ticked. The most-likely time stays in the primary
+                 picker above. -->
+            <label class="sidebar-multi-toggle" for="use-multi-issue"
+                   title="By default only the most-likely issue time is used. Tick to also use the additional times below.">
+                <input type="checkbox" id="use-multi-issue"
+                       onchange="_onSidebarMultiToggle(this)">
+                <span>
+                    <strong>Use multiple issue times</strong>
+                    <span class="smt-sub">Off — only the most-likely time. Tick to add more.</span>
+                </span>
+            </label>
+
+{{ sb.extra_issue_times(hidden=True) }}
+
+{{ sb.capture_window() }}
+        </div>
+
+{{ sb.skills() }}
+
+{{ sb.quick_questions() }}
+
+        </div><!-- /#sidebar-controls-view -->
+
+{{ sb.history_view() }}

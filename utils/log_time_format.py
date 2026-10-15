@@ -155,6 +155,9 @@ _SHAPES: Tuple[_Shape, ...] = (
 )
 
 _UNKNOWN_LABEL = "no recognised timestamps"
+# Holds whichever reason the anchor failed for: both alternatives carry absolute times.
+_DMESG_REMEDY = (" To enable it, recapture with dmesg -T, or load this boot's kern.log "
+                 "or journal instead.")
 
 
 # ---------------------------------------------------------------------------
@@ -316,7 +319,8 @@ class LogTimeFormat:
 
         text = "Detected: " + ", ".join(facts) + "."
         if self.kind == "relative" and self.anchor is None:
-            return text + " " + (self.anchor_missing or "No absolute time in the file.") + no_window
+            return (text + " " + (self.anchor_missing or "No absolute time in the file.")
+                    + no_window + _DMESG_REMEDY)
         if assumed:
             text += " Assumed: " + "; ".join(assumed) + "."
         if first and last:

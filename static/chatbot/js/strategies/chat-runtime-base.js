@@ -22,14 +22,15 @@
     // never loads that controller. A sidebar without the element (NW) and a
     // file whose format was not recognised both just leave it hidden.
     function showLogTimeFormat(info) {
+        // A file with no absolute time cannot have a window applied, so the
+        // line is a warning rather than a detail.
+        const blocked = !!(info && info.supports_windowing === false);
+        window.__logTimeAxis = !blocked;
         const el = document.getElementById('it-log-format');
         if (!el) return;
         const note = (info && info.note) ? String(info.note) : '';
         el.textContent = note;
         el.style.display = note ? 'block' : 'none';
-        // A file with no absolute time cannot have a window applied, so the
-        // line is a warning rather than a detail.
-        const blocked = !!(info && info.supports_windowing === false);
         el.style.color = blocked ? '#92400e' : '#666';
         el.style.background = blocked ? '#fff7ed' : 'transparent';
         el.style.border = blocked ? '1px solid #fdba74' : 'none';
@@ -637,7 +638,10 @@
             if (typeof refreshIssueTimeDateOptional === 'function') refreshIssueTimeDateOptional();
             this._afterDateOptionalRefresh();
 
-            this._applyIssueTimeOnLoad(data, { skipIssueTimeAutofill, logGen });
+            // No time axis: the issue-time fields are disabled, nothing to fill.
+            if (window.__logTimeAxis !== false) {
+                this._applyIssueTimeOnLoad(data, { skipIssueTimeAutofill, logGen });
+            }
 
             // Issue-time-only follow-ups. A profile with features.issue_time
             // off (NW) never loads issue-time-controller.js, so these are

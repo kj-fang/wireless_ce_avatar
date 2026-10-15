@@ -41,6 +41,29 @@
     IssueTimeStrategyBase.prototype._applyDateFieldState = function (noDate) {};
     IssueTimeStrategyBase.prototype._afterDisplayUpdate = function () {};
 
+    // A log with no time axis (an unanchored dmesg, an unrecognised format)
+    // cannot be windowed, so anything typed or suggested here would go unused.
+    // Only what this disabled is re-enabled: _applyDateFieldState owns the rest.
+    IssueTimeStrategyBase.prototype._applyTimeAxisState = function (hasAxis) {
+        ['it-month', 'it-day', 'it-year', 'it-hour', 'it-min', 'it-sec', 'it-ms',
+         'ai-time-btn', 'add-extra-issue-btn'].forEach(id => {
+            const el = document.getElementById(id);
+            if (!el) return;
+            if (!hasAxis) {
+                if (!el.disabled) el.dataset.axisDisabled = '1';
+                el.disabled = true;
+                el.classList.add('it-axis-off');
+                if (el.tagName === 'INPUT') el.value = '';
+            } else if (el.classList.contains('it-axis-off')) {
+                el.classList.remove('it-axis-off');
+                if (el.dataset.axisDisabled) {
+                    el.disabled = false;
+                    delete el.dataset.axisDisabled;
+                }
+            }
+        });
+    };
+
     // ---- shared flow ------------------------------------------------------
 
     IssueTimeStrategyBase.prototype._applyCapturedTimesToSidebar = function (times, mode) {
@@ -349,6 +372,7 @@
         const hint = document.getElementById('it-nodate-hint');
         if (hint) hint.style.display = noDate ? 'block' : 'none';
         this._applyDateFieldState(noDate);
+        this._applyTimeAxisState(window.__logTimeAxis !== false);
         if (typeof updateIssueTimeDisplay === 'function') updateIssueTimeDisplay();
         if (typeof validateUserInput === 'function') validateUserInput();
     };

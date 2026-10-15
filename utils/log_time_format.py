@@ -255,6 +255,10 @@ class LogTimeFormat:
                 target = aware.utcoffset() or timedelta(0)
             return aware.astimezone(timezone(target)).replace(tzinfo=None)
 
+        # strptime's %f takes at most 6 digits; DDD / tracefmt write 7.
+        head, dot, frac = token.partition(".")
+        if dot and len(frac) > 6:
+            token = f"{head}.{frac[:6]}"
         for fmt in shape.fmts:
             try:
                 dt = datetime.strptime(token, fmt)

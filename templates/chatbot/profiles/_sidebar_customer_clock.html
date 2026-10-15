@@ -6,7 +6,9 @@
 
 {{ sb.log_file() }}
 
+{% if ui.windows_event_log %}
 {{ sb.event_log() }}
+{% endif %}
 
         <!-- Issue Time -->
         <div class="sidebar-section">
@@ -53,6 +55,7 @@
                 </label>
             </div>
 
+            {% if ui.issue_time.event_refinement %}
             <!-- Refine picker: lets the user choose between the original issue
                  time and the closest system-event error time. Hidden by default;
                  shown by refineIssueTimeFromEventLog() when a close match exists. -->
@@ -76,6 +79,7 @@
                     </button>
                 </div>
             </div>
+            {% endif %}
 
             <!-- Shown when the loaded log has no dates (e.g. DDD): date optional. -->
             <div id="it-nodate-hint" style="display:none;font-size:0.7rem;color:#92400e;background:#fff7ed;border:1px solid #fdba74;border-radius:6px;padding:5px 8px;margin-bottom:8px;line-height:1.3;">

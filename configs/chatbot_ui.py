@@ -74,6 +74,7 @@ BT_UI = {
         ["all", "All"],
     ],
     "event_source_default": "pci_bt",
+    "windows_event_log": True,
     "feedback_domain": "bt",
     "feedback_conclusions": BT_FEEDBACK_CONCLUSIONS,
     "allow_modified_yaml_upload": True,
@@ -84,7 +85,7 @@ BT_UI = {
     "runtime_strategy_script": "/static/chatbot/js/strategies/bt-chat-runtime.js",
     "profile_script": "/static/chatbot/js/profiles/bt.js",
     "template_parts": {
-        "sidebar": "chatbot/profiles/bt/_sidebar.html",
+        "sidebar": "chatbot/profiles/_sidebar_customer_clock.html",
         "runtime": "chatbot/features/_issue_time_runtime.html",
     },
     "issue_time": {
@@ -136,6 +137,7 @@ LOG_CHATBOT_UI = {
         ["all", "All"],
     ],
     "event_source_default": "wifi",
+    "windows_event_log": True,
     "feedback_domain": "",
     "feedback_conclusions": WIFI_FEEDBACK_CONCLUSIONS,
     "allow_modified_yaml_upload": False,
@@ -199,6 +201,7 @@ NW_UI = {
         ["all", "All"],
     ],
     "event_source_default": "wifi",
+    "windows_event_log": True,
     "feedback_domain": "",
     "feedback_conclusions": WIFI_FEEDBACK_CONCLUSIONS,
     "allow_modified_yaml_upload": False,
@@ -237,6 +240,9 @@ NW_UI = {
 # dmesg/journalctl log read straight off the reporting machine — there is no
 # ETL decode step and no decode-host clock to reconcile against a customer
 # timezone, so customer_timezone is off (same reasoning as BT's .hci.txt).
+# It runs Wi-Fi's scripts: what they add over Linux's needs is the customer-
+# time card, which stays inert without its sidebar elements and a timezone.
+# The sidebar is BT's, as its log is also on the customer's own clock.
 LINUX_UI = {
     "domain": "linux",
     "api": "/linux_chatbot",
@@ -255,19 +261,21 @@ LINUX_UI = {
         ["all", "All"],
     ],
     "event_source_default": "wifi",
+    # A Linux capture has no Windows System Event Log.
+    "windows_event_log": False,
     "feedback_domain": "linux",
     "feedback_conclusions": WIFI_FEEDBACK_CONCLUSIONS,
     "allow_modified_yaml_upload": False,
     "history_reset_before_set_log": True,
     "stylesheets": ["/static/chatbot/css/full-agent.css"],
-    "runtime_strategy_script": "/static/chatbot/js/strategies/linux-chat-runtime.js",
-    "profile_script": "/static/chatbot/js/profiles/linux.js",
+    "runtime_strategy_script": "/static/chatbot/js/strategies/wifi-chat-runtime.js",
+    "profile_script": "/static/chatbot/js/profiles/wifi.js",
     "template_parts": {
-        "sidebar": "chatbot/profiles/linux/_sidebar.html",
+        "sidebar": "chatbot/profiles/_sidebar_customer_clock.html",
         "runtime": "chatbot/features/_issue_time_runtime.html",
     },
     "issue_time": {
-        "strategy_script": "/static/chatbot/js/strategies/linux-issue-time.js",
+        "strategy_script": "/static/chatbot/js/strategies/wifi-issue-time.js",
         # dmesg (no -T) / some journalctl formats have no calendar date, just
         # an elapsed/clock time, so time-only issue times must be accepted.
         "allow_time_only": True,

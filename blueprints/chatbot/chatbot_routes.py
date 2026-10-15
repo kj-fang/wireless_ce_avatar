@@ -213,9 +213,6 @@ class AgentRouteProfile:
     #: What the AI issue-time suggestion samples first (``utils.issue_time_ai``).
     #: ``None`` keeps the generic digest, which suits our own short decodes.
     issue_time_focus: IssueTimeFocus | None = None
-    #: Look for a Windows System Event Log next to the log. A Linux capture has
-    #: none, and a ``system.evtx`` elsewhere in the same case is not its own.
-    windows_event_log: bool = True
 
     # ---- derived: read the flags the UI config already declares ----
     @property
@@ -236,6 +233,11 @@ class AgentRouteProfile:
     def allow_time_only(self) -> bool:
         """Accept logs with no dates (DDD / tracefmt), so ``HH:MM:SS`` is valid."""
         return bool(self.ui["issue_time"]["allow_time_only"])
+
+    @property
+    def windows_event_log(self) -> bool:
+        """Look for a System Event Log next to the log; the sidebar reads it too."""
+        return bool(self.ui["windows_event_log"])
 
     @property
     def event_log_anchor(self) -> bool:
@@ -1882,7 +1884,6 @@ LINUX_PROFILE = AgentRouteProfile(
     read_log_has_date_while_running=False,
     # A multi-day kern.log or logcat: sample the Wi-Fi stack, not boot noise.
     issue_time_focus=LINUX_WIFI_FOCUS,
-    windows_event_log=False,
 )
 
 log_chatbot_bp = create_agent_blueprint(WIFI_PROFILE)

@@ -174,10 +174,16 @@ def main(argv: Optional[list[str]] = None) -> int:
     if args.case_number is not None and not args.once:
         print("[handsfree-cli] --case-number requires --once", file=sys.stderr)
         return 2
-    if args.case_number is not None and not any(ch.isalnum() for ch in args.case_number):
-        print("[handsfree-cli] --case-number must contain letters or digits",
-              file=sys.stderr)
-        return 2
+    if args.case_number is not None:
+        # The repository's one definition of a typed IPS case number
+        # (utils/check_ips_utils): 6-8 digits, zero-padded to eight, leading 0.
+        from utils.check_ips_utils import normalise_ips
+        case_number = normalise_ips(args.case_number)
+        if not case_number:
+            print(f"[handsfree-cli] --case-number {args.case_number!r} is not an IPS "
+                  "case number (six to eight digits, e.g. 01009610)", file=sys.stderr)
+            return 2
+        args.case_number = case_number
     try:
         owners = [] if args.case_number is not None else _load_owners(args)
     except ValueError as e:

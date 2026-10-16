@@ -17,7 +17,8 @@ from flask import Blueprint, jsonify, render_template, request
 
 from services.handsfree import orchestrator
 from services.handsfree.queue import (HandsfreeShareUnavailable, HandsfreeStore,
-                                      decoded_log_dir, decoded_log_file, open_store)
+                                      decoded_log_dir, decoded_log_file,
+                                      describe_share_error, open_store)
 
 handsfree_bp = Blueprint("handsfree", __name__, url_prefix="/handsfree")
 
@@ -29,6 +30,14 @@ def _store() -> HandsfreeStore:
 @handsfree_bp.errorhandler(HandsfreeShareUnavailable)
 def _share_unavailable(e):
     return jsonify({"ok": False, "error": str(e)}), 503
+
+
+@handsfree_bp.errorhandler(OSError)
+def _file_error(e):
+    # Permission or network trouble after the startup check passed.
+    where = f" ({e.filename})" if getattr(e, "filename", None) else ""
+    return jsonify({"ok": False,
+                    "error": f"file access failed{where}: {describe_share_error(e)}"}), 503
 
 
 @handsfree_bp.route("/")
@@ -84,19 +93,10 @@ def status():
     return jsonify(orchestrator.get_run_state())
 
 
-# ---------- automatic analysis (scheduler) ----------
-
-@handsfree_bp.record_once
-def _resume_scheduler(_state):
-    """After an app restart, resume a previously enabled schedule without
-    waiting for someone to open the page. The thread reads the config on
-    every tick, so a not-yet-booted app_config just means a skipped tick."""
-    try:
-        from services.handsfree import scheduler
-        scheduler.ensure_started()
-    except Exception as e:
-        print(f"[handsfree] scheduler not started: {e}")
-
+# ---------- automatic analysis ----------
+# Scheduled rounds run on the Handsfree server (nightly CLI) only. The app
+# keeps the round settings and "Run now" (a one-off manual round), but never
+# starts the in-app scheduler: the config is shared by every reviewer's PC.
 
 @handsfree_bp.route("/auto", methods=["GET", "POST"])
 def auto_check():
@@ -104,6 +104,9 @@ def auto_check():
     if request.method == "GET":
         return jsonify(scheduler.status())
     body = request.get_json(silent=True) or {}
+    if body.get("enabled"):
+        return jsonify({"ok": False, "error": "scheduled analysis runs on the Handsfree "
+                        "server (nightly CLI) and cannot be started from the app"}), 403
     try:
         return jsonify(scheduler.configure(
             enabled=bool(body.get("enabled")),

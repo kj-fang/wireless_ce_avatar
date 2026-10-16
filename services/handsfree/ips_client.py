@@ -281,7 +281,7 @@ class IpsClient:
                 subject=str(cols.get("Subject") or ""),
                 status=str(cols.get("Status") or ""),
                 created=str(cols.get("CreatedDate") or ""),
-                owner_name=str(cols.get("Owner.Name") or cols.get("OwnerId") or ""),
+                owner_name=str(cols.get("Owner.Name") or ""),
             ))
         self._fill_case_states(out)
         return out
@@ -297,7 +297,8 @@ class IpsClient:
         ids = list(by_id)
         for start in range(0, len(ids), 150):
             chunk = ", ".join(f"'{_soql_quote(i)}'" for i in ids[start:start + 150])
-            soql = f"SELECT Id, IsClosed, Status, CreatedDate FROM Case WHERE Id IN ({chunk})"
+            soql = ("SELECT Id, IsClosed, Status, CreatedDate, Owner.Name "
+                    f"FROM Case WHERE Id IN ({chunk})")
             try:
                 resp = self._request("GET", "/services/data/v{ver}/query",
                                      params={"q": soql}, timeout=60)
@@ -313,6 +314,7 @@ class IpsClient:
                 ref.closed = bool(rec.get("IsClosed"))
                 ref.status = str(rec.get("Status") or ref.status)
                 ref.created = str(rec.get("CreatedDate") or ref.created)
+                ref.owner_name = str((rec.get("Owner") or {}).get("Name") or ref.owner_name)
 
     def find_open_cases(self, owner_name: str, limit: int = 200) -> list[CaseRef]:
         """All open cases assigned to `owner_name` (auto-scan candidates)."""

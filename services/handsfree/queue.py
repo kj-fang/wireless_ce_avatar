@@ -334,12 +334,46 @@ class HandsfreeStore:
             path = self.queue_dir / f"{draft_id}.json"
             _atomic_write(path, json.dumps(record, indent=2, ensure_ascii=False,
                                            default=str))
+            # A real draft supersedes an earlier "skipped" row of the case.
+            self._skipped_path(case_nbr).unlink(missing_ok=True)
         # An "error" draft means the case could not even be fetched: it is
         # not an analysis, so it never marks the case processed (the auto
         # scan must retry it; is_processed must not hide it).
         if mode != "error":
             self.mark_analyzed(case_nbr, draft_id)
         return record
+
+    def _skipped_path(self, case_nbr: str) -> Path:
+        return self.queue_dir / f"{_safe_case(case_nbr)}__skipped.json"
+
+    def record_skipped(self, *, case_nbr: str, case_id: str, subject: str,
+                       reason: str, owner_name: str = "",
+                       analysis: Optional[dict] = None) -> None:
+        """Queue row for a case the server looked at but did not analyze, so
+        reviewers see why. One per case (a re-run overwrites it); never
+        postable, and not marked analyzed in the ledger."""
+        record = {
+            "draft_id": f"{_safe_case(case_nbr)}__skipped",
+            "status": "skipped",
+            "trial": False,
+            "created_at": _now_iso(),
+            "updated_at": _now_iso(),
+            "case_nbr": str(case_nbr),
+            "case_id": case_id,
+            "owner_name": owner_name,
+            "subject": subject,
+            "mode": "unsupported",
+            "confidence": None,
+            "draft_plain": "",
+            "draft_html": "",
+            "post_result": None,
+            "skip_reason": reason,
+            "shared_log_path": "",
+            "analysis": analysis or {},
+        }
+        with _LOCK:
+            _atomic_write(self._skipped_path(case_nbr),
+                          json.dumps(record, indent=2, ensure_ascii=False, default=str))
 
     def _draft_path(self, draft_id: str) -> Optional[Path]:
         # draft_id is client-supplied on approve/reject — sanitise.
@@ -425,7 +459,7 @@ class HandsfreeStore:
         slim = {k: rec.get(k) for k in
                 ("draft_id", "status", "created_at", "updated_at",
                  "case_nbr", "case_id", "owner_name", "subject", "mode", "confidence",
-                 "post_result")}
+                 "post_result", "skip_reason")}
         slim["trial"] = bool(rec.get("trial"))
         slim["log_dir"] = decoded_log_dir(rec)
         analysis = rec.get("analysis") or {}

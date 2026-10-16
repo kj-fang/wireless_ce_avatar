@@ -1048,7 +1048,18 @@
       chips.push({label: 'time check', text: 'log does NOT cover issue time', cls: 'bad',
                   title: 'reported: ' + (tm.issue_times || []).join(' · ')
                        + ' — log covers ' + tm.log_first + ' – ' + tm.log_last
-                       + ' (±' + (tm.grace_minutes || 10) + ' min grace)'});
+                       + ' (±' + (tm.grace_minutes || 10) + ' min grace)'
+                       + (tm.log_first_customer ? ' = ' + tm.log_first_customer + ' – ' + tm.log_last_customer
+                                                  + ' in the customer clock' : '')});
+    }
+    // How the customer's issue time was placed in the log's clock (decoder
+    // host, GMT+8) — shown only when the two clocks differ.
+    const ta = analysis.time_alignment || {};
+    if (ta.offset && ta.offset !== '+00:00' && ta.offset !== '-00:00') {
+      const how = {tz_helper: 'time zone', folder_stamp: 'folder stamp'}[ta.anchor] || ta.anchor || '?';
+      chips.push({label: 'clock', text: ta.customer_time + ' customer = ' + ta.log_time + ' log ('
+                                        + ta.offset + ' via ' + how + ')',
+                  title: ta.customer_tz ? 'customer time zone: ' + ta.customer_tz : ''});
     }
     const times = (cr.issue_times && cr.issue_times.length)
       ? cr.issue_times : (analysis.issue_times || []);

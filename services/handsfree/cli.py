@@ -165,6 +165,20 @@ def _run_once(owner: str) -> int:
     return 1 if errors else 0
 
 
+def _cleanup() -> None:
+    """Retention housekeeping after an owner round; never fails the run."""
+    from . import orchestrator
+
+    try:
+        res = orchestrator.cleanup_queue(_store())
+        print(f"[handsfree-cli] cleanup: {res['drafts_removed']} draft(s), "
+              f"{res['log_folders_removed']} log folder(s) removed "
+              f"(retention {res['retention_days']} days; "
+              f"{len(res['closed_cases'])} closed case(s))")
+    except Exception as e:
+        print(f"[handsfree-cli] cleanup skipped: {type(e).__name__}: {e}")
+
+
 def _run_case_once(case_nbr: str) -> int:
     from . import orchestrator
 
@@ -209,6 +223,7 @@ def _run_owners(owners: list[str]) -> int:
         print(f"[handsfree-cli] checking owner {owner!r}")
         if _run_once(owner) != 0:
             failures.append(owner)
+    _cleanup()
     if failures:
         print("[handsfree-cli] failed owner check(s): " + ", ".join(failures))
         return 1

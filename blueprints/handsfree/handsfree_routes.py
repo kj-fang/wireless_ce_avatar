@@ -15,7 +15,7 @@ from flask import Blueprint, jsonify, render_template, request
 
 from services.handsfree import orchestrator
 from services.handsfree.queue import (HandsfreeShareUnavailable, HandsfreeStore,
-                                      decoded_log_dir, open_store)
+                                      decoded_log_dir, decoded_log_file, open_store)
 
 handsfree_bp = Blueprint("handsfree", __name__, url_prefix="/handsfree")
 
@@ -187,9 +187,10 @@ def reject(draft_id: str):
 
 @handsfree_bp.route("/queue/<draft_id>/open_log_folder", methods=["POST"])
 def open_log_folder(draft_id: str):
-    """Open the folder of the case's decoded WRT log in Explorer (the app
-    runs on the reviewer's own PC), with the .log selected. The path comes
-    from the stored draft record, never from the request."""
+    """Open the folder of the case's decoded log in Explorer (the app runs on
+    the reviewer's own PC), with the log selected — the shared copy on the
+    Handsfree folder, so it works whichever machine ran the analysis. The
+    path comes from the stored draft record, never from the request."""
     if request.remote_addr not in ("127.0.0.1", "::1"):
         return jsonify({"ok": False, "error": "localhost only"}), 403
     rec = _store().get(draft_id)
@@ -202,7 +203,7 @@ def open_log_folder(draft_id: str):
     if not os.path.isdir(folder):
         return jsonify({"ok": False,
                         "error": f"folder no longer exists: {folder}"}), 404
-    log_path = os.path.normpath(rec["analysis"]["log_path"])
+    log_path = os.path.normpath(decoded_log_file(rec))
     if os.path.isfile(log_path):
         subprocess.Popen(["explorer", "/select,", log_path])
     else:

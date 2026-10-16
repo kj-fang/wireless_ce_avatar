@@ -61,11 +61,41 @@ def _triage_sections(triage: dict) -> list[tuple[str, list[str]]]:
     return out
 
 
-def _incident_lines(inc: IncidentReport) -> list[str]:
+def _customer_tz(analysis: CaseAnalysis) -> str:
+    """The customer's time zone name as the runner saw it (recorded on the
+    alignment / mismatch), else read from the log's system_info.txt."""
+    for d in (getattr(analysis, "time_alignment", None),
+              getattr(analysis, "time_mismatch", None)):
+        if isinstance(d, dict) and d.get("customer_tz"):
+            return str(d["customer_tz"])
+    if getattr(analysis, "log_path", ""):
+        try:
+            from utils.timezone_utils import get_effective_timezone
+            return get_effective_timezone(analysis.log_path) or ""
+        except Exception:
+            pass
+    return ""
+
+
+def _anchor_label(anchor: str) -> str:
+    from .runner import ANCHOR_LABELS
+    return ANCHOR_LABELS.get(anchor or "", anchor or "unknown")
+
+
+def _incident_lines(inc: IncidentReport, customer_tz: str = "") -> list[str]:
     lines: list[str] = []
     rep = inc.report or {}
     if inc.issue_time:
-        lines.append(f"Incident time: {inc.issue_time}")
+        log_t = getattr(inc, "issue_time_log", "") or ""
+        cust_t = getattr(inc, "issue_time_customer", "") or ""
+        if log_t and log_t != cust_t:
+            # Two clocks: what the customer reported vs the same moment in
+            # the decoded log (decoder host clock).
+            lines.append(f"Incident time: {inc.issue_time} (customer"
+                         + (f", {customer_tz}" if customer_tz else "")
+                         + f") = {log_t} (in the log)")
+        else:
+            lines.append(f"Incident time: {inc.issue_time}")
     if rep.get("root_cause_summary"):
         lines.append(f"Root cause: {rep['root_cause_summary']}")
     if rep.get("confidence_score") is not None:
@@ -275,8 +305,16 @@ def _request_logs_lines(analysis: CaseAnalysis) -> list[str]:
         # time is what the analysis anchors on (policy 2026-10-07).
         tm = analysis.time_mismatch or {}
         name = f" ({analysis.chosen_attachment})" if analysis.chosen_attachment else ""
+        if tm.get("log_first_customer"):
+            # The log's range in the CUSTOMER's clock (the runner shifted the
+            # decoder-host times) — never show the customer Taiwan times.
+            tz = tm.get("customer_tz") or ""
+            covers = (f"{tm['log_first_customer']} – {tm.get('log_last_customer', '?')} "
+                      f"(your local time{', ' + tz if tz else ''})")
+        else:
+            covers = f"{tm.get('log_first', '?')} – {tm.get('log_last', '?')}"
         missing = (f"we checked the attached archive{name}: the WRT log inside "
-                   f"covers {tm.get('log_first', '?')} – {tm.get('log_last', '?')}, "
+                   f"covers {covers}, "
                    f"but the reported issue time is {', '.join(tm.get('issue_times', []))}"
                    + (f" (we also tried {tm['also_tried']} other capture folder(s) "
                       "in the archive)" if tm.get("also_tried") else "")
@@ -366,13 +404,24 @@ def compose_plain(analysis: CaseAnalysis) -> str:
     # Time-coverage warning first — the reviewer must see it before the
     # findings, because findings from a log that does not cover the reported
     # issue time may describe a DIFFERENT occurrence.
+    customer_tz = _customer_tz(analysis)
     tm = analysis.time_mismatch or {}
     if tm.get("log_first"):
+        reported = f"Reported issue time: {', '.join(tm.get('issue_times', []))}"
+        mapped = [m for m in (tm.get("issue_times_log") or []) if m]
+        if mapped and mapped != tm.get("issue_times"):
+            reported += (f" (customer{', ' + customer_tz if customer_tz else ''}) = "
+                         f"{', '.join(mapped)} in the log's clock")
+        covers = f"Attached WRT log covers {tm['log_first']} – {tm.get('log_last')}"
+        if tm.get("log_first_customer"):
+            covers += (f" (log clock) = {tm['log_first_customer']} – "
+                       f"{tm.get('log_last_customer')} (customer clock"
+                       + (f", {customer_tz}" if customer_tz else "")
+                       + f"; {tm.get('offset', '?')} via {_anchor_label(tm.get('anchor', ''))})")
         parts += [
             "*** TIME MISMATCH — the attached log does NOT cover the reported "
             "issue time ***",
-            f"Reported issue time: {', '.join(tm.get('issue_times', []))}. "
-            f"Attached WRT log covers {tm['log_first']} – {tm.get('log_last')}.",
+            f"{reported}. {covers}.",
         ]
         if tm.get("yb_assert_override"):
             parts.append(
@@ -384,6 +433,18 @@ def compose_plain(analysis: CaseAnalysis) -> str:
             parts.append("Log time is not the same as the issue time — please "
                          "help provide a WRT log captured at the issue time.")
         parts.append("")
+
+    # How the customer's clock was aligned to the log's (reviewer check):
+    # only worth a line when the two clocks actually differ.
+    ta = getattr(analysis, "time_alignment", None) or {}
+    if ta.get("offset") and ta.get("offset") not in ("+00:00", "-00:00"):
+        parts += [
+            f"Clock alignment: customer {ta.get('customer_time')}"
+            + (f" ({customer_tz})" if customer_tz else "")
+            + f" = log {ta.get('log_time')}; offset {ta['offset']} via "
+            f"{_anchor_label(ta.get('anchor', ''))}.",
+            "",
+        ]
 
     # BSOD branch: what went to the BSOD share / PotatoFarm (private note).
     if analysis.mode in ("bsod_submitted", "bsod_pending"):
@@ -420,7 +481,7 @@ def compose_plain(analysis: CaseAnalysis) -> str:
         for n, inc in enumerate(reported, 1):
             if len(reported) > 1:
                 parts.append(f"--- Incident {n}/{len(reported)} ---")
-            parts.extend(_incident_lines(inc))
+            parts.extend(_incident_lines(inc, customer_tz))
             md = (inc.report or {}).get("markdown_summary") or ""
             if md:
                 parts.append("")

@@ -8,8 +8,10 @@ v1 rules enforced here and in the orchestrator:
 
 from __future__ import annotations
 
+import json
 import os
 import subprocess
+from pathlib import Path
 
 from flask import Blueprint, jsonify, render_template, request
 
@@ -36,7 +38,30 @@ def index():
         share_error = ""
     except HandsfreeShareUnavailable as e:
         cfg, share_error = dict(HandsfreeStore.DEFAULT_CONFIG), str(e)
-    return render_template("handsfree.html", config=cfg, share_error=share_error)
+    return render_template("handsfree.html", config=cfg, share_error=share_error,
+                           my_owner=_my_owner())
+
+
+# ---------- this reviewer (kept on this PC, not on the shared folder) ----------
+
+def _me_path() -> Path:
+    from configs.global_configs import app_config
+    return Path(app_config.avatarfiles_dir) / "handsfree_user.json"
+
+
+def _my_owner() -> str:
+    try:
+        return str(json.loads(_me_path().read_text(encoding="utf-8")).get("owner_name") or "")
+    except Exception:
+        return ""
+
+
+@handsfree_bp.route("/me", methods=["POST"])
+def set_me():
+    """Remember whose cases this reviewer's queue opens on."""
+    name = str((request.get_json(silent=True) or {}).get("owner_name") or "").strip()
+    _me_path().write_text(json.dumps({"owner_name": name}), encoding="utf-8")
+    return jsonify({"ok": True, "owner_name": name})
 
 
 # ---------- run ----------

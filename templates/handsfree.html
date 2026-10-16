@@ -393,9 +393,13 @@
       </label>
       <label style="font-size: 12px; margin-left: 8px; font-weight: 400;">
         owner:
-        <input type="text" id="owner-filter" placeholder="Filter by case owner"
+        <input type="text" id="owner-filter" placeholder="Filter by case owner" value="{{ my_owner }}"
                style="width: 190px;" onkeydown="if(event.key==='Enter')loadQueue()">
       </label>
+      <button class="ghost" onclick="setMyOwner()" title="Open the queue on this owner's cases every time (saved on this PC)"
+              style="height: 28px; padding: 0 11px; font-size: 12px;">Set as mine</button>
+      <span id="my-owner-status" style="font-size: 12px; color: var(--muted); font-weight: 400;">
+        {% if my_owner %}showing your cases — clear the box for everyone's{% endif %}</span>
     </h3>
     <table id="queue-table">
       <thead><tr>
@@ -1152,6 +1156,19 @@
       body: JSON.stringify({reason}),
     });
     document.getElementById('draft-panel').style.display = 'none';
+    loadQueue();
+  }
+
+  async function setMyOwner() {
+    const name = document.getElementById('owner-filter').value.trim();
+    const r = await fetch('/handsfree/me', {
+      method: 'POST', headers: {'Content-Type': 'application/json'},
+      body: JSON.stringify({owner_name: name}),
+    });
+    const j = await r.json();
+    document.getElementById('my-owner-status').textContent = j.ok
+      ? (name ? 'saved — the queue opens on ' + name + "'s cases" : 'saved — the queue opens on everyone\'s cases')
+      : 'could not save';
     loadQueue();
   }
 

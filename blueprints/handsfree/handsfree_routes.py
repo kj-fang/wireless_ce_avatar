@@ -14,21 +14,29 @@ import subprocess
 from flask import Blueprint, jsonify, render_template, request
 
 from services.handsfree import orchestrator
-from services.handsfree.queue import HandsfreeStore, decoded_log_dir
+from services.handsfree.queue import (HandsfreeShareUnavailable, HandsfreeStore,
+                                      decoded_log_dir, open_store)
 
 handsfree_bp = Blueprint("handsfree", __name__, url_prefix="/handsfree")
 
 
 def _store() -> HandsfreeStore:
-    from configs.global_configs import app_config
-    from pathlib import Path
-    return HandsfreeStore(Path(app_config.avatarfiles_dir) / "handsfree")
+    return open_store()
+
+
+@handsfree_bp.errorhandler(HandsfreeShareUnavailable)
+def _share_unavailable(e):
+    return jsonify({"ok": False, "error": str(e)}), 503
 
 
 @handsfree_bp.route("/")
 def index():
-    cfg = _store().load_config()
-    return render_template("handsfree.html", config=cfg)
+    try:
+        cfg = _store().load_config()
+        share_error = ""
+    except HandsfreeShareUnavailable as e:
+        cfg, share_error = dict(HandsfreeStore.DEFAULT_CONFIG), str(e)
+    return render_template("handsfree.html", config=cfg, share_error=share_error)
 
 
 # ---------- run ----------

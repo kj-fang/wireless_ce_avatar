@@ -1,23 +1,28 @@
 """
 Review queue + processed-case ledger for the Handsfree Replyer.
 
-Layout under <avatarfiles_dir>/handsfree/:
-    config.json                    orchestrator config (owner, backend, caps)
-    ledger.json                    {case_nbr: {analyzed_at, posted_at, draft_id}}
+Lives on the shared folder (configs.path_configs.HANDSFREE_DIR) so the
+analysis server and every reviewer's Avatar see the same queue:
+    config.json                    team-wide config (owner, backend, caps, schedule)
+    ledger/<case_nbr>.json         {analyzed_at, posted_at, draft_id, ...} per case
     queue/<case_nbr>__<ts>.json    one draft per analyzed case
+    locks/<case_nbr>.lock          held while one reviewer posts to the case
 
 Draft lifecycle:  pending_review → posted
                               ↘ rejected  ↘ post_failed
 
-Same write style as the rest of the app's sidecar stores: per-process lock,
-atomic replace, swallow-and-log on the read path.
+Several machines write here: every file is written whole through a uniquely
+named temp file + atomic replace, and the ledger is one file per case so two
+machines only collide when they touch the same case at the same moment.
 """
 
 from __future__ import annotations
 
 import json
 import os
+import re
 import threading
+import time
 import uuid
 from datetime import datetime
 from pathlib import Path
@@ -28,8 +33,67 @@ VALID_STATUSES = {"pending_review", "approved", "posted", "rejected", "post_fail
 _LOCK = threading.Lock()
 
 
+class HandsfreeShareUnavailable(RuntimeError):
+    """The shared Handsfree folder cannot be reached or written."""
+
+
+_root_cache: Optional[Path] = None
+_root_lock = threading.Lock()
+_SHARE_PROBE_TIMEOUT_S = 10
+
+
+def handsfree_root() -> Path:
+    """The shared Handsfree folder. Raises HandsfreeShareUnavailable instead
+    of falling back to a local folder, which would split the queue between
+    machines. Only a success is cached, so a later call retries."""
+    global _root_cache
+    with _root_lock:
+        if _root_cache is not None:
+            return _root_cache
+        from configs.path_configs import HANDSFREE_DIR
+        outcome: list = []
+
+        def _probe():
+            try:
+                Path(HANDSFREE_DIR).mkdir(parents=True, exist_ok=True)
+                outcome.append(None)
+            except Exception as e:
+                outcome.append(e)
+
+        # An unreachable SMB host can block for minutes; probe in a thread.
+        t = threading.Thread(target=_probe, daemon=True, name="handsfree-share-probe")
+        t.start()
+        t.join(_SHARE_PROBE_TIMEOUT_S)
+        if not outcome or outcome[0] is not None:
+            reason = f"{outcome[0]}" if outcome else f"no answer in {_SHARE_PROBE_TIMEOUT_S}s"
+            raise HandsfreeShareUnavailable(
+                f"Handsfree shared folder unreachable: {HANDSFREE_DIR} ({reason})")
+        _root_cache = Path(HANDSFREE_DIR)
+        print(f"[handsfree.queue] using shared folder: {_root_cache}")
+        return _root_cache
+
+
+def open_store() -> "HandsfreeStore":
+    """The one HandsfreeStore everyone (server, clients, CLI, UI) uses."""
+    return HandsfreeStore(handsfree_root())
+
+
 def _now_iso() -> str:
     return datetime.now().astimezone().isoformat(timespec="seconds")
+
+
+def _atomic_write(path: Path, text: str) -> None:
+    # Unique temp name: two machines replacing the same file must not share a temp.
+    tmp = path.with_name(f".{path.name}.{uuid.uuid4().hex[:8]}.tmp")
+    tmp.write_text(text, encoding="utf-8")
+    os.replace(tmp, path)
+
+
+def _safe_case(case_nbr: str) -> str:
+    safe = re.sub(r"[^A-Za-z0-9]", "", str(case_nbr or ""))
+    if not safe:
+        raise ValueError(f"invalid case number: {case_nbr!r}")
+    return safe
 
 
 def decoded_log_dir(rec: dict) -> str:
@@ -43,9 +107,11 @@ class HandsfreeStore:
     def __init__(self, root: Path):
         self.root = Path(root)
         self.queue_dir = self.root / "queue"
-        self.ledger_path = self.root / "ledger.json"
+        self.ledger_dir = self.root / "ledger"
+        self.locks_dir = self.root / "locks"
         self.config_path = self.root / "config.json"
-        self.queue_dir.mkdir(parents=True, exist_ok=True)
+        for d in (self.queue_dir, self.ledger_dir, self.locks_dir):
+            d.mkdir(parents=True, exist_ok=True)
 
     # ------------------------------------------------------------------
     # config
@@ -85,40 +151,32 @@ class HandsfreeStore:
         # fields (trial_mode, dry_run, owner, source).
         with _LOCK:
             merged = {**self.load_config(), **(cfg or {})}
-            tmp = self.config_path.with_suffix(".json.tmp")
-            tmp.write_text(json.dumps(merged, indent=2), encoding="utf-8")
-            os.replace(tmp, self.config_path)
+            _atomic_write(self.config_path, json.dumps(merged, indent=2))
         return merged
 
     # ------------------------------------------------------------------
-    # ledger
+    # ledger (one file per case)
     # ------------------------------------------------------------------
-    def _load_ledger(self) -> dict:
-        try:
-            if self.ledger_path.exists():
-                return json.loads(self.ledger_path.read_text(encoding="utf-8"))
-        except Exception as e:
-            print(f"[handsfree.queue] ledger read failed: {e}")
-        return {}
-
-    def _save_ledger(self, ledger: dict) -> None:
-        tmp = self.ledger_path.with_suffix(".json.tmp")
-        tmp.write_text(json.dumps(ledger, indent=2), encoding="utf-8")
-        os.replace(tmp, self.ledger_path)
+    def _ledger_file(self, case_nbr: str) -> Path:
+        return self.ledger_dir / f"{_safe_case(case_nbr)}.json"
 
     def is_processed(self, case_nbr: str) -> bool:
-        return str(case_nbr) in self._load_ledger()
+        return self._ledger_file(case_nbr).exists()
 
     def ledger_entry(self, case_nbr: str) -> dict:
-        return dict(self._load_ledger().get(str(case_nbr)) or {})
+        p = self._ledger_file(case_nbr)
+        try:
+            if p.exists():
+                return dict(json.loads(p.read_text(encoding="utf-8")) or {})
+        except Exception as e:
+            print(f"[handsfree.queue] ledger read failed ({case_nbr}): {e}")
+        return {}
 
     def _update_ledger(self, case_nbr: str, **fields) -> None:
         with _LOCK:
-            ledger = self._load_ledger()
-            entry = ledger.get(str(case_nbr), {})
+            entry = self.ledger_entry(case_nbr)
             entry.update(fields)
-            ledger[str(case_nbr)] = entry
-            self._save_ledger(ledger)
+            _atomic_write(self._ledger_file(case_nbr), json.dumps(entry, indent=2))
 
     def mark_analyzed(self, case_nbr: str, draft_id: str) -> None:
         self._update_ledger(case_nbr, analyzed_at=_now_iso(), draft_id=draft_id)
@@ -144,13 +202,44 @@ class HandsfreeStore:
 
     def mark_skipped(self, case_nbr: str, reason: str,
                      owner_name: str = "") -> None:
-        with _LOCK:
-            ledger = self._load_ledger()
-            entry = ledger.get(str(case_nbr), {})
-            entry.update({"skipped_at": _now_iso(), "skip_reason": reason,
-                          "owner_name": owner_name})
-            ledger[str(case_nbr)] = entry
-            self._save_ledger(ledger)
+        self._update_ledger(case_nbr, skipped_at=_now_iso(), skip_reason=reason,
+                            owner_name=owner_name)
+
+    # ------------------------------------------------------------------
+    # posting claim (cross-machine)
+    # ------------------------------------------------------------------
+    # Longer than any post takes (REST seconds, UI fallback ~1 min); an older
+    # lock was left by a crashed post.
+    CLAIM_STALE_S = 600
+
+    def claim_case(self, case_nbr: str, holder: str) -> Optional[str]:
+        """Take the case's posting claim: None when taken, else who holds it.
+        O_EXCL creation is atomic on the file server, so two reviewers on
+        different machines cannot post to the same case at the same time."""
+        path = self.locks_dir / f"{_safe_case(case_nbr)}.lock"
+        for _ in range(2):
+            try:
+                fd = os.open(path, os.O_CREAT | os.O_EXCL | os.O_WRONLY)
+            except FileExistsError:
+                try:
+                    if time.time() - path.stat().st_mtime > self.CLAIM_STALE_S:
+                        path.unlink()
+                        continue
+                    return path.read_text(encoding="utf-8").strip() or "another reviewer"
+                except FileNotFoundError:
+                    continue       # released between our two calls: try again
+                except OSError:
+                    return "another reviewer"
+            with os.fdopen(fd, "w", encoding="utf-8") as f:
+                f.write(holder)
+            return None
+        return "another reviewer"
+
+    def release_case(self, case_nbr: str) -> None:
+        try:
+            (self.locks_dir / f"{_safe_case(case_nbr)}.lock").unlink()
+        except FileNotFoundError:
+            pass
 
     # ------------------------------------------------------------------
     # queue
@@ -180,8 +269,8 @@ class HandsfreeStore:
         }
         with _LOCK:
             path = self.queue_dir / f"{draft_id}.json"
-            path.write_text(json.dumps(record, indent=2, ensure_ascii=False,
-                                       default=str), encoding="utf-8")
+            _atomic_write(path, json.dumps(record, indent=2, ensure_ascii=False,
+                                           default=str))
         # An "error" draft means the case could not even be fetched: it is
         # not an analysis, so it never marks the case processed (the auto
         # scan must retry it; is_processed must not hide it).
@@ -217,10 +306,7 @@ class HandsfreeStore:
             rec.update(fields)
             rec["updated_at"] = _now_iso()
             p = self.queue_dir / f"{draft_id}.json"
-            tmp = p.with_suffix(".json.tmp")
-            tmp.write_text(json.dumps(rec, indent=2, ensure_ascii=False,
-                                      default=str), encoding="utf-8")
-            os.replace(tmp, p)
+            _atomic_write(p, json.dumps(rec, indent=2, ensure_ascii=False, default=str))
             return rec
 
     def list_drafts(self, include_closed: bool = True,

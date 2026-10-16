@@ -135,11 +135,9 @@ def _sso_check() -> int:
 
 
 def _store():
-    from configs.global_configs import app_config
-    from pathlib import Path
-    from .queue import HandsfreeStore
+    from .queue import open_store
 
-    return HandsfreeStore(Path(app_config.avatarfiles_dir) / "handsfree")
+    return open_store()
 
 
 def _wait_for_run() -> dict:
@@ -251,7 +249,12 @@ def main(argv: Optional[list[str]] = None) -> int:
 
     print("[handsfree-cli] initializing analysis services (no web UI)")
     _initialize_services()
-    store = _store()
+    from .queue import HandsfreeShareUnavailable
+    try:
+        store = _store()
+    except HandsfreeShareUnavailable as e:
+        print(f"[handsfree-cli] {e}", file=sys.stderr)
+        return 1
     updates = {}
     if args.owner is not None:
         updates["owner_name"] = owners[0]

@@ -219,6 +219,12 @@
 </header>
 
 <main>
+  {% if share_error %}
+  <div class="panel" style="border-color: var(--bad, #c33);">
+    <b>Shared Handsfree folder unavailable</b> — the review queue cannot be read or written.
+    <div class="status-line error">{{ share_error }}</div>
+  </div>
+  {% endif %}
   <div class="panel" id="settings-panel">
     <h3 role="button" tabindex="0" onclick="toggleSettings()" onkeydown="if(event.key==='Enter'||event.key===' '){event.preventDefault();toggleSettings();}">
       <span class="caret" aria-hidden="true">

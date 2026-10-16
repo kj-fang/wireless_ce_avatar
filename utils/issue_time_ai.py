@@ -227,16 +227,14 @@ LINUX_WIFI_FOCUS = IssueTimeFocus(
         r"|\biwd\b|deauth|disassoc|\brfkill\b|ct-kill|\bWifi\w*|wificond",
         re.IGNORECASE,
     ),
+    # Only what is true of the DIGEST, not of the domain: this hint travels
+    # with rx, and both describe the sample the model is handed. What the model
+    # should look FOR moved to the suggest_time speclet, where someone
+    # retargeting this agent to another Linux domain can replace it.
     hint=(
-        "This is a Linux Wi-Fi log: kernel iwlwifi / mac80211 / cfg80211 lines "
-        "and wpa_supplicant / NetworkManager lines. 'deauthenticating from ... by "
-        "local choice' means this machine left the AP; 'deauthenticated from' or "
-        "'disassociated from' means the AP ended it; 'Microcode SW error', "
-        "'NMI_INTERRUPT' and 'FW error' are firmware crashes. A log can span "
-        "several days and boots and contain several separate incidents: suggest "
-        "the distinct incidents that fit the description, best first. Every "
-        "sample line starts with its timestamp already in MM/DD/YYYY-HH:MM:SS.mmm "
-        "on the log's own clock; copy timestamps from there."
+        "Every sample line starts with its timestamp already in "
+        "MM/DD/YYYY-HH:MM:SS.mmm on the log's own clock; copy timestamps from "
+        "there."
     ),
     label="Wi-Fi",
 )
@@ -448,6 +446,7 @@ def llm_suggest(
     tz_label: str = "",
     event_digest: Optional[str] = None,
     domain_hint: str = "",
+    brief: str = "",
 ) -> dict:
     """Ask the LLM to infer issue time(s) from the description + log sample.
 
@@ -550,15 +549,13 @@ def llm_suggest(
         "event-log row when the description and log point elsewhere. "
         if event_digest else ""
     )
+    # The briefing is a document the profile owns and a person can edit (the
+    # suggest_time speclet, resolved by the caller). Everything after it is
+    # computed here -- the log's range, the timezone anchors, the format rule,
+    # the event-log caveat -- and the strict JSON contract below is what the
+    # reply is parsed with, so neither can be edited away.
     system = (
-        "You determine the 'issue time' that anchors log analysis. Logs are "
-        "typically Wi-Fi or Bluetooth, but the user's problem description "
-        "(which may be vague, non-English, or use a wrong time format) is "
-        "the source of truth for the specific scenario. Read it plus a "
-        "rough sample of the log, then infer the most likely issue time(s) "
-        "— use the description to decide which lines in the log are "
-        "relevant, and pick the timestamp that sits next to one of those "
-        "lines. "
+        brief.strip() + " "
         f"{domain_hint + ' ' if domain_hint else ''}"
         f"{event_priority}"
         f"{rng}{tz_block} {format_rule}\n"
@@ -613,6 +610,7 @@ def build_issue_time_suggestions(
     event_log_events: Optional[List[dict]] = None,
     focus: Optional[IssueTimeFocus] = None,
     log_format=None,
+    brief: str = "",
 ) -> dict:
     """Full orchestration. Returns a response payload dict ready to ``jsonify``.
 
@@ -705,6 +703,7 @@ def build_issue_time_suggestions(
             tz_label=tz_label,
             event_digest=event_digest,
             domain_hint=focus.hint if focus is not None else "",
+            brief=brief,
         )
     except Exception as _e:
         print(f"[issue_time_ai] llm_suggest failed, deferring to fallback: {_e}")

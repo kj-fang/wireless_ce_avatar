@@ -273,6 +273,19 @@ class AgentRouteProfile:
 # point where it happens.
 
 
+def _profile_speclet(agent_profile: str, kind: str) -> str:
+    """One profile-owned document: the override if there is one, else built-in.
+
+    Same contract the engine uses for its system prompt — a share that is
+    unreachable, or an edit nobody made, leaves the compiled-in text in place.
+    Reads the cache the speclets were loaded into at boot, so this costs
+    nothing on the request path.
+    """
+    from utils.speclets_utils import get_speclet
+
+    return get_speclet(agent_profile, kind) or default_speclet(agent_profile, kind)
+
+
 def _log_time_format_note(log_path: str) -> dict:
     """What the sidebar prints about the loaded log's timestamps.
 
@@ -1011,6 +1024,10 @@ class AgentRoutes:
                 last_ts=last_ts,
                 llm_client=getattr(agent, "client", None),
                 llm_model=getattr(agent, "model", None),
+                # The briefing for this judgement is one of the profile's own
+                # editable documents, so retargeting the agent's domain
+                # retargets what it looks for when it picks the moment too.
+                brief=_profile_speclet(self.profile.agent_profile, "suggest_time"),
                 **extra,
             )
             _attach_nearest_errors(payload, event_log_events)

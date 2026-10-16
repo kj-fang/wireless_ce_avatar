@@ -72,8 +72,15 @@ from configs.path_configs import (
 #: Profiles that own a speclet pair. Keys match AgentCapabilityPolicy.profile.
 PROFILES = ("wifi", "bt", "nw", "linux")
 
-#: The two documents each profile owns.
-KINDS = ("prompt", "report")
+#: The documents each profile owns.
+#:   prompt        the agent's identity, phases and constraints
+#:   report        the required ``markdown_summary`` skeleton
+#:   suggest_time  the briefing for "AI suggest issue time", which reads the
+#:                 description plus a digest of the log and proposes the
+#:                 timestamp the analysis is anchored on. A retargeted agent
+#:                 needs this one too: a storage expert should not be hunting
+#:                 for a deauth when it picks the moment to look at.
+KINDS = ("prompt", "report", "suggest_time")
 
 #: Documents that are the same for every profile. "shared" is not a real
 #: profile -- it is a fourth namespace, so ``speclet_filename`` and the cache

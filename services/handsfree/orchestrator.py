@@ -132,6 +132,8 @@ def _analyze_and_enqueue(store: HandsfreeStore, case_nbr: str,
         trial = bool(store.load_config().get("trial_mode"))
     trial = bool(trial)
 
+    shared_log_path = _share_decoded_log(store, case_nbr, analysis.log_path)
+
     draft = compose(analysis)
     rec = store.enqueue(
         case_nbr=case_nbr,
@@ -144,6 +146,7 @@ def _analyze_and_enqueue(store: HandsfreeStore, case_nbr: str,
         analysis=analysis.to_dict(),
         owner_name=owner_name,
         trial=trial,
+        shared_log_path=shared_log_path,
     )
     _log_event(
         f"[{case_nbr}] queued draft {rec['draft_id']} "
@@ -174,11 +177,27 @@ def _analyze_and_enqueue(store: HandsfreeStore, case_nbr: str,
             # "public reply to customer" visibility chip.
             analysis=fr.to_dict(),
             trial=trial,
-                owner_name=owner_name,
+            owner_name=owner_name,
+            shared_log_path=shared_log_path,
         )
         _log_event(f"[{case_nbr}] queued first-response checklist draft "
                    f"{fr_rec['draft_id']}")
     return rec
+
+
+def _share_decoded_log(store: HandsfreeStore, case_nbr: str, log_path: str) -> str:
+    """Shared copy of the decoded log, or "" (no log, or the copy failed —
+    the draft then simply has no Open-folder button)."""
+    import os
+    if not log_path or not os.path.isfile(log_path):
+        return ""
+    try:
+        shared = store.share_log(case_nbr, log_path)
+        _log_event(f"[{case_nbr}] decoded log shared: {shared}")
+        return shared
+    except Exception as e:
+        _log_event(f"[{case_nbr}] could not share the decoded log: {type(e).__name__}: {e}")
+        return ""
 
 
 def _run_check(owner: str, store: HandsfreeStore,
@@ -485,6 +504,57 @@ def start_case_run(case_nbr: str) -> dict:
 
     threading.Thread(target=_run, daemon=True, name="handsfree-case").start()
     return {"ok": True, "case_nbr": case_nbr}
+
+
+# ---------------------------------------------------------------------------
+# retention
+# ---------------------------------------------------------------------------
+
+# A log folder this fresh may belong to a draft being queued right now on
+# another machine, so it is never removed as "orphaned".
+_LOG_GRACE_S = 24 * 3600
+
+
+def cleanup_queue(store: HandsfreeStore) -> dict:
+    """Remove drafts older than retention_days, every draft of a case IPS
+    reports closed, and shared log folders no remaining draft uses. The
+    ledger is kept, so a cleaned case is never re-analyzed as "new"; a
+    removed draft can always be produced again by re-running the case."""
+    from datetime import datetime, timedelta
+    from .ips_client import CaseRef
+
+    days = int(store.load_config().get("retention_days") or 30)
+    cutoff = datetime.now().astimezone() - timedelta(days=days)
+    drafts = store.all_drafts()
+
+    closed: set = set()
+    refs = {d["case_id"]: CaseRef(case_nbr=str(d["case_nbr"]), case_id=d["case_id"])
+            for d in drafts if d.get("case_id") and d.get("case_nbr")}
+    if refs:
+        try:
+            IpsClient()._fill_case_states(list(refs.values()))
+            closed = {r.case_nbr for r in refs.values() if r.closed}
+        except Exception as e:
+            # Without the IPS state only the age rule applies this time.
+            print(f"[handsfree] cleanup: case state lookup failed ({e}); age rule only")
+
+    removed, kept_cases = 0, set()
+    for d in drafts:
+        created = _parse_iso(d.get("created_at", ""))
+        if str(d.get("case_nbr")) in closed or (created and created < cutoff):
+            store.delete_draft(str(d.get("draft_id") or ""))
+            removed += 1
+        else:
+            kept_cases.add(str(d.get("case_nbr")))
+
+    logs_removed = 0
+    for case_dir in store.case_log_dirs():
+        fresh = time.time() - case_dir.stat().st_mtime < _LOG_GRACE_S
+        if case_dir.name not in kept_cases and (case_dir.name in closed or not fresh):
+            store.delete_case_logs(case_dir.name)
+            logs_removed += 1
+    return {"drafts_removed": removed, "log_folders_removed": logs_removed,
+            "closed_cases": sorted(closed), "retention_days": days}
 
 
 # ---------------------------------------------------------------------------

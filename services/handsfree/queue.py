@@ -6,6 +6,7 @@ analysis server and every reviewer's Avatar see the same queue:
     config.json                    team-wide config (owner, backend, caps, schedule)
     ledger/<case_nbr>.json         {analyzed_at, posted_at, draft_id, ...} per case
     queue/<case_nbr>__<ts>.json    one draft per analyzed case
+    logs/<case_nbr>/<file>.log     decoded log the analysis read, for every reviewer
     locks/<case_nbr>.lock          held while one reviewer posts to the case
 
 Draft lifecycle:  pending_review → posted
@@ -21,6 +22,7 @@ from __future__ import annotations
 import json
 import os
 import re
+import shutil
 import threading
 import time
 import uuid
@@ -97,10 +99,16 @@ def _safe_case(case_nbr: str) -> str:
 
 
 def decoded_log_dir(rec: dict) -> str:
-    """Folder holding the case's decoded WRT log, or "" when the run never
-    got past decode_etl (analysis.log_path is only set once the .log exists)."""
-    log_path = str(((rec or {}).get("analysis") or {}).get("log_path") or "")
+    """Folder holding the case's decoded log, or "" when the run never got
+    past decoding. The shared copy wins: the analysis' own log_path is on the
+    machine that ran it, which other reviewers cannot open."""
+    log_path = decoded_log_file(rec)
     return os.path.dirname(os.path.normpath(log_path)) if log_path else ""
+
+
+def decoded_log_file(rec: dict) -> str:
+    return str((rec or {}).get("shared_log_path")
+               or ((rec or {}).get("analysis") or {}).get("log_path") or "")
 
 
 class HandsfreeStore:
@@ -109,8 +117,9 @@ class HandsfreeStore:
         self.queue_dir = self.root / "queue"
         self.ledger_dir = self.root / "ledger"
         self.locks_dir = self.root / "locks"
+        self.logs_dir = self.root / "logs"
         self.config_path = self.root / "config.json"
-        for d in (self.queue_dir, self.ledger_dir, self.locks_dir):
+        for d in (self.queue_dir, self.ledger_dir, self.locks_dir, self.logs_dir):
             d.mkdir(parents=True, exist_ok=True)
 
     # ------------------------------------------------------------------
@@ -122,6 +131,9 @@ class HandsfreeStore:
         "post_backend": "auto",        # rest | ui | auto (rest first, ui fallback)
         "max_cases_per_run": 3,
         "dry_run": False,              # analyze + queue, posting disabled
+        # Drafts (and their shared logs) older than this are removed by the
+        # nightly cleanup; drafts of closed cases go regardless of age.
+        "retention_days": 30,
         # Trial / tuning on historical cases: every run's drafts are flagged
         # "trial" and can never be posted, and closed cases of the automatic
         # analysis' list-view source are included instead of skipped.
@@ -248,7 +260,7 @@ class HandsfreeStore:
                 draft_plain: str, draft_html: str,
                 confidence: Optional[int], mode: str,
                 analysis: dict, owner_name: str = "",
-                trial: bool = False) -> dict:
+                trial: bool = False, shared_log_path: str = "") -> dict:
         draft_id = f"{case_nbr}__{datetime.now().strftime('%Y%m%dT%H%M%S')}_{uuid.uuid4().hex[:6]}"
         record = {
             "draft_id": draft_id,
@@ -265,6 +277,7 @@ class HandsfreeStore:
             "draft_plain": draft_plain,
             "draft_html": draft_html,
             "post_result": None,
+            "shared_log_path": shared_log_path,
             "analysis": analysis,              # full CaseAnalysis dump for the UI
         }
         with _LOCK:
@@ -341,3 +354,41 @@ class HandsfreeStore:
             if len(out) >= limit:
                 break
         return out
+
+    def all_drafts(self) -> list[dict]:
+        """Every draft record (full), unordered — for housekeeping."""
+        out: list[dict] = []
+        for p in self.queue_dir.glob("*.json"):
+            try:
+                out.append(json.loads(p.read_text(encoding="utf-8")))
+            except Exception:
+                continue
+        return out
+
+    def delete_draft(self, draft_id: str) -> None:
+        p = self._draft_path(draft_id)
+        if p is not None:
+            p.unlink(missing_ok=True)
+
+    # ------------------------------------------------------------------
+    # shared decoded logs
+    # ------------------------------------------------------------------
+    def share_log(self, case_nbr: str, local_path: str) -> str:
+        """Copy the decoded log the analysis read into logs/<case>/ so every
+        reviewer can open it; returns the shared path. A copy of the same size
+        already there is kept (re-runs of the case do not copy again)."""
+        src = Path(local_path)
+        dest_dir = self.logs_dir / _safe_case(case_nbr)
+        dest_dir.mkdir(parents=True, exist_ok=True)
+        dest = dest_dir / src.name
+        if not (dest.exists() and dest.stat().st_size == src.stat().st_size):
+            tmp = dest.with_name(f".{dest.name}.{uuid.uuid4().hex[:8]}.tmp")
+            shutil.copyfile(src, tmp)
+            os.replace(tmp, dest)
+        return str(dest)
+
+    def case_log_dirs(self) -> list[Path]:
+        return [d for d in self.logs_dir.iterdir() if d.is_dir()]
+
+    def delete_case_logs(self, case_nbr: str) -> None:
+        shutil.rmtree(self.logs_dir / _safe_case(case_nbr), ignore_errors=True)

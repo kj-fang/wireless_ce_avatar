@@ -4,15 +4,16 @@ The same "one shared copy everyone can edit" lifecycle the skills YAML has
 (see utils/skills_yaml_utils.py), applied to the prompt text most often
 worth adjusting:
 
+    <profile>_agent.md  one file with prompt, report and suggest_time sections
     <profile>_prompt.md   the agent's identity, phases and constraints
     <profile>_report.md   the required ``markdown_summary`` skeleton
     shared_*.md           prompts the engine sends on its own behalf
 
 Layout on the share (and mirrored locally):
 
-    Speclets/wifi_prompt.md   Speclets/wifi_report.md
-    Speclets/bt_prompt.md     Speclets/bt_report.md
-    Speclets/nw_prompt.md     Speclets/nw_report.md
+    Speclets/wifi_agent.md    or the separate wifi_prompt/report/suggest_time files
+    Speclets/bt_agent.md      or the separate bt_prompt/report/suggest_time files
+    Speclets/linux_agent.md   or the separate linux_prompt/report/suggest_time files
     Speclets/shared_review.md      the final-report quality auditor
     Speclets/shared_issue_time.md  free-text issue-time extraction
     Speclets/shared_followup.md    the post-analysis follow-up framing
@@ -57,6 +58,7 @@ from __future__ import annotations
 
 import json
 import os
+import re
 import shutil
 import threading
 from pathlib import Path
@@ -69,10 +71,14 @@ from configs.path_configs import (
     SPECLETS_DIR_prim,
 )
 
-#: Profiles that own a speclet pair. Keys match AgentCapabilityPolicy.profile.
+#: Profiles that own prompt documents. Keys match AgentCapabilityPolicy.profile.
 PROFILES = ("wifi", "bt", "nw", "linux")
 
 #: The documents each profile owns.
+#:   agent         all three of the below in one file, as ``## prompt`` /
+#:                 ``## report`` / ``## suggest_time`` sections. Retargeting a
+#:                 domain means replacing all three, so one file is one swap.
+#:                 First, because that is the file most people will edit.
 #:   prompt        the agent's identity, phases and constraints
 #:   report        the required ``markdown_summary`` skeleton
 #:   suggest_time  the briefing for "AI suggest issue time", which reads the
@@ -80,7 +86,10 @@ PROFILES = ("wifi", "bt", "nw", "linux")
 #:                 timestamp the analysis is anchored on. A retargeted agent
 #:                 needs this one too: a storage expert should not be hunting
 #:                 for a deauth when it picks the moment to look at.
-KINDS = ("prompt", "report", "suggest_time")
+BUNDLE = "agent"
+KINDS = (BUNDLE, "prompt", "report", "suggest_time")
+#: The three a bundle can carry. ``agent`` is the container, not a section.
+BUNDLED_KINDS = tuple(k for k in KINDS if k != BUNDLE)
 
 #: Documents that are the same for every profile. "shared" is not a real
 #: profile -- it is a fourth namespace, so ``speclet_filename`` and the cache
@@ -279,6 +288,11 @@ def set_source(profile: str, kind: str, source: str) -> str:
         sources.pop(key, None)
     else:
         sources[key] = chosen
+    if kind == BUNDLE:
+        # Selecting one whole document is an atomic switch of its three parts.
+        # Old per-part choices must not keep pointing at a different version.
+        for part in BUNDLED_KINDS:
+            sources.pop(_cache_key(profile, part), None)
     try:
         path = _sources_path()
         tmp = path.with_suffix(".json.tmp")
@@ -290,7 +304,18 @@ def set_source(profile: str, kind: str, source: str) -> str:
 
 
 def write_user_speclet(profile: str, kind: str, text: str) -> Path:
-    """Save the user's version of one document and return its path."""
+    """Save the user's version of one document and return its path.
+
+    When a local bundle already holds this document, the edit goes back into
+    that section instead of into a separate file — otherwise the save would
+    land in a file the bundle outranks, and appear to do nothing.
+    """
+    if kind in BUNDLED_KINDS and get_source(profile, BUNDLE) == SOURCE_LOCAL:
+        bundle = read_user_speclet(profile, BUNDLE)
+        if bundle and split_bundle(bundle).get(kind):
+            sections = split_bundle(bundle)
+            sections[kind] = text.strip()
+            return write_user_speclet(profile, BUNDLE, join_bundle(sections))
     path = local_user_speclets_dir() / speclet_filename(profile, kind)
     tmp = path.with_suffix(path.suffix + ".tmp")
     tmp.write_text(text.strip() + "\n", encoding="utf-8")
@@ -307,7 +332,72 @@ def delete_user_speclet(profile: str, kind: str) -> bool:
     return True
 
 
+# --- one file holding all three ------------------------------------------
+
+_SECTION_RE = re.compile(
+    r"^#{1,3}[ \t]*(prompt|report|suggest[ _-]?time)[ \t]*:?[ \t]*$",
+    re.IGNORECASE | re.MULTILINE,
+)
+
+
+def split_bundle(text: str) -> dict[str, str]:
+    """Sections of an ``agent`` bundle, keyed by kind.
+
+    A heading line — ``# prompt``, ``## report``, ``### suggest time`` — opens
+    a section and the next one closes it. Anything before the first heading is
+    ignored, so a bundle can carry a note to whoever edits it. A file with no
+    headings yields nothing rather than guessing which document it is.
+    """
+    if not text:
+        return {}
+    found: dict[str, str] = {}
+    matches = list(_SECTION_RE.finditer(text))
+    for index, match in enumerate(matches):
+        end = matches[index + 1].start() if index + 1 < len(matches) else len(text)
+        kind = match.group(1).lower().replace(" ", "_").replace("-", "_")
+        body = text[match.end():end].strip()
+        if body:
+            found[kind] = body
+    return found
+
+
+def join_bundle(sections: dict[str, str]) -> str:
+    """The inverse: one file from the three documents, in a fixed order."""
+    parts = []
+    for kind in BUNDLED_KINDS:
+        body = (sections.get(kind) or "").strip()
+        if body:
+            parts.append(f"## {kind}\n\n{body}")
+    return "\n\n".join(parts) + "\n"
+
+
 # --- resolution ----------------------------------------------------------
+
+def _resolve_detail(profile: str, kind: str) -> tuple[Optional[str], str, bool]:
+    """Resolve text, source and whether it came from a bundle section."""
+    if kind in BUNDLED_KINDS:
+        if get_source(profile, BUNDLE) == SOURCE_LOCAL:
+            local_bundle = read_user_speclet(profile, BUNDLE)
+            section = split_bundle(local_bundle).get(kind)
+            if section:
+                return section, SOURCE_LOCAL, True
+        if get_source(profile, kind) == SOURCE_LOCAL:
+            local_part = read_user_speclet(profile, kind)
+            if local_part:
+                return local_part, SOURCE_LOCAL, False
+        shared_bundle = _read_local(profile, BUNDLE)
+        section = split_bundle(shared_bundle).get(kind)
+        if section:
+            return section, SOURCE_SHARED, True
+    elif get_source(profile, kind) == SOURCE_LOCAL:
+        text = read_user_speclet(profile, kind)
+        if text:
+            return text, SOURCE_LOCAL, False
+    text = _read_local(profile, kind)
+    if text:
+        return text, SOURCE_SHARED, False
+    return None, SOURCE_BUILTIN, False
+
 
 def resolve(profile: str, kind: str) -> tuple[Optional[str], str]:
     """``(text, source)`` for one document, following its recorded source.
@@ -315,14 +405,13 @@ def resolve(profile: str, kind: str) -> tuple[Optional[str], str]:
     ``text`` is None when neither file exists: the caller then uses the text
     compiled into the agent, which is what ``source == "built-in"`` means.
     """
-    if get_source(profile, kind) == SOURCE_LOCAL:
-        text = read_user_speclet(profile, kind)
-        if text:
-            return text, SOURCE_LOCAL
-    text = _read_local(profile, kind)
-    if text:
-        return text, SOURCE_SHARED
-    return None, SOURCE_BUILTIN
+    text, source, _via_bundle = _resolve_detail(profile, kind)
+    return text, source
+
+
+def from_bundle(profile: str, kind: str) -> bool:
+    """Whether this document's live text came from a bundle section."""
+    return _resolve_detail(profile, kind)[2]
 
 
 def load_into_cache() -> int:
@@ -396,7 +485,7 @@ def prime_async() -> threading.Thread:
 def documents_for(profile: str) -> list[tuple[str, str]]:
     """The documents one profile's editor may touch.
 
-    Its own two, plus the three the engine sends on its own behalf. The shared
+    Its own bundle and three parts, plus the three the engine sends on its own behalf. The shared
     three are included because they carry the most domain judgement of
     anything here — and listed last, so the editor can mark them as affecting
     every agent rather than just this one.
@@ -432,6 +521,10 @@ def speclet_status(profile: str, default_text=None) -> dict:
             "shared_across_profiles": doc_profile == SHARED,
             "source": source,
             "reads": get_source(doc_profile, kind),
+            # Where this one's live text physically came from, so the editor
+            # can say "from the one-file bundle" instead of leaving someone
+            # wondering why the single-document file they see is not in use.
+            "via_bundle": from_bundle(doc_profile, kind),
             "has_shared": shared_text is not None,
             "has_local": user_text is not None,
             "has_builtin": bool(built_in),

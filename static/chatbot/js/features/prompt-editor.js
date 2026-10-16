@@ -51,9 +51,10 @@
             btn.className = 'prompt-doc-tab' + (doc.doc === current ? ' active' : '');
             // "prompt" / "report" for this agent; the engine's own documents
             // keep their full name so they cannot be mistaken for this one's.
+            // The bundle is named for what it is rather than for its kind.
             btn.textContent = doc.shared_across_profiles
                 ? doc.doc.replace('_', ' ')
-                : doc.kind;
+                : (doc.kind === 'agent' ? 'all three, one file' : doc.kind);
             if (doc.source === 'local') {
                 const dot = document.createElement('span');
                 dot.className = 'prompt-doc-dot';
@@ -71,6 +72,9 @@
         if (!doc || !meta) return;
         const bits = [`<strong>${doc.filename}</strong>`,
                       `live: ${sourceLabel(doc.source)}`];
+        // Otherwise a single-document file sitting next to a bundle that
+        // outranks it looks like the file in use, and it is not.
+        if (doc.via_bundle) bits.push('text comes from the one-file bundle');
         if (doc.has_local) {
             bits.push(`your copy saved ${doc.local_mtime || 'earlier'}`);
         }
@@ -196,7 +200,8 @@
     // domain and must not nag.
     const isIdentityDoc = (docId) => {
         const doc = docs.find((d) => d.doc === docId);
-        return !!doc && doc.kind === 'prompt' && !doc.shared_across_profiles;
+        return !!doc && (doc.kind === 'prompt' || doc.kind === 'agent')
+            && !doc.shared_across_profiles;
     };
 
     window.savePrompt = async function () {

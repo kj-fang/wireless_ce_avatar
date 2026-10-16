@@ -20,7 +20,7 @@ Every write reloads the in-memory cache, and the engine reads that cache
 fresh on every turn, so an edit takes effect on the next question with no
 restart and no reload of the page.
 
-Only the profile's own two documents and the three the engine sends on its
+Only the profile's own bundle/parts and the three the engine sends on its
 own behalf are reachable from one page, so the Linux editor cannot rewrite
 Wi-Fi's prompt. The shared three DO affect every agent, which the payload
 marks and the page says out loud.
@@ -101,6 +101,16 @@ def build_prompt_editor_handlers(context: PromptEditorContext) -> dict[str, Call
                             "error": "A prompt cannot be empty — the agent would "
                                      "be sent a blank system prompt."}), 400
         doc_profile, kind = parsed
+        if kind == sp.BUNDLE:
+            sections = sp.split_bundle(text)
+            missing = [part for part in sp.BUNDLED_KINDS if not sections.get(part)]
+            if missing:
+                return jsonify({
+                    "success": False,
+                    "error": "A one-file agent must contain all three non-empty "
+                             "sections: ## prompt, ## report, ## suggest_time. "
+                             f"Missing: {', '.join(missing)}.",
+                }), 400
         try:
             path = sp.write_user_speclet(doc_profile, kind, text)
         except Exception as e:

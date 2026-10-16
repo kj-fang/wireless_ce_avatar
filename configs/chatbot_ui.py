@@ -109,6 +109,7 @@ BT_UI = {
         "history": True,
         "skill_editor": True,
         "skill_append": True,
+        "prompt_editor": True,
     },
 }
 
@@ -173,6 +174,7 @@ LOG_CHATBOT_UI = {
         "history": True,
         "skill_editor": True,
         "skill_append": True,
+        "prompt_editor": True,
     },
 }
 

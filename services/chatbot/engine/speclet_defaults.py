@@ -304,4 +304,9 @@ DEFAULTS: dict[str, str] = {
 
 def default_speclet(profile: str, kind: str) -> str:
     """Built-in text for one speclet, or "" for an unknown combination."""
+    if kind == "agent" and profile in ("wifi", "bt", "nw", "linux"):
+        from utils.speclets_utils import join_bundle
+
+        return join_bundle({part: DEFAULTS.get(f"{profile}_{part}", "")
+                            for part in ("prompt", "report", "suggest_time")})
     return DEFAULTS.get(f"{profile}_{kind}", "")

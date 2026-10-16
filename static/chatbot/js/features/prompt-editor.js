@@ -89,6 +89,7 @@
     }
 
     async function selectDoc(docId) {
+        hideSkillOffer();
         current = docId;
         renderTabs();
         renderMeta();
@@ -118,6 +119,7 @@
         if (!modal) return;
         modal.classList.add('open');
         modal.setAttribute('aria-hidden', 'false');
+        hideSkillOffer();
         status('Loading…');
         try {
             await refreshStatus(false);
@@ -132,6 +134,7 @@
         if (!modal) return;
         modal.classList.remove('open');
         modal.setAttribute('aria-hidden', 'true');
+        hideSkillOffer();
     };
 
     // Swap the editor's contents for another source, without saving: this is
@@ -146,6 +149,56 @@
         status(`Loaded the ${which === 'builtin' ? 'built-in' : which} text — not saved yet.`);
     };
 
+    // Changing the prompt is only half of retargeting an agent: the prompt
+    // decides what it looks for, the skills decide which lines it is given to
+    // look at. A new domain almost always needs both, so the saved prompt
+    // offers the other half right here instead of hoping the person remembers
+    // the sidebar button. Two plain choices, because tuning the wording of one
+    // prompt needs no skill change: "Keep skills" just dismisses this, and
+    // "Switch skills" dismisses it too and opens the picker the sidebar
+    // button opens -- it does not decide anything on its own.
+    // The offer belongs to one save, so it never outlives it: switching
+    // document, reopening or closing the panel all take it away.
+    function hideSkillOffer() {
+        const offer = el('prompt-skill-offer');
+        if (offer) offer.style.display = 'none';
+    }
+
+    function offerSkillSwap(lead) {
+        const offer = el('prompt-skill-offer');
+        // A profile could have the prompt editor without the append button.
+        if (!offer || typeof appendSkillsFromYaml !== 'function') {
+            status(lead, 'ok');
+            return;
+        }
+        status(lead, 'ok');
+        offer.style.display = 'flex';
+    }
+
+    window.dismissSkillOffer = function () {
+        hideSkillOffer();
+        status('Prompt saved. Skills left as they are.', 'ok');
+    };
+
+    window.switchSkillsFromPrompt = async function () {
+        hideSkillOffer();
+        status('Opening the skills file picker…');
+        await appendSkillsFromYaml();
+        // appendSkillsFromYaml reports into the sidebar's status line, which is
+        // behind this modal, so repeat its outcome where it can be seen.
+        const sidebar = document.getElementById('skill-editor-status');
+        const said = (sidebar && sidebar.textContent || '').trim();
+        status(said || 'Skills unchanged.', said.startsWith('✘') ? 'err' : 'ok');
+    };
+
+    // Only the document that decides what the agent IS. Saving a report
+    // skeleton, or one of the engine's shared documents, is not a change of
+    // domain and must not nag.
+    const isIdentityDoc = (docId) => {
+        const doc = docs.find((d) => d.doc === docId);
+        return !!doc && doc.kind === 'prompt' && !doc.shared_across_profiles;
+    };
+
     window.savePrompt = async function () {
         const text = el('prompt-editor-text').value;
         const doc = docs.find((d) => d.doc === current);
@@ -153,6 +206,10 @@
             !confirm('This prompt is used by every agent, not just this one. Save it?')) {
             return;
         }
+        // Whether the live text really moved decides whether this was a change
+        // of domain or a wording tweak -- and so whether to offer the skills.
+        const changed = (loaded.live || '').trim() !== text.trim();
+        const identity = isIdentityDoc(current);
         status('Saving…');
         try {
             const data = await call('/prompts/save', {
@@ -163,7 +220,12 @@
             await refreshStatus(true);
             renderMeta();
             loaded = await call(`/prompts/get?doc=${encodeURIComponent(current)}`);
-            status(data.message || 'Saved.', 'ok');
+            const saved = data.message || 'Saved.';
+            if (identity && changed) {
+                offerSkillSwap(saved);
+            } else {
+                status(saved, 'ok');
+            }
         } catch (e) {
             status(e.message, 'err');
         }

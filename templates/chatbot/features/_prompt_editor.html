@@ -34,6 +34,27 @@
                 applies to <strong>every</strong> agent, not just this one.
             </div>
 
+            <!-- Shown after the agent's own prompt is saved with new text: the
+                 skills are the other half of a domain change. "Keep skills"
+                 only dismisses this; "Switch skills…" dismisses it and opens
+                 the same picker the sidebar's Append button opens. -->
+            <div id="prompt-skill-offer"
+                 style="display:none;align-items:center;gap:10px;flex-wrap:wrap;
+                        font-size:0.78rem;color:#334;background:#f0f6ff;
+                        border:1px solid #bac8ff;border-radius:8px;
+                        padding:8px 10px;margin-bottom:8px;">
+                <span style="flex:1;min-width:220px;">
+                    🧠 Prompt saved. The <strong>skills</strong> decide which log
+                    lines this agent reads — switch those too?
+                </span>
+                <button type="button" class="fbd-btn primary" onclick="switchSkillsFromPrompt()">
+                    Switch skills…
+                </button>
+                <button type="button" class="fbd-btn" onclick="dismissSkillOffer()">
+                    Keep skills
+                </button>
+            </div>
+
             <textarea id="prompt-editor-text" spellcheck="false"
                       style="width:100%;min-height:46vh;font-family:Consolas,monospace;
                              font-size:0.78rem;line-height:1.5;padding:10px;

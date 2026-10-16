@@ -101,6 +101,11 @@ from services.chatbot.session import (
     register_session_agent_store,
     resume_agent_for as _shared_resume_agent_for,
 )
+from services.chatbot.engine.speclet_defaults import default_speclet
+from services.chatbot.prompt_editor import (
+    PromptEditorContext,
+    build_prompt_editor_handlers,
+)
 from services.chatbot.shared_routes import (
     SharedRouteContext,
     build_shared_handlers,
@@ -247,6 +252,16 @@ class AgentRouteProfile:
     @property
     def capabilities(self) -> set[str]:
         return {key for key, on in self.ui["features"].items() if on}
+
+    @property
+    def agent_profile(self) -> str:
+        """The engine policy's profile name — the key its prompts are filed under.
+
+        Read off the agent class instead of repeated as a field of its own, so
+        the prompt the editor shows and saves is by construction the one this
+        profile's agent loads when it builds a system prompt.
+        """
+        return self.agent_class.CAPABILITY_POLICY.profile
 
 
 # ==================================================================
@@ -1785,6 +1800,16 @@ class AgentRoutes:
             set_active_source=yu.set_active_source,
             skills_yaml_status_payload=yu.skills_yaml_status,
         ))
+        # The prompt editor, for a profile that opted into it. Its documents
+        # are this profile's own two plus the engine's three shared ones, and
+        # every write reloads the cache the system prompt is built from.
+        prompt_editor_handlers = (
+            build_prompt_editor_handlers(PromptEditorContext(
+                profile=profile.agent_profile,
+                default_text=default_speclet,
+            ))
+            if "prompt_editor" in profile.capabilities else {}
+        )
         shared_handlers = build_shared_handlers(SharedRouteContext(
             domain=profile.history_domain,
             agent_config_attr=profile.agent_config_attr,
@@ -1805,6 +1830,7 @@ class AgentRoutes:
             "suggest_issue_times": self.suggest_issue_times,
             **shared_handlers,
             **skill_editor_handlers,
+            **prompt_editor_handlers,
         }
 
 

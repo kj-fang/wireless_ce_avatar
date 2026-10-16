@@ -114,6 +114,21 @@ ROUTE_SPECS: tuple[RouteSpec, ...] = (
         ("POST",),
         "skill_editor",
     ),
+    # The prompt editor: the same lifecycle as the skills YAML, for the text
+    # that makes an agent a domain expert. One group, so a profile opts in by
+    # listing "prompt_editor" in its UI features.
+    RouteSpec("/prompts/status", "prompts_status", ("GET",), "prompt_editor"),
+    RouteSpec("/prompts/get", "prompts_get", ("GET",), "prompt_editor"),
+    RouteSpec("/prompts/save", "prompts_save", ("POST",), "prompt_editor"),
+    RouteSpec("/prompts/use_source", "prompts_use_source", ("POST",), "prompt_editor"),
+    RouteSpec("/prompts/revert", "prompts_revert", ("POST",), "prompt_editor"),
+    RouteSpec(
+        "/prompts/refresh_shared",
+        "prompts_refresh_shared",
+        ("POST",),
+        "prompt_editor",
+    ),
+    RouteSpec("/prompts/upload", "prompts_upload", ("POST",), "prompt_editor"),
     RouteSpec(
         "/set_log_sleepstudy",
         "set_log_sleepstudy",

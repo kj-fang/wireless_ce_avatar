@@ -124,6 +124,7 @@
 <script src="{{ ui.profile_script }}"></script>
 {% if ui.features.feedback %}{% include 'chatbot/features/_feedback.html' %}{% endif %}
 {% if ui.features.skill_editor %}{% include 'chatbot/features/_skill_editor.html' %}{% endif %}
+{% if ui.features.prompt_editor %}{% include 'chatbot/features/_prompt_editor.html' %}{% endif %}
 {% if ui.features.skill_append %}
 {# Importing skills from a YAML file is its own capability: NW offers the
    button without the editor panel, so this lives outside _skill_editor.html

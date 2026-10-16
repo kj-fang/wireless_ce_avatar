@@ -3,6 +3,7 @@
 Examples:
     python -m services.handsfree.cli --owner "Charles P Chu" --once
     python -m services.handsfree.cli --owner "Charles P Chu" --interval 300
+    python -m services.handsfree.cli --list-view Handsfree_replier_test_case --once
     python -m services.handsfree.cli --sso-login
     python -m services.handsfree.cli --sso-check
 
@@ -45,6 +46,12 @@ def _build_parser() -> argparse.ArgumentParser:
     targets.add_argument(
         "--case-number",
         help="Analyze one explicit case, bypassing owner/date and processed-case checks; requires --once.",
+    )
+    targets.add_argument(
+        "--list-view",
+        action="append",
+        metavar="DEVELOPER_NAME",
+        help="IPS case list view to scan (developer name); repeat for up to 3, their cases are combined.",
     )
     targets.add_argument(
         "--sso-login",
@@ -150,12 +157,13 @@ def _wait_for_run() -> dict:
         time.sleep(1)
 
 
-def _run_once(owner: str) -> int:
+def _run_once(owner: str = "", list_views: Optional[list[str]] = None) -> int:
     from . import orchestrator
 
     store = _store()
     max_cases = int(store.load_config().get("max_cases_per_run") or 3)
-    summary = orchestrator.run_auto_scan(store, owner, max_cases, trigger="cli")
+    summary = orchestrator.run_auto_scan(store, owner, max_cases, trigger="cli",
+                                         list_views=list_views)
     if not summary.get("ok"):
         print(f"[handsfree-cli] scan failed: {summary.get('error')}")
         return 1
@@ -217,6 +225,21 @@ def _load_owners(args) -> list[str]:
     return unique
 
 
+def _load_list_views(args) -> list[str]:
+    from .scheduler import MAX_LIST_VIEWS
+
+    views = []
+    for name in args.list_view:
+        name = name.strip()
+        if name and name not in views:
+            views.append(name)
+    if not views:
+        raise ValueError("--list-view is empty")
+    if len(views) > MAX_LIST_VIEWS:
+        raise ValueError(f"at most {MAX_LIST_VIEWS} --list-view values")
+    return views
+
+
 def _run_owners(owners: list[str]) -> int:
     failures = []
     for owner in owners:
@@ -228,6 +251,13 @@ def _run_owners(owners: list[str]) -> int:
         print("[handsfree-cli] failed owner check(s): " + ", ".join(failures))
         return 1
     return 0
+
+
+def _run_list_views(views: list[str]) -> int:
+    print("[handsfree-cli] checking list view(s) " + ", ".join(repr(v) for v in views))
+    rc = _run_once(list_views=views)
+    _cleanup()
+    return rc
 
 
 def main(argv: Optional[list[str]] = None) -> int:
@@ -257,7 +287,9 @@ def main(argv: Optional[list[str]] = None) -> int:
             return 2
         args.case_number = case_number
     try:
-        owners = [] if args.case_number is not None else _load_owners(args)
+        views = _load_list_views(args) if args.list_view is not None else []
+        owners = ([] if args.case_number is not None or views
+                  else _load_owners(args))
     except ValueError as e:
         print(f"[handsfree-cli] {e}", file=sys.stderr)
         return 2
@@ -282,6 +314,9 @@ def main(argv: Optional[list[str]] = None) -> int:
         (f"[handsfree-cli] case_number={args.case_number!r}, "
          f"max_cases={cfg['max_cases_per_run']}, dry_run={cfg['dry_run']}"
          if args.case_number is not None else
+         f"[handsfree-cli] list_views={views}, "
+         f"max_cases={cfg['max_cases_per_run']}, dry_run={cfg['dry_run']}"
+         if views else
          f"[handsfree-cli] owners={len(owners)}, "
         f"max_cases={cfg['max_cases_per_run']}, "
          f"dry_run={cfg['dry_run']}")
@@ -290,14 +325,18 @@ def main(argv: Optional[list[str]] = None) -> int:
     if args.case_number is not None:
         return _run_case_once(args.case_number)
 
+    run_round = ((lambda: _run_list_views(views)) if views
+                 else (lambda: _run_owners(owners)))
     if args.once:
-        return _run_owners(owners)
+        return run_round()
 
-    print(f"[handsfree-cli] polling {len(owners)} owner(s) for new cases and "
-          f"customer updates every {args.interval:g}s; press Ctrl+C to stop")
+    print(f"[handsfree-cli] polling "
+          + (f"{len(views)} list view(s)" if views else f"{len(owners)} owner(s)")
+          + f" for new cases and customer updates every {args.interval:g}s; "
+          "press Ctrl+C to stop")
     try:
         while True:
-            _run_owners(owners)
+            run_round()
             time.sleep(args.interval)
     except KeyboardInterrupt:
         print("\n[handsfree-cli] stopped")

@@ -396,12 +396,9 @@ class HandsfreeRunner:
             analysis.subject = case_ctx.subject or ""
             analysis.description = case_ctx.description or ""
             analysis.subcategory = str(case_ctx.subcategory or "")
-            # Explicit IPS subcategory wins; otherwise keep CaseService's
-            # legacy derivation (non-"wifi" -> bt) so cases such as "OEM
-            # Tools" still get the BT-gated triage + first-response checklist
-            # validated on 2026-10-01 instead of being skipped as unsupported.
-            analysis.wifi_or_bt = (_classify_wireless_domain(analysis.subcategory)
-                                   or str(case_ctx.wifi_or_bt or ""))
+            # Only an explicit Wi-Fi/BT subcategory is analyzed; CaseService's
+            # legacy "non-wifi -> bt" guess is deliberately NOT used.
+            analysis.wifi_or_bt = _classify_wireless_domain(analysis.subcategory)
             analysis.env_detail = dict(case_ctx.env_detail or {})
             from .case_reader import customer_visible_history
             analysis.customer_history = customer_visible_history(case_ctx.comments)
@@ -409,7 +406,10 @@ class HandsfreeRunner:
             analysis.mode = "error"
             analysis.error = "case fetch failed — no subject/description"
             return analysis
-        if not analysis.wifi_or_bt:
+        bsod_hint = _bsod.quick_hint(analysis.subject, analysis.subcategory,
+                                     analysis.description)
+        # BSOD cases go to the BSOD branch whatever their subcategory says.
+        if not analysis.wifi_or_bt and not bsod_hint:
             analysis.mode = "unsupported"
             analysis.error = (f"unsupported IPS subcategory: "
                               f"{analysis.subcategory or '(empty)'}")
@@ -421,7 +421,7 @@ class HandsfreeRunner:
         # The reader usually nominates the newest upload; when it picks
         # another file the normal download runs and this one is discarded.
         prefetch = None
-        if _bsod.quick_hint(analysis.subject, analysis.subcategory, analysis.description):
+        if bsod_hint:
             # A BSOD case's newest archive is a memory dump (GBs), not a WRT
             # capture — the BSOD branch downloads it to the BSOD share instead.
             self.progress("fetch_case", "BSOD wording in the case — WRT prefetch skipped")
@@ -442,7 +442,9 @@ class HandsfreeRunner:
         with self._stage(analysis, "triage"):
             from services.case_info_service import CaseService
             llm = app_config.llm_helper
-            prompt_path = CaseService.load_case_summary_prompt(analysis.wifi_or_bt)
+            # A BSOD case without an explicit Wi-Fi/BT subcategory keeps the legacy prompt pick.
+            prompt_path = CaseService.load_case_summary_prompt(
+                analysis.wifi_or_bt or str(case_ctx.wifi_or_bt or "bt"))
             ctx_dict = case_ctx.to_dict()
             triage = llm.analyze_desc(prompt_path, ctx_dict)
             if isinstance(triage, dict):
@@ -452,9 +454,8 @@ class HandsfreeRunner:
 
         # Provisional checklist domain before any early exit (the reader can
         # upgrade it later): IPS subcategory is customer-selected and often
-        # exact ("OEM Tools"); note wifi_or_bt is derived as "bt" whenever
-        # the subcategory lacks the word "wifi", so BT-gated cases MUST get
-        # their domain here or the first-response checklist falls to Others.
+        # exact; BT-gated cases MUST get their domain here or the
+        # first-response checklist falls to Others.
         analysis.issue_domain = _resolve_issue_domain(
             "", analysis.subcategory, analysis.issue_type)
 

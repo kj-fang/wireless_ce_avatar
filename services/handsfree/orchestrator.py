@@ -99,6 +99,10 @@ def _analyze_and_enqueue(store: HandsfreeStore, case_nbr: str,
     analysis = runner.analyze_case(case_nbr)
     if analysis.mode == "unsupported":
         store.mark_skipped(case_nbr, analysis.error, owner_name=owner_name)
+        store.record_skipped(case_nbr=case_nbr, case_id=case_id or analysis.case_id,
+                             subject=subject or analysis.subject,
+                             reason=analysis.error, owner_name=owner_name,
+                             analysis=analysis.to_dict())
         _log_event(f"[{case_nbr}] skipped: {analysis.error}")
         return None
 
@@ -619,6 +623,8 @@ def _approve_and_post_locked(draft_id: str, edited_plain: Optional[str]) -> dict
         return {"ok": False, "error": f"draft not found: {draft_id}"}
     if rec.get("status") == "posted":
         return {"ok": False, "error": "draft already posted", "draft": rec}
+    if rec.get("status") == "skipped":
+        return {"ok": False, "error": "skipped case — there is no draft to post"}
     if cfg.get("dry_run"):
         return {"ok": False, "error": "dry_run is enabled in config — posting disabled"}
     if rec.get("trial"):

@@ -106,6 +106,8 @@
     tbody tr:last-child td { border-bottom: none; }
     #queue-table tbody tr { transition: background 200ms var(--ease); }
     #queue-table tbody tr:hover { background: rgba(69,184,240,0.06); cursor: pointer; }
+    #queue-table tbody tr.skipped-row { opacity: 0.55; }
+    #queue-table tbody tr.skipped-row:hover { background: none; cursor: default; }
     td.case-nbr { font-family: var(--mono); font-size: 12.5px; }
     a.case-link { color: var(--accent, #4ea1ff); text-decoration: none; border-bottom: 1px dotted currentColor; }
     a.case-link:hover { text-decoration: none; border-bottom-style: solid; }
@@ -967,6 +969,23 @@
       return;
     }
     (j.items || []).forEach(it => {
+      if (it.status === 'skipped') {
+        // Looked at by the server but not analyzed: no draft to open.
+        const tr = document.createElement('tr');
+        tr.className = 'skipped-row';
+        tr.innerHTML =
+          `<td class="case-nbr">${caseLink(it.case_nbr, it.case_id)}</td>` +
+          `<td>${esc(it.owner_name || '—')}</td>` +
+          `<td title="${esc(it.subject || '')}">${esc(it.skip_reason || 'skipped')}</td>` +
+          `<td><span class="pill">${esc(it.mode || '')}</span></td>` +
+          `<td>—</td>` +
+          `<td><span class="pill">skipped</span></td>` +
+          `<td>—</td>` +
+          `<td>${esc((it.created_at || '').slice(0, 16))}</td>` +
+          `<td>—</td>`;
+        tbody.appendChild(tr);
+        return;
+      }
       const statusCls = it.status === 'posted' ? 'good'
                       : it.status === 'post_failed' ? 'bad'
                       : it.status === 'rejected' ? 'bad'

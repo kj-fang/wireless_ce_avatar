@@ -21,13 +21,12 @@ from typing import Optional
 
 from .composer import compose, AI_MARKER, CHECKLIST_TAG
 from .ips_client import IpsClient, PostUnsupported
-from .queue import HandsfreeStore
+from .queue import HandsfreeStore, open_store
 from .runner import HandsfreeRunner
 
 
 def _store() -> HandsfreeStore:
-    from configs.global_configs import app_config
-    return HandsfreeStore(Path(app_config.avatarfiles_dir) / "handsfree")
+    return open_store()
 
 
 _run_lock = threading.Lock()
@@ -516,12 +515,34 @@ def approve_and_post(draft_id: str, edited_plain: Optional[str] = None) -> dict:
     """Human clicked Approve. Post the (possibly edited) draft to IPS.
     Returns the updated draft record + result.
 
-    Serialized by _post_lock: the duplicate guard below is check-then-act
-    (scan existing comments, then insert), so two near-simultaneous approvals
-    interleaving could both pass the scan and double-post. Posting is a
-    human-click-rate operation — a coarse lock costs nothing."""
+    The duplicate guard below is check-then-act (scan existing comments,
+    then insert), so two near-simultaneous approvals interleaving could both
+    pass the scan and double-post. _post_lock serializes this process; the
+    case claim on the shared folder serializes reviewers on other machines."""
     with _post_lock:
-        return _approve_and_post_locked(draft_id, edited_plain)
+        store = _store()
+        rec = store.get(draft_id)
+        if rec is None:
+            return {"ok": False, "error": f"draft not found: {draft_id}"}
+        case_nbr = rec["case_nbr"]
+        holder = store.claim_case(case_nbr, _reviewer_id())
+        if holder:
+            return {"ok": False, "error": f"{holder} is posting to case {case_nbr} "
+                                          "right now — refresh and try again in a moment"}
+        try:
+            return _approve_and_post_locked(draft_id, edited_plain)
+        finally:
+            store.release_case(case_nbr)
+
+
+def _reviewer_id() -> str:
+    import getpass
+    import socket
+    try:
+        user = getpass.getuser()
+    except Exception:
+        user = "unknown"
+    return f"{user}@{socket.gethostname()}"
 
 
 def _approve_and_post_locked(draft_id: str, edited_plain: Optional[str]) -> dict:

@@ -738,8 +738,8 @@ def smoke_runner(tmp: Path) -> None:
               and analysis7.env_detail.get("Steps to reproduce", "").startswith("1. Run"),
               f"missing={analysis7.missing_info}")
 
-        # BT-gated case (wifi_or_bt='bt' skips the reader) must still get a
-        # checklist domain from the customer-selected IPS subcategory.
+        # A subcategory that is not explicitly Wi-Fi/BT is unsupported, even
+        # though CaseService's legacy rule labels it 'bt'.
         def _fake_process_bt_oem(case_ctx: CaseContext) -> CaseContext:
             case_ctx = _fake_process(case_ctx)
             case_ctx.wifi_or_bt = "bt"
@@ -747,10 +747,9 @@ def smoke_runner(tmp: Path) -> None:
             return case_ctx
         cis.CaseService.process_case = staticmethod(_fake_process_bt_oem)
         analysis8 = r.analyze_case("01234567")
-        check("S11.f BT-gated case gets domain from IPS subcategory",
-              analysis8.mode == "triage_only"
-              and analysis8.issue_domain == "OEM Tools",
-              f"mode={analysis8.mode} domain={analysis8.issue_domain}")
+        check("S11.f non-Wi-Fi/BT subcategory is unsupported",
+              analysis8.mode == "unsupported",
+              f"mode={analysis8.mode}")
 
         # --- S13: failure-path reply policy (2026-10-02) --------------------
         cis.CaseService.process_case = staticmethod(_fake_process)

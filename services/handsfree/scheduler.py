@@ -12,9 +12,6 @@ Config (HandsfreeStore config.json):
                                                     only in trial mode)
     auto_list_view       str                        legacy single name (first of the list)
     auto_next_run_at     ISO local                  persisted so a restart resumes
-    auto_check_host      str                        machine that pressed Start: the
-                                                    config is shared, so only that
-                                                    machine's thread runs the rounds
     auto_last_scan_at    ISO UTC                    written by run_auto_scan
     auto_last_result     str                        "<n> case(s) run" / "failed: …"
 
@@ -55,15 +52,6 @@ def next_run_after(mode: str, now: datetime, first: bool = False) -> datetime:
 def _store():
     from .orchestrator import _store as orchestrator_store
     return orchestrator_store()
-
-
-def _this_host() -> str:
-    import socket
-    return socket.gethostname().casefold()
-
-
-def _runs_here(cfg: dict) -> bool:
-    return str(cfg.get("auto_check_host") or "").casefold() == _this_host()
 
 
 MAX_LIST_VIEWS = 3
@@ -126,8 +114,6 @@ def status(cfg: Optional[dict] = None) -> dict:
         "next_run_at": cfg.get("auto_next_run_at") or "",
         "last_scan_at": cfg.get("auto_last_scan_at") or "",
         "last_result": cfg.get("auto_last_result") or "",
-        "host": cfg.get("auto_check_host") or "",
-        "runs_here": _runs_here(cfg),
         "running": _running.is_set(),
         "thread_alive": bool(_thread and _thread.is_alive()),
     }
@@ -175,7 +161,6 @@ def configure(enabled: bool, mode: str, max_cases: Optional[int] = None,
             raise ValueError(target["error"])
         updates["auto_next_run_at"] = next_run_after(
             mode, datetime.now().astimezone(), first=True).isoformat(timespec="seconds")
-        updates["auto_check_host"] = _this_host()
     else:
         updates["auto_next_run_at"] = ""
     cfg = store.save_config(updates)
@@ -219,8 +204,7 @@ def _loop() -> None:
                 time.sleep(_TICK_S)      # app still booting (set_up not run yet)
                 continue
             cfg = _store().load_config()
-            if (cfg.get("auto_check_enabled") and cfg.get("auto_next_run_at")
-                    and _runs_here(cfg)):
+            if cfg.get("auto_check_enabled") and cfg.get("auto_next_run_at"):
                 due = datetime.fromisoformat(cfg["auto_next_run_at"])
                 if datetime.now().astimezone() >= due:
                     run_once(trigger="scheduled")

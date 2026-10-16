@@ -15,10 +15,17 @@ Draft lifecycle:  pending_review → posted
 Several machines write here: every file is written whole through a uniquely
 named temp file + atomic replace, and the ledger is one file per case so two
 machines only collide when they touch the same case at the same moment.
+
+Every access to the share is a network round trip (~1 s measured from a
+desk PC), so this module touches it as little as possible: one store per
+process, the config re-read only when it changed, and the queue list read
+incrementally (only new/changed drafts, in parallel) with the summaries also
+kept on this PC across restarts.
 """
 
 from __future__ import annotations
 
+import copy
 import json
 import os
 import re
@@ -26,6 +33,7 @@ import shutil
 import threading
 import time
 import uuid
+from concurrent.futures import ThreadPoolExecutor
 from datetime import datetime
 from pathlib import Path
 from typing import Optional
@@ -39,15 +47,29 @@ class HandsfreeShareUnavailable(RuntimeError):
     """The shared Handsfree folder cannot be reached or written."""
 
 
+def describe_share_error(e: BaseException) -> str:
+    """What a reviewer can act on, instead of a raw WinError."""
+    if isinstance(e, PermissionError):
+        return ("access denied — your Windows account needs read AND write "
+                "permission on this folder (ask the share owner)")
+    if isinstance(e, FileNotFoundError):
+        return "path not found — check the network / VPN connection"
+    if isinstance(e, TimeoutError):
+        return f"{e} — check the network / VPN connection"
+    return f"{type(e).__name__}: {e}"
+
+
 _root_cache: Optional[Path] = None
+_store_cache: Optional["HandsfreeStore"] = None
 _root_lock = threading.Lock()
-_SHARE_PROBE_TIMEOUT_S = 10
+_SHARE_PROBE_TIMEOUT_S = 15
 
 
 def handsfree_root() -> Path:
-    """The shared Handsfree folder. Raises HandsfreeShareUnavailable instead
-    of falling back to a local folder, which would split the queue between
-    machines. Only a success is cached, so a later call retries."""
+    """The shared Handsfree folder, checked once per process for both read
+    and write access. Raises HandsfreeShareUnavailable instead of falling
+    back to a local folder, which would split the queue between machines.
+    Only a success is cached, so a later call retries."""
     global _root_cache
     with _root_lock:
         if _root_cache is not None:
@@ -57,7 +79,11 @@ def handsfree_root() -> Path:
 
         def _probe():
             try:
-                Path(HANDSFREE_DIR).mkdir(parents=True, exist_ok=True)
+                root = Path(HANDSFREE_DIR)
+                root.mkdir(parents=True, exist_ok=True)
+                probe = root / f".probe-{uuid.uuid4().hex[:8]}.tmp"
+                probe.write_text("ok", encoding="utf-8")
+                probe.unlink()
                 outcome.append(None)
             except Exception as e:
                 outcome.append(e)
@@ -67,17 +93,25 @@ def handsfree_root() -> Path:
         t.start()
         t.join(_SHARE_PROBE_TIMEOUT_S)
         if not outcome or outcome[0] is not None:
-            reason = f"{outcome[0]}" if outcome else f"no answer in {_SHARE_PROBE_TIMEOUT_S}s"
+            err = outcome[0] if outcome else TimeoutError(
+                f"no answer in {_SHARE_PROBE_TIMEOUT_S}s")
             raise HandsfreeShareUnavailable(
-                f"Handsfree shared folder unreachable: {HANDSFREE_DIR} ({reason})")
+                f"Handsfree shared folder unavailable: {HANDSFREE_DIR} — "
+                f"{describe_share_error(err)}")
         _root_cache = Path(HANDSFREE_DIR)
         print(f"[handsfree.queue] using shared folder: {_root_cache}")
         return _root_cache
 
 
 def open_store() -> "HandsfreeStore":
-    """The one HandsfreeStore everyone (server, clients, CLI, UI) uses."""
-    return HandsfreeStore(handsfree_root())
+    """The one HandsfreeStore everyone (server, clients, CLI, UI) uses —
+    created once per process, so its folder checks and caches are paid once."""
+    global _store_cache
+    root = handsfree_root()
+    with _root_lock:
+        if _store_cache is None or _store_cache.root != root:
+            _store_cache = HandsfreeStore(root)
+        return _store_cache
 
 
 def _now_iso() -> str:
@@ -121,6 +155,9 @@ class HandsfreeStore:
         self.config_path = self.root / "config.json"
         for d in (self.queue_dir, self.ledger_dir, self.locks_dir, self.logs_dir):
             d.mkdir(parents=True, exist_ok=True)
+        self._config_cache: Optional[tuple] = None    # ((mtime_ns, size), dict)
+        self._summaries: Optional[dict] = None        # {file name: ((mtime_ns, size), slim)}
+        self._summaries_lock = threading.Lock()
 
     # ------------------------------------------------------------------
     # config
@@ -148,12 +185,25 @@ class HandsfreeStore:
     }
 
     def load_config(self) -> dict:
+        """Defaults overlaid with config.json, re-read only when the file's
+        mtime/size changed (a stat is far cheaper than a read on the share)."""
         cfg = dict(self.DEFAULT_CONFIG)
         try:
-            if self.config_path.exists():
-                cfg.update(json.loads(self.config_path.read_text(encoding="utf-8")))
-        except Exception as e:
-            print(f"[handsfree.queue] config read failed: {e}")
+            st = os.stat(self.config_path)
+        except FileNotFoundError:
+            return cfg
+        except OSError as e:
+            print(f"[handsfree.queue] config stat failed: {e}")
+            return cfg
+        key = (st.st_mtime_ns, st.st_size)
+        if self._config_cache is None or self._config_cache[0] != key:
+            try:
+                data = json.loads(self.config_path.read_text(encoding="utf-8"))
+            except Exception as e:
+                print(f"[handsfree.queue] config read failed: {e}")
+                return cfg
+            self._config_cache = (key, data)
+        cfg.update(copy.deepcopy(self._config_cache[1]))
         return cfg
 
     def save_config(self, cfg: dict) -> dict:
@@ -324,41 +374,100 @@ class HandsfreeStore:
 
     def list_drafts(self, include_closed: bool = True,
                     limit: int = 100, owner_name: str = "") -> list[dict]:
-        """Newest-first draft summaries (analysis payload omitted)."""
-        out: list[dict] = []
+        """Newest-first draft summaries (analysis payload omitted).
+        Raises OSError when the queue folder cannot be listed \u2014 an empty
+        list would read as "no drafts" and hide the real problem."""
         owner_filter = (owner_name or "").strip().casefold()
-        try:
-            files = sorted(self.queue_dir.glob("*.json"),
-                           key=lambda p: p.stat().st_mtime, reverse=True)
-        except Exception:
-            return out
-        for p in files[:limit * 2]:
-            try:
-                rec = json.loads(p.read_text(encoding="utf-8"))
-            except Exception:
+        out: list[dict] = []
+        for slim in self._refresh_summaries():
+            if owner_filter and str(slim.get("owner_name") or "").casefold() != owner_filter:
                 continue
-            if owner_filter and str(rec.get("owner_name") or "").casefold() != owner_filter:
+            if not include_closed and slim.get("status") in ("posted", "rejected"):
                 continue
-            if not include_closed and rec.get("status") in ("posted", "rejected"):
-                continue
-            slim = {k: rec.get(k) for k in
-                    ("draft_id", "status", "created_at", "updated_at",
-                     "case_nbr", "case_id", "owner_name", "subject", "mode", "confidence",
-                     "post_result")}
-            slim["trial"] = bool(rec.get("trial"))
-            slim["log_dir"] = decoded_log_dir(rec)
-            analysis = rec.get("analysis") or {}
-            slim["action_owner"] = str(analysis.get("action_owner") or "")
-            slim["next_action"] = str(analysis.get("next_action") or "")
-            out.append(slim)
+            out.append(dict(slim))
             if len(out) >= limit:
                 break
         return out
+
+    # ---- summary cache behind list_drafts -------------------------------
+    _READ_THREADS = 16      # the share is latency-bound: parallel reads ~4x faster
+
+    def _refresh_summaries(self) -> list[dict]:
+        """All drafts' summaries, newest first. One directory listing per call;
+        only files whose (mtime, size) changed are read, in parallel."""
+        with self._summaries_lock:
+            if self._summaries is None:
+                self._summaries = self._load_local_summaries()
+            entries = [e for e in os.scandir(self.queue_dir)
+                       if e.name.endswith(".json") and not e.name.startswith(".")]
+            keys = {e.name: (e.stat().st_mtime_ns, e.stat().st_size) for e in entries}
+            stale = [e for e in entries
+                     if (self._summaries.get(e.name) or (None,))[0] != keys[e.name]]
+            if stale:
+                with ThreadPoolExecutor(self._READ_THREADS) as ex:
+                    for name, slim in ex.map(self._read_summary, stale):
+                        if slim is not None:
+                            self._summaries[name] = (keys[name], slim)
+            gone = set(self._summaries) - set(keys)
+            for name in gone:
+                del self._summaries[name]
+            if stale or gone:
+                self._save_local_summaries()
+            names = sorted((n for n in keys if n in self._summaries),
+                           key=lambda n: keys[n][0], reverse=True)
+            return [self._summaries[n][1] for n in names]
+
+    def _read_summary(self, entry) -> tuple:
+        try:
+            rec = json.loads(Path(entry.path).read_text(encoding="utf-8"))
+        except Exception:
+            return entry.name, None       # mid-write or corrupt: retried next refresh
+        slim = {k: rec.get(k) for k in
+                ("draft_id", "status", "created_at", "updated_at",
+                 "case_nbr", "case_id", "owner_name", "subject", "mode", "confidence",
+                 "post_result")}
+        slim["trial"] = bool(rec.get("trial"))
+        slim["log_dir"] = decoded_log_dir(rec)
+        analysis = rec.get("analysis") or {}
+        slim["action_owner"] = str(analysis.get("action_owner") or "")
+        slim["next_action"] = str(analysis.get("next_action") or "")
+        return entry.name, slim
+
+    def _local_summaries_path(self) -> Optional[Path]:
+        try:
+            from configs.global_configs import app_config
+            base = getattr(app_config, "avatarfiles_dir", None)
+        except Exception:
+            base = None
+        return Path(base) / "handsfree_queue_cache.json" if base else None
+
+    def _load_local_summaries(self) -> dict:
+        p = self._local_summaries_path()
+        try:
+            if p and p.exists():
+                data = json.loads(p.read_text(encoding="utf-8"))
+                if data.get("root") == str(self.root):
+                    return {n: (tuple(v[0]), v[1]) for n, v in data["items"].items()}
+        except Exception as e:
+            print(f"[handsfree.queue] local queue cache ignored: {e}")
+        return {}
+
+    def _save_local_summaries(self) -> None:
+        p = self._local_summaries_path()
+        if not p:
+            return
+        try:
+            _atomic_write(p, json.dumps({"root": str(self.root), "items": {
+                n: [list(k), s] for n, (k, s) in self._summaries.items()}}))
+        except Exception as e:
+            print(f"[handsfree.queue] local queue cache not saved: {e}")
 
     def all_drafts(self) -> list[dict]:
         """Every draft record (full), unordered — for housekeeping."""
         out: list[dict] = []
         for p in self.queue_dir.glob("*.json"):
+            if p.name.startswith("."):
+                continue
             try:
                 out.append(json.loads(p.read_text(encoding="utf-8")))
             except Exception:

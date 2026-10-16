@@ -312,13 +312,14 @@
       </div>
     </div>
     <div id="tab-auto" style="display:none;">
-      <div class="hint">Each round scans the ONE source chosen below — the open IPS cases of the case owner (from
+      <div class="hint">Scheduled rounds run on the Handsfree server every night. <b>Run now</b> runs one round
+        right away on this PC with the settings below. Each round scans the ONE source chosen below — the open IPS cases of the case owner (from
         Settings) for either new cases OR new customer comments since the previous round, or the cases of up to three IPS
         list views (their union) that were not analyzed yet or have new customer comments — and runs the handsfree pipeline
-        for each; the drafts queue below for review. Frequency and max cases per round apply to either source. Nothing is
+        for each; the drafts queue below for review. Max cases per round applies to either source. Nothing is
         posted automatically — Approve still decides. Closed cases of a list view run only in trial mode (Settings).</div>
       <div class="controls">
-        <label>Frequency:
+        <label style="display: none;">Frequency:
           <select id="auto-mode">
             <option value="4h">Every 4 hours</option>
             <option value="8h">Every 8 hours</option>
@@ -328,7 +329,7 @@
         <label>Max cases per round:
           <input type="number" id="auto-max" min="1" max="50" step="1" value="10" style="width: 64px;">
         </label>
-        <button class="primary" id="auto-toggle-btn" onclick="toggleAuto()">
+        <button class="primary" id="auto-toggle-btn" onclick="toggleAuto()" style="display: none;">
           <svg width="11" height="11" viewBox="0 0 24 24" fill="currentColor" aria-hidden="true">
             <path d="M6 4.5l14 7.5-14 7.5z" /></svg>
           <span id="auto-toggle-text">Start automatic analysis</span></button>
@@ -485,7 +486,12 @@
   async function loadConfig() {
     try {
       const r = await fetch('/handsfree/config');
-      fillConfigForm(await r.json());
+      const cfg = await r.json();
+      if (cfg.error) {
+        document.getElementById('cfg-status').textContent = 'config load failed: ' + cfg.error;
+        return;
+      }
+      fillConfigForm(cfg);
     } catch (e) {
       document.getElementById('cfg-status').textContent = 'config load failed: ' + e;
     }
@@ -955,6 +961,11 @@
     const j = await r.json();
     const tbody = document.querySelector('#queue-table tbody');
     tbody.innerHTML = '';
+    if (j.error) {
+      tbody.innerHTML = '<tr><td colspan="9" style="color:var(--bad, #c33);">could not load the queue: '
+        + esc(j.error) + '</td></tr>';
+      return;
+    }
     (j.items || []).forEach(it => {
       const statusCls = it.status === 'posted' ? 'good'
                       : it.status === 'post_failed' ? 'bad'
@@ -1099,7 +1110,11 @@
 
   async function openDraft(draftId) {
     const r = await fetch('/handsfree/queue/' + encodeURIComponent(draftId));
-    if (!r.ok) { alert('draft not found'); return; }
+    if (!r.ok) {
+      const err = await r.json().catch(() => ({}));
+      alert('Could not open the draft: ' + (err.error || 'draft not found'));
+      return;
+    }
     const d = await r.json();
     currentDraftId = d.draft_id;
     currentDraftMode = d.mode || null;

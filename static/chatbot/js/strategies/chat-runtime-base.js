@@ -26,6 +26,7 @@
         // line is a warning rather than a detail.
         const blocked = !!(info && info.supports_windowing === false);
         window.__logTimeAxis = !blocked;
+        window.__logTimeFormat = info || null;
         const el = document.getElementById('it-log-format');
         if (!el) return;
         const note = (info && info.note) ? String(info.note) : '';
@@ -648,6 +649,21 @@
             // genuinely absent there rather than merely optional.
             if (typeof refreshIssueWindowBounds === 'function') refreshIssueWindowBounds();
             if (typeof validateUserInput === 'function') validateUserInput();
+            // Only a newly loaded, unanchored dmesg opens the AI consent gate.
+            // The user must still allow the LLM request. Repeated refreshes of
+            // the same file (and history restores) must not nag or auto-send.
+            if (!skipIssueTimeAutofill && data.log_time_format &&
+                data.log_time_format.name === 'monotonic' &&
+                data.log_time_format.supports_windowing === false &&
+                window.__bootSuggestPromptedPath !== path) {
+                setTimeout(() => {
+                    if (window.__setLogGen === logGen &&
+                        window.__bootSuggestPromptedPath !== path &&
+                        typeof suggestIssueTimesWithAI === 'function') {
+                        suggestIssueTimesWithAI();
+                    }
+                }, 700);
+            }
         } catch (e) {
             showStatus(statusEl, '✘ Network error: ' + e.message, 'err');
         }

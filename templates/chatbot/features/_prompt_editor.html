@@ -15,14 +15,23 @@
         </div>
         <div class="fbd-body">
             <div style="font-size:0.82rem;color:#555;margin-bottom:10px;">
-                A prompt decides what this agent is an expert in. Saving keeps
-                your version on this machine and the next question uses it —
-                no restart. <strong>Revert</strong> goes back to the shared
-                text; <strong>Upload</strong> offers your version to the team.
+                Choose a three-section .md file or edit below, then Save &amp; use.
+                This changes only this agent on this machine; the next question
+                uses it without a restart.
             </div>
 
-            <!-- Which document -->
-            <div id="prompt-doc-tabs" class="prompt-doc-tabs"></div>
+            <details id="prompt-advanced" style="margin-bottom:8px;">
+                <summary style="cursor:pointer;font-size:0.8rem;">Advanced: individual sections, shared prompts &amp; sources</summary>
+                <div id="prompt-doc-tabs" class="prompt-doc-tabs" style="margin-top:8px;"></div>
+            </details>
+
+            <div style="display:flex;gap:8px;align-items:center;margin-bottom:8px;flex-wrap:wrap;">
+                <input id="prompt-file-input" type="file" accept=".md,text/markdown,text/plain" hidden
+                       onchange="choosePromptFile(this)">
+                <button type="button" class="fbd-btn" onclick="document.getElementById('prompt-file-input').click()"
+                        title="Load a local .md file into the editor; nothing is saved until Save &amp; use">Choose .md file…</button>
+                <span id="prompt-editor-status" role="status" style="font-size:0.78rem;color:#555;"></span>
+            </div>
 
             <!-- Where the live text comes from, and what else is on disk -->
             <div id="prompt-doc-meta" class="prompt-doc-meta"></div>
@@ -60,7 +69,9 @@
                              font-size:0.78rem;line-height:1.5;padding:10px;
                              border:1px solid #d7dee3;border-radius:8px;resize:vertical;"></textarea>
 
-            <div style="display:flex;gap:8px;align-items:center;margin-top:8px;flex-wrap:wrap;">
+            <details style="margin-top:8px;font-size:0.8rem;">
+                <summary style="cursor:pointer;">Advanced: restore or share this prompt</summary>
+                <div style="display:flex;gap:8px;align-items:center;margin-top:8px;flex-wrap:wrap;">
                 <button type="button" class="fbd-btn" onclick="loadPromptText('shared')"
                         title="Replace the editor's contents with the shared text">Load shared</button>
                 <button type="button" class="fbd-btn" onclick="loadPromptText('builtin')"
@@ -69,8 +80,8 @@
                         title="Delete your copy, so this prompt reads the shared text again">Revert to shared</button>
                 <button type="button" class="fbd-btn" id="prompt-upload-btn" onclick="uploadPrompt()"
                         title="Copy your version to the shared folder, for everyone">⬆ Upload to share</button>
-                <span id="prompt-editor-status" style="font-size:0.78rem;color:#555;"></span>
-            </div>
+                </div>
+            </details>
         </div>
         <div class="fbd-footer">
             <button type="button" class="fbd-btn" onclick="closePromptEditor()">Close</button>

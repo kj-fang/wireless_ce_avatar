@@ -124,6 +124,8 @@
         modal.classList.add('open');
         modal.setAttribute('aria-hidden', 'false');
         hideSkillOffer();
+        const advanced = el('prompt-advanced');
+        if (advanced) advanced.open = false;
         status('Loading…');
         try {
             await refreshStatus(false);
@@ -139,6 +141,39 @@
         modal.classList.remove('open');
         modal.setAttribute('aria-hidden', 'true');
         hideSkillOffer();
+    };
+
+    // Browsers deliberately expose only the chosen file's contents, never its
+    // path. Loading is a preview: the existing Save & use action performs the
+    // same server-side bundle validation as a hand-edited prompt.
+    window.choosePromptFile = async function (input) {
+        const file = input.files && input.files[0];
+        if (!file) return;
+        input.value = ''; // choosing the same file again should still fire change
+        if (!/\.md$/i.test(file.name) || file.size > 1024 * 1024) {
+            status('Choose a .md file smaller than 1 MB.', 'err');
+            return;
+        }
+        const bundle = docs.find((d) => d.kind === 'agent' && !d.shared_across_profiles);
+        if (!bundle) {
+            status('This agent has no three-section prompt document.', 'err');
+            return;
+        }
+        try {
+            const content = (await file.text()).replace(/^\uFEFF/, '');
+            if (!/^##\s+prompt\s*$/im.test(content) ||
+                !/^##\s+report\s*$/im.test(content) ||
+                !/^##\s+suggest_time\s*$/im.test(content)) {
+                status('The file needs ## prompt, ## report and ## suggest_time sections.', 'err');
+                return;
+            }
+            if (current !== bundle.doc) await selectDoc(bundle.doc);
+            el('prompt-editor-text').value = content;
+            hideSkillOffer();
+            status(`Loaded ${file.name} into the editor — review it, then Save & use.`, 'ok');
+        } catch (e) {
+            status(`Could not read ${file.name}: ${e.message}`, 'err');
+        }
     };
 
     // Swap the editor's contents for another source, without saving: this is

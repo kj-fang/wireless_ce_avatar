@@ -42,13 +42,27 @@
     IssueTimeStrategyBase.prototype._afterDisplayUpdate = function () {};
 
     // A log with no time axis (an unanchored dmesg, an unrecognised format)
-    // cannot be windowed, so anything typed or suggested here would go unused.
+    // cannot be windowed, so calendar fields would go unused. The AI button
+    // stays available: for unanchored dmesg it suggests *boot elapsed* offsets
+    // in a separate result view, never a fabricated wall-clock value.
     // Only what this disabled is re-enabled: _applyDateFieldState owns the rest.
     IssueTimeStrategyBase.prototype._applyTimeAxisState = function (hasAxis) {
         ['it-month', 'it-day', 'it-year', 'it-hour', 'it-min', 'it-sec', 'it-ms',
          'ai-time-btn', 'add-extra-issue-btn'].forEach(id => {
             const el = document.getElementById(id);
             if (!el) return;
+            // Unknown formats have no useful axis at all. Unanchored dmesg
+            // alone gets the separate, verified boot-elapsed AI workflow.
+            const keepAi = id === 'ai-time-btn' && !hasAxis &&
+                window.__logTimeFormat && window.__logTimeFormat.name === 'monotonic';
+            if (keepAi) {
+                el.classList.remove('it-axis-off');
+                if (el.dataset.axisDisabled) {
+                    el.disabled = false;
+                    delete el.dataset.axisDisabled;
+                }
+                return;
+            }
             if (!hasAxis) {
                 if (!el.disabled) el.dataset.axisDisabled = '1';
                 el.disabled = true;
@@ -244,6 +258,12 @@
                 return;
             }
             const sugg = data.suggestions || [];
+            if (data.time_basis === 'boot_elapsed') {
+                if (typeof showBootElapsedSuggestions === 'function') {
+                    showBootElapsedSuggestions(data);
+                }
+                return;
+            }
             const { chosen, bestIdx } = this._selectSuggestions(data, sugg);
             // Funnel into the existing capture popup (handles replace/append).
             const detected = chosen.map((s) => ({

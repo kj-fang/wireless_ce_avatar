@@ -119,7 +119,7 @@ def _bring_chrome_to_front(server_pid):
     except Exception as e:
         print(f'⚠️ [SendTo] _bring_chrome_to_front failed: {e}')
 
-def _build_startup_path(input_paths, sendto_token=None):
+def _build_startup_path(input_paths, sendto_token=None, default='/'):
     """Route any SendTo path straight to open_local_analysis and let that route
     do ALL validation (existence, directory-vs-file, allowed extension) so
     every rejection reason is surfaced to the user as a flash-modal on the
@@ -127,7 +127,7 @@ def _build_startup_path(input_paths, sendto_token=None):
     """
     candidate_paths = [p for p in input_paths if p]
     if not candidate_paths:
-        return '/'
+        return default
 
     if len(candidate_paths) > 1:
         print(f"⚠️ Multiple SendTo files were provided; only the first one will be used: {candidate_paths[0]}")
@@ -252,9 +252,12 @@ if __name__ == "__main__":
     parser.add_argument('--tray-mode', action='store_true', help='Run as tray manager')
     parser.add_argument('--silent-mode', action='store_true', default=False, help='Disable auto-opening analysis windows (TextAnalysisTool / Explorer) after parsing.')
     parser.add_argument('--sendto-token', type=str, default=None, help='SendTo security token (auto-set by shortcut, not for manual use).')
+    parser.add_argument('--handsfree', action='store_true', help='Open the Handsfree review dashboard instead of the home page.')
     parser.add_argument('input_paths', nargs='*', help='Optional local analysis file paths passed from Windows SendTo.')
     args = parser.parse_args()
-    startup_path = _build_startup_path(args.input_paths, sendto_token=args.sendto_token)
+    home_path = '/handsfree/' if args.handsfree else '/'
+    startup_path = _build_startup_path(args.input_paths, sendto_token=args.sendto_token,
+                                       default=home_path)
     from configs.global_configs import app_config
     app_config.silent_mode = args.silent_mode
     
@@ -355,7 +358,7 @@ if __name__ == "__main__":
     # Rebuild startup_path using THIS instance's token (app_config.sendto_token).
     # The CLI --sendto-token arg may be from a stale shortcut (previous run),
     # which would cause token validation to fail in open_local_analysis.
-    startup_path = _build_startup_path(args.input_paths)
+    startup_path = _build_startup_path(args.input_paths, default=home_path)
     # =========================================================================
     
     app_config.driver_manager.run_driver(socketio, app, port=port, startup_path=startup_path)

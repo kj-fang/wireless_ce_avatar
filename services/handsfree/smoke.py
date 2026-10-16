@@ -1840,6 +1840,106 @@ def smoke_time_coverage(tmp: Path) -> None:
           "Wi-Fi driver" in both and "BT driver" in both and "1/2" in both
           and "BT" not in bsod_assessment([{"wifi_fault": True}]), both)
 
+    # Two clocks: a customer in UTC-3 reports 15:00; the decoded log (decoder
+    # host GMT+8) covers 01:30–02:05 the NEXT day, so 15:00 = 02:00 in the
+    # log. The tz comes from system_info.txt beside the capture. Own subtree:
+    # the tz walk looks at a dir and its immediate children, so tmp/s8/* logs
+    # never see this file.
+    from datetime import datetime as _dt
+    ar_case = tmp / "s8_ar" / "case"
+    ar_log = ar_case / "WRT" / "x.etl.log"
+    ar_log.parent.mkdir(parents=True, exist_ok=True)
+    (ar_case / "system_info.txt").write_text(
+        json.dumps({"System Time Zone": "(UTC-03:00) City of Buenos Aires"}),
+        encoding="utf-8")
+    ar_log.write_text("06/21/2026-01:30:00.000 [0] first\n"
+                      "06/21/2026-02:05:00.000 [0] last\n", encoding="utf-8")
+    try:
+        n = CaseAnalysis(case_nbr="8", mode="full", wifi_or_bt="wifi",
+                         log_path=str(ar_log), issue_times=["06/20/2026 15:00:00"])
+        r._check_time_coverage(n)
+        check("S8.n UTC-3 customer: 15:00 maps to 02:00 next day inside the log -> "
+              "covered, alignment recorded (time zone, +11:00)",
+              n.time_mismatch == {}
+              and n.time_alignment.get("log_time") == "06/21/2026-02:00:00"
+              and n.time_alignment.get("customer_time") == "06/20/2026-15:00:00"
+              and n.time_alignment.get("anchor") == "tz_helper"
+              and n.time_alignment.get("offset") == "+11:00"
+              and "Buenos Aires" in n.time_alignment.get("customer_tz", ""),
+              f"{n.time_mismatch} {n.time_alignment}")
+
+        class _StubAgent:
+            def __init__(self):
+                self.issue_time = None
+                self._issue_time_time_only = True
+                self.issue_time_customer = None
+                self.issue_time_tz = ""
+                self.current_log_path = ""
+            def prime_with_context(self, **kw):
+                self.issue_time = _dt(2026, 6, 20, 15, 0)   # what the UI path would set
+            def chat(self, msg, use_tools=True, max_steps=1, step_callback=None):
+                return {"type": "report", "data": {
+                    "root_cause_summary": "deauth at the reported time",
+                    "confidence_score": 80, "recommended_actions": [],
+                    "involved_skills": ["Connectivity"]}}
+        stub = _StubAgent()
+        orig_build = HandsfreeRunner._build_agent
+        HandsfreeRunner._build_agent = lambda self, domain="wifi": stub
+        try:
+            r._run_agent(n, max_steps=1)
+        finally:
+            HandsfreeRunner._build_agent = orig_build
+        inc_n = n.incidents[0] if n.incidents else None
+        check("S8.o agent receives the LOG-frame issue time (02:00), incident keeps both clocks",
+              stub.issue_time == _dt(2026, 6, 21, 2, 0)
+              and stub.issue_time_customer == _dt(2026, 6, 20, 15, 0)
+              and stub._issue_time_time_only is False
+              and "Buenos Aires" in stub.issue_time_tz
+              and inc_n is not None
+              and inc_n.issue_time == "06/20/2026 15:00:00"
+              and inc_n.issue_time_customer == "06/20/2026-15:00:00"
+              and inc_n.issue_time_log == "06/21/2026-02:00:00"
+              and inc_n.time_anchor == "tz_helper",
+              f"agent={stub.issue_time} inc={inc_n}")
+        plain_n = compose_plain(n)
+        check("S8.p private draft shows both clocks and how they were aligned",
+              "Incident time: 06/20/2026 15:00:00 (customer, (UTC-03:00) City of Buenos Aires) "
+              "= 06/21/2026-02:00:00 (in the log)" in plain_n
+              and "Clock alignment: customer 06/20/2026-15:00:00" in plain_n
+              and "offset +11:00 via time zone" in plain_n,
+              plain_n[:600])
+
+        # Not covered: 10:00 customer = 21:00 log, the log runs 01:30–02:05.
+        # The public request states the log's range in the CUSTOMER's clock.
+        q = CaseAnalysis(case_nbr="9", mode="full", wifi_or_bt="wifi",
+                         log_path=str(ar_log), issue_times=["06/20/2026 10:00:00"])
+        r._check_time_coverage(q)
+        q.mode, q.log_request_reason = "request_logs", "log_not_covering"
+        public_q = compose_plain(q)
+        q.mode = "full"
+        private_q = compose_plain(q)
+        check("S8.q non-covering log: range shifted to the customer's clock in the public "
+              "request (no Taiwan times), both clocks in the private warning",
+              q.time_mismatch.get("log_first_customer") == "06/20/2026-14:30:00"
+              and q.time_mismatch.get("log_last_customer") == "06/20/2026-15:05:00"
+              and q.time_mismatch.get("issue_times_log") == ["06/20/2026-21:00:00"]
+              and q.time_mismatch.get("offset") == "+11:00"
+              and q.time_mismatch.get("log_first") == "06/21/2026-01:30:00"
+              and "covers 06/20/2026-14:30:00 – 06/20/2026-15:05:00 (your local time, "
+                  "(UTC-03:00) City of Buenos Aires)" in public_q
+              and "01:30" not in public_q and "02:05" not in public_q
+              and "= 06/20/2026-21:00:00 in the log's clock" in private_q
+              and "(log clock) = 06/20/2026-14:30:00 – 06/20/2026-15:05:00 (customer clock"
+                  in private_q,
+              f"{q.time_mismatch}\n{public_q}\n{private_q[:400]}")
+    finally:
+        shutil.rmtree(tmp / "s8_ar", ignore_errors=True)
+    check("S8.r folder-stamp alignment recorded (00994274 pattern: +08:00 via the capture folder)",
+          e.time_alignment.get("anchor") == "folder_stamp"
+          and e.time_alignment.get("offset") == "+08:00"
+          and e.time_alignment.get("log_time") == "01/14/2026-21:55:11",
+          str(e.time_alignment))
+
 
 # ---------------------------------------------------------------- S10
 def smoke_yb_etl_pick() -> None:

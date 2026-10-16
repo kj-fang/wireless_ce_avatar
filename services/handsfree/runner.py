@@ -186,6 +186,22 @@ def _folder_timestamp(etl_path: str):
         return None
 
 
+def _fmt_offset(delta) -> str:
+    """A clock offset as '+11:00' / '-03:30' (rounded to the minute)."""
+    minutes = int(round(delta.total_seconds() / 60.0))
+    sign = "-" if minutes < 0 else "+"
+    minutes = abs(minutes)
+    return f"{sign}{minutes // 60:02d}:{minutes % 60:02d}"
+
+
+# How the customer's issue time was placed in the decoded log's clock.
+ANCHOR_AS_IS = "as_is"            # same clock (or nothing known): value taken as given
+ANCHOR_TZ = "tz_helper"           # system_info.txt time zone vs the decode host (GMT+8)
+ANCHOR_FOLDER = "folder_stamp"    # WRT folder stamp (DUT clock) vs the log's last line
+ANCHOR_LABELS = {ANCHOR_AS_IS: "same clock", ANCHOR_TZ: "time zone",
+                 ANCHOR_FOLDER: "capture-folder stamp"}
+
+
 
 def _resolve_issue_domain(reader_domain: str, subcategory: str,
                           issue_type: str) -> str:
@@ -238,7 +254,11 @@ class StageStatus:
 
 @dataclass
 class IncidentReport:
-    issue_time: str = ""
+    issue_time: str = ""             # as reported (the customer's clock)
+    issue_time_customer: str = ""    # same, as a full datetime in the customer's clock
+    issue_time_log: str = ""         # the same moment in the decoded log's clock
+    time_anchor: str = ""            # how the two were aligned: tz_helper |
+                                     #   folder_stamp | as_is
     user_message: str = ""
     result_type: str = ""            # report | partial_report | text | error
     report: Optional[dict] = None    # submit_final_report args
@@ -280,6 +300,10 @@ class CaseAnalysis:
     stages: list[StageStatus] = field(default_factory=list)
     echo_insights: list = field(default_factory=list)  # Echo KB root-cause answers
     time_mismatch: dict = field(default_factory=dict)  # log doesn't cover issue time
+    time_alignment: dict = field(default_factory=dict) # how the customer's issue time was
+                                                       #   placed in the log's clock:
+                                                       #   customer_time, log_time,
+                                                       #   customer_tz, anchor, offset
     missing_info: list = field(default_factory=list)   # [{item, reason}] case-info gaps
     env_detail: dict = field(default_factory=dict)     # IPS Environment Details Q&A form
     issue_domain: str = ""                             # debug-checklist domain (tab name)
@@ -1049,31 +1073,106 @@ class HandsfreeRunner:
 
         grace = timedelta(minutes=grace_minutes)
         checked: list[str] = []
-        covered = False
+        mapped: list[str] = []       # each checked value in the log's clock
+        covered = None               # (customer_dt, log_dt, anchor) that matched
+        customer_tz = self._customer_tz(analysis.log_path)
         for raw in analysis.issue_times:
-            cands = self._issue_time_candidates(raw, analysis.log_path, first, last)
+            cands = self._issue_time_candidates_tagged(raw, analysis.log_path, first, last)
             if not cands:
                 continue
             checked.append(str(raw))
-            for cand in cands:
+            for cust, cand, anchor in cands:
                 if first - grace <= cand <= last + grace:
-                    covered = True
+                    covered = (cust, cand, anchor)
                     break
             if covered:
                 break
+            best = self._preferred_candidate(cands)
+            mapped.append(format_issue_time(best[1], with_ms=False) if best else "")
 
-        if checked and not covered:
+        if covered:
+            cust, cand, anchor = covered
+            analysis.time_alignment = {
+                "customer_time": format_issue_time(cust, with_ms=False),
+                "log_time": format_issue_time(cand, with_ms=False),
+                "customer_tz": customer_tz,
+                "anchor": anchor,
+                "offset": _fmt_offset(cand - cust),
+            }
+            if anchor != ANCHOR_AS_IS:
+                self.progress(
+                    "decode_etl",
+                    f"issue time {analysis.time_alignment['customer_time']} (customer) = "
+                    f"{analysis.time_alignment['log_time']} (log clock, "
+                    f"{analysis.time_alignment['offset']} via {ANCHOR_LABELS[anchor]})")
+        elif checked:
             analysis.time_mismatch = {
                 "issue_times": checked,
                 "log_first": format_issue_time(first, with_ms=False),
                 "log_last": format_issue_time(last, with_ms=False),
                 "grace_minutes": grace_minutes,
+                "customer_tz": customer_tz,
             }
+            if any(mapped):
+                analysis.time_mismatch["issue_times_log"] = mapped
+            # The log's range in the customer's clock, so the public request
+            # never shows the customer Taiwan times.
+            shift = self._log_to_customer_shift(analysis.log_path, first, last, customer_tz)
+            if shift:
+                cust_first, cust_last, anchor, offset = shift
+                analysis.time_mismatch.update({
+                    "log_first_customer": format_issue_time(cust_first, with_ms=False),
+                    "log_last_customer": format_issue_time(cust_last, with_ms=False),
+                    "anchor": anchor,
+                    "offset": _fmt_offset(offset),
+                })
             self.progress(
                 "decode_etl",
                 f"WARNING: log covers {analysis.time_mismatch['log_first']} – "
                 f"{analysis.time_mismatch['log_last']} but the reported issue "
                 f"time(s) {', '.join(checked)} are OUTSIDE this window")
+
+    @staticmethod
+    def _customer_tz(log_path: str) -> str:
+        """The customer's time zone name (system_info.txt / sidecar), '' when unknown."""
+        try:
+            from utils.timezone_utils import get_effective_timezone
+            return get_effective_timezone(log_path) or ""
+        except Exception:
+            return ""
+
+    @staticmethod
+    def _log_to_customer_shift(log_path: str, first, last, customer_tz: str):
+        """(first, last, anchor, offset) with the log's range expressed in the
+        customer's clock: the tz helper when it moves the time, else the
+        capture-folder stamp, else None (same clock as far as we know)."""
+        from datetime import timedelta
+        if first is None or last is None:
+            return None
+        if customer_tz:
+            try:
+                from utils.timezone_utils import taiwan_to_local
+                cf, cl = taiwan_to_local(first, customer_tz), taiwan_to_local(last, customer_tz)
+                if cf is not None and cl is not None and cf != first:
+                    return cf, cl, ANCHOR_TZ, first - cf
+            except Exception:
+                pass
+        folder_ts = _folder_timestamp(log_path)
+        if folder_ts is not None:
+            offset = last - folder_ts
+            if timedelta(minutes=20) <= abs(offset) <= timedelta(hours=26):
+                return first - offset, last - offset, ANCHOR_FOLDER, offset
+        return None
+
+    @staticmethod
+    def _preferred_candidate(cands: list):
+        """Of the tagged candidates for one value, the one to quote when none
+        falls inside the log: tz helper, then folder stamp, then as-is."""
+        for want in (ANCHOR_TZ, ANCHOR_FOLDER, ANCHOR_AS_IS):
+            for c in cands:
+                if c[2] == want:
+                    return c
+        return cands[0] if cands else None
 
     # Asserts count as evidence for THIS issue only inside this window
     # around the reported time (minutes before / after).
@@ -1095,14 +1194,23 @@ class HandsfreeRunner:
             the DUT clock; the helper alone rejected a log that covered the
             issue.
         """
+        return [c for c, _anchor in
+                HandsfreeRunner._log_frame_candidates_tagged(dt, log_path, first, last)]
+
+    @staticmethod
+    def _log_frame_candidates_tagged(dt, log_path: str, first, last) -> list:
+        """_log_frame_candidates with the anchor that produced each value:
+        [(log_dt, ANCHOR_AS_IS | ANCHOR_TZ | ANCHOR_FOLDER)], as-is first."""
         from datetime import timedelta
-        cands = [dt]
+        cands = [(dt, ANCHOR_AS_IS)]
+        seen = [dt]
         try:
             from utils.issue_time_ai import determine_issue_time_frames
             mapped = determine_issue_time_frames(
                 dt, [log_path], first, last).get("log_frame")
-            if mapped and mapped not in cands:
-                cands.append(mapped)
+            if mapped and mapped not in seen:
+                cands.append((mapped, ANCHOR_TZ))
+                seen.append(mapped)
         except Exception:
             pass
         folder_ts = _folder_timestamp(log_path)
@@ -1110,8 +1218,8 @@ class HandsfreeRunner:
             offset = last - folder_ts
             if abs(offset) <= timedelta(hours=26) and abs(offset) >= timedelta(minutes=20):
                 shifted = dt + offset
-                if shifted not in cands:
-                    cands.append(shifted)
+                if shifted not in seen:
+                    cands.append((shifted, ANCHOR_FOLDER))
         return cands
 
     @staticmethod
@@ -1122,46 +1230,69 @@ class HandsfreeRunner:
         the clock offsets _log_frame_candidates applies) and each placement
         mapped the same way. [] when the value does not parse, or when a
         clock-only value has no log range to be placed on."""
+        return [c for _cust, c, _anchor in
+                HandsfreeRunner._issue_time_candidates_tagged(raw, log_path, first, last)]
+
+    @staticmethod
+    def _issue_time_candidates_tagged(raw: str, log_path: str, first, last) -> list:
+        """_issue_time_candidates keeping the customer-clock value each log
+        candidate came from: [(customer_dt, log_dt, anchor)]. For a clock-only
+        value customer_dt is the clock placed on a date the log spans."""
         from datetime import datetime, timedelta
         from utils.issue_time_utils import parse_issue_time_string
         dt, time_only = parse_issue_time_string(str(raw))
         if dt is None:
             return []
         if not time_only:
-            return HandsfreeRunner._log_frame_candidates(dt, log_path, first, last)
+            return [(dt, c, a) for c, a in
+                    HandsfreeRunner._log_frame_candidates_tagged(dt, log_path, first, last)]
         if first is None or last is None:
             return []
         out: list = []
+        seen: list = []
         day0 = first.date() - timedelta(days=1)
         days = min((last.date() - first.date()).days, 7) + 2
         for n in range(days + 1):
             placed = datetime.combine(day0 + timedelta(days=n), dt.time())
-            for cand in HandsfreeRunner._log_frame_candidates(placed, log_path, first, last):
-                if cand not in out:
-                    out.append(cand)
+            for cand, anchor in HandsfreeRunner._log_frame_candidates_tagged(
+                    placed, log_path, first, last):
+                if cand not in seen:
+                    seen.append(cand)
+                    out.append((placed, cand, anchor))
         return out
 
+    def _align_issue_time(self, raw: str, log_path: str, first, last) -> Optional[dict]:
+        """One reported issue time placed in the log's clock:
+        {customer: dt, log: dt, anchor, inside: bool}. The candidate that
+        falls inside the log window wins (inside=True); otherwise, full
+        datetimes only, the tz helper's mapping, then the folder stamp's,
+        then the value as-is (inside=False). A clock-only value that occurs
+        nowhere in the log gives None, as does an unparseable one."""
+        from utils.issue_time_utils import parse_issue_time_string
+        cands = self._issue_time_candidates_tagged(raw, log_path, first, last)
+        if not cands:
+            return None
+        if first and last:
+            for cust, cand, anchor in cands:
+                if first <= cand <= last:
+                    return {"customer": cust, "log": cand, "anchor": anchor, "inside": True}
+        if parse_issue_time_string(str(raw))[1]:
+            return None          # clock-only, never inside the log: no anchor
+        cust, cand, anchor = self._preferred_candidate(cands)
+        return {"customer": cust, "log": cand, "anchor": anchor, "inside": False}
+
     def _issue_datetime_in_log_frame(self, analysis: CaseAnalysis):
-        """First reported issue time as a full datetime in the log's clock:
-        the candidate that falls inside the log window wins, else (full
-        datetimes only) the tz helper's mapping. A clock-only value that
-        occurs nowhere in the log gives None, as does an unparseable one."""
-        from utils.issue_time_utils import (parse_issue_time_string,
-                                            read_log_time_range)
+        """First reported issue time as a full datetime in the log's clock
+        (see _align_issue_time), or None."""
+        from utils.issue_time_utils import read_log_time_range
         if not analysis.issue_times or not analysis.log_path:
             return None
         first, last = read_log_time_range(analysis.log_path)
         for raw in analysis.issue_times:
-            cands = self._issue_time_candidates(raw, analysis.log_path, first, last)
-            if not cands:
+            if not self._issue_time_candidates_tagged(raw, analysis.log_path, first, last):
                 continue
-            if first and last:
-                for cand in cands:
-                    if first <= cand <= last:
-                        return cand
-            if parse_issue_time_string(str(raw))[1]:
-                return None          # clock-only, never inside the log: no anchor
-            return cands[1] if len(cands) > 1 else cands[0]
+            align = self._align_issue_time(raw, analysis.log_path, first, last)
+            return align["log"] if align else None
         return None
 
     def _run_bsod_branch(self, analysis: CaseAnalysis, case_ctx,
@@ -1489,6 +1620,18 @@ class HandsfreeRunner:
             attachment_time=analysis.attachment_time,
         )
 
+        # The log's clock (decoder host, GMT+8) vs the customer's: the agent's
+        # PreScan window must sit on the reported moment AS WRITTEN IN THE LOG.
+        log_first = log_last = None
+        customer_tz = ""
+        if analysis.wifi_or_bt == "wifi" and analysis.log_path:
+            try:
+                from utils.issue_time_utils import read_log_time_range
+                log_first, log_last = read_log_time_range(analysis.log_path)
+                customer_tz = self._customer_tz(analysis.log_path)
+            except Exception as e:
+                print(f"[handsfree.runner] log time range unavailable: {e}")
+
         times = analysis.issue_times or [""]
         for t in times:
             inc = IncidentReport(issue_time=t)
@@ -1501,14 +1644,40 @@ class HandsfreeRunner:
                         "content": str(step.get("content") or "")[:_STEP_CONTENT_CAP],
                     })
 
-            # Mirror the UI: per-incident issue-time override on the agent.
+            # Mirror the UI: per-incident issue-time override on the agent —
+            # in the LOG's clock when the reported time maps inside the log
+            # (the same alignment the coverage check accepted), else as before.
             if t:
                 try:
-                    from utils.issue_time_utils import parse_issue_time_string, resolve_issue_time
-                    dt, _time_only = parse_issue_time_string(t)
-                    if dt is not None:
-                        resolved, _src = resolve_issue_time(t, analysis.log_path)
-                        agent.issue_time = resolved or dt
+                    from utils.issue_time_utils import (format_issue_time,
+                                                        parse_issue_time_string,
+                                                        resolve_issue_time)
+                    align = None
+                    if log_first is not None and log_last is not None:
+                        align = self._align_issue_time(t, analysis.log_path,
+                                                       log_first, log_last)
+                    if align and align["inside"]:
+                        agent.issue_time = align["log"]
+                        for attr, val in (("_issue_time_time_only", False),
+                                          ("issue_time_customer", align["customer"]),
+                                          ("issue_time_tz", customer_tz)):
+                            if hasattr(agent, attr):
+                                setattr(agent, attr, val)
+                        inc.issue_time_customer = format_issue_time(align["customer"], with_ms=False)
+                        inc.issue_time_log = format_issue_time(align["log"], with_ms=False)
+                        inc.time_anchor = align["anchor"]
+                        if align["anchor"] != ANCHOR_AS_IS:
+                            self.progress(
+                                "agent_analysis",
+                                f"issue time {inc.issue_time_customer} (customer) = "
+                                f"{inc.issue_time_log} (log, "
+                                f"{_fmt_offset(align['log'] - align['customer'])} via "
+                                f"{ANCHOR_LABELS[align['anchor']]})")
+                    else:
+                        dt, _time_only = parse_issue_time_string(t)
+                        if dt is not None:
+                            resolved, _src = resolve_issue_time(t, analysis.log_path)
+                            agent.issue_time = resolved or dt
                 except Exception as e:
                     print(f"[handsfree.runner] issue-time override failed ({t}): {e}")
 

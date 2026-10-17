@@ -15,9 +15,9 @@
         </div>
         <div class="fbd-body">
             <div style="font-size:0.82rem;color:#555;margin-bottom:10px;">
-                Choose a three-section .md file or edit below, then Save &amp; use.
-                This changes only this agent on this machine; the next question
-                uses it without a restart.
+                <strong>① Prompt.</strong> Choose a three-section .md file or edit
+                below. This changes only this agent on this machine; the next
+                question uses it without a restart.
             </div>
 
             <details id="prompt-advanced" style="margin-bottom:8px;">
@@ -47,6 +47,32 @@
                       style="width:100%;min-height:46vh;font-family:Consolas,monospace;
                              font-size:0.78rem;line-height:1.5;padding:10px;
                              border:1px solid #d7dee3;border-radius:8px;resize:vertical;"></textarea>
+
+            <!-- Step 2. Appears once the prompt has actually been edited, and
+                 Save & use stays disabled until it is answered: a retargeted
+                 agent reading the old domain's skills is the one mistake this
+                 panel can lead someone into. -->
+            <div id="prompt-skill-step"
+                 style="display:none;align-items:center;gap:10px;flex-wrap:wrap;
+                        font-size:0.78rem;color:#334;background:#f0f6ff;
+                        border:1px solid #bac8ff;border-radius:8px;
+                        padding:8px 10px;margin-top:8px;">
+                <span style="flex:1;min-width:230px;">
+                    <strong>② Skills.</strong> The prompt decides what this agent
+                    looks for; the <strong>skills</strong> decide which log lines
+                    it is given. Switch those too?
+                </span>
+                <button type="button" class="fbd-btn primary" id="prompt-skill-switch"
+                        onclick="chooseSkills('switch')"
+                        title="Pick a skills YAML now; nothing is saved until Save &amp; use">
+                    Switch skills…
+                </button>
+                <button type="button" class="fbd-btn" id="prompt-skill-keep"
+                        onclick="chooseSkills('keep')"
+                        title="Keep the skills this agent already has">
+                    Keep skills
+                </button>
+            </div>
 
             <details style="margin-top:8px;font-size:0.8rem;">
                 <summary style="cursor:pointer;">Advanced: restore or share this prompt</summary>

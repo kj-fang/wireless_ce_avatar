@@ -14,6 +14,10 @@
     let docs = [];          // from /prompts/status
     let current = null;     // the selected document's id, e.g. "linux_prompt"
     let loaded = {};        // the four texts of the selected document
+    //: null until the skills question is answered for this edit; then
+    //: "switch" or "keep". Save & use waits on it, so a retargeted agent
+    //: cannot be saved while still reading the old domain's skills.
+    let skillChoice = null;
 
     const el = (id) => document.getElementById(id);
     const status = (msg, kind) => {
@@ -94,6 +98,7 @@
 
     async function selectDoc(docId) {
         current = docId;
+        skillChoice = null;
         renderTabs();
         renderMeta();
         status('Loading…');
@@ -101,6 +106,7 @@
             loaded = await call(`/prompts/get?doc=${encodeURIComponent(docId)}`);
             el('prompt-editor-text').value = loaded.live || '';
             el('prompt-editor-file').textContent = loaded.filename || '';
+            refreshSaveState();
             status('');
         } catch (e) {
             status(e.message, 'err');
@@ -124,6 +130,8 @@
         modal.setAttribute('aria-hidden', 'false');
         const advanced = el('prompt-advanced');
         if (advanced) advanced.open = false;
+        skillChoice = null;
+        refreshSaveState();
         status('Loading…');
         try {
             await refreshStatus(false);
@@ -166,7 +174,9 @@
             }
             if (current !== bundle.doc) await selectDoc(bundle.doc);
             el('prompt-editor-text').value = content;
-                status(`Loaded ${file.name} into the editor — review it, then Save & use.`, 'ok');
+            refreshSaveState();
+            status(`Loaded ${file.name} into the editor — review it, then answer `
+                   + `the skills question below.`, 'ok');
         } catch (e) {
             status(`Could not read ${file.name}: ${e.message}`, 'err');
         }
@@ -181,62 +191,92 @@
             return;
         }
         el('prompt-editor-text').value = text;
+        refreshSaveState();
         status(`Loaded the ${which === 'builtin' ? 'built-in' : which} text — not saved yet.`);
     };
 
     // Changing the prompt is only half of retargeting an agent: the prompt
     // decides what it looks for, the skills decide which lines it is given to
-    // look at. A new domain almost always needs both, so the saved prompt
-    // offers the other half — but the panel has just closed, so the offer is
-    // a toast rather than a banner inside it. Its action switches the skills;
-    // dismissing it (or letting it expire) keeps them, which is the right
-    // default: tuning the wording of one prompt needs no skill change.
-    function offerSkillSwap(lead, offerSkills) {
-        const canSwitch = offerSkills && typeof appendSkillsFromYaml === 'function';
-        if (typeof showToast !== 'function') return;
-        showToast({
-            message: canSwitch
-                ? `${lead} The skills decide which log lines it reads — switch those too?`
-                : lead,
-            actionLabel: canSwitch ? 'Switch skills…' : undefined,
-            onAction: canSwitch ? switchSkillsFromPrompt : undefined,
-            // Long enough to be a decision rather than something to catch.
-            ttlMs: canSwitch ? 45000 : 12000,
-        });
+    // look at. So the panel is two numbered steps — edit the prompt, then
+    // answer the skills question — and Save & use is the end of both rather
+    // than something that happens before the second one is considered.
+    //
+    // The question only appears for a document that decides what the agent IS
+    // (the bundle or the prompt, not the report, the issue-time briefing or
+    // the engine's shared three) and only once the text has actually moved:
+    // fixing a typo is not a change of domain.
+    function needsSkillStep() {
+        const doc = docs.find((d) => d.doc === current);
+        const identity = !!doc && (doc.kind === 'prompt' || doc.kind === 'agent')
+            && !doc.shared_across_profiles;
+        return identity && textChanged() && typeof appendSkillsFromYaml === 'function';
     }
 
-    async function switchSkillsFromPrompt() {
-        await appendSkillsFromYaml();
-        // appendSkillsFromYaml reports into the sidebar's status line; say the
-        // outcome where the person is looking instead.
-        const sidebar = document.getElementById('skill-editor-status');
-        const said = (sidebar && sidebar.textContent || '').trim();
-        if (typeof showToast === 'function') {
-            showToast({ message: said || 'Skills unchanged.', ttlMs: 12000 });
+    function textChanged() {
+        const box = el('prompt-editor-text');
+        if (!box) return false;
+        return (loaded.live || '').trim() !== (box.value || '').trim();
+    }
+
+    // One place decides what the footer button may do, so the rule cannot
+    // drift between the places that change the state it reads.
+    function refreshSaveState() {
+        const step = el('prompt-skill-step');
+        const save = el('prompt-save-btn');
+        const wanted = needsSkillStep();
+        if (step) step.style.display = wanted && !skillChoice ? 'flex' : 'none';
+        if (!save) return;
+        if (!textChanged()) {
+            save.disabled = true;
+            save.title = 'Edit the prompt first — there is nothing to save yet.';
+        } else if (wanted && !skillChoice) {
+            save.disabled = true;
+            save.title = 'Answer the skills question above first.';
+        } else {
+            save.disabled = false;
+            save.title = 'Save this prompt; the next question uses it';
         }
     }
-    window.switchSkillsFromPrompt = switchSkillsFromPrompt;
+
+    // The question and the button follow the text, so typing the prompt back
+    // to what it was withdraws both, and loading a .md file raises them.
+    document.addEventListener('DOMContentLoaded', () => {
+        const box = el('prompt-editor-text');
+        if (box) box.addEventListener('input', refreshSaveState);
+        refreshSaveState();
+    });
+
+    window.chooseSkills = async function (choice) {
+        skillChoice = choice === 'switch' ? 'switch' : 'keep';
+        refreshSaveState();
+        if (skillChoice === 'keep') {
+            status('Skills left as they are. Save & use when ready.', 'ok');
+            return;
+        }
+        status('Opening the skills file picker…');
+        await appendSkillsFromYaml();
+        // appendSkillsFromYaml reports into the sidebar's status line, which
+        // is behind this panel, so repeat its outcome where it can be seen.
+        const sidebar = document.getElementById('skill-editor-status');
+        const said = (sidebar && sidebar.textContent || '').trim();
+        status(said || 'Skills unchanged.', said.startsWith('✘') ? 'err' : 'ok');
+    };
 
     // Only the document that decides what the agent IS. Saving a report
     // skeleton, or one of the engine's shared documents, is not a change of
-    // domain and must not nag.
-    const isIdentityDoc = (docId) => {
-        const doc = docs.find((d) => d.doc === docId);
-        return !!doc && (doc.kind === 'prompt' || doc.kind === 'agent')
-            && !doc.shared_across_profiles;
-    };
-
     window.savePrompt = async function () {
         const text = el('prompt-editor-text').value;
         const doc = docs.find((d) => d.doc === current);
+        // The button is disabled in both of these cases; the checks stand for
+        // a keyboard activation or a call from the console.
+        if (!textChanged() || (needsSkillStep() && !skillChoice)) {
+            refreshSaveState();
+            return;
+        }
         if (doc && doc.shared_across_profiles &&
             !confirm('This prompt is used by every agent, not just this one. Save it?')) {
             return;
         }
-        // Whether the live text really moved decides whether this was a change
-        // of domain or a wording tweak -- and so whether to offer the skills.
-        const changed = (loaded.live || '').trim() !== text.trim();
-        const identity = isIdentityDoc(current);
         status('Saving…');
         try {
             const data = await call('/prompts/save', {
@@ -244,15 +284,16 @@
                 headers: { 'Content-Type': 'application/json' },
                 body: JSON.stringify({ doc: current, text: text }),
             });
-            await refreshStatus(true);
-            renderMeta();
-            loaded = await call(`/prompts/get?doc=${encodeURIComponent(current)}`);
-            const saved = data.message || 'Saved.';
-            // Save & use is the end of the job: the prompt is live, so the
-            // panel gets out of the way instead of leaving the person to
-            // find the Close button.
+            // Both steps are done, so the panel gets out of the way instead of
+            // leaving the person to find the Close button.
             closePromptEditor();
-            offerSkillSwap(saved, identity && changed);
+            if (typeof showToast === 'function') {
+                showToast({
+                    message: (data.message || 'Saved.')
+                        + (skillChoice === 'switch' ? '' : ' Skills left as they are.'),
+                    ttlMs: 12000,
+                });
+            }
         } catch (e) {
             status(e.message, 'err');
         }

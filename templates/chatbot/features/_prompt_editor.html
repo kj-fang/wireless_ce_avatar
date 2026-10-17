@@ -1,0 +1,102 @@
+<!-- ===== Prompt editor modal =========================================
+     The skills editor next door tunes which lines the agent reads. This one
+     tunes what the agent IS: its identity, what it looks for, and the shape
+     of its report. Same lifecycle (shared folder / your own copy / built-in),
+     same modal shell, so the two read as one feature with two halves.
+     Included only for a profile whose UI config enables prompt_editor.
+================================================================== -->
+<div id="prompt-editor-modal" class="fbd-modal" aria-hidden="true">
+    <div class="fbd-backdrop" onclick="closePromptEditor()"></div>
+    <div class="fbd-card" role="dialog" aria-modal="true" style="width: min(900px, 96vw);">
+        <div class="fbd-header">
+            <h3>Edit agent prompts</h3>
+            <span class="fbd-vote-badge" id="prompt-editor-file"></span>
+            <button type="button" class="fbd-close" onclick="closePromptEditor()" aria-label="Close">×</button>
+        </div>
+        <div class="fbd-body">
+            <div style="font-size:0.82rem;color:#555;margin-bottom:10px;">
+                <strong>① Prompt.</strong> Choose a three-section .md file or edit
+                below. A new conversation starts with this agent's original
+                prompt; changes here apply only to this conversation.
+            </div>
+
+            <details id="prompt-advanced" style="margin-bottom:8px;">
+                <summary style="cursor:pointer;font-size:0.8rem;">Advanced: individual sections &amp; prompt sources</summary>
+                <div id="prompt-doc-tabs" class="prompt-doc-tabs" style="margin-top:8px;"></div>
+            </details>
+
+            <div style="display:flex;gap:8px;align-items:center;margin-bottom:8px;flex-wrap:wrap;">
+                <input id="prompt-file-input" type="file" accept=".md,text/markdown,text/plain" hidden
+                       onchange="choosePromptFile(this)">
+                <button type="button" class="fbd-btn" onclick="document.getElementById('prompt-file-input').click()"
+                        title="Load a local .md file into the editor; nothing is saved until Save &amp; use">Choose .md file…</button>
+                <span id="prompt-editor-status" role="status" style="font-size:0.78rem;color:#555;"></span>
+            </div>
+
+            <!-- Where the live text comes from, and what else is on disk -->
+            <div id="prompt-doc-meta" class="prompt-doc-meta"></div>
+
+            <div id="prompt-shared-warning"
+                 style="display:none;font-size:0.78rem;color:#92400e;background:#fff7ed;
+                        border:1px solid #fdba74;border-radius:6px;padding:6px 9px;margin-bottom:8px;">
+                ⚠️ This prompt is sent by the engine on its own behalf, so it
+                applies to <strong>every</strong> agent, not just this one.
+            </div>
+
+            <textarea id="prompt-editor-text" spellcheck="false"
+                      style="width:100%;min-height:46vh;font-family:Consolas,monospace;
+                             font-size:0.78rem;line-height:1.5;padding:10px;
+                             border:1px solid #d7dee3;border-radius:8px;resize:vertical;"></textarea>
+
+            <!-- Step 2. Appears once the prompt has actually been edited, and
+                 Save & use stays disabled until it is answered: a retargeted
+                 agent reading the old domain's skills is the one mistake this
+                 panel can lead someone into. -->
+            <div id="prompt-skill-step"
+                 style="display:none;align-items:center;gap:10px;flex-wrap:wrap;
+                        font-size:0.78rem;color:#334;background:#f0f6ff;
+                        border:1px solid #bac8ff;border-radius:8px;
+                        padding:8px 10px;margin-top:8px;">
+                <span style="flex:1;min-width:230px;">
+                    <strong>② Skills.</strong> The prompt decides what this agent
+                    looks for; the <strong>skills</strong> decide which log lines
+                    it is given. Switch those too?
+                </span>
+                <button type="button" class="fbd-btn primary" id="prompt-skill-replace"
+                        onclick="chooseSkills('replace')"
+                        title="Pick a skills YAML; it becomes this agent's whole skill set. For a new domain — the old domain's skills are dropped so they cannot be chosen.">
+                    Replace skills…
+                </button>
+                <button type="button" class="fbd-btn" id="prompt-skill-add"
+                        onclick="chooseSkills('append')"
+                        title="Pick a skills YAML and add it to the ones this agent already has">
+                    Add skills…
+                </button>
+                <button type="button" class="fbd-btn" id="prompt-skill-keep"
+                        onclick="chooseSkills('keep')"
+                        title="Keep the skills this agent already has">
+                    Keep skills
+                </button>
+            </div>
+
+            <details style="margin-top:8px;font-size:0.8rem;">
+                <summary style="cursor:pointer;">Advanced: load or restore prompt text</summary>
+                <div style="display:flex;gap:8px;align-items:center;margin-top:8px;flex-wrap:wrap;">
+                <button type="button" class="fbd-btn" onclick="loadPromptText('shared')"
+                        title="Replace the editor's contents with the shared text">Load shared</button>
+                <button type="button" class="fbd-btn" onclick="loadPromptText('builtin')"
+                        title="Replace the editor's contents with the text this agent ships with">Load built-in</button>
+                <button type="button" class="fbd-btn" id="prompt-revert-btn" onclick="revertPrompt()"
+                        title="Use the original prompt again in this conversation">Restore original</button>
+                </div>
+            </details>
+        </div>
+        <div class="fbd-footer">
+            <button type="button" class="fbd-btn" onclick="closePromptEditor()">Close</button>
+            <button type="button" class="fbd-btn primary" id="prompt-save-btn"
+                    onclick="savePrompt()">Save &amp; use</button>
+        </div>
+    </div>
+</div>
+
+<script src="/static/chatbot/js/features/prompt-editor.js"></script>

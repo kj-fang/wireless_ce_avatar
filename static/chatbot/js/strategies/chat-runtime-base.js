@@ -26,6 +26,7 @@
         // line is a warning rather than a detail.
         const blocked = !!(info && info.supports_windowing === false);
         window.__logTimeAxis = !blocked;
+        window.__logTimeFormat = info || null;
         const el = document.getElementById('it-log-format');
         if (!el) return;
         const note = (info && info.note) ? String(info.note) : '';
@@ -45,7 +46,7 @@
         wrapper.className = 'msg-row assistant';
         wrapper.innerHTML =
             `<div class="avatar-icon">🕒</div>` +
-            `<div style="flex:1;"><span class="incident-tag">Incident ${idx} / ${total}` +
+            `<div class="msg-body"><span class="incident-tag">Incident ${idx} / ${total}` +
             (fmt ? ` &nbsp;·&nbsp; ${fmt}` : '') + `</span></div>`;
         document.getElementById('chat-window').appendChild(wrapper);
         scrollBottom();
@@ -149,9 +150,7 @@
         const wrapper = document.createElement('div');
         wrapper.className = 'msg-row assistant';
         wrapper.style.maxWidth = '95%';
-        // min-width:0 lets a wide code block scroll inside the card instead of
-        // stretching the whole report past the chat column.
-        wrapper.innerHTML = `<div class="avatar-icon">🤖</div><div style="flex:1;min-width:0;">${html}${turnId ? renderFeedbackWidget(turnId) : ''}</div>`;
+        wrapper.innerHTML = `<div class="avatar-icon">🤖</div><div class="msg-body">${html}${turnId ? renderFeedbackWidget(turnId) : ''}</div>`;
         document.getElementById('chat-window').appendChild(wrapper);
         scrollBottom();
 
@@ -275,7 +274,12 @@
         // Soft gate: first round without an Issue Time. Ask for explicit
         // confirmation via a modal dialog before proceeding.
         const firstRound = !firstRoundSent;
-        if (firstRound && !issueTime) {
+        // A boot-elapsed offset in the question is an issue time for a log
+        // that has no calendar — asking to confirm "no issue time" there sends
+        // the user back to the AI dialog that produced the offset.
+        const carriesBootElapsed = typeof questionCarriesBootElapsed === 'function'
+            && questionCarriesBootElapsed(desc);
+        if (firstRound && !issueTime && !carriesBootElapsed) {
             const confirmed = await confirmNoIssueTime();
             if (!confirmed) {
                 input.focus();
@@ -648,6 +652,21 @@
             // genuinely absent there rather than merely optional.
             if (typeof refreshIssueWindowBounds === 'function') refreshIssueWindowBounds();
             if (typeof validateUserInput === 'function') validateUserInput();
+            // Only a newly loaded, unanchored dmesg opens the AI consent gate.
+            // The user must still allow the LLM request. Repeated refreshes of
+            // the same file (and history restores) must not nag or auto-send.
+            if (!skipIssueTimeAutofill && data.log_time_format &&
+                data.log_time_format.name === 'monotonic' &&
+                data.log_time_format.supports_windowing === false &&
+                window.__bootSuggestPromptedPath !== path) {
+                setTimeout(() => {
+                    if (window.__setLogGen === logGen &&
+                        window.__bootSuggestPromptedPath !== path &&
+                        typeof suggestIssueTimesWithAI === 'function') {
+                        suggestIssueTimesWithAI();
+                    }
+                }, 700);
+            }
         } catch (e) {
             showStatus(statusEl, '✘ Network error: ' + e.message, 'err');
         }

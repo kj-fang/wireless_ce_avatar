@@ -117,6 +117,9 @@ SPECLETS_DIR_bkup = _os.environ.get("INTELAVATAR_SPECLETS_DIR_BKUP") \
 
 # Local mirror lives beside skills_config/ under <avatarfiles_dir>.
 LOCAL_SPECLETS_DIR_NAME = "speclets"
+#: Prompts the user edited here, kept apart from the mirror of the share so a
+#: refresh of the shared copy can never overwrite someone's own version.
+LOCAL_SPECLETS_USER_DIR_NAME = "speclets_user"
 
 # ACE playbook cloud sync (WiFi/general).
 #

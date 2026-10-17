@@ -3,6 +3,28 @@
         /\b\d{4}[-/]\d{1,2}[-/]\d{1,2}[\sT]\d{1,2}:\d{2}:\d{2}\b/
     ];
 
+    // A dmesg that counts seconds since boot has no calendar time to type, so
+    // for one of those logs the issue time IS the offset — which is what the
+    // AI suggestion drops into the question ("Focus on [3.304294] seconds
+    // since boot."). Without this the picker stays empty, the sidebar keeps
+    // saying the time is missing, and sending re-opens the AI dialog that just
+    // produced the offset.
+    const BOOT_ELAPSED_REGEXES = [
+        /\[\s*\d+\.\d{1,6}\s*\]/,
+        /\b\d+\.\d{1,6}\s*s(?:ec(?:onds?)?)?\b[^.\n]{0,24}\bboot\b/i,
+    ];
+
+    // Only for such a log: a bracketed decimal in a Wi-Fi description is not
+    // a time, and must not silence the missing-time hint there.
+    function _logIsBootElapsed() {
+        return !!(window.__logTimeFormat && window.__logTimeFormat.name === 'monotonic');
+    }
+
+    function questionCarriesBootElapsed(text) {
+        return _logIsBootElapsed() && BOOT_ELAPSED_REGEXES.some(r => r.test(text || ''));
+    }
+    window.questionCarriesBootElapsed = questionCarriesBootElapsed;
+
     // Shown as a small badge beside the "Issue Time" heading so the user can
     // tell an attachment's own timestamp apart from one the organizer parsed
     // out of the customer's description — they carry different confidence.
@@ -46,6 +68,7 @@
     }
 
     IssueTimeController.prototype.inputHasValidTime = function (text) {
+        if (questionCarriesBootElapsed(text)) return true;
         return VALID_TIME_REGEXES.some(r => r.test(text));
     };
 
@@ -391,7 +414,11 @@
 
         const firstRound = !firstRoundSent;
         // An auto-filled (previous-page) time only counts once confirmed.
-        const hasIssueTime = !!getIssueTimeString() && !issueTimeAwaitingConfirm;
+        // On a boot-elapsed log the offset lives in the question instead of
+        // the picker — there is no calendar field it could go in — so a
+        // question carrying one counts as having an issue time.
+        const hasIssueTime = (!!getIssueTimeString() && !issueTimeAwaitingConfirm)
+            || questionCarriesBootElapsed(text);
 
         if (firstRound && !logLoaded) {
             valid = false;
@@ -697,6 +724,11 @@
     };
 
     IssueTimeController.prototype.suggestIssueTimesWithAI = function () {
+        if (window.__logTimeFormat && window.__logTimeFormat.name === 'monotonic' &&
+            window.__logTimeFormat.supports_windowing === false) {
+            const path = document.getElementById('log-path-input');
+            if (path) window.__bootSuggestPromptedPath = path.value.trim();
+        }
         const input = document.getElementById('user-input');
         const text = (input ? input.value : '').trim();
         const nodesc = document.getElementById('ai-time-nodesc');
@@ -705,18 +737,98 @@
         // the user to add a description for better accuracy, then continue.
         if (nodesc) nodesc.style.display = text ? 'none' : 'block';
         _llmTimeConsentText = text;   // may be empty
+        // Editable, not a preview: this dialog can open before the user has
+        // typed anything — the boot-offset path opens it on its own — and
+        // being asked to allow an analysis of an empty description, with no
+        // way to add one without cancelling, is a dead end.
         const prev = document.getElementById('llm-consent-text');
-        if (prev) prev.textContent = text
-            || '(no description — the AI will infer the issue time from the log only)';
+        if (prev) prev.value = text;
         const loghint = document.getElementById('llm-consent-loghint');
         if (loghint) {
             const hasLog = (typeof logLoaded !== 'undefined' && logLoaded) || !!window.__logSpanMinutes;
-            loghint.innerHTML = hasLog
-                ? '✔ A log is loaded and will be sampled to anchor the suggestion.'
-                : '⚠️ No log loaded — load a log so the AI has something to analyze.';
-            loghint.style.color = hasLog ? '#15803d' : '#92400e';
+            const bootOnly = window.__logTimeFormat &&
+                window.__logTimeFormat.name === 'monotonic' &&
+                window.__logTimeFormat.supports_windowing === false;
+            loghint.textContent = bootOnly
+                ? '⚠️ This log has only seconds since boot. AI can suggest a relative event, but cannot recover a calendar date or apply an issue-time window. Nothing is sent until you allow it.'
+                : hasLog
+                    ? '✔ A log is loaded and will be sampled to anchor the suggestion.'
+                    : '⚠️ No log loaded — load a log so the AI has something to analyze.';
+            loghint.style.color = bootOnly || !hasLog ? '#92400e' : '#15803d';
         }
         openLlmTimeConsent();
+    };
+
+    // A relative dmesg offset belongs in the question, not in the calendar
+    // picker: the backend has verified it against an actual log line, but
+    // there is no trusted wall-clock anchor for Segment2.
+    IssueTimeController.prototype.showBootElapsedSuggestions = function (data) {
+        const list = document.getElementById('boot-time-suggestions');
+        const note = document.getElementById('boot-time-result-note');
+        const modal = document.getElementById('boot-time-result-modal');
+        if (!list || !modal) return;
+        list.replaceChildren();
+        if (note) note.textContent = data.message || '';
+        (data.suggestions || []).forEach((item) => {
+            const row = document.createElement('div');
+            row.style.cssText = 'border:1px solid #ddd;border-radius:6px;padding:8px;margin:8px 0;';
+            const title = document.createElement('strong');
+            title.textContent = `${item.boot_elapsed}s after boot`;
+            row.appendChild(title);
+            // Where the offer came from. A pick the backend made out of the
+            // log when the description matched nothing must not read as if
+            // the AI had tied it to what the user asked.
+            const badge = document.createElement('span');
+            badge.textContent = item.source === 'log'
+                ? 'from the log' : 'matched to your description';
+            badge.style.cssText = 'margin-left:8px;font-size:0.68rem;padding:1px 7px;'
+                + 'border-radius:999px;vertical-align:middle;'
+                + (item.source === 'log'
+                    ? 'background:#fff7ed;color:#92400e;border:1px solid #fdba74;'
+                    : 'background:#eafaf0;color:#15803d;border:1px solid #dcf3e4;');
+            row.appendChild(badge);
+            const detail = document.createElement('div');
+            detail.textContent = `${item.reason || ''} ${item.log_line || ''}`.trim();
+            detail.style.cssText = 'font-size:0.78rem;white-space:pre-wrap;word-break:break-word;';
+            row.appendChild(detail);
+            const choose = document.createElement('button');
+            choose.type = 'button';
+            choose.className = 'fbd-btn';
+            choose.textContent = 'Add offset to question';
+            choose.onclick = () => {
+                const input = document.getElementById('user-input');
+                if (input) {
+                    input.value = `${input.value.trim()} Focus on [${item.boot_elapsed}] seconds since boot.`.trim();
+                    input.dispatchEvent(new Event('input', { bubbles: true }));
+                    input.focus();
+                }
+                closeBootElapsedSuggestions();
+            };
+            row.appendChild(choose);
+            list.appendChild(row);
+        });
+        modal.classList.add('open');
+        modal.setAttribute('aria-hidden', 'false');
+    };
+
+    IssueTimeController.prototype.closeBootElapsedSuggestions = function () {
+        const modal = document.getElementById('boot-time-result-modal');
+        if (modal) {
+            modal.classList.remove('open');
+            modal.setAttribute('aria-hidden', 'true');
+        }
+    };
+
+    // This dialog opens by itself on a boot-elapsed log, so it can easily be
+    // the first thing a user sees — before they have described anything. A
+    // result of "nothing matched" with only a Close button is then a dead
+    // end, so offer the way back: the consent dialog, where the description
+    // can now be written.
+    IssueTimeController.prototype.retryBootElapsedWithDescription = function () {
+        this.closeBootElapsedSuggestions();
+        this.suggestIssueTimesWithAI();
+        const box = document.getElementById('llm-consent-text');
+        if (box) box.focus();
     };
 
     IssueTimeController.prototype.openLlmTimeConsent = function () {
@@ -864,4 +976,7 @@
     window._parseCanonicalToRow = (...args) => window.issueTimeController._parseCanonicalToRow(...args);
     window.suggestIssueTimesWithAI = (...args) => window.issueTimeController.suggestIssueTimesWithAI(...args);
     window.openLlmTimeConsent = (...args) => window.issueTimeController.openLlmTimeConsent(...args);
+    window.showBootElapsedSuggestions = (...args) => window.issueTimeController.showBootElapsedSuggestions(...args);
+    window.closeBootElapsedSuggestions = (...args) => window.issueTimeController.closeBootElapsedSuggestions(...args);
+    window.retryBootElapsedWithDescription = (...args) => window.issueTimeController.retryBootElapsedWithDescription(...args);
     window.closeLlmTimeConsent = (...args) => window.issueTimeController.closeLlmTimeConsent(...args);

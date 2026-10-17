@@ -41,6 +41,7 @@ _MAX_STEPS = 1000
 # result, and how many jobs total we retain before pruning oldest terminals.
 _TERMINAL_TTL = timedelta(minutes=30)
 _MAX_JOBS = 50
+_SSE_HEARTBEAT_SECONDS = 15
 
 
 class ChatJob:
@@ -49,7 +50,7 @@ class ChatJob:
     __slots__ = (
         "conversation_id", "turn_id", "title", "status",
         "steps", "result", "error", "agent", "domain",
-        "created_at", "updated_at", "_subscribers", "lock",
+        "created_at", "updated_at", "_subscribers", "lock", "worker_thread",
     )
 
     def __init__(self, conversation_id: str, turn_id: str, title: str, agent: Any, domain: str = ""):
@@ -69,6 +70,7 @@ class ChatJob:
         self.updated_at = self.created_at
         self._subscribers: set = set()   # set[queue.Queue]
         self.lock = threading.Lock()
+        self.worker_thread: Optional[threading.Thread] = None
 
     def summary(self) -> dict:
         return {
@@ -292,16 +294,24 @@ def job_sse(job: Any) -> Iterator[str]:
             return
         while True:
             try:
-                kind, payload = event_queue.get(timeout=120)
+                kind, payload = event_queue.get(timeout=_SSE_HEARTBEAT_SECONDS)
             except _queue.Empty:
-                yield (
-                    "data: "
-                    + json.dumps(
-                        {"type": "error", "content": "Chat timed out."},
-                    )
-                    + "\n\n"
-                )
-                return
+                # An expensive pre-scan can legitimately produce no steps for
+                # longer than the old 120-second inactivity cutoff. Take a
+                # terminal snapshot under the job lock: a finish/error may
+                # have raced with the queue timeout. SSE comments keep proxies
+                # and browsers connected without creating fake UI steps.
+                with job.lock:
+                    status, result, error = job.status, job.result, job.error
+                    worker = job.worker_thread
+                if status in ("done", "error"):
+                    yield terminal_sse(job, status, result if status == "done" else error)
+                    return
+                if worker is not None and not worker.is_alive():
+                    yield terminal_sse(job, "error", "Analysis worker stopped unexpectedly.")
+                    return
+                yield ": keep-alive\n\n"
+                continue
             if kind == "step":
                 yield (
                     "data: "

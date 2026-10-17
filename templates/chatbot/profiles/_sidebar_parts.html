@@ -167,6 +167,16 @@
                     onclick="appendSkillsFromYaml()" id="skill-append-btn"
                     title="Pick a YAML file; its skills are appended to your customised configuration (duplicates overwrite)."
                     >📥 Append Skills from YAML…</button>
+            {# The other half of what makes this agent an expert: the prompt
+               itself. Same section as the skills, because they are tuned
+               together -- the skills decide which lines it reads, the prompt
+               decides what it is looking for. #}
+            {% if ui.features.prompt_editor %}
+            <button class="btn-set-log" style="width:100%;margin-top:6px;"
+                    onclick="openPromptEditor()" id="prompt-editor-btn"
+                    title="Edit this agent's prompt and report format: what it is an expert in"
+                    >🧠 Edit Agent Prompts…</button>
+            {% endif %}
             <div id="skill-editor-status" class="log-status"></div>
         </div>
 {% endmacro %}

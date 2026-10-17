@@ -651,7 +651,7 @@
             const wrapper = document.createElement('div');
             wrapper.className = 'msg-row assistant';
             wrapper.style.maxWidth = '95%';
-            wrapper.innerHTML = '<div class="avatar-icon">🤖</div><div style="flex:1;">' + html + '</div>';
+            wrapper.innerHTML = '<div class="avatar-icon">🤖</div><div class="msg-body">' + html + '</div>';
             document.getElementById('chat-window').appendChild(wrapper);
             bodyEl = document.getElementById(cardId);
             scrollBottom();

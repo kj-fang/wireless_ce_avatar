@@ -91,7 +91,18 @@ class ChatbotUseCases:
 
     def reset_conversation(self) -> UseCaseResult:
         try:
-            self._get_agent().reset_conversation()
+            agent = self._get_agent()
+            agent.reset_conversation()
+            # /reset is a new conversation, unlike an internal context reset
+            # during set_log/prepare. Do not carry experimental prompts or
+            # skill imports into it.
+            if hasattr(agent, "prompt_overrides"):
+                agent.prompt_overrides.clear()
+            if hasattr(agent, "_initial_skills"):
+                agent.apply_updated_skills(dict(agent._initial_skills))
+                agent._session_skill_source = "cloud"
+                agent._session_skill_filename = ""
+                agent._session_skill_path = None
             return UseCaseResult({
                 "success": True,
                 "message": "Conversation reset.",

@@ -101,6 +101,11 @@ from services.chatbot.session import (
     register_session_agent_store,
     resume_agent_for as _shared_resume_agent_for,
 )
+from services.chatbot.engine.speclet_defaults import conversation_speclet, default_speclet
+from services.chatbot.prompt_editor import (
+    PromptEditorContext,
+    build_prompt_editor_handlers,
+)
 from services.chatbot.shared_routes import (
     SharedRouteContext,
     build_shared_handlers,
@@ -247,6 +252,16 @@ class AgentRouteProfile:
     @property
     def capabilities(self) -> set[str]:
         return {key for key, on in self.ui["features"].items() if on}
+
+    @property
+    def agent_profile(self) -> str:
+        """The engine policy's profile name — the key its prompts are filed under.
+
+        Read off the agent class instead of repeated as a field of its own, so
+        the prompt the editor shows and saves is by construction the one this
+        profile's agent loads when it builds a system prompt.
+        """
+        return self.agent_class.CAPABILITY_POLICY.profile
 
 
 # ==================================================================
@@ -707,6 +722,23 @@ class AgentRoutes:
             self._get_or_create_agent,
         )
 
+    def _get_configuration_agent(self):
+        """Edit the agent that the next turn of this conversation will use."""
+        conversation_id = session.get("feedback_conversation_id", "")
+        if conversation_id:
+            job = chat_jobs.get_job(conversation_id)
+            if job is not None and getattr(job, "agent", None) is not None:
+                if job.status == "running":
+                    return job.agent  # read-only until the job finishes
+                return self._resume_agent_for(conversation_id)
+        return self._get_or_create_agent()
+
+    def _ensure_configuration_editable(self):
+        conversation_id = session.get("feedback_conversation_id", "")
+        job = chat_jobs.get_job(conversation_id) if conversation_id else None
+        if job is not None and job.status == "running":
+            raise RuntimeError("Wait for the current analysis to finish before changing prompts or skills.")
+
     def _get_llm_client_model(self):
         return _llm_client_model(self.profile.agent_config_attr)
 
@@ -996,6 +1028,10 @@ class AgentRoutes:
                 last_ts=last_ts,
                 llm_client=getattr(agent, "client", None),
                 llm_model=getattr(agent, "model", None),
+                # The briefing for this judgement is one of the profile's own
+                # editable documents, so retargeting the agent's domain
+                # retargets what it looks for when it picks the moment too.
+                brief=conversation_speclet(agent, "suggest_time"),
                 **extra,
             )
             _attach_nearest_errors(payload, event_log_events)
@@ -1292,6 +1328,7 @@ class AgentRoutes:
                     chat_jobs.fail_job(job, str(exc))
 
             t = threading.Thread(target=run_chat_with_tools, daemon=True)
+            job.worker_thread = t
             t.start()
 
             # The original request streams the job exactly like a reconnect
@@ -1759,6 +1796,26 @@ class AgentRoutes:
     # each engine module's SKILL_FILE_MAP).
     def _build_handlers(self) -> dict[str, Callable[..., Any]]:
         profile, yu = self.profile, self.profile.yaml_utils
+
+        def skill_source() -> str:
+            return getattr(self._get_configuration_agent(), "_session_skill_source", "cloud")
+
+        def set_skill_source(source: str) -> str:
+            agent = self._get_configuration_agent()
+            agent._session_skill_source = "user" if source == "user" else "cloud"
+            return agent._session_skill_source
+
+        def skill_status() -> dict:
+            payload = yu.skills_yaml_status()
+            agent = self._get_configuration_agent()
+            source = skill_source()
+            payload["active_source"] = payload["effective_source"] = source
+            payload["skills"] = agent.get_skill_descriptions()
+            filename = getattr(agent, "_session_skill_filename", "")
+            if source == "user" and filename:
+                payload["user_local"] = {**payload["user_local"], "filename": filename}
+            return payload
+
         _yaml_helpers = build_profile_yaml_helpers(
             user_local_dir=yu.local_user_overrides_dir,
             today_yaml_filename=yu.today_dated_filename,
@@ -1767,14 +1824,14 @@ class AgentRoutes:
             latest_user_yaml=yu.find_latest_user_yaml,
             write_yaml_file=_write_yaml_file,
             load_skills_from_yaml=load_skills_from_yaml,
-            get_agent=self._get_or_create_agent,
+            get_agent=self._get_configuration_agent,
             agent_config_attr=profile.agent_config_attr,
         )
 
         skill_editor_handlers = build_skill_editor_handlers(SkillEditorContext(
             activate_yaml=_yaml_helpers["activate_yaml"],
-            get_active_source=yu.get_active_source,
-            get_or_create_agent=self._get_or_create_agent,
+            get_active_source=skill_source,
+            get_or_create_agent=self._get_configuration_agent,
             latest_cloud_baseline=yu.find_latest_cloud_baseline_yaml,
             latest_user_yaml=yu.find_latest_user_yaml,
             persist_user_yaml_snapshot=_yaml_helpers["persist_user_yaml_snapshot"],
@@ -1782,13 +1839,27 @@ class AgentRoutes:
             refresh_cloud_baseline=yu.refresh_local_cloud_baseline,
             resolve_cloud_skills_dir=yu.resolve_cloud_skills_dir,
             sanitise_skill_payload=_sanitise_skill_payload,
-            set_active_source=yu.set_active_source,
-            skills_yaml_status_payload=yu.skills_yaml_status,
+            set_active_source=set_skill_source,
+            skills_yaml_status_payload=skill_status,
+            ensure_editable=self._ensure_configuration_editable,
         ))
+        # The prompt editor writes only to this conversation's agent. Shared
+        # prompt files remain source material, not automatic live overrides.
+        prompt_editor_handlers = (
+            build_prompt_editor_handlers(PromptEditorContext(
+                profile=profile.agent_profile,
+                default_text=default_speclet,
+                get_agent=self._get_configuration_agent,
+                ensure_editable=self._ensure_configuration_editable,
+                load_skills_from_yaml=load_skills_from_yaml,
+            ))
+            if "prompt_editor" in profile.capabilities else {}
+        )
         shared_handlers = build_shared_handlers(SharedRouteContext(
             domain=profile.history_domain,
             agent_config_attr=profile.agent_config_attr,
-            get_agent=self._get_or_create_agent,
+            get_agent=self._get_configuration_agent,
+            ensure_editable=self._ensure_configuration_editable,
             session_agents=self.session_agents,
             browse_filetypes=profile.browse_filetypes,
             load_skills_from_yaml=load_skills_from_yaml,
@@ -1805,6 +1876,7 @@ class AgentRoutes:
             "suggest_issue_times": self.suggest_issue_times,
             **shared_handlers,
             **skill_editor_handlers,
+            **prompt_editor_handlers,
         }
 
 

@@ -246,9 +246,50 @@ SHARED_FOLLOWUP = (
 )
 
 
+# The briefing for "AI suggest issue time". It judges WHICH MOMENT the
+# analysis should be anchored on, from the user's description plus a digest of
+# the log -- so it is the third document a retargeted agent needs, after its
+# prompt and its report.
+#
+# What stays in code and is appended after this text: the log's range, the
+# timezone anchors, the output format rule, the event-log caveat, and the
+# strict JSON contract the reply is parsed with. Editing this briefing can
+# change what the model looks for; it cannot break how the answer is read.
+SUGGEST_TIME_BASE = (
+    "You determine the 'issue time' that anchors log analysis. Logs are "
+    "typically Wi-Fi or Bluetooth, but the user's problem description "
+    "(which may be vague, non-English, or use a wrong time format) is "
+    "the source of truth for the specific scenario. Read it plus a "
+    "rough sample of the log, then infer the most likely issue time(s) "
+    "— use the description to decide which lines in the log are "
+    "relevant, and pick the timestamp that sits next to one of those "
+    "lines."
+)
+
+# Linux keeps the domain knowledge that used to sit in IssueTimeFocus.hint:
+# it is what the model should look FOR, which is exactly what someone
+# retargeting this agent to another Linux domain needs to replace. The
+# mechanical half of that hint -- that the digest is pre-stamped and filtered
+# -- stays in the focus, because it describes the digest, not the domain.
+LINUX_SUGGEST_TIME = (
+    SUGGEST_TIME_BASE + "\n"
+    "This is a Linux Wi-Fi log: kernel iwlwifi / mac80211 / cfg80211 lines "
+    "and wpa_supplicant / NetworkManager lines. 'deauthenticating from ... by "
+    "local choice' means this machine left the AP; 'deauthenticated from' or "
+    "'disassociated from' means the AP ended it; 'Microcode SW error', "
+    "'NMI_INTERRUPT' and 'FW error' are firmware crashes. A log can span "
+    "several days and boots and contain several separate incidents: suggest "
+    "the distinct incidents that fit the description, best first."
+)
+
+
 DEFAULTS: dict[str, str] = {
     "wifi_prompt": WIFI_PROMPT,
     "wifi_report": WIFI_REPORT,
+    "wifi_suggest_time": SUGGEST_TIME_BASE,
+    "bt_suggest_time": SUGGEST_TIME_BASE,
+    "nw_suggest_time": SUGGEST_TIME_BASE,
+    "linux_suggest_time": LINUX_SUGGEST_TIME,
     "bt_prompt": BT_PROMPT,
     "bt_report": BT_REPORT,
     "nw_prompt": NW_PROMPT,
@@ -263,4 +304,19 @@ DEFAULTS: dict[str, str] = {
 
 def default_speclet(profile: str, kind: str) -> str:
     """Built-in text for one speclet, or "" for an unknown combination."""
+    if kind == "agent" and profile in ("wifi", "bt", "nw", "linux"):
+        from utils.speclets_utils import join_bundle
+
+        return join_bundle({part: DEFAULTS.get(f"{profile}_{part}", "")
+                            for part in ("prompt", "report", "suggest_time")})
     return DEFAULTS.get(f"{profile}_{kind}", "")
+
+
+def conversation_speclet(agent, kind: str) -> str:
+    """Profile default unless this conversation explicitly chose another text.
+
+    The shared Speclets mirror and a previous conversation's local copy are
+    library sources, not automatic overrides of a fresh conversation.
+    """
+    overrides = getattr(agent, "prompt_overrides", {})
+    return overrides.get(kind) or default_speclet(agent.capabilities.profile, kind)

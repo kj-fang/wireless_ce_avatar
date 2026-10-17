@@ -258,6 +258,30 @@ class LogTimeFormat:
                 target = aware.utcoffset() or timedelta(0)
             return aware.astimezone(timezone(target)).replace(tzinfo=None)
 
+        # These two fixed decoder layouts dominate multi-million-line Wi-Fi /
+        # BT pre-scans. Constructing datetime directly avoids strptime's
+        # format parser on every row. All Linux shapes deliberately retain
+        # their existing parsing path below.
+        if shape.name == "wifi_etl":
+            try:
+                return datetime(
+                    int(token[6:10]), int(token[0:2]), int(token[3:5]),
+                    int(token[11:13]), int(token[14:16]), int(token[17:19]),
+                    int(token[20:23]) * 1000,
+                )
+            except (ValueError, OverflowError):
+                return None
+        if shape.name == "bt_hci":
+            try:
+                fraction = token[20:] if len(token) > 19 else ""
+                return datetime(
+                    int(token[0:4]), int(token[5:7]), int(token[8:10]),
+                    int(token[11:13]), int(token[14:16]), int(token[17:19]),
+                    int(fraction.ljust(6, "0")) if fraction else 0,
+                )
+            except (ValueError, OverflowError):
+                return None
+
         # strptime's %f takes at most 6 digits; DDD / tracefmt write 7.
         head, dot, frac = token.partition(".")
         if dot and len(frac) > 6:

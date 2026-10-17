@@ -7,6 +7,7 @@ import threading
 import traceback
 from dataclasses import dataclass
 from functools import partial
+from pathlib import Path
 from typing import Any, Callable
 
 from flask import jsonify, request, session
@@ -26,6 +27,7 @@ class SkillEditorContext:
     sanitise_skill_payload: Callable[..., Any]
     set_active_source: Callable[..., Any]
     skills_yaml_status_payload: Callable[..., Any]
+    ensure_editable: Callable[[], None] | None = None
 
 
 def skills_yaml_status(context: SkillEditorContext):
@@ -55,6 +57,8 @@ def skills_yaml_use_cloud(context: SkillEditorContext):
     intact so the user can toggle back later via /skills_yaml_use_user.
     """
     try:
+        if context.ensure_editable:
+            context.ensure_editable()
         c_path, c_date = context.latest_cloud_baseline()
         if c_path is None:
             return jsonify({
@@ -73,6 +77,8 @@ def skills_yaml_use_cloud(context: SkillEditorContext):
             "message":         "Now using the cloud baseline configuration.",
             "skills":          skills,
         })
+    except RuntimeError as e:
+        return jsonify({"success": False, "error": str(e)}), 409
     except Exception as e:
         traceback.print_exc()
         return jsonify({"success": False, "error": str(e)}), 500
@@ -84,6 +90,8 @@ def skills_yaml_use_user(context: SkillEditorContext):
     is only meaningful once a user override exists.
     """
     try:
+        if context.ensure_editable:
+            context.ensure_editable()
         u_path, u_date = context.latest_user_yaml()
         if u_path is None:
             return jsonify({
@@ -102,6 +110,8 @@ def skills_yaml_use_user(context: SkillEditorContext):
             "message":         "Now using your customised configuration.",
             "skills":          skills,
         })
+    except RuntimeError as e:
+        return jsonify({"success": False, "error": str(e)}), 409
     except Exception as e:
         traceback.print_exc()
         return jsonify({"success": False, "error": str(e)}), 500
@@ -112,6 +122,8 @@ def refresh_cloud_baseline_route(context: SkillEditorContext):
     safe to call from a "retry" button when the user reconnects to VPN.
     """
     try:
+        if context.ensure_editable:
+            context.ensure_editable()
         path, dt = context.refresh_cloud_baseline()
         if path is None:
             return jsonify({
@@ -134,6 +146,8 @@ def refresh_cloud_baseline_route(context: SkillEditorContext):
             "message":     "Cloud baseline refreshed from the share folder.",
             "skills":      agent.get_skill_descriptions(),
         })
+    except RuntimeError as e:
+        return jsonify({"success": False, "error": str(e)}), 409
     except Exception as e:
         traceback.print_exc()
         return jsonify({"success": False, "error": str(e)}), 500
@@ -148,9 +162,13 @@ def load_local_skills_yaml(context: SkillEditorContext):
     The editor uses `source=user` to pre-fill from the user's previous
     edits, and `source=cloud` to start from the pristine baseline.
     """
-    requested = (request.args.get("source") or "").strip().lower() or context.get_active_source()
+    explicit = (request.args.get("source") or "").strip().lower()
+    requested = explicit or context.get_active_source()
     try:
-        if requested == "user":
+        active_path = getattr(context.get_or_create_agent(), "_session_skill_path", None)
+        if not explicit and active_path is not None:
+            local_path, local_date = active_path, None
+        elif requested == "user":
             local_path, local_date = context.latest_user_yaml()
         else:
             requested = "cloud"
@@ -198,6 +216,8 @@ def save_local_skills_yaml(context: SkillEditorContext):
         return jsonify({"success": False, "error": err}), 400
 
     try:
+        if context.ensure_editable:
+            context.ensure_editable()
         target = context.persist_user_yaml_snapshot(cleaned)
 
         context.set_active_source("user")
@@ -214,6 +234,8 @@ def save_local_skills_yaml(context: SkillEditorContext):
             "message":       f"Saved {len(cleaned)} skill(s) to {target.name}.",
             "skills":        skills,
         })
+    except RuntimeError as e:
+        return jsonify({"success": False, "error": str(e)}), 409
     except Exception as e:
         traceback.print_exc()
         return jsonify({"success": False, "error": str(e)}), 500
@@ -235,6 +257,8 @@ def delete_local_skill(context: SkillEditorContext):
         }), 400
 
     try:
+        if context.ensure_editable:
+            context.ensure_editable()
         # Start from the user copy if it exists, otherwise from the cloud
         # baseline — the resulting file always lands in user/ and becomes
         # the new active configuration.
@@ -270,6 +294,8 @@ def delete_local_skill(context: SkillEditorContext):
             "message":       f"Removed skill '{skill_key}'.",
             "skills":        skills,
         })
+    except RuntimeError as e:
+        return jsonify({"success": False, "error": str(e)}), 409
     except Exception as e:
         traceback.print_exc()
         return jsonify({"success": False, "error": str(e)}), 500
@@ -350,7 +376,6 @@ def build_profile_yaml_helpers(
     real differences are the dated filename prefix each profile writes into
     ``user/`` and which ``app_config`` attribute holds its app-level agent.
     """
-    from configs.global_configs import app_config
     from services.skill_editor.yaml_service import gather_disabled_comments
 
     write_lock = threading.Lock()
@@ -387,16 +412,15 @@ def build_profile_yaml_helpers(
             return target
 
     def refresh_loaded_skills(yaml_path: str) -> dict:
-        """Re-load skills from `yaml_path` into the live agent and llm_helper."""
+        """Re-load skills from `yaml_path` into this conversation only."""
         skills = load_skills_from_yaml(yaml_path)
         agent = get_agent()
         # Keep history; clear rule/filter caches so the reloaded skills apply.
         agent.apply_updated_skills(skills)
-        app_agent = getattr(app_config, agent_config_attr, None)
-        if app_agent:
-            app_agent.skills = skills
-        if app_config.llm_helper:
-            app_config.llm_helper.skills = skills
+        source_path = Path(yaml_path)
+        agent._session_skill_source = "cloud" if source_path.parent.name == "cloud" else "user"
+        agent._session_skill_filename = source_path.name
+        agent._session_skill_path = source_path
         return skills
 
     def activate_yaml(path) -> dict:
@@ -428,6 +452,8 @@ class SkillAppendContext:
     persist_user_yaml_snapshot: Callable[..., Any]
     read_yaml_file: Callable[..., Any]
     set_active_source: Callable[..., Any]
+    current_yaml_path: Callable[[], Any] | None = None
+    ensure_editable: Callable[[], None] | None = None
 
     @classmethod
     def from_editor(cls, editor: SkillEditorContext) -> "SkillAppendContext":
@@ -438,6 +464,8 @@ class SkillAppendContext:
             persist_user_yaml_snapshot=editor.persist_user_yaml_snapshot,
             read_yaml_file=editor.read_yaml_file,
             set_active_source=editor.set_active_source,
+            current_yaml_path=lambda: getattr(editor.get_or_create_agent(), "_session_skill_path", None),
+            ensure_editable=editor.ensure_editable,
         )
 
 
@@ -462,7 +490,19 @@ def append_skills_yaml_route(context: SkillAppendContext):
     module. Every dependency it needs was already on SkillEditorContext, so
     here it is a single body both full agents share.
 
-    Request JSON: { "yaml_path": "/path/to/skills.yaml" }
+    ``mode`` chooses what happens to the skills already there:
+
+      "append"  (default)  keep them, add the file's, same-name wins
+      "replace"            the file's skills become the whole set
+
+    Appending is right when a skill set is being extended. Replacing is for
+    retargeting an agent to another domain: merging there leaves the old
+    domain's skills in the menu the prompt tells the agent to choose from, so
+    a Bluetooth agent is still offered eight Wi-Fi filters and can spend a
+    step on one. Nothing is lost either way -- the previous set stays in its
+    own dated file, and the cloud baseline is untouched.
+
+    Request JSON: { "yaml_path": "/path/to/skills.yaml", "mode": "append" }
     """
     from pathlib import Path
 
@@ -470,8 +510,15 @@ def append_skills_yaml_route(context: SkillAppendContext):
 
     data = request.get_json(silent=True) or {}
     yaml_path = (data.get("yaml_path") or "").strip()
+    replace = str(data.get("mode") or "append").strip().lower() == "replace"
     if not yaml_path:
         return jsonify({"success": False, "error": "yaml_path is required."}), 400
+
+    if context.ensure_editable:
+        try:
+            context.ensure_editable()
+        except RuntimeError as exc:
+            return jsonify({"success": False, "error": str(exc)}), 409
 
     try:
         valid, skipped = load_and_filter_source(yaml_path)
@@ -489,12 +536,22 @@ def append_skills_yaml_route(context: SkillAppendContext):
         }), 400
 
     try:
-        base_path, _ = context.latest_user_yaml()
+        base_path = context.current_yaml_path() if context.current_yaml_path else None
         if base_path is None:
             base_path, _ = context.latest_cloud_baseline()
         existing = context.read_yaml_file(base_path) if base_path is not None else {}
 
-        merged, appended, overwritten = merge_overwrite(existing, valid)
+        if replace:
+            # Everything in the file is "appended" from the destination's point
+            # of view, and whatever it did not name is dropped -- reported, so
+            # the message says what left rather than only what arrived.
+            merged = dict(valid)
+            appended = list(valid)
+            overwritten = []
+            dropped = [k for k in (existing or {}) if k not in valid]
+        else:
+            merged, appended, overwritten = merge_overwrite(existing, valid)
+            dropped = []
         target = context.persist_user_yaml_snapshot(merged)
 
         context.set_active_source("user")
@@ -503,10 +560,15 @@ def append_skills_yaml_route(context: SkillAppendContext):
         session["yaml_modified_path"] = str(target)
 
         parts = []
-        if appended:
-            parts.append(f"appended {len(appended)}")
-        if overwritten:
-            parts.append(f"overwrote {len(overwritten)}")
+        if replace:
+            parts.append(f"now {len(appended)} skill(s)")
+            if dropped:
+                parts.append(f"removed {len(dropped)}")
+        else:
+            if appended:
+                parts.append(f"appended {len(appended)}")
+            if overwritten:
+                parts.append(f"overwrote {len(overwritten)}")
         if skipped:
             parts.append(f"skipped {len(skipped)}")
         summary = ", ".join(parts) if parts else "no changes"
@@ -514,12 +576,15 @@ def append_skills_yaml_route(context: SkillAppendContext):
         return jsonify({
             "success":       True,
             "active_source": "user",
+            "mode":          "replace" if replace else "append",
             "target_path":   str(target),
             "filename":      target.name,
             "appended":      appended,
             "overwritten":   overwritten,
+            "dropped":       dropped,
             "skipped":       skipped,
-            "message":       f"Imported from {Path(yaml_path).name}: {summary}.",
+            "message":       (f"{'Replaced with' if replace else 'Imported from'} "
+                              f"{Path(yaml_path).name}: {summary}."),
             "skills":        skills,
         })
     except Exception as e:

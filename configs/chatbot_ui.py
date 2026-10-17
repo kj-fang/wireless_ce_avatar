@@ -109,6 +109,7 @@ BT_UI = {
         "history": True,
         "skill_editor": True,
         "skill_append": True,
+        "prompt_editor": True,
     },
 }
 
@@ -173,6 +174,7 @@ LOG_CHATBOT_UI = {
         "history": True,
         "skill_editor": True,
         "skill_append": True,
+        "prompt_editor": True,
     },
 }
 
@@ -246,7 +248,10 @@ NW_UI = {
 LINUX_UI = {
     "domain": "linux",
     "api": "/linux_chatbot",
-    "title": "Linux Wi-Fi Driver Agent",
+    # What this agent is good at comes from its prompt and its skills, both of
+    # which are editable without touching Python, so the page does not name one
+    # domain in its chrome. Matches the home page's "Linux Analysis Agent".
+    "title": "Linux Analysis Agent",
     "back_url": "/linux_chatbot/back_to_avatar",
     "input_placeholder": "Describe the issue and ask a question about the log.",
     "accent": "#15803d",
@@ -300,5 +305,9 @@ LINUX_UI = {
         "history": True,
         "skill_editor": True,
         "skill_append": True,
+        # First profile with the prompt editor: what this agent is an
+        # expert in is its prompt and its skills, and both are now
+        # editable from the page.
+        "prompt_editor": True,
     },
 }

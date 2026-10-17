@@ -229,6 +229,21 @@
         margin-right: auto;
     }
 
+    /* The message body beside the avatar.
+       min-width:0 is what keeps a wide child inside the chat column. A flex
+       item defaults to min-width:auto — "never shrink below my content" — and
+       a report quoting a 300-character log line in a <pre> is exactly that
+       content, so without this the row sets its own width and the card runs
+       past the column instead of the code block scrolling inside it.
+       It lives here, on a class, rather than inline at each call site: six
+       places build this wrapper and only two carried the inline version, so a
+       report rendered by the other four — a restored conversation among them —
+       still overflowed. */
+    .msg-row .msg-body {
+        flex: 1;
+        min-width: 0;
+    }
+
     .avatar-icon {
         width: 34px;
         height: 34px;
@@ -337,6 +352,13 @@
         padding: 1px 5px;
         border-radius: 3px;
         font-size: 0.78rem;
+    }
+
+    /* The scroll container for a quoted log line. The <pre> is capped too, so
+       the cap holds even if a future wrapper forgets .msg-body. */
+    .markdown-section pre {
+        max-width: 100%;
+        overflow-x: auto;
     }
 
     .markdown-section pre code {

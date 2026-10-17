@@ -775,6 +775,18 @@
             const title = document.createElement('strong');
             title.textContent = `${item.boot_elapsed}s after boot`;
             row.appendChild(title);
+            // Where the offer came from. A pick the backend made out of the
+            // log when the description matched nothing must not read as if
+            // the AI had tied it to what the user asked.
+            const badge = document.createElement('span');
+            badge.textContent = item.source === 'log'
+                ? 'from the log' : 'matched to your description';
+            badge.style.cssText = 'margin-left:8px;font-size:0.68rem;padding:1px 7px;'
+                + 'border-radius:999px;vertical-align:middle;'
+                + (item.source === 'log'
+                    ? 'background:#fff7ed;color:#92400e;border:1px solid #fdba74;'
+                    : 'background:#eafaf0;color:#15803d;border:1px solid #dcf3e4;');
+            row.appendChild(badge);
             const detail = document.createElement('div');
             detail.textContent = `${item.reason || ''} ${item.log_line || ''}`.trim();
             detail.style.cssText = 'font-size:0.78rem;white-space:pre-wrap;word-break:break-word;';
@@ -805,6 +817,18 @@
             modal.classList.remove('open');
             modal.setAttribute('aria-hidden', 'true');
         }
+    };
+
+    // This dialog opens by itself on a boot-elapsed log, so it can easily be
+    // the first thing a user sees — before they have described anything. A
+    // result of "nothing matched" with only a Close button is then a dead
+    // end, so offer the way back: the consent dialog, where the description
+    // can now be written.
+    IssueTimeController.prototype.retryBootElapsedWithDescription = function () {
+        this.closeBootElapsedSuggestions();
+        this.suggestIssueTimesWithAI();
+        const box = document.getElementById('llm-consent-text');
+        if (box) box.focus();
     };
 
     IssueTimeController.prototype.openLlmTimeConsent = function () {
@@ -954,4 +978,5 @@
     window.openLlmTimeConsent = (...args) => window.issueTimeController.openLlmTimeConsent(...args);
     window.showBootElapsedSuggestions = (...args) => window.issueTimeController.showBootElapsedSuggestions(...args);
     window.closeBootElapsedSuggestions = (...args) => window.issueTimeController.closeBootElapsedSuggestions(...args);
+    window.retryBootElapsedWithDescription = (...args) => window.issueTimeController.retryBootElapsedWithDescription(...args);
     window.closeLlmTimeConsent = (...args) => window.issueTimeController.closeLlmTimeConsent(...args);

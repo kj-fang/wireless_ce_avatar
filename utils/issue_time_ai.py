@@ -369,16 +369,74 @@ def suggest_boot_elapsed(
             "boot_elapsed": nearest[1], "confidence": str(item.get("confidence") or "low"),
             "reason": str(item.get("reason") or "")[:400],
             "log_line": nearest[2][:300],
+            "source": "description",
         })
+    # The model answers nothing when the description does not point at an
+    # event -- "what" is not a symptom, and an empty box is not either. The
+    # log still has its own stand-out moments, so offer those rather than a
+    # dialog whose only button is Close. They are picked here, not by the
+    # model, so they are labelled as what they are: from the log, not matched
+    # to anything the user said.
+    from_log = [] if suggestions else _notable_boot_offsets(observed)
     return {
-        "success": True, "time_basis": "boot_elapsed", "suggestions": suggestions,
+        "success": True, "time_basis": "boot_elapsed",
+        "suggestions": suggestions or from_log,
         "interpretation": str(answer.get("interpretation") or "")[:400],
         "needs_user_input": True,
-        "message": ("These are seconds since boot, not calendar times. The full log "
-                    "remains in scope; add a suggested offset to your chat question "
-                    "to focus the agent." if suggestions else
-                    "No verifiable boot-elapsed event was found. The full log remains in scope."),
+        "message": (
+            "These are seconds since boot, not calendar times. The full log "
+            "remains in scope; add a suggested offset to your chat question "
+            "to focus the agent." if suggestions else
+            "Nothing in the log matched the description. These are the log's own "
+            "notable lines — pick one, or describe what went wrong and try again."
+            if from_log else
+            "No verifiable boot-elapsed event was found. The full log remains in "
+            "scope. Describing what went wrong gives the AI something to match."),
     }
+
+
+# Strong fault signals only. "disabled", "warning on user-space split_locks"
+# and friends are ordinary boot chatter on every machine, and including them
+# buries the handful of lines that are actually worth looking at.
+_BOOT_FAULT_RE = re.compile(
+    r"(?:\berror\b|\bfail(?:ed|ure|s)?\b|\bpanic\b|\bOops\b|\bBUG:|\bWARNING:|"
+    r"\btimed out\b|\btimeout\b|\bunable to\b|\bcannot\b|\bnot responding\b|"
+    r"\bdenied\b|Call Trace|\bI/O error\b|\bfault\b)", re.I)
+_DIGIT_SHAPE = re.compile(r"\d+")
+
+
+def _notable_boot_offsets(observed, limit: int = 3) -> List[dict]:
+    """Fault lines from the log itself, spread across the boot.
+
+    ``observed`` is ``(offset, token, line)`` for every timestamped line. One
+    entry per distinct message — a message repeated with different numbers is
+    the same event — and the picks are spread so they do not all come from the
+    first second, which is where a boot log is densest.
+    """
+    seen: set[str] = set()
+    faults = []
+    for offset, token, line in observed:
+        if not _BOOT_FAULT_RE.search(line):
+            continue
+        shape = _DIGIT_SHAPE.sub("#", line)[:90]
+        if shape in seen:
+            continue
+        seen.add(shape)
+        faults.append((offset, token, line))
+    if not faults:
+        return []
+    if len(faults) <= limit:
+        picks = faults
+    else:
+        step = (len(faults) - 1) / (limit - 1) if limit > 1 else 0
+        picks = [faults[round(i * step)] for i in range(limit)]
+    return [{
+        "boot_elapsed": token,
+        "confidence": "low",
+        "reason": "From the log, not matched to your description.",
+        "log_line": line[:300],
+        "source": "log",
+    } for _offset, token, line in picks]
 
 
 def _last_focus_timestamp(log_lines: List[str], focus: IssueTimeFocus,

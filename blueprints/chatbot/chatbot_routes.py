@@ -1324,6 +1324,7 @@ class AgentRoutes:
                     chat_jobs.fail_job(job, str(exc))
 
             t = threading.Thread(target=run_chat_with_tools, daemon=True)
+            job.worker_thread = t
             t.start()
 
             # The original request streams the job exactly like a reconnect

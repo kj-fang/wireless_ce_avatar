@@ -243,7 +243,7 @@ class LogScopeMixin:
         except Exception:
             return 0
 
-    def _preprocess_raw_log_context(self) -> None:
+    def _preprocess_raw_log_context(self, progress_callback=None) -> None:
         """
         Pre-analysis scan executed on self._raw_log_cache BEFORE any skill
         filtering runs.  Produces two segments that are merged into
@@ -274,12 +274,25 @@ class LogScopeMixin:
 
         total_lines = len(self._raw_log_cache)
 
+        def _progress(label: str, scanned: int) -> None:
+            if progress_callback is None or total_lines < 500_000:
+                return
+            try:
+                progress_callback({
+                    "role": "agent",
+                    "content": f"🔎 Pre-scan {label}: {scanned:,}/{total_lines:,} lines",
+                })
+            except Exception:
+                pass  # UI progress must never interrupt the analysis.
+
         # ------------------------------------------------------------------
         # Pass 1: single scan — find first ADD, count ADDs, collect all RESETs
         # ------------------------------------------------------------------
         driver_add_indices = []
         reset_indices = []
         for i, line in enumerate(self._raw_log_cache):
+            if i and i % 500_000 == 0:
+                _progress("driver markers", i)
             line_lower = line.lower()
             if self._line_matches_any(line_lower, driver_add_markers):
                 driver_add_indices.append(i)
@@ -433,9 +446,13 @@ class LogScopeMixin:
             # works on a Linux capture (RFC 3339 with its own UTC offset,
             # logcat with no year) as well as on a Wi-Fi decode. The format
             # also resolves a New-Year rollover inside a yearless log.
-            ts_points: List[Tuple[datetime, int]] = [
-                (t, i) for i, t in _fmt.iter_timestamps(self._raw_log_cache)
-            ]
+            ts_points: List[Tuple[datetime, int]] = []
+            for i, line in enumerate(self._raw_log_cache):
+                if i and i % 500_000 == 0:
+                    _progress("timestamps", i)
+                t = _fmt.parse(line)
+                if t is not None:
+                    ts_points.append((t, i))
 
             # --- Sanity check: verify attachment issue_time falls within log's actual time range ---
             if ts_points:
@@ -478,6 +495,7 @@ class LogScopeMixin:
                     verdicts: List[Optional[bool]] = [None] * total_lines
                     for t, i in ts_points:
                         verdicts[i] = window_start <= t <= window_end
+                    _progress("selecting the issue window", total_lines)
                     seg2_start_idx, seg2_end_idx, seg2_lines, dropped = (
                         self._strict_window(verdicts))
 
@@ -533,6 +551,7 @@ class LogScopeMixin:
         # ------------------------------------------------------------------
         # Merge Segment1 + Segment2 → _scoped_log_lines (de-duplicated)
         # ------------------------------------------------------------------
+        _progress("merging scoped lines", total_lines)
         # Use an OrderedDict-style approach: keep insertion order, skip dupes.
         seen_ids: set = set()
         merged: List[str] = []

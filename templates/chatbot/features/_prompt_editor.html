@@ -16,12 +16,12 @@
         <div class="fbd-body">
             <div style="font-size:0.82rem;color:#555;margin-bottom:10px;">
                 <strong>① Prompt.</strong> Choose a three-section .md file or edit
-                below. This changes only this agent on this machine; the next
-                question uses it without a restart.
+                below. A new conversation starts with this agent's original
+                prompt; changes here apply only to this conversation.
             </div>
 
             <details id="prompt-advanced" style="margin-bottom:8px;">
-                <summary style="cursor:pointer;font-size:0.8rem;">Advanced: individual sections, shared prompts &amp; sources</summary>
+                <summary style="cursor:pointer;font-size:0.8rem;">Advanced: individual sections &amp; prompt sources</summary>
                 <div id="prompt-doc-tabs" class="prompt-doc-tabs" style="margin-top:8px;"></div>
             </details>
 
@@ -80,16 +80,14 @@
             </div>
 
             <details style="margin-top:8px;font-size:0.8rem;">
-                <summary style="cursor:pointer;">Advanced: restore or share this prompt</summary>
+                <summary style="cursor:pointer;">Advanced: load or restore prompt text</summary>
                 <div style="display:flex;gap:8px;align-items:center;margin-top:8px;flex-wrap:wrap;">
                 <button type="button" class="fbd-btn" onclick="loadPromptText('shared')"
                         title="Replace the editor's contents with the shared text">Load shared</button>
                 <button type="button" class="fbd-btn" onclick="loadPromptText('builtin')"
                         title="Replace the editor's contents with the text this agent ships with">Load built-in</button>
                 <button type="button" class="fbd-btn" id="prompt-revert-btn" onclick="revertPrompt()"
-                        title="Delete your copy, so this prompt reads the shared text again">Revert to shared</button>
-                <button type="button" class="fbd-btn" id="prompt-upload-btn" onclick="uploadPrompt()"
-                        title="Copy your version to the shared folder, for everyone">⬆ Upload to share</button>
+                        title="Use the original prompt again in this conversation">Restore original</button>
                 </div>
             </details>
         </div>

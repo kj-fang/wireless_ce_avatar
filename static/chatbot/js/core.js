@@ -86,9 +86,9 @@
 
     // Lightweight new-session flow for profiles that intentionally do not
     // load the conversation-history feature (currently NW).  It resets only
-    // the conversation while preserving the selected log and loaded skills,
-    // matching the legacy NW "Reset Conversation" behavior without bringing
-    // back the removed Actions column or the 900-line history controller.
+    // the conversation while preserving the selected log. Custom prompts and
+    // skills return to this profile's originals on the new conversation.
+    // This does not bring back the removed Actions column or history controller.
     async function startNewConversationKeepingLog(button) {
         const originalText = button ? button.textContent : '';
         if (button) {

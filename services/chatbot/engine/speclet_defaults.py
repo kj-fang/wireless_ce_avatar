@@ -310,3 +310,13 @@ def default_speclet(profile: str, kind: str) -> str:
         return join_bundle({part: DEFAULTS.get(f"{profile}_{part}", "")
                             for part in ("prompt", "report", "suggest_time")})
     return DEFAULTS.get(f"{profile}_{kind}", "")
+
+
+def conversation_speclet(agent, kind: str) -> str:
+    """Profile default unless this conversation explicitly chose another text.
+
+    The shared Speclets mirror and a previous conversation's local copy are
+    library sources, not automatic overrides of a fresh conversation.
+    """
+    overrides = getattr(agent, "prompt_overrides", {})
+    return overrides.get(kind) or default_speclet(agent.capabilities.profile, kind)

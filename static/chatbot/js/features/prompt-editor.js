@@ -18,6 +18,7 @@
     //: "switch" or "keep". Save & use waits on it, so a retargeted agent
     //: cannot be saved while still reading the old domain's skills.
     let skillChoice = null;
+    let skillPath = null;   // staged until Save & use; choosing a file is not activation
 
     const el = (id) => document.getElementById(id);
     const status = (msg, kind) => {
@@ -30,6 +31,7 @@
 
     // A document's live source, said the way a person would.
     const sourceLabel = (source) => ({
+        conversation: 'this conversation only',
         local: 'your copy',
         shared: 'the shared folder',
         'built-in': 'the text this agent ships with',
@@ -79,7 +81,7 @@
         // Otherwise a single-document file sitting next to a bundle that
         // outranks it looks like the file in use, and it is not.
         if (doc.via_bundle) bits.push('text comes from the one-file bundle');
-        if (doc.has_local) {
+        if (doc.has_local && doc.source === 'local') {
             bits.push(`your copy saved ${doc.local_mtime || 'earlier'}`);
         }
         if (doc.has_shared) {
@@ -92,13 +94,14 @@
         // Nothing to revert or upload without a copy of your own.
         const revert = el('prompt-revert-btn');
         const upload = el('prompt-upload-btn');
-        if (revert) revert.disabled = !doc.has_local;
-        if (upload) upload.disabled = !doc.has_local;
+        if (revert) revert.disabled = doc.source !== 'conversation';
+        if (upload) upload.disabled = true; // session edits are never published implicitly
     }
 
     async function selectDoc(docId) {
         current = docId;
         skillChoice = null;
+        skillPath = null;
         renderTabs();
         renderMeta();
         status('Loading…');
@@ -131,6 +134,7 @@
         const advanced = el('prompt-advanced');
         if (advanced) advanced.open = false;
         skillChoice = null;
+        skillPath = null;
         refreshSaveState();
         status('Loading…');
         try {
@@ -251,19 +255,33 @@
     // the menu this agent's prompt tells it to choose from. "append" extends
     // the set, which is what the sidebar button has always done.
     window.chooseSkills = async function (choice) {
-        skillChoice = (choice === 'replace' || choice === 'append') ? choice : 'keep';
-        refreshSaveState();
-        if (skillChoice === 'keep') {
+        if (choice === 'keep') {
+            skillChoice = 'keep';
+            skillPath = null;
+            refreshSaveState();
             status('Skills left as they are. Save & use when ready.', 'ok');
             return;
         }
+        skillChoice = null;
+        skillPath = null;
+        refreshSaveState();
         status('Opening the skills file picker…');
-        await appendSkillsFromYaml(skillChoice);
-        // appendSkillsFromYaml reports into the sidebar's status line, which
-        // is behind this panel, so repeat its outcome where it can be seen.
-        const sidebar = document.getElementById('skill-editor-status');
-        const said = (sidebar && sidebar.textContent || '').trim();
-        status(said || 'Skills unchanged.', said.startsWith('✘') ? 'err' : 'ok');
+        try {
+            const picked = await call('/browse_yaml');
+            const path = String(picked.path || '').trim();
+            if (!path) { status('No file selected; skills unchanged.'); return; }
+            if (choice === 'replace' && !confirm(
+                'Replace this conversation’s skills with the chosen YAML when you press Save & use?')) {
+                status('Skills unchanged.');
+                return;
+            }
+            skillPath = path;
+            skillChoice = choice;
+            refreshSaveState();
+            status('Skills file selected. Prompt and skills will change together on Save & use.', 'ok');
+        } catch (e) {
+            status('Could not choose skills: ' + e.message, 'err');
+        }
     };
 
     // Only the document that decides what the agent IS. Saving a report
@@ -286,8 +304,13 @@
             const data = await call('/prompts/save', {
                 method: 'POST',
                 headers: { 'Content-Type': 'application/json' },
-                body: JSON.stringify({ doc: current, text: text }),
+                body: JSON.stringify({ doc: current, text: text,
+                    skill_mode: skillChoice || 'keep', skill_yaml_path: skillPath || '' }),
             });
+            if (data.skills && typeof renderSkills === 'function') renderSkills(data.skills);
+            if (data.skills && typeof refreshSkillSourcePanel === 'function') {
+                await refreshSkillSourcePanel();
+            }
             // Both steps are done, so the panel gets out of the way instead of
             // leaving the person to find the Close button.
             closePromptEditor();
@@ -304,7 +327,7 @@
     };
 
     window.revertPrompt = async function () {
-        if (!confirm('Delete your copy of this prompt and go back to the shared text?')) return;
+        if (!confirm('Restore the original prompt for this conversation?')) return;
         status('Reverting…');
         try {
             const data = await call('/prompts/revert', {

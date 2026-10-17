@@ -5,7 +5,8 @@ from __future__ import annotations
 from dataclasses import dataclass
 from typing import Any, Callable, Collection, Mapping
 
-from flask import Blueprint, jsonify
+from flask import Blueprint, jsonify, session
+from flask.sessions import NullSession
 
 from services.chatbot.session import (
     ChatbotUseCases,
@@ -227,7 +228,12 @@ def create_chatbot_blueprint(config: ChatbotBlueprintConfig) -> Blueprint:
         # here so turns stop accumulating into the previous one.
         if config.on_reset is not None:
             config.on_reset()
-        return _json_result(use_cases.reset_conversation())
+        result = use_cases.reset_conversation()
+        if result.payload.get("success") and not isinstance(session._get_current_object(), NullSession):
+            # A new draft must not re-adopt the previous conversation's
+            # detached job agent (and its custom prompt/skills) on Send.
+            session.pop("feedback_conversation_id", None)
+        return _json_result(result)
 
     def get_skills():
         return _json_result(use_cases.get_skills())

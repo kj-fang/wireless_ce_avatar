@@ -28,9 +28,9 @@
             yamlPath = (pickData && pickData.path) ? String(pickData.path).trim() : '';
         } catch (e) {
             if (statusEl) statusEl.textContent = '✘ Could not open file picker: ' + e.message;
-            return;
+            return false;
         }
-        if (!yamlPath) return;   // user cancelled the dialog
+        if (!yamlPath) return false;   // user cancelled the dialog
 
         if (replacing && !confirm(
                 'Replace this agent\'s skills with the ones in the chosen file?\n\n'
@@ -38,7 +38,7 @@
                 + 'offered the previous domain\'s filters. Your current set stays in '
                 + 'its own dated file, and the shared baseline is untouched.')) {
             if (statusEl) statusEl.textContent = 'Skills left as they are.';
-            return;
+            return false;
         }
         if (statusEl) statusEl.textContent = replacing ? 'Replacing…' : 'Importing…';
         try {
@@ -57,11 +57,13 @@
                 if (typeof refreshSkillSourcePanel === 'function') {
                     await refreshSkillSourcePanel();
                 }
+                return true;
             } else if (statusEl) {
                 statusEl.textContent = '✘ ' + (data && data.error ? data.error : 'Import failed.');
             }
         } catch (e) {
             if (statusEl) statusEl.textContent = '✘ Network error: ' + e.message;
         }
+        return false;
     }
     window.appendSkillsFromYaml = appendSkillsFromYaml;

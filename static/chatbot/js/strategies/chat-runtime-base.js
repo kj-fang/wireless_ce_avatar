@@ -276,7 +276,12 @@
         // Soft gate: first round without an Issue Time. Ask for explicit
         // confirmation via a modal dialog before proceeding.
         const firstRound = !firstRoundSent;
-        if (firstRound && !issueTime) {
+        // A boot-elapsed offset in the question is an issue time for a log
+        // that has no calendar — asking to confirm "no issue time" there sends
+        // the user back to the AI dialog that produced the offset.
+        const carriesBootElapsed = typeof questionCarriesBootElapsed === 'function'
+            && questionCarriesBootElapsed(desc);
+        if (firstRound && !issueTime && !carriesBootElapsed) {
             const confirmed = await confirmNoIssueTime();
             if (!confirmed) {
                 input.focus();

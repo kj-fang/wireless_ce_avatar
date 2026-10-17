@@ -240,6 +240,18 @@
     };
 
     IssueTimeStrategyBase.prototype.confirmLlmTimeConsent = async function () {
+        // The description can be written or corrected in the dialog itself, so
+        // read it back from there — and keep the chat box in step, since that
+        // same text is the question the user is about to ask.
+        const edited = document.getElementById('llm-consent-text');
+        if (edited) {
+            _llmTimeConsentText = (edited.value || '').trim();
+            const input = document.getElementById('user-input');
+            if (input && input.value.trim() !== _llmTimeConsentText) {
+                input.value = _llmTimeConsentText;
+                input.dispatchEvent(new Event('input', { bubbles: true }));
+            }
+        }
         closeLlmTimeConsent();
         const btn = document.getElementById('ai-time-btn');
         const orig = btn ? btn.innerHTML : '';

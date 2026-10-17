@@ -7,6 +7,19 @@ import os
 from typing import Any, Optional
 
 
+def _llm_error_for_user(exc: Exception, step_idx: int, model: str) -> str:
+    """Explain permission failures without exposing the provider's resource details."""
+    status = getattr(exc, "status_code", None)
+    if status == 403 or type(exc).__name__ == "ForbiddenError":
+        return (
+            f"LLM access denied (HTTP 403) at reasoning step {step_idx}. "
+            f"The current account/token cannot use model {model}. "
+            "Check the configured model and ask your administrator for access. "
+            "Changing the log or issue time will not fix this permission error."
+        )
+    return f"LLM API error at reasoning step {step_idx}: {exc}"
+
+
 class ConversationMixin:
     """Conversation behavior for the composed agent."""
 
@@ -570,8 +583,9 @@ class ConversationMixin:
                     max_tokens=4096,
                 )
             except Exception as e:
-                error_msg = f"LLM API error at reasoning step {step_idx}: {str(e)}"
-                print(f"[ERROR] {error_msg}")
+                error_msg = _llm_error_for_user(e, step_idx, self.model)
+                # Keep provider details in the server log, not in the chat UI.
+                print(f"[ERROR] LLM API error at reasoning step {step_idx}: {e}")
                 # Dump the role + tool-id skeleton so a tool_use/tool_result
                 # mismatch can be pinpointed by message index + id.
                 if self.capabilities.diagnose_history_on_llm_error:

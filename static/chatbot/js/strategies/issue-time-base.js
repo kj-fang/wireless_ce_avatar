@@ -401,10 +401,13 @@
 
     IssueTimeStrategyBase.prototype.refreshIssueTimeDateOptional = function () {
         const noDate = (window.__logHasDate === false);
+        const hasAxis = (window.__logTimeAxis !== false);
         const hint = document.getElementById('it-nodate-hint');
-        if (hint) hint.style.display = noDate ? 'block' : 'none';
+        // "Time only" applies to clock-based logs, not unanchored dmesg:
+        // boot-elapsed seconds cannot be entered as a wall-clock issue time.
+        if (hint) hint.style.display = noDate && hasAxis ? 'block' : 'none';
         this._applyDateFieldState(noDate);
-        this._applyTimeAxisState(window.__logTimeAxis !== false);
+        this._applyTimeAxisState(hasAxis);
         if (typeof updateIssueTimeDisplay === 'function') updateIssueTimeDisplay();
         if (typeof validateUserInput === 'function') validateUserInput();
     };

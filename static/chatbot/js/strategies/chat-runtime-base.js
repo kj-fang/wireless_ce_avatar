@@ -46,7 +46,7 @@
         wrapper.className = 'msg-row assistant';
         wrapper.innerHTML =
             `<div class="avatar-icon">🕒</div>` +
-            `<div style="flex:1;"><span class="incident-tag">Incident ${idx} / ${total}` +
+            `<div class="msg-body"><span class="incident-tag">Incident ${idx} / ${total}` +
             (fmt ? ` &nbsp;·&nbsp; ${fmt}` : '') + `</span></div>`;
         document.getElementById('chat-window').appendChild(wrapper);
         scrollBottom();
@@ -150,9 +150,7 @@
         const wrapper = document.createElement('div');
         wrapper.className = 'msg-row assistant';
         wrapper.style.maxWidth = '95%';
-        // min-width:0 lets a wide code block scroll inside the card instead of
-        // stretching the whole report past the chat column.
-        wrapper.innerHTML = `<div class="avatar-icon">🤖</div><div style="flex:1;min-width:0;">${html}${turnId ? renderFeedbackWidget(turnId) : ''}</div>`;
+        wrapper.innerHTML = `<div class="avatar-icon">🤖</div><div class="msg-body">${html}${turnId ? renderFeedbackWidget(turnId) : ''}</div>`;
         document.getElementById('chat-window').appendChild(wrapper);
         scrollBottom();
 

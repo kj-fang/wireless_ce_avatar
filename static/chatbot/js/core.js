@@ -231,7 +231,7 @@
         row.className = 'msg-row assistant';
         row.innerHTML = `
             <div class="avatar-icon">🤖</div>
-            <div style="flex:1;min-width:0;">
+            <div class="msg-body">
                 <div class="msg-bubble">${marked.parse(text)}</div>
                 ${showFeedback ? renderFeedbackWidget(turnId) : ''}
             </div>
@@ -448,7 +448,7 @@
             const wrapper = document.createElement('div');
             wrapper.className = 'msg-row assistant';
             wrapper.style.maxWidth = '95%';
-            wrapper.innerHTML = `<div class="avatar-icon">${avatar}</div><div style="flex:1;">${html}</div>`;
+            wrapper.innerHTML = `<div class="avatar-icon">${avatar}</div><div class="msg-body">${html}</div>`;
             document.getElementById('chat-window').appendChild(wrapper);
             bodyEl = document.getElementById(cardId);
             scrollBottom();
@@ -577,7 +577,7 @@
         const wrapper = document.createElement('div');
         wrapper.className = 'msg-row assistant';
         wrapper.style.maxWidth = '95%';
-        wrapper.innerHTML = `<div class="avatar-icon">🤖</div><div style="flex:1;">${html}</div>`;
+        wrapper.innerHTML = `<div class="avatar-icon">🤖</div><div class="msg-body">${html}</div>`;
         document.getElementById('chat-window').appendChild(wrapper);
         scrollBottom();
 

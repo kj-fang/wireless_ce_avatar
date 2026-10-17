@@ -11,12 +11,12 @@
 Examples for the current cycle:
 
 ```text
-main:         99.2.0, 99.2.1, 99.2.2
-release/1.2:  1.2.0, 1.2.1, 1.2.2
-feature/fix:  99.2.1-dev.a1b2c3d
+main:         99.3.0, 99.3.1, 99.3.2
+release/1.3:  1.3.0, 1.3.1, 1.3.2
+feature/fix:  99.3.1-dev.a1b2c3d
 ```
 
-The `99` major identifies non-stable builds. The nightly and release counters are intentionally independent: `99.2.8` and `1.2.2` are both valid at the same time.
+The `99` major identifies non-stable builds. The nightly and release counters are intentionally independent: `99.3.8` and `1.3.2` are both valid at the same time.
 
 ## GitHub Downloads
 
@@ -36,7 +36,7 @@ The nightly workflow also uploads a GitHub Actions artifact. The prerelease ZIP 
 - Pull requests targeting `main`: developer build
 - Pushes to `main`: nightly build
 
-Nightly builds use the configured cycle base and produce `99.2.<cycle_checkin>`. The current configuration uses `release/1.2` as the cycle-base reference for the `99.2` cycle.
+Nightly builds use the configured cycle base and produce `99.3.<cycle_checkin>`. The current configuration uses `release/1.3` as the cycle-base reference for the `99.3` cycle. Until that branch exists, builds use `main` as the temporary base; create the branch from the merged cycle-start commit before any further changes reach `main`.
 
 ### `release/X.Y`
 
@@ -58,14 +58,14 @@ Use `release/1.2`, not `release/v1.2`. The `v` prefix belongs on Git tags, not b
 Feature and fix branches produce developer versions such as:
 
 ```text
-99.2.1-dev.a1b2c3d
+99.3.1-dev.a1b2c3d
 ```
 
 The SHA identifies the exact source commit. These builds are posted to the pull request and are not stable releases.
 
 ## Starting a New Release Cycle
 
-For the next cycle, such as `1.3`, use this order:
+For a new cycle, such as `1.3`, use this order:
 
 1. Update the nightly cycle from `99.2` to `99.3` in both the GitHub Actions workflow and the local build script.
 2. Commit the change on a branch with a message such as:
@@ -75,8 +75,8 @@ For the next cycle, such as `1.3`, use this order:
    ```
 
 3. Open a pull request to `main` and merge it using the repository's branch-protection rules.
-4. After the pull request is merged, create an immutable cycle-base reference from the resulting `main` commit. Prefer a tag such as `nightly-99.3-base`.
-5. Create the stable branch from that exact `main` commit:
+4. The first push build on `main` uses the merged commit itself as the temporary base and produces `99.3.0`.
+5. Immediately create the stable branch from that exact merged `main` commit; the version scripts use this branch as the lasting cycle base:
 
    ```powershell
    git fetch origin --prune
@@ -135,9 +135,9 @@ The script mirrors CI:
 
 | Current branch | Build type | Example |
 |---|---|---|
-| `main` | Nightly | `99.2.0` |
-| `release/1.2` | Stable release | `1.2.0` |
-| `feature/my-fix` | Developer | `99.2.0-dev.a1b2c3d` |
+| `main` | Nightly | `99.3.0` |
+| `release/1.3` | Stable release | `1.3.0` |
+| `feature/my-fix` | Developer | `99.3.0-dev.a1b2c3d` |
 
 Do not manually edit `configs/version.py` or `version_info.txt`; the build process regenerates them.
 
@@ -153,4 +153,4 @@ Do not manually edit `configs/version.py` or `version_info.txt`; the build proce
 
 ## Historical Note
 
-The `1.2` cycle exposed why a release branch should not be the permanent nightly anchor: cherry-picks and squash merges intentionally create different commit IDs. Future cycles should use an immutable cycle-base tag created from the final merged `main` commit, then create the release branch from that same commit.
+The `1.2` cycle exposed why the base must be chosen after the cycle-start PR merges: cherry-picks and squash merges intentionally create different commit IDs. The current scripts use the merge base of `main` and the release branch. An immutable cycle-base tag would require updating those scripts to resolve tags before adopting that approach.

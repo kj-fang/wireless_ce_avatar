@@ -93,7 +93,6 @@
     }
 
     async function selectDoc(docId) {
-        hideSkillOffer();
         current = docId;
         renderTabs();
         renderMeta();
@@ -123,7 +122,6 @@
         if (!modal) return;
         modal.classList.add('open');
         modal.setAttribute('aria-hidden', 'false');
-        hideSkillOffer();
         const advanced = el('prompt-advanced');
         if (advanced) advanced.open = false;
         status('Loading…');
@@ -140,7 +138,6 @@
         if (!modal) return;
         modal.classList.remove('open');
         modal.setAttribute('aria-hidden', 'true');
-        hideSkillOffer();
     };
 
     // Browsers deliberately expose only the chosen file's contents, never its
@@ -169,8 +166,7 @@
             }
             if (current !== bundle.doc) await selectDoc(bundle.doc);
             el('prompt-editor-text').value = content;
-            hideSkillOffer();
-            status(`Loaded ${file.name} into the editor — review it, then Save & use.`, 'ok');
+                status(`Loaded ${file.name} into the editor — review it, then Save & use.`, 'ok');
         } catch (e) {
             status(`Could not read ${file.name}: ${e.message}`, 'err');
         }
@@ -191,44 +187,35 @@
     // Changing the prompt is only half of retargeting an agent: the prompt
     // decides what it looks for, the skills decide which lines it is given to
     // look at. A new domain almost always needs both, so the saved prompt
-    // offers the other half right here instead of hoping the person remembers
-    // the sidebar button. Two plain choices, because tuning the wording of one
-    // prompt needs no skill change: "Keep skills" just dismisses this, and
-    // "Switch skills" dismisses it too and opens the picker the sidebar
-    // button opens -- it does not decide anything on its own.
-    // The offer belongs to one save, so it never outlives it: switching
-    // document, reopening or closing the panel all take it away.
-    function hideSkillOffer() {
-        const offer = el('prompt-skill-offer');
-        if (offer) offer.style.display = 'none';
+    // offers the other half — but the panel has just closed, so the offer is
+    // a toast rather than a banner inside it. Its action switches the skills;
+    // dismissing it (or letting it expire) keeps them, which is the right
+    // default: tuning the wording of one prompt needs no skill change.
+    function offerSkillSwap(lead, offerSkills) {
+        const canSwitch = offerSkills && typeof appendSkillsFromYaml === 'function';
+        if (typeof showToast !== 'function') return;
+        showToast({
+            message: canSwitch
+                ? `${lead} The skills decide which log lines it reads — switch those too?`
+                : lead,
+            actionLabel: canSwitch ? 'Switch skills…' : undefined,
+            onAction: canSwitch ? switchSkillsFromPrompt : undefined,
+            // Long enough to be a decision rather than something to catch.
+            ttlMs: canSwitch ? 45000 : 12000,
+        });
     }
 
-    function offerSkillSwap(lead) {
-        const offer = el('prompt-skill-offer');
-        // A profile could have the prompt editor without the append button.
-        if (!offer || typeof appendSkillsFromYaml !== 'function') {
-            status(lead, 'ok');
-            return;
-        }
-        status(lead, 'ok');
-        offer.style.display = 'flex';
-    }
-
-    window.dismissSkillOffer = function () {
-        hideSkillOffer();
-        status('Prompt saved. Skills left as they are.', 'ok');
-    };
-
-    window.switchSkillsFromPrompt = async function () {
-        hideSkillOffer();
-        status('Opening the skills file picker…');
+    async function switchSkillsFromPrompt() {
         await appendSkillsFromYaml();
-        // appendSkillsFromYaml reports into the sidebar's status line, which is
-        // behind this modal, so repeat its outcome where it can be seen.
+        // appendSkillsFromYaml reports into the sidebar's status line; say the
+        // outcome where the person is looking instead.
         const sidebar = document.getElementById('skill-editor-status');
         const said = (sidebar && sidebar.textContent || '').trim();
-        status(said || 'Skills unchanged.', said.startsWith('✘') ? 'err' : 'ok');
-    };
+        if (typeof showToast === 'function') {
+            showToast({ message: said || 'Skills unchanged.', ttlMs: 12000 });
+        }
+    }
+    window.switchSkillsFromPrompt = switchSkillsFromPrompt;
 
     // Only the document that decides what the agent IS. Saving a report
     // skeleton, or one of the engine's shared documents, is not a change of
@@ -261,11 +248,11 @@
             renderMeta();
             loaded = await call(`/prompts/get?doc=${encodeURIComponent(current)}`);
             const saved = data.message || 'Saved.';
-            if (identity && changed) {
-                offerSkillSwap(saved);
-            } else {
-                status(saved, 'ok');
-            }
+            // Save & use is the end of the job: the prompt is live, so the
+            // panel gets out of the way instead of leaving the person to
+            // find the Close button.
+            closePromptEditor();
+            offerSkillSwap(saved, identity && changed);
         } catch (e) {
             status(e.message, 'err');
         }

@@ -62,10 +62,15 @@
                     looks for; the <strong>skills</strong> decide which log lines
                     it is given. Switch those too?
                 </span>
-                <button type="button" class="fbd-btn primary" id="prompt-skill-switch"
-                        onclick="chooseSkills('switch')"
-                        title="Pick a skills YAML now; nothing is saved until Save &amp; use">
-                    Switch skills…
+                <button type="button" class="fbd-btn primary" id="prompt-skill-replace"
+                        onclick="chooseSkills('replace')"
+                        title="Pick a skills YAML; it becomes this agent's whole skill set. For a new domain — the old domain's skills are dropped so they cannot be chosen.">
+                    Replace skills…
+                </button>
+                <button type="button" class="fbd-btn" id="prompt-skill-add"
+                        onclick="chooseSkills('append')"
+                        title="Pick a skills YAML and add it to the ones this agent already has">
+                    Add skills…
                 </button>
                 <button type="button" class="fbd-btn" id="prompt-skill-keep"
                         onclick="chooseSkills('keep')"

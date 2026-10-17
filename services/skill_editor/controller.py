@@ -462,7 +462,19 @@ def append_skills_yaml_route(context: SkillAppendContext):
     module. Every dependency it needs was already on SkillEditorContext, so
     here it is a single body both full agents share.
 
-    Request JSON: { "yaml_path": "/path/to/skills.yaml" }
+    ``mode`` chooses what happens to the skills already there:
+
+      "append"  (default)  keep them, add the file's, same-name wins
+      "replace"            the file's skills become the whole set
+
+    Appending is right when a skill set is being extended. Replacing is for
+    retargeting an agent to another domain: merging there leaves the old
+    domain's skills in the menu the prompt tells the agent to choose from, so
+    a Bluetooth agent is still offered eight Wi-Fi filters and can spend a
+    step on one. Nothing is lost either way -- the previous set stays in its
+    own dated file, and the cloud baseline is untouched.
+
+    Request JSON: { "yaml_path": "/path/to/skills.yaml", "mode": "append" }
     """
     from pathlib import Path
 
@@ -470,6 +482,7 @@ def append_skills_yaml_route(context: SkillAppendContext):
 
     data = request.get_json(silent=True) or {}
     yaml_path = (data.get("yaml_path") or "").strip()
+    replace = str(data.get("mode") or "append").strip().lower() == "replace"
     if not yaml_path:
         return jsonify({"success": False, "error": "yaml_path is required."}), 400
 
@@ -494,7 +507,17 @@ def append_skills_yaml_route(context: SkillAppendContext):
             base_path, _ = context.latest_cloud_baseline()
         existing = context.read_yaml_file(base_path) if base_path is not None else {}
 
-        merged, appended, overwritten = merge_overwrite(existing, valid)
+        if replace:
+            # Everything in the file is "appended" from the destination's point
+            # of view, and whatever it did not name is dropped -- reported, so
+            # the message says what left rather than only what arrived.
+            merged = dict(valid)
+            appended = list(valid)
+            overwritten = []
+            dropped = [k for k in (existing or {}) if k not in valid]
+        else:
+            merged, appended, overwritten = merge_overwrite(existing, valid)
+            dropped = []
         target = context.persist_user_yaml_snapshot(merged)
 
         context.set_active_source("user")
@@ -503,10 +526,15 @@ def append_skills_yaml_route(context: SkillAppendContext):
         session["yaml_modified_path"] = str(target)
 
         parts = []
-        if appended:
-            parts.append(f"appended {len(appended)}")
-        if overwritten:
-            parts.append(f"overwrote {len(overwritten)}")
+        if replace:
+            parts.append(f"now {len(appended)} skill(s)")
+            if dropped:
+                parts.append(f"removed {len(dropped)}")
+        else:
+            if appended:
+                parts.append(f"appended {len(appended)}")
+            if overwritten:
+                parts.append(f"overwrote {len(overwritten)}")
         if skipped:
             parts.append(f"skipped {len(skipped)}")
         summary = ", ".join(parts) if parts else "no changes"
@@ -514,12 +542,15 @@ def append_skills_yaml_route(context: SkillAppendContext):
         return jsonify({
             "success":       True,
             "active_source": "user",
+            "mode":          "replace" if replace else "append",
             "target_path":   str(target),
             "filename":      target.name,
             "appended":      appended,
             "overwritten":   overwritten,
+            "dropped":       dropped,
             "skipped":       skipped,
-            "message":       f"Imported from {Path(yaml_path).name}: {summary}.",
+            "message":       (f"{'Replaced with' if replace else 'Imported from'} "
+                              f"{Path(yaml_path).name}: {summary}."),
             "skills":        skills,
         })
     except Exception as e:

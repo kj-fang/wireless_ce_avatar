@@ -246,15 +246,19 @@
         refreshSaveState();
     });
 
+    // "replace" is the one that matches a domain change: the chosen file
+    // becomes the whole set, so the previous domain's skills are not left in
+    // the menu this agent's prompt tells it to choose from. "append" extends
+    // the set, which is what the sidebar button has always done.
     window.chooseSkills = async function (choice) {
-        skillChoice = choice === 'switch' ? 'switch' : 'keep';
+        skillChoice = (choice === 'replace' || choice === 'append') ? choice : 'keep';
         refreshSaveState();
         if (skillChoice === 'keep') {
             status('Skills left as they are. Save & use when ready.', 'ok');
             return;
         }
         status('Opening the skills file picker…');
-        await appendSkillsFromYaml();
+        await appendSkillsFromYaml(skillChoice);
         // appendSkillsFromYaml reports into the sidebar's status line, which
         // is behind this panel, so repeat its outcome where it can be seen.
         const sidebar = document.getElementById('skill-editor-status');
@@ -290,7 +294,7 @@
             if (typeof showToast === 'function') {
                 showToast({
                     message: (data.message || 'Saved.')
-                        + (skillChoice === 'switch' ? '' : ' Skills left as they are.'),
+                        + (skillChoice === 'keep' ? ' Skills left as they are.' : ''),
                     ttlMs: 12000,
                 });
             }

@@ -14,7 +14,12 @@
     // /append_skills_yaml merges that file's skills into the active user YAML.
     // Both endpoints are profile-relative, so this one body serves BT and
     // Wi-Fi — main carried a copy of it in each profile's template instead.
-    async function appendSkillsFromYaml() {
+    // `mode` is "append" (the sidebar button, extending a set) or "replace"
+    // (the prompt panel retargeting a domain, where leaving the old domain's
+    // skills in the menu is the whole problem). The server owns what each
+    // one does; this only carries the choice.
+    async function appendSkillsFromYaml(mode) {
+        const replacing = mode === 'replace';
         const statusEl = document.getElementById('skill-editor-status');
         let yamlPath = '';
         try {
@@ -27,12 +32,20 @@
         }
         if (!yamlPath) return;   // user cancelled the dialog
 
-        if (statusEl) statusEl.textContent = 'Importing…';
+        if (replacing && !confirm(
+                'Replace this agent\'s skills with the ones in the chosen file?\n\n'
+                + 'The skills it has now are dropped, so a retargeted agent is not '
+                + 'offered the previous domain\'s filters. Your current set stays in '
+                + 'its own dated file, and the shared baseline is untouched.')) {
+            if (statusEl) statusEl.textContent = 'Skills left as they are.';
+            return;
+        }
+        if (statusEl) statusEl.textContent = replacing ? 'Replacing…' : 'Importing…';
         try {
             const res = await fetch(`${CHATBOT_API}/append_skills_yaml`, {
                 method: 'POST',
                 headers: {'Content-Type': 'application/json'},
-                body: JSON.stringify({yaml_path: yamlPath}),
+                body: JSON.stringify({yaml_path: yamlPath, mode: replacing ? 'replace' : 'append'}),
             });
             const data = await res.json().catch(() => ({}));
             if (data && data.success) {

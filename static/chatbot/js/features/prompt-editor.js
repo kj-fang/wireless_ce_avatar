@@ -98,6 +98,81 @@
         if (upload) upload.disabled = true; // session edits are never published implicitly
     }
 
+    // ── Keeping an edit ────────────────────────────────────────────────────
+    // A save applies to this conversation and writes nothing to disk, which is
+    // the point: one person's experiment must not become everyone's agent. The
+    // cost is that leaving the page ends the conversation and the edit with it.
+    // So the panel closes the loop in two ways that need no server state:
+    //   * Download .md — the edit leaves as the file it already is, and comes
+    //     back through "Choose .md file…" in the next conversation. This is the
+    //     one to use for a prompt worth keeping.
+    //   * a draft in this browser — the unsaved text survives a reload or a
+    //     misclick. Per viewer, per document, never sent anywhere.
+    const draftKey = () => `promptDraft:${API}:${current || ''}`;
+
+    function saveDraft() {
+        const box = el('prompt-editor-text');
+        if (!box || !current) return;
+        try {
+            if (textChanged()) localStorage.setItem(draftKey(), box.value);
+            else localStorage.removeItem(draftKey());
+        } catch (e) { /* private window, or site data blocked */ }
+    }
+
+    function readDraft() {
+        try { return localStorage.getItem(draftKey()); } catch (e) { return null; }
+    }
+
+    function clearDraft() {
+        try { localStorage.removeItem(draftKey()); } catch (e) { /* as above */ }
+    }
+
+    function offerDraft() {
+        const bar = el('prompt-draft-bar');
+        if (!bar) return;
+        const draft = readDraft();
+        const show = !!draft && draft.trim() !== (loaded.live || '').trim();
+        bar.style.display = show ? 'flex' : 'none';
+    }
+
+    window.restorePromptDraft = function () {
+        const draft = readDraft();
+        if (!draft) return;
+        el('prompt-editor-text').value = draft;
+        const bar = el('prompt-draft-bar');
+        if (bar) bar.style.display = 'none';
+        refreshSaveState();
+        status('Restored your unsaved draft — not in use until Save & use.', 'ok');
+    };
+
+    window.discardPromptDraft = function () {
+        clearDraft();
+        const bar = el('prompt-draft-bar');
+        if (bar) bar.style.display = 'none';
+        status('Draft discarded.');
+    };
+
+    window.downloadPromptFile = function () {
+        const box = el('prompt-editor-text');
+        if (!box || !box.value.trim()) {
+            status('There is nothing in the editor to save.', 'err');
+            return;
+        }
+        const stamp = new Date().toISOString().slice(0, 10);
+        const base = (loaded.filename || 'agent_prompt.md').replace(/\.md$/i, '');
+        const blob = new Blob([box.value], { type: 'text/markdown;charset=utf-8' });
+        const url = URL.createObjectURL(blob);
+        const a = document.createElement('a');
+        a.href = url;
+        a.download = `${base}-${stamp}.md`;
+        document.body.appendChild(a);
+        a.click();
+        a.remove();
+        setTimeout(() => URL.revokeObjectURL(url), 0);
+        status(`Saved ${a.download}. Load it again with "Choose .md file…" in `
+               + `a later conversation.`, 'ok');
+    };
+
     async function selectDoc(docId) {
         current = docId;
         skillChoice = null;
@@ -109,6 +184,7 @@
             loaded = await call(`/prompts/get?doc=${encodeURIComponent(docId)}`);
             el('prompt-editor-text').value = loaded.live || '';
             el('prompt-editor-file').textContent = loaded.filename || '';
+            offerDraft();
             refreshSaveState();
             status('');
         } catch (e) {
@@ -246,7 +322,12 @@
     // to what it was withdraws both, and loading a .md file raises them.
     document.addEventListener('DOMContentLoaded', () => {
         const box = el('prompt-editor-text');
-        if (box) box.addEventListener('input', refreshSaveState);
+        if (box) {
+            box.addEventListener('input', () => {
+                refreshSaveState();
+                saveDraft();
+            });
+        }
         refreshSaveState();
     });
 
@@ -311,6 +392,8 @@
             if (data.skills && typeof refreshSkillSourcePanel === 'function') {
                 await refreshSkillSourcePanel();
             }
+            // The text is in use now, so the draft has nothing left to rescue.
+            clearDraft();
             // Both steps are done, so the panel gets out of the way instead of
             // leaving the person to find the Close button.
             closePromptEditor();
@@ -329,6 +412,7 @@
     window.revertPrompt = async function () {
         if (!confirm('Restore the original prompt for this conversation?')) return;
         status('Reverting…');
+        clearDraft();
         try {
             const data = await call('/prompts/revert', {
                 method: 'POST',

@@ -17,7 +17,10 @@
             <div style="font-size:0.82rem;color:#555;margin-bottom:10px;">
                 <strong>① Prompt.</strong> Choose a three-section .md file or edit
                 below. A new conversation starts with this agent's original
-                prompt; changes here apply only to this conversation.
+                prompt; changes here apply only to this conversation, so nobody
+                else's agent changes — and leaving the page ends the
+                conversation. <strong>Download .md</strong> to keep a prompt you
+                want again later; load it back with <strong>Choose .md file…</strong>.
             </div>
 
             <details id="prompt-advanced" style="margin-bottom:8px;">
@@ -30,7 +33,32 @@
                        onchange="choosePromptFile(this)">
                 <button type="button" class="fbd-btn" onclick="document.getElementById('prompt-file-input').click()"
                         title="Load a local .md file into the editor; nothing is saved until Save &amp; use">Choose .md file…</button>
+                <!-- The way out, and the answer to "my prompt disappeared when
+                     I left the page". A save applies to this conversation and
+                     writes nothing to disk on purpose; a prompt worth keeping
+                     leaves here as a .md and comes back through the button to
+                     the left. -->
+                <button type="button" class="fbd-btn" onclick="downloadPromptFile()"
+                        title="Save the editor's contents as a .md file you keep, so you can load it again in a later conversation">⬇ Download .md</button>
                 <span id="prompt-editor-status" role="status" style="font-size:0.78rem;color:#555;"></span>
+            </div>
+
+            <!-- Shown only when this browser is holding text you typed but
+                 never saved. It lives in this browser alone: it is not sent
+                 anywhere, and it does not reach another conversation. -->
+            <div id="prompt-draft-bar"
+                 style="display:none;align-items:center;gap:10px;flex-wrap:wrap;
+                        font-size:0.78rem;color:#334;background:#fffbeb;
+                        border:1px solid #fde68a;border-radius:8px;
+                        padding:7px 10px;margin-bottom:8px;">
+                <span style="flex:1;min-width:220px;">
+                    You have an <strong>unsaved draft</strong> of this prompt from
+                    earlier in this browser.
+                </span>
+                <button type="button" class="fbd-btn" onclick="restorePromptDraft()"
+                        title="Put your unsaved text back into the editor">Restore draft</button>
+                <button type="button" class="fbd-btn" onclick="discardPromptDraft()"
+                        title="Forget the draft and keep the prompt shown below">Discard</button>
             </div>
 
             <!-- Where the live text comes from, and what else is on disk -->

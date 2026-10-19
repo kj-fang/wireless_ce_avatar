@@ -198,7 +198,10 @@
           color: var(--muted); }
 
     /* ---------- page grid: main column + live analysis panel ---------- */
-    .page-grid { display: grid; grid-template-columns: minmax(0, 1160px) 440px;
+    /* The analysis text is read in the live panel, so it takes ~44% of the
+       window (min 520 px) and the main column gives way; narrower than
+       1480 px the panel moves under Step 1 instead. */
+    .page-grid { display: grid; grid-template-columns: minmax(0, 1160px) minmax(520px, 44%);
                  justify-content: center; align-items: start; }
     .page-grid > header { grid-column: 1 / -1; max-width: none; width: 100%; margin: 0; }
     .page-grid > main { margin: 0; max-width: none; min-width: 0; }
@@ -287,16 +290,21 @@
     .lp-dot.bad { background: var(--bad); }
     .lp-actions { display: flex; gap: 8px; flex-wrap: wrap; margin-top: 10px; }
     .lp-live { grid-column: 2 / 4; margin-top: 6px; background: #0b1017; border: 1px solid #223042;
-               border-radius: 6px; padding: 8px 10px; font-size: 12.5px; color: #dbe6f3; }
+               border-radius: 6px; padding: 10px 12px; font-size: 13.5px; color: #dbe6f3; line-height: 1.55; }
     .lp-live .lp-cap { margin-bottom: 6px; }
-    .lp-agent-steps { max-height: 190px; overflow: auto; }
+    .lp-agent-steps { max-height: 260px; overflow: auto; }
+    .lp-trace { margin-top: 8px; }
+    .lp-trace summary { color: #9fb3c8; cursor: pointer; font-size: 12.5px; }
+    .lp-trace .lp-as { padding: 3px 0; }
+    .lp-as.tool, .lp-as.fetch { color: #fff; font-weight: 550; }
+    .lp-as .skill { font-family: var(--mono); font-size: 12.5px; color: var(--accent-strong); }
     .lp-as { display: grid; grid-template-columns: 18px 1fr; column-gap: 6px; padding: 2px 0;
              color: #c7d3e0; }
     .lp-as .k { color: #9fb3c8; }
     .lp-as.conclusion { color: var(--good); } .lp-as.error, .lp-as.warning { color: var(--warn); }
     .lp-as.error { color: var(--bad); }
     .lp-res { margin-top: 8px; border-top: 1px solid #223042; padding-top: 8px; }
-    .lp-res .rc { color: #fff; }
+    .lp-res .rc { color: #fff; font-size: 14px; }
     .lp-res ul { margin: 6px 0 0; padding-left: 18px; color: #dbe6f3; }
     .lp-echo-q { color: #9fb3c8; }
     .lp-echo-a { color: #eef3f8; white-space: pre-wrap; margin: 2px 0 8px; max-height: 160px; overflow: auto; }
@@ -1475,6 +1483,7 @@
   function liveSentHtml(d, finished) {
     const sent = d.sent_for_analysis || [];
     if (sent.length) {
+      const sameDesc = sent.length > 1 && sent.every(x => (x.description || '') === (sent[0].description || ''));
       return sent.map((x, i) => {
         const differs = x.issue_time_log && x.issue_time_customer && x.issue_time_log !== x.issue_time_customer;
         const timeHtml = x.issue_time_customer
@@ -1489,7 +1498,8 @@
           timeHtml +
           `<dl class="lp-kv"><dt>Log</dt><dd class="mono">${esc(x.log_file || '—')}</dd>` +
           (range ? `<dt>Log covers</dt><dd class="mono">${esc(range)}</dd>` : '') + `</dl>` +
-          `<div class="lp-desc">${esc(x.description || '')}</div></div>`;
+          (sameDesc && i > 0 ? `<div class="lp-time-sub">same description as incident 1</div>`
+                             : `<div class="lp-desc">${esc(x.description || '')}</div>`) + `</div>`;
       }).join('');
     }
     if (!finished) {
@@ -1520,14 +1530,36 @@
         (r.result_type === 'partial_report' ? `<span class="lp-chip warn">partial report</span>` : '') +
         (r.involved_skills || []).map(k => `<span class="lp-chip">${esc(k)}</span>`).join('') + `</div>` +
         `<div class="rc">${esc(r.root_cause_summary || '(no root-cause summary)')}</div>` +
-        ((r.recommended_actions || []).length
-          ? `<ul>${r.recommended_actions.map(a => `<li>${esc(a)}</li>`).join('')}</ul>` : '');
+        liveTraceHtml(r.trace || []);
     } else if (r.result_type === 'error') {
       html += `<div style="color: var(--bad);">AI analysis failed: ${esc(r.error || 'unknown error')}</div>`;
     } else {
       html += `<div>${esc(r.text || 'no report produced' + (r.result_type ? ' (' + r.result_type + ')' : ''))}</div>`;
     }
     return html + `</div>`;
+  }
+
+  // The analysis trace after the run: which skills / steps the agent went
+  // through, in order. Tool invocations are the headline (the skill name is
+  // pulled out of "Invoking `Roaming`" / "Fetching filtered logs for `X`"),
+  // results and reasoning stay as sub-lines; bookkeeping lines are dropped.
+  function liveTraceHtml(trace) {
+    const shown = (trace || []).filter(st => !['usage', 'playbook', 'plan', 'step'].includes(st.kind));
+    if (!shown.length) return '';
+    const line = st => {
+      let text = st.text || '';
+      const m = /`([^`]+)`/.exec(text);
+      if ((st.kind === 'tool' || st.kind === 'fetch') && m) {
+        text = (st.kind === 'fetch' ? 'Filtered the log for ' : 'Ran skill ') + `<span class="skill">${esc(m[1])}</span>`;
+        return `<div class="lp-as ${esc(st.kind)}"><span class="k">${STEP_ICON[st.kind] || '·'}</span><span>${text}</span></div>`;
+      }
+      if (st.kind === 'result' && m) text = text.replace(/^Result\s*\(`[^`]+`\):\s*/, '');
+      return `<div class="lp-as ${esc(st.kind)}"><span class="k">${STEP_ICON[st.kind] || '·'}</span><span>${esc(text)}</span></div>`;
+    };
+    const tools = shown.filter(st => st.kind === 'tool' || st.kind === 'fetch').length;
+    return `<details class="lp-trace" open><summary>Analysis steps — ${shown.length} step${shown.length === 1 ? '' : 's'}` +
+      (tools ? `, ${tools} skill call${tools === 1 ? '' : 's'}` : '') + `</summary>` +
+      `<div class="lp-agent-steps">${shown.map(line).join('')}</div></details>`;
   }
 
   // Inline live box under "AI log analysis": the agent's steps as they

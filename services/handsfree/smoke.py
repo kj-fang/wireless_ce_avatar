@@ -564,6 +564,8 @@ def smoke_runner(tmp: Path) -> None:
               and final.get("status") == "report" and (final.get("result") or {}).get("confidence") == 90
               and "deauth" in (final.get("result") or {}).get("root_cause_summary", "").lower()
               and live.get("agent_results") and live["agent_results"][0]["confidence"] == 90
+              and live["agent_results"][0].get("trace") and live["incidents"][0].get("trace")
+              and all("kind" in st and "text" in st for st in live["agent_results"][0]["trace"])
               and live.get("incidents") and live["incidents"][0]["confidence"] == 90
               and live.get("log_path", "").endswith(".log")
               and "echo_live_summary" in live,

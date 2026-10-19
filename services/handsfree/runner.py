@@ -383,7 +383,9 @@ _STEP_KINDS = (("🧠 Thinking", "thinking"), ("🧠", "playbook"), ("💭", "st
 def _compact_step(step: dict, limit: int = 300) -> dict:
     """One agent step as the live panel shows it: a kind (icon), short text."""
     role = str(step.get("role") or "")
-    text = str(step.get("content") or "").strip()
+    # The agent writes markdown ("🧠 **Thinking:**", "🔍 **Fetching filtered
+    # logs** for `X`"): drop the bold markers so the kind markers below match.
+    text = str(step.get("content") or "").replace("**", "").strip()
     kind = {"tool": "result", "error": "error", "token_usage": "usage"}.get(role, "agent")
     for marker, name in _STEP_KINDS:
         if text.startswith(marker):
@@ -410,6 +412,9 @@ def _result_summary(inc: "IncidentReport") -> dict:
         "text": "" if rep else str(inc.report_text or "")[:600],
         "error": inc.error,
         "steps": len(inc.steps or []),
+        # The analysis trace: which skills / steps the agent went through, in
+        # order (the live panel shows it instead of the priority action list).
+        "trace": [_compact_step(st) for st in (inc.steps or [])][-40:],
     }
 
 

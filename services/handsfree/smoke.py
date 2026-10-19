@@ -466,7 +466,11 @@ def smoke_runner(tmp: Path) -> None:
 
         cis.CaseService.process_case = staticmethod(_fake_process)
         adc.process_single_zip = _fake_zip_proc
-        analysis = r.analyze_case("01234567")
+        # Same run with a snapshot collector (the page's live panel feed).
+        live_snaps: list = []
+        r_live = runner_mod.HandsfreeRunner(progress_cb=r.progress,
+                                            snapshot_cb=live_snaps.append)
+        analysis = r_live.analyze_case("01234567")
 
         check("S4.a mode is full", analysis.mode == "full",
               f"mode={analysis.mode} err={analysis.error} stages={[ (s.name, s.ok, s.detail) for s in analysis.stages ]}")
@@ -477,6 +481,34 @@ def smoke_runner(tmp: Path) -> None:
         check("S4.d issue time from comments (reader)",
               analysis.issue_times == ["06/20/2026-10:17:30"]
               and analysis.case_reader.get("issue_time_source") == "comment #2")
+        live = {}
+        for sn in live_snaps:
+            live.update(sn)
+        sent = (live.get("sent_for_analysis") or [{}])[0]
+        inc0 = analysis.incidents[0] if analysis.incidents else None
+        try:
+            json.dumps(live)
+            live_json_ok = True
+        except Exception:
+            live_json_ok = False
+        check("S4.live snapshots: case facts as they become known, the exact agent "
+              "inputs (description + both clocks + log), the final outcome; JSON-safe",
+              live_json_ok and live.get("subject") == analysis.subject
+              and live.get("issue_times") == analysis.issue_times
+              and live.get("issue_time_source") == "comment #2"
+              and live.get("chosen_attachment") == "repro_logs.7z"
+              and live.get("finished") is True and live.get("mode") == "full"
+              and live.get("confidence") == 90
+              and any(sn.get("current_stage") == "agent_analysis" for sn in live_snaps)
+              and {st["name"] for st in live.get("stages") or []} >= {"fetch_case", "agent_analysis"}
+              and inc0 is not None and sent == inc0.sent_for_analysis
+              and sent.get("user_message") == inc0.user_message
+              and sent.get("description", "").startswith(analysis.clean_description)
+              and bool(sent.get("issue_time_log"))
+              and sent.get("issue_time_reported") == "06/20/2026-10:17:30"
+              and sent.get("log_file", "").endswith(".log"),
+              f"json_ok={live_json_ok} keys={sorted(live)[:12]} sent={sent} "
+              f"stages={[sn.get('current_stage') for sn in live_snaps if 'current_stage' in sn][:20]}")
         stage_names = [s.name for s in analysis.stages]
         check("S4.e all stages recorded",
               {"fetch_case", "triage", "read_case_history", "check_wrt_log",
@@ -910,6 +942,18 @@ def smoke_runner(tmp: Path) -> None:
         store14d.mark_posted("01234567", comment_id="CMT-FR", first_response=True)
         orch._analyze_and_enqueue(store14d, "01234567")
         modes14d = [d.get("mode") for d in store14d.list_drafts(include_closed=True)]
+        st14d = (orch.get_run_state().get("case_details") or {}).get("01234567", {})
+        st14d_copy_ok = True
+        if st14d:
+            st14d["subject"] = "mutated"
+            st14d_copy_ok = (orch.get_run_state()["case_details"]["01234567"].get("subject")
+                             != "mutated")
+        check("S14.live run state per case: queued draft id, the agent inputs, finished "
+              "outcome; get_run_state hands out a copy",
+              bool(st14d.get("draft_id")) and st14d.get("finished") is True
+              and (st14d.get("sent_for_analysis") or [{}])[0].get("description")
+              and st14d.get("mode") == "full" and st14d_copy_ok,
+              f"keys={sorted(st14d)} draft={st14d.get('draft_id')} copy_ok={st14d_copy_ok}")
         cis.CaseService.process_case = staticmethod(_fake_process_no_logs)
         store14e = HandsfreeStore(tmp / "handsfree_s14e")
         store14e.mark_posted("01234567", comment_id="CMT-FR", first_response=True)
@@ -951,6 +995,7 @@ def smoke_runner(tmp: Path) -> None:
             summary_m = orch.run_auto_scan(
                 store14m, "", max_cases=5, trigger="manual",
                 list_views=["Handsfree_replier_test_case", "Second_view"])
+            details_m = sorted((orch.get_run_state().get("case_details") or {}).keys())
         finally:
             orch.IpsClient = orig_ips_cls
         trial_drafts = store14g.list_drafts(include_closed=True)
@@ -1182,8 +1227,10 @@ def smoke_runner(tmp: Path) -> None:
               summary_m["ok"] and [c["case_nbr"] for c in summary_m["cases"]] == ["00000003", "00000009"]
               and "Second_view" in summary_m["source"]
               and "listview:handsfree_replier_test_case|second_view"
-              in (store14m.load_config().get("auto_last_scan_by_owner") or {}),
-              f"summary={summary_m} cfg={store14m.load_config().get('auto_last_scan_by_owner')}")
+              in (store14m.load_config().get("auto_last_scan_by_owner") or {})
+              and details_m == ["00000003", "00000009"],      # live panel reset per run
+              f"summary={summary_m} cfg={store14m.load_config().get('auto_last_scan_by_owner')} "
+              f"details={details_m}")
 
         check("S14.d later round: analysis only (no second overview); request reply "
               "asks for the logs without the checklist",

@@ -55,8 +55,24 @@ def build_prompt_editor_handlers(context: PromptEditorContext) -> dict[str, Call
     def _conversation_parts() -> dict[str, str]:
         agent = context.get_agent()
         overrides = getattr(agent, "prompt_overrides", {})
-        return {part: overrides.get(part) or context.default_text(context.profile, part)
+        # Same order as conversation_speclet(): this conversation's edit, then
+        # a prompt the user kept for next time, then the built-in text. The
+        # panel has to show what the agent will actually read, or Save & use
+        # would be comparing against the wrong "before".
+        return {part: (overrides.get(part)
+                       or sp.kept_text(context.profile, part)
+                       or context.default_text(context.profile, part))
                 for part in sp.BUNDLED_KINDS}
+
+    def _part_source(kind: str, overrides: dict) -> str:
+        """Where the live text of one document comes from, for the badge."""
+        if kind == sp.BUNDLE:
+            if overrides:
+                return "conversation"
+            return "kept" if sp.is_kept(context.profile, sp.BUNDLE) else "built-in"
+        if kind in overrides:
+            return "conversation"
+        return "kept" if sp.kept_text(context.profile, kind) else "built-in"
 
     def _apply_conversation_text(kind: str, text: str) -> None:
         agent = context.get_agent()
@@ -82,8 +98,10 @@ def build_prompt_editor_handlers(context: PromptEditorContext) -> dict[str, Call
             payload["documents"] = [d for d in payload["documents"]
                                     if d["profile"] == context.profile]
             for doc in payload["documents"]:
-                doc["source"] = ("conversation" if overrides else "built-in") if doc["kind"] == sp.BUNDLE else (
-                    "conversation" if doc["kind"] in overrides else "built-in")
+                doc["source"] = _part_source(doc["kind"], overrides)
+                doc["kept"] = sp.is_kept(context.profile, doc["kind"]) or (
+                    doc["kind"] != sp.BUNDLE
+                    and sp.is_kept(context.profile, sp.BUNDLE))
                 doc["via_bundle"] = False
             payload["conversation_only"] = True
         return jsonify(payload)
@@ -103,8 +121,9 @@ def build_prompt_editor_handlers(context: PromptEditorContext) -> dict[str, Call
                 "success": True,
                 "doc": f"{doc_profile}_{kind}",
                 "filename": sp.speclet_filename(doc_profile, kind),
-                "source": "conversation" if (bool(overrides) if kind == sp.BUNDLE
-                                            else kind in overrides) else "built-in",
+                "source": _part_source(kind, overrides),
+                "kept": sp.is_kept(doc_profile, kind) or (
+                    kind != sp.BUNDLE and sp.is_kept(doc_profile, sp.BUNDLE)),
                 "reads": "conversation",
                 "live": live,
                 "local": sp.read_user_speclet(doc_profile, kind) or "",
@@ -176,11 +195,16 @@ def build_prompt_editor_handlers(context: PromptEditorContext) -> dict[str, Call
                 agent._session_skill_path = Path(skill_path) if skill_mode == "replace" else None
                 agent._session_skill_filename = Path(skill_path).name
             _apply_conversation_text(kind, text)
+            kept = sp.is_kept(doc_profile, kind) or (
+                kind != sp.BUNDLE and sp.is_kept(doc_profile, sp.BUNDLE))
             return jsonify({
                 "success": True,
-                "message": "Applied to this conversation only. New conversations use the original prompt.",
+                "message": "Applied to this conversation only. New conversations "
+                           + ("start from the prompt you kept."
+                              if kept else "use the original prompt."),
                 "doc": f"{doc_profile}_{kind}",
                 "source": "conversation",
+                "kept": kept,
                 "skills": agent.get_skill_descriptions() if skill_mode != "keep" else None,
             })
         try:
@@ -195,6 +219,74 @@ def build_prompt_editor_handlers(context: PromptEditorContext) -> dict[str, Call
             "message": f"Saved. The next question uses this prompt ({path.name}).",
             "doc": f"{doc_profile}_{kind}",
             "source": sp.SOURCE_LOCAL,
+        })
+
+    # Asked on the way out of the panel: the one place where a person knows
+    # whether the prompt they have been editing was worth more than this
+    # conversation. Save & use deliberately writes nothing to disk, so without
+    # this there was no answer to "keep it for next time" except downloading a
+    # file and loading it again by hand.
+    def prompts_keep():
+        blocked = _edit_guard()
+        if blocked is not None:
+            return blocked
+        if context.get_agent is None:
+            return jsonify({"success": False,
+                            "error": "Keeping a prompt needs a conversation."}), 400
+        data = request.get_json(silent=True) or {}
+        parsed = _parse_doc(context, data.get("doc"))
+        if parsed is None:
+            return jsonify({"success": False, "error": "Unknown prompt document."}), 400
+        doc_profile, kind = parsed
+        if doc_profile != context.profile:
+            return jsonify({"success": False,
+                            "error": "Shared prompts are not editable in a conversation."}), 400
+
+        # keep: false withdraws it, and needs no text — the caller is saying
+        # "stop starting new conversations from my copy", not sending one.
+        if data.get("keep") is False:
+            sp.set_kept(doc_profile, kind, False)
+            return jsonify({
+                "success": True,
+                "doc": f"{doc_profile}_{kind}",
+                "kept": False,
+                "message": "New conversations start from the original prompt again.",
+            })
+
+        text = str(data.get("text") or "")
+        if not text.strip():
+            return jsonify({"success": False,
+                            "error": "A prompt cannot be empty — the agent would "
+                                     "be sent a blank system prompt."}), 400
+        if kind == sp.BUNDLE:
+            missing = [part for part in sp.BUNDLED_KINDS
+                       if not sp.split_bundle(text).get(part)]
+            if missing:
+                return jsonify({
+                    "success": False,
+                    "error": "A one-file agent must contain all three non-empty "
+                             "sections: ## prompt, ## report, ## suggest_time. "
+                             f"Missing: {', '.join(missing)}.",
+                }), 400
+        try:
+            path = sp.write_user_speclet(doc_profile, kind, text)
+        except Exception as e:
+            return jsonify({"success": False, "error": f"Could not save: {e}"}), 500
+        # Three separate facts, and all three are needed: the text exists on
+        # disk, the library shows that copy, and a conversation that has made
+        # no choice of its own begins from it.
+        sp.set_source(doc_profile, kind, sp.SOURCE_LOCAL)
+        sp.set_kept(doc_profile, kind, True)
+        _apply_conversation_text(kind, text)
+        _reload()
+        return jsonify({
+            "success": True,
+            "doc": f"{doc_profile}_{kind}",
+            "source": "conversation",
+            "kept": True,
+            "filename": path.name,
+            "message": f"Kept as {path.name}. New conversations on this page "
+                       "start from it until you press Restore original.",
         })
 
     def prompts_use_source():
@@ -253,8 +345,29 @@ def build_prompt_editor_handlers(context: PromptEditorContext) -> dict[str, Call
                 agent.prompt_overrides.clear()
             else:
                 agent.prompt_overrides.pop(kind, None)
-            return jsonify({"success": True, "doc": f"{doc_profile}_{kind}",
-                            "source": "built-in", "message": "Original prompt restored for this conversation."})
+            # "Original" has to mean the built-in text, not a kept copy -- a
+            # Restore that left the keep standing would put the same custom
+            # prompt back on the next question and look broken. Withdrawing it
+            # does not delete the file: Choose .md file... and the library
+            # still have it.
+            was_kept = sp.is_kept(doc_profile, kind)
+            if was_kept:
+                sp.set_kept(doc_profile, kind, False)
+            if kind != sp.BUNDLE and sp.is_kept(doc_profile, sp.BUNDLE):
+                # One part of a kept bundle cannot be singled out, so this is
+                # the whole document going back to built-in.
+                sp.set_kept(doc_profile, sp.BUNDLE, False)
+                was_kept = True
+            return jsonify({
+                "success": True,
+                "doc": f"{doc_profile}_{kind}",
+                "source": "built-in",
+                "kept": False,
+                "message": "Original prompt restored for this conversation."
+                           + (" New conversations no longer start from your "
+                              "kept copy; the file itself is still saved."
+                              if was_kept else ""),
+            })
         removed = sp.delete_user_speclet(doc_profile, kind)
         sp.set_source(doc_profile, kind, sp.SOURCE_SHARED)
         _reload()
@@ -295,6 +408,7 @@ def build_prompt_editor_handlers(context: PromptEditorContext) -> dict[str, Call
         "prompts_status": prompts_status,
         "prompts_get": prompts_get,
         "prompts_save": prompts_save,
+        "prompts_keep": prompts_keep,
         "prompts_use_source": prompts_use_source,
         "prompts_revert": prompts_revert,
         "prompts_refresh_shared": prompts_refresh_shared,

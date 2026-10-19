@@ -32,6 +32,7 @@
     // A document's live source, said the way a person would.
     const sourceLabel = (source) => ({
         conversation: 'this conversation only',
+        kept: 'your kept copy — new conversations start from it',
         local: 'your copy',
         shared: 'the shared folder',
         'built-in': 'the text this agent ships with',
@@ -81,6 +82,10 @@
         // Otherwise a single-document file sitting next to a bundle that
         // outranks it looks like the file in use, and it is not.
         if (doc.via_bundle) bits.push('text comes from the one-file bundle');
+        // Worth its own badge: it is the one state in which a NEW conversation
+        // does not start from the built-in text, so it has to be visible
+        // rather than inferred from the live source alone.
+        if (doc.kept && doc.source !== 'kept') bits.push('kept for new conversations');
         if (doc.has_local && doc.source === 'local') {
             bits.push(`your copy saved ${doc.local_mtime || 'earlier'}`);
         }
@@ -94,7 +99,10 @@
         // Nothing to revert or upload without a copy of your own.
         const revert = el('prompt-revert-btn');
         const upload = el('prompt-upload-btn');
-        if (revert) revert.disabled = doc.source !== 'conversation';
+        // Also enabled for a kept prompt with no edit in this conversation:
+        // that is exactly the state someone needs to get out of, and reading
+        // only the live source would lock the button that does it.
+        if (revert) revert.disabled = doc.source !== 'conversation' && !doc.kept;
         if (upload) upload.disabled = true; // session edits are never published implicitly
     }
 
@@ -221,11 +229,78 @@
         }
     };
 
-    window.closePromptEditor = function () {
+    // ── Leaving the panel ──────────────────────────────────────────────────
+    // A prompt in play belongs to this conversation and to nothing else, which
+    // is why leaving the page used to lose it. The exit is where that decision
+    // belongs: this is the moment someone knows whether what they just wrote
+    // was an experiment or their new default. Everything else about the panel
+    // stays as it was -- nothing is persisted unless this question is answered
+    // with "Keep".
+    function hideExitAsk() {
+        const ask = el('prompt-exit-ask');
+        if (ask) ask.style.display = 'none';
+        const note = el('prompt-exit-status');
+        if (note) note.textContent = '';
+    }
+
+    function reallyClose() {
+        hideExitAsk();
         const modal = el('prompt-editor-modal');
         if (!modal) return;
         modal.classList.remove('open');
         modal.setAttribute('aria-hidden', 'true');
+    }
+
+    // Worth asking about only when there is a custom prompt in play that a new
+    // conversation would not get: either unsaved text in the box, or a Save &
+    // use that has already landed on this conversation. A prompt that is
+    // already kept, or one still identical to the built-in text, has nothing
+    // to decide.
+    function worthKeeping() {
+        const doc = docs.find((d) => d.doc === current);
+        if (!doc || doc.shared_across_profiles) return false;
+        if (doc.kind !== 'prompt' && doc.kind !== 'agent') return false;
+        if (doc.kept) return false;
+        const box = el('prompt-editor-text');
+        const text = ((box && box.value) || '').trim();
+        if (!text) return false;
+        return text !== (loaded.builtin || '').trim();
+    }
+
+    window.closePromptEditor = function () {
+        const modal = el('prompt-editor-modal');
+        if (!modal || !modal.classList.contains('open')) return reallyClose();
+        if (!worthKeeping()) return reallyClose();
+        const ask = el('prompt-exit-ask');
+        if (!ask) return reallyClose();
+        const label = el('prompt-exit-doc');
+        if (label) label.textContent = loaded.filename || 'This prompt';
+        ask.style.display = 'flex';
+    };
+
+    window.cancelPromptExit = hideExitAsk;
+    window.leaveWithoutKeeping = reallyClose;
+
+    window.keepPromptAndLeave = async function () {
+        const note = el('prompt-exit-status');
+        const text = el('prompt-editor-text').value;
+        if (note) note.textContent = 'Keeping…';
+        try {
+            const data = await call('/prompts/keep', {
+                method: 'POST',
+                headers: { 'Content-Type': 'application/json' },
+                body: JSON.stringify({ doc: current, text: text, keep: true }),
+            });
+            clearDraft();
+            reallyClose();
+            if (typeof showToast === 'function') {
+                showToast({ message: data.message || 'Kept.', ttlMs: 12000 });
+            }
+        } catch (e) {
+            // The panel stays open on a failure: closing it would throw away
+            // the text the person just asked to have saved.
+            if (note) note.textContent = e.message;
+        }
     };
 
     // Browsers deliberately expose only the chosen file's contents, never its
@@ -395,8 +470,9 @@
             // The text is in use now, so the draft has nothing left to rescue.
             clearDraft();
             // Both steps are done, so the panel gets out of the way instead of
-            // leaving the person to find the Close button.
-            closePromptEditor();
+            // leaving the person to find the Close button. The toast goes
+            // first: closing now raises the "keep it for next time?" question,
+            // and the toast is what explains why it is being asked.
             if (typeof showToast === 'function') {
                 showToast({
                     message: (data.message || 'Saved.')
@@ -404,6 +480,11 @@
                     ttlMs: 12000,
                 });
             }
+            // The text that was just saved is this conversation's prompt now,
+            // so the exit question must compare against it, not against the
+            // text the panel opened with.
+            loaded.live = text;
+            closePromptEditor();
         } catch (e) {
             status(e.message, 'err');
         }

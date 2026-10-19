@@ -313,10 +313,22 @@ def default_speclet(profile: str, kind: str) -> str:
 
 
 def conversation_speclet(agent, kind: str) -> str:
-    """Profile default unless this conversation explicitly chose another text.
+    """What this conversation reads, in order of how explicit the choice was.
 
-    The shared Speclets mirror and a previous conversation's local copy are
-    library sources, not automatic overrides of a fresh conversation.
+    1. An edit made in this conversation. Always wins.
+    2. A prompt the user pressed "Keep for next time" on. This is the only
+       thing on disk a fresh conversation adopts, and only because someone
+       said so in as many words.
+    3. The profile default.
+
+    The shared Speclets mirror, and a .md that is merely saved and selectable,
+    stay library sources: they do not override a conversation that has made no
+    choice. Otherwise one person's experiment becomes everyone's agent.
     """
+    from utils import speclets_utils as sp
+
     overrides = getattr(agent, "prompt_overrides", {})
-    return overrides.get(kind) or default_speclet(agent.capabilities.profile, kind)
+    if overrides.get(kind):
+        return overrides[kind]
+    profile = agent.capabilities.profile
+    return sp.kept_text(profile, kind) or default_speclet(profile, kind)

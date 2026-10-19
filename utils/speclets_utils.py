@@ -107,6 +107,7 @@ SOURCE_BUILTIN = "built-in"
 
 #: Records which of the first two a document reads, per document.
 _SOURCES_FILENAME = "active_sources.json"
+_KEPT_FILENAME = "kept_prompts.json"
 
 _cache: dict[str, str] = {}
 _cache_lock = threading.Lock()
@@ -301,6 +302,81 @@ def set_source(profile: str, kind: str, source: str) -> str:
     except Exception as e:
         print(f"[speclets] could not record the active source for {key}: {e}")
     return chosen
+
+
+# --- prompts the user asked a NEW conversation to start from --------------
+#
+# A .md sitting in speclets_user/ is library material: it was selectable, and
+# a fresh conversation ignored it on purpose, so one person's experiment could
+# not silently become the agent everyone gets. That rule cost the person doing
+# the editing their work every time they left the page.
+#
+# "Keep for next time" is the explicit opt-in that was missing. It is tracked
+# separately from get_source() precisely because the two answer different
+# questions: get_source says which copy the library shows you, this says which
+# copy a conversation that has made no choice of its own should begin with.
+# Nothing is kept unless someone pressed the button, and Restore original
+# clears it again.
+
+def read_kept() -> set[str]:
+    """The ``"linux_agent"``-style keys the user asked to start from."""
+    try:
+        raw = json.loads((local_user_speclets_dir() / _KEPT_FILENAME)
+                         .read_text(encoding="utf-8"))
+    except (OSError, ValueError):
+        return set()
+    if not isinstance(raw, list):
+        return set()
+    return {str(k) for k in raw}
+
+
+def is_kept(profile: str, kind: str) -> bool:
+    return _cache_key(profile, kind) in read_kept()
+
+
+def set_kept(profile: str, kind: str, on: bool) -> bool:
+    """Record (or withdraw) "a new conversation starts from my copy".
+
+    Keeping a bundle withdraws any per-part choice, for the same reason
+    set_source does: one whole document is an atomic switch of its three
+    parts, and a stale per-part key would point at a different version.
+    """
+    kept = read_kept()
+    key = _cache_key(profile, kind)
+    if on:
+        kept.add(key)
+    else:
+        kept.discard(key)
+    if kind == BUNDLE:
+        for part in BUNDLED_KINDS:
+            kept.discard(_cache_key(profile, part))
+    try:
+        path = local_user_speclets_dir() / _KEPT_FILENAME
+        tmp = path.with_suffix(".json.tmp")
+        tmp.write_text(json.dumps(sorted(kept), indent=1), encoding="utf-8")
+        shutil.move(str(tmp), str(path))
+    except Exception as e:
+        print(f"[speclets] could not record the kept prompt for {key}: {e}")
+    return on
+
+
+def kept_text(profile: str, kind: str) -> Optional[str]:
+    """What a fresh conversation should start from, or None for the built-in.
+
+    A bundle outranks a single part, the same way it does everywhere else: if
+    the whole document was kept, its section is the answer even when an older
+    single-part file is still on disk.
+    """
+    if kind != BUNDLE and is_kept(profile, BUNDLE):
+        bundle = read_user_speclet(profile, BUNDLE)
+        section = split_bundle(bundle).get(kind) if bundle else None
+        if section:
+            return section
+    if is_kept(profile, kind):
+        text = read_user_speclet(profile, kind)
+        if text and text.strip():
+            return text.strip()
+    return None
 
 
 def write_user_speclet(profile: str, kind: str, text: str) -> Path:

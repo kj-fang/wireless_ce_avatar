@@ -121,6 +121,7 @@ ROUTE_SPECS: tuple[RouteSpec, ...] = (
     RouteSpec("/prompts/status", "prompts_status", ("GET",), "prompt_editor"),
     RouteSpec("/prompts/get", "prompts_get", ("GET",), "prompt_editor"),
     RouteSpec("/prompts/save", "prompts_save", ("POST",), "prompt_editor"),
+    RouteSpec("/prompts/keep", "prompts_keep", ("POST",), "prompt_editor"),
     RouteSpec("/prompts/use_source", "prompts_use_source", ("POST",), "prompt_editor"),
     RouteSpec("/prompts/revert", "prompts_revert", ("POST",), "prompt_editor"),
     RouteSpec(

@@ -17,6 +17,7 @@ from __future__ import annotations
 
 import json
 import os
+import shutil
 import threading
 import uuid
 from datetime import datetime
@@ -223,6 +224,62 @@ class HandsfreeStore:
             os.replace(tmp, p)
             return rec
 
+    # Ledger fields that record a POST to IPS: a reset never forgets them (a
+    # first response that already went out must not be sent again).
+    _LEDGER_KEEP_ON_RESET = ("posted_at", "comment_id",
+                             "first_response_posted_at", "first_response_comment_id")
+
+    def reset_case(self, case_nbr: str, *, purge_downloads: bool = False,
+                   case_dir: str = "") -> dict:
+        """Forget a case's analysis history so it is analyzed afresh (the
+        log was wrong, the customer re-uploaded, ...). Drafts that were not
+        posted move to queue_archive_reset_<stamp>/ (never deleted); posted
+        drafts stay as the audit trail. The ledger keeps only the post
+        records. purge_downloads removes decoded logs and extracted capture
+        folders under case_dir but keeps the downloaded archives."""
+        case_nbr = str(case_nbr)
+        stamp = datetime.now().strftime("%Y%m%dT%H%M%S")
+        archive = self.root / f"queue_archive_reset_{stamp}"
+        archived: list[str] = []
+        kept: list[str] = []
+        with _LOCK:
+            for p in sorted(self.queue_dir.glob(f"{case_nbr}__*.json")):
+                try:
+                    rec = json.loads(p.read_text(encoding="utf-8"))
+                except Exception:
+                    rec = {}
+                if str(rec.get("case_nbr") or "") not in ("", case_nbr):
+                    continue
+                if rec.get("status") == "posted":
+                    kept.append(p.stem)
+                    continue
+                archive.mkdir(parents=True, exist_ok=True)
+                shutil.move(str(p), str(archive / p.name))
+                archived.append(p.stem)
+            ledger = self._load_ledger()
+            entry = ledger.get(case_nbr) or {}
+            remaining = {k: v for k, v in entry.items() if k in self._LEDGER_KEEP_ON_RESET}
+            if remaining:
+                ledger[case_nbr] = remaining
+            else:
+                ledger.pop(case_nbr, None)
+            self._save_ledger(ledger)
+        purged: list[str] = []
+        if purge_downloads and case_dir and os.path.isdir(case_dir):
+            for dirpath, dirnames, filenames in os.walk(case_dir):
+                for name in filenames:
+                    low = name.lower()
+                    if low.endswith(".log") or ".etl" in low:
+                        full = os.path.join(dirpath, name)
+                        try:
+                            os.remove(full)
+                            purged.append(full)
+                        except OSError:
+                            pass
+        return {"case_nbr": case_nbr, "archived": archived, "kept_posted": kept,
+                "archive_dir": str(archive) if archived else "",
+                "ledger_kept": remaining, "purged": purged}
+
     def list_drafts(self, include_closed: bool = True,
                     limit: int = 100, owner_name: str = "") -> list[dict]:
         """Newest-first draft summaries (analysis payload omitted)."""
@@ -249,6 +306,7 @@ class HandsfreeStore:
             slim["trial"] = bool(rec.get("trial"))
             slim["log_dir"] = decoded_log_dir(rec)
             analysis = rec.get("analysis") or {}
+            slim["log_path"] = str(analysis.get("log_path") or "") if slim["log_dir"] else ""
             slim["action_owner"] = str(analysis.get("action_owner") or "")
             slim["next_action"] = str(analysis.get("next_action") or "")
             out.append(slim)

@@ -486,6 +486,9 @@ class HandsfreeRunner:
     # consumed (the reader chose another archive, or the run stopped at an
     # early gate) before giving up on it.
     PREFETCH_JOIN_TIMEOUT_S = 15 * 60
+    # Minutes of slack on either side of the decoded log when deciding whether
+    # a reported issue time is covered / can be placed in the log's clock.
+    TIME_GRACE_MIN = 10
 
     def __init__(self, progress_cb: Optional[Callable[[str, str], None]] = None,
                  snapshot_cb: Optional[Callable[[dict], None]] = None):
@@ -1236,7 +1239,7 @@ class HandsfreeRunner:
 
     # ------------------------------------------------------------------
     def _check_time_coverage(self, analysis: CaseAnalysis,
-                             grace_minutes: int = 10) -> None:
+                             grace_minutes: int = TIME_GRACE_MIN) -> None:
         """Flag when NO reported issue time falls inside the decoded log's
         time range (±grace). Full datetimes are mapped into the log's clock;
         a clock-only value ("10:17", accepted as minute-precise) is placed
@@ -1454,8 +1457,13 @@ class HandsfreeRunner:
         if not cands:
             return None
         if first and last:
+            # Same grace as the coverage check: a capture usually starts
+            # seconds to minutes after the reported moment (01033659: the
+            # reported 20:10:00 vs a log starting 20:11:13).
+            from datetime import timedelta
+            grace = timedelta(minutes=self.TIME_GRACE_MIN)
             for cust, cand, anchor in cands:
-                if first <= cand <= last:
+                if first - grace <= cand <= last + grace:
                     return {"customer": cust, "log": cand, "anchor": anchor, "inside": True}
         if parse_issue_time_string(str(raw))[1]:
             return None          # clock-only, never inside the log: no anchor

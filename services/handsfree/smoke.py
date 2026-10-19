@@ -2047,6 +2047,22 @@ def smoke_time_coverage(tmp: Path) -> None:
           and e.time_alignment.get("log_time") == "01/14/2026-21:55:11",
           str(e.time_alignment))
 
+    # A reported time a minute before the log's first line: covered under the
+    # 10-min grace, so the alignment must place it too (inside=True) — the
+    # chatbot hand-off carries that value and the Log Chatbot's own range
+    # check allows the same grace (01033659, 2026-10-19).
+    from . import runner as runner_mod_g
+    from datetime import datetime as _dt_g
+    r_g = runner_mod_g.HandsfreeRunner()
+    first_g, last_g = _dt_g(2026, 6, 20, 10, 17, 0), _dt_g(2026, 6, 20, 10, 30, 0)
+    al_in = r_g._align_issue_time("06/20/2026-10:16:30", str(tmp / "nolog.log"), first_g, last_g)
+    al_out = r_g._align_issue_time("06/20/2026-09:50:00", str(tmp / "nolog.log"), first_g, last_g)
+    check("S8.n alignment uses the coverage grace: 30 s before the first line is inside, "
+          "27 min before is not",
+          al_in is not None and al_in["inside"] and al_in["log"] == _dt_g(2026, 6, 20, 10, 16, 30)
+          and al_out is not None and not al_out["inside"],
+          f"in={al_in} out={al_out}")
+
 
 # ---------------------------------------------------------------- S10
 def smoke_yb_etl_pick() -> None:

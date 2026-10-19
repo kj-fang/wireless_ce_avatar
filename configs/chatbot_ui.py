@@ -250,7 +250,8 @@ LINUX_UI = {
     "api": "/linux_chatbot",
     # What this agent is good at comes from its prompt and its skills, both of
     # which are editable without touching Python, so the page does not name one
-    # domain in its chrome. Matches the home page's "Linux Analysis Agent".
+    # domain in its chrome. Kept in step with the home page's card in
+    # templates/index.html, which says the same words.
     "title": "Generic Log Analysis Agent",
     "back_url": "/linux_chatbot/back_to_avatar",
     "input_placeholder": "Describe the issue and ask a question about the log.",

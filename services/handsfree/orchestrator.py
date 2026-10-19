@@ -151,6 +151,12 @@ def _analyze_and_enqueue(store: HandsfreeStore, case_nbr: str,
         _log_event(f"[{case_nbr}] first response: domain "
                    f"'{analysis.issue_domain or 'Others'}', pre-filled "
                    f"{filled}/{total} checklist items")
+        # The runner's final snapshot predates the fill: push what the
+        # checklist concluded (required logs provided / missing, the asks).
+        _update_case_details(case_nbr, {
+            "checklist_decision": dict(getattr(analysis, "checklist_decision", None) or {}),
+            "issue_subcategory": analysis.issue_subcategory,
+            "checklist_summary": f"{filled}/{total}"})
     except Exception as e:
         print(f"[handsfree] checklist fill failed (continuing): {e}")
 

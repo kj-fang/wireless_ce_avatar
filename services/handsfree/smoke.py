@@ -553,6 +553,40 @@ def smoke_runner(tmp: Path) -> None:
               and sent.get("log_file", "").endswith(".log"),
               f"json_ok={live_json_ok} keys={sorted(live)[:12]} sent={sent} "
               f"stages={[sn.get('current_stage') for sn in live_snaps if 'current_stage' in sn][:20]}")
+        dd, tdn, pdn = analysis.domain_decision, analysis.time_decision, analysis.pick_decision
+        cand_src = [c["source"] for c in dd.get("candidates", [])]
+        chosen_caps = [c for c in pdn.get("captures", []) if c.get("role") == "chosen"]
+        check("S4.dec1 issue-category decision: candidates in priority order (reader, IPS "
+              "subcategory, triage); the fake reader says 'Others' so triage wins; the "
+              "domain's required logs named",
+              dd.get("winner") == "Connectivity" and dd.get("winner_source") == "triage"
+              and cand_src == ["reader", "ips_subcategory", "triage"]
+              and dd["candidates"][0]["resolved"] == "Others" and not dd["candidates"][0]["specific"]
+              and dd.get("provisional") and isinstance(dd.get("required_logs"), list)
+              and any("WRT" in i or "WPP" in i for i in dd["required_logs"]),
+              f"dd={dd}")
+        check("S4.dec2 issue-time decision: the reader's time with its source, the rule, "
+              "gate ok, placement inside the log with the chosen candidate",
+              tdn.get("found") and tdn["found"][0]["time"] == "06/20/2026-10:17:30"
+              and tdn["found"][0]["source"] == "comment #2" and tdn.get("gate") == "ok"
+              and tdn.get("rule") and tdn.get("placements")
+              and any(c["inside"] for c in tdn["placements"][0]["candidates"])
+              and tdn.get("coverage", {}).get("covered") is True
+              and tdn["coverage"]["chosen"]["log"].startswith("06/20/2026-10:17"),
+              f"td={tdn}")
+        check("S4.dec3 archive + capture decision: uploads listed, the reader's pick matched "
+              "exactly, the capture closest at/after the issue time chosen (normalized time), "
+              "the chosen capture marked decoded + covering",
+              [a["name"] for a in pdn.get("archives", [])] == ["repro_logs.7z", "later_capture.zip"]
+              and pdn.get("reader_pick") == "repro_logs.7z" and pdn.get("match") == "exact"
+              and pdn.get("chosen_rule") == "reader" and not pdn.get("fallback_used")
+              and pdn.get("etl_rule") == "closest_at_or_after_issue"
+              and pdn.get("issue_time_used") == "06/20/2026-10:17:30"
+              and len(chosen_caps) == 1 and chosen_caps[0]["folder"] == "capture_20-06-2026_10-20-00"
+              and chosen_caps[0]["delta_s"] == 150 and chosen_caps[0]["decode"] == "ok"
+              and chosen_caps[0]["covered"] is True
+              and (pdn.get("contents") or {}).get("wifi_wpp") == 1,
+              f"pd={pdn}")
         agent_snaps = [sn["agent_live"] for sn in live_snaps if sn.get("agent_live")]
         running = [a for a in agent_snaps if a.get("status") == "running"]
         final = agent_snaps[-1] if agent_snaps else {}
@@ -1010,6 +1044,14 @@ def smoke_runner(tmp: Path) -> None:
             st14d["subject"] = "mutated"
             st14d_copy_ok = (orch.get_run_state()["case_details"]["01234567"].get("subject")
                              != "mutated")
+        cd14 = st14d.get("checklist_decision") or {}
+        check("S14.live3 checklist decision pushed after the fill: required logs with "
+              "provided/missing + how they were filled, the asks",
+              cd14.get("domain") == "Connectivity" and isinstance(cd14.get("required_logs"), list)
+              and cd14["required_logs"] and all("provided" in e and "source" in e for e in cd14["required_logs"])
+              and any(e["provided"] and e["source"] == "pipeline" for e in cd14["required_logs"])
+              and isinstance(cd14.get("asks"), list) and st14d.get("checklist_summary"),
+              f"cd={cd14}")
         check("S14.live run state per case: queued draft id, the agent inputs, finished "
               "outcome; get_run_state hands out a copy",
               bool(st14d.get("draft_id")) and st14d.get("finished") is True
@@ -2059,6 +2101,26 @@ def smoke_time_coverage(tmp: Path) -> None:
     first_g, last_g = _dt_g(2026, 6, 20, 10, 17, 0), _dt_g(2026, 6, 20, 10, 30, 0)
     al_in = r_g._align_issue_time("06/20/2026-10:16:30", str(tmp / "nolog.log"), first_g, last_g)
     al_out = r_g._align_issue_time("06/20/2026-09:50:00", str(tmp / "nolog.log"), first_g, last_g)
+    # Reader-style times ("16:31/12/13/2025") never parsed inside the capture
+    # picker, so it silently took the newest folder; the runner now normalizes
+    # the value first.
+    fix_wifi = [str(tmp / "x_13-12-2025_16-35-00_1" / "WifiDriverIHVSession.etl.001"),
+                str(tmp / "x_13-12-2025_20-00-00_1" / "WifiDriverIHVSession.etl.001")]
+    picked, rule, used = r_g._pick_etl(fix_wifi, [], "16:31/12/13/2025")
+    picked_none, rule_none, used_none = r_g._pick_etl(fix_wifi, [], "")
+    check("S8.o capture pick: a reader-style issue time is normalized and the capture "
+          "at/after it wins (not the newest); without a time the newest is taken and says so",
+          picked == fix_wifi[0] and rule == "closest_at_or_after_issue" and used == "12/13/2025-16:31:00"
+          and picked_none == fix_wifi[1] and rule_none == "newest_wifi" and used_none == "",
+          f"picked={picked} rule={rule} used={used} none={picked_none},{rule_none}")
+    from .checklist import resolve_subcategory_explained as rse
+    check("S8.p sub-category rules explained: explicit / keyword / default / ask / none",
+          rse("Connectivity", "Roaming", "") == ("Roaming", "explicit")
+          and rse("Connectivity", "", "the client roams badly")[1].startswith("keyword:")
+          and rse("Connectivity", "", "") == ("Connectivity", "named_like_domain")
+          and rse("OEM Tools", "", "") == ("", "ask")
+          and rse("BSOD", "", "") == ("", "none"),
+          str([rse("Connectivity", "", "the client roams badly"), rse("OEM Tools", "", "")]))
     check("S8.n alignment uses the coverage grace: 30 s before the first line is inside, "
           "27 min before is not",
           al_in is not None and al_in["inside"] and al_in["log"] == _dt_g(2026, 6, 20, 10, 16, 30)

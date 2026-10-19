@@ -309,6 +309,23 @@
     .lp-echo-q { color: #9fb3c8; }
     .lp-echo-a { color: #eef3f8; white-space: pre-wrap; margin: 2px 0 8px; max-height: 160px; overflow: auto; }
     .lp-btn-sm { height: 24px; padding: 0 9px; font-size: 12px; }
+    .lp-rows { display: grid; grid-template-columns: auto 1fr; gap: 3px 10px; font-size: 13px; }
+    .lp-rows .k { color: #9fb3c8; white-space: nowrap; }
+    .lp-cand { display: flex; gap: 8px; align-items: baseline; padding: 2px 0; color: #b8c6d6; }
+    .lp-cand.win { color: #fff; font-weight: 600; }
+    .lp-cand .src { color: #9fb3c8; font-weight: 400; font-size: 12.5px; }
+    .lp-cand.win .src { color: var(--accent-strong); }
+    .lp-req { padding: 2px 0; display: grid; grid-template-columns: 18px 1fr; column-gap: 6px; }
+    .lp-req.ok { color: #dbe6f3; } .lp-req.ok .m { color: var(--good); }
+    .lp-req.miss { color: #fff; } .lp-req.miss .m { color: var(--warn); }
+    .lp-req .how { color: #9fb3c8; font-size: 12.5px; }
+    .lp-ask { margin-top: 8px; padding: 8px 10px; border-left: 3px solid var(--warn); background: rgba(229,176,72,0.08); color: #fff; }
+    .lp-vague { color: #8a98ab; text-decoration: line-through; }
+    table.lp-tbl { border-collapse: collapse; width: 100%; font-size: 12.5px; margin-top: 4px; }
+    table.lp-tbl th { text-align: left; color: #9fb3c8; font-weight: 600; padding: 3px 6px 3px 0; border-bottom: 1px solid #223042; }
+    table.lp-tbl td { padding: 3px 6px 3px 0; color: #dbe6f3; vertical-align: top; font-family: var(--mono); font-size: 12px; }
+    table.lp-tbl tr.win td { color: #fff; }
+    table.lp-tbl td.t { font-family: inherit; font-size: 12.5px; }
     #draft-sent { margin: 0 0 10px; }
     #draft-sent summary { color: var(--muted); cursor: pointer; }
 
@@ -1349,6 +1366,7 @@
     ['read_images', 'Read comment screenshots'],
     ['read_case_history', 'Read the IPS comment thread'],
     ['check_case_info', 'Check the case information'],
+    ['category', 'Identify the issue category & required logs'],
   ];
   const LIVE_WIFI = [
     ['pick_zip', 'Pick the log archive'], ['download', 'Download the archive'],
@@ -1417,7 +1435,20 @@
       case 'check_case_info':
         if (ev.status !== 'done') return ev.detail || '';
         return (d.missing_info || []).length ? 'missing: ' + d.missing_info.join(', ') : 'all case information present';
-      case 'pick_zip': return d.chosen_attachment || '';
+      case 'category': {
+        const dd = d.domain_decision || {}, cd = d.checklist_decision || {};
+        if (!dd.winner) return '';
+        let t = dd.winner + ' (from the ' + (dd.winner_label || dd.winner_source || '?') + ')';
+        if (cd.required_logs) t += ' · ' + cd.required_logs.length + ' required log' + (cd.required_logs.length === 1 ? '' : 's')
+          + (cd.missing_logs && cd.missing_logs.length ? ', ' + cd.missing_logs.length + ' missing' : ', all provided');
+        else if ((dd.required_logs || []).length) t += ' · ' + dd.required_logs.length + ' required log' + (dd.required_logs.length === 1 ? '' : 's');
+        return t;
+      }
+      case 'pick_zip': {
+        const pd = d.pick_decision || {};
+        if (!d.chosen_attachment) return '';
+        return d.chosen_attachment + ({reader: ' — nominated by the reader', newest_upload: ' — newest upload', only_archive: ' — the only archive'}[pd.chosen_rule] || '');
+      }
       case 'decompose': {
         const c = d.archive_contents || {};
         const parts = [['wifi_wpp', 'WPP'], ['ddd', 'DDD'], ['event_logs', 'event logs'], ['bt', 'BT'], ['fw', 'FW']]
@@ -1427,7 +1458,13 @@
       case 'issue_time':
         return ta.customer_time ? ta.customer_time + ' customer = ' + ta.log_time + ' in the log'
           : ((d.issue_times || [])[0] ? 'anchoring on ' + d.issue_times[0] : '');
-      case 'pick_etl': return d.etl_capture || '';
+      case 'pick_etl': {
+        const pd = d.pick_decision || {};
+        if (!d.etl_capture) return '';
+        return d.etl_capture + ({closest_at_or_after_issue: ' — closest capture at/after ' + (pd.issue_time_used || 'the issue time'),
+          yb_earliest: ' — earliest capture with an error code', newest_ddd: ' — newest DDD capture', newest_wifi: ' — newest WRT capture',
+          bt_newest: ' — newest BT capture'}[pd.etl_rule] || '');
+      }
       case 'decode_etl': case 'decode_bt':
         if (tm.log_first) return 'log ' + tm.log_first + ' – ' + tm.log_last + ' does NOT cover the issue time'
           + (tm.yb_assert_override ? ' (continued on assert ' + tm.yb_assert_override.join(', ') + ')' : '');
@@ -1452,6 +1489,10 @@
     const steps = path.map(([key, label]) => {
       const e = ev[key] || {};
       let status = e.status || (exact[key] ? (exact[key].ok ? 'done' : 'failed') : 'pending');
+      if (key === 'category') {
+        const dd = d.domain_decision || {};
+        status = dd.winner ? 'done' : (finished ? 'skipped' : 'pending');
+      }
       if (status === 'pending' && finished) status = 'skipped';
       if (status === 'running' && finished) status = exact[key] ? (exact[key].ok ? 'done' : 'failed') : 'done';
       let dur = '';
@@ -1609,6 +1650,169 @@
     return html + `</div>`;
   }
 
+  // ---- decision boxes: category + required logs, issue time, archive, capture ----
+
+  function fmtDelta(sec) {
+    if (sec == null) return '';
+    const a = Math.abs(sec), sign = sec < 0 ? '−' : '+';
+    if (a < 60) return sign + a + ' s';
+    if (a < 3600) return sign + Math.round(a / 60) + ' min';
+    return sign + Math.floor(a / 3600) + ' h ' + String(Math.round((a % 3600) / 60)).padStart(2, '0') + ' min';
+  }
+
+  function liveCategoryHtml(d, status) {
+    const dd = d.domain_decision || {}, cd = d.checklist_decision || {};
+    if (status === 'pending' || status === 'skipped' || !dd.winner) return '';
+    let html = `<div class="lp-live">`;
+    html += `<div class="lp-cap">Candidates, in priority order — the first specific one wins</div>`;
+    (dd.candidates || []).forEach(c => {
+      const win = c.source === dd.winner_source;
+      html += `<div class="lp-cand ${win ? 'win' : ''}"><span>${win ? '➜' : '·'}</span>` +
+        `<span>${esc(c.resolved || '—')}</span><span class="src">${esc(c.label || c.source)}` +
+        (c.raw && c.raw !== c.resolved ? ': “' + esc(c.raw) + '”' : (c.raw ? '' : ': nothing')) +
+        (c.resolved && !c.specific ? ' (generic)' : '') + `</span></div>`;
+    });
+    if (dd.provisional && dd.provisional !== dd.winner) html += `<div class="lp-time-sub">before the thread was read: ${esc(dd.provisional)}</div>`;
+    const sub = cd.subcategory || dd.subcategory_raw;
+    if (sub || cd.subcategory_rule === 'ask') {
+      const rule = cd.subcategory_rule || '';
+      const how = rule === 'explicit' ? 'named in the case' : rule.startsWith('keyword:') ? 'keyword “' + rule.slice(8) + '” in the case text'
+                : rule === 'named_like_domain' ? 'default for the domain' : rule === 'ask' ? 'not identified — the reply asks which one' : rule === 'first' ? 'first sub-category' : '';
+      html += `<div class="lp-time-sub">sub-category: <b style="color:#fff;">${esc(sub || '?')}</b>${how ? ' — ' + esc(how) : ''}</div>`;
+    }
+    const reqs = cd.required_logs || (dd.required_logs || []).map(i => ({item: i, provided: null}));
+    if (reqs.length) {
+      html += `<div class="lp-cap" style="margin-top: 8px;">Required logs for ${esc(dd.winner)}${cd.required_logs ? '' : ' (checked once the run completes)'}</div>`;
+      reqs.forEach(r => {
+        const st = r.provided === null ? '' : r.provided ? 'ok' : 'miss';
+        const mark = r.provided === null ? '·' : r.provided ? '✓' : '✗';
+        html += `<div class="lp-req ${st}"><span class="m">${mark}</span><span>${esc(r.item)}` +
+          (r.provided ? `<div class="how">${esc(r.value || '')}${r.source ? ' (' + esc(r.source) + ')' : ''}</div>` : (r.provided === false ? `<div class="how">not provided</div>` : '')) +
+          `</span></div>`;
+      });
+    } else if (cd.required_logs) {
+      html += `<div class="lp-time-sub">this category lists no required logs</div>`;
+    }
+    if (cd.required_info && cd.required_info.length) {
+      const miss = cd.required_info.filter(r => !r.provided).length;
+      html += `<div class="lp-time-sub" style="margin-top: 6px;">required info: ${cd.required_info.length - miss}/${cd.required_info.length} provided</div>`;
+    }
+    if (cd.asks) {
+      html += cd.asks.length
+        ? `<div class="lp-ask">Will ask the customer for:<ul style="margin: 4px 0 0; padding-left: 18px;">${cd.asks.map(a => `<li>${esc(a)}</li>`).join('')}</ul></div>`
+        : `<div class="lp-time-sub" style="margin-top: 6px;">nothing to ask — all required logs and information are present</div>`;
+    }
+    return html + `</div>`;
+  }
+
+  function liveTimesFoundHtml(d, status) {
+    const td = d.time_decision || {};
+    if (status === 'pending' || status === 'skipped' || !(td.found || td.ignored_vague || td.reasoning)) return '';
+    let html = `<div class="lp-live"><div class="lp-cap">Issue times in the case</div>`;
+    if ((td.found || []).length) {
+      td.found.forEach(f => {
+        html += `<div class="lp-cand ${f.used ? 'win' : ''}"><span>${f.used ? '➜' : '·'}</span><span class="mono">${esc(f.time)}</span>` +
+          `<span class="src">${f.source ? 'from ' + esc(f.source) : ''}${f.used ? '' : ' (beyond the per-case limit)'}</span></div>`;
+      });
+    } else {
+      html += `<div style="color: var(--warn);">no minute-precise time stated anywhere</div>`;
+    }
+    if ((td.ignored_vague || []).length) {
+      html += `<div class="lp-time-sub" style="margin-top: 4px;">ignored as too vague: ${td.ignored_vague.map(v => `<span class="lp-vague">${esc(v)}</span>`).join(', ')}</div>`;
+    }
+    if (td.rule) html += `<div class="lp-time-sub">rule: ${esc(td.rule)}</div>`;
+    if (td.reasoning) html += `<details style="margin-top: 6px;"><summary class="lp-time-sub" style="cursor:pointer;">how the thread was read</summary><div class="lp-desc" style="max-height: 160px;">${esc(td.reasoning)}</div></details>`;
+    return html + `</div>`;
+  }
+
+  function liveTimePlacementHtml(d, status) {
+    const td = d.time_decision || {};
+    if (status === 'pending' || status === 'skipped') return '';
+    const gaps = (td.gaps || []).filter(g => g.action !== 'reader' || true);
+    let html = `<div class="lp-live">`;
+    if (gaps.length) {
+      html += `<div class="lp-cap">Case-information check</div>`;
+      gaps.forEach(g => {
+        const verb = g.action === 'retracted' ? 'no longer missing' : g.action === 'backstop' ? 'missing (pipeline check)' : 'missing (reader)';
+        html += `<div class="lp-time-sub" style="color: ${g.action === 'retracted' ? 'var(--good)' : 'var(--warn)'};">${esc(g.item)}: ${verb}${g.reason ? ' — ' + esc(g.reason) : ''}</div>`;
+      });
+    }
+    if (td.gate) {
+      const gateText = {ok: 'issue time usable — the log pipeline runs', request_info: 'no usable issue time — the customer is asked for it, no log is downloaded',
+        bsod_no_time_needed: 'BSOD with a crash dump — no issue time needed', bsod_no_dump: 'BSOD without a dump — the customer is asked for the dump'}[td.gate] || td.gate;
+      html += `<div class="lp-time-sub" style="margin-top: 4px;">gate: ${esc(gateText)}</div>`;
+    }
+    if (td.organizer_used) html += `<div class="lp-time-sub">description cleaned by the organizer (the reader gave none)</div>`;
+    const cov = td.coverage || {};
+    if ((td.placements || []).length) {
+      html += `<div class="lp-cap" style="margin-top: 8px;">Placing the reported time in the log's clock` +
+        (cov.log_first ? ` — log ${esc(cov.log_file || '')} covers ${esc(cov.log_first)} – ${esc(cov.log_last)} (±${esc(cov.grace_min)} min)` : '') + `</div>`;
+      td.placements.forEach(pl => {
+        html += `<div class="lp-time-sub" style="margin-top: 4px;">reported <span class="mono" style="color:#fff;">${esc(pl.time)}</span>${pl.note ? ' — ' + esc(pl.note) : ''}</div>`;
+        if ((pl.candidates || []).length) {
+          html += `<table class="lp-tbl"><tr><th>anchor</th><th>customer clock</th><th>log clock</th><th>covered</th></tr>` +
+            pl.candidates.map(c => `<tr class="${c.inside ? 'win' : ''}"><td class="t">${esc(LIVE_ANCHOR_TEXT[c.anchor] || c.anchor)}</td><td>${esc(c.customer)}</td><td>${esc(c.log)}</td>` +
+              `<td class="t">${c.inside ? '✓ inside' : 'outside by ' + esc(fmtDelta(c.outside_s))}</td></tr>`).join('') + `</table>`;
+        }
+      });
+      if (cov.covered === false) html += `<div class="lp-ask">No placement falls inside the log — ${(d.time_mismatch || {}).yb_assert_override ? 'continued on the assert evidence (yellow bang)' : 'other captures are tried, else the customer is asked for a log taken at the issue time'}</div>`;
+    } else if (d.issue_times && d.issue_times.length && status === 'done' && !cov.log_first) {
+      html += `<div class="lp-time-sub" style="margin-top: 4px;">anchoring on ${esc(d.issue_times.join(' · '))} — placement in the log's clock happens after the decode</div>`;
+    }
+    return html + `</div>`;
+  }
+
+  function liveArchiveHtml(d, status) {
+    const pd = d.pick_decision || {};
+    if (status === 'pending' || status === 'skipped' || !(pd.archives || []).length && !pd.chosen) return '';
+    let html = `<div class="lp-live"><div class="lp-cap">Uploads in the case</div><table class="lp-tbl"><tr><th></th><th>file</th><th>uploaded</th><th>note</th></tr>`;
+    (pd.archives || []).forEach(a => {
+      const chosen = a.name === pd.chosen;
+      html += `<tr class="${chosen ? 'win' : ''}"><td class="t">${chosen ? '➜' : (a.is_archive ? '·' : '')}</td><td>${esc(a.name)}</td><td>${esc(a.uploaded)}</td>` +
+        `<td class="t">${a.is_archive ? '' : 'not an archive'}${a.subtitle && a.subtitle !== a.name ? esc(a.subtitle) : ''}</td></tr>`;
+    });
+    html += `</table>`;
+    if (pd.reader_pick) {
+      const m = {exact: 'matched exactly', case_insensitive: 'matched ignoring case', substring: 'matched by name fragment', not_found: 'not found among the uploads', non_archive: 'is not an archive'}[pd.match] || '';
+      html += `<div class="lp-time-sub" style="margin-top: 6px;">reader nominated <span class="mono" style="color:#fff;">${esc(pd.reader_pick)}</span>${m ? ' — ' + m : ''}` +
+        (pd.reader_reason ? `<div>why: ${esc(pd.reader_reason)}</div>` : '') + `</div>`;
+    }
+    if (pd.chosen) {
+      const rule = {reader: 'the reader\'s nomination', newest_upload: 'fallback: the newest upload', only_archive: 'the only archive in the case'}[pd.chosen_rule] || pd.chosen_rule || '';
+      html += `<div class="lp-time-sub">chosen: <span class="mono" style="color:#fff;">${esc(pd.chosen)}</span>${rule ? ' — ' + rule : ''}${pd.fallback_used ? ' (the nomination could not be used)' : ''}</div>`;
+    }
+    const bits = [];
+    if (pd.prefetch && pd.prefetch.name) bits.push('prefetched ' + pd.prefetch.name + (pd.prefetch.used ? ' and used' : ', not used'));
+    if (pd.download_attempts > 1) bits.push(pd.download_attempts + ' download attempts');
+    const c = pd.contents || {};
+    const parts = [['wifi_wpp', 'WPP driver log'], ['ddd', 'DDD'], ['event_logs', 'event log'], ['bt', 'BT'], ['fw', 'FW']].filter(([k]) => c[k]).map(([k, l]) => c[k] + ' ' + l);
+    if (parts.length) bits.push('extracted: ' + parts.join(', '));
+    if (bits.length) html += `<div class="lp-time-sub">${esc(bits.join(' · '))}</div>`;
+    return html + `</div>`;
+  }
+
+  function liveCaptureHtml(d, status) {
+    const pd = d.pick_decision || {};
+    if (status === 'pending' || status === 'skipped' || !(pd.captures || []).length) return '';
+    const ruleText = {closest_at_or_after_issue: 'the capture whose folder stamp is closest at/after the issue time' + (pd.issue_time_used ? ' ' + pd.issue_time_used : ''),
+      yb_earliest: 'yellow-bang / assert case: the earliest capture whose folder name carries a nonzero error code',
+      newest_ddd: 'newest DDD capture' + (pd.issue_time_used ? '' : ' — the issue time could not be used'),
+      newest_wifi: 'newest WRT capture' + (pd.issue_time_used ? ' (no capture at/after the issue time)' : ' — the issue time could not be used'),
+      bt_newest: 'newest BT capture', none: 'no capture found'}[pd.etl_rule] || '';
+    let html = `<div class="lp-live"><div class="lp-cap">${pd.captures.length} capture folder${pd.captures.length === 1 ? '' : 's'} in the archive${ruleText ? ' — rule: ' + esc(ruleText) : ''}</div>`;
+    html += `<table class="lp-tbl"><tr><th></th><th>capture folder</th><th>stamp (DUT clock)</th><th>vs issue</th><th>result</th></tr>`;
+    pd.captures.forEach(c => {
+      const res = c.role === 'chosen' ? (c.covered === true ? 'decoded, covers the issue time' : c.covered === false ? 'decoded, does NOT cover the issue time' : c.decode === 'failed' ? 'decode failed' : 'chosen')
+                : c.role === 'alternate' ? (c.decode === 'failed' ? 'tried, decode failed' : c.covered === true ? 'tried, covers' : c.covered === false ? 'tried, no coverage' : 'tried') : '';
+      html += `<tr class="${c.role === 'chosen' ? 'win' : ''}"><td class="t">${c.role === 'chosen' ? '➜' : c.role === 'alternate' ? '↻' : ''}</td>` +
+        `<td>${esc(c.folder)}${c.yb_code ? ' <span style="color:var(--warn);">' + esc(c.yb_code) + '</span>' : ''}</td><td>${esc(c.stamp || '?')}</td>` +
+        `<td>${c.delta_s == null ? '' : esc(fmtDelta(c.delta_s))}</td><td class="t">${res}</td></tr>`;
+    });
+    html += `</table>`;
+    if (pd.alternates_tried) html += `<div class="lp-time-sub">${pd.alternates_tried} other capture${pd.alternates_tried === 1 ? '' : 's'} tried after the first did not cover the issue time</div>`;
+    return html + `</div>`;
+  }
+
   function liveCaseStatus(d, ev) {
     if (!d) return '';
     if (!d.finished) return 'running';
@@ -1667,6 +1871,11 @@
       `<li class="lp-step ${x.status}"><span class="lp-ico">${icon(x.status)}</span>` +
       `<span class="lp-lab">${esc(x.label)}</span><span class="lp-dur">${esc(x.dur)}</span>` +
       (x.detail && x.status !== 'pending' ? `<span class="lp-det">${esc(x.detail)}</span>` : '') +
+      (x.key === 'category' ? liveCategoryHtml(d, x.status) : '') +
+      (x.key === 'read_case_history' ? liveTimesFoundHtml(d, x.status) : '') +
+      (x.key === 'issue_time' ? liveTimePlacementHtml(d, x.status) : '') +
+      (x.key === 'pick_zip' ? liveArchiveHtml(d, x.status) : '') +
+      (x.key === 'pick_etl' ? liveCaptureHtml(d, x.status) : '') +
       (x.key === 'agent_analysis' ? liveAgentHtml(d, x.status, sel) : '') +
       (x.key === 'echo_kb' ? liveEchoHtml(d, x.status) : '') +
       `</li>`).join('') + `</ol>`;

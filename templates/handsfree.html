@@ -286,6 +286,21 @@
     .lp-dot.warn { background: var(--warn); }
     .lp-dot.bad { background: var(--bad); }
     .lp-actions { display: flex; gap: 8px; flex-wrap: wrap; margin-top: 10px; }
+    .lp-live { grid-column: 2 / 4; margin-top: 6px; background: #0b1017; border: 1px solid #223042;
+               border-radius: 6px; padding: 8px 10px; font-size: 12.5px; color: #dbe6f3; }
+    .lp-live .lp-cap { margin-bottom: 6px; }
+    .lp-agent-steps { max-height: 190px; overflow: auto; }
+    .lp-as { display: grid; grid-template-columns: 18px 1fr; column-gap: 6px; padding: 2px 0;
+             color: #c7d3e0; }
+    .lp-as .k { color: #9fb3c8; }
+    .lp-as.conclusion { color: var(--good); } .lp-as.error, .lp-as.warning { color: var(--warn); }
+    .lp-as.error { color: var(--bad); }
+    .lp-res { margin-top: 8px; border-top: 1px solid #223042; padding-top: 8px; }
+    .lp-res .rc { color: #fff; }
+    .lp-res ul { margin: 6px 0 0; padding-left: 18px; color: #dbe6f3; }
+    .lp-echo-q { color: #9fb3c8; }
+    .lp-echo-a { color: #eef3f8; white-space: pre-wrap; margin: 2px 0 8px; max-height: 160px; overflow: auto; }
+    .lp-btn-sm { height: 24px; padding: 0 9px; font-size: 12px; }
     #draft-sent { margin: 0 0 10px; }
     #draft-sent summary { color: var(--muted); cursor: pointer; }
 
@@ -488,7 +503,7 @@
     <table id="queue-table">
       <thead><tr>
   <th>Case</th><th>Owner</th><th>Subject</th><th>Mode</th><th>Confidence</th>
-  <th>Status</th><th>Action owner</th><th>Created</th><th>Decoded log</th>
+  <th>Status</th><th>Action owner</th><th>Created</th><th>Actions</th>
       </tr></thead>
       <tbody></tbody>
     </table>
@@ -512,6 +527,10 @@
         Approve &amp; post to IPS</button>
       <button class="ghost" onclick="saveDraft()">Save edits</button>
       <button class="danger" onclick="rejectDraft()">Reject</button>
+      <button class="ghost" id="draft-avatar-btn" style="display:none;" onclick="openInAvatar(currentDraftCase, currentDraftId)"
+              title="Opens Avatar's Log Chatbot on this case's decoded log, primed with the case and the issue time, to continue by hand">Open in Avatar analysis</button>
+      <button class="ghost" onclick="resetCase(currentDraftCase)"
+              title="Forget this case's handsfree history (drafts archived, analysis marks cleared) so the next run starts fresh">Reset case history</button>
       <span class="status-line" id="post-status"></span>
     </div>
     <details style="margin-top:10px;">
@@ -1046,6 +1065,7 @@
     const j = await r.json();
     const tbody = document.querySelector('#queue-table tbody');
     tbody.innerHTML = '';
+    const firstOfCase = new Set();   // the Reset button shows once per case
     (j.items || []).forEach(it => {
       const statusCls = it.status === 'posted' ? 'good'
                       : it.status === 'post_failed' ? 'bad'
@@ -1068,23 +1088,68 @@
           : `<td style="color:var(--faint);">—</td>`) +
         `<td>${esc((it.created_at || '').slice(0, 16))}</td>` +
         // Only cases whose WRT log was decoded (decode_etl reached) have one.
+        `<td style="white-space: nowrap;">` +
         (it.log_dir
-          ? `<td><button class="ghost log-folder-btn" title="${esc(it.log_dir)}">` +
+          ? `<button class="ghost log-folder-btn lp-btn-sm" title="${esc(it.log_dir)}">` +
             `<svg width="12" height="12" viewBox="0 0 24 24" fill="none" stroke="currentColor" ` +
             `stroke-width="2.2" stroke-linecap="round" stroke-linejoin="round" aria-hidden="true">` +
             `<path d="M3 7a2 2 0 0 1 2-2h4l2 2h8a2 2 0 0 1 2 2v8a2 2 0 0 1-2 2H5a2 2 0 0 1-2-2z" /></svg>` +
-            `Open folder</button></td>`
-          : `<td style="color:var(--faint);">—</td>`);
+            `Folder</button> ` +
+            `<button class="ghost avatar-btn lp-btn-sm" title="Open Avatar's Log Chatbot on this decoded log to continue by hand">Avatar</button> `
+          : '') +
+        (firstOfCase.has(it.case_nbr) ? '' :
+          `<button class="ghost reset-btn lp-btn-sm" title="Forget this case's handsfree history so the next run starts fresh">Reset</button>`) +
+        `</td>`;
+      firstOfCase.add(it.case_nbr);
       tr.onclick = () => openDraft(it.draft_id);
       const logBtn = tr.querySelector('.log-folder-btn');
       if (logBtn) {
         logBtn.onclick = (ev) => { ev.stopPropagation(); openLogFolder(it.draft_id); };
       }
+      const avBtn = tr.querySelector('.avatar-btn');
+      if (avBtn) avBtn.onclick = (ev) => { ev.stopPropagation(); openInAvatar(it.case_nbr, it.draft_id); };
+      const rsBtn = tr.querySelector('.reset-btn');
+      if (rsBtn) rsBtn.onclick = (ev) => { ev.stopPropagation(); resetCase(it.case_nbr); };
       tbody.appendChild(tr);
     });
     if (!(j.items || []).length) {
       tbody.innerHTML = '<tr><td colspan="9" style="color:var(--muted);">queue is empty — run a check above</td></tr>';
     }
+  }
+
+  let currentDraftCase = '';
+
+  // Hand-off to Avatar's manual analysis (Log Chatbot) on the case's decoded
+  // log. The server seeds this browser session (case, log, issue time in the
+  // log's clock); the tab must be opened from the click handler.
+  async function openInAvatar(caseNbr, draftId) {
+    let j;
+    try {
+      j = await postJson('/handsfree/chatbot_handoff', {case_nbr: caseNbr, draft_id: draftId || ''});
+    } catch (e) { alert('Could not prepare the Avatar analysis page: ' + e); return; }
+    if (!j.ok) { alert('Could not open in Avatar: ' + (j.error || 'unknown')); return; }
+    const w = window.open(j.url, '_blank');
+    if (!w) alert('The browser blocked the new tab — allow pop-ups for this page, then try again.');
+  }
+
+  async function resetCase(caseNbr) {
+    if (!caseNbr) return;
+    const purge = confirm('Reset handsfree history of case ' + caseNbr + '?\n\n' +
+      'Its unposted drafts move to an archive folder and the analysis marks are cleared, ' +
+      'so the next run analyzes it afresh. Posted comments stay recorded.\n\n' +
+      'OK = reset (keep downloaded files)\nCancel = do nothing');
+    if (!purge) return;
+    let j;
+    try {
+      j = await postJson('/handsfree/case/' + encodeURIComponent(caseNbr) + '/reset', {purge_downloads: false});
+    } catch (e) { alert('Reset failed: ' + e); return; }
+    if (!j.ok) { alert('Reset failed: ' + (j.error || 'unknown')); return; }
+    const n = (j.archived || []).length;
+    document.getElementById('run-status').textContent =
+      'case ' + caseNbr + ' reset — ' + n + ' draft' + (n === 1 ? '' : 's') + ' archived'
+      + ((j.kept_posted || []).length ? ', ' + j.kept_posted.length + ' posted kept' : '');
+    if (currentDraftCase === caseNbr) document.getElementById('draft-panel').style.display = 'none';
+    loadQueue();
   }
 
   async function openLogFolder(draftId) {
@@ -1205,6 +1270,9 @@
     const d = await r.json();
     currentDraftId = d.draft_id;
     currentDraftMode = d.mode || null;
+    currentDraftCase = d.case_nbr || '';
+    document.getElementById('draft-avatar-btn').style.display =
+      (d.analysis && d.analysis.log_path) ? '' : 'none';
     document.getElementById('draft-panel').style.display = '';
     document.getElementById('draft-title').innerHTML =
       `case ${caseLink(d.case_nbr, d.case_id)} · ${esc(d.mode)} · ${esc(d.status)}`;
@@ -1437,6 +1505,78 @@
       (d.error ? `<div class="lp-time-sub" style="margin-top: 4px;">${esc(d.error)}</div>` : '') + `</div>`;
   }
 
+  const STEP_ICON = {thinking: '🧠', playbook: '📘', step: '💭', fetch: '🔍', tool: '🔧', prescan: '🔍',
+                     plan: '🧭', result: '📄', conclusion: '✅', warning: '⚠️', stopped: '⏹', time: '🕒',
+                     error: '✕', usage: '∑', agent: '·'};
+
+  function liveResultHtml(r) {
+    if (!r) return '';
+    const conf = r.confidence;
+    const confCls = conf == null ? '' : conf >= 80 ? 'good' : conf >= 50 ? 'warn' : 'bad';
+    let html = `<div class="lp-res">`;
+    if (r.result_type === 'report' || r.result_type === 'partial_report') {
+      html += `<div class="lp-chips" style="margin: 0 0 6px;">` +
+        (conf != null ? `<span class="lp-chip ${confCls}">confidence ${esc(conf)}/100</span>` : '') +
+        (r.result_type === 'partial_report' ? `<span class="lp-chip warn">partial report</span>` : '') +
+        (r.involved_skills || []).map(k => `<span class="lp-chip">${esc(k)}</span>`).join('') + `</div>` +
+        `<div class="rc">${esc(r.root_cause_summary || '(no root-cause summary)')}</div>` +
+        ((r.recommended_actions || []).length
+          ? `<ul>${r.recommended_actions.map(a => `<li>${esc(a)}</li>`).join('')}</ul>` : '');
+    } else if (r.result_type === 'error') {
+      html += `<div style="color: var(--bad);">AI analysis failed: ${esc(r.error || 'unknown error')}</div>`;
+    } else {
+      html += `<div>${esc(r.text || 'no report produced' + (r.result_type ? ' (' + r.result_type + ')' : ''))}</div>`;
+    }
+    return html + `</div>`;
+  }
+
+  // Inline live box under "AI log analysis": the agent's steps as they
+  // happen, then the result per incident.
+  function liveAgentHtml(d, status, caseNbr) {
+    const live = d.agent_live, results = d.agent_results || (d.incidents || []);
+    if (status === 'pending' || status === 'skipped') return '';
+    let html = `<div class="lp-live">`;
+    if (live && live.status === 'running') {
+      const n = (live.steps || []).length;
+      html += `<div class="lp-cap">Incident ${esc(live.index)}${live.total > 1 ? ' of ' + esc(live.total) : ''}` +
+        (live.incident ? ' · ' + esc(live.incident) : '') + ` · ${n} step${n === 1 ? '' : 's'} so far</div>` +
+        `<div class="lp-agent-steps" id="lp-agent-steps">` +
+        (live.steps || []).map(st => `<div class="lp-as ${esc(st.kind)}"><span class="k">${STEP_ICON[st.kind] || '·'}</span><span>${esc(st.text)}</span></div>`).join('') +
+        `</div>`;
+    }
+    results.forEach((r, i) => {
+      if (results.length > 1) html += `<div class="lp-cap" style="margin-top: 6px;">Incident ${i + 1} · ${esc(r.issue_time || 'no time')}</div>`;
+      html += liveResultHtml(r);
+    });
+    if (!results.length && !(live && live.status === 'running')) {
+      html += `<div class="lp-cap">${status === 'running' ? 'starting…' : 'no result'}</div>`;
+    }
+    if (d.log_path) {
+      html += `<div class="lp-actions" style="margin-top: 8px;"><button class="ghost lp-btn-sm" ` +
+        `onclick="event.stopPropagation(); openInAvatar(${JSON.stringify(caseNbr).replace(/"/g, '&quot;')}, ${JSON.stringify(d.draft_id || '').replace(/"/g, '&quot;')})" ` +
+        `title="Opens Avatar's Log Chatbot on this decoded log, primed with the case and the issue time, to continue by hand">` +
+        `Open in Avatar analysis</button></div>`;
+    }
+    return html + `</div>`;
+  }
+
+  // Inline live box under "Knowledge base (Echo)".
+  function liveEchoHtml(d, status) {
+    if (status === 'pending' || status === 'skipped') return '';
+    const items = d.echo_live || d.echo_insights || [];
+    const summary = d.echo_live_summary || '';
+    if (!items.length && !summary) return status === 'running' ? `<div class="lp-live"><div class="lp-cap">looking for assert / yellow-bang evidence…</div></div>` : '';
+    let html = `<div class="lp-live">` + (summary ? `<div class="lp-cap">${esc(summary)}</div>` : '');
+    items.forEach(it => {
+      const head = it.kind === 'assert' ? 'Assert ' + esc(it.code || '') : it.kind === 'yellow_bang' ? 'Yellow bang' : 'Question';
+      html += `<div class="lp-echo-q">${head}${it.question && !it.kind ? ': ' + esc(it.question) : ''}</div>` +
+        (it.error ? `<div class="lp-echo-a" style="color: var(--warn);">Echo unavailable: ${esc(it.error)}</div>`
+         : it.answer ? `<div class="lp-echo-a">${esc(it.answer)}</div>`
+         : `<div class="lp-echo-a" style="color: #9fb3c8;">waiting for Echo…</div>`);
+    });
+    return html + `</div>`;
+  }
+
   function liveCaseStatus(d, ev) {
     if (!d) return '';
     if (!d.finished) return 'running';
@@ -1495,6 +1635,8 @@
       `<li class="lp-step ${x.status}"><span class="lp-ico">${icon(x.status)}</span>` +
       `<span class="lp-lab">${esc(x.label)}</span><span class="lp-dur">${esc(x.dur)}</span>` +
       (x.detail && x.status !== 'pending' ? `<span class="lp-det">${esc(x.detail)}</span>` : '') +
+      (x.key === 'agent_analysis' ? liveAgentHtml(d, x.status, sel) : '') +
+      (x.key === 'echo_kb' ? liveEchoHtml(d, x.status) : '') +
       `</li>`).join('') + `</ol>`;
 
     // outcome
@@ -1508,6 +1650,7 @@
         `<div class="lp-actions">` +
         (d.draft_id ? `<button class="primary" onclick="openDraft(${JSON.stringify(d.draft_id).replace(/"/g, '&quot;')})">Open draft</button>` : '') +
         (d.fr_draft_id ? `<button class="ghost" onclick="openDraft(${JSON.stringify(d.fr_draft_id).replace(/"/g, '&quot;')})">Open first-response</button>` : '') +
+        (d.log_path ? `<button class="ghost" onclick="openInAvatar(${JSON.stringify(d.case_nbr || sel).replace(/"/g, '&quot;')}, ${JSON.stringify(d.draft_id || '').replace(/"/g, '&quot;')})" title="Open Avatar's Log Chatbot on this decoded log to continue by hand">Open in Avatar analysis</button>` : '') +
         `</div></div></div>`;
     }
 
@@ -1521,11 +1664,15 @@
           `<span class="sub">${esc((cd && cd.subject) || ref.subject || '')}</span></li>`;
       }).join('') + `</ul></div>` : '';
 
+    const panelScroll = panel.scrollTop;
     panel.innerHTML = head + `<div class="lp-meta">${esc(meta)}</div>` +
       `<div class="lp-sec"><div class="lp-h">Case</div>${caseHtml}</div>` +
       `<div class="lp-sec"><div class="lp-h">Sent for analysis</div>${liveSentHtml(d, finished)}</div>` +
       `<div class="lp-sec"><div class="lp-h">Pipeline</div>${stepsHtml}</div>` +
       outcomeHtml + casesHtml;
+    panel.scrollTop = panelScroll;
+    const agentSteps = document.getElementById('lp-agent-steps');
+    if (agentSteps) agentSteps.scrollTop = agentSteps.scrollHeight;
   }
 
   // Narrow windows: the panel moves under Step 1 as a full-width card.

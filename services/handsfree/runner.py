@@ -374,6 +374,52 @@ def _sent_for_analysis(inc, agent, description: str, customer_tz: str,
     }
 
 
+_STEP_KINDS = (("🧠 Thinking", "thinking"), ("🧠", "playbook"), ("💭", "step"),
+               ("🔍 Fetching", "fetch"), ("🔍 Invoking", "tool"), ("🔍 Pre-Analysis", "prescan"),
+               ("🔍", "tool"), ("🧭", "plan"), ("📄", "result"), ("✅", "conclusion"),
+               ("⚠️", "warning"), ("⏹", "stopped"), ("🕒", "time"))
+
+
+def _compact_step(step: dict, limit: int = 300) -> dict:
+    """One agent step as the live panel shows it: a kind (icon), short text."""
+    role = str(step.get("role") or "")
+    text = str(step.get("content") or "").strip()
+    kind = {"tool": "result", "error": "error", "token_usage": "usage"}.get(role, "agent")
+    for marker, name in _STEP_KINDS:
+        if text.startswith(marker):
+            kind = name
+            text = text[len(marker):].lstrip(" :\n")
+            break
+    text = " ".join(text.split())
+    if len(text) > limit:
+        text = text[:limit] + " …"
+    return {"ts": time.strftime("%H:%M:%S"), "role": role, "kind": kind, "text": text}
+
+
+def _result_summary(inc: "IncidentReport") -> dict:
+    rep = inc.report if isinstance(inc.report, dict) else {}
+    return {
+        "issue_time": inc.issue_time,
+        "issue_time_log": inc.issue_time_log,
+        "result_type": inc.result_type,
+        "confidence": inc.confidence,
+        "root_cause_summary": str(rep.get("root_cause_summary") or "")[:600],
+        "recommended_actions": [str(x) for x in (rep.get("recommended_actions") or [])][:5],
+        "involved_skills": [str(x) for x in (rep.get("involved_skills") or [])][:6],
+        "markdown_summary": str(rep.get("markdown_summary") or "")[:1500],
+        "text": "" if rep else str(inc.report_text or "")[:600],
+        "error": inc.error,
+        "steps": len(inc.steps or []),
+    }
+
+
+def _compact_insight(ins: dict) -> dict:
+    return {"kind": str(ins.get("kind") or ""), "code": ins.get("code"),
+            "question": str(ins.get("question") or "")[:400],
+            "answer": str(ins.get("answer") or "")[:900],
+            "error": str(ins.get("error") or "")[:300]}
+
+
 def live_fields(a: "CaseAnalysis") -> dict:
     """Compact, JSON-safe view of what is known about a case so far (the
     page's live panel renders it while the run is in flight)."""
@@ -402,6 +448,10 @@ def live_fields(a: "CaseAnalysis") -> dict:
         "etl_capture": os.path.basename(os.path.dirname(a.etl_path)) if a.etl_path else "",
         "etl_file": os.path.basename(a.etl_path or ""),
         "log_file": os.path.basename(a.log_path or ""),
+        "log_path": a.log_path or "",
+        "incidents": [_result_summary(i) for i in (a.incidents or [])],
+        "echo_insights": [_compact_insight(i) for i in (a.echo_insights or [])
+                          if isinstance(i, dict)],
         "time_mismatch": {k: v for k, v in (a.time_mismatch or {}).items()
                           if k in ("issue_times", "log_first", "log_last",
                                    "log_first_customer", "log_last_customer",
@@ -1124,11 +1174,12 @@ class HandsfreeRunner:
                 src = {"wrt_log": "from WRT log", "agent_text": "from agent text",
                        "env_detail": "from IPS Environment Details form",
                        None: ""}.get(evidence.get("source"), "")
-                self.progress(
-                    "echo_kb",
-                    f"asking Echo KB — asserts: {evidence['assert_codes'] or 'none'}"
-                    + (f" ({src})" if src else "")
-                    + f", yellow bang: {evidence['yellow_bang']}")
+                echo_summary = (f"asking Echo KB — asserts: {evidence['assert_codes'] or 'none'}"
+                                + (f" ({src})" if src else "")
+                                + f", yellow bang: {evidence['yellow_bang']}")
+                self.progress("echo_kb", echo_summary)
+                echo_live: list[dict] = []
+                self._snap(echo_live_summary=echo_summary, echo_live=[])
 
                 def _clip(text: object, limit: int) -> str:
                     s = str(text).strip()
@@ -1136,14 +1187,23 @@ class HandsfreeRunner:
 
                 def _ask_logged(question: str) -> str:
                     # Surface the exchange in the run log (full text stays in
-                    # analysis.echo_insights → draft's Analysis details).
+                    # analysis.echo_insights → draft's Analysis details) and
+                    # in the live panel as each answer arrives.
                     self.progress("echo_kb", "Q → Echo:\n" + _clip(question, 700))
+                    entry = {"kind": "", "code": None, "question": _clip(question, 400),
+                             "answer": "", "error": ""}
+                    echo_live.append(entry)
+                    self._snap(echo_live=[dict(e) for e in echo_live])
                     try:
                         answer = ask_echo_kb(question)
                     except EchoUnavailable as e:
                         self.progress("echo_kb", f"Echo unavailable: {_clip(e, 300)}")
+                        entry["error"] = _clip(e, 300)
+                        self._snap(echo_live=[dict(e) for e in echo_live])
                         raise
                     self.progress("echo_kb", "A ← Echo:\n" + _clip(answer, 900))
+                    entry["answer"] = _clip(answer, 900)
+                    self._snap(echo_live=[dict(e) for e in echo_live])
                     return answer
 
                 # The same windowed evidence drives the questions: a
@@ -1156,8 +1216,16 @@ class HandsfreeRunner:
                 self.progress(
                     "echo_kb",
                     f"{answered}/{len(analysis.echo_insights)} insight(s) answered")
+                # Final form: kind + code per insight (the live entries only
+                # knew the question text).
+                self._snap(echo_live=[_compact_insight(i) for i in analysis.echo_insights
+                                      if isinstance(i, dict)],
+                           echo_live_summary=echo_summary
+                           + f" — {answered}/{len(analysis.echo_insights)} answered")
             else:
                 self.progress("echo_kb", "no assert / yellow-bang evidence — skipped")
+                self._snap(echo_live_summary="no assert / yellow-bang evidence — skipped",
+                           echo_live=[])
 
         got_report = any(i.report for i in analysis.incidents)
         analysis.mode = "full" if got_report else "triage_only"
@@ -1747,16 +1815,26 @@ class HandsfreeRunner:
 
         times = analysis.issue_times or [""]
         sent_all: list[dict] = []
-        for t in times:
+        agent_results: list[dict] = []
+        for idx, t in enumerate(times):
             inc = IncidentReport(issue_time=t)
             captured: list[dict] = []
+            live_steps: list[dict] = []
+            live_head = {"incident": t, "index": idx + 1, "total": len(times),
+                         "status": "running"}
 
-            def _capture(step, _cap=captured):
-                if isinstance(step, dict) and len(_cap) < _MAX_STEPS_KEPT:
+            def _capture(step, _cap=captured, _live=live_steps, _head=live_head):
+                if not isinstance(step, dict):
+                    return
+                if len(_cap) < _MAX_STEPS_KEPT:
                     _cap.append({
                         "role": str(step.get("role") or ""),
                         "content": str(step.get("content") or "")[:_STEP_CONTENT_CAP],
                     })
+                # Live panel: the last steps as they happen (bounded).
+                _live.append(_compact_step(step))
+                del _live[:-40]
+                self._snap(agent_live=dict(_head, steps=list(_live), result=None))
 
             # Mirror the UI: per-incident issue-time override on the agent —
             # in the LOG's clock when the reported time maps inside the log
@@ -1824,3 +1902,8 @@ class HandsfreeRunner:
                 print(f"[handsfree.runner] agent run failed:\n{traceback.format_exc()}")
             inc.steps = captured
             analysis.incidents.append(inc)
+            summary = _result_summary(inc)
+            agent_results.append(summary)
+            self._snap(agent_live=dict(live_head, status=inc.result_type or "error",
+                                       steps=list(live_steps), result=summary),
+                       agent_results=list(agent_results))

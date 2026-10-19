@@ -240,6 +240,50 @@ def smoke_queue(tmp: Path) -> None:
     check("S3.k concurrent partial config writes never lose each other's keys",
           all(cfg_after.get(k) == 39 for k in ("w_a", "w_b", "w_c"))
           and cfg_after["owner_name"] == "Charles P Chu", str(cfg_after))
+    # Reset a case: unposted drafts archived, posted ones + post marks kept,
+    # analysis marks dropped, decoded files purged only on request.
+    from . import bsod as bsod_mod
+    orig_sub_path = bsod_mod._submissions_path
+    bsod_mod._submissions_path = lambda: tmp / "handsfree" / "bsod_submissions.json"
+    try:
+        case_dir = tmp / "01234570"
+        cap_dir = case_dir / "WRT" / "Log" / "cap_01-01-2026_10-00-00_1"
+        cap_dir.mkdir(parents=True, exist_ok=True)
+        (cap_dir / "WifiDriverIHVSession.etl.001").write_bytes(b"etl")
+        (cap_dir / "WifiDriverIHVSession.etl.001.log").write_text("log", encoding="utf-8")
+        (case_dir / "upload.zip").write_bytes(b"zip")
+        r1 = store.enqueue(case_nbr="01234570", case_id="500R", subject="s",
+                           draft_plain="b", draft_html="<p>b</p>", confidence=70, mode="full",
+                           analysis={"log_path": str(cap_dir / "WifiDriverIHVSession.etl.001.log")})
+        r2 = store.enqueue(case_nbr="01234570", case_id="500R", subject="s",
+                           draft_plain="fr", draft_html="<p>fr</p>", confidence=None,
+                           mode="first_response", analysis={})
+        store.update(r2["draft_id"], status="posted", post_result={"ok": True})
+        store.mark_posted("01234570", comment_id="CMT-1", first_response=True)
+        store.mark_customer_update("01234570", "2026-10-01T00:00:00Z")
+        bsod_mod.record_submission("01234570", ["x.zip"], "\\\\share\\01234570", "a@b", 200)
+        res = store.reset_case("01234570", purge_downloads=True, case_dir=str(case_dir))
+        forgotten = bsod_mod.forget_case("01234570")
+        after = store.ledger_entry("01234570")
+        ids_left = {d["draft_id"] for d in store.list_drafts(include_closed=True)
+                    if d["case_nbr"] == "01234570"}
+        check("S3.r reset_case: unposted draft archived (not deleted), posted draft and the "
+              "post marks kept, analysis marks dropped, decoded/extracted files purged but "
+              "the archive kept, BSOD record forgotten",
+              res["archived"] == [r1["draft_id"]] and res["kept_posted"] == [r2["draft_id"]]
+              and (tmp / "handsfree" / Path(res["archive_dir"]).name / (r1["draft_id"] + ".json")).exists()
+              and ids_left == {r2["draft_id"]}
+              and "analyzed_at" not in after and "last_customer_update" not in after
+              and after.get("first_response_comment_id") == "CMT-1" and after.get("comment_id") == "CMT-1"
+              and store.first_response_posted("01234570")
+              and not (cap_dir / "WifiDriverIHVSession.etl.001.log").exists()
+              and not (cap_dir / "WifiDriverIHVSession.etl.001").exists()
+              and (case_dir / "upload.zip").exists()
+              and forgotten == 1 and bsod_mod.submissions("01234570") == [],
+              f"res={res} after={after} left={ids_left}")
+        store.list_drafts()   # still readable
+    finally:
+        bsod_mod._submissions_path = orig_sub_path
     from .case_reader import normalize_action_owner as nao
     check("S3.i action owner normalized: intel / customer / unknown",
           nao("Intel") == "intel" and nao("case owner (Intel FAE)") == "intel"
@@ -509,6 +553,22 @@ def smoke_runner(tmp: Path) -> None:
               and sent.get("log_file", "").endswith(".log"),
               f"json_ok={live_json_ok} keys={sorted(live)[:12]} sent={sent} "
               f"stages={[sn.get('current_stage') for sn in live_snaps if 'current_stage' in sn][:20]}")
+        agent_snaps = [sn["agent_live"] for sn in live_snaps if sn.get("agent_live")]
+        running = [a for a in agent_snaps if a.get("status") == "running"]
+        final = agent_snaps[-1] if agent_snaps else {}
+        check("S4.live2 AI analysis streamed: running snapshots carry the agent's steps "
+              "(kind + text), the last one carries the result (confidence 90, root cause); "
+              "Echo stage reports its evidence verdict",
+              running and all(isinstance(a.get("steps"), list) for a in running)
+              and any(st.get("kind") and st.get("text") for a in running for st in a["steps"])
+              and final.get("status") == "report" and (final.get("result") or {}).get("confidence") == 90
+              and "deauth" in (final.get("result") or {}).get("root_cause_summary", "").lower()
+              and live.get("agent_results") and live["agent_results"][0]["confidence"] == 90
+              and live.get("incidents") and live["incidents"][0]["confidence"] == 90
+              and live.get("log_path", "").endswith(".log")
+              and "echo_live_summary" in live,
+              f"running={len(running)} kinds={[st.get('kind') for a in running[:1] for st in a['steps']][:8]} "
+              f"final={ {k: final.get(k) for k in ('status', 'result')} } echo={live.get('echo_live_summary')!r}")
         stage_names = [s.name for s in analysis.stages]
         check("S4.e all stages recorded",
               {"fetch_case", "triage", "read_case_history", "check_wrt_log",

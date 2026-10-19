@@ -12,6 +12,7 @@ and is deliberately not consulted anywhere yet.
 
 from __future__ import annotations
 
+import copy
 import re
 import threading
 import time
@@ -42,6 +43,8 @@ def get_run_state() -> dict:
             s["events"] = [dict(e) for e in s["events"]]
         if isinstance(s.get("cases"), list):
             s["cases"] = [dict(c) for c in s["cases"]]
+        if isinstance(s.get("case_details"), dict):
+            s["case_details"] = copy.deepcopy(s["case_details"])
     try:
         from . import scheduler
         s["auto"] = scheduler.status()
@@ -52,6 +55,26 @@ def get_run_state() -> dict:
 def _set_state(**fields) -> None:
     with _state_lock:
         _run_state.update(fields)
+
+
+_MAX_CASE_DETAILS = 60
+
+
+def _update_case_details(case_nbr: str, fields: dict) -> None:
+    """Merge structured facts about one case of the current run into the run
+    state (the page's live panel). Bounded: the oldest cases drop first."""
+    with _state_lock:
+        details = _run_state.setdefault("case_details", {})
+        entry = details.get(str(case_nbr))
+        if entry is None:
+            entry = details[str(case_nbr)] = {"case_nbr": str(case_nbr),
+                                              "started_at": time.time()}
+        entry.update(fields)
+        entry["updated_at"] = time.time()
+        if len(details) > _MAX_CASE_DETAILS:
+            for key in sorted(details, key=lambda k: details[k].get("started_at", 0))[
+                    : len(details) - _MAX_CASE_DETAILS]:
+                details.pop(key, None)
 
 
 def _log_event(message: str) -> None:
@@ -79,7 +102,7 @@ def start_check_now(owner_name: Optional[str] = None,
 
     _set_state(status="running", owner=owner, created_date=created_date,
                started_at=time.time(),
-               events=[], cases=[], error=None)
+               events=[], cases=[], case_details={}, error=None)
 
     t = threading.Thread(target=_run_check, args=(owner, store, created_date),
                          daemon=True, name="handsfree-check")
@@ -100,11 +123,19 @@ def _analyze_and_enqueue(store: HandsfreeStore, case_nbr: str,
     def _progress(stage, detail, _c=case_nbr):
         _log_event(f"[{_c}] {stage}: {detail}")
 
-    runner = HandsfreeRunner(progress_cb=_progress)
+    def _snapshot(fields, _c=case_nbr):
+        _update_case_details(_c, fields)
+
+    _update_case_details(case_nbr, {"case_id": case_id, "subject": subject,
+                                    "owner_name": owner_name, "finished": False,
+                                    "current_stage": "", "draft_id": "",
+                                    "fr_draft_id": ""})
+    runner = HandsfreeRunner(progress_cb=_progress, snapshot_cb=_snapshot)
     analysis = runner.analyze_case(case_nbr)
     if analysis.mode == "unsupported":
         store.mark_skipped(case_nbr, analysis.error, owner_name=owner_name)
         _log_event(f"[{case_nbr}] skipped: {analysis.error}")
+        _update_case_details(case_nbr, {"skipped": analysis.error})
         return None
 
     # Pre-fill the first-response checklist: pipeline facts first, then one
@@ -146,6 +177,7 @@ def _analyze_and_enqueue(store: HandsfreeStore, case_nbr: str,
         owner_name=owner_name,
         trial=trial,
     )
+    _update_case_details(case_nbr, {"draft_id": rec["draft_id"]})
     _log_event(
         f"[{case_nbr}] queued draft {rec['draft_id']} "
         f"(mode={analysis.mode}, confidence={draft['confidence']}"
@@ -177,6 +209,7 @@ def _analyze_and_enqueue(store: HandsfreeStore, case_nbr: str,
             trial=trial,
                 owner_name=owner_name,
         )
+        _update_case_details(case_nbr, {"fr_draft_id": fr_rec["draft_id"]})
         _log_event(f"[{case_nbr}] queued first-response checklist draft "
                    f"{fr_rec['draft_id']}")
     return rec
@@ -335,7 +368,7 @@ def run_auto_scan(store: HandsfreeStore, owner: str = "", max_cases: int = 10,
                      "source": source, "cases": []}
     try:
         _set_state(status="running", owner=owner or None, mode=f"auto-scan ({trigger})",
-                   started_at=time.time(), events=[], cases=[], error=None)
+                   started_at=time.time(), events=[], cases=[], case_details={}, error=None)
         if on_start is not None:
             on_start()
         cfg = store.load_config()
@@ -465,7 +498,7 @@ def start_case_run(case_nbr: str) -> dict:
     store = _store()
     _set_state(status="running", owner=None, mode="single-case",
                case_nbr=case_nbr, started_at=time.time(),
-               events=[], cases=[], error=None)
+               events=[], cases=[], case_details={}, error=None)
     if store.is_processed(case_nbr):
         _log_event(f"note: case {case_nbr} was analyzed before — re-running "
                    "on explicit request (approve-time duplicate guard still active)")

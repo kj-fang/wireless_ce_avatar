@@ -260,6 +260,8 @@ class IncidentReport:
     time_anchor: str = ""            # how the two were aligned: tz_helper |
                                      #   folder_stamp | as_is
     user_message: str = ""
+    sent_for_analysis: dict = field(default_factory=dict)  # exact agent inputs (live
+                                     #   panel + review): description, both clocks, log
     result_type: str = ""            # report | partial_report | text | error
     report: Optional[dict] = None    # submit_final_report args
     report_text: str = ""
@@ -345,6 +347,88 @@ def _noop(_stage: str, _detail: str = "") -> None:
     pass
 
 
+def _fmt_dt(dt) -> str:
+    if dt is None:
+        return ""
+    try:
+        from utils.issue_time_utils import format_issue_time
+        return format_issue_time(dt, with_ms=False)
+    except Exception:
+        return str(dt)
+
+
+def _sent_for_analysis(inc, agent, description: str, customer_tz: str,
+                       log_path: str, log_first, log_last) -> dict:
+    """What the analysis agent actually receives for one incident."""
+    log_time = inc.issue_time_log or _fmt_dt(getattr(agent, "issue_time", None))
+    return {
+        "issue_time_reported": inc.issue_time,
+        "issue_time_customer": inc.issue_time_customer or inc.issue_time,
+        "issue_time_log": log_time,
+        "time_anchor": inc.time_anchor,
+        "customer_tz": customer_tz or "",
+        "description": description,
+        "user_message": inc.user_message,
+        "log_file": os.path.basename(log_path or ""),
+        "log_range": [_fmt_dt(log_first), _fmt_dt(log_last)],
+    }
+
+
+def live_fields(a: "CaseAnalysis") -> dict:
+    """Compact, JSON-safe view of what is known about a case so far (the
+    page's live panel renders it while the run is in flight)."""
+    reader = a.case_reader or {}
+    bsod = a.bsod or {}
+    return {
+        "case_id": a.case_id,
+        "subject": a.subject,
+        "subcategory": a.subcategory,
+        "wifi_or_bt": a.wifi_or_bt,
+        "issue_type": a.issue_type,
+        "issue_domain": a.issue_domain,
+        "issue_subcategory": a.issue_subcategory,
+        "clean_description": (a.clean_description or "")[:2000],
+        "issue_times": list(a.issue_times or []),
+        "vague_times": list(reader.get("vague_times") or []),
+        "issue_time_source": str(reader.get("issue_time_source") or ""),
+        "reader_attachment": str(reader.get("attachment_name") or ""),
+        "reader_attachment_reason": str(reader.get("attachment_reason") or ""),
+        "action_owner": a.action_owner,
+        "next_action": a.next_action,
+        "missing_info": [m.get("item") for m in (a.missing_info or []) if isinstance(m, dict)],
+        "chosen_attachment": a.chosen_attachment,
+        "attachment_time": a.attachment_time,
+        "archive_contents": dict(a.archive_contents or {}),
+        "etl_capture": os.path.basename(os.path.dirname(a.etl_path)) if a.etl_path else "",
+        "etl_file": os.path.basename(a.etl_path or ""),
+        "log_file": os.path.basename(a.log_path or ""),
+        "time_mismatch": {k: v for k, v in (a.time_mismatch or {}).items()
+                          if k in ("issue_times", "log_first", "log_last",
+                                   "log_first_customer", "log_last_customer",
+                                   "also_tried", "yb_assert_override")},
+        "time_alignment": dict(getattr(a, "time_alignment", None) or {}),
+        "yb_case": a.yb_case,
+        "bsod_case": a.bsod_case,
+        "bsod": {
+            "dumps": list(bsod.get("dumps") or []),
+            "dumps_path": bsod.get("dumps_path") or "",
+            "submitted": bool(bsod.get("submitted")),
+            "skipped": bsod.get("skipped") or "",
+            "failed": list(bsod.get("failed") or []),
+            "results": [{"dump": r.get("dump"), "bugcheck_code": r.get("bugcheck_code"),
+                         "bugcheck_str": r.get("bugcheck_str"),
+                         "failure_bucket_id": r.get("failure_bucket_id"),
+                         "wifi_fault": r.get("wifi_fault"), "bt_fault": r.get("bt_fault")}
+                        for r in (bsod.get("results") or [])],
+        } if (a.bsod_case or bsod) else {},
+        "stages": [{"name": st.name, "ok": st.ok, "duration_ms": st.duration_ms,
+                    "detail": (st.detail or "")[:200]} for st in (a.stages or [])],
+        "mode": a.mode,
+        "log_request_reason": a.log_request_reason,
+        "error": (a.error or "")[:400],
+    }
+
+
 class HandsfreeRunner:
     """One instance per run; stateless between cases."""
 
@@ -353,9 +437,32 @@ class HandsfreeRunner:
     # early gate) before giving up on it.
     PREFETCH_JOIN_TIMEOUT_S = 15 * 60
 
-    def __init__(self, progress_cb: Optional[Callable[[str, str], None]] = None):
+    def __init__(self, progress_cb: Optional[Callable[[str, str], None]] = None,
+                 snapshot_cb: Optional[Callable[[dict], None]] = None):
         self.progress = progress_cb or _noop
+        # snapshot_cb(fields): structured facts about the case as they become
+        # known (live panel on the page). Optional; never allowed to break a run.
+        self.snapshot_cb = snapshot_cb
         self._prefetch: Optional[_Prefetch] = None
+
+    def _snap(self, **fields) -> None:
+        if self.snapshot_cb is None:
+            return
+        try:
+            self.snapshot_cb(fields)
+        except Exception as e:
+            print(f"[handsfree.runner] snapshot failed (ignored): {e}")
+
+    def _snap_analysis(self, analysis: "CaseAnalysis", **extra) -> None:
+        if self.snapshot_cb is None:
+            return
+        try:
+            fields = live_fields(analysis)
+        except Exception as e:
+            print(f"[handsfree.runner] live fields failed (ignored): {e}")
+            fields = {}
+        fields.update(extra)
+        self._snap(**fields)
 
     # ---- stage helper ----
     def _stage(self, analysis: CaseAnalysis, name: str):
@@ -365,6 +472,7 @@ class HandsfreeRunner:
             def __enter__(ctx):
                 ctx.t0 = time.time()
                 runner.progress(name, "started")
+                runner._snap(current_stage=name)
                 return ctx
 
             def __exit__(ctx, exc_type, exc, tb):
@@ -376,6 +484,7 @@ class HandsfreeRunner:
                     detail = f"{type(exc).__name__}: {exc}"
                     analysis.stages.append(StageStatus(name, False, detail, dur))
                     runner.progress(name, f"failed: {detail}")
+                runner._snap_analysis(analysis, current_stage="")
                 # Never propagate — callers check the returned ok flags.
                 return True
 
@@ -391,8 +500,12 @@ class HandsfreeRunner:
         DriverManager / download globals."""
         self._prefetch = None
         try:
-            return self._analyze_case(case_nbr, max_steps=max_steps,
-                                      max_incidents=max_incidents)
+            analysis = self._analyze_case(case_nbr, max_steps=max_steps,
+                                          max_incidents=max_incidents)
+            best = analysis.best_incident
+            self._snap_analysis(analysis, current_stage="", finished=True,
+                                confidence=best.confidence if best else None)
+            return analysis
         finally:
             pf, self._prefetch = self._prefetch, None
             if pf is not None and pf.is_alive():
@@ -1633,6 +1746,7 @@ class HandsfreeRunner:
                 print(f"[handsfree.runner] log time range unavailable: {e}")
 
         times = analysis.issue_times or [""]
+        sent_all: list[dict] = []
         for t in times:
             inc = IncidentReport(issue_time=t)
             captured: list[dict] = []
@@ -1685,6 +1799,11 @@ class HandsfreeRunner:
                 f"{analysis.clean_description} at around {t}" if t
                 else analysis.clean_description
             )
+            inc.sent_for_analysis = _sent_for_analysis(
+                inc, agent, primed_description, customer_tz,
+                analysis.log_path, log_first, log_last)
+            sent_all.append(inc.sent_for_analysis)
+            self._snap(sent_for_analysis=list(sent_all))
             self.progress("agent_analysis", f"incident @ {t or 'unspecified time'}")
             try:
                 res = agent.chat(inc.user_message, use_tools=True,

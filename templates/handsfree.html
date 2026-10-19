@@ -128,7 +128,7 @@
     #run-log { max-height: 34vh; min-height: 60px; overflow: auto; background: var(--field);
                border: 1px solid var(--border); border-radius: 8px; padding: 10px 12px;
                font-family: var(--mono); font-size: 12px; line-height: 1.65; }
-    #run-log:empty::before { content: 'run output appears here'; color: var(--faint); }
+    #run-log:empty::before { content: 'raw run log appears here'; color: var(--faint); }
     .log-line { white-space: pre-wrap; word-break: break-word; color: var(--muted); }
     .log-line .ts { color: var(--faint); margin-right: 10px; }
     .log-line.err { color: var(--bad); }
@@ -197,6 +197,98 @@
           font-size: 12px; line-height: 1.6; white-space: pre-wrap; word-break: break-word;
           color: var(--muted); }
 
+    /* ---------- page grid: main column + live analysis panel ---------- */
+    .page-grid { display: grid; grid-template-columns: minmax(0, 1160px) 440px;
+                 justify-content: center; align-items: start; }
+    .page-grid > header { grid-column: 1 / -1; max-width: none; width: 100%; margin: 0; }
+    .page-grid > main { margin: 0; max-width: none; min-width: 0; }
+    @media (max-width: 1480px) {
+      .page-grid { grid-template-columns: minmax(0, 1160px); }
+    }
+
+    /* ---------- live analysis panel ---------- */
+    #live-panel { position: sticky; top: 16px; margin: 28px 28px 28px 0;
+                  max-height: calc(100vh - 32px); overflow: auto;
+                  background: linear-gradient(180deg, #131a24, #0f141c);
+                  border: 1px solid #2b3a4f; border-top: 3px solid var(--accent);
+                  border-radius: var(--r); padding: 18px 20px 20px;
+                  color: #f4f7fb; font-size: 14px; line-height: 1.55;
+                  box-shadow: 0 1px 2px rgba(0,0,0,0.35), 0 18px 40px -22px rgba(0,0,0,0.75); }
+    #live-panel.inline { position: static; margin: 0 0 20px; max-height: none; }
+    .lp-top { display: flex; align-items: center; gap: 10px; flex-wrap: wrap; }
+    .lp-title { font-size: 16px; font-weight: 650; color: #fff; letter-spacing: -0.01em;
+                font-family: 'Segoe UI Variable Display', 'Segoe UI', system-ui, sans-serif; }
+    .lp-meta { margin-top: 4px; font-size: 12.5px; color: #a9bbcf; }
+    .lp-sec { margin-top: 16px; }
+    .lp-h { font-size: 11px; letter-spacing: 0.1em; text-transform: uppercase; color: #9fb3c8;
+            font-weight: 650; margin-bottom: 8px; }
+    .lp-box { background: #0c1118; border: 1px solid #263243; border-radius: 8px; padding: 12px 14px; }
+    .lp-subj { font-weight: 600; color: #fff; margin-top: 2px; }
+    .lp-chips { display: flex; flex-wrap: wrap; gap: 6px; margin-top: 8px; }
+    .lp-chip { font-size: 12px; padding: 2px 9px; border-radius: 999px; background: #1b2532;
+               color: #dbe6f3; border: 1px solid #2a3749; }
+    .lp-chip.warn { color: var(--warn); border-color: rgba(229,176,72,0.4); }
+    .lp-chip.good { color: var(--good); border-color: rgba(62,207,142,0.4); }
+    .lp-chip.bad  { color: var(--bad);  border-color: rgba(240,113,120,0.4); }
+    .lp-next { margin-top: 8px; font-size: 13px; color: #dbe6f3; }
+    .lp-big { font-size: 22px; font-weight: 650; color: #fff; font-family: var(--mono); }
+    ol.lp-steps { list-style: none; margin: 0; padding: 0; }
+    .lp-step { display: grid; grid-template-columns: 22px 1fr auto; column-gap: 10px;
+               padding: 6px 0; position: relative; }
+    .lp-step:not(:last-child)::before { content: ''; position: absolute; left: 10px; top: 30px;
+               bottom: -6px; width: 2px; background: #253142; }
+    .lp-step.done:not(:last-child)::before { background: rgba(62,207,142,0.35); }
+    .lp-ico { width: 22px; height: 22px; border-radius: 50%; display: grid; place-items: center;
+              font-size: 12px; font-weight: 700; position: relative; z-index: 1;
+              border: 1px solid #3a475a; color: #6f7f93; background: #0f141c; }
+    .lp-step.done .lp-ico { background: rgba(62,207,142,0.16); color: var(--good);
+                            border-color: rgba(62,207,142,0.55); }
+    .lp-step.failed .lp-ico { background: rgba(240,113,120,0.16); color: var(--bad);
+                              border-color: rgba(240,113,120,0.6); }
+    .lp-step.running .lp-ico { border-color: var(--accent); background: rgba(69,184,240,0.12); }
+    .lp-step.skipped .lp-ico { border-style: dashed; opacity: 0.6; }
+    .lp-lab { color: #f4f7fb; font-weight: 550; align-self: center; }
+    .lp-step.pending .lp-lab, .lp-step.skipped .lp-lab { color: #8a98ab; font-weight: 450; }
+    .lp-step.running .lp-lab { color: #fff; font-weight: 650; }
+    .lp-dur { font-family: var(--mono); font-size: 12px; color: #9fb3c8; align-self: center; }
+    .lp-det { grid-column: 2 / 4; font-size: 12.5px; color: #b8c6d6; word-break: break-word; }
+    .lp-step.failed .lp-det { color: var(--bad); }
+    .lp-spin { width: 11px; height: 11px; border: 2px solid rgba(69,184,240,0.3);
+               border-top-color: var(--accent); border-radius: 50%; animation: lpspin 0.8s linear infinite; }
+    @keyframes lpspin { to { transform: rotate(360deg); } }
+    @media (prefers-reduced-motion: reduce) { .lp-spin { animation: none; } }
+    .lp-sent { border: 1px solid rgba(126,208,255,0.5); background: rgba(69,184,240,0.07);
+               border-radius: 8px; padding: 12px 14px; }
+    .lp-sent + .lp-sent { margin-top: 10px; }
+    .lp-sent.pending { border-style: dashed; background: transparent; }
+    .lp-sent .lp-cap { font-size: 12px; color: #a9bbcf; margin-bottom: 8px; }
+    .lp-time { font-family: var(--mono); font-size: 15px; color: #fff; }
+    .lp-time-sub { font-size: 12.5px; color: #b8c6d6; margin-top: 2px; }
+    .lp-desc { white-space: pre-wrap; word-break: break-word; background: #0b1017;
+               border: 1px solid #223042; border-radius: 6px; padding: 10px 12px; margin-top: 8px;
+               max-height: 240px; overflow: auto; color: #eef3f8; font-size: 13.5px; }
+    .lp-kv { display: grid; grid-template-columns: 96px 1fr; gap: 3px 10px; font-size: 13px;
+             margin-top: 8px; }
+    .lp-kv dt { color: #9fb3c8; }
+    .lp-kv dd { margin: 0; color: #fff; word-break: break-word; }
+    .lp-kv dd.mono { font-family: var(--mono); font-size: 12.5px; }
+    .lp-empty { color: #a9bbcf; font-size: 13.5px; }
+    ul.lp-cases { list-style: none; margin: 0; padding: 0; }
+    .lp-cases li { display: flex; align-items: center; gap: 8px; padding: 4px 6px; border-radius: 6px;
+                   cursor: pointer; font-size: 13px; color: #dbe6f3; }
+    .lp-cases li:hover { background: #18202b; }
+    .lp-cases li.sel { background: #1b2532; color: #fff; }
+    .lp-cases .nbr { font-family: var(--mono); font-size: 12.5px; }
+    .lp-cases .sub { color: #a9bbcf; overflow: hidden; text-overflow: ellipsis; white-space: nowrap; }
+    .lp-dot { width: 8px; height: 8px; border-radius: 50%; flex: none; background: #4a586b; }
+    .lp-dot.running { background: var(--accent); animation: breathe 1.8s var(--ease) infinite; }
+    .lp-dot.done { background: var(--good); }
+    .lp-dot.warn { background: var(--warn); }
+    .lp-dot.bad { background: var(--bad); }
+    .lp-actions { display: flex; gap: 8px; flex-wrap: wrap; margin-top: 10px; }
+    #draft-sent { margin: 0 0 10px; }
+    #draft-sent summary { color: var(--muted); cursor: pointer; }
+
     @media (max-width: 880px) {
       main { padding: 18px; }
       #progress-row { flex-direction: column; }
@@ -205,6 +297,7 @@
   </style>
 </head>
 <body>
+<div class="page-grid">
 <header>
   <span class="mark" aria-hidden="true">
     <svg width="20" height="20" viewBox="0 0 24 24" fill="none" stroke="currentColor"
@@ -267,7 +360,7 @@
     </div>
   </div>
 
-  <div class="panel">
+  <div class="panel" id="step1-panel">
     <div class="eyebrow">Step 1 · Detect &amp; analyze</div>
     <div class="tabs" role="tablist">
       <button class="tab active" id="tab-btn-new" role="tab" onclick="showTab('new')">Check for new cases</button>
@@ -358,6 +451,7 @@
     </div>
     <div class="row" id="progress-row">
       <div class="col log-col">
+        <div class="status-line" style="margin-bottom: 4px;">Raw run log</div>
         <div id="run-log"></div>
       </div>
       <div class="col stage-col">
@@ -407,6 +501,7 @@
       <span class="status-line" id="draft-status"></span>
     </div>
     <div id="draft-chips"></div>
+    <div id="draft-sent"></div>
     <textarea id="draft-text" rows="18"></textarea>
     <div class="controls" style="margin-top:8px;">
       <button class="good" id="approve-btn" onclick="approveDraft()"
@@ -425,6 +520,11 @@
     </details>
   </div>
 </main>
+<aside id="live-panel" aria-live="polite" aria-label="Live analysis">
+  <div class="lp-top"><span class="lp-title">Live analysis</span></div>
+  <div class="lp-empty" style="margin-top: 10px;">No run yet — start one in Step 1 and its progress shows here.</div>
+</aside>
+</div>
 
 <script>
   let currentDraftId = null;
@@ -824,7 +924,7 @@
   const STAGES = ['fetch_case', 'triage', 'read_images', 'read_case_history', 'check_case_info',
                   'pick_zip', 'download', 'decompose', 'check_wrt_log', 'check_bt_log',
                   'issue_time', 'pick_etl', 'decode_etl', 'decode_bt', 'agent_analysis',
-                  'echo_kb'];
+                  'echo_kb', 'bsod_dumps', 'bsod_download', 'bsod_submit', 'bsod_result'];
   let stageCasePinned = null;   // user-selected case; null = follow the running one
 
   function pinStageCase(caseNbr) {
@@ -924,6 +1024,7 @@
     }).join('');
     log.scrollTop = log.scrollHeight;
     renderStageTable(s.events);
+    renderLivePanel(s);
     if (s.auto) renderAuto(s.auto);
     if (s.status !== 'running') {
       setRunButtons(false);
@@ -1111,6 +1212,7 @@
       d.post_result && d.post_result.error ? ('last post attempt: ' + d.post_result.error) : '';
     document.getElementById('draft-text').value = d.draft_plain || '';
     renderDraftChips(d.analysis || {});
+    renderDraftSent(d.analysis || {});
     document.getElementById('draft-analysis').textContent =
       JSON.stringify(d.analysis || {}, null, 2);
     document.getElementById('approve-btn').disabled =
@@ -1158,6 +1260,301 @@
     });
     document.getElementById('draft-panel').style.display = 'none';
     loadQueue();
+  }
+
+  // ---------- live analysis side panel ----------
+  // Rendered from the same /handsfree/status poll: run header, the case,
+  // a plain-language pipeline timeline, what was sent to the AI analysis,
+  // the outcome and the cases of the round.
+
+  const LIVE_COMMON = [
+    ['fetch_case', 'Fetch the IPS case'],
+    ['triage', 'Triage the description'],
+    ['read_images', 'Read comment screenshots'],
+    ['read_case_history', 'Read the IPS comment thread'],
+    ['check_case_info', 'Check the case information'],
+  ];
+  const LIVE_WIFI = [
+    ['pick_zip', 'Pick the log archive'], ['download', 'Download the archive'],
+    ['decompose', 'Extract the archive'], ['check_wrt_log', 'Check for WRT logs'],
+    ['issue_time', 'Settle the issue time'], ['pick_etl', 'Pick the capture'],
+    ['decode_etl', 'Decode the ETL log'], ['agent_analysis', 'AI log analysis'],
+    ['echo_kb', 'Knowledge base (Echo)'],
+  ];
+  const LIVE_BT = [
+    ['pick_zip', 'Pick the log archive'], ['download', 'Download the archive'],
+    ['decompose', 'Extract the archive'], ['check_bt_log', 'Check for BT logs'],
+    ['issue_time', 'Settle the issue time'], ['pick_etl', 'Pick the capture'],
+    ['decode_bt', 'Decode the BT log'], ['agent_analysis', 'AI log analysis'],
+    ['echo_kb', 'Knowledge base (Echo)'],
+  ];
+  const LIVE_BSOD = [
+    ['bsod_dumps', 'Find the crash dumps'], ['bsod_download', 'Copy dumps to the BSOD share'],
+    ['bsod_submit', 'Submit to PotatoFarm'], ['bsod_result', 'PotatoFarm verdict'],
+  ];
+  const LIVE_MODE_TEXT = {
+    full: ['AI analysis report drafted', 'good'],
+    triage_only: ['Triage only — no usable log', 'warn'],
+    request_logs: ['Reply asks the customer for logs', 'warn'],
+    request_info: ['Reply asks the customer for information', 'warn'],
+    waiting_customer: ['Waiting on the customer', ''],
+    bsod_submitted: ['BSOD dump sent to PotatoFarm', 'good'],
+    bsod_pending: ['BSOD — already submitted to PotatoFarm', ''],
+    unsupported: ['Skipped — unsupported subcategory', ''],
+    error: ['Error', 'bad'],
+  };
+  const LIVE_ANCHOR_TEXT = {tz_helper: 'time zone from system_info', folder_stamp: 'capture folder stamp',
+                            as_is: 'same clock'};
+
+  function liveFmtMs(ms) {
+    if (ms == null) return '';
+    if (ms < 1000) return ms + ' ms';
+    const sec = ms / 1000;
+    if (sec < 60) return sec.toFixed(sec < 10 ? 1 : 0) + ' s';
+    return Math.floor(sec / 60) + ' m ' + Math.round(sec % 60) + ' s';
+  }
+  function liveFmtSec(sec) {
+    if (sec == null || sec < 0) return '';
+    sec = Math.round(sec);
+    return sec < 60 ? sec + ' s' : Math.floor(sec / 60) + ' m ' + (sec % 60) + ' s';
+  }
+  function liveNowTs() {
+    const n = new Date();
+    return n.getHours() * 3600 + n.getMinutes() * 60 + n.getSeconds();
+  }
+
+  function liveStepDetail(key, d, ev) {
+    const tm = d.time_mismatch || {}, ta = d.time_alignment || {}, b = d.bsod || {};
+    switch (key) {
+      case 'fetch_case':
+        return d.subcategory ? 'IPS subcategory: ' + d.subcategory : '';
+      case 'read_case_history': {
+        const bits = [];
+        if ((d.issue_times || []).length) bits.push('issue time ' + d.issue_times.join(' · ')
+          + (d.issue_time_source ? ' (from ' + d.issue_time_source + ')' : ''));
+        else if (ev.status === 'done') bits.push(d.bsod_case
+          ? 'no issue time needed — the crash dump carries it'
+          : 'no minute-precise issue time stated');
+        if (d.reader_attachment) bits.push('log: ' + d.reader_attachment);
+        return bits.join(' — ');
+      }
+      case 'check_case_info':
+        if (ev.status !== 'done') return ev.detail || '';
+        return (d.missing_info || []).length ? 'missing: ' + d.missing_info.join(', ') : 'all case information present';
+      case 'pick_zip': return d.chosen_attachment || '';
+      case 'decompose': {
+        const c = d.archive_contents || {};
+        const parts = [['wifi_wpp', 'WPP'], ['ddd', 'DDD'], ['event_logs', 'event logs'], ['bt', 'BT'], ['fw', 'FW']]
+          .filter(([k]) => c[k]).map(([k, l]) => c[k] + ' ' + l);
+        return parts.length ? 'found ' + parts.join(' · ') : (ev.status === 'done' ? 'no driver logs inside' : '');
+      }
+      case 'issue_time':
+        return ta.customer_time ? ta.customer_time + ' customer = ' + ta.log_time + ' in the log'
+          : ((d.issue_times || [])[0] ? 'anchoring on ' + d.issue_times[0] : '');
+      case 'pick_etl': return d.etl_capture || '';
+      case 'decode_etl': case 'decode_bt':
+        if (tm.log_first) return 'log ' + tm.log_first + ' – ' + tm.log_last + ' does NOT cover the issue time'
+          + (tm.yb_assert_override ? ' (continued on assert ' + tm.yb_assert_override.join(', ') + ')' : '');
+        return d.log_file ? d.log_file : '';
+      case 'bsod_dumps': return (b.dumps || []).join(', ');
+      case 'bsod_download': return b.dumps_path || '';
+      case 'bsod_submit': return b.submitted ? 'accepted' : (b.skipped || '');
+      case 'bsod_result': {
+        const r = b.results || [];
+        if (!r.length) return ev.status === 'done' ? 'no result in the folder yet' : '';
+        return r.map(x => '0x' + x.bugcheck_code + ' ' + (x.failure_bucket_id || '') + ' — Wi-Fi '
+          + (x.wifi_fault ? 'AT FAULT' : 'not at fault')).join(' · ');
+      }
+    }
+    return (ev.detail && ev.detail !== 'started') ? ev.detail : '';
+  }
+
+  function liveSteps(d, ev, finished) {
+    const path = LIVE_COMMON.concat(d.bsod_case ? LIVE_BSOD : (d.wifi_or_bt === 'bt' ? LIVE_BT : LIVE_WIFI));
+    const exact = {};
+    (d.stages || []).forEach(x => { exact[x.name] = x; });
+    const steps = path.map(([key, label]) => {
+      const e = ev[key] || {};
+      let status = e.status || (exact[key] ? (exact[key].ok ? 'done' : 'failed') : 'pending');
+      if (status === 'pending' && finished) status = 'skipped';
+      if (status === 'running' && finished) status = exact[key] ? (exact[key].ok ? 'done' : 'failed') : 'done';
+      let dur = '';
+      if (exact[key] && status !== 'running') dur = liveFmtMs(exact[key].duration_ms);
+      else if (status === 'running' && e.startTs) {
+        let sec = liveNowTs() - tsToSeconds(e.startTs);
+        if (sec < 0) sec += 86400;
+        dur = liveFmtSec(sec);
+      }
+      let detail = liveStepDetail(key, d, e);
+      if (status === 'failed' && exact[key] && exact[key].detail) detail = exact[key].detail;
+      return {key, label, status, dur, detail};
+    });
+    // A step this path did not need (e.g. "Check for WRT logs" when the
+    // archive held them) stays untouched while later steps run: skipped.
+    for (let i = steps.length - 2; i >= 0; i--) {
+      if (steps[i].status === 'pending' && steps.slice(i + 1).some(x => x.status !== 'pending')) {
+        steps[i].status = 'skipped';
+      }
+    }
+    const queued = d.draft_id || d.fr_draft_id;
+    steps.push({key: 'draft', label: 'Draft queued for review',
+                status: queued ? 'done' : (finished ? (d.skipped ? 'skipped' : 'failed') : 'pending'),
+                dur: '', detail: queued ? (LIVE_MODE_TEXT[d.mode] || [d.mode])[0]
+                                        : (d.skipped ? 'skipped: ' + d.skipped : '')});
+    return steps;
+  }
+
+  function liveSentHtml(d, finished) {
+    const sent = d.sent_for_analysis || [];
+    if (sent.length) {
+      return sent.map((x, i) => {
+        const differs = x.issue_time_log && x.issue_time_customer && x.issue_time_log !== x.issue_time_customer;
+        const timeHtml = x.issue_time_customer
+          ? `<div class="lp-time">${esc(x.issue_time_customer)}</div>` +
+            `<div class="lp-time-sub">${differs
+              ? '= ' + esc(x.issue_time_log) + ' in the log clock (' + esc(LIVE_ANCHOR_TEXT[x.time_anchor] || x.time_anchor || 'aligned') + ')'
+              : 'same clock in the log'}${x.customer_tz ? ' · customer tz ' + esc(x.customer_tz) : ''}</div>`
+          : `<div class="lp-time">no issue time</div><div class="lp-time-sub">the AI scans the whole log</div>`;
+        const range = (x.log_range || []).filter(Boolean).join(' – ');
+        return `<div class="lp-sent">` +
+          `<div class="lp-cap">Incident ${i + 1}${sent.length > 1 ? ' of ' + sent.length : ''} · sent to the AI log analysis</div>` +
+          timeHtml +
+          `<dl class="lp-kv"><dt>Log</dt><dd class="mono">${esc(x.log_file || '—')}</dd>` +
+          (range ? `<dt>Log covers</dt><dd class="mono">${esc(range)}</dd>` : '') + `</dl>` +
+          `<div class="lp-desc">${esc(x.description || '')}</div></div>`;
+      }).join('');
+    }
+    if (!finished) {
+      if (!d.clean_description && !(d.issue_times || []).length) {
+        return '<div class="lp-empty">Prepared once the IPS thread has been read.</div>';
+      }
+      return `<div class="lp-sent pending"><div class="lp-cap">Prepared — sent when the AI analysis starts</div>` +
+        `<div class="lp-time">${esc((d.issue_times || [])[0] || 'no issue time yet')}</div>` +
+        `<div class="lp-desc">${esc(d.clean_description || '')}</div></div>`;
+    }
+    const why = (LIVE_MODE_TEXT[d.mode] || [d.mode || 'stopped'])[0];
+    return `<div class="lp-empty">Not sent to the AI log analysis — ${esc(why)}` +
+      (d.error ? `<div class="lp-time-sub" style="margin-top: 4px;">${esc(d.error)}</div>` : '') + `</div>`;
+  }
+
+  function liveCaseStatus(d, ev) {
+    if (!d) return '';
+    if (!d.finished) return 'running';
+    const m = LIVE_MODE_TEXT[d.mode];
+    return m ? (m[1] === 'good' ? 'done' : m[1] || '') : '';
+  }
+
+  function renderLivePanel(s) {
+    const panel = document.getElementById('live-panel');
+    if (!panel) return;
+    const details = s.case_details || {};
+    const {byCase} = parseStageEvents(s.events || []);
+    const order = Object.keys(details).sort((a, b) => (details[a].started_at || 0) - (details[b].started_at || 0));
+    (s.cases || []).forEach(c => { if (c.case_nbr && !order.includes(c.case_nbr)) order.push(c.case_nbr); });
+    const head = `<div class="lp-top"><span class="lp-title">Live analysis</span>` +
+      `<span class="pill dot ${s.status === 'running' ? 'warn live' : s.status === 'done' ? 'good'
+        : s.status === 'error' ? 'bad' : ''}">${esc(s.status || 'idle')}</span></div>`;
+    if (!order.length) {
+      panel.innerHTML = head + `<div class="lp-empty" style="margin-top: 10px;">` +
+        (s.status === 'running' ? 'Looking for cases to analyze…'
+                                : 'No run yet — start one in Step 1 and its progress shows here.') + `</div>`;
+      return;
+    }
+    const runningCase = [...order].reverse().find(c => details[c] && !details[c].finished);
+    const sel = (stageCasePinned && order.includes(stageCasePinned)) ? stageCasePinned
+              : (runningCase || [...order].reverse().find(c => details[c]) || order[0]);
+    const d = details[sel] || {case_nbr: sel};
+    const ev = byCase[sel] || {};
+    const finished = !!d.finished || (s.status !== 'running' && !!details[sel]);
+    const started = s.started_at ? (s.finished_at && s.status !== 'running' ? s.finished_at : Date.now() / 1000) - s.started_at : null;
+    const meta = [s.mode || '', s.owner ? 'owner ' + s.owner : '',
+                  'case ' + (order.indexOf(sel) + 1) + ' of ' + order.length,
+                  started != null ? 'elapsed ' + liveFmtSec(started) : ''].filter(Boolean).join(' · ');
+
+    // case card
+    const chips = [];
+    if (d.issue_domain) chips.push(['domain ' + d.issue_domain
+      + (d.issue_subcategory && d.issue_subcategory !== d.issue_domain ? ' · ' + d.issue_subcategory : ''), '']);
+    if (d.wifi_or_bt) chips.push([d.wifi_or_bt === 'bt' ? 'Bluetooth' : 'Wi-Fi', '']);
+    if (d.bsod_case) chips.push(['BSOD', 'warn']);
+    if (d.yb_case) chips.push(['yellow bang / assert', 'warn']);
+    if (d.action_owner) chips.push(['next: ' + (ACTION_OWNER_TEXT[d.action_owner] || d.action_owner),
+                                     d.action_owner === 'intel' ? 'warn' : '']);
+    const caseHtml = `<div class="lp-box">` +
+      `<div>${caseLink(d.case_nbr || sel, d.case_id)}${d.current_stage && !finished
+        ? ' <span class="lp-time-sub" style="display:inline;">· now: ' + esc(d.current_stage) + '</span>' : ''}</div>` +
+      `<div class="lp-subj">${esc(d.subject || '—')}</div>` +
+      (chips.length ? `<div class="lp-chips">${chips.map(([t, c]) => `<span class="lp-chip ${c}">${esc(t)}</span>`).join('')}</div>` : '') +
+      (d.next_action ? `<div class="lp-next">${esc(d.next_action)}</div>` : '') + `</div>`;
+
+    // timeline
+    const steps = liveSteps(d, ev, finished);
+    const icon = st => st === 'done' ? '✓' : st === 'failed' ? '✕' : st === 'running' ? '<span class="lp-spin"></span>'
+                     : st === 'skipped' ? '–' : '';
+    const stepsHtml = `<ol class="lp-steps">` + steps.map(x =>
+      `<li class="lp-step ${x.status}"><span class="lp-ico">${icon(x.status)}</span>` +
+      `<span class="lp-lab">${esc(x.label)}</span><span class="lp-dur">${esc(x.dur)}</span>` +
+      (x.detail && x.status !== 'pending' ? `<span class="lp-det">${esc(x.detail)}</span>` : '') +
+      `</li>`).join('') + `</ol>`;
+
+    // outcome
+    let outcomeHtml = '';
+    if (finished && details[sel]) {
+      const m = LIVE_MODE_TEXT[d.mode] || [d.mode || 'finished', ''];
+      outcomeHtml = `<div class="lp-sec"><div class="lp-h">Outcome</div><div class="lp-box">` +
+        `<div class="lp-chips" style="margin-top: 0;"><span class="lp-chip ${m[1]}">${esc(m[0])}</span>` +
+        (d.confidence != null ? `<span class="lp-chip ${d.confidence >= 80 ? 'good' : d.confidence >= 50 ? 'warn' : 'bad'}">confidence ${esc(d.confidence)}/100</span>` : '') +
+        `</div>` + (d.error && d.mode !== 'full' ? `<div class="lp-next">${esc(d.error)}</div>` : '') +
+        `<div class="lp-actions">` +
+        (d.draft_id ? `<button class="primary" onclick="openDraft(${JSON.stringify(d.draft_id).replace(/"/g, '&quot;')})">Open draft</button>` : '') +
+        (d.fr_draft_id ? `<button class="ghost" onclick="openDraft(${JSON.stringify(d.fr_draft_id).replace(/"/g, '&quot;')})">Open first-response</button>` : '') +
+        `</div></div></div>`;
+    }
+
+    // cases of the round
+    const casesHtml = order.length > 1 ? `<div class="lp-sec"><div class="lp-h">Cases this round</div><ul class="lp-cases">` +
+      order.map(c => {
+        const cd = details[c];
+        const ref = (s.cases || []).find(r => r.case_nbr === c) || {};
+        return `<li class="${c === sel ? 'sel' : ''}" onclick="pinStageCase(${JSON.stringify(c).replace(/"/g, '&quot;')})">` +
+          `<span class="lp-dot ${liveCaseStatus(cd)}"></span><span class="nbr">${esc(c)}</span>` +
+          `<span class="sub">${esc((cd && cd.subject) || ref.subject || '')}</span></li>`;
+      }).join('') + `</ul></div>` : '';
+
+    panel.innerHTML = head + `<div class="lp-meta">${esc(meta)}</div>` +
+      `<div class="lp-sec"><div class="lp-h">Case</div>${caseHtml}</div>` +
+      `<div class="lp-sec"><div class="lp-h">Sent for analysis</div>${liveSentHtml(d, finished)}</div>` +
+      `<div class="lp-sec"><div class="lp-h">Pipeline</div>${stepsHtml}</div>` +
+      outcomeHtml + casesHtml;
+  }
+
+  // Narrow windows: the panel moves under Step 1 as a full-width card.
+  const liveMq = window.matchMedia('(max-width: 1480px)');
+  function placeLivePanel() {
+    const panel = document.getElementById('live-panel');
+    const step1 = document.getElementById('step1-panel');
+    const grid = document.querySelector('.page-grid');
+    if (!panel || !step1 || !grid) return;
+    if (liveMq.matches) { if (step1.nextElementSibling !== panel) step1.after(panel); }
+    else if (panel.parentElement !== grid) grid.appendChild(panel);
+    panel.classList.toggle('inline', liveMq.matches);
+  }
+  if (liveMq.addEventListener) liveMq.addEventListener('change', placeLivePanel);
+  else liveMq.addListener(placeLivePanel);
+  placeLivePanel();
+
+  // Step 3: what the AI analysis received for this draft's case.
+  function renderDraftSent(analysis) {
+    const el = document.getElementById('draft-sent');
+    const sent = (analysis.incidents || []).map(i => i.sent_for_analysis).filter(x => x && Object.keys(x).length);
+    if (!sent.length) { el.innerHTML = ''; return; }
+    el.innerHTML = `<details><summary>Sent for AI analysis — ` +
+      sent.map(x => esc(x.issue_time_customer || 'no issue time') +
+        (x.issue_time_log && x.issue_time_log !== x.issue_time_customer ? ' (= ' + esc(x.issue_time_log) + ' in the log)' : '')).join(' · ') +
+      `</summary>` + sent.map(x =>
+        `<pre style="white-space: pre-wrap; margin-top: 6px;">${esc('log: ' + (x.log_file || '—')
+          + ((x.log_range || []).filter(Boolean).length ? '  (' + x.log_range.join(' – ') + ')' : '')
+          + '\n\n' + (x.description || ''))}</pre>`).join('') + `</details>`;
   }
 
   loadConfig();

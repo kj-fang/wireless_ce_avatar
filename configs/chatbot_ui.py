@@ -251,7 +251,7 @@ LINUX_UI = {
     # What this agent is good at comes from its prompt and its skills, both of
     # which are editable without touching Python, so the page does not name one
     # domain in its chrome. Matches the home page's "Linux Analysis Agent".
-    "title": "Linux Analysis Agent",
+    "title": "Generic Log Analysis Agent",
     "back_url": "/linux_chatbot/back_to_avatar",
     "input_placeholder": "Describe the issue and ask a question about the log.",
     "accent": "#15803d",

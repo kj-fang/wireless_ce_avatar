@@ -52,6 +52,51 @@
         scrollBottom();
     };
 
+    // A report is Markdown before it is a card: the model writes
+    // markdown_summary and the card renders it. Keep the source, so a report
+    // can leave the page as the .md it already is — pasting rendered HTML out
+    // of the browser loses the tables and the mermaid blocks it is made of.
+    const _reportMarkdown = new Map();
+
+    function _reportAsMarkdown(data, header, eventTime) {
+        const toArr = (v) => Array.isArray(v) ? v
+            : (typeof v === 'string' && v.trim()
+                ? v.split(/\r?\n|;/).map(s => s.replace(/^[-*•\s]+/, '').trim()).filter(Boolean)
+            : (v && typeof v === 'object' ? Object.values(v) : []));
+        const lines = [`# ${header.replace(/^[^\w一-鿿]+/, '').trim() || 'Analysis Report'}`, ''];
+        if (eventTime) lines.push(`**Event time:** ${eventTime}  `);
+        if (data.confidence_score) lines.push(`**Confidence:** ${data.confidence_score}%  `);
+        const skills = toArr(data.involved_skills).map(String).filter(Boolean);
+        if (skills.length) lines.push(`**Skills used:** ${skills.join(', ')}  `);
+        lines.push(`**Generated:** ${new Date().toLocaleString()}`, '');
+        if (data.root_cause_summary) {
+            lines.push('## Root cause', '', data.root_cause_summary, '');
+        }
+        const actions = toArr(data.recommended_actions).map(String).filter(Boolean);
+        if (actions.length) {
+            lines.push('## Recommendations', '', ...actions.map(a => `- ${a}`), '');
+        }
+        if (data.markdown_summary) lines.push(data.markdown_summary.trim(), '');
+        return lines.join('\n');
+    }
+
+    window.downloadReportMarkdown = function (reportId) {
+        const text = _reportMarkdown.get(reportId);
+        if (!text) return;
+        const stamp = new Date().toISOString().slice(0, 19).replace(/[:T]/g, '-');
+        const profile = (window.CHATBOT && window.CHATBOT.api || 'report').replace(/\W+/g, '') || 'report';
+        const blob = new Blob([text], { type: 'text/markdown;charset=utf-8' });
+        const url = URL.createObjectURL(blob);
+        const a = document.createElement('a');
+        a.href = url;
+        a.download = `${profile}-report-${stamp}.md`;
+        document.body.appendChild(a);
+        a.click();
+        a.remove();
+        // Revoke on the next tick: Chrome needs the URL alive for the click.
+        setTimeout(() => URL.revokeObjectURL(url), 0);
+    };
+
     ChatRuntimeStrategyBase.prototype.appendReport = function (data, header = '📊 Analysis Report', eventTime = null, turnId = null) {
         removeTyping();
         hideWelcome();
@@ -82,6 +127,10 @@
 
         const ts = Date.now();
         const detailsId = 'report-details-' + ts;
+        // Everything the card shows, as the Markdown file it came from. The
+        // summary the model wrote is the body; the fields the card renders
+        // separately are put back as a header, so the file stands alone.
+        _reportMarkdown.set(detailsId, _reportAsMarkdown(data, header, eventTime));
         const toggleId = 'toggle-' + ts;
 
         // Main section: always visible
@@ -127,7 +176,12 @@
 
         const html = `
         <div class="report-card">
-            <div class="report-header">${escapeHtml(header)}</div>
+            <div class="report-header">
+                <span style="flex:1;">${escapeHtml(header)}</span>
+                <button type="button" class="report-download" data-report-id="${detailsId}"
+                        onclick="downloadReportMarkdown('${detailsId}')"
+                        title="Save this report as a .md file">⬇ .md</button>
+            </div>
             <div class="report-body">
                 ${mainHtml}
             </div>

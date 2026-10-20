@@ -143,10 +143,20 @@
                         <strong>Save&nbsp;&amp;&nbsp;use</strong>, so these are safe to try.
                     </div>
                     <div style="display:flex;gap:8px;align-items:center;flex-wrap:wrap;">
-                        <button type="button" class="fbd-btn" onclick="loadPromptText('shared')"
+                        <!-- Disabled when the source has nothing for the
+                             document on screen. The share holds linux_prompt
+                             and linux_report but no linux_agent, so on the
+                             one-file tab -- the tab the panel opens on --
+                             "Load shared" could only ever answer that there
+                             is no shared copy. A button whose only outcome is
+                             that message should say so before it is pressed. -->
+                        <button type="button" class="fbd-btn" id="prompt-load-shared"
+                                onclick="loadPromptText('shared')"
                                 title="Fill the box with the team's shared copy. Not saved until Save &amp; use.">Load shared</button>
-                        <button type="button" class="fbd-btn" onclick="loadPromptText('builtin')"
+                        <button type="button" class="fbd-btn" id="prompt-load-builtin"
+                                onclick="loadPromptText('builtin')"
                                 title="Fill the box with the text this agent ships with. Not saved until Save &amp; use.">Load built-in</button>
+                        <span id="prompt-load-note" style="color:#64748b;"></span>
                     </div>
                 </div>
 

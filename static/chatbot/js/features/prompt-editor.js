@@ -216,6 +216,33 @@
                + `"Choose .md file…" in a later conversation.`, 'ok');
     };
 
+    // A "load from X" button is only honest when X has something for the
+    // document on screen. The share carries linux_prompt and linux_report but
+    // no linux_agent, so on the one-file tab the panel opens on, Load shared
+    // had exactly one possible outcome: an error saying there is no shared
+    // copy. Saying that on the button costs nothing and saves the click.
+    function refreshSourceButtons() {
+        const pairs = [
+            ['prompt-load-shared', (loaded.shared || '').trim(), 'the shared folder'],
+            ['prompt-load-builtin', (loaded.builtin || '').trim(), 'this agent'],
+        ];
+        const empty = [];
+        for (const [id, text, where] of pairs) {
+            const btn = el(id);
+            if (!btn) continue;
+            btn.disabled = !text;
+            btn.title = text
+                ? `Fill the box with the copy from ${where}. Not saved until Save & use.`
+                : `${where} has no copy of ${loaded.filename || 'this document'}.`;
+            if (!text) empty.push(where);
+        }
+        const note = el('prompt-load-note');
+        if (note) {
+            note.textContent = empty.length
+                ? `No copy in ${empty.join(' or ')} for this document.` : '';
+        }
+    }
+
     async function selectDoc(docId) {
         current = docId;
         skillChoice = null;
@@ -227,6 +254,7 @@
             loaded = await call(`/prompts/get?doc=${encodeURIComponent(docId)}`);
             el('prompt-editor-text').value = loaded.live || '';
             el('prompt-editor-file').textContent = loaded.filename || '';
+            refreshSourceButtons();
             offerDraft();
             refreshSaveState();
             status('');

@@ -78,6 +78,35 @@ class UseCaseResult:
     status: int = 200
 
 
+def _kept_skills_for(agent):
+    """``(skills, source, filename)`` kept for this agent's profile, or None.
+
+    Only the explicit "keep for next time" counts. The skill editor's own
+    active source lives on the conversation's agent and is meant to die with
+    it; this is the one thing on disk that a fresh conversation adopts, and
+    only because someone ticked a box saying so. Never raises: a missing or
+    unreadable file just means the built-in skills, which is what every
+    conversation used before keeping existed.
+    """
+    from pathlib import Path
+
+    from utils import speclets_utils
+
+    try:
+        profile = getattr(getattr(agent, "capabilities", None), "profile", "")
+        path = speclets_utils.kept_skills(profile) if profile else None
+        if not path:
+            return None
+        from services.chatbot.engine.system import load_skills_from_yaml
+
+        skills = load_skills_from_yaml(path)
+        return (skills, "user", Path(path).name) if skills else None
+    except Exception:
+        print("[skills] could not load the kept skill set; "
+              "this conversation uses the built-in one.")
+        return None
+
+
 class ChatbotUseCases:
     """Small application layer around an injected domain-agent provider.
 
@@ -91,7 +120,30 @@ class ChatbotUseCases:
 
     def reset_conversation(self) -> UseCaseResult:
         try:
-            self._get_agent().reset_conversation()
+            agent = self._get_agent()
+            agent.reset_conversation()
+            # /reset is a new conversation, unlike an internal context reset
+            # during set_log/prepare. Do not carry experimental prompts or
+            # skill imports into it.
+            if hasattr(agent, "prompt_overrides"):
+                agent.prompt_overrides.clear()
+            if hasattr(agent, "_initial_skills"):
+                # "The skills this conversation starts from" is the kept set
+                # when there is one, and the built-in set otherwise -- the same
+                # order conversation_speclet() uses for the prompt, and for the
+                # same reason: a kept prompt names its skills, and fetch_
+                # filtered_logs takes an enum of the ones actually loaded, so
+                # resetting to the built-in set here would leave the agent
+                # holding instructions to call skills it no longer has.
+                skills, source, filename = (
+                    dict(agent._initial_skills), "cloud", "")
+                kept = _kept_skills_for(agent)
+                if kept:
+                    skills, source, filename = kept
+                agent.apply_updated_skills(skills)
+                agent._session_skill_source = source
+                agent._session_skill_filename = filename
+                agent._session_skill_path = None
             return UseCaseResult({
                 "success": True,
                 "message": "Conversation reset.",

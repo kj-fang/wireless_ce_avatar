@@ -1015,6 +1015,21 @@
             background: white;
         }
 
+        /* ── Prompt editor (reuses the .fbd-modal shell below) ────────── */
+        /* A tab per document; a dot marks the ones reading your own copy. */
+        .prompt-doc-tabs { display: flex; gap: 6px; flex-wrap: wrap; margin-bottom: 8px; }
+        .prompt-doc-tab {
+            border: 1px solid #d7dee3; background: #f7f9fa; color: #334;
+            border-radius: 999px; padding: 4px 11px; font-size: 0.76rem;
+            cursor: pointer; text-transform: capitalize;
+        }
+        .prompt-doc-tab.active { background: var(--accent); border-color: var(--accent); color: #fff; }
+        .prompt-doc-dot {
+            display: inline-block; width: 6px; height: 6px; border-radius: 50%;
+            background: #f59e0b; margin-left: 6px; vertical-align: middle;
+        }
+        .prompt-doc-meta { font-size: 0.74rem; color: #667c85; margin-bottom: 8px; }
+
         /* ── Feedback detail modal ───────────────────────────────────── */
         .fbd-modal { position: fixed; inset: 0; z-index: 9000; display: none; }
         .fbd-modal.open { display: block; }

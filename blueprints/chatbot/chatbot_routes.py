@@ -101,13 +101,20 @@ from services.chatbot.session import (
     register_session_agent_store,
     resume_agent_for as _shared_resume_agent_for,
 )
+from services.chatbot.engine.speclet_defaults import conversation_speclet, default_speclet
+from services.chatbot.prompt_editor import (
+    PromptEditorContext,
+    build_prompt_editor_handlers,
+)
 from services.chatbot.shared_routes import (
     SharedRouteContext,
     build_shared_handlers,
     llm_client_model as _llm_client_model,
 )
 from services.skill_editor.controller import (
+    SkillAppendContext,
     SkillEditorContext,
+    apply_skills_yaml,
     build_profile_yaml_helpers,
     build_skill_editor_handlers,
 )
@@ -120,6 +127,7 @@ from utils import bt_skills_yaml_utils as _bt_yaml_utils
 from utils import linux_skills_yaml_utils as _linux_yaml_utils
 from utils import log_time_format
 from utils import skills_yaml_utils as _wifi_yaml_utils
+from utils import speclets_utils
 from utils.event_log_utils import find_event_log_for_log
 from utils.issue_time_ai import (
     LINUX_WIFI_FOCUS,
@@ -247,6 +255,16 @@ class AgentRouteProfile:
     @property
     def capabilities(self) -> set[str]:
         return {key for key, on in self.ui["features"].items() if on}
+
+    @property
+    def agent_profile(self) -> str:
+        """The engine policy's profile name — the key its prompts are filed under.
+
+        Read off the agent class instead of repeated as a field of its own, so
+        the prompt the editor shows and saves is by construction the one this
+        profile's agent loads when it builds a system prompt.
+        """
+        return self.agent_class.CAPABILITY_POLICY.profile
 
 
 # ==================================================================
@@ -596,6 +614,28 @@ class AgentRoutes:
         """
         return _shared_feedback_conversation_id(rotate=rotate)
 
+    def _chosen_skills(self):
+        """The skills kept alongside a kept prompt, or None for the boot set.
+
+        Deliberately NOT the skill editor's own active source: that lives on
+        the conversation's agent and dies with it, which is the behaviour the
+        panel's badge already describes. This reads only the explicit "keep
+        for next time", the same opt-in that carries the prompt, and nothing
+        else on disk makes a new conversation adopt a skill set.
+
+        Reads a file only when such a keep exists, so the common case costs
+        nothing, and a failure is never fatal: the caller falls back to the
+        boot-time skills, which is what every conversation used before this.
+        """
+        try:
+            path = speclets_utils.kept_skills(self.profile.agent_profile)
+            return load_skills_from_yaml(path) or None if path else None
+        except Exception:
+            print("[skills] could not load the kept skill set; "
+                  "this conversation uses the built-in one.")
+            traceback.print_exc()
+            return None
+
     def _get_or_create_agent(self, skip_prime: bool = False):
         """
         Return a per-session agent for this profile.
@@ -631,10 +671,19 @@ class AgentRoutes:
             # own overrides survive the clone — that is how BtLogAgentSystem
             # keeps SCOPE_FULL_LOG_WHEN_EMPTY and its empty DRIVER_ADD_MARKER /
             # RESET_MARKER.
+            # Normally the boot-time skills, with no disk read. But if this
+            # user has chosen their own skill set, that choice is recorded on
+            # disk and the sidebar badge says so -- and until this read, a new
+            # conversation quietly ignored it and came up on the cloud
+            # baseline. The damage was worse than a stale list: a kept prompt
+            # names its skills, fetch_filtered_logs takes an enum of the ones
+            # actually loaded, so the agent came back with a prompt telling it
+            # to call skills it no longer had. The choice persists, so honour
+            # it; "Use cloud baseline" is still one click away.
             agent = type(base)(
                 client=base.client,
                 model=base.model,
-                skills=base.skills,   # reuse pre-loaded skills, no disk re-read
+                skills=self._chosen_skills() or base.skills,
             )
             # Inherit ACE runner from the boot-time base agent so playbook
             # blocks are injected into per-session prompts. Each profile has its
@@ -706,6 +755,23 @@ class AgentRoutes:
             self.session_agents,
             self._get_or_create_agent,
         )
+
+    def _get_configuration_agent(self):
+        """Edit the agent that the next turn of this conversation will use."""
+        conversation_id = session.get("feedback_conversation_id", "")
+        if conversation_id:
+            job = chat_jobs.get_job(conversation_id)
+            if job is not None and getattr(job, "agent", None) is not None:
+                if job.status == "running":
+                    return job.agent  # read-only until the job finishes
+                return self._resume_agent_for(conversation_id)
+        return self._get_or_create_agent()
+
+    def _ensure_configuration_editable(self):
+        conversation_id = session.get("feedback_conversation_id", "")
+        job = chat_jobs.get_job(conversation_id) if conversation_id else None
+        if job is not None and job.status == "running":
+            raise RuntimeError("Wait for the current analysis to finish before changing prompts or skills.")
 
     def _get_llm_client_model(self):
         return _llm_client_model(self.profile.agent_config_attr)
@@ -996,6 +1062,10 @@ class AgentRoutes:
                 last_ts=last_ts,
                 llm_client=getattr(agent, "client", None),
                 llm_model=getattr(agent, "model", None),
+                # The briefing for this judgement is one of the profile's own
+                # editable documents, so retargeting the agent's domain
+                # retargets what it looks for when it picks the moment too.
+                brief=conversation_speclet(agent, "suggest_time"),
                 **extra,
             )
             _attach_nearest_errors(payload, event_log_events)
@@ -1095,6 +1165,21 @@ class AgentRoutes:
                     session.get("chatbot_log_path")
                     or app_config.last_analyzed_log_path or ""
                 )
+            if not agent.current_log_path:
+                # Last resort: the path the sidebar is showing right now. The
+                # box is filled server-side from the previous analysis, and a
+                # value put there by the server never fires the field's own
+                # onchange -- so a path can sit in plain sight, be used for the
+                # timestamp-format note, and still never have been registered,
+                # which reads as "No log file loaded" next to a visible path
+                # and is impossible to act on. Treated as a suggestion, not an
+                # instruction: it is used only when nothing else has a log, and
+                # only when it names a file that exists.
+                offered = str(data.get("log_path") or "").strip()
+                if offered and os.path.isfile(offered):
+                    agent.current_log_path = offered
+                    session["chatbot_log_path"] = offered
+                    print(f"[chat] adopted the sidebar's log path: {offered}")
             if not agent.current_log_path:
                 def _no_log():
                     yield f"data: {json.dumps({'type': 'error', 'content': 'No log file loaded. Please set a log file first.'})}\n\n"
@@ -1292,6 +1377,7 @@ class AgentRoutes:
                     chat_jobs.fail_job(job, str(exc))
 
             t = threading.Thread(target=run_chat_with_tools, daemon=True)
+            job.worker_thread = t
             t.start()
 
             # The original request streams the job exactly like a reconnect
@@ -1759,6 +1845,26 @@ class AgentRoutes:
     # each engine module's SKILL_FILE_MAP).
     def _build_handlers(self) -> dict[str, Callable[..., Any]]:
         profile, yu = self.profile, self.profile.yaml_utils
+
+        def skill_source() -> str:
+            return getattr(self._get_configuration_agent(), "_session_skill_source", "cloud")
+
+        def set_skill_source(source: str) -> str:
+            agent = self._get_configuration_agent()
+            agent._session_skill_source = "user" if source == "user" else "cloud"
+            return agent._session_skill_source
+
+        def skill_status() -> dict:
+            payload = yu.skills_yaml_status()
+            agent = self._get_configuration_agent()
+            source = skill_source()
+            payload["active_source"] = payload["effective_source"] = source
+            payload["skills"] = agent.get_skill_descriptions()
+            filename = getattr(agent, "_session_skill_filename", "")
+            if source == "user" and filename:
+                payload["user_local"] = {**payload["user_local"], "filename": filename}
+            return payload
+
         _yaml_helpers = build_profile_yaml_helpers(
             user_local_dir=yu.local_user_overrides_dir,
             today_yaml_filename=yu.today_dated_filename,
@@ -1767,14 +1873,17 @@ class AgentRoutes:
             latest_user_yaml=yu.find_latest_user_yaml,
             write_yaml_file=_write_yaml_file,
             load_skills_from_yaml=load_skills_from_yaml,
-            get_agent=self._get_or_create_agent,
+            get_agent=self._get_configuration_agent,
             agent_config_attr=profile.agent_config_attr,
         )
 
-        skill_editor_handlers = build_skill_editor_handlers(SkillEditorContext(
+        # Bound rather than inlined: the prompt panel imports skills through
+        # the same context, so both buttons write the same dated user file and
+        # flip the same active source.
+        skill_editor_context = SkillEditorContext(
             activate_yaml=_yaml_helpers["activate_yaml"],
-            get_active_source=yu.get_active_source,
-            get_or_create_agent=self._get_or_create_agent,
+            get_active_source=skill_source,
+            get_or_create_agent=self._get_configuration_agent,
             latest_cloud_baseline=yu.find_latest_cloud_baseline_yaml,
             latest_user_yaml=yu.find_latest_user_yaml,
             persist_user_yaml_snapshot=_yaml_helpers["persist_user_yaml_snapshot"],
@@ -1782,13 +1891,39 @@ class AgentRoutes:
             refresh_cloud_baseline=yu.refresh_local_cloud_baseline,
             resolve_cloud_skills_dir=yu.resolve_cloud_skills_dir,
             sanitise_skill_payload=_sanitise_skill_payload,
-            set_active_source=yu.set_active_source,
-            skills_yaml_status_payload=yu.skills_yaml_status,
-        ))
+            set_active_source=set_skill_source,
+            skills_yaml_status_payload=skill_status,
+            ensure_editable=self._ensure_configuration_editable,
+        )
+        skill_editor_handlers = build_skill_editor_handlers(skill_editor_context)
+        # The prompt editor writes only to this conversation's agent, unless
+        # the person ticks "keep". Shared prompt files remain source material,
+        # not automatic live overrides.
+        prompt_editor_handlers = (
+            build_prompt_editor_handlers(PromptEditorContext(
+                profile=profile.agent_profile,
+                default_text=default_speclet,
+                get_agent=self._get_configuration_agent,
+                ensure_editable=self._ensure_configuration_editable,
+                load_skills_from_yaml=load_skills_from_yaml,
+                # The panel imports skills through the same code the sidebar's
+                # "Append Skills from YAML..." runs, so the two buttons leave
+                # the same thing behind.
+                persist_skills=(
+                    lambda path, replace: apply_skills_yaml(
+                        SkillAppendContext.from_editor(skill_editor_context),
+                        path,
+                        replace,
+                    )
+                ),
+            ))
+            if "prompt_editor" in profile.capabilities else {}
+        )
         shared_handlers = build_shared_handlers(SharedRouteContext(
             domain=profile.history_domain,
             agent_config_attr=profile.agent_config_attr,
-            get_agent=self._get_or_create_agent,
+            get_agent=self._get_configuration_agent,
+            ensure_editable=self._ensure_configuration_editable,
             session_agents=self.session_agents,
             browse_filetypes=profile.browse_filetypes,
             load_skills_from_yaml=load_skills_from_yaml,
@@ -1805,6 +1940,7 @@ class AgentRoutes:
             "suggest_issue_times": self.suggest_issue_times,
             **shared_handlers,
             **skill_editor_handlers,
+            **prompt_editor_handlers,
         }
 
 

@@ -1166,6 +1166,21 @@ class AgentRoutes:
                     or app_config.last_analyzed_log_path or ""
                 )
             if not agent.current_log_path:
+                # Last resort: the path the sidebar is showing right now. The
+                # box is filled server-side from the previous analysis, and a
+                # value put there by the server never fires the field's own
+                # onchange -- so a path can sit in plain sight, be used for the
+                # timestamp-format note, and still never have been registered,
+                # which reads as "No log file loaded" next to a visible path
+                # and is impossible to act on. Treated as a suggestion, not an
+                # instruction: it is used only when nothing else has a log, and
+                # only when it names a file that exists.
+                offered = str(data.get("log_path") or "").strip()
+                if offered and os.path.isfile(offered):
+                    agent.current_log_path = offered
+                    session["chatbot_log_path"] = offered
+                    print(f"[chat] adopted the sidebar's log path: {offered}")
+            if not agent.current_log_path:
                 def _no_log():
                     yield f"data: {json.dumps({'type': 'error', 'content': 'No log file loaded. Please set a log file first.'})}\n\n"
                 return Response(_no_log(), mimetype="text/event-stream")

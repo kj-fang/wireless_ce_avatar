@@ -80,16 +80,40 @@
         return lines.join('\n');
     }
 
-    window.downloadReportMarkdown = function (reportId) {
+    window.downloadReportMarkdown = async function (reportId) {
         const text = _reportMarkdown.get(reportId);
         if (!text) return;
         const stamp = new Date().toISOString().slice(0, 19).replace(/[:T]/g, '-');
         const profile = (window.CHATBOT && window.CHATBOT.api || 'report').replace(/\W+/g, '') || 'report';
+        const suggested = `${profile}-report-${stamp}.md`;
+
+        // A real Save dialog where there is one: a report gets filed next to
+        // the case it belongs to, under a name that says which case, and
+        // neither is possible once it has landed in Downloads.
+        if (window.showSaveFilePicker) {
+            try {
+                const handle = await window.showSaveFilePicker({
+                    suggestedName: suggested,
+                    types: [{
+                        description: 'Analysis report (Markdown)',
+                        accept: { 'text/markdown': ['.md'] },
+                    }],
+                });
+                const writable = await handle.createWritable();
+                await writable.write(text);
+                await writable.close();
+                return;
+            } catch (e) {
+                if (e && e.name === 'AbortError') return;
+                console.warn('Save dialog unavailable, falling back:', e);
+            }
+        }
+
         const blob = new Blob([text], { type: 'text/markdown;charset=utf-8' });
         const url = URL.createObjectURL(blob);
         const a = document.createElement('a');
         a.href = url;
-        a.download = `${profile}-report-${stamp}.md`;
+        a.download = suggested;
         document.body.appendChild(a);
         a.click();
         a.remove();
@@ -405,6 +429,13 @@
                 signal: __chatCtl.signal,
                 body: JSON.stringify({
                     message: text,
+                    // What the sidebar is showing. The server prefers its own
+                    // registered log and only falls back to this, so the box
+                    // and the server can no longer disagree: a path put in the
+                    // field by the server itself never fires its onchange, and
+                    // a path nobody registered used to surface as "No log file
+                    // loaded" with the file plainly visible in the box.
+                    log_path: ((document.getElementById('log-path-input') || {}).value || '').trim(),
                     // Sidebar Issue Time is the SINGLE source of truth.
                     // Always send the field explicitly so the backend can
                     // override / clear any pre-primed attachment_time.

@@ -160,7 +160,7 @@
         status('Draft discarded.');
     };
 
-    window.downloadPromptFile = function () {
+    window.downloadPromptFile = async function () {
         const box = el('prompt-editor-text');
         if (!box || !box.value.trim()) {
             status('There is nothing in the editor to save.', 'err');
@@ -168,17 +168,52 @@
         }
         const stamp = new Date().toISOString().slice(0, 10);
         const base = (loaded.filename || 'agent_prompt.md').replace(/\.md$/i, '');
-        const blob = new Blob([box.value], { type: 'text/markdown;charset=utf-8' });
+        const suggested = `${base}-${stamp}.md`;
+        const text = box.value;
+
+        // A real Save dialog where the browser offers one: this file is meant
+        // to be kept, named for the domain it retargets the agent to, and put
+        // next to the others in the prompt library -- none of which you can do
+        // when it lands in Downloads under a name chosen for you.
+        if (window.showSaveFilePicker) {
+            try {
+                const handle = await window.showSaveFilePicker({
+                    suggestedName: suggested,
+                    types: [{
+                        description: 'Agent prompt (Markdown)',
+                        accept: { 'text/markdown': ['.md'] },
+                    }],
+                });
+                const writable = await handle.createWritable();
+                await writable.write(text);
+                await writable.close();
+                status(`Saved ${handle.name}. Load it again with "Choose .md file…" `
+                       + `in a later conversation.`, 'ok');
+                return;
+            } catch (e) {
+                // Cancelling the dialog is an answer, not a failure.
+                if (e && e.name === 'AbortError') {
+                    status('Not saved.');
+                    return;
+                }
+                // Anything else (a browser that lists the API but refuses it
+                // here, a permission refusal) falls through to the plain
+                // download, so the text is never trapped in the box.
+                console.warn('Save dialog unavailable, falling back:', e);
+            }
+        }
+
+        const blob = new Blob([text], { type: 'text/markdown;charset=utf-8' });
         const url = URL.createObjectURL(blob);
         const a = document.createElement('a');
         a.href = url;
-        a.download = `${base}-${stamp}.md`;
+        a.download = suggested;
         document.body.appendChild(a);
         a.click();
         a.remove();
         setTimeout(() => URL.revokeObjectURL(url), 0);
-        status(`Saved ${a.download}. Load it again with "Choose .md file…" in `
-               + `a later conversation.`, 'ok');
+        status(`Saved ${suggested} to your downloads. Load it again with `
+               + `"Choose .md file…" in a later conversation.`, 'ok');
     };
 
     async function selectDoc(docId) {

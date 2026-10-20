@@ -514,7 +514,36 @@ def smoke_runner(tmp: Path) -> None:
         live_snaps: list = []
         r_live = runner_mod.HandsfreeRunner(progress_cb=r.progress,
                                             snapshot_cb=live_snaps.append)
-        analysis = r_live.analyze_case("01234567")
+        # One run with the Echo next-step advice on (faked, answered in the
+        # background thread): it must land on the analysis, in the live
+        # snapshots and in the private draft, and never in a public reply.
+        from . import echo_client as echo_mod
+        orig_ask = echo_mod.ask_echo_kb
+        asked_adv: list = []
+        def _fake_advice(q, **kw):
+            asked_adv.append(q)
+            return ("- Ask the customer for the AP model / controller version and a sniffer "
+                    "capture during the drop.\n- Check the roaming thresholds.")
+        echo_mod.ask_echo_kb = _fake_advice
+        runner_mod.HandsfreeRunner.ECHO_ADVICE_ENABLED = True
+        try:
+            analysis = r_live.analyze_case("01234567")
+        finally:
+            runner_mod.HandsfreeRunner.ECHO_ADVICE_ENABLED = False
+            echo_mod.ask_echo_kb = orig_ask
+        from .composer import compose_plain as _cp_adv
+        adv = analysis.echo_advice
+        adv_snaps = [sn["echo_advice"]["status"] for sn in live_snaps if sn.get("echo_advice")]
+        check("S4.echo next-step advice: the question carries the case summary, category "
+              "and attachments; answered in the background; live snapshots went asking -> "
+              "answered; the private draft quotes it",
+              len(asked_adv) == 1 and "Connectivity" in asked_adv[0]
+              and "repro_logs.7z" in asked_adv[0] and "NEXT STEPS" in asked_adv[0]
+              and adv.get("status") == "answered" and "sniffer" in adv.get("answer", "")
+              and adv_snaps[:1] == ["asking"] and "answered" in adv_snaps
+              and "Echo knowledge base — suggested next steps" in _cp_adv(analysis),
+              f"asked={len(asked_adv)} adv={ {k: adv.get(k) for k in ('status', 'error', 'elapsed_s')} } "
+              f"snaps={adv_snaps} q={asked_adv[0][:200] if asked_adv else ''}")
 
         check("S4.a mode is full", analysis.mode == "full",
               f"mode={analysis.mode} err={analysis.error} stages={[ (s.name, s.ok, s.detail) for s in analysis.stages ]}")
@@ -2662,6 +2691,8 @@ def run_smoke() -> int:
     try:
         smoke_soql()
         smoke_composer()
+        from . import runner as _runner_mod
+        _runner_mod.HandsfreeRunner.ECHO_ADVICE_ENABLED = False   # no network in the smoke
         smoke_queue(tmp)
         smoke_runner(tmp)
         smoke_orchestrator(tmp)

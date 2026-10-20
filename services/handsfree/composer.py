@@ -459,6 +459,15 @@ def compose_plain(analysis: CaseAnalysis) -> str:
                                       "owner unclear")
         parts += [f"Next action — {who}: {next_action}", ""]
 
+    # Echo knowledge-base advice on what to ask / do next (Private-to-Intel
+    # drafts only — never in a customer-facing reply).
+    adv = getattr(analysis, "echo_advice", None) or {}
+    if adv.get("status") == "answered" and adv.get("answer"):
+        ans = str(adv["answer"]).strip()
+        if len(ans) > 1500:
+            ans = ans[:1500] + " …[truncated — full text in analysis details]"
+        parts += ["Echo knowledge base — suggested next steps (for reference):", ans, ""]
+
     # Case-info gaps that didn't block the analysis: give the reviewer a
     # forwardable clarification request (this draft posts Private-to-Intel).
     if analysis.missing_info:

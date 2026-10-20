@@ -108,6 +108,7 @@ SOURCE_BUILTIN = "built-in"
 #: Records which of the first two a document reads, per document.
 _SOURCES_FILENAME = "active_sources.json"
 _KEPT_FILENAME = "kept_prompts.json"
+_KEPT_SKILLS_FILENAME = "kept_skills.json"
 
 _cache: dict[str, str] = {}
 _cache_lock = threading.Lock()
@@ -358,6 +359,46 @@ def set_kept(profile: str, kind: str, on: bool) -> bool:
     except Exception as e:
         print(f"[speclets] could not record the kept prompt for {key}: {e}")
     return on
+
+
+def kept_skills(profile: str) -> Optional[str]:
+    """The skills file a new conversation should start from, or None.
+
+    Paired with the kept prompt rather than with the skill editor's own
+    source, which lives on the conversation's agent and is gone with it. A
+    kept prompt names its skills, and fetch_filtered_logs takes an enum of
+    the skills actually loaded, so keeping one without the other produces an
+    agent instructed to call skills it does not have -- dead text, silently.
+    Restore original withdraws both together.
+    """
+    path = read_kept_skills().get(profile)
+    return path if path and Path(path).is_file() else None
+
+
+def read_kept_skills() -> dict[str, str]:
+    try:
+        raw = json.loads((local_user_speclets_dir() / _KEPT_SKILLS_FILENAME)
+                         .read_text(encoding="utf-8"))
+    except (OSError, ValueError):
+        return {}
+    return {str(k): str(v) for k, v in raw.items()} if isinstance(raw, dict) else {}
+
+
+def set_kept_skills(profile: str, path: Optional[str]) -> Optional[str]:
+    """Record (or withdraw) the skills file kept alongside this prompt."""
+    kept = read_kept_skills()
+    if path:
+        kept[profile] = str(path)
+    else:
+        kept.pop(profile, None)
+    try:
+        target = local_user_speclets_dir() / _KEPT_SKILLS_FILENAME
+        tmp = target.with_suffix(".json.tmp")
+        tmp.write_text(json.dumps(kept, indent=1, sort_keys=True), encoding="utf-8")
+        shutil.move(str(tmp), str(target))
+    except Exception as e:
+        print(f"[speclets] could not record the kept skills for {profile}: {e}")
+    return path
 
 
 def kept_text(profile: str, kind: str) -> Optional[str]:

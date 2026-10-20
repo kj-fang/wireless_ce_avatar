@@ -475,6 +475,61 @@ def build_skill_append_handlers(
     return {"append_skills_yaml_route": partial(append_skills_yaml_route, context)}
 
 
+def apply_skills_yaml(context: SkillAppendContext, yaml_path: str, replace: bool) -> dict:
+    """Import a skills YAML the way the sidebar button does, and persist it.
+
+    Factored out of the route so the prompt panel can reach it. The panel used
+    to swap skills on the conversation's agent in memory only, which read as a
+    bug rather than a policy: the sidebar's "Append Skills from YAML..." right
+    next to it writes a dated user file and flips the active source, so the
+    same choice made two feet away survived a reload and this one did not.
+    Someone retargeting an agent would come back to a kept prompt naming
+    skills the agent no longer had -- and a prompt naming a skill that is not
+    in fetch_filtered_logs's enum is dead text.
+
+    Returns the usual payload; raises ValueError with a message for the caller
+    to turn into a 400.
+    """
+    from pathlib import Path
+
+    from utils.skill_import_utils import load_and_filter_source, merge_overwrite
+
+    if not yaml_path:
+        raise ValueError("yaml_path is required.")
+    valid, skipped = load_and_filter_source(yaml_path)
+    if not valid:
+        raise ValueError("No appendable skills found in the selected YAML.")
+
+    base_path = context.current_yaml_path() if context.current_yaml_path else None
+    if base_path is None:
+        base_path, _ = context.latest_cloud_baseline()
+    existing = context.read_yaml_file(base_path) if base_path is not None else {}
+
+    if replace:
+        merged, appended, overwritten = dict(valid), list(valid), []
+        dropped = [k for k in (existing or {}) if k not in valid]
+    else:
+        merged, appended, overwritten = merge_overwrite(existing, valid)
+        dropped = []
+    target = context.persist_user_yaml_snapshot(merged)
+    context.set_active_source("user")
+    skills = context.activate_yaml(target)
+    session["yaml_modified"] = True
+    session["yaml_modified_path"] = str(target)
+    return {
+        "active_source": "user",
+        "mode": "replace" if replace else "append",
+        "target_path": str(target),
+        "filename": target.name,
+        "appended": appended,
+        "overwritten": overwritten,
+        "dropped": dropped,
+        "skipped": skipped,
+        "skills": skills,
+        "source_name": Path(yaml_path).name,
+    }
+
+
 def append_skills_yaml_route(context: SkillAppendContext):
     """
     Import skills from a user-picked YAML file and append them to the

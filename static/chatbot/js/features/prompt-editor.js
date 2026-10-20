@@ -219,6 +219,13 @@
         if (advanced) advanced.open = false;
         skillChoice = null;
         skillPath = null;
+        const chosen = el('prompt-skill-chosen');
+        if (chosen) chosen.textContent = '';
+        // Keeping is never carried over from the last time the panel was
+        // open: it writes to disk, so it is opted into per edit.
+        const keep = el('prompt-keep-check');
+        if (keep) keep.checked = false;
+        refreshKeepHint();
         refreshSaveState();
         status('Loading…');
         try {
@@ -229,77 +236,39 @@
         }
     };
 
-    // ── Leaving the panel ──────────────────────────────────────────────────
-    // A prompt in play belongs to this conversation and to nothing else, which
-    // is why leaving the page used to lose it. The exit is where that decision
-    // belongs: this is the moment someone knows whether what they just wrote
-    // was an experiment or their new default. Everything else about the panel
-    // stays as it was -- nothing is persisted unless this question is answered
-    // with "Keep".
-    function hideExitAsk() {
-        const ask = el('prompt-exit-ask');
-        if (ask) ask.style.display = 'none';
-        const note = el('prompt-exit-status');
-        if (note) note.textContent = '';
-    }
-
-    function reallyClose() {
-        hideExitAsk();
+    // ── Keeping, decided on this screen ────────────────────────────────────
+    // This used to be a second screen on the way out. It is a checkbox now,
+    // sitting under the two steps it depends on: whoever is deciding has the
+    // prompt and the skills in front of them, which is when they actually
+    // know whether this was an experiment or their new default. Unticked,
+    // nothing is written to disk and the edit dies with the conversation --
+    // the property that keeps one person's experiment off everyone's agent.
+    window.closePromptEditor = function () {
         const modal = el('prompt-editor-modal');
         if (!modal) return;
         modal.classList.remove('open');
         modal.setAttribute('aria-hidden', 'true');
-    }
-
-    // Worth asking about only when there is a custom prompt in play that a new
-    // conversation would not get: either unsaved text in the box, or a Save &
-    // use that has already landed on this conversation. A prompt that is
-    // already kept, or one still identical to the built-in text, has nothing
-    // to decide.
-    function worthKeeping() {
-        const doc = docs.find((d) => d.doc === current);
-        if (!doc || doc.shared_across_profiles) return false;
-        if (doc.kind !== 'prompt' && doc.kind !== 'agent') return false;
-        if (doc.kept) return false;
-        const box = el('prompt-editor-text');
-        const text = ((box && box.value) || '').trim();
-        if (!text) return false;
-        return text !== (loaded.builtin || '').trim();
-    }
-
-    window.closePromptEditor = function () {
-        const modal = el('prompt-editor-modal');
-        if (!modal || !modal.classList.contains('open')) return reallyClose();
-        if (!worthKeeping()) return reallyClose();
-        const ask = el('prompt-exit-ask');
-        if (!ask) return reallyClose();
-        const label = el('prompt-exit-doc');
-        if (label) label.textContent = loaded.filename || 'This prompt';
-        ask.style.display = 'flex';
     };
 
-    window.cancelPromptExit = hideExitAsk;
-    window.leaveWithoutKeeping = reallyClose;
+    const wantsKeep = () => !!(el('prompt-keep-check') || {}).checked;
 
-    window.keepPromptAndLeave = async function () {
-        const note = el('prompt-exit-status');
-        const text = el('prompt-editor-text').value;
-        if (note) note.textContent = 'Keeping…';
-        try {
-            const data = await call('/prompts/keep', {
-                method: 'POST',
-                headers: { 'Content-Type': 'application/json' },
-                body: JSON.stringify({ doc: current, text: text, keep: true }),
-            });
-            clearDraft();
-            reallyClose();
-            if (typeof showToast === 'function') {
-                showToast({ message: data.message || 'Kept.', ttlMs: 12000 });
-            }
-        } catch (e) {
-            // The panel stays open on a failure: closing it would throw away
-            // the text the person just asked to have saved.
-            if (note) note.textContent = e.message;
+    window.refreshKeepHint = function () {
+        const hint = el('prompt-keep-hint');
+        const row = el('prompt-keep-row');
+        if (!hint) return;
+        const on = wantsKeep();
+        hint.innerHTML = on
+            ? 'On — saved as your own copy on <strong>Save &amp; use</strong>, '
+              + 'and every new conversation on this page starts from it. '
+              + 'The skills you chose above are saved with it. '
+              + 'Undo with <em>Restore original</em>.'
+            : 'Off — the prompt applies to this conversation only, and leaving '
+              + 'the page discards it. Tick to save it as your own copy so every '
+              + 'new conversation on this page starts from it (undo with '
+              + '<em>Restore original</em>).';
+        if (row) {
+            row.style.background = on ? '#eafaf0' : '#f6fbf7';
+            row.style.borderColor = on ? '#7ccb96' : '#bbe3c6';
         }
     };
 
@@ -411,15 +380,18 @@
     // the menu this agent's prompt tells it to choose from. "append" extends
     // the set, which is what the sidebar button has always done.
     window.chooseSkills = async function (choice) {
+        const chosen = el('prompt-skill-chosen');
         if (choice === 'keep') {
             skillChoice = 'keep';
             skillPath = null;
+            if (chosen) chosen.textContent = 'Skills left as they are.';
             refreshSaveState();
             status('Skills left as they are. Save & use when ready.', 'ok');
             return;
         }
         skillChoice = null;
         skillPath = null;
+        if (chosen) chosen.textContent = '';
         refreshSaveState();
         status('Opening the skills file picker…');
         try {
@@ -434,7 +406,16 @@
             skillPath = path;
             skillChoice = choice;
             refreshSaveState();
-            status('Skills file selected. Prompt and skills will change together on Save & use.', 'ok');
+            // Name the file on the panel. The picker is a native dialog that
+            // closes behind itself, so without this the only record of what
+            // was chosen is the person's memory of it.
+            const chosen = el('prompt-skill-chosen');
+            if (chosen) {
+                chosen.textContent =
+                    `${choice === 'replace' ? 'Replace with' : 'Add from'}: `
+                    + path.split(/[\\/]/).pop();
+            }
+            status('Skills file selected. Prompt and skills change together on Save & use.', 'ok');
         } catch (e) {
             status('Could not choose skills: ' + e.message, 'err');
         }
@@ -461,7 +442,8 @@
                 method: 'POST',
                 headers: { 'Content-Type': 'application/json' },
                 body: JSON.stringify({ doc: current, text: text,
-                    skill_mode: skillChoice || 'keep', skill_yaml_path: skillPath || '' }),
+                    skill_mode: skillChoice || 'keep', skill_yaml_path: skillPath || '',
+                    keep: wantsKeep() }),
             });
             if (data.skills && typeof renderSkills === 'function') renderSkills(data.skills);
             if (data.skills && typeof refreshSkillSourcePanel === 'function') {
@@ -480,9 +462,6 @@
                     ttlMs: 12000,
                 });
             }
-            // The text that was just saved is this conversation's prompt now,
-            // so the exit question must compare against it, not against the
-            // text the panel opened with.
             loaded.live = text;
             closePromptEditor();
         } catch (e) {

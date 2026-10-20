@@ -28,6 +28,13 @@ class PromptEditorContext:
     get_agent: Optional[Callable[[], Any]] = None
     ensure_editable: Optional[Callable[[], None]] = None
     load_skills_from_yaml: Optional[Callable[[str], dict]] = None
+    #: ``(yaml_path, replace) -> payload``. The same import the sidebar's
+    #: "Append Skills from YAML..." performs: it writes a dated user file and
+    #: flips the active source, so the choice outlives the conversation. The
+    #: panel calls it for the same reason the sidebar does -- a skill set that
+    #: vanished on reload left a kept prompt naming skills the agent no longer
+    #: had, which is dead text in fetch_filtered_logs's enum.
+    persist_skills: Optional[Callable[[str, bool], dict]] = None
 
 
 def _parse_doc(context: PromptEditorContext, raw: Any) -> Optional[tuple[str, str]]:
@@ -175,33 +182,83 @@ def build_prompt_editor_handlers(context: PromptEditorContext) -> dict[str, Call
                 return jsonify({"success": False, "error": "Shared prompts are not editable in a conversation."}), 400
             skill_mode = str(data.get("skill_mode") or "keep")
             skill_path = str(data.get("skill_yaml_path") or "").strip()
+            wants_keep = bool(data.get("keep"))
             if skill_mode not in ("keep", "replace", "append"):
                 return jsonify({"success": False, "error": "Unknown skills choice."}), 400
-            if skill_mode != "keep":
-                if not skill_path or context.load_skills_from_yaml is None:
-                    return jsonify({"success": False, "error": "Choose a skills YAML file first."}), 400
-                try:
-                    chosen_skills = context.load_skills_from_yaml(skill_path)
-                except Exception as exc:
-                    return jsonify({"success": False, "error": f"Could not load skills: {exc}"}), 400
-                if not chosen_skills:
-                    return jsonify({"success": False, "error": "The skills file is empty."}), 400
+            if skill_mode != "keep" and not skill_path:
+                return jsonify({"success": False, "error": "Choose a skills YAML file first."}), 400
+
             agent = context.get_agent()
+            skill_note = ""
+            persisted_skill_file = None
             if skill_mode != "keep":
-                skills = ({**agent.skills, **chosen_skills} if skill_mode == "append"
-                          else chosen_skills)
-                agent.apply_updated_skills(skills)
-                agent._session_skill_source = "user"
-                agent._session_skill_path = Path(skill_path) if skill_mode == "replace" else None
-                agent._session_skill_filename = Path(skill_path).name
+                # The same import the sidebar performs, so the panel's choice
+                # is persisted rather than living only on this agent. Skills
+                # have always had their own visible source badge and their own
+                # undo ("Cloud baseline"), so persisting here does not weaken
+                # anything -- it removes a difference between two buttons that
+                # look like they do the same thing.
+                if context.persist_skills is not None:
+                    try:
+                        imported = context.persist_skills(skill_path, skill_mode == "replace")
+                    except ValueError as exc:
+                        return jsonify({"success": False, "error": str(exc)}), 400
+                    except Exception as exc:
+                        return jsonify({"success": False, "error": f"Could not load skills: {exc}"}), 400
+                    # The dated snapshot, not the file the person picked: that
+                    # one lives on their Desktop and can move or change, and a
+                    # kept prompt pointing at a file that is gone is worse than
+                    # one pointing at nothing.
+                    persisted_skill_file = imported["target_path"]
+                    skill_note = (f" Skills {'replaced with' if skill_mode == 'replace' else 'extended from'} "
+                                  f"{imported['source_name']}, saved as {imported['filename']}.")
+                elif context.load_skills_from_yaml is not None:
+                    try:
+                        chosen_skills = context.load_skills_from_yaml(skill_path)
+                    except Exception as exc:
+                        return jsonify({"success": False, "error": f"Could not load skills: {exc}"}), 400
+                    if not chosen_skills:
+                        return jsonify({"success": False, "error": "The skills file is empty."}), 400
+                    agent.apply_updated_skills(
+                        {**agent.skills, **chosen_skills} if skill_mode == "append" else chosen_skills)
+                    agent._session_skill_source = "user"
+                    agent._session_skill_path = Path(skill_path) if skill_mode == "replace" else None
+                    agent._session_skill_filename = Path(skill_path).name
+                else:
+                    return jsonify({"success": False, "error": "Choose a skills YAML file first."}), 400
+
             _apply_conversation_text(kind, text)
+
+            # Keeping is the same action, answered on the same screen rather
+            # than on a second one after the fact: the person deciding has the
+            # prompt and the skills in front of them, which is when they know.
+            prompt_note = ""
+            if wants_keep:
+                try:
+                    path = sp.write_user_speclet(doc_profile, kind, text)
+                except Exception as exc:
+                    return jsonify({"success": False, "error": f"Could not save: {exc}"}), 500
+                sp.set_source(doc_profile, kind, sp.SOURCE_LOCAL)
+                sp.set_kept(doc_profile, kind, True)
+                # The skills travel with the prompt, because the prompt names
+                # them. Keeping one without the other leaves the agent reading
+                # instructions to call skills that are not in its enum.
+                if persisted_skill_file:
+                    sp.set_kept_skills(doc_profile, persisted_skill_file)
+                _reload()
+                kept_names = sp.kept_skills(doc_profile)
+                prompt_note = (f"Kept as {path.name}: new conversations on this page "
+                               "start from it"
+                               + (" and from the skills saved with it" if kept_names else "")
+                               + " until you press Restore original.")
             kept = sp.is_kept(doc_profile, kind) or (
                 kind != sp.BUNDLE and sp.is_kept(doc_profile, sp.BUNDLE))
             return jsonify({
                 "success": True,
-                "message": "Applied to this conversation only. New conversations "
-                           + ("start from the prompt you kept."
-                              if kept else "use the original prompt."),
+                "message": (prompt_note or
+                            ("Applied to this conversation only. New conversations "
+                             + ("start from the prompt you kept." if kept
+                                else "use the original prompt."))) + skill_note,
                 "doc": f"{doc_profile}_{kind}",
                 "source": "conversation",
                 "kept": kept,
@@ -350,9 +407,12 @@ def build_prompt_editor_handlers(context: PromptEditorContext) -> dict[str, Call
             # prompt back on the next question and look broken. Withdrawing it
             # does not delete the file: Choose .md file... and the library
             # still have it.
-            was_kept = sp.is_kept(doc_profile, kind)
-            if was_kept:
+            was_kept = sp.is_kept(doc_profile, kind) or bool(sp.kept_skills(doc_profile))
+            if sp.is_kept(doc_profile, kind):
                 sp.set_kept(doc_profile, kind, False)
+            # Both halves of the keep, together: the prompt named the skills,
+            # so leaving the skills kept would be half a restore.
+            sp.set_kept_skills(doc_profile, None)
             if kind != sp.BUNDLE and sp.is_kept(doc_profile, sp.BUNDLE):
                 # One part of a kept bundle cannot be singled out, so this is
                 # the whole document going back to built-in.
@@ -365,8 +425,8 @@ def build_prompt_editor_handlers(context: PromptEditorContext) -> dict[str, Call
                 "kept": False,
                 "message": "Original prompt restored for this conversation."
                            + (" New conversations no longer start from your "
-                              "kept copy; the file itself is still saved."
-                              if was_kept else ""),
+                              "kept prompt or its skills; both files are still "
+                              "saved." if was_kept else ""),
             })
         removed = sp.delete_user_speclet(doc_profile, kind)
         sp.set_source(doc_profile, kind, sp.SOURCE_SHARED)

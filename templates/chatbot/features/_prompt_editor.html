@@ -106,7 +106,30 @@
                         title="Keep the skills this agent already has">
                     Keep skills
                 </button>
+                <span id="prompt-skill-chosen" style="flex-basis:100%;color:#475569;"></span>
             </div>
+
+            <!-- Step 3, on this screen and not on a second one after the fact.
+                 The person deciding has the prompt and the skills in front of
+                 them, which is exactly when they know whether this was an
+                 experiment or their new default. Unticked, the edit lives and
+                 dies with this conversation, which is what keeps one person's
+                 experiment from becoming everyone's agent. -->
+            <label id="prompt-keep-row"
+                   style="display:flex;align-items:flex-start;gap:9px;margin-top:8px;
+                          font-size:0.78rem;color:#334;background:#f6fbf7;
+                          border:1px solid #bbe3c6;border-radius:8px;
+                          padding:8px 10px;cursor:pointer;">
+                <input type="checkbox" id="prompt-keep-check" style="margin-top:2px;"
+                       onchange="refreshKeepHint()">
+                <span>
+                    <strong>③ Keep for next time.</strong>
+                    <span id="prompt-keep-hint">Off — the prompt applies to this
+                    conversation only, and leaving the page discards it. Tick to
+                    save it as your own copy so every new conversation on this
+                    page starts from it (undo with <em>Restore original</em>).</span>
+                </span>
+            </label>
 
             <details style="margin-top:8px;font-size:0.8rem;">
                 <summary style="cursor:pointer;">Advanced: load or restore prompt text</summary>
@@ -126,36 +149,6 @@
                     onclick="savePrompt()">Save &amp; use</button>
         </div>
 
-        <!-- Asked on the way out, because this is the moment a person knows
-             whether the prompt they just wrote was worth more than this one
-             conversation. Shown over the panel rather than as a confirm(), so
-             both answers can say what they actually do. -->
-        <div id="prompt-exit-ask" style="display:none;position:absolute;inset:0;
-                 background:rgba(255,255,255,0.93);border-radius:inherit;
-                 align-items:center;justify-content:center;padding:24px;z-index:3;">
-            <div style="max-width:430px;">
-                <h4 style="margin:0 0 8px;font-size:0.95rem;">Keep this prompt for next time?</h4>
-                <p style="font-size:0.82rem;color:#555;line-height:1.55;margin:0 0 14px;">
-                    <strong id="prompt-exit-doc"></strong> is in use for this
-                    conversation. Keep it and every new conversation on this page
-                    starts from it, until you press <em>Restore original</em>.
-                </p>
-                <div style="display:flex;gap:8px;flex-wrap:wrap;">
-                    <button type="button" class="fbd-btn primary" onclick="keepPromptAndLeave()"
-                            title="Save this prompt as your own copy and start new conversations from it">
-                        Keep and close
-                    </button>
-                    <button type="button" class="fbd-btn" onclick="leaveWithoutKeeping()"
-                            title="Close without saving; this conversation keeps the prompt, new ones do not">
-                        Close without keeping
-                    </button>
-                    <button type="button" class="fbd-btn" onclick="cancelPromptExit()"
-                            title="Go back to editing">Back to editing</button>
-                </div>
-                <p id="prompt-exit-status" role="status"
-                   style="font-size:0.78rem;color:#555;margin:10px 0 0;"></p>
-            </div>
-        </div>
     </div>
 </div>
 

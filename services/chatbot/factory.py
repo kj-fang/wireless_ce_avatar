@@ -60,7 +60,16 @@ ROUTE_SPECS: tuple[RouteSpec, ...] = (
     RouteSpec("/history/load", "history_load", ("POST",), "history"),
     # Session teardown, not a history feature: every profile needs it so a
     # page reloaded after "Back to Avatar" starts clean.
-    RouteSpec("/back_to_avatar", "back_to_avatar", ("GET",)),
+    #
+    # POST, not GET. It discards the session agent -- the loaded log, the
+    # conversation, the primed context -- and a GET that destroys state is
+    # reachable by anything that follows a link without being asked to: a
+    # browser prefetching the top bar's href on hover, a link scanner, a
+    # stray click on a control sitting at the window edge. The symptom is
+    # baffling from the page's side, because the sidebar still shows the log
+    # path it put there itself while the server has already forgotten it, and
+    # the next question comes back "No log file loaded."
+    RouteSpec("/back_to_avatar", "back_to_avatar", ("POST",)),
     RouteSpec(
         "/append_skills_yaml",
         "append_skills_yaml_route",

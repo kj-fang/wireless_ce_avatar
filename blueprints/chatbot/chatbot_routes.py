@@ -112,7 +112,9 @@ from services.chatbot.shared_routes import (
     llm_client_model as _llm_client_model,
 )
 from services.skill_editor.controller import (
+    SkillAppendContext,
     SkillEditorContext,
+    apply_skills_yaml,
     build_profile_yaml_helpers,
     build_skill_editor_handlers,
 )
@@ -125,6 +127,7 @@ from utils import bt_skills_yaml_utils as _bt_yaml_utils
 from utils import linux_skills_yaml_utils as _linux_yaml_utils
 from utils import log_time_format
 from utils import skills_yaml_utils as _wifi_yaml_utils
+from utils import speclets_utils
 from utils.event_log_utils import find_event_log_for_log
 from utils.issue_time_ai import (
     LINUX_WIFI_FOCUS,
@@ -611,6 +614,28 @@ class AgentRoutes:
         """
         return _shared_feedback_conversation_id(rotate=rotate)
 
+    def _chosen_skills(self):
+        """The skills kept alongside a kept prompt, or None for the boot set.
+
+        Deliberately NOT the skill editor's own active source: that lives on
+        the conversation's agent and dies with it, which is the behaviour the
+        panel's badge already describes. This reads only the explicit "keep
+        for next time", the same opt-in that carries the prompt, and nothing
+        else on disk makes a new conversation adopt a skill set.
+
+        Reads a file only when such a keep exists, so the common case costs
+        nothing, and a failure is never fatal: the caller falls back to the
+        boot-time skills, which is what every conversation used before this.
+        """
+        try:
+            path = speclets_utils.kept_skills(self.profile.agent_profile)
+            return load_skills_from_yaml(path) or None if path else None
+        except Exception:
+            print("[skills] could not load the kept skill set; "
+                  "this conversation uses the built-in one.")
+            traceback.print_exc()
+            return None
+
     def _get_or_create_agent(self, skip_prime: bool = False):
         """
         Return a per-session agent for this profile.
@@ -646,10 +671,19 @@ class AgentRoutes:
             # own overrides survive the clone — that is how BtLogAgentSystem
             # keeps SCOPE_FULL_LOG_WHEN_EMPTY and its empty DRIVER_ADD_MARKER /
             # RESET_MARKER.
+            # Normally the boot-time skills, with no disk read. But if this
+            # user has chosen their own skill set, that choice is recorded on
+            # disk and the sidebar badge says so -- and until this read, a new
+            # conversation quietly ignored it and came up on the cloud
+            # baseline. The damage was worse than a stale list: a kept prompt
+            # names its skills, fetch_filtered_logs takes an enum of the ones
+            # actually loaded, so the agent came back with a prompt telling it
+            # to call skills it no longer had. The choice persists, so honour
+            # it; "Use cloud baseline" is still one click away.
             agent = type(base)(
                 client=base.client,
                 model=base.model,
-                skills=base.skills,   # reuse pre-loaded skills, no disk re-read
+                skills=self._chosen_skills() or base.skills,
             )
             # Inherit ACE runner from the boot-time base agent so playbook
             # blocks are injected into per-session prompts. Each profile has its
@@ -1828,7 +1862,10 @@ class AgentRoutes:
             agent_config_attr=profile.agent_config_attr,
         )
 
-        skill_editor_handlers = build_skill_editor_handlers(SkillEditorContext(
+        # Bound rather than inlined: the prompt panel imports skills through
+        # the same context, so both buttons write the same dated user file and
+        # flip the same active source.
+        skill_editor_context = SkillEditorContext(
             activate_yaml=_yaml_helpers["activate_yaml"],
             get_active_source=skill_source,
             get_or_create_agent=self._get_configuration_agent,
@@ -1842,9 +1879,11 @@ class AgentRoutes:
             set_active_source=set_skill_source,
             skills_yaml_status_payload=skill_status,
             ensure_editable=self._ensure_configuration_editable,
-        ))
-        # The prompt editor writes only to this conversation's agent. Shared
-        # prompt files remain source material, not automatic live overrides.
+        )
+        skill_editor_handlers = build_skill_editor_handlers(skill_editor_context)
+        # The prompt editor writes only to this conversation's agent, unless
+        # the person ticks "keep". Shared prompt files remain source material,
+        # not automatic live overrides.
         prompt_editor_handlers = (
             build_prompt_editor_handlers(PromptEditorContext(
                 profile=profile.agent_profile,
@@ -1852,6 +1891,16 @@ class AgentRoutes:
                 get_agent=self._get_configuration_agent,
                 ensure_editable=self._ensure_configuration_editable,
                 load_skills_from_yaml=load_skills_from_yaml,
+                # The panel imports skills through the same code the sidebar's
+                # "Append Skills from YAML..." runs, so the two buttons leave
+                # the same thing behind.
+                persist_skills=(
+                    lambda path, replace: apply_skills_yaml(
+                        SkillAppendContext.from_editor(skill_editor_context),
+                        path,
+                        replace,
+                    )
+                ),
             ))
             if "prompt_editor" in profile.capabilities else {}
         )

@@ -591,6 +591,23 @@
         });
     }
 
+// ---- Leaving the page ---------------------------------------------------
+// "Back to Avatar" discards the session agent: the loaded log, the
+// conversation, the primed context, and any prompt that was applied to this
+// conversation but not kept. That is the right behaviour when it is what you
+// meant, and nothing to do with navigation when it is not -- so it asks,
+// but only when there is something to lose. A page with no log loaded has
+// nothing to confirm and should not nag.
+window.confirmLeaveChatbot = function () {
+    const path = (document.getElementById('log-path-input') || {}).value || '';
+    if (!path.trim()) return true;
+    return confirm(
+        'Leave the analysis?\n\n'
+        + 'The loaded log and this conversation are discarded, and a prompt '
+        + 'you applied without keeping goes with them.'
+    );
+};
+
 // ---- Chat runtime shims -------------------------------------------------
 // Inline `onclick=` handlers call these as free globals. The profile strategy
 // script loads AFTER core.js, so resolve (and memoize) it on first call.

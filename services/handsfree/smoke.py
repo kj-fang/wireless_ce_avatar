@@ -556,6 +556,13 @@ def smoke_runner(tmp: Path) -> None:
         dd, tdn, pdn = analysis.domain_decision, analysis.time_decision, analysis.pick_decision
         cand_src = [c["source"] for c in dd.get("candidates", [])]
         chosen_caps = [c for c in pdn.get("captures", []) if c.get("role") == "chosen"]
+        check("S4.img live panel carries the image reader's output (comment, author, date, "
+              "the description text)",
+              isinstance(live.get("comment_images"), list) and live["comment_images"]
+              and live["comment_images"][0].get("comment_id") == "CIMG1"
+              and live["comment_images"][0].get("author") == "Partner"
+              and "WRT" in (live["comment_images"][0].get("descriptions") or [""])[0],
+              f"imgs={live.get('comment_images')}")
         check("S4.dec1 issue-category decision: candidates in priority order (reader, IPS "
               "subcategory, triage); the fake reader says 'Others' so triage wins; the "
               "domain's required logs named",

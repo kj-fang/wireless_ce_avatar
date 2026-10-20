@@ -928,6 +928,7 @@
   }
 
   async function startRun(url, body) {
+    liveHistory = null;   // a new run takes the panel back
     setRunButtons(true);
     let j;
     try {
@@ -1321,6 +1322,7 @@
     document.getElementById('draft-text').value = d.draft_plain || '';
     renderDraftChips(d.analysis || {});
     renderDraftSent(d.analysis || {});
+    if (d.live) showLiveHistory(d);
     document.getElementById('draft-analysis').textContent =
       JSON.stringify(d.analysis || {}, null, 2);
     document.getElementById('approve-btn').disabled =
@@ -1898,7 +1900,9 @@
     }
     const q = a.question ? `<details><summary>the question sent to Echo</summary><div class="q">${esc(a.question)}</div></details>` : '';
     return `<div class="lp-sec"><div class="lp-h">Next-step suggestions (Echo knowledge base)</div><div class="lp-advice">` +
-      `<div class="lp-cap">What to ask the customer next · recommended debug steps · known similar issues</div>` + body + q + `</div></div>`;
+      `<div class="lp-cap">What to ask the customer next · recommended debug steps · known similar issues</div>` +
+      `<div style="color: var(--warn); font-size: 12.5px; margin-bottom: 6px;">⚠ May contain internal knowledge — check before sharing.</div>` +
+      body + q + `</div></div>`;
   }
 
   function liveCaseStatus(d, ev) {
@@ -1908,16 +1912,36 @@
     return m ? (m[1] === 'good' ? 'done' : m[1] || '') : '';
   }
 
+  // A draft opened from the review queue replays its saved run in the live
+  // panel until "Back to live" (or a new run) is pressed.
+  let liveHistory = null;
+  function showLiveHistory(d) {
+    const live = d.live;
+    if (!live || !live.case_details) return;
+    const cd = live.case_details[d.case_nbr] || Object.values(live.case_details)[0] || {};
+    liveHistory = {status: 'done', mode: live.run_mode || 'saved run', started_at: cd.started_at || live.run_started_at,
+                   finished_at: cd.updated_at || null, events: live.events || [],
+                   case_details: live.case_details, cases: [{case_nbr: d.case_nbr, subject: d.subject}],
+                   __history: {draft_id: d.draft_id, saved_at: live.saved_at || '', created_at: d.created_at || ''}};
+    stageCasePinned = d.case_nbr;
+    renderLivePanel(liveHistory);
+  }
+  function backToLive() { liveHistory = null; stageCasePinned = null; refreshStatus(); }
+
   function renderLivePanel(s) {
     const panel = document.getElementById('live-panel');
     if (!panel) return;
+    if (liveHistory && s !== liveHistory) s = liveHistory;   // history stays until "Back to live"
     const details = s.case_details || {};
     const {byCase} = parseStageEvents(s.events || []);
     const order = Object.keys(details).sort((a, b) => (details[a].started_at || 0) - (details[b].started_at || 0));
     (s.cases || []).forEach(c => { if (c.case_nbr && !order.includes(c.case_nbr)) order.push(c.case_nbr); });
-    const head = `<div class="lp-top"><span class="lp-title">Live analysis</span>` +
-      `<span class="pill dot ${s.status === 'running' ? 'warn live' : s.status === 'done' ? 'good'
-        : s.status === 'error' ? 'bad' : ''}">${esc(s.status || 'idle')}</span></div>`;
+    const hist = s.__history;
+    const head = `<div class="lp-top"><span class="lp-title">${hist ? 'Analysis history' : 'Live analysis'}</span>` +
+      (hist ? `<span class="pill" title="${esc(hist.draft_id)}">saved run · ${esc((hist.created_at || hist.saved_at || '').slice(0, 16).replace('T', ' '))}</span>` +
+              `<button class="ghost lp-btn-sm" onclick="backToLive()">Back to live</button>`
+            : `<span class="pill dot ${s.status === 'running' ? 'warn live' : s.status === 'done' ? 'good'
+        : s.status === 'error' ? 'bad' : ''}">${esc(s.status || 'idle')}</span>`) + `</div>`;
     if (!order.length) {
       panel.innerHTML = head + `<div class="lp-empty" style="margin-top: 10px;">` +
         (s.status === 'running' ? 'Looking for cases to analyze…'

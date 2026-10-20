@@ -1080,6 +1080,13 @@ def smoke_runner(tmp: Path) -> None:
             st14d["subject"] = "mutated"
             st14d_copy_ok = (orch.get_run_state()["case_details"]["01234567"].get("subject")
                              != "mutated")
+        rec14_live = (store14d.get(store14d.list_drafts(include_closed=True)[0]["draft_id"]) or {}).get("live") or {}
+        check("S14.live4 the run's live history is saved with the draft (case_details + "
+              "the case's stage events) for replay from the review queue",
+              rec14_live.get("case_details", {}).get("01234567", {}).get("finished") is True
+              and rec14_live.get("events") and all(e["message"].startswith("[01234567]") for e in rec14_live["events"])
+              and rec14_live.get("saved_at"),
+              f"keys={sorted(rec14_live)} n_events={len(rec14_live.get('events') or [])}")
         cd14 = st14d.get("checklist_decision") or {}
         check("S14.live3 checklist decision pushed after the fill: required logs with "
               "provided/missing + how they were filled, the asks",
@@ -2626,6 +2633,26 @@ def smoke_comment_images(tmp: Path) -> None:
           calls["vision"] == 1 and len(calls["fetch"]) == 2 and rows2[1][2] == rows[1][2]
           and cache.exists(), str(calls))
     check("S17.e budget constant sane", 1 <= MAX_IMAGES_PER_CASE <= 20)
+    # Images in the case DESCRIPTION (01034043): read first, row placed ahead
+    # of the comments, cached under desc:<case id>.
+    fetch_before, vision_before = len(calls["fetch"]), calls["vision"]
+
+    class _IpsDesc(_Ips):
+        def get_case_rich_description(self, case_id):
+            return {"html": '<p>RU/MRU Tx fails, see <img src="https://intel.file.force.com/servlet/rtaImage?eid=desc&amp;refid=a"></p>',
+                    "created": "2026-06-18T08:00:00.000+0000"}
+    rows3, info3 = annotate_case_comments(_IpsDesc(), llm, "500Y", base, cache_path=cache,
+                                          skip_marker="[AI-Avatar preliminary analysis]")
+    check("S17.h images embedded in the case DESCRIPTION are read too: one fetch + one vision "
+          "call, row placed first (case creation date), details entry 'description', cached "
+          "under desc:<id>",
+          rows3 and rows3[0][1] == "Customer (case description)"
+          and "[Images embedded in the case description" in rows3[0][2]
+          and any(i.get("comment_id") == "description" for i in info3)
+          and len(calls["fetch"]) == fetch_before + 1 + 0 and calls["vision"] == vision_before + 1
+          and "desc:500Y" in json.loads(cache.read_text(encoding="utf-8")),
+          f"first={rows3[0] if rows3 else None} info={info3} fetch={calls['fetch'][fetch_before:]} "
+          f"vision={calls['vision'] - vision_before}")
     from .comment_images import _host_allowed
     from .ips_client import is_tenant_url
     check("S17.g image URLs: only Intel's own Salesforce hosts over HTTPS get the session "

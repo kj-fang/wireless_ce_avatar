@@ -1435,6 +1435,12 @@
       case 'check_case_info':
         if (ev.status !== 'done') return ev.detail || '';
         return (d.missing_info || []).length ? 'missing: ' + d.missing_info.join(', ') : 'all case information present';
+      case 'read_images': {
+        const imgs = d.comment_images || [];
+        const n = imgs.reduce((a, i) => a + (i.descriptions || []).length, 0);
+        if (n) return n + ' image' + (n === 1 ? '' : 's') + ' described across ' + imgs.length + ' comment' + (imgs.length === 1 ? '' : 's');
+        return ev.status === 'done' ? 'no images in the comments' : (ev.detail && ev.detail !== 'started' ? ev.detail : '');
+      }
       case 'category': {
         const dd = d.domain_decision || {}, cd = d.checklist_decision || {};
         if (!dd.winner) return '';
@@ -1705,6 +1711,23 @@
     return html + `</div>`;
   }
 
+  // Under "Read comment screenshots": what the vision model read from each
+  // image embedded in the IPS comments (this text is all the later steps see).
+  function liveImagesHtml(d, status) {
+    const imgs = d.comment_images || [];
+    if (status === 'pending' || status === 'skipped' || !imgs.length) return '';
+    const n = imgs.reduce((a, i) => a + (i.descriptions || []).length, 0);
+    let html = `<div class="lp-live"><div class="lp-cap">${n} image${n === 1 ? '' : 's'} read from ${imgs.length} comment${imgs.length === 1 ? '' : 's'} — the descriptions below are what the later steps see</div>`;
+    imgs.forEach(i => {
+      html += `<div class="lp-time-sub" style="margin-top: 6px;">comment of <span class="mono" style="color:#fff;">${esc(i.date || '?')}</span> by ${esc(i.author || 'unknown')}` +
+        (i.count && i.count > (i.descriptions || []).length ? ` · ${i.count - i.descriptions.length} of ${i.count} image(s) not read` : '') + `</div>`;
+      (i.descriptions || []).forEach((desc, k) => {
+        html += `<div class="lp-as"><span class="k">🖼</span><span><b style="color:#fff;">Image ${k + 1}:</b> ${esc(desc)}</span></div>`;
+      });
+    });
+    return html + `</div>`;
+  }
+
   function liveTimesFoundHtml(d, status) {
     const td = d.time_decision || {};
     if (status === 'pending' || status === 'skipped' || !(td.found || td.ignored_vague || td.reasoning)) return '';
@@ -1872,6 +1895,7 @@
       `<span class="lp-lab">${esc(x.label)}</span><span class="lp-dur">${esc(x.dur)}</span>` +
       (x.detail && x.status !== 'pending' ? `<span class="lp-det">${esc(x.detail)}</span>` : '') +
       (x.key === 'category' ? liveCategoryHtml(d, x.status) : '') +
+      (x.key === 'read_images' ? liveImagesHtml(d, x.status) : '') +
       (x.key === 'read_case_history' ? liveTimesFoundHtml(d, x.status) : '') +
       (x.key === 'issue_time' ? liveTimePlacementHtml(d, x.status) : '') +
       (x.key === 'pick_zip' ? liveArchiveHtml(d, x.status) : '') +

@@ -574,6 +574,10 @@ def live_fields(a: "CaseAnalysis") -> dict:
         "etl_file": os.path.basename(a.etl_path or ""),
         "log_file": os.path.basename(a.log_path or ""),
         "log_path": a.log_path or "",
+        "comment_images": [{"comment_id": i.get("comment_id"), "date": str(i.get("date") or "")[:16],
+                            "author": i.get("author"), "count": i.get("count"),
+                            "descriptions": [str(x)[:900] for x in (i.get("descriptions") or [])]}
+                           for i in (a.comment_images or []) if isinstance(i, dict)][:10],
         "domain_decision": dict(a.domain_decision or {}),
         "time_decision": dict(a.time_decision or {}),
         "pick_decision": dict(a.pick_decision or {}),

@@ -466,7 +466,8 @@ def compose_plain(analysis: CaseAnalysis) -> str:
         ans = str(adv["answer"]).strip()
         if len(ans) > 1500:
             ans = ans[:1500] + " …[truncated — full text in analysis details]"
-        parts += ["Echo knowledge base — suggested next steps (for reference):", ans, ""]
+        parts += ["Echo knowledge base — suggested next steps (for reference; "
+                  "may contain internal knowledge — check before sharing):", ans, ""]
 
     # Case-info gaps that didn't block the analysis: give the reviewer a
     # forwardable clarification request (this draft posts Private-to-Intel).

@@ -344,6 +344,21 @@ class IpsClient:
                 params = None
         return latest
 
+    def get_case_rich_description(self, case_id: str) -> dict:
+        """The case's rich-text description (Core_Issue_Description__c — the
+        Snowflake copy handsfree reads is plain text, so images embedded in
+        the description are only visible here) + the case creation date.
+        {} when unavailable."""
+        soql = ("SELECT Core_Issue_Description__c, CreatedDate FROM Case "
+                f"WHERE Id='{_soql_quote(case_id)}'")
+        resp = self._request("GET", "/services/data/v{ver}/query", params={"q": soql})
+        resp.raise_for_status()
+        recs = resp.json().get("records", [])
+        if not recs:
+            return {}
+        return {"html": str(recs[0].get("Core_Issue_Description__c") or ""),
+                "created": str(recs[0].get("CreatedDate") or "")}
+
     def get_case_comments(self, case_id: str) -> list[dict]:
         """Existing comments on a case. Used to (a) detect our own prior post
         and (b) inspect how human-authored comments populate the visibility /

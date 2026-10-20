@@ -91,6 +91,13 @@ KINDS = (BUNDLE, "prompt", "report", "suggest_time")
 #: The three a bundle can carry. ``agent`` is the container, not a section.
 BUNDLED_KINDS = tuple(k for k in KINDS if k != BUNDLE)
 
+#: Where split_bundle keeps the note above the first heading. Deliberately
+#: not in KINDS or BUNDLED_KINDS: it is documentation for the next person to
+#: edit the file, never a document the engine sends to the model. Anything
+#: iterating the real kinds therefore ignores it, and only join_bundle and
+#: the editor need to know it exists.
+PREAMBLE = "_preamble"
+
 #: Documents that are the same for every profile. "shared" is not a real
 #: profile -- it is a fourth namespace, so ``speclet_filename`` and the cache
 #: key need no special case: shared + review -> shared_review.md. These are
@@ -461,14 +468,24 @@ def split_bundle(text: str) -> dict[str, str]:
     """Sections of an ``agent`` bundle, keyed by kind.
 
     A heading line — ``# prompt``, ``## report``, ``### suggest time`` — opens
-    a section and the next one closes it. Anything before the first heading is
-    ignored, so a bundle can carry a note to whoever edits it. A file with no
-    headings yields nothing rather than guessing which document it is.
+    a section and the next one closes it. A file with no headings yields
+    nothing rather than guessing which document it is.
+
+    Text before the first heading is the note to whoever edits the file next:
+    which skills YAML it is paired with, what it must not be mixed with, the
+    size of log it suits. The engine never sends it to the model — it is not
+    one of BUNDLED_KINDS — but it is kept under PREAMBLE and written back by
+    join_bundle, because an editor that quietly dropped it took the warnings
+    off the file the moment anyone opened it.
     """
     if not text:
         return {}
     found: dict[str, str] = {}
     matches = list(_SECTION_RE.finditer(text))
+    if matches:
+        note = text[:matches[0].start()].strip()
+        if note:
+            found[PREAMBLE] = note
     for index, match in enumerate(matches):
         end = matches[index + 1].start() if index + 1 < len(matches) else len(text)
         kind = match.group(1).lower().replace(" ", "_").replace("-", "_")
@@ -481,6 +498,9 @@ def split_bundle(text: str) -> dict[str, str]:
 def join_bundle(sections: dict[str, str]) -> str:
     """The inverse: one file from the three documents, in a fixed order."""
     parts = []
+    note = (sections.get(PREAMBLE) or "").strip()
+    if note:
+        parts.append(note)
     for kind in BUNDLED_KINDS:
         body = (sections.get(kind) or "").strip()
         if body:

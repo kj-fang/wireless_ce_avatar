@@ -130,15 +130,35 @@
                 </span>
             </label>
 
+            <!-- Two of these only fill the box; the third takes effect on its
+                 own. They used to sit in a row looking alike, which is a trap:
+                 "Restore original" reads like a third way to load some text
+                 and is in fact the undo for keeping. Split and labelled. -->
             <details style="margin-top:8px;font-size:0.8rem;">
-                <summary style="cursor:pointer;">Advanced: load or restore prompt text</summary>
-                <div style="display:flex;gap:8px;align-items:center;margin-top:8px;flex-wrap:wrap;">
-                <button type="button" class="fbd-btn" onclick="loadPromptText('shared')"
-                        title="Replace the editor's contents with the shared text">Load shared</button>
-                <button type="button" class="fbd-btn" onclick="loadPromptText('builtin')"
-                        title="Replace the editor's contents with the text this agent ships with">Load built-in</button>
-                <button type="button" class="fbd-btn" id="prompt-revert-btn" onclick="revertPrompt()"
-                        title="Use the original prompt again in this conversation, and stop new conversations starting from a kept copy. Your saved file is not deleted.">Restore original</button>
+                <summary style="cursor:pointer;">Advanced: start from another version, or undo a keep</summary>
+
+                <div style="margin-top:10px;">
+                    <div style="color:#555;margin-bottom:5px;">
+                        Put other text in the box. Nothing changes until you press
+                        <strong>Save&nbsp;&amp;&nbsp;use</strong>, so these are safe to try.
+                    </div>
+                    <div style="display:flex;gap:8px;align-items:center;flex-wrap:wrap;">
+                        <button type="button" class="fbd-btn" onclick="loadPromptText('shared')"
+                                title="Fill the box with the team's shared copy. Not saved until Save &amp; use.">Load shared</button>
+                        <button type="button" class="fbd-btn" onclick="loadPromptText('builtin')"
+                                title="Fill the box with the text this agent ships with. Not saved until Save &amp; use.">Load built-in</button>
+                    </div>
+                </div>
+
+                <div style="margin-top:12px;padding-top:10px;border-top:1px solid #e8edf1;">
+                    <div style="color:#555;margin-bottom:5px;">
+                        <strong>Takes effect immediately.</strong> This conversation
+                        goes back to the built-in prompt, and new conversations stop
+                        starting from your kept copy and its skills. Your saved
+                        files are not deleted.
+                    </div>
+                    <button type="button" class="fbd-btn" id="prompt-revert-btn" onclick="revertPrompt()"
+                            title="Undo a keep, and put this conversation back on the built-in prompt. The saved files stay on disk.">Restore original</button>
                 </div>
             </details>
         </div>

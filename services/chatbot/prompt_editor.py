@@ -66,10 +66,18 @@ def build_prompt_editor_handlers(context: PromptEditorContext) -> dict[str, Call
         # a prompt the user kept for next time, then the built-in text. The
         # panel has to show what the agent will actually read, or Save & use
         # would be comparing against the wrong "before".
-        return {part: (overrides.get(part)
-                       or sp.kept_text(context.profile, part)
-                       or context.default_text(context.profile, part))
-                for part in sp.BUNDLED_KINDS}
+        parts = {part: (overrides.get(part)
+                        or sp.kept_text(context.profile, part)
+                        or context.default_text(context.profile, part))
+                 for part in sp.BUNDLED_KINDS}
+        # The editor's note travels with the three sections, so reopening the
+        # panel shows the file as it was written rather than a rebuild of it
+        # with its own warnings stripped off.
+        note = (overrides.get(sp.PREAMBLE)
+                or sp.kept_text(context.profile, sp.PREAMBLE) or "")
+        if note:
+            parts[sp.PREAMBLE] = note
+        return parts
 
     def _part_source(kind: str, overrides: dict) -> str:
         """Where the live text of one document comes from, for the badge."""
@@ -369,7 +377,8 @@ def build_prompt_editor_handlers(context: PromptEditorContext) -> dict[str, Call
                 text = None
             if not text:
                 return jsonify({"success": False, "error": "That prompt source is unavailable."}), 400
-            if kind == sp.BUNDLE and set(sp.split_bundle(text)) != set(sp.BUNDLED_KINDS):
+            if kind == sp.BUNDLE and (set(sp.split_bundle(text)) - {sp.PREAMBLE}
+                                      != set(sp.BUNDLED_KINDS)):
                 return jsonify({"success": False, "error": "The bundle needs all three sections."}), 400
             _apply_conversation_text(kind, text)
             return jsonify({"success": True, "doc": f"{doc_profile}_{kind}",

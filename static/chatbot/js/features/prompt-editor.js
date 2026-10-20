@@ -353,10 +353,23 @@
         }
         try {
             const content = (await file.text()).replace(/^\uFEFF/, '');
-            if (!/^##\s+prompt\s*$/im.test(content) ||
-                !/^##\s+report\s*$/im.test(content) ||
-                !/^##\s+suggest_time\s*$/im.test(content)) {
-                status('The file needs ## prompt, ## report and ## suggest_time sections.', 'err');
+            // The same rule the server parses with (_SECTION_RE in
+            // speclets_utils). It was stricter here -- exactly two hashes, a
+            // required space, no colon, only "suggest_time" -- so a file the
+            // server would have accepted was refused in the browser before it
+            // was ever sent, and the message named the one spelling that
+            // worked rather than the five that also would have.
+            const heading = (name) =>
+                new RegExp(String.raw`^#{1,3}[ \t]*${name}[ \t]*:?[ \t\r]*$`, 'im');
+            const missing = [
+                ['prompt', heading('prompt')],
+                ['report', heading('report')],
+                ['suggest_time', heading('suggest[ _-]?time')],
+            ].filter(([, re_]) => !re_.test(content)).map(([n]) => n);
+            if (missing.length) {
+                status(`${file.name} is missing: ${missing.map(n => '## ' + n).join(', ')}. `
+                       + `A heading may use 1-3 #, any spacing, and suggest_time `
+                       + `may also be written "suggest time" or "suggest-time".`, 'err');
                 return;
             }
             if (current !== bundle.doc) await selectDoc(bundle.doc);

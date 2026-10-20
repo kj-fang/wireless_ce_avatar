@@ -458,8 +458,18 @@ def delete_user_speclet(profile: str, kind: str) -> bool:
 
 # --- one file holding all three ------------------------------------------
 
+#: A section heading. Deliberately forgiving about how it is written -- one
+#: to three hashes, any or no space, an optional colon, and "suggest time" /
+#: "suggest-time" / "suggest_time" -- because the person writing a bundle is
+#: writing Markdown by hand and none of those variations mean anything
+#: different.
+#:
+#: \r is in the trailing class because a file saved by a Windows editor ends
+#: its lines with CRLF, and without it every heading in that file failed to
+#: match: the whole bundle parsed as zero sections and came back "must
+#: contain all three sections" about a file that plainly had all three.
 _SECTION_RE = re.compile(
-    r"^#{1,3}[ \t]*(prompt|report|suggest[ _-]?time)[ \t]*:?[ \t]*$",
+    r"^#{1,3}[ \t]*(prompt|report|suggest[ _-]?time)[ \t]*:?[ \t\r]*$",
     re.IGNORECASE | re.MULTILINE,
 )
 

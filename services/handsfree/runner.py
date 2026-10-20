@@ -376,6 +376,10 @@ class CaseAnalysis:
     time_decision: dict = field(default_factory=dict)
     pick_decision: dict = field(default_factory=dict)
     checklist_decision: dict = field(default_factory=dict)
+    # Echo knowledge-base advice asked right after the thread is read (what
+    # to request from the customer next / next debug steps); answered in the
+    # background while the log pipeline runs. {status, question, answer, error, ...}
+    echo_advice: dict = field(default_factory=dict)
     error: str = ""
 
     @property
@@ -582,6 +586,8 @@ def live_fields(a: "CaseAnalysis") -> dict:
         "time_decision": dict(a.time_decision or {}),
         "pick_decision": dict(a.pick_decision or {}),
         "checklist_decision": dict(a.checklist_decision or {}),
+        "echo_advice": {k: (v if k != "answer" else str(v)[:6000])
+                        for k, v in (a.echo_advice or {}).items()},
         "incidents": [_result_summary(i) for i in (a.incidents or [])],
         "echo_insights": [_compact_insight(i) for i in (a.echo_insights or [])
                           if isinstance(i, dict)],
@@ -619,6 +625,11 @@ class HandsfreeRunner:
     # consumed (the reader chose another archive, or the run stopped at an
     # early gate) before giving up on it.
     PREFETCH_JOIN_TIMEOUT_S = 15 * 60
+    # Echo next-step advice: asked in a background thread after the reader;
+    # the run waits at most this long for it before the draft is composed.
+    ECHO_ADVICE_ENABLED = True
+    ECHO_ADVICE_TIMEOUT_S = 90
+    ECHO_ADVICE_JOIN_S = 75      # Echo answers in ~70 s; a down Echo must not hold every run hostage
     # Minutes of slack on either side of the decoded log when deciding whether
     # a reported issue time is covered / can be placed in the log's clock.
     TIME_GRACE_MIN = 10
@@ -630,6 +641,7 @@ class HandsfreeRunner:
         # known (live panel on the page). Optional; never allowed to break a run.
         self.snapshot_cb = snapshot_cb
         self._prefetch: Optional[_Prefetch] = None
+        self._echo_thread: Optional[threading.Thread] = None
 
     def _snap(self, **fields) -> None:
         if self.snapshot_cb is None:
@@ -685,9 +697,11 @@ class HandsfreeRunner:
         download would overlap the next run's use of the shared
         DriverManager / download globals."""
         self._prefetch = None
+        self._echo_thread = None
         try:
             analysis = self._analyze_case(case_nbr, max_steps=max_steps,
                                           max_incidents=max_incidents)
+            self._join_echo_advice(analysis)
             best = analysis.best_incident
             self._snap_analysis(analysis, current_stage="", finished=True,
                                 confidence=best.confidence if best else None)
@@ -883,6 +897,10 @@ class HandsfreeRunner:
                       f"(from the {analysis.domain_decision['winner_label']})"
                       + (f", sub-category {analysis.issue_subcategory}"
                          if analysis.issue_subcategory else ""))
+        # Charles (2026-10-20): alongside the analysis, ask the Echo knowledge
+        # base what to request from the customer next / the next debug steps
+        # for this kind of issue — in the background, shown in its own panel.
+        self._start_echo_advice(analysis, case_ctx)
 
         # Ball with the customer (Intel already asked for logs / info / repro
         # and nothing came back): nothing to analyze and nothing to ask.
@@ -1917,6 +1935,74 @@ class HandsfreeRunner:
             self.progress("bsod_result",
                           "no PotatoFarm result in the folder yet — the next round "
                           "picks it up (the parser also e-mails it)")
+
+    def _start_echo_advice(self, analysis: CaseAnalysis, case_ctx) -> None:
+        if not self.ECHO_ADVICE_ENABLED:
+            return
+        try:
+            from .case_reader import _normalize_comments, _CUSTOMER_AUTHOR_PREFIXES
+            from .echo_client import build_next_steps_question
+            latest = ""
+            for r_ in reversed(_normalize_comments(getattr(case_ctx, "comments", None))):
+                if r_["author"].strip().lower().startswith(_CUSTOMER_AUTHOR_PREFIXES):
+                    latest = r_["text"]
+                    break
+            question = build_next_steps_question(
+                subject=analysis.subject, description=analysis.clean_description or analysis.description,
+                domain=analysis.issue_domain, subcategory=analysis.issue_subcategory,
+                issue_times=analysis.issue_times,
+                missing_info=(analysis.case_reader or {}).get("missing_info"),
+                attachments=getattr(case_ctx, "attachment_list", None),
+                latest_customer_comment=latest, reader_next_action=analysis.next_action)
+        except Exception as e:
+            print(f"[handsfree.runner] echo advice question not built: {e}")
+            return
+        analysis.echo_advice = {"status": "asking", "question": question, "answer": "",
+                                "error": "", "started_at": time.time(), "elapsed_s": 0}
+        self._snap(echo_advice=dict(analysis.echo_advice))
+        self.progress("read_case_history",
+                      "asking the Echo knowledge base for next-step suggestions (in the background)")
+
+        def _run(adv=analysis.echo_advice):
+            from .echo_client import EchoUnavailable, ask_echo_kb
+            try:
+                adv["answer"] = str(ask_echo_kb(question, timeout=self.ECHO_ADVICE_TIMEOUT_S) or "")
+                adv["status"] = "answered" if adv["answer"].strip() else "empty"
+            except EchoUnavailable as e:
+                adv["status"], adv["error"] = "unavailable", str(e)[:300]
+            except Exception as e:
+                adv["status"], adv["error"] = "unavailable", f"{type(e).__name__}: {e}"[:300]
+            adv["elapsed_s"] = int(time.time() - adv["started_at"])
+            self._snap(echo_advice=dict(adv))
+            self.progress("read_case_history",
+                          f"Echo next-step suggestions: {adv['status']}"
+                          + (f" ({len(adv['answer'])} chars, {adv['elapsed_s']} s)"
+                             if adv["status"] == "answered" else
+                             (f" — {adv['error']}" if adv["error"] else "")))
+
+        self._echo_thread = threading.Thread(target=_run, daemon=True,
+                                             name="handsfree-echo-advice")
+        self._echo_thread.start()
+
+    def _join_echo_advice(self, analysis: CaseAnalysis) -> None:
+        t, self._echo_thread = self._echo_thread, None
+        if t is None:
+            return
+        if t.is_alive():
+            self.progress("read_case_history",
+                          "waiting for the Echo next-step suggestions before composing the draft")
+            t.join(timeout=self.ECHO_ADVICE_JOIN_S)
+        if t.is_alive() and analysis.echo_advice.get("status") == "asking":
+            # Still no answer: the draft is composed without it; the thread
+            # keeps running and the live panel shows the answer when it lands.
+            analysis.echo_advice.update(
+                note=f"no answer within {self.ECHO_ADVICE_JOIN_S} s — the draft was composed "
+                     "without it; the live panel updates when Echo answers",
+                elapsed_s=int(time.time() - analysis.echo_advice["started_at"]))
+            self._snap(echo_advice=dict(analysis.echo_advice))
+            self.progress("read_case_history",
+                          f"Echo next-step suggestions not in within {self.ECHO_ADVICE_JOIN_S} s — "
+                          "continuing; they show in the live panel when they arrive")
 
     def _assert_window(self, analysis: CaseAnalysis):
         from datetime import timedelta

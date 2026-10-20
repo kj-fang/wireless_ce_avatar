@@ -309,6 +309,16 @@
     .lp-echo-q { color: #9fb3c8; }
     .lp-echo-a { color: #eef3f8; white-space: pre-wrap; margin: 2px 0 8px; max-height: 160px; overflow: auto; }
     .lp-btn-sm { height: 24px; padding: 0 9px; font-size: 12px; }
+    /* Echo next-step suggestions: its own window, visually apart from the pipeline */
+    .lp-advice { border: 1px solid rgba(190,140,255,0.55); border-left: 4px solid #b98cff;
+                 background: rgba(150,110,230,0.08); border-radius: 8px; padding: 12px 14px; }
+    .lp-advice .lp-cap { color: #cdb8ff; }
+    .lp-advice-a { white-space: pre-wrap; word-break: break-word; color: #f4f7fb; font-size: 14px;
+                   line-height: 1.6; max-height: 420px; overflow: auto; margin-top: 6px; }
+    .lp-advice details { margin-top: 8px; }
+    .lp-advice summary { color: #9fb3c8; cursor: pointer; font-size: 12.5px; }
+    .lp-advice .q { white-space: pre-wrap; color: #b8c6d6; font-size: 12.5px; max-height: 220px; overflow: auto;
+                    background: #0b1017; border: 1px solid #223042; border-radius: 6px; padding: 8px 10px; margin-top: 6px; }
     .lp-rows { display: grid; grid-template-columns: auto 1fr; gap: 3px 10px; font-size: 13px; }
     .lp-rows .k { color: #9fb3c8; white-space: nowrap; }
     .lp-cand { display: flex; gap: 8px; align-items: baseline; padding: 2px 0; color: #b8c6d6; }
@@ -1276,6 +1286,11 @@
       chips.push({label: 'stages', text: okN + '/' + stages.length + ' OK',
                   cls: okN === stages.length ? 'good' : 'warn'});
     }
+    const adv = analysis.echo_advice || {};
+    if (adv.status === 'answered' && adv.answer) {
+      chips.push({label: 'Echo next steps', text: 'suggestions available (in the draft)', cls: 'good',
+                  title: String(adv.answer).slice(0, 600)});
+    }
     const echo = (analysis.echo_insights || []).filter(i => i && i.answer);
     if (echo.length) {
       chips.push({label: 'echo kb', text: echo.length + ' root-cause insight' + (echo.length > 1 ? 's' : ''),
@@ -1836,6 +1851,56 @@
     return html + `</div>`;
   }
 
+  // Echo next-step suggestions: asked right after the IPS thread is read,
+  // answered in the background — rendered as its own window so it can be
+  // read and referenced apart from the log analysis.
+  // Minimal, safe markdown for Echo's answers: escape first, then headings,
+  // bold, inline code, links (https only) and bullet lists. Nothing else.
+  function mdLite(text) {
+    const lines = esc(String(text || '')).split('\n');
+    let html = '', inList = false;
+    const inline = t => t
+      .replace(/\*\*(.+?)\*\*/g, '<b>$1</b>')
+      .replace(/`([^`]+)`/g, '<code style="font-family: var(--mono); font-size: 12.5px;">$1</code>')
+      .replace(/\[([^\]]+)\]\((https:\/\/[^)\s]+)\)/g, '<a href="$2" target="_blank" rel="noopener" class="case-link">$1</a>');
+    for (const raw of lines) {
+      const line = raw.replace(/\s+$/, '');
+      const h = /^(#{1,4})\s+(.*)$/.exec(line);
+      const li = /^\s*[-*]\s+(.*)$/.exec(line);
+      if (li) {
+        if (!inList) { html += '<ul style="margin: 4px 0; padding-left: 20px;">'; inList = true; }
+        html += '<li>' + inline(li[1]) + '</li>';
+        continue;
+      }
+      if (inList) { html += '</ul>'; inList = false; }
+      if (h) { html += '<div style="font-weight: 650; color: #fff; margin-top: 8px;">' + inline(h[2]) + '</div>'; continue; }
+      if (!line.trim()) { html += '<div style="height: 6px;"></div>'; continue; }
+      html += '<div>' + inline(line) + '</div>';
+    }
+    if (inList) html += '</ul>';
+    return html;
+  }
+
+  function liveAdviceHtml(d) {
+    const a = d.echo_advice || {};
+    if (!a.status) return '';
+    let body = '';
+    if (a.status === 'asking') {
+      body = `<div class="lp-time-sub"><span class="lp-spin" style="display:inline-block; vertical-align: middle; margin-right: 6px;"></span>asking the Echo knowledge base what to request from the customer next and the recommended next steps…` +
+        (a.note ? `<div style="margin-top: 4px; color: var(--warn);">${esc(a.note)}</div>` : '') + `</div>`;
+    } else if (a.status === 'answered') {
+      body = `<div class="lp-advice-a" style="white-space: normal;">${mdLite(a.answer || '')}</div>` +
+        `<div class="lp-time-sub" style="margin-top: 4px;">answered in ${esc(a.elapsed_s != null ? a.elapsed_s + ' s' : '?')} · knowledge-base guidance from the case summary, not from the logs — verify before acting</div>`;
+    } else if (a.status === 'empty') {
+      body = `<div class="lp-time-sub">Echo returned no suggestions for this case.</div>`;
+    } else {
+      body = `<div class="lp-time-sub" style="color: var(--warn);">Echo ${esc(a.status)}${a.error ? ': ' + esc(a.error) : ''}</div>`;
+    }
+    const q = a.question ? `<details><summary>the question sent to Echo</summary><div class="q">${esc(a.question)}</div></details>` : '';
+    return `<div class="lp-sec"><div class="lp-h">Next-step suggestions (Echo knowledge base)</div><div class="lp-advice">` +
+      `<div class="lp-cap">What to ask the customer next · recommended debug steps · known similar issues</div>` + body + q + `</div></div>`;
+  }
+
   function liveCaseStatus(d, ev) {
     if (!d) return '';
     if (!d.finished) return 'running';
@@ -1932,6 +1997,7 @@
     const panelScroll = panel.scrollTop;
     panel.innerHTML = head + `<div class="lp-meta">${esc(meta)}</div>` +
       `<div class="lp-sec"><div class="lp-h">Case</div>${caseHtml}</div>` +
+      liveAdviceHtml(d) +
       `<div class="lp-sec"><div class="lp-h">Sent for analysis</div>${liveSentHtml(d, finished)}</div>` +
       `<div class="lp-sec"><div class="lp-h">Pipeline</div>${stepsHtml}</div>` +
       outcomeHtml + casesHtml;

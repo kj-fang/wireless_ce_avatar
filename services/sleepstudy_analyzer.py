@@ -11,6 +11,8 @@ For each qualifying session the agent:
   - Summarises general session info
   - Checks Wi-Fi-related content inside Activators and FX Devices blocker groups
   - Extracts SRUM (System Resource Utilization Monitor) App IDs that consume Network power
+  - Decides the root-cause verdict by rule from the NetWakeReasonTypeDevice wake count
+    (1-900: remote-driven Wi-Fi activity; above 900: contact the Intel Wi-Fi team)
   - Calls an LLM (via a caller-supplied callback) to produce a concise report
 
 Usage:
@@ -31,6 +33,17 @@ SEC_TO_100NS = 10_000_000     # SwLowPowerStateTime / HwLowPowerStateTime in 100
 ACTIVITY_LEVEL_NAMES = ["neutral", "low", "moderate", "high", "invalid", "invalid"]
 DRIP_THRESHOLD = 80.0         # percent — sessions below this are flagged
 
+# Root-cause rule. The Wi-Fi device's DataPathWake entry (under FX Devices)
+# carries one metadata counter per wake reason; this one means the NIC was woken
+# by unsolicited inbound traffic from a remote host.
+DEVICE_WAKE_REASON    = "NetWakeReasonTypeDevice"
+DEVICE_WAKE_THRESHOLD = 900   # more device-reason wakes than this -> escalate to Intel
+SHORT_WAKE_BUCKET     = "0-29 seconds"
+
+VERDICT_SCENARIO_B    = "Scenario B: Wi-Fi activity by remote"
+VERDICT_CONTACT_INTEL = "Please contact Intel Wi-Fi team"
+VERDICT_NONE          = "No remote-driven Wi-Fi wake activity identified"
+
 
 # ── System prompt shared by all callers (web + CLI) ────────────────────────────
 SLEEPSTUDY_SYSTEM_PROMPT = (
@@ -46,27 +59,24 @@ SLEEPSTUDY_SYSTEM_PROMPT = (
     "2. **Network Activity by App** — which App IDs (from SRUM and NDIS) consumed "
     "network power; include network/MBB power in mW, bytes sent/received, and "
     "outgoing wake counts. Present as a short table or bullet list.\n"
-    "3. **Root Cause Assessment** — first classify the root cause into ONE of the "
-    "three scenarios below, and put the verdict on the FIRST line of this section "
-    "in bold:\n"
-    "   - **Scenario A: Wi-Fi activity by OS / App** — one or a few App IDs clearly "
-    "dominate the network/MBB power consumption (from SRUM or NDIS bytes/wakes) and "
-    "are the direct cause of the SW/HW Drip loss. State which App IDs dominate and "
-    "by how much (mW, bytes, or wake counts).\n"
-    "   - **Scenario B: Wi-Fi activity by remote** — the data shows a continuous "
-    "stream of short wake events triggered by `NetWakeReasonTypeDevice` (i.e. the "
-    "Wi-Fi NIC was receiving unsolicited inbound network traffic), causing the SW/HW "
-    "Drips. Cite the wake-reason metadata and counts that prove this. "
-    "**Exception:** if in this sleep session the count of short wakes (0-29 seconds) "
-    "triggered by `NetWakeReasonTypeDevice` is **greater than 900**, do NOT report "
-    "Scenario B — instead fall through to the \"Please contact Intel Wi-Fi team\" "
-    "verdict below.\n"
-    "   - **Neither scenario identified** — if neither A nor B is clearly supported "
-    "by the data, the FIRST line of the section MUST be exactly: "
-    "**\"Please contact Intel Wi-Fi team\"** (no other verdict).\n"
+    "3. **Root Cause Assessment** — the verdict is decided by rule from the count "
+    "of wakes with reason `NetWakeReasonTypeDevice` (the Wi-Fi NIC woken by "
+    "unsolicited inbound traffic from a remote host) and is given on the "
+    "`Rule-based verdict` line of the provided data. Put that verdict, exactly as "
+    "given, on the FIRST line of this section in bold. The possible verdicts are:\n"
+    "   - **Scenario B: Wi-Fi activity by remote** — between 1 and 900 wakes with "
+    "reason `NetWakeReasonTypeDevice`: a stream of short wakes caused by remote "
+    "traffic is what cost the SW/HW Drip. Cite the wake-reason counts and the "
+    "short-wake (0-29 seconds) bucket that prove this.\n"
+    "   - **Please contact Intel Wi-Fi team** — more than 900 wakes with reason "
+    "`NetWakeReasonTypeDevice` in this session. State the count and that it "
+    "exceeds the 900 threshold.\n"
+    "   - **No remote-driven Wi-Fi wake activity identified** — no wakes with "
+    "reason `NetWakeReasonTypeDevice`. Say which wake reasons were seen instead, "
+    "if any.\n"
     "   After the verdict line, give a short evidence-based explanation tying the "
-    "offending app(s) and/or wake reasons directly to the SW/HW low-power-state loss. "
-    "Pick exactly one of the three verdicts; do not list multiple.\n\n"
+    "wake reasons directly to the SW/HW low-power-state loss. Never choose a "
+    "different verdict from the one given in the data.\n\n"
     "Rules: be concise. Use only the data provided. Do not invent numbers. Do not "
     "emit any heading or section other than the three above."
 )
@@ -212,6 +222,11 @@ def extract_wifi_content(session: dict) -> dict:
         "fx_devices_wifi": [],
         "srum_network_apps": [],
         "ndis_app_traffic": [],
+        # Wake-reason counters summed over the Wi-Fi FX Devices entries that
+        # carry them (the DataPathWake rows): {reason name: count}.
+        "wake_reasons": {},
+        # Wakes in the 0-29 seconds bucket of those same entries.
+        "short_wakes": 0,
     }
 
     TARGET_GROUPS = {"Activators", "FX Devices"}
@@ -256,6 +271,7 @@ def extract_wifi_content(session: dict) -> dict:
                     result["activators_wifi"].append(info)
                 else:
                     result["fx_devices_wifi"].append(info)
+                    _collect_wake_reasons(entry, result)
 
     # SRUM — network power per app
     srum = session.get("SrumData", {}).get("PowerEstimationData", {})
@@ -273,6 +289,57 @@ def extract_wifi_content(session: dict) -> dict:
 
     result["srum_network_apps"].sort(key=lambda x: -(x["network_power_mw"] + x["mbb_power_mw"]))
     return result
+
+
+def _collect_wake_reasons(entry: dict, result: dict) -> None:
+    """
+    Sum the NetWakeReasonType* metadata counters of one FX Devices entry into
+    result["wake_reasons"], and its 0-29 seconds bucket into result["short_wakes"].
+    Entries without wake-reason metadata are left alone, so a parent device row
+    does not add its aggregate buckets on top of its DataPathWake child's.
+    """
+    reasons = {}
+    for mv in entry.get("Metadata", {}).get("Values", []):
+        key = str(mv.get("Key", ""))
+        if not key.startswith("NetWakeReasonType"):
+            continue
+        try:
+            reasons[key] = reasons.get(key, 0) + int(mv.get("Value", 0))
+        except (TypeError, ValueError):
+            continue
+    if not reasons:
+        return
+    for key, count in reasons.items():
+        result["wake_reasons"][key] = result["wake_reasons"].get(key, 0) + count
+    for bucket in entry.get("BlockingTimeBuckets", []):
+        if bucket.get("BucketName") == SHORT_WAKE_BUCKET:
+            try:
+                result["short_wakes"] += int(bucket.get("Value", 0) or 0)
+            except (TypeError, ValueError):
+                pass
+
+
+def classify_root_cause(wifi_content: dict) -> dict:
+    """
+    Decide the root-cause verdict from the device-reason wake count:
+      > 900 device wakes -> Please contact Intel Wi-Fi team
+      1..900             -> Scenario B: Wi-Fi activity by remote
+      0                  -> No remote-driven Wi-Fi wake activity identified
+    Returns {"verdict", "reason", "device_wakes"}.
+    """
+    device_wakes = int(wifi_content.get("wake_reasons", {}).get(DEVICE_WAKE_REASON, 0) or 0)
+    if device_wakes > DEVICE_WAKE_THRESHOLD:
+        verdict = VERDICT_CONTACT_INTEL
+        reason  = (f"{device_wakes} wakes with reason {DEVICE_WAKE_REASON} "
+                   f"exceed the {DEVICE_WAKE_THRESHOLD} threshold")
+    elif device_wakes > 0:
+        verdict = VERDICT_SCENARIO_B
+        reason  = (f"{device_wakes} wakes with reason {DEVICE_WAKE_REASON} "
+                   f"(within the {DEVICE_WAKE_THRESHOLD} threshold)")
+    else:
+        verdict = VERDICT_NONE
+        reason  = f"no wakes with reason {DEVICE_WAKE_REASON}"
+    return {"verdict": verdict, "reason": reason, "device_wakes": device_wakes}
 
 
 def _parse_ndis_metadata(meta_vals: list) -> list:
@@ -399,6 +466,19 @@ def build_session_summary(session: dict, wifi_content: dict) -> str:
             )
 
     lines.append("")
+    lines.append("-- Wi-Fi Wake Reasons (DataPathWake) -----------------")
+    if wifi_content["wake_reasons"]:
+        width = max(len(k) for k in wifi_content["wake_reasons"])
+        for key, count in sorted(wifi_content["wake_reasons"].items(), key=lambda kv: -kv[1]):
+            lines.append(f"  {key:<{width}} : {count}")
+        lines.append(f"  Short wakes ({SHORT_WAKE_BUCKET} bucket): {wifi_content['short_wakes']}")
+    else:
+        lines.append("  No wake-reason counters found on the Wi-Fi device.")
+    verdict = classify_root_cause(wifi_content)
+    lines.append(f"  Rule-based verdict : {verdict['verdict']}")
+    lines.append(f"    ({verdict['reason']})")
+
+    lines.append("")
     lines.append("-- SRUM: Apps Consuming Network Power ----------------")
     if wifi_content["srum_network_apps"]:
         for app in wifi_content["srum_network_apps"]:
@@ -484,6 +564,12 @@ def analyze_sleepstudy_stream(html_path: str, llm_call=None):
                 f"SRUM consumers={len(wifi_content['srum_network_apps'])}"
             )}
 
+            verdict = classify_root_cause(wifi_content)
+            yield {"type": "step", "content": (
+                f"Session {sid} rule-based verdict: **{verdict['verdict']}** "
+                f"({verdict['reason']})"
+            )}
+
             summary = build_session_summary(sess, wifi_content)
             yield {"type": "step", "content": f"```\n{summary}\n```"}
 
@@ -503,7 +589,8 @@ def analyze_sleepstudy_stream(html_path: str, llm_call=None):
             section = (
                 f"## AI Report - Session {sid}\n"
                 f"_Start: {start} | Duration: {dur} | "
-                f"SW Drip: {sw_pct:.1f}% | HW Drip: {hw_pct:.1f}%_\n\n"
+                f"SW Drip: {sw_pct:.1f}% | HW Drip: {hw_pct:.1f}%_\n"
+                f"**Verdict: {verdict['verdict']}** — {verdict['reason']}\n\n"
                 f"{ai_report}"
             )
             combined_reports.append(section)

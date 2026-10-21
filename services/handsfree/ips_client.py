@@ -1,5 +1,5 @@
 """
-IPS (Salesforce) client for the Handsfree Replyer.
+IPS (Salesforce) client for Beacon (the handsfree replyer).
 
 Reuses CaseService's authenticated session machinery:
   - CaseService._get_vf_session()            SSO cookies (cached, 4h file TTL)
@@ -343,6 +343,21 @@ class IpsClient:
                 url = None if d.get("done", True) else d.get("nextRecordsUrl")
                 params = None
         return latest
+
+    def get_case_rich_description(self, case_id: str) -> dict:
+        """The case's rich-text description (Core_Issue_Description__c — the
+        Snowflake copy handsfree reads is plain text, so images embedded in
+        the description are only visible here) + the case creation date.
+        {} when unavailable."""
+        soql = ("SELECT Core_Issue_Description__c, CreatedDate FROM Case "
+                f"WHERE Id='{_soql_quote(case_id)}'")
+        resp = self._request("GET", "/services/data/v{ver}/query", params={"q": soql})
+        resp.raise_for_status()
+        recs = resp.json().get("records", [])
+        if not recs:
+            return {}
+        return {"html": str(recs[0].get("Core_Issue_Description__c") or ""),
+                "created": str(recs[0].get("CreatedDate") or "")}
 
     def get_case_comments(self, case_id: str) -> list[dict]:
         """Existing comments on a case. Used to (a) detect our own prior post

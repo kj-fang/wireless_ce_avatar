@@ -1,5 +1,5 @@
 """
-Handsfree Replyer routes — manual trigger + review queue.
+Beacon (handsfree replyer) routes — manual trigger + review queue.
 
 v1 rules enforced here and in the orchestrator:
   * Posting happens ONLY via the explicit Approve endpoint.
@@ -11,7 +11,7 @@ from __future__ import annotations
 import os
 import subprocess
 
-from flask import Blueprint, jsonify, render_template, request
+from flask import Blueprint, jsonify, render_template, request, session
 
 from services.handsfree import orchestrator
 from services.handsfree.queue import HandsfreeStore, decoded_log_dir
@@ -200,6 +200,118 @@ def open_log_folder(draft_id: str):
     else:
         subprocess.Popen(["explorer", folder])
     return jsonify({"ok": True, "folder": folder})
+
+
+# ---------- per-case history + hand-off to Avatar's manual analysis ----------
+
+def _localhost_only():
+    if request.remote_addr not in ("127.0.0.1", "::1"):
+        return jsonify({"ok": False, "error": "localhost only"}), 403
+    return None
+
+
+@handsfree_bp.route("/case/<case_nbr>/reset", methods=["POST"])
+def reset_case(case_nbr: str):
+    """Forget the case's handsfree history (drafts archived, ledger analysis
+    marks dropped, BSOD submissions forgotten) so the next run starts fresh,
+    e.g. after the customer replaced a wrong log upload. Posted drafts and
+    the record of what was posted are kept."""
+    denied = _localhost_only()
+    if denied:
+        return denied
+    from services.handsfree import bsod
+    from utils import check_ips_utils
+    canonical = check_ips_utils.normalise_ips(str(case_nbr or ""))
+    if not canonical:
+        return jsonify({"ok": False, "error": f"not a case number: {case_nbr}"}), 400
+    body = request.get_json(silent=True) or {}
+    case_dir = ""
+    try:
+        from configs.global_configs import app_config
+        case_dir = os.path.join(app_config.avatarfiles_dir, canonical)
+    except Exception:
+        pass
+    res = _store().reset_case(canonical, purge_downloads=bool(body.get("purge_downloads")),
+                              case_dir=case_dir)
+    res["bsod_forgotten"] = bsod.forget_case(canonical)
+    res["ok"] = True
+    return jsonify(res)
+
+
+def _handoff_source(case_nbr: str, draft_id: str) -> dict:
+    """What the chatbot needs, from the draft record or (while a run is in
+    flight) the run state: log_path, subject, description, ... ."""
+    store = _store()
+    if draft_id:
+        rec = store.get(draft_id)
+        if rec and str(rec.get("case_nbr") or "") == case_nbr:
+            a = rec.get("analysis") or {}
+            incs = a.get("incidents") or []
+            sent = (incs[0].get("sent_for_analysis") if incs and isinstance(incs[0], dict)
+                    else None) or {}
+            return {"log_path": a.get("log_path") or "", "case_id": a.get("case_id") or "",
+                    "subject": a.get("subject") or "", "wifi_or_bt": a.get("wifi_or_bt") or "wifi",
+                    "issue_type": a.get("issue_type") or "",
+                    "description": a.get("clean_description") or a.get("description") or "",
+                    "issue_time_log": sent.get("issue_time_log") or ""}
+    live = (orchestrator.get_run_state().get("case_details") or {}).get(case_nbr) or {}
+    sent = (live.get("sent_for_analysis") or [{}])[0]
+    return {"log_path": live.get("log_path") or "", "case_id": live.get("case_id") or "",
+            "subject": live.get("subject") or "", "wifi_or_bt": live.get("wifi_or_bt") or "wifi",
+            "issue_type": live.get("issue_type") or "",
+            "description": live.get("clean_description") or "",
+            "issue_time_log": sent.get("issue_time_log") or ""}
+
+
+@handsfree_bp.route("/chatbot_handoff", methods=["POST"])
+def chatbot_handoff():
+    """Prepare THIS browser session so Avatar's Log Chatbot opens on the
+    case's decoded log, primed with the case and the issue time (in the log's
+    clock), for a manual analysis. Returns the URL to open; the page opens it
+    in a new tab from the click handler."""
+    denied = _localhost_only()
+    if denied:
+        return denied
+    from urllib.parse import urlencode
+    from configs.global_configs import app_config
+    from models.models import CaseContext
+    from services import check_ips_service
+    from utils import check_ips_utils
+    body = request.get_json(silent=True) or {}
+    case_nbr = check_ips_utils.normalise_ips(str(body.get("case_nbr") or ""))
+    if not case_nbr:
+        return jsonify({"ok": False, "error": "case number required"}), 400
+    src = _handoff_source(case_nbr, str(body.get("draft_id") or ""))
+    log_path = src["log_path"]
+    if not log_path or not os.path.isfile(log_path):
+        return jsonify({"ok": False, "error": "this case has no decoded log to hand off"}), 404
+    try:
+        # 1. the chatbot's case-number gate
+        check_ips_service.attach(case_nbr, check_ips_service.EXPLICIT, log_path)
+        # 2. the case as the chatbot's issue context (no refetch)
+        ctx = CaseContext(case_nbr=case_nbr, id=src["case_id"], subject=src["subject"],
+                          description=src["description"], wifi_or_bt=src["wifi_or_bt"],
+                          case_download_dir=os.path.join(app_config.avatarfiles_dir, case_nbr),
+                          case_ref_source=check_ips_service.EXPLICIT)
+        session["case_context"] = ctx.to_session()
+        session["classification"] = {"issue_type": src["issue_type"]} if src["issue_type"] else {}
+        session.pop("ai_ips_analysis", None)
+        # 3. the log + the issue time, the way /log_chatbot/prepare seeds them
+        for key in ("_attachment_time_cache", "_issue_ai_quick", "chatbot_session_id",
+                    "feedback_conversation_id"):
+            session.pop(key, None)
+        session["chatbot_log_path"] = log_path
+        session["_carried_issue_time_present"] = bool(src["issue_time_log"])
+        session["_carried_issue_time"] = src["issue_time_log"]
+        session["_carried_issue_time_warning"] = ""
+        app_config.last_analyzed_log_path = log_path
+    except Exception as e:
+        return jsonify({"ok": False, "error": f"{type(e).__name__}: {e}"}), 500
+    params = {"auto_run": "analyze_all"}
+    if src["issue_time_log"]:
+        params["issue_time"] = src["issue_time_log"]
+    return jsonify({"ok": True, "url": "/log_chatbot/?" + urlencode(params),
+                    "log_path": log_path, "issue_time": src["issue_time_log"]})
 
 
 # ---------- config + REST field discovery ----------

@@ -1,5 +1,5 @@
 """
-Handsfree Replyer orchestration: check-now runs and approve-and-post.
+Beacon (handsfree replyer) orchestration: check-now runs and approve-and-post.
 
 One check run at a time (module lock). All state the UI needs lives in
 `run_state` (thread-safe copies via get_run_state) and the HandsfreeStore
@@ -138,6 +138,7 @@ def _analyze_and_enqueue(store: HandsfreeStore, case_nbr: str,
         _update_case_details(case_nbr, {"skipped": analysis.error})
         return None
 
+    fr_rec = None
     # Pre-fill the first-response checklist: pipeline facts first, then one
     # LLM pass over the rest. Failure never blocks the drafts.
     try:
@@ -151,6 +152,12 @@ def _analyze_and_enqueue(store: HandsfreeStore, case_nbr: str,
         _log_event(f"[{case_nbr}] first response: domain "
                    f"'{analysis.issue_domain or 'Others'}', pre-filled "
                    f"{filled}/{total} checklist items")
+        # The runner's final snapshot predates the fill: push what the
+        # checklist concluded (required logs provided / missing, the asks).
+        _update_case_details(case_nbr, {
+            "checklist_decision": dict(getattr(analysis, "checklist_decision", None) or {}),
+            "issue_subcategory": analysis.issue_subcategory,
+            "checklist_summary": f"{filled}/{total}"})
     except Exception as e:
         print(f"[handsfree] checklist fill failed (continuing): {e}")
 
@@ -212,7 +219,31 @@ def _analyze_and_enqueue(store: HandsfreeStore, case_nbr: str,
         _update_case_details(case_nbr, {"fr_draft_id": fr_rec["draft_id"]})
         _log_event(f"[{case_nbr}] queued first-response checklist draft "
                    f"{fr_rec['draft_id']}")
+    # Keep the live-panel history with the drafts, so opening a draft later
+    # replays how that run went (Charles, 2026-10-20).
+    try:
+        live = _live_history(case_nbr)
+        for d_id in [rec["draft_id"]] + ([fr_rec["draft_id"]] if fr_rec else []):
+            store.update(d_id, live=live)
+    except Exception as e:
+        print(f"[handsfree] live history not saved (continuing): {e}")
     return rec
+
+
+def _live_history(case_nbr: str) -> dict:
+    """Snapshot of the run state for one case: its case_details entry and
+    its stage events (what renderLivePanel needs to replay the run)."""
+    with _state_lock:
+        details = copy.deepcopy((_run_state.get("case_details") or {}).get(str(case_nbr)) or {})
+        prefix = f"[{case_nbr}]"
+        events = [dict(e) for e in (_run_state.get("events") or [])
+                  if str(e.get("message", "")).startswith(prefix)]
+        mode = _run_state.get("mode") or ""
+        started = _run_state.get("started_at")
+    details.setdefault("finished", True)
+    return {"saved_at": time.strftime("%Y-%m-%dT%H:%M:%S"), "run_mode": mode,
+            "run_started_at": started, "case_details": {str(case_nbr): details},
+            "events": events[-200:]}
 
 
 def _run_check(owner: str, store: HandsfreeStore,

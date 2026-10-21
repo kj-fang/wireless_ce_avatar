@@ -2,7 +2,7 @@
 <html lang="en">
 <head>
   <meta charset="utf-8" />
-  <title>Handsfree Replyer</title>
+  <title>Avatar Beacon</title>
   <style>
     :root {
       --bg: #0a0d12;
@@ -198,7 +198,10 @@
           color: var(--muted); }
 
     /* ---------- page grid: main column + live analysis panel ---------- */
-    .page-grid { display: grid; grid-template-columns: minmax(0, 1160px) 440px;
+    /* The analysis text is read in the live panel, so it takes ~44% of the
+       window (min 520 px) and the main column gives way; narrower than
+       1480 px the panel moves under Step 1 instead. */
+    .page-grid { display: grid; grid-template-columns: minmax(0, 1160px) minmax(520px, 44%);
                  justify-content: center; align-items: start; }
     .page-grid > header { grid-column: 1 / -1; max-width: none; width: 100%; margin: 0; }
     .page-grid > main { margin: 0; max-width: none; min-width: 0; }
@@ -286,6 +289,53 @@
     .lp-dot.warn { background: var(--warn); }
     .lp-dot.bad { background: var(--bad); }
     .lp-actions { display: flex; gap: 8px; flex-wrap: wrap; margin-top: 10px; }
+    .lp-live { grid-column: 2 / 4; margin-top: 6px; background: #0b1017; border: 1px solid #223042;
+               border-radius: 6px; padding: 10px 12px; font-size: 13.5px; color: #dbe6f3; line-height: 1.55; }
+    .lp-live .lp-cap { margin-bottom: 6px; }
+    .lp-agent-steps { max-height: 260px; overflow: auto; }
+    .lp-trace { margin-top: 8px; }
+    .lp-trace summary { color: #9fb3c8; cursor: pointer; font-size: 12.5px; }
+    .lp-trace .lp-as { padding: 3px 0; }
+    .lp-as.tool, .lp-as.fetch { color: #fff; font-weight: 550; }
+    .lp-as .skill { font-family: var(--mono); font-size: 12.5px; color: var(--accent-strong); }
+    .lp-as { display: grid; grid-template-columns: 18px 1fr; column-gap: 6px; padding: 2px 0;
+             color: #c7d3e0; }
+    .lp-as .k { color: #9fb3c8; }
+    .lp-as.conclusion { color: var(--good); } .lp-as.error, .lp-as.warning { color: var(--warn); }
+    .lp-as.error { color: var(--bad); }
+    .lp-res { margin-top: 8px; border-top: 1px solid #223042; padding-top: 8px; }
+    .lp-res .rc { color: #fff; font-size: 14px; }
+    .lp-res ul { margin: 6px 0 0; padding-left: 18px; color: #dbe6f3; }
+    .lp-echo-q { color: #9fb3c8; }
+    .lp-echo-a { color: #eef3f8; white-space: pre-wrap; margin: 2px 0 8px; max-height: 160px; overflow: auto; }
+    .lp-btn-sm { height: 24px; padding: 0 9px; font-size: 12px; }
+    /* Echo next-step suggestions: its own window, visually apart from the pipeline */
+    .lp-advice { border: 1px solid rgba(190,140,255,0.55); border-left: 4px solid #b98cff;
+                 background: rgba(150,110,230,0.08); border-radius: 8px; padding: 12px 14px; }
+    .lp-advice .lp-cap { color: #cdb8ff; }
+    .lp-advice-a { white-space: pre-wrap; word-break: break-word; color: #f4f7fb; font-size: 14px;
+                   line-height: 1.6; max-height: 420px; overflow: auto; margin-top: 6px; }
+    .lp-advice details { margin-top: 8px; }
+    .lp-advice summary { color: #9fb3c8; cursor: pointer; font-size: 12.5px; }
+    .lp-advice .q { white-space: pre-wrap; color: #b8c6d6; font-size: 12.5px; max-height: 220px; overflow: auto;
+                    background: #0b1017; border: 1px solid #223042; border-radius: 6px; padding: 8px 10px; margin-top: 6px; }
+    .lp-rows { display: grid; grid-template-columns: auto 1fr; gap: 3px 10px; font-size: 13px; }
+    .lp-rows .k { color: #9fb3c8; white-space: nowrap; }
+    .lp-cand { display: flex; gap: 8px; align-items: baseline; padding: 2px 0; color: #b8c6d6; }
+    .lp-cand.win { color: #fff; font-weight: 600; }
+    .lp-cand .src { color: #9fb3c8; font-weight: 400; font-size: 12.5px; }
+    .lp-cand.win .src { color: var(--accent-strong); }
+    .lp-req { padding: 2px 0; display: grid; grid-template-columns: 18px 1fr; column-gap: 6px; }
+    .lp-req.ok { color: #dbe6f3; } .lp-req.ok .m { color: var(--good); }
+    .lp-req.miss { color: #fff; } .lp-req.miss .m { color: var(--warn); }
+    .lp-req .how { color: #9fb3c8; font-size: 12.5px; }
+    .lp-ask { margin-top: 8px; padding: 8px 10px; border-left: 3px solid var(--warn); background: rgba(229,176,72,0.08); color: #fff; }
+    .lp-vague { color: #8a98ab; text-decoration: line-through; }
+    table.lp-tbl { border-collapse: collapse; width: 100%; font-size: 12.5px; margin-top: 4px; }
+    table.lp-tbl th { text-align: left; color: #9fb3c8; font-weight: 600; padding: 3px 6px 3px 0; border-bottom: 1px solid #223042; }
+    table.lp-tbl td { padding: 3px 6px 3px 0; color: #dbe6f3; vertical-align: top; font-family: var(--mono); font-size: 12px; }
+    table.lp-tbl tr.win td { color: #fff; }
+    table.lp-tbl td.t { font-family: inherit; font-size: 12.5px; }
     #draft-sent { margin: 0 0 10px; }
     #draft-sent summary { color: var(--muted); cursor: pointer; }
 
@@ -307,8 +357,8 @@
       <circle cx="12" cy="17.6" r="1.6" fill="currentColor" stroke="none" />
     </svg>
   </span>
-  <h1>Handsfree Replyer</h1>
-  <div class="sub">Detect newly assigned IPS cases → analyze → review → post Private-to-Intel</div>
+  <h1>Avatar Beacon</h1>
+  <div class="sub">Hands-free IPS case replies — detect newly assigned cases → analyze → review → post Private-to-Intel</div>
 </header>
 
 <main>
@@ -488,7 +538,7 @@
     <table id="queue-table">
       <thead><tr>
   <th>Case</th><th>Owner</th><th>Subject</th><th>Mode</th><th>Confidence</th>
-  <th>Status</th><th>Action owner</th><th>Created</th><th>Decoded log</th>
+  <th>Status</th><th>Action owner</th><th>Created</th><th>Actions</th>
       </tr></thead>
       <tbody></tbody>
     </table>
@@ -512,6 +562,10 @@
         Approve &amp; post to IPS</button>
       <button class="ghost" onclick="saveDraft()">Save edits</button>
       <button class="danger" onclick="rejectDraft()">Reject</button>
+      <button class="ghost" id="draft-avatar-btn" style="display:none;" onclick="openInAvatar(currentDraftCase, currentDraftId)"
+              title="Opens Avatar's Log Chatbot on this case's decoded log, primed with the case and the issue time, to continue by hand">Open in Avatar analysis</button>
+      <button class="ghost" onclick="resetCase(currentDraftCase)"
+              title="Forget this case's Beacon history (drafts archived, analysis marks cleared) so the next run starts fresh">Reset case history</button>
       <span class="status-line" id="post-status"></span>
     </div>
     <details style="margin-top:10px;">
@@ -874,6 +928,7 @@
   }
 
   async function startRun(url, body) {
+    liveHistory = null;   // a new run takes the panel back
     setRunButtons(true);
     let j;
     try {
@@ -1046,6 +1101,7 @@
     const j = await r.json();
     const tbody = document.querySelector('#queue-table tbody');
     tbody.innerHTML = '';
+    const firstOfCase = new Set();   // the Reset button shows once per case
     (j.items || []).forEach(it => {
       const statusCls = it.status === 'posted' ? 'good'
                       : it.status === 'post_failed' ? 'bad'
@@ -1068,23 +1124,68 @@
           : `<td style="color:var(--faint);">—</td>`) +
         `<td>${esc((it.created_at || '').slice(0, 16))}</td>` +
         // Only cases whose WRT log was decoded (decode_etl reached) have one.
+        `<td style="white-space: nowrap;">` +
         (it.log_dir
-          ? `<td><button class="ghost log-folder-btn" title="${esc(it.log_dir)}">` +
+          ? `<button class="ghost log-folder-btn lp-btn-sm" title="${esc(it.log_dir)}">` +
             `<svg width="12" height="12" viewBox="0 0 24 24" fill="none" stroke="currentColor" ` +
             `stroke-width="2.2" stroke-linecap="round" stroke-linejoin="round" aria-hidden="true">` +
             `<path d="M3 7a2 2 0 0 1 2-2h4l2 2h8a2 2 0 0 1 2 2v8a2 2 0 0 1-2 2H5a2 2 0 0 1-2-2z" /></svg>` +
-            `Open folder</button></td>`
-          : `<td style="color:var(--faint);">—</td>`);
+            `Folder</button> ` +
+            `<button class="ghost avatar-btn lp-btn-sm" title="Open Avatar's Log Chatbot on this decoded log to continue by hand">Avatar</button> `
+          : '') +
+        (firstOfCase.has(it.case_nbr) ? '' :
+          `<button class="ghost reset-btn lp-btn-sm" title="Forget this case's Beacon history so the next run starts fresh">Reset</button>`) +
+        `</td>`;
+      firstOfCase.add(it.case_nbr);
       tr.onclick = () => openDraft(it.draft_id);
       const logBtn = tr.querySelector('.log-folder-btn');
       if (logBtn) {
         logBtn.onclick = (ev) => { ev.stopPropagation(); openLogFolder(it.draft_id); };
       }
+      const avBtn = tr.querySelector('.avatar-btn');
+      if (avBtn) avBtn.onclick = (ev) => { ev.stopPropagation(); openInAvatar(it.case_nbr, it.draft_id); };
+      const rsBtn = tr.querySelector('.reset-btn');
+      if (rsBtn) rsBtn.onclick = (ev) => { ev.stopPropagation(); resetCase(it.case_nbr); };
       tbody.appendChild(tr);
     });
     if (!(j.items || []).length) {
       tbody.innerHTML = '<tr><td colspan="9" style="color:var(--muted);">queue is empty — run a check above</td></tr>';
     }
+  }
+
+  let currentDraftCase = '';
+
+  // Hand-off to Avatar's manual analysis (Log Chatbot) on the case's decoded
+  // log. The server seeds this browser session (case, log, issue time in the
+  // log's clock); the tab must be opened from the click handler.
+  async function openInAvatar(caseNbr, draftId) {
+    let j;
+    try {
+      j = await postJson('/handsfree/chatbot_handoff', {case_nbr: caseNbr, draft_id: draftId || ''});
+    } catch (e) { alert('Could not prepare the Avatar analysis page: ' + e); return; }
+    if (!j.ok) { alert('Could not open in Avatar: ' + (j.error || 'unknown')); return; }
+    const w = window.open(j.url, '_blank');
+    if (!w) alert('The browser blocked the new tab — allow pop-ups for this page, then try again.');
+  }
+
+  async function resetCase(caseNbr) {
+    if (!caseNbr) return;
+    const purge = confirm('Reset Beacon history of case ' + caseNbr + '?\n\n' +
+      'Its unposted drafts move to an archive folder and the analysis marks are cleared, ' +
+      'so the next run analyzes it afresh. Posted comments stay recorded.\n\n' +
+      'OK = reset (keep downloaded files)\nCancel = do nothing');
+    if (!purge) return;
+    let j;
+    try {
+      j = await postJson('/handsfree/case/' + encodeURIComponent(caseNbr) + '/reset', {purge_downloads: false});
+    } catch (e) { alert('Reset failed: ' + e); return; }
+    if (!j.ok) { alert('Reset failed: ' + (j.error || 'unknown')); return; }
+    const n = (j.archived || []).length;
+    document.getElementById('run-status').textContent =
+      'case ' + caseNbr + ' reset — ' + n + ' draft' + (n === 1 ? '' : 's') + ' archived'
+      + ((j.kept_posted || []).length ? ', ' + j.kept_posted.length + ' posted kept' : '');
+    if (currentDraftCase === caseNbr) document.getElementById('draft-panel').style.display = 'none';
+    loadQueue();
   }
 
   async function openLogFolder(draftId) {
@@ -1186,6 +1287,11 @@
       chips.push({label: 'stages', text: okN + '/' + stages.length + ' OK',
                   cls: okN === stages.length ? 'good' : 'warn'});
     }
+    const adv = analysis.echo_advice || {};
+    if (adv.status === 'answered' && adv.answer) {
+      chips.push({label: 'Echo next steps', text: 'suggestions available (in the draft)', cls: 'good',
+                  title: String(adv.answer).slice(0, 600)});
+    }
     const echo = (analysis.echo_insights || []).filter(i => i && i.answer);
     if (echo.length) {
       chips.push({label: 'echo kb', text: echo.length + ' root-cause insight' + (echo.length > 1 ? 's' : ''),
@@ -1205,6 +1311,9 @@
     const d = await r.json();
     currentDraftId = d.draft_id;
     currentDraftMode = d.mode || null;
+    currentDraftCase = d.case_nbr || '';
+    document.getElementById('draft-avatar-btn').style.display =
+      (d.analysis && d.analysis.log_path) ? '' : 'none';
     document.getElementById('draft-panel').style.display = '';
     document.getElementById('draft-title').innerHTML =
       `case ${caseLink(d.case_nbr, d.case_id)} · ${esc(d.mode)} · ${esc(d.status)}`;
@@ -1213,6 +1322,7 @@
     document.getElementById('draft-text').value = d.draft_plain || '';
     renderDraftChips(d.analysis || {});
     renderDraftSent(d.analysis || {});
+    if (d.live) showLiveHistory(d);
     document.getElementById('draft-analysis').textContent =
       JSON.stringify(d.analysis || {}, null, 2);
     document.getElementById('approve-btn').disabled =
@@ -1273,6 +1383,7 @@
     ['read_images', 'Read comment screenshots'],
     ['read_case_history', 'Read the IPS comment thread'],
     ['check_case_info', 'Check the case information'],
+    ['category', 'Identify the issue category & required logs'],
   ];
   const LIVE_WIFI = [
     ['pick_zip', 'Pick the log archive'], ['download', 'Download the archive'],
@@ -1341,7 +1452,26 @@
       case 'check_case_info':
         if (ev.status !== 'done') return ev.detail || '';
         return (d.missing_info || []).length ? 'missing: ' + d.missing_info.join(', ') : 'all case information present';
-      case 'pick_zip': return d.chosen_attachment || '';
+      case 'read_images': {
+        const imgs = d.comment_images || [];
+        const n = imgs.reduce((a, i) => a + (i.descriptions || []).length, 0);
+        if (n) return n + ' image' + (n === 1 ? '' : 's') + ' described across ' + imgs.length + ' comment' + (imgs.length === 1 ? '' : 's');
+        return ev.status === 'done' ? 'no images in the comments' : (ev.detail && ev.detail !== 'started' ? ev.detail : '');
+      }
+      case 'category': {
+        const dd = d.domain_decision || {}, cd = d.checklist_decision || {};
+        if (!dd.winner) return '';
+        let t = dd.winner + ' (from the ' + (dd.winner_label || dd.winner_source || '?') + ')';
+        if (cd.required_logs) t += ' · ' + cd.required_logs.length + ' required log' + (cd.required_logs.length === 1 ? '' : 's')
+          + (cd.missing_logs && cd.missing_logs.length ? ', ' + cd.missing_logs.length + ' missing' : ', all provided');
+        else if ((dd.required_logs || []).length) t += ' · ' + dd.required_logs.length + ' required log' + (dd.required_logs.length === 1 ? '' : 's');
+        return t;
+      }
+      case 'pick_zip': {
+        const pd = d.pick_decision || {};
+        if (!d.chosen_attachment) return '';
+        return d.chosen_attachment + ({reader: ' — nominated by the reader', newest_upload: ' — newest upload', only_archive: ' — the only archive'}[pd.chosen_rule] || '');
+      }
       case 'decompose': {
         const c = d.archive_contents || {};
         const parts = [['wifi_wpp', 'WPP'], ['ddd', 'DDD'], ['event_logs', 'event logs'], ['bt', 'BT'], ['fw', 'FW']]
@@ -1351,7 +1481,13 @@
       case 'issue_time':
         return ta.customer_time ? ta.customer_time + ' customer = ' + ta.log_time + ' in the log'
           : ((d.issue_times || [])[0] ? 'anchoring on ' + d.issue_times[0] : '');
-      case 'pick_etl': return d.etl_capture || '';
+      case 'pick_etl': {
+        const pd = d.pick_decision || {};
+        if (!d.etl_capture) return '';
+        return d.etl_capture + ({closest_at_or_after_issue: ' — closest capture at/after ' + (pd.issue_time_used || 'the issue time'),
+          yb_earliest: ' — earliest capture with an error code', newest_ddd: ' — newest DDD capture', newest_wifi: ' — newest WRT capture',
+          bt_newest: ' — newest BT capture'}[pd.etl_rule] || '');
+      }
       case 'decode_etl': case 'decode_bt':
         if (tm.log_first) return 'log ' + tm.log_first + ' – ' + tm.log_last + ' does NOT cover the issue time'
           + (tm.yb_assert_override ? ' (continued on assert ' + tm.yb_assert_override.join(', ') + ')' : '');
@@ -1376,6 +1512,10 @@
     const steps = path.map(([key, label]) => {
       const e = ev[key] || {};
       let status = e.status || (exact[key] ? (exact[key].ok ? 'done' : 'failed') : 'pending');
+      if (key === 'category') {
+        const dd = d.domain_decision || {};
+        status = dd.winner ? 'done' : (finished ? 'skipped' : 'pending');
+      }
       if (status === 'pending' && finished) status = 'skipped';
       if (status === 'running' && finished) status = exact[key] ? (exact[key].ok ? 'done' : 'failed') : 'done';
       let dur = '';
@@ -1407,6 +1547,7 @@
   function liveSentHtml(d, finished) {
     const sent = d.sent_for_analysis || [];
     if (sent.length) {
+      const sameDesc = sent.length > 1 && sent.every(x => (x.description || '') === (sent[0].description || ''));
       return sent.map((x, i) => {
         const differs = x.issue_time_log && x.issue_time_customer && x.issue_time_log !== x.issue_time_customer;
         const timeHtml = x.issue_time_customer
@@ -1421,7 +1562,8 @@
           timeHtml +
           `<dl class="lp-kv"><dt>Log</dt><dd class="mono">${esc(x.log_file || '—')}</dd>` +
           (range ? `<dt>Log covers</dt><dd class="mono">${esc(range)}</dd>` : '') + `</dl>` +
-          `<div class="lp-desc">${esc(x.description || '')}</div></div>`;
+          (sameDesc && i > 0 ? `<div class="lp-time-sub">same description as incident 1</div>`
+                             : `<div class="lp-desc">${esc(x.description || '')}</div>`) + `</div>`;
       }).join('');
     }
     if (!finished) {
@@ -1437,6 +1579,332 @@
       (d.error ? `<div class="lp-time-sub" style="margin-top: 4px;">${esc(d.error)}</div>` : '') + `</div>`;
   }
 
+  const STEP_ICON = {thinking: '🧠', playbook: '📘', step: '💭', fetch: '🔍', tool: '🔧', prescan: '🔍',
+                     plan: '🧭', result: '📄', conclusion: '✅', warning: '⚠️', stopped: '⏹', time: '🕒',
+                     error: '✕', usage: '∑', agent: '·'};
+
+  function liveResultHtml(r) {
+    if (!r) return '';
+    const conf = r.confidence;
+    const confCls = conf == null ? '' : conf >= 80 ? 'good' : conf >= 50 ? 'warn' : 'bad';
+    let html = `<div class="lp-res">`;
+    if (r.result_type === 'report' || r.result_type === 'partial_report') {
+      html += `<div class="lp-chips" style="margin: 0 0 6px;">` +
+        (conf != null ? `<span class="lp-chip ${confCls}">confidence ${esc(conf)}/100</span>` : '') +
+        (r.result_type === 'partial_report' ? `<span class="lp-chip warn">partial report</span>` : '') +
+        (r.involved_skills || []).map(k => `<span class="lp-chip">${esc(k)}</span>`).join('') + `</div>` +
+        `<div class="rc">${esc(r.root_cause_summary || '(no root-cause summary)')}</div>` +
+        liveTraceHtml(r.trace || []);
+    } else if (r.result_type === 'error') {
+      html += `<div style="color: var(--bad);">AI analysis failed: ${esc(r.error || 'unknown error')}</div>`;
+    } else {
+      html += `<div>${esc(r.text || 'no report produced' + (r.result_type ? ' (' + r.result_type + ')' : ''))}</div>`;
+    }
+    return html + `</div>`;
+  }
+
+  // The analysis trace after the run: which skills / steps the agent went
+  // through, in order. Tool invocations are the headline (the skill name is
+  // pulled out of "Invoking `Roaming`" / "Fetching filtered logs for `X`"),
+  // results and reasoning stay as sub-lines; bookkeeping lines are dropped.
+  function liveTraceHtml(trace) {
+    const shown = (trace || []).filter(st => !['usage', 'playbook', 'plan', 'step'].includes(st.kind));
+    if (!shown.length) return '';
+    const line = st => {
+      let text = st.text || '';
+      const m = /`([^`]+)`/.exec(text);
+      if ((st.kind === 'tool' || st.kind === 'fetch') && m) {
+        text = (st.kind === 'fetch' ? 'Filtered the log for ' : 'Ran skill ') + `<span class="skill">${esc(m[1])}</span>`;
+        return `<div class="lp-as ${esc(st.kind)}"><span class="k">${STEP_ICON[st.kind] || '·'}</span><span>${text}</span></div>`;
+      }
+      if (st.kind === 'result' && m) text = text.replace(/^Result\s*\(`[^`]+`\):\s*/, '');
+      return `<div class="lp-as ${esc(st.kind)}"><span class="k">${STEP_ICON[st.kind] || '·'}</span><span>${esc(text)}</span></div>`;
+    };
+    const tools = shown.filter(st => st.kind === 'tool' || st.kind === 'fetch').length;
+    return `<details class="lp-trace" open><summary>Analysis steps — ${shown.length} step${shown.length === 1 ? '' : 's'}` +
+      (tools ? `, ${tools} skill call${tools === 1 ? '' : 's'}` : '') + `</summary>` +
+      `<div class="lp-agent-steps">${shown.map(line).join('')}</div></details>`;
+  }
+
+  // Inline live box under "AI log analysis": the agent's steps as they
+  // happen, then the result per incident.
+  function liveAgentHtml(d, status, caseNbr) {
+    const live = d.agent_live, results = d.agent_results || (d.incidents || []);
+    if (status === 'pending' || status === 'skipped') return '';
+    let html = `<div class="lp-live">`;
+    if (live && live.status === 'running') {
+      const n = (live.steps || []).length;
+      html += `<div class="lp-cap">Incident ${esc(live.index)}${live.total > 1 ? ' of ' + esc(live.total) : ''}` +
+        (live.incident ? ' · ' + esc(live.incident) : '') + ` · ${n} step${n === 1 ? '' : 's'} so far</div>` +
+        `<div class="lp-agent-steps" id="lp-agent-steps">` +
+        (live.steps || []).map(st => `<div class="lp-as ${esc(st.kind)}"><span class="k">${STEP_ICON[st.kind] || '·'}</span><span>${esc(st.text)}</span></div>`).join('') +
+        `</div>`;
+    }
+    results.forEach((r, i) => {
+      if (results.length > 1) html += `<div class="lp-cap" style="margin-top: 6px;">Incident ${i + 1} · ${esc(r.issue_time || 'no time')}</div>`;
+      html += liveResultHtml(r);
+    });
+    if (!results.length && !(live && live.status === 'running')) {
+      html += `<div class="lp-cap">${status === 'running' ? 'starting…' : 'no result'}</div>`;
+    }
+    if (d.log_path) {
+      html += `<div class="lp-actions" style="margin-top: 8px;"><button class="ghost lp-btn-sm" ` +
+        `onclick="event.stopPropagation(); openInAvatar(${JSON.stringify(caseNbr).replace(/"/g, '&quot;')}, ${JSON.stringify(d.draft_id || '').replace(/"/g, '&quot;')})" ` +
+        `title="Opens Avatar's Log Chatbot on this decoded log, primed with the case and the issue time, to continue by hand">` +
+        `Open in Avatar analysis</button></div>`;
+    }
+    return html + `</div>`;
+  }
+
+  // Inline live box under "Knowledge base (Echo)".
+  function liveEchoHtml(d, status) {
+    if (status === 'pending' || status === 'skipped') return '';
+    const items = d.echo_live || d.echo_insights || [];
+    const summary = d.echo_live_summary || '';
+    if (!items.length && !summary) return status === 'running' ? `<div class="lp-live"><div class="lp-cap">looking for assert / yellow-bang evidence…</div></div>` : '';
+    let html = `<div class="lp-live">` + (summary ? `<div class="lp-cap">${esc(summary)}</div>` : '');
+    items.forEach(it => {
+      const head = it.kind === 'assert' ? 'Assert ' + esc(it.code || '') : it.kind === 'yellow_bang' ? 'Yellow bang' : 'Question';
+      html += `<div class="lp-echo-q">${head}${it.question && !it.kind ? ': ' + esc(it.question) : ''}</div>` +
+        (it.error ? `<div class="lp-echo-a" style="color: var(--warn);">Echo unavailable: ${esc(it.error)}</div>`
+         : it.answer ? `<div class="lp-echo-a">${esc(it.answer)}</div>`
+         : `<div class="lp-echo-a" style="color: #9fb3c8;">waiting for Echo…</div>`);
+    });
+    return html + `</div>`;
+  }
+
+  // ---- decision boxes: category + required logs, issue time, archive, capture ----
+
+  function fmtDelta(sec) {
+    if (sec == null) return '';
+    const a = Math.abs(sec), sign = sec < 0 ? '−' : '+';
+    if (a < 60) return sign + a + ' s';
+    if (a < 3600) return sign + Math.round(a / 60) + ' min';
+    return sign + Math.floor(a / 3600) + ' h ' + String(Math.round((a % 3600) / 60)).padStart(2, '0') + ' min';
+  }
+
+  function liveCategoryHtml(d, status) {
+    const dd = d.domain_decision || {}, cd = d.checklist_decision || {};
+    if (status === 'pending' || status === 'skipped' || !dd.winner) return '';
+    let html = `<div class="lp-live">`;
+    html += `<div class="lp-cap">Candidates, in priority order — the first specific one wins</div>`;
+    (dd.candidates || []).forEach(c => {
+      const win = c.source === dd.winner_source;
+      html += `<div class="lp-cand ${win ? 'win' : ''}"><span>${win ? '➜' : '·'}</span>` +
+        `<span>${esc(c.resolved || '—')}</span><span class="src">${esc(c.label || c.source)}` +
+        (c.raw && c.raw !== c.resolved ? ': “' + esc(c.raw) + '”' : (c.raw ? '' : ': nothing')) +
+        (c.resolved && !c.specific ? ' (generic)' : '') + `</span></div>`;
+    });
+    if (dd.provisional && dd.provisional !== dd.winner) html += `<div class="lp-time-sub">before the thread was read: ${esc(dd.provisional)}</div>`;
+    const sub = cd.subcategory || dd.subcategory_raw;
+    if (sub || cd.subcategory_rule === 'ask') {
+      const rule = cd.subcategory_rule || '';
+      const how = rule === 'explicit' ? 'named in the case' : rule.startsWith('keyword:') ? 'keyword “' + rule.slice(8) + '” in the case text'
+                : rule === 'named_like_domain' ? 'default for the domain' : rule === 'ask' ? 'not identified — the reply asks which one' : rule === 'first' ? 'first sub-category' : '';
+      html += `<div class="lp-time-sub">sub-category: <b style="color:#fff;">${esc(sub || '?')}</b>${how ? ' — ' + esc(how) : ''}</div>`;
+    }
+    const reqs = cd.required_logs || (dd.required_logs || []).map(i => ({item: i, provided: null}));
+    if (reqs.length) {
+      html += `<div class="lp-cap" style="margin-top: 8px;">Required logs for ${esc(dd.winner)}${cd.required_logs ? '' : ' (checked once the run completes)'}</div>`;
+      reqs.forEach(r => {
+        const st = r.provided === null ? '' : r.provided ? 'ok' : 'miss';
+        const mark = r.provided === null ? '·' : r.provided ? '✓' : '✗';
+        html += `<div class="lp-req ${st}"><span class="m">${mark}</span><span>${esc(r.item)}` +
+          (r.provided ? `<div class="how">${esc(r.value || '')}${r.source ? ' (' + esc(r.source) + ')' : ''}</div>` : (r.provided === false ? `<div class="how">not provided</div>` : '')) +
+          `</span></div>`;
+      });
+    } else if (cd.required_logs) {
+      html += `<div class="lp-time-sub">this category lists no required logs</div>`;
+    }
+    if (cd.required_info && cd.required_info.length) {
+      const miss = cd.required_info.filter(r => !r.provided).length;
+      html += `<div class="lp-time-sub" style="margin-top: 6px;">required info: ${cd.required_info.length - miss}/${cd.required_info.length} provided</div>`;
+    }
+    if (cd.asks) {
+      html += cd.asks.length
+        ? `<div class="lp-ask">Will ask the customer for:<ul style="margin: 4px 0 0; padding-left: 18px;">${cd.asks.map(a => `<li>${esc(a)}</li>`).join('')}</ul></div>`
+        : `<div class="lp-time-sub" style="margin-top: 6px;">nothing to ask — all required logs and information are present</div>`;
+    }
+    return html + `</div>`;
+  }
+
+  // Under "Read comment screenshots": what the vision model read from each
+  // image embedded in the IPS comments (this text is all the later steps see).
+  function liveImagesHtml(d, status) {
+    const imgs = d.comment_images || [];
+    if (status === 'pending' || status === 'skipped' || !imgs.length) return '';
+    const n = imgs.reduce((a, i) => a + (i.descriptions || []).length, 0);
+    let html = `<div class="lp-live"><div class="lp-cap">${n} image${n === 1 ? '' : 's'} read from ${imgs.length} comment${imgs.length === 1 ? '' : 's'} — the descriptions below are what the later steps see</div>`;
+    imgs.forEach(i => {
+      html += `<div class="lp-time-sub" style="margin-top: 6px;">comment of <span class="mono" style="color:#fff;">${esc(i.date || '?')}</span> by ${esc(i.author || 'unknown')}` +
+        (i.count && i.count > (i.descriptions || []).length ? ` · ${i.count - i.descriptions.length} of ${i.count} image(s) not read` : '') + `</div>`;
+      (i.descriptions || []).forEach((desc, k) => {
+        html += `<div class="lp-as"><span class="k">🖼</span><span><b style="color:#fff;">Image ${k + 1}:</b> ${esc(desc)}</span></div>`;
+      });
+    });
+    return html + `</div>`;
+  }
+
+  function liveTimesFoundHtml(d, status) {
+    const td = d.time_decision || {};
+    if (status === 'pending' || status === 'skipped' || !(td.found || td.ignored_vague || td.reasoning)) return '';
+    let html = `<div class="lp-live"><div class="lp-cap">Issue times in the case</div>`;
+    if ((td.found || []).length) {
+      td.found.forEach(f => {
+        html += `<div class="lp-cand ${f.used ? 'win' : ''}"><span>${f.used ? '➜' : '·'}</span><span class="mono">${esc(f.time)}</span>` +
+          `<span class="src">${f.source ? 'from ' + esc(f.source) : ''}${f.used ? '' : ' (beyond the per-case limit)'}</span></div>`;
+      });
+    } else {
+      html += `<div style="color: var(--warn);">no minute-precise time stated anywhere</div>`;
+    }
+    if ((td.ignored_vague || []).length) {
+      html += `<div class="lp-time-sub" style="margin-top: 4px;">ignored as too vague: ${td.ignored_vague.map(v => `<span class="lp-vague">${esc(v)}</span>`).join(', ')}</div>`;
+    }
+    if (td.rule) html += `<div class="lp-time-sub">rule: ${esc(td.rule)}</div>`;
+    if (td.reasoning) html += `<details style="margin-top: 6px;"><summary class="lp-time-sub" style="cursor:pointer;">how the thread was read</summary><div class="lp-desc" style="max-height: 160px;">${esc(td.reasoning)}</div></details>`;
+    return html + `</div>`;
+  }
+
+  function liveTimePlacementHtml(d, status) {
+    const td = d.time_decision || {};
+    if (status === 'pending' || status === 'skipped') return '';
+    const gaps = (td.gaps || []).filter(g => g.action !== 'reader' || true);
+    let html = `<div class="lp-live">`;
+    if (gaps.length) {
+      html += `<div class="lp-cap">Case-information check</div>`;
+      gaps.forEach(g => {
+        const verb = g.action === 'retracted' ? 'no longer missing' : g.action === 'backstop' ? 'missing (pipeline check)' : 'missing (reader)';
+        html += `<div class="lp-time-sub" style="color: ${g.action === 'retracted' ? 'var(--good)' : 'var(--warn)'};">${esc(g.item)}: ${verb}${g.reason ? ' — ' + esc(g.reason) : ''}</div>`;
+      });
+    }
+    if (td.gate) {
+      const gateText = {ok: 'issue time usable — the log pipeline runs', request_info: 'no usable issue time — the customer is asked for it, no log is downloaded',
+        bsod_no_time_needed: 'BSOD with a crash dump — no issue time needed', bsod_no_dump: 'BSOD without a dump — the customer is asked for the dump'}[td.gate] || td.gate;
+      html += `<div class="lp-time-sub" style="margin-top: 4px;">gate: ${esc(gateText)}</div>`;
+    }
+    if (td.organizer_used) html += `<div class="lp-time-sub">description cleaned by the organizer (the reader gave none)</div>`;
+    const cov = td.coverage || {};
+    if ((td.placements || []).length) {
+      html += `<div class="lp-cap" style="margin-top: 8px;">Placing the reported time in the log's clock` +
+        (cov.log_first ? ` — log ${esc(cov.log_file || '')} covers ${esc(cov.log_first)} – ${esc(cov.log_last)} (±${esc(cov.grace_min)} min)` : '') + `</div>`;
+      td.placements.forEach(pl => {
+        html += `<div class="lp-time-sub" style="margin-top: 4px;">reported <span class="mono" style="color:#fff;">${esc(pl.time)}</span>${pl.note ? ' — ' + esc(pl.note) : ''}</div>`;
+        if ((pl.candidates || []).length) {
+          html += `<table class="lp-tbl"><tr><th>anchor</th><th>customer clock</th><th>log clock</th><th>covered</th></tr>` +
+            pl.candidates.map(c => `<tr class="${c.inside ? 'win' : ''}"><td class="t">${esc(LIVE_ANCHOR_TEXT[c.anchor] || c.anchor)}</td><td>${esc(c.customer)}</td><td>${esc(c.log)}</td>` +
+              `<td class="t">${c.inside ? '✓ inside' : 'outside by ' + esc(fmtDelta(c.outside_s))}</td></tr>`).join('') + `</table>`;
+        }
+      });
+      if (cov.covered === false) html += `<div class="lp-ask">No placement falls inside the log — ${(d.time_mismatch || {}).yb_assert_override ? 'continued on the assert evidence (yellow bang)' : 'other captures are tried, else the customer is asked for a log taken at the issue time'}</div>`;
+    } else if (d.issue_times && d.issue_times.length && status === 'done' && !cov.log_first) {
+      html += `<div class="lp-time-sub" style="margin-top: 4px;">anchoring on ${esc(d.issue_times.join(' · '))} — placement in the log's clock happens after the decode</div>`;
+    }
+    return html + `</div>`;
+  }
+
+  function liveArchiveHtml(d, status) {
+    const pd = d.pick_decision || {};
+    if (status === 'pending' || status === 'skipped' || !(pd.archives || []).length && !pd.chosen) return '';
+    let html = `<div class="lp-live"><div class="lp-cap">Uploads in the case</div><table class="lp-tbl"><tr><th></th><th>file</th><th>uploaded</th><th>note</th></tr>`;
+    (pd.archives || []).forEach(a => {
+      const chosen = a.name === pd.chosen;
+      html += `<tr class="${chosen ? 'win' : ''}"><td class="t">${chosen ? '➜' : (a.is_archive ? '·' : '')}</td><td>${esc(a.name)}</td><td>${esc(a.uploaded)}</td>` +
+        `<td class="t">${a.is_archive ? '' : 'not an archive'}${a.subtitle && a.subtitle !== a.name ? esc(a.subtitle) : ''}</td></tr>`;
+    });
+    html += `</table>`;
+    if (pd.reader_pick) {
+      const m = {exact: 'matched exactly', case_insensitive: 'matched ignoring case', substring: 'matched by name fragment', not_found: 'not found among the uploads', non_archive: 'is not an archive'}[pd.match] || '';
+      html += `<div class="lp-time-sub" style="margin-top: 6px;">reader nominated <span class="mono" style="color:#fff;">${esc(pd.reader_pick)}</span>${m ? ' — ' + m : ''}` +
+        (pd.reader_reason ? `<div>why: ${esc(pd.reader_reason)}</div>` : '') + `</div>`;
+    }
+    if (pd.chosen) {
+      const rule = {reader: 'the reader\'s nomination', newest_upload: 'fallback: the newest upload', only_archive: 'the only archive in the case'}[pd.chosen_rule] || pd.chosen_rule || '';
+      html += `<div class="lp-time-sub">chosen: <span class="mono" style="color:#fff;">${esc(pd.chosen)}</span>${rule ? ' — ' + rule : ''}${pd.fallback_used ? ' (the nomination could not be used)' : ''}</div>`;
+    }
+    const bits = [];
+    if (pd.prefetch && pd.prefetch.name) bits.push('prefetched ' + pd.prefetch.name + (pd.prefetch.used ? ' and used' : ', not used'));
+    if (pd.download_attempts > 1) bits.push(pd.download_attempts + ' download attempts');
+    const c = pd.contents || {};
+    const parts = [['wifi_wpp', 'WPP driver log'], ['ddd', 'DDD'], ['event_logs', 'event log'], ['bt', 'BT'], ['fw', 'FW']].filter(([k]) => c[k]).map(([k, l]) => c[k] + ' ' + l);
+    if (parts.length) bits.push('extracted: ' + parts.join(', '));
+    if (bits.length) html += `<div class="lp-time-sub">${esc(bits.join(' · '))}</div>`;
+    return html + `</div>`;
+  }
+
+  function liveCaptureHtml(d, status) {
+    const pd = d.pick_decision || {};
+    if (status === 'pending' || status === 'skipped' || !(pd.captures || []).length) return '';
+    const ruleText = {closest_at_or_after_issue: 'the capture whose folder stamp is closest at/after the issue time' + (pd.issue_time_used ? ' ' + pd.issue_time_used : ''),
+      yb_earliest: 'yellow-bang / assert case: the earliest capture whose folder name carries a nonzero error code',
+      newest_ddd: 'newest DDD capture' + (pd.issue_time_used ? '' : ' — the issue time could not be used'),
+      newest_wifi: 'newest WRT capture' + (pd.issue_time_used ? ' (no capture at/after the issue time)' : ' — the issue time could not be used'),
+      bt_newest: 'newest BT capture', none: 'no capture found'}[pd.etl_rule] || '';
+    let html = `<div class="lp-live"><div class="lp-cap">${pd.captures.length} capture folder${pd.captures.length === 1 ? '' : 's'} in the archive${ruleText ? ' — rule: ' + esc(ruleText) : ''}</div>`;
+    html += `<table class="lp-tbl"><tr><th></th><th>capture folder</th><th>stamp (DUT clock)</th><th>vs issue</th><th>result</th></tr>`;
+    pd.captures.forEach(c => {
+      const res = c.role === 'chosen' ? (c.covered === true ? 'decoded, covers the issue time' : c.covered === false ? 'decoded, does NOT cover the issue time' : c.decode === 'failed' ? 'decode failed' : 'chosen')
+                : c.role === 'alternate' ? (c.decode === 'failed' ? 'tried, decode failed' : c.covered === true ? 'tried, covers' : c.covered === false ? 'tried, no coverage' : 'tried') : '';
+      html += `<tr class="${c.role === 'chosen' ? 'win' : ''}"><td class="t">${c.role === 'chosen' ? '➜' : c.role === 'alternate' ? '↻' : ''}</td>` +
+        `<td>${esc(c.folder)}${c.yb_code ? ' <span style="color:var(--warn);">' + esc(c.yb_code) + '</span>' : ''}</td><td>${esc(c.stamp || '?')}</td>` +
+        `<td>${c.delta_s == null ? '' : esc(fmtDelta(c.delta_s))}</td><td class="t">${res}</td></tr>`;
+    });
+    html += `</table>`;
+    if (pd.alternates_tried) html += `<div class="lp-time-sub">${pd.alternates_tried} other capture${pd.alternates_tried === 1 ? '' : 's'} tried after the first did not cover the issue time</div>`;
+    return html + `</div>`;
+  }
+
+  // Echo next-step suggestions: asked right after the IPS thread is read,
+  // answered in the background — rendered as its own window so it can be
+  // read and referenced apart from the log analysis.
+  // Minimal, safe markdown for Echo's answers: escape first, then headings,
+  // bold, inline code, links (https only) and bullet lists. Nothing else.
+  function mdLite(text) {
+    const lines = esc(String(text || '')).split('\n');
+    let html = '', inList = false;
+    const inline = t => t
+      .replace(/\*\*(.+?)\*\*/g, '<b>$1</b>')
+      .replace(/`([^`]+)`/g, '<code style="font-family: var(--mono); font-size: 12.5px;">$1</code>')
+      .replace(/\[([^\]]+)\]\((https:\/\/[^)\s]+)\)/g, '<a href="$2" target="_blank" rel="noopener" class="case-link">$1</a>');
+    for (const raw of lines) {
+      const line = raw.replace(/\s+$/, '');
+      const h = /^(#{1,4})\s+(.*)$/.exec(line);
+      const li = /^\s*[-*]\s+(.*)$/.exec(line);
+      if (li) {
+        if (!inList) { html += '<ul style="margin: 4px 0; padding-left: 20px;">'; inList = true; }
+        html += '<li>' + inline(li[1]) + '</li>';
+        continue;
+      }
+      if (inList) { html += '</ul>'; inList = false; }
+      if (h) { html += '<div style="font-weight: 650; color: #fff; margin-top: 8px;">' + inline(h[2]) + '</div>'; continue; }
+      if (!line.trim()) { html += '<div style="height: 6px;"></div>'; continue; }
+      html += '<div>' + inline(line) + '</div>';
+    }
+    if (inList) html += '</ul>';
+    return html;
+  }
+
+  function liveAdviceHtml(d) {
+    const a = d.echo_advice || {};
+    if (!a.status) return '';
+    let body = '';
+    if (a.status === 'asking') {
+      body = `<div class="lp-time-sub"><span class="lp-spin" style="display:inline-block; vertical-align: middle; margin-right: 6px;"></span>asking the Echo knowledge base what to request from the customer next and the recommended next steps…` +
+        (a.note ? `<div style="margin-top: 4px; color: var(--warn);">${esc(a.note)}</div>` : '') + `</div>`;
+    } else if (a.status === 'answered') {
+      body = `<div class="lp-advice-a" style="white-space: normal;">${mdLite(a.answer || '')}</div>` +
+        `<div class="lp-time-sub" style="margin-top: 4px;">answered in ${esc(a.elapsed_s != null ? a.elapsed_s + ' s' : '?')} · knowledge-base guidance from the case summary, not from the logs — verify before acting</div>`;
+    } else if (a.status === 'empty') {
+      body = `<div class="lp-time-sub">Echo returned no suggestions for this case.</div>`;
+    } else {
+      body = `<div class="lp-time-sub" style="color: var(--warn);">Echo ${esc(a.status)}${a.error ? ': ' + esc(a.error) : ''}</div>`;
+    }
+    const q = a.question ? `<details><summary>the question sent to Echo</summary><div class="q">${esc(a.question)}</div></details>` : '';
+    return `<div class="lp-sec"><div class="lp-h">Next-step suggestions (Echo knowledge base)</div><div class="lp-advice">` +
+      `<div class="lp-cap">What to ask the customer next · recommended debug steps · known similar issues</div>` +
+      `<div style="color: var(--warn); font-size: 12.5px; margin-bottom: 6px;">⚠ May contain internal knowledge — check before sharing.</div>` +
+      body + q + `</div></div>`;
+  }
+
   function liveCaseStatus(d, ev) {
     if (!d) return '';
     if (!d.finished) return 'running';
@@ -1444,16 +1912,36 @@
     return m ? (m[1] === 'good' ? 'done' : m[1] || '') : '';
   }
 
+  // A draft opened from the review queue replays its saved run in the live
+  // panel until "Back to live" (or a new run) is pressed.
+  let liveHistory = null;
+  function showLiveHistory(d) {
+    const live = d.live;
+    if (!live || !live.case_details) return;
+    const cd = live.case_details[d.case_nbr] || Object.values(live.case_details)[0] || {};
+    liveHistory = {status: 'done', mode: live.run_mode || 'saved run', started_at: cd.started_at || live.run_started_at,
+                   finished_at: cd.updated_at || null, events: live.events || [],
+                   case_details: live.case_details, cases: [{case_nbr: d.case_nbr, subject: d.subject}],
+                   __history: {draft_id: d.draft_id, saved_at: live.saved_at || '', created_at: d.created_at || ''}};
+    stageCasePinned = d.case_nbr;
+    renderLivePanel(liveHistory);
+  }
+  function backToLive() { liveHistory = null; stageCasePinned = null; refreshStatus(); }
+
   function renderLivePanel(s) {
     const panel = document.getElementById('live-panel');
     if (!panel) return;
+    if (liveHistory && s !== liveHistory) s = liveHistory;   // history stays until "Back to live"
     const details = s.case_details || {};
     const {byCase} = parseStageEvents(s.events || []);
     const order = Object.keys(details).sort((a, b) => (details[a].started_at || 0) - (details[b].started_at || 0));
     (s.cases || []).forEach(c => { if (c.case_nbr && !order.includes(c.case_nbr)) order.push(c.case_nbr); });
-    const head = `<div class="lp-top"><span class="lp-title">Live analysis</span>` +
-      `<span class="pill dot ${s.status === 'running' ? 'warn live' : s.status === 'done' ? 'good'
-        : s.status === 'error' ? 'bad' : ''}">${esc(s.status || 'idle')}</span></div>`;
+    const hist = s.__history;
+    const head = `<div class="lp-top"><span class="lp-title">${hist ? 'Analysis history' : 'Live analysis'}</span>` +
+      (hist ? `<span class="pill" title="${esc(hist.draft_id)}">saved run · ${esc((hist.created_at || hist.saved_at || '').slice(0, 16).replace('T', ' '))}</span>` +
+              `<button class="ghost lp-btn-sm" onclick="backToLive()">Back to live</button>`
+            : `<span class="pill dot ${s.status === 'running' ? 'warn live' : s.status === 'done' ? 'good'
+        : s.status === 'error' ? 'bad' : ''}">${esc(s.status || 'idle')}</span>`) + `</div>`;
     if (!order.length) {
       panel.innerHTML = head + `<div class="lp-empty" style="margin-top: 10px;">` +
         (s.status === 'running' ? 'Looking for cases to analyze…'
@@ -1495,6 +1983,14 @@
       `<li class="lp-step ${x.status}"><span class="lp-ico">${icon(x.status)}</span>` +
       `<span class="lp-lab">${esc(x.label)}</span><span class="lp-dur">${esc(x.dur)}</span>` +
       (x.detail && x.status !== 'pending' ? `<span class="lp-det">${esc(x.detail)}</span>` : '') +
+      (x.key === 'category' ? liveCategoryHtml(d, x.status) : '') +
+      (x.key === 'read_images' ? liveImagesHtml(d, x.status) : '') +
+      (x.key === 'read_case_history' ? liveTimesFoundHtml(d, x.status) : '') +
+      (x.key === 'issue_time' ? liveTimePlacementHtml(d, x.status) : '') +
+      (x.key === 'pick_zip' ? liveArchiveHtml(d, x.status) : '') +
+      (x.key === 'pick_etl' ? liveCaptureHtml(d, x.status) : '') +
+      (x.key === 'agent_analysis' ? liveAgentHtml(d, x.status, sel) : '') +
+      (x.key === 'echo_kb' ? liveEchoHtml(d, x.status) : '') +
       `</li>`).join('') + `</ol>`;
 
     // outcome
@@ -1508,6 +2004,7 @@
         `<div class="lp-actions">` +
         (d.draft_id ? `<button class="primary" onclick="openDraft(${JSON.stringify(d.draft_id).replace(/"/g, '&quot;')})">Open draft</button>` : '') +
         (d.fr_draft_id ? `<button class="ghost" onclick="openDraft(${JSON.stringify(d.fr_draft_id).replace(/"/g, '&quot;')})">Open first-response</button>` : '') +
+        (d.log_path ? `<button class="ghost" onclick="openInAvatar(${JSON.stringify(d.case_nbr || sel).replace(/"/g, '&quot;')}, ${JSON.stringify(d.draft_id || '').replace(/"/g, '&quot;')})" title="Open Avatar's Log Chatbot on this decoded log to continue by hand">Open in Avatar analysis</button>` : '') +
         `</div></div></div>`;
     }
 
@@ -1521,11 +2018,16 @@
           `<span class="sub">${esc((cd && cd.subject) || ref.subject || '')}</span></li>`;
       }).join('') + `</ul></div>` : '';
 
+    const panelScroll = panel.scrollTop;
     panel.innerHTML = head + `<div class="lp-meta">${esc(meta)}</div>` +
       `<div class="lp-sec"><div class="lp-h">Case</div>${caseHtml}</div>` +
+      liveAdviceHtml(d) +
       `<div class="lp-sec"><div class="lp-h">Sent for analysis</div>${liveSentHtml(d, finished)}</div>` +
       `<div class="lp-sec"><div class="lp-h">Pipeline</div>${stepsHtml}</div>` +
       outcomeHtml + casesHtml;
+    panel.scrollTop = panelScroll;
+    const agentSteps = document.getElementById('lp-agent-steps');
+    if (agentSteps) agentSteps.scrollTop = agentSteps.scrollHeight;
   }
 
   // Narrow windows: the panel moves under Step 1 as a full-width card.

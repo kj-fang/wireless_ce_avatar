@@ -1,4 +1,4 @@
-"""Headless Handsfree Replyer runner.
+"""Headless Beacon (handsfree replyer) runner.
 
 Examples:
     python -m services.handsfree.cli --owner "Charles P Chu" --once

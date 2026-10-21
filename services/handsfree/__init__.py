@@ -1,5 +1,5 @@
 """
-Handsfree Replyer — autonomous IPS case analysis with reviewed comment posting.
+Beacon (handsfree replyer) — autonomous IPS case analysis with reviewed comment posting.
 
 Flow:  find_new_cases (SOQL, owner + today)          ips_client.py
        → headless analysis (download → decode → agent) runner.py

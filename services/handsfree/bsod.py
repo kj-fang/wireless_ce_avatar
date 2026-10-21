@@ -1,5 +1,5 @@
 """
-BSOD branch of the Handsfree Replyer — Avatar's BSOD flow, unattended.
+BSOD branch of Beacon (the handsfree replyer) — Avatar's BSOD flow, unattended.
 
 Avatar's manual flow (index page "BSOD" toggle -> select attachments ->
 download -> bsod.html -> bsod_submit): the uploads are downloaded, NOT
@@ -185,6 +185,21 @@ def names_to_skip(case_nbr: str) -> set[str]:
     skip = submitted_names(case_nbr)
     skip |= {n for n, c in failed_names(case_nbr).items() if c >= MAX_DOWNLOAD_ROUNDS}
     return skip
+
+
+def forget_case(case_nbr: str) -> int:
+    """Drop a case's submission record (handsfree 'reset case'). Returns the
+    number of entries removed."""
+    with _LOCK:
+        data = _load()
+        entries = data.pop(str(case_nbr), None) or []
+        if entries:
+            p = _submissions_path()
+            p.parent.mkdir(parents=True, exist_ok=True)
+            tmp = p.with_suffix(".json.tmp")
+            tmp.write_text(json.dumps(data, indent=2), encoding="utf-8")
+            os.replace(tmp, p)
+        return len(entries)
 
 
 def record_submission(case_nbr: str, attachments: list, dumps_path: str,

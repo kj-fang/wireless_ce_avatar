@@ -175,6 +175,53 @@ def annotate_case_comments(ips, llm, case_id: str, comments: Any, *,
     cached = cache.load()
     budget = MAX_IMAGES_PER_CASE
     changed = False
+
+    # The case DESCRIPTION can embed images too (01034043: the failing
+    # measurement screenshot was only in the description). Its rich text is
+    # a Case field, not a comment: read it first, cache it under desc:<id>,
+    # and put the synthetic row ahead of the comments (case creation date).
+    get_desc = getattr(ips, "get_case_rich_description", None)
+    if callable(get_desc):
+        try:
+            desc = get_desc(case_id) or {}
+        except Exception as e:
+            say(f"case description not readable for images: {e}")
+            desc = {}
+        d_urls = [u for u in extract_image_urls(desc.get("html") or "") if _host_allowed(u)]
+        if d_urls:
+            d_key, d_date = f"desc:{case_id}", str(desc.get("created") or "")
+            entry = cached.get(d_key)
+            if entry and entry.get("url_count") == len(d_urls):
+                d_descs = entry["descriptions"]
+                say(f"{len(d_urls)} image(s) in the case description: cached")
+            else:
+                images = []
+                for u in d_urls[:budget]:
+                    got = ips.fetch_binary(u, max_bytes=MAX_IMAGE_BYTES)
+                    if got:
+                        media = sniff_media_type(got[1], got[0])
+                        if media in _ALLOWED_MEDIA:
+                            images.append((media, got[1]))
+                budget -= len(images)
+                d_descs = []
+                if images:
+                    say(f"describing {len(images)} image(s) in the case description")
+                    d_descs = describe_images(llm, images, author="Customer (case description)",
+                                              date=d_date[:16], comment_text=_text_of(desc.get("html")))
+                    if any(d_descs):
+                        cached[d_key] = {"descriptions": d_descs, "url_count": len(d_urls),
+                                         "date": d_date, "author": "Customer (case description)"}
+                        changed = True
+                else:
+                    say("could not download the image(s) in the case description")
+            d_descs = [d for d in d_descs if d]
+            if d_descs:
+                text = (f"[Images embedded in the case description ({d_date[:10] or 'creation'})] "
+                        + " ".join(f"{i}) {d}" for i, d in enumerate(d_descs, 1)))
+                rows.insert(0, [d_date, "Customer (case description)", text])
+                details.append({"comment_id": "description", "date": d_date,
+                                "author": "Customer (case description)",
+                                "count": len(d_urls), "descriptions": d_descs})
     for c in sorted(rest, key=lambda r: r.get("CreatedDate") or ""):
         rich = str(c.get(getattr(ips, "FIELD_RICH_BODY", "Core_IPS_Rich_Comment__c")) or "")
         urls = [u for u in extract_image_urls(rich) if _host_allowed(u)]

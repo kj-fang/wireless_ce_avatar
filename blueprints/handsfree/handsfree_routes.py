@@ -1,5 +1,5 @@
 """
-Handsfree Replyer routes — manual trigger + review queue.
+Beacon (handsfree replyer) routes — manual trigger + review queue.
 
 v1 rules enforced here and in the orchestrator:
   * Posting happens ONLY via the explicit Approve endpoint.

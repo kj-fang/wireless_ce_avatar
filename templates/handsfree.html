@@ -2,7 +2,7 @@
 <html lang="en">
 <head>
   <meta charset="utf-8" />
-  <title>Handsfree Replyer</title>
+  <title>Beacon</title>
   <style>
     :root {
       --bg: #0a0d12;
@@ -357,8 +357,8 @@
       <circle cx="12" cy="17.6" r="1.6" fill="currentColor" stroke="none" />
     </svg>
   </span>
-  <h1>Handsfree Replyer</h1>
-  <div class="sub">Detect newly assigned IPS cases → analyze → review → post Private-to-Intel</div>
+  <h1>Beacon</h1>
+  <div class="sub">Hands-free IPS case replies — detect newly assigned cases → analyze → review → post Private-to-Intel</div>
 </header>
 
 <main>
@@ -565,7 +565,7 @@
       <button class="ghost" id="draft-avatar-btn" style="display:none;" onclick="openInAvatar(currentDraftCase, currentDraftId)"
               title="Opens Avatar's Log Chatbot on this case's decoded log, primed with the case and the issue time, to continue by hand">Open in Avatar analysis</button>
       <button class="ghost" onclick="resetCase(currentDraftCase)"
-              title="Forget this case's handsfree history (drafts archived, analysis marks cleared) so the next run starts fresh">Reset case history</button>
+              title="Forget this case's Beacon history (drafts archived, analysis marks cleared) so the next run starts fresh">Reset case history</button>
       <span class="status-line" id="post-status"></span>
     </div>
     <details style="margin-top:10px;">
@@ -1134,7 +1134,7 @@
             `<button class="ghost avatar-btn lp-btn-sm" title="Open Avatar's Log Chatbot on this decoded log to continue by hand">Avatar</button> `
           : '') +
         (firstOfCase.has(it.case_nbr) ? '' :
-          `<button class="ghost reset-btn lp-btn-sm" title="Forget this case's handsfree history so the next run starts fresh">Reset</button>`) +
+          `<button class="ghost reset-btn lp-btn-sm" title="Forget this case's Beacon history so the next run starts fresh">Reset</button>`) +
         `</td>`;
       firstOfCase.add(it.case_nbr);
       tr.onclick = () => openDraft(it.draft_id);
@@ -1170,7 +1170,7 @@
 
   async function resetCase(caseNbr) {
     if (!caseNbr) return;
-    const purge = confirm('Reset handsfree history of case ' + caseNbr + '?\n\n' +
+    const purge = confirm('Reset Beacon history of case ' + caseNbr + '?\n\n' +
       'Its unposted drafts move to an archive folder and the analysis marks are cleared, ' +
       'so the next run analyzes it afresh. Posted comments stay recorded.\n\n' +
       'OK = reset (keep downloaded files)\nCancel = do nothing');

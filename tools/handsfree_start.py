@@ -1,5 +1,5 @@
 """
-One-click start for Handsfree Replyer testing (dev mode, live source).
+One-click start for Beacon (handsfree replyer) testing (dev mode, live source).
 
 Starts the Avatar app from this checkout when it is not already running,
 waits for it to boot, then points the app's own Chrome window at the
@@ -37,7 +37,8 @@ for _stream in (sys.stdout, sys.stderr):
         _stream.reconfigure(encoding="utf-8", errors="replace")
 
 START_PATH = "/handsfree"
-SHORTCUT_NAME = "Handsfree Replyer (dev).lnk"
+SHORTCUT_NAME = "Beacon (dev).lnk"
+OLD_SHORTCUT_NAMES = ("Handsfree Replyer (dev).lnk",)   # removed on --install-shortcut
 REGISTER_TIMEOUT_S = 60     # instance file is written before the heavy boot
 BOOT_TIMEOUT_S = 360        # set_up(): key share, ChromeDriver, skills, agents
 
@@ -159,13 +160,15 @@ def install_shortcut() -> int:
     icon = REPO_ROOT / "icon.ico"
     script = (
         "$d = [Environment]::GetFolderPath('Desktop'); "
-        f"$p = Join-Path $d '{ps(SHORTCUT_NAME)}'; "
+        + "".join(f"Remove-Item -LiteralPath (Join-Path $d '{ps(n)}') -ErrorAction SilentlyContinue; "
+                  for n in OLD_SHORTCUT_NAMES)
+        + f"$p = Join-Path $d '{ps(SHORTCUT_NAME)}'; "
         "$s = (New-Object -COM WScript.Shell).CreateShortcut($p); "
         f"$s.TargetPath = '{ps(sys.executable)}'; "
         f"$s.Arguments = '\"{ps(Path(__file__).resolve())}\"'; "
         f"$s.WorkingDirectory = '{ps(REPO_ROOT)}'; "
         + (f"$s.IconLocation = '{ps(icon)},0'; " if icon.exists() else "")
-        + "$s.Description = 'Start Avatar from source and open the Handsfree page'; "
+        + "$s.Description = 'Start Avatar from source and open the Beacon page'; "
         "$s.Save(); Write-Output $p")
     encoded = base64.b64encode(script.encode("utf-16-le")).decode("ascii")
     r = subprocess.run(["powershell", "-NoProfile", "-EncodedCommand", encoded],

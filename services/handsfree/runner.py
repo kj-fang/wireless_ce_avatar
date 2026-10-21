@@ -1,5 +1,5 @@
 """
-Headless per-case analysis pipeline for the Handsfree Replyer.
+Headless per-case analysis pipeline for Beacon (the handsfree replyer).
 
 Replays the full avatar user journey without the web UI:
 

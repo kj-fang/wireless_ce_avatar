@@ -789,7 +789,7 @@ def parse_single_binary(parser: object) -> None:
     parser.run_external_formatter()
 
     # GUI conveniences for the interactive desktop flow. Skipped when the
-    # decode runs headlessly (Handsfree Replyer sets AVATAR_HEADLESS_DECODE=1)
+    # decode runs headlessly (Beacon, the handsfree replyer, sets AVATAR_HEADLESS_DECODE=1)
     # so no TextAnalysisTool / Explorer window pops on an unattended machine.
     if os.environ.get("AVATAR_HEADLESS_DECODE") != "1" and not app_config.silent_mode:
         # open text analysis

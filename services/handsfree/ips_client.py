@@ -1,5 +1,5 @@
 """
-IPS (Salesforce) client for the Handsfree Replyer.
+IPS (Salesforce) client for Beacon (the handsfree replyer).
 
 Reuses CaseService's authenticated session machinery:
   - CaseService._get_vf_session()            SSO cookies (cached, 4h file TTL)

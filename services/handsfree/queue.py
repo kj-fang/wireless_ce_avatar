@@ -1,5 +1,5 @@
 """
-Review queue + processed-case ledger for the Handsfree Replyer.
+Review queue + processed-case ledger for Beacon (the handsfree replyer).
 
 Layout under <avatarfiles_dir>/handsfree/:
     config.json                    orchestrator config (owner, backend, caps)

@@ -1,5 +1,5 @@
 """
-Handsfree Replyer orchestration: check-now runs and approve-and-post.
+Beacon (handsfree replyer) orchestration: check-now runs and approve-and-post.
 
 One check run at a time (module lock). All state the UI needs lives in
 `run_state` (thread-safe copies via get_run_state) and the HandsfreeStore

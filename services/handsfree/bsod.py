@@ -1,5 +1,5 @@
 """
-BSOD branch of the Handsfree Replyer — Avatar's BSOD flow, unattended.
+BSOD branch of Beacon (the handsfree replyer) — Avatar's BSOD flow, unattended.
 
 Avatar's manual flow (index page "BSOD" toggle -> select attachments ->
 download -> bsod.html -> bsod_submit): the uploads are downloaded, NOT

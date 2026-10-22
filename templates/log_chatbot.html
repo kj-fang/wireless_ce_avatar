@@ -656,6 +656,54 @@
             gap: 10px;
             align-items: flex-end;
         }
+        .model-picker {
+            display: flex;
+            flex: 0 0 190px;
+            flex-direction: column;
+            gap: 4px;
+        }
+        .model-toggle {
+            display: grid;
+            grid-template-columns: 1fr 1fr;
+            height: 44px;
+            padding: 3px;
+            border: 1px solid #d7dce1;
+            border-radius: 8px;
+            background: #f3f5f7;
+        }
+        .model-toggle-option {
+            display: flex;
+            min-width: 0;
+            align-items: center;
+            justify-content: center;
+            gap: 5px;
+            padding: 0 5px;
+            border: 0;
+            border-radius: 5px;
+            background: transparent;
+            color: #333;
+            font: 600 0.76rem 'Inter', sans-serif;
+            cursor: pointer;
+        }
+        .model-toggle-option[aria-pressed="true"] {
+            background: white;
+            color: #005a9e;
+            box-shadow: 0 1px 3px rgba(20, 35, 50, 0.18);
+        }
+        .model-toggle-option:focus-visible {
+            outline: 2px solid #0071c5;
+            outline-offset: 1px;
+        }
+        .model-toggle-option:disabled {
+            cursor: not-allowed;
+            opacity: 0.55;
+        }
+        #echo-mode-hint {
+            min-height: 12px;
+            color: #666;
+            font-size: 0.64rem;
+            line-height: 1.2;
+        }
         #user-input {
             flex: 1;
             resize: none;
@@ -689,6 +737,13 @@
         #send-btn.stopping { background: #dc2626; }
         #send-btn.stopping:hover { background: #b91c1c; }
         #send-btn.stopping:disabled { opacity: 1; cursor: pointer; }
+        @media (max-width: 700px) {
+            .input-row { gap: 6px; padding: 10px; }
+            .model-picker { flex-basis: 145px; }
+            .model-toggle-option { gap: 3px; padding: 0 3px; font-size: 0.68rem; }
+            #send-btn { padding: 10px 12px; }
+        }
+        .echo-answer { white-space: pre-wrap; overflow-wrap: anywhere; }
 
         /* Scrollbar */
         #chat-window::-webkit-scrollbar { width: 5px; }
@@ -2388,8 +2443,7 @@
             <div class="welcome-msg" id="welcome-msg">
                 <div class="big-icon">🤖</div>
                 <strong>Wi-Fi Log Chatbot</strong><br>
-                Load a log file on the left, then ask me anything about it.<br>
-                I will apply the relevant skill filter and analyse the logs for you.
+                Choose Avatar for log analysis or Echo for standalone knowledge questions.
             </div>
         </div>
 
@@ -2418,6 +2472,20 @@
             ✏️ Auto-extracted issue context is pre-filled below. Review or edit the time/text, then click <strong>Send ↑</strong> to start the analysis.
         </div>
         <div class="input-row">
+            <div class="model-picker">
+                <div class="model-toggle" role="group" aria-label="Choose chat model">
+                    <button type="button" id="model-avatar" class="model-toggle-option"
+                            aria-pressed="true" title="Use Avatar for log analysis"
+                            onclick="setChatModel('avatar')">
+                        <span aria-hidden="true">🤖</span><span>Avatar</span>
+                    </button>
+                    <button type="button" id="model-echo" class="model-toggle-option"
+                            aria-pressed="false" title="Use Echo; loaded logs are not sent"
+                            onclick="setChatModel('echo')">
+                        <span aria-hidden="true">🦜</span><span>Echo</span>
+                    </button>
+                </div>
+            </div>
             <textarea id="user-input" rows="1" placeholder="Describe the issue (e.g. '6G Weak Signal disconnected'). Pick the issue time on the left." onkeydown="handleEnter(event)" oninput="onUserInputChange(this)"></textarea>
             <button id="send-btn" onclick="onSendBtnClick()">Send ↑</button>
         </div>
@@ -2457,6 +2525,42 @@
     let agenticMode = true;
     let isAutoFillMode = false;  // true after auto_run prefill; requires a timestamp before sending
     let firstRoundSent = false;  // true after the user successfully sends the first question
+    let selectedChatModel = 'avatar';
+    let __echoHistory = [];
+    let __echoRequestActive = false;
+
+    function isEchoModelSelected() {
+        return selectedChatModel === 'echo';
+    }
+
+    function setChatModel(model) {
+        if (__echoRequestActive || __wifiStreaming) return;
+        selectedChatModel = model === 'echo' ? 'echo' : 'avatar';
+        document.getElementById('model-avatar').setAttribute(
+            'aria-pressed', String(selectedChatModel === 'avatar'));
+        document.getElementById('model-echo').setAttribute(
+            'aria-pressed', String(selectedChatModel === 'echo'));
+        onChatModelChange();
+    }
+
+    function setChatModelPickerDisabled(disabled) {
+        document.querySelectorAll('.model-toggle-option').forEach(button => {
+            button.disabled = disabled;
+        });
+    }
+
+    function onChatModelChange() {
+        const echoMode = isEchoModelSelected();
+        const input = document.getElementById('user-input');
+        const hint = document.getElementById('echo-mode-hint');
+        if (input) {
+            input.placeholder = echoMode
+                ? 'Ask Echo a question...'
+                : "Describe the issue (e.g. '6G Weak Signal disconnected'). Pick the issue time on the left.";
+        }
+        if (hint) hint.style.display = echoMode ? 'block' : 'none';
+        validateUserInput(false);
+    }
     // True when the primary Issue Time was auto-filled from the PREVIOUS PAGE
     // and the user hasn't confirmed it yet. While true the primary time is
     // shown in the fields but does NOT count as a usable issue time (the user
@@ -3168,6 +3272,15 @@
         // An auto-filled (previous-page) time only counts once confirmed.
         const hasIssueTime = !!getIssueTimeString() && !issueTimeAwaitingConfirm;
 
+        if (isEchoModelSelected()) {
+            const valid = !!text.trim();
+            if (noLogHint) noLogHint.style.display = 'none';
+            if (noTimeHint) noTimeHint.style.display = 'none';
+            if (noDescHint) noDescHint.style.display = !valid && submitting ? 'block' : 'none';
+            if (sendBtn) sendBtn.disabled = !valid || __echoRequestActive;
+            return valid;
+        }
+
         if (firstRound && !logLoaded) {
             valid = false;
             // Log-not-loaded is a structural blocker -> always surface.
@@ -3314,7 +3427,7 @@
         scrollBottom();
     }
 
-    function appendTyping() {
+    function appendTyping(label = 'Analysing…') {
         hideWelcome();
         const row = document.createElement('div');
         row.className = 'msg-row assistant';
@@ -3323,7 +3436,7 @@
             <div class="avatar-icon">🤖</div>
             <div class="typing-indicator">
                 <span class="dot"></span><span class="dot"></span><span class="dot"></span>
-                &nbsp;Analysing…
+                &nbsp;${escapeHtml(label)}
             </div>
         `;
         document.getElementById('chat-window').appendChild(row);
@@ -3347,6 +3460,24 @@
                 ${turnId ? renderFeedbackWidget(turnId) : ''}
             </div>
         `;
+        document.getElementById('chat-window').appendChild(row);
+        scrollBottom();
+    }
+
+    function appendEchoAssistantText(text) {
+        removeTyping();
+        const row = document.createElement('div');
+        row.className = 'msg-row assistant';
+        const icon = document.createElement('div');
+        icon.className = 'avatar-icon';
+        icon.textContent = '🤖';
+        const bubble = document.createElement('div');
+        bubble.className = 'msg-bubble echo-answer';
+        bubble.textContent = String(text || '');
+        const content = document.createElement('div');
+        content.style.cssText = 'flex:1;min-width:0;';
+        content.appendChild(bubble);
+        row.append(icon, content);
         document.getElementById('chat-window').appendChild(row);
         scrollBottom();
     }
@@ -3930,6 +4061,7 @@
     function setSendBtnStopMode() {
         __wifiStreaming = true;
         const btn = document.getElementById('send-btn');
+        setChatModelPickerDisabled(true);
         if (!btn) return;
         btn.disabled = false;
         btn.classList.add('stopping');
@@ -3939,6 +4071,7 @@
     function setSendBtnSendMode() {
         __wifiStreaming = false;
         const btn = document.getElementById('send-btn');
+        setChatModelPickerDisabled(false);
         if (!btn) return;
         btn.classList.remove('stopping');
         btn.textContent = 'Send ↑';
@@ -3970,10 +4103,81 @@
         setSendBtnSendMode();
     }
 
+    async function sendEchoMessage(text, input) {
+        if (__echoRequestActive) return;
+        __echoRequestActive = true;
+        if (window.__streamCtl) { try { window.__streamCtl.abort(); } catch (e) {} }
+        const controller = new AbortController();
+        window.__streamCtl = controller;
+        const sendBtn = document.getElementById('send-btn');
+        setChatModelPickerDisabled(true);
+        if (sendBtn) {
+            sendBtn.disabled = true;
+            sendBtn.textContent = 'Waiting…';
+        }
+        input.value = '';
+        input.style.height = 'auto';
+        appendUserMsg(text);
+        appendTyping('Waiting for Echo…');
+
+        try {
+            const response = await fetch('/log_chatbot/chat', {
+                method: 'POST',
+                headers: {'Content-Type': 'application/json'},
+                signal: controller.signal,
+                body: JSON.stringify({
+                    message: text,
+                    model: 'echo',
+                    echo_history: __echoHistory.slice(-12),
+                }),
+            });
+            if (!response.ok) throw new Error(`Server error ${response.status}`);
+
+            const payload = await response.text();
+            let answer = '';
+            for (const line of payload.split(/\r?\n/)) {
+                if (!line.startsWith('data:')) continue;
+                let event;
+                try { event = JSON.parse(line.slice(5).trim()); } catch (e) { continue; }
+                if (event.type === 'error') throw new Error(event.content || 'Echo request failed.');
+                if (event.type === 'done') answer = event.result?.data || '';
+            }
+            if (window.__streamCtl !== controller) return;
+            if (!answer) throw new Error('Echo returned an empty response.');
+
+            appendEchoAssistantText(answer);
+            __echoHistory.push({role: 'user', content: text}, {role: 'assistant', content: answer});
+            __echoHistory = __echoHistory.slice(-12);
+        } catch (error) {
+            if (error.name !== 'AbortError' && window.__streamCtl === controller) {
+                appendEchoAssistantText('Echo unavailable: ' + error.message);
+            }
+        } finally {
+            if (window.__streamCtl === controller) {
+                window.__streamCtl = null;
+                __echoRequestActive = false;
+                removeTyping();
+                setChatModelPickerDisabled(false);
+                if (sendBtn) sendBtn.textContent = 'Send ↑';
+                validateUserInput(false);
+            }
+        }
+    }
+
     // ── Send chat message ──────────────────────────────────────────
     async function sendMessage() {
         const input = document.getElementById('user-input');
         let desc = input.value.trim();
+        if (__echoRequestActive) return;
+        if (isEchoModelSelected()) {
+            if (!desc) {
+                validateUserInput(true);
+                input.focus();
+                return;
+            }
+            await sendEchoMessage(desc, input);
+            return;
+        }
 
         // ── Multi-time CONTINUATION? ──────────────────────────────────
         // When the previous /chat iteration finished and there are
@@ -4488,6 +4692,8 @@
 
     // ── Reset ──────────────────────────────────────────────────────
     async function resetConversation() {
+        _abortActiveStream();
+        _unlockChatInput();
         await fetch('/log_chatbot/reset', {method: 'POST'});
         document.getElementById('chat-window').innerHTML = `
             <div class="welcome-msg" id="welcome-msg">
@@ -8055,8 +8261,19 @@
         if (typeof closeTimeCaptureModal === 'function') closeTimeCaptureModal();
         window.__multiTimeContext = null;
         window.__skipTimeCaptureOnce = false;
+        __wifiStreaming = false;
+        __echoRequestActive = false;
+        __echoHistory = [];
         const sb = document.getElementById('send-btn');
-        if (sb) sb.disabled = false;
+        if (sb) {
+            sb.textContent = 'Send ↑';
+            sb.classList.remove('stopping');
+        }
+        selectedChatModel = 'avatar';
+        setChatModelPickerDisabled(false);
+        document.getElementById('model-avatar').setAttribute('aria-pressed', 'true');
+        document.getElementById('model-echo').setAttribute('aria-pressed', 'false');
+        onChatModelChange();
         if (typeof validateUserInput === 'function') validateUserInput();
         if (typeof updateAnalyzeBtn === 'function') updateAnalyzeBtn();
     }
@@ -8606,6 +8823,7 @@
         // Stop rendering whatever stream is currently on screen (its server
         // job, if any, keeps running and can be re-attached to later).
         _abortActiveStream();
+        _unlockChatInput();
         // Preserve the chat-box draft of the conversation we're leaving so it
         // reappears when we switch back to it (kept per-conversation in memory).
         saveCurrentDraft();

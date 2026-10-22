@@ -553,6 +553,202 @@ def start_case_run(case_nbr: str) -> dict:
 
 
 # ---------------------------------------------------------------------------
+# Outlook intake (2026-10-22): mail that names an IPS case
+# ---------------------------------------------------------------------------
+
+def run_email_scan(store: HandsfreeStore, *, folder: str = "Inbox", max_cases: int = 3,
+                   lookback_days: int = 7, trigger: str = "manual",
+                   reply_all: bool = True, on_start=None,
+                   own_email: Optional[str] = None) -> dict:
+    """One Outlook round: mail received in the last `lookback_days` in the
+    folder, not handled before, that names an IPS case → the case pipeline
+    (ledger bypassed: a new mail is a new ask), one run per case per round,
+    newest mail first. The drafts carry `email` (the mail to reply to) so
+    Approve saves an Outlook reply draft instead of posting to IPS. Mail
+    without a case number is remembered and listed as skipped."""
+    from datetime import datetime, timedelta
+    from . import outlook_source as ol
+
+    if not _run_lock.acquire(blocking=False):
+        return {"ok": False, "error": "a run is already in progress"}
+    source = f"Outlook folder '{folder or 'Inbox'}'"
+    started = datetime.now().astimezone()
+    summary: dict = {"ok": True, "trigger": trigger, "source": source,
+                     "started_at": started.isoformat(timespec="seconds"),
+                     "cases": [], "skipped": []}
+    try:
+        _set_state(status="running", owner=None, mode=f"email-scan ({trigger})",
+                   source=source, started_at=time.time(), events=[], cases=[],
+                   case_details={}, error=None)
+        if on_start is not None:
+            on_start()
+        since = started - timedelta(days=max(1, int(lookback_days or 7)))
+        own = own_email
+        if own is None:                            # the signed-in user's UPN
+            own = ""
+            try:
+                from utils.helpers import detect_user_email
+                own = detect_user_email() or ""
+            except Exception:
+                pass
+        _log_event(f"email-scan ({trigger}): {source}, mail received since "
+                   f"{since.strftime('%Y-%m-%d %H:%M')}")
+        with ol.Outlook() as app:
+            refs = app.scan(folder or "Inbox", since, own_email=own)
+        state = ol.load_state(store.root)
+        new = [r for r in refs if not ol.is_processed(state, r.entry_id)]
+        for r in new:
+            if not r.case_nbrs:
+                summary["skipped"].append({"subject": r.subject[:80], "sender": r.sender_name,
+                                           "why": "no IPS case number"})
+                ol.mark_processed(store.root, r.entry_id)
+        work: list = []
+        dupes: list = []            # older mails naming a case a newer mail already runs
+        seen: set = set()
+        for r in new:                              # newest first
+            for nbr in r.case_nbrs:
+                if nbr not in seen:
+                    seen.add(nbr)
+                    work.append((r, nbr))
+                else:
+                    dupes.append((r, nbr))
+        _log_event(f"{len(refs)} mail(s) in the window, {len(new)} new, "
+                   f"{len(summary['skipped'])} without a case number, {len(work)} case(s) to run")
+        capped = len(work) > max_cases
+        if capped:
+            _log_event(f"capped to {max_cases} case(s) this round (newest mail first)")
+            work = work[:max_cases]
+        _set_state(cases=[{"case_nbr": nbr, "subject": r.subject, "email": True}
+                          for r, nbr in work])
+        failed = 0
+        done_cases: set = set()
+        for r, nbr in work:
+            email = {**r.to_dict(), "reply_all": bool(reply_all)}
+            email.pop("case_nbrs", None)
+            _log_event(f"analyzing case {nbr} — mail from {r.sender_name or r.sender_email}: "
+                       f"{r.subject[:60]}")
+            _update_case_details(nbr, {"email": email})
+            try:
+                rec = _analyze_and_enqueue(store, nbr)
+                if rec is not None and rec.get("mode") == "error":
+                    failed += 1
+                    _log_event(f"[{nbr}] FAILED: "
+                               f"{(rec.get('analysis') or {}).get('error') or 'case fetch failed'}"
+                               " — the mail is retried next round")
+                    summary["cases"].append({"case_nbr": nbr, "subject": r.subject,
+                                             "sender": r.sender_name, "mode": "error"})
+                    continue
+                draft_ids = []
+                if rec is not None:
+                    draft_ids.append(rec["draft_id"])
+                    with _state_lock:
+                        fr_id = ((_run_state.get("case_details") or {}).get(nbr) or {}).get("fr_draft_id")
+                    if fr_id:
+                        draft_ids.append(fr_id)
+                    for d_id in draft_ids:
+                        store.update(d_id, email=email)
+                ol.mark_processed(store.root, r.entry_id, nbr, draft_ids[0] if draft_ids else "")
+                done_cases.add(nbr)
+                summary["cases"].append({"case_nbr": nbr, "subject": r.subject,
+                                         "sender": r.sender_name,
+                                         "mode": rec.get("mode") if rec else "unsupported"})
+            except Exception as e:
+                print(f"[handsfree] email-scan case {nbr} failed:\n{traceback.format_exc()}")
+                _log_event(f"[{nbr}] FAILED: {type(e).__name__}: {e}")
+                failed += 1
+                summary["cases"].append({"case_nbr": nbr, "subject": r.subject,
+                                         "sender": r.sender_name, "mode": "error"})
+        # The case got its analysis from the newest mail (the reply draft
+        # answers that one); the older mails naming it are handled too.
+        for r, nbr in dupes:
+            if nbr in done_cases:
+                ol.mark_processed(store.root, r.entry_id, nbr)
+        result = f"{len(work)} case(s) run from {len(work)} mail(s)" if work else "no new mail naming a case"
+        if capped or failed:
+            result += " (capped/failed — retried next round)"
+        state = ol.load_state(store.root)
+        state["last_scan_at"] = started.isoformat(timespec="seconds")
+        ol.save_state(store.root, state)
+        store.save_config({"email_last_scan_at": started.isoformat(timespec="seconds"),
+                           "email_last_result": result})
+        _set_state(status="done", finished_at=time.time())
+        _log_event("email-scan complete — review the queue below; Approve saves the reply "
+                   "as an Outlook draft")
+    except ol.OutlookUnavailable as e:
+        summary.update(ok=False, error=str(e))
+        store.save_config({"email_last_result": f"failed: {e}"})
+        _set_state(status="error", error=str(e), finished_at=time.time())
+        _log_event(f"email-scan FAILED: {e}")
+    except Exception as e:
+        print(f"[handsfree] email-scan failed:\n{traceback.format_exc()}")
+        summary.update(ok=False, error=f"{type(e).__name__}: {e}")
+        store.save_config({"email_last_result": f"failed: {type(e).__name__}: {e}"})
+        _set_state(status="error", error=f"{type(e).__name__}: {e}", finished_at=time.time())
+        _log_event(f"email-scan FAILED: {e}")
+    finally:
+        _run_lock.release()
+    return summary
+
+
+def start_email_scan(**settings) -> dict:
+    """UI 'Check Outlook now': the round in a worker thread; answers once the
+    worker holds the run lock (same handshake as the automatic Run now)."""
+    from . import scheduler
+    if _run_lock.locked():
+        return {"ok": False, "error": "a run is already in progress"}
+    store = _store()
+    cfg = store.load_config()
+    opts = scheduler.email_settings(cfg)
+    started = threading.Event()
+    outcome: dict = {}
+
+    def _worker():
+        try:
+            outcome["res"] = run_email_scan(store, trigger="manual", on_start=started.set, **opts)
+        finally:
+            started.set()
+
+    threading.Thread(target=_worker, daemon=True, name="handsfree-email-now").start()
+    started.wait(timeout=15)
+    res = outcome.get("res")
+    if res is not None and not res.get("ok"):
+        return {"ok": False, "error": res.get("error") or "run did not start"}
+    return {"ok": True}
+
+
+def _save_outlook_reply(store: HandsfreeStore, cfg: dict, draft_id: str,
+                        rec: dict, email: dict) -> dict:
+    """Approve for a mail-triggered draft: the text becomes a reply DRAFT in
+    Outlook (nothing is sent, nothing goes to IPS, the IPS ledger is left
+    alone)."""
+    from . import outlook_source as ol
+    from .composer import compose_html
+    from .ips_client import PostResult
+    body_html = rec.get("draft_html") or compose_html(rec.get("draft_plain") or "")
+    reply_all = bool(email.get("reply_all", cfg.get("email_reply_all", True)))
+    try:
+        with ol.Outlook() as app:
+            saved = app.save_reply_draft(email, ol.reply_fragment(body_html),
+                                         reply_all=reply_all,
+                                         display=bool(cfg.get("email_display_draft")))
+    except ol.OutlookUnavailable as e:
+        err = str(e)
+    except Exception as e:
+        err = f"{type(e).__name__}: {e}"
+    else:
+        result = PostResult(ok=True, backend="outlook", comment_id=saved.get("entry_id", ""),
+                            detail={"folder": "Drafts", "to": saved.get("to", ""),
+                                    "subject": saved.get("subject", ""),
+                                    "reply_all": reply_all,
+                                    "in_reply_to": email.get("subject", "")})
+        store.update(draft_id, status="posted", post_result=result.to_dict())
+        return {"ok": True, "draft": store.get(draft_id), "result": result.to_dict()}
+    store.update(draft_id, status="post_failed",
+                 post_result={"ok": False, "backend": "outlook", "error": err})
+    return {"ok": False, "error": err, "draft": store.get(draft_id)}
+
+
+# ---------------------------------------------------------------------------
 # posting
 # ---------------------------------------------------------------------------
 
@@ -616,6 +812,10 @@ def _approve_and_post_locked(draft_id: str, edited_plain: Optional[str]) -> dict
             plain = plain.replace(AI_MARKER, AI_MARKER + "\n" + CHECKLIST_TAG, 1)
         rec = store.update(draft_id, draft_plain=plain,
                            draft_html=compose_html(plain))
+
+    # A mail-triggered draft replies to the mail, in Outlook, as a draft.
+    if rec.get("email"):
+        return _save_outlook_reply(store, cfg, draft_id, rec, rec["email"])
 
     ips = IpsClient()
 

@@ -78,9 +78,29 @@ def auto_check():
             max_cases=body.get("max_cases"),
             source=body.get("source"),
             list_view=body.get("list_view"),
-            list_views=body.get("list_views")))
+            list_views=body.get("list_views"),
+            **_email_settings_of(body)))
     except ValueError as e:
         return jsonify({"ok": False, "error": str(e)}), 400
+
+
+_EMAIL_KEYS = ("email_watch", "email_folder", "email_lookback_days", "email_max",
+               "email_reply_all")
+
+
+def _email_settings_of(body: dict) -> dict:
+    """The Outlook round settings present in a request body (absent = keep)."""
+    return {k: body[k] for k in _EMAIL_KEYS if k in body}
+
+
+@handsfree_bp.route("/email/check_now", methods=["POST"])
+def email_check_now():
+    """Scan the Outlook folder right away for mail that names an IPS case
+    and analyze those cases (the settings from the page are saved first)."""
+    from services.handsfree import scheduler
+    body = request.get_json(silent=True) or {}
+    scheduler.save_settings(**_email_settings_of(body))
+    return jsonify(orchestrator.start_email_scan())
 
 
 @handsfree_bp.route("/list_views")
@@ -107,7 +127,8 @@ def auto_run_now():
     cfg = scheduler.save_settings(max_cases=body.get("max_cases"),
                                   source=body.get("source"),
                                   list_view=body.get("list_view"),
-                                  list_views=body.get("list_views"))
+                                  list_views=body.get("list_views"),
+                                  **_email_settings_of(body))
     target = scheduler.scan_target(cfg)
     if target["error"]:
         return jsonify({"ok": False, "error": target["error"]})
@@ -323,7 +344,8 @@ def config():
         return jsonify(store.load_config())
     body = request.get_json(silent=True) or {}
     allowed = {"owner_name", "post_backend", "max_cases_per_run",
-               "dry_run", "rest_field_map", "ui_locators", "trial_mode"}
+               "dry_run", "rest_field_map", "ui_locators", "trial_mode",
+               "email_reply_all", "email_display_draft"}
     updates = {k: v for k, v in body.items() if k in allowed}
     return jsonify(store.save_config(updates))
 

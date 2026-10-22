@@ -65,6 +65,14 @@ class HandsfreeStore:
         # view (auto_source "list_view" + auto_list_view developer name).
         "auto_source": "owner",
         "auto_list_view": "Handsfree_replier_test_case",
+        # Outlook intake (2026-10-22): mail naming an IPS case → the case
+        # pipeline; Approve saves the reply as an Outlook draft (never sent).
+        "email_watch_enabled": False,
+        "email_folder": "Inbox",
+        "email_lookback_days": 7,
+        "email_max_per_round": 3,
+        "email_reply_all": True,
+        "email_display_draft": False,  # open the saved draft in Outlook too
         # Verified by a human after describe_comment_fields():
         #   {"body_field": "...", "private_field": "...", "private_value": true}
         "rest_field_map": None,
@@ -309,6 +317,10 @@ class HandsfreeStore:
             slim["log_path"] = str(analysis.get("log_path") or "") if slim["log_dir"] else ""
             slim["action_owner"] = str(analysis.get("action_owner") or "")
             slim["next_action"] = str(analysis.get("next_action") or "")
+            email = rec.get("email") or {}
+            slim["email"] = ({k: email.get(k, "") for k in
+                              ("sender_name", "sender_email", "subject", "received")}
+                             if email else None)
             out.append(slim)
             if len(out) >= limit:
                 break

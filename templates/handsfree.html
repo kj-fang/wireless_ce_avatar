@@ -453,7 +453,9 @@
         Settings) for either new cases OR new customer comments since the previous round, or the cases of up to three IPS
         list views (their union) that were not analyzed yet or have new customer comments — and runs the handsfree pipeline
         for each; the drafts queue below for review. Frequency and max cases per round apply to either source. Nothing is
-        posted automatically — Approve still decides. Closed cases of a list view run only in trial mode (Settings).</div>
+        posted automatically — Approve still decides. Closed cases of a list view run only in trial mode (Settings).
+        With "Also watch Outlook", each round also reads your Outlook folder: mail that names an IPS case runs that case,
+        and Approve on its draft saves a reply in your Outlook Drafts (nothing is sent).</div>
       <div class="controls">
         <label>Frequency:
           <select id="auto-mode">
@@ -497,6 +499,21 @@
         <button class="ghost" id="auto-lv-add" onclick="addAutoListView()"
                 title="Add the selected list view (max 3)">Add</button>
         <span class="status-line" id="auto-source-note"></span>
+      </div>
+      <div class="controls" id="auto-email-row">
+        <label style="display: inline-flex; align-items: center; gap: 6px; cursor: pointer;">
+          <input type="checkbox" id="auto-email-watch"> Also watch Outlook
+        </label>
+        <label>folder
+          <input type="text" id="auto-email-folder" value="Inbox" style="width: 150px; font-family: var(--mono); font-size: 12.5px;"
+                 title="Inbox, or a subfolder of it such as Inbox/Beacon"></label>
+        <label>mail from the last
+          <input type="number" id="auto-email-days" min="1" max="60" step="1" value="7" style="width: 54px;"> days</label>
+        <label>max
+          <input type="number" id="auto-email-max" min="1" max="20" step="1" value="3" style="width: 54px;"> cases</label>
+        <button class="ghost" id="email-check-btn" onclick="emailCheckNow()"
+                title="Read the Outlook folder now: mail that names an IPS case runs that case; the reply waits as a draft for review">Check Outlook now</button>
+        <span class="status-line" id="auto-email-status"></span>
       </div>
     </div>
     <div class="row" id="progress-row">
@@ -559,7 +576,7 @@
         <svg width="13" height="13" viewBox="0 0 24 24" fill="none" stroke="currentColor"
              stroke-width="2.6" stroke-linecap="round" stroke-linejoin="round" aria-hidden="true">
           <path d="M4.5 12.5l5 5 10-11" /></svg>
-        Approve &amp; post to IPS</button>
+        <span id="approve-btn-text">Approve &amp; post to IPS</span></button>
       <button class="ghost" onclick="saveDraft()">Save edits</button>
       <button class="danger" onclick="rejectDraft()">Reject</button>
       <button class="ghost" id="draft-avatar-btn" style="display:none;" onclick="openInAvatar(currentDraftCase, currentDraftId)"
@@ -813,6 +830,18 @@
       autoListViews = (a.list_views || (a.list_view ? [a.list_view] : [])).slice(0, MAX_AUTO_LIST_VIEWS);
     }
     applyAutoSourceUi();
+    const emWatch = document.getElementById('auto-email-watch');
+    if (document.activeElement !== emWatch) emWatch.checked = !!a.email_watch_enabled;
+    const emFolder = document.getElementById('auto-email-folder');
+    if (document.activeElement !== emFolder) emFolder.value = a.email_folder || 'Inbox';
+    const emDays = document.getElementById('auto-email-days');
+    if (document.activeElement !== emDays) emDays.value = a.email_lookback_days || 7;
+    const emMax = document.getElementById('auto-email-max');
+    if (document.activeElement !== emMax) emMax.value = a.email_max || 3;
+    const emBits = [];
+    if (a.email_last_scan_at) emBits.push('last Outlook check ' + a.email_last_scan_at.slice(0, 16).replace('T', ' '));
+    if (a.email_last_result) emBits.push(a.email_last_result);
+    document.getElementById('auto-email-status').textContent = emBits.join(' · ');
     document.getElementById('auto-toggle-text').textContent =
       autoEnabled ? 'Stop automatic analysis' : 'Start automatic analysis';
     document.getElementById('auto-toggle-btn').className = autoEnabled ? 'danger' : 'primary';
@@ -820,7 +849,8 @@
     const srcText = a.source === 'list_view'
       ? 'list view' + ((a.list_views || []).length > 1 ? 's ' : ' ') + ((a.list_views || [a.list_view]).join(', ') || '?')
       : 'open cases of the owner';
-    bits.push(autoEnabled ? 'ON · ' + (a.mode_label || a.mode) + ' · ' + srcText : 'off');
+    bits.push(autoEnabled ? 'ON · ' + (a.mode_label || a.mode) + ' · ' + srcText
+      + (a.email_watch_enabled ? ' + Outlook ' + (a.email_folder || 'Inbox') : '') : 'off');
     if (autoEnabled && a.next_run_at) bits.push('next round ' + a.next_run_at.slice(0, 16).replace('T', ' '));
     if (a.last_scan_at) bits.push('last round ' + a.last_scan_at.slice(0, 16).replace('T', ' ') + ' UTC');
     if (a.last_result) bits.push(a.last_result);
@@ -886,12 +916,26 @@
     }
   }
 
-  function autoRoundSettings() {
+  function emailRoundSettings() {
     return {
+      email_watch: document.getElementById('auto-email-watch').checked,
+      email_folder: document.getElementById('auto-email-folder').value.trim() || 'Inbox',
+      email_lookback_days: parseInt(document.getElementById('auto-email-days').value, 10) || 7,
+      email_max: parseInt(document.getElementById('auto-email-max').value, 10) || 3,
+    };
+  }
+
+  function autoRoundSettings() {
+    return Object.assign({
       max_cases: parseInt(document.getElementById('auto-max').value, 10) || 10,
       source: getAutoSource(),
       list_views: autoListViews.slice(0, MAX_AUTO_LIST_VIEWS),
-    };
+    }, emailRoundSettings());
+  }
+
+  async function emailCheckNow() {
+    await startRun('/handsfree/email/check_now', emailRoundSettings());
+    loadAuto();
   }
 
   async function toggleAuto() {
@@ -1114,6 +1158,7 @@
         `<td>${esc((it.subject || '').slice(0, 70))}</td>` +
         `<td><span class="pill">${esc(it.mode || '')}</span>` +
         (it.trial ? ` <span class="pill warn" title="tuning run on a historical case — cannot be posted">TRIAL</span>` : '') +
+        (it.email ? ` <span class="pill" title="${esc('from ' + (it.email.sender_name || it.email.sender_email || '?') + ' · ' + (it.email.subject || ''))}">email</span>` : '') +
         `</td>` +
         `<td>${it.confidence != null ? it.confidence + '/100' : '—'}</td>` +
         `<td><span class="pill dot ${statusCls}">${esc(it.status)}</span></td>` +
@@ -1154,6 +1199,8 @@
   }
 
   let currentDraftCase = '';
+
+  let currentDraftEmail = null;   // the mail a mail-triggered draft replies to
 
   // Hand-off to Avatar's manual analysis (Log Chatbot) on the case's decoded
   // log. The server seeds this browser session (case, log, issue time in the
@@ -1312,13 +1359,26 @@
     currentDraftId = d.draft_id;
     currentDraftMode = d.mode || null;
     currentDraftCase = d.case_nbr || '';
+    currentDraftEmail = d.email || null;
+    document.getElementById('approve-btn-text').textContent =
+      d.email ? 'Save reply draft in Outlook' : 'Approve & post to IPS';
+    document.getElementById('approve-btn').title = d.email
+      ? 'Saves this text as a reply to the mail in your Outlook Drafts folder — nothing is sent'
+      : 'Posts this text to IPS as a Private-to-Intel comment';
     document.getElementById('draft-avatar-btn').style.display =
       (d.analysis && d.analysis.log_path) ? '' : 'none';
     document.getElementById('draft-panel').style.display = '';
     document.getElementById('draft-title').innerHTML =
       `case ${caseLink(d.case_nbr, d.case_id)} · ${esc(d.mode)} · ${esc(d.status)}`;
-    document.getElementById('draft-status').textContent =
-      d.post_result && d.post_result.error ? ('last post attempt: ' + d.post_result.error) : '';
+    document.getElementById('draft-status').textContent = [
+      d.email ? 'Reply to: ' + (d.email.sender_name || d.email.sender_email || '?')
+        + (d.email.sender_email && d.email.sender_name ? ' <' + d.email.sender_email + '>' : '')
+        + ' · "' + (d.email.subject || '') + '" · received ' + (d.email.received || '').slice(0, 16).replace('T', ' ')
+        + (d.email.reply_all === false ? ' · reply to sender only' : ' · reply all') : '',
+      d.post_result && d.post_result.backend === 'outlook' && d.post_result.ok
+        ? 'saved in Outlook Drafts' + (d.post_result.detail && d.post_result.detail.to ? ' to ' + d.post_result.detail.to : '') : '',
+      d.post_result && d.post_result.error ? ('last post attempt: ' + d.post_result.error) : '',
+    ].filter(Boolean).join(' · ');
     document.getElementById('draft-text').value = d.draft_plain || '';
     renderDraftChips(d.analysis || {});
     renderDraftSent(d.analysis || {});
@@ -1343,20 +1403,24 @@
 
   async function approveDraft() {
     if (!currentDraftId) return;
-    const msg = (['request_logs', 'request_info', 'first_response'].includes(currentDraftMode))
+    const msg = currentDraftEmail
+      ? 'Save this text as a reply draft in your Outlook Drafts folder? Nothing is sent and nothing is posted to IPS.'
+      : (['request_logs', 'request_info', 'first_response'].includes(currentDraftMode))
       ? 'Post this reply to IPS as a PUBLIC comment visible to the customer?'
       : 'Post this comment to IPS as Private to Intel?';
     if (!confirm(msg)) return;
     const btn = document.getElementById('approve-btn');
     btn.disabled = true;
-    document.getElementById('post-status').textContent = 'posting…';
+    document.getElementById('post-status').textContent = currentDraftEmail ? 'saving the Outlook draft…' : 'posting…';
     const r = await fetch('/handsfree/queue/' + encodeURIComponent(currentDraftId) + '/approve', {
       method: 'POST', headers: {'Content-Type': 'application/json'},
       body: JSON.stringify({draft_plain: document.getElementById('draft-text').value}),
     });
     const j = await r.json();
     document.getElementById('post-status').textContent =
-      j.ok ? 'posted to IPS' : ('post failed: ' + (j.error || 'unknown'));
+      j.ok ? (currentDraftEmail ? 'reply draft saved in Outlook — open Outlook Drafts to send it'
+                                : 'posted to IPS')
+           : ((currentDraftEmail ? 'Outlook draft failed: ' : 'post failed: ') + (j.error || 'unknown'));
     if (!j.ok) btn.disabled = false;
     loadQueue();
   }
@@ -1955,7 +2019,8 @@
     const ev = byCase[sel] || {};
     const finished = !!d.finished || (s.status !== 'running' && !!details[sel]);
     const started = s.started_at ? (s.finished_at && s.status !== 'running' ? s.finished_at : Date.now() / 1000) - s.started_at : null;
-    const meta = [s.mode || '', s.owner ? 'owner ' + s.owner : '',
+    const meta = [s.mode || '', String(s.mode || '').startsWith('email-scan') ? (s.source || '') : '',
+                  s.owner ? 'owner ' + s.owner : '',
                   'case ' + (order.indexOf(sel) + 1) + ' of ' + order.length,
                   started != null ? 'elapsed ' + liveFmtSec(started) : ''].filter(Boolean).join(' · ');
 
@@ -2001,6 +2066,7 @@
         `<div class="lp-chips" style="margin-top: 0;"><span class="lp-chip ${m[1]}">${esc(m[0])}</span>` +
         (d.confidence != null ? `<span class="lp-chip ${d.confidence >= 80 ? 'good' : d.confidence >= 50 ? 'warn' : 'bad'}">confidence ${esc(d.confidence)}/100</span>` : '') +
         `</div>` + (d.error && d.mode !== 'full' ? `<div class="lp-next">${esc(d.error)}</div>` : '') +
+        (d.email ? `<div class="lp-next">Reply goes to Outlook as a draft · to ${esc(d.email.sender_name || d.email.sender_email || '?')} · "${esc(d.email.subject || '')}"</div>` : '') +
         `<div class="lp-actions">` +
         (d.draft_id ? `<button class="primary" onclick="openDraft(${JSON.stringify(d.draft_id).replace(/"/g, '&quot;')})">Open draft</button>` : '') +
         (d.fr_draft_id ? `<button class="ghost" onclick="openDraft(${JSON.stringify(d.fr_draft_id).replace(/"/g, '&quot;')})">Open first-response</button>` : '') +

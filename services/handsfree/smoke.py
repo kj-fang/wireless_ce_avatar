@@ -2720,6 +2720,219 @@ def smoke_comment_images(tmp: Path) -> None:
           and sniff_media_type(b"nothing", "image/gif") == "image/gif")
 
 
+# ---------------------------------------------------------------- S19
+def smoke_email_intake(tmp: Path) -> None:
+    print("[S19] Outlook intake: mail naming a case -> pipeline -> reply draft")
+    from datetime import datetime, timedelta
+    from . import orchestrator as orch
+    from . import outlook_source as ol
+    from .composer import AI_MARKER
+    from .queue import HandsfreeStore
+
+    # --- a) case numbers in subject / body ---------------------------------
+    nbrs = ol.extract_case_numbers("RE: Case 1031658 Wi-Fi drops / also IPS#01032299",
+                                   "see #01031658 again, ticket 123456 is not a case, 01034043 bare")
+    check("S19.a case numbers: subject first, 'Case 1031658' padded, 'IPS#' form, bare "
+          "eight-digit in the body, duplicates and six-digit non-IPS numbers dropped",
+          nbrs == ["01031658", "01032299", "01034043"], str(nbrs))
+    check("S19.b no case number -> empty", ol.extract_case_numbers("lunch?", "noon") == [])
+
+    # --- fake Outlook ------------------------------------------------------
+    now = datetime.now()
+
+    class _Reply:
+        def __init__(self, src, all_):
+            self.src, self.all = src, all_
+            self.HTMLBody = "<html><body><div>quoted thread</div></body></html>"
+            self.EntryID, self.To, self.Subject = "DRAFT-" + src.EntryID, "a@x; b@x", "RE: " + src.Subject
+            self.saved = self.displayed = self.sent = False
+        def Save(self): self.saved = True
+        def Display(self): self.displayed = True
+        def Send(self): self.sent = True
+
+    class _Mail:
+        Class = 43
+        def __init__(self, entry, subject, body, sender, email, received):
+            self.EntryID, self.Subject, self.Body = entry, subject, body
+            self.SenderName, self.SenderEmailAddress, self.SenderEmailType = sender, email, "SMTP"
+            self.ReceivedTime, self.ConversationID = received, "conv-" + entry
+            self.replies = []
+        def ReplyAll(self):
+            r = _Reply(self, True); self.replies.append(r); return r
+        def Reply(self):
+            r = _Reply(self, False); self.replies.append(r); return r
+
+    class _Items:
+        def __init__(self, mails): self.m, self.restricted = list(mails), None
+        @property
+        def Count(self): return len(self.m)
+        def Item(self, i): return self.m[i - 1]
+        def Sort(self, key, desc): self.m.sort(key=lambda x: x.ReceivedTime, reverse=bool(desc))
+        def Restrict(self, q): self.restricted = q; return self
+
+    class _Folder:
+        def __init__(self, name, mails, subs=()):
+            self.Name, self.Items, self.StoreID = name, _Items(mails), "STORE1"
+            self.Folders = _Items(list(subs))
+
+    class _NS:
+        def __init__(self, inbox): self.inbox = inbox; self.opened = []
+        def GetDefaultFolder(self, n): return self.inbox
+        def GetItemFromID(self, entry_id, store_id=None):
+            self.opened.append((entry_id, store_id))
+            for f in [self.inbox] + self.inbox.Folders.m:
+                for m in f.Items.m:
+                    if m.EntryID == entry_id: return m
+            raise RuntimeError("not found")
+
+    class _App:
+        def __init__(self, ns): self.ns = ns
+        def GetNamespace(self, kind): return self.ns
+
+    m_new = _Mail("E1", "Fwd: Case 01031658 keeps disconnecting", "please check", "Ann", "ann@oem.com", now - timedelta(hours=2))
+    m_two = _Mail("E2", "two cases", "01032299 and 01031658", "Bob", "bob@oem.com", now - timedelta(hours=5))
+    m_none = _Mail("E3", "lunch?", "noon", "Cat", "cat@intel.com", now - timedelta(hours=1))
+    m_old = _Mail("E4", "Case 01034043 old", "", "Dan", "dan@oem.com", now - timedelta(days=30))
+    m_mine = _Mail("E5", "RE: Case 01031658", "my own reply", "Me", "me@intel.com", now - timedelta(minutes=5))
+    sub = _Folder("Beacon", [_Mail("E6", "case 01034043 in subfolder", "", "Eve", "eve@oem.com", now - timedelta(hours=3))])
+    inbox = _Folder("Inbox", [m_new, m_two, m_none, m_old, m_mine], subs=[sub])
+    ns = _NS(inbox)
+    ol.Outlook.factory = lambda: _App(ns)
+    try:
+        with ol.Outlook() as app:
+            refs = app.scan("Inbox", now - timedelta(days=7), own_email="ME@intel.com")
+            refs_sub = app.scan("Inbox/Beacon", now - timedelta(days=7))
+            try:
+                app.folder("Inbox/Nope")
+                folder_err = ""
+            except ol.OutlookUnavailable as e:
+                folder_err = str(e)
+        check("S19.c scan: newest first, 7-day window, own mail skipped, case numbers per mail, "
+              "subfolder path resolved, missing folder named in the error",
+              [r.entry_id for r in refs] == ["E3", "E1", "E2"]
+              and refs[1].case_nbrs == ["01031658"] and refs[2].case_nbrs == ["01032299", "01031658"]
+              and refs[0].case_nbrs == [] and refs[1].sender_email == "ann@oem.com"
+              and refs[1].store_id == "STORE1" and refs[1].received.startswith(str(now.year))
+              and [r.entry_id for r in refs_sub] == ["E6"] and "Nope" in folder_err,
+              f"{[(r.entry_id, r.case_nbrs) for r in refs]} sub={[r.entry_id for r in refs_sub]} err={folder_err}")
+
+        # --- d) the round: fake pipeline, drafts carry the mail --------------
+        store = HandsfreeStore(tmp / "handsfree_s19")
+        ran: list = []
+
+        def _fake_analyze(store_, case_nbr, case_id="", subject="", owner_name="", trial=None):
+            ran.append(case_nbr)
+            rec = store_.enqueue(case_nbr=case_nbr, case_id="500" + case_nbr, subject="IPS subject " + case_nbr,
+                                 draft_plain=AI_MARKER + "\n\nanalysis of " + case_nbr, draft_html="<p>a</p>",
+                                 confidence=70, mode="full", analysis={})
+            fr = store_.enqueue(case_nbr=case_nbr, case_id="500" + case_nbr, subject="IPS subject " + case_nbr,
+                                draft_plain=AI_MARKER + "\n\nchecklist", draft_html="<p>c</p>",
+                                confidence=None, mode="first_response", analysis={})
+            orch._update_case_details(case_nbr, {"fr_draft_id": fr["draft_id"], "draft_id": rec["draft_id"]})
+            return rec
+
+        orig_analyze, orig_store = orch._analyze_and_enqueue, orch._store
+        orch._analyze_and_enqueue = _fake_analyze
+        orch._store = lambda: store
+        try:
+            res = orch.run_email_scan(store, folder="Inbox", max_cases=3, lookback_days=7, trigger="manual",
+                                      own_email="ME@intel.com")
+            drafts = store.list_drafts()
+            e_drafts = [d for d in drafts if d.get("email")]
+            full = [d for d in e_drafts if d["mode"] == "full"]
+            st = ol.load_state(store.root)
+            check("S19.d round: cases from the newest mail first, one run per case (01031658 once "
+                  "although two mails name it), both drafts of a case carry the mail, no-case mail "
+                  "skipped and remembered, state + config stamped",
+                  res["ok"] and ran == ["01031658", "01032299"]
+                  and [c["case_nbr"] for c in res["cases"]] == ["01031658", "01032299"]
+                  and res["cases"][0]["sender"] == "Ann"
+                  and len(e_drafts) == 4 and all(d["email"]["sender_name"] in ("Ann", "Bob") for d in e_drafts)
+                  and next(d for d in full if d["case_nbr"] == "01031658")["email"]["subject"].startswith("Fwd: Case")
+                  and res["skipped"] == [{"subject": "lunch?", "sender": "Cat", "why": "no IPS case number"}]
+                  and set(st["processed"]) == {"E1", "E2", "E3"}
+                  and st["processed"]["E2"]["case_nbrs"] == ["01032299", "01031658"]   # dupe case handled too
+                  and store.load_config().get("email_last_result", "").startswith("2 case(s) run")
+                  and orch.get_run_state()["status"] == "done",
+                  f"ran={ran} cases={res.get('cases')} skipped={res.get('skipped')} "
+                  f"drafts={[(d['case_nbr'], d['mode'], bool(d.get('email'))) for d in drafts]} state={sorted(st['processed'])} err={res.get('error')}")
+            res2 = orch.run_email_scan(store, folder="Inbox", max_cases=3, lookback_days=7,
+                                       own_email="ME@intel.com")
+            check("S19.e second round: every mail already handled -> nothing runs",
+                  res2["ok"] and res2["cases"] == [] and ran == ["01031658", "01032299"]
+                  and store.load_config().get("email_last_result") == "no new mail naming a case",
+                  str(res2))
+
+            # --- f) approve = Outlook reply draft, never sent, IPS untouched ---
+            d_full = next(d for d in full if d["case_nbr"] == "01031658")
+            rec_full = store.get(d_full["draft_id"])
+            store.save_config({"post_backend": "rest", "dry_run": True})
+            r_dry = orch.approve_and_post(d_full["draft_id"])
+            store.save_config({"dry_run": False})
+            r_ok = orch.approve_and_post(d_full["draft_id"], edited_plain="edited analysis text")
+            reply = m_new.replies[-1] if m_new.replies else None
+            after = store.get(d_full["draft_id"])
+            check("S19.f approve on a mail draft: dry run blocks; then ReplyAll().Save() on the "
+                  "original mail with the edited text above the quoted thread, never Send, status "
+                  "posted with backend outlook, the IPS ledger never marked posted",
+                  not r_dry["ok"] and "dry_run" in r_dry["error"]
+                  and r_ok["ok"] and reply is not None and reply.all and reply.saved and not reply.sent
+                  and "edited analysis text" in reply.HTMLBody and "quoted thread" in reply.HTMLBody
+                  and reply.HTMLBody.index("edited analysis text") < reply.HTMLBody.index("quoted thread")
+                  and after["status"] == "posted" and after["post_result"]["backend"] == "outlook"
+                  and after["post_result"]["comment_id"] == "DRAFT-E1"
+                  and after["post_result"]["detail"]["to"] == "a@x; b@x"
+                  and ns.opened[-1] == ("E1", "STORE1")
+                  and not (store.ledger_entry("01031658") or {}).get("posted_at"),
+                  f"dry={r_dry} ok={r_ok.get('ok')} err={r_ok.get('error')} reply={reply and reply.__dict__}")
+            d_fr = next(d for d in e_drafts if d["mode"] == "first_response" and d["case_nbr"] == "01032299")
+            store.update(d_fr["draft_id"], email={**store.get(d_fr["draft_id"])["email"], "reply_all": False})
+            r_fr = orch.approve_and_post(d_fr["draft_id"])
+            check("S19.g reply_all False -> Reply() (sender only); a second draft of the case "
+                  "is independent (no 'already posted' coupling through IPS)",
+                  r_fr["ok"] and m_two.replies and not m_two.replies[-1].all and m_two.replies[-1].saved,
+                  str(r_fr))
+
+            # --- h) Outlook gone -> post_failed with the message ------------
+            ol.Outlook.factory = lambda: (_ for _ in ()).throw(RuntimeError("COM down"))
+            d_other = next(d for d in full if d["case_nbr"] == "01032299")
+            r_bad = orch.approve_and_post(d_other["draft_id"])
+            check("S19.h Outlook unavailable at approve: post_failed, reviewer-readable error, "
+                  "draft stays in the queue",
+                  not r_bad["ok"] and store.get(d_other["draft_id"])["status"] == "post_failed"
+                  and "COM down" in store.get(d_other["draft_id"])["post_result"]["error"],
+                  str(r_bad))
+            r_scan = orch.run_email_scan(store, folder="Inbox")
+            check("S19.i Outlook unavailable at scan: round reports the error, state says error",
+                  not r_scan["ok"] and "COM down" in r_scan["error"]
+                  and orch.get_run_state()["status"] == "error", str(r_scan))
+        finally:
+            orch._analyze_and_enqueue, orch._store = orig_analyze, orig_store
+    finally:
+        ol.Outlook.factory = None
+
+    # --- j) scheduler settings round-trip ------------------------------------
+    from . import scheduler as sch
+    orig_s = sch._store
+    store_s = HandsfreeStore(tmp / "handsfree_s19s")
+    sch._store = lambda: store_s
+    try:
+        store_s.save_config({"owner_name": "Charles"})
+        st = sch.configure(False, "4h", max_cases=5, email_watch=True, email_folder=" Inbox/Beacon ",
+                           email_lookback_days=99, email_max=0)
+        check("S19.j /auto settings: email keys saved and clamped, reported by status()",
+              st["email_watch_enabled"] is True and st["email_folder"] == "Inbox/Beacon"
+              and st["email_lookback_days"] == 60 and st["email_max"] == 1 and st["email_reply_all"] is True
+              and sch.email_settings(store_s.load_config()) == {"folder": "Inbox/Beacon", "max_cases": 1,
+                                                                 "lookback_days": 60, "reply_all": True},
+              str({k: v for k, v in st.items() if k.startswith("email")}))
+        st2 = sch.save_settings(max_cases=4)
+        check("S19.k settings absent from a request are kept", st2.get("email_folder") == "Inbox/Beacon"
+              and st2.get("email_watch_enabled") is True)
+    finally:
+        sch._store = orig_s
+
+
 def run_smoke() -> int:
     tmp = Path(tempfile.mkdtemp(prefix="handsfree_smoke_"))
     try:
@@ -2739,6 +2952,7 @@ def run_smoke() -> int:
         smoke_checklist_convert(tmp)
         smoke_auto_scan(tmp)
         smoke_comment_images(tmp)
+        smoke_email_intake(tmp)
     finally:
         shutil.rmtree(tmp, ignore_errors=True)
     print(f"\nsmoke result: {'ALL PASS' if not PASS_FAIL else 'FAILURES: ' + ', '.join(PASS_FAIL)}")

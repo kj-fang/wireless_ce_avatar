@@ -14,6 +14,12 @@ Config (HandsfreeStore config.json):
     auto_next_run_at     ISO local                  persisted so a restart resumes
     auto_last_scan_at    ISO UTC                    written by run_auto_scan
     auto_last_result     str                        "<n> case(s) run" / "failed: …"
+    email_watch_enabled  bool                       also scan an Outlook folder each round
+    email_folder         str                        "Inbox" or "Inbox/<subfolder>"
+    email_lookback_days  int                        how far back a round looks
+    email_max_per_round  int                        cases per round from mail
+    email_reply_all      bool                       Reply all (default) or Reply
+    email_last_scan_at / email_last_result          written by run_email_scan
 
 One daemon thread, started lazily (ensure_started) by the blueprint; it
 re-reads the config every tick so Start/Stop/mode changes from the UI need
@@ -100,9 +106,39 @@ def scan_target(cfg: dict) -> dict:
             "error": "" if owner else "no owner name configured"}
 
 
+EMAIL_DEFAULTS = {"email_watch_enabled": False, "email_folder": "Inbox",
+                  "email_lookback_days": 7, "email_max_per_round": 3,
+                  "email_reply_all": True}
+
+
+def _int(value, default: int) -> int:
+    """int(value); the default only for an absent/blank/non-numeric value
+    (0 is a value, clamped by the caller)."""
+    try:
+        return int(str(value).strip())
+    except (TypeError, ValueError):
+        return default
+
+
+def email_settings(cfg: dict) -> dict:
+    """run_email_scan keyword arguments from the config."""
+    return {"folder": str(cfg.get("email_folder") or "Inbox").strip() or "Inbox",
+            "max_cases": max(1, min(20, int(cfg.get("email_max_per_round") or 3))),
+            "lookback_days": max(1, min(60, int(cfg.get("email_lookback_days") or 7))),
+            "reply_all": bool(cfg.get("email_reply_all", True))}
+
+
 def status(cfg: Optional[dict] = None) -> dict:
     cfg = cfg if cfg is not None else _store().load_config()
+    em = email_settings(cfg)
     return {
+        "email_watch_enabled": bool(cfg.get("email_watch_enabled")),
+        "email_folder": em["folder"],
+        "email_lookback_days": em["lookback_days"],
+        "email_max": em["max_cases"],
+        "email_reply_all": em["reply_all"],
+        "email_last_scan_at": cfg.get("email_last_scan_at") or "",
+        "email_last_result": cfg.get("email_last_result") or "",
         "enabled": bool(cfg.get("auto_check_enabled")),
         "mode": cfg.get("auto_check_mode") or "nightly",
         "mode_label": MODES.get(cfg.get("auto_check_mode") or "nightly", ""),
@@ -120,10 +156,22 @@ def status(cfg: Optional[dict] = None) -> dict:
 
 
 def _settings_updates(max_cases=None, source=None, list_view=None,
-                      list_views=None) -> dict:
+                      list_views=None, email_watch=None, email_folder=None,
+                      email_lookback_days=None, email_max=None,
+                      email_reply_all=None) -> dict:
     updates: dict = {}
     if max_cases is not None:
         updates["auto_check_max_cases"] = max(1, min(50, int(max_cases)))
+    if email_watch is not None:
+        updates["email_watch_enabled"] = bool(email_watch)
+    if email_folder is not None:
+        updates["email_folder"] = str(email_folder).strip() or "Inbox"
+    if email_lookback_days is not None:
+        updates["email_lookback_days"] = max(1, min(60, _int(email_lookback_days, 7)))
+    if email_max is not None:
+        updates["email_max_per_round"] = max(1, min(20, _int(email_max, 3)))
+    if email_reply_all is not None:
+        updates["email_reply_all"] = bool(email_reply_all)
     if source is not None:
         updates["auto_source"] = "list_view" if str(source) == "list_view" else "owner"
     if list_views is not None:
@@ -138,15 +186,16 @@ def _settings_updates(max_cases=None, source=None, list_view=None,
     return updates
 
 
-def save_settings(max_cases=None, source=None, list_view=None, list_views=None) -> dict:
+def save_settings(max_cases=None, source=None, list_view=None, list_views=None,
+                  **email) -> dict:
     """Persist the round settings without touching the schedule (UI 'Run
     now' with edited fields). Returns the config."""
     return _store().save_config(
-        _settings_updates(max_cases, source, list_view, list_views))
+        _settings_updates(max_cases, source, list_view, list_views, **email))
 
 
 def configure(enabled: bool, mode: str, max_cases: Optional[int] = None,
-              source=None, list_view=None, list_views=None) -> dict:
+              source=None, list_view=None, list_views=None, **email) -> dict:
     """Start / stop / re-cadence from the UI. Returns the new status.
     Raises ValueError for an unknown mode or, when starting, an unconfigured
     source (no owner name / no list view name)."""
@@ -154,7 +203,7 @@ def configure(enabled: bool, mode: str, max_cases: Optional[int] = None,
     if mode not in MODES:
         raise ValueError(f"unknown mode: {mode}")
     updates: dict = {"auto_check_enabled": bool(enabled), "auto_check_mode": mode}
-    updates.update(_settings_updates(max_cases, source, list_view, list_views))
+    updates.update(_settings_updates(max_cases, source, list_view, list_views, **email))
     if enabled:
         target = scan_target({**store.load_config(), **updates})
         if target["error"]:
@@ -172,7 +221,7 @@ def configure(enabled: bool, mode: str, max_cases: Optional[int] = None,
 def run_once(trigger: str = "manual", on_start=None) -> dict:
     """Run a round now (UI 'Run now'); reschedules the next automatic one.
     on_start() fires once the round holds the run lock (see run_auto_scan)."""
-    from .orchestrator import run_auto_scan
+    from .orchestrator import run_auto_scan, run_email_scan
     store = _store()
     cfg = store.load_config()
     target = scan_target(cfg)
@@ -184,6 +233,9 @@ def run_once(trigger: str = "manual", on_start=None) -> dict:
                             int(cfg.get("auto_check_max_cases") or 10),
                             trigger=trigger, list_views=target["list_views"],
                             on_start=on_start)
+        # The Outlook folder is an ADDITIONAL source of the same round.
+        if res.get("ok") and cfg.get("email_watch_enabled"):
+            res["email"] = run_email_scan(store, trigger=trigger, **email_settings(cfg))
     finally:
         _running.clear()
     busy = not res.get("ok") and "already in progress" in str(res.get("error", ""))

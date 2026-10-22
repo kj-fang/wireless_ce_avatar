@@ -604,15 +604,24 @@ def run_email_scan(store: HandsfreeStore, *, folder: str = "Inbox", max_cases: i
             refs = app.scan(folder or "Inbox", since, own_email=own)
             state = ol.load_state(store.root)
             new = [r for r in refs if not ol.is_processed(state, r.entry_id)]
+            triggers = []
             for r in new:
                 if not r.case_nbrs:
-                    summary["skipped"].append({"subject": r.subject[:80], "sender": r.sender_name,
-                                               "why": "no IPS case number"})
-                    ol.mark_processed(store.root, r.entry_id)
+                    why = "no IPS case number"
+                elif ec.is_automated(r.sender_email, r.sender_name, r.subject):
+                    why = "automated mail (IPS/Jira notification, auto-reply)"
+                elif ec.is_digest(r.case_nbrs):
+                    why = f"names {len(set(r.case_nbrs))} cases — a status digest, not a case mail"
+                else:
+                    triggers.append(r)
+                    continue
+                summary["skipped"].append({"subject": r.subject[:80], "sender": r.sender_name,
+                                           "why": why})
+                ol.mark_processed(store.root, r.entry_id)
             work: list = []
             dupes: list = []            # older mails naming a case a newer mail already runs
             seen: set = set()
-            for r in new:                              # newest first
+            for r in triggers:                         # newest first
                 for nbr in r.case_nbrs:
                     if nbr not in seen:
                         seen.add(nbr)
@@ -620,7 +629,8 @@ def run_email_scan(store: HandsfreeStore, *, folder: str = "Inbox", max_cases: i
                     else:
                         dupes.append((r, nbr))
             _log_event(f"{len(refs)} mail(s) in the window, {len(new)} new, "
-                       f"{len(summary['skipped'])} without a case number, {len(work)} case(s) to run")
+                       f"{len(summary['skipped'])} skipped (no case number / automated / digest), "
+                       f"{len(work)} case(s) to run")
             capped = len(work) > max_cases
             if capped:
                 _log_event(f"capped to {max_cases} case(s) this round (newest mail first)")
@@ -641,7 +651,7 @@ def run_email_scan(store: HandsfreeStore, *, folder: str = "Inbox", max_cases: i
                     for m in msgs:
                         app.save_attachments(m, thread_dir)
                     ctx = ec.build_case_context(nbr, msgs, thread_dir)
-                    target = ec.reply_target(msgs) or msgs[-1]
+                    target = ec.reply_target(msgs, trigger_entry_id=r.entry_id) or msgs[-1]
                     email = {"entry_id": target.entry_id, "store_id": target.store_id,
                              "subject": target.subject, "sender_name": target.sender_name,
                              "sender_email": target.sender_email, "received": target.received,

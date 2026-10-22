@@ -31,6 +31,20 @@ IMAGE_EXTS = (".png", ".jpg", ".jpeg", ".gif", ".webp")
 INTEL_DOMAINS = ("intel.com",)
 MAX_IMAGE_BYTES = 5 * 1024 * 1024
 MAX_IMAGES_PER_THREAD = 8
+# A mail naming more cases than this is a digest / status report, not part
+# of any case's thread (the bi-weekly case status mail names dozens).
+MAX_CASES_PER_MAIL = 3
+# Automated senders / subjects: IPS notifications (they duplicate the IPS
+# thread, which stage 2 merges in properly), Jira, no-reply robots,
+# out-of-office replies. Matched case-insensitively against the sender
+# address, the sender name and the subject.
+AUTOMATED_SENDER_PATTERNS = ("intel.premier.support@", "noreply", "no-reply", "no_reply",
+                             "donotreply", "do-not-reply", "do_not_reply", "jira@",
+                             "_jira", "(jira)", "notification@", "notifications@",
+                             "mailer-daemon", "postmaster@")
+AUTOMATED_SUBJECT_RE = re.compile(
+    r"^\s*(automatic reply|auto(matic)?[\s-]*reply|out of office|undeliverable|"
+    r"delivery (status notification|has failed)|read:|ips (has|-) )", re.IGNORECASE)
 
 _REPLY_PREFIX_RE = re.compile(r"^\s*(?:(?:re|fw|fwd|aw|wg|sv|tr|答复|回复|转发)\s*:\s*)+", re.IGNORECASE)
 _BT_RE = re.compile(r"bluetooth|\bbt\b|a2dp|\bhfp\b|le audio|\bhid\b", re.IGNORECASE)
@@ -94,14 +108,42 @@ def sort_messages(messages) -> list[EmailMessage]:
     return sorted(messages or [], key=lambda m: m.received or "")
 
 
-def reply_target(messages) -> Optional[EmailMessage]:
-    """The mail the reply draft answers: the newest one not written by us
-    (else simply the newest)."""
+def is_automated(sender_email: str = "", sender_name: str = "", subject: str = "") -> bool:
+    """IPS / Jira / robot notifications and out-of-office replies: never
+    part of a case's email thread, never a trigger."""
+    hay = f"{sender_email} {sender_name}".lower()
+    if any(p in hay for p in AUTOMATED_SENDER_PATTERNS):
+        return True
+    return bool(AUTOMATED_SUBJECT_RE.match(str(subject or "")))
+
+
+def is_digest(case_nbrs) -> bool:
+    """A mail naming more than MAX_CASES_PER_MAIL cases is a status digest."""
+    return len(set(case_nbrs or [])) > MAX_CASES_PER_MAIL
+
+
+def reply_target(messages, trigger_entry_id: str = "") -> Optional[EmailMessage]:
+    """The mail the reply draft answers. The mail that triggered the run;
+    when that one is ours, the newest mail not written by us in the same
+    conversation, else the trigger itself (a reply-all on our own mail goes
+    to its recipients). Without a trigger: the newest mail not written by
+    us, else the newest."""
     msgs = sort_messages(messages)
+    if not msgs:
+        return None
+    trigger = next((m for m in msgs if m.entry_id == trigger_entry_id), None) if trigger_entry_id else None
+    if trigger is not None:
+        if not trigger.is_own:
+            return trigger
+        if trigger.conversation_id:
+            for m in reversed(msgs):
+                if not m.is_own and m.conversation_id == trigger.conversation_id:
+                    return m
+        return trigger
     for m in reversed(msgs):
         if not m.is_own:
             return m
-    return msgs[-1] if msgs else None
+    return msgs[-1]
 
 
 # ------------------------------------------------------------- the context

@@ -2821,7 +2821,15 @@ def smoke_email_intake(tmp: Path) -> None:
     m_old = _Mail("E4", "Case 01034043 old", "", "Dan", "dan@oem.com", now - timedelta(days=30))
     m_mine = _Mail("E5", "RE: Case 01031658", "my own reply", "Me", "me@intel.com", now - timedelta(minutes=5))
     sub = _Folder("Beacon", [_Mail("E6", "case 01034043 in subfolder", "", "Eve", "eve@oem.com", now - timedelta(hours=3))])
-    inbox = _Folder("Inbox", [m_new, m_two, m_none, m_old, m_mine], subs=[sub])
+    # Noise that names the case: an IPS notification, an out-of-office reply,
+    # and a status digest naming five cases. None is thread mail or a trigger.
+    m_ips = _Mail("N1", "IPS has New Private Comment on Case 01031658 - BANCO", "comment on 01031658",
+                  "Intel Premier Support", "intel.premier.support@intel.com", now - timedelta(hours=4))
+    m_oof = _Mail("N2", "Automatic reply: Case 01031658 keeps disconnecting", "out of office, see 01031658",
+                  "Dan", "dan@oem.com", now - timedelta(minutes=50))
+    m_dig = _Mail("N3", "Bi-weekly case status", "01031658 01032299 01034043 01030001 01030002",
+                  "Lin", "lin@intel.com", now - timedelta(minutes=30))
+    inbox = _Folder("Inbox", [m_new, m_two, m_none, m_old, m_mine, m_ips, m_oof, m_dig], subs=[sub])
     sent = _Folder("Sent Items", [m_sent])
     ns = _NS(inbox, sent)
     ol.Outlook.factory = lambda: _App(ns)
@@ -2834,12 +2842,14 @@ def smoke_email_intake(tmp: Path) -> None:
                 folder_err = ""
             except ol.OutlookUnavailable as e:
                 folder_err = str(e)
+        by = {r.entry_id: r for r in refs}
         check("S19.c scan: newest first, 7-day window, own mail skipped, case numbers per mail, "
               "subfolder path resolved, missing folder named in the error",
-              [r.entry_id for r in refs] == ["E3", "E1", "E2"]
-              and refs[1].case_nbrs == ["01031658"] and refs[2].case_nbrs == ["01032299", "01031658"]
-              and refs[0].case_nbrs == [] and refs[1].sender_email == "ann@oem.com"
-              and refs[1].store_id == "STORE1" and refs[1].received.startswith(str(now.year))
+              [r.entry_id for r in refs] == ["N3", "N2", "E3", "E1", "N1", "E2"]
+              and by["E1"].case_nbrs == ["01031658"] and by["E2"].case_nbrs == ["01032299", "01031658"]
+              and by["E3"].case_nbrs == [] and by["E1"].sender_email == "ann@oem.com"
+              and by["E1"].store_id == "STORE1" and by["E1"].received.startswith(str(now.year))
+              and len(by["N3"].case_nbrs) == 5
               and [r.entry_id for r in refs_sub] == ["E6"] and "Nope" in folder_err,
               f"{[(r.entry_id, r.case_nbrs) for r in refs]} sub={[r.entry_id for r in refs_sub]} err={folder_err}")
 
@@ -2858,6 +2868,19 @@ def smoke_email_intake(tmp: Path) -> None:
               and th[2].folder == "Sent Items" and th[3].is_own and th[3].folder == "Inbox"
               and [m.entry_id for m in th_7] == ["E2"],
               f"{[(m.entry_id, m.is_own, m.folder) for m in th]} / {[m.entry_id for m in th_7]}")
+        check("S19.p filters: IPS notifications, auto-replies and multi-case digests are not thread "
+              "mail; the reply goes to the triggering mail, or (own trigger) to the newest customer mail "
+              "of its conversation, else to the trigger itself; no trigger -> newest customer mail",
+              all(m.entry_id not in ("N1", "N2", "N3") for m in th)
+              and ec.is_automated("intel.premier.support@intel.com") and ec.is_automated(subject="Automatic reply: x")
+              and ec.is_automated("", "sys_mule2hsd (Jira)", "") and ec.is_automated("CNV_Jira@Intel.com")
+              and not ec.is_automated("ann@oem.com", "Ann", "RE: Case 1")
+              and ec.is_digest(["1", "2", "3", "4"]) and not ec.is_digest(["1", "2", "3", "3"])
+              and ec.reply_target(th, trigger_entry_id="E2").entry_id == "E2"
+              and ec.reply_target(th, trigger_entry_id="S1").entry_id == "S1"
+              and ec.reply_target(th).entry_id == "E1",
+              f"thread={[m.entry_id for m in th]} tgt_E2={ec.reply_target(th, trigger_entry_id='E2').entry_id} "
+              f"tgt_S1={ec.reply_target(th, trigger_entry_id='S1').entry_id} tgt={ec.reply_target(th).entry_id}")
         check("S19.m the thread as a case: earliest mail = description (with a From/subject header), "
               "later mails = comments with Customer/Agent authors, file attachments saved and listed as "
               "uploads with the mail's time (attached mails skipped), images set aside, local paths kept, "
@@ -2942,8 +2965,8 @@ def smoke_email_intake(tmp: Path) -> None:
                   and res["cases"][0]["sender"] == "Ann"
                   and len(e_drafts) == 4 and all(d["email"]["sender_name"] in ("Ann", "Bob") for d in e_drafts)
                   and next(d for d in full if d["case_nbr"] == "01031658")["email"]["subject"].startswith("Fwd: Case")
-                  and res["skipped"] == [{"subject": "lunch?", "sender": "Cat", "why": "no IPS case number"}]
-                  and set(st["processed"]) == {"E1", "E2", "E3"}
+                  and [s_["why"][:9] for s_ in res["skipped"]] == ["names 5 c", "automated", "no IPS ca", "automated"]
+                  and set(st["processed"]) == {"E1", "E2", "E3", "N1", "N2", "N3"}
                   and st["processed"]["E2"]["case_nbrs"] == ["01032299", "01031658"]   # dupe case handled too
                   and store.load_config().get("email_last_result", "").startswith("2 case(s) run")
                   and orch.get_run_state()["status"] == "done",

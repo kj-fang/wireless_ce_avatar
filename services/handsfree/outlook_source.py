@@ -360,7 +360,7 @@ class Outlook:
         """Every mail that names the case (eight-digit or without the leading
         zeros) in the given folders, oldest first, as EmailMessage objects
         (attachments not yet saved: see save_attachments)."""
-        from .email_case import EmailMessage
+        from .email_case import EmailMessage, is_automated, is_digest
         nbr = str(case_nbr)
         forms = [nbr] + ([nbr.lstrip("0")] if nbr.lstrip("0") != nbr else [])
         dasl = "@SQL=" + " OR ".join(
@@ -400,7 +400,8 @@ class Outlook:
                     body = str(getattr(item, "Body", "") or "")[:MAX_BODY_CHARS]
                 except Exception:
                     body = ""
-                if nbr not in extract_case_numbers(subject, body):
+                nbrs = extract_case_numbers(subject, body)
+                if nbr not in nbrs or is_digest(nbrs):
                     continue
                 entry_id = str(item.EntryID)
                 if entry_id in seen:
@@ -409,10 +410,19 @@ class Outlook:
                 received = _to_datetime(getattr(item, "ReceivedTime", None)
                                         or getattr(item, "SentOn", None))
                 sender_email = _sender_email(item)
+                sender_name = str(getattr(item, "SenderName", "") or "")
+                if is_automated(sender_email, sender_name, subject):
+                    continue                     # IPS/Jira/robot mail, auto-replies
+                # A mail to oneself sits in Sent Items AND the Inbox: one copy.
+                dup_key = (subject.strip().casefold(), sender_email.casefold(),
+                           received.strftime("%Y-%m-%dT%H:%M") if received else "")
+                if dup_key in seen:
+                    continue
+                seen.add(dup_key)
                 out.append(EmailMessage(
                     entry_id=entry_id, store_id=store_id, folder=str(fname),
                     subject=subject,
-                    sender_name=str(getattr(item, "SenderName", "") or ""),
+                    sender_name=sender_name,
                     sender_email=sender_email,
                     received=received.isoformat(timespec="seconds") if received else "",
                     body=body,

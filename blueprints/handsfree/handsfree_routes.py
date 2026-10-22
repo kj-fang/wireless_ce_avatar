@@ -93,6 +93,13 @@ def _email_settings_of(body: dict) -> dict:
     return {k: body[k] for k in _EMAIL_KEYS if k in body}
 
 
+@handsfree_bp.route("/email/run_case", methods=["POST"])
+def email_run_case():
+    """Manual: the email thread of one typed case number through the pipeline."""
+    body = request.get_json(silent=True) or {}
+    return jsonify(orchestrator.start_email_case_run(body.get("case_nbr")))
+
+
 @handsfree_bp.route("/email/check_now", methods=["POST"])
 def email_check_now():
     """Scan the Outlook folder right away for mail that names an IPS case

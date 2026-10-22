@@ -454,8 +454,9 @@
         list views (their union) that were not analyzed yet or have new customer comments — and runs the handsfree pipeline
         for each; the drafts queue below for review. Frequency and max cases per round apply to either source. Nothing is
         posted automatically — Approve still decides. Closed cases of a list view run only in trial mode (Settings).
-        With "Also watch Outlook", each round also reads your Outlook folder: mail that names an IPS case runs that case,
-        and Approve on its draft saves a reply in your Outlook Drafts (nothing is sent).</div>
+        With "Also watch Outlook", each round also reads your Outlook folder: a mail whose subject names a case as
+        "IPS 01234567" runs that case on its email thread (every human mail naming the case, Inbox + Sent Items), and
+        Approve on its draft saves a reply in your Outlook Drafts (nothing is sent).</div>
       <div class="controls">
         <label>Frequency:
           <select id="auto-mode">
@@ -512,8 +513,16 @@
         <label>max
           <input type="number" id="auto-email-max" min="1" max="20" step="1" value="3" style="width: 54px;"> cases</label>
         <button class="ghost" id="email-check-btn" onclick="emailCheckNow()"
-                title="Read the Outlook folder now: mail that names an IPS case runs that case; the reply waits as a draft for review">Check Outlook now</button>
+                title="Read the Outlook folder now: a mail whose subject says 'IPS <case number>' runs that case on its email thread; the reply waits as a draft for review">Check Outlook now</button>
         <span class="status-line" id="auto-email-status"></span>
+      </div>
+      <div class="controls" id="auto-email-case-row" style="padding-left: 24px;">
+        <span style="color: var(--muted);">…or analyze the email thread of one case:</span>
+        <input type="text" id="email-case-nbr" placeholder="IPS case number, e.g. 01009610"
+               style="width: 220px; font-family: var(--mono); font-size: 12.5px;"
+               onkeydown="if(event.key==='Enter')emailRunCase()">
+        <button class="ghost" id="email-case-btn" onclick="emailRunCase()"
+                title="Collect every human mail naming this case (Inbox + Sent Items) and run the pipeline on that thread; the reply answers the newest customer mail">Analyze the email thread</button>
       </div>
     </div>
     <div class="row" id="progress-row">
@@ -936,6 +945,12 @@
   async function emailCheckNow() {
     await startRun('/handsfree/email/check_now', emailRoundSettings());
     loadAuto();
+  }
+
+  async function emailRunCase() {
+    const caseNbr = document.getElementById('email-case-nbr').value.trim();
+    if (!caseNbr) { alert('Type an IPS case number first.'); return; }
+    await startRun('/handsfree/email/run_case', {case_nbr: caseNbr});
   }
 
   async function toggleAuto() {
@@ -2020,7 +2035,7 @@
     const ev = byCase[sel] || {};
     const finished = !!d.finished || (s.status !== 'running' && !!details[sel]);
     const started = s.started_at ? (s.finished_at && s.status !== 'running' ? s.finished_at : Date.now() / 1000) - s.started_at : null;
-    const meta = [s.mode || '', String(s.mode || '').startsWith('email-scan') ? (s.source || '') : '',
+    const meta = [s.mode || '', String(s.mode || '').startsWith('email') ? (s.source || '') : '',
                   s.owner ? 'owner ' + s.owner : '',
                   'case ' + (order.indexOf(sel) + 1) + ' of ' + order.length,
                   started != null ? 'elapsed ' + liveFmtSec(started) : ''].filter(Boolean).join(' · ');

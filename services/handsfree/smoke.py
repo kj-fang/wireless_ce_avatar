@@ -2810,16 +2810,18 @@ def smoke_email_intake(tmp: Path) -> None:
         def GetNamespace(self, kind): return self.ns
 
     png = b"\x89PNG\r\n\x1a\n" + b"x" * 40
-    m_new = _Mail("E1", "Fwd: Case 01031658 keeps disconnecting", "please check the attached WRT log", "Ann", "ann@oem.com",
+    m_new = _Mail("E1", "Fwd: IPS 01031658 keeps disconnecting", "please check the attached WRT log", "Ann", "ann@oem.com",
                   now - timedelta(hours=2), atts=[_Att("WRT_logs.zip", b"PK\x03\x04zip"), _Att("screen.png", png),
                                                   _Att("forwarded.msg", b"", type_=5)])
-    m_two = _Mail("E2", "two cases", "01032299 and 01031658 — bluetooth headset drops", "Bob", "bob@oem.com",
+    m_two = _Mail("E2", "two cases: IPS 01032299", "and 01031658 — bluetooth headset drops", "Bob", "bob@oem.com",
                   now - timedelta(hours=5), atts=[_Att("notes.txt", b"hi")])
     m_sent = _Mail("S1", "RE: Case 01031658 keeps disconnecting", "we are looking into it", "Me", "me@intel.com",
                    now - timedelta(hours=1, minutes=30))
     m_none = _Mail("E3", "lunch?", "noon", "Cat", "cat@intel.com", now - timedelta(hours=1))
     m_old = _Mail("E4", "Case 01034043 old", "", "Dan", "dan@oem.com", now - timedelta(days=30))
     m_mine = _Mail("E5", "RE: Case 01031658", "my own reply", "Me", "me@intel.com", now - timedelta(minutes=5))
+    m_body = _Mail("E7", "Case 01034043 [AI_test] parameter config", "see 01034043", "Fay", "fay@oem.com",
+                   now - timedelta(minutes=40))      # no 'IPS' in the subject: not a trigger
     sub = _Folder("Beacon", [_Mail("E6", "case 01034043 in subfolder", "", "Eve", "eve@oem.com", now - timedelta(hours=3))])
     # Noise that names the case: an IPS notification, an out-of-office reply,
     # and a status digest naming five cases. None is thread mail or a trigger.
@@ -2829,7 +2831,7 @@ def smoke_email_intake(tmp: Path) -> None:
                   "Dan", "dan@oem.com", now - timedelta(minutes=50))
     m_dig = _Mail("N3", "Bi-weekly case status", "01031658 01032299 01034043 01030001 01030002",
                   "Lin", "lin@intel.com", now - timedelta(minutes=30))
-    inbox = _Folder("Inbox", [m_new, m_two, m_none, m_old, m_mine, m_ips, m_oof, m_dig], subs=[sub])
+    inbox = _Folder("Inbox", [m_new, m_two, m_none, m_old, m_mine, m_ips, m_oof, m_dig, m_body], subs=[sub])
     sent = _Folder("Sent Items", [m_sent])
     ns = _NS(inbox, sent)
     ol.Outlook.factory = lambda: _App(ns)
@@ -2845,7 +2847,7 @@ def smoke_email_intake(tmp: Path) -> None:
         by = {r.entry_id: r for r in refs}
         check("S19.c scan: newest first, 7-day window, own mail skipped, case numbers per mail, "
               "subfolder path resolved, missing folder named in the error",
-              [r.entry_id for r in refs] == ["N3", "N2", "E3", "E1", "N1", "E2"]
+              [r.entry_id for r in refs] == ["N3", "E7", "N2", "E3", "E1", "N1", "E2"]
               and by["E1"].case_nbrs == ["01031658"] and by["E2"].case_nbrs == ["01032299", "01031658"]
               and by["E3"].case_nbrs == [] and by["E1"].sender_email == "ann@oem.com"
               and by["E1"].store_id == "STORE1" and by["E1"].received.startswith(str(now.year))
@@ -2878,14 +2880,18 @@ def smoke_email_intake(tmp: Path) -> None:
               and ec.is_digest(["1", "2", "3", "4"]) and not ec.is_digest(["1", "2", "3", "3"])
               and ec.reply_target(th, trigger_entry_id="E2").entry_id == "E2"
               and ec.reply_target(th, trigger_entry_id="S1").entry_id == "S1"
-              and ec.reply_target(th).entry_id == "E1",
+              and ec.reply_target(th).entry_id == "E1"
+              and ec.trigger_cases("Fwd: IPS 01031658 keeps disconnecting") == ["01031658"]
+              and ec.trigger_cases("ips-01031658 / IPS 01032299") == ["01031658", "01032299"]
+              and ec.trigger_cases("Case 01031658 [AI_test]") == [] and ec.trigger_cases("IPS 1031658") == []
+              and ec.trigger_cases("ips https://x/01031658") == ["01031658"],
               f"thread={[m.entry_id for m in th]} tgt_E2={ec.reply_target(th, trigger_entry_id='E2').entry_id} "
               f"tgt_S1={ec.reply_target(th, trigger_entry_id='S1').entry_id} tgt={ec.reply_target(th).entry_id}")
         check("S19.m the thread as a case: earliest mail = description (with a From/subject header), "
               "later mails = comments with Customer/Agent authors, file attachments saved and listed as "
               "uploads with the mail's time (attached mails skipped), images set aside, local paths kept, "
               "BT wording -> bt, source email",
-              ctx.subject == "two cases" and ctx.description.startswith("[Email from Bob <bob@oem.com>")
+              ctx.subject == "two cases: IPS 01032299" and ctx.description.startswith("[Email from Bob <bob@oem.com>")
               and [r[1] for r in ctx.comments] == ["Customer", "Agent", "Agent"]
               and "[Email from Ann" in ctx.comments[0][2] and "please check" in ctx.comments[0][2]
               and [it[0] for it in ctx.attachment_list] == ["notes.txt", "WRT_logs.zip"]
@@ -2964,10 +2970,11 @@ def smoke_email_intake(tmp: Path) -> None:
                   and [c["case_nbr"] for c in res["cases"]] == ["01031658", "01032299"]
                   and res["cases"][0]["sender"] == "Ann"
                   and len(e_drafts) == 4 and all(d["email"]["sender_name"] in ("Ann", "Bob") for d in e_drafts)
-                  and next(d for d in full if d["case_nbr"] == "01031658")["email"]["subject"].startswith("Fwd: Case")
-                  and [s_["why"][:9] for s_ in res["skipped"]] == ["names 5 c", "automated", "no IPS ca", "automated"]
-                  and set(st["processed"]) == {"E1", "E2", "E3", "N1", "N2", "N3"}
-                  and st["processed"]["E2"]["case_nbrs"] == ["01032299", "01031658"]   # dupe case handled too
+                  and next(d for d in full if d["case_nbr"] == "01031658")["email"]["subject"].startswith("Fwd: IPS")
+                  and [s_["why"][:9] for s_ in res["skipped"]] == ["names 5 c", "the subje", "automated", "no IPS ca", "automated"]
+                  and "01034043" in res["skipped"][1]["why"]
+                  and set(st["processed"]) == {"E1", "E2", "E3", "E7", "N1", "N2", "N3"}
+                  and st["processed"]["E2"]["case_nbrs"] == ["01032299"]   # 01031658 is only in E2's body: no trigger
                   and store.load_config().get("email_last_result", "").startswith("2 case(s) run")
                   and orch.get_run_state()["status"] == "done",
                   f"ran={ran} cases={res.get('cases')} skipped={res.get('skipped')} "
@@ -3021,6 +3028,22 @@ def smoke_email_intake(tmp: Path) -> None:
                   "is independent (no 'already posted' coupling through IPS)",
                   r_fr["ok"] and m_two.replies and not m_two.replies[-1].all and m_two.replies[-1].saved,
                   str(r_fr))
+
+            # --- r) manual: the email thread of a typed case number ------------
+            ran.clear()
+            r_man = orch.run_email_case(store, "01034043", own_email="ME@intel.com")
+            man = [d for d in store.list_drafts() if d["case_nbr"] == "01034043" and d["mode"] == "full"]
+            r_none = orch.run_email_case(store, "01039999", own_email="ME@intel.com")
+            check("S19.r manual 'analyze the email thread' of a typed case: the thread is found even "
+                  "when no subject says 'IPS' (E4 + E7), runs with source email, the reply answers the "
+                  "newest customer mail; an unknown case reports 'no mail names case'",
+                  r_man["ok"] and r_man["thread"] == 2 and ran == ["01034043"]
+                  and man and man[0]["source"] == "email" and man[0]["email"]["sender_name"] == "Fay"
+                  and orch.get_run_state()["mode"] == "email-case",
+                  f"man={r_man} none={r_none} drafts={[(d['case_nbr'], d.get('email', {}) or {}) for d in man]}")
+            check("S19.r2 unknown case -> clear error, state error",
+                  not r_none["ok"] and "names case 01039999" in r_none["error"]
+                  and orch.get_run_state()["status"] == "error", str(r_none))
 
             # --- h) Outlook gone -> post_failed with the message ------------
             ol.Outlook.factory = lambda: (_ for _ in ()).throw(RuntimeError("COM down"))

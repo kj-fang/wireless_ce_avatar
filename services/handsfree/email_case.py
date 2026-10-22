@@ -117,6 +117,25 @@ def is_automated(sender_email: str = "", sender_name: str = "", subject: str = "
     return bool(AUTOMATED_SUBJECT_RE.match(str(subject or "")))
 
 
+_TRIGGER_WORD_RE = re.compile(r"(?i)\bIPS\b")
+_EIGHT_DIGITS_RE = re.compile(r"(?<!\d)\d{8}(?!\d)")
+
+
+def trigger_cases(subject: str) -> list[str]:
+    """The cases a mail may START a run for (Charles, 2026-10-22): the
+    SUBJECT must name the case as 'IPS' plus an eight-digit number, e.g.
+    'IPS 01234567'. Numbers only in the body, or subjects without 'IPS', do
+    not trigger (they still make the mail part of the case's thread)."""
+    text = str(subject or "")
+    if not _TRIGGER_WORD_RE.search(text):
+        return []
+    out: list[str] = []
+    for n in _EIGHT_DIGITS_RE.findall(text):
+        if n not in out:
+            out.append(n)
+    return out
+
+
 def is_digest(case_nbrs) -> bool:
     """A mail naming more than MAX_CASES_PER_MAIL cases is a status digest."""
     return len(set(case_nbrs or [])) > MAX_CASES_PER_MAIL

@@ -1158,7 +1158,7 @@
         `<td>${esc((it.subject || '').slice(0, 70))}</td>` +
         `<td><span class="pill">${esc(it.mode || '')}</span>` +
         (it.trial ? ` <span class="pill warn" title="tuning run on a historical case — cannot be posted">TRIAL</span>` : '') +
-        (it.email ? ` <span class="pill" title="${esc('from ' + (it.email.sender_name || it.email.sender_email || '?') + ' · ' + (it.email.subject || ''))}">email</span>` : '') +
+        (it.email ? ` <span class="pill" title="${esc('from ' + (it.email.sender_name || it.email.sender_email || '?') + ' · ' + (it.email.subject || ''))}">${it.source === 'email' ? 'email thread' : 'email'}</span>` : '') +
         `</td>` +
         `<td>${it.confidence != null ? it.confidence + '/100' : '—'}</td>` +
         `<td><span class="pill dot ${statusCls}">${esc(it.status)}</span></td>` +
@@ -1573,7 +1573,8 @@
     const path = LIVE_COMMON.concat(d.bsod_case ? LIVE_BSOD : (d.wifi_or_bt === 'bt' ? LIVE_BT : LIVE_WIFI));
     const exact = {};
     (d.stages || []).forEach(x => { exact[x.name] = x; });
-    const steps = path.map(([key, label]) => {
+    const steps = path.map(([key, label0]) => {
+      const label = (key === 'fetch_case' && d.source === 'email') ? 'Collect the email thread' : label0;
       const e = ev[key] || {};
       let status = e.status || (exact[key] ? (exact[key].ok ? 'done' : 'failed') : 'pending');
       if (key === 'category') {
@@ -2029,6 +2030,7 @@
     if (d.issue_domain) chips.push(['domain ' + d.issue_domain
       + (d.issue_subcategory && d.issue_subcategory !== d.issue_domain ? ' · ' + d.issue_subcategory : ''), '']);
     if (d.wifi_or_bt) chips.push([d.wifi_or_bt === 'bt' ? 'Bluetooth' : 'Wi-Fi', '']);
+    if (d.source === 'email') chips.push(['email thread' + (d.email && d.email.thread_size ? ' · ' + d.email.thread_size + ' mail(s)' : ''), 'warn']);
     if (d.bsod_case) chips.push(['BSOD', 'warn']);
     if (d.yb_case) chips.push(['yellow bang / assert', 'warn']);
     if (d.action_owner) chips.push(['next: ' + (ACTION_OWNER_TEXT[d.action_owner] || d.action_owner),

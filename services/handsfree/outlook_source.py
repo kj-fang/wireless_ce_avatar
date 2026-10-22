@@ -30,6 +30,7 @@ from pathlib import Path
 from typing import Optional
 
 OL_FOLDER_INBOX = 6
+OL_FOLDER_SENT = 5
 OL_MAIL_ITEM = 43
 STATE_FILE = "email_state.json"
 MAX_BODY_CHARS = 20000          # the case number is near the top anyway
@@ -342,6 +343,116 @@ class Outlook:
                 f"Outlook refused to create the reply draft ({type(e).__name__}: {e}) — "
                 "if Outlook showed a programmatic-access warning, allow it and approve again"
             ) from e
+
+
+    # -- the thread of a case (stage 1) ------------------------------------
+
+    def _named_folder(self, name: str):
+        if str(name or "").strip().casefold() in ("sent items", "sent"):
+            try:
+                return self._ns.GetDefaultFolder(OL_FOLDER_SENT)
+            except Exception as e:
+                raise OutlookUnavailable(f"Sent Items could not be opened ({e})") from e
+        return self.folder(name)
+
+    def thread(self, case_nbr: str, *, folders=("Inbox", "Sent Items"),
+               max_items: int = 200, own_email: str = "") -> list:
+        """Every mail that names the case (eight-digit or without the leading
+        zeros) in the given folders, oldest first, as EmailMessage objects
+        (attachments not yet saved: see save_attachments)."""
+        from .email_case import EmailMessage
+        nbr = str(case_nbr)
+        forms = [nbr] + ([nbr.lstrip("0")] if nbr.lstrip("0") != nbr else [])
+        dasl = "@SQL=" + " OR ".join(
+            f"\"urn:schemas:httpmail:subject\" LIKE '%{f}%' OR "
+            f"\"urn:schemas:httpmail:textdescription\" LIKE '%{f}%'" for f in forms)
+        own = (own_email or "").strip().casefold()
+        out: list = []
+        seen: set = set()
+        for fname in folders:
+            try:
+                folder = self._named_folder(fname)
+            except OutlookUnavailable:
+                continue
+            store_id = str(getattr(folder, "StoreID", "") or "")
+            is_sent = str(fname).strip().casefold() in ("sent items", "sent")
+            items = folder.Items
+            try:
+                items.Sort("[ReceivedTime]", True)
+            except Exception:
+                pass
+            restricted = True
+            try:
+                items = items.Restrict(dasl)
+            except Exception:
+                restricted = False          # scan by hand below
+            count = int(getattr(items, "Count", 0) or 0)
+            limit = max_items if restricted else max_items * 5
+            for i in range(1, min(count, limit) + 1):
+                try:
+                    item = items.Item(i)
+                except Exception:
+                    continue
+                if int(getattr(item, "Class", OL_MAIL_ITEM) or OL_MAIL_ITEM) != OL_MAIL_ITEM:
+                    continue
+                subject = str(getattr(item, "Subject", "") or "")
+                try:
+                    body = str(getattr(item, "Body", "") or "")[:MAX_BODY_CHARS]
+                except Exception:
+                    body = ""
+                if nbr not in extract_case_numbers(subject, body):
+                    continue
+                entry_id = str(item.EntryID)
+                if entry_id in seen:
+                    continue
+                seen.add(entry_id)
+                received = _to_datetime(getattr(item, "ReceivedTime", None)
+                                        or getattr(item, "SentOn", None))
+                sender_email = _sender_email(item)
+                out.append(EmailMessage(
+                    entry_id=entry_id, store_id=store_id, folder=str(fname),
+                    subject=subject,
+                    sender_name=str(getattr(item, "SenderName", "") or ""),
+                    sender_email=sender_email,
+                    received=received.isoformat(timespec="seconds") if received else "",
+                    body=body,
+                    is_own=is_sent or (bool(own) and sender_email.casefold() == own),
+                    conversation_id=str(getattr(item, "ConversationID", "") or "")))
+        return sorted(out, key=lambda m: m.received or "")
+
+    def save_attachments(self, msg, dest_dir: str) -> list[dict]:
+        """Save the mail's file attachments into dest_dir (skips attached
+        mails / OLE objects; keeps an existing file). Fills and returns
+        msg.attachments: [{name, path, size, is_image}]."""
+        from .email_case import IMAGE_EXTS
+        try:
+            item = (self._ns.GetItemFromID(msg.entry_id, msg.store_id) if msg.store_id
+                    else self._ns.GetItemFromID(msg.entry_id))
+            atts = item.Attachments
+            count = int(getattr(atts, "Count", 0) or 0)
+        except Exception as e:
+            raise OutlookUnavailable(
+                f"attachments of the mail '{msg.subject[:50]}' could not be read ({e})") from e
+        out: list[dict] = []
+        if count:
+            os.makedirs(dest_dir, exist_ok=True)
+        for i in range(1, count + 1):
+            try:
+                att = atts.Item(i)
+                if int(getattr(att, "Type", 1) or 1) in (5, 6):      # olEmbeddeditem, olOLE
+                    continue
+                name = str(getattr(att, "FileName", "") or f"attachment_{i}")
+                safe = re.sub(r'[\\/:*?"<>|]+', "_", name).strip() or f"attachment_{i}"
+                path = os.path.join(dest_dir, safe)
+                if not os.path.exists(path):
+                    att.SaveAsFile(path)
+                size = os.path.getsize(path) if os.path.exists(path) else 0
+                out.append({"name": safe, "path": path, "size": size,
+                            "is_image": safe.lower().endswith(IMAGE_EXTS)})
+            except Exception as e:
+                print(f"[handsfree.outlook] attachment {i} of '{msg.subject[:40]}' skipped: {e}")
+        msg.attachments = out
+        return out
 
 
 def reply_fragment(body_html: str) -> str:

@@ -2750,13 +2750,27 @@ def smoke_email_intake(tmp: Path) -> None:
         def Display(self): self.displayed = True
         def Send(self): self.sent = True
 
+    class _Att:
+        def __init__(self, name, data, type_=1):
+            self.FileName, self.data, self.Type = name, data, type_
+        def SaveAsFile(self, path):
+            Path(path).write_bytes(self.data)
+
+    class _Atts:
+        def __init__(self, atts): self.a = list(atts)
+        @property
+        def Count(self): return len(self.a)
+        def Item(self, i): return self.a[i - 1]
+
     class _Mail:
         Class = 43
-        def __init__(self, entry, subject, body, sender, email, received):
+        def __init__(self, entry, subject, body, sender, email, received, atts=()):
             self.EntryID, self.Subject, self.Body = entry, subject, body
             self.SenderName, self.SenderEmailAddress, self.SenderEmailType = sender, email, "SMTP"
             self.ReceivedTime, self.ConversationID = received, "conv-" + entry
-            self.replies = []
+            self.replies, self.atts = [], list(atts)
+        @property
+        def Attachments(self): return _Atts(self.atts)
         def ReplyAll(self):
             r = _Reply(self, True); self.replies.append(r); return r
         def Reply(self):
@@ -2768,7 +2782,13 @@ def smoke_email_intake(tmp: Path) -> None:
         def Count(self): return len(self.m)
         def Item(self, i): return self.m[i - 1]
         def Sort(self, key, desc): self.m.sort(key=lambda x: x.ReceivedTime, reverse=bool(desc))
-        def Restrict(self, q): self.restricted = q; return self
+        def Restrict(self, q):
+            self.restricted = q
+            if str(q).startswith("@SQL"):          # the thread search
+                import re as _re
+                toks = _re.findall(r"%([^%']+)%", str(q))
+                return _Items([m for m in self.m if any(t in (m.Subject + " " + m.Body) for t in toks)])
+            return self
 
     class _Folder:
         def __init__(self, name, mails, subs=()):
@@ -2776,11 +2796,11 @@ def smoke_email_intake(tmp: Path) -> None:
             self.Folders = _Items(list(subs))
 
     class _NS:
-        def __init__(self, inbox): self.inbox = inbox; self.opened = []
-        def GetDefaultFolder(self, n): return self.inbox
+        def __init__(self, inbox, sent=None): self.inbox, self.sent = inbox, sent; self.opened = []
+        def GetDefaultFolder(self, n): return self.sent if n == 5 else self.inbox
         def GetItemFromID(self, entry_id, store_id=None):
             self.opened.append((entry_id, store_id))
-            for f in [self.inbox] + self.inbox.Folders.m:
+            for f in [self.inbox] + self.inbox.Folders.m + ([self.sent] if self.sent else []):
                 for m in f.Items.m:
                     if m.EntryID == entry_id: return m
             raise RuntimeError("not found")
@@ -2789,14 +2809,21 @@ def smoke_email_intake(tmp: Path) -> None:
         def __init__(self, ns): self.ns = ns
         def GetNamespace(self, kind): return self.ns
 
-    m_new = _Mail("E1", "Fwd: Case 01031658 keeps disconnecting", "please check", "Ann", "ann@oem.com", now - timedelta(hours=2))
-    m_two = _Mail("E2", "two cases", "01032299 and 01031658", "Bob", "bob@oem.com", now - timedelta(hours=5))
+    png = b"\x89PNG\r\n\x1a\n" + b"x" * 40
+    m_new = _Mail("E1", "Fwd: Case 01031658 keeps disconnecting", "please check the attached WRT log", "Ann", "ann@oem.com",
+                  now - timedelta(hours=2), atts=[_Att("WRT_logs.zip", b"PK\x03\x04zip"), _Att("screen.png", png),
+                                                  _Att("forwarded.msg", b"", type_=5)])
+    m_two = _Mail("E2", "two cases", "01032299 and 01031658 — bluetooth headset drops", "Bob", "bob@oem.com",
+                  now - timedelta(hours=5), atts=[_Att("notes.txt", b"hi")])
+    m_sent = _Mail("S1", "RE: Case 01031658 keeps disconnecting", "we are looking into it", "Me", "me@intel.com",
+                   now - timedelta(hours=1, minutes=30))
     m_none = _Mail("E3", "lunch?", "noon", "Cat", "cat@intel.com", now - timedelta(hours=1))
     m_old = _Mail("E4", "Case 01034043 old", "", "Dan", "dan@oem.com", now - timedelta(days=30))
     m_mine = _Mail("E5", "RE: Case 01031658", "my own reply", "Me", "me@intel.com", now - timedelta(minutes=5))
     sub = _Folder("Beacon", [_Mail("E6", "case 01034043 in subfolder", "", "Eve", "eve@oem.com", now - timedelta(hours=3))])
     inbox = _Folder("Inbox", [m_new, m_two, m_none, m_old, m_mine], subs=[sub])
-    ns = _NS(inbox)
+    sent = _Folder("Sent Items", [m_sent])
+    ns = _NS(inbox, sent)
     ol.Outlook.factory = lambda: _App(ns)
     try:
         with ol.Outlook() as app:
@@ -2816,18 +2843,84 @@ def smoke_email_intake(tmp: Path) -> None:
               and [r.entry_id for r in refs_sub] == ["E6"] and "Nope" in folder_err,
               f"{[(r.entry_id, r.case_nbrs) for r in refs]} sub={[r.entry_id for r in refs_sub]} err={folder_err}")
 
+        # --- l/m/n/o) the email THREAD as the case -----------------------------
+        from . import email_case as ec
+        with ol.Outlook() as app:
+            th = app.thread("01031658", own_email="me@intel.com")
+            th_7 = app.thread("01032299")
+            tdir = tmp / "email_01031658"
+            for m in th:
+                app.save_attachments(m, str(tdir))
+            ctx = ec.build_case_context("01031658", th, str(tdir))
+        check("S19.l thread(): every mail naming the case across Inbox + Sent Items (DASL on "
+              "subject/body, both number forms), oldest first, own/sent mail flagged, the other case untouched",
+              [m.entry_id for m in th] == ["E2", "E1", "S1", "E5"] and th[2].is_own and not th[1].is_own
+              and th[2].folder == "Sent Items" and th[3].is_own and th[3].folder == "Inbox"
+              and [m.entry_id for m in th_7] == ["E2"],
+              f"{[(m.entry_id, m.is_own, m.folder) for m in th]} / {[m.entry_id for m in th_7]}")
+        check("S19.m the thread as a case: earliest mail = description (with a From/subject header), "
+              "later mails = comments with Customer/Agent authors, file attachments saved and listed as "
+              "uploads with the mail's time (attached mails skipped), images set aside, local paths kept, "
+              "BT wording -> bt, source email",
+              ctx.subject == "two cases" and ctx.description.startswith("[Email from Bob <bob@oem.com>")
+              and [r[1] for r in ctx.comments] == ["Customer", "Agent", "Agent"]
+              and "[Email from Ann" in ctx.comments[0][2] and "please check" in ctx.comments[0][2]
+              and [it[0] for it in ctx.attachment_list] == ["notes.txt", "WRT_logs.zip"]
+              and ctx.attachment_list[1][2][1] == "email from Ann"
+              and (tdir / "WRT_logs.zip").read_bytes().startswith(b"PK") and not (tdir / "forwarded.msg").exists()
+              and ctx.local_paths["WRT_logs.zip"] == str(tdir / "WRT_logs.zip")
+              and [a["name"] for _m, a in ctx.image_files] == ["screen.png"]
+              and ctx.wifi_or_bt == "bt" and ctx.source == "email" and ctx.subcategory == "Email thread"
+              and ctx.id == "" and ec.reply_target(th).entry_id == "E1"
+              and "messages" not in ctx.to_dict(),
+              f"subject={ctx.subject!r} comments={[(r[1], r[2][:40]) for r in ctx.comments]} "
+              f"atts={ctx.attachment_list} imgs={[a['name'] for _m, a in ctx.image_files]} bt={ctx.wifi_or_bt}")
+        from models.models import CaseContext as _CC
+        ips_ctx = _CC(case_nbr="01031658", id="500X", subject="IPS subject", description="IPS description",
+                      comments=[[(now - timedelta(hours=3)).isoformat(timespec="seconds"), "Partner", "ips comment"]],
+                      attachment_list=[["WRT_logs.zip", "https://esft/x", ["10/01/2026 10:00", ""]],
+                                       ["other.zip", "https://esft/y", ["10/02/2026 10:00", ""]]],
+                      case_download_dir=str(tmp / "ips"), wifi_or_bt="wifi")
+        merged = ec.merge_contexts(ips_ctx, ctx)
+        check("S19.n stage-2 hook merge_contexts: comments interleaved by time (email rows tagged), "
+              "archives of both with IPS winning a name clash, local paths + messages carried, source ips+email",
+              [r[2][:7] for r in merged.comments] == ["ips com", "[email]", "[email]", "[email]"]
+              and [it[0] for it in merged.attachment_list] == ["WRT_logs.zip", "other.zip", "notes.txt"]
+              and merged.attachment_list[0][1] == "https://esft/x"
+              and merged.source == "ips+email" and merged.local_paths == ctx.local_paths
+              and merged.description.startswith("IPS description") and "[Email thread]" in merged.description
+              and merged.id == "500X" and not hasattr(ips_ctx, "source"),   # the IPS context is left alone
+              f"{[(r[1], r[2][:12]) for r in merged.comments]} {[it[0] for it in merged.attachment_list]}")
+        img_cache = tmp / "email_img_cache.json"
+        rows0, info0 = ec.annotate_email_images(None, ctx, cache_path=img_cache)
+        img_cache.write_text(json.dumps({"email:E1": {"descriptions": ["a DRTU power-limit screenshot"],
+                                                      "url_count": 1}}), encoding="utf-8")
+        rows1, info1 = ec.annotate_email_images(None, ctx, cache_path=img_cache)
+        check("S19.o thread images: no vision available -> rows unchanged; a cached description becomes a "
+              "comment row in time order with the mail's author, details like the IPS image reader",
+              rows0 == ctx.comments and info0 == []
+              and len(rows1) == len(ctx.comments) + 1
+              and [r[1] for r in rows1] == ["Customer", "Customer", "Agent", "Agent"]
+              and rows1[1][2].startswith("[Images attached to the mail of") and "DRTU" in rows1[1][2]
+              and info1 == [{"comment_id": "E1", "date": ctx.messages[1].received, "author": "Customer (Ann)",
+                             "count": 1, "descriptions": ["a DRTU power-limit screenshot"]}],
+              f"{[(r[1], r[2][:30]) for r in rows1]} {info1}")
+
         # --- d) the round: fake pipeline, drafts carry the mail --------------
         store = HandsfreeStore(tmp / "handsfree_s19")
         ran: list = []
+        ctxs: list = []
 
-        def _fake_analyze(store_, case_nbr, case_id="", subject="", owner_name="", trial=None):
+        def _fake_analyze(store_, case_nbr, case_id="", subject="", owner_name="", trial=None,
+                          case_ctx=None, source="ips"):
             ran.append(case_nbr)
-            rec = store_.enqueue(case_nbr=case_nbr, case_id="500" + case_nbr, subject="IPS subject " + case_nbr,
+            ctxs.append((case_nbr, source, case_ctx))
+            rec = store_.enqueue(case_nbr=case_nbr, case_id="", subject=subject or "IPS subject " + case_nbr,
                                  draft_plain=AI_MARKER + "\n\nanalysis of " + case_nbr, draft_html="<p>a</p>",
-                                 confidence=70, mode="full", analysis={})
-            fr = store_.enqueue(case_nbr=case_nbr, case_id="500" + case_nbr, subject="IPS subject " + case_nbr,
+                                 confidence=70, mode="full", analysis={}, source=source)
+            fr = store_.enqueue(case_nbr=case_nbr, case_id="", subject=subject or "IPS subject " + case_nbr,
                                 draft_plain=AI_MARKER + "\n\nchecklist", draft_html="<p>c</p>",
-                                confidence=None, mode="first_response", analysis={})
+                                confidence=None, mode="first_response", analysis={}, source=source)
             orch._update_case_details(case_nbr, {"fr_draft_id": fr["draft_id"], "draft_id": rec["draft_id"]})
             return rec
 
@@ -2856,6 +2949,19 @@ def smoke_email_intake(tmp: Path) -> None:
                   and orch.get_run_state()["status"] == "done",
                   f"ran={ran} cases={res.get('cases')} skipped={res.get('skipped')} "
                   f"drafts={[(d['case_nbr'], d['mode'], bool(d.get('email'))) for d in drafts]} state={sorted(st['processed'])} err={res.get('error')}")
+            check("S19.d2 each case ran on its EMAIL THREAD: source email, the context holds the thread "
+                  "(oldest first, Sent Items included), its files are local, the draft records say source "
+                  "email, the reply target is the newest customer mail, the IPS ledger is NOT marked analyzed",
+                  [(c, s_) for c, s_, _ in ctxs] == [("01031658", "email"), ("01032299", "email")]
+                  and [m.entry_id for m in ctxs[0][2].messages] == ["E2", "E1", "S1", "E5"]
+                  and ctxs[0][2].local_paths.get("WRT_logs.zip", "").endswith("WRT_logs.zip")
+                  and [m.entry_id for m in ctxs[1][2].messages] == ["E2"]
+                  and all(d.get("source") == "email" for d in e_drafts)
+                  and next(d for d in full if d["case_nbr"] == "01031658")["email"]["thread_size"] == 4
+                  and not store.is_processed("01031658") and not store.is_processed("01032299")
+                  and res["cases"][0]["thread"] == 4,
+                  f"ctxs={[(c, s_, [m.entry_id for m in x.messages] if x else None) for c, s_, x in ctxs]} "
+                  f"processed={store.is_processed('01031658')} src={[d.get('source') for d in e_drafts]}")
             res2 = orch.run_email_scan(store, folder="Inbox", max_cases=3, lookback_days=7,
                                        own_email="ME@intel.com")
             check("S19.e second round: every mail already handled -> nothing runs",

@@ -319,6 +319,7 @@ class IncidentReport:
 class CaseAnalysis:
     case_nbr: str
     case_id: str = ""                # Salesforce 18-char id (for posting)
+    source: str = "ips"              # ips | email | ips+email — where the case thread came from
     ok: bool = False
     mode: str = ""                   # full | triage_only | unsupported | error |
                                      # request_logs | request_info | first_response |
@@ -556,6 +557,7 @@ def live_fields(a: "CaseAnalysis") -> dict:
     bsod = a.bsod or {}
     return {
         "case_id": a.case_id,
+        "source": a.source,
         "subject": a.subject,
         "subcategory": a.subcategory,
         "wifi_or_bt": a.wifi_or_bt,
@@ -690,7 +692,7 @@ class HandsfreeRunner:
 
     # ------------------------------------------------------------------
     def analyze_case(self, case_nbr: str, *, max_steps: int = MAX_AGENT_STEPS,
-                     max_incidents: int = MAX_INCIDENTS) -> CaseAnalysis:
+                     max_incidents: int = MAX_INCIDENTS, case_ctx=None) -> CaseAnalysis:
         """Run the pipeline for one case. Whatever path the run takes, a
         background archive prefetch it started is waited for before this
         returns: the caller releases the run lock right after, and an orphan
@@ -700,7 +702,7 @@ class HandsfreeRunner:
         self._echo_thread = None
         try:
             analysis = self._analyze_case(case_nbr, max_steps=max_steps,
-                                          max_incidents=max_incidents)
+                                          max_incidents=max_incidents, case_ctx=case_ctx)
             self._join_echo_advice(analysis)
             best = analysis.best_incident
             self._snap_analysis(analysis, current_stage="", finished=True,
@@ -718,17 +720,31 @@ class HandsfreeRunner:
                           "running after the join timeout — left to finish on its own")
 
     def _analyze_case(self, case_nbr: str, *, max_steps: int,
-                      max_incidents: int) -> CaseAnalysis:
+                      max_incidents: int, case_ctx=None) -> CaseAnalysis:
         from configs.global_configs import app_config
 
         analysis = CaseAnalysis(case_nbr=str(case_nbr))
-        case_ctx = None
+        given_ctx, case_ctx = case_ctx, None
 
         # -- 1. fetch case info ------------------------------------------------
+        # A prebuilt context replaces the IPS fetch: the email thread of the
+        # case (stage 1 of the Outlook intake), later the IPS+email merge.
+        # Every stage after this one runs on the context unchanged.
         with self._stage(analysis, "fetch_case"):
-            from models.models import CaseContext
-            from services.case_info_service import CaseService
-            case_ctx = CaseService.process_case(CaseContext(case_nbr=str(case_nbr)))
+            if given_ctx is not None:
+                case_ctx = given_ctx
+                analysis.source = str(getattr(case_ctx, "source", "") or "ips")
+                msgs = getattr(case_ctx, "messages", None) or []
+                if msgs:
+                    self.progress("fetch_case",
+                                  f"email thread of case {case_nbr}: {len(msgs)} mail(s) "
+                                  f"({msgs[0].received[:10]} → {msgs[-1].received[:10]}), "
+                                  f"{len(case_ctx.attachment_list or [])} file attachment(s), "
+                                  f"{len(getattr(case_ctx, 'image_files', []) or [])} image(s)")
+            else:
+                from models.models import CaseContext
+                from services.case_info_service import CaseService
+                case_ctx = CaseService.process_case(CaseContext(case_nbr=str(case_nbr)))
             analysis.case_id = case_ctx.id or ""
             analysis.subject = case_ctx.subject or ""
             analysis.description = case_ctx.description or ""
@@ -762,7 +778,7 @@ class HandsfreeRunner:
             # A BSOD case's newest archive is a memory dump (GBs), not a WRT
             # capture — the BSOD branch downloads it to the BSOD share instead.
             self.progress("fetch_case", "BSOD wording in the case — WRT prefetch skipped")
-        elif analysis.wifi_or_bt == "wifi":
+        elif analysis.wifi_or_bt == "wifi" and not getattr(case_ctx, "local_paths", None):
             try:
                 newest = _pick_latest_archive(case_ctx.attachment_list)
                 if newest is not None:
@@ -810,10 +826,17 @@ class HandsfreeRunner:
             cache = (Path(app_config.avatarfiles_dir) / "handsfree"
                      / "image_descriptions.json"
                      if getattr(app_config, "avatarfiles_dir", None) else None)
-            rows, info = annotate_case_comments(
-                IpsClient(), app_config.llm_helper, analysis.case_id,
-                case_ctx.comments, cache_path=cache, skip_marker=AI_MARKER,
-                progress=lambda m: self.progress("read_images", m))
+            if analysis.source == "email":
+                # The thread's image attachments (screenshots sent by mail).
+                from .email_case import annotate_email_images
+                rows, info = annotate_email_images(
+                    app_config.llm_helper, case_ctx, cache_path=cache,
+                    progress=lambda m: self.progress("read_images", m))
+            else:
+                rows, info = annotate_case_comments(
+                    IpsClient(), app_config.llm_helper, analysis.case_id,
+                    case_ctx.comments, cache_path=cache, skip_marker=AI_MARKER,
+                    progress=lambda m: self.progress("read_images", m))
             analysis.comment_images = info
             if info:
                 case_ctx.comments = rows
@@ -1120,6 +1143,11 @@ class HandsfreeRunner:
                 else:
                     self.progress("download",
                                   f"prefetch failed ({prefetch.error}); downloading normally")
+            # A file that came with the mail is already on disk.
+            local_path = (getattr(case_ctx, "local_paths", None) or {}).get(str(zip_item[0]))
+            if not downloaded and local_path and Path(local_path).exists():
+                downloaded.append([local_path, str(zip_item[0]), True])
+                self.progress("download", "attached to the mail — already on disk, nothing to download")
             for attempt in (1, 2):
                 if downloaded:
                     break
@@ -1809,7 +1837,25 @@ class HandsfreeRunner:
             if not dest:
                 raise RuntimeError("BSOD dump share unreachable")
             from utils.attachment_download import run_dload_threads
+            # Dumps that came with the mail: copy them to the share.
+            local = getattr(case_ctx, "local_paths", None) or {}
+            if local:
+                import shutil
+                remaining = []
+                for it in new_items:
+                    src = local.get(str(it[0]))
+                    if src and Path(src).exists():
+                        target = str(Path(dest) / str(it[0]))
+                        if not Path(target).exists():
+                            shutil.copy2(src, target)
+                        downloaded.append([target, str(it[0]), True])
+                        self.progress("bsod_download", f"{it[0]}: copied from the mail attachment")
+                    else:
+                        remaining.append(it)
+                new_items = remaining
             for attempt in (1, 2):
+                if not new_items:
+                    break
                 try:
                     for item in run_dload_threads(new_items, dest, socketio=None):
                         downloaded.append(item)

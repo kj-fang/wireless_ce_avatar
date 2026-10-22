@@ -168,7 +168,7 @@ class HandsfreeStore:
                 draft_plain: str, draft_html: str,
                 confidence: Optional[int], mode: str,
                 analysis: dict, owner_name: str = "",
-                trial: bool = False) -> dict:
+                trial: bool = False, source: str = "ips") -> dict:
         draft_id = f"{case_nbr}__{datetime.now().strftime('%Y%m%dT%H%M%S')}_{uuid.uuid4().hex[:6]}"
         record = {
             "draft_id": draft_id,
@@ -181,6 +181,7 @@ class HandsfreeStore:
             "owner_name": owner_name,
             "subject": subject,
             "mode": mode,                      # full | triage_only
+            "source": source,                  # ips | email | ips+email (where the thread came from)
             "confidence": confidence,
             "draft_plain": draft_plain,
             "draft_html": draft_html,
@@ -194,7 +195,9 @@ class HandsfreeStore:
         # An "error" draft means the case could not even be fetched: it is
         # not an analysis, so it never marks the case processed (the auto
         # scan must retry it; is_processed must not hide it).
-        if mode != "error":
+        # An email-thread analysis is not an IPS analysis: the IPS ledger
+        # (what the IPS auto-scan skips) stays as it was.
+        if mode != "error" and source != "email":
             self.mark_analyzed(case_nbr, draft_id)
         return record
 
@@ -310,7 +313,7 @@ class HandsfreeStore:
             slim = {k: rec.get(k) for k in
                     ("draft_id", "status", "created_at", "updated_at",
                      "case_nbr", "case_id", "owner_name", "subject", "mode", "confidence",
-                     "post_result")}
+                     "post_result", "source")}
             slim["trial"] = bool(rec.get("trial"))
             slim["log_dir"] = decoded_log_dir(rec)
             analysis = rec.get("analysis") or {}
@@ -319,7 +322,7 @@ class HandsfreeStore:
             slim["next_action"] = str(analysis.get("next_action") or "")
             email = rec.get("email") or {}
             slim["email"] = ({k: email.get(k, "") for k in
-                              ("sender_name", "sender_email", "subject", "received")}
+                              ("sender_name", "sender_email", "subject", "received", "thread_size")}
                              if email else None)
             out.append(slim)
             if len(out) >= limit:

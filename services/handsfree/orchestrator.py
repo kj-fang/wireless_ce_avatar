@@ -113,7 +113,8 @@ def start_check_now(owner_name: Optional[str] = None,
 def _analyze_and_enqueue(store: HandsfreeStore, case_nbr: str,
                          case_id: str = "", subject: str = "",
                          owner_name: str = "",
-                         trial: Optional[bool] = None) -> Optional[dict]:
+                         trial: Optional[bool] = None,
+                         case_ctx=None, source: str = "ips") -> Optional[dict]:
     """Shared per-case body for check runs and manual single-case runs.
 
     trial: the run's captured trial-mode flag (run_auto_scan fixes it once
@@ -131,7 +132,8 @@ def _analyze_and_enqueue(store: HandsfreeStore, case_nbr: str,
                                     "current_stage": "", "draft_id": "",
                                     "fr_draft_id": ""})
     runner = HandsfreeRunner(progress_cb=_progress, snapshot_cb=_snapshot)
-    analysis = runner.analyze_case(case_nbr)
+    analysis = runner.analyze_case(case_nbr, case_ctx=case_ctx)
+    _update_case_details(case_nbr, {"source": source})
     if analysis.mode == "unsupported":
         store.mark_skipped(case_nbr, analysis.error, owner_name=owner_name)
         _log_event(f"[{case_nbr}] skipped: {analysis.error}")
@@ -172,7 +174,7 @@ def _analyze_and_enqueue(store: HandsfreeStore, case_nbr: str,
     trial = bool(trial)
 
     draft = compose(analysis)
-    rec = store.enqueue(
+    rec = store.enqueue(source=source, 
         case_nbr=case_nbr,
         case_id=case_id or analysis.case_id,
         subject=subject or analysis.subject,
@@ -202,7 +204,7 @@ def _analyze_and_enqueue(store: HandsfreeStore, case_nbr: str,
         from dataclasses import replace
         fr = replace(analysis, mode="first_response")
         fr_draft = compose(fr)
-        fr_rec = store.enqueue(
+        fr_rec = store.enqueue(source=source, 
             case_nbr=case_nbr,
             case_id=case_id or analysis.case_id,
             subject=subject or analysis.subject,
@@ -560,14 +562,19 @@ def run_email_scan(store: HandsfreeStore, *, folder: str = "Inbox", max_cases: i
                    lookback_days: int = 7, trigger: str = "manual",
                    reply_all: bool = True, on_start=None,
                    own_email: Optional[str] = None) -> dict:
-    """One Outlook round: mail received in the last `lookback_days` in the
-    folder, not handled before, that names an IPS case → the case pipeline
-    (ledger bypassed: a new mail is a new ask), one run per case per round,
-    newest mail first. The drafts carry `email` (the mail to reply to) so
-    Approve saves an Outlook reply draft instead of posting to IPS. Mail
-    without a case number is remembered and listed as skipped."""
+    """One Outlook round (stage 1 of the email intake). New mail received in
+    the last `lookback_days` in the folder that names an IPS case → the
+    case's EMAIL THREAD (every mail naming it, Inbox + Sent Items) becomes
+    the case: earliest mail = description, later mails = comments, their
+    files = the uploads (saved under <avatarfiles>/email_<case>), and the
+    whole pipeline runs on that, not on IPS. One run per case per round,
+    newest mail first. The drafts carry `email` (the newest customer mail,
+    the reply target) and source "email", so Approve saves an Outlook reply
+    draft and the IPS ledger stays untouched. Mail without a case number is
+    remembered and listed as skipped."""
     from datetime import datetime, timedelta
     from . import outlook_source as ol
+    from . import email_case as ec
 
     if not _run_lock.acquire(blocking=False):
         return {"ok": False, "error": "a run is already in progress"}
@@ -595,69 +602,87 @@ def run_email_scan(store: HandsfreeStore, *, folder: str = "Inbox", max_cases: i
                    f"{since.strftime('%Y-%m-%d %H:%M')}")
         with ol.Outlook() as app:
             refs = app.scan(folder or "Inbox", since, own_email=own)
-        state = ol.load_state(store.root)
-        new = [r for r in refs if not ol.is_processed(state, r.entry_id)]
-        for r in new:
-            if not r.case_nbrs:
-                summary["skipped"].append({"subject": r.subject[:80], "sender": r.sender_name,
-                                           "why": "no IPS case number"})
-                ol.mark_processed(store.root, r.entry_id)
-        work: list = []
-        dupes: list = []            # older mails naming a case a newer mail already runs
-        seen: set = set()
-        for r in new:                              # newest first
-            for nbr in r.case_nbrs:
-                if nbr not in seen:
-                    seen.add(nbr)
-                    work.append((r, nbr))
-                else:
-                    dupes.append((r, nbr))
-        _log_event(f"{len(refs)} mail(s) in the window, {len(new)} new, "
-                   f"{len(summary['skipped'])} without a case number, {len(work)} case(s) to run")
-        capped = len(work) > max_cases
-        if capped:
-            _log_event(f"capped to {max_cases} case(s) this round (newest mail first)")
-            work = work[:max_cases]
-        _set_state(cases=[{"case_nbr": nbr, "subject": r.subject, "email": True}
-                          for r, nbr in work])
-        failed = 0
-        done_cases: set = set()
-        for r, nbr in work:
-            email = {**r.to_dict(), "reply_all": bool(reply_all)}
-            email.pop("case_nbrs", None)
-            _log_event(f"analyzing case {nbr} — mail from {r.sender_name or r.sender_email}: "
-                       f"{r.subject[:60]}")
-            _update_case_details(nbr, {"email": email})
-            try:
-                rec = _analyze_and_enqueue(store, nbr)
-                if rec is not None and rec.get("mode") == "error":
+            state = ol.load_state(store.root)
+            new = [r for r in refs if not ol.is_processed(state, r.entry_id)]
+            for r in new:
+                if not r.case_nbrs:
+                    summary["skipped"].append({"subject": r.subject[:80], "sender": r.sender_name,
+                                               "why": "no IPS case number"})
+                    ol.mark_processed(store.root, r.entry_id)
+            work: list = []
+            dupes: list = []            # older mails naming a case a newer mail already runs
+            seen: set = set()
+            for r in new:                              # newest first
+                for nbr in r.case_nbrs:
+                    if nbr not in seen:
+                        seen.add(nbr)
+                        work.append((r, nbr))
+                    else:
+                        dupes.append((r, nbr))
+            _log_event(f"{len(refs)} mail(s) in the window, {len(new)} new, "
+                       f"{len(summary['skipped'])} without a case number, {len(work)} case(s) to run")
+            capped = len(work) > max_cases
+            if capped:
+                _log_event(f"capped to {max_cases} case(s) this round (newest mail first)")
+                work = work[:max_cases]
+            _set_state(cases=[{"case_nbr": nbr, "subject": r.subject, "email": True}
+                              for r, nbr in work])
+            failed = 0
+            done_cases: set = set()
+            thread_root = Path(store.root).parent
+            for r, nbr in work:
+                _log_event(f"[{nbr}] collecting the email thread — triggered by the mail from "
+                           f"{r.sender_name or r.sender_email}: {r.subject[:60]}")
+                try:
+                    msgs = app.thread(nbr, own_email=own)
+                    if not msgs:
+                        raise RuntimeError("the mail naming the case was not found again in Outlook")
+                    thread_dir = str(thread_root / f"email_{nbr}")
+                    for m in msgs:
+                        app.save_attachments(m, thread_dir)
+                    ctx = ec.build_case_context(nbr, msgs, thread_dir)
+                    target = ec.reply_target(msgs) or msgs[-1]
+                    email = {"entry_id": target.entry_id, "store_id": target.store_id,
+                             "subject": target.subject, "sender_name": target.sender_name,
+                             "sender_email": target.sender_email, "received": target.received,
+                             "reply_all": bool(reply_all), "thread_size": len(msgs),
+                             "folder": folder or "Inbox"}
+                    _update_case_details(nbr, {"email": email, "source": "email",
+                                               "subject": ctx.subject})
+                    _log_event(f"[{nbr}] email thread: {len(msgs)} mail(s), "
+                               f"{len(ctx.attachment_list)} file attachment(s), "
+                               f"{len(ctx.image_files)} image(s); reply goes to "
+                               f"{target.sender_name or target.sender_email}")
+                    rec = _analyze_and_enqueue(store, nbr, subject=ctx.subject,
+                                               case_ctx=ctx, source="email")
+                    if rec is not None and rec.get("mode") == "error":
+                        failed += 1
+                        _log_event(f"[{nbr}] FAILED: "
+                                   f"{(rec.get('analysis') or {}).get('error') or 'analysis failed'}"
+                                   " — the mail is retried next round")
+                        summary["cases"].append({"case_nbr": nbr, "subject": r.subject,
+                                                 "sender": r.sender_name, "mode": "error"})
+                        continue
+                    draft_ids = []
+                    if rec is not None:
+                        draft_ids.append(rec["draft_id"])
+                        with _state_lock:
+                            fr_id = ((_run_state.get("case_details") or {}).get(nbr) or {}).get("fr_draft_id")
+                        if fr_id:
+                            draft_ids.append(fr_id)
+                        for d_id in draft_ids:
+                            store.update(d_id, email=email)
+                    ol.mark_processed(store.root, r.entry_id, nbr, draft_ids[0] if draft_ids else "")
+                    done_cases.add(nbr)
+                    summary["cases"].append({"case_nbr": nbr, "subject": r.subject,
+                                             "sender": r.sender_name, "thread": len(msgs),
+                                             "mode": rec.get("mode") if rec else "unsupported"})
+                except Exception as e:
+                    print(f"[handsfree] email-scan case {nbr} failed:\n{traceback.format_exc()}")
+                    _log_event(f"[{nbr}] FAILED: {type(e).__name__}: {e}")
                     failed += 1
-                    _log_event(f"[{nbr}] FAILED: "
-                               f"{(rec.get('analysis') or {}).get('error') or 'case fetch failed'}"
-                               " — the mail is retried next round")
                     summary["cases"].append({"case_nbr": nbr, "subject": r.subject,
                                              "sender": r.sender_name, "mode": "error"})
-                    continue
-                draft_ids = []
-                if rec is not None:
-                    draft_ids.append(rec["draft_id"])
-                    with _state_lock:
-                        fr_id = ((_run_state.get("case_details") or {}).get(nbr) or {}).get("fr_draft_id")
-                    if fr_id:
-                        draft_ids.append(fr_id)
-                    for d_id in draft_ids:
-                        store.update(d_id, email=email)
-                ol.mark_processed(store.root, r.entry_id, nbr, draft_ids[0] if draft_ids else "")
-                done_cases.add(nbr)
-                summary["cases"].append({"case_nbr": nbr, "subject": r.subject,
-                                         "sender": r.sender_name,
-                                         "mode": rec.get("mode") if rec else "unsupported"})
-            except Exception as e:
-                print(f"[handsfree] email-scan case {nbr} failed:\n{traceback.format_exc()}")
-                _log_event(f"[{nbr}] FAILED: {type(e).__name__}: {e}")
-                failed += 1
-                summary["cases"].append({"case_nbr": nbr, "subject": r.subject,
-                                         "sender": r.sender_name, "mode": "error"})
         # The case got its analysis from the newest mail (the reply draft
         # answers that one); the older mails naming it are handled too.
         for r, nbr in dupes:
@@ -688,7 +713,6 @@ def run_email_scan(store: HandsfreeStore, *, folder: str = "Inbox", max_cases: i
     finally:
         _run_lock.release()
     return summary
-
 
 def start_email_scan(**settings) -> dict:
     """UI 'Check Outlook now': the round in a worker thread; answers once the

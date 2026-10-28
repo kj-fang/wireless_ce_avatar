@@ -3,6 +3,28 @@
         /\b\d{4}[-/]\d{1,2}[-/]\d{1,2}[\sT]\d{1,2}:\d{2}:\d{2}\b/
     ];
 
+    // A dmesg that counts seconds since boot has no calendar time to type, so
+    // for one of those logs the issue time IS the offset — which is what the
+    // AI suggestion drops into the question ("Focus on [3.304294] seconds
+    // since boot."). Without this the picker stays empty, the sidebar keeps
+    // saying the time is missing, and sending re-opens the AI dialog that just
+    // produced the offset.
+    const BOOT_ELAPSED_REGEXES = [
+        /\[\s*\d+\.\d{1,6}\s*\]/,
+        /\b\d+\.\d{1,6}\s*s(?:ec(?:onds?)?)?\b[^.\n]{0,24}\bboot\b/i,
+    ];
+
+    // Only for such a log: a bracketed decimal in a Wi-Fi description is not
+    // a time, and must not silence the missing-time hint there.
+    function _logIsBootElapsed() {
+        return !!(window.__logTimeFormat && window.__logTimeFormat.name === 'monotonic');
+    }
+
+    function questionCarriesBootElapsed(text) {
+        return _logIsBootElapsed() && BOOT_ELAPSED_REGEXES.some(r => r.test(text || ''));
+    }
+    window.questionCarriesBootElapsed = questionCarriesBootElapsed;
+
     // Shown as a small badge beside the "Issue Time" heading so the user can
     // tell an attachment's own timestamp apart from one the organizer parsed
     // out of the customer's description — they carry different confidence.
@@ -46,6 +68,7 @@
     }
 
     IssueTimeController.prototype.inputHasValidTime = function (text) {
+        if (questionCarriesBootElapsed(text)) return true;
         return VALID_TIME_REGEXES.some(r => r.test(text));
     };
 
@@ -391,7 +414,11 @@
 
         const firstRound = !firstRoundSent;
         // An auto-filled (previous-page) time only counts once confirmed.
-        const hasIssueTime = !!getIssueTimeString() && !issueTimeAwaitingConfirm;
+        // On a boot-elapsed log the offset lives in the question instead of
+        // the picker — there is no calendar field it could go in — so a
+        // question carrying one counts as having an issue time.
+        const hasIssueTime = (!!getIssueTimeString() && !issueTimeAwaitingConfirm)
+            || questionCarriesBootElapsed(text);
 
         if (firstRound && !logLoaded) {
             valid = false;
@@ -705,9 +732,12 @@
         // the user to add a description for better accuracy, then continue.
         if (nodesc) nodesc.style.display = text ? 'none' : 'block';
         _llmTimeConsentText = text;   // may be empty
+        // Editable, not a preview: this dialog can open before the user has
+        // typed anything — the boot-offset path opens it on its own — and
+        // being asked to allow an analysis of an empty description, with no
+        // way to add one without cancelling, is a dead end.
         const prev = document.getElementById('llm-consent-text');
-        if (prev) prev.textContent = text
-            || '(no description — the AI will infer the issue time from the log only)';
+        if (prev) prev.value = text;
         const loghint = document.getElementById('llm-consent-loghint');
         if (loghint) {
             const hasLog = (typeof logLoaded !== 'undefined' && logLoaded) || !!window.__logSpanMinutes;

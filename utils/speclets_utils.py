@@ -47,7 +47,7 @@ from configs.path_configs import (
 )
 
 #: Profiles that own a speclet pair. Keys match AgentCapabilityPolicy.profile.
-PROFILES = ("wifi", "bt", "nw")
+PROFILES = ("wifi", "bt", "nw", "linux")
 
 #: The two documents each profile owns.
 KINDS = ("prompt", "report")

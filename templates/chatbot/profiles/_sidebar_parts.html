@@ -113,6 +113,31 @@
 
 {# Extras list + "add another" button. Wi-Fi keeps both hidden until the
    "use multiple issue times" master toggle is ticked. #}
+{% macro multi_issue_toggle() %}
+            <!-- Master toggle: hide additional issue times unless the user
+                 opts in. AI auto-fill / popup-apply may add extras into
+                 the DOM, but they only appear (and only count) once
+                 this is ticked. The most-likely time stays in the primary
+                 picker above.
+
+                 Render this wherever extra_issue_times(hidden=True) is
+                 rendered. The two belong together: the rows start hidden and
+                 this is the only thing that reveals them, and the profile
+                 script reads this checkbox to decide whether the extra rows
+                 count at all. A sidebar that drew the rows without the
+                 toggle let people fill in times that were then dropped from
+                 every analysis, with nothing on screen saying so. -->
+            <label class="sidebar-multi-toggle" for="use-multi-issue"
+                   title="By default only the most-likely issue time is used. Tick to also use the additional times below.">
+                <input type="checkbox" id="use-multi-issue"
+                       onchange="_onSidebarMultiToggle(this)">
+                <span>
+                    <strong>Use multiple issue times</strong>
+                    <span class="smt-sub">Off — only the most-likely time. Tick to add more.</span>
+                </span>
+            </label>
+{% endmacro %}
+
 {% macro extra_issue_times(hidden=False) %}
             <!-- Extras list: additional issue times beyond the primary
                  picker above. Each row is a compact MM/DD/YYYY HH:MM:SS.mmm

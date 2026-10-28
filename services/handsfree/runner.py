@@ -20,7 +20,7 @@ Design notes:
     honored in parse_single_binary.
   * The agent run mirrors services/ace/eval/replay.py: fresh
     WifiLogAgentSystem, current_log_path BEFORE prime_with_context,
-    chat(use_tools=True) → {"type": "report", "data": {...}}.
+    chat() → {"type": "report", "data": {...}}.
 """
 
 from __future__ import annotations
@@ -1389,14 +1389,14 @@ class HandsfreeRunner:
         """Fresh agent per case; borrows client/model/skills (and the ACE
         runner, so learned playbooks apply) from the boot-time base agent."""
         from configs.global_configs import app_config
-        from services.log_chatbot_service import WifiLogAgentSystem
+        from services.chatbot.engine.system import WifiLogAgentSystem
 
         base = getattr(app_config, "log_chatbot_agent", None)
         llm = app_config.llm_helper
         skills = getattr(base, "skills", None) or getattr(llm, "skills", None) or {}
         agent_cls = WifiLogAgentSystem
         if domain == "bt":
-            from services.bt_chatbot_service import BtLogAgentSystem
+            from services.chatbot.engine.bluetooth import BtLogAgentSystem
             agent_cls = BtLogAgentSystem
         agent = agent_cls(client=llm.client,
                           model=getattr(llm, "model", "gpt-4.1"),
@@ -1449,8 +1449,8 @@ class HandsfreeRunner:
             )
             self.progress("agent_analysis", f"incident @ {t or 'unspecified time'}")
             try:
-                res = agent.chat(inc.user_message, use_tools=True,
-                                 max_steps=max_steps, step_callback=_capture)
+                res = agent.chat(inc.user_message, max_steps=max_steps,
+                                 step_callback=_capture)
                 inc.result_type = (res or {}).get("type", "") if isinstance(res, dict) else ""
                 data = (res or {}).get("data") if isinstance(res, dict) else None
                 if inc.result_type in ("report", "partial_report") and isinstance(data, dict):

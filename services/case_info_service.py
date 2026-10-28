@@ -458,7 +458,7 @@ class CaseService:
                 driver.quit()
                 if driver in driver_manager.all_drivers:
                     driver_manager.all_drivers.remove(driver)
-            print(f"(download pdf) time total: {(time.time() - start_time):.2f}秒")
+            print(f"(download pdf) time total: {(time.time() - start_time):.2f}s")
     
     @staticmethod
     def _process_snowflake_data(case_context, case_fields, key):

@@ -309,7 +309,11 @@ def _load_or_parse() -> dict:
     # Dev mode: check mtime and re-parse if stale.
     if _CACHE_JSON.exists():
         h_mtimes = [p.stat().st_mtime for p in (_LMAC_H, _UMAC_H) if p.exists()]
-        if h_mtimes and _CACHE_JSON.stat().st_mtime >= max(h_mtimes):
+        # Some development/test distributions intentionally ship only the
+        # generated cache, not the private headers.  In that layout the cache
+        # is authoritative; attempting a re-parse would produce {} and erase
+        # the usable lookup table.
+        if not h_mtimes or _CACHE_JSON.stat().st_mtime >= max(h_mtimes):
             try:
                 data = json.loads(_CACHE_JSON.read_text(encoding="utf-8"))
                 if data:

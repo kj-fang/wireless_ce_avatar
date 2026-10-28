@@ -1221,6 +1221,239 @@ def estimate_tokens():
         return jsonify({'success': False, 'message': str(e)}), 500
 
 
+# ==================================================================
+# Capture selection: pick the best log out of a list of ETL paths
+# ==================================================================
+# This used to live in all three chatbot route modules, in three different
+# states of repair, even though it belongs to neither Wi-Fi nor BT: it takes a
+# list of paths and an issue time and returns one path. It never touches an
+# agent, a conversation, a skill or a profile's UI. Choosing which capture to
+# open is log-parser work, so it lives here now and is served once.
+#
+# The two rules below are DATA. Supporting a new collector layout or a new
+# richness proxy is an edit to a list, not a change to the selection logic.
+
+# Capture-timestamp formats seen in collection folder / file names. Each regex
+# must expose 6 numeric groups in (Y, M, D, h, m, s) order.
+#   e.g. ".../DESKTOP-8ED6JMJ-2026-04-08-00-16-16Z/ibtpci-...-boot.etl"
+PATH_TS_PATTERNS = [
+    re.compile(r'(\d{4})-(\d{2})-(\d{2})-(\d{2})-(\d{2})-(\d{2})'),      # 2026-04-08-00-16-16[Z]
+    re.compile(r'(\d{4})-(\d{2})-(\d{2})[ _](\d{2})-(\d{2})-(\d{2})'),   # 2026-04-08_00-16-16
+    re.compile(r'(\d{4})(\d{2})(\d{2})[ _T-](\d{2})(\d{2})(\d{2})'),     # 20260408T001616
+]
+
+# Suffixes probed (in order) to size a candidate as a content-richness proxy.
+# "" means the etl path itself (the raw .etl).
+SIZE_PROBE_SUFFIXES = [".hci.txt", "", ".log"]
+
+
+def _parse_path_timestamp(path: str):
+    """Extract a capture datetime from an ETL path / folder name, or None.
+
+    This is the answer to "the decoded log does not exist yet". A BT driver
+    capture is only decoded to .hci.txt AFTER the user clicks the agent button,
+    so at selection time there is no log to read a timestamp out of — but the
+    collector already stamped the capture time into the folder name. Wi-Fi
+    never needs this because its <etl>.log is written by the parse step that
+    got us here.
+
+    Tries each pattern in PATH_TS_PATTERNS — extend that list for new layouts.
+    """
+    if not path:
+        return None
+    for rx in PATH_TS_PATTERNS:
+        m = rx.search(path)
+        if not m:
+            continue
+        try:
+            y, mo, d, hh, mm, ss = (int(g) for g in m.groups())
+            return datetime.datetime(y, mo, d, hh, mm, ss)
+        except (ValueError, TypeError):
+            continue
+    return None
+
+
+def _etl_size(etl_path: str) -> int:
+    """Best-available size proxy for richness, probing SIZE_PROBE_SUFFIXES in
+    order. 0 when nothing is found."""
+    for suffix in SIZE_PROBE_SUFFIXES:
+        p = etl_path + suffix
+        try:
+            if os.path.exists(p):
+                return os.path.getsize(p)
+        except OSError:
+            pass
+    return 0
+
+
+def _pick_preferred(cands: list) -> dict:
+    """Choose among candidates that already match the issue time equally well.
+
+    Two situations make that a real tie rather than a rare one:
+
+      * Several captures in one collection folder share the folder timestamp,
+        so every one of them is an exact match.
+      * A collector writes both a small circular boot buffer and the full
+        runtime capture, often under near-identical names.
+
+    Larger wins, because more captured content is more likely to contain the
+    failure — which subsumes the boot-vs-runtime case without hard-coding
+    "boot". Path is the final tiebreak, so two same-size candidates always
+    resolve the same way instead of depending on directory order.
+    """
+    return max(cands, key=lambda c: (int(c.get("size", 0) or 0), c["etl_path"]))
+
+
+def _pref_note(c: dict) -> str:
+    """Short human-readable note on why a candidate won the tiebreak."""
+    size_mb = (int(c.get("size", 0) or 0)) / (1024 * 1024)
+    return f"{size_mb:.0f} MB, largest (richest) capture"
+
+
+@log_parser_bp.route("/find_best_log", methods=["POST"])
+def find_best_log():
+    """
+    Given a list of ETL paths and an issue time string, return the ETL path
+    whose log time range covers (or is closest to) the issue time.
+
+    Request JSON:
+      { "etl_paths": ["path1", "path2", ...], "issue_time_str": "10/28/2025-11:25:49" }
+
+    Response JSON:
+      { "best_path": "path2", "reason": "...", "resolved_issue_time": "..." }
+    """
+    from utils.etl_utils import extract_time_from_description
+    from utils.issue_time_utils import parse_issue_time_string, read_log_time_range
+
+    data = request.get_json(silent=True) or {}
+    etl_paths = data.get("etl_paths", [])
+    issue_time_str = data.get("issue_time_str", "").strip()
+
+    if not etl_paths:
+        return jsonify({"best_path": None, "reason": "No ETL paths provided."})
+
+    # --- Parse issue time from the provided string ---
+    # Try the strict canonical parse first (sidebar / auto-extract path), then
+    # fall back to the looser description scanner for legacy free-form input.
+    issue_time, is_time_only = parse_issue_time_string(issue_time_str)
+    issue_time_only_str = None
+    if issue_time and is_time_only:
+        issue_time_only_str = issue_time.strftime("%H:%M:%S")
+        issue_time = None
+    if issue_time is None and issue_time_only_str is None:
+        _parsed = extract_time_from_description(issue_time_str)
+        if isinstance(_parsed, datetime.datetime):
+            issue_time = _parsed
+        elif isinstance(_parsed, str):
+            issue_time_only_str = _parsed  # e.g. '14:50:51'
+
+    # --- Scan each candidate for its time range ---
+    # Prefer the decoded log's real first/last range. When there is no decoded
+    # log yet, fall back to the capture timestamp in the path as a single-point
+    # anchor (first_ts == last_ts) — see _parse_path_timestamp.
+    candidates = []
+    for etl_path in etl_paths:
+        log_path = etl_path + ".log"
+        first_ts = last_ts = None
+        if os.path.exists(log_path):
+            first_ts, last_ts = read_log_time_range(log_path)
+        if first_ts is None and last_ts is None:
+            folder_ts = _parse_path_timestamp(etl_path)
+            if folder_ts is not None:
+                first_ts = last_ts = folder_ts
+        if first_ts is None and last_ts is None:
+            continue
+        candidates.append({
+            "etl_path": etl_path,
+            "log_path": log_path,
+            "first_ts": first_ts,
+            "last_ts": last_ts,
+            "size": _etl_size(etl_path),
+        })
+
+    if not candidates:
+        return jsonify({"best_path": etl_paths[0] if etl_paths else None,
+                        "reason": "No readable log files or path timestamps; defaulting to first.",
+                        "resolved_issue_time": ""})
+
+    print(f"[find_best_log] candidates={[c['etl_path'] for c in candidates]}, "
+          f"issue_time={issue_time}, issue_time_only_str={issue_time_only_str}")
+
+    # --- Resolve a time-only issue_time_str using the candidates' dates ---
+    # e.g. '14:50:51' -> combine with the date from a log's first/last timestamp
+    if not issue_time and issue_time_only_str and candidates:
+        try:
+            ih, im, is_ = map(int, issue_time_only_str.split(':'))
+            for c in candidates:
+                ref_ts = c["last_ts"] or c["first_ts"]
+                if ref_ts:
+                    issue_time = ref_ts.replace(hour=ih, minute=im, second=is_, microsecond=0)
+                    break
+        except Exception:
+            pass
+
+    # Serialize the resolved issue_time so the frontend can use the full datetime
+    resolved_issue_time_str = issue_time.strftime("%m/%d/%Y-%H:%M:%S") if issue_time else ""
+
+    # --- If we have an issue time, pick the log whose range covers it ---
+    if issue_time:
+        # Priority 1: logs whose [first_ts, last_ts] contains issue_time.
+        # More than one may qualify, so break the tie by size.
+        covering = [c for c in candidates
+                    if c["first_ts"] and c["last_ts"]
+                    and c["first_ts"] <= issue_time <= c["last_ts"]]
+        if covering:
+            chosen = _pick_preferred(covering)
+            return jsonify({
+                "best_path": chosen["etl_path"],
+                "reason": f"Log covers issue time {issue_time_str} "
+                          f"(range: {chosen['first_ts']} ~ {chosen['last_ts']}; "
+                          f"{_pref_note(chosen)})",
+                "resolved_issue_time": resolved_issue_time_str,
+            })
+
+        # Priority 2: logs closest to issue_time. Collect everything within ~1s
+        # of the minimum delta — exact ties are normal when candidates share a
+        # folder timestamp — then apply the size tiebreak.
+        withdelta = []
+        for c in candidates:
+            ts = c["last_ts"] or c["first_ts"]
+            if ts:
+                withdelta.append((c, abs((issue_time - ts).total_seconds())))
+        if withdelta:
+            min_delta = min(d for _, d in withdelta)
+            tied = [c for c, d in withdelta if d <= min_delta + 1.0]
+            chosen = _pick_preferred(tied)
+            return jsonify({
+                "best_path": chosen["etl_path"],
+                "reason": f"Closest log to issue time {issue_time_str} "
+                          f"(range: {chosen['first_ts']} ~ {chosen['last_ts']}, "
+                          f"delta: {min_delta:.0f}s; {_pref_note(chosen)})",
+                "resolved_issue_time": resolved_issue_time_str,
+            })
+
+    # --- Fallback: latest last_ts; tie-break same-time logs by size ---
+    candidates_with_ts = [c for c in candidates if c["last_ts"]]
+    if candidates_with_ts:
+        latest_ts = max(c["last_ts"] for c in candidates_with_ts)
+        tied = [c for c in candidates_with_ts if c["last_ts"] == latest_ts]
+        chosen = _pick_preferred(tied)
+        return jsonify({
+            "best_path": chosen["etl_path"],
+            "reason": f"No issue time provided; picked latest log "
+                      f"(range: {chosen['first_ts']} ~ {chosen['last_ts']}; "
+                      f"{_pref_note(chosen)})",
+            "resolved_issue_time": resolved_issue_time_str,
+        })
+
+    # --- Ultimate fallback ---
+    return jsonify({
+        "best_path": candidates[0]["etl_path"],
+        "reason": "Could not determine timestamps; defaulting to first.",
+        "resolved_issue_time": "",
+    })
+
+
 def register_socketio_handlers(socketio):
     # Flask-SocketIO rejects client connections to namespaces with no
     # registered handler. This empty connect keeps /wpp_progress open so the

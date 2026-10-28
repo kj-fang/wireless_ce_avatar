@@ -39,7 +39,18 @@ SEC_TO_US    = 1_000_000      # Duration field is in microseconds
 SEC_TO_100NS = 10_000_000     # SwLowPowerStateTime / HwLowPowerStateTime in 100-nanosecond units
 ACTIVITY_LEVEL_NAMES = ["neutral", "low", "moderate", "high", "invalid", "invalid"]
 DRIP_THRESHOLD = 80.0         # percent — sessions below this are flagged
-RED_ACTIVITY_LEVEL = 3        # ActivityLevel at which a blocker is reported RED
+# RED is level 3 exactly, not "3 or more": ACTIVITY_LEVEL_NAMES calls 4 and 5
+# invalid, so a higher number is a measurement that failed, not a worse
+# offender. Routing a driver-log investigation off an invalid reading would
+# send someone to open a log over a number the report itself distrusts.
+RED_ACTIVITY_LEVEL = 3
+
+# The Wi-Fi report is written about Intel's radio: SLEEPSTUDY_SYSTEM_PROMPT
+# mandates an "Intel Wi-Fi Impact" heading and a "Please contact Intel Wi-Fi
+# team" verdict. So the report path asks for this vendor by name, while
+# classify_device() stays vendor-neutral for callers that only want to know
+# which device family to route to.
+WIFI_REPORT_VENDOR = "Intel"
 
 # Modern Standby session types. Everything else (Type 0, 5, 7, 11 …) is a
 # transition the drip percentages do not describe, so the filter skips it.
@@ -204,12 +215,15 @@ def activity_label(level: int) -> str:
     return names[level] if level < len(names) else "unknown"
 
 
-def red_top_blockers(session: dict, devices=None) -> list:
+def red_top_blockers(session: dict, devices=None, vendor=None) -> list:
     """
-    Return the session's RED (ActivityLevel >= 3) top blockers, each tagged with
-    the device family it belongs to, longest active time first.
+    Return the session's RED top blockers, each tagged with the device family
+    it belongs to, longest active time first.
 
     `devices` restricts the result to those families; None accepts every one.
+    `vendor` additionally requires that string in the blocker's name, for a
+    caller whose report speaks for one vendor.
+
     An empty list means nothing in this session was red — which is the normal
     case, since most sessions carry no TopBlockers list at all.
     """
@@ -217,9 +231,12 @@ def red_top_blockers(session: dict, devices=None) -> list:
 
     hits = []
     for tb in session.get("TopBlockers") or []:
-        if (tb.get("ActivityLevel") or 0) < RED_ACTIVITY_LEVEL:
+        if (tb.get("ActivityLevel") or 0) != RED_ACTIVITY_LEVEL:
             continue
-        device = classify_device(tb.get("Name", ""))
+        name = tb.get("Name", "")
+        if vendor is not None and vendor not in name:
+            continue
+        device = classify_device(name)
         if wanted is not None and device not in wanted:
             continue
         hits.append({"device": device, "blocker": tb})
@@ -230,30 +247,35 @@ def red_top_blockers(session: dict, devices=None) -> list:
 
 def wifi_in_top_offenders_red(session: dict):
     """
-    The Wi-Fi-only view of `red_top_blockers`, in the raw TopBlockers shape.
+    The question the Wi-Fi report asks: is Intel Wi-Fi a red offender here?
 
-    Kept because "is Wi-Fi a red offender here?" is the question the Wi-Fi
-    report asks, and an empty list still answers no.
+    Returns the raw TopBlockers entries, and an empty list still answers no.
     """
-    return [hit["blocker"] for hit in red_top_blockers(session, devices=(DEVICE_WIFI,))]
+    return [
+        hit["blocker"]
+        for hit in red_top_blockers(
+            session, devices=(DEVICE_WIFI,), vendor=WIFI_REPORT_VENDOR
+        )
+    ]
 
 
 # ══════════════════════════════════════════════════════════════════════════════
 #  STEP 3 — SESSION FILTER (the three criteria)
 # ══════════════════════════════════════════════════════════════════════════════
 
-def filter_qualifying_sessions(sessions: list, devices=(DEVICE_WIFI,)) -> list:
+def filter_qualifying_sessions(sessions: list, devices=(DEVICE_WIFI,), vendor=None) -> list:
     """
     Return sessions that satisfy ALL three criteria:
       1. Drain session  (OnAc = False)
       2. SW Drip < 80 %  OR  HW Drip < 80 %
-      3. a RED (ActivityLevel >= 3) top offender from one of `devices`
+      3. a RED top offender from one of `devices`
     Only Modern Standby session types (Type 1 = Screen Off, Type 2 = Sleep) are considered.
 
     `devices` defaults to Wi-Fi alone, because that is the question the Wi-Fi
     report asks and this function answers it for that report. Pass
     `DEVICE_ORDER` — or None — to accept a red blocker from any family, which
-    is what a caller routing between teams wants.
+    is what a caller routing between teams wants. `vendor` narrows criterion 3
+    to one vendor's hardware; the Wi-Fi report passes `WIFI_REPORT_VENDOR`.
     """
     qualifying = []
     for s in sessions:
@@ -271,7 +293,7 @@ def filter_qualifying_sessions(sessions: list, devices=(DEVICE_WIFI,)) -> list:
         if not drip_fail:
             continue
 
-        if not red_top_blockers(s, devices=devices):
+        if not red_top_blockers(s, devices=devices, vendor=vendor):
             continue
 
         qualifying.append(s)
@@ -661,7 +683,11 @@ def analyze_sleepstudy_stream(html_path: str, llm_call=None):
             "3. Intel Wi-Fi is a RED top offender (ActivityLevel = 3)"
         )}
 
-        qualifying = filter_qualifying_sessions(sessions)
+        # The Wi-Fi report names Intel in its headings and in its fallback
+        # verdict, so it asks criterion 3 about Intel Wi-Fi specifically.
+        qualifying = filter_qualifying_sessions(
+            sessions, devices=(DEVICE_WIFI,), vendor=WIFI_REPORT_VENDOR
+        )
         yield {"type": "step", "content": f"Qualifying sessions: **{len(qualifying)}**"}
 
         if not qualifying:

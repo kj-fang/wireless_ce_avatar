@@ -5,13 +5,21 @@ Sleep Study Analyzer — AI-Powered Agent
 Analyzes a Windows Sleep Study HTML report to find sessions matching all three criteria:
   1. Sleep session is a DRAIN (OnAc=False — battery in use, not charging)
   2. SW Drip OR HW Drip percentage < 80%
-  3. Intel(R) Wi-Fi is in the Top Offenders list, marked RED (ActivityLevel = 3/high)
+  3. a device is in the Top Offenders list, marked RED (ActivityLevel = 3/high)
 
-For each qualifying session the agent:
-  - Summarises general session info
-  - Checks Wi-Fi-related content inside Activators and FX Devices blocker groups
-  - Extracts SRUM (System Resource Utilization Monitor) App IDs that consume Network power
-  - Calls an LLM (via a caller-supplied callback) to produce a concise report
+The report is read two ways, from one implementation of the criteria:
+
+  - As prose, for a person. `analyze_sleepstudy_stream` summarises each
+    qualifying session, pulls the Wi-Fi content out of the Activators and FX
+    Devices blocker groups, adds the SRUM App IDs that spend network power,
+    and has an LLM write it up. This is what the NW page shows, and it asks
+    criterion 3 about Wi-Fi only.
+
+  - As data, for a caller that has to act on it. `collect_sessions` answers
+    with the sessions themselves plus one routing field: which device family
+    blocked the SoC — wifi, bt, other, or none at all. A caller uses that to
+    decide whose driver log to open next, and the per-session issue time to
+    decide where in that log to look.
 
 Usage:
     python sleepstudy_analyzer.py [path-to-sleepstudy.html]
@@ -23,6 +31,7 @@ import json
 import re
 import sys
 import os
+from datetime import datetime
 from pathlib import Path
 
 # ── Constants ──────────────────────────────────────────────────────────────────
@@ -30,6 +39,54 @@ SEC_TO_US    = 1_000_000      # Duration field is in microseconds
 SEC_TO_100NS = 10_000_000     # SwLowPowerStateTime / HwLowPowerStateTime in 100-nanosecond units
 ACTIVITY_LEVEL_NAMES = ["neutral", "low", "moderate", "high", "invalid", "invalid"]
 DRIP_THRESHOLD = 80.0         # percent — sessions below this are flagged
+RED_ACTIVITY_LEVEL = 3        # ActivityLevel at which a blocker is reported RED
+
+# Modern Standby session types. Everything else (Type 0, 5, 7, 11 …) is a
+# transition the drip percentages do not describe, so the filter skips it.
+MS_SESSION_TYPES = {1: "Screen Off", 2: "Sleep"}
+
+
+# ── Device taxonomy ────────────────────────────────────────────────────────────
+# The report already names the device that blocked the SoC, so it can also say
+# which team's driver log to open next. Wi-Fi and Bluetooth each have one;
+# anything else is still a genuine blocker, it just does not route to a
+# wireless log.
+#
+# `NO_DEVICE` is not a fourth device. It is the answer "no session qualified",
+# which is a different outcome from "a session blocked on something that is
+# neither Wi-Fi nor Bluetooth": the first needs no further analysis, the
+# second needs a log this tool does not own.
+DEVICE_WIFI  = "wifi"
+DEVICE_BT    = "bt"
+DEVICE_OTHER = "other"
+NO_DEVICE    = "none"
+
+DEVICE_ORDER = (DEVICE_WIFI, DEVICE_BT, DEVICE_OTHER)
+
+# Matched against a blocker's Name. Word boundaries earn their keep here: a
+# bare "BT" substring also matches DEBT and BTW. CNVW and CNVB are the ACPI
+# names of the two halves of an Intel CNVi module — W is the Wi-Fi radio, B is
+# the Bluetooth one — and a real report names the device that way:
+# "Intel(R) Wi-Fi 7 BE201 320MHz (\_SB.PC00.CNVW)".
+_DEVICE_PATTERNS = (
+    (DEVICE_WIFI, re.compile(r"Wi-?Fi|WLAN|Wireless\s+LAN|CNVW", re.IGNORECASE)),
+    (DEVICE_BT,   re.compile(r"Bluetooth|BTH(?:USB|PORT|ENUM)|CNVB|\bBT\b", re.IGNORECASE)),
+)
+
+
+def classify_device(name: str) -> str:
+    """
+    Name the device family a blocker belongs to: wifi, bt, or other.
+
+    Wi-Fi is tested first on purpose. On a combo module both halves carry the
+    same vendor and module string, so a Wi-Fi blocker can read as Bluetooth to
+    a looser test — and a report that mislabels it sends the reader to the
+    wrong driver log.
+    """
+    for device, pattern in _DEVICE_PATTERNS:
+        if pattern.search(name or ""):
+            return device
+    return DEVICE_OTHER
 
 
 # ── System prompt shared by all callers (web + CLI) ────────────────────────────
@@ -147,36 +204,62 @@ def activity_label(level: int) -> str:
     return names[level] if level < len(names) else "unknown"
 
 
+def red_top_blockers(session: dict, devices=None) -> list:
+    """
+    Return the session's RED (ActivityLevel >= 3) top blockers, each tagged with
+    the device family it belongs to, longest active time first.
+
+    `devices` restricts the result to those families; None accepts every one.
+    An empty list means nothing in this session was red — which is the normal
+    case, since most sessions carry no TopBlockers list at all.
+    """
+    wanted = set(devices) if devices is not None else None
+
+    hits = []
+    for tb in session.get("TopBlockers") or []:
+        if (tb.get("ActivityLevel") or 0) < RED_ACTIVITY_LEVEL:
+            continue
+        device = classify_device(tb.get("Name", ""))
+        if wanted is not None and device not in wanted:
+            continue
+        hits.append({"device": device, "blocker": tb})
+
+    hits.sort(key=lambda hit: -(hit["blocker"].get("ActiveTime") or 0))
+    return hits
+
+
 def wifi_in_top_offenders_red(session: dict):
     """
-    Returns a list of Intel Wi-Fi top-blocker entries that have ActivityLevel >= 3 (high/red).
-    An empty list means Wi-Fi is NOT a red top offender in this session.
+    The Wi-Fi-only view of `red_top_blockers`, in the raw TopBlockers shape.
+
+    Kept because "is Wi-Fi a red offender here?" is the question the Wi-Fi
+    report asks, and an empty list still answers no.
     """
-    red_wifi = []
-    for tb in session.get("TopBlockers", []):
-        name = tb.get("Name", "")
-        if "Intel" in name and "Wi-Fi" in name and tb.get("ActivityLevel", 0) >= 3:
-            red_wifi.append(tb)
-    return red_wifi
+    return [hit["blocker"] for hit in red_top_blockers(session, devices=(DEVICE_WIFI,))]
 
 
 # ══════════════════════════════════════════════════════════════════════════════
 #  STEP 3 — SESSION FILTER (the three criteria)
 # ══════════════════════════════════════════════════════════════════════════════
 
-def filter_qualifying_sessions(sessions: list) -> list:
+def filter_qualifying_sessions(sessions: list, devices=(DEVICE_WIFI,)) -> list:
     """
     Return sessions that satisfy ALL three criteria:
       1. Drain session  (OnAc = False)
       2. SW Drip < 80 %  OR  HW Drip < 80 %
-      3. Intel Wi-Fi is a RED (ActivityLevel = 3) top offender
+      3. a RED (ActivityLevel >= 3) top offender from one of `devices`
     Only Modern Standby session types (Type 1 = Screen Off, Type 2 = Sleep) are considered.
+
+    `devices` defaults to Wi-Fi alone, because that is the question the Wi-Fi
+    report asks and this function answers it for that report. Pass
+    `DEVICE_ORDER` — or None — to accept a red blocker from any family, which
+    is what a caller routing between teams wants.
     """
     qualifying = []
     for s in sessions:
         if s.get("OnAc", True):
             continue
-        if s.get("Type") not in [1, 2]:
+        if s.get("Type") not in MS_SESSION_TYPES:
             continue
 
         sw_pct, hw_pct = compute_drip_percentages(s)
@@ -188,7 +271,7 @@ def filter_qualifying_sessions(sessions: list) -> list:
         if not drip_fail:
             continue
 
-        if not wifi_in_top_offenders_red(s):
+        if not red_top_blockers(s, devices=devices):
             continue
 
         qualifying.append(s)
@@ -415,6 +498,138 @@ def build_session_summary(session: dict, wifi_content: dict) -> str:
         lines.append("  No SRUM network power consumers found for this session.")
 
     return "\n".join(lines)
+
+
+# ══════════════════════════════════════════════════════════════════════════════
+#  STEP 5b — STRUCTURED RESULT (no Flask, no LLM, no markdown)
+# ══════════════════════════════════════════════════════════════════════════════
+#  Everything above this point produces prose for a person to read. A caller
+#  that has to act on the result — pick a device, open that device's log, fill
+#  in an issue time — needs the same findings as data instead. This section is
+#  that view: plain dicts, no request, no session, no LLM, so one implementation
+#  serves the web route, the CLI, a test, and a tool server.
+
+# The chatbot asks for an issue time as MM/DD/YYYY HH:MM:SS. The report writes
+# EntryTimestampLocal as ISO-8601 with a trailing Z even though the value is
+# already local, so the Z is dropped rather than honoured: reading it as UTC
+# would shift every time by the machine's offset and point the next agent at
+# the wrong stretch of the driver log.
+_TS_FORMATS = ("%Y-%m-%dT%H:%M:%S", "%Y-%m-%dT%H:%M:%S.%f")
+
+
+def parse_local_timestamp(value: str):
+    """Parse a report timestamp into a naive datetime, or None if unreadable."""
+    text = (value or "").strip().rstrip("Z")
+    for fmt in _TS_FORMATS:
+        try:
+            return datetime.strptime(text, fmt)
+        except ValueError:
+            continue
+    return None
+
+
+def to_issue_time(value: str):
+    """Render a report timestamp in the MM/DD/YYYY HH:MM:SS the chatbot expects."""
+    parsed = parse_local_timestamp(value)
+    return parsed.strftime("%m/%d/%Y %H:%M:%S") if parsed else None
+
+
+def summarize_blocker(hit: dict) -> dict:
+    """Flatten one `red_top_blockers` hit into plain fields."""
+    tb = hit["blocker"]
+    level = tb.get("ActivityLevel") or 0
+    return {
+        "name": tb.get("Name", ""),
+        "device": hit["device"],
+        "activity_level": level,
+        "activity_label": activity_label(level),
+        "active_time_us": tb.get("ActiveTime") or 0,
+        "active_time_pct": tb.get("ActiveTimePercent") or 0,
+    }
+
+
+def summarize_session_data(session: dict, devices=None) -> dict:
+    """
+    Describe one session as data: when it ran, how badly it dripped, and which
+    device family its worst red blocker belongs to.
+    """
+    sw_pct, hw_pct = compute_drip_percentages(session)
+    hits = red_top_blockers(session, devices=devices)
+    duration_us = session.get("Duration") or 0
+    start = session.get("EntryTimestampLocal")
+
+    return {
+        "session_id": session.get("SessionId"),
+        "type": session.get("Type"),
+        "type_label": MS_SESSION_TYPES.get(session.get("Type"), "Other"),
+        "on_ac": bool(session.get("OnAc")),
+        "start": start,
+        "end": session.get("ExitTimestampLocal"),
+        "issue_time": to_issue_time(start),
+        "duration_us": duration_us,
+        "duration": format_duration(duration_us),
+        "sw_drip_pct": sw_pct,
+        "hw_drip_pct": hw_pct,
+        # The longest-running red blocker decides the device, so a caller never
+        # has to guess which of several entries to route on.
+        "device": hits[0]["device"] if hits else NO_DEVICE,
+        "blockers": [summarize_blocker(hit) for hit in hits],
+    }
+
+
+def _drip_rank(summary: dict) -> float:
+    """Sort key: the worse of the two drip percentages, missing values last."""
+    known = [v for v in (summary["sw_drip_pct"], summary["hw_drip_pct"]) if v is not None]
+    return min(known) if known else float("inf")
+
+
+def collect_sessions(html_path: str, devices=DEVICE_ORDER) -> dict:
+    """
+    Load a Sleep Study report and return its qualifying sessions as data.
+
+    `device` is the one-line routing answer — wifi, bt, other or none — and
+    `sessions` lists every qualifying session worst drip first, so a report
+    holding both a Wi-Fi session and a Bluetooth one is not flattened into a
+    single verdict. `warnings` carries what a reader needs before trusting the
+    result: a report with no sessions in it, or a timestamp this parser could
+    not read.
+    """
+    payload = load_sleepstudy(html_path)
+    sessions = payload.get("ScenarioInstances") or []
+    warnings = []
+
+    if not sessions:
+        warnings.append("The report contains no sleep sessions.")
+
+    qualifying = filter_qualifying_sessions(sessions, devices=devices)
+    summaries = [summarize_session_data(s, devices=devices) for s in qualifying]
+    summaries.sort(key=_drip_rank)
+
+    undated = [s["session_id"] for s in summaries if not s["issue_time"]]
+    if undated:
+        warnings.append(
+            "Could not read the entry timestamp of session(s) "
+            + ", ".join(str(i) for i in undated)
+            + " — the issue time has to be filled in by hand."
+        )
+
+    return {
+        "source": html_path,
+        "total_sessions": len(sessions),
+        "qualifying_count": len(summaries),
+        "sessions": summaries,
+        # `none` means the report is clean against the three criteria: there is
+        # no log to open next, which is not the same as a blocker this tool
+        # cannot attribute to Wi-Fi or Bluetooth (that one reports as `other`).
+        "device": summaries[0]["device"] if summaries else NO_DEVICE,
+        "devices": sorted({s["device"] for s in summaries}),
+        "criteria": {
+            "drip_threshold_pct": DRIP_THRESHOLD,
+            "red_activity_level": RED_ACTIVITY_LEVEL,
+            "devices": list(devices) if devices is not None else list(DEVICE_ORDER),
+        },
+        "warnings": warnings,
+    }
 
 
 # ══════════════════════════════════════════════════════════════════════════════

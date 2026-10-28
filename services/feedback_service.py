@@ -28,6 +28,7 @@ from datetime import datetime
 from pathlib import Path
 from typing import Any, Iterable, Optional
 
+from configs import chat_domains
 from configs.global_configs import app_config
 from configs.path_configs import FEEDBACK_DIR_prim, FEEDBACK_DIR_bkup
 from configs.version import __version__ as APP_VERSION
@@ -271,20 +272,17 @@ def _deep_scrub(obj: Any) -> Any:
 # conversation inherits it (see _resolve_domain), so a JSONL row and its
 # conversation snapshot can never disagree on which stream they belong to.
 
-_DOMAIN_PREFIXES = {"bt": "bt_"}   # canonical-domain → filename prefix
-
-
+# The domain → filename-prefix map is declared once, in
+# configs/chat_domains.py. It used to live here knowing only Bluetooth, so a
+# Linux vote was written into the Wi-Fi feedback file under Wi-Fi's name.
 def _norm_domain(domain: Any) -> str:
     """Normalise a raw domain hint to a canonical key. '' = wifi/default."""
-    d = domain.strip().lower() if isinstance(domain, str) else ""
-    if d in ("bt", "bluetooth"):
-        return "bt"
-    return ""  # wifi / default — keep legacy filenames unchanged
+    return chat_domains.normalize(domain)
 
 
 def _domain_prefix(domain: Any) -> str:
     """Filename prefix for a domain ('' for wifi/default, 'bt_' for BT)."""
-    return _DOMAIN_PREFIXES.get(_norm_domain(domain), "")
+    return chat_domains.feedback_prefix(domain)
 
 
 def _resolve_domain(conversation_id: str, domain_hint: Any) -> str:

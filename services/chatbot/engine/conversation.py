@@ -3,6 +3,7 @@
 from __future__ import annotations
 
 import json
+import os
 from typing import Any, Optional
 
 
@@ -455,11 +456,19 @@ class ConversationMixin:
                 _emit({"role": "agent", "content": content})
 
             # --- Raw log preprocessing (scope-narrowing) ---
+            try:
+                log_mb = os.path.getsize(self.current_log_path) / (1024 * 1024)
+                size_hint = f" ({log_mb:,.0f} MB)"
+            except (OSError, TypeError, ValueError):
+                size_hint = ""
+            _emit({"role": "agent", "content": f"📂 Reading raw log{size_hint}…"})
             load_err = self._ensure_raw_log_cache()
             if load_err:
                 _emit({"role": "error", "content": f"❌ Raw log load failed: {load_err}"})
             else:
-                self._preprocess_raw_log_context()
+                _emit({"role": "agent", "content":
+                       f"🔎 Loaded {len(self._raw_log_cache):,} lines; scanning for driver markers and issue-time window…"})
+                self._preprocess_raw_log_context(progress_callback=_emit)
                 pre_msg_parts = [
                     f"- **Segment1 — Driver init block:** {len(self._driver_init_lines)} lines "
                     f"(driver load occurrences: {self._driver_init_count})",

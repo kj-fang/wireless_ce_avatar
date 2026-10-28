@@ -102,10 +102,12 @@
             <div class="tc-hint">
                 The assistant will read the description below plus a rough sample
                 of the loaded log (not shown here) to suggest issue time(s).
-                Nothing is sent until you allow it.
+                Nothing is sent until you allow it. You can write or correct the
+                description here — it is also kept in the chat box.
             </div>
-            <div id="llm-consent-text"
-                 style="margin-top:10px;padding:8px 10px;background:#f9fafb;border:1px solid #e5e7eb;border-radius:6px;font-size:0.8rem;white-space:pre-wrap;word-break:break-word;max-height:180px;overflow:auto;"></div>
+            <textarea id="llm-consent-text" spellcheck="false"
+                      placeholder="No description yet — say what went wrong (e.g. &quot;wifi dropped right after resume&quot;). Leave it empty to let the AI infer the time from the log alone."
+                      style="margin-top:10px;width:100%;min-height:92px;padding:8px 10px;background:#f9fafb;border:1px solid #e5e7eb;border-radius:6px;font-size:0.8rem;line-height:1.45;resize:vertical;"></textarea>
             <div class="tc-hint" id="llm-consent-loghint" style="margin-top:8px;"></div>
         </div>
         <div class="fbd-footer">

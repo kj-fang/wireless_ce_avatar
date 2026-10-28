@@ -78,6 +78,7 @@ from datetime import datetime, timezone
 from pathlib import Path
 from typing import Any, Iterator, Optional
 
+from configs import chat_domains
 from configs.global_configs import app_config
 from configs.llm_pricing import cost_for
 from configs.path_configs import GATHER_DIR_prim, GATHER_DIR_bkup
@@ -442,8 +443,13 @@ def _feedback_submission_path(feedback_event_id: str, user: str) -> Path:
 
 
 def _agent_domain(value: Any) -> str:
+    # The accepted set lives in configs/chat_domains.py, next to the storage
+    # domains, so adding a profile is one file to edit rather than three to
+    # remember. An agent whose name is not registered is recorded as unknown
+    # rather than guessed at, because a wrong label is worse here than an
+    # honest gap: it would quietly add that agent's turns to another's totals.
     value = str(value or "").strip().lower()
-    return value if value in {"wifi", "nw", "bt"} else UNKNOWN_DOMAIN
+    return value if chat_domains.is_agent_domain(value) else UNKNOWN_DOMAIN
 
 
 def _case_domain(issue: Optional[dict], explicit: str = "") -> str:

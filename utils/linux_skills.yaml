@@ -1,0 +1,89 @@
+# Linux skills — bundled baseline.
+#
+# This file ships with the app so the Linux agent always has Linux skills.
+# Before it existed, a machine that could not reach the share folder started
+# the Linux agent on the WI-FI skills instead: WDI markers and Wi-Fi-specific
+# terms, which a dmesg or journalctl capture essentially never contains. The
+# filtered view came back near-empty and the agent answered from almost
+# nothing, which is far harder to notice than an outright failure.
+#
+# It holds one skill that filters nothing — the closest thing to "no skills,
+# just let the agent read the log". That is deliberate: a wrong keyword set
+# is worse than no keyword set, and a generic one is honest about having no
+# Linux domain knowledge yet. Replace it with a real Linux skill set when
+# there is one; this is a floor, not a destination.
+#
+# WHEN THIS IS THE RIGHT CHOICE, AND WHEN IT IS NOT
+#
+#   fetch_filtered_logs returns at most 15 KB and keeps the EARLIEST lines.
+#   This skill matches every line, so it hands over the first ~15 KB of the
+#   file and stops. That is the whole log only if the whole log is under
+#   15 KB — roughly 150-200 lines.
+#
+#   Measured on three real files, as a share of the distinct lines in each:
+#
+#                              this skill   a six-skill keyword set
+#     18 KB test-harness log       80.7%          25.1%
+#     119 KB dmesg                 13.8%          20.7%
+#     3.2 MB kern.log               2.2%           7.3%
+#
+#   So "just show it the log" wins only on the small file. Past roughly
+#   20 KB, filtering beats not filtering — not because filtering shows more
+#   of the file in total, but because several keyword sets reach several
+#   different places in it, while this one view can only ever reach the
+#   front. Worse, nothing tells the model the rest exists: it will reason
+#   about the first 150 lines as if they were the file. Rule 1 below is what
+#   makes the agent say so instead.
+
+Whole_Log_Unfiltered:
+  name: "Whole_Log_Unfiltered"
+  description: "The log itself, with no keyword filter applied. Every line, in order, up to the 15 KB the tool returns. Use this when the log is small enough to read whole and you want to reason about it directly rather than through a keyword filter. There is exactly one skill on this agent, so call it once and work from what it gives you."
+  # Punctuation, digits and vowels. Between them, every line of every log
+  # format in use here contains at least one, so the filter is a no-op and
+  # the model receives the file as it is.
+  #
+  # NOT a single space, which is the obvious choice and does not work: the
+  # importer drops any keyword that is empty after .strip(), so " " vanishes
+  # on load and takes the no-op property with it, silently. Every entry
+  # below survives stripping.
+  keywords:
+    - ":"
+    - "."
+    - "-"
+    - ","
+    - "="
+    - "0"
+    - "1"
+    - "2"
+    - "3"
+    - "4"
+    - "5"
+    - "6"
+    - "7"
+    - "8"
+    - "9"
+    - "a"
+    - "e"
+    - "i"
+    - "o"
+    - "u"
+  expert_rules: |
+    0. You were given the log, not a selection from it. Nothing has been
+       filtered out, so an absence in what you can see is a real absence —
+       unlike a keyword-filtered view, where it would only mean the keywords
+       missed it.
+    1. BUT the view stops at 15 KB, kept from the start of the file, and the
+       reply's header says how many lines that was. Compare it against what
+       the log should contain. If the view ends mid-run, mid-sentence, or
+       before the last event the user described, say so in the report and
+       treat everything after it as unknown. Never conclude that something
+       did not happen because this view ended before it.
+    2. Read it as a sequence, which is the one thing this view gives you that
+       a keyword filter cannot: what follows what, what is missing between
+       two steps, and where the gaps in time are.
+    3. Quote verbatim with timestamps, as always. You have the original lines
+       here, so there is no excuse for paraphrase.
+    4. If the log turns out to be far larger than this view, say so plainly
+       and recommend a domain-specific skill set, which reaches further into
+       the file. Do not analyse the front of a large file as though it were
+       the whole of it.

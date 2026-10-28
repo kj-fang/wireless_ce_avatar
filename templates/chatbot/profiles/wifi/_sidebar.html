@@ -59,6 +59,8 @@
                 🖥 <strong>ETL decode-host time</strong> (GMT+8)
                 <span style="display:block;color:#9aa3ad;margin-top:1px;">Format: MM / DD / YYYY &nbsp; HH:MM:SS.mmm</span>
             </div>
+            <div id="it-log-format"
+                 style="display:none;font-size:0.7rem;color:#666;margin-bottom:8px;line-height:1.35;"></div>
 
             <!-- Shown when the loaded log has no dates (e.g. DDD): date fields
                  stay visible but get greyed out + disabled, so the row still
@@ -102,20 +104,7 @@
                 </div>
             </div>
 
-            <!-- Master toggle: hide additional issue times unless the user
-                 opts in. AI auto-fill / popup-apply may add extras into
-                 the DOM, but they only appear (and only count) once
-                 this is ticked. The most-likely time stays in the primary
-                 picker above. -->
-            <label class="sidebar-multi-toggle" for="use-multi-issue"
-                   title="By default only the most-likely issue time is used. Tick to also use the additional times below.">
-                <input type="checkbox" id="use-multi-issue"
-                       onchange="_onSidebarMultiToggle(this)">
-                <span>
-                    <strong>Use multiple issue times</strong>
-                    <span class="smt-sub">Off — only the most-likely time. Tick to add more.</span>
-                </span>
-            </label>
+{{ sb.multi_issue_toggle() }}
 
 {{ sb.extra_issue_times(hidden=True) }}
 

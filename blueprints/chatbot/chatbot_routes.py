@@ -1,4 +1,4 @@
-"""One route module for both full log-analysis agents: Wi-Fi and Bluetooth.
+"""One route module for every full log-analysis agent: Wi-Fi, Bluetooth, Linux.
 
 Until now ``blueprints/log_chatbot/log_chatbot_routes.py`` and
 ``blueprints/bt_chatbot/bt_chatbot_routes.py`` were two 1,500-line files whose
@@ -8,6 +8,13 @@ slot holds the app-level agent, which history domain key partitions the saved
 conversations, which agent class to instantiate) plus seven behaviour
 switches: three the UI config already declared, and four explicit fields on
 :class:`AgentRouteProfile`.
+
+``blueprints/linux_chatbot/linux_chatbot_routes.py`` was the third copy — 1,223
+lines of which 1,093 matched the Wi-Fi file once names were normalised. It
+asked for no new handler and no new behaviour switch: a fourth profile card
+covers it, and the three safety nets it was missing (log-range guard, the
+``/prepare`` cache purge, the index pre-warm) are unconditional here, so it
+gains them by being folded in rather than by growing another flag.
 
 This module is the same move the refactor already made for the engine and for
 ``services/chatbot/shared_routes.py``, applied one layer out:
@@ -67,7 +74,7 @@ from flask import (
     session,
 )
 
-from configs.chatbot_ui import BT_UI, LOG_CHATBOT_UI
+from configs.chatbot_ui import BT_UI, LINUX_UI, LOG_CHATBOT_UI
 from configs.global_configs import app_config
 from services import feedback_service
 from services import check_ips_service
@@ -75,6 +82,7 @@ from services import gather_service
 from services import history_service
 from services.chatbot import job_runtime as chat_jobs
 from services.chatbot.engine.bluetooth import BtLogAgentSystem
+from services.chatbot.engine.linux import LinuxLogAgentSystem
 from services.chatbot.engine.system import WifiLogAgentSystem, load_skills_from_yaml
 from services.chatbot.factory import (
     ChatbotBlueprintConfig,
@@ -109,9 +117,13 @@ from services.skill_editor.yaml_service import (
     write_yaml_file as _write_yaml_file,
 )
 from utils import bt_skills_yaml_utils as _bt_yaml_utils
+from utils import linux_skills_yaml_utils as _linux_yaml_utils
+from utils import log_time_format
 from utils import skills_yaml_utils as _wifi_yaml_utils
 from utils.event_log_utils import find_event_log_for_log
 from utils.issue_time_ai import (
+    LINUX_WIFI_FOCUS,
+    IssueTimeFocus,
     build_issue_time_suggestions,
     find_nearest_event_error,
     realign_times_to_log,
@@ -182,16 +194,25 @@ class AgentRouteProfile:
     #: TODO(team): BT reaching /prepare is also a new analysis, so this looks
     #: like drift rather than policy — confirm before unifying.
     reset_conversation_on_prepare: bool
-    #: ``/prepare`` accepts a path that is ALREADY a log file (``.log`` /
-    #: ``.txt``, including ``.hci.txt``) instead of appending ``.log``. BT's
-    #: HCI decode writes ``<etl>.hci.txt`` directly; Wi-Fi's wpp_ddd flow
-    #: always produces ``<etl>.log``.
-    accepts_direct_log_path: bool
+    #: Suffixes that let ``/prepare`` treat an EXISTING path as the log
+    #: itself instead of appending ``.log``.
+    #:   ``None``        never — the decode always writes ``<etl>.log``
+    #:                   (Wi-Fi's wpp_ddd flow).
+    #:   a tuple         only these — BT's HCI decode writes
+    #:                   ``<etl>.hci.txt`` next to the ``.etl`` it came from,
+    #:                   so the suffix is what tells the two apart.
+    #:   ``()``          any existing file — a capture that was never decoded
+    #:                   at all, so its name proves nothing (Linux dmesg /
+    #:                   journalctl: ``syslog``, ``kern.log.1``, ``messages``).
+    direct_log_suffixes: tuple[str, ...] | None
     #: ``/history/load`` reads ``_log_has_date()`` even while the conversation's
     #: background analysis is still running. False (BT) skips it, because the
     #: analysis thread mutates the ``_raw_log_cache`` pair that call reads.
     #: TODO(team): the guard is right for both — Wi-Fi just never got it.
     read_log_has_date_while_running: bool
+    #: What the AI issue-time suggestion samples first (``utils.issue_time_ai``).
+    #: ``None`` keeps the generic digest, which suits our own short decodes.
+    issue_time_focus: IssueTimeFocus | None = None
 
     # ---- derived: read the flags the UI config already declares ----
     @property
@@ -214,6 +235,11 @@ class AgentRouteProfile:
         return bool(self.ui["issue_time"]["allow_time_only"])
 
     @property
+    def windows_event_log(self) -> bool:
+        """Look for a System Event Log next to the log; the sidebar reads it too."""
+        return bool(self.ui["windows_event_log"])
+
+    @property
     def event_log_anchor(self) -> bool:
         """Anchor AI issue-time suggestions on System Event Log Warn/Err rows."""
         return bool(self.ui["issue_time"]["event_refinement"])
@@ -230,6 +256,34 @@ class AgentRouteProfile:
 # a profile: they take what they need as arguments. That keeps the handler
 # bodies below readable as flow, with the profile's extra work named at the
 # point where it happens.
+
+
+def _log_time_format_note(log_path: str) -> dict:
+    """What the sidebar prints about the loaded log's timestamps.
+
+    One sentence, server-side, for every profile. The user always types the one
+    canonical issue-time format; this is the other half of that contract — what
+    the value is about to be compared against. A Linux capture makes it worth
+    showing: an RFC 3339 journal names its own UTC offset, a logcat has no year
+    in it, and a dmesg counting seconds since boot has no absolute time at all,
+    which is the difference between "your time selects a window" and "the whole
+    file is analysed".
+    """
+    if not log_path:
+        return {}
+    try:
+        fmt = log_time_format.detect(log_path)
+        # An unrecognised format is reported too: "no window can be applied"
+        # is exactly what the user needs to know before choosing a time.
+        first_ts, last_ts = read_log_time_range(log_path)
+        return {
+            "name": fmt.name,
+            "note": fmt.describe(first_ts, last_ts),
+            "supports_windowing": fmt.supports_windowing,
+        }
+    except Exception as e:
+        print(f"⚠️  log time-format note failed for {log_path}: {e}")
+        return {}
 
 
 def _time_only_log_last_time(agent) -> str:
@@ -786,6 +840,32 @@ class AgentRoutes:
             except Exception:
                 log_span_minutes = 0
 
+            # Detect the log's timestamp format once, here, while the user is
+            # already waiting on this request: everything below — the date
+            # fields, the log range, Segment2 — reads the cached answer.
+            # This is also the one place the LLM may be asked, and only for a
+            # file no known format fits; its description is then verified
+            # against the file before anything uses it (see log_time_format).
+            try:
+                _client, _model = self._get_llm_client_model()
+                _workflow_id = session.get("gather_workflow_id", "")
+
+                def _record_probe_usage(usage: dict) -> None:
+                    gather_service.record_feature_usage(
+                        workflow_id=_workflow_id, feature_code="log_time_format_probe",
+                        model=_model or "", usage=usage,
+                        domain=self.profile.gather_domain, trigger="set_log",
+                    )
+
+                log_time_format.detect_with_llm_fallback(
+                    log_path,
+                    probe=(log_time_format.llm_format_probe(
+                        _client, _model, on_usage=_record_probe_usage)
+                        if _client is not None else None),
+                )
+            except Exception as _e:
+                print(f"⚠️  log time-format detection skipped: {_e}")
+
             # Whether this log carries dates. Time-only logs (e.g. DDD) let the
             # sidebar leave the date fields blank and match Segment2 by
             # time-of-day. Computed before log_last_time because the time-only
@@ -809,10 +889,12 @@ class AgentRoutes:
                 log_last_time = ""
 
             # Locate associated System Event log (.evtx / .evt)
-            try:
-                evtx_path = find_event_log_for_log(log_path)
-            except Exception:
-                evtx_path = ""
+            evtx_path = ""
+            if self.profile.windows_event_log:
+                try:
+                    evtx_path = find_event_log_for_log(log_path)
+                except Exception:
+                    evtx_path = ""
 
             return jsonify({
                 "success": True,
@@ -822,6 +904,12 @@ class AgentRoutes:
                 "log_span_minutes": log_span_minutes,
                 "log_last_time": log_last_time,
                 "log_has_date": log_has_date,
+                # What the timestamps in THIS file look like, in one sentence
+                # the sidebar prints under the issue-time format hint. The user
+                # keeps typing one canonical format; this says what it will be
+                # matched against — including "this file has no absolute time,
+                # so the window cannot be applied".
+                "log_time_format": _log_time_format_note(log_path),
                 "evtx_path": evtx_path,
                 **check_ips_service.prompt_state(log_path),
                 # Hints for the client to clear chat history + show the toast.
@@ -897,6 +985,9 @@ class AgentRoutes:
                 extra["tz_label"] = format_tz_label(_tz_name) if _tz_name else ""
             if self.profile.event_log_anchor:
                 extra["event_log_events"] = event_log_events
+            if self.profile.issue_time_focus is not None and log_path:
+                extra["focus"] = self.profile.issue_time_focus
+                extra["log_format"] = log_time_format.detect(log_path)
 
             payload = build_issue_time_suggestions(
                 text=text,
@@ -1201,6 +1292,7 @@ class AgentRoutes:
                     chat_jobs.fail_job(job, str(exc))
 
             t = threading.Thread(target=run_chat_with_tools, daemon=True)
+            job.worker_thread = t
             t.start()
 
             # The original request streams the job exactly like a reconnect
@@ -1447,16 +1539,17 @@ class AgentRoutes:
         # <etl>.hci.txt, with no separate .log) accepts a path that IS already a
         # log file. Mirrors the log_parser entry handling. Everyone else follows
         # the wpp_ddd convention and appends ".log".
-        lower = etl_path.lower()
-        if (self.profile.accepts_direct_log_path and os.path.exists(etl_path)
-                and (lower.endswith(".log") or lower.endswith(".txt"))):
+        suffixes = self.profile.direct_log_suffixes
+        accepts_direct = suffixes is not None
+        if (accepts_direct and os.path.isfile(etl_path)
+                and (not suffixes or etl_path.lower().endswith(suffixes))):
             log_path = etl_path
         else:
             log_path = etl_path + ".log"
-        if not os.path.exists(log_path):
+        if not os.path.isfile(log_path):
             # A profile that can only ever derive "<etl>.log" says so; one that
             # also accepts a direct path can't promise which extension it wanted.
-            missing = "Log file" if self.profile.accepts_direct_log_path else ".log file"
+            missing = "Log file" if accepts_direct else ".log file"
             return jsonify({"success": False,
                             "error": f"{missing} not found: {log_path}"}), 404
 
@@ -1635,6 +1728,10 @@ class AgentRoutes:
             "issue_times": issue_times,
             "log_first_time": format_issue_time(first_ts),
             "log_last_time": format_issue_time(last_ts),
+            # Same sentence /set_log sends: this request also lands on a page
+            # that may have been opened straight from download_result, where
+            # /set_log never ran.
+            "log_time_format": _log_time_format_note(log_path),
             # Why the picker was left empty: a hand-off that failed
             # validation, or every auto-filled time fell outside the log.
             "issue_time_blocked": bool(
@@ -1734,7 +1831,7 @@ def create_agent_blueprint(profile: AgentRouteProfile):
 
 
 # ==================================================================
-# The two profiles
+# The three profiles
 # ==================================================================
 WIFI_PROFILE = AgentRouteProfile(
     name="log_chatbot",
@@ -1747,7 +1844,7 @@ WIFI_PROFILE = AgentRouteProfile(
     gather_domain="wifi",
     window_minutes_cap=1440,
     reset_conversation_on_prepare=True,
-    accepts_direct_log_path=False,
+    direct_log_suffixes=None,
     read_log_has_date_while_running=True,
 )
 
@@ -1762,9 +1859,34 @@ BT_PROFILE = AgentRouteProfile(
     gather_domain="bt",
     window_minutes_cap=100000,
     reset_conversation_on_prepare=False,
-    accepts_direct_log_path=True,
+    direct_log_suffixes=(".log", ".txt"),
     read_log_has_date_while_running=False,
+)
+
+# Linux reads dmesg / journalctl text, which no decoder produced: there is no
+# ETL step, so /prepare is handed the log itself under whatever name the
+# distro uses, and the engine turns off the Windows driver-init markers
+# (see LinuxLogAgentSystem). Everything else it wanted was already a field.
+LINUX_PROFILE = AgentRouteProfile(
+    name="linux_chatbot",
+    ui=LINUX_UI,
+    agent_class=LinuxLogAgentSystem,
+    agent_config_attr="linux_chatbot_agent",
+    yaml_utils=_linux_yaml_utils,
+    user_yaml_prefix="linux_skills_",
+    # First entry is the dialog's default filter: rotated logs (kern.log.1),
+    # logcat dumps (.txt) and extension-less syslog / messages must all show.
+    browse_filetypes=(("Linux logs", "*.log *.log.* *.txt syslog* messages* kern* dmesg* journal*"),
+                      ("All files", "*.*")),
+    gather_domain="linux",
+    window_minutes_cap=100000,
+    reset_conversation_on_prepare=False,
+    direct_log_suffixes=(),
+    read_log_has_date_while_running=False,
+    # A multi-day kern.log or logcat: sample the Wi-Fi stack, not boot noise.
+    issue_time_focus=LINUX_WIFI_FOCUS,
 )
 
 log_chatbot_bp = create_agent_blueprint(WIFI_PROFILE)
 bt_chatbot_bp = create_agent_blueprint(BT_PROFILE)
+linux_chatbot_bp = create_agent_blueprint(LINUX_PROFILE)

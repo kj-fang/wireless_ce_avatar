@@ -636,6 +636,12 @@ class WifiLogAgentSystem(
             print("⚠️  No skills source available – using built-in fallback skills.")
             self.skills = get_builtin_skills()
 
+        # A new conversation starts with its profile's shipped prompt/skills.
+        # Saved .md/.yaml files are selectable library material, never an
+        # implicit carry-over from someone else's conversation.
+        self.prompt_overrides: Dict[str, str] = {}
+        self._initial_skills = dict(self.skills)
+
         # ACE adaptation hook. When attach_ace() has been called with an
         # AceRunner instance, the agent injects the workflow + domain
         # playbooks into its prompts at generation time, and can also drive

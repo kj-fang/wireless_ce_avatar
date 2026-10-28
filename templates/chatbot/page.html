@@ -43,8 +43,19 @@
     <span style="font-size:1.4rem;">📡</span>
     <h1>{{ ui.title }}</h1>
     <span class="badge-model">Avatar · Multi-Skill Agent</span>
-    <a href="{{ ui.back_url }}" class="ml-auto"
-       style="color:rgba(255,255,255,0.75);font-size:0.8rem;text-decoration:none;">← Back to Avatar</a>
+    <!-- A form, not a link. This endpoint throws away the session agent: the
+         loaded log, the conversation and the primed context. As an href it was
+         reachable by anything that follows links on its own -- prefetch on
+         hover, a scanner, a stray click on a control at the window edge -- and
+         the page could not tell, because the sidebar keeps showing the log
+         path it rendered itself while the server has already forgotten it.
+         The confirm is for the deliberate click; POST is for all the rest. -->
+    <form method="post" action="{{ ui.back_url }}" class="ml-auto"
+          onsubmit="return confirmLeaveChatbot();" style="margin:0;">
+        <button type="submit"
+                style="background:none;border:none;padding:0;cursor:pointer;font:inherit;
+                       color:rgba(255,255,255,0.75);font-size:0.8rem;">← Back to Avatar</button>
+    </form>
 </div>
 
 <div class="main-layout">
@@ -124,6 +135,7 @@
 <script src="{{ ui.profile_script }}"></script>
 {% if ui.features.feedback %}{% include 'chatbot/features/_feedback.html' %}{% endif %}
 {% if ui.features.skill_editor %}{% include 'chatbot/features/_skill_editor.html' %}{% endif %}
+{% if ui.features.prompt_editor %}{% include 'chatbot/features/_prompt_editor.html' %}{% endif %}
 {% if ui.features.skill_append %}
 {# Importing skills from a YAML file is its own capability: NW offers the
    button without the editor panel, so this lives outside _skill_editor.html

@@ -7,6 +7,19 @@ import os
 from typing import Any, Optional
 
 
+def _llm_error_for_user(exc: Exception, step_idx: int, model: str) -> str:
+    """Explain permission failures without exposing the provider's resource details."""
+    status = getattr(exc, "status_code", None)
+    if status == 403 or type(exc).__name__ == "ForbiddenError":
+        return (
+            f"LLM access denied (HTTP 403) at reasoning step {step_idx}. "
+            f"The current account/token cannot use model {model}. "
+            "Check the configured model and ask your administrator for access. "
+            "Changing the log or issue time will not fix this permission error."
+        )
+    return f"LLM API error at reasoning step {step_idx}: {exc}"
+
+
 class ConversationMixin:
     """Conversation behavior for the composed agent."""
 
@@ -154,6 +167,55 @@ class ConversationMixin:
         except Exception as e:
             print(f"[chat] restored context repair failed: {e}")
         return len(self.conversation_history)
+
+    def _background_context_section(self) -> str:
+        """
+        The BACKGROUND CONTEXT block the system prompt opens with.
+
+        Built from issue_context, which prime_with_context() fills in and
+        which does not change during a conversation. It lives in its own
+        method so the first turn and a later rebuild cannot drift apart: the
+        rebuild has to reproduce this block exactly, or refreshing the prompt
+        would quietly drop the case number from the agent's context.
+        """
+        if not self.issue_context:
+            return ""
+
+        context_parts = []
+        if self.issue_context.get("case_nbr"):
+            context_parts.append(f"**Case Number:** {self.issue_context.get('case_nbr')}")
+        if self.issue_context.get("issue_type"):
+            context_parts.append(f"**Issue Type:** {self.issue_context.get('issue_type')}")
+        if self.issue_context.get("subject"):
+            context_parts.append(f"**Subject:** {self.issue_context.get('subject')}")
+        if not context_parts:
+            return ""
+        return "\n=== BACKGROUND CONTEXT ===\n" + "\n".join(context_parts) + "\n\n"
+
+    def _refresh_system_prompt(self) -> bool:
+        """
+        Rewrite the system message from the prompt documents as they stand
+        now, and report whether that changed anything.
+
+        Only the system message is touched. The questions, answers and tool
+        results already in the conversation stay exactly as they are, so a
+        prompt edit changes how the agent reasons from here on without
+        rewriting what it has already found.
+        """
+        rebuilt = self._build_analyze_system_prompt(self._background_context_section())
+
+        for message in self.conversation_history:
+            if isinstance(message, dict) and message.get("role") == "system":
+                if message.get("content") == rebuilt:
+                    return False
+                message["content"] = rebuilt
+                return True
+
+        # No system message to replace. A follow-up should always have one,
+        # so this means the history was trimmed or restored without it --
+        # put one back rather than let the turn run with no instructions.
+        self.conversation_history.insert(0, {"role": "system", "content": rebuilt})
+        return True
 
     # The one conversation entry point, inherited by all three agents.
     #
@@ -357,19 +419,9 @@ class ConversationMixin:
             # and the caches, but contributes no message of its own.
             self.conversation_history = []
 
-            context_section = ""
-            if self.issue_context:
-                context_parts = []
-                if self.issue_context.get("case_nbr"):
-                    context_parts.append(f"**Case Number:** {self.issue_context.get('case_nbr')}")
-                if self.issue_context.get("issue_type"):
-                    context_parts.append(f"**Issue Type:** {self.issue_context.get('issue_type')}")
-                if self.issue_context.get("subject"):
-                    context_parts.append(f"**Subject:** {self.issue_context.get('subject')}")
-                if context_parts:
-                    context_section = "\n=== BACKGROUND CONTEXT ===\n" + "\n".join(context_parts) + "\n\n"
-
-            system_content = self._build_analyze_system_prompt(context_section)
+            system_content = self._build_analyze_system_prompt(
+                self._background_context_section()
+            )
 
             self.conversation_history.append({
                 "role": "system",
@@ -506,6 +558,27 @@ class ConversationMixin:
         else:
             # Follow-up turn — history already has prior analysis context.
             # Assembled-log caches are still warm so all tools work as normal.
+            #
+            # Rewrite the system message before adding the question. It was
+            # written on the first turn from the prompt documents as they
+            # stood then, and the prompt editor can change them in the middle
+            # of a conversation -- save, revert, or switch source. Without
+            # this, an edit only reached the NEXT conversation, which is the
+            # one place the person who just made it is not looking: they ask
+            # another question, watch the agent answer the old way, and
+            # conclude the editor does nothing.
+            #
+            # It is a no-op when the documents have not changed, so an
+            # ordinary follow-up is unaffected.
+            if self._refresh_system_prompt():
+                _emit({
+                    "role": "agent",
+                    "content": (
+                        "✏️ **Prompt updated** — this answer uses the agent "
+                        "prompt as it stands now, not the one this "
+                        "conversation started with."
+                    ),
+                })
             self.conversation_history.append({"role": "user", "content": user_message})
 
         # Per-call tracking
@@ -570,8 +643,9 @@ class ConversationMixin:
                     max_tokens=4096,
                 )
             except Exception as e:
-                error_msg = f"LLM API error at reasoning step {step_idx}: {str(e)}"
-                print(f"[ERROR] {error_msg}")
+                error_msg = _llm_error_for_user(e, step_idx, self.model)
+                # Keep provider details in the server log, not in the chat UI.
+                print(f"[ERROR] LLM API error at reasoning step {step_idx}: {e}")
                 # Dump the role + tool-id skeleton so a tool_use/tool_result
                 # mismatch can be pinpointed by message index + id.
                 if self.capabilities.diagnose_history_on_llm_error:

@@ -411,19 +411,15 @@ class ToolExecutionMixin:
     def _build_analyze_system_prompt(self, context_section: str) -> str:
         """Build the agentic analysis system prompt used by _chat_with_tools.
 
-        The identity/phases body and the report skeleton are per-profile
-        Speclets: shared Markdown files domain experts edit without touching
-        Python (see utils/speclets_utils.py). When the share has not been
-        mirrored — off-VPN, or the background prime has not finished yet —
-        this falls back to the built-in defaults, which are byte-identical
-        to the prompts these agents carried inline before Speclets existed.
+        A new conversation uses its profile's built-in identity/report.
+        The prompt editor may override those documents for this agent alone;
+        the shared mirror and another conversation's saved copy never replace
+        the opening prompt implicitly.
         """
-        from services.chatbot.engine.speclet_defaults import default_speclet
-        from utils.speclets_utils import get_speclet
+        from services.chatbot.engine.speclet_defaults import conversation_speclet
 
-        profile = self.capabilities.profile
-        body = get_speclet(profile, "prompt") or default_speclet(profile, "prompt")
-        report = get_speclet(profile, "report") or default_speclet(profile, "report")
+        body = conversation_speclet(self, "prompt")
+        report = conversation_speclet(self, "report")
 
         skills_block = "".join(
             f"  - {s['name']}: {s['description']}\n"

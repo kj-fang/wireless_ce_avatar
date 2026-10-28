@@ -86,9 +86,9 @@
 
     // Lightweight new-session flow for profiles that intentionally do not
     // load the conversation-history feature (currently NW).  It resets only
-    // the conversation while preserving the selected log and loaded skills,
-    // matching the legacy NW "Reset Conversation" behavior without bringing
-    // back the removed Actions column or the 900-line history controller.
+    // the conversation while preserving the selected log. Custom prompts and
+    // skills return to this profile's originals on the new conversation.
+    // This does not bring back the removed Actions column or history controller.
     async function startNewConversationKeepingLog(button) {
         const originalText = button ? button.textContent : '';
         if (button) {
@@ -231,7 +231,7 @@
         row.className = 'msg-row assistant';
         row.innerHTML = `
             <div class="avatar-icon">🤖</div>
-            <div style="flex:1;min-width:0;">
+            <div class="msg-body">
                 <div class="msg-bubble">${marked.parse(text)}</div>
                 ${showFeedback ? renderFeedbackWidget(turnId) : ''}
             </div>
@@ -448,7 +448,7 @@
             const wrapper = document.createElement('div');
             wrapper.className = 'msg-row assistant';
             wrapper.style.maxWidth = '95%';
-            wrapper.innerHTML = `<div class="avatar-icon">${avatar}</div><div style="flex:1;">${html}</div>`;
+            wrapper.innerHTML = `<div class="avatar-icon">${avatar}</div><div class="msg-body">${html}</div>`;
             document.getElementById('chat-window').appendChild(wrapper);
             bodyEl = document.getElementById(cardId);
             scrollBottom();
@@ -577,7 +577,7 @@
         const wrapper = document.createElement('div');
         wrapper.className = 'msg-row assistant';
         wrapper.style.maxWidth = '95%';
-        wrapper.innerHTML = `<div class="avatar-icon">🤖</div><div style="flex:1;">${html}</div>`;
+        wrapper.innerHTML = `<div class="avatar-icon">🤖</div><div class="msg-body">${html}</div>`;
         document.getElementById('chat-window').appendChild(wrapper);
         scrollBottom();
 
@@ -590,6 +590,23 @@
             }
         });
     }
+
+// ---- Leaving the page ---------------------------------------------------
+// "Back to Avatar" discards the session agent: the loaded log, the
+// conversation, the primed context, and any prompt that was applied to this
+// conversation but not kept. That is the right behaviour when it is what you
+// meant, and nothing to do with navigation when it is not -- so it asks,
+// but only when there is something to lose. A page with no log loaded has
+// nothing to confirm and should not nag.
+window.confirmLeaveChatbot = function () {
+    const path = (document.getElementById('log-path-input') || {}).value || '';
+    if (!path.trim()) return true;
+    return confirm(
+        'Leave the analysis?\n\n'
+        + 'The loaded log and this conversation are discarded, and a prompt '
+        + 'you applied without keeping goes with them.'
+    );
+};
 
 // ---- Chat runtime shims -------------------------------------------------
 // Inline `onclick=` handlers call these as free globals. The profile strategy

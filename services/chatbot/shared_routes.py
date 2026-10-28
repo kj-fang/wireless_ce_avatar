@@ -19,6 +19,7 @@ import threading
 import traceback
 from dataclasses import dataclass
 from datetime import datetime
+from pathlib import Path
 from typing import Any, Callable, Sequence
 
 from flask import Response, jsonify, redirect, request, session, url_for
@@ -54,6 +55,7 @@ class SharedRouteContext:
     #: analytics rows ("wifi"). Keeping them separate preserves both the legacy
     #: history layout and the analytics values main already writes.
     gather_domain: str = "wifi"
+    ensure_editable: Callable[[], None] | None = None
 
 
 def llm_client_model(agent_config_attr: str):
@@ -119,8 +121,8 @@ def leave_chatbot(session_agents: dict):
 def build_shared_handlers(ctx: SharedRouteContext) -> dict[str, Callable[..., Any]]:
     """Build the profile-bound copies of every shared route handler."""
 
-    def _apply_skills_everywhere(skills):
-        """Swap skills on the session agent AND the app-level ones.
+    def _apply_skills_to_conversation(skills):
+        """Swap skills on this conversation's agent only.
 
         Mid-conversation skill edit: ``apply_updated_skills`` also clears the
         rule/filter caches so the edit actually takes effect, while keeping
@@ -128,11 +130,7 @@ def build_shared_handlers(ctx: SharedRouteContext) -> dict[str, Callable[..., An
         """
         agent = ctx.get_agent()
         agent.apply_updated_skills(skills)
-        app_agent = getattr(app_config, ctx.agent_config_attr, None)
-        if app_agent:
-            app_agent.skills = skills
-        if app_config.llm_helper:
-            app_config.llm_helper.skills = skills
+        agent._session_skill_source = "user"
         return agent
 
     # ------------------------------------------------------------------
@@ -343,9 +341,17 @@ def build_shared_handlers(ctx: SharedRouteContext) -> dict[str, Callable[..., An
         if not yaml_path:
             return jsonify({"success": False, "error": "yaml_path is required."}), 400
 
+        if ctx.ensure_editable:
+            try:
+                ctx.ensure_editable()
+            except RuntimeError as exc:
+                return jsonify({"success": False, "error": str(exc)}), 409
+
         try:
             skills = ctx.load_skills_from_yaml(yaml_path)
-            agent = _apply_skills_everywhere(skills)
+            agent = _apply_skills_to_conversation(skills)
+            agent._session_skill_path = Path(yaml_path)
+            agent._session_skill_filename = Path(yaml_path).name
 
             return jsonify({
                 "success": True,
@@ -373,6 +379,12 @@ def build_shared_handlers(ctx: SharedRouteContext) -> dict[str, Callable[..., An
         from pathlib import Path
         from utils import helpers as _helpers
 
+        if ctx.ensure_editable:
+            try:
+                ctx.ensure_editable()
+            except RuntimeError as exc:
+                return jsonify({"success": False, "error": str(exc)}), 409
+
         try:
             # Try to find shared YAML location
             yaml_shared = _helpers.get_load_path(
@@ -387,7 +399,7 @@ def build_shared_handlers(ctx: SharedRouteContext) -> dict[str, Callable[..., An
                 }), 400
 
             skills = ctx.load_skills_from_yaml(yaml_shared)
-            agent = _apply_skills_everywhere(skills)
+            agent = _apply_skills_to_conversation(skills)
 
             return jsonify({
                 "success": True,

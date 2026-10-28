@@ -117,6 +117,27 @@
     </div>
 </div>
 
+<!-- Unanchored dmesg: AI can locate a real boot offset but cannot produce a
+     calendar issue time. Keep its result separate from the date picker. -->
+<div id="boot-time-result-modal" class="fbd-modal" aria-hidden="true">
+    <div class="fbd-backdrop" onclick="closeBootElapsedSuggestions()"></div>
+    <div class="fbd-card" role="dialog" aria-modal="true">
+        <div class="fbd-header">
+            <h3>AI suggestions — seconds since boot</h3>
+            <button type="button" class="fbd-close" onclick="closeBootElapsedSuggestions()" aria-label="Close">×</button>
+        </div>
+        <div class="fbd-body">
+            <div id="boot-time-result-note" class="tc-hint"></div>
+            <div id="boot-time-suggestions"></div>
+        </div>
+        <div class="fbd-footer">
+            <button type="button" class="fbd-btn" onclick="closeBootElapsedSuggestions()">Close</button>
+            <button type="button" class="fbd-btn primary"
+                    onclick="retryBootElapsedWithDescription()">Describe it and try again</button>
+        </div>
+    </div>
+</div>
+
 <!-- Compact one-row template used INSIDE the time-capture popup.
      Same .eit-month / .eit-day / ... hook classes so the shared JS
      helpers (_populateEitRow, _readEitRow) work unchanged. -->

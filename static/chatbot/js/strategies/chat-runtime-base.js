@@ -26,6 +26,7 @@
         // line is a warning rather than a detail.
         const blocked = !!(info && info.supports_windowing === false);
         window.__logTimeAxis = !blocked;
+        window.__logTimeFormat = info || null;
         const el = document.getElementById('it-log-format');
         if (!el) return;
         const note = (info && info.note) ? String(info.note) : '';
@@ -45,7 +46,7 @@
         wrapper.className = 'msg-row assistant';
         wrapper.innerHTML =
             `<div class="avatar-icon">🕒</div>` +
-            `<div style="flex:1;"><span class="incident-tag">Incident ${idx} / ${total}` +
+            `<div class="msg-body"><span class="incident-tag">Incident ${idx} / ${total}` +
             (fmt ? ` &nbsp;·&nbsp; ${fmt}` : '') + `</span></div>`;
         document.getElementById('chat-window').appendChild(wrapper);
         scrollBottom();
@@ -79,16 +80,40 @@
         return lines.join('\n');
     }
 
-    window.downloadReportMarkdown = function (reportId) {
+    window.downloadReportMarkdown = async function (reportId) {
         const text = _reportMarkdown.get(reportId);
         if (!text) return;
         const stamp = new Date().toISOString().slice(0, 19).replace(/[:T]/g, '-');
         const profile = (window.CHATBOT && window.CHATBOT.api || 'report').replace(/\W+/g, '') || 'report';
+        const suggested = `${profile}-report-${stamp}.md`;
+
+        // A real Save dialog where there is one: a report gets filed next to
+        // the case it belongs to, under a name that says which case, and
+        // neither is possible once it has landed in Downloads.
+        if (window.showSaveFilePicker) {
+            try {
+                const handle = await window.showSaveFilePicker({
+                    suggestedName: suggested,
+                    types: [{
+                        description: 'Analysis report (Markdown)',
+                        accept: { 'text/markdown': ['.md'] },
+                    }],
+                });
+                const writable = await handle.createWritable();
+                await writable.write(text);
+                await writable.close();
+                return;
+            } catch (e) {
+                if (e && e.name === 'AbortError') return;
+                console.warn('Save dialog unavailable, falling back:', e);
+            }
+        }
+
         const blob = new Blob([text], { type: 'text/markdown;charset=utf-8' });
         const url = URL.createObjectURL(blob);
         const a = document.createElement('a');
         a.href = url;
-        a.download = `${profile}-report-${stamp}.md`;
+        a.download = suggested;
         document.body.appendChild(a);
         a.click();
         a.remove();
@@ -203,9 +228,7 @@
         const wrapper = document.createElement('div');
         wrapper.className = 'msg-row assistant';
         wrapper.style.maxWidth = '95%';
-        // min-width:0 lets a wide code block scroll inside the card instead of
-        // stretching the whole report past the chat column.
-        wrapper.innerHTML = `<div class="avatar-icon">🤖</div><div style="flex:1;min-width:0;">${html}${turnId ? renderFeedbackWidget(turnId) : ''}</div>`;
+        wrapper.innerHTML = `<div class="avatar-icon">🤖</div><div class="msg-body">${html}${turnId ? renderFeedbackWidget(turnId) : ''}</div>`;
         document.getElementById('chat-window').appendChild(wrapper);
         scrollBottom();
 
@@ -406,6 +429,13 @@
                 signal: __chatCtl.signal,
                 body: JSON.stringify({
                     message: text,
+                    // What the sidebar is showing. The server prefers its own
+                    // registered log and only falls back to this, so the box
+                    // and the server can no longer disagree: a path put in the
+                    // field by the server itself never fires its onchange, and
+                    // a path nobody registered used to surface as "No log file
+                    // loaded" with the file plainly visible in the box.
+                    log_path: ((document.getElementById('log-path-input') || {}).value || '').trim(),
                     // Sidebar Issue Time is the SINGLE source of truth.
                     // Always send the field explicitly so the backend can
                     // override / clear any pre-primed attachment_time.
@@ -707,6 +737,21 @@
             // genuinely absent there rather than merely optional.
             if (typeof refreshIssueWindowBounds === 'function') refreshIssueWindowBounds();
             if (typeof validateUserInput === 'function') validateUserInput();
+            // Only a newly loaded, unanchored dmesg opens the AI consent gate.
+            // The user must still allow the LLM request. Repeated refreshes of
+            // the same file (and history restores) must not nag or auto-send.
+            if (!skipIssueTimeAutofill && data.log_time_format &&
+                data.log_time_format.name === 'monotonic' &&
+                data.log_time_format.supports_windowing === false &&
+                window.__bootSuggestPromptedPath !== path) {
+                setTimeout(() => {
+                    if (window.__setLogGen === logGen &&
+                        window.__bootSuggestPromptedPath !== path &&
+                        typeof suggestIssueTimesWithAI === 'function') {
+                        suggestIssueTimesWithAI();
+                    }
+                }, 700);
+            }
         } catch (e) {
             showStatus(statusEl, '✘ Network error: ' + e.message, 'err');
         }

@@ -198,6 +198,8 @@ def _full_datetime_to_log_frame(
 def validate_issue_time_in_log_range(
     raw_str: str,
     log_path: str,
+    *,
+    log_in_customer_clock: bool = False,
 ) -> Tuple[Optional[datetime], Optional[datetime], Optional[datetime], str]:
     """Parse a carried issue time and reject it when it cannot exist in the log.
 
@@ -212,6 +214,10 @@ def validate_issue_time_in_log_range(
     their UTC offset, so the value is moved into the log frame first — dated
     values through ``determine_issue_time_frames``, clock-only values by
     walking the customer dates the log covers and converting each back.
+
+    ``log_in_customer_clock=True`` is for logs that already carry the
+    customer's clock (BT ``.hci.txt``, Linux dmesg/journalctl): the value is
+    compared as-is, even when a nearby system_info.txt names a timezone.
 
     Returns ``(issue_dt, first_ts, last_ts, error)``.  ``issue_dt`` is a
     LOG-frame datetime, or ``None`` when the value is malformed or outside a
@@ -231,11 +237,14 @@ def validate_issue_time_in_log_range(
     # proceeds: when the customer really is GMT+8 (or the capture is ours)
     # the raw comparison is the correct one, and refusing outright would
     # block those valid values.
-    customer_tz = _customer_timezone_for(log_path)
-    unverified = "" if customer_tz else (
-        " The customer timezone could not be read from the capture, so the "
-        "value could not be converted to the log's clock."
-    )
+    if log_in_customer_clock:
+        customer_tz, unverified = "", ""
+    else:
+        customer_tz = _customer_timezone_for(log_path)
+        unverified = "" if customer_tz else (
+            " The customer timezone could not be read from the capture, so the "
+            "value could not be converted to the log's clock."
+        )
 
     if is_time_only:
         if not first_ts or not last_ts:
@@ -266,7 +275,7 @@ def validate_issue_time_in_log_range(
                 + unverified
             )
         parsed = max(candidates)
-    else:
+    elif not log_in_customer_clock:
         parsed = _full_datetime_to_log_frame(parsed, log_path, first_ts, last_ts)
 
     if first_ts and last_ts and not (first_ts <= parsed <= last_ts):

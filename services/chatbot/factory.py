@@ -40,7 +40,10 @@ ROUTE_SPECS: tuple[RouteSpec, ...] = (
     RouteSpec("/reload_from_shared", "reload_from_shared", ("POST",)),
     RouteSpec("/skills", "get_skills", ("GET",)),
     RouteSpec("/get_issue_context", "get_issue_context", ("GET",)),
-    RouteSpec("/find_best_log", "find_best_log", ("POST",)),
+    # /find_best_log is deliberately NOT here. Picking one capture out of a
+    # list of ETL paths never touches an agent, a conversation or a skill, so
+    # it is not part of a chatbot profile's contract — it is served once by
+    # blueprints/log_parser as POST /log_parser/find_best_log.
     RouteSpec(
         "/suggest_issue_times",
         "suggest_issue_times",

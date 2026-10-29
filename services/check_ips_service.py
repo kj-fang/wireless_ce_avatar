@@ -42,6 +42,7 @@ _last_prompted_log = ""
 
 # Logs answered in this conversation; cleared so each new conversation reconfirms its case.
 _answered_this_session = set()
+_UPLOAD_ANSWER_KEY = "_ips_answered_upload_key"
 
 
 def _answer_store_path() -> Optional[Path]:
@@ -223,6 +224,7 @@ def _apply_stored_answer(log_path) -> None:
 def start_new_session() -> None:
     """Begin a fresh conversation, which confirms the case again."""
     _answered_this_session.clear()
+    session.pop(_UPLOAD_ANSWER_KEY, None)
     if current_source() not in (EXPLICIT, DERIVED_FROM_PATH, SKIPPED):
         return
     session[SESSION_SOURCE_KEY] = ABSENT
@@ -347,7 +349,24 @@ def _from_answered_upload(log_path) -> bool:
     """
     uploaded = session.get("uploaded_source_path")
     key = _log_key(uploaded)
-    return bool(key and key in _answered_this_session and _placeholder_is_for(log_path))
+    return bool(key and session.get(_UPLOAD_ANSWER_KEY) == key
+                and _placeholder_is_for(log_path))
+
+
+def carry_upload_answer(source_path) -> None:
+    """Carry this upload's confirmed answer to its extracted/decoded log.
+
+    The analysis runs before the chatbot opens, sometimes in the Send To
+    worker. A process-global set cannot reliably follow that hand-off (or
+    distinguish two browsers), so the confirmed source key travels with the
+    Flask session snapshot instead. A new conversation clears it.
+    """
+    key = _log_key(source_path)
+    record = answer_for(source_path)
+    if key and record.get("source") in (EXPLICIT, DERIVED_FROM_PATH, SKIPPED):
+        session[_UPLOAD_ANSWER_KEY] = key
+    else:
+        session.pop(_UPLOAD_ANSWER_KEY, None)
 
 
 def needs_ips(log_path) -> bool:
@@ -376,6 +395,13 @@ def needs_ips(log_path) -> bool:
     if not key:
         return not current_case_nbr() and current_source() != SKIPPED
     if current_source() == ABSENT:
+        # Send To starts a fresh file in an existing browser session. A case
+        # found by a previous case search does not establish this new file's
+        # identity just because it happens to be in the same browser.
+        pending = _log_key(session.get("sendto_pending_path"))
+        previous_upload = _log_key(session.get("uploaded_source_path"))
+        if pending == key and previous_upload and previous_upload != key:
+            return True
         # A case that came from the case search rather than from this prompt.
         return not current_case_nbr()
     return True
@@ -585,7 +611,7 @@ def _lookup_case_facts(canonical: str) -> Optional[dict]:
     key = getattr(app_config, "key", None)
     passwd = getattr(key, "snowflake_passwd", None)
     if not passwd:
-        return None
+        raise CaseLookupUnavailable("Snowflake credentials are unavailable")
     llm = getattr(app_config, "llm_helper", None)
 
     # Wait for the slot rather than walking away from it. Refusing instantly
@@ -614,10 +640,15 @@ def _lookup_case_facts(canonical: str) -> Optional[dict]:
             usage = llm.empty_usage() if llm is not None else None
             classification = None
             if llm is not None:
-                classification = llm.classify_issue(
-                    {"case_nbr": canonical, "subject": subject or "",
-                     "description": description or "", "subcategory": subcategory or ""},
-                    usage_accumulator=usage)
+                try:
+                    classification = llm.classify_issue(
+                        {"case_nbr": canonical, "subject": subject or "",
+                         "description": description or "", "subcategory": subcategory or ""},
+                        usage_accumulator=usage)
+                except Exception as e:
+                    # Classification is optional. Do not throw away a valid
+                    # IPS row just because the second, LLM-based step failed.
+                    print(f"[ips] classification for {canonical} unavailable: {e}")
             return {"fields": fields, "classification": classification,
                     "usage": usage, "model": getattr(llm, "model", "") if llm else ""}
         finally:
@@ -627,8 +658,7 @@ def _lookup_case_facts(canonical: str) -> Optional[dict]:
         future = _case_lookup_pool.submit(work)
     except Exception as e:
         _case_lookup_slot.release()
-        print(f"[ips] case lookup for {canonical} skipped: {e}")
-        return None
+        raise CaseLookupUnavailable(canonical) from e
     try:
         facts = future.result(timeout=_ENRICH_TIMEOUT_SEC)
     except FutureTimeoutError as e:
@@ -640,8 +670,8 @@ def _lookup_case_facts(canonical: str) -> Optional[dict]:
         # A backend too slow to answer has not told us the case is empty.
         raise CaseLookupUnavailable(canonical) from e
     except Exception as e:
-        print(f"[ips] case lookup for {canonical} skipped: {e}")
-        return None
+        print(f"[ips] case lookup for {canonical} failed: {e}")
+        raise CaseLookupUnavailable(canonical) from e
     if facts:
         with _case_facts_lock:
             _case_facts[canonical] = facts

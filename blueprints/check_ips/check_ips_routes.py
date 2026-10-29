@@ -92,6 +92,8 @@ def resolve():
     if lookup_unavailable:
         message += (" Its details could not be read just now, so the subject "
                     "and classification are not filled in yet.")
+    elif not enriched:
+        message += " No matching IPS case details were returned."
 
     return jsonify({
         "success": True,

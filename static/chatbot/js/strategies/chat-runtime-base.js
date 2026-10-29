@@ -793,6 +793,10 @@
                 !(opts && opts.deferCasePrefill)) {
                 await this._prefillAttachedCaseDescription(logGen);
             }
+            if (attachedCase && attachedCase.case_nbr && !attachedCase.enriched) {
+                showStatus(statusEl, '⚠ ' + (attachedCase.message ||
+                    'Case attached, but IPS details could not be loaded.'), 'err');
+            }
             // Only a newly loaded, unanchored dmesg opens the AI consent gate.
             // The user must still allow the LLM request. Repeated refreshes of
             // the same file (and history restores) must not nag or auto-send.

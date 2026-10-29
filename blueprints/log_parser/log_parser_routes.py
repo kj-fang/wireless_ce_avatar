@@ -532,6 +532,7 @@ def _process_local_analysis(source_path: str, source_dir: str, file_path: str,
 
     session['download_path'] = source_dir
     session['uploaded_source_path'] = source_path
+    check_ips_service.carry_upload_answer(source_path)
     session['local_in_place'] = True
     # A case already looked up for this run (the prompt's answer) keeps its
     # classification; only a run with no known case is "Unclassified".
@@ -912,6 +913,7 @@ def upload_local_analysis():
     # Keys mutated by _process_local_analysis that must be cleared on cancellation
     _cancelable_session_keys = (
         'download_path', 'uploaded_source_path', 'local_in_place',
+        '_ips_answered_upload_key',
         'classification', 'case_context', 'selected_files', 'bsod',
         'latest_etl_llm', 'latest_etl_path', 'gather_workflow_id',
         'auto_analysis_fw',

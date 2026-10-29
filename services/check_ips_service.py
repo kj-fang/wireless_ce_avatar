@@ -561,6 +561,20 @@ _ENRICH_TIMEOUT_SEC = 20
 # the backend call really finishes, not when the caller stops waiting.
 _case_lookup_pool = ThreadPoolExecutor(max_workers=1, thread_name_prefix="ips-case-lookup")
 _case_lookup_slot = threading.BoundedSemaphore(1)
+#: How long to queue behind a lookup that is already running. Shorter than
+#: _ENRICH_TIMEOUT_SEC so waiting for the slot and then doing the work still
+#: cannot outlast the patience a lookup of its own would have been given.
+_LOOKUP_SLOT_WAIT_SEC = 5
+
+
+class CaseLookupUnavailable(Exception):
+    """The case could not be looked up now -- not that it has nothing to add.
+
+    Raised rather than returned so the two cannot be confused by a caller
+    that only checks for a falsy result. A case with no extra fields is a
+    finished answer; a lookup that never ran is worth trying again, and the
+    person should not be told the case was enriched when it was not.
+    """
 
 
 def _lookup_case_facts(canonical: str) -> Optional[dict]:
@@ -574,9 +588,21 @@ def _lookup_case_facts(canonical: str) -> Optional[dict]:
         return None
     llm = getattr(app_config, "llm_helper", None)
 
-    if not _case_lookup_slot.acquire(blocking=False):
-        print(f"[ips] case lookup for {canonical} skipped: another lookup is still running")
-        return None
+    # Wait for the slot rather than walking away from it. Refusing instantly
+    # meant a case attached while any other lookup was in flight came back
+    # with its number and nothing else -- no subject, no description, no
+    # classification -- and the caller was told the attach succeeded, because
+    # a skipped lookup is indistinguishable from a case with nothing to add.
+    # Two Send To runs in a row are enough to overlap, and that is the normal
+    # way to use it.
+    #
+    # The wait is bounded and shorter than _ENRICH_TIMEOUT_SEC, so a queued
+    # lookup still cannot make the answer take longer than a lookup of its
+    # own would have.
+    if not _case_lookup_slot.acquire(timeout=_LOOKUP_SLOT_WAIT_SEC):
+        print(f"[ips] case lookup for {canonical} gave up waiting: "
+              f"another lookup held the slot for {_LOOKUP_SLOT_WAIT_SEC}s")
+        raise CaseLookupUnavailable(canonical)
 
     def work():
         try:
@@ -610,8 +636,9 @@ def _lookup_case_facts(canonical: str) -> Optional[dict]:
         # already running, work() owns the slot until the backend returns.
         if future.cancel():
             _case_lookup_slot.release()
-        print(f"[ips] case lookup for {canonical} skipped: {e}")
-        return None
+        print(f"[ips] case lookup for {canonical} timed out: {e}")
+        # A backend too slow to answer has not told us the case is empty.
+        raise CaseLookupUnavailable(canonical) from e
     except Exception as e:
         print(f"[ips] case lookup for {canonical} skipped: {e}")
         return None

@@ -66,14 +66,32 @@ def resolve():
     # Look the case up and classify it, as the case search does, so a number
     # given here is no longer left "Unclassified" with no description. After
     # the answer is recorded, and never a reason to refuse it.
+    #
+    # Whether that worked is now reported. It used to be discarded, so an
+    # attach that enriched nothing -- because the backend was slow, or
+    # because another lookup held the one lookup slot -- answered exactly
+    # like one that had worked. The number went in and the subject,
+    # description and classification silently did not, which reads as "the
+    # lookup found it but nothing reached the chatbot".
+    enriched = False
+    lookup_unavailable = False
     try:
-        check_ips_service.enrich_attached_case(canonical)
+        enriched = check_ips_service.enrich_attached_case(canonical)
+    except check_ips_service.CaseLookupUnavailable:
+        lookup_unavailable = True
     except Exception as e:
         print(f"[ips] enrich after resolve failed: {e}")
+
+    message = f"Case {canonical} attached."
+    if lookup_unavailable:
+        message += (" Its details could not be read just now, so the subject "
+                    "and classification are not filled in yet.")
 
     return jsonify({
         "success": True,
         "case_nbr": canonical,
         "case_ref_source": source,
-        "message": f"Case {canonical} attached.",
+        "enriched": enriched,
+        "lookup_unavailable": lookup_unavailable,
+        "message": message,
     })

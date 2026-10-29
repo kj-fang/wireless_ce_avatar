@@ -7,7 +7,7 @@ afterwards. These endpoints back the prompt that asks for the number before
 the conversation starts.
 """
 
-from flask import Blueprint, jsonify, request
+from flask import Blueprint, jsonify, request, session
 
 from services import check_ips_service
 
@@ -81,6 +81,12 @@ def resolve():
         lookup_unavailable = True
     except Exception as e:
         print(f"[ips] enrich after resolve failed: {e}")
+
+    # The page may have cached a no-case (or previous-case) organizer result
+    # before the user answered the IPS dialog. The next context read must
+    # organize the newly attached description, not reuse that stale summary.
+    if enriched:
+        session.pop("_issue_ai_quick", None)
 
     message = f"Case {canonical} attached."
     if lookup_unavailable:

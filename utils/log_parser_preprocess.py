@@ -1,4 +1,5 @@
 import re
+import xml.etree.ElementTree as ET
 from collections import defaultdict
 from typing import List
 
@@ -20,6 +21,59 @@ def extract_enabled_keywords_from_filter_file(filter_file_path: str) -> List[str
                 enabled_keywords.append(keyword)
     print("enabled_keyword", enabled_keywords)
     return enabled_keywords
+
+
+def extract_enabled_filter_rules_from_filter_file(filter_file_path: str) -> List[dict]:
+    """Read enabled TAT filters with their exclusion and regex settings."""
+    rules = []
+    try:
+        root = ET.parse(filter_file_path).getroot()
+    except (ET.ParseError, OSError) as exc:
+        print(f"Could not parse TAT filter '{filter_file_path}': {exc}")
+        return rules
+    for element in root.iter():
+        if element.tag.rsplit("}", 1)[-1].lower() != "filter":
+            continue
+        if element.get("enabled", "n").lower() != "y":
+            continue
+        text = (element.get("text") or "").strip()
+        if not text:
+            continue
+        rules.append({
+            "text": text,
+            "excluding": element.get("excluding", "n").lower() == "y",
+            "regex": element.get("regex", "n").lower() == "y",
+        })
+    return rules
+
+
+def filter_log_by_filters(log_lines: List[str], filters: List[dict]) -> List[str]:
+    """Apply enabled TAT include rules, then remove matches of exclude rules."""
+    includes = []
+    excludes = []
+    for rule in filters:
+        text = str(rule.get("text") or "").strip()
+        if not text:
+            continue
+        matcher = None
+        if rule.get("regex"):
+            try:
+                matcher = re.compile(text, re.IGNORECASE)
+            except re.error:
+                continue
+        target = excludes if rule.get("excluding") else includes
+        target.append((text.lower(), matcher))
+
+    if not includes:
+        return []
+
+    def matches(line: str, rule) -> bool:
+        text, matcher = rule
+        return bool(matcher.search(line)) if matcher else text in line.lower()
+
+    return [line for line in log_lines
+            if any(matches(line, rule) for rule in includes)
+            and not any(matches(line, rule) for rule in excludes)]
 
 
 def extract_all_keywords_from_filter_file(filter_file_path: str) -> List[dict]:

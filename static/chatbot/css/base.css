@@ -162,16 +162,48 @@
         background: var(--accent-hover);
     }
 
+    /* A skill name is an identifier out of someone's YAML --
+       Bluetooth_device_abnormal_disconnected, Whole_Log_Unfiltered -- and a
+       description can be a paragraph. Neither has a space to break at where
+       the sidebar runs out, so without this they ran past the card's border
+       and under the chat column.
+
+       overflow-wrap: anywhere rather than word-break: break-all: break-all
+       splits every line at whatever character lands on the edge, including
+       ordinary words in the description. This one only breaks a run that has
+       no break opportunity of its own, which is exactly the identifiers.
+
+       min-width: 0 on the card because a <details> is a block box whose
+       summary can still establish a wider minimum; without it the card grows
+       to fit the longest name instead of wrapping it. */
+    .skill-card {
+        min-width: 0;
+        overflow-wrap: anywhere;
+    }
+
+    .skill-card > summary {
+        min-width: 0;
+        /* The marker and the name sit on one line; the name wraps under it
+           rather than pushing the triangle out of the card. */
+        overflow-wrap: anywhere;
+    }
+
     .skill-card .skill-name {
         font-weight: 600;
         font-size: 0.78rem;
         color: var(--accent);
+        min-width: 0;
+        max-width: 100%;
+        overflow-wrap: anywhere;
     }
 
     .skill-card .skill-desc {
         font-size: 0.72rem;
         color: #777;
         margin-top: 2px;
+        min-width: 0;
+        max-width: 100%;
+        overflow-wrap: anywhere;
     }
 
     /* Analyze All button */
@@ -575,6 +607,33 @@
         font-size: 0.78rem;
         color: #374151;
         line-height: 1.5;
+        /* A flex item's minimum size is its content, so a table wider than
+           the card stretches the card instead of scrolling inside it -- which
+           is how the seven-column token report pushed the step card past the
+           chat column. These two together let it scroll in place. */
+        min-width: 0;
+        overflow-x: auto;
+    }
+
+    /* The token usage report. Figures are read down the column, so they are
+       right-aligned and never wrapped: a cost split across two lines is
+       harder to scan than one that scrolls. */
+    .agent-step-content table {
+        border-collapse: collapse;
+        font-size: 0.72rem;
+        margin: 4px 0;
+    }
+
+    .agent-step-content th,
+    .agent-step-content td {
+        white-space: nowrap;
+        padding: 2px 10px 2px 0;
+        text-align: right;
+    }
+
+    .agent-step-content th:first-child,
+    .agent-step-content td:first-child {
+        text-align: left;
     }
 
     .agent-step-content pre {

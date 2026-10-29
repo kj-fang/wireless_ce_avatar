@@ -6,6 +6,8 @@ import json
 import os
 from typing import Any, Optional
 
+from configs.llm_pricing import resolve_rates
+
 
 def _llm_error_for_user(exc: Exception, step_idx: int, model: str) -> str:
     """Explain permission failures without exposing the provider's resource details."""
@@ -591,16 +593,51 @@ class ConversationMixin:
         def _emit_token_report():
             if not step_token_usages:
                 return
+            # Rates come from the shared pricing table rather than a constant,
+            # so a model switch cannot leave the report quoting a stale price.
+            # An unpriced model reports counts only: a guessed rate puts a
+            # wrong number in front of the reader, which is worse than none.
+            rates = resolve_rates(self.model)
+            if rates is None:
+                rows = [
+                    "📊 **Token Usage Report**\n",
+                    "| Step | Prompt | Completion | Total |",
+                    "|------|--------|------------|-------|",
+                ]
+                total_p = total_c = total_t = 0
+                for s in step_token_usages:
+                    rows.append(f"| {s['step']} | {s['prompt']:,} | {s['completion']:,} | {s['total']:,} |")
+                    total_p += s["prompt"]; total_c += s["completion"]; total_t += s["total"]
+                rows.append(f"| **Total** | **{total_p:,}** | **{total_c:,}** | **{total_t:,}** |")
+                _emit({"role": "token_usage", "content": "\n".join(rows)})
+                return
+
             rows = [
-                "📊 **Token Usage Report**\n",
-                "| Step | Prompt | Completion | Total |",
-                "|------|--------|------------|-------|",
+                f"📊 **Token Usage & Cost Report** *(list price — "
+                f"${rates['input']:.2f}/MTok in · ${rates['output']:.2f}/MTok out)*\n",
+                "| Step | Input(tok) | Output(tok) | Total(tok) | Input Cost ($) | Output Cost ($) | Step Cost ($) |",
+                "|------|------------|-------------|------------|----------------|-----------------|---------------|",
             ]
             total_p = total_c = total_t = 0
+            total_cost_in = total_cost_out = 0.0
             for s in step_token_usages:
-                rows.append(f"| {s['step']} | {s['prompt']:,} | {s['completion']:,} | {s['total']:,} |")
+                cost_in = s["prompt"] / 1_000_000 * rates["input"]
+                cost_out = s["completion"] / 1_000_000 * rates["output"]
+                rows.append(
+                    f"| {s['step']} | {s['prompt']:,} | {s['completion']:,} | {s['total']:,} "
+                    f"| {cost_in:.4f} | {cost_out:.4f} | {cost_in + cost_out:.4f} |"
+                )
                 total_p += s["prompt"]; total_c += s["completion"]; total_t += s["total"]
-            rows.append(f"| **Total** | **{total_p:,}** | **{total_c:,}** | **{total_t:,}** |")
+                total_cost_in += cost_in; total_cost_out += cost_out
+            total_cost = total_cost_in + total_cost_out
+            rows.append(
+                f"| **Total** | **{total_p:,}** | **{total_c:,}** | **{total_t:,}** "
+                f"| **{total_cost_in:.4f}** | **{total_cost_out:.4f}** | **{total_cost:.4f}** |"
+            )
+            rows.append(
+                f"\n💰 **Estimated total cost: ${total_cost:.4f}** "
+                "— public list price, not the internal gateway's chargeback rate."
+            )
             _emit({"role": "token_usage", "content": "\n".join(rows)})
 
         for step_idx in range(max_steps):

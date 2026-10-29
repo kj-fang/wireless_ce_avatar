@@ -732,15 +732,38 @@ def _forget_case_on_agents(canonical: str) -> None:
         for key in _AGENT_CASE_FIELDS:
             ctx.pop(key, None)
         ctx["case_nbr"] = canonical
-    # The caches derived from the old case: its attachment time, the issue
-    # time resolved from that, the LLM's summary of its description, and its
-    # classification and IPS analysis, which _extract_issue_context would
-    # otherwise prime the next agent with. The _carried_issue_time* keys are
-    # left alone -- they are the time the user picked for this log, not
-    # something the old case supplied. Kept in step with
-    # the shared chatbot adapter's issue-context cache invalidation.
-    for key in ("_attachment_time_cache", "_resolved_issue_time_cache",
-                "_issue_ai_quick", "classification", "ai_ips_analysis"):
+    forget_case_derived_session_keys()
+
+
+#: Everything in the session that was derived from a particular case: its
+#: attachment time, the issue time resolved from that, the LLM's summary of
+#: its description, and its classification and IPS analysis -- all of which
+#: _extract_issue_context would otherwise prime the next agent with.
+#:
+#: The _carried_issue_time* keys are deliberately absent: they are the time
+#: the user picked for this log, not something the case supplied.
+#:
+#: Named because two callers need the same list and they are far apart. One
+#: is a case being replaced in a live session; the other is Send To handing a
+#: new file to a window that is already open, where the browser's session
+#: still holds the previous file's answers. A second hand-written copy of
+#: these five keys is how one of them ends up a key behind.
+CASE_DERIVED_SESSION_KEYS = (
+    "_attachment_time_cache",
+    "_resolved_issue_time_cache",
+    "_issue_ai_quick",
+    "classification",
+    "ai_ips_analysis",
+)
+
+
+def forget_case_derived_session_keys() -> None:
+    """Drop everything the session inferred from whichever case it was on.
+
+    Kept in step with the shared chatbot adapter's issue-context cache
+    invalidation.
+    """
+    for key in CASE_DERIVED_SESSION_KEYS:
         session.pop(key, None)
 
 

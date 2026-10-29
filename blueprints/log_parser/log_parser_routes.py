@@ -290,6 +290,22 @@ def _pickup_sendto_session():
 
     if entry:
         _, data = entry
+        # Forget the previous file's case before adopting this one's.
+        #
+        # session.update() merges: it overwrites the keys the snapshot has and
+        # leaves every other one alone. With the Avatar window closed between
+        # runs that is harmless, because the browser arrives with nothing. With
+        # it left open -- which is the normal way to use Send To twice -- the
+        # session still holds what the LAST case number looked up: its
+        # attachment time, the issue time resolved from it, the LLM's summary
+        # of its description. The snapshot does not carry those keys unless
+        # this file produced its own, so they survived, and the new analysis
+        # opened pre-filled with the previous file's answers in the input box.
+        #
+        # Only the case-derived keys go. The session also carries things that
+        # are the user's rather than the case's, and a blanket clear would take
+        # those too.
+        check_ips_service.forget_case_derived_session_keys()
         session.update(data)
 
 _SAFE_MARKDOWN_TAGS = [

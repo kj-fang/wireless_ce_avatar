@@ -797,6 +797,19 @@
             // A page opened straight from download_result never ran setLog, so
             // this is where it learns what the log's timestamps look like.
             showLogTimeFormat(contextData.log_time_format);
+            if (contextData.log_time_format &&
+                typeof contextData.log_time_format.log_has_date === 'boolean') {
+                window.__logHasDate = contextData.log_time_format.log_has_date;
+            }
+            // ...and the fields have to be told as well. showLogTimeFormat
+            // only updates window.__logTimeAxis; refreshIssueTimeDateOptional
+            // is what carries that into the DOM, and it used to run on the
+            // setLog path alone. So loading an unanchored dmesg and then
+            // opening a dated conversation from History left the date and
+            // time inputs disabled from the previous log -- the new one
+            // supports an issue time, and there was no way to type one.
+            if (typeof refreshIssueTimeDateOptional === 'function') refreshIssueTimeDateOptional();
+            this._afterDateOptionalRefresh();
 
             // Pre-fill input but DO NOT auto-send.  The user reviews / edits
             // the issue context (especially the timestamp) and clicks Send.

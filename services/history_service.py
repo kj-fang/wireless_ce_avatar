@@ -606,7 +606,7 @@ def list_conversations(limit: int = _LIST_LIMIT, domain: str = "") -> list[dict]
     # any filename carrying a KNOWN foreign prefix — a cheap startswith()
     # check on the name already in hand, no JSON parsing required.
     if not prefix:
-        foreign_prefixes = tuple(p for p in _DOMAIN_PREFIXES.values() if p)
+        foreign_prefixes = chat_domains.prefixed_history_prefixes()
         files = [fp for fp in files if not fp.name.startswith(foreign_prefixes)]
 
     for fp in files:

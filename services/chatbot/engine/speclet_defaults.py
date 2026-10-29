@@ -46,9 +46,27 @@ WIFI_REPORT = """Your `markdown_summary` format (REQUIRED):
   - T+Ns: Final Termination
 
   ## Recommendations
+  CONFIDENCE THRESHOLD: Only list recommendations you are AT LEAST 90% confident in.
+  - For each recommendation, internally estimate confidence (0-100%) based on evidence strength.
+  - OMIT any recommendation below 90% confidence — do not list it, do not mention it.
+  EVIDENCE-BOUND — anti-hallucination rule (MANDATORY):
+  - EVERY recommendation MUST be tied to a SPECIFIC log line, timestamp, or event you actually saw in the fetched evidence.
+  - If you cannot point to a concrete log line/timestamp that justifies the recommendation, DO NOT LIST IT — no exceptions.
+  - Do NOT invent, infer, or extrapolate 'best-practice' advice, generic tuning tips, or textbook suggestions not grounded in this log.
+  - Format each item to make the evidence visible: `- <action> — evidence: <log snippet or <HH:MM:SS> event>`.
+  - If a priority tier has no ≥90% confident, evidence-backed items, write `(none)` for that tier.
+  - If ALL tiers are empty, write: `Please work with CFE and file a Jira ticket`
   **P0 (Urgent):** ...
   **P1 (Important):** ...
-  **P2 (Nice-to-have):** ..."""
+  ## Additional Logs Needed from Customer
+  STRICT GATE — do NOT dump a wish-list. Only include a request if ALL are true:
+  (1) You are ≥90% confident this specific log/trace is directly related to the observed issue.
+  (2) You can name the exact uncertainty it will resolve or the specific hypothesis it will confirm/refute — cite the log line that raised the uncertainty.
+  (3) Current logs are genuinely insufficient — the answer is NOT already in the assembled evidence.
+  (4) The gap you're closing must be visible in existing evidence (e.g. a truncated trace, a missing subsystem, an unresolved assert code) — if you cannot cite what triggered the request, DO NOT ask.
+  Hard cap: at most 3 items. Prefer 1 targeted request over 3 generic ones. Never list generic 'more logs' / 'full trace' / 'system dump' as filler.
+  Format per item: `- <WHAT (specific log/trace)> — needed to <WHY (concrete gap it closes, referencing the log evidence)>` (add HOW only if collection is non-obvious).
+  If nothing meets the gate, write exactly: `(none — current logs are sufficient for the stated confidence)`."""
 
 
 # --- Bluetooth (bt_chatbot) ----------------------------------------------

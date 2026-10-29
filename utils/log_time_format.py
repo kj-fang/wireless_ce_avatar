@@ -286,15 +286,52 @@ class LogTimeFormat:
         head, dot, frac = token.partition(".")
         if dot and len(frac) > 6:
             token = f"{head}.{frac[:6]}"
+        yearless = not shape.has_year and self.kind == "absolute"
         for fmt in shape.fmts:
             try:
                 dt = datetime.strptime(token, fmt)
             except ValueError:
-                continue
-            if not shape.has_year and self.kind == "absolute":
-                return _with_year(dt, self._year_for(dt))
-            return dt
+                # A yearless stamp is parsed against strptime's default year,
+                # 1900, which is not a leap year -- so "Feb 29" raises here and
+                # the line is dropped before _year_for() ever gets to say which
+                # year it belongs to. Retry against the year we would have
+                # assigned anyway; if that year really has no 29 February the
+                # second attempt fails too and nothing changes.
+                if not yearless:
+                    continue
+                dt = _retry_yearless(token, fmt, self._leap_candidate())
+                if dt is None:
+                    continue
+                # The retry parsed the year in, so _with_year would be a no-op.
+            else:
+                if yearless:
+                    dt = _with_year(dt, self._year_for(dt))
+            # One exit for every path. strptime applies %z, so an LLM-described
+            # format carrying one hands back an aware datetime where every
+            # caller compares naive ones -- "can't compare offset-naive and
+            # offset-aware datetimes". The offset is already reflected in the
+            # wall-clock reading, so dropping the tzinfo keeps the value and
+            # loses only the label. Returning from inside the retry branch
+            # instead would let a leap-day line skip exactly this.
+            return dt.replace(tzinfo=None) if dt.tzinfo is not None else dt
         return None
+
+    def _leap_candidate(self) -> int:
+        """The year to retry a 29 February stamp against.
+
+        The same rollover rule _year_for() applies, because 29 February is a
+        date like any other in that respect: a log that crosses New Year
+        records its first month and day, and anything earlier in the calendar
+        than that belongs to the later year. A capture starting in December
+        2023 and running into 2024 would otherwise retry its leap day against
+        2023, which has none -- clamping a real 29 February to the 28th while
+        the year it actually belongs to had one.
+        """
+        year = self.year or datetime.now().year
+        if (self.end_year and self.end_year != year and self._first_md
+                and (2, 29) < self._first_md):
+            return self.end_year
+        return year
 
     def _year_for(self, dt: datetime) -> int:
         """The year a yearless stamp belongs to (see the module docstring)."""
@@ -366,6 +403,68 @@ def _with_year(dt: datetime, year: int) -> datetime:
         return dt.replace(year=year)
     except ValueError:      # Feb 29 on a non-leap year
         return dt.replace(year=year, day=28)
+
+
+#: The 29 in a leap-day token, in either order a yearless format writes it:
+#: "Feb 29" / "29 Feb", and the numeric "02-29" / "29/02". Bounded by
+#: non-digits so it cannot match the 29 inside a time or a longer number.
+_LEAP_DAY_RE = re.compile(
+    r"(?<!\d)(?:(?P<before>(?:Feb(?:ruary)?|02|2)[ /-]+)29"
+    r"|29(?P<after>[ /-]+(?:Feb(?:ruary)?|02|2)))(?!\d)",
+    re.IGNORECASE,
+)
+
+
+def _clamp_leap_day(m: "re.Match") -> str:
+    """Rewrite a matched 29 February as the 28th, keeping the token's shape."""
+    if m.group("before"):
+        return f"{m.group('before')}28"
+    return f"28{m.group('after')}"
+
+
+def _describes_a_date(pattern: str) -> bool:
+    """Whether a pattern supplies a calendar day, not just a partial date.
+
+    A weekday or year alone leaves strptime to invent January 1. A month
+    together with a day, a day-of-year, a full locale date, or a complete ISO
+    week date can locate a day (with an inferred year when the log omits it).
+    """
+    directives = set(re.findall(r"%(?:%|[A-Za-z])", pattern or "")) - {"%%"}
+    return (bool(directives & {"%c", "%x", "%j"})
+            or (bool(directives & {"%m", "%b", "%B"}) and "%d" in directives)
+            or {"%G", "%V", "%u"} <= directives)
+
+
+def _retry_yearless(token: str, fmt: str, year: int) -> Optional[datetime]:
+    """Parse a yearless token against ``year`` instead of strptime's 1900.
+
+    Only 29 February needs this. strptime fills a yearless format's year with
+    1900, which is not a leap year, so a perfectly good leap-day line raises
+    and is thrown away before anything can point out that the log is from a
+    year that does have one. Prefixing the year makes the same token parse.
+
+    When the candidate year has no 29 February either, the day is clamped to
+    the 28th rather than dropped. That is the policy _with_year() already
+    applies to the same collision, and it is the better of two imperfect
+    answers: the year was inferred and may be the wrong one, so throwing the
+    line away loses a real event over a guess this module made itself.
+
+    Returns None when the token is not a leap day at all, which leaves the
+    caller exactly where it was.
+    """
+    try:
+        return datetime.strptime(f"{year} {token}", f"%Y {fmt}")
+    except ValueError:
+        pass
+    # Only the leap day gets the second chance; anything else that failed
+    # against a real year is genuinely unparseable.
+    if not _LEAP_DAY_RE.search(token):
+        return None
+    try:
+        return datetime.strptime(
+            f"{year} {_LEAP_DAY_RE.sub(_clamp_leap_day, token, count=1)}", f"%Y {fmt}")
+    except ValueError:
+        return None
 
 
 def _read_sample(log_path: str) -> Tuple[list[str], list[str]]:
@@ -444,6 +543,12 @@ def _infer_years(fmt: LogTimeFormat, shape: _Shape, head: list[str],
             if not m:
                 continue
             for candidate_fmt in shape.fmts:
+                # The sample scan only needs month/day. Parse a leap day in a
+                # known leap year before strptime tries its default 1900.
+                if _LEAP_DAY_RE.search(m.group(1)):
+                    leap = _retry_yearless(m.group(1), candidate_fmt, 2000)
+                    if leap is not None:
+                        return leap
                 try:
                     return datetime.strptime(m.group(1), candidate_fmt)
                 except ValueError:
@@ -473,6 +578,13 @@ _SIBLING_HINTS = ("kern", "syslog", "messages", "journal")
 # rsyslog stamps the boot banner when it starts reading the kernel buffer, a
 # few seconds to a minute after the RTC set.
 _SAME_BOOT_TOLERANCE = timedelta(minutes=2)
+#: How far apart two sightings of the SAME banner can be written. The kernel
+#: line reaches kern.log and syslog through the same journal, so the two
+#: copies carry the same second or the one after it. Deliberately far smaller
+#: than _SAME_BOOT_TOLERANCE, which is about whether a boot matches at all:
+#: reusing that one here would collapse a rapid reboot into a single
+#: candidate and let the ambiguity check pick a timezone it should refuse.
+_DUPLICATE_SIGHTING_TOLERANCE = timedelta(seconds=2)
 _DMESG_SCAN_BYTES = 64 * 1024 * 1024
 
 
@@ -545,16 +657,35 @@ def _find_boot_anchor(log_path: str) -> Tuple[Optional[datetime], str, str, bool
                     stamp_utc = datetime.fromisoformat(raw).astimezone(timezone.utc)
                     gap = abs(stamp_utc.replace(tzinfo=None) - boot_utc)
                     if gap <= _SAME_BOOT_TOLERANCE:
-                        matches.append((gap, name, sibling))
+                        matches.append((gap, name, sibling, stamp_utc))
         except (OSError, ValueError):
             continue
     if not matches:
         return None, "", missing, suspended
     matches.sort(key=lambda x: x[0])
+    # One boot seen twice is not two boots. The scan appends a match per
+    # banner line per file, and the same kernel banner routinely appears in
+    # both kern.log and syslog -- and more than once within one of them. Those
+    # sightings share a timestamp, which the ambiguity test below read as two
+    # candidate boots and refused to choose between, so the timezone went
+    # unresolved exactly when the evidence was strongest.
+    #
+    # Deduplicating on the banner's own timestamp, not on its gap from
+    # boot_utc: every accepted match already has a gap within
+    # _SAME_BOOT_TOLERANCE, so comparing gaps against that same tolerance
+    # would collapse genuinely different boots as well -- including the rapid
+    # reboot the ambiguity test exists to refuse. Two sightings of one boot
+    # agree to the second; two boots do not.
+    distinct = []
+    for entry in matches:
+        if not any(abs(entry[3] - kept[3]) <= _DUPLICATE_SIGHTING_TOLERANCE
+                   for kept in distinct):
+            distinct.append(entry)
+    matches = distinct
     if len(matches) > 1 and matches[1][0] - matches[0][0] < timedelta(seconds=10):
         return None, "", (f"The boot started at {utc_text} UTC, and more than one boot "
                           f"in the folder's logs fits it, so it cannot be told apart."), suspended
-    _, name, sibling = matches[0]
+    _, name, sibling, _stamp = matches[0]
     offset = sibling._utcoffset or timedelta(0)
     return (boot_utc + offset, f"{name} (same kernel banner, boot within "
             f"{int(matches[0][0].total_seconds())} s of the RTC line)", "", suspended)
@@ -719,8 +850,16 @@ def detect_with_llm_fallback(
         return fmt
     pattern = str(described.get("strptime") or "")
     has_year = bool(described.get("has_year", True))
+    # A described format is only absolute if it actually carries a date. The
+    # kind used to be hardcoded, so a clock-only proposal such as
+    # "%H:%M:%S.%f" passed validation -- it parses every line perfectly -- and
+    # was then handed to _with_year(), which gave it 1 January of the inferred
+    # year. The sidebar read that as a real calendar time and offered an
+    # issue-time window against a date the log had never stated. The built-in
+    # shapes already distinguish the two: ddd_time_only is kind "time_only".
+    kind = "absolute" if _describes_a_date(pattern) else "time_only"
     shape = _Shape("llm", f"described by the model ({pattern or 'regex only'})",
-                   rx, (pattern,) if pattern else (), "absolute", has_year=has_year)
+                   rx, (pattern,) if pattern else (), kind, has_year=has_year)
 
     # Validate the claim before trusting it: it must find AND parse real
     # timestamps on most of the sample.

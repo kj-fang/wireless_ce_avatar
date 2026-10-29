@@ -118,10 +118,21 @@ class LogScopeMixin:
         if not hits:
             return -1, -1, [], 0
         first, last = hits[0], hits[-1]
+        # The last in-window entry has a body too. Stopping at `last` -- the
+        # last line carrying its own in-window timestamp -- dropped every
+        # timestamp-less line that followed it, which for a wrapped entry is
+        # the entry itself: an error at the end of the window was kept while
+        # its stack frames were not. So the walk runs past `last` for as long
+        # as the lines are continuations, and stops at the first line that
+        # carries a timestamp of its own, whatever that timestamp says.
+        end = last
+        while end + 1 < len(verdicts) and verdicts[end + 1] is None:
+            end += 1
+
         kept: List[str] = []
         dropped = 0
         continuing = False
-        for i in range(first, last + 1):
+        for i in range(first, end + 1):
             v = verdicts[i]
             if v:
                 kept.append(cache[i])
@@ -132,6 +143,9 @@ class LogScopeMixin:
             else:
                 continuing = False
                 dropped += 1
+        # `last` stays the last line with an in-window timestamp: it is what
+        # the caller reports as the window's end, and the trailing body is
+        # part of that entry rather than a later moment in the log.
         return first, last, kept, dropped
 
     def _log_has_date(self) -> bool:

@@ -29,7 +29,8 @@ from utils import helpers
 from utils.assert_code_utils import lookup_assert_code
 from utils.issue_time_utils import resolve_issue_time, parse_issue_time_string, format_issue_time
 from utils.log_parser_preprocess import (
-    extract_enabled_keywords_from_filter_file,
+    extract_enabled_filter_rules_from_filter_file,
+    filter_log_by_filters,
     filter_log_by_keywords,
     preprocess_log_for_llm,
     group_similar_logs,
@@ -558,6 +559,7 @@ class WifiLogAgentSystem:
 
         try:
             self._raw_log_cache = helpers.read_log_file(self.current_log_path)
+            self._raw_log_source_by_id = {}
             self._raw_log_cache_path = self.current_log_path
             # A different file means all derived caches are stale.
             self._filter_cache_by_skill = {}
@@ -661,17 +663,24 @@ class WifiLogAgentSystem:
         # wraps the time-of-day in ``<...>``.
         start_re = re.compile(r'^\s*<?(?:\d+\s+)?\d{1,2}:\d{2}:\d{2}')
         merged: List[str] = []
+        original_entries = []
         wrapped = 0
         for line in lines:
             if not line.strip() or not merged or start_re.match(line):
                 # Blank lines and entry-start lines pass through unchanged;
                 # blanks are never treated as continuations.
                 merged.append(line)
+                original_entries.append(line)
             else:
                 merged[-1] = merged[-1].rstrip("\r\n") + " " + line.strip()
+                original_entries[-1] += line
                 wrapped += 1
         if wrapped:
             self._raw_log_cache = merged
+            self._raw_log_source_by_id = {
+                id(line): original for line, original in zip(merged, original_entries)
+                if line != original
+            }
             print(f"[PreScan] 🔗 Merged {wrapped} wrapped continuation line(s) "
                   f"in time-only log (now {len(merged)} entries).")
 
@@ -1194,7 +1203,7 @@ class WifiLogAgentSystem:
             self._assembled_entries_no_ts.values(),
             key=lambda x: x["text"]
         )
-        assembled_lines = [e["text"] for e in with_ts] + [e["text"] for e in no_ts]
+        assembled_lines = [e["text"] for e in with_ts + no_ts]
         self._assembled_log_text = "\n".join(assembled_lines)
         return added, len(assembled_lines)
 
@@ -1336,12 +1345,13 @@ class WifiLogAgentSystem:
 
     def _get_filtered_log_lines(self, skill_name: str, apply_output_limit: bool = True) -> str:
         """
-        Apply the TAT keyword filter for `skill_name` to the current log file
-        using the same pipeline as LogParserService.process_analysis:
-          read_log_file → extract_enabled_keywords_from_filter_file
-          → filter_log_by_keywords → preprocess_log_for_llm → group_similar_logs
-        Falls back to simple regex matching when no tat_path is available.
+                Apply the TAT filter for `skill_name` to the current log file:
+                scope → enabled TAT include/exclude/regex rules (or YAML keywords)
+                → preprocess_log_for_llm → group_similar_logs.
         """
+        if not hasattr(self, "_last_skill_raw_lines"):
+            self._last_skill_raw_lines = {}
+        self._last_skill_raw_lines[skill_name] = []
         skill = self.skills.get(skill_name)
         if not skill:
             return f"Error: skill '{skill_name}' not found."
@@ -1352,17 +1362,43 @@ class WifiLogAgentSystem:
         #  scoped lines（Segment1+Segment2）
         log_lines = self._scoped_log_lines
 
-        # --- keyword extraction: prefer TAT file, fall back to in-memory list ---
+        # --- Prefer enabled TAT rules; YAML keywords remain the fallback. ---
         if skill.tat_path and Path(skill.tat_path).exists():
-            keywords = extract_enabled_keywords_from_filter_file(skill.tat_path)
+            tat_filters = extract_enabled_filter_rules_from_filter_file(skill.tat_path)
+            if not tat_filters:
+                return "No enabled filters available for this skill."
+            filtered = filter_log_by_filters(log_lines, tat_filters)
+            raw_filtered_lines = list(filtered)
+            filtered = [re.sub(r"^\d+\t", "", line) for line in filtered]
         else:
             keywords = skill.keywords  # fallback: keywords already loaded from TAT
+            if not keywords:
+                return "No keywords available for this skill."
+            filtered = filter_log_by_keywords(log_lines, keywords)
+            raw_filtered_lines = [
+                line for line in log_lines
+                if any(keyword.lower() in line.lower() for keyword in keywords)
+            ]
 
-        if not keywords:
-            return "No keywords available for this skill."
-
-        # --- same preprocessing steps as log_parser_service.process_analysis ---
-        filtered   = filter_log_by_keywords(log_lines, keywords)
+        # Keep raw source rows for the modal; the model still receives the
+        # same normalized and grouped representation as before.
+        exclusive_terms = [str(term).lower() for term in (skill.exclusive or []) if str(term).strip()]
+        source_by_id = getattr(self, "_raw_log_source_by_id", {})
+        kept_raw_lines = []
+        for line in raw_filtered_lines:
+            processed_line = preprocess_log_for_llm([line])
+            if not processed_line:
+                normalized_line = str(line)
+            else:
+                normalized_line = str(processed_line[0])
+            _, _, message_only = self._normalize_time_message(normalized_line)
+            raw_low = self._strip_line_number_prefix(str(line)).lower()
+            message_low = str(message_only).lower()
+            if any(term in raw_low or term in message_low for term in exclusive_terms):
+                continue
+            kept_raw_lines.append(source_by_id.get(id(line), line))
+        raw_filtered_lines = kept_raw_lines
+        self._last_skill_raw_lines[skill_name] = raw_filtered_lines
         processed  = preprocess_log_for_llm(filtered)
         grouped    = group_similar_logs(processed)
 
@@ -1508,6 +1544,8 @@ class WifiLogAgentSystem:
         
         if skill_name in self._filter_cache_by_skill:
             cached = self._filter_cache_by_skill[skill_name]
+            self._remember_turn_skill_logs(
+                skill_name, cached.get("modal_lines", cached.get("lines", [])))
             export_path = self._export_assembled_log_file()
             total_count = len(self._assembled_log_text.splitlines()) if self._assembled_log_text else 0
             result = self._build_skill_focus_payload(
@@ -1603,13 +1641,17 @@ class WifiLogAgentSystem:
                 compact_lines.append(f"    {_variation_summary(body_lines[run_start:run_end])}")
             run_start = run_end
         body_lines = deduped_body_lines
+        modal_lines = self._compact_original_skill_lines(
+            self._last_skill_raw_lines.get(skill_name, []))
 
         self._filter_cache_by_skill[skill_name] = {
             "skill_name": skill_name,
             "line_count": len(compact_lines),
             "lines": compact_lines,
+            "modal_lines": modal_lines,
             "created_at": datetime.utcnow().strftime('%Y-%m-%dT%H:%M:%SZ'),
         }
+        self._remember_turn_skill_logs(skill_name, modal_lines)
 
         new_added, total_count = self._merge_lines_into_assembled_log(body_lines, skill_name)
         skill_focus_report = self._build_skill_focus_payload(skill_name, new_added, total_count)
@@ -1834,12 +1876,66 @@ class WifiLogAgentSystem:
         self.cancel_event.clear()
         # Fresh turn — token counters describe THIS turn only.
         self._reset_turn_usage()
+        self._turn_skill_log_lines = {}
 
         # Delegate to appropriate implementation
         if use_tools:
-            return self._chat_with_tools(user_message, max_steps, temperature=temperature, step_callback=step_callback)
+            result = self._chat_with_tools(user_message, max_steps, temperature=temperature, step_callback=step_callback)
         else:
-            return self._chat_simple(user_message, temperature=temperature, max_tokens=max_tokens)
+            result = self._chat_simple(user_message, temperature=temperature, max_tokens=max_tokens)
+        self._attach_summary_key_logs(result)
+        return result
+
+    def _remember_turn_skill_logs(self, skill_name: str, lines: list) -> None:
+        if not hasattr(self, "_turn_skill_log_lines"):
+            self._turn_skill_log_lines = {}
+        self._turn_skill_log_lines[skill_name] = [str(line) for line in lines if str(line).strip()]
+
+    def _compact_original_skill_lines(self, lines: list) -> list:
+        variable_pattern = re.compile(
+            r'(?:[0-9a-fA-F]{2}[:\-]){5}[0-9a-fA-F]{2}'
+            r'|\b\d{1,3}(?:\.\d{1,3}){3}\b'
+            r'|0x[0-9a-fA-F]+'
+            r'|\b[0-9a-fA-F]{4,}\b'
+            r'|\b\d+\b'
+        )
+        source_lines = [str(line) for line in lines]
+        compacted = []
+        start = 0
+        while start < len(source_lines):
+            first_message = self._normalize_time_message(source_lines[start])[2]
+            first_pattern = variable_pattern.sub('*', first_message)
+            end = start + 1
+            while end < len(source_lines):
+                message = self._normalize_time_message(source_lines[end])[2]
+                if variable_pattern.sub('*', message) != first_pattern:
+                    break
+                end += 1
+            if end - start <= 2:
+                compacted.extend(source_lines[start:end])
+            else:
+                compacted.extend((source_lines[start], source_lines[end - 1]))
+            start = end
+        return compacted
+
+    def _attach_summary_key_logs(self, result: dict) -> None:
+        skill_logs = getattr(self, "_turn_skill_log_lines", {})
+        result["key_logs_basis"] = "skill_filtered_compact"
+        result["key_logs_status"] = (
+            "selected" if any(lines for lines in skill_logs.values()) else "no_evidence"
+        )
+        sections = []
+        for skill_name, lines in skill_logs.items():
+            if not lines:
+                continue
+            name = self.skills[skill_name].name if skill_name in self.skills else skill_name
+            original_text = "".join(
+                line if line.endswith(("\n", "\r")) else line + "\n"
+                for line in lines
+            )
+            sections.append(f"=== {name} ===\n{original_text}")
+        result["key_logs"] = "\n".join(sections)
+        return result
 
     @staticmethod
     def _empty_turn_usage() -> dict:
@@ -1904,7 +2000,7 @@ class WifiLogAgentSystem:
                 try:
                     from utils.helpers import read_log_file
                     lines = read_log_file(self.current_log_path)
-                    log_snippet = "\n".join(str(l) for l in lines[:500])
+                    log_snippet = "\n".join(str(line) for line in lines[:500])
                 except Exception:
                     log_snippet = "(unable to read log file)"
 
@@ -3017,7 +3113,7 @@ class WifiLogAgentSystem:
         for line in tail_lines:
             line_str = str(line)
             if any(kw in line_str for kw in self._OUTCOME_SIGNAL_KEYWORDS):
-                signals.append(line_str.strip())
+                signals.append(line)
 
         if not signals:
             return ""

@@ -39,6 +39,7 @@ from services import gather_service
 from services import check_ips_service
 
 log_chatbot_bp = Blueprint("log_chatbot", __name__, url_prefix="/log_chatbot")
+LOG_PREVIEW_CHUNK_BYTES = 1024 * 1024
 
 # Server-side store: session_id -> WifiLogAgentSystem instance
 _chatbot_instances: dict = {}
@@ -624,6 +625,64 @@ def set_log():
 
 
 # ------------------------------------------------------------------
+# API: read the currently selected log for the TAT preview modal
+# ------------------------------------------------------------------
+@log_chatbot_bp.route("/preview_log", methods=["GET"])
+def preview_log():
+    """Return metadata for reading the active session log in chunks."""
+    agent = _get_or_create_agent()
+    log_path = (getattr(agent, "current_log_path", "") or "").strip()
+    if not log_path:
+        return jsonify({"success": False, "error": "Load a log file in the sidebar first."}), 400
+    if not os.path.isfile(log_path):
+        return jsonify({"success": False, "error": "The selected log file is not available."}), 404
+    return jsonify({
+        "success": True,
+        "name": os.path.basename(log_path),
+        "size": os.path.getsize(log_path),
+        "chunk_size": LOG_PREVIEW_CHUNK_BYTES,
+        "chunk_url": url_for("log_chatbot.preview_log_chunk"),
+    })
+
+
+@log_chatbot_bp.route("/preview_log_chunk", methods=["GET"])
+def preview_log_chunk():
+    """Read a bounded byte range from the active session log for the preview worker."""
+    agent = _get_or_create_agent()
+    log_path = (getattr(agent, "current_log_path", "") or "").strip()
+    if not log_path:
+        return Response("Load a log file in the sidebar first.", status=400,
+                        mimetype="text/plain; charset=utf-8")
+    if not os.path.isfile(log_path):
+        return Response("The selected log file is not available.", status=404,
+                        mimetype="text/plain; charset=utf-8")
+    try:
+        offset = int(request.args.get("offset", "0"))
+    except (TypeError, ValueError):
+        return Response("offset must be a non-negative integer.", status=400,
+                        mimetype="text/plain; charset=utf-8")
+    size = os.path.getsize(log_path)
+    if offset < 0 or offset > size:
+        return Response("offset is outside the selected log.", status=416,
+                        mimetype="text/plain; charset=utf-8")
+    try:
+        with open(log_path, "rb") as log_file:
+            log_file.seek(offset)
+            chunk = log_file.read(LOG_PREVIEW_CHUNK_BYTES)
+        next_offset = offset + len(chunk)
+        return Response(chunk, mimetype="application/octet-stream", headers={
+            "Cache-Control": "no-store",
+            "X-Content-Type-Options": "nosniff",
+            "X-Next-Offset": str(next_offset),
+            "X-Log-Size": str(size),
+            "X-Log-Eof": "true" if next_offset >= size else "false",
+        })
+    except Exception as exc:
+        return Response(f"Could not read the selected log: {exc}", status=500,
+                        mimetype="text/plain; charset=utf-8")
+
+
+# ------------------------------------------------------------------
 # API: suggest issue time(s) via LLM
 # ------------------------------------------------------------------
 @log_chatbot_bp.route("/suggest_issue_times", methods=["POST"])
@@ -700,6 +759,28 @@ def chat():
     user_message = (data.get("message") or "").strip()
     if not user_message:
         return jsonify({"success": False, "error": "message is required"}), 400
+
+    if str(data.get("model", "avatar")).strip().lower() == "echo":
+        from services.log_chatbot_echo_service import ask_echo_chat
+
+        try:
+            history = data.get("echo_history")
+            answer = ask_echo_chat(
+                user_message,
+                history=history if isinstance(history, list) else [],
+            )
+            event = {"type": "done", "result": {"type": "text", "data": answer}}
+        except Exception as error:
+            event = {"type": "error", "content": str(error)}
+
+        def echo_response():
+            yield f"data: {json.dumps(event, ensure_ascii=False)}\n\n"
+
+        return Response(
+            echo_response(),
+            mimetype="text/event-stream",
+            headers={"Cache-Control": "no-cache", "X-Accel-Buffering": "no"},
+        )
 
     # 428 Precondition Required: the log has no case number yet. The client
     # opens the prompt and replays this request once it has one.

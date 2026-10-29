@@ -696,8 +696,30 @@
             // the 📋 copy button).
             showStatus(statusEl, '✔ Log loaded', 'ok', 3000);
             renderSkills(data.skills);
+
+            // Ask for the case BEFORE releasing the load, and wait for the
+            // answer. tryAutoAnalyzeOnLoad() is gated on logLoaded and does
+            // nothing but wait for it, so setting the flag first let it run
+            // the moment this line executed -- while the dialog was still on
+            // screen. It fetched /get_issue_context with no case attached,
+            // got no description, and pre-filled the input box with nothing.
+            // The answer arrived seconds later and enriched the session, but
+            // the box had already been filled from the empty version, and
+            // nothing re-read it: "the lookup found the case and nothing
+            // reached the input box".
+            //
+            // NW already awaited this (nw.js). The other three profiles did
+            // not, and this is the shared path they use.
+            if (window.IpsPrompt) {
+                try {
+                    await window.IpsPrompt.handleSetLog(data);
+                } catch (e) {
+                    // A dialog that failed must not strand the load: the log
+                    // is usable without a case, which is what skipping means.
+                    console.warn('case prompt failed', e);
+                }
+            }
             logLoaded = true;
-            if (window.IpsPrompt) { window.IpsPrompt.handleSetLog(data); }
             // Enables the (collapsed) System Event Log panel when the capture
             // folder ships an .evt / .evtx next to the log.
             if (typeof updateEvtButton === 'function') {

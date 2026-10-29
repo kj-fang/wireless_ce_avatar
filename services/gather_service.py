@@ -452,10 +452,53 @@ def _agent_domain(value: Any) -> str:
     return value if chat_domains.is_agent_domain(value) else UNKNOWN_DOMAIN
 
 
+def _names_a_case(issue: Optional[dict]) -> bool:
+    """Whether this issue context refers to a real case at all.
+
+    A local upload with no case number is given a synthetic one so the rest
+    of the pipeline has something to key on; it is a placeholder, not a case.
+    """
+    case_nbr = str((issue or {}).get("case_nbr") or "").strip()
+    return bool(case_nbr) and not check_ips_utils.is_synthetic_case_nbr(case_nbr)
+
+
 def _case_domain(issue: Optional[dict], explicit: str = "") -> str:
     issue = issue if isinstance(issue, dict) else {}
-    value = str(issue.get("wifi_or_bt") or explicit or "").strip().lower()
+
+    # No case, no case technology -- whatever else the context claims, and
+    # before anything else is consulted. Two different paths arrive here
+    # without a case: the homepage links open a chatbot with no case at all,
+    # and a local upload is minted a synthetic case number by the parser,
+    # which also sets wifi_or_bt from the files it found. Reading the stated
+    # value first would keep exactly the case-less runs this is here to
+    # exclude, and the technology rollup would go on counting sessions that
+    # were never about a case.
+    if not _names_a_case(issue):
+        return UNKNOWN_DOMAIN
+
+    stated = str(issue.get("wifi_or_bt") or "").strip().lower()
+    if stated in {"wifi", "bt"}:
+        return stated
+
+    value = str(explicit or "").strip().lower()
     return value if value in {"wifi", "bt"} else UNKNOWN_DOMAIN
+
+
+
+def _case_domain_hint(domain) -> str:
+    """The agent domain, but only when running that agent implies a technology.
+
+    A case record's own `wifi_or_bt` is essentially never populated, so
+    `_case_domain` settles on "unknown" unless something stands in for it.
+    The Wi-Fi and Bluetooth agents can: each is opened for a problem in its
+    own technology. NW and Linux cannot -- NW reads a sleep-study report,
+    which may not be wireless at all, and Linux is the Generic Log Analysis
+    Agent, pointed at whatever log the user has.
+
+    Returns "" for those, so the caller falls through to "unknown" rather
+    than claiming a technology the session never established.
+    """
+    return str(domain or "") if chat_domains.implies_case_technology(domain) else ""
 
 
 _CASE_REF_SOURCES = {"explicit", "derived_from_path", "skipped", "absent"}
@@ -603,7 +646,11 @@ def _new_record(
         # `domain` remains the pre-v6 agent-domain field for existing ETL.
         "domain": domain or UNKNOWN_DOMAIN,
         "agent_domain": _agent_domain(domain),
-        "case_domain": _case_domain(issue),
+        # The case's own `wifi_or_bt` is essentially never populated, so without
+        # the agent as fallback this settles on "unknown". wifi_chatbot and
+        # bt_chatbot only ever run on their own technology; `nw` is genuinely
+        # ambiguous and _case_domain already rejects it.
+        "case_domain": _case_domain(issue, _case_domain_hint(domain)),
         "case": _clean_case(issue),
         "case_ref_source": _case_ref_source(issue, log_path),
         "log_path": log_path or "",
@@ -847,7 +894,7 @@ def _new_workflow_record(
         "execution_mode": _execution_mode(),
         # `domain` remains the pre-v6 case-domain field for existing ETL.
         "domain": str(domain or UNKNOWN_DOMAIN).strip().lower() or UNKNOWN_DOMAIN,
-        "case_domain": _case_domain(issue, domain),
+        "case_domain": _case_domain(issue, _case_domain_hint(domain)),
         # A workflow can use multiple agents; agents_used is authoritative.
         "agent_domain": None,
         "case": _clean_case(issue),
@@ -887,7 +934,17 @@ def _load_or_new_workflow(
     # recorded separately in `agents_used`.
     if domain and not record.get("domain"):
         record["domain"] = str(domain).strip().lower()
-    record["case_domain"] = _case_domain(issue, record.get("case_domain") or record.get("domain"))
+    # Write-once now has to be enforced rather than assumed. The established
+    # value used to survive by being passed as the fallback, because
+    # _case_domain honoured any wifi/bt string handed to it. It no longer
+    # does: this function is also reached by feature writes that carry no
+    # issue context at all -- the set_log probe callback among them -- and an
+    # issue naming no case now resolves to unknown, so recomputing would
+    # erase the technology the case-load call established.
+    established = str(record.get("case_domain") or "").strip().lower()
+    if established not in {"wifi", "bt"}:
+        record["case_domain"] = _case_domain(
+            issue, _case_domain_hint(record.get("domain")))
     record["agent_domain"] = None
     record["app_version"] = APP_VERSION
     record["execution_mode"] = _execution_mode()
@@ -1296,7 +1353,7 @@ def _do_record_feature_usage(
                 # `domain` is retained as the pre-v6 agent-domain alias.
                 "domain": str(domain or record.get("domain") or UNKNOWN_DOMAIN),
                 "agent_domain": _agent_domain(domain),
-                "case_domain": str(record.get("case_domain") or _case_domain(issue)),
+                "case_domain": str(record.get("case_domain") or _case_domain(issue, _case_domain_hint(domain))),
                 "conversation_id": _safe_id(conversation_id) if conversation_id else "",
                 "turn_id": _safe_id(turn_id) if turn_id else "",
                 "model": str(model or ""),
@@ -1402,7 +1459,8 @@ def _do_record(
         # selected agent, while case_domain is derived independently.
         record["domain"] = str(record.get("domain") or domain or UNKNOWN_DOMAIN)
         record["agent_domain"] = _agent_domain(domain or record.get("agent_domain") or record.get("domain"))
-        case_dom = _case_domain(issue)
+        # Same agent fallback as _new_record().
+        case_dom = _case_domain(issue, _case_domain_hint(domain))
         if case_dom != UNKNOWN_DOMAIN or not record.get("case_domain"):
             record["case_domain"] = case_dom
         record["app_version"] = APP_VERSION
@@ -1683,7 +1741,8 @@ def _do_record_usage(
             record["workflow_id"] = _safe_id(workflow_id)
         record["domain"] = str(record.get("domain") or domain or UNKNOWN_DOMAIN)
         record["agent_domain"] = _agent_domain(domain or record.get("agent_domain") or record.get("domain"))
-        case_dom = _case_domain(issue)
+        # Same agent fallback as _new_record().
+        case_dom = _case_domain(issue, _case_domain_hint(domain))
         if case_dom != UNKNOWN_DOMAIN or not record.get("case_domain"):
             record["case_domain"] = case_dom
         record["app_version"] = APP_VERSION
@@ -1911,7 +1970,7 @@ def _do_record_feedback_submit(
             # `domain` stays as the pre-v6 agent-domain alias.
             "domain": _agent_domain(domain),
             "agent_domain": _agent_domain(domain),
-            "case_domain": _case_domain(issue),
+            "case_domain": _case_domain(issue, _case_domain_hint(domain)),
         }
         with _lock_for(path):
             _write_json_atomic(path, event)

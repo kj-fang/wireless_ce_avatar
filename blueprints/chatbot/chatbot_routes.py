@@ -83,6 +83,7 @@ from services import history_service
 from services.chatbot import job_runtime as chat_jobs
 from services.chatbot.engine.bluetooth import BtLogAgentSystem
 from services.chatbot.engine.linux import LinuxLogAgentSystem
+from services.chatbot.engine.log_scope import LogScopeMixin
 from services.chatbot.engine.system import WifiLogAgentSystem, load_skills_from_yaml
 from services.chatbot.factory import (
     ChatbotBlueprintConfig,
@@ -298,6 +299,10 @@ def _log_time_format_note(log_path: str) -> dict:
             "name": fmt.name,
             "note": fmt.describe(first_ts, last_ts),
             "supports_windowing": fmt.supports_windowing,
+            # Match the engine's BT policy: BT HCI has dates but still uses
+            # the time-of-day window until dated BT slicing is enabled.
+            "log_has_date": (fmt.name in LogScopeMixin._DATED_WINDOW_FORMATS
+                             and fmt.has_absolute_time),
         }
     except Exception as e:
         print(f"⚠️  log time-format note failed for {log_path}: {e}")

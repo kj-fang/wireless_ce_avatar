@@ -81,6 +81,31 @@ DOMAINS: tuple[ChatDomain, ...] = (
 # are these" are different questions.
 AGENT_DOMAINS: frozenset[str] = frozenset({"wifi", "nw", "bt", "linux"})
 
+# A third question, and the one that is easiest to get wrong: which agents
+# tell you what TECHNOLOGY the case is about?
+#
+# Only these two. The Wi-Fi agent is opened for a Wi-Fi problem and the
+# Bluetooth agent for a Bluetooth one, so when a case record does not say, the
+# agent is a fair stand-in. The other two say nothing of the kind:
+#
+#   nw     reads a sleep-study report, which is a platform-power question
+#          that may or may not turn out to be wireless at all.
+#   linux  is the "Generic Log Analysis Agent" -- it is pointed at whatever
+#          log the user has, so a session on it is evidence of nothing.
+#
+# Both are rejected today anyway, because gather_service._case_domain only
+# admits "wifi" and "bt". That is an accident of that allowlist rather than a
+# decision, and the day somebody widens it -- to count Linux cases, say --
+# every generic-agent session would quietly start being filed under a
+# technology nobody established. Stating it here means the fallback has to
+# opt a domain in, instead of relying on a filter elsewhere to keep it out.
+CASE_TECHNOLOGY_AGENTS: frozenset[str] = frozenset({"wifi", "bt"})
+
+
+def implies_case_technology(agent_domain: Any) -> bool:
+    """Whether running this agent is itself evidence of the case's technology."""
+    return str(agent_domain or "").strip().lower() in CASE_TECHNOLOGY_AGENTS
+
 _BY_ALIAS: dict[str, ChatDomain] = {
     alias: domain for domain in DOMAINS for alias in domain.aliases
 }
@@ -127,6 +152,18 @@ def history_folder(domain: Any) -> str:
 def history_prefix(domain: Any) -> str:
     """Filename prefix for this domain's conversation files."""
     return _entry(domain).history_prefix
+
+
+def prefixed_history_prefixes() -> tuple[str, ...]:
+    """Every history prefix that is not the empty default.
+
+    The default domain's files have no prefix, so a bare "*.json" glob of its
+    folder would also match another domain's files if the two roots ever
+    collapsed into one. Listing the prefixed domains is what lets that glob
+    exclude them, and it has to come from the registry: a hand-written copy
+    of this tuple is exactly what goes stale when a domain is added.
+    """
+    return tuple(domain.history_prefix for domain in DOMAINS if domain.history_prefix)
 
 
 def feedback_prefix(domain: Any) -> str:

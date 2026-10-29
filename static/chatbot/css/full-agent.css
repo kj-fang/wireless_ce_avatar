@@ -543,7 +543,9 @@
             font-size: 0.72rem;
             color: #5a6470;
             font-family: ui-monospace, Menlo, Consolas, monospace;
-            word-break: break-all;
+            min-width: 0;
+            max-width: 100%;
+            overflow-wrap: anywhere;
         }
         .skill-source-actions {
             margin-top: 6px;

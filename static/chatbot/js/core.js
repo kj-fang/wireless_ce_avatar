@@ -329,8 +329,8 @@
         }
     }
 
-    // Skills are presented as collapsed disclosures: expanding one only reveals
-    // its description and never starts a conversation with the agent.
+    // A skill card is a shortcut for starting an analysis in this conversation.
+    // Skill names come from YAML, so build the card with textContent, not HTML.
     function renderSkills(skills) {
         const container = document.getElementById('skills-list');
         container.innerHTML = '';
@@ -346,14 +346,16 @@
             // markup or inject script.
             skills.forEach((s) => {
                 const name = String(s && s.name != null ? s.name : '');
-                const card = document.createElement('details');
+                const card = document.createElement('button');
+                card.type = 'button';
                 card.className = 'skill-card';
-                const summary = document.createElement('summary');
+                card.addEventListener('click', () => {
+                    sendQuick('Analyse using the ' + name + ' skill');
+                });
                 const nameEl = document.createElement('div');
                 nameEl.className = 'skill-name';
                 nameEl.textContent = name;
-                summary.appendChild(nameEl);
-                card.appendChild(summary);
+                card.appendChild(nameEl);
                 if (s && s.description) {
                     const description = document.createElement('div');
                     description.className = 'skill-desc';

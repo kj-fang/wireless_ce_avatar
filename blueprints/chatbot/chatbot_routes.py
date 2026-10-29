@@ -139,6 +139,7 @@ from utils.issue_time_ai import (
 from utils.issue_time_utils import (
     format_issue_time,
     parse_issue_time_string,
+    read_log_last_time_only,
     read_log_time_range,
     validate_issue_time_in_log_range,
 )
@@ -305,35 +306,21 @@ def _log_time_format_note(log_path: str) -> dict:
 
 
 def _time_only_log_last_time(agent) -> str:
-    """Last ``HH:MM:SS`` in a DATELESS log, scanning the raw cache backwards.
+    """Last ``HH:MM:SS`` in a DATELESS log, read from the file's tail.
 
     ``read_log_time_range``'s regex wants ``MM/DD/YYYY-HH:MM:SS.fff``, so on a
     DDD / tracefmt upload it finds nothing and the sidebar's "Use log's last
     time" button silently does nothing. This is the fallback for those.
+
+    It reads the tail of the file rather than the agent's raw-log cache. The
+    cache version had to force the whole log into memory first -- /set_log
+    defers that load until the first analysis, so an unforced cache was empty
+    and the button no-opped -- which meant loading a multi-hundred-megabyte
+    capture into the analysis cache to answer a question about its last line.
+    ``read_log_last_time_only`` seeks the last 64KB instead, so the lazy load
+    stays lazy.
     """
-    # Force the raw-log cache to load — /set_log otherwise defers it until the
-    # first analysis, and this would find [] and no-op.
-    try:
-        agent._ensure_raw_log_cache()
-    except Exception as _e:
-        print(f"⚠️  _ensure_raw_log_cache failed for time-only log: {_e}")
-    cache = getattr(agent, "_raw_log_cache", None) or []
-    _time_re = re.compile(
-        r'(?<!\d)(\d{1,2}):(\d{2}):(\d{2})(?:[:.](\d{1,6}))?(?!\d)'
-    )
-    for _line in reversed(cache):
-        _m = _time_re.search(_line or "")
-        if not _m:
-            continue
-        _hh, _mm, _ss = (int(_m.group(i)) for i in (1, 2, 3))
-        if not (0 <= _hh <= 23 and 0 <= _mm <= 59 and 0 <= _ss <= 59):
-            continue
-        _raw_ms = _m.group(4)
-        if _raw_ms:
-            _ms = int(_raw_ms.ljust(6, "0")[:6]) // 1000
-            return f"{_hh:02d}:{_mm:02d}:{_ss:02d}.{_ms:03d}"
-        return f"{_hh:02d}:{_mm:02d}:{_ss:02d}"
-    return ""
+    return read_log_last_time_only(getattr(agent, "current_log_path", "") or "")
 
 
 def _event_log_anchor_events(log_path: str, source_filter: str, level_filter: str) -> list:

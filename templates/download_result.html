@@ -1461,12 +1461,13 @@
         }
 
         if (autoAnalysisEtlElement) {
-            const etlPathEncoded = autoAnalysisEtlElement.value;
-            const dummyButton = document.createElement('button');
-            dummyButton.classList.add('btn', 'btn-success');
-            setAnalysisCardLocked(true);
-            startLogParser(dummyButton, etlPathEncoded);
-            
+            document.addEventListener('DOMContentLoaded', function() {
+                const etlPathEncoded = autoAnalysisEtlElement.value;
+                const dummyButton = document.createElement('button');
+                dummyButton.classList.add('btn', 'btn-success');
+                setAnalysisCardLocked(true);
+                startLogParser(dummyButton, etlPathEncoded, true);
+            });
         }
 
         // --- BT Auto-Analysis: decode HCI → redirect to bt_chatbot ---
@@ -1954,7 +1955,7 @@
                 });
         }
     
-    function startLogParser(button, etlPathEncoded) {
+    function startLogParser(button, etlPathEncoded, showParseModal = false) {
         cancelPendingFwAnalysis();
         if (button.classList.contains('disabled')) return;
 
@@ -1964,6 +1965,11 @@
         button.innerText = 'Processing & Parsing...';
 
         const decoded = decodePath(etlPathEncoded);
+        if (showParseModal) {
+            openParseModal(`Wi-Fi Analysis Agent: ${getFilename(decoded)}`);
+            clearTimeout(window._parseSafetyTimer);
+            window._parseSafetyTimer = null;
+        }
         appendLog(`\n\n🚀 Starting Analyze with LLM: ${decoded}\n`);
 
         appendLog(`🛠️ Step 1: Running Analysis...\n`);
@@ -1981,6 +1987,7 @@
                 console.error("Analysis failed:", err);
                 logBox.innerText += `❌ Analysis Failed: ${decoded}\n`;
                 logBox.scrollTop = logBox.scrollHeight;
+                _closeParseModal(false, '❌ Parsing Failed', 'Request failed — see log for details.');
                 setWifiActionButtonsBusy(false);
                 setAnalysisCardLocked(false);
             });

@@ -241,7 +241,10 @@ def find_assert_evidence(analysis, window=None) -> dict:
       1. the decoded WRT log (analysis.log_path) — the driver's own
          "uCode ASSERT(<CPU>, rtStatus = 0x…)" lines. Authoritative.
       2. fallback: assert codes mentioned in the agent's write-up
-         (6+ hex digits; Windows event IDs like 5002 rejected).
+         (6+ hex digits; Windows event IDs like 5002 rejected) — only when
+         the log held NO asserts at all. When the window excluded every log
+         assert, the write-up (made from the whole log) would just hand the
+         same excluded codes back.
 
     window: optional (start, end) datetimes in the log's clock frame — an
     assert outside it happened at another time and is not this issue's
@@ -275,7 +278,7 @@ def find_assert_evidence(analysis, window=None) -> dict:
     # agent's own write-up) supply assert codes.
 
     blob = _analysis_text_blob(analysis)
-    if not asserts:
+    if not asserts and not ignored:
         seen: set = set()
         for regex in (_ASSERT_CODE_RE, _LOOKUP_BLOCK_RE):
             for m in regex.finditer(blob):
@@ -340,8 +343,12 @@ def build_yellow_bang_question(context: str = "") -> str:
 
 
 def collect_echo_insights(analysis,
-                          ask: Optional[Callable[[str], str]] = None) -> list[dict]:
+                          ask: Optional[Callable[[str], str]] = None,
+                          evidence: Optional[dict] = None) -> list[dict]:
     """Query Echo for every assert (and yellow bang) found in the analysis.
+
+    evidence: a find_assert_evidence() result to use as-is (the runner passes
+    its issue-time-windowed one); None recomputes without a window.
 
     Never raises: a per-question EchoUnavailable becomes an entry with
     "error" set and "answer" None, so one outage can't lose other answers
@@ -350,7 +357,8 @@ def collect_echo_insights(analysis,
     from utils.assert_code_utils import lookup_assert_code
 
     ask = ask or ask_echo_kb
-    evidence = find_assert_evidence(analysis)
+    if evidence is None:
+        evidence = find_assert_evidence(analysis)
     context = str(getattr(analysis, "clean_description", "") or "")
     insights: list[dict] = []
 

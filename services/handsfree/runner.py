@@ -324,8 +324,14 @@ def _noop(_stage: str, _detail: str = "") -> None:
 class HandsfreeRunner:
     """One instance per run; stateless between cases."""
 
+    # How long the end of a run waits for a background prefetch nobody
+    # consumed (the reader chose another archive, or the run stopped at an
+    # early gate) before giving up on it.
+    PREFETCH_JOIN_TIMEOUT_S = 15 * 60
+
     def __init__(self, progress_cb: Optional[Callable[[str, str], None]] = None):
         self.progress = progress_cb or _noop
+        self._prefetch: Optional[_Prefetch] = None
 
     # ---- stage helper ----
     def _stage(self, analysis: CaseAnalysis, name: str):
@@ -354,6 +360,28 @@ class HandsfreeRunner:
     # ------------------------------------------------------------------
     def analyze_case(self, case_nbr: str, *, max_steps: int = MAX_AGENT_STEPS,
                      max_incidents: int = MAX_INCIDENTS) -> CaseAnalysis:
+        """Run the pipeline for one case. Whatever path the run takes, a
+        background archive prefetch it started is waited for before this
+        returns: the caller releases the run lock right after, and an orphan
+        download would overlap the next run's use of the shared
+        DriverManager / download globals."""
+        self._prefetch = None
+        try:
+            return self._analyze_case(case_nbr, max_steps=max_steps,
+                                      max_incidents=max_incidents)
+        finally:
+            pf, self._prefetch = self._prefetch, None
+            if pf is not None and pf.is_alive():
+                self.progress("download",
+                              f"waiting for the background prefetch of {pf.attachment_name} "
+                              "to finish before the run ends")
+                pf.join(timeout=self.PREFETCH_JOIN_TIMEOUT_S)
+                if pf.is_alive():
+                    print(f"[handsfree.runner] prefetch of {pf.attachment_name} still "
+                          "running after the join timeout — left to finish on its own")
+
+    def _analyze_case(self, case_nbr: str, *, max_steps: int,
+                      max_incidents: int) -> CaseAnalysis:
         from configs.global_configs import app_config
 
         analysis = CaseAnalysis(case_nbr=str(case_nbr))
@@ -403,6 +431,7 @@ class HandsfreeRunner:
                 if newest is not None:
                     prefetch = _Prefetch(newest, case_ctx.case_download_dir)
                     prefetch.start()
+                    self._prefetch = prefetch     # joined by analyze_case on every exit
                     self.progress("fetch_case",
                                   f"prefetching {prefetch.attachment_name} in the background")
             except Exception as e:
@@ -829,10 +858,17 @@ class HandsfreeRunner:
 
         # -- 9. decode ETL -> analysis log --------------------------------------
         if analysis.wifi_or_bt == "bt":
-            from services.etl_parser.bt_parser import find_ready_hci
-            log_path = find_ready_hci(etl_path) or ""
-            if not log_path:
-                with self._stage(analysis, "decode_bt"):
+            # Same as the Wi-Fi branch: an already-decoded HCI is a fast
+            # "done", not a skip, or the stage table shows decode_bt pending
+            # forever on re-runs.
+            log_path = ""
+            with self._stage(analysis, "decode_bt"):
+                from services.etl_parser.bt_parser import find_ready_hci
+                log_path = find_ready_hci(etl_path) or ""
+                if log_path:
+                    self.progress("decode_bt",
+                                  f"reusing existing decoded HCI ({os.path.basename(log_path)})")
+                else:
                     log_path = self._decode_bt(etl_path) or ""
         else:
             # Always record the stage: a cached .log (this case analyzed before)
@@ -973,8 +1009,12 @@ class HandsfreeRunner:
                     self.progress("echo_kb", "A ← Echo:\n" + _clip(answer, 900))
                     return answer
 
+                # The same windowed evidence drives the questions: a
+                # recompute without the window would ask about the asserts
+                # just ignored as another incident's.
                 analysis.echo_insights = collect_echo_insights(analysis,
-                                                               ask=_ask_logged)
+                                                               ask=_ask_logged,
+                                                               evidence=evidence)
                 answered = sum(1 for i in analysis.echo_insights if i.get("answer"))
                 self.progress(
                     "echo_kb",
@@ -993,13 +1033,13 @@ class HandsfreeRunner:
     def _check_time_coverage(self, analysis: CaseAnalysis,
                              grace_minutes: int = 10) -> None:
         """Flag when NO reported issue time falls inside the decoded log's
-        time range (±grace). Only full datetimes count — time-only values
-        borrow the log's date downstream, so they are inside by construction.
+        time range (±grace). Full datetimes are mapped into the log's clock;
+        a clock-only value ("10:17", accepted as minute-precise) is placed
+        on the dates the log spans — a capture of 08:00–08:10 does not cover
+        an issue reported at 10:17 just because the date was not stated.
         Sets analysis.time_mismatch and emits a WARNING progress line."""
         from datetime import timedelta
-        from utils.issue_time_utils import (format_issue_time,
-                                            parse_issue_time_string,
-                                            read_log_time_range)
+        from utils.issue_time_utils import format_issue_time, read_log_time_range
 
         if not analysis.issue_times or not analysis.log_path:
             return
@@ -1011,11 +1051,11 @@ class HandsfreeRunner:
         checked: list[str] = []
         covered = False
         for raw in analysis.issue_times:
-            dt, time_only = parse_issue_time_string(str(raw))
-            if dt is None or time_only:
+            cands = self._issue_time_candidates(raw, analysis.log_path, first, last)
+            if not cands:
                 continue
             checked.append(str(raw))
-            for cand in self._log_frame_candidates(dt, analysis.log_path, first, last):
+            for cand in cands:
                 if first - grace <= cand <= last + grace:
                     covered = True
                     break
@@ -1074,24 +1114,53 @@ class HandsfreeRunner:
                     cands.append(shifted)
         return cands
 
+    @staticmethod
+    def _issue_time_candidates(raw: str, log_path: str, first, last) -> list:
+        """The reported issue time as datetimes in the log's clock. A full
+        datetime goes through _log_frame_candidates; a clock-only value is
+        placed on every date the log spans (one day either side too, for
+        the clock offsets _log_frame_candidates applies) and each placement
+        mapped the same way. [] when the value does not parse, or when a
+        clock-only value has no log range to be placed on."""
+        from datetime import datetime, timedelta
+        from utils.issue_time_utils import parse_issue_time_string
+        dt, time_only = parse_issue_time_string(str(raw))
+        if dt is None:
+            return []
+        if not time_only:
+            return HandsfreeRunner._log_frame_candidates(dt, log_path, first, last)
+        if first is None or last is None:
+            return []
+        out: list = []
+        day0 = first.date() - timedelta(days=1)
+        days = min((last.date() - first.date()).days, 7) + 2
+        for n in range(days + 1):
+            placed = datetime.combine(day0 + timedelta(days=n), dt.time())
+            for cand in HandsfreeRunner._log_frame_candidates(placed, log_path, first, last):
+                if cand not in out:
+                    out.append(cand)
+        return out
+
     def _issue_datetime_in_log_frame(self, analysis: CaseAnalysis):
         """First reported issue time as a full datetime in the log's clock:
-        the candidate that falls inside the log window wins, else the tz
-        helper's mapping. None when no full datetime is known."""
+        the candidate that falls inside the log window wins, else (full
+        datetimes only) the tz helper's mapping. A clock-only value that
+        occurs nowhere in the log gives None, as does an unparseable one."""
         from utils.issue_time_utils import (parse_issue_time_string,
                                             read_log_time_range)
         if not analysis.issue_times or not analysis.log_path:
             return None
         first, last = read_log_time_range(analysis.log_path)
         for raw in analysis.issue_times:
-            dt, time_only = parse_issue_time_string(str(raw))
-            if dt is None or time_only:
+            cands = self._issue_time_candidates(raw, analysis.log_path, first, last)
+            if not cands:
                 continue
-            cands = self._log_frame_candidates(dt, analysis.log_path, first, last)
             if first and last:
                 for cand in cands:
                     if first <= cand <= last:
                         return cand
+            if parse_issue_time_string(str(raw))[1]:
+                return None          # clock-only, never inside the log: no anchor
             return cands[1] if len(cands) > 1 else cands[0]
         return None
 

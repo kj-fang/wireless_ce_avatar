@@ -251,7 +251,7 @@
       </div>
       <div class="controls divider">
         <label title="Tuning on historical IPS cases: closed cases of the automatic-analysis list view are included, and every run's drafts are flagged TRIAL and can never be posted">
-          <input type="checkbox" id="cfg-trial" onchange="applyTrialUi()"> trial mode (include closed cases, posting disabled)
+          <input type="checkbox" id="cfg-trial" onchange="toggleTrial()"> trial mode (include closed cases, posting disabled)
         </label>
       </div>
       <div style="margin-top: 12px;">
@@ -480,6 +480,33 @@
     const badge = document.getElementById('trial-badge');
     if (badge) badge.style.display = on ? '' : 'none';
     applyAutoSourceUi();
+  }
+
+  // Trial mode is a safety property of the next run, so the toggle is saved
+  // the moment it is flipped and the badge follows the server's answer: the
+  // page never claims TRIAL while the server would create postable drafts.
+  async function toggleTrial() {
+    const box = document.getElementById('cfg-trial');
+    const want = box.checked;
+    const status = document.getElementById('cfg-status');
+    box.disabled = true;
+    try {
+      const r = await fetch('/handsfree/config', {
+        method: 'POST', headers: {'Content-Type': 'application/json'},
+        body: JSON.stringify({trial_mode: want}),
+      });
+      const cfg = await r.json();
+      box.checked = !!cfg.trial_mode;
+      status.textContent = 'trial mode ' + (cfg.trial_mode ? 'on' : 'off') + ' (saved)';
+      status.className = 'status-line done';
+    } catch (e) {
+      box.checked = !want;
+      status.textContent = 'trial mode not saved: ' + e;
+      status.className = 'status-line error';
+    } finally {
+      box.disabled = false;
+      applyTrialUi();
+    }
   }
 
   function applyAutoSourceUi() {

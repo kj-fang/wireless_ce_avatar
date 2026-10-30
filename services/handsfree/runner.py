@@ -1384,7 +1384,7 @@ class HandsfreeRunner:
         if not bt_files:
             return None
         try:
-            from blueprints.bt_chatbot.bt_chatbot_routes import _parse_path_timestamp
+            from blueprints.log_parser.log_parser_routes import _parse_path_timestamp
             dated = [(path, _parse_path_timestamp(path)) for path in bt_files]
             dated = [(path, ts) for path, ts in dated if ts is not None]
             if dated:

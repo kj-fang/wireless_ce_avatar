@@ -67,7 +67,7 @@ def _build_parser() -> argparse.ArgumentParser:
     targets.add_argument(
         "--sso-check",
         action="store_true",
-        help="Verify the saved sign-in still works unattended (exit 0 = OK, 1 = expired).",
+        help="Verify Salesforce + esft sign-in works unattended (saved profile, else the Windows account; exit 0 = OK, 1 = failed).",
     )
     targets.add_argument(
         "--sso-refresh",
@@ -158,7 +158,8 @@ def _sso_refresh() -> int:
 
     _initialize_sso_only()
     if not os.path.isdir(CaseService._sso_profile_dir()):
-        print("[handsfree-cli] no saved sign-in on this machine; run --sso-login first")
+        print("[handsfree-cli] no saved sign-in profile here: this machine signs in with "
+              "its Windows account, so check that account (or run --sso-login)")
         return 1
     try:
         CaseService.interactive_sso_login(wait_s=_SSO_REFRESH_WAIT_S)

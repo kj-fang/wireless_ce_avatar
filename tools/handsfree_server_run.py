@@ -3,14 +3,15 @@ One scheduled Handsfree round on the server (run it from Task Scheduler).
 
     python tools/handsfree_server_run.py --owners-file C:\\path\\owners.txt
 
-1. --sso-check: is the saved sign-in still good?
-2. If not, --sso-refresh once: a visible Chrome retries the saved sign-in
-   with nobody typing. If that fails too, a person must run --sso-login.
+1. --sso-check: does Salesforce + esft sign-in work unattended? (the saved
+   --sso-login profile if there is one, else the Windows account)
+2. If not, --sso-refresh once: a visible Chrome retries the saved profile
+   with nobody typing. If that fails too, a person must fix the sign-in.
 3. One scan of the owners' new cases / new customer comments (--once).
 
 Each run writes <avatarfiles_dir>/logs/handsfree_server/<timestamp>.log and
 overwrites last_status.txt there. Logs older than 30 days are deleted.
-Exit code: 0 ok, 1 scan failed, 2 sign-in expired, 3 bad owners file.
+Exit code: 0 ok, 1 scan failed, 2 sign-in failed, 3 bad owners file.
 """
 
 from __future__ import annotations
@@ -59,8 +60,8 @@ def _cli(log, *args: str) -> int:
 def _round(owners_file: Path, log) -> tuple[int, str]:
     if _cli(log, "--sso-check") != 0:
         if _cli(log, "--sso-refresh") != 0:
-            return 2, ("SIGN-IN EXPIRED - on the server run: "
-                       "python -m services.handsfree.cli --sso-login")
+            return 2, ("SIGN-IN FAILED - Salesforce/esft sign-in did not complete; "
+                       "see the log (a saved-profile machine needs --sso-login)")
     rc = _cli(log, "--owners-file", str(owners_file), "--once")
     return (0, "OK") if rc == 0 else (1, f"scan failed (cli exit {rc})")
 

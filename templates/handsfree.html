@@ -247,6 +247,9 @@
         <label title="Kill-switch: when checked, nothing is ever posted to IPS">
           <input type="checkbox" id="cfg-dry-run"> dry run (posting disabled)
         </label>
+        <label title="A case's first reply that asks the customer for missing items (request logs / request info / first response) posts PUBLICLY without review, under the IPS account of the machine running the analysis. Dry run still blocks it.">
+          <input type="checkbox" id="cfg-auto-post-fr"> auto-post first response (missing items)
+        </label>
         <label>Post backend:
           <select id="cfg-backend">
             <option value="rest">rest</option>
@@ -296,6 +299,8 @@
           posting backend: <b id="backend-name">{{ config.post_backend }}</b>
           <span id="dry-run-badge" class="pill warn"
                 {% if not config.dry_run %}style="display:none;"{% endif %}>DRY RUN — posting disabled</span>
+          <span id="auto-post-fr-badge" class="pill warn" title="First replies asking for missing items post without review"
+                {% if not config.auto_post_first_response %}style="display:none;"{% endif %}>AUTO-POST first response</span>
           <span id="trial-badge" class="pill warn" title="Tuning on historical cases: drafts are flagged TRIAL and cannot be posted"
                 {% if not config.trial_mode %}style="display:none;"{% endif %}>TRIAL MODE</span>
         </span>
@@ -468,6 +473,8 @@
   function applyConfigBadge(cfg) {
     document.getElementById('backend-name').textContent = cfg.post_backend || 'auto';
     document.getElementById('dry-run-badge').style.display = cfg.dry_run ? '' : 'none';
+    document.getElementById('auto-post-fr-badge').style.display =
+      cfg.auto_post_first_response ? '' : 'none';
     document.getElementById('trial-badge').style.display = cfg.trial_mode ? '' : 'none';
     if (cfg.owner_name) document.getElementById('owner-name').value = cfg.owner_name;
   }
@@ -477,6 +484,7 @@
     document.getElementById('auto-owner').textContent = cfg.owner_name || '—';
     document.getElementById('cfg-max-cases').value = cfg.max_cases_per_run ?? 3;
     document.getElementById('cfg-dry-run').checked = !!cfg.dry_run;
+    document.getElementById('cfg-auto-post-fr').checked = !!cfg.auto_post_first_response;
     document.getElementById('cfg-backend').value = cfg.post_backend || 'auto';
     document.getElementById('cfg-trial').checked = !!cfg.trial_mode;
     applyTrialUi();
@@ -602,6 +610,7 @@
       owner_name: document.getElementById('cfg-owner').value.trim(),
       max_cases_per_run: Math.min(15, Math.max(1, isNaN(maxRaw) ? 3 : maxRaw)),
       dry_run: document.getElementById('cfg-dry-run').checked,
+      auto_post_first_response: document.getElementById('cfg-auto-post-fr').checked,
       post_backend: document.getElementById('cfg-backend').value,
       trial_mode: document.getElementById('cfg-trial').checked,
     };
@@ -999,7 +1008,9 @@
         (it.trial ? ` <span class="pill warn" title="tuning run on a historical case — cannot be posted">TRIAL</span>` : '') +
         `</td>` +
         `<td>${it.confidence != null ? it.confidence + '/100' : '—'}</td>` +
-        `<td><span class="pill dot ${statusCls}">${esc(it.status)}</span></td>` +
+        `<td><span class="pill dot ${statusCls}">${esc(it.status)}</span>` +
+        (it.auto_posted ? ` <span class="pill" title="Posted automatically (auto-post first response)">AUTO</span>` : '') +
+        `</td>` +
         // Who acts next, as read from the comment thread (hover = the step).
         (it.action_owner
           ? `<td><span class="pill ${it.action_owner === 'intel' ? 'warn' : ''}" ` +

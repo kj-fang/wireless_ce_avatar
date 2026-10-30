@@ -1327,6 +1327,55 @@ def smoke_orchestrator(tmp: Path) -> None:
               res["ok"] is False and "once" in res["error"]
               and store.ledger_entry("09999995").get("first_response_comment_id") == "C9",
               str(res))
+
+        # Opt-in auto-post: only a case's first reply that asks for missing
+        # items posts unreviewed; every gate leaves the draft for review.
+        from types import SimpleNamespace
+        _Ips.comments, _Ips.post_ok = [], True
+        missing = {"general_info": [{"item": "Driver version", "provided": False}]}
+        complete = {"general_info": [{"item": "Driver version", "provided": True,
+                                      "value": "23.60"}]}
+
+        def auto(case, mode, *, done=False, fills=None, trial=False):
+            rec = store.enqueue(case_nbr=case, case_id="500" + case, subject="s",
+                                draft_plain=AI_MARKER + "\n" + CHECKLIST_TAG + "\n\nb",
+                                draft_html="<p>b</p>", confidence=None, mode=mode,
+                                analysis={"first_response_done": done}, trial=trial)
+            before = len(_Ips.posted)
+            orch._auto_post_first_response(
+                store, rec, SimpleNamespace(first_response_done=done,
+                                            checklist_fills=fills or missing))
+            return store.get(rec["draft_id"]), len(_Ips.posted) - before
+
+        rec, n = auto("09999990", "request_logs")
+        check("S5.h auto-post off by default: first-round request left for review",
+              n == 0 and rec["status"] == "pending_review", rec["status"])
+        store.save_config({"auto_post_first_response": True, "dry_run": True})
+        rec, n = auto("09999989", "request_logs")
+        check("S5.h2 dry run blocks auto-post", n == 0 and rec["status"] == "pending_review")
+        store.save_config({"dry_run": False})
+        rec, n = auto("09999988", "request_info")
+        check("S5.h3 no verified rest_field_map: auto-post skipped",
+              n == 0 and rec["status"] == "pending_review")
+        store.save_config({"rest_field_map": {"body_field": "Core_IPS_Rich_Comment__c"}})
+        rec, n = auto("09999987", "request_logs")
+        check("S5.h4 first-round request posts PUBLIC, marked auto_posted, first response recorded",
+              n == 1 and _Ips.posted[-1][1] is False and rec["status"] == "posted"
+              and rec.get("auto_posted") is True
+              and store.first_response_posted("09999987"), str(rec.get("post_result")))
+        rec, n = auto("09999986", "first_response")
+        check("S5.h5 first_response with missing checklist items posts",
+              n == 1 and rec["status"] == "posted" and rec.get("auto_posted") is True)
+        skipped = [auto("09999985", "first_response", fills=complete),
+                   auto("09999984", "request_logs", done=True),
+                   auto("09999983", "full"),
+                   auto("09999982", "triage_only"),
+                   auto("09999981", "request_info", trial=True)]
+        check("S5.h6 not auto-posted: nothing missing / later round / analysis / triage / trial",
+              all(n == 0 and r["status"] == "pending_review" and not r.get("auto_posted")
+                  for r, n in skipped),
+              str([(r["mode"], r["status"], n) for r, n in skipped]))
+        store.save_config({"auto_post_first_response": False, "rest_field_map": None})
     finally:
         orch._store = orig_store_fn
         orch.IpsClient = orig_ips

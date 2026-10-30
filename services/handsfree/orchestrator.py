@@ -5,9 +5,11 @@ One check run at a time (module lock). All state the UI needs lives in
 `run_state` (thread-safe copies via get_run_state) and the HandsfreeStore
 queue/ledger on disk.
 
-v1 posting policy: ONLY approve_and_post (a human click) ever posts.
-The auto_post config flag is reserved for the future confidence-gated mode
-and is deliberately not consulted anywhere yet.
+v1 posting policy: a human click (approve_and_post) posts, except that the
+opt-in auto_post_first_response option posts a case's first reply asking
+the customer for missing items through that same function. The auto_post
+config flag is reserved for the future confidence-gated mode and is
+deliberately not consulted anywhere yet.
 """
 
 from __future__ import annotations
@@ -152,6 +154,7 @@ def _analyze_and_enqueue(store: HandsfreeStore, case_nbr: str,
         f"[{case_nbr}] queued draft {rec['draft_id']} "
         f"(mode={analysis.mode}, confidence={draft['confidence']}"
         + (", TRIAL — posting disabled" if trial else "") + ")")
+    _auto_post_first_response(store, rec, analysis)
 
     # Every case also gets a first-response checklist reply — except when the
     # primary draft already IS the first response (the request modes render
@@ -182,6 +185,7 @@ def _analyze_and_enqueue(store: HandsfreeStore, case_nbr: str,
         )
         _log_event(f"[{case_nbr}] queued first-response checklist draft "
                    f"{fr_rec['draft_id']}")
+        _auto_post_first_response(store, fr_rec, fr)
     return rec
 
 
@@ -579,6 +583,42 @@ def _is_checklist_comment(body: str) -> bool:
     if CHECKLIST_TAG in body:
         return True
     return any(p in body for p in _LEGACY_REQUEST_PHRASES)
+
+
+def _has_missing_items(fills: Optional[dict]) -> bool:
+    return any(not e.get("provided") and not str(e.get("item", "")).lower().startswith("note:")
+               for entries in (fills or {}).values() for e in entries)
+
+
+def _auto_post_first_response(store: HandsfreeStore, rec: dict, analysis) -> None:
+    """With the auto_post_first_response option on, post a case's first reply
+    that asks the customer for missing items without waiting for a reviewer.
+    Anything not posted stays in the queue for review."""
+    mode = rec.get("mode")
+    if mode not in _CHECKLIST_MODES or getattr(analysis, "first_response_done", False):
+        return
+    if (mode == "first_response"
+            and not _has_missing_items(getattr(analysis, "checklist_fills", None))):
+        return
+    cfg = store.load_config()
+    if not cfg.get("auto_post_first_response") or rec.get("trial"):
+        return
+    case_nbr, draft_id = rec.get("case_nbr"), rec.get("draft_id")
+    if cfg.get("dry_run"):
+        _log_event(f"[{case_nbr}] auto-post skipped: dry run is on - {draft_id} left for review")
+        return
+    # Public replies post over REST only, and only with a verified field map.
+    if not cfg.get("rest_field_map"):
+        _log_event(f"[{case_nbr}] auto-post skipped: no verified rest_field_map - "
+                   f"{draft_id} left for review")
+        return
+    res = approve_and_post(draft_id)
+    if res.get("ok"):
+        store.update(draft_id, auto_posted=True)
+        _log_event(f"[{case_nbr}] auto-posted first response {draft_id} (mode={mode})")
+    else:
+        _log_event(f"[{case_nbr}] auto-post of {draft_id} not done: {res.get('error')} "
+                   "- left for review")
 
 
 def approve_and_post(draft_id: str, edited_plain: Optional[str] = None) -> dict:

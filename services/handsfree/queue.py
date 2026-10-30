@@ -168,6 +168,9 @@ class HandsfreeStore:
         "post_backend": "auto",        # rest | ui | auto (rest first, ui fallback)
         "max_cases_per_run": 3,
         "dry_run": False,              # analyze + queue, posting disabled
+        # Opt-in: a case's first reply that asks the customer for missing
+        # items (request_logs / request_info / first_response) posts without review.
+        "auto_post_first_response": False,
         # Drafts (and their shared logs) older than this are removed by the
         # nightly cleanup; drafts of closed cases go regardless of age.
         "retention_days": 30,
@@ -459,7 +462,7 @@ class HandsfreeStore:
         slim = {k: rec.get(k) for k in
                 ("draft_id", "status", "created_at", "updated_at",
                  "case_nbr", "case_id", "owner_name", "subject", "mode", "confidence",
-                 "post_result", "skip_reason")}
+                 "post_result", "skip_reason", "auto_posted")}
         slim["trial"] = bool(rec.get("trial"))
         slim["log_dir"] = decoded_log_dir(rec)
         analysis = rec.get("analysis") or {}

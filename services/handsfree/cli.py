@@ -96,6 +96,11 @@ def _build_parser() -> argparse.ArgumentParser:
         action="store_true",
         help="Persist dry_run=true so posting is disabled if an approve call is made.",
     )
+    parser.add_argument(
+        "--auto-post-first-response",
+        choices=("on", "off"),
+        help="Persist the option: a case's first reply asking the customer for missing items posts without review.",
+    )
     return parser
 
 
@@ -342,17 +347,20 @@ def main(argv: Optional[list[str]] = None) -> int:
         updates["max_cases_per_run"] = args.max_cases
     if args.dry_run:
         updates["dry_run"] = True
+    if args.auto_post_first_response is not None:
+        updates["auto_post_first_response"] = args.auto_post_first_response == "on"
     cfg = store.save_config(updates)
+    posting = (f"dry_run={cfg['dry_run']}, "
+               f"auto_post_first_response={cfg.get('auto_post_first_response', False)}")
     print(
         (f"[handsfree-cli] case_number={args.case_number!r}, "
-         f"max_cases={cfg['max_cases_per_run']}, dry_run={cfg['dry_run']}"
+         f"max_cases={cfg['max_cases_per_run']}, {posting}"
          if args.case_number is not None else
          f"[handsfree-cli] list_views={views}, "
-         f"max_cases={cfg['max_cases_per_run']}, dry_run={cfg['dry_run']}"
+         f"max_cases={cfg['max_cases_per_run']}, {posting}"
          if views else
          f"[handsfree-cli] owners={len(owners)}, "
-        f"max_cases={cfg['max_cases_per_run']}, "
-         f"dry_run={cfg['dry_run']}")
+         f"max_cases={cfg['max_cases_per_run']}, {posting}")
     )
 
     if args.case_number is not None:

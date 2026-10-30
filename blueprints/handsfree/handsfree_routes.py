@@ -248,7 +248,8 @@ def config():
         return jsonify(store.load_config())
     body = request.get_json(silent=True) or {}
     allowed = {"owner_name", "post_backend", "max_cases_per_run",
-               "dry_run", "rest_field_map", "ui_locators", "trial_mode"}
+               "dry_run", "rest_field_map", "ui_locators", "trial_mode",
+               "auto_post_first_response"}
     updates = {k: v for k, v in body.items() if k in allowed}
     return jsonify(store.save_config(updates))
 

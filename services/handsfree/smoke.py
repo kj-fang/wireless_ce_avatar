@@ -295,6 +295,7 @@ def smoke_runner(tmp: Path) -> None:
         case_ctx.subject = "Wi-Fi drops right after connecting"
         case_ctx.description = "Device sometimes disconnects. First seen last week."
         case_ctx.wifi_or_bt = "wifi"
+        case_ctx.subcategory = "WiFi Connectivity"
         case_ctx.case_download_dir = str(case_dir)
         case_ctx.comments = [
             [datetime(2026, 6, 19, 9, 0), "Partner",
@@ -446,6 +447,7 @@ def smoke_runner(tmp: Path) -> None:
         def _fake_process_bt(case_ctx: CaseContext) -> CaseContext:
             case_ctx = _fake_process(case_ctx)
             case_ctx.wifi_or_bt = "bt"
+            case_ctx.subcategory = "Bluetooth"
             return case_ctx
 
         cis.CaseService.process_case = staticmethod(_fake_process_bt)

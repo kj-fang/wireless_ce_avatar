@@ -21,6 +21,7 @@ import argparse
 import os
 import sys
 import time
+from datetime import datetime, timedelta
 from pathlib import Path
 from typing import Optional
 
@@ -377,7 +378,14 @@ def main(argv: Optional[list[str]] = None) -> int:
           "press Ctrl+C to stop")
     try:
         while True:
-            run_round()
+            try:
+                run_round()
+            except Exception as e:
+                # One bad round (share or IPS briefly unreachable) must not end the loop.
+                print(f"[handsfree-cli] {datetime.now():%Y-%m-%d %H:%M} round FAILED: "
+                      f"{type(e).__name__}: {e}")
+            next_at = datetime.now() + timedelta(seconds=args.interval)
+            print(f"[handsfree-cli] next round at {next_at:%Y-%m-%d %H:%M}")
             time.sleep(args.interval)
     except KeyboardInterrupt:
         print("\n[handsfree-cli] stopped")

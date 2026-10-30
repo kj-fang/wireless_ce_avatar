@@ -141,17 +141,29 @@ ACTION_OWNER_LABELS = {"intel": "Intel (case owner)", "customer": "customer"}
 
 _INTEL_AUTHOR_PREFIXES = ("agent", "fae")
 
+# What an Intel comment that asks the customer for something looks like: a
+# question, or a request form ("please …", "could you …", "we need …",
+# "requesting …", "waiting for …"). A status note ("we are investigating",
+# "escalated to the driver team", "do not share") matches neither and is
+# not an ask. Bare verbs (share, upload, send) are deliberately not enough:
+# they appear in internal notes as often as in requests.
+_INTEL_ASK_RE = re.compile(
+    r"(?i)\?|\b(?:please|kindly|could you|can you|would you|we(?:'d| would)? need|"
+    r"need(?:ed)?|request(?:ing|ed)?|let us know|a?waiting for)\b")
+
 
 def intel_has_asked(comments: Any, ai_marker: str = "") -> bool:
-    """Is there an Intel-written comment in the thread at all (an automated
-    AI note does not count)? "Waiting on the customer" is only possible
-    after Intel actually said something to them."""
+    """Did an Intel-written comment ask the customer for something (a
+    question, or a request to provide / upload / confirm / retry)? An
+    automated AI note does not count, and neither does a status-only note:
+    "waiting on the customer" is only possible after Intel actually asked."""
     for r in _normalize_comments(comments):
         if not r["author"].strip().lower().startswith(_INTEL_AUTHOR_PREFIXES):
             continue
         if ai_marker and ai_marker in r["text"]:
             continue
-        return True
+        if _INTEL_ASK_RE.search(r["text"]):
+            return True
     return False
 
 

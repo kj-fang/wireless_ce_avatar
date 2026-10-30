@@ -3,6 +3,10 @@
 Examples:
     python -m services.handsfree.cli --owner "Charles P Chu" --once
     python -m services.handsfree.cli --owner "Charles P Chu" --interval 300
+    python -m services.handsfree.cli --list-view Handsfree_replier_test_case --once
+    python -m services.handsfree.cli --sso-login
+    python -m services.handsfree.cli --sso-check
+    python -m services.handsfree.cli --sso-refresh
 
 This starts the application services needed by the analysis pipeline, but it
 never starts Flask, Socket.IO, a browser, or the Handsfree UI. Each owner's
@@ -14,10 +18,16 @@ Approve operation from the UI or another trusted caller.
 from __future__ import annotations
 
 import argparse
+import os
 import sys
 import time
+from datetime import datetime, timedelta
 from pathlib import Path
 from typing import Optional
+
+# Long enough for Microsoft's redirects in a visible window, short enough for
+# a scheduled run that nobody is watching.
+_SSO_REFRESH_WAIT_S = 120
 
 
 def _configure_output() -> None:
@@ -44,6 +54,27 @@ def _build_parser() -> argparse.ArgumentParser:
         "--case-number",
         help="Analyze one explicit case, bypassing owner/date and processed-case checks; requires --once.",
     )
+    targets.add_argument(
+        "--list-view",
+        action="append",
+        metavar="DEVELOPER_NAME",
+        help="IPS case list view to scan (developer name); repeat for up to 3, their cases are combined.",
+    )
+    targets.add_argument(
+        "--sso-login",
+        action="store_true",
+        help="Sign in to Salesforce once in a visible Chrome and keep the sign-in for unattended runs.",
+    )
+    targets.add_argument(
+        "--sso-check",
+        action="store_true",
+        help="Verify Salesforce + esft sign-in works unattended (saved profile, else the Windows account; exit 0 = OK, 1 = failed).",
+    )
+    targets.add_argument(
+        "--sso-refresh",
+        action="store_true",
+        help="Retry the saved sign-in in a visible Chrome without anyone typing (exit 0 = OK, 1 = a person must run --sso-login).",
+    )
     parser.add_argument(
         "--interval",
         type=float,
@@ -66,6 +97,11 @@ def _build_parser() -> argparse.ArgumentParser:
         action="store_true",
         help="Persist dry_run=true so posting is disabled if an approve call is made.",
     )
+    parser.add_argument(
+        "--auto-post-first-response",
+        choices=("on", "off"),
+        help="Persist the option: a case's first reply asking the customer for missing items posts without review.",
+    )
     return parser
 
 
@@ -79,12 +115,73 @@ def _initialize_services() -> None:
     set_up(None)
 
 
-def _store():
+def _initialize_sso_only() -> None:
+    # Not set_up(): its background prewarm would start its own SSO on the same profile.
     from configs.global_configs import app_config
-    from pathlib import Path
-    from .queue import HandsfreeStore
+    from services.driver_manage_service import DriverManager
+    from utils import helpers
 
-    return HandsfreeStore(Path(app_config.avatarfiles_dir) / "handsfree")
+    avatarfiles_dir, _driver_dir, _prompt_dir = helpers.init_download_dir()
+    app_config.set_avatarfiles_dir(avatarfiles_dir)
+    if app_config.driver_manager is None:
+        app_config.set_driver_manager(DriverManager(avatarfiles_dir))
+
+
+def _sso_login() -> int:
+    from services.case_info_service import CaseService
+
+    _initialize_sso_only()
+    print("[handsfree-cli] a Chrome window will open: sign in with your Intel account "
+          "(choose 'Stay signed in' if asked). Waiting up to 10 minutes.")
+    try:
+        CaseService.interactive_sso_login()
+    except Exception as e:
+        print(f"[handsfree-cli] sign-in failed: {e}", file=sys.stderr)
+        return 1
+    print("[handsfree-cli] sign-in saved and verified in the background; profile: "
+          f"{CaseService._sso_profile_dir()}")
+    return 0
+
+
+def _sso_check() -> int:
+    from datetime import datetime
+    from services.case_info_service import CaseService
+
+    _initialize_sso_only()
+    try:
+        CaseService.verify_saved_sign_in()
+    except Exception as e:
+        print(f"[handsfree-cli] {datetime.now():%Y-%m-%d %H:%M} SSO check FAILED: {e}")
+        return 1
+    print(f"[handsfree-cli] {datetime.now():%Y-%m-%d %H:%M} SSO check OK "
+          "(Salesforce + esft signed in unattended)")
+    return 0
+
+
+def _sso_refresh() -> int:
+    from datetime import datetime
+    from services.case_info_service import CaseService
+
+    _initialize_sso_only()
+    if not os.path.isdir(CaseService._sso_profile_dir()):
+        print("[handsfree-cli] no saved sign-in profile here: this machine signs in with "
+              "its Windows account, so check that account (or run --sso-login)")
+        return 1
+    try:
+        CaseService.interactive_sso_login(wait_s=_SSO_REFRESH_WAIT_S)
+    except Exception as e:
+        print(f"[handsfree-cli] {datetime.now():%Y-%m-%d %H:%M} SSO refresh FAILED "
+              f"(a person must run --sso-login on this machine): {e}")
+        return 1
+    print(f"[handsfree-cli] {datetime.now():%Y-%m-%d %H:%M} SSO refresh OK "
+          "(saved sign-in renewed without a password)")
+    return 0
+
+
+def _store():
+    from .queue import open_store
+
+    return open_store()
 
 
 def _wait_for_run() -> dict:
@@ -97,12 +194,13 @@ def _wait_for_run() -> dict:
         time.sleep(1)
 
 
-def _run_once(owner: str) -> int:
+def _run_once(owner: str = "", list_views: Optional[list[str]] = None) -> int:
     from . import orchestrator
 
     store = _store()
     max_cases = int(store.load_config().get("max_cases_per_run") or 3)
-    summary = orchestrator.run_auto_scan(store, owner, max_cases, trigger="cli")
+    summary = orchestrator.run_auto_scan(store, owner, max_cases, trigger="cli",
+                                         list_views=list_views)
     if not summary.get("ok"):
         print(f"[handsfree-cli] scan failed: {summary.get('error')}")
         return 1
@@ -110,6 +208,20 @@ def _run_once(owner: str) -> int:
     print(f"[handsfree-cli] scan finished: {len(summary['cases'])} case(s) run"
           + (f", failed: {', '.join(errors)}" if errors else ""))
     return 1 if errors else 0
+
+
+def _cleanup() -> None:
+    """Retention housekeeping after an owner round; never fails the run."""
+    from . import orchestrator
+
+    try:
+        res = orchestrator.cleanup_queue(_store())
+        print(f"[handsfree-cli] cleanup: {res['drafts_removed']} draft(s), "
+              f"{res['log_folders_removed']} log folder(s) removed "
+              f"(retention {res['retention_days']} days; "
+              f"{len(res['closed_cases'])} closed case(s))")
+    except Exception as e:
+        print(f"[handsfree-cli] cleanup skipped: {type(e).__name__}: {e}")
 
 
 def _run_case_once(case_nbr: str) -> int:
@@ -150,21 +262,50 @@ def _load_owners(args) -> list[str]:
     return unique
 
 
+def _load_list_views(args) -> list[str]:
+    from .scheduler import MAX_LIST_VIEWS
+
+    views = []
+    for name in args.list_view:
+        name = name.strip()
+        if name and name not in views:
+            views.append(name)
+    if not views:
+        raise ValueError("--list-view is empty")
+    if len(views) > MAX_LIST_VIEWS:
+        raise ValueError(f"at most {MAX_LIST_VIEWS} --list-view values")
+    return views
+
+
 def _run_owners(owners: list[str]) -> int:
     failures = []
     for owner in owners:
         print(f"[handsfree-cli] checking owner {owner!r}")
         if _run_once(owner) != 0:
             failures.append(owner)
+    _cleanup()
     if failures:
         print("[handsfree-cli] failed owner check(s): " + ", ".join(failures))
         return 1
     return 0
 
 
+def _run_list_views(views: list[str]) -> int:
+    print("[handsfree-cli] checking list view(s) " + ", ".join(repr(v) for v in views))
+    rc = _run_once(list_views=views)
+    _cleanup()
+    return rc
+
+
 def main(argv: Optional[list[str]] = None) -> int:
     _configure_output()
     args = _build_parser().parse_args(argv)
+    if args.sso_login:
+        return _sso_login()
+    if args.sso_check:
+        return _sso_check()
+    if args.sso_refresh:
+        return _sso_refresh()
     if args.interval <= 0:
         print("[handsfree-cli] --interval must be greater than zero", file=sys.stderr)
         return 2
@@ -174,19 +315,32 @@ def main(argv: Optional[list[str]] = None) -> int:
     if args.case_number is not None and not args.once:
         print("[handsfree-cli] --case-number requires --once", file=sys.stderr)
         return 2
-    if args.case_number is not None and not any(ch.isalnum() for ch in args.case_number):
-        print("[handsfree-cli] --case-number must contain letters or digits",
-              file=sys.stderr)
-        return 2
+    if args.case_number is not None:
+        # The repository's one definition of a typed IPS case number
+        # (utils/check_ips_utils): 6-8 digits, zero-padded to eight, leading 0.
+        from utils.check_ips_utils import normalise_ips
+        case_number = normalise_ips(args.case_number)
+        if not case_number:
+            print(f"[handsfree-cli] --case-number {args.case_number!r} is not an IPS "
+                  "case number (six to eight digits, e.g. 01009610)", file=sys.stderr)
+            return 2
+        args.case_number = case_number
     try:
-        owners = [] if args.case_number is not None else _load_owners(args)
+        views = _load_list_views(args) if args.list_view is not None else []
+        owners = ([] if args.case_number is not None or views
+                  else _load_owners(args))
     except ValueError as e:
         print(f"[handsfree-cli] {e}", file=sys.stderr)
         return 2
 
     print("[handsfree-cli] initializing analysis services (no web UI)")
     _initialize_services()
-    store = _store()
+    from .queue import HandsfreeShareUnavailable
+    try:
+        store = _store()
+    except HandsfreeShareUnavailable as e:
+        print(f"[handsfree-cli] {e}", file=sys.stderr)
+        return 1
     updates = {}
     if args.owner is not None:
         updates["owner_name"] = owners[0]
@@ -194,27 +348,44 @@ def main(argv: Optional[list[str]] = None) -> int:
         updates["max_cases_per_run"] = args.max_cases
     if args.dry_run:
         updates["dry_run"] = True
+    if args.auto_post_first_response is not None:
+        updates["auto_post_first_response"] = args.auto_post_first_response == "on"
     cfg = store.save_config(updates)
+    posting = (f"dry_run={cfg['dry_run']}, "
+               f"auto_post_first_response={cfg.get('auto_post_first_response', False)}")
     print(
         (f"[handsfree-cli] case_number={args.case_number!r}, "
-         f"max_cases={cfg['max_cases_per_run']}, dry_run={cfg['dry_run']}"
+         f"max_cases={cfg['max_cases_per_run']}, {posting}"
          if args.case_number is not None else
+         f"[handsfree-cli] list_views={views}, "
+         f"max_cases={cfg['max_cases_per_run']}, {posting}"
+         if views else
          f"[handsfree-cli] owners={len(owners)}, "
-        f"max_cases={cfg['max_cases_per_run']}, "
-         f"dry_run={cfg['dry_run']}")
+         f"max_cases={cfg['max_cases_per_run']}, {posting}")
     )
 
     if args.case_number is not None:
         return _run_case_once(args.case_number)
 
+    run_round = ((lambda: _run_list_views(views)) if views
+                 else (lambda: _run_owners(owners)))
     if args.once:
-        return _run_owners(owners)
+        return run_round()
 
-    print(f"[handsfree-cli] polling {len(owners)} owner(s) for new cases and "
-          f"customer updates every {args.interval:g}s; press Ctrl+C to stop")
+    print(f"[handsfree-cli] polling "
+          + (f"{len(views)} list view(s)" if views else f"{len(owners)} owner(s)")
+          + f" for new cases and customer updates every {args.interval:g}s; "
+          "press Ctrl+C to stop")
     try:
         while True:
-            _run_owners(owners)
+            try:
+                run_round()
+            except Exception as e:
+                # One bad round (share or IPS briefly unreachable) must not end the loop.
+                print(f"[handsfree-cli] {datetime.now():%Y-%m-%d %H:%M} round FAILED: "
+                      f"{type(e).__name__}: {e}")
+            next_at = datetime.now() + timedelta(seconds=args.interval)
+            print(f"[handsfree-cli] next round at {next_at:%Y-%m-%d %H:%M}")
             time.sleep(args.interval)
     except KeyboardInterrupt:
         print("\n[handsfree-cli] stopped")

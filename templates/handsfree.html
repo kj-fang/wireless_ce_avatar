@@ -106,6 +106,8 @@
     tbody tr:last-child td { border-bottom: none; }
     #queue-table tbody tr { transition: background 200ms var(--ease); }
     #queue-table tbody tr:hover { background: rgba(69,184,240,0.06); cursor: pointer; }
+    #queue-table tbody tr.skipped-row { opacity: 0.55; }
+    #queue-table tbody tr.skipped-row:hover { background: none; cursor: default; }
     td.case-nbr { font-family: var(--mono); font-size: 12.5px; }
     a.case-link { color: var(--accent, #4ea1ff); text-decoration: none; border-bottom: 1px dotted currentColor; }
     a.case-link:hover { text-decoration: none; border-bottom-style: solid; }
@@ -219,6 +221,12 @@
 </header>
 
 <main>
+  {% if share_error %}
+  <div class="panel" style="border-color: var(--bad, #c33);">
+    <b>Shared Handsfree folder unavailable</b> — the review queue cannot be read or written.
+    <div class="status-line error">{{ share_error }}</div>
+  </div>
+  {% endif %}
   <div class="panel" id="settings-panel">
     <h3 role="button" tabindex="0" onclick="toggleSettings()" onkeydown="if(event.key==='Enter'||event.key===' '){event.preventDefault();toggleSettings();}">
       <span class="caret" aria-hidden="true">
@@ -239,6 +247,9 @@
         <label title="Kill-switch: when checked, nothing is ever posted to IPS">
           <input type="checkbox" id="cfg-dry-run"> dry run (posting disabled)
         </label>
+        <label title="A case's first reply that asks the customer for missing items (request logs / request info / first response) posts PUBLICLY without review, under the IPS account of the machine running the analysis. Dry run still blocks it.">
+          <input type="checkbox" id="cfg-auto-post-fr"> auto-post first response (missing items)
+        </label>
         <label>Post backend:
           <select id="cfg-backend">
             <option value="rest">rest</option>
@@ -251,7 +262,7 @@
       </div>
       <div class="controls divider">
         <label title="Tuning on historical IPS cases: closed cases of the automatic-analysis list view are included, and every run's drafts are flagged TRIAL and can never be posted">
-          <input type="checkbox" id="cfg-trial" onchange="applyTrialUi()"> trial mode (include closed cases, posting disabled)
+          <input type="checkbox" id="cfg-trial" onchange="toggleTrial()"> trial mode (include closed cases, posting disabled)
         </label>
       </div>
       <div style="margin-top: 12px;">
@@ -288,6 +299,8 @@
           posting backend: <b id="backend-name">{{ config.post_backend }}</b>
           <span id="dry-run-badge" class="pill warn"
                 {% if not config.dry_run %}style="display:none;"{% endif %}>DRY RUN — posting disabled</span>
+          <span id="auto-post-fr-badge" class="pill warn" title="First replies asking for missing items post without review"
+                {% if not config.auto_post_first_response %}style="display:none;"{% endif %}>AUTO-POST first response</span>
           <span id="trial-badge" class="pill warn" title="Tuning on historical cases: drafts are flagged TRIAL and cannot be posted"
                 {% if not config.trial_mode %}style="display:none;"{% endif %}>TRIAL MODE</span>
         </span>
@@ -306,14 +319,14 @@
       </div>
     </div>
     <div id="tab-auto" style="display:none;">
-      <div class="hint">Each round scans one source: the open IPS cases of the case owner (from Settings) for
-        either new cases OR new customer comments since the previous round (one of the two is enough), or the cases of an
-        IPS list view that were not analyzed yet or have new customer comments. The handsfree pipeline runs for each and the
-        drafts queue below for review. Nothing is posted automatically — Approve still decides. Closed cases of a list view
-        run only in trial mode (Settings).</div>
+      <div class="hint">Scheduled rounds run on the Handsfree server every night. <b>Run now</b> runs one round
+        right away on this PC with the settings below. Each round scans the ONE source chosen below — the open IPS cases of the case owner (from
+        Settings) for either new cases OR new customer comments since the previous round, or the cases of up to three IPS
+        list views (their union) that were not analyzed yet or have new customer comments — and runs the handsfree pipeline
+        for each; the drafts queue below for review. Max cases per round applies to either source. Nothing is
+        posted automatically — Approve still decides. Closed cases of a list view run only in trial mode (Settings).</div>
       <div class="controls">
-        <label>Case owner: <b id="auto-owner" style="color: var(--fg);">{{ config.owner_name or '—' }}</b></label>
-        <label>Frequency:
+        <label style="display: none;">Frequency:
           <select id="auto-mode">
             <option value="4h">Every 4 hours</option>
             <option value="8h">Every 8 hours</option>
@@ -323,7 +336,7 @@
         <label>Max cases per round:
           <input type="number" id="auto-max" min="1" max="50" step="1" value="10" style="width: 64px;">
         </label>
-        <button class="primary" id="auto-toggle-btn" onclick="toggleAuto()">
+        <button class="primary" id="auto-toggle-btn" onclick="toggleAuto()" style="display: none;">
           <svg width="11" height="11" viewBox="0 0 24 24" fill="currentColor" aria-hidden="true">
             <path d="M6 4.5l14 7.5-14 7.5z" /></svg>
           <span id="auto-toggle-text">Start automatic analysis</span></button>
@@ -331,22 +344,29 @@
                 title="Run one round right now with the settings above">Run now</button>
         <span class="status-line" id="auto-status"></span>
       </div>
-      <div class="controls">
-        <label>Source:
-          <select id="auto-source" onchange="applyAutoSourceUi()">
-            <option value="owner">Open cases of the case owner</option>
-            <option value="list_view">IPS list view</option>
-          </select>
+      <div class="controls" id="auto-source-row">
+        <span style="color: var(--muted);">Source:</span>
+        <label class="auto-src-opt" style="display: inline-flex; align-items: center; gap: 6px; cursor: pointer;">
+          <input type="radio" name="auto-source" value="owner" onchange="applyAutoSourceUi()">
+          Open cases of case owner <b id="auto-owner" style="color: var(--fg);">{{ config.owner_name or '—' }}</b>
         </label>
-        <label>IPS list view:
-          <select id="auto-list-view" style="max-width: 320px;" onchange="applyAutoListViewUi()"
-                  title="Case list views visible to the current IPS login">
-            <option value="">loading…</option>
-            <option value="__other__">other…</option>
-          </select>
-          <input type="text" id="auto-list-view-other" style="width: 240px; font-family: var(--mono); font-size: 12.5px; display: none;"
-                 placeholder="developer name, e.g. Handsfree_replier_test_case">
+        <label class="auto-src-opt" style="display: inline-flex; align-items: center; gap: 6px; cursor: pointer;">
+          <input type="radio" name="auto-source" value="list_view" onchange="applyAutoSourceUi()">
+          IPS list views <span style="color: var(--faint);">(up to 3, their cases are combined)</span>
         </label>
+      </div>
+      <div class="controls" id="auto-lv-row" style="display: none; padding-left: 58px;">
+        <span id="auto-lv-chips" style="display: inline-flex; gap: 6px; flex-wrap: wrap;"></span>
+        <select id="auto-list-view" style="max-width: 320px;" onchange="applyAutoListViewUi()"
+                title="Case list views visible to the current IPS login">
+          <option value="">loading…</option>
+          <option value="__other__">other…</option>
+        </select>
+        <input type="text" id="auto-list-view-other" style="width: 240px; font-family: var(--mono); font-size: 12.5px; display: none;"
+               placeholder="developer name, e.g. Handsfree_replier_test_case"
+               onkeydown="if(event.key==='Enter')addAutoListView()">
+        <button class="ghost" id="auto-lv-add" onclick="addAutoListView()"
+                title="Add the selected list view (max 3)">Add</button>
         <span class="status-line" id="auto-source-note"></span>
       </div>
     </div>
@@ -381,9 +401,13 @@
       </label>
       <label style="font-size: 12px; margin-left: 8px; font-weight: 400;">
         owner:
-        <input type="text" id="owner-filter" placeholder="Filter by case owner"
+        <input type="text" id="owner-filter" placeholder="Filter by case owner" value="{{ my_owner }}"
                style="width: 190px;" onkeydown="if(event.key==='Enter')loadQueue()">
       </label>
+      <button class="ghost" onclick="setMyOwner()" title="Open the queue on this owner's cases every time (saved on this PC)"
+              style="height: 28px; padding: 0 11px; font-size: 12px;">Set as mine</button>
+      <span id="my-owner-status" style="font-size: 12px; color: var(--muted); font-weight: 400;">
+        {% if my_owner %}showing your cases — clear the box for everyone's{% endif %}</span>
     </h3>
     <table id="queue-table">
       <thead><tr>
@@ -449,6 +473,8 @@
   function applyConfigBadge(cfg) {
     document.getElementById('backend-name').textContent = cfg.post_backend || 'auto';
     document.getElementById('dry-run-badge').style.display = cfg.dry_run ? '' : 'none';
+    document.getElementById('auto-post-fr-badge').style.display =
+      cfg.auto_post_first_response ? '' : 'none';
     document.getElementById('trial-badge').style.display = cfg.trial_mode ? '' : 'none';
     if (cfg.owner_name) document.getElementById('owner-name').value = cfg.owner_name;
   }
@@ -458,6 +484,7 @@
     document.getElementById('auto-owner').textContent = cfg.owner_name || '—';
     document.getElementById('cfg-max-cases').value = cfg.max_cases_per_run ?? 3;
     document.getElementById('cfg-dry-run').checked = !!cfg.dry_run;
+    document.getElementById('cfg-auto-post-fr').checked = !!cfg.auto_post_first_response;
     document.getElementById('cfg-backend').value = cfg.post_backend || 'auto';
     document.getElementById('cfg-trial').checked = !!cfg.trial_mode;
     applyTrialUi();
@@ -469,7 +496,12 @@
   async function loadConfig() {
     try {
       const r = await fetch('/handsfree/config');
-      fillConfigForm(await r.json());
+      const cfg = await r.json();
+      if (cfg.error) {
+        document.getElementById('cfg-status').textContent = 'config load failed: ' + cfg.error;
+        return;
+      }
+      fillConfigForm(cfg);
     } catch (e) {
       document.getElementById('cfg-status').textContent = 'config load failed: ' + e;
     }
@@ -482,14 +514,94 @@
     applyAutoSourceUi();
   }
 
+  // Trial mode is a safety property of the next run, so the toggle is saved
+  // the moment it is flipped and the badge follows the server's answer: the
+  // page never claims TRIAL while the server would create postable drafts.
+  async function toggleTrial() {
+    const box = document.getElementById('cfg-trial');
+    const want = box.checked;
+    const status = document.getElementById('cfg-status');
+    box.disabled = true;
+    try {
+      const r = await fetch('/handsfree/config', {
+        method: 'POST', headers: {'Content-Type': 'application/json'},
+        body: JSON.stringify({trial_mode: want}),
+      });
+      const cfg = await r.json();
+      box.checked = !!cfg.trial_mode;
+      status.textContent = 'trial mode ' + (cfg.trial_mode ? 'on' : 'off') + ' (saved)';
+      status.className = 'status-line done';
+    } catch (e) {
+      box.checked = !want;
+      status.textContent = 'trial mode not saved: ' + e;
+      status.className = 'status-line error';
+    } finally {
+      box.disabled = false;
+      applyTrialUi();
+    }
+  }
+
+  const MAX_AUTO_LIST_VIEWS = 3;
+  let autoListViews = [];          // developer names chosen for the list-view source
+
+  function getAutoSource() {
+    const r = document.querySelector('input[name="auto-source"]:checked');
+    return r ? r.value : 'owner';
+  }
+  function setAutoSource(v) {
+    const r = document.querySelector('input[name="auto-source"][value="' + (v || 'owner') + '"]');
+    if (r) r.checked = true;
+  }
+
+  // Only the chosen source's details are shown, so what will run is never
+  // ambiguous: owner -> its name in the radio label; list views -> the chips.
   function applyAutoSourceUi() {
-    const lv = document.getElementById('auto-source').value === 'list_view';
-    document.getElementById('auto-list-view').disabled = !lv;
-    document.getElementById('auto-list-view-other').disabled = !lv;
+    const lv = getAutoSource() === 'list_view';
+    document.getElementById('auto-lv-row').style.display = lv ? '' : 'none';
+    document.querySelectorAll('.auto-src-opt').forEach(l => {
+      l.style.color = l.querySelector('input').checked ? 'var(--fg)' : 'var(--muted)';
+    });
+    renderAutoListViewChips();
+  }
+
+  function renderAutoListViewChips() {
+    const box = document.getElementById('auto-lv-chips');
+    box.innerHTML = autoListViews.map(name =>
+      `<span class="pill" title="${esc(name)}">${esc(name)} ` +
+      `<a href="#" onclick="removeAutoListView(${JSON.stringify(name).replace(/"/g, '&quot;')});return false;" ` +
+      `style="color: var(--muted); text-decoration: none; margin-left: 2px;" title="Remove">✕</a></span>`
+    ).join('');
+    const full = autoListViews.length >= MAX_AUTO_LIST_VIEWS;
+    document.getElementById('auto-lv-add').disabled = full;
+    document.getElementById('auto-list-view').disabled = full;
+    document.getElementById('auto-list-view-other').disabled = full;
     const trial = document.getElementById('cfg-trial').checked;
-    document.getElementById('auto-source-note').textContent = !lv ? '' : trial
-      ? 'trial mode: closed cases included, drafts cannot be posted'
-      : 'open cases only — enable trial mode in Settings to include closed cases';
+    const note = document.getElementById('auto-source-note');
+    if (getAutoSource() !== 'list_view') { note.textContent = ''; return; }
+    note.textContent = (autoListViews.length ? '' : 'no list view chosen yet — ')
+      + (full ? 'maximum of 3 list views · ' : '')
+      + (trial ? 'trial mode: closed cases included, drafts cannot be posted'
+               : 'open cases only — enable trial mode in Settings to include closed cases');
+  }
+
+  function addAutoListView() {
+    const name = currentAutoListView();
+    if (!name) { alert('Pick a list view first (or type its developer name under "other…").'); return; }
+    if (autoListViews.includes(name)) { alert(name + ' is already in the list.'); return; }
+    if (autoListViews.length >= MAX_AUTO_LIST_VIEWS) { alert('At most ' + MAX_AUTO_LIST_VIEWS + ' list views.'); return; }
+    autoListViews.push(name);
+    document.getElementById('auto-list-view-other').value = '';
+    renderAutoListViewChips();
+  }
+
+  function removeAutoListView(name) {
+    autoListViews = autoListViews.filter(n => n !== name);
+    renderAutoListViewChips();
+  }
+
+  function autoListViewEditing() {
+    const row = document.getElementById('auto-lv-row');
+    return row && row.contains(document.activeElement);
   }
 
   function configBody() {
@@ -498,6 +610,7 @@
       owner_name: document.getElementById('cfg-owner').value.trim(),
       max_cases_per_run: Math.min(15, Math.max(1, isNaN(maxRaw) ? 3 : maxRaw)),
       dry_run: document.getElementById('cfg-dry-run').checked,
+      auto_post_first_response: document.getElementById('cfg-auto-post-fr').checked,
       post_backend: document.getElementById('cfg-backend').value,
       trial_mode: document.getElementById('cfg-trial').checked,
     };
@@ -568,16 +681,19 @@
     if (document.activeElement !== modeSel) modeSel.value = a.mode || 'nightly';
     const maxEl = document.getElementById('auto-max');
     if (document.activeElement !== maxEl) maxEl.value = a.max_cases || 10;
-    const srcEl = document.getElementById('auto-source');
-    if (document.activeElement !== srcEl) srcEl.value = a.source || 'owner';
-    setAutoListView(a.list_view || '');
+    setAutoSource(a.source || 'owner');
+    if (!autoListViewEditing()) {
+      autoListViews = (a.list_views || (a.list_view ? [a.list_view] : [])).slice(0, MAX_AUTO_LIST_VIEWS);
+    }
     applyAutoSourceUi();
     document.getElementById('auto-toggle-text').textContent =
       autoEnabled ? 'Stop automatic analysis' : 'Start automatic analysis';
     document.getElementById('auto-toggle-btn').className = autoEnabled ? 'danger' : 'primary';
     const bits = [];
-    bits.push(autoEnabled ? 'ON · ' + (a.mode_label || a.mode)
-      + (a.source === 'list_view' ? ' · list view ' + (a.list_view || '?') : '') : 'off');
+    const srcText = a.source === 'list_view'
+      ? 'list view' + ((a.list_views || []).length > 1 ? 's ' : ' ') + ((a.list_views || [a.list_view]).join(', ') || '?')
+      : 'open cases of the owner';
+    bits.push(autoEnabled ? 'ON · ' + (a.mode_label || a.mode) + ' · ' + srcText : 'off');
     if (autoEnabled && a.next_run_at) bits.push('next round ' + a.next_run_at.slice(0, 16).replace('T', ' '));
     if (a.last_scan_at) bits.push('last round ' + a.last_scan_at.slice(0, 16).replace('T', ' ') + ' UTC');
     if (a.last_result) bits.push(a.last_result);
@@ -608,23 +724,6 @@
       : sel.value;
   }
 
-  // Select `name` in the dropdown; a name the listing does not know (or an
-  // unloaded listing) goes to the "other…" text input so it is never lost.
-  function setAutoListView(name) {
-    const sel = document.getElementById('auto-list-view');
-    const other = document.getElementById('auto-list-view-other');
-    if (document.activeElement === sel || document.activeElement === other) return;
-    const known = Array.from(sel.options).some(o => o.value === name && o.value !== '__other__');
-    if (name && !known) {
-      sel.value = '__other__';
-      other.value = name;
-    } else {
-      sel.value = name;
-      if (sel.value !== name) sel.value = sel.options.length ? sel.options[0].value : '';
-    }
-    applyAutoListViewUi();
-  }
-
   function applyAutoListViewUi() {
     const sel = document.getElementById('auto-list-view');
     document.getElementById('auto-list-view-other').style.display =
@@ -633,7 +732,6 @@
 
   function fillListViews(items, errorText) {
     const sel = document.getElementById('auto-list-view');
-    const keep = currentAutoListView();
     sel.innerHTML = '';
     const add = (value, text) => {
       const o = document.createElement('option');
@@ -641,9 +739,11 @@
     };
     if (errorText) add('', 'list views unavailable: ' + errorText);
     else if (!items.length) add('', 'no Case list views visible to this login');
+    else add('', 'choose a list view to add…');
     items.forEach(v => add(v.developer_name, v.label + ' (' + v.developer_name + ')'));
     add('__other__', 'other…');
-    setAutoListView(keep);
+    sel.value = '';
+    applyAutoListViewUi();
   }
 
   async function loadListViews() {
@@ -662,8 +762,8 @@
   function autoRoundSettings() {
     return {
       max_cases: parseInt(document.getElementById('auto-max').value, 10) || 10,
-      source: document.getElementById('auto-source').value,
-      list_view: currentAutoListView(),
+      source: getAutoSource(),
+      list_views: autoListViews.slice(0, MAX_AUTO_LIST_VIEWS),
     };
   }
 
@@ -872,7 +972,29 @@
     const j = await r.json();
     const tbody = document.querySelector('#queue-table tbody');
     tbody.innerHTML = '';
+    if (j.error) {
+      tbody.innerHTML = '<tr><td colspan="9" style="color:var(--bad, #c33);">could not load the queue: '
+        + esc(j.error) + '</td></tr>';
+      return;
+    }
     (j.items || []).forEach(it => {
+      if (it.status === 'skipped') {
+        // Looked at by the server but not analyzed: no draft to open.
+        const tr = document.createElement('tr');
+        tr.className = 'skipped-row';
+        tr.innerHTML =
+          `<td class="case-nbr">${caseLink(it.case_nbr, it.case_id)}</td>` +
+          `<td>${esc(it.owner_name || '—')}</td>` +
+          `<td title="${esc(it.subject || '')}">${esc(it.skip_reason || 'skipped')}</td>` +
+          `<td><span class="pill">${esc(it.mode || '')}</span></td>` +
+          `<td>—</td>` +
+          `<td><span class="pill">skipped</span></td>` +
+          `<td>—</td>` +
+          `<td>${esc((it.created_at || '').slice(0, 16))}</td>` +
+          `<td>—</td>`;
+        tbody.appendChild(tr);
+        return;
+      }
       const statusCls = it.status === 'posted' ? 'good'
                       : it.status === 'post_failed' ? 'bad'
                       : it.status === 'rejected' ? 'bad'
@@ -886,7 +1008,9 @@
         (it.trial ? ` <span class="pill warn" title="tuning run on a historical case — cannot be posted">TRIAL</span>` : '') +
         `</td>` +
         `<td>${it.confidence != null ? it.confidence + '/100' : '—'}</td>` +
-        `<td><span class="pill dot ${statusCls}">${esc(it.status)}</span></td>` +
+        `<td><span class="pill dot ${statusCls}">${esc(it.status)}</span>` +
+        (it.auto_posted ? ` <span class="pill" title="Posted automatically (auto-post first response)">AUTO</span>` : '') +
+        `</td>` +
         // Who acts next, as read from the comment thread (hover = the step).
         (it.action_owner
           ? `<td><span class="pill ${it.action_owner === 'intel' ? 'warn' : ''}" ` +
@@ -1016,7 +1140,11 @@
 
   async function openDraft(draftId) {
     const r = await fetch('/handsfree/queue/' + encodeURIComponent(draftId));
-    if (!r.ok) { alert('draft not found'); return; }
+    if (!r.ok) {
+      const err = await r.json().catch(() => ({}));
+      alert('Could not open the draft: ' + (err.error || 'draft not found'));
+      return;
+    }
     const d = await r.json();
     currentDraftId = d.draft_id;
     currentDraftMode = d.mode || null;
@@ -1073,6 +1201,19 @@
       body: JSON.stringify({reason}),
     });
     document.getElementById('draft-panel').style.display = 'none';
+    loadQueue();
+  }
+
+  async function setMyOwner() {
+    const name = document.getElementById('owner-filter').value.trim();
+    const r = await fetch('/handsfree/me', {
+      method: 'POST', headers: {'Content-Type': 'application/json'},
+      body: JSON.stringify({owner_name: name}),
+    });
+    const j = await r.json();
+    document.getElementById('my-owner-status').textContent = j.ok
+      ? (name ? 'saved — the queue opens on ' + name + "'s cases" : 'saved — the queue opens on everyone\'s cases')
+      : 'could not save';
     loadQueue();
   }
 

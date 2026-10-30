@@ -8,27 +8,69 @@ v1 rules enforced here and in the orchestrator:
 
 from __future__ import annotations
 
+import json
 import os
 import subprocess
+from pathlib import Path
 
 from flask import Blueprint, jsonify, render_template, request
 
 from services.handsfree import orchestrator
-from services.handsfree.queue import HandsfreeStore, decoded_log_dir
+from services.handsfree.queue import (HandsfreeShareUnavailable, HandsfreeStore,
+                                      decoded_log_dir, decoded_log_file,
+                                      describe_share_error, open_store)
 
 handsfree_bp = Blueprint("handsfree", __name__, url_prefix="/handsfree")
 
 
 def _store() -> HandsfreeStore:
-    from configs.global_configs import app_config
-    from pathlib import Path
-    return HandsfreeStore(Path(app_config.avatarfiles_dir) / "handsfree")
+    return open_store()
+
+
+@handsfree_bp.errorhandler(HandsfreeShareUnavailable)
+def _share_unavailable(e):
+    return jsonify({"ok": False, "error": str(e)}), 503
+
+
+@handsfree_bp.errorhandler(OSError)
+def _file_error(e):
+    # Permission or network trouble after the startup check passed.
+    where = f" ({e.filename})" if getattr(e, "filename", None) else ""
+    return jsonify({"ok": False,
+                    "error": f"file access failed{where}: {describe_share_error(e)}"}), 503
 
 
 @handsfree_bp.route("/")
 def index():
-    cfg = _store().load_config()
-    return render_template("handsfree.html", config=cfg)
+    try:
+        cfg = _store().load_config()
+        share_error = ""
+    except HandsfreeShareUnavailable as e:
+        cfg, share_error = dict(HandsfreeStore.DEFAULT_CONFIG), str(e)
+    return render_template("handsfree.html", config=cfg, share_error=share_error,
+                           my_owner=_my_owner())
+
+
+# ---------- this reviewer (kept on this PC, not on the shared folder) ----------
+
+def _me_path() -> Path:
+    from configs.global_configs import app_config
+    return Path(app_config.avatarfiles_dir) / "handsfree_user.json"
+
+
+def _my_owner() -> str:
+    try:
+        return str(json.loads(_me_path().read_text(encoding="utf-8")).get("owner_name") or "")
+    except Exception:
+        return ""
+
+
+@handsfree_bp.route("/me", methods=["POST"])
+def set_me():
+    """Remember whose cases this reviewer's queue opens on."""
+    name = str((request.get_json(silent=True) or {}).get("owner_name") or "").strip()
+    _me_path().write_text(json.dumps({"owner_name": name}), encoding="utf-8")
+    return jsonify({"ok": True, "owner_name": name})
 
 
 # ---------- run ----------
@@ -51,19 +93,10 @@ def status():
     return jsonify(orchestrator.get_run_state())
 
 
-# ---------- automatic analysis (scheduler) ----------
-
-@handsfree_bp.record_once
-def _resume_scheduler(_state):
-    """After an app restart, resume a previously enabled schedule without
-    waiting for someone to open the page. The thread reads the config on
-    every tick, so a not-yet-booted app_config just means a skipped tick."""
-    try:
-        from services.handsfree import scheduler
-        scheduler.ensure_started()
-    except Exception as e:
-        print(f"[handsfree] scheduler not started: {e}")
-
+# ---------- automatic analysis ----------
+# Scheduled rounds run on the Handsfree server (nightly CLI) only. The app
+# keeps the round settings and "Run now" (a one-off manual round), but never
+# starts the in-app scheduler: the config is shared by every reviewer's PC.
 
 @handsfree_bp.route("/auto", methods=["GET", "POST"])
 def auto_check():
@@ -71,13 +104,17 @@ def auto_check():
     if request.method == "GET":
         return jsonify(scheduler.status())
     body = request.get_json(silent=True) or {}
+    if body.get("enabled"):
+        return jsonify({"ok": False, "error": "scheduled analysis runs on the Handsfree "
+                        "server (nightly CLI) and cannot be started from the app"}), 403
     try:
         return jsonify(scheduler.configure(
             enabled=bool(body.get("enabled")),
             mode=str(body.get("mode") or "nightly"),
             max_cases=body.get("max_cases"),
             source=body.get("source"),
-            list_view=body.get("list_view")))
+            list_view=body.get("list_view"),
+            list_views=body.get("list_views")))
     except ValueError as e:
         return jsonify({"ok": False, "error": str(e)}), 400
 
@@ -105,12 +142,27 @@ def auto_run_now():
     body = request.get_json(silent=True) or {}
     cfg = scheduler.save_settings(max_cases=body.get("max_cases"),
                                   source=body.get("source"),
-                                  list_view=body.get("list_view"))
+                                  list_view=body.get("list_view"),
+                                  list_views=body.get("list_views"))
     target = scheduler.scan_target(cfg)
     if target["error"]:
         return jsonify({"ok": False, "error": target["error"]})
-    threading.Thread(target=scheduler.run_once, kwargs={"trigger": "manual"},
-                     daemon=True, name="handsfree-auto-now").start()
+    # Handshake: answer only once the worker holds the run lock and the
+    # status says "running" — the page polls right away and would otherwise
+    # read the previous run's "done" and stop polling before this one starts.
+    started = threading.Event()
+    outcome: dict = {}
+
+    def _worker():
+        try:
+            outcome["res"] = scheduler.run_once(trigger="manual", on_start=started.set)
+        finally:
+            started.set()
+    threading.Thread(target=_worker, daemon=True, name="handsfree-auto-now").start()
+    started.wait(timeout=15)
+    res = outcome.get("res")
+    if res is not None and not res.get("ok"):
+        return jsonify({"ok": False, "error": res.get("error") or "run did not start"})
     return jsonify({"ok": True})
 
 
@@ -163,9 +215,10 @@ def reject(draft_id: str):
 
 @handsfree_bp.route("/queue/<draft_id>/open_log_folder", methods=["POST"])
 def open_log_folder(draft_id: str):
-    """Open the folder of the case's decoded WRT log in Explorer (the app
-    runs on the reviewer's own PC), with the .log selected. The path comes
-    from the stored draft record, never from the request."""
+    """Open the folder of the case's decoded log in Explorer (the app runs on
+    the reviewer's own PC), with the log selected — the shared copy on the
+    Handsfree folder, so it works whichever machine ran the analysis. The
+    path comes from the stored draft record, never from the request."""
     if request.remote_addr not in ("127.0.0.1", "::1"):
         return jsonify({"ok": False, "error": "localhost only"}), 403
     rec = _store().get(draft_id)
@@ -178,7 +231,7 @@ def open_log_folder(draft_id: str):
     if not os.path.isdir(folder):
         return jsonify({"ok": False,
                         "error": f"folder no longer exists: {folder}"}), 404
-    log_path = os.path.normpath(rec["analysis"]["log_path"])
+    log_path = os.path.normpath(decoded_log_file(rec))
     if os.path.isfile(log_path):
         subprocess.Popen(["explorer", "/select,", log_path])
     else:
@@ -195,7 +248,8 @@ def config():
         return jsonify(store.load_config())
     body = request.get_json(silent=True) or {}
     allowed = {"owner_name", "post_backend", "max_cases_per_run",
-               "dry_run", "rest_field_map", "ui_locators", "trial_mode"}
+               "dry_run", "rest_field_map", "ui_locators", "trial_mode",
+               "auto_post_first_response"}
     updates = {k: v for k, v in body.items() if k in allowed}
     return jsonify(store.save_config(updates))
 

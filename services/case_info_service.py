@@ -152,10 +152,9 @@ class CaseService:
 
     @staticmethod
     def verify_saved_sign_in() -> None:
-        """Unattended sign-in to Salesforce and esft on the saved profile,
-        bypassing the cookie-file cache. Raises when the sign-in has expired."""
-        if not os.path.isdir(CaseService._sso_profile_dir()):
-            raise RuntimeError("no saved sign-in on this machine; run --sso-login first")
+        """Unattended sign-in to Salesforce and esft, bypassing the cookie-file
+        cache: with the saved profile when --sso-login made one, else with the
+        Windows account. Raises when it does not complete."""
         with CaseService._sso_lock:
             CaseService._headless_profile_sign_in()
 
@@ -192,10 +191,11 @@ class CaseService:
         cookies as CDP CookieParams. Caller holds _sso_lock."""
         from urllib.parse import urlparse
         driver_manager = app_config.driver_manager
+        profile = CaseService._sso_profile_dir()
         driver = driver_manager.create_download_driver(
             os.path.join(app_config.avatarfiles_dir, "_vf_auth_tmp"),
             headless=headless,
-            user_data_dir=CaseService._sso_profile_dir(),
+            user_data_dir=profile if os.path.isdir(profile) else None,
         )
         try:
             driver.get("https://esft.intel.com/sftservices/")

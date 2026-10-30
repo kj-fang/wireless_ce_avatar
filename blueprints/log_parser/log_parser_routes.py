@@ -290,6 +290,22 @@ def _pickup_sendto_session():
 
     if entry:
         _, data = entry
+        # Forget the previous file's case before adopting this one's.
+        #
+        # session.update() merges: it overwrites the keys the snapshot has and
+        # leaves every other one alone. With the Avatar window closed between
+        # runs that is harmless, because the browser arrives with nothing. With
+        # it left open -- which is the normal way to use Send To twice -- the
+        # session still holds what the LAST case number looked up: its
+        # attachment time, the issue time resolved from it, the LLM's summary
+        # of its description. The snapshot does not carry those keys unless
+        # this file produced its own, so they survived, and the new analysis
+        # opened pre-filled with the previous file's answers in the input box.
+        #
+        # Only the case-derived keys go. The session also carries things that
+        # are the user's rather than the case's, and a blanket clear would take
+        # those too.
+        check_ips_service.forget_case_derived_session_keys()
         session.update(data)
 
 _SAFE_MARKDOWN_TAGS = [
@@ -474,6 +490,34 @@ def _resolve_local_case(file_path: str, source_path: str):
     return derived_ips, local_case_ref_source
 
 
+def _local_case_context(case_nbr: str, source: str, domain: str,
+                        download_dir: str, backend_id: str = "") -> CaseContext:
+    """Build the local run without discarding this file's IPS lookup.
+
+    The case prompt runs before extraction. Creating a bare CaseContext after
+    extraction used to erase the subject and description it had just fetched,
+    so the chatbot opened with a case number but no customer context. Only
+    carry fields when the looked-up case is the one for this run; a second
+    Send To in the same browser must never inherit the first file's details.
+    """
+    prior = CaseContext.from_session(session.get('case_context') or {})
+    same_case = bool(check_ips_utils.normalise_ips(case_nbr)) and (
+        check_ips_utils.normalise_ips(prior.case_nbr) ==
+        check_ips_utils.normalise_ips(case_nbr))
+    return CaseContext(
+        case_nbr=case_nbr,
+        case_ref_source=source,
+        backend_id=backend_id,
+        wifi_or_bt=domain,
+        case_download_dir=download_dir,
+        id=prior.id if same_case else None,
+        subject=prior.subject if same_case else None,
+        description=prior.description if same_case else None,
+        env_detail=prior.env_detail if same_case else {},
+        subcategory=prior.subcategory if same_case else None,
+    )
+
+
 def _process_local_analysis(source_path: str, source_dir: str, file_path: str,
                             original_name: str, timestamp: str,
                             is_bsod: bool = False,
@@ -516,6 +560,7 @@ def _process_local_analysis(source_path: str, source_dir: str, file_path: str,
 
     session['download_path'] = source_dir
     session['uploaded_source_path'] = source_path
+    check_ips_service.carry_upload_answer(source_path)
     session['local_in_place'] = True
     # A case already looked up for this run (the prompt's answer) keeps its
     # classification; only a run with no known case is "Unclassified".
@@ -549,13 +594,9 @@ def _process_local_analysis(source_path: str, source_dir: str, file_path: str,
         session['download_path'] = shared_case_dir
         
         # Build a minimal case context so BSOD submission page can render in local-upload mode.
-        local_context = CaseContext(
-            case_nbr=local_case_nbr,
-            case_ref_source=local_case_ref_source,
-            backend_id=local_case_nbr,
-            wifi_or_bt='wifi',
-            case_download_dir=shared_case_dir,
-        )
+        local_context = _local_case_context(
+            local_case_nbr, local_case_ref_source, 'wifi', shared_case_dir,
+            backend_id=local_case_nbr)
         session['case_context'] = local_context.to_session()
         session['selected_files'] = [(original_name, original_name, None)]
         workflow_id = gather_service.new_workflow_id()
@@ -625,12 +666,8 @@ def _process_local_analysis(source_path: str, source_dir: str, file_path: str,
         # Only consider bt_files for case type inference since wifi_files may be present in both wifi and bt cases
         local_case_type = _infer_local_upload_case_type(bt_files)
 
-        local_context = CaseContext(
-            case_nbr=local_case_nbr,
-            case_ref_source=local_case_ref_source,
-            wifi_or_bt=local_case_type,
-            case_download_dir=source_dir
-        )
+        local_context = _local_case_context(
+            local_case_nbr, local_case_ref_source, local_case_type, source_dir)
         session['case_context'] = local_context.to_session()
         session['selected_files'] = []
         workflow_id = gather_service.new_workflow_id()
@@ -700,12 +737,8 @@ def _process_local_analysis(source_path: str, source_dir: str, file_path: str,
         fw_type = infer_fw_parse_type(file_path, 'wifi')
         local_case_nbr = derived_ips or f'local_upload_{timestamp}'
         local_case_type = fw_type if fw_type in ('bt', 'wifi') else 'wifi'
-        local_context = CaseContext(
-            case_nbr=local_case_nbr,
-            case_ref_source=local_case_ref_source,
-            wifi_or_bt=local_case_type,
-            case_download_dir=source_dir,
-        )
+        local_context = _local_case_context(
+            local_case_nbr, local_case_ref_source, local_case_type, source_dir)
         session['case_context'] = local_context.to_session()
         session['selected_files'] = []
         session['bsod'] = False
@@ -896,6 +929,7 @@ def upload_local_analysis():
     # Keys mutated by _process_local_analysis that must be cleared on cancellation
     _cancelable_session_keys = (
         'download_path', 'uploaded_source_path', 'local_in_place',
+        '_ips_answered_upload_key',
         'classification', 'case_context', 'selected_files', 'bsod',
         'latest_etl_llm', 'latest_etl_path', 'gather_workflow_id',
         'auto_analysis_fw',

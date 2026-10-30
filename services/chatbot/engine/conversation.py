@@ -6,6 +6,8 @@ import json
 import os
 from typing import Any, Optional
 
+from configs.llm_pricing import resolve_rates
+
 
 def _llm_error_for_user(exc: Exception, step_idx: int, model: str) -> str:
     """Explain permission failures without exposing the provider's resource details."""
@@ -591,16 +593,58 @@ class ConversationMixin:
         def _emit_token_report():
             if not step_token_usages:
                 return
+            # The gateway may report a different model from the one requested.
+            # Price each response by its actual model, not the agent template.
+            # Unknown rates stay visible as unpriced rather than silently
+            # borrowing the old hard-coded Standard Sonnet estimate.
+            priced = [resolve_rates(s["model"]) for s in step_token_usages]
+            unique_rates = {tuple(sorted(r.items())) for r in priced if r}
+            if len(unique_rates) == 1 and all(priced):
+                rates = priced[0]
+                rate_note = (f"list price — ${rates['input']:.2f}/MTok in · "
+                             f"${rates['output']:.2f}/MTok out")
+            else:
+                rate_note = "model-specific list prices where available"
             rows = [
-                "📊 **Token Usage Report**\n",
-                "| Step | Prompt | Completion | Total |",
-                "|------|--------|------------|-------|",
+                f"📊 **Token Usage & Cost Report** *({rate_note})*\n",
+                "| Step | Input(tok) | Output(tok) | Total(tok) | Input Cost ($) | Output Cost ($) | Step Cost ($) |",
+                "|------|------------|-------------|------------|----------------|-----------------|---------------|",
             ]
             total_p = total_c = total_t = 0
-            for s in step_token_usages:
-                rows.append(f"| {s['step']} | {s['prompt']:,} | {s['completion']:,} | {s['total']:,} |")
+            total_cost_in = total_cost_out = 0.0
+            unpriced_models = set()
+            for s, rates in zip(step_token_usages, priced):
+                cost_in = s["prompt"] / 1_000_000 * rates["input"] if rates else None
+                cost_out = s["completion"] / 1_000_000 * rates["output"] if rates else None
+                rows.append(
+                    f"| {s['step']} | {s['prompt']:,} | {s['completion']:,} | {s['total']:,} "
+                    f"| {cost_in:.4f} | {cost_out:.4f} | {cost_in + cost_out:.4f} |"
+                    if rates else
+                    f"| {s['step']} | {s['prompt']:,} | {s['completion']:,} | {s['total']:,} "
+                    "| — | — | — |"
+                )
                 total_p += s["prompt"]; total_c += s["completion"]; total_t += s["total"]
-            rows.append(f"| **Total** | **{total_p:,}** | **{total_c:,}** | **{total_t:,}** |")
+                if rates:
+                    total_cost_in += cost_in; total_cost_out += cost_out
+                else:
+                    unpriced_models.add(s["model"] or "(unknown)")
+            total_cost = total_cost_in + total_cost_out
+            rows.append(
+                f"| **Total** | **{total_p:,}** | **{total_c:,}** | **{total_t:,}** "
+                f"| **{total_cost_in:.4f}** | **{total_cost_out:.4f}** | "
+                f"**{total_cost:.4f}** |" if not unpriced_models else
+                f"| **Total** | **{total_p:,}** | **{total_c:,}** | **{total_t:,}** "
+                "| incomplete | incomplete | incomplete |"
+            )
+            if unpriced_models:
+                rows.append("\n💰 **Total cost unavailable** — no verified rate for "
+                            + ", ".join(sorted(unpriced_models)) + ". "
+                            + f"Priced subtotal: ${total_cost:.4f}.")
+            else:
+                rows.append(
+                    f"\n💰 **Estimated total cost: ${total_cost:.4f}** "
+                    "— public list price, not the internal gateway's chargeback rate."
+                )
             _emit({"role": "token_usage", "content": "\n".join(rows)})
 
         for step_idx in range(max_steps):
@@ -690,6 +734,7 @@ class ConversationMixin:
                     "prompt": usage.prompt_tokens,
                     "completion": usage.completion_tokens,
                     "total": usage.total_tokens,
+                    "model": getattr(response, "model", None) or self.model,
                 })
                 if usage.total_tokens > self.MAX_TOKENS_PER_STEP:
                     _emit({

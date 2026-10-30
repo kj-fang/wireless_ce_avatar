@@ -664,6 +664,31 @@
     ChatRuntimeStrategyBase.prototype._onAutoIssueTimeApplied = function () {};
     ChatRuntimeStrategyBase.prototype._afterAutoPrefill = function () {};
 
+    ChatRuntimeStrategyBase.prototype._prefillAttachedCaseDescription = async function (logGen) {
+        // The manual file-picker path never enters tryAutoAnalyzeOnLoad(). After
+        // the IPS dialog enriches the case, fetch its organized description for
+        // the same input box that the page-load path fills. Do not replace a
+        // draft the user typed while the lookup was in flight.
+        const input = document.getElementById('user-input');
+        if (!input || input.value.trim()) return;
+        const initialValue = input.value;
+        try {
+            const res = await fetch(`${this.api}/get_issue_context`);
+            if (!res.ok) return;
+            const context = await res.json();
+            const description = String(context.description || '').replace(/\s+/g, ' ').trim();
+            if (!description || logGen !== window.__setLogGen ||
+                input.value !== initialValue) return;
+            input.value = description;
+            autoResize(input);
+            const hint = document.getElementById('prefill-hint');
+            if (hint) hint.style.display = 'block';
+            if (typeof validateUserInput === 'function') validateUserInput();
+        } catch (e) {
+            console.warn('case description prefill failed', e);
+        }
+    };
+
     ChatRuntimeStrategyBase.prototype.setLog = async function (opts) {
         // When restoring a per-conversation draft / a resumed live session the
         // caller manages the Issue Time itself (from the saved snapshot), so it
@@ -696,8 +721,31 @@
             // the 📋 copy button).
             showStatus(statusEl, '✔ Log loaded', 'ok', 3000);
             renderSkills(data.skills);
+
+            // Ask for the case BEFORE releasing the load, and wait for the
+            // answer. tryAutoAnalyzeOnLoad() is gated on logLoaded and does
+            // nothing but wait for it, so setting the flag first let it run
+            // the moment this line executed -- while the dialog was still on
+            // screen. It fetched /get_issue_context with no case attached,
+            // got no description, and pre-filled the input box with nothing.
+            // The answer arrived seconds later and enriched the session, but
+            // the box had already been filled from the empty version, and
+            // nothing re-read it: "the lookup found the case and nothing
+            // reached the input box".
+            //
+            // NW already awaited this (nw.js). The other three profiles did
+            // not, and this is the shared path they use.
+            let attachedCase = null;
+            if (window.IpsPrompt) {
+                try {
+                    attachedCase = await window.IpsPrompt.handleSetLog(data);
+                } catch (e) {
+                    // A dialog that failed must not strand the load: the log
+                    // is usable without a case, which is what skipping means.
+                    console.warn('case prompt failed', e);
+                }
+            }
             logLoaded = true;
-            if (window.IpsPrompt) { window.IpsPrompt.handleSetLog(data); }
             // Enables the (collapsed) System Event Log panel when the capture
             // folder ships an .evt / .evtx next to the log.
             if (typeof updateEvtButton === 'function') {
@@ -737,6 +785,18 @@
             // genuinely absent there rather than merely optional.
             if (typeof refreshIssueWindowBounds === 'function') refreshIssueWindowBounds();
             if (typeof validateUserInput === 'function') validateUserInput();
+            // A case entered after the page opened has new context, but the
+            // page-load prefill has already had its only chance to run. Only
+            // that manual path needs another fetch; the automatic path below
+            // will perform its own complete prefill after setLog returns.
+            if (attachedCase && attachedCase.case_nbr && attachedCase.enriched &&
+                !(opts && opts.deferCasePrefill)) {
+                await this._prefillAttachedCaseDescription(logGen);
+            }
+            if (attachedCase && attachedCase.case_nbr && !attachedCase.enriched) {
+                showStatus(statusEl, '⚠ ' + (attachedCase.message ||
+                    'Case attached, but IPS details could not be loaded.'), 'err');
+            }
             // Only a newly loaded, unanchored dmesg opens the AI consent gate.
             // The user must still allow the LLM request. Repeated refreshes of
             // the same file (and history restores) must not nag or auto-send.
@@ -771,7 +831,7 @@
         autoAnalyzeTriggered = true;
 
         try {
-            await setLog(); // load log file first
+            await setLog({deferCasePrefill: true}); // the full prefill runs below
 
             // Wait for state synchronization
             let retries = 0;

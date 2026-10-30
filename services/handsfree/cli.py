@@ -6,6 +6,7 @@ Examples:
     python -m services.handsfree.cli --list-view Handsfree_replier_test_case --once
     python -m services.handsfree.cli --sso-login
     python -m services.handsfree.cli --sso-check
+    python -m services.handsfree.cli --sso-refresh
 
 This starts the application services needed by the analysis pipeline, but it
 never starts Flask, Socket.IO, a browser, or the Handsfree UI. Each owner's
@@ -17,10 +18,15 @@ Approve operation from the UI or another trusted caller.
 from __future__ import annotations
 
 import argparse
+import os
 import sys
 import time
 from pathlib import Path
 from typing import Optional
+
+# Long enough for Microsoft's redirects in a visible window, short enough for
+# a scheduled run that nobody is watching.
+_SSO_REFRESH_WAIT_S = 120
 
 
 def _configure_output() -> None:
@@ -62,6 +68,11 @@ def _build_parser() -> argparse.ArgumentParser:
         "--sso-check",
         action="store_true",
         help="Verify the saved sign-in still works unattended (exit 0 = OK, 1 = expired).",
+    )
+    targets.add_argument(
+        "--sso-refresh",
+        action="store_true",
+        help="Retry the saved sign-in in a visible Chrome without anyone typing (exit 0 = OK, 1 = a person must run --sso-login).",
     )
     parser.add_argument(
         "--interval",
@@ -138,6 +149,25 @@ def _sso_check() -> int:
         return 1
     print(f"[handsfree-cli] {datetime.now():%Y-%m-%d %H:%M} SSO check OK "
           "(Salesforce + esft signed in unattended)")
+    return 0
+
+
+def _sso_refresh() -> int:
+    from datetime import datetime
+    from services.case_info_service import CaseService
+
+    _initialize_sso_only()
+    if not os.path.isdir(CaseService._sso_profile_dir()):
+        print("[handsfree-cli] no saved sign-in on this machine; run --sso-login first")
+        return 1
+    try:
+        CaseService.interactive_sso_login(wait_s=_SSO_REFRESH_WAIT_S)
+    except Exception as e:
+        print(f"[handsfree-cli] {datetime.now():%Y-%m-%d %H:%M} SSO refresh FAILED "
+              f"(a person must run --sso-login on this machine): {e}")
+        return 1
+    print(f"[handsfree-cli] {datetime.now():%Y-%m-%d %H:%M} SSO refresh OK "
+          "(saved sign-in renewed without a password)")
     return 0
 
 
@@ -267,6 +297,8 @@ def main(argv: Optional[list[str]] = None) -> int:
         return _sso_login()
     if args.sso_check:
         return _sso_check()
+    if args.sso_refresh:
+        return _sso_refresh()
     if args.interval <= 0:
         print("[handsfree-cli] --interval must be greater than zero", file=sys.stderr)
         return 2

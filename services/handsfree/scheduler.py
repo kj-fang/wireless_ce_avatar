@@ -132,8 +132,9 @@ def configure(enabled: bool, mode: str, max_cases: Optional[int] = None,
     return status(cfg)
 
 
-def run_once(trigger: str = "manual") -> dict:
-    """Run a round now (UI 'Run now'); reschedules the next automatic one."""
+def run_once(trigger: str = "manual", on_start=None) -> dict:
+    """Run a round now (UI 'Run now'); reschedules the next automatic one.
+    on_start() fires once the round holds the run lock (see run_auto_scan)."""
     from .orchestrator import run_auto_scan
     store = _store()
     cfg = store.load_config()
@@ -144,7 +145,8 @@ def run_once(trigger: str = "manual") -> dict:
     try:
         res = run_auto_scan(store, target["owner"],
                             int(cfg.get("auto_check_max_cases") or 10),
-                            trigger=trigger, list_view=target["list_view"])
+                            trigger=trigger, list_view=target["list_view"],
+                            on_start=on_start)
     finally:
         _running.clear()
     busy = not res.get("ok") and "already in progress" in str(res.get("error", ""))

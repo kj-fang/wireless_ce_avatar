@@ -8,7 +8,8 @@ servlet), the app's Salesforce session can download them, and the Claude
 model accepts images. So, per case:
 
   1. pull the rich-text comments via IpsClient.get_case_comments,
-  2. download the embedded images (force.com hosts only, bounded),
+  2. download the embedded images (Intel's own Salesforce hosts over
+     HTTPS only — the session credentials never go anywhere else; bounded),
   3. one vision call per comment with images -> one description per image,
   4. append a synthetic comment row "[Images embedded in the comment of
      <date> by <author>] 1) ... 2) ..." so the case reader, the checklist
@@ -32,7 +33,6 @@ from typing import Any, Callable, Optional
 MAX_IMAGES_PER_CASE = 8
 MAX_IMAGE_BYTES = 5 * 1024 * 1024
 _ALLOWED_MEDIA = {"image/png", "image/jpeg", "image/gif", "image/webp"}
-_ALLOWED_HOSTS = (".force.com", ".salesforce.com")
 _CACHE_LOCK = threading.Lock()
 
 _IMG_RE = re.compile(r"""<img\b[^>]*\bsrc\s*=\s*["']([^"']+)["']""", re.IGNORECASE)
@@ -59,9 +59,11 @@ def sniff_media_type(data: bytes, declared: str = "") -> str:
 
 
 def _host_allowed(url: str) -> bool:
-    m = re.match(r"https?://([^/]+)/", url + "/")
-    host = (m.group(1) if m else "").lower()
-    return any(host.endswith(h) for h in _ALLOWED_HOSTS)
+    """Only the org's own Salesforce hosts, HTTPS only (ips_client.is_tenant_url):
+    fetch_binary attaches the Salesforce session to the request, so a URL on
+    any other tenant — or plain HTTP — would hand the credentials away."""
+    from .ips_client import is_tenant_url
+    return is_tenant_url(url)
 
 
 def image_blocks(images: list[tuple[str, bytes]], model: str) -> list[dict]:

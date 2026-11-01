@@ -109,8 +109,22 @@ def auto_run_now():
     target = scheduler.scan_target(cfg)
     if target["error"]:
         return jsonify({"ok": False, "error": target["error"]})
-    threading.Thread(target=scheduler.run_once, kwargs={"trigger": "manual"},
-                     daemon=True, name="handsfree-auto-now").start()
+    # Handshake: answer only once the worker holds the run lock and the
+    # status says "running" — the page polls right away and would otherwise
+    # read the previous run's "done" and stop polling before this one starts.
+    started = threading.Event()
+    outcome: dict = {}
+
+    def _worker():
+        try:
+            outcome["res"] = scheduler.run_once(trigger="manual", on_start=started.set)
+        finally:
+            started.set()
+    threading.Thread(target=_worker, daemon=True, name="handsfree-auto-now").start()
+    started.wait(timeout=15)
+    res = outcome.get("res")
+    if res is not None and not res.get("ok"):
+        return jsonify({"ok": False, "error": res.get("error") or "run did not start"})
     return jsonify({"ok": True})
 
 

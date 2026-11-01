@@ -292,7 +292,10 @@ def assessment(results: list[dict]) -> str:
         return ""
     blamed = [r for r in results if r.get("wifi_fault") or r.get("bt_fault")]
     if blamed:
-        who = sorted({"Wi-Fi driver" if r.get("wifi_fault") else "BT driver" for r in blamed})
+        who = sorted({label for r in blamed
+                      for label, flag in (("Wi-Fi driver", r.get("wifi_fault")),
+                                          ("BT driver", r.get("bt_fault")))
+                      if flag})
         return (f"PotatoFarm blames the Intel {' / '.join(who)} in "
                 f"{len(blamed)}/{len(results)} dump(s) — driver issue to debug.")
     on_stack = [r for r in results if r.get("driver_on_stack")]

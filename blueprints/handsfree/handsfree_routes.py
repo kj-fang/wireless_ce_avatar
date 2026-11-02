@@ -8,10 +8,8 @@ v1 rules enforced here and in the orchestrator:
 
 from __future__ import annotations
 
-import json
 import os
 import subprocess
-from pathlib import Path
 
 from flask import Blueprint, jsonify, render_template, request
 
@@ -47,30 +45,39 @@ def index():
         share_error = ""
     except HandsfreeShareUnavailable as e:
         cfg, share_error = dict(HandsfreeStore.DEFAULT_CONFIG), str(e)
-    return render_template("handsfree.html", config=cfg, share_error=share_error,
-                           my_owner=_my_owner())
+    return render_template("handsfree.html", config=cfg, share_error=share_error)
 
 
-# ---------- this reviewer (kept on this PC, not on the shared folder) ----------
+# ---------- this reviewer: the IPS sign-in of this PC ----------
+# The client posts with the Salesforce session of the Windows account that
+# runs it, so that session's user IS the reviewer: the queue opens on that
+# user's cases and Approve posts under that name. Nothing is stored here
+# beyond the resolved identity (login.py).
 
-def _me_path() -> Path:
-    from configs.global_configs import app_config
-    return Path(app_config.avatarfiles_dir) / "handsfree_user.json"
-
-
-def _my_owner() -> str:
-    try:
-        return str(json.loads(_me_path().read_text(encoding="utf-8")).get("owner_name") or "")
-    except Exception:
-        return ""
+def _login():
+    from services.handsfree import login
+    return login
 
 
-@handsfree_bp.route("/me", methods=["POST"])
-def set_me():
-    """Remember whose cases this reviewer's queue opens on."""
-    name = str((request.get_json(silent=True) or {}).get("owner_name") or "").strip()
-    _me_path().write_text(json.dumps({"owner_name": name}), encoding="utf-8")
-    return jsonify({"ok": True, "owner_name": name})
+@handsfree_bp.route("/login", methods=["GET"])
+def login_status():
+    return jsonify(_login().status())
+
+
+@handsfree_bp.route("/login", methods=["POST"])
+def login_start():
+    """Start the sign-in in the background: silent (cookie file / Windows
+    account SSO) by default; {"interactive": true} opens a visible Chrome
+    for the reviewer to sign in, which only makes sense on this PC."""
+    body = request.get_json(silent=True) or {}
+    interactive = bool(body.get("interactive"))
+    if interactive and request.remote_addr not in ("127.0.0.1", "::1"):
+        return jsonify({"ok": False, "error": "interactive sign-in: localhost only"}), 403
+    return jsonify(_login().start_sign_in(interactive=interactive))
+
+
+def _signed_in_name() -> str:
+    return str(((_login().status().get("identity") or {}).get("name")) or "")
 
 
 # ---------- run ----------
@@ -170,8 +177,18 @@ def auto_run_now():
 
 @handsfree_bp.route("/queue")
 def list_queue():
-    include_closed = request.args.get("all", "").lower() in ("1", "true", "yes")
+    """The signed-in reviewer's own cases. ?everyone=1 lifts that to every
+    owner (optionally narrowed by ?owner=); without a sign-in the own-cases
+    view is empty and says so."""
+    truthy = ("1", "true", "yes")
+    include_closed = request.args.get("all", "").lower() in truthy
+    everyone = request.args.get("everyone", "").lower() in truthy
     owner_name = request.args.get("owner", "").strip()
+    if not everyone:
+        me = _signed_in_name()
+        if not me:
+            return jsonify({"items": [], "signed_out": True})
+        owner_name = me
     return jsonify({"items": _store().list_drafts(
         include_closed=include_closed, owner_name=owner_name)})
 

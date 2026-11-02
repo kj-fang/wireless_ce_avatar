@@ -957,12 +957,15 @@ def smoke_runner(tmp: Path) -> None:
         trial_drafts = store14g.list_drafts(include_closed=True)
         res_trial = None
         if trial_drafts:
-            orig_store_fn = orch._store
+            orig_store_fn, orig_identity = orch._store, orch._signed_in_identity
             orch._store = lambda: store14g
+            orch._signed_in_identity = lambda: {"user_id": "005SMOKE", "name": "Smoke Reviewer",
+                                                "email": "", "username": ""}
             try:
                 res_trial = orch.approve_and_post(trial_drafts[0]["draft_id"])
             finally:
                 orch._store = orig_store_fn
+                orch._signed_in_identity = orig_identity
         check("S14.f list-view round in trial mode: analyzed case skipped, next (closed) "
               "case run, drafts flagged TRIAL, Approve refuses to post them",
               summary["ok"] and [c["case_nbr"] for c in summary["cases"]] == ["01234567"]
@@ -1239,6 +1242,9 @@ def smoke_orchestrator(tmp: Path) -> None:
                                   comment_id=f"CMT{len(self.posted)}")
             return PostResult(ok=False, backend="rest", error="rest down")
 
+        def comment_author(self, comment_id):
+            return {"user_id": "005SMOKE", "name": "Smoke Reviewer"}
+
     def enqueue(case, mode, body="body", later_round=False):
         tag = ("\n" + CHECKLIST_TAG) if mode in orch._CHECKLIST_MODES else ""
         return store.enqueue(case_nbr=case, case_id="500" + case, subject="s",
@@ -1249,9 +1255,24 @@ def smoke_orchestrator(tmp: Path) -> None:
                              analysis={"first_response_done": later_round})["draft_id"]
 
     orig_store_fn, orig_ips = orch._store, orch.IpsClient
+    orig_identity = orch._signed_in_identity
     try:
         orch._store = lambda: store
         orch.IpsClient = _Ips
+
+        # No IPS sign-in on this PC: nothing is posted, the draft stays.
+        def _no_session():
+            raise RuntimeError("Salesforce SSO did not complete")
+        orch._signed_in_identity = _no_session
+        d0 = enqueue("09999990", "full")
+        res0 = orch.approve_and_post(d0)
+        check("S5.0 approve refused without an IPS sign-in; draft untouched, nothing posted",
+              res0["ok"] is False and "not signed in" in res0["error"]
+              and store.get(d0)["status"] == "pending_review" and not _Ips.posted, str(res0))
+        orch._signed_in_identity = lambda: {"user_id": "005SMOKE", "name": "Smoke Reviewer",
+                                            "email": "smoke@intel.com", "username": "smoke"}
+        check("S5.0b claim holder names the signed-in reviewer",
+              orch._reviewer_id({"name": "Smoke Reviewer"}).startswith("Smoke Reviewer ("))
 
         # An existing AI analysis comment no longer blocks another analysis
         # (one per round), and a scan failure never aborts a post.
@@ -1278,6 +1299,14 @@ def smoke_orchestrator(tmp: Path) -> None:
               res["ok"] and _Ips.posted[-1][1] is False
               and store.first_response_posted("09999997"), str(res))
         fr_comment_id = (res.get("result") or {}).get("comment_id")
+        rec3 = store.get(d3)
+        check("S5.c2 a posted draft records who posted it: draft, post_result (+ IPS "
+              "author read-back) and ledger",
+              rec3.get("posted_by") == "Smoke Reviewer"
+              and (rec3["post_result"].get("posted_by") or {}).get("name") == "Smoke Reviewer"
+              and (rec3["post_result"].get("author") or {}).get("name") == "Smoke Reviewer"
+              and store.ledger_entry("09999997").get("posted_by") == "Smoke Reviewer",
+              str(rec3.get("post_result")))
         d4 = enqueue("09999997", "first_response")
         res = orch.approve_and_post(d4)
         check("S5.d second first-response on the case refused + marked posted",
@@ -1379,6 +1408,7 @@ def smoke_orchestrator(tmp: Path) -> None:
     finally:
         orch._store = orig_store_fn
         orch.IpsClient = orig_ips
+        orch._signed_in_identity = orig_identity
 
     # Typed case numbers go through the repository's one definition
     # (utils/check_ips_utils.normalise_ips) — UI manual run and the CLI alike.
@@ -2413,6 +2443,118 @@ def smoke_comment_images(tmp: Path) -> None:
           and sniff_media_type(b"nothing", "image/gif") == "image/gif")
 
 
+# ---------------------------------------------------------------- S19
+def smoke_identity() -> None:
+    print("[S19] IPS sign-in identity: whoami, parsing, author read-back, login state")
+    from .ips_client import IpsClient, parse_identity
+
+    oidc = parse_identity({"user_id": "005A", "name": "Charles P Chu", "email": "c@intel.com",
+                           "preferred_username": "c@intel.com.prod"})
+    chatter = parse_identity({"id": "005B", "displayName": "Wesley Kuo", "email": "w@intel.com",
+                              "username": "w@intel.com"})
+    partial = parse_identity({"user_id": "005C", "given_name": "Ching-Fang", "family_name": "Lai"})
+    check("S19.a userinfo, chatter and name-part answers normalise to one shape",
+          oidc == {"user_id": "005A", "name": "Charles P Chu", "email": "c@intel.com",
+                   "username": "c@intel.com.prod"}
+          and chatter["name"] == "Wesley Kuo" and chatter["user_id"] == "005B"
+          and chatter["username"] == "w@intel.com" and partial["name"] == "Ching-Fang Lai",
+          str((oidc, chatter, partial)))
+    check("S19.b empty answers carry no name",
+          parse_identity({})["name"] == "" and parse_identity(None)["name"] == "")
+
+    class _Resp:
+        def __init__(self, status, data):
+            self.status_code, self._d = status, data
+
+        def json(self):
+            return self._d
+
+        def raise_for_status(self):
+            if self.status_code >= 400:
+                raise RuntimeError(f"HTTP {self.status_code}")
+
+    calls: list = []
+
+    class _Client(IpsClient):
+        header = "Bearer sid-1"
+        answers: dict = {}
+
+        def _auth(self):
+            return None, {"Authorization": self.header}, "62.0"
+
+        def _request(self, method, path, **kw):
+            calls.append(path)
+            return self.answers.get(path) or _Resp(404, {})
+
+    IpsClient._identity_cache = None
+    c = _Client()
+    _Client.answers = {"/services/oauth2/userinfo":
+                       _Resp(200, {"user_id": "005A", "name": "Charles P Chu", "email": "c@intel.com"})}
+    who, who2 = c.whoami(), c.whoami()
+    check("S19.c whoami: userinfo answers; cached per session (one GET for two calls)",
+          who["name"] == "Charles P Chu" and who2 == who
+          and calls.count("/services/oauth2/userinfo") == 1, str(calls))
+    _Client.header = "Bearer sid-2"
+    _Client.answers = {"/services/data/v{ver}/chatter/users/me":
+                       _Resp(200, {"id": "005B", "displayName": "Wesley Kuo"})}
+    who3 = c.whoami()
+    check("S19.d a new session is re-resolved; chatter/users/me is the fallback",
+          who3["name"] == "Wesley Kuo"
+          and calls.count("/services/data/v{ver}/chatter/users/me") == 1, str(calls))
+    _Client.header = "Bearer sid-3"
+    _Client.answers = {"/services/oauth2/userinfo": _Resp(200, {"user_id": "005X"})}
+    try:
+        c.whoami()
+        check("S19.e an answer without a user name is rejected", False)
+    except RuntimeError:
+        check("S19.e an answer without a user name is rejected", True)
+
+    seen: dict = {}
+
+    class _Author(_Client):
+        def _request(self, method, path, **kw):
+            seen["q"] = (kw.get("params") or {}).get("q", "")
+            return _Resp(200, {"records": [{"Id": "a0X", "CreatedById": "005A",
+                                            "CreatedBy": {"Name": "Charles P Chu"}}]})
+
+    author = _Author().comment_author("a0X'1")
+    check("S19.f comment_author reads CreatedBy back; the id is SOQL-escaped",
+          author == {"user_id": "005A", "name": "Charles P Chu"}
+          and "Id = 'a0X\\'1'" in seen["q"] and "CreatedBy.Name" in seen["q"], seen.get("q"))
+    check("S19.g comment_author without an id is {}", _Author().comment_author("") == {})
+    IpsClient._identity_cache = None
+
+    from . import login
+    orig_whoami = login._whoami
+    try:
+        login._whoami = lambda: {"user_id": "005A", "name": "Charles P Chu", "email": "", "username": ""}
+        st = login.start_sign_in(False)
+        login._worker.join(5)
+        st2 = login.status()
+        check("S19.h silent sign-in: signing_in -> signed_in with the identity",
+              st["status"] in ("signing_in", "signed_in") and st2["status"] == "signed_in"
+              and st2["identity"]["name"] == "Charles P Chu", str(st2))
+
+        def _boom():
+            raise RuntimeError("Salesforce SSO did not complete")
+        login._whoami = _boom
+        login.start_sign_in(False)
+        login._worker.join(5)
+        st3 = login.status()
+        check("S19.i failed sign-in: status failed, the error kept, no identity",
+              st3["status"] == "failed" and "SSO" in st3["error"] and st3["identity"] is None,
+              str(st3))
+        try:
+            login.current_identity()
+            check("S19.j current_identity raises when there is no session", False)
+        except RuntimeError:
+            check("S19.j current_identity raises when there is no session", True)
+    finally:
+        login._whoami = orig_whoami
+        with login._lock:
+            login._state.update(status="signed_out", identity=None, error="")
+
+
 def run_smoke() -> int:
     tmp = Path(tempfile.mkdtemp(prefix="handsfree_smoke_"))
     try:
@@ -2430,6 +2572,7 @@ def run_smoke() -> int:
         smoke_checklist_convert(tmp)
         smoke_auto_scan(tmp)
         smoke_comment_images(tmp)
+        smoke_identity()
     finally:
         shutil.rmtree(tmp, ignore_errors=True)
     print(f"\nsmoke result: {'ALL PASS' if not PASS_FAIL else 'FAILURES: ' + ', '.join(PASS_FAIL)}")

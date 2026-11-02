@@ -635,27 +635,47 @@ def approve_and_post(draft_id: str, edited_plain: Optional[str] = None) -> dict:
         if rec is None:
             return {"ok": False, "error": f"draft not found: {draft_id}"}
         case_nbr = rec["case_nbr"]
-        holder = store.claim_case(case_nbr, _reviewer_id())
+        # The comment goes out under the IPS session of this PC, so it must
+        # be the reviewer's own sign-in — resolved now, not from page state.
+        try:
+            reviewer = _signed_in_identity()
+        except Exception as e:
+            return {"ok": False,
+                    "error": "not signed in to IPS on this PC, so the comment could "
+                             f"not be posted in your name ({type(e).__name__}: {e}) — "
+                             "use 'Sign in to IPS' on the page and approve again"}
+        holder = store.claim_case(case_nbr, _reviewer_id(reviewer))
         if holder:
             return {"ok": False, "error": f"{holder} is posting to case {case_nbr} "
                                           "right now — refresh and try again in a moment"}
         try:
-            return _approve_and_post_locked(draft_id, edited_plain)
+            return _approve_and_post_locked(draft_id, edited_plain, reviewer)
         finally:
             store.release_case(case_nbr)
 
 
-def _reviewer_id() -> str:
+def _signed_in_identity() -> dict:
+    """The IPS user behind this PC's session ({"user_id", "name", "email",
+    "username"}); raises when there is no sign-in. Module-level so tests can
+    stand in for IPS."""
+    from .login import current_identity
+    return current_identity()
+
+
+def _reviewer_id(identity: Optional[dict] = None) -> str:
     import getpass
     import socket
     try:
         user = getpass.getuser()
     except Exception:
         user = "unknown"
-    return f"{user}@{socket.gethostname()}"
+    host = f"{user}@{socket.gethostname()}"
+    name = (identity or {}).get("name") or ""
+    return f"{name} ({host})" if name else host
 
 
-def _approve_and_post_locked(draft_id: str, edited_plain: Optional[str]) -> dict:
+def _approve_and_post_locked(draft_id: str, edited_plain: Optional[str],
+                             reviewer: Optional[dict] = None) -> dict:
     store = _store()
     cfg = store.load_config()
     rec = store.get(draft_id)
@@ -769,13 +789,32 @@ def _approve_and_post_locked(draft_id: str, edited_plain: Optional[str]) -> dict
         result = ui.post_comment(rec["case_id"], rec["draft_plain"])
 
     if result.ok:
-        store.update(draft_id, status="posted", post_result=result.to_dict())
+        posted = result.to_dict()
+        reviewer_name = (reviewer or {}).get("name") or ""
+        if reviewer:
+            posted["posted_by"] = {k: reviewer.get(k, "")
+                                   for k in ("user_id", "name", "email")}
+        # Read the author back from IPS: proof of whose name the comment
+        # carries, independent of what we believed before posting.
+        try:
+            author = ips.comment_author(result.comment_id) if result.comment_id else {}
+        except Exception as e:
+            print(f"[handsfree] author read-back skipped ({type(e).__name__}: {e})")
+            author = {}
+        if author:
+            posted["author"] = author
+            if reviewer_name and author.get("name") \
+                    and author["name"].casefold() != reviewer_name.casefold():
+                print(f"[handsfree] WARNING: comment {result.comment_id} was created by "
+                      f"{author['name']!r}, not the signed-in reviewer {reviewer_name!r}")
+        store.update(draft_id, status="posted", post_result=posted,
+                     posted_by=reviewer_name)
         # A request reply carries the overview checklist only on the first
         # round, so it counts as the first response exactly when no first
         # response was recorded before (mark_posted keeps the first record).
         store.mark_posted(rec["case_nbr"], comment_id=result.comment_id,
-                          first_response=draft_is_checklist)
-        return {"ok": True, "draft": store.get(draft_id), "result": result.to_dict()}
+                          first_response=draft_is_checklist, posted_by=reviewer_name)
+        return {"ok": True, "draft": store.get(draft_id), "result": posted}
 
     store.update(draft_id, status="post_failed", post_result=result.to_dict())
     return {"ok": False, "error": result.error, "draft": store.get(draft_id)}

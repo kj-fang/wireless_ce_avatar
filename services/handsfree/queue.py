@@ -217,6 +217,15 @@ class HandsfreeStore:
         with _LOCK:
             merged = {**self.load_config(), **(cfg or {})}
             _atomic_write(self.config_path, json.dumps(merged, indent=2))
+            # Prime the read cache with what was just written: two writes
+            # inside one mtime tick with equal sizes would otherwise look
+            # unchanged to load_config and the second merge would start
+            # from the first's stale snapshot.
+            try:
+                st = os.stat(self.config_path)
+                self._config_cache = ((st.st_mtime_ns, st.st_size), copy.deepcopy(merged))
+            except OSError:
+                self._config_cache = None
         return merged
 
     # ------------------------------------------------------------------
@@ -252,11 +261,14 @@ class HandsfreeStore:
         self._update_ledger(case_nbr, last_customer_update=update_iso)
 
     def mark_posted(self, case_nbr: str, comment_id: str = "",
-                    first_response: bool = False) -> None:
+                    first_response: bool = False, posted_by: str = "") -> None:
         """Record a post. The first customer-facing overview (checklist /
         request reply carrying it) is remembered separately: it is sent at
-        most ONCE per case, while analyses may post once per round."""
+        most ONCE per case, while analyses may post once per round.
+        posted_by: the IPS user the comment was posted as (the reviewer)."""
         fields = {"posted_at": _now_iso(), "comment_id": comment_id}
+        if posted_by:
+            fields["posted_by"] = posted_by
         if first_response and not self.first_response_posted(case_nbr):
             fields.update({"first_response_posted_at": _now_iso(),
                            "first_response_comment_id": comment_id})

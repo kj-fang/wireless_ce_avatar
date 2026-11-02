@@ -399,15 +399,20 @@
       <label style="font-size: 12px; margin-left: 4px; font-weight: 400;">
         <input type="checkbox" id="show-closed" onchange="loadQueue()"> show posted/rejected
       </label>
-      <label style="font-size: 12px; margin-left: 8px; font-weight: 400;">
+      <label style="font-size: 12px; margin-left: 8px; font-weight: 400;"
+             title="The queue opens on the cases of the IPS user signed in on this PC; tick to see every owner's">
+        <input type="checkbox" id="show-everyone" onchange="applyEveryoneUi(); loadQueue()"> everyone's cases
+      </label>
+      <label id="owner-filter-wrap" style="font-size: 12px; margin-left: 4px; font-weight: 400; display: none;">
         owner:
-        <input type="text" id="owner-filter" placeholder="Filter by case owner" value="{{ my_owner }}"
+        <input type="text" id="owner-filter" placeholder="Filter by case owner"
                style="width: 190px;" onkeydown="if(event.key==='Enter')loadQueue()">
       </label>
-      <button class="ghost" onclick="setMyOwner()" title="Open the queue on this owner's cases every time (saved on this PC)"
-              style="height: 28px; padding: 0 11px; font-size: 12px;">Set as mine</button>
-      <span id="my-owner-status" style="font-size: 12px; color: var(--muted); font-weight: 400;">
-        {% if my_owner %}showing your cases — clear the box for everyone's{% endif %}</span>
+      <span id="login-badge" class="pill" style="margin-left: 8px; font-weight: 400;"
+            title="The IPS (Salesforce) user of this PC's session: the queue opens on this user's cases and Approve posts under this name">IPS: signing in…</span>
+      <button class="ghost" id="login-btn" onclick="signIn(true)"
+              style="display: none; height: 28px; padding: 0 11px; font-size: 12px;"
+              title="Opens a Chrome window for Intel SSO; the sign-in is kept on this PC">Sign in to IPS</button>
     </h3>
     <table id="queue-table">
       <thead><tr>
@@ -965,8 +970,11 @@
     const showClosed = document.getElementById('show-closed').checked;
     const params = new URLSearchParams();
     if (showClosed) params.set('all', '1');
-    const owner = document.getElementById('owner-filter').value.trim();
-    if (owner) params.set('owner', owner);
+    if (document.getElementById('show-everyone').checked) {
+      params.set('everyone', '1');
+      const owner = document.getElementById('owner-filter').value.trim();
+      if (owner) params.set('owner', owner);
+    }
     const query = params.toString();
     const r = await fetch('/handsfree/queue' + (query ? '?' + query : ''));
     const j = await r.json();
@@ -975,6 +983,14 @@
     if (j.error) {
       tbody.innerHTML = '<tr><td colspan="9" style="color:var(--bad, #c33);">could not load the queue: '
         + esc(j.error) + '</td></tr>';
+      return;
+    }
+    if (j.signed_out) {
+      tbody.innerHTML = '<tr><td colspan="9" style="color:var(--muted);">' + (
+        ipsLogin.status === 'signing_in'
+          ? 'signing in to IPS — your cases appear in a moment'
+          : 'not signed in to IPS: use "Sign in to IPS" to see your cases, or tick "everyone\'s cases"'
+      ) + '</td></tr>';
       return;
     }
     (j.items || []).forEach(it => {
@@ -1151,8 +1167,11 @@
     document.getElementById('draft-panel').style.display = '';
     document.getElementById('draft-title').innerHTML =
       `case ${caseLink(d.case_nbr, d.case_id)} · ${esc(d.mode)} · ${esc(d.status)}`;
+    const pr = d.post_result || {};
+    const postedAs = (pr.author && pr.author.name) || (pr.posted_by && pr.posted_by.name) || d.posted_by || '';
     document.getElementById('draft-status').textContent =
-      d.post_result && d.post_result.error ? ('last post attempt: ' + d.post_result.error) : '';
+      pr.error ? ('last post attempt: ' + pr.error)
+      : (d.status === 'posted' && postedAs ? ('posted to IPS as ' + postedAs) : '');
     document.getElementById('draft-text').value = d.draft_plain || '';
     renderDraftChips(d.analysis || {});
     document.getElementById('draft-analysis').textContent =
@@ -1175,9 +1194,14 @@
 
   async function approveDraft() {
     if (!currentDraftId) return;
-    const msg = (['request_logs', 'request_info', 'first_response'].includes(currentDraftMode))
+    if (!(ipsLogin.status === 'signed_in' && ipsLogin.identity)) {
+      alert('Not signed in to IPS on this PC. Use "Sign in to IPS" first — the comment is posted under that name.');
+      return;
+    }
+    const asWho = '\n\nIt will be posted as ' + ipsLogin.identity.name + '.';
+    const msg = ((['request_logs', 'request_info', 'first_response'].includes(currentDraftMode))
       ? 'Post this reply to IPS as a PUBLIC comment visible to the customer?'
-      : 'Post this comment to IPS as Private to Intel?';
+      : 'Post this comment to IPS as Private to Intel?') + asWho;
     if (!confirm(msg)) return;
     const btn = document.getElementById('approve-btn');
     btn.disabled = true;
@@ -1187,8 +1211,11 @@
       body: JSON.stringify({draft_plain: document.getElementById('draft-text').value}),
     });
     const j = await r.json();
+    const postedName = j.ok && ((j.result && j.result.author && j.result.author.name)
+      || (ipsLogin.identity && ipsLogin.identity.name));
     document.getElementById('post-status').textContent =
-      j.ok ? 'posted to IPS' : ('post failed: ' + (j.error || 'unknown'));
+      j.ok ? ('posted to IPS' + (postedName ? ' as ' + postedName : ''))
+           : ('post failed: ' + (j.error || 'unknown'));
     if (!j.ok) btn.disabled = false;
     loadQueue();
   }
@@ -1204,21 +1231,66 @@
     loadQueue();
   }
 
-  async function setMyOwner() {
-    const name = document.getElementById('owner-filter').value.trim();
-    const r = await fetch('/handsfree/me', {
-      method: 'POST', headers: {'Content-Type': 'application/json'},
-      body: JSON.stringify({owner_name: name}),
-    });
+  // ---- IPS sign-in of this PC: whose cases the queue shows, whose name posts carry
+  let ipsLogin = {status: 'signed_out', identity: null, error: ''};
+
+  function applyEveryoneUi() {
+    const everyone = document.getElementById('show-everyone').checked;
+    document.getElementById('owner-filter-wrap').style.display = everyone ? '' : 'none';
+  }
+
+  function renderLogin() {
+    const badge = document.getElementById('login-badge');
+    const btn = document.getElementById('login-btn');
+    const id = ipsLogin.identity;
+    if (ipsLogin.status === 'signed_in' && id) {
+      badge.textContent = 'IPS: ' + id.name;
+      badge.className = 'pill good';
+      badge.title = 'Signed in to IPS as ' + id.name + (id.email ? ' <' + id.email + '>' : '')
+        + ' — the queue shows this user\'s cases and Approve posts under this name';
+      btn.style.display = 'none';
+    } else if (ipsLogin.status === 'signing_in') {
+      badge.textContent = ipsLogin.interactive ? 'IPS: sign in in the Chrome window…' : 'IPS: signing in…';
+      badge.className = 'pill';
+      badge.title = '';
+      btn.style.display = 'none';
+    } else {
+      badge.textContent = 'IPS: not signed in';
+      badge.className = 'pill warn';
+      badge.title = ipsLogin.error || 'no IPS session on this PC';
+      btn.style.display = '';
+    }
+  }
+
+  async function pollLogin() {
+    const r = await fetch('/handsfree/login');
     const j = await r.json();
-    document.getElementById('my-owner-status').textContent = j.ok
-      ? (name ? 'saved — the queue opens on ' + name + "'s cases" : 'saved — the queue opens on everyone\'s cases')
-      : 'could not save';
+    const before = ipsLogin.status;
+    ipsLogin = j;
+    renderLogin();
+    if (j.status === 'signing_in') { setTimeout(pollLogin, 2000); return; }
+    if (j.status === 'signed_in' && j.identity) {
+      // "Check now" defaults to the signed-in reviewer's own cases.
+      const ownerBox = document.getElementById('owner-name');
+      if (ownerBox && !ownerBox.value.trim()) ownerBox.value = j.identity.name;
+    }
+    if (before !== j.status) loadQueue();
+  }
+
+  async function signIn(interactive) {
+    const r = await fetch('/handsfree/login', {
+      method: 'POST', headers: {'Content-Type': 'application/json'},
+      body: JSON.stringify({interactive: !!interactive}),
+    });
+    ipsLogin = await r.json();
+    renderLogin();
     loadQueue();
+    setTimeout(pollLogin, 1500);
   }
 
   loadConfig();
-  loadQueue();
+  applyEveryoneUi();
+  signIn(false);
   refreshStatus();
   loadAuto();
 </script>

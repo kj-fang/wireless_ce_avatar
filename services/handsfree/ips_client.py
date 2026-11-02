@@ -6,10 +6,12 @@ Reuses CaseService's authenticated session machinery:
   - CaseService._build_salesforce_api_headers()  sid cookie -> Bearer token
   - CaseService._get_salesforce_api_version()
 
-Adds the two capabilities the codebase lacked:
+Adds the capabilities the codebase lacked:
   1. find_new_cases(owner, ...)  — SOQL on the standard Case object.
   2. post_comment(...)           — REST insert into Core_IPS_Case_Comments__c
                                    (the same object the app already reads).
+  3. whoami()                    — the Salesforce user behind the session,
+                                   i.e. the name a posted comment carries.
 
 The "Private to Intel" flag's API field name is org-specific; it is
 discovered once via describe_comment_fields() and persisted by the
@@ -111,6 +113,23 @@ def build_new_cases_soql(owner_name: str, since_iso: Optional[str] = None,
     )
 
 
+def parse_identity(data: dict) -> dict:
+    """Normalise the signed-in user from /services/oauth2/userinfo (OpenID
+    claims) or /chatter/users/me (Connect REST) into one shape. Pure."""
+    d = data or {}
+    name = str(d.get("name") or d.get("displayName") or "").strip()
+    if not name:
+        parts = (d.get("given_name") or d.get("firstName"),
+                 d.get("family_name") or d.get("lastName"))
+        name = " ".join(str(x).strip() for x in parts if x)
+    return {
+        "user_id": str(d.get("user_id") or d.get("id") or "").strip(),
+        "name": name,
+        "email": str(d.get("email") or "").strip(),
+        "username": str(d.get("preferred_username") or d.get("username") or "").strip(),
+    }
+
+
 # Comment author types written by the customer side (Snowflake / REST share
 # the picklist): an "update from the customer" is a comment by one of these.
 CUSTOMER_AUTHOR_TYPES = ("Partner", "Customer", "Partner - Agent", "Partner - DFAE")
@@ -156,6 +175,9 @@ class IpsClient:
     # Fields we know from the app's existing read path.
     FIELD_CASE_LOOKUP = "Core_IPS_Case__c"
     FIELD_RICH_BODY = "Core_IPS_Rich_Comment__c"
+
+    # (Bearer header, identity) of the last whoami(): one GET per session.
+    _identity_cache: Optional[tuple] = None
 
     def __init__(self):
         self._api_ver: Optional[str] = None
@@ -208,9 +230,49 @@ class IpsClient:
         return resp
 
     # ------------------------------------------------------------------
+    # identity
+    # ------------------------------------------------------------------
+
+    def whoami(self) -> dict:
+        """The Salesforce user the session belongs to — the author IPS shows
+        on every comment this client posts. Signs in first when there is no
+        session yet (CaseService: cookie file, silent Chrome SSO, saved
+        profile). Raises when no sign-in is possible or IPS names nobody."""
+        _vf, headers, _ver = self._auth()
+        cached = IpsClient._identity_cache
+        if cached and cached[0] == headers.get("Authorization"):
+            return dict(cached[1])
+        resp = self._request("GET", "/services/oauth2/userinfo", timeout=15)
+        if resp.status_code != 200:
+            resp = self._request("GET", "/services/data/v{ver}/chatter/users/me", timeout=15)
+        resp.raise_for_status()
+        ident = parse_identity(resp.json())
+        if not ident["name"]:
+            raise RuntimeError("IPS answered the identity request without a user name")
+        # _request may have re-authenticated: cache against the live header.
+        _vf, headers, _ver = self._auth()
+        IpsClient._identity_cache = (headers.get("Authorization"), ident)
+        return dict(ident)
+
+    def comment_author(self, comment_id: str) -> dict:
+        """Who IPS recorded as the creator of a comment: {"user_id", "name"},
+        {} when the comment cannot be read back."""
+        if not comment_id:
+            return {}
+        soql = (f"SELECT Id, CreatedById, CreatedBy.Name FROM {self.COMMENT_OBJECT} "
+                f"WHERE Id = '{_soql_quote(comment_id)}'")
+        resp = self._request("GET", "/services/data/v{ver}/query", params={"q": soql})
+        resp.raise_for_status()
+        recs = resp.json().get("records") or []
+        if not recs:
+            return {}
+        return {"user_id": str(recs[0].get("CreatedById") or ""),
+                "name": str((recs[0].get("CreatedBy") or {}).get("Name") or "")}
+
+    # ------------------------------------------------------------------
     # detection
     # ------------------------------------------------------------------
-    
+
     def _query_cases(self, soql: str) -> list[CaseRef]:
         resp = self._request("GET", "/services/data/v{ver}/query",
                              params={"q": soql})

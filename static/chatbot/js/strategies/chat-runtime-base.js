@@ -498,6 +498,7 @@
                         appendReport(result.data, '⚠️ Partial Analysis (Step Limit)', result.issue_time || null, turnId);
                     } else if (result && result.type === 'text') appendAssistantText(result.data || '_No response._', turnId);
                     else if (result) appendAssistantText('⚠️ ' + (result.data || 'Unknown response.'), turnId);
+                    if (result) document.dispatchEvent(new CustomEvent('chatbot:result-rendered', {detail: result}));
                 } else if (evt.type === 'error') {
                     removeTyping();
                     appendAssistantText('❌ Error: ' + (evt.content || 'Unknown error'));
@@ -799,6 +800,7 @@
                 }
             }
             logLoaded = true;
+            document.dispatchEvent(new Event('chatbot:context-changed'));
             // Enables the (collapsed) System Event Log panel when the capture
             // folder ships an .evt / .evtx next to the log.
             if (typeof updateEvtButton === 'function') {

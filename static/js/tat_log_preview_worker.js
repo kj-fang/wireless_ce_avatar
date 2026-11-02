@@ -17,6 +17,21 @@ self.onmessage = event => {
         const end = Math.max(start, Math.min(matchedRows.length, start + (message.count | 0)));
         self.postMessage({type: 'range', runId: activeRunId, requestId: message.requestId,
             start, rows: matchedRows.slice(start, end)});
+    } else if (message.type === 'selection' && message.runId === activeRunId) {
+        const start = Math.max(0, Math.min(message.start, message.end));
+        const end = Math.min(matchedRows.length - 1, Math.max(message.start, message.end));
+        const rows = [];
+        let length = 0;
+        for (let index = start; index <= end; index++) {
+            length += matchedRows[index].text.length;
+            if (rows.length >= 200 || length > 8000) {
+                self.postMessage({type: 'selection', runId: activeRunId, requestId: message.requestId,
+                    error: 'Select at most 200 lines and 8,000 characters. Nothing was added.'});
+                return;
+            }
+            rows.push(matchedRows[index]);
+        }
+        self.postMessage({type: 'selection', runId: activeRunId, requestId: message.requestId, rows});
     }
 };
 
@@ -65,14 +80,14 @@ async function scanSource(message, runId) {
         if (!line.trim()) return;
         candidateCount++;
         if (!rules.length) {
-            matchedRows.push({text: originalLine, foreground: '', background: ''});
+            matchedRows.push({text: originalLine, lineNumber: physicalLine, foreground: '', background: ''});
             return;
         }
         if (!includeRules.length) return;
         const lowerLine = line.toLowerCase();
         const include = includeRules.find(rule => matches(line, lowerLine, rule));
         if (!include || excludeRules.some(rule => matches(line, lowerLine, rule))) return;
-        matchedRows.push({text: originalLine, foreground: include.foreground, background: include.background});
+        matchedRows.push({text: originalLine, lineNumber: physicalLine, foreground: include.foreground, background: include.background});
     }
 
     function consumeDecoded(text, finalChunk) {

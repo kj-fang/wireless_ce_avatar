@@ -141,6 +141,7 @@
     // ➕ New Conversation: reset everything to the fresh, empty page state the
     // user sees when first entering the agent (no log, no issue time, no chat).
     async function startNewConversation() {
+        document.dispatchEvent(new Event('chatbot:context-changed'));
         if (typeof _abortActiveStream === 'function') _abortActiveStream();
         // Dismiss any blocking modal left open by the previous send (the
         // no-issue-time confirm prompt or the time-capture popup). A stuck
@@ -593,6 +594,7 @@
             } else {
                 appendAssistantText('⚠️ ' + (r.data || 'Unknown response.'), turnId);
             }
+            document.dispatchEvent(new CustomEvent('chatbot:result-rendered', {detail: r}));
         });
         scrollBottom();
     }
@@ -750,6 +752,7 @@
                 } else if (result) {
                     appendAssistantText('⚠️ ' + (result.data || 'Unknown response.'), turnId);
                 }
+                if (result) document.dispatchEvent(new CustomEvent('chatbot:result-rendered', {detail: result}));
                 if (typeof loadHistoryList === 'function') loadHistoryList();
             } else if (evt.type === 'error') {
                 if (window.__streamCtl !== ctl) return;
@@ -796,6 +799,7 @@
     // (restore the log file + context) so follow-up questions keep working.
     // If the analysis is still running, reconnect to its live stream.
     async function openHistoryConversation(id) {
+        document.dispatchEvent(new Event('chatbot:context-changed'));
         // Stop rendering whatever stream is currently on screen (its server
         // job, if any, keeps running and can be re-attached to later).
         _abortActiveStream();

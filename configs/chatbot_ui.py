@@ -168,6 +168,8 @@ LOG_CHATBOT_UI = {
     },
     "features": {
         **_COMMON_FEATURES,
+        "log_preview": True,
+        "echo_chat": True,
         "sidebar_toggle": True,
         "issue_time": True,
         "feedback": True,

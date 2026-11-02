@@ -33,6 +33,12 @@
                             aria-label="Copy log path">📋</button>
                 </div>
                 <button type="button" class="btn-browse" onclick="browseLog()" title="Browse for file">📁</button>
+                {% if ui.features.log_preview %}
+                <button type="button" class="key-log-button" onclick="openTatPreviewFromSidebar(this)"
+                        title="Open TAT log preview" aria-label="Open TAT log preview">
+                    <i data-lucide="file-text" aria-hidden="true"></i>
+                </button>
+                {% endif %}
             </div>
             <div id="log-status" class="log-status"></div>
 {% endmacro %}

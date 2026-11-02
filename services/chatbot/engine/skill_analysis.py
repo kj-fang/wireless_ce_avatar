@@ -10,6 +10,49 @@ from datetime import datetime
 class SkillAnalysisMixin:
     """SkillAnalysis behavior for the composed agent."""
 
+    def _compact_original_skill_lines(self, lines):
+        retained = []
+        previous_pattern = None
+        run = []
+        for line in lines:
+            message = self._normalize_time_message(line)[2]
+            pattern = re.sub(r"0x[0-9a-fA-F]+|\b\d+\b", "*", message)
+            if pattern != previous_pattern and run:
+                retained.extend(run if len(run) <= 2 else [run[0], run[-1]])
+                run = []
+            previous_pattern = pattern
+            run.append(line)
+        retained.extend(run if len(run) <= 2 else [run[0], run[-1]])
+        limit = self.MAX_SKILL_FOCUS_LINES
+        if len(retained) > limit:
+            retained = retained[:limit // 2] + retained[-(limit - limit // 2):]
+        selected = []
+        used = 0
+        for line in retained:
+            if used + len(line) > self.MAX_SKILL_FOCUS_CHARS:
+                break
+            selected.append(line)
+            used += len(line)
+        return selected
+
+    def _remember_turn_skill_logs(self, skill_name, lines):
+        if not hasattr(self, "_turn_skill_log_lines"):
+            self._turn_skill_log_lines = {}
+        originals = getattr(self, "_original_wrapped_lines", {})
+        self._turn_skill_log_lines[skill_name] = self._compact_original_skill_lines(
+            [originals.get(line, line) for line in lines])
+
+    def _attach_summary_key_logs(self, result):
+        sections = []
+        for skill_name, lines in getattr(self, "_turn_skill_log_lines", {}).items():
+            if not lines:
+                continue
+            skill = self.skills.get(skill_name)
+            sections.append(f"=== {skill.name if skill else skill_name} ===\n" + "".join(lines))
+        return {**result, "key_logs": "\n".join(sections),
+                "key_logs_basis": "skill_filtered_compact",
+                "key_logs_status": "selected" if sections else "no_evidence"}
+
     def _analyze_with_skill_prompt(self, skill: Skill, filtered_log: str) -> str:
         """
         Run a focused LLM call using this skill's expert_rules as the system
@@ -82,6 +125,8 @@ class SkillAnalysisMixin:
         
         if skill_name in self._filter_cache_by_skill:
             cached = self._filter_cache_by_skill[skill_name]
+            if not getattr(self, "_turn_skill_log_lines", {}).get(skill_name):
+                self._get_filtered_log_lines(skill_name, apply_output_limit=False)
             export_path = self._export_assembled_log_file()
             total_count = len(self._assembled_log_text.splitlines()) if self._assembled_log_text else 0
             result = self._build_skill_focus_payload(

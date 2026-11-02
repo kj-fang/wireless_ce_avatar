@@ -1,0 +1,41 @@
+.workspace-mode-button { padding: 5px 10px; border: 1px solid rgba(255,255,255,0.6); border-radius: 4px; color: #fff; background: transparent; font-size: 0.75rem; cursor: pointer; white-space: nowrap; }
+.workspace-pane[hidden], .workspace-divider[hidden] { display: none; }
+.main-layout.advanced-workspace { display: grid; grid-template-columns: minmax(200px, var(--workspace-sidebar, 20fr)) 5px minmax(260px, var(--workspace-viewer, 45fr)) 5px minmax(320px, var(--workspace-chat, 35fr)); min-height: 0; }
+.advanced-workspace > .sidebar { width: auto; min-width: 0; display: flex; }
+body.sidebar-collapsed .main-layout.advanced-workspace { grid-template-columns: 0 0 minmax(260px, var(--workspace-viewer, 45fr)) 5px minmax(320px, var(--workspace-chat, 35fr)); }
+body.sidebar-collapsed .advanced-workspace > .sidebar { overflow: hidden; }
+body.sidebar-collapsed .advanced-workspace > .sidebar + .workspace-divider { visibility: hidden; pointer-events: none; }
+.main-layout.advanced-workspace { transition: grid-template-columns 0.22s ease; }
+.advanced-workspace .sidebar .log-input-wrap { min-width: 0; }
+.advanced-workspace .sidebar .log-input-group input { min-width: 0; width: 100%; }
+.advanced-workspace .sidebar .it-field { min-width: 0; }
+.advanced-workspace .sidebar .it-input { max-width: 100%; }
+.advanced-workspace > .chat-area { min-width: 0; overflow: hidden; }
+.workspace-pane { display: flex; flex-direction: column; min-width: 0; min-height: 0; background: #fff; }
+.workspace-tabs { display: flex; flex: 0 0 35px; border-bottom: 1px solid #d6dbe1; background: #f4f6f8; }
+.workspace-tabs button { border: 0; border-right: 1px solid #d6dbe1; border-bottom: 2px solid transparent; padding: 5px 12px; background: transparent; color: #64748b; font-size: 0.75rem; cursor: pointer; }
+.workspace-tabs button[aria-selected="true"] { background: white; border-bottom-color: #0071c5; color: #005a9e; }
+.workspace-view-host { flex: 1; display: flex; flex-direction: column; min-height: 0; min-width: 0; }
+.workspace-view-host[hidden] { display: none; }
+.workspace-view-host > .key-log-modal { position: static; inset: auto; margin: 0; width: 100%; max-width: none; height: 100%; max-height: none; display: flex; flex-direction: column; border: 0; border-radius: 0; box-shadow: none; }
+.workspace-view-host > .key-log-modal > .key-log-heading { display: none; }
+.main-layout.advanced-workspace.workspace-resizing { transition: none; user-select: none; }
+.workspace-divider { position: relative; z-index: 2; background: #e4eaf2; cursor: col-resize; touch-action: none; }
+.workspace-divider::before { content: ""; position: absolute; inset: 0 -5px; }
+.workspace-divider:hover, .workspace-divider:focus-visible { background: #0071c5; outline: none; }
+.advanced-workspace .input-row { padding: 10px; gap: 6px; flex-wrap: wrap; }
+.advanced-workspace .input-row #user-input { min-width: 140px; width: 0; }
+.advanced-workspace .input-row .chatbot-mode-selector { height: 36px; }
+.advanced-workspace .chatbot-mode-selector button { width: 52px; }
+.advanced-workspace .key-log-pane-heading { flex-wrap: wrap; gap: 3px; }
+.advanced-workspace .key-log-state { max-width: 100%; overflow-wrap: anywhere; }
+.advanced-workspace .key-log-filter-header { flex-wrap: wrap; }
+.snippet-banner { display: flex; align-items: flex-start; gap: 6px; padding: 7px 10px; border-top: 1px solid #b8c5d1; background: #e6f0fa; }
+.snippet-banner[hidden] { display: none; }
+.snippet-banner details { flex: 1; min-width: 0; }
+.snippet-banner summary { font-size: 0.72rem; color: #005a9e; overflow-wrap: anywhere; cursor: pointer; }
+.snippet-banner pre, .snippet-message-attachment pre { max-height: 160px; max-width: 100%; overflow: auto; margin: 6px 0 0; font: 11px/1.4 Consolas, monospace; background: #fff; padding: 6px; }
+.snippet-message-attachment { margin-top: 6px; max-width: 100%; }
+.snippet-message-attachment summary { font-size: 0.68rem; overflow-wrap: anywhere; cursor: pointer; }
+.snippet-answer { min-width: 0; white-space: pre-wrap; overflow-wrap: anywhere; }
+.snippet-answer strong { display: block; font-size: 0.72rem; margin-bottom: 5px; }

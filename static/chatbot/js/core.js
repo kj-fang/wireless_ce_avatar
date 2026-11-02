@@ -63,6 +63,16 @@
     // Single click entry point for the Send/Stop button (and the Enter key).
     function onSendBtnClick() {
         if (__chatStreaming) { stopChat(); return; }
+        if (window.ChatbotSnippets?.busy) return;
+        if (window.ChatbotSnippets?.active) {
+            window.ChatbotSnippets.send();
+            return;
+        }
+        if (window.__echoChatBusy) return;
+        if (window.__chatRecipient === 'echo' && typeof window.sendEchoMessage === 'function') {
+            window.sendEchoMessage();
+            return;
+        }
         sendMessage();
     }
 
@@ -598,14 +608,22 @@
 // meant, and nothing to do with navigation when it is not -- so it asks,
 // but only when there is something to lose. A page with no log loaded has
 // nothing to confirm and should not nag.
-window.confirmLeaveChatbot = function () {
+window.confirmLeaveChatbot = function (form) {
+    if (form && form.dataset.leaving) return false;
     const path = (document.getElementById('log-path-input') || {}).value || '';
-    if (!path.trim()) return true;
-    return confirm(
+    const ok = !path.trim() || confirm(
         'Leave the analysis?\n\n'
         + 'The loaded log and this conversation are discarded, and a prompt '
         + 'you applied without keeping goes with them.'
     );
+    if (ok && form) {
+        // Avatar's index can take a while to render; show progress and block a second submit.
+        form.dataset.leaving = '1';
+        const button = form.querySelector('button[type="submit"]');
+        if (button) { button.disabled = true; button.textContent = 'Leaving…'; }
+        document.body.style.cursor = 'progress';
+    }
+    return ok;
 };
 
 // ---- Chat runtime shims -------------------------------------------------

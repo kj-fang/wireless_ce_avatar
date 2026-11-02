@@ -19,6 +19,11 @@
     {% for stylesheet in ui.stylesheets %}
     <link href="{{ stylesheet }}" rel="stylesheet">
     {% endfor %}
+    {% if ui.features.log_preview %}
+    <link href="/static/chatbot/css/log-preview.css" rel="stylesheet">
+    <link href="/static/chatbot/css/workspace.css" rel="stylesheet">
+    <script src="https://unpkg.com/lucide@0.468.0/dist/umd/lucide.min.js"></script>
+    {% endif %}
     <script src="https://cdn.jsdelivr.net/npm/marked/marked.min.js"></script>
     <style>
         :root {
@@ -43,6 +48,9 @@
     <span style="font-size:1.4rem;">📡</span>
     <h1>{{ ui.title }}</h1>
     <span class="badge-model">Avatar · Multi-Skill Agent</span>
+    {% if ui.features.log_preview %}
+    <button type="button" id="advanced-mode-toggle" class="workspace-mode-button" aria-pressed="false">Advanced mode</button>
+    {% endif %}
     <!-- A form, not a link. This endpoint throws away the session agent: the
          loaded log, the conversation and the primed context. As an href it was
          reachable by anything that follows links on its own -- prefetch on
@@ -51,7 +59,7 @@
          path it rendered itself while the server has already forgotten it.
          The confirm is for the deliberate click; POST is for all the rest. -->
     <form method="post" action="{{ ui.back_url }}" class="ml-auto"
-          onsubmit="return confirmLeaveChatbot();" style="margin:0;">
+          onsubmit="return confirmLeaveChatbot(this);" style="margin:0;">
         <button type="submit"
                 style="background:none;border:none;padding:0;cursor:pointer;font:inherit;
                        color:rgba(255,255,255,0.75);font-size:0.8rem;">← Back to Avatar</button>
@@ -133,6 +141,12 @@
 {% include ui.template_parts.runtime %}
 {% endif %}
 <script src="{{ ui.profile_script }}"></script>
+{% if ui.features.log_preview %}<script src="/static/chatbot/js/features/log-preview.js"></script>{% endif %}
+{% if ui.features.echo_chat %}{% include 'chatbot/features/_echo_chat.html' %}{% endif %}
+{% if ui.features.log_preview %}
+<script src="/static/chatbot/js/features/snippets.js"></script>
+<script src="/static/chatbot/js/features/workspace.js"></script>
+{% endif %}
 {% if ui.features.feedback %}{% include 'chatbot/features/_feedback.html' %}{% endif %}
 {% if ui.features.skill_editor %}{% include 'chatbot/features/_skill_editor.html' %}{% endif %}
 {% if ui.features.prompt_editor %}{% include 'chatbot/features/_prompt_editor.html' %}{% endif %}

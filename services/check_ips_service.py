@@ -8,6 +8,7 @@ when a slow request that started before they answered writes the session back
 over the top of it.
 """
 
+import hashlib
 import json
 import os
 import threading
@@ -41,6 +42,16 @@ _MAX_REMEMBERED_ANSWERS = 500
 #: the chatbot come up blank for a log it has already been told about.
 CASE_FACTS_KEY = "case_facts"
 _CASE_FACT_FIELDS = ("description", "attachment_time", "issue_time", "issue_times")
+
+#: The same store also keeps what belongs to the CASE rather than to one
+#: capture of it: what IPS said about it, and the LLM pre-pass over that. Both
+#: are the same answer every time, so paying for them again -- on a restart, a
+#: new conversation, or a second log of the same case -- is the user watching
+#: an empty box while a lookup and an LLM call reproduce what is on disk.
+_CASE_KEY_PREFIX = "case:"
+CASE_LOOKUP_KEY = "lookup"
+ORGANIZED_KEY = "organized"
+_LOOKUP_FIELDS = ("subject", "description", "issue_type")
 
 _answer_lock = threading.Lock()
 
@@ -541,6 +552,98 @@ def remember_case_facts(log_path, case_nbr, facts: dict) -> bool:
         return False
 
 
+def _case_level_key(case_nbr) -> str:
+    """Where a case's own record lives. Namespaced, so it cannot be a log key."""
+    canonical = check_ips_utils.normalise_ips(case_nbr)
+    return f"{_CASE_KEY_PREFIX}{canonical}" if canonical else ""
+
+
+def _case_holder(answers: dict, case_nbr) -> dict:
+    key = _case_level_key(case_nbr)
+    holder = answers.get(key) if key else None
+    return holder if isinstance(holder, dict) else {}
+
+
+def _write_case_holder(canonical: str, field: str, value) -> bool:
+    """Put one field on the case's record. Returns whether anything changed."""
+    key = _case_level_key(canonical)
+    path = _answer_store_path()
+    if not key or path is None:
+        return False
+    try:
+        with _answer_lock:
+            answers = _load_answers()
+            holder = answers.get(key)
+            if not isinstance(holder, dict):
+                # Deliberately no "source": nobody is ever asked about a case
+                # number on its own, only about files, and the gate reads those.
+                holder = {"case_nbr": canonical}
+            if holder.get(field) == value:
+                return False
+            holder[field] = value
+            # Refreshed on every write so the store's oldest-first trim does
+            # not drop the case while its logs are still being worked on.
+            holder["at"] = datetime.now(timezone.utc).isoformat(timespec="seconds")
+            answers[key] = holder
+            _write_answers(answers, path)
+        return True
+    except Exception as e:
+        print(f"[ips] could not keep {field} for {canonical}: {e}")
+        return False
+
+
+def remember_case_lookup(case_nbr, subject: str, description: str,
+                         issue_type: str) -> None:
+    """Keep what IPS said about a case, so the next conversation need not ask."""
+    canonical = check_ips_utils.normalise_ips(case_nbr)
+    if not canonical or not (subject or description):
+        return
+    if _write_case_holder(canonical, CASE_LOOKUP_KEY, {
+            "subject": subject or "",
+            "description": description or "",
+            "issue_type": issue_type or ""}):
+        print(f"[ips] kept what IPS said about {canonical}; the next "
+              f"conversation about it opens without a lookup")
+
+
+def remembered_case_lookup(case_nbr) -> dict:
+    """What IPS said about this case the last time anybody asked, or {}."""
+    found = _case_holder(_load_answers(), case_nbr).get(CASE_LOOKUP_KEY)
+    if not isinstance(found, dict):
+        return {}
+    return {name: found.get(name) or "" for name in _LOOKUP_FIELDS}
+
+
+def _organize_digest(raw_desc: str) -> str:
+    return hashlib.sha1((raw_desc or "").encode("utf-8", "replace")).hexdigest()
+
+
+def remembered_organized(case_nbr, raw_desc: str) -> dict:
+    """The LLM pre-pass already run over this exact description, or {}.
+
+    Keyed on the description it was run over, so an edited case description is
+    organized again rather than answered from a summary of the old one.
+    """
+    if not raw_desc:
+        return {}
+    cached = _case_holder(_load_answers(), case_nbr).get(ORGANIZED_KEY)
+    if not isinstance(cached, dict) or cached.get("for") != _organize_digest(raw_desc):
+        return {}
+    data = cached.get("data")
+    return dict(data) if isinstance(data, dict) else {}
+
+
+def remember_organized(case_nbr, raw_desc: str, data: dict) -> None:
+    """Keep the pre-pass beside the case it was run for."""
+    canonical = check_ips_utils.normalise_ips(case_nbr)
+    if not canonical or not raw_desc or not isinstance(data, dict) or not data:
+        return
+    if _write_case_holder(canonical, ORGANIZED_KEY,
+                          {"for": _organize_digest(raw_desc), "data": data}):
+        print(f"[ips] kept the organized description for {canonical}; the next "
+              f"conversation about it skips the LLM pass")
+
+
 def candidates_for(log_path) -> List[str]:
     """Case numbers worth offering for this log, best guess first."""
     found = check_ips_utils.derive_ips_candidates(log_path)
@@ -1014,6 +1117,10 @@ def enrich_attached_case(case_nbr) -> bool:
     if isinstance(classification, dict) and classification.get("issue_type"):
         session["classification"] = classification
 
+    remember_case_lookup(canonical, subject, description,
+                         (classification or {}).get("issue_type", "")
+                         if isinstance(classification, dict) else "")
+
     # The agent reads issue_context on every answer, so updating it is enough;
     # no re-priming, which would reset the conversation.
     for agent in _primed_agents():
@@ -1066,6 +1173,16 @@ def prefetch_case_facts(case_nbr) -> None:
         print(f"[ips] prefetch for {canonical} started")
         try:
             facts = _lookup_case_facts(canonical)
+            if facts:
+                # Onto disk from the thread as well, so the next run of the
+                # app starts where this one left off rather than looking the
+                # same case up again.
+                _, subject, _, description, _, _ = facts["fields"]
+                classification = facts.get("classification")
+                remember_case_lookup(
+                    canonical, subject, description,
+                    (classification or {}).get("issue_type", "")
+                    if isinstance(classification, dict) else "")
             print(f"[ips] prefetch for {canonical} done: "
                   f"{'IPS returned a row' if facts else 'IPS had no row for it'}")
         except Exception as e:
@@ -1088,6 +1205,19 @@ def enrich_attached_case_if_needed() -> bool:
     context = CaseContext.from_session(session.get("case_context") or {})
     if context.description or context.subject:
         return False
+    remembered = remembered_case_lookup(canonical)
+    if remembered.get("description") or remembered.get("subject"):
+        context.subject = context.subject or remembered["subject"]
+        context.description = context.description or remembered["description"]
+        session["case_context"] = context.to_session()
+        if remembered.get("issue_type") and not session.get("classification"):
+            session["classification"] = {"issue_type": remembered["issue_type"]}
+        # Same reason the lookup branch below does it: the page may already
+        # have organized the empty description.
+        session.pop("_issue_ai_quick", None)
+        print(f"[ips] {canonical} was looked up in an earlier conversation; "
+              f"using what is on file instead of asking IPS again")
+        return True
     print(f"[ips] {canonical} is on the session with nothing filled in; "
           f"looking it up now")
     try:

@@ -93,9 +93,8 @@ def share_case_dir(case_nbr: str, backend_id: str = "") -> str:
 
 def handsfree_config() -> dict:
     try:
-        from configs.global_configs import app_config
-        from .queue import HandsfreeStore
-        return HandsfreeStore(Path(app_config.avatarfiles_dir) / "handsfree").load_config()
+        from .queue import open_store
+        return open_store().load_config()
     except Exception as e:
         print(f"[handsfree.bsod] config unavailable: {e}")
         return {}
@@ -142,8 +141,9 @@ def submit_to_potatofarm(dumps_path: str, email: str, key=None) -> dict:
 # ---------------------------------------------------------------------------
 
 def _submissions_path() -> Path:
-    from configs.global_configs import app_config
-    return Path(app_config.avatarfiles_dir) / "handsfree" / "bsod_submissions.json"
+    # Shared, so the server and a client never submit the same dumps twice.
+    from .queue import handsfree_root
+    return handsfree_root() / "bsod_submissions.json"
 
 
 def _load() -> dict:
@@ -292,7 +292,10 @@ def assessment(results: list[dict]) -> str:
         return ""
     blamed = [r for r in results if r.get("wifi_fault") or r.get("bt_fault")]
     if blamed:
-        who = sorted({"Wi-Fi driver" if r.get("wifi_fault") else "BT driver" for r in blamed})
+        who = sorted({label for r in blamed
+                      for label, flag in (("Wi-Fi driver", r.get("wifi_fault")),
+                                          ("BT driver", r.get("bt_fault")))
+                      if flag})
         return (f"PotatoFarm blames the Intel {' / '.join(who)} in "
                 f"{len(blamed)}/{len(results)} dump(s) — driver issue to debug.")
     on_stack = [r for r in results if r.get("driver_on_stack")]

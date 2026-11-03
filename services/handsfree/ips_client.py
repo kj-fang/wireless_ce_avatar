@@ -6,10 +6,12 @@ Reuses CaseService's authenticated session machinery:
   - CaseService._build_salesforce_api_headers()  sid cookie -> Bearer token
   - CaseService._get_salesforce_api_version()
 
-Adds the two capabilities the codebase lacked:
+Adds the capabilities the codebase lacked:
   1. find_new_cases(owner, ...)  — SOQL on the standard Case object.
   2. post_comment(...)           — REST insert into Core_IPS_Case_Comments__c
                                    (the same object the app already reads).
+  3. whoami()                    — the Salesforce user behind the session,
+                                   i.e. the name a posted comment carries.
 
 The "Private to Intel" flag's API field name is org-specific; it is
 discovered once via describe_comment_fields() and persisted by the
@@ -64,6 +66,25 @@ def _soql_quote(value: str) -> str:
     return (value or "").replace("\\", "\\\\").replace("'", "\\'")
 
 
+# Hosts of Intel's own Salesforce org — the only places the authenticated
+# session (Bearer header + sid cookie) may ever be sent: intel.my.salesforce
+# .com (REST), intel.file.force.com (rtaImage servlet), intel--c.vf.force.com
+# (Visualforce), intel.lightning.force.com. Any other *.force.com /
+# *.salesforce.com host is somebody else's tenant — a customer can embed an
+# image hosted on their own org and would receive our credentials.
+SF_TENANT = "intel"
+_TENANT_HOST_RE = re.compile(
+    r"^" + re.escape(SF_TENANT) + r"(?:--c)?(?:\.[a-z0-9-]+)?\.(?:force|salesforce)\.com$")
+
+
+def is_tenant_url(url: str) -> bool:
+    """HTTPS URL on one of the org's own Salesforce hosts (no userinfo, no
+    other port) — the precondition for attaching the session credentials."""
+    m = re.match(r"^https://([a-z0-9.-]+)(?::443)?(?:[/?#]|$)", str(url or "").strip(),
+                 re.IGNORECASE)
+    return bool(m and _TENANT_HOST_RE.match(m.group(1).lower()))
+
+
 def build_new_cases_soql(owner_name: str, since_iso: Optional[str] = None,
                          limit: int = 20, created_date: str = "TODAY") -> str:
     """Pure builder (unit-testable, no network).
@@ -92,6 +113,23 @@ def build_new_cases_soql(owner_name: str, since_iso: Optional[str] = None,
     )
 
 
+def parse_identity(data: dict) -> dict:
+    """Normalise the signed-in user from /services/oauth2/userinfo (OpenID
+    claims) or /chatter/users/me (Connect REST) into one shape. Pure."""
+    d = data or {}
+    name = str(d.get("name") or d.get("displayName") or "").strip()
+    if not name:
+        parts = (d.get("given_name") or d.get("firstName"),
+                 d.get("family_name") or d.get("lastName"))
+        name = " ".join(str(x).strip() for x in parts if x)
+    return {
+        "user_id": str(d.get("user_id") or d.get("id") or "").strip(),
+        "name": name,
+        "email": str(d.get("email") or "").strip(),
+        "username": str(d.get("preferred_username") or d.get("username") or "").strip(),
+    }
+
+
 # Comment author types written by the customer side (Snowflake / REST share
 # the picklist): an "update from the customer" is a comment by one of these.
 CUSTOMER_AUTHOR_TYPES = ("Partner", "Customer", "Partner - Agent", "Partner - DFAE")
@@ -109,10 +147,12 @@ def build_open_cases_soql(owner_name: str, limit: int = 200) -> str:
 
 
 def build_customer_updates_soql(case_ids: list[str], since_iso: str,
-                                limit: int = 500) -> str:
+                                limit: Optional[int] = None) -> str:
     """Customer-side comments on the given cases created after `since_iso`
     (ISO-8601 UTC). Bounded by case ids AND time so the huge comment table
-    stays selective."""
+    stays selective. No LIMIT by default: the caller pages through every
+    result (a truncated result would silently drop the cases whose updates
+    sort last, and the scan window would advance past them)."""
     if not re.match(r"^\d{4}-\d{2}-\d{2}T\d{2}:\d{2}:\d{2}(\.\d+)?(Z|[+-]\d{2}:?\d{2})$",
                     since_iso or ""):
         raise ValueError(f"since_iso is not ISO-8601: {since_iso!r}")
@@ -123,8 +163,8 @@ def build_customer_updates_soql(case_ids: list[str], since_iso: str,
         "FROM Core_IPS_Case_Comments__c "
         f"WHERE Core_IPS_Case__c IN ({ids}) AND CreatedDate > {since_iso} "
         f"AND Core_IPS_Comment_Author_Type__c IN ({authors}) "
-        "ORDER BY CreatedDate DESC "
-        f"LIMIT {int(limit)}"
+        "ORDER BY CreatedDate DESC"
+        + (f" LIMIT {int(limit)}" if limit else "")
     )
 
 
@@ -135,6 +175,9 @@ class IpsClient:
     # Fields we know from the app's existing read path.
     FIELD_CASE_LOOKUP = "Core_IPS_Case__c"
     FIELD_RICH_BODY = "Core_IPS_Rich_Comment__c"
+
+    # (Bearer header, identity) of the last whoami(): one GET per session.
+    _identity_cache: Optional[tuple] = None
 
     def __init__(self):
         self._api_ver: Optional[str] = None
@@ -187,9 +230,49 @@ class IpsClient:
         return resp
 
     # ------------------------------------------------------------------
+    # identity
+    # ------------------------------------------------------------------
+
+    def whoami(self) -> dict:
+        """The Salesforce user the session belongs to — the author IPS shows
+        on every comment this client posts. Signs in first when there is no
+        session yet (CaseService: cookie file, silent Chrome SSO, saved
+        profile). Raises when no sign-in is possible or IPS names nobody."""
+        _vf, headers, _ver = self._auth()
+        cached = IpsClient._identity_cache
+        if cached and cached[0] == headers.get("Authorization"):
+            return dict(cached[1])
+        resp = self._request("GET", "/services/oauth2/userinfo", timeout=15)
+        if resp.status_code != 200:
+            resp = self._request("GET", "/services/data/v{ver}/chatter/users/me", timeout=15)
+        resp.raise_for_status()
+        ident = parse_identity(resp.json())
+        if not ident["name"]:
+            raise RuntimeError("IPS answered the identity request without a user name")
+        # _request may have re-authenticated: cache against the live header.
+        _vf, headers, _ver = self._auth()
+        IpsClient._identity_cache = (headers.get("Authorization"), ident)
+        return dict(ident)
+
+    def comment_author(self, comment_id: str) -> dict:
+        """Who IPS recorded as the creator of a comment: {"user_id", "name"},
+        {} when the comment cannot be read back."""
+        if not comment_id:
+            return {}
+        soql = (f"SELECT Id, CreatedById, CreatedBy.Name FROM {self.COMMENT_OBJECT} "
+                f"WHERE Id = '{_soql_quote(comment_id)}'")
+        resp = self._request("GET", "/services/data/v{ver}/query", params={"q": soql})
+        resp.raise_for_status()
+        recs = resp.json().get("records") or []
+        if not recs:
+            return {}
+        return {"user_id": str(recs[0].get("CreatedById") or ""),
+                "name": str((recs[0].get("CreatedBy") or {}).get("Name") or "")}
+
+    # ------------------------------------------------------------------
     # detection
     # ------------------------------------------------------------------
-    
+
     def _query_cases(self, soql: str) -> list[CaseRef]:
         resp = self._request("GET", "/services/data/v{ver}/query",
                              params={"q": soql})
@@ -260,7 +343,7 @@ class IpsClient:
                 subject=str(cols.get("Subject") or ""),
                 status=str(cols.get("Status") or ""),
                 created=str(cols.get("CreatedDate") or ""),
-                owner_name=str(cols.get("Owner.Name") or cols.get("OwnerId") or ""),
+                owner_name=str(cols.get("Owner.Name") or ""),
             ))
         self._fill_case_states(out)
         return out
@@ -268,21 +351,24 @@ class IpsClient:
     def _fill_case_states(self, refs: list) -> None:
         """Open/closed state (+ Status, CreatedDate) of list-view cases: a
         list view only returns the columns it displays, so query the Case
-        object for them. Best effort — on failure the refs keep closed=None
-        and callers fall back to the Status text."""
+        object for them. Raises when the query fails: the closed-case gate
+        of a non-trial round relies on IsClosed (Status may be a column the
+        view does not show), so an unknown state must fail the round rather
+        than pass as open."""
         by_id = {r.case_id: r for r in refs if r.case_id}
         ids = list(by_id)
         for start in range(0, len(ids), 150):
             chunk = ", ".join(f"'{_soql_quote(i)}'" for i in ids[start:start + 150])
-            soql = f"SELECT Id, IsClosed, Status, CreatedDate FROM Case WHERE Id IN ({chunk})"
+            soql = ("SELECT Id, IsClosed, Status, CreatedDate, Owner.Name "
+                    f"FROM Case WHERE Id IN ({chunk})")
             try:
                 resp = self._request("GET", "/services/data/v{ver}/query",
                                      params={"q": soql}, timeout=60)
                 resp.raise_for_status()
                 records = resp.json().get("records", [])
             except Exception as e:
-                print(f"[handsfree.ips] case state lookup failed: {e}")
-                return
+                raise RuntimeError("case state lookup failed (open/closed unknown — "
+                                   f"round aborted): {type(e).__name__}: {e}") from e
             for rec in records:
                 ref = by_id.get(str(rec.get("Id") or ""))
                 if ref is None:
@@ -290,6 +376,7 @@ class IpsClient:
                 ref.closed = bool(rec.get("IsClosed"))
                 ref.status = str(rec.get("Status") or ref.status)
                 ref.created = str(rec.get("CreatedDate") or ref.created)
+                ref.owner_name = str((rec.get("Owner") or {}).get("Name") or ref.owner_name)
 
     def find_open_cases(self, owner_name: str, limit: int = 200) -> list[CaseRef]:
         """All open cases assigned to `owner_name` (auto-scan candidates)."""
@@ -304,14 +391,21 @@ class IpsClient:
         ids = [i for i in case_ids if i]
         for start in range(0, len(ids), 150):
             soql = build_customer_updates_soql(ids[start:start + 150], since_iso)
-            resp = self._request("GET", "/services/data/v{ver}/query",
-                                 params={"q": soql}, timeout=60)
-            resp.raise_for_status()
-            for rec in resp.json().get("records", []):
-                cid = rec.get("Core_IPS_Case__c") or ""
-                ts = rec.get("CreatedDate") or ""
-                if cid and ts > latest.get(cid, ""):
-                    latest[cid] = ts
+            # Every page: Salesforce returns at most ~2000 rows per response,
+            # and the cases whose comments sort last must not go missing.
+            url: Optional[str] = "/services/data/v{ver}/query"
+            params: Optional[dict] = {"q": soql}
+            while url:
+                resp = self._request("GET", url, params=params, timeout=60)
+                resp.raise_for_status()
+                d = resp.json()
+                for rec in d.get("records", []):
+                    cid = rec.get("Core_IPS_Case__c") or ""
+                    ts = rec.get("CreatedDate") or ""
+                    if cid and ts > latest.get(cid, ""):
+                        latest[cid] = ts
+                url = None if d.get("done", True) else d.get("nextRecordsUrl")
+                params = None
         return latest
 
     def get_case_comments(self, case_id: str) -> list[dict]:
@@ -331,26 +425,45 @@ class IpsClient:
         resp.raise_for_status()
         return resp.json().get("records", [])
 
-    def fetch_binary(self, url: str, max_bytes: int = 5 * 1024 * 1024
-                     ) -> Optional[tuple[str, bytes]]:
+    def fetch_binary(self, url: str, max_bytes: int = 5 * 1024 * 1024,
+                     max_redirects: int = 3) -> Optional[tuple[str, bytes]]:
         """Download a file the comment body links to (rich-text images on
         the force.com image servlet) with the Salesforce session. Returns
-        (content_type, bytes) or None (non-200, non-image, too big)."""
+        (content_type, bytes) or None (non-200, non-image, too big).
+
+        The URL comes from customer-authored rich text: credentials are only
+        attached to HTTPS URLs on the org's own hosts (is_tenant_url), and
+        redirects are followed by hand so every hop is re-checked before the
+        headers go out again."""
+        if not is_tenant_url(url):
+            print(f"[handsfree.ips] image URL refused (not an {SF_TENANT} Salesforce "
+                  f"host over HTTPS): {str(url)[:120]}")
+            return None
         vf_session, headers, _ver = self._auth()
         try:
-            resp = _requests.get(url, headers=headers, cookies=vf_session.cookies,
-                                 proxies=vf_session.proxies, timeout=30, stream=True)
-            if resp.status_code != 200:
-                return None
-            ctype = (resp.headers.get("Content-Type") or "").split(";")[0].strip().lower()
-            if not ctype.startswith("image/"):
-                return None
-            data = b""
-            for chunk in resp.iter_content(65536):
-                data += chunk
-                if len(data) > max_bytes:
+            for _hop in range(max_redirects + 1):
+                resp = _requests.get(url, headers=headers, cookies=vf_session.cookies,
+                                     proxies=vf_session.proxies, timeout=30, stream=True,
+                                     allow_redirects=False)
+                if resp.status_code in (301, 302, 303, 307, 308):
+                    from urllib.parse import urljoin
+                    url = urljoin(url, resp.headers.get("Location") or "")
+                    if not is_tenant_url(url):
+                        print(f"[handsfree.ips] image redirect refused: {url[:120]}")
+                        return None
+                    continue
+                if resp.status_code != 200:
                     return None
-            return ctype, data
+                ctype = (resp.headers.get("Content-Type") or "").split(";")[0].strip().lower()
+                if not ctype.startswith("image/"):
+                    return None
+                data = b""
+                for chunk in resp.iter_content(65536):
+                    data += chunk
+                    if len(data) > max_bytes:
+                        return None
+                return ctype, data
+            return None
         except Exception as e:
             print(f"[handsfree.ips] image download failed: {e}")
             return None
@@ -441,12 +554,19 @@ class IpsClient:
                     "privacy field in config; refusing to post a customer reply."
                 )
             payload[private_field] = not private_value
-            # Optional verified overrides for public posts (e.g. the org's
-            # public comment-type picklist value).
+            # Verified values for public posts (the org's public comment-
+            # type picklist value). Required, not optional: seen live (case
+            # 01032011) that the Public flag alone inserts a comment IPS
+            # shows nowhere — the picklist is what the comment feed goes by.
             pub_extra = fm.get("public_extra_fields")
-            if isinstance(pub_extra, dict):
-                for k, v in pub_extra.items():
-                    payload.setdefault(k, v)
+            if not isinstance(pub_extra, dict) or not pub_extra:
+                raise PostUnsupported(
+                    "No verified public comment type in config — add "
+                    "rest_field_map.public_extra_fields (e.g. "
+                    "Core_IPS_Case_Comment_Type__c: 'Public to Customers'); "
+                    "refusing to post a customer reply that IPS would not display.")
+            for k, v in pub_extra.items():
+                payload.setdefault(k, v)
         extra = fm.get("extra_fields")
         if isinstance(extra, dict):
             unset = []

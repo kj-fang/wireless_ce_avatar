@@ -1863,6 +1863,16 @@ class AgentRoutes:
         except Exception as e:
             print(f"[get_issue_context] could not remember this log's case facts: {e}")
 
+        # The one line that says what actually reached the input box and the
+        # picker, so a report of "nothing was filled in" can be read against
+        # the [ips] lines above it rather than guessed at.
+        print(f"[get_issue_context] case={ctx.get('case_nbr') or '-'} "
+              f"description={len(payload.get('description') or '')} chars "
+              f"issue_time={payload.get('issue_time') or '-'} "
+              f"times={len(payload.get('issue_times') or [])} "
+              f"attachment_time={payload.get('attachment_time') or '-'} "
+              f"blocked={payload.get('issue_time_blocked')} | {log_path}")
+
         return jsonify(payload)
 
     # ==================================================================

@@ -218,6 +218,8 @@ def _fill_from_remembered_case(context: dict) -> dict:
     for name in ("description", "attachment_time"):
         if not context.get(name) and remembered.get(name):
             context[name] = remembered[name]
+            print(f"[issue_context] {name} for case {context['case_nbr']} came "
+                  f"from what this log was shown last time")
     return context
 
 

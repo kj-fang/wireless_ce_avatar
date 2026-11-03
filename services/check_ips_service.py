@@ -109,6 +109,19 @@ def _note_log_path(log_path) -> None:
         _last_prompted_log = text
 
 
+def _gate(verdict: bool, reason: str, log_path) -> bool:
+    """Record which branch decided this, then return it.
+
+    One line per decision, because the bug reports this feature attracts are
+    all of the form "it asked again" or "it did not ask" and the answer is
+    always which of needs_ips' branches ran.
+    """
+    print(f"[ips] gate {'ASK' if verdict else 'OPEN'}: {reason} "
+          f"| case={current_case_nbr() or '-'} source={current_source()} "
+          f"| {log_path or '(no log path)'}")
+    return verdict
+
+
 def answer_for(log_path) -> dict:
     """The answer already given for this log file, or {}."""
     key = _log_key(log_path)
@@ -326,8 +339,14 @@ def _owning_answer_key(log_path) -> str:
         return key
     uploaded = _log_key(session.get("uploaded_source_path"))
     if uploaded and uploaded in answers and _placeholder_is_for(log_path):
+        print(f"[ips] {key} is covered by the answer for the upload it came "
+              f"from: {uploaded}")
         return uploaded
-    return _archive_answer_key(log_path)
+    from_archive = _archive_answer_key(log_path)
+    if from_archive:
+        print(f"[ips] {key} is covered by the answer for the archive it was "
+              f"extracted from: {from_archive}")
+    return from_archive
 
 
 def remembered_case_facts(log_path, case_nbr) -> dict:
@@ -340,17 +359,31 @@ def remembered_case_facts(log_path, case_nbr) -> dict:
     """
     canonical = check_ips_utils.normalise_ips(case_nbr)
     if not canonical:
+        print(f"[ips] recall skipped: no real case number on this run "
+              f"(asked with {case_nbr!r}) | {log_path}")
         return {}
     key = _owning_answer_key(log_path)
     record = _load_answers().get(key) if key else None
     if not isinstance(record, dict):
+        print(f"[ips] recall miss for {canonical}: no stored answer covers "
+              f"{log_path}")
         return {}
-    if check_ips_utils.normalise_ips(record.get("case_nbr")) != canonical:
+    stored_case = check_ips_utils.normalise_ips(record.get("case_nbr"))
+    if stored_case != canonical:
+        print(f"[ips] recall miss for {canonical}: {key} is filed under "
+              f"{stored_case or '(no case)'}")
         return {}
     facts = record.get(CASE_FACTS_KEY)
     if not isinstance(facts, dict) or not facts:
+        print(f"[ips] recall miss for {canonical}: {key} has the number but "
+              f"nothing was ever worked out from it")
         return {}
-    return {name: facts[name] for name in _CASE_FACT_FIELDS if facts.get(name)}
+    recalled = {name: facts[name] for name in _CASE_FACT_FIELDS if facts.get(name)}
+    print(f"[ips] recall hit for {canonical} from {key}: "
+          f"description={len(recalled.get('description', ''))} chars, "
+          f"issue_time={recalled.get('issue_time') or '-'}, "
+          f"attachment_time={recalled.get('attachment_time') or '-'}")
+    return recalled
 
 
 def settled_case_answer(log_path) -> dict:
@@ -396,6 +429,8 @@ def remember_case_facts(log_path, case_nbr, facts: dict) -> bool:
             record = answers.get(key) if key else None
             if not isinstance(record, dict) or \
                     check_ips_utils.normalise_ips(record.get("case_nbr")) != canonical:
+                print(f"[ips] not stored for {canonical}: no answer filed under "
+                      f"{key or '(no key)'} names that case | {log_path}")
                 return False
             stored = record.get(CASE_FACTS_KEY)
             stored = dict(stored) if isinstance(stored, dict) else {}
@@ -412,6 +447,9 @@ def remember_case_facts(log_path, case_nbr, facts: dict) -> bool:
             record[CASE_FACTS_KEY] = merged
             answers[key] = record
             _write_answers(answers, path)
+        print(f"[ips] stored for {canonical} under {key}: "
+              + ", ".join(f"{name}={'set' if merged.get(name) else '-'}"
+                          for name in _CASE_FACT_FIELDS))
         return True
     except Exception as e:
         print(f"[ips] could not remember the case facts for {log_path}: {e}")
@@ -512,14 +550,15 @@ def needs_ips(log_path) -> bool:
     if key and key in _answered_this_session:
         # Answered in this conversation, so only the session can have lost it.
         _apply_stored_answer(log_path)
-        return False
+        return _gate(False, "answered in this conversation", log_path)
     if key and _from_answered_upload(log_path):
         # The upload's answer is this log's answer for this conversation. It is
         # not stored against the log: a skip stored that way would outlive the
         # conversation and override a case given for the same upload later.
         _mark_answered(key)
         _apply_stored_answer(log_path)
-        return False
+        return _gate(False, "the upload it came from was answered "
+                            f"({session.get('uploaded_source_path')})", log_path)
     if key and answer_for(log_path).get("source") == SKIPPED:
         # A confirmed "this log has no case" outlives the conversation and the
         # process. The user answered a question about the file, and that does
@@ -528,7 +567,7 @@ def needs_ips(log_path) -> bool:
         # remembered case number is deliberately not reapplied here: each new
         # conversation confirms that one again.
         _apply_stored_answer(log_path)
-        return False
+        return _gate(False, "stored as having no case number", log_path)
     if key:
         settled = settled_case_answer(log_path)
         if settled:
@@ -539,9 +578,11 @@ def needs_ips(log_path) -> bool:
             # offers the same way to change it, so the dialog only repeats it.
             _mark_answered(key)
             _remember_on_session(settled["case_nbr"], settled["source"], log_path)
-            return False
+            return _gate(False, f"already been to IPS as {settled['case_nbr']} "
+                                f"({settled['source']}), facts on file", log_path)
     if not key:
-        return not current_case_nbr() and current_source() != SKIPPED
+        verdict = not current_case_nbr() and current_source() != SKIPPED
+        return _gate(verdict, "no log path to go on", log_path)
     if current_source() == ABSENT:
         # Send To starts a fresh file in an existing browser session. A case
         # found by a previous case search does not establish this new file's
@@ -549,10 +590,13 @@ def needs_ips(log_path) -> bool:
         pending = _log_key(session.get("sendto_pending_path"))
         previous_upload = _log_key(session.get("uploaded_source_path"))
         if pending == key and previous_upload and previous_upload != key:
-            return True
+            return _gate(True, "a new Send To in a window that held another file "
+                               f"({session.get('uploaded_source_path')})", log_path)
         # A case that came from the case search rather than from this prompt.
-        return not current_case_nbr()
-    return True
+        return _gate(not current_case_nbr(),
+                     "nothing recorded by this prompt; using whatever the case "
+                     "search left on the session", log_path)
+    return _gate(True, "this conversation has not confirmed this log's case", log_path)
 
 
 def prompt_state(log_path) -> dict:
@@ -561,6 +605,9 @@ def prompt_state(log_path) -> dict:
     needed = needs_ips(log_path)
     candidates = candidates_for(log_path)
     mine = _session_answer_is_about(log_path)
+    print(f"[ips] told the browser: needs_ips={needed} "
+          f"case={(current_case_nbr() if mine else '') or '-'} "
+          f"candidates={candidates or '-'}")
     return {
         "needs_ips": needed,
         "ips_candidates": candidates,
@@ -912,11 +959,15 @@ def prefetch_case_facts(case_nbr) -> None:
         return
     with _case_facts_lock:
         if canonical in _case_facts:
+            print(f"[ips] prefetch for {canonical} not needed, already looked up")
             return
 
     def warm():
+        print(f"[ips] prefetch for {canonical} started")
         try:
-            _lookup_case_facts(canonical)
+            facts = _lookup_case_facts(canonical)
+            print(f"[ips] prefetch for {canonical} done: "
+                  f"{'IPS returned a row' if facts else 'IPS had no row for it'}")
         except Exception as e:
             print(f"[ips] prefetch for {canonical} skipped: {e}")
 
@@ -937,12 +988,18 @@ def enrich_attached_case_if_needed() -> bool:
     context = CaseContext.from_session(session.get("case_context") or {})
     if context.description or context.subject:
         return False
+    print(f"[ips] {canonical} is on the session with nothing filled in; "
+          f"looking it up now")
     try:
-        return enrich_attached_case(canonical)
-    except CaseLookupUnavailable:
+        applied = enrich_attached_case(canonical)
+        print(f"[ips] quiet lookup of {canonical}: "
+              f"{'details applied' if applied else 'IPS had nothing to add'}")
+        return applied
+    except CaseLookupUnavailable as e:
+        print(f"[ips] quiet lookup of {canonical} could not run now: {e}")
         return False
     except Exception as e:
-        print(f"[ips] quiet enrich for {canonical} failed: {e}")
+        print(f"[ips] quiet lookup of {canonical} hit a problem: {e}")
         return False
 
 
@@ -1013,8 +1070,9 @@ def forget_case_derived_session_keys() -> None:
     Kept in step with the shared chatbot adapter's issue-context cache
     invalidation.
     """
-    for key in CASE_DERIVED_SESSION_KEYS:
-        session.pop(key, None)
+    dropped = [key for key in CASE_DERIVED_SESSION_KEYS if session.pop(key, None) is not None]
+    if dropped:
+        print(f"[ips] dropped what the previous case left behind: {', '.join(dropped)}")
 
 
 def attach(case_nbr: str, source: str, log_path="") -> str:
@@ -1042,12 +1100,15 @@ def attach(case_nbr: str, source: str, log_path="") -> str:
     if source == SKIPPED:
         _mark_answered(key)
         remember_answer(log_path, "", SKIPPED)
+        print(f"[ips] recorded: no case number, for {log_path}")
         return _remember_on_session("", SKIPPED, log_path)
 
     canonical = check_ips_utils.normalise_ips(case_nbr)
     if not canonical:
+        print(f"[ips] refused {case_nbr!r} for {log_path}: not a case number")
         raise ValueError("Enter an 8-digit case number, for example 01010628.")
 
     _mark_answered(key)
     remember_answer(log_path, canonical, source)
+    print(f"[ips] recorded: {canonical} ({source}) for {log_path}")
     return _remember_on_session(canonical, source, log_path)

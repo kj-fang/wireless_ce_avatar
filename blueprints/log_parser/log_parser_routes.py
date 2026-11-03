@@ -305,8 +305,15 @@ def _pickup_sendto_session():
         # Only the case-derived keys go. The session also carries things that
         # are the user's rather than the case's, and a blanket clear would take
         # those too.
+        print(f"[ips] SendTo hand-off {token}: adopting {len(data)} session keys "
+              f"for {data.get('uploaded_source_path') or '(unknown file)'}")
         check_ips_service.forget_case_derived_session_keys()
         session.update(data)
+    elif token:
+        # Expired, already used, or produced by a different app run. The
+        # browser then keeps whatever the previous Send To left behind.
+        print(f"[ips] SendTo hand-off {token}: nothing to adopt "
+              f"(token unknown or older than {_SENDTO_TOKEN_TTL}s)")
 
 _SAFE_MARKDOWN_TAGS = [
     'p', 'br', 'strong', 'em', 'code', 'pre',

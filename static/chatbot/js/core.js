@@ -40,6 +40,9 @@
 
     function setSendBtnStopMode() {
         __chatStreaming = true;
+        // Before the early return below: a profile with no Send button still
+        // has skill cards, and they must go inert too.
+        setSkillCardsEnabled(false);
         const btn = document.getElementById('send-btn');
         if (!btn) return;
         btn.disabled = false;
@@ -49,6 +52,7 @@
 
     function setSendBtnSendMode() {
         __chatStreaming = false;
+        setSkillCardsEnabled(true);
         window.__streamCtl = null;
         const btn = document.getElementById('send-btn');
         if (!btn) return;
@@ -329,8 +333,18 @@
         }
     }
 
-    // Skills are presented as collapsed disclosures: expanding one only reveals
-    // its description and never starts a conversation with the agent.
+    // A skill card starts that skill's analysis in the current conversation.
+    //
+    // Every path that changes the skill list comes back through here --
+    // loading a log, importing a YAML, replacing the set, reopening a saved
+    // conversation -- so a card built here is the only kind that exists, and
+    // an imported skill is clickable for the same reason the others are
+    // rather than because its own code path remembered to make it so.
+    //
+    // A <button> rather than a clickable <div>: it answers the keyboard and
+    // carries a real disabled state, which is what the running-analysis
+    // guard below relies on. Names and descriptions come out of someone's
+    // YAML and are assigned with textContent, never as markup.
     function renderSkills(skills) {
         const container = document.getElementById('skills-list');
         container.innerHTML = '';
@@ -341,19 +355,24 @@
             container.appendChild(empty);
             skillsLoaded = false;
         } else {
-            // Build nodes via the DOM API and assign text via textContent so
-            // skill names/descriptions from the user's YAML can never break the
-            // markup or inject script.
             skills.forEach((s) => {
                 const name = String(s && s.name != null ? s.name : '');
-                const card = document.createElement('details');
+                const card = document.createElement('button');
+                card.type = 'button';
                 card.className = 'skill-card';
-                const summary = document.createElement('summary');
+                // Rendered mid-analysis, a card starts out inert like the
+                // rest: the list is re-rendered on events that can land while
+                // a turn is streaming, and a card that became live merely by
+                // being created late would be the one hole in the guard.
+                card.disabled = __chatStreaming;
+                card.addEventListener('click', () => {
+                    if (__chatStreaming) return;
+                    sendQuick('Analyse using the ' + name + ' skill');
+                });
                 const nameEl = document.createElement('div');
                 nameEl.className = 'skill-name';
                 nameEl.textContent = name;
-                summary.appendChild(nameEl);
-                card.appendChild(summary);
+                card.appendChild(nameEl);
                 if (s && s.description) {
                     const description = document.createElement('div');
                     description.className = 'skill-desc';
@@ -364,6 +383,20 @@
             });
             skillsLoaded = true;
         }
+    }
+
+    // Clicking a card starts a turn, so the cards go inert while one runs --
+    // a second request would queue behind the first and arrive without the
+    // evidence it is still gathering. They follow the Send button, which is
+    // already a Stop button for the same stretch of time.
+    function setSkillCardsEnabled(enabled) {
+        const container = document.getElementById('skills-list');
+        if (!container) return;
+        Array.from(container.children).forEach((card) => {
+            if (card.classList && card.classList.contains('skill-card')) {
+                card.disabled = !enabled;
+            }
+        });
     }
 
     // ── Agent process cards ─────────────────────────────────────────

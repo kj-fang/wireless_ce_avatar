@@ -375,6 +375,17 @@ def _owning_answer_key(log_path) -> str:
         print(f"[ips] {key} is covered by the answer for the upload it came "
               f"from: {uploaded}")
         return uploaded
+    # Its own record already names who was asked. A later conversation has no
+    # uploaded_source_path to go on, and a decoded .etl is not under any
+    # archive folder, so without this the answer for it cannot be found again.
+    # Only honoured when the record it points at is still a real answer.
+    covered_by = (answers.get(key) or {}).get("covered_by")
+    owner = answers.get(covered_by) if covered_by else None
+    if isinstance(owner, dict) and owner.get("case_nbr") \
+            and owner.get("source") in (EXPLICIT, DERIVED_FROM_PATH):
+        print(f"[ips] {key} is covered by the answer it was filed under: "
+              f"{covered_by}")
+        return covered_by
     from_archive = _archive_answer_key(log_path)
     if from_archive:
         print(f"[ips] {key} is covered by the answer for the archive it was "

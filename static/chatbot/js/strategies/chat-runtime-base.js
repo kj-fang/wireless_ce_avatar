@@ -664,13 +664,14 @@
     ChatRuntimeStrategyBase.prototype._onAutoIssueTimeApplied = function () {};
     ChatRuntimeStrategyBase.prototype._afterAutoPrefill = function () {};
 
-    ChatRuntimeStrategyBase.prototype._prefillAttachedCaseDescription = async function (logGen) {
+    ChatRuntimeStrategyBase.prototype._prefillAttachedCaseDescription = async function (logGen, replaceDraft) {
         // The manual file-picker path never enters tryAutoAnalyzeOnLoad(). After
         // the IPS dialog enriches the case, fetch its organized description for
         // the same input box that the page-load path fills. Do not replace a
         // draft the user typed while the lookup was in flight.
         const input = document.getElementById('user-input');
-        if (!input || input.value.trim()) return;
+        if (!input) return;
+        if (input.value.trim() && !replaceDraft) return;
         const initialValue = input.value;
         try {
             const res = await fetch(`${this.api}/get_issue_context`);
@@ -678,7 +679,7 @@
             const context = await res.json();
             const description = String(context.description || '').replace(/\s+/g, ' ').trim();
             if (!description || logGen !== window.__setLogGen ||
-                input.value !== initialValue) return;
+                (!replaceDraft && input.value !== initialValue)) return;
             input.value = description;
             autoResize(input);
             const hint = document.getElementById('prefill-hint');
@@ -690,6 +691,14 @@
     };
 
     ChatRuntimeStrategyBase.prototype.setLog = async function (opts) {
+        // The notice that names the quietly attached case offers a way to
+        // change it. Whatever is in the box came from the previous number, so
+        // a change replaces it rather than yielding to it as a draft.
+        if (window.IpsPrompt && !window.IpsPrompt.onCaseChanged) {
+            window.IpsPrompt.onCaseChanged = () => {
+                this._prefillAttachedCaseDescription(window.__setLogGen, true);
+            };
+        }
         // When restoring a per-conversation draft / a resumed live session the
         // caller manages the Issue Time itself (from the saved snapshot), so it
         // can suppress this function's own issue-time auto-fill — otherwise the
@@ -789,8 +798,13 @@
             // page-load prefill has already had its only chance to run. Only
             // that manual path needs another fetch; the automatic path below
             // will perform its own complete prefill after setLog returns.
-            if (attachedCase && attachedCase.case_nbr && attachedCase.enriched &&
-                !(opts && opts.deferCasePrefill)) {
+            //
+            // A case read off the folder name opened no dialog, so there is no
+            // answer to check -- but it is just as much a case the input box
+            // has not seen yet, and it used to be the one that filled nothing.
+            const quietlyAttached = !data.needs_ips && !!data.case_nbr;
+            if (((attachedCase && attachedCase.case_nbr && attachedCase.enriched) ||
+                 quietlyAttached) && !(opts && opts.deferCasePrefill)) {
                 await this._prefillAttachedCaseDescription(logGen);
             }
             if (attachedCase && attachedCase.case_nbr && !attachedCase.enriched) {

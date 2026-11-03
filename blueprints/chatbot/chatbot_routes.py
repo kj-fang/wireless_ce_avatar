@@ -1708,6 +1708,12 @@ class AgentRoutes:
     # API: consolidated issue context for the sidebar
     # ------------------------------------------------------------------
     def get_issue_context(self):
+        # A case taken from the folder name is attached without anybody being
+        # asked, so no route has looked it up; this is the first read of it.
+        try:
+            check_ips_service.enrich_attached_case_if_needed()
+        except Exception as e:
+            print(f"[get_issue_context] quiet case lookup skipped: {e}")
         try:
             ctx = _extract_issue_context()
             attachment_time = ctx.get("attachment_time", "")

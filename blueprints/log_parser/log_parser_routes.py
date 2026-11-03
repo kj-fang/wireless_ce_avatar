@@ -916,6 +916,8 @@ def upload_local_analysis():
         # remembered answer offered first.
         try:
             check_ips_service.attach(derived, check_ips_service.DERIVED_FROM_PATH, source_path)
+            # Nobody was asked, so nothing has looked the case up either.
+            check_ips_service.prefetch_case_facts(derived)
         except ValueError:
             pass
     blocked = check_ips_service.blocking_state(source_path)
@@ -1098,6 +1100,8 @@ def open_local_analysis():
         # remembered answer offered first.
         try:
             check_ips_service.attach(derived, check_ips_service.DERIVED_FROM_PATH, source_path)
+            # Nobody was asked, so nothing has looked the case up either.
+            check_ips_service.prefetch_case_facts(derived)
         except ValueError:
             pass
 

@@ -353,6 +353,28 @@ def remembered_case_facts(log_path, case_nbr) -> dict:
     return {name: facts[name] for name in _CASE_FACT_FIELDS if facts.get(name)}
 
 
+def settled_case_answer(log_path) -> dict:
+    """The answer for this log when it has already been to IPS and back, else {}.
+
+    "Already been" means a real case number plus what that case told the
+    chatbot: its description and an issue time. Only then is there something
+    for the chatbot to show instead of the dialog.
+    """
+    key = _owning_answer_key(log_path)
+    record = _load_answers().get(key) if key else None
+    if not isinstance(record, dict):
+        return {}
+    canonical = check_ips_utils.normalise_ips(record.get("case_nbr"))
+    if not canonical or record.get("source") not in (EXPLICIT, DERIVED_FROM_PATH):
+        return {}
+    facts = record.get(CASE_FACTS_KEY)
+    if not isinstance(facts, dict) or not facts.get("description"):
+        return {}
+    if not (facts.get("issue_time") or facts.get("issue_times")):
+        return {}
+    return {"case_nbr": canonical, "source": record["source"]}
+
+
 def remember_case_facts(log_path, case_nbr, facts: dict) -> bool:
     """Keep what was shown for this log beside the case number already stored.
 
@@ -507,6 +529,17 @@ def needs_ips(log_path) -> bool:
         # conversation confirms that one again.
         _apply_stored_answer(log_path)
         return False
+    if key:
+        settled = settled_case_answer(log_path)
+        if settled:
+            # This log has been to IPS and come back with the case's
+            # description and an issue time, in this conversation or an earlier
+            # one. Re-confirming exists so a number is never inherited by the
+            # next file; here the chatbot already names the case on screen and
+            # offers the same way to change it, so the dialog only repeats it.
+            _mark_answered(key)
+            _remember_on_session(settled["case_nbr"], settled["source"], log_path)
+            return False
     if not key:
         return not current_case_nbr() and current_source() != SKIPPED
     if current_source() == ABSENT:
@@ -866,6 +899,51 @@ def enrich_attached_case(case_nbr) -> bool:
         except Exception:
             pass
     return True
+
+
+def prefetch_case_facts(case_nbr) -> None:
+    """Warm the lookup cache for a case attached without anybody being asked.
+
+    The analysis that follows takes far longer than the lookup, so the wait is
+    free here and the chatbot's first read finds the answer already made.
+    """
+    canonical = check_ips_utils.normalise_ips(case_nbr)
+    if not canonical:
+        return
+    with _case_facts_lock:
+        if canonical in _case_facts:
+            return
+
+    def warm():
+        try:
+            _lookup_case_facts(canonical)
+        except Exception as e:
+            print(f"[ips] prefetch for {canonical} skipped: {e}")
+
+    threading.Thread(target=warm, name=f"ips-prefetch-{canonical}", daemon=True).start()
+
+
+def enrich_attached_case_if_needed() -> bool:
+    """Look up a case the session was handed quietly, the first time it is read.
+
+    A number typed into the prompt is enriched by the route that records it. A
+    number taken from the path is attached without anybody being asked, so
+    nothing enriched it, and the conversation opened knowing the case and none
+    of what it says. Failure is not reported: the case is attached either way.
+    """
+    canonical = current_case_nbr()
+    if not canonical:
+        return False
+    context = CaseContext.from_session(session.get("case_context") or {})
+    if context.description or context.subject:
+        return False
+    try:
+        return enrich_attached_case(canonical)
+    except CaseLookupUnavailable:
+        return False
+    except Exception as e:
+        print(f"[ips] quiet enrich for {canonical} failed: {e}")
+        return False
 
 
 def _primed_agents() -> list:

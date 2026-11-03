@@ -710,6 +710,10 @@
         _abortActiveStream();
         const ctl = new AbortController();
         window.__streamCtl = ctl;
+        // Re-attaching is as busy as sending: without this the skill cards
+        // stayed clickable and a card started a second analysis on top of the
+        // one being followed.
+        if (typeof setSendBtnStopMode === 'function') setSendBtnStopMode();
         const card = __makeStepCard();
 
         const processLine = (line) => {
@@ -775,7 +779,12 @@
         } catch (e) {
             if (e.name !== 'AbortError') console.warn('[history] stream failed:', e);
         } finally {
-            if (window.__streamCtl === ctl) window.__streamCtl = null;
+            // Only the stream still on screen may hand the controls back; a
+            // superseded one would re-enable them under its replacement.
+            if (window.__streamCtl === ctl) {
+                window.__streamCtl = null;
+                if (typeof setSendBtnSendMode === 'function') setSendBtnSendMode();
+            }
         }
     }
 
@@ -863,6 +872,10 @@
                 if (data.running_user_message) appendUserMsg(data.running_user_message);
                 // No pre-render: /history/stream replays the full step buffer.
                 followJobStream(data.conversation_id || id);
+            } else if (typeof setSendBtnSendMode === 'function') {
+                // Leaving a running conversation aborted its stream, and the
+                // controls it disabled belong to it, not to this one.
+                setSendBtnSendMode();
             }
 
             // Refresh the list so the active item highlights.

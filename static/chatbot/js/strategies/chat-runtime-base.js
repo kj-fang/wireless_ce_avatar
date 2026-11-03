@@ -677,16 +677,52 @@
             const res = await fetch(`${this.api}/get_issue_context`);
             if (!res.ok) return;
             const context = await res.json();
+            // replaceDraft means "replace what the previous case left there",
+            // not "replace anything": typing while the lookup and the LLM
+            // organize were running still wins, as it does without it.
+            if (logGen !== window.__setLogGen || input.value !== initialValue) return;
+            if (replaceDraft) this._replaceCaseDerivedIssueTime(context);
             const description = String(context.description || '').replace(/\s+/g, ' ').trim();
-            if (!description || logGen !== window.__setLogGen ||
-                (!replaceDraft && input.value !== initialValue)) return;
+            // A case changed to none leaves no description, and the box is
+            // still showing the one the old case put there.
+            if (!description && !replaceDraft) return;
             input.value = description;
             autoResize(input);
             const hint = document.getElementById('prefill-hint');
-            if (hint) hint.style.display = 'block';
+            if (hint) hint.style.display = description ? 'block' : 'none';
             if (typeof validateUserInput === 'function') validateUserInput();
         } catch (e) {
             console.warn('case description prefill failed', e);
+        }
+    };
+
+    /**
+     * Put the issue-time fields back in step with the case now attached.
+     *
+     * The picker still holds what the previous case's attachment or
+     * description put there, so leaving it alone analyses the new case's
+     * problem statement at the old case's time.
+     */
+    ChatRuntimeStrategyBase.prototype._replaceCaseDerivedIssueTime = function (context) {
+        if (window.__logTimeAxis === false) return;
+        if (typeof clearAllIssueTimes !== 'function') return;
+        clearAllIssueTimes();
+        _setIssueTimeSourceTag('');
+        if (context.issue_time_blocked) return;
+        const times = Array.isArray(context.issue_times)
+            ? context.issue_times.filter(Boolean) : [];
+        if (times.length > 0 && typeof _prefillAutoTimes === 'function'
+                && _prefillAutoTimes(times)) {
+            _setIssueTimeSourceTag(ISSUE_TIME_SOURCE.DESCRIPTION);
+            this._onAutoIssueTimeApplied();
+            return;
+        }
+        const attachmentTime = String(context.attachment_time || '').trim();
+        const single = attachmentTime || String(context.issue_time || '').trim();
+        if (single && typeof setIssueTimeFromString === 'function'
+                && setIssueTimeFromString(single)) {
+            if (attachmentTime) _setIssueTimeSourceTag(ISSUE_TIME_SOURCE.ATTACHMENT);
+            this._onAutoIssueTimeApplied();
         }
     };
 

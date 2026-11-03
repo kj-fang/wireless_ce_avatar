@@ -68,7 +68,7 @@ def organized_issue_context(raw_desc: str, first_ts, last_ts, log_path: str = ""
     }
 
 
-def extract_issue_context() -> dict:
+def extract_issue_context(log_path: str = "") -> dict:
     """
     Consolidate issue context from session into a single dict with keys:
       case_nbr, subject, description, issue_type
@@ -77,6 +77,10 @@ def extract_issue_context() -> dict:
       - session['ai_ips_analysis']  : LLM-generated analysis dict (richest)
       - session['classification']   : issue_type + confidence
       - session['case_context']     : raw Salesforce case fields
+
+    ``log_path`` names the log being loaded. /set_log and prepare() extract
+    before they write the new path to the session, so without it the remembered
+    facts come back keyed on the log being replaced.
     """
     # --- raw case fields ---
     raw_ctx = session.get("case_context", {})
@@ -182,10 +186,10 @@ def extract_issue_context() -> dict:
         "issue_type":  issue_type,
         "attachment_time": attachment_time,
     }
-    return _fill_from_remembered_case(context)
+    return _fill_from_remembered_case(context, log_path)
 
 
-def _fill_from_remembered_case(context: dict) -> dict:
+def _fill_from_remembered_case(context: dict, log_path: str = "") -> dict:
     """Put back what this log's case told us last time, for what we lack now.
 
     The description and the attachment time are read out of the case and its
@@ -208,7 +212,8 @@ def _fill_from_remembered_case(context: dict) -> dict:
         from configs.global_configs import app_config
         from services import check_ips_service
 
-        log_path = (session.get("chatbot_log_path")
+        log_path = (log_path
+                    or session.get("chatbot_log_path")
                     or getattr(app_config, "last_analyzed_log_path", "") or "")
         remembered = check_ips_service.remembered_case_facts(
             log_path, context["case_nbr"])

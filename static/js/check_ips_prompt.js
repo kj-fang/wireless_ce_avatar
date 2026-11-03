@@ -329,7 +329,7 @@
     return pending;
   }
 
-  var NOTICE_MS = 7000;
+  var NOTICE_MS = 5000;
 
   /**
    * Say what was recorded when nothing asked.
@@ -354,7 +354,8 @@
       "class": "ips-attached-notice",
       role: "status",
       style: {
-        position: "fixed", right: "18px", bottom: "18px", zIndex: "99998",
+        // Top right: the bottom right corner is the Send button.
+        position: "fixed", right: "18px", top: "76px", zIndex: "99998",
         display: "flex", alignItems: "center", gap: "10px",
         background: "#f8fafc", border: "1px solid #e2e8f0",
         borderLeft: "3px solid " + (attached ? "#93c5fd" : "#cbd5e1"),
@@ -394,13 +395,18 @@
       opened.dismissable = true;
       opened.suggested_ips = attached || state.suggested_ips || "";
       ask(opened).then(function (body) {
-        if (!body || !body.case_nbr) { return; }
+        // Only a cancelled dialog leaves the case as it was. "This log has no
+        // case" comes back successful with an empty number, and is as much a
+        // change as any other -- the description and the time on screen still
+        // belong to the case that has just been detached.
+        if (!body || !body.success) { return; }
         // The number changed, so what the page is showing came from the
         // previous one. Whoever owns the input box re-reads it.
         if (typeof window.IpsPrompt.onCaseChanged === "function") {
           window.IpsPrompt.onCaseChanged(body);
         }
-        notice({ case_nbr: body.case_nbr, case_ref_source: body.case_ref_source,
+        notice({ case_nbr: body.case_nbr || "",
+                 case_ref_source: body.case_ref_source || "skipped",
                  log_path: state.log_path || "" });
       });
     });

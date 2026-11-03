@@ -448,6 +448,27 @@ def _validate_carried_issue_time(carried_issue_time: str, log_path: str,
         )
 
 
+def _primeable_attachment_time(attachment_time: str, log_path: str,
+                               log_in_customer_clock: bool) -> str:
+    """Drop a time the selected log cannot contain, before it primes the agent.
+
+    The picker gets this check in /get_issue_context, but the agent is primed
+    long before anyone asks for that -- so a time left over from the case this
+    window was on anchored the whole analysis on a timestamp the log does not
+    cover, reported as "source: primed". Empty makes prime_with_context fall
+    back to the log's own latest timestamp.
+    """
+    if not attachment_time or not log_path:
+        return attachment_time
+    parsed, first_ts, last_ts, error = validate_issue_time_in_log_range(
+        attachment_time, log_path, log_in_customer_clock=log_in_customer_clock)
+    if parsed is not None or not (first_ts and last_ts):
+        return attachment_time
+    print(f"[prime] not priming with {attachment_time!r}: {error} Log covers "
+          f"{format_issue_time(first_ts)} to {format_issue_time(last_ts)} | {log_path}")
+    return ""
+
+
 def _invalidate_issue_context_caches() -> None:
     """Drop the DERIVED issue-context caches so they get recomputed from the
     current ``selected_files`` / ``case_context``.
@@ -860,7 +881,15 @@ class AgentRoutes:
             agent.current_log_path = log_path
             if not same_log:
                 agent.reset_conversation()      # fresh conversation for a new file
-            ctx = _extract_issue_context()      # re-extract context in case session was updated after agent creation
+            # A log that has already been to IPS is not asked about again, but
+            # that restoring happens when the client asks -- after this has
+            # primed the agent from a session with no case on it, leaving the
+            # remembered description and time to reach the sidebar alone.
+            check_ips_service.restore_settled_answer(log_path)
+            ctx = _extract_issue_context(log_path)  # the session may have moved on since the agent was made
+            ctx["attachment_time"] = _primeable_attachment_time(
+                ctx.get("attachment_time", ""), log_path,
+                not self.profile.customer_timezone)
             # Always prime: prime_with_context falls back to the log file's latest
             # timestamp when ctx has no usable issue time, so the sidebar always
             # gets an issue_time to display (covers the no-session entry path).
@@ -1672,7 +1701,10 @@ class AgentRoutes:
                     log_in_customer_clock=not self.profile.customer_timezone)
 
             # Pull consolidated issue context from all session sources
-            ctx = _extract_issue_context()
+            ctx = _extract_issue_context(log_path)
+            ctx["attachment_time"] = _primeable_attachment_time(
+                ctx.get("attachment_time", ""), log_path,
+                not self.profile.customer_timezone)
 
             # Update shared last_analyzed_log_path so the chatbot index page pre-fills it
             app_config.last_analyzed_log_path = log_path

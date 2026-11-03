@@ -436,6 +436,27 @@ def _reject_if_directory(path: str) -> str | None:
     return None
 
 
+def _no_silent_case_because(source_path: str, derived: str) -> str:
+    """Why the case in the folder name is not being taken, or "" when it is.
+
+    Two files sitting under identical-looking case folders can still behave
+    differently here, and the difference is never the path -- it is what the
+    window already holds, or what this file was answered with before.
+    """
+    if not derived:
+        return 'the path names no case'
+    held = check_ips_service.current_case_nbr()
+    if held:
+        return f'this window is already on {held}'
+    # Not over an answer the user gave. Re-analysing a log somebody said has no
+    # case, or gave a case number for, would quietly replace that answer with a
+    # folder name. Left alone, the gate asks again with that answer offered first.
+    filed = check_ips_service.answer_for(source_path).get('source')
+    if filed in (check_ips_service.SKIPPED, check_ips_service.EXPLICIT):
+        return f'this file already carries an answer of its own ({filed})'
+    return ''
+
+
 def _is_bt_etl(file_path: str) -> bool:
     """Return True if the file is a BT ETL that should be decoded via bt_decode_hci_via_folder."""
     name = os.path.basename(file_path).lower()
@@ -914,13 +935,10 @@ def upload_local_analysis():
     # A path that already names its case answers the question by itself, and
     # is attached without interrupting anybody.
     derived = check_ips_utils.derive_ips_from_path(source_path)
-    if (derived and not check_ips_service.current_case_nbr()
-            and check_ips_service.answer_for(source_path).get("source")
-                not in (check_ips_service.SKIPPED, check_ips_service.EXPLICIT)):
-        # Not over an answer the user gave. Re-analysing a log somebody said
-        # has no case, or gave a case number for, would quietly replace that
-        # answer with a folder name. Left alone, the gate asks again with the
-        # remembered answer offered first.
+    withheld = _no_silent_case_because(source_path, derived)
+    if withheld:
+        print(f'[ips] not taking the case from the folder name: {withheld} | {source_path}')
+    else:
         try:
             check_ips_service.attach(derived, check_ips_service.DERIVED_FROM_PATH, source_path)
             # Nobody was asked, so nothing has looked the case up either.
@@ -1098,13 +1116,10 @@ def open_local_analysis():
     # Explorer -- so the page asks before it emits start_sendto. A path that
     # already names its case answers the question without interrupting anyone.
     derived = check_ips_utils.derive_ips_from_path(source_path)
-    if (derived and not check_ips_service.current_case_nbr()
-            and check_ips_service.answer_for(source_path).get("source")
-                not in (check_ips_service.SKIPPED, check_ips_service.EXPLICIT)):
-        # Not over an answer the user gave. Re-analysing a log somebody said
-        # has no case, or gave a case number for, would quietly replace that
-        # answer with a folder name. Left alone, the gate asks again with the
-        # remembered answer offered first.
+    withheld = _no_silent_case_because(source_path, derived)
+    if withheld:
+        print(f'[ips] not taking the case from the folder name: {withheld} | {source_path}')
+    else:
         try:
             check_ips_service.attach(derived, check_ips_service.DERIVED_FROM_PATH, source_path)
             # Nobody was asked, so nothing has looked the case up either.

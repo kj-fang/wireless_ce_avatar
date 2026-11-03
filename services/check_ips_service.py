@@ -330,22 +330,25 @@ def _owning_answer_key(log_path) -> str:
     return _archive_answer_key(log_path)
 
 
-def remembered_case_facts(log_path, case_nbr="") -> dict:
+def remembered_case_facts(log_path, case_nbr) -> dict:
     """What this log's case last told the chatbot, or {}.
 
-    Empty when the stored answer is about a different case: the facts describe
-    that case, and handing them to another one is how a conversation ends up
-    discussing the wrong customer's problem.
+    Both sides have to be the same real case number. An empty or synthetic one
+    is not a match to anything: Send To leaves the window open, so a run that
+    has no case of its own is exactly the run that would otherwise be handed
+    the previous file's description and issue time.
     """
+    canonical = check_ips_utils.normalise_ips(case_nbr)
+    if not canonical:
+        return {}
     key = _owning_answer_key(log_path)
     record = _load_answers().get(key) if key else None
     if not isinstance(record, dict):
         return {}
+    if check_ips_utils.normalise_ips(record.get("case_nbr")) != canonical:
+        return {}
     facts = record.get(CASE_FACTS_KEY)
     if not isinstance(facts, dict) or not facts:
-        return {}
-    wanted = check_ips_utils.normalise_ips(case_nbr)
-    if wanted and wanted != check_ips_utils.normalise_ips(record.get("case_nbr")):
         return {}
     return {name: facts[name] for name in _CASE_FACT_FIELDS if facts.get(name)}
 

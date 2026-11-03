@@ -1039,6 +1039,17 @@ def _forget_case_on_agents(canonical: str) -> None:
         for key in _AGENT_CASE_FIELDS:
             ctx.pop(key, None)
         ctx["case_nbr"] = canonical
+        reset = getattr(agent, "reset_conversation", None)
+        if callable(reset):
+            reset()
+    # Every turn so far was about the case being replaced, and the next one
+    # resumes the thread by id -- which re-adopts the detached agent a
+    # finished analysis left behind, with that case's log, notes and history
+    # intact. Nothing cleared above can reach that agent; dropping the id can.
+    previous = session.pop("feedback_conversation_id", None)
+    if previous:
+        print(f"[ips] the case changed, so conversation {previous} is closed; "
+              f"the next question starts a new one")
     forget_case_derived_session_keys()
 
 

@@ -877,6 +877,10 @@ class AgentRoutes:
             # if the user never sends a message); keep it for a same-file re-load
             # so the next turn appends to the conversation already on screen.
             new_conv_id = self._ensure_feedback_conversation_id(rotate=not same_log)
+            print(f"[set_log] {'same file, continuing' if same_log else 'new file, starting over'}: "
+                  f"{prev_log_path or '(nothing loaded)'} -> {log_path} | "
+                  f"conversation {prev_conv_id or '-'} -> {new_conv_id} | "
+                  f"case={ctx.get('case_nbr') or '-'}")
 
             if same_log:
                 if preserved_history:
@@ -1157,6 +1161,9 @@ class AgentRoutes:
             # brand-new, context-less agent.
             conversation_id = self._ensure_feedback_conversation_id()
             agent = self._resume_agent_for(conversation_id)
+            print(f"[chat] answering in conversation {conversation_id} from an agent "
+                  f"carrying {len(getattr(agent, 'conversation_history', None) or [])} messages "
+                  f"about {getattr(agent, 'current_log_path', '') or '(no log)'}")
             if issue_time_window_minutes is not None:
                 agent.issue_time_window_minutes = issue_time_window_minutes
             # Backstop: if the resolved agent lost its log path (e.g. a fresh

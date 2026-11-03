@@ -11,6 +11,7 @@ over the top of it.
 import hashlib
 import json
 import os
+import re
 import threading
 from concurrent.futures import ThreadPoolExecutor, TimeoutError as FutureTimeoutError
 from datetime import datetime, timezone
@@ -550,6 +551,23 @@ def remember_case_facts(log_path, case_nbr, facts: dict) -> bool:
     except Exception as e:
         print(f"[ips] could not remember the case facts for {log_path}: {e}")
         return False
+
+
+def case_wireless_domain(context: Optional[dict] = None) -> str:
+    """Which radio the attached case is about: "wifi", "bt", or "" if unstated.
+
+    The IPS subcategory is the only field that describes the CASE. The context's
+    own wifi_or_bt is rewritten by the local-upload flow with whatever the
+    bundle happened to contain, so a Wi-Fi case whose zip carried one stray BT
+    log reads as "bt" there.
+    """
+    raw = context if isinstance(context, dict) else (session.get("case_context") or {})
+    value = str(raw.get("subcategory") or "").strip().lower()
+    if "wifi" in value or "wi-fi" in value:
+        return "wifi"
+    if "bluetooth" in value or re.search(r"\bbt\b", value):
+        return "bt"
+    return ""
 
 
 def _case_level_key(case_nbr) -> str:

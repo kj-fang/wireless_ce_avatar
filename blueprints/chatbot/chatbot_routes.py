@@ -469,6 +469,40 @@ def _primeable_attachment_time(attachment_time: str, log_path: str,
     return ""
 
 
+_WIRELESS_DOMAINS = ("wifi", "bt")
+
+
+def _case_filed_under_other_radio(profile_domain: str) -> str:
+    """The radio this case belongs to when it is not this chatbot's, else "".
+
+    A combo card's bundle carries both stacks, so a Wi-Fi case is routinely
+    opened with the BT log that came in the same zip. Its problem statement is
+    then about the other radio, and an agent primed with it reports on the
+    stack it was told about: a BT run explaining a Wi-Fi disconnect, concluding
+    there was no Bluetooth evidence, at 42% confidence.
+    """
+    case_domain = check_ips_service.case_wireless_domain()
+    profile_domain = (profile_domain or "").strip().lower()
+    if case_domain in _WIRELESS_DOMAINS and profile_domain in _WIRELESS_DOMAINS \
+            and case_domain != profile_domain:
+        return case_domain
+    return ""
+
+
+def _drop_other_radios_statement(ctx: dict, profile_domain: str) -> dict:
+    """Blank a problem statement that describes the other radio. Mutates ctx."""
+    other = _case_filed_under_other_radio(profile_domain)
+    if not other or not (ctx.get("description") or ctx.get("subject")):
+        return ctx
+    print(f"[prime] case {ctx.get('case_nbr') or '-'} is filed under {other}, "
+          f"not {profile_domain}: working from the log alone, not from a "
+          f"problem statement about the other radio")
+    ctx["description"] = ""
+    ctx["subject"] = ""
+    ctx["issue_type"] = ""
+    return ctx
+
+
 def _invalidate_issue_context_caches() -> None:
     """Drop the DERIVED issue-context caches so they get recomputed from the
     current ``selected_files`` / ``case_context``.
@@ -890,6 +924,7 @@ class AgentRoutes:
             ctx["attachment_time"] = _primeable_attachment_time(
                 ctx.get("attachment_time", ""), log_path,
                 not self.profile.customer_timezone)
+            _drop_other_radios_statement(ctx, self.profile.gather_domain)
             # Always prime: prime_with_context falls back to the log file's latest
             # timestamp when ctx has no usable issue time, so the sidebar always
             # gets an issue_time to display (covers the no-session entry path).
@@ -1705,6 +1740,7 @@ class AgentRoutes:
             ctx["attachment_time"] = _primeable_attachment_time(
                 ctx.get("attachment_time", ""), log_path,
                 not self.profile.customer_timezone)
+            _drop_other_radios_statement(ctx, self.profile.gather_domain)
 
             # Update shared last_analyzed_log_path so the chatbot index page pre-fills it
             app_config.last_analyzed_log_path = log_path
@@ -1746,6 +1782,17 @@ class AgentRoutes:
     # ------------------------------------------------------------------
     # API: consolidated issue context for the sidebar
     # ------------------------------------------------------------------
+    def _drop_other_radios_statement_from_agent(self) -> None:
+        """Take the other radio's problem statement back off this bot's agent."""
+        if not _case_filed_under_other_radio(self.profile.gather_domain):
+            return
+        agent = self.session_agents.get(session.get("chatbot_session_id") or "")
+        ctx = getattr(agent, "issue_context", None)
+        if not isinstance(ctx, dict):
+            return
+        for name in ("description", "subject", "issue_type"):
+            ctx[name] = ""
+
     def get_issue_context(self):
         # A case taken from the folder name is attached without anybody being
         # asked, so no route has looked it up; this is the first read of it.
@@ -1753,8 +1800,12 @@ class AgentRoutes:
             check_ips_service.enrich_attached_case_if_needed()
         except Exception as e:
             print(f"[get_issue_context] quiet case lookup skipped: {e}")
+        # The lookup above writes the case's description onto agents already
+        # primed, so this runs after it, not instead of the guard at priming.
+        self._drop_other_radios_statement_from_agent()
         try:
             ctx = _extract_issue_context()
+            _drop_other_radios_statement(ctx, self.profile.gather_domain)
             attachment_time = ctx.get("attachment_time", "")
         except Exception:
             ctx = {}

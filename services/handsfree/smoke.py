@@ -2555,6 +2555,100 @@ def smoke_identity() -> None:
             login._state.update(status="signed_out", identity=None, error="")
 
 
+# ---------------------------------------------------------------- S20
+def smoke_snowflake_reconnect() -> None:
+    print("[S20] Snowflake: an expired session is re-opened once, other errors propagate")
+    import services.snowflake_service as sf
+    try:
+        from snowflake.connector.errors import ProgrammingError
+    except Exception:  # the connector is an app dependency; stand in if absent
+        class ProgrammingError(Exception):
+            def __init__(self, msg="", errno=None, sqlstate=None):
+                super().__init__(msg)
+                self.msg, self.errno, self.sqlstate = msg, errno, sqlstate
+
+    expired = ProgrammingError(msg="Authentication token has expired.  The user must "
+                                   "authenticate again.", errno=390114, sqlstate="08001")
+    check("S20.a 390114 / 'token has expired' count as an expired session; a SQL "
+          "error does not",
+          sf._session_expired(expired)
+          and sf._session_expired(RuntimeError("Session no longer exists"))
+          and not sf._session_expired(ProgrammingError(msg="SQL compilation error",
+                                                       errno=1003, sqlstate="42000")))
+
+    class _Cursor:
+        def __init__(self, conn):
+            self.conn = conn
+
+        def execute(self, sql):
+            self.conn.executed.append(sql)
+            if self.conn.fail_with is not None:
+                exc, self.conn.fail_with = self.conn.fail_with, None
+                raise exc
+
+        def fetchone(self):
+            return ("row-from", self.conn.n)
+
+        def fetchall(self):
+            return [("row-from", self.conn.n)]
+
+        def close(self):
+            pass
+
+    class _Conn:
+        def __init__(self, n, fail_with):
+            self.n, self.fail_with, self.executed, self.closed = n, fail_with, [], False
+
+        def cursor(self):
+            return _Cursor(self)
+
+        def is_closed(self):
+            return self.closed
+
+        def close(self):
+            self.closed = True
+
+    made: list = []
+    plan: list = []
+
+    def _fake_connect(passwd, use_privatelink):
+        made.append(_Conn(len(made) + 1, plan.pop(0) if plan else None))
+        return made[-1]
+
+    saved = (sf._connect, sf._snowflake_conn, sf._snowflake_passwd, sf._snowflake_conn_mode)
+    try:
+        sf._connect = _fake_connect
+        sf._snowflake_conn = sf._snowflake_passwd = sf._snowflake_conn_mode = None
+
+        plan[:] = [expired]           # first connection: first query hits an expired session
+        row = sf.snowflake_query("pw", "select 1", "S", fetch_mode="one")
+        check("S20.b the query is answered by a fresh connection after the expired one is dropped",
+              row == ("row-from", 2) and len(made) == 2 and made[0].closed
+              and sf._snowflake_conn is made[1], str((row, len(made))))
+        row2 = sf.snowflake_query("pw", "select 2", "S", fetch_mode="one")
+        check("S20.c the fresh connection is the cached one afterwards",
+              row2 == ("row-from", 2) and len(made) == 2 and made[1].executed == ["select 1", "select 2"])
+
+        made[1].fail_with = ProgrammingError(msg="SQL compilation error", errno=1003, sqlstate="42000")
+        try:
+            sf.snowflake_query("pw", "select bad", "S", fetch_mode="one")
+            check("S20.d a non-session error propagates without a reconnect", False)
+        except ProgrammingError as e:
+            check("S20.d a non-session error propagates without a reconnect",
+                  e.errno == 1003 and len(made) == 2 and sf._snowflake_conn is made[1])
+
+        plan[:] = [expired]           # expired twice in a row: the retry's error surfaces
+        made[1].fail_with = expired
+        try:
+            sf.snowflake_query("pw", "select 3", "S", fetch_mode="one")
+            check("S20.e only one reconnect is attempted; a second expiry surfaces", False)
+        except ProgrammingError as e:
+            check("S20.e only one reconnect is attempted; a second expiry surfaces",
+                  e.errno == 390114 and len(made) == 3, str(len(made)))
+    finally:
+        sf._connect, sf._snowflake_conn, sf._snowflake_passwd, sf._snowflake_conn_mode = saved
+
+
 def run_smoke() -> int:
     tmp = Path(tempfile.mkdtemp(prefix="handsfree_smoke_"))
     try:
@@ -2573,6 +2667,7 @@ def run_smoke() -> int:
         smoke_auto_scan(tmp)
         smoke_comment_images(tmp)
         smoke_identity()
+        smoke_snowflake_reconnect()
     finally:
         shutil.rmtree(tmp, ignore_errors=True)
     print(f"\nsmoke result: {'ALL PASS' if not PASS_FAIL else 'FAILURES: ' + ', '.join(PASS_FAIL)}")

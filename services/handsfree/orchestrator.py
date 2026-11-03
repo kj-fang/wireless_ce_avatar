@@ -109,20 +109,25 @@ def _analyze_and_enqueue(store: HandsfreeStore, case_nbr: str,
         return None
 
     # Pre-fill the first-response checklist: pipeline facts first, then one
-    # LLM pass over the rest. Failure never blocks the drafts.
-    try:
-        from .checklist import build_fills
-        from configs.global_configs import app_config
-        analysis.checklist_fills = build_fills(
-            analysis, llm=getattr(app_config, "llm_helper", None))
-        filled = sum(1 for sec in analysis.checklist_fills.values()
-                     for e in sec if e.get("provided"))
-        total = sum(len(sec) for sec in analysis.checklist_fills.values())
-        _log_event(f"[{case_nbr}] first response: domain "
-                   f"'{analysis.issue_domain or 'Others'}', pre-filled "
-                   f"{filled}/{total} checklist items")
-    except Exception as e:
-        print(f"[handsfree] checklist fill failed (continuing): {e}")
+    # LLM pass over the rest. Failure never blocks the drafts. A case that
+    # could not even be fetched (mode "error") has nothing to fill from and
+    # gets no customer reply, so the LLM pass is skipped there.
+    if analysis.mode == "error":
+        _log_event(f"[{case_nbr}] first response: skipped ({analysis.error})")
+    else:
+        try:
+            from .checklist import build_fills
+            from configs.global_configs import app_config
+            analysis.checklist_fills = build_fills(
+                analysis, llm=getattr(app_config, "llm_helper", None))
+            filled = sum(1 for sec in analysis.checklist_fills.values()
+                         for e in sec if e.get("provided"))
+            total = sum(len(sec) for sec in analysis.checklist_fills.values())
+            _log_event(f"[{case_nbr}] first response: domain "
+                       f"'{analysis.issue_domain or 'Others'}', pre-filled "
+                       f"{filled}/{total} checklist items")
+        except Exception as e:
+            print(f"[handsfree] checklist fill failed (continuing): {e}")
 
     # The customer-facing overview checklist goes out once per case: later
     # rounds (customer replied, new logs) get targeted asks only.

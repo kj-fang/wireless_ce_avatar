@@ -677,11 +677,15 @@
             const res = await fetch(`${this.api}/get_issue_context`);
             if (!res.ok) return;
             const context = await res.json();
+            if (logGen !== window.__setLogGen) return;
+            // The picker belongs to the case, not to the draft: the server has
+            // already attached the new one, so a time left there by the old
+            // case would anchor the next Send whatever the box now says.
+            if (replaceDraft) this._replaceCaseDerivedIssueTime(context);
             // replaceDraft means "replace what the previous case left there",
             // not "replace anything": typing while the lookup and the LLM
-            // organize were running still wins, as it does without it.
-            if (logGen !== window.__setLogGen || input.value !== initialValue) return;
-            if (replaceDraft) this._replaceCaseDerivedIssueTime(context);
+            // organize were running still wins the box, as it does without it.
+            if (input.value !== initialValue) return;
             const description = String(context.description || '').replace(/\s+/g, ' ').trim();
             // A case changed to none leaves no description, and the box is
             // still showing the one the old case put there.

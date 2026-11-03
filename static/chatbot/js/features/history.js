@@ -780,8 +780,12 @@
             if (e.name !== 'AbortError') console.warn('[history] stream failed:', e);
         } finally {
             // Only the stream still on screen may hand the controls back; a
-            // superseded one would re-enable them under its replacement.
-            if (window.__streamCtl === ctl) {
+            // superseded one would re-enable them under its replacement. A
+            // null means nothing replaced it -- New Conversation and Resume
+            // draft abort through _abortActiveStream(), and skipping here
+            // left the fresh session in Stop mode with the skill cards
+            // disabled and the next Send calling stopChat().
+            if (window.__streamCtl === ctl || window.__streamCtl === null) {
                 window.__streamCtl = null;
                 if (typeof setSendBtnSendMode === 'function') setSendBtnSendMode();
             }

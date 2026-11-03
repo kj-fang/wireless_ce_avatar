@@ -45,7 +45,8 @@ def organized_issue_context(raw_desc: str, first_ts, last_ts, log_path: str = ""
         # conversation. Lazily imported -- check_ips_service reaches back into
         # the chatbot session registry, which is built while this is imported.
         case_nbr = check_ips_service.current_case_nbr()
-        d = check_ips_service.remembered_organized(case_nbr, raw_desc)
+        d = check_ips_service.remembered_organized(case_nbr, raw_desc,
+                                                   first_ts, last_ts)
         if d:
             session["_issue_ai_quick"] = {"data": d}
         else:
@@ -56,7 +57,8 @@ def organized_issue_context(raw_desc: str, first_ts, last_ts, log_path: str = ""
                 llm_client=client, llm_model=model, return_usage=True,
             )
             session["_issue_ai_quick"] = {"data": d}
-            check_ips_service.remember_organized(case_nbr, raw_desc, d)
+            check_ips_service.remember_organized(case_nbr, raw_desc, d,
+                                                 first_ts, last_ts)
             # Cost accounting for the pre-pass. Best-effort: analytics must never
             # break the flow that produced them.
             if int(usage.get("llm_calls") or 0) > 0:

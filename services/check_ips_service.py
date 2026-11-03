@@ -527,8 +527,13 @@ def remember_case_facts(log_path, case_nbr, facts: dict) -> bool:
                 holder = {"case_nbr": canonical, "covered_by": key,
                           "at": datetime.now(timezone.utc).isoformat(timespec="seconds")}
                 answers[holder_key] = holder
-            elif holder_key != key:
+            elif holder_key != key and \
+                    check_ips_utils.normalise_ips(holder.get("case_nbr")) != canonical:
+                # Re-filed under another number: the times under it were worked
+                # out for the previous case, and merging leaves the ones this
+                # one has nothing to say about readable as its own.
                 holder["case_nbr"] = canonical
+                holder.pop(CASE_FACTS_KEY, None)
             stored = holder.get(CASE_FACTS_KEY)
             stored = dict(stored) if isinstance(stored, dict) else {}
             merged = dict(stored)
@@ -632,32 +637,46 @@ def remembered_case_lookup(case_nbr) -> dict:
     return {name: found.get(name) or "" for name in _LOOKUP_FIELDS}
 
 
-def _organize_digest(raw_desc: str) -> str:
-    return hashlib.sha1((raw_desc or "").encode("utf-8", "replace")).hexdigest()
+def _organize_digest(raw_desc: str, first_ts=None, last_ts=None) -> str:
+    """What one pre-pass was run over: the text, and the window it was dated in.
+
+    The organizer stamps clock-only times with the log's dates, so the same
+    description over another capture is a different answer -- reusing it put
+    the first capture's dates on the second one's times and the range guard
+    threw them all out.
+    """
+    def _day(ts) -> str:
+        return ts.strftime("%Y-%m-%d") if hasattr(ts, "strftime") else ""
+
+    material = f"{raw_desc or ''}|{_day(first_ts)}|{_day(last_ts)}"
+    return hashlib.sha1(material.encode("utf-8", "replace")).hexdigest()
 
 
-def remembered_organized(case_nbr, raw_desc: str) -> dict:
-    """The LLM pre-pass already run over this exact description, or {}.
+def remembered_organized(case_nbr, raw_desc: str, first_ts=None, last_ts=None) -> dict:
+    """The LLM pre-pass already run over this description for this log, or {}.
 
-    Keyed on the description it was run over, so an edited case description is
-    organized again rather than answered from a summary of the old one.
+    Keyed on what it was run over, so an edited case description or another
+    capture is organized again rather than answered from the old result.
     """
     if not raw_desc:
         return {}
     cached = _case_holder(_load_answers(), case_nbr).get(ORGANIZED_KEY)
-    if not isinstance(cached, dict) or cached.get("for") != _organize_digest(raw_desc):
+    if not isinstance(cached, dict) or \
+            cached.get("for") != _organize_digest(raw_desc, first_ts, last_ts):
         return {}
     data = cached.get("data")
     return dict(data) if isinstance(data, dict) else {}
 
 
-def remember_organized(case_nbr, raw_desc: str, data: dict) -> None:
+def remember_organized(case_nbr, raw_desc: str, data: dict,
+                       first_ts=None, last_ts=None) -> None:
     """Keep the pre-pass beside the case it was run for."""
     canonical = check_ips_utils.normalise_ips(case_nbr)
     if not canonical or not raw_desc or not isinstance(data, dict) or not data:
         return
     if _write_case_holder(canonical, ORGANIZED_KEY,
-                          {"for": _organize_digest(raw_desc), "data": data}):
+                          {"for": _organize_digest(raw_desc, first_ts, last_ts),
+                           "data": data}):
         print(f"[ips] kept the organized description for {canonical}; the next "
               f"conversation about it skips the LLM pass")
 
@@ -1104,6 +1123,25 @@ def cached_classification(case_nbr) -> Optional[dict]:
     return classification if isinstance(classification, dict) else None
 
 
+def _apply_case_to_primed_agents(canonical: str, subject: str, description: str,
+                                 issue_type: str) -> None:
+    """Fill what an agent primed before the case details arrived is missing.
+
+    The agent reads issue_context on every answer, so updating it is enough;
+    no re-priming, which would reset the conversation.
+    """
+    for agent in _primed_agents():
+        ctx = getattr(agent, "issue_context", None)
+        # Primed agents only: an empty context is a boot-time template.
+        if not isinstance(ctx, dict) or not ctx \
+                or check_ips_utils.normalise_ips(ctx.get("case_nbr")) != canonical:
+            continue
+        ctx["subject"] = ctx.get("subject") or subject or ""
+        ctx["description"] = ctx.get("description") or description or ""
+        if issue_type:
+            ctx["issue_type"] = issue_type
+
+
 def enrich_attached_case(case_nbr) -> bool:
     """Fill the session's case from IPS and classify it, as the case search does.
 
@@ -1141,16 +1179,11 @@ def enrich_attached_case(case_nbr) -> bool:
 
     # The agent reads issue_context on every answer, so updating it is enough;
     # no re-priming, which would reset the conversation.
-    for agent in _primed_agents():
-        ctx = getattr(agent, "issue_context", None)
-        # Primed agents only: an empty context is a boot-time template.
-        if not isinstance(ctx, dict) or not ctx \
-                or check_ips_utils.normalise_ips(ctx.get("case_nbr")) != canonical:
-            continue
-        ctx["subject"] = ctx.get("subject") or context.subject or ""
-        ctx["description"] = ctx.get("description") or context.description or ""
-        if isinstance(classification, dict) and classification.get("issue_type"):
-            ctx["issue_type"] = classification["issue_type"]
+    _apply_case_to_primed_agents(
+        canonical, context.subject, context.description,
+        classification["issue_type"]
+        if isinstance(classification, dict) and classification.get("issue_type")
+        else "")
 
     # The classification is an LLM call; its cost is recorded the way the
     # case search records its own, so it is not the one untracked spend.
@@ -1224,7 +1257,13 @@ def enrich_attached_case_if_needed() -> bool:
     if context.description or context.subject:
         return False
     remembered = remembered_case_lookup(canonical)
-    if remembered.get("description") or remembered.get("subject"):
+    with _case_facts_lock:
+        in_memory = canonical in _case_facts
+    # Only when this run has nothing in memory. enrich_attached_case is the
+    # path that reports the classification's cost, and its lookup is a cache
+    # read once a prefetch has run -- taking the disk branch over it would
+    # save nothing and leave that LLM call unreported.
+    if not in_memory and (remembered.get("description") or remembered.get("subject")):
         context.subject = context.subject or remembered["subject"]
         context.description = context.description or remembered["description"]
         session["case_context"] = context.to_session()
@@ -1233,6 +1272,9 @@ def enrich_attached_case_if_needed() -> bool:
         # Same reason the lookup branch below does it: the page may already
         # have organized the empty description.
         session.pop("_issue_ai_quick", None)
+        _apply_case_to_primed_agents(canonical, context.subject,
+                                     context.description,
+                                     remembered.get("issue_type", ""))
         print(f"[ips] {canonical} was looked up in an earlier conversation; "
               f"using what is on file instead of asking IPS again")
         return True

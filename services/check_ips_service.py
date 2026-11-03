@@ -35,6 +35,13 @@ SESSION_SOURCE_KEY = "case_ref_source"
 _ANSWER_FILE_NAME = "ips_answers.json"
 _MAX_REMEMBERED_ANSWERS = 500
 
+#: What a remembered answer carries besides the number. These are derived from
+#: the case and the log -- both of which are the same file next time -- so
+#: re-deriving them costs an IPS lookup, an LLM call, and a user who watches
+#: the chatbot come up blank for a log it has already been told about.
+CASE_FACTS_KEY = "case_facts"
+_CASE_FACT_FIELDS = ("description", "attachment_time", "issue_time", "issue_times")
+
 _answer_lock = threading.Lock()
 
 # Kept outside the session so overlapping requests cannot detach an answer from its log.
@@ -111,6 +118,18 @@ def answer_for(log_path) -> dict:
     return record if isinstance(record, dict) else {}
 
 
+def _write_answers(answers: dict, path: Path) -> None:
+    """Replace the store with `answers`, trimmed and atomically. Holds _answer_lock."""
+    if len(answers) > _MAX_REMEMBERED_ANSWERS:
+        oldest = sorted(answers.items(),
+                        key=lambda kv: str((kv[1] or {}).get("at", "")))
+        answers = dict(oldest[-_MAX_REMEMBERED_ANSWERS:])
+    tmp = path.with_suffix(".tmp")
+    with tmp.open("w", encoding="utf-8") as fh:
+        json.dump(answers, fh, indent=2)
+    os.replace(tmp, path)
+
+
 def remember_answer(log_path, case_nbr: str, source: str) -> None:
     key = _log_key(log_path)
     if not key:
@@ -121,19 +140,22 @@ def remember_answer(log_path, case_nbr: str, source: str) -> None:
     try:
         with _answer_lock:
             answers = _load_answers()
-            answers[key] = {
+            previous = answers.get(key)
+            record = {
                 "case_nbr": case_nbr or "",
                 "source": source,
                 "at": datetime.now(timezone.utc).isoformat(timespec="seconds"),
             }
-            if len(answers) > _MAX_REMEMBERED_ANSWERS:
-                oldest = sorted(answers.items(),
-                                key=lambda kv: str((kv[1] or {}).get("at", "")))
-                answers = dict(oldest[-_MAX_REMEMBERED_ANSWERS:])
-            tmp = path.with_suffix(".tmp")
-            with tmp.open("w", encoding="utf-8") as fh:
-                json.dump(answers, fh, indent=2)
-            os.replace(tmp, path)
+            # Re-confirming the same case re-writes the answer; what was learned
+            # about that case is still true, so it is carried over rather than
+            # dropped on every new conversation.
+            if isinstance(previous, dict) and case_nbr \
+                    and str(previous.get("case_nbr") or "") == case_nbr:
+                facts = previous.get(CASE_FACTS_KEY)
+                if isinstance(facts, dict) and facts:
+                    record[CASE_FACTS_KEY] = facts
+            answers[key] = record
+            _write_answers(answers, path)
     except Exception as e:
         print(f"[ips] could not remember the answer for {key}: {e}")
 
@@ -254,8 +276,8 @@ def start_new_session() -> None:
 _ARCHIVE_EXTS = (".zip", ".7z", ".rar")
 
 
-def _archive_answer(log_path) -> dict:
-    """The answer given for the archive this log was extracted from, if any.
+def _archive_answer_key(log_path) -> str:
+    """The store key of the archive this log was extracted from, if any.
 
     A local archive is extracted in place, into <its folder>/<stem with spaces
     as underscores>/ (see _process_local_analysis). So a Send To of a zip that
@@ -267,7 +289,7 @@ def _archive_answer(log_path) -> dict:
     """
     key = _log_key(log_path)
     if not key:
-        return {}
+        return ""
     for answered, record in _load_answers().items():
         stem, ext = os.path.splitext(answered)
         if ext.lower() not in _ARCHIVE_EXTS:
@@ -277,8 +299,98 @@ def _archive_answer(log_path) -> dict:
         if key.startswith(folder + os.sep) and isinstance(record, dict) \
                 and record.get("source") in (EXPLICIT, DERIVED_FROM_PATH) \
                 and record.get("case_nbr"):
-            return record
-    return {}
+            return answered
+    return ""
+
+
+def _archive_answer(log_path) -> dict:
+    """The answer given for the archive this log was extracted from, or {}."""
+    key = _archive_answer_key(log_path)
+    return _load_answers().get(key, {}) if key else {}
+
+
+def _owning_answer_key(log_path) -> str:
+    """The store key whose answer covers this log.
+
+    The question is asked about the file that was sent -- an archive, an .etl --
+    and the chatbot then opens a file extracted or decoded from it, under a
+    path nobody was asked about. needs_ips already makes that mapping so the
+    same work is not asked about twice; what was remembered about the case is
+    remembered for the same set of files, and for the same reason.
+    """
+    key = _log_key(log_path)
+    if not key:
+        return ""
+    answers = _load_answers()
+    if key in answers:
+        return key
+    uploaded = _log_key(session.get("uploaded_source_path"))
+    if uploaded and uploaded in answers and _placeholder_is_for(log_path):
+        return uploaded
+    return _archive_answer_key(log_path)
+
+
+def remembered_case_facts(log_path, case_nbr="") -> dict:
+    """What this log's case last told the chatbot, or {}.
+
+    Empty when the stored answer is about a different case: the facts describe
+    that case, and handing them to another one is how a conversation ends up
+    discussing the wrong customer's problem.
+    """
+    key = _owning_answer_key(log_path)
+    record = _load_answers().get(key) if key else None
+    if not isinstance(record, dict):
+        return {}
+    facts = record.get(CASE_FACTS_KEY)
+    if not isinstance(facts, dict) or not facts:
+        return {}
+    wanted = check_ips_utils.normalise_ips(case_nbr)
+    if wanted and wanted != check_ips_utils.normalise_ips(record.get("case_nbr")):
+        return {}
+    return {name: facts[name] for name in _CASE_FACT_FIELDS if facts.get(name)}
+
+
+def remember_case_facts(log_path, case_nbr, facts: dict) -> bool:
+    """Keep what was shown for this log beside the case number already stored.
+
+    Only ever written onto an answer that exists and names the same case: a log
+    nobody was asked about has no answer to annotate, and inventing one here
+    would start offering a case number for it. Returns whether anything new
+    was stored.
+    """
+    canonical = check_ips_utils.normalise_ips(case_nbr)
+    if not canonical or not isinstance(facts, dict) or not facts:
+        return False
+    path = _answer_store_path()
+    if path is None:
+        return False
+    try:
+        with _answer_lock:
+            answers = _load_answers()
+            key = _owning_answer_key(log_path)
+            record = answers.get(key) if key else None
+            if not isinstance(record, dict) or \
+                    check_ips_utils.normalise_ips(record.get("case_nbr")) != canonical:
+                return False
+            stored = record.get(CASE_FACTS_KEY)
+            stored = dict(stored) if isinstance(stored, dict) else {}
+            merged = dict(stored)
+            for name in _CASE_FACT_FIELDS:
+                value = facts.get(name)
+                # A blank is "not worked out this time", not "there is none":
+                # a page opened before the log loads must not erase the answer
+                # a page that had the log already wrote.
+                if value:
+                    merged[name] = value
+            if merged == stored:
+                return False
+            record[CASE_FACTS_KEY] = merged
+            answers[key] = record
+            _write_answers(answers, path)
+        return True
+    except Exception as e:
+        print(f"[ips] could not remember the case facts for {log_path}: {e}")
+        return False
 
 
 def candidates_for(log_path) -> List[str]:

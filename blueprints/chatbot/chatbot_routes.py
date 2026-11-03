@@ -1748,6 +1748,16 @@ class AgentRoutes:
         clean_desc = organized.get("clean_description") or _compose_concise_description(ctx)
         issue_times = organized.get("issue_times") or []
 
+        # Nothing to go on for this log -- but it may have been analysed
+        # before, and the time that was put in the picker then is stored
+        # beside its case number. Offer that rather than an empty picker; it
+        # still has to pass the log-range check below like any other source.
+        remembered = check_ips_service.remembered_case_facts(
+            log_path, ctx.get("case_nbr", ""))
+        if remembered and not issue_times:
+            issue_times = [t for t in (remembered.get("issue_times")
+                                       or [remembered.get("issue_time", "")]) if t]
+
         # A case-number hand-off is authoritative for this transition. It either
         # supplies the already-resolved, range-checked value from download_result,
         # or deliberately supplies no value after validation failed. In the latter
@@ -1829,6 +1839,24 @@ class AgentRoutes:
             ),
             "issue_time_warning": carried_warning or range_warning,
         })
+
+        # Store what the user is actually being shown, next to the case number
+        # already remembered for this log. The description came from an IPS
+        # lookup and an LLM pass, the time from the attachment subtitle and a
+        # read of the log -- none of which the same file needs to be put
+        # through again, and a new conversation has no session left to find
+        # them in. Best-effort: a store that cannot be written costs a repeat,
+        # not the page.
+        try:
+            check_ips_service.remember_case_facts(log_path, ctx.get("case_nbr", ""), {
+                "description": ctx.get("description", ""),
+                "attachment_time": attachment_time,
+                "issue_time": issue_time_str,
+                "issue_times": issue_times,
+            })
+        except Exception as e:
+            print(f"[get_issue_context] could not remember this log's case facts: {e}")
+
         return jsonify(payload)
 
     # ==================================================================

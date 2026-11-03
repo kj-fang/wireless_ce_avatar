@@ -175,13 +175,51 @@ def extract_issue_context() -> dict:
         # Cache in session so subsequent requests in the same flow skip re-parsing
         session["_attachment_time_cache"] = attachment_time
 
-    return {
+    context = {
         "case_nbr":    ctx.case_nbr or "",
         "subject":     ctx.subject or "",
         "description": "\n".join(description_parts),
         "issue_type":  issue_type,
         "attachment_time": attachment_time,
     }
+    return _fill_from_remembered_case(context)
+
+
+def _fill_from_remembered_case(context: dict) -> dict:
+    """Put back what this log's case told us last time, for what we lack now.
+
+    The description and the attachment time are read out of the case and its
+    attachments when a log is first analysed, and they live in the session. A
+    new conversation -- or a restart, or a Send To that is not asked for the
+    case number again because the answer is already on file -- starts with an
+    empty session, and the same log came up with no problem statement in the
+    chatbot box and no time in the picker, while the case number sitting next
+    to them was remembered perfectly well.
+
+    Only gaps are filled, so anything this session worked out itself wins.
+    """
+    if not context.get("case_nbr"):
+        return context
+    if context.get("description") and context.get("attachment_time"):
+        return context
+    try:
+        # Lazily imported: check_ips_service reaches back into the chatbot
+        # session registry, and this module is imported while that is built.
+        from configs.global_configs import app_config
+        from services import check_ips_service
+
+        log_path = (session.get("chatbot_log_path")
+                    or getattr(app_config, "last_analyzed_log_path", "") or "")
+        remembered = check_ips_service.remembered_case_facts(
+            log_path, context["case_nbr"])
+    except Exception as e:
+        print(f"[issue_context] remembered case facts unavailable: {e}")
+        return context
+    for name in ("description", "attachment_time"):
+        if not context.get(name) and remembered.get(name):
+            context[name] = remembered[name]
+    return context
+
 
 def resolved_issue_time_for(log_path: str, attachment_time: str) -> str:
     """

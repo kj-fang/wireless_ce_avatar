@@ -329,7 +329,7 @@
     return pending;
   }
 
-  var NOTICE_MS = 3000;
+  var NOTICE_MS = 7000;
 
   /**
    * Say what was recorded when nothing asked.

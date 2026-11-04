@@ -247,12 +247,10 @@ def _load_owners(args) -> list[str]:
     if args.owner is not None:
         owners = [args.owner.strip()]
     else:
-        try:
-            lines = args.owners_file.read_text(encoding="utf-8-sig").splitlines()
-        except OSError as e:
-            raise ValueError(f"cannot read owners file {args.owners_file}: {e}") from e
-        owners = [line.strip() for line in lines
-                  if line.strip() and not line.lstrip().startswith("#")]
+        # One reader for the file, shared with the Beacon page's "owners
+        # file" source (scheduler.read_owners_file).
+        from .scheduler import read_owners_file
+        owners = read_owners_file(args.owners_file)
 
     unique = []
     seen = set()

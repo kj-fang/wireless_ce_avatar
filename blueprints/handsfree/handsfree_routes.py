@@ -128,7 +128,19 @@ def auto_check():
     if request.method == "GET":
         return jsonify(scheduler.status())
     body = request.get_json(silent=True) or {}
-    if "enabled" in body and not scheduler.can_schedule_here():
+    if "enabled" not in body:
+        # Settings only (a field edited on the page, e.g. the owners file
+        # path): saved and reported back, the schedule itself left alone.
+        try:
+            cfg = scheduler.save_settings(
+                max_cases=body.get("max_cases"), source=body.get("source"),
+                list_view=body.get("list_view"), list_views=body.get("list_views"),
+                owners=body.get("owners"), owners_file=body.get("owners_file"),
+                **_email_settings_of(body))
+        except ValueError as e:
+            return jsonify({"ok": False, "error": str(e)}), 400
+        return jsonify(scheduler.status(cfg))
+    if not scheduler.can_schedule_here():
         return jsonify({"ok": False, "error": scheduler.CLIENT_CANNOT_SCHEDULE}), 403
     try:
         return jsonify(scheduler.configure(
@@ -139,6 +151,7 @@ def auto_check():
             list_view=body.get("list_view"),
             list_views=body.get("list_views"),
             owners=body.get("owners"),
+            owners_file=body.get("owners_file"),
             **_email_settings_of(body)))
     except ValueError as e:
         return jsonify({"ok": False, "error": str(e)}), 400
@@ -196,6 +209,7 @@ def auto_run_now():
                                   list_view=body.get("list_view"),
                                   list_views=body.get("list_views"),
                                   owners=body.get("owners"),
+                                  owners_file=body.get("owners_file"),
                                   **_email_settings_of(body))
     target = scheduler.scan_target(cfg)
     if target["error"]:

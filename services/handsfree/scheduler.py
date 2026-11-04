@@ -8,10 +8,15 @@ Config (HandsfreeStore config.json):
                                                     config is shared, only that
                                                     machine runs the rounds
     auto_check_max_cases int                        cases per round (newest first)
-    auto_source          "owner" | "list_view"      what a round scans (default owner)
+    auto_source          "owner" | "list_view" | "owners_file"
+                                                    what a round scans (default owner)
     auto_owners          [str]                      up to MAX_OWNERS IPS Owner.Name
                                                     for the owner source; empty =
                                                     the Settings owner_name
+    auto_owners_file     str                        owners_file source: path (on the
+                                                    machine that runs the round) of
+                                                    the CLI's --owners-file text file,
+                                                    one Owner.Name per line
     auto_list_views      [str]                      up to MAX_LIST_VIEWS IPS list view
                                                     developer names; a round runs the
                                                     union of their cases (closed cases
@@ -108,8 +113,47 @@ MAX_LIST_VIEWS = 3
 MAX_OWNERS = 10
 
 
+SOURCES = ("owner", "list_view", "owners_file")
+
+
 def _source(cfg: dict) -> str:
-    return "list_view" if cfg.get("auto_source") == "list_view" else "owner"
+    value = str(cfg.get("auto_source") or "")
+    return value if value in SOURCES else "owner"
+
+
+def read_owners_file(path) -> list[str]:
+    """The owners in a CLI owners file: UTF-8 (BOM allowed), one Owner.Name
+    per line, blank lines and # comments ignored, deduped case-insensitively
+    in file order. Raises ValueError when the file cannot be read."""
+    from pathlib import Path
+    p = Path(str(path).strip())
+    if not p.is_file():
+        raise ValueError(f"owners file not found: {p}")
+    try:
+        lines = p.read_text(encoding="utf-8-sig").splitlines()
+    except OSError as e:
+        raise ValueError(f"cannot read owners file {p}: {e}") from e
+    out: list[str] = []
+    seen: set = set()
+    for line in lines:
+        name = line.strip()
+        if not name or name.startswith("#") or name.casefold() in seen:
+            continue
+        out.append(name)
+        seen.add(name.casefold())
+    return out
+
+
+def _owners_file_info(cfg: dict) -> tuple[list[str], str]:
+    """(owners, error) of the configured owners file."""
+    path = str(cfg.get("auto_owners_file") or "").strip()
+    if not path:
+        return [], "no owners file configured"
+    try:
+        owners = read_owners_file(path)
+    except ValueError as e:
+        return [], str(e)
+    return owners, ("" if owners else f"owners file is empty: {path}")
 
 
 def _clean_views(values) -> list[str]:
@@ -171,6 +215,11 @@ def scan_target(cfg: dict) -> dict:
         return {"owner": "", "owners": [], "list_views": views,
                 "list_view": views[0] if views else "",
                 "error": "" if views else "no IPS list view configured"}
+    if _source(cfg) == "owners_file":
+        # The CLI's --owners-file, read on the machine that runs the round.
+        owners, error = _owners_file_info(cfg)
+        return {"owner": owners[0] if owners else "", "owners": owners, "list_views": [],
+                "list_view": "", "error": error}
     owners = _owners(cfg)
     return {"owner": owners[0] if owners else "", "owners": owners, "list_views": [],
             "list_view": "", "error": "" if owners else "no owner name configured"}
@@ -216,6 +265,9 @@ def status(cfg: Optional[dict] = None) -> dict:
         "source": _source(cfg),
         "owners": _owners(cfg),
         "max_owners": MAX_OWNERS,
+        "owners_file": str(cfg.get("auto_owners_file") or "").strip(),
+        "owners_file_owners": _owners_file_info(cfg)[0],
+        "owners_file_error": _owners_file_info(cfg)[1],
         "list_view": _list_view(cfg),
         "list_views": _list_views(cfg),
         "max_list_views": MAX_LIST_VIEWS,
@@ -275,14 +327,17 @@ def cli_last_run() -> str:
 
 
 def _settings_updates(max_cases=None, source=None, list_view=None,
-                      list_views=None, owners=None, email_watch=None,
-                      email_folder=None, email_lookback_days=None,
-                      email_max=None, email_reply_all=None) -> dict:
+                      list_views=None, owners=None, owners_file=None,
+                      email_watch=None, email_folder=None,
+                      email_lookback_days=None, email_max=None,
+                      email_reply_all=None) -> dict:
     updates: dict = {}
     if max_cases is not None:
         updates["auto_check_max_cases"] = max(1, min(50, int(max_cases)))
     if owners is not None:
         updates["auto_owners"] = _clean_owners(owners)
+    if owners_file is not None:
+        updates["auto_owners_file"] = str(owners_file or "").strip()
     if email_watch is not None:
         updates["email_watch_enabled"] = bool(email_watch)
     if email_folder is not None:
@@ -294,7 +349,7 @@ def _settings_updates(max_cases=None, source=None, list_view=None,
     if email_reply_all is not None:
         updates["email_reply_all"] = bool(email_reply_all)
     if source is not None:
-        updates["auto_source"] = "list_view" if str(source) == "list_view" else "owner"
+        updates["auto_source"] = str(source) if str(source) in SOURCES else "owner"
     if list_views is not None:
         views = _clean_views(list_views)
     elif list_view is not None:
@@ -308,11 +363,12 @@ def _settings_updates(max_cases=None, source=None, list_view=None,
 
 
 def save_settings(max_cases=None, source=None, list_view=None, list_views=None,
-                  owners=None, **email) -> dict:
+                  owners=None, owners_file=None, **email) -> dict:
     """Persist the round settings without touching the schedule (UI 'Run
     now' with edited fields). Returns the config."""
     return _store().save_config(
-        _settings_updates(max_cases, source, list_view, list_views, owners, **email))
+        _settings_updates(max_cases, source, list_view, list_views, owners, owners_file,
+                          **email))
 
 
 CLIENT_CANNOT_SCHEDULE = ("this PC runs Beacon as a client: scheduled rounds are started "
@@ -322,7 +378,7 @@ CLIENT_CANNOT_SCHEDULE = ("this PC runs Beacon as a client: scheduled rounds are
 
 def configure(enabled: bool, mode: str, max_cases: Optional[int] = None,
               source=None, list_view=None, list_views=None, owners=None,
-              **email) -> dict:
+              owners_file=None, **email) -> dict:
     """Start / stop / re-cadence from the UI. Returns the new status.
     Raises ValueError for an unknown mode, for Start on a client machine, or,
     when starting, an unconfigured source (no owner name / no list view)."""
@@ -337,7 +393,7 @@ def configure(enabled: bool, mode: str, max_cases: Optional[int] = None,
             raise ValueError(cli_running_message(recent))
     updates: dict = {"auto_check_enabled": bool(enabled), "auto_check_mode": mode}
     updates.update(_settings_updates(max_cases, source, list_view, list_views, owners,
-                                     **email))
+                                     owners_file, **email))
     if enabled:
         target = scan_target({**store.load_config(), **updates})
         if target["error"]:
@@ -361,6 +417,15 @@ def run_once(trigger: str = "manual", on_start=None) -> dict:
     cfg = store.load_config()
     target = scan_target(cfg)
     if target["error"]:
+        # A misconfigured source (owners file gone, no list view): say so in
+        # the status line and, for the schedule, move on to the next slot
+        # instead of retrying every tick.
+        updates = {"auto_last_result": f"failed: {target['error']}"}
+        if cfg.get("auto_check_enabled") and trigger == "scheduled":
+            updates["auto_next_run_at"] = next_run_after(
+                cfg.get("auto_check_mode") or "nightly",
+                datetime.now().astimezone()).isoformat(timespec="seconds")
+        store.save_config(updates)
         return {"ok": False, "error": target["error"]}
     _running.set()
     try:
@@ -371,6 +436,10 @@ def run_once(trigger: str = "manual", on_start=None) -> dict:
         # The Outlook folder is an ADDITIONAL source of the same round.
         if res.get("ok") and cfg.get("email_watch_enabled"):
             res["email"] = run_email_scan(store, trigger=trigger, **email_settings(cfg))
+        # Like the CLI after its owners round: retention housekeeping, but
+        # only for the schedule's own rounds (Run now leaves the queue alone).
+        if res.get("ok") and trigger == "scheduled":
+            res["cleanup"] = _cleanup_after_round(store)
     finally:
         _running.clear()
     busy = not res.get("ok") and "already in progress" in str(res.get("error", ""))
@@ -381,6 +450,19 @@ def run_once(trigger: str = "manual", on_start=None) -> dict:
             cfg.get("auto_check_mode") or "nightly",
             datetime.now().astimezone()).isoformat(timespec="seconds")})
     return res
+
+
+def _cleanup_after_round(store) -> dict:
+    """orchestrator.cleanup_queue, never failing the round (same as the CLI)."""
+    from .orchestrator import cleanup_queue
+    try:
+        res = cleanup_queue(store)
+        print(f"[handsfree.scheduler] cleanup: {res.get('drafts_removed')} draft(s), "
+              f"{res.get('log_folders_removed')} log folder(s) removed")
+        return res
+    except Exception as e:
+        print(f"[handsfree.scheduler] cleanup skipped: {type(e).__name__}: {e}")
+        return {"error": f"{type(e).__name__}: {e}"}
 
 
 def _tick(now: Optional[datetime] = None) -> bool:

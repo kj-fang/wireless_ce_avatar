@@ -469,8 +469,9 @@
         job that runs <code>tools/handsfree_server_run.py</code> (same sign-in profile, duplicate rounds).{% else %}Scheduled rounds run on
         the Handsfree server (the schedule below is read-only on this PC).{% endif %} <b>Run now</b> runs one round
         right away on this PC with the settings below. Each round scans the ONE source chosen below — the open IPS cases of up to ten case
-        owners for either new cases OR new customer comments since the previous round, or the cases of up to three IPS
-        list views (their union) that were not analyzed yet or have new customer comments — and runs the handsfree pipeline
+        owners for either new cases OR new customer comments since the previous round, the cases of up to three IPS
+        list views (their union) that were not analyzed yet or have new customer comments, or the open cases of every owner
+        listed in an owners file on the server (the same file as the CLI's <code>--owners-file</code>) — and runs the handsfree pipeline
         for each; the drafts queue below for review. Max cases per round applies to either source. Nothing is
         posted automatically — Approve still decides. Closed cases of a list view run only in trial mode (Settings).
         With "Also watch Outlook", a round run on this PC also reads your Outlook folder: a mail whose subject names a case as
@@ -498,14 +499,25 @@
       <div class="controls" id="auto-source-row">
         <span style="color: var(--muted);">Source:</span>
         <label class="auto-src-opt" style="display: inline-flex; align-items: center; gap: 6px; cursor: pointer;">
-          <input type="radio" name="auto-source" value="owner" onchange="applyAutoSourceUi()">
+          <input type="radio" name="auto-source" value="owner" onchange="applyAutoSourceUi(); saveAutoSettings({source: 'owner'})">
           Open cases of case owner(s) <span style="color: var(--faint);">(up to 10; empty = the Settings owner
           <b id="auto-owner" style="color: var(--muted);">{{ config.owner_name or '—' }}</b>)</span>
         </label>
         <label class="auto-src-opt" style="display: inline-flex; align-items: center; gap: 6px; cursor: pointer;">
-          <input type="radio" name="auto-source" value="list_view" onchange="applyAutoSourceUi()">
+          <input type="radio" name="auto-source" value="list_view" onchange="applyAutoSourceUi(); saveAutoSettings({source: 'list_view'})">
           IPS list views <span style="color: var(--faint);">(up to 3, their cases are combined)</span>
         </label>
+        <label class="auto-src-opt" style="display: inline-flex; align-items: center; gap: 6px; cursor: pointer;">
+          <input type="radio" name="auto-source" value="owners_file" onchange="applyAutoSourceUi(); saveAutoSettings({source: 'owners_file'})">
+          Owners file on the server <span style="color: var(--faint);">(the CLI's --owners-file: every owner in it)</span>
+        </label>
+      </div>
+      <div class="controls" id="auto-owners-file-row" style="display: none; padding-left: 58px;">
+        <input type="text" id="auto-owners-file" style="width: 420px; font-family: var(--mono); font-size: 12.5px;"
+               placeholder="C:\path\owners.txt — one IPS Owner.Name per line, # comments"
+               title="Path on the machine that runs the round (the Handsfree server); UTF-8 text, one Owner.Name per line, blank lines and # comments ignored"
+               onchange="refreshOwnersFileNote()">
+        <span class="status-line" id="auto-owners-file-note"></span>
       </div>
       <div class="controls" id="auto-owner-row" style="display: none; padding-left: 58px;">
         <span id="auto-owner-chips" style="display: inline-flex; gap: 6px; flex-wrap: wrap;"></span>
@@ -759,9 +771,11 @@
   // Only the chosen source's details are shown, so what will run is never
   // ambiguous: owner -> its name in the radio label; list views -> the chips.
   function applyAutoSourceUi() {
-    const lv = getAutoSource() === 'list_view';
+    const src = getAutoSource();
+    const lv = src === 'list_view';
     document.getElementById('auto-lv-row').style.display = lv ? '' : 'none';
-    document.getElementById('auto-owner-row').style.display = lv ? 'none' : '';
+    document.getElementById('auto-owner-row').style.display = src === 'owner' ? '' : 'none';
+    document.getElementById('auto-owners-file-row').style.display = src === 'owners_file' ? '' : 'none';
     document.querySelectorAll('.auto-src-opt').forEach(l => {
       l.style.color = l.querySelector('input').checked ? 'var(--fg)' : 'var(--muted)';
     });
@@ -798,16 +812,55 @@
     autoOwners.push(name);
     input.value = '';
     renderAutoOwnerChips();
+    saveAutoSettings({owners: autoOwners.slice(0, MAX_AUTO_OWNERS)});
   }
 
   function removeAutoOwner(name) {
     autoOwners = autoOwners.filter(n => n !== name);
     renderAutoOwnerChips();
+    saveAutoSettings({owners: autoOwners.slice(0, MAX_AUTO_OWNERS)});
   }
 
   function autoOwnerEditing() {
     const row = document.getElementById('auto-owner-row');
     return row && row.contains(document.activeElement);
+  }
+
+  // ---------- owners file (the CLI's --owners-file, read by the server) ----------
+
+  let ownersFileInfo = {owners: [], error: ''};   // from the last status answer
+
+  function renderOwnersFileNote() {
+    const note = document.getElementById('auto-owners-file-note');
+    const path = document.getElementById('auto-owners-file').value.trim();
+    if (!path) { note.textContent = 'no owners file set'; note.className = 'status-line'; return; }
+    if (ownersFileInfo.error) { note.textContent = ownersFileInfo.error; note.className = 'status-line error'; return; }
+    const o = ownersFileInfo.owners || [];
+    note.textContent = o.length + ' owner' + (o.length === 1 ? '' : 's') + ': '
+      + o.slice(0, 6).join(', ') + (o.length > 6 ? ', …' : '');
+    note.className = 'status-line';
+  }
+
+  // Round settings are saved the moment they change (source radio, owner /
+  // list-view chips, the owners file path): the schedule is left alone (no
+  // "enabled" in the body), the page re-renders from the server's answer, so
+  // the status polls never undo an edit and the server validates at once.
+  async function saveAutoSettings(partial) {
+    try {
+      const j = await postJson('/handsfree/auto', Object.assign({source: getAutoSource()}, partial));
+      if (j.error) { alert('Settings not saved: ' + j.error); return; }
+      renderAuto(j);
+    } catch (e) {
+      serverUnreachable(e);
+    }
+  }
+
+  // The path box was edited: save it so the server re-reads the file and
+  // the note shows what it found.
+  async function refreshOwnersFileNote() {
+    const note = document.getElementById('auto-owners-file-note');
+    note.textContent = 'checking…'; note.className = 'status-line';
+    await saveAutoSettings({owners_file: document.getElementById('auto-owners-file').value.trim()});
   }
 
   function renderAutoListViewChips() {
@@ -838,11 +891,13 @@
     autoListViews.push(name);
     document.getElementById('auto-list-view-other').value = '';
     renderAutoListViewChips();
+    saveAutoSettings({list_views: autoListViews.slice(0, MAX_AUTO_LIST_VIEWS)});
   }
 
   function removeAutoListView(name) {
     autoListViews = autoListViews.filter(n => n !== name);
     renderAutoListViewChips();
+    saveAutoSettings({list_views: autoListViews.slice(0, MAX_AUTO_LIST_VIEWS)});
   }
 
   function autoListViewEditing() {
@@ -934,7 +989,11 @@
     if (!autoOwnerEditing()) {
       autoOwners = (a.owners || []).slice(0, MAX_AUTO_OWNERS);
     }
+    const ofEl = document.getElementById('auto-owners-file');
+    if (document.activeElement !== ofEl) ofEl.value = a.owners_file || '';
+    ownersFileInfo = {owners: a.owners_file_owners || [], error: a.owners_file_error || ''};
     applyAutoSourceUi();
+    renderOwnersFileNote();
     const emWatch = document.getElementById('auto-email-watch');
     if (document.activeElement !== emWatch) emWatch.checked = !!a.email_watch_enabled;
     const emFolder = document.getElementById('auto-email-folder');
@@ -952,8 +1011,11 @@
     document.getElementById('auto-toggle-btn').className = autoEnabled ? 'danger' : 'primary';
     const bits = [];
     const owners = a.owners || [];
+    const fileOwners = a.owners_file_owners || [];
     const srcText = a.source === 'list_view'
       ? 'list view' + ((a.list_views || []).length > 1 ? 's ' : ' ') + ((a.list_views || [a.list_view]).join(', ') || '?')
+      : a.source === 'owners_file'
+      ? 'owners file ' + (a.owners_file || '?') + (a.owners_file_error ? ' (' + a.owners_file_error + ')' : ' (' + fileOwners.length + ' owners)')
       : 'open cases of ' + (owners.length > 1 ? owners.length + ' owners (' + owners.join(', ') + ')'
                                                : (owners[0] ? "'" + owners[0] + "'" : 'the owner'));
     bits.push((a.can_schedule ? '' : 'schedule (read-only here): ')
@@ -1047,6 +1109,7 @@
       source: getAutoSource(),
       list_views: autoListViews.slice(0, MAX_AUTO_LIST_VIEWS),
       owners: autoOwners.slice(0, MAX_AUTO_OWNERS),
+      owners_file: document.getElementById('auto-owners-file').value.trim(),
     }, emailRoundSettings());
   }
 

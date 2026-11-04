@@ -3417,6 +3417,63 @@ def smoke_server_role(tmp: Path) -> None:
               and "capped" in (store_c.load_config().get("auto_last_result") or ""),
               f"cases={[c['case_nbr'] for c in res_c['cases']]} result={store_c.load_config().get('auto_last_result')}")
 
+        # --- k) owners file source: the CLI's --owners-file, read by the page ---
+        from .scheduler import read_owners_file
+        of = tmp / "owners.txt"
+        of.write_text("\ufeff# team\nAnn\n\n  bob  \nann\nCara\n", encoding="utf-8")
+        cfg_f = {"auto_source": "owners_file", "auto_owners_file": str(of), "owner_name": "Zed"}
+        t_f = scan_target(cfg_f)
+        t_missing = scan_target({**cfg_f, "auto_owners_file": str(tmp / "nope.txt")})
+        t_unset = scan_target({"auto_source": "owners_file"})
+        st_f = sch.status(cfg_f)
+        upd = _settings_updates(source="owners_file", owners_file=" " + str(of) + " ")
+        check("S21.k owners file source: BOM, comments and blanks skipped, deduped in file order; "
+              "missing / unset file is an error; status and settings carry it",
+              read_owners_file(of) == ["Ann", "bob", "Cara"]
+              and t_f["owners"] == ["Ann", "bob", "Cara"] and t_f["owner"] == "Ann" and t_f["error"] == ""
+              and "not found" in t_missing["error"] and t_unset["error"] == "no owners file configured"
+              and st_f["source"] == "owners_file" and st_f["owners_file"] == str(of)
+              and st_f["owners_file_owners"] == ["Ann", "bob", "Cara"] and st_f["owners_file_error"] == ""
+              and upd == {"auto_source": "owners_file", "auto_owners_file": str(of)}
+              and _settings_updates(source="bogus") == {"auto_source": "owner"},
+              f"t_f={t_f} missing={t_missing['error']!r} unset={t_unset['error']!r} upd={upd}")
+        # a scheduled round over the file: owners handed over, cleanup afterwards; a
+        # vanished file moves the schedule on instead of retrying every tick
+        cleaned: list = []
+        orig_cleanup = orch.cleanup_queue
+        orch.cleanup_queue = lambda store_: cleaned.append(True) or {"drafts_removed": 0, "log_folders_removed": 0}
+        orch.run_auto_scan = _fake_scan
+        try:
+            got.clear()
+            store.save_config({"auto_check_enabled": True, "auto_check_mode": "4h",
+                               "auto_check_host": sch._this_host(), "auto_source": "owners_file",
+                               "auto_owners_file": str(of), "auto_next_run_at": past})
+            res_f = sch.run_once(trigger="scheduled")
+            cfg_after = store.load_config()
+            store.save_config({"auto_owners_file": str(tmp / "gone.txt"), "auto_next_run_at": past})
+            res_gone = sch.run_once(trigger="scheduled")
+            cfg_gone = store.load_config()
+            got_manual = {}
+            store.save_config({"auto_owners_file": str(of)})
+            cleaned_before = len(cleaned)
+            sch.run_once(trigger="manual")
+            cleaned_manual = len(cleaned) - cleaned_before
+        finally:
+            orch.run_auto_scan, orch.cleanup_queue = orig_scan, orig_cleanup
+            store.save_config({"auto_check_enabled": False, "auto_source": "owner", "auto_next_run_at": ""})
+        now_local = datetime.now().astimezone()
+        check("S21.k2 scheduled round over the owners file: every owner handed to the round, cleanup once "
+              "(not for Run now); a missing file -> failed result and the next slot, no hot retry",
+              res_f.get("ok") and got.get("owners") == ["Ann", "bob", "Cara"] and got.get("owner") == "Ann"
+              and res_f.get("cleanup") == {"drafts_removed": 0, "log_folders_removed": 0} and len(cleaned) == 1
+              and datetime.fromisoformat(cfg_after["auto_next_run_at"]) > now_local
+              and res_gone.get("ok") is False and "not found" in res_gone.get("error", "")
+              and str(cfg_gone.get("auto_last_result", "")).startswith("failed: owners file not found")
+              and datetime.fromisoformat(cfg_gone["auto_next_run_at"]) > now_local
+              and cleaned_manual == 0,
+              f"res_f={res_f} got={got} cleaned={cleaned} next={cfg_after.get('auto_next_run_at')} "
+              f"gone={res_gone} last={cfg_gone.get('auto_last_result')!r} manual_cleanups={cleaned_manual}")
+
         # --- h) the route: 403 for a client, the server starts it -----------
         try:
             from flask import Flask

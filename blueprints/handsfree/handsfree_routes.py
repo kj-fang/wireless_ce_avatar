@@ -14,21 +14,70 @@ import subprocess
 from flask import Blueprint, jsonify, render_template, request, session
 
 from services.handsfree import orchestrator
-from services.handsfree.queue import HandsfreeStore, decoded_log_dir
+from services.handsfree.queue import (HandsfreeShareUnavailable, HandsfreeStore,
+                                      decoded_log_dir, decoded_log_file,
+                                      describe_share_error, open_store)
 
 handsfree_bp = Blueprint("handsfree", __name__, url_prefix="/handsfree")
 
 
 def _store() -> HandsfreeStore:
-    from configs.global_configs import app_config
-    from pathlib import Path
-    return HandsfreeStore(Path(app_config.avatarfiles_dir) / "handsfree")
+    return open_store()
+
+
+@handsfree_bp.errorhandler(HandsfreeShareUnavailable)
+def _share_unavailable(e):
+    return jsonify({"ok": False, "error": str(e)}), 503
+
+
+@handsfree_bp.errorhandler(OSError)
+def _file_error(e):
+    # Permission or network trouble after the startup check passed.
+    where = f" ({e.filename})" if getattr(e, "filename", None) else ""
+    return jsonify({"ok": False,
+                    "error": f"file access failed{where}: {describe_share_error(e)}"}), 503
 
 
 @handsfree_bp.route("/")
 def index():
-    cfg = _store().load_config()
-    return render_template("handsfree.html", config=cfg)
+    try:
+        cfg = _store().load_config()
+        share_error = ""
+    except HandsfreeShareUnavailable as e:
+        cfg, share_error = dict(HandsfreeStore.DEFAULT_CONFIG), str(e)
+    return render_template("handsfree.html", config=cfg, share_error=share_error)
+
+
+# ---------- this reviewer: the IPS sign-in of this PC ----------
+# The client posts with the Salesforce session of the Windows account that
+# runs it, so that session's user IS the reviewer: the queue opens on that
+# user's cases and Approve posts under that name. Nothing is stored here
+# beyond the resolved identity (login.py).
+
+def _login():
+    from services.handsfree import login
+    return login
+
+
+@handsfree_bp.route("/login", methods=["GET"])
+def login_status():
+    return jsonify(_login().status())
+
+
+@handsfree_bp.route("/login", methods=["POST"])
+def login_start():
+    """Start the sign-in in the background: silent (cookie file / Windows
+    account SSO) by default; {"interactive": true} opens a visible Chrome
+    for the reviewer to sign in, which only makes sense on this PC."""
+    body = request.get_json(silent=True) or {}
+    interactive = bool(body.get("interactive"))
+    if interactive and request.remote_addr not in ("127.0.0.1", "::1"):
+        return jsonify({"ok": False, "error": "interactive sign-in: localhost only"}), 403
+    return jsonify(_login().start_sign_in(interactive=interactive))
+
+
+def _signed_in_name() -> str:
+    return str(((_login().status().get("identity") or {}).get("name")) or "")
 
 
 # ---------- run ----------
@@ -51,19 +100,10 @@ def status():
     return jsonify(orchestrator.get_run_state())
 
 
-# ---------- automatic analysis (scheduler) ----------
-
-@handsfree_bp.record_once
-def _resume_scheduler(_state):
-    """After an app restart, resume a previously enabled schedule without
-    waiting for someone to open the page. The thread reads the config on
-    every tick, so a not-yet-booted app_config just means a skipped tick."""
-    try:
-        from services.handsfree import scheduler
-        scheduler.ensure_started()
-    except Exception as e:
-        print(f"[handsfree] scheduler not started: {e}")
-
+# ---------- automatic analysis ----------
+# Scheduled rounds run on the Handsfree server (nightly CLI) only. The app
+# keeps the round settings and "Run now" (a one-off manual round), but never
+# starts the in-app scheduler: the config is shared by every reviewer's PC.
 
 @handsfree_bp.route("/auto", methods=["GET", "POST"])
 def auto_check():
@@ -71,6 +111,9 @@ def auto_check():
     if request.method == "GET":
         return jsonify(scheduler.status())
     body = request.get_json(silent=True) or {}
+    if body.get("enabled"):
+        return jsonify({"ok": False, "error": "scheduled analysis runs on the Handsfree "
+                        "server (nightly CLI) and cannot be started from the app"}), 403
     try:
         return jsonify(scheduler.configure(
             enabled=bool(body.get("enabled")),
@@ -162,8 +205,18 @@ def auto_run_now():
 
 @handsfree_bp.route("/queue")
 def list_queue():
-    include_closed = request.args.get("all", "").lower() in ("1", "true", "yes")
+    """The signed-in reviewer's own cases. ?everyone=1 lifts that to every
+    owner (optionally narrowed by ?owner=); without a sign-in the own-cases
+    view is empty and says so."""
+    truthy = ("1", "true", "yes")
+    include_closed = request.args.get("all", "").lower() in truthy
+    everyone = request.args.get("everyone", "").lower() in truthy
     owner_name = request.args.get("owner", "").strip()
+    if not everyone:
+        me = _signed_in_name()
+        if not me:
+            return jsonify({"items": [], "signed_out": True})
+        owner_name = me
     return jsonify({"items": _store().list_drafts(
         include_closed=include_closed, owner_name=owner_name)})
 
@@ -207,9 +260,10 @@ def reject(draft_id: str):
 
 @handsfree_bp.route("/queue/<draft_id>/open_log_folder", methods=["POST"])
 def open_log_folder(draft_id: str):
-    """Open the folder of the case's decoded WRT log in Explorer (the app
-    runs on the reviewer's own PC), with the .log selected. The path comes
-    from the stored draft record, never from the request."""
+    """Open the folder of the case's decoded log in Explorer (the app runs on
+    the reviewer's own PC), with the log selected — the shared copy on the
+    Handsfree folder, so it works whichever machine ran the analysis. The
+    path comes from the stored draft record, never from the request."""
     if request.remote_addr not in ("127.0.0.1", "::1"):
         return jsonify({"ok": False, "error": "localhost only"}), 403
     rec = _store().get(draft_id)
@@ -222,7 +276,7 @@ def open_log_folder(draft_id: str):
     if not os.path.isdir(folder):
         return jsonify({"ok": False,
                         "error": f"folder no longer exists: {folder}"}), 404
-    log_path = os.path.normpath(rec["analysis"]["log_path"])
+    log_path = os.path.normpath(decoded_log_file(rec))
     if os.path.isfile(log_path):
         subprocess.Popen(["explorer", "/select,", log_path])
     else:
@@ -352,7 +406,7 @@ def config():
     body = request.get_json(silent=True) or {}
     allowed = {"owner_name", "post_backend", "max_cases_per_run",
                "dry_run", "rest_field_map", "ui_locators", "trial_mode",
-               "email_reply_all", "email_display_draft"}
+               "email_reply_all", "email_display_draft", "auto_post_first_response"}
     updates = {k: v for k, v in body.items() if k in allowed}
     return jsonify(store.save_config(updates))
 

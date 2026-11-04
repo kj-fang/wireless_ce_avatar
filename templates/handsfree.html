@@ -106,6 +106,8 @@
     tbody tr:last-child td { border-bottom: none; }
     #queue-table tbody tr { transition: background 200ms var(--ease); }
     #queue-table tbody tr:hover { background: rgba(69,184,240,0.06); cursor: pointer; }
+    #queue-table tbody tr.skipped-row { opacity: 0.55; }
+    #queue-table tbody tr.skipped-row:hover { background: none; cursor: default; }
     td.case-nbr { font-family: var(--mono); font-size: 12.5px; }
     a.case-link { color: var(--accent, #4ea1ff); text-decoration: none; border-bottom: 1px dotted currentColor; }
     a.case-link:hover { text-decoration: none; border-bottom-style: solid; }
@@ -362,6 +364,12 @@
 </header>
 
 <main>
+  {% if share_error %}
+  <div class="panel" style="border-color: var(--bad, #c33);">
+    <b>Shared Handsfree folder unavailable</b> — the review queue cannot be read or written.
+    <div class="status-line error">{{ share_error }}</div>
+  </div>
+  {% endif %}
   <div class="panel" id="settings-panel">
     <h3 role="button" tabindex="0" onclick="toggleSettings()" onkeydown="if(event.key==='Enter'||event.key===' '){event.preventDefault();toggleSettings();}">
       <span class="caret" aria-hidden="true">
@@ -381,6 +389,9 @@
         </label>
         <label title="Kill-switch: when checked, nothing is ever posted to IPS">
           <input type="checkbox" id="cfg-dry-run"> dry run (posting disabled)
+        </label>
+        <label title="A case's first reply that asks the customer for missing items (request logs / request info / first response) posts PUBLICLY without review, under the IPS account of the machine running the analysis. Dry run still blocks it.">
+          <input type="checkbox" id="cfg-auto-post-fr"> auto-post first response (missing items)
         </label>
         <label>Post backend:
           <select id="cfg-backend">
@@ -431,6 +442,8 @@
           posting backend: <b id="backend-name">{{ config.post_backend }}</b>
           <span id="dry-run-badge" class="pill warn"
                 {% if not config.dry_run %}style="display:none;"{% endif %}>DRY RUN — posting disabled</span>
+          <span id="auto-post-fr-badge" class="pill warn" title="First replies asking for missing items post without review"
+                {% if not config.auto_post_first_response %}style="display:none;"{% endif %}>AUTO-POST first response</span>
           <span id="trial-badge" class="pill warn" title="Tuning on historical cases: drafts are flagged TRIAL and cannot be posted"
                 {% if not config.trial_mode %}style="display:none;"{% endif %}>TRIAL MODE</span>
         </span>
@@ -449,16 +462,17 @@
       </div>
     </div>
     <div id="tab-auto" style="display:none;">
-      <div class="hint">Each round scans the ONE source chosen below — the open IPS cases of the case owner (from
+      <div class="hint">Scheduled rounds run on the Handsfree server every night. <b>Run now</b> runs one round
+        right away on this PC with the settings below. Each round scans the ONE source chosen below — the open IPS cases of the case owner (from
         Settings) for either new cases OR new customer comments since the previous round, or the cases of up to three IPS
         list views (their union) that were not analyzed yet or have new customer comments — and runs the handsfree pipeline
-        for each; the drafts queue below for review. Frequency and max cases per round apply to either source. Nothing is
+        for each; the drafts queue below for review. Max cases per round applies to either source. Nothing is
         posted automatically — Approve still decides. Closed cases of a list view run only in trial mode (Settings).
-        With "Also watch Outlook", each round also reads your Outlook folder: a mail whose subject names a case as
+        With "Also watch Outlook", a round run on this PC also reads your Outlook folder: a mail whose subject names a case as
         "IPS 01234567" runs that case on its email thread (every human mail naming the case, Inbox + Sent Items), and
         Approve on its draft saves a reply in your Outlook Drafts (nothing is sent).</div>
       <div class="controls">
-        <label>Frequency:
+        <label style="display: none;">Frequency:
           <select id="auto-mode">
             <option value="4h">Every 4 hours</option>
             <option value="8h">Every 8 hours</option>
@@ -468,7 +482,7 @@
         <label>Max cases per round:
           <input type="number" id="auto-max" min="1" max="50" step="1" value="10" style="width: 64px;">
         </label>
-        <button class="primary" id="auto-toggle-btn" onclick="toggleAuto()">
+        <button class="primary" id="auto-toggle-btn" onclick="toggleAuto()" style="display: none;">
           <svg width="11" height="11" viewBox="0 0 24 24" fill="currentColor" aria-hidden="true">
             <path d="M6 4.5l14 7.5-14 7.5z" /></svg>
           <span id="auto-toggle-text">Start automatic analysis</span></button>
@@ -555,11 +569,20 @@
       <label style="font-size: 12px; margin-left: 4px; font-weight: 400;">
         <input type="checkbox" id="show-closed" onchange="loadQueue()"> show posted/rejected
       </label>
-      <label style="font-size: 12px; margin-left: 8px; font-weight: 400;">
+      <label style="font-size: 12px; margin-left: 8px; font-weight: 400;"
+             title="The queue opens on the cases of the IPS user signed in on this PC; tick to see every owner's">
+        <input type="checkbox" id="show-everyone" onchange="applyEveryoneUi(); loadQueue()"> everyone's cases
+      </label>
+      <label id="owner-filter-wrap" style="font-size: 12px; margin-left: 4px; font-weight: 400; display: none;">
         owner:
         <input type="text" id="owner-filter" placeholder="Filter by case owner"
                style="width: 190px;" onkeydown="if(event.key==='Enter')loadQueue()">
       </label>
+      <span id="login-badge" class="pill" style="margin-left: 8px; font-weight: 400;"
+            title="The IPS (Salesforce) user of this PC's session: the queue opens on this user's cases and Approve posts under this name">IPS: signing in…</span>
+      <button class="ghost" id="login-btn" onclick="signIn(true)"
+              style="display: none; height: 28px; padding: 0 11px; font-size: 12px;"
+              title="Opens a Chrome window for Intel SSO; the sign-in is kept on this PC">Sign in to IPS</button>
     </h3>
     <table id="queue-table">
       <thead><tr>
@@ -635,6 +658,8 @@
   function applyConfigBadge(cfg) {
     document.getElementById('backend-name').textContent = cfg.post_backend || 'auto';
     document.getElementById('dry-run-badge').style.display = cfg.dry_run ? '' : 'none';
+    document.getElementById('auto-post-fr-badge').style.display =
+      cfg.auto_post_first_response ? '' : 'none';
     document.getElementById('trial-badge').style.display = cfg.trial_mode ? '' : 'none';
     if (cfg.owner_name) document.getElementById('owner-name').value = cfg.owner_name;
   }
@@ -644,6 +669,7 @@
     document.getElementById('auto-owner').textContent = cfg.owner_name || '—';
     document.getElementById('cfg-max-cases').value = cfg.max_cases_per_run ?? 3;
     document.getElementById('cfg-dry-run').checked = !!cfg.dry_run;
+    document.getElementById('cfg-auto-post-fr').checked = !!cfg.auto_post_first_response;
     document.getElementById('cfg-backend').value = cfg.post_backend || 'auto';
     document.getElementById('cfg-trial').checked = !!cfg.trial_mode;
     applyTrialUi();
@@ -655,7 +681,12 @@
   async function loadConfig() {
     try {
       const r = await fetch('/handsfree/config');
-      fillConfigForm(await r.json());
+      const cfg = await r.json();
+      if (cfg.error) {
+        document.getElementById('cfg-status').textContent = 'config load failed: ' + cfg.error;
+        return;
+      }
+      fillConfigForm(cfg);
     } catch (e) {
       document.getElementById('cfg-status').textContent = 'config load failed: ' + e;
     }
@@ -764,6 +795,7 @@
       owner_name: document.getElementById('cfg-owner').value.trim(),
       max_cases_per_run: Math.min(15, Math.max(1, isNaN(maxRaw) ? 3 : maxRaw)),
       dry_run: document.getElementById('cfg-dry-run').checked,
+      auto_post_first_response: document.getElementById('cfg-auto-post-fr').checked,
       post_backend: document.getElementById('cfg-backend').value,
       trial_mode: document.getElementById('cfg-trial').checked,
     };
@@ -1153,15 +1185,48 @@
     const showClosed = document.getElementById('show-closed').checked;
     const params = new URLSearchParams();
     if (showClosed) params.set('all', '1');
-    const owner = document.getElementById('owner-filter').value.trim();
-    if (owner) params.set('owner', owner);
+    if (document.getElementById('show-everyone').checked) {
+      params.set('everyone', '1');
+      const owner = document.getElementById('owner-filter').value.trim();
+      if (owner) params.set('owner', owner);
+    }
     const query = params.toString();
     const r = await fetch('/handsfree/queue' + (query ? '?' + query : ''));
     const j = await r.json();
     const tbody = document.querySelector('#queue-table tbody');
     tbody.innerHTML = '';
     const firstOfCase = new Set();   // the Reset button shows once per case
+    if (j.error) {
+      tbody.innerHTML = '<tr><td colspan="9" style="color:var(--bad, #c33);">could not load the queue: '
+        + esc(j.error) + '</td></tr>';
+      return;
+    }
+    if (j.signed_out) {
+      tbody.innerHTML = '<tr><td colspan="9" style="color:var(--muted);">' + (
+        ipsLogin.status === 'signing_in'
+          ? 'signing in to IPS — your cases appear in a moment'
+          : 'not signed in to IPS: use "Sign in to IPS" to see your cases, or tick "everyone\'s cases"'
+      ) + '</td></tr>';
+      return;
+    }
     (j.items || []).forEach(it => {
+      if (it.status === 'skipped') {
+        // Looked at by the server but not analyzed: no draft to open.
+        const tr = document.createElement('tr');
+        tr.className = 'skipped-row';
+        tr.innerHTML =
+          `<td class="case-nbr">${caseLink(it.case_nbr, it.case_id)}</td>` +
+          `<td>${esc(it.owner_name || '—')}</td>` +
+          `<td title="${esc(it.subject || '')}">${esc(it.skip_reason || 'skipped')}</td>` +
+          `<td><span class="pill">${esc(it.mode || '')}</span></td>` +
+          `<td>—</td>` +
+          `<td><span class="pill">skipped</span></td>` +
+          `<td>—</td>` +
+          `<td>${esc((it.created_at || '').slice(0, 16))}</td>` +
+          `<td>—</td>`;
+        tbody.appendChild(tr);
+        return;
+      }
       const statusCls = it.status === 'posted' ? 'good'
                       : it.status === 'post_failed' ? 'bad'
                       : it.status === 'rejected' ? 'bad'
@@ -1176,7 +1241,9 @@
         (it.email ? ` <span class="pill" title="${esc('from ' + (it.email.sender_name || it.email.sender_email || '?') + ' · ' + (it.email.subject || ''))}">${it.source === 'email' ? 'email thread' : 'email'}</span>` : '') +
         `</td>` +
         `<td>${it.confidence != null ? it.confidence + '/100' : '—'}</td>` +
-        `<td><span class="pill dot ${statusCls}">${esc(it.status)}</span></td>` +
+        `<td><span class="pill dot ${statusCls}">${esc(it.status)}</span>` +
+        (it.auto_posted ? ` <span class="pill" title="Posted automatically (auto-post first response)">AUTO</span>` : '') +
+        `</td>` +
         // Who acts next, as read from the comment thread (hover = the step).
         (it.action_owner
           ? `<td><span class="pill ${it.action_owner === 'intel' ? 'warn' : ''}" ` +
@@ -1369,7 +1436,11 @@
 
   async function openDraft(draftId) {
     const r = await fetch('/handsfree/queue/' + encodeURIComponent(draftId));
-    if (!r.ok) { alert('draft not found'); return; }
+    if (!r.ok) {
+      const err = await r.json().catch(() => ({}));
+      alert('Could not open the draft: ' + (err.error || 'draft not found'));
+      return;
+    }
     const d = await r.json();
     currentDraftId = d.draft_id;
     currentDraftMode = d.mode || null;
@@ -1385,14 +1456,17 @@
     document.getElementById('draft-panel').style.display = '';
     document.getElementById('draft-title').innerHTML =
       `case ${caseLink(d.case_nbr, d.case_id)} · ${esc(d.mode)} · ${esc(d.status)}`;
+    const pr = d.post_result || {};
+    const postedAs = (pr.author && pr.author.name) || (pr.posted_by && pr.posted_by.name) || d.posted_by || '';
     document.getElementById('draft-status').textContent = [
       d.email ? 'Reply to: ' + (d.email.sender_name || d.email.sender_email || '?')
         + (d.email.sender_email && d.email.sender_name ? ' <' + d.email.sender_email + '>' : '')
         + ' · "' + (d.email.subject || '') + '" · received ' + (d.email.received || '').slice(0, 16).replace('T', ' ')
         + (d.email.reply_all === false ? ' · reply to sender only' : ' · reply all') : '',
-      d.post_result && d.post_result.backend === 'outlook' && d.post_result.ok
-        ? 'saved in Outlook Drafts' + (d.post_result.detail && d.post_result.detail.to ? ' to ' + d.post_result.detail.to : '') : '',
-      d.post_result && d.post_result.error ? ('last post attempt: ' + d.post_result.error) : '',
+      pr.backend === 'outlook' && pr.ok
+        ? 'saved in Outlook Drafts' + (pr.detail && pr.detail.to ? ' to ' + pr.detail.to : '') : '',
+      !d.email && d.status === 'posted' && postedAs ? ('posted to IPS as ' + postedAs) : '',
+      pr.error ? ('last post attempt: ' + pr.error) : '',
     ].filter(Boolean).join(' · ');
     document.getElementById('draft-text').value = d.draft_plain || '';
     renderDraftChips(d.analysis || {});
@@ -1418,11 +1492,18 @@
 
   async function approveDraft() {
     if (!currentDraftId) return;
+    // An IPS comment goes out under this PC's IPS sign-in; an Outlook reply
+    // draft needs no IPS session at all.
+    if (!currentDraftEmail && !(ipsLogin.status === 'signed_in' && ipsLogin.identity)) {
+      alert('Not signed in to IPS on this PC. Use "Sign in to IPS" first — the comment is posted under that name.');
+      return;
+    }
+    const asWho = currentDraftEmail ? '' : '\n\nIt will be posted as ' + ipsLogin.identity.name + '.';
     const msg = currentDraftEmail
       ? 'Save this text as a reply draft in your Outlook Drafts folder? Nothing is sent and nothing is posted to IPS.'
-      : (['request_logs', 'request_info', 'first_response'].includes(currentDraftMode))
+      : ((['request_logs', 'request_info', 'first_response'].includes(currentDraftMode))
       ? 'Post this reply to IPS as a PUBLIC comment visible to the customer?'
-      : 'Post this comment to IPS as Private to Intel?';
+      : 'Post this comment to IPS as Private to Intel?') + asWho;
     if (!confirm(msg)) return;
     const btn = document.getElementById('approve-btn');
     btn.disabled = true;
@@ -1432,9 +1513,11 @@
       body: JSON.stringify({draft_plain: document.getElementById('draft-text').value}),
     });
     const j = await r.json();
+    const postedName = j.ok && ((j.result && j.result.author && j.result.author.name)
+      || (ipsLogin.identity && ipsLogin.identity.name));
     document.getElementById('post-status').textContent =
       j.ok ? (currentDraftEmail ? 'reply draft saved in Outlook — open Outlook Drafts to send it'
-                                : 'posted to IPS')
+                                : 'posted to IPS' + (postedName ? ' as ' + postedName : ''))
            : ((currentDraftEmail ? 'Outlook draft failed: ' : 'post failed: ') + (j.error || 'unknown'));
     if (!j.ok) btn.disabled = false;
     loadQueue();
@@ -2140,10 +2223,66 @@
         `<pre style="white-space: pre-wrap; margin-top: 6px;">${esc('log: ' + (x.log_file || '—')
           + ((x.log_range || []).filter(Boolean).length ? '  (' + x.log_range.join(' – ') + ')' : '')
           + '\n\n' + (x.description || ''))}</pre>`).join('') + `</details>`;
+  // ---- IPS sign-in of this PC: whose cases the queue shows, whose name posts carry
+  let ipsLogin = {status: 'signed_out', identity: null, error: ''};
+
+  function applyEveryoneUi() {
+    const everyone = document.getElementById('show-everyone').checked;
+    document.getElementById('owner-filter-wrap').style.display = everyone ? '' : 'none';
+  }
+
+  function renderLogin() {
+    const badge = document.getElementById('login-badge');
+    const btn = document.getElementById('login-btn');
+    const id = ipsLogin.identity;
+    if (ipsLogin.status === 'signed_in' && id) {
+      badge.textContent = 'IPS: ' + id.name;
+      badge.className = 'pill good';
+      badge.title = 'Signed in to IPS as ' + id.name + (id.email ? ' <' + id.email + '>' : '')
+        + ' — the queue shows this user\'s cases and Approve posts under this name';
+      btn.style.display = 'none';
+    } else if (ipsLogin.status === 'signing_in') {
+      badge.textContent = ipsLogin.interactive ? 'IPS: sign in in the Chrome window…' : 'IPS: signing in…';
+      badge.className = 'pill';
+      badge.title = '';
+      btn.style.display = 'none';
+    } else {
+      badge.textContent = 'IPS: not signed in';
+      badge.className = 'pill warn';
+      badge.title = ipsLogin.error || 'no IPS session on this PC';
+      btn.style.display = '';
+    }
+  }
+
+  async function pollLogin() {
+    const r = await fetch('/handsfree/login');
+    const j = await r.json();
+    const before = ipsLogin.status;
+    ipsLogin = j;
+    renderLogin();
+    if (j.status === 'signing_in') { setTimeout(pollLogin, 2000); return; }
+    if (j.status === 'signed_in' && j.identity) {
+      // "Check now" defaults to the signed-in reviewer's own cases.
+      const ownerBox = document.getElementById('owner-name');
+      if (ownerBox && !ownerBox.value.trim()) ownerBox.value = j.identity.name;
+    }
+    if (before !== j.status) loadQueue();
+  }
+
+  async function signIn(interactive) {
+    const r = await fetch('/handsfree/login', {
+      method: 'POST', headers: {'Content-Type': 'application/json'},
+      body: JSON.stringify({interactive: !!interactive}),
+    });
+    ipsLogin = await r.json();
+    renderLogin();
+    loadQueue();
+    setTimeout(pollLogin, 1500);
   }
 
   loadConfig();
-  loadQueue();
+  applyEveryoneUi();
+  signIn(false);
   refreshStatus();
   loadAuto();
 </script>

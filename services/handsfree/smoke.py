@@ -346,6 +346,7 @@ def smoke_runner(tmp: Path) -> None:
         case_ctx.subject = "Wi-Fi drops right after connecting"
         case_ctx.description = "Device sometimes disconnects. First seen last week."
         case_ctx.wifi_or_bt = "wifi"
+        case_ctx.subcategory = "WiFi Connectivity"
         case_ctx.case_download_dir = str(case_dir)
         case_ctx.comments = [
             [datetime(2026, 6, 19, 9, 0), "Partner",
@@ -497,6 +498,7 @@ def smoke_runner(tmp: Path) -> None:
         def _fake_process_bt(case_ctx: CaseContext) -> CaseContext:
             case_ctx = _fake_process(case_ctx)
             case_ctx.wifi_or_bt = "bt"
+            case_ctx.subcategory = "Bluetooth"
             return case_ctx
 
         cis.CaseService.process_case = staticmethod(_fake_process_bt)
@@ -599,10 +601,13 @@ def smoke_runner(tmp: Path) -> None:
               and live["comment_images"][0].get("author") == "Partner"
               and "WRT" in (live["comment_images"][0].get("descriptions") or [""])[0],
               f"imgs={live.get('comment_images')}")
+        # The fixture carries an explicit IPS subcategory ('WiFi Connectivity'),
+        # so with the fake reader saying 'Others' the subcategory, not triage,
+        # is the first specific candidate.
         check("S4.dec1 issue-category decision: candidates in priority order (reader, IPS "
-              "subcategory, triage); the fake reader says 'Others' so triage wins; the "
-              "domain's required logs named",
-              dd.get("winner") == "Connectivity" and dd.get("winner_source") == "triage"
+              "subcategory, triage); the fake reader says 'Others' so the IPS subcategory "
+              "wins over triage; the domain's required logs named",
+              dd.get("winner") == "Connectivity" and dd.get("winner_source") == "ips_subcategory"
               and cand_src == ["reader", "ips_subcategory", "triage"]
               and dd["candidates"][0]["resolved"] == "Others" and not dd["candidates"][0]["specific"]
               and dd.get("provisional") and isinstance(dd.get("required_logs"), list)
@@ -909,8 +914,8 @@ def smoke_runner(tmp: Path) -> None:
               and analysis7.env_detail.get("Steps to reproduce", "").startswith("1. Run"),
               f"missing={analysis7.missing_info}")
 
-        # BT-gated case (wifi_or_bt='bt' skips the reader) must still get a
-        # checklist domain from the customer-selected IPS subcategory.
+        # A subcategory that is not explicitly Wi-Fi/BT is unsupported, even
+        # though CaseService's legacy rule labels it 'bt'.
         def _fake_process_bt_oem(case_ctx: CaseContext) -> CaseContext:
             case_ctx = _fake_process(case_ctx)
             case_ctx.wifi_or_bt = "bt"
@@ -918,10 +923,9 @@ def smoke_runner(tmp: Path) -> None:
             return case_ctx
         cis.CaseService.process_case = staticmethod(_fake_process_bt_oem)
         analysis8 = r.analyze_case("01234567")
-        check("S11.f BT-gated case gets domain from IPS subcategory",
-              analysis8.mode == "triage_only"
-              and analysis8.issue_domain == "OEM Tools",
-              f"mode={analysis8.mode} domain={analysis8.issue_domain}")
+        check("S11.f non-Wi-Fi/BT subcategory is unsupported",
+              analysis8.mode == "unsupported",
+              f"mode={analysis8.mode}")
 
         # --- S13: failure-path reply policy (2026-10-02) --------------------
         cis.CaseService.process_case = staticmethod(_fake_process)
@@ -1155,12 +1159,15 @@ def smoke_runner(tmp: Path) -> None:
         trial_drafts = store14g.list_drafts(include_closed=True)
         res_trial = None
         if trial_drafts:
-            orig_store_fn = orch._store
+            orig_store_fn, orig_identity = orch._store, orch._signed_in_identity
             orch._store = lambda: store14g
+            orch._signed_in_identity = lambda: {"user_id": "005SMOKE", "name": "Smoke Reviewer",
+                                                "email": "", "username": ""}
             try:
                 res_trial = orch.approve_and_post(trial_drafts[0]["draft_id"])
             finally:
                 orch._store = orig_store_fn
+                orch._signed_in_identity = orig_identity
         check("S14.f list-view round in trial mode: analyzed case skipped, next (closed) "
               "case run, drafts flagged TRIAL, Approve refuses to post them",
               summary["ok"] and [c["case_nbr"] for c in summary["cases"]] == ["01234567"]
@@ -1439,6 +1446,9 @@ def smoke_orchestrator(tmp: Path) -> None:
                                   comment_id=f"CMT{len(self.posted)}")
             return PostResult(ok=False, backend="rest", error="rest down")
 
+        def comment_author(self, comment_id):
+            return {"user_id": "005SMOKE", "name": "Smoke Reviewer"}
+
     def enqueue(case, mode, body="body", later_round=False):
         tag = ("\n" + CHECKLIST_TAG) if mode in orch._CHECKLIST_MODES else ""
         return store.enqueue(case_nbr=case, case_id="500" + case, subject="s",
@@ -1449,9 +1459,24 @@ def smoke_orchestrator(tmp: Path) -> None:
                              analysis={"first_response_done": later_round})["draft_id"]
 
     orig_store_fn, orig_ips = orch._store, orch.IpsClient
+    orig_identity = orch._signed_in_identity
     try:
         orch._store = lambda: store
         orch.IpsClient = _Ips
+
+        # No IPS sign-in on this PC: nothing is posted, the draft stays.
+        def _no_session():
+            raise RuntimeError("Salesforce SSO did not complete")
+        orch._signed_in_identity = _no_session
+        d0 = enqueue("09999990", "full")
+        res0 = orch.approve_and_post(d0)
+        check("S5.0 approve refused without an IPS sign-in; draft untouched, nothing posted",
+              res0["ok"] is False and "not signed in" in res0["error"]
+              and store.get(d0)["status"] == "pending_review" and not _Ips.posted, str(res0))
+        orch._signed_in_identity = lambda: {"user_id": "005SMOKE", "name": "Smoke Reviewer",
+                                            "email": "smoke@intel.com", "username": "smoke"}
+        check("S5.0b claim holder names the signed-in reviewer",
+              orch._reviewer_id({"name": "Smoke Reviewer"}).startswith("Smoke Reviewer ("))
 
         # An existing AI analysis comment no longer blocks another analysis
         # (one per round), and a scan failure never aborts a post.
@@ -1478,6 +1503,14 @@ def smoke_orchestrator(tmp: Path) -> None:
               res["ok"] and _Ips.posted[-1][1] is False
               and store.first_response_posted("09999997"), str(res))
         fr_comment_id = (res.get("result") or {}).get("comment_id")
+        rec3 = store.get(d3)
+        check("S5.c2 a posted draft records who posted it: draft, post_result (+ IPS "
+              "author read-back) and ledger",
+              rec3.get("posted_by") == "Smoke Reviewer"
+              and (rec3["post_result"].get("posted_by") or {}).get("name") == "Smoke Reviewer"
+              and (rec3["post_result"].get("author") or {}).get("name") == "Smoke Reviewer"
+              and store.ledger_entry("09999997").get("posted_by") == "Smoke Reviewer",
+              str(rec3.get("post_result")))
         d4 = enqueue("09999997", "first_response")
         res = orch.approve_and_post(d4)
         check("S5.d second first-response on the case refused + marked posted",
@@ -1527,9 +1560,80 @@ def smoke_orchestrator(tmp: Path) -> None:
               res["ok"] is False and "once" in res["error"]
               and store.ledger_entry("09999995").get("first_response_comment_id") == "C9",
               str(res))
+
+        # Opt-in auto-post: only a case's first reply that asks for missing
+        # items posts unreviewed; every gate leaves the draft for review.
+        from types import SimpleNamespace
+        _Ips.comments, _Ips.post_ok = [], True
+        missing = {"general_info": [{"item": "Driver version", "provided": False}]}
+        complete = {"general_info": [{"item": "Driver version", "provided": True,
+                                      "value": "23.60"}]}
+
+        def auto(case, mode, *, done=False, fills=None, trial=False):
+            rec = store.enqueue(case_nbr=case, case_id="500" + case, subject="s",
+                                draft_plain=AI_MARKER + "\n" + CHECKLIST_TAG + "\n\nb",
+                                draft_html="<p>b</p>", confidence=None, mode=mode,
+                                analysis={"first_response_done": done}, trial=trial)
+            before = len(_Ips.posted)
+            orch._auto_post_first_response(
+                store, rec, SimpleNamespace(first_response_done=done,
+                                            checklist_fills=fills or missing))
+            return store.get(rec["draft_id"]), len(_Ips.posted) - before
+
+        rec, n = auto("09999990", "request_logs")
+        check("S5.h auto-post off by default: first-round request left for review",
+              n == 0 and rec["status"] == "pending_review", rec["status"])
+        store.save_config({"auto_post_first_response": True, "dry_run": True})
+        rec, n = auto("09999989", "request_logs")
+        check("S5.h2 dry run blocks auto-post", n == 0 and rec["status"] == "pending_review")
+        store.save_config({"dry_run": False})
+        rec, n = auto("09999988", "request_info")
+        check("S5.h3 no verified rest_field_map: auto-post skipped",
+              n == 0 and rec["status"] == "pending_review")
+        store.save_config({"rest_field_map": {"body_field": "Core_IPS_Rich_Comment__c"}})
+        rec, n = auto("09999987", "request_logs")
+        check("S5.h4 first-round request posts PUBLIC, marked auto_posted, first response recorded",
+              n == 1 and _Ips.posted[-1][1] is False and rec["status"] == "posted"
+              and rec.get("auto_posted") is True
+              and store.first_response_posted("09999987"), str(rec.get("post_result")))
+        rec, n = auto("09999986", "first_response")
+        check("S5.h5 first_response with missing checklist items posts",
+              n == 1 and rec["status"] == "posted" and rec.get("auto_posted") is True)
+        skipped = [auto("09999985", "first_response", fills=complete),
+                   auto("09999984", "request_logs", done=True),
+                   auto("09999983", "full"),
+                   auto("09999982", "triage_only"),
+                   auto("09999981", "request_info", trial=True)]
+        check("S5.h6 not auto-posted: nothing missing / later round / analysis / triage / trial",
+              all(n == 0 and r["status"] == "pending_review" and not r.get("auto_posted")
+                  for r, n in skipped),
+              str([(r["mode"], r["status"], n) for r, n in skipped]))
+        store.save_config({"auto_post_first_response": False, "rest_field_map": None})
     finally:
         orch._store = orig_store_fn
         orch.IpsClient = orig_ips
+        orch._signed_in_identity = orig_identity
+
+    # Typed case numbers go through the repository's one definition
+    # (utils/check_ips_utils.normalise_ips) — UI manual run and the CLI alike.
+    from . import cli as hf_cli
+    bad = [orch.start_case_run(x) for x in ("abc", "123", "01234567x", "")]
+    check("S5.i manual run refuses non-case-numbers (letters, too short, mixed, empty)",
+          all(r["ok"] is False for r in bad)
+          and all("not an IPS case number" in r["error"] for r in bad[:3])
+          and bad[3]["error"] == "empty case number"
+          and not orch._run_lock.locked(), str(bad))
+    import io, contextlib
+    with contextlib.redirect_stderr(io.StringIO()) as err:
+        rc_bad = hf_cli.main(["--case-number", "abc", "--once"])
+        rc_short = hf_cli.main(["--case-number", "12345", "--once"])
+    check("S5.j CLI --case-number validated the same way (exit 2, nothing started)",
+          rc_bad == 2 and rc_short == 2 and "not an IPS case number" in err.getvalue(),
+          err.getvalue()[:200])
+    from utils.check_ips_utils import normalise_ips
+    check("S5.k normalise_ips pads a typed 7-digit number and strips edge punctuation",
+          normalise_ips("1234567") == "01234567" and normalise_ips(" 01234567. ") == "01234567"
+          and normalise_ips("abc") == "" and normalise_ips("20260923") == "")
 
     # Typed case numbers go through the repository's one definition
     # (utils/check_ips_utils.normalise_ips) — UI manual run and the CLI alike.
@@ -3083,6 +3187,209 @@ def smoke_email_intake(tmp: Path) -> None:
               and st2.get("email_watch_enabled") is True)
     finally:
         sch._store = orig_s
+def smoke_identity() -> None:
+    print("[S19] IPS sign-in identity: whoami, parsing, author read-back, login state")
+    from .ips_client import IpsClient, parse_identity
+
+    oidc = parse_identity({"user_id": "005A", "name": "Charles P Chu", "email": "c@intel.com",
+                           "preferred_username": "c@intel.com.prod"})
+    chatter = parse_identity({"id": "005B", "displayName": "Wesley Kuo", "email": "w@intel.com",
+                              "username": "w@intel.com"})
+    partial = parse_identity({"user_id": "005C", "given_name": "Ching-Fang", "family_name": "Lai"})
+    check("S19.a userinfo, chatter and name-part answers normalise to one shape",
+          oidc == {"user_id": "005A", "name": "Charles P Chu", "email": "c@intel.com",
+                   "username": "c@intel.com.prod"}
+          and chatter["name"] == "Wesley Kuo" and chatter["user_id"] == "005B"
+          and chatter["username"] == "w@intel.com" and partial["name"] == "Ching-Fang Lai",
+          str((oidc, chatter, partial)))
+    check("S19.b empty answers carry no name",
+          parse_identity({})["name"] == "" and parse_identity(None)["name"] == "")
+
+    class _Resp:
+        def __init__(self, status, data):
+            self.status_code, self._d = status, data
+
+        def json(self):
+            return self._d
+
+        def raise_for_status(self):
+            if self.status_code >= 400:
+                raise RuntimeError(f"HTTP {self.status_code}")
+
+    calls: list = []
+
+    class _Client(IpsClient):
+        header = "Bearer sid-1"
+        answers: dict = {}
+
+        def _auth(self):
+            return None, {"Authorization": self.header}, "62.0"
+
+        def _request(self, method, path, **kw):
+            calls.append(path)
+            return self.answers.get(path) or _Resp(404, {})
+
+    IpsClient._identity_cache = None
+    c = _Client()
+    _Client.answers = {"/services/oauth2/userinfo":
+                       _Resp(200, {"user_id": "005A", "name": "Charles P Chu", "email": "c@intel.com"})}
+    who, who2 = c.whoami(), c.whoami()
+    check("S19.c whoami: userinfo answers; cached per session (one GET for two calls)",
+          who["name"] == "Charles P Chu" and who2 == who
+          and calls.count("/services/oauth2/userinfo") == 1, str(calls))
+    _Client.header = "Bearer sid-2"
+    _Client.answers = {"/services/data/v{ver}/chatter/users/me":
+                       _Resp(200, {"id": "005B", "displayName": "Wesley Kuo"})}
+    who3 = c.whoami()
+    check("S19.d a new session is re-resolved; chatter/users/me is the fallback",
+          who3["name"] == "Wesley Kuo"
+          and calls.count("/services/data/v{ver}/chatter/users/me") == 1, str(calls))
+    _Client.header = "Bearer sid-3"
+    _Client.answers = {"/services/oauth2/userinfo": _Resp(200, {"user_id": "005X"})}
+    try:
+        c.whoami()
+        check("S19.e an answer without a user name is rejected", False)
+    except RuntimeError:
+        check("S19.e an answer without a user name is rejected", True)
+
+    seen: dict = {}
+
+    class _Author(_Client):
+        def _request(self, method, path, **kw):
+            seen["q"] = (kw.get("params") or {}).get("q", "")
+            return _Resp(200, {"records": [{"Id": "a0X", "CreatedById": "005A",
+                                            "CreatedBy": {"Name": "Charles P Chu"}}]})
+
+    author = _Author().comment_author("a0X'1")
+    check("S19.f comment_author reads CreatedBy back; the id is SOQL-escaped",
+          author == {"user_id": "005A", "name": "Charles P Chu"}
+          and "Id = 'a0X\\'1'" in seen["q"] and "CreatedBy.Name" in seen["q"], seen.get("q"))
+    check("S19.g comment_author without an id is {}", _Author().comment_author("") == {})
+    IpsClient._identity_cache = None
+
+    from . import login
+    orig_whoami = login._whoami
+    try:
+        login._whoami = lambda: {"user_id": "005A", "name": "Charles P Chu", "email": "", "username": ""}
+        st = login.start_sign_in(False)
+        login._worker.join(5)
+        st2 = login.status()
+        check("S19.h silent sign-in: signing_in -> signed_in with the identity",
+              st["status"] in ("signing_in", "signed_in") and st2["status"] == "signed_in"
+              and st2["identity"]["name"] == "Charles P Chu", str(st2))
+
+        def _boom():
+            raise RuntimeError("Salesforce SSO did not complete")
+        login._whoami = _boom
+        login.start_sign_in(False)
+        login._worker.join(5)
+        st3 = login.status()
+        check("S19.i failed sign-in: status failed, the error kept, no identity",
+              st3["status"] == "failed" and "SSO" in st3["error"] and st3["identity"] is None,
+              str(st3))
+        try:
+            login.current_identity()
+            check("S19.j current_identity raises when there is no session", False)
+        except RuntimeError:
+            check("S19.j current_identity raises when there is no session", True)
+    finally:
+        login._whoami = orig_whoami
+        with login._lock:
+            login._state.update(status="signed_out", identity=None, error="")
+
+
+# ---------------------------------------------------------------- S20
+def smoke_snowflake_reconnect() -> None:
+    print("[S20] Snowflake: an expired session is re-opened once, other errors propagate")
+    import services.snowflake_service as sf
+    try:
+        from snowflake.connector.errors import ProgrammingError
+    except Exception:  # the connector is an app dependency; stand in if absent
+        class ProgrammingError(Exception):
+            def __init__(self, msg="", errno=None, sqlstate=None):
+                super().__init__(msg)
+                self.msg, self.errno, self.sqlstate = msg, errno, sqlstate
+
+    expired = ProgrammingError(msg="Authentication token has expired.  The user must "
+                                   "authenticate again.", errno=390114, sqlstate="08001")
+    check("S20.a 390114 / 'token has expired' count as an expired session; a SQL "
+          "error does not",
+          sf._session_expired(expired)
+          and sf._session_expired(RuntimeError("Session no longer exists"))
+          and not sf._session_expired(ProgrammingError(msg="SQL compilation error",
+                                                       errno=1003, sqlstate="42000")))
+
+    class _Cursor:
+        def __init__(self, conn):
+            self.conn = conn
+
+        def execute(self, sql):
+            self.conn.executed.append(sql)
+            if self.conn.fail_with is not None:
+                exc, self.conn.fail_with = self.conn.fail_with, None
+                raise exc
+
+        def fetchone(self):
+            return ("row-from", self.conn.n)
+
+        def fetchall(self):
+            return [("row-from", self.conn.n)]
+
+        def close(self):
+            pass
+
+    class _Conn:
+        def __init__(self, n, fail_with):
+            self.n, self.fail_with, self.executed, self.closed = n, fail_with, [], False
+
+        def cursor(self):
+            return _Cursor(self)
+
+        def is_closed(self):
+            return self.closed
+
+        def close(self):
+            self.closed = True
+
+    made: list = []
+    plan: list = []
+
+    def _fake_connect(passwd, use_privatelink):
+        made.append(_Conn(len(made) + 1, plan.pop(0) if plan else None))
+        return made[-1]
+
+    saved = (sf._connect, sf._snowflake_conn, sf._snowflake_passwd, sf._snowflake_conn_mode)
+    try:
+        sf._connect = _fake_connect
+        sf._snowflake_conn = sf._snowflake_passwd = sf._snowflake_conn_mode = None
+
+        plan[:] = [expired]           # first connection: first query hits an expired session
+        row = sf.snowflake_query("pw", "select 1", "S", fetch_mode="one")
+        check("S20.b the query is answered by a fresh connection after the expired one is dropped",
+              row == ("row-from", 2) and len(made) == 2 and made[0].closed
+              and sf._snowflake_conn is made[1], str((row, len(made))))
+        row2 = sf.snowflake_query("pw", "select 2", "S", fetch_mode="one")
+        check("S20.c the fresh connection is the cached one afterwards",
+              row2 == ("row-from", 2) and len(made) == 2 and made[1].executed == ["select 1", "select 2"])
+
+        made[1].fail_with = ProgrammingError(msg="SQL compilation error", errno=1003, sqlstate="42000")
+        try:
+            sf.snowflake_query("pw", "select bad", "S", fetch_mode="one")
+            check("S20.d a non-session error propagates without a reconnect", False)
+        except ProgrammingError as e:
+            check("S20.d a non-session error propagates without a reconnect",
+                  e.errno == 1003 and len(made) == 2 and sf._snowflake_conn is made[1])
+
+        plan[:] = [expired]           # expired twice in a row: the retry's error surfaces
+        made[1].fail_with = expired
+        try:
+            sf.snowflake_query("pw", "select 3", "S", fetch_mode="one")
+            check("S20.e only one reconnect is attempted; a second expiry surfaces", False)
+        except ProgrammingError as e:
+            check("S20.e only one reconnect is attempted; a second expiry surfaces",
+                  e.errno == 390114 and len(made) == 3, str(len(made)))
+    finally:
+        sf._connect, sf._snowflake_conn, sf._snowflake_passwd, sf._snowflake_conn_mode = saved
 
 
 def run_smoke() -> int:
@@ -3105,6 +3412,8 @@ def run_smoke() -> int:
         smoke_auto_scan(tmp)
         smoke_comment_images(tmp)
         smoke_email_intake(tmp)
+        smoke_identity()
+        smoke_snowflake_reconnect()
     finally:
         shutil.rmtree(tmp, ignore_errors=True)
     print(f"\nsmoke result: {'ALL PASS' if not PASS_FAIL else 'FAILURES: ' + ', '.join(PASS_FAIL)}")

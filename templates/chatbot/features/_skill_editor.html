@@ -1,0 +1,132 @@
+<!-- ===== Skill editor modal (per-skill structured form) ============= -->
+<div id="skill-editor-modal" class="fbd-modal" aria-hidden="true">
+    <div class="fbd-backdrop" onclick="closeSkillEditor()"></div>
+    <div class="fbd-card" role="dialog" aria-modal="true" style="width: min(820px, 96vw);">
+        <div class="fbd-header">
+            <h3>Edit skill configuration</h3>
+            <span class="fbd-vote-badge" id="skill-editor-file"></span>
+            <button type="button" class="fbd-close" onclick="closeSkillEditor()" aria-label="Close">×</button>
+        </div>
+        <div class="fbd-body">
+            <div style="font-size:0.82rem;color:#555;margin-bottom:12px;">
+                Edits are saved to a new dated file
+                (<code>skills_YYYY-MM-DD.yaml</code>) in the local cache. Use
+                <strong>Upload to share folder</strong> later if you would like
+                the Wireless CE team to incorporate your tuning.
+            </div>
+            <div id="skill-editor-list"></div>
+            <button type="button" class="fbd-add-row" onclick="addSkillEditorRow()">+ Add new skill</button>
+        </div>
+        <div class="fbd-footer">
+            <button type="button" class="fbd-btn" onclick="closeSkillEditor()">Cancel</button>
+            <button type="button" class="fbd-btn primary" id="skill-editor-save-btn"
+                    onclick="saveSkillEditor()">Save changes</button>
+        </div>
+    </div>
+</div>
+
+<template id="skill-edit-row-template">
+    <div class="skill-edit-row collapsed">
+        <div class="row-head">
+            <button type="button" class="row-toggle"
+                    onclick="toggleSkillEditorRow(this)"
+                    title="Expand / collapse this skill">▾</button>
+            <input type="text" class="skill-key" placeholder="e.g. Roaming">
+            <button type="button" class="delete-skill-btn" onclick="removeSkillEditorRow(this)">Delete</button>
+        </div>
+        <div class="row-body">
+
+        <label>Skill ID<span class="required-star">*</span></label>
+        <div class="field-hint">
+            The YAML key for this skill, for example <code>Roaming:</code>.
+        </div>
+
+        <label>Display name<span class="required-star">*</span></label>
+        <label class="inline-check">
+            <input type="checkbox" class="skill-name-sync" checked>
+            <span>Same as Skill ID</span>
+        </label>
+        <div class="field-hint">
+            The skill name shown in the sidebar. Keep it short and capitalised.
+            Example: <code>Roaming Diagnostics</code>.
+        </div>
+        <input type="text" class="skill-name"
+               placeholder="e.g. Roaming Diagnostics">
+
+        <label>Description<span class="required-star">*</span></label>
+        <div class="field-hint">
+            One sentence — what this skill does + when the agent should pick it.
+            Example: <code>Identifies roaming events and reconnection flows. Use when the user asks about roaming, scan, or AP switching.</code>
+        </div>
+        <input type="text" class="skill-desc"
+               placeholder="e.g. Identifies roaming events and reconnection flows. Use when …">
+        <div class="desc-strength" aria-live="polite">
+            <div class="desc-strength-bar">
+                <span class="seg"></span>
+                <span class="seg"></span>
+                <span class="seg"></span>
+                <span class="seg"></span>
+            </div>
+            <div class="desc-strength-line">
+                <span class="desc-strength-label">—</span>
+                <span class="desc-strength-count"></span>
+                <span class="desc-strength-hints"></span>
+            </div>
+        </div>
+
+        <label>Keywords</label>
+        <div class="field-hint">
+            Tokens that flag this skill when found in the log. Each chip is
+            one keyword (equivalent to a YAML list item under <code>keywords:</code>).
+            Example: <code>ROAMING_DECISION</code>, <code>scan_request</code>.
+        </div>
+        <div class="chip-box keywords-box" tabindex="-1">
+            <input type="text" class="chip-input keywords-input"
+                   placeholder="Type a keyword and press Enter, or paste multiple lines">
+        </div>
+        <div class="chip-hint">Press Enter or comma to add a chip. Paste multi-line text to bulk-add. Click ✕ to remove.</div>
+
+        <label>Exclusive (optional)</label>
+        <div class="field-hint">
+            Tokens that, when present, prevent this skill from being chosen.
+            Use to disambiguate skills with overlapping keywords.
+        </div>
+        <div class="chip-box exclusive-box" tabindex="-1">
+            <input type="text" class="chip-input exclusive-input"
+                   placeholder="Keywords that must NOT appear">
+        </div>
+
+        <label>Expert rules<span class="required-star">*</span></label>
+        <div class="preamble-wrap">
+            <button type="button" class="preamble-show-btn"
+                    onclick="showPreamble(this.closest('.skill-edit-row'))"
+                    title="Add an overall analysis approach or framing the agent reads before the numbered steps">+ Add overview</button>
+            <textarea class="rules-preamble"
+                      placeholder="Overall approach, priorities, or context the agent should keep in mind before walking through the steps."></textarea>
+            <button type="button" class="preamble-hide-btn"
+                    onclick="hidePreamble(this.closest('.skill-edit-row'))"
+                    title="Collapse the overview box (only when empty)">▲ Collapse</button>
+        </div>
+        <div class="rules-list"></div>
+        <button type="button" class="add-rule-btn"
+                onclick="addRulePoint(this.closest('.skill-edit-row'))"
+                title="Add a discrete analysis step the agent should walk through (1, 2, 3 …)">
+            <span class="add-rule-icon">+</span>
+            <span>Add analysis step</span>
+        </button>
+        </div><!-- /.row-body -->
+    </div>
+</template>
+
+<template id="rule-point-template">
+    <div class="rule-point">
+        <span class="rule-number">1</span>
+        <textarea class="rule-text"
+                  placeholder="Step text."></textarea>
+        <button type="button" class="rule-delete-btn"
+                onclick="removeRulePoint(this)">Delete</button>
+    </div>
+</template>
+
+
+<script src="/static/chatbot/js/features/skill-editor.js"></script>

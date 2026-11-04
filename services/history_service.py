@@ -84,6 +84,7 @@ from datetime import datetime
 from pathlib import Path
 from typing import Any, Optional
 
+from configs import chat_domains
 from configs.global_configs import app_config
 
 
@@ -124,24 +125,21 @@ _MAX_STEP_CHARS = 8_000
 # Canonical domain key -> (root folder name, filename prefix). "" (wifi) is
 # the legacy default: unchanged folder name and no filename prefix, so every
 # conversation file already on a user's machine keeps working untouched.
-_DOMAIN_FOLDERS = {"": "history", "bt": "bt_history"}
-_DOMAIN_PREFIXES = {"": "", "bt": "bt-"}
-
-
+# Which folder and prefix a domain uses is declared once, in
+# configs/chat_domains.py. This module used to answer it from a private map
+# that knew only Bluetooth, so every other profile -- Linux included -- was
+# filed as Wi-Fi without anything saying so.
 def _norm_domain(domain: Any) -> str:
     """Normalise a raw domain hint to a canonical key. '' = wifi/default."""
-    d = domain.strip().lower() if isinstance(domain, str) else ""
-    if d in ("bt", "bluetooth"):
-        return "bt"
-    return ""
+    return chat_domains.normalize(domain)
 
 
 def _domain_folder(domain: Any) -> str:
-    return _DOMAIN_FOLDERS.get(_norm_domain(domain), "history")
+    return chat_domains.history_folder(domain)
 
 
 def _domain_prefix(domain: Any) -> str:
-    return _DOMAIN_PREFIXES.get(_norm_domain(domain), "")
+    return chat_domains.history_prefix(domain)
 
 
 # --- Storage location ----------------------------------------------------
@@ -608,7 +606,7 @@ def list_conversations(limit: int = _LIST_LIMIT, domain: str = "") -> list[dict]
     # any filename carrying a KNOWN foreign prefix — a cheap startswith()
     # check on the name already in hand, no JSON parsing required.
     if not prefix:
-        foreign_prefixes = tuple(p for p in _DOMAIN_PREFIXES.values() if p)
+        foreign_prefixes = chat_domains.prefixed_history_prefixes()
         files = [fp for fp in files if not fp.name.startswith(foreign_prefixes)]
 
     for fp in files:

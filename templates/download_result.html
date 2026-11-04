@@ -2179,15 +2179,19 @@
 
         // Bluetooth Analysis Agent flow: prepare the bt_chatbot agent
         // server-side, then jump to /bt_chatbot/. msg.hci_path is the
-        // decoded HCI path; bt_chatbot.prepare appends ".log" internally —
-        // same convention the (now-removed) log_parser redirect used.
+        // decoded HCI path, which bt_chatbot.prepare accepts as-is. The
+        // issue time this page already resolved goes along, as it does for
+        // Wi-Fi, so the agent is checked against the log instead of guessing.
         appendLog(`✅ HCI decode done — preparing Bluetooth Analysis Agent...\n`);
         button.innerText = '⏳ Preparing UI...';
 
         fetch(BT_CHATBOT_PREPARE_URL, {
             method: 'POST',
             headers: { 'Content-Type': 'application/json' },
-            body: JSON.stringify({ etl_path: msg.hci_path })
+            body: JSON.stringify({
+                etl_path: msg.hci_path,
+                issue_time: window.__llmIssueTime || ''
+            })
         })
         .then(res => res.json())
         .then(data => {
@@ -2597,10 +2601,11 @@
     // ---- BT auto-pick helpers ------------------------------------------
     // BT logs aren't decoded until the agent button is clicked, so we can't
     // read their internal timestamps here. Instead we ask the backend
-    // (/bt_chatbot/find_best_log) which parses the capture-folder timestamp
+    // (/log_parser/find_best_log) which parses the capture-folder timestamp
     // (e.g. ...-2026-04-08-00-16-16Z\) and returns the closest match. We then
-    // select that BT row.
-    const BT_FIND_BEST_LOG_URL = "{{ url_for('bt_chatbot.find_best_log') }}";
+    // select that BT row. The endpoint is log-parser-owned, not BT-owned: it
+    // takes a list of paths and an issue time and returns one path.
+    const BT_FIND_BEST_LOG_URL = "{{ url_for('log_parser.find_best_log') }}";
 
     // Auto-select the NEWEST BT log by capture-folder timestamp (no issue
     // time matching). Called on page load as the default selection.

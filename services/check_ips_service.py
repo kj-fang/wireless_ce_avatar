@@ -10,7 +10,6 @@ over the top of it.
 
 import json
 import os
-import sys
 import threading
 from concurrent.futures import ThreadPoolExecutor, TimeoutError as FutureTimeoutError
 from datetime import datetime, timezone
@@ -20,6 +19,7 @@ from typing import List, Optional
 from flask import session
 
 from configs.global_configs import app_config
+from services.chatbot.session import agents_for_session
 from models.models import CaseContext
 from utils import check_ips_utils, helpers
 
@@ -42,6 +42,7 @@ _last_prompted_log = ""
 
 # Logs answered in this conversation; cleared so each new conversation reconfirms its case.
 _answered_this_session = set()
+_UPLOAD_ANSWER_KEY = "_ips_answered_upload_key"
 
 
 def _answer_store_path() -> Optional[Path]:
@@ -223,6 +224,7 @@ def _apply_stored_answer(log_path) -> None:
 def start_new_session() -> None:
     """Begin a fresh conversation, which confirms the case again."""
     _answered_this_session.clear()
+    session.pop(_UPLOAD_ANSWER_KEY, None)
     if current_source() not in (EXPLICIT, DERIVED_FROM_PATH, SKIPPED):
         return
     session[SESSION_SOURCE_KEY] = ABSENT
@@ -347,7 +349,24 @@ def _from_answered_upload(log_path) -> bool:
     """
     uploaded = session.get("uploaded_source_path")
     key = _log_key(uploaded)
-    return bool(key and key in _answered_this_session and _placeholder_is_for(log_path))
+    return bool(key and session.get(_UPLOAD_ANSWER_KEY) == key
+                and _placeholder_is_for(log_path))
+
+
+def carry_upload_answer(source_path) -> None:
+    """Carry this upload's confirmed answer to its extracted/decoded log.
+
+    The analysis runs before the chatbot opens, sometimes in the Send To
+    worker. A process-global set cannot reliably follow that hand-off (or
+    distinguish two browsers), so the confirmed source key travels with the
+    Flask session snapshot instead. A new conversation clears it.
+    """
+    key = _log_key(source_path)
+    record = answer_for(source_path)
+    if key and record.get("source") in (EXPLICIT, DERIVED_FROM_PATH, SKIPPED):
+        session[_UPLOAD_ANSWER_KEY] = key
+    else:
+        session.pop(_UPLOAD_ANSWER_KEY, None)
 
 
 def needs_ips(log_path) -> bool:
@@ -376,6 +395,13 @@ def needs_ips(log_path) -> bool:
     if not key:
         return not current_case_nbr() and current_source() != SKIPPED
     if current_source() == ABSENT:
+        # Send To starts a fresh file in an existing browser session. A case
+        # found by a previous case search does not establish this new file's
+        # identity just because it happens to be in the same browser.
+        pending = _log_key(session.get("sendto_pending_path"))
+        previous_upload = _log_key(session.get("uploaded_source_path"))
+        if pending == key and previous_upload and previous_upload != key:
+            return True
         # A case that came from the case search rather than from this prompt.
         return not current_case_nbr()
     return True
@@ -561,6 +587,20 @@ _ENRICH_TIMEOUT_SEC = 20
 # the backend call really finishes, not when the caller stops waiting.
 _case_lookup_pool = ThreadPoolExecutor(max_workers=1, thread_name_prefix="ips-case-lookup")
 _case_lookup_slot = threading.BoundedSemaphore(1)
+#: How long to queue behind a lookup that is already running. Shorter than
+#: _ENRICH_TIMEOUT_SEC so waiting for the slot and then doing the work still
+#: cannot outlast the patience a lookup of its own would have been given.
+_LOOKUP_SLOT_WAIT_SEC = 5
+
+
+class CaseLookupUnavailable(Exception):
+    """The case could not be looked up now -- not that it has nothing to add.
+
+    Raised rather than returned so the two cannot be confused by a caller
+    that only checks for a falsy result. A case with no extra fields is a
+    finished answer; a lookup that never ran is worth trying again, and the
+    person should not be told the case was enriched when it was not.
+    """
 
 
 def _lookup_case_facts(canonical: str) -> Optional[dict]:
@@ -571,12 +611,24 @@ def _lookup_case_facts(canonical: str) -> Optional[dict]:
     key = getattr(app_config, "key", None)
     passwd = getattr(key, "snowflake_passwd", None)
     if not passwd:
-        return None
+        raise CaseLookupUnavailable("Snowflake credentials are unavailable")
     llm = getattr(app_config, "llm_helper", None)
 
-    if not _case_lookup_slot.acquire(blocking=False):
-        print(f"[ips] case lookup for {canonical} skipped: another lookup is still running")
-        return None
+    # Wait for the slot rather than walking away from it. Refusing instantly
+    # meant a case attached while any other lookup was in flight came back
+    # with its number and nothing else -- no subject, no description, no
+    # classification -- and the caller was told the attach succeeded, because
+    # a skipped lookup is indistinguishable from a case with nothing to add.
+    # Two Send To runs in a row are enough to overlap, and that is the normal
+    # way to use it.
+    #
+    # The wait is bounded and shorter than _ENRICH_TIMEOUT_SEC, so a queued
+    # lookup still cannot make the answer take longer than a lookup of its
+    # own would have.
+    if not _case_lookup_slot.acquire(timeout=_LOOKUP_SLOT_WAIT_SEC):
+        print(f"[ips] case lookup for {canonical} gave up waiting: "
+              f"another lookup held the slot for {_LOOKUP_SLOT_WAIT_SEC}s")
+        raise CaseLookupUnavailable(canonical)
 
     def work():
         try:
@@ -588,10 +640,15 @@ def _lookup_case_facts(canonical: str) -> Optional[dict]:
             usage = llm.empty_usage() if llm is not None else None
             classification = None
             if llm is not None:
-                classification = llm.classify_issue(
-                    {"case_nbr": canonical, "subject": subject or "",
-                     "description": description or "", "subcategory": subcategory or ""},
-                    usage_accumulator=usage)
+                try:
+                    classification = llm.classify_issue(
+                        {"case_nbr": canonical, "subject": subject or "",
+                         "description": description or "", "subcategory": subcategory or ""},
+                        usage_accumulator=usage)
+                except Exception as e:
+                    # Classification is optional. Do not throw away a valid
+                    # IPS row just because the second, LLM-based step failed.
+                    print(f"[ips] classification for {canonical} unavailable: {e}")
             return {"fields": fields, "classification": classification,
                     "usage": usage, "model": getattr(llm, "model", "") if llm else ""}
         finally:
@@ -601,8 +658,7 @@ def _lookup_case_facts(canonical: str) -> Optional[dict]:
         future = _case_lookup_pool.submit(work)
     except Exception as e:
         _case_lookup_slot.release()
-        print(f"[ips] case lookup for {canonical} skipped: {e}")
-        return None
+        raise CaseLookupUnavailable(canonical) from e
     try:
         facts = future.result(timeout=_ENRICH_TIMEOUT_SEC)
     except FutureTimeoutError as e:
@@ -610,11 +666,12 @@ def _lookup_case_facts(canonical: str) -> Optional[dict]:
         # already running, work() owns the slot until the backend returns.
         if future.cancel():
             _case_lookup_slot.release()
-        print(f"[ips] case lookup for {canonical} skipped: {e}")
-        return None
+        print(f"[ips] case lookup for {canonical} timed out: {e}")
+        # A backend too slow to answer has not told us the case is empty.
+        raise CaseLookupUnavailable(canonical) from e
     except Exception as e:
-        print(f"[ips] case lookup for {canonical} skipped: {e}")
-        return None
+        print(f"[ips] case lookup for {canonical} failed: {e}")
+        raise CaseLookupUnavailable(canonical) from e
     if facts:
         with _case_facts_lock:
             _case_facts[canonical] = facts
@@ -696,32 +753,17 @@ def enrich_attached_case(case_nbr) -> bool:
     return True
 
 
-_CHATBOT_ROUTE_MODULES = (
-    "blueprints.log_chatbot.log_chatbot_routes",
-    "blueprints.bt_chatbot.bt_chatbot_routes",
-    "blueprints.nw_analysis.nw_analysis_routes",
-)
-
-
 def _primed_agents() -> list:
     """Every agent that may be holding this session's case summary.
 
     The agents on app_config are boot-time templates. What /set_log actually
-    primes is each chatbot's per-session clone in its module-level
-    _chatbot_instances, keyed by session['chatbot_session_id'] -- the same map
-    a finished background job's agent is adopted into. Clearing only the
-    templates left the clone the next chat really uses still holding the old
-    case. Modules are read from sys.modules rather than imported: one that
-    has not been loaded has no agents to clear, and importing it here would
-    drag a whole chatbot in from the service layer.
+    primes is each profile's per-session clone, keyed by chatbot_session_id.
+    The shared registry exposes those existing clones without importing route
+    modules or depending on their filenames. Boot-time templates alone would
+    leave the clone used by the next chat holding the previous case's notes.
     """
-    agents = []
     sid = session.get("chatbot_session_id")
-    if sid:
-        for module_name in _CHATBOT_ROUTE_MODULES:
-            instances = getattr(sys.modules.get(module_name), "_chatbot_instances", None)
-            if isinstance(instances, dict) and instances.get(sid) is not None:
-                agents.append(instances[sid])
+    agents = agents_for_session(sid or "")
     for name in ("log_chatbot_agent", "bt_chatbot_agent", "nw_analysis_agent"):
         agent = getattr(app_config, name, None)
         if agent is not None and all(agent is not a for a in agents):
@@ -747,15 +789,38 @@ def _forget_case_on_agents(canonical: str) -> None:
         for key in _AGENT_CASE_FIELDS:
             ctx.pop(key, None)
         ctx["case_nbr"] = canonical
-    # The caches derived from the old case: its attachment time, the issue
-    # time resolved from that, the LLM's summary of its description, and its
-    # classification and IPS analysis, which _extract_issue_context would
-    # otherwise prime the next agent with. The _carried_issue_time* keys are
-    # left alone -- they are the time the user picked for this log, not
-    # something the old case supplied. Kept in step with
-    # log_chatbot_routes._invalidate_issue_context_caches.
-    for key in ("_attachment_time_cache", "_resolved_issue_time_cache",
-                "_issue_ai_quick", "classification", "ai_ips_analysis"):
+    forget_case_derived_session_keys()
+
+
+#: Everything in the session that was derived from a particular case: its
+#: attachment time, the issue time resolved from that, the LLM's summary of
+#: its description, and its classification and IPS analysis -- all of which
+#: _extract_issue_context would otherwise prime the next agent with.
+#:
+#: The _carried_issue_time* keys are deliberately absent: they are the time
+#: the user picked for this log, not something the case supplied.
+#:
+#: Named because two callers need the same list and they are far apart. One
+#: is a case being replaced in a live session; the other is Send To handing a
+#: new file to a window that is already open, where the browser's session
+#: still holds the previous file's answers. A second hand-written copy of
+#: these five keys is how one of them ends up a key behind.
+CASE_DERIVED_SESSION_KEYS = (
+    "_attachment_time_cache",
+    "_resolved_issue_time_cache",
+    "_issue_ai_quick",
+    "classification",
+    "ai_ips_analysis",
+)
+
+
+def forget_case_derived_session_keys() -> None:
+    """Drop everything the session inferred from whichever case it was on.
+
+    Kept in step with the shared chatbot adapter's issue-context cache
+    invalidation.
+    """
+    for key in CASE_DERIVED_SESSION_KEYS:
         session.pop(key, None)
 
 

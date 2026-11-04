@@ -7,7 +7,7 @@ afterwards. These endpoints back the prompt that asks for the number before
 the conversation starts.
 """
 
-from flask import Blueprint, jsonify, request
+from flask import Blueprint, jsonify, request, session
 
 from services import check_ips_service
 
@@ -66,14 +66,40 @@ def resolve():
     # Look the case up and classify it, as the case search does, so a number
     # given here is no longer left "Unclassified" with no description. After
     # the answer is recorded, and never a reason to refuse it.
+    #
+    # Whether that worked is now reported. It used to be discarded, so an
+    # attach that enriched nothing -- because the backend was slow, or
+    # because another lookup held the one lookup slot -- answered exactly
+    # like one that had worked. The number went in and the subject,
+    # description and classification silently did not, which reads as "the
+    # lookup found it but nothing reached the chatbot".
+    enriched = False
+    lookup_unavailable = False
     try:
-        check_ips_service.enrich_attached_case(canonical)
+        enriched = check_ips_service.enrich_attached_case(canonical)
+    except check_ips_service.CaseLookupUnavailable:
+        lookup_unavailable = True
     except Exception as e:
         print(f"[ips] enrich after resolve failed: {e}")
+
+    # The page may have cached a no-case (or previous-case) organizer result
+    # before the user answered the IPS dialog. The next context read must
+    # organize the newly attached description, not reuse that stale summary.
+    if enriched:
+        session.pop("_issue_ai_quick", None)
+
+    message = f"Case {canonical} attached."
+    if lookup_unavailable:
+        message += (" Its details could not be read just now, so the subject "
+                    "and classification are not filled in yet.")
+    elif not enriched:
+        message += " No matching IPS case details were returned."
 
     return jsonify({
         "success": True,
         "case_nbr": canonical,
         "case_ref_source": source,
-        "message": f"Case {canonical} attached.",
+        "enriched": enriched,
+        "lookup_unavailable": lookup_unavailable,
+        "message": message,
     })

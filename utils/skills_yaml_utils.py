@@ -273,11 +273,27 @@ def refresh_local_cloud_baseline() -> Tuple[Optional[Path], Optional[date]]:
     target_name = share_path.name if share_date is not None else today_dated_filename()
     target = target_dir / target_name
 
+    # Skip the copy when the mirror already holds this exact file. copy2
+    # preserves mtime, so matching size + mtime means the bytes are the ones
+    # we would be about to write — and re-copying a ~40 KB YAML over SMB costs
+    # ~2.5s on every startup. Same mtime test sync_to_local() uses for the
+    # prompt/filter mirror. Pruning below still runs either way, so a stale
+    # sibling left by an interrupted earlier run is still cleaned up.
+    already_current = False
     try:
-        _shutil.copy2(str(share_path), str(target))
-    except Exception as e:
-        print(f"[skills_yaml] refresh_local_cloud_baseline failed: {e}")
-        return (None, None)
+        if target.exists():
+            src_stat, dst_stat = share_path.stat(), target.stat()
+            already_current = (src_stat.st_size == dst_stat.st_size
+                               and int(src_stat.st_mtime) == int(dst_stat.st_mtime))
+    except OSError:
+        already_current = False  # stat failed — fall through and copy
+
+    if not already_current:
+        try:
+            _shutil.copy2(str(share_path), str(target))
+        except Exception as e:
+            print(f"[skills_yaml] refresh_local_cloud_baseline failed: {e}")
+            return (None, None)
 
     # Prune older mirror files so the cloud/ dir holds a single baseline.
     try:

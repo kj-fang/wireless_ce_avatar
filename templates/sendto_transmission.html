@@ -197,7 +197,12 @@
       if (IPS_STATE && IPS_STATE.needs_ips && window.IpsPrompt) {
         appendLog('Waiting for the IPS case number…', 'log-ok');
         window.IpsPrompt.handleSetLog(IPS_STATE)
-          .then(function () { socket.emit('start_sendto'); })
+          .then(function (answer) {
+            if (answer && answer.case_nbr && !answer.enriched) {
+              appendLog(answer.message || 'Case attached, but IPS details could not be loaded.', 'log-err');
+            }
+            socket.emit('start_sendto');
+          })
           .catch(function () { socket.emit('start_sendto'); });
         return;
       }

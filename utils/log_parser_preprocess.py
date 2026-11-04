@@ -56,6 +56,17 @@ def filter_log_by_keywords(log_lines: List[str], keywords: List[str]) -> List[st
 
 #---------------- preprocess filtered log ---------------
 
+#: A dotted quad, with whatever word introduces it. `ver` captures only when
+#: that word says the quad is a version, which is the one case the IP
+#: redaction below must keep its hands off.
+_IP_OR_VERSION_RE = re.compile(
+    r'(?P<ver>\b(?:version|ver|firmware|fw|build|revision|rev|release|patch)'
+    r'\b[\s:=v]*)?'
+    r'\b\d{1,3}\.\d{1,3}\.\d{1,3}\.\d{1,3}\b',
+    re.IGNORECASE,
+)
+
+
 def preprocess_log_for_llm(log_lines, preserve_timestamps=True):
     processed_lines = []
     
@@ -83,8 +94,16 @@ def preprocess_log_for_llm(log_lines, preserve_timestamps=True):
         # hex
         line = re.sub(r'\b[0-9A-F]{8,}\b', '<HEX_VALUE>', line)
         
-        # IP
-        line = re.sub(r'\b\d{1,3}\.\d{1,3}\.\d{1,3}\.\d{1,3}\b', '<IP_ADDR>', line)
+        # IP -- but not a dotted-quad VERSION. Intel firmware and driver
+        # versions are four numbers separated by dots (77.12.34.56), and every
+        # octet is under 256, so nothing about the number itself tells the two
+        # apart. Before this, "firmware 77.12.34.56" reached the model as
+        # "firmware <IP_ADDR>": the prompt asks the agent to quote the version
+        # verbatim and compare it between two runs, and the version had already
+        # been destroyed. The preceding word is what disambiguates, so a quad
+        # introduced by one is left alone; everything else redacts as before.
+        line = _IP_OR_VERSION_RE.sub(
+            lambda m: m.group(0) if m.group('ver') else '<IP_ADDR>', line)
         
         # arg
         line = re.sub(r'etwLength\s*=\s*\d+', '', line)

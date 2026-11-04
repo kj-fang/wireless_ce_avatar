@@ -45,6 +45,15 @@ BT_SKILLS_YAML_DATED_GLOB = "bt_skills_*.yaml"                # e.g. bt_skills_2
 BT_SKILLS_YAML_DATED_RE = r"^bt_skills_(\d{4}-\d{2}-\d{2})\.yaml$"
 BT_SKILLS_YAML_DATED_TEMPLATE = "bt_skills_{date}.yaml"       # date = YYYY-MM-DD
 
+# Linux skills YAML — same shared skills_config dir, `linux_` prefix so the
+# three domains coexist without name collisions. Loaded at startup by
+# set_up_app to populate the linux_chatbot_agent. Falls back to the WiFi
+# skills (skills.yaml) when this file is missing.
+LINUX_SKILLS_YAML_FILENAME = "linux_skills.yaml"                  # legacy un-dated file
+LINUX_SKILLS_YAML_DATED_GLOB = "linux_skills_*.yaml"              # e.g. linux_skills_2026-06-02.yaml
+LINUX_SKILLS_YAML_DATED_RE = r"^linux_skills_(\d{4}-\d{2}-\d{2})\.yaml$"
+LINUX_SKILLS_YAML_DATED_TEMPLATE = "linux_skills_{date}.yaml"     # date = YYYY-MM-DD
+
 # Wireless knowledge topics used by the home page.
 WIRELESS_TOPICS_DIR = rf"\\infs089.iil.intel.com\HOME\WirelessCE\Intel_WirelessCE_Avatar\WiFi_BT_knowledge_yaml"
 
@@ -84,6 +93,33 @@ GATHER_DIR_prim = _os.environ.get("INTELAVATAR_GATHER_DIR") \
     or _sibling_share(FEEDBACK_DIR_prim, _GATHER_LEAF)
 GATHER_DIR_bkup = _os.environ.get("INTELAVATAR_GATHER_DIR_BKUP") \
     or _sibling_share(FEEDBACK_DIR_bkup, _GATHER_LEAF)
+
+# Speclets — the agent's architecture prompt and report format, per profile.
+#
+# Same "everyone edits one shared copy" intent as the skills YAML, but stored
+# as plain Markdown rather than YAML: these are prose documents (agent
+# identity, phase instructions, the report skeleton), and a .md file survives
+# being edited in Notepad by someone who does not know YAML's multi-line
+# string rules. One concern per file, so the Wi-Fi prompt and the BT report
+# can be edited by two people at once without touching the same file:
+#
+#     Speclets/wifi_prompt.md   Speclets/wifi_report.md
+#     Speclets/bt_prompt.md     Speclets/bt_report.md
+#     Speclets/nw_prompt.md     Speclets/nw_report.md
+#
+# Missing or unreachable files fall back to the built-in defaults compiled
+# into the agent, so an off-VPN run behaves exactly as it did before.
+_SPECLETS_LEAF = "Speclets"
+SPECLETS_DIR_prim = _os.environ.get("INTELAVATAR_SPECLETS_DIR") \
+    or _sibling_share(FEEDBACK_DIR_prim, _SPECLETS_LEAF)
+SPECLETS_DIR_bkup = _os.environ.get("INTELAVATAR_SPECLETS_DIR_BKUP") \
+    or _sibling_share(FEEDBACK_DIR_bkup, _SPECLETS_LEAF)
+
+# Local mirror lives beside skills_config/ under <avatarfiles_dir>.
+LOCAL_SPECLETS_DIR_NAME = "speclets"
+#: Prompts the user edited here, kept apart from the mirror of the share so a
+#: refresh of the shared copy can never overwrite someone's own version.
+LOCAL_SPECLETS_USER_DIR_NAME = "speclets_user"
 
 # ACE playbook cloud sync (WiFi/general).
 #

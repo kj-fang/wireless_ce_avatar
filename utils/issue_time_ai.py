@@ -16,6 +16,7 @@ model name) so the logic is unit-testable in isolation.
 
 import json
 import re
+from dataclasses import dataclass
 from datetime import datetime, timedelta
 from typing import Any, List, Optional, Tuple, Union
 
@@ -202,6 +203,252 @@ def build_log_digest(
     return digest
 
 
+@dataclass(frozen=True)
+class IssueTimeFocus:
+    """What a profile's issue-time suggestion should look at first.
+
+    The generic digest samples lines on lifecycle words, which a multi-day
+    Linux kern.log is full of: on a real one it sent 0 of 1,560 Wi-Fi lines
+    and was truncated before the last day. A focus samples the profile's own
+    subsystem across the whole log instead.
+    """
+
+    #: Lines worth anchoring an issue time on.
+    rx: "re.Pattern[str]"
+    #: Domain briefing added to the suggestion prompt.
+    hint: str
+    #: Name of the subsystem, for the fallback reason shown to the user.
+    label: str
+
+
+LINUX_WIFI_FOCUS = IssueTimeFocus(
+    rx=re.compile(
+        r"iwlwifi|\bwl[a-z0-9]+:|cfg80211|mac80211|wpa_supplicant|NetworkManager"
+        r"|\biwd\b|deauth|disassoc|\brfkill\b|ct-kill|\bWifi\w*|wificond",
+        re.IGNORECASE,
+    ),
+    # Only what is true of the DIGEST, not of the domain: this hint travels
+    # with rx, and both describe the sample the model is handed. What the model
+    # should look FOR moved to the suggest_time speclet, where someone
+    # retargeting this agent to another Linux domain can replace it.
+    hint=(
+        "Every sample line starts with its timestamp already in "
+        "MM/DD/YYYY-HH:MM:SS.mmm on the log's own clock; copy timestamps from "
+        "there."
+    ),
+    label="Wi-Fi",
+)
+
+_DIGIT_RUN = re.compile(r"\d+")
+
+
+def build_focus_digest(
+    log_lines: List[str],
+    focus: IssueTimeFocus,
+    log_format,
+    max_lines: int = 140,
+    per_message: int = 3,
+    max_chars: int = 12000,
+) -> str:
+    """Focus lines across the whole log, each re-stamped on the log's own clock.
+
+    Repeats of one message (digits ignored) keep at most ``per_message``
+    occurrences, spread over time, so one noisy line cannot fill the budget;
+    the rest is sampled evenly so every day of the log is represented.
+    Returns "" when the log has no focus line or no readable timestamps.
+    """
+    shape = getattr(log_format, "_shape", None)
+    if shape is None:
+        return ""
+    by_message: dict = {}
+    for i, line in enumerate(log_lines or []):
+        if not focus.rx.search(line):
+            continue
+        m = shape.rx.search(line)
+        stamp = log_format.parse(line) if m else None
+        if stamp is None:
+            continue
+        message = line[m.end():].strip()
+        by_message.setdefault(_DIGIT_RUN.sub("#", message), []).append((i, stamp, message))
+    picked = []
+    for hits in by_message.values():
+        if len(hits) <= per_message:
+            picked.extend(hits)
+        else:
+            step = (len(hits) - 1) / (per_message - 1)
+            picked.extend(hits[round(k * step)] for k in range(per_message))
+    if not picked:
+        return ""
+    picked.sort(key=lambda h: h[0])
+    rows = [f"{format_issue_time(s)} | {msg[:180]}" for _, s, msg in picked]
+    # Thin evenly until it fits, so the budget never cuts off the log's end.
+    while len(rows) > 1 and (len(rows) > max_lines
+                             or sum(len(r) + 1 for r in rows) > max_chars):
+        keep = min(max_lines, max(1, int(len(rows) * 0.85)))
+        step = (len(rows) - 1) / max(1, keep - 1)
+        rows = [rows[round(k * step)] for k in range(keep)]
+    return "\n".join(rows)
+
+
+def suggest_boot_elapsed(
+    text: str, log_lines: List[str], log_format, llm_client: Any,
+    llm_model: Optional[str], *, brief: str = "", focus: Optional[IssueTimeFocus] = None,
+) -> dict:
+    """Suggest an *observed* dmesg boot offset, never a fabricated wall clock.
+
+    This path is only for a relative log with no proven boot anchor. It never
+    returns the normal ``issue_time`` fields: those would be mistaken for a
+    date or a time of day by the sidebar and Segment2.
+    """
+    shape = getattr(log_format, "_shape", None)
+    if shape is None or log_format.kind != "relative" or log_format.anchor is not None:
+        raise ValueError("Boot-elapsed suggestions require an unanchored relative log")
+    observed = []
+    for line in log_lines or []:
+        match = shape.rx.search(line)
+        if match:
+            try:
+                observed.append((float(match.group(1)), match.group(1), line.strip()))
+            except ValueError:
+                continue
+    if not observed:
+        return {"success": True, "time_basis": "boot_elapsed", "suggestions": [],
+                "needs_user_input": True, "message": "No boot-elapsed timestamps were found in this log."}
+    if llm_client is None or not llm_model:
+        return {"success": False, "time_basis": "boot_elapsed", "suggestions": [],
+                "error": "LLM is not configured on this server."}
+
+    # Evenly cover the full boot; prefer subsystem lines when available, but
+    # always include the head/tail so the model can see the range and context.
+    focused = [row for row in observed if
+               (focus and focus.rx.search(row[2])) or _LOG_DIGEST_KEYWORDS.search(row[2])]
+    pool = focused or observed
+    stride = max(1, (len(pool) + 109) // 110)
+    sample = pool[::stride][:110] + observed[:10] + observed[-10:]
+    digest = "\n".join(row[2][:200] for row in sample)[:12000]
+    system = (
+        brief.strip() + "\n"
+        "For THIS log, override any calendar-output instruction above. "
+        "This is a dmesg log with ONLY seconds since boot. There is no proven "
+        "calendar date, timezone, or wall-clock anchor. NEVER invent one. "
+        "Identify the most relevant event from the description and the log "
+        "sample. Return at most three boot-elapsed timestamps copied from "
+        "observed [seconds.microseconds] log prefixes. If evidence is "
+        "insufficient, return no suggestions. Reply STRICT JSON only: "
+        '{"interpretation":"short summary","suggestions":['
+        '{"boot_elapsed":"55.510209","confidence":"high|medium|low",'
+        '"reason":"short explanation"}]}'
+    )
+    user = f"Problem description:\n{text or '(none provided)'}\n\nLog sample:\n{digest}"
+    try:
+        response = llm_client.chat.completions.create(
+            model=llm_model,
+            messages=[{"role": "system", "content": system},
+                      {"role": "user", "content": user}],
+            temperature=0.1, max_tokens=700,
+        )
+        answer = parse_json_loose(response.choices[0].message.content or "")
+        if not isinstance(answer, dict):
+            answer = {}
+    except Exception as exc:
+        print(f"[issue_time_ai] boot-elapsed suggestion failed: {exc}")
+        answer = {}
+    suggestions = []
+    candidates = answer.get("suggestions")
+    for item in (candidates if isinstance(candidates, list) else [])[:3]:
+        if not isinstance(item, dict):
+            continue
+        token = str(item.get("boot_elapsed") or "").strip()
+        if not re.fullmatch(r"\d+(?:\.\d{1,6})?", token):
+            continue
+        target = float(token)
+        nearest = min(observed, key=lambda row: abs(row[0] - target))
+        if abs(nearest[0] - target) > 1.0:
+            continue
+        suggestions.append({
+            "boot_elapsed": nearest[1], "confidence": str(item.get("confidence") or "low"),
+            "reason": str(item.get("reason") or "")[:400],
+            "log_line": nearest[2][:300],
+            "source": "description",
+        })
+    # The model answers nothing when the description does not point at an
+    # event -- "what" is not a symptom, and an empty box is not either. The
+    # log still has its own stand-out moments, so offer those rather than a
+    # dialog whose only button is Close. They are picked here, not by the
+    # model, so they are labelled as what they are: from the log, not matched
+    # to anything the user said.
+    from_log = [] if suggestions else _notable_boot_offsets(observed)
+    return {
+        "success": True, "time_basis": "boot_elapsed",
+        "suggestions": suggestions or from_log,
+        "interpretation": str(answer.get("interpretation") or "")[:400],
+        "needs_user_input": True,
+        "message": (
+            "These are seconds since boot, not calendar times. The full log "
+            "remains in scope; add a suggested offset to your chat question "
+            "to focus the agent." if suggestions else
+            "Nothing in the log matched the description. These are the log's own "
+            "notable lines — pick one, or describe what went wrong and try again."
+            if from_log else
+            "No verifiable boot-elapsed event was found. The full log remains in "
+            "scope. Describing what went wrong gives the AI something to match."),
+    }
+
+
+# Strong fault signals only. "disabled", "warning on user-space split_locks"
+# and friends are ordinary boot chatter on every machine, and including them
+# buries the handful of lines that are actually worth looking at.
+_BOOT_FAULT_RE = re.compile(
+    r"(?:\berror\b|\bfail(?:ed|ure|s)?\b|\bpanic\b|\bOops\b|\bBUG:|\bWARNING:|"
+    r"\btimed out\b|\btimeout\b|\bunable to\b|\bcannot\b|\bnot responding\b|"
+    r"\bdenied\b|Call Trace|\bI/O error\b|\bfault\b)", re.I)
+_DIGIT_SHAPE = re.compile(r"\d+")
+
+
+def _notable_boot_offsets(observed, limit: int = 3) -> List[dict]:
+    """Fault lines from the log itself, spread across the boot.
+
+    ``observed`` is ``(offset, token, line)`` for every timestamped line. One
+    entry per distinct message — a message repeated with different numbers is
+    the same event — and the picks are spread so they do not all come from the
+    first second, which is where a boot log is densest.
+    """
+    seen: set[str] = set()
+    faults = []
+    for offset, token, line in observed:
+        if not _BOOT_FAULT_RE.search(line):
+            continue
+        shape = _DIGIT_SHAPE.sub("#", line)[:90]
+        if shape in seen:
+            continue
+        seen.add(shape)
+        faults.append((offset, token, line))
+    if not faults:
+        return []
+    if len(faults) <= limit:
+        picks = faults
+    else:
+        step = (len(faults) - 1) / (limit - 1) if limit > 1 else 0
+        picks = [faults[round(i * step)] for i in range(limit)]
+    return [{
+        "boot_elapsed": token,
+        "confidence": "low",
+        "reason": "From the log, not matched to your description.",
+        "log_line": line[:300],
+        "source": "log",
+    } for _offset, token, line in picks]
+
+
+def _last_focus_timestamp(log_lines: List[str], focus: IssueTimeFocus,
+                          log_format) -> Optional[datetime]:
+    for line in reversed(log_lines or []):
+        if focus.rx.search(line):
+            stamp = log_format.parse(line)
+            if stamp is not None:
+                return stamp
+    return None
+
+
 def build_event_log_digest(
     events: Optional[List[dict]],
     max_events: int = 40,
@@ -347,6 +594,8 @@ def llm_suggest(
     log_frame_last_ts: Optional[datetime] = None,
     tz_label: str = "",
     event_digest: Optional[str] = None,
+    domain_hint: str = "",
+    brief: str = "",
 ) -> dict:
     """Ask the LLM to infer issue time(s) from the description + log sample.
 
@@ -449,15 +698,14 @@ def llm_suggest(
         "event-log row when the description and log point elsewhere. "
         if event_digest else ""
     )
+    # The briefing is a document the profile owns and a person can edit (the
+    # suggest_time speclet, resolved by the caller). Everything after it is
+    # computed here -- the log's range, the timezone anchors, the format rule,
+    # the event-log caveat -- and the strict JSON contract below is what the
+    # reply is parsed with, so neither can be edited away.
     system = (
-        "You determine the 'issue time' that anchors log analysis. Logs are "
-        "typically Wi-Fi or Bluetooth, but the user's problem description "
-        "(which may be vague, non-English, or use a wrong time format) is "
-        "the source of truth for the specific scenario. Read it plus a "
-        "rough sample of the log, then infer the most likely issue time(s) "
-        "— use the description to decide which lines in the log are "
-        "relevant, and pick the timestamp that sits next to one of those "
-        "lines. "
+        brief.strip() + " "
+        f"{domain_hint + ' ' if domain_hint else ''}"
         f"{event_priority}"
         f"{rng}{tz_block} {format_rule}\n"
         "Reply with STRICT JSON only (no markdown, no prose) of the form:\n"
@@ -509,6 +757,9 @@ def build_issue_time_suggestions(
     log_frame_last_ts: Optional[datetime] = None,
     tz_label: str = "",
     event_log_events: Optional[List[dict]] = None,
+    focus: Optional[IssueTimeFocus] = None,
+    log_format=None,
+    brief: str = "",
 ) -> dict:
     """Full orchestration. Returns a response payload dict ready to ``jsonify``.
 
@@ -528,7 +779,17 @@ def build_issue_time_suggestions(
     to the LLM alongside the raw-log sample — the model weighs them itself
     rather than being forced onto a fault row. Omitting it (Wi-Fi /
     log_chatbot) keeps the original behaviour.
+
+    ``focus`` with ``log_format`` (a ``utils.log_time_format`` result) swaps
+    the generic digest for :func:`build_focus_digest`, briefs the model with
+    ``focus.hint``, and falls back to the last focus event rather than the
+    last log line. Omitting them keeps the original behaviour.
     """
+    if (log_format is not None and getattr(log_format, "kind", None) == "relative"
+            and getattr(log_format, "anchor", None) is None):
+        return suggest_boot_elapsed(text, log_lines or [], log_format,
+                                    llm_client, llm_model, brief=brief, focus=focus)
+
     no_date = log_has_date is False
 
     # 1) User-first deterministic pass — explicit time(s) win, no LLM.
@@ -577,7 +838,11 @@ def build_issue_time_suggestions(
             "message": "LLM is not configured on this server.",
         }
 
-    log_digest = build_log_digest(log_lines or [])
+    log_digest = ""
+    if focus is not None and log_format is not None:
+        log_digest = build_focus_digest(log_lines or [], focus, log_format)
+    if not log_digest:
+        log_digest = build_log_digest(log_lines or [])
     event_digest = build_event_log_digest(event_log_events)
     # Wrap the LLM call so any network / parse / API-error failure degrades
     # gracefully into "no suggestions" instead of a 500 — the log-first
@@ -591,6 +856,8 @@ def build_issue_time_suggestions(
             log_frame_last_ts=log_frame_last_ts,
             tz_label=tz_label,
             event_digest=event_digest,
+            domain_hint=focus.hint if focus is not None else "",
+            brief=brief,
         )
     except Exception as _e:
         print(f"[issue_time_ai] llm_suggest failed, deferring to fallback: {_e}")
@@ -631,6 +898,19 @@ def build_issue_time_suggestions(
     # end). The user still sees "low" confidence + a reason explaining
     # it's a guess, and needs_user_input stays True so they're prompted
     # to confirm or edit.
+    if not suggestions and log_lines and focus is not None and log_format is not None:
+        # A multi-day log's last line is rarely the incident; its last event of
+        # the profile's own subsystem is a far better guess.
+        focus_dt = _last_focus_timestamp(log_lines, focus, log_format)
+        if focus_dt is not None:
+            suggestions.append(make_suggestion(
+                focus_dt, "low",
+                (f"No exact anchor matched the description; using the log's last "
+                 f"{focus.label} event as a starting point. Edit if the issue "
+                 f"happened at another time."),
+                "inferred",
+                log_has_date=not no_date,
+            ))
     if not suggestions and log_lines:
         fallback_dt = _find_last_log_timestamp(log_lines, no_date_log=no_date)
         if fallback_dt is not None:

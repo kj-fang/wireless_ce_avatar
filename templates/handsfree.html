@@ -446,6 +446,8 @@
                 {% if not config.auto_post_first_response %}style="display:none;"{% endif %}>AUTO-POST first response</span>
           <span id="trial-badge" class="pill warn" title="Tuning on historical cases: drafts are flagged TRIAL and cannot be posted"
                 {% if not config.trial_mode %}style="display:none;"{% endif %}>TRIAL MODE</span>
+          {% if role == 'server' %}<span id="role-badge" class="pill good"
+                title="This app runs as the Handsfree server: the scheduled analysis rounds run here and show in the live panel">SERVER</span>{% endif %}
         </span>
       </div>
       <div class="controls divider">
@@ -462,9 +464,12 @@
       </div>
     </div>
     <div id="tab-auto" style="display:none;">
-      <div class="hint">Scheduled rounds run on the Handsfree server every night. <b>Run now</b> runs one round
-        right away on this PC with the settings below. Each round scans the ONE source chosen below — the open IPS cases of the case owner (from
-        Settings) for either new cases OR new customer comments since the previous round, or the cases of up to three IPS
+      <div class="hint">{% if role == 'server' %}This PC is the <b>Handsfree server</b>: <b>Start automatic analysis</b> runs the rounds below on
+        the chosen frequency inside this app, and the live panel shows each round as it runs. While it is ON, disable the Task Scheduler
+        job that runs <code>tools/handsfree_server_run.py</code> (same sign-in profile, duplicate rounds).{% else %}Scheduled rounds run on
+        the Handsfree server (the schedule below is read-only on this PC).{% endif %} <b>Run now</b> runs one round
+        right away on this PC with the settings below. Each round scans the ONE source chosen below — the open IPS cases of up to ten case
+        owners for either new cases OR new customer comments since the previous round, or the cases of up to three IPS
         list views (their union) that were not analyzed yet or have new customer comments — and runs the handsfree pipeline
         for each; the drafts queue below for review. Max cases per round applies to either source. Nothing is
         posted automatically — Approve still decides. Closed cases of a list view run only in trial mode (Settings).
@@ -472,7 +477,7 @@
         "IPS 01234567" runs that case on its email thread (every human mail naming the case, Inbox + Sent Items), and
         Approve on its draft saves a reply in your Outlook Drafts (nothing is sent).</div>
       <div class="controls">
-        <label style="display: none;">Frequency:
+        <label {% if role != 'server' %}style="display: none;"{% endif %}>Frequency:
           <select id="auto-mode">
             <option value="4h">Every 4 hours</option>
             <option value="8h">Every 8 hours</option>
@@ -482,7 +487,7 @@
         <label>Max cases per round:
           <input type="number" id="auto-max" min="1" max="50" step="1" value="10" style="width: 64px;">
         </label>
-        <button class="primary" id="auto-toggle-btn" onclick="toggleAuto()" style="display: none;">
+        <button class="primary" id="auto-toggle-btn" onclick="toggleAuto()" {% if role != 'server' %}style="display: none;"{% endif %}>
           <svg width="11" height="11" viewBox="0 0 24 24" fill="currentColor" aria-hidden="true">
             <path d="M6 4.5l14 7.5-14 7.5z" /></svg>
           <span id="auto-toggle-text">Start automatic analysis</span></button>
@@ -494,12 +499,22 @@
         <span style="color: var(--muted);">Source:</span>
         <label class="auto-src-opt" style="display: inline-flex; align-items: center; gap: 6px; cursor: pointer;">
           <input type="radio" name="auto-source" value="owner" onchange="applyAutoSourceUi()">
-          Open cases of case owner <b id="auto-owner" style="color: var(--fg);">{{ config.owner_name or '—' }}</b>
+          Open cases of case owner(s) <span style="color: var(--faint);">(up to 10; empty = the Settings owner
+          <b id="auto-owner" style="color: var(--muted);">{{ config.owner_name or '—' }}</b>)</span>
         </label>
         <label class="auto-src-opt" style="display: inline-flex; align-items: center; gap: 6px; cursor: pointer;">
           <input type="radio" name="auto-source" value="list_view" onchange="applyAutoSourceUi()">
           IPS list views <span style="color: var(--faint);">(up to 3, their cases are combined)</span>
         </label>
+      </div>
+      <div class="controls" id="auto-owner-row" style="display: none; padding-left: 58px;">
+        <span id="auto-owner-chips" style="display: inline-flex; gap: 6px; flex-wrap: wrap;"></span>
+        <input type="text" id="auto-owner-new" style="width: 240px; font-family: var(--mono); font-size: 12.5px;"
+               placeholder="IPS Owner.Name, e.g. Charles P Chu"
+               onkeydown="if(event.key==='Enter')addAutoOwner()">
+        <button class="ghost" id="auto-owner-add" onclick="addAutoOwner()"
+                title="Add a case owner (max 10)">Add</button>
+        <span class="status-line" id="auto-owner-note"></span>
       </div>
       <div class="controls" id="auto-lv-row" style="display: none; padding-left: 58px;">
         <span id="auto-lv-chips" style="display: inline-flex; gap: 6px; flex-wrap: wrap;"></span>
@@ -571,7 +586,8 @@
       </label>
       <label style="font-size: 12px; margin-left: 8px; font-weight: 400;"
              title="The queue opens on the cases of the IPS user signed in on this PC; tick to see every owner's">
-        <input type="checkbox" id="show-everyone" onchange="applyEveryoneUi(); loadQueue()"> everyone's cases
+        <input type="checkbox" id="show-everyone" onchange="applyEveryoneUi(); loadQueue()"
+               {% if role == 'server' %}checked{% endif %}> everyone's cases
       </label>
       <label id="owner-filter-wrap" style="font-size: 12px; margin-left: 4px; font-weight: 400; display: none;">
         owner:
@@ -625,7 +641,7 @@
 </main>
 <aside id="live-panel" aria-live="polite" aria-label="Live analysis">
   <div class="lp-top"><span class="lp-title">Live analysis</span></div>
-  <div class="lp-empty" style="margin-top: 10px;">No run yet — start one in Step 1 and its progress shows here.</div>
+  <div class="lp-empty" style="margin-top: 10px;">No run yet — start one in Step 1{% if role == 'server' %}, or wait for the next scheduled round;{% else %} and{% endif %} its progress shows here.</div>
 </aside>
 </div>
 
@@ -728,6 +744,8 @@
 
   const MAX_AUTO_LIST_VIEWS = 3;
   let autoListViews = [];          // developer names chosen for the list-view source
+  const MAX_AUTO_OWNERS = 10;
+  let autoOwners = [];             // IPS Owner.Name values chosen for the owner source
 
   function getAutoSource() {
     const r = document.querySelector('input[name="auto-source"]:checked');
@@ -743,10 +761,53 @@
   function applyAutoSourceUi() {
     const lv = getAutoSource() === 'list_view';
     document.getElementById('auto-lv-row').style.display = lv ? '' : 'none';
+    document.getElementById('auto-owner-row').style.display = lv ? 'none' : '';
     document.querySelectorAll('.auto-src-opt').forEach(l => {
       l.style.color = l.querySelector('input').checked ? 'var(--fg)' : 'var(--muted)';
     });
     renderAutoListViewChips();
+    renderAutoOwnerChips();
+  }
+
+  // ---------- owner chips (the owner source scans each of these) ----------
+
+  function renderAutoOwnerChips() {
+    const box = document.getElementById('auto-owner-chips');
+    box.innerHTML = autoOwners.map(name =>
+      `<span class="pill" title="${esc(name)}">${esc(name)} ` +
+      `<a href="#" onclick="removeAutoOwner(${JSON.stringify(name).replace(/"/g, '&quot;')});return false;" ` +
+      `style="color: var(--muted); text-decoration: none; margin-left: 2px;" title="Remove">✕</a></span>`
+    ).join('');
+    const full = autoOwners.length >= MAX_AUTO_OWNERS;
+    document.getElementById('auto-owner-add').disabled = full;
+    document.getElementById('auto-owner-new').disabled = full;
+    const note = document.getElementById('auto-owner-note');
+    if (getAutoSource() === 'list_view') { note.textContent = ''; return; }
+    const settingsOwner = document.getElementById('auto-owner').textContent;
+    note.textContent = autoOwners.length
+      ? (full ? 'maximum of ' + MAX_AUTO_OWNERS + ' owners' : '')
+      : 'no owner added — the round scans the Settings owner' + (settingsOwner && settingsOwner !== '—' ? ' ' + settingsOwner : '');
+  }
+
+  function addAutoOwner() {
+    const input = document.getElementById('auto-owner-new');
+    const name = input.value.trim();
+    if (!name) { alert('Type an IPS Owner.Name first (as shown on the case, e.g. "Charles P Chu").'); return; }
+    if (autoOwners.some(o => o.toLowerCase() === name.toLowerCase())) { alert(name + ' is already in the list.'); return; }
+    if (autoOwners.length >= MAX_AUTO_OWNERS) { alert('At most ' + MAX_AUTO_OWNERS + ' owners.'); return; }
+    autoOwners.push(name);
+    input.value = '';
+    renderAutoOwnerChips();
+  }
+
+  function removeAutoOwner(name) {
+    autoOwners = autoOwners.filter(n => n !== name);
+    renderAutoOwnerChips();
+  }
+
+  function autoOwnerEditing() {
+    const row = document.getElementById('auto-owner-row');
+    return row && row.contains(document.activeElement);
   }
 
   function renderAutoListViewChips() {
@@ -870,6 +931,9 @@
     if (!autoListViewEditing()) {
       autoListViews = (a.list_views || (a.list_view ? [a.list_view] : [])).slice(0, MAX_AUTO_LIST_VIEWS);
     }
+    if (!autoOwnerEditing()) {
+      autoOwners = (a.owners || []).slice(0, MAX_AUTO_OWNERS);
+    }
     applyAutoSourceUi();
     const emWatch = document.getElementById('auto-email-watch');
     if (document.activeElement !== emWatch) emWatch.checked = !!a.email_watch_enabled;
@@ -887,24 +951,35 @@
       autoEnabled ? 'Stop automatic analysis' : 'Start automatic analysis';
     document.getElementById('auto-toggle-btn').className = autoEnabled ? 'danger' : 'primary';
     const bits = [];
+    const owners = a.owners || [];
     const srcText = a.source === 'list_view'
       ? 'list view' + ((a.list_views || []).length > 1 ? 's ' : ' ') + ((a.list_views || [a.list_view]).join(', ') || '?')
-      : 'open cases of the owner';
-    bits.push(autoEnabled ? 'ON · ' + (a.mode_label || a.mode) + ' · ' + srcText
-      + (a.email_watch_enabled ? ' + Outlook ' + (a.email_folder || 'Inbox') : '') : 'off');
+      : 'open cases of ' + (owners.length > 1 ? owners.length + ' owners (' + owners.join(', ') + ')'
+                                               : (owners[0] ? "'" + owners[0] + "'" : 'the owner'));
+    bits.push((a.can_schedule ? '' : 'schedule (read-only here): ')
+      + (autoEnabled ? 'ON · ' + (a.mode_label || a.mode) + ' · ' + srcText
+         + (a.email_watch_enabled ? ' + Outlook ' + (a.email_folder || 'Inbox') : '') : 'off'));
+    if (autoEnabled && a.host) bits.push(a.runs_here && a.can_schedule ? 'runs in this app' : 'runs on ' + a.host);
     if (autoEnabled && a.next_run_at) bits.push('next round ' + a.next_run_at.slice(0, 16).replace('T', ' '));
     if (a.last_scan_at) bits.push('last round ' + a.last_scan_at.slice(0, 16).replace('T', ' ') + ' UTC');
     if (a.last_result) bits.push(a.last_result);
     if (a.running) bits.push('running now');
+    if (autoEnabled && a.runs_here && a.cli_last_run) {
+      bits.push('⚠ the Task Scheduler CLI also ran: ' + a.cli_last_run + ' — run only one of them');
+    }
     const el = document.getElementById('auto-status');
     el.textContent = bits.join(' · ');
-    el.className = 'status-line ' + (a.running ? 'running' : autoEnabled ? 'done' : '');
+    el.className = 'status-line ' + (a.running ? 'running'
+                   : (autoEnabled && a.runs_here && a.cli_last_run) ? 'error'
+                   : autoEnabled ? 'done' : '');
   }
 
   async function loadAuto() {
     try {
       const r = await fetch('/handsfree/auto');
-      renderAuto(await r.json());
+      const a = await r.json();
+      renderAuto(a);
+      ensureIdlePolling(a);
     } catch (e) {
       document.getElementById('auto-status').textContent = 'status unavailable: ' + e;
     }
@@ -971,6 +1046,7 @@
       max_cases: parseInt(document.getElementById('auto-max').value, 10) || 10,
       source: getAutoSource(),
       list_views: autoListViews.slice(0, MAX_AUTO_LIST_VIEWS),
+      owners: autoOwners.slice(0, MAX_AUTO_OWNERS),
     }, emailRoundSettings());
   }
 
@@ -998,6 +1074,7 @@
     if (j.error) { alert('Failed: ' + j.error); return; }
     renderAuto(j);
     if (j.enabled && j.mode !== 'nightly') startPolling();   // interval modes run right away
+    else ensureIdlePolling(j);                                // nightly: watch for it at a slow pace
   }
 
   // A request that never gets an answer (the app was restarted and this tab
@@ -1059,10 +1136,26 @@
     await startRun('/handsfree/run_case', {case_nbr: caseNbr});
   }
 
-  function startPolling() {
+  let pollIntervalMs = 0;
+  const POLL_FAST_MS = 2000;     // a run is in progress
+  const POLL_IDLE_MS = 5000;     // server: between scheduled rounds
+
+  function setPollInterval(ms) {
     if (pollTimer) clearInterval(pollTimer);
-    pollTimer = setInterval(refreshStatus, 2000);
+    pollTimer = setInterval(refreshStatus, ms);
+    pollIntervalMs = ms;
+  }
+
+  function startPolling() {
+    setPollInterval(POLL_FAST_MS);
     refreshStatus();
+  }
+
+  // The scheduled rounds run inside THIS app when it is the server that
+  // owns the schedule: keep a slow poll going while idle, so a round that
+  // starts on its own shows up in the live panel without a click.
+  function ensureIdlePolling(a) {
+    if (a && a.enabled && a.can_schedule && a.runs_here && !pollTimer) setPollInterval(POLL_IDLE_MS);
   }
 
   // ---------- per-case stage table ----------
@@ -1175,9 +1268,14 @@
     if (s.status !== 'running') {
       setRunButtons(false);
       if (pollTimer && s.status !== 'idle') { clearInterval(pollTimer); pollTimer = null; }
-      if (s.status === 'done') loadQueue();
+      if (s.status === 'done' && lastSeenStatus !== 'done') loadQueue();
+      ensureIdlePolling(s.auto);
+    } else if (pollTimer && pollIntervalMs !== POLL_FAST_MS) {
+      setPollInterval(POLL_FAST_MS);        // a scheduled round began: follow it closely
     }
+    lastSeenStatus = s.status;
   }
+  let lastSeenStatus = null;
 
   const ACTION_OWNER_TEXT = {intel: 'Intel (case owner)', customer: 'Customer'};
 
@@ -2223,6 +2321,8 @@
         `<pre style="white-space: pre-wrap; margin-top: 6px;">${esc('log: ' + (x.log_file || '—')
           + ((x.log_range || []).filter(Boolean).length ? '  (' + x.log_range.join(' – ') + ')' : '')
           + '\n\n' + (x.description || ''))}</pre>`).join('') + `</details>`;
+  }
+
   // ---- IPS sign-in of this PC: whose cases the queue shows, whose name posts carry
   let ipsLogin = {status: 'signed_out', identity: null, error: ''};
 

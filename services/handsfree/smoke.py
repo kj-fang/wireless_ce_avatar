@@ -1735,10 +1735,10 @@ def smoke_auto_scan(tmp: Path) -> None:
     check("S16.d3 scheduler target: owner by default, list views when chosen (legacy "
           "auto_list_view / trial_list_view honoured), errors when the chosen source is unconfigured",
           scan_target({"owner_name": "Charles"})
-          == {"owner": "Charles", "list_views": [], "list_view": "", "error": ""}
+          == {"owner": "Charles", "owners": ["Charles"], "list_views": [], "list_view": "", "error": ""}
           and scan_target({"auto_source": "list_view", "trial_list_view": "Old_view"})["list_views"] == ["Old_view"]
           and scan_target({"auto_source": "list_view", "auto_list_view": "LV"})
-          == {"owner": "", "list_views": ["LV"], "list_view": "LV", "error": ""}
+          == {"owner": "", "owners": [], "list_views": ["LV"], "list_view": "LV", "error": ""}
           and scan_target({"auto_source": "list_view", "auto_list_views": ["A", "B"], "auto_list_view": "A"})["list_views"] == ["A", "B"]
           and scan_target({"auto_source": "list_view"})["error"]
           and scan_target({"auto_source": "owner"})["error"])
@@ -3187,6 +3187,273 @@ def smoke_email_intake(tmp: Path) -> None:
               and st2.get("email_watch_enabled") is True)
     finally:
         sch._store = orig_s
+def smoke_server_role(tmp: Path) -> None:
+    print("[S21] Server role: the in-app schedule runs only on the server that pressed Start; "
+          "several owners per round")
+    import os
+    from datetime import datetime, timedelta, timezone
+    from configs.global_configs import app_config
+    from . import scheduler as sch
+    from . import orchestrator as orch
+    from .ips_client import CaseRef
+    from .queue import HandsfreeStore
+
+    orig_role = getattr(app_config, "handsfree_role", "client")
+    orig_env = os.environ.get("INTELAVATAR_HANDSFREE_ROLE")
+    orig_store_s, orig_started, orig_run_once = sch._store, sch.ensure_started, sch.run_once
+    orig_orch_store, orig_analyze, orig_ips = orch._store, orch._analyze_and_enqueue, orch.IpsClient
+    store = HandsfreeStore(tmp / "handsfree_s20")
+    sch._store = lambda: store
+    orch._store = lambda: store
+
+    def set_role(value, env=None):
+        app_config.handsfree_role = value
+        if env is None:
+            os.environ.pop("INTELAVATAR_HANDSFREE_ROLE", None)
+        else:
+            os.environ["INTELAVATAR_HANDSFREE_ROLE"] = env
+
+    try:
+        # --- a) role resolution ---------------------------------------------
+        set_role("server")
+        r1 = sch.role()
+        set_role("", "SERVER")
+        r2 = sch.role()
+        set_role("bogus", "server")
+        r3 = sch.role()
+        set_role("")
+        r4 = sch.role()
+        check("S21.a role(): app_config wins, env var is the fallback, unknown values are a client",
+              (r1, r2, r3, r4) == ("server", "server", "client", "client"), str((r1, r2, r3, r4)))
+
+        # --- b) a client cannot start the schedule --------------------------
+        set_role("client")
+        store.save_config({"owner_name": "Charles"})
+        try:
+            sch.configure(True, "4h")
+            check("S21.b client: Start refused", False, "no ValueError")
+        except ValueError as e:
+            check("S21.b client: Start refused with the server hint",
+                  "client" in str(e) and "--handsfree-role server" in str(e), str(e))
+        st_c = sch.status()
+        check("S21.b2 client status: can_schedule False, no host yet, Stop still allowed",
+              st_c["role"] == "client" and st_c["can_schedule"] is False and st_c["host"] == ""
+              and sch.configure(False, "4h")["enabled"] is False)
+
+        # --- c) the server starts it: host pinned, first interval run due now ---
+        set_role("server")
+        started: list = []
+        sch.ensure_started = lambda: started.append(True)
+        before = datetime.now().astimezone()
+        st = sch.configure(True, "4h", owners=["Ann", " bob ", "ann", ""])
+        cfg = store.load_config()
+        due = datetime.fromisoformat(cfg["auto_next_run_at"])
+        check("S21.c server Start: enabled, host = this machine, owners cleaned, due now, thread asked",
+              st["enabled"] is True and st["can_schedule"] is True and st["runs_here"] is True
+              and cfg["auto_check_host"] == sch._this_host() and st["host"] == sch._this_host()
+              and cfg["auto_owners"] == ["Ann", "bob"] and st["owners"] == ["Ann", "bob"]
+              and st["max_owners"] == 10
+              and before - timedelta(seconds=2) <= due <= before + timedelta(seconds=30)
+              and started == [True],
+              f"{ {k: v for k, v in st.items() if k in ('enabled', 'host', 'runs_here', 'owners')} } "
+              f"host={cfg.get('auto_check_host')} due={cfg.get('auto_next_run_at')} started={started}")
+        st_off = sch.configure(False, "4h")
+        check("S21.c2 Stop clears the due time and starts nothing",
+              st_off["enabled"] is False and st_off["next_run_at"] == "" and started == [True])
+
+        # --- c3) one scheduler per server, both ways --------------------------
+        orig_files_dir = getattr(app_config, "avatarfiles_dir", None)
+        files_dir = tmp / "s21files"
+        status_file = files_dir / "logs" / "handsfree_server" / "last_status.txt"
+        status_file.parent.mkdir(parents=True, exist_ok=True)
+        app_config.avatarfiles_dir = str(files_dir)
+        try:
+            status_file.write_text("2026-11-04 02:00 OK\nlog: x.log\n", encoding="utf-8")
+            try:
+                sch.configure(True, "4h", owners=["Ann"])
+                check("S21.c3 Start refused while the CLI status file is fresh", False, "no ValueError")
+            except ValueError as e:
+                check("S21.c3 Start refused while the CLI status file is fresh (names the run)",
+                      "Task Scheduler CLI" in str(e) and "2026-11-04 02:00 OK" in str(e)
+                      and store.load_config().get("auto_check_enabled") is False
+                      and sch.status()["cli_last_run"] == "2026-11-04 02:00 OK", str(e))
+            import os as _os, time as _time
+            old = _time.time() - 2 * 24 * 3600
+            _os.utime(status_file, (old, old))
+            st_old = sch.configure(True, "4h", owners=["Ann"])
+            check("S21.c4 a status file older than a day no longer blocks Start",
+                  st_old["enabled"] is True and st_old["cli_last_run"] == "")
+            # the CLI side: an owner round steps aside while the page owns the schedule here
+            from .scheduler import scheduled_in_app_here
+            cfg_on = store.load_config()
+            reason_here = scheduled_in_app_here(cfg_on)
+            reason_other = scheduled_in_app_here({**cfg_on, "auto_check_host": "another-box"})
+            reason_off = scheduled_in_app_here({**cfg_on, "auto_check_enabled": False})
+            from . import cli as cli_mod
+            check("S21.c5 CLI guard: refuses only when the schedule is ON and pinned to this host; "
+                  "exit code 3 is reserved for it",
+                  "this server" in reason_here and cfg_on["auto_check_host"] in reason_here
+                  and reason_other == "" and reason_off == "" and cli_mod.EXIT_SCHEDULED_IN_APP == 3,
+                  f"here={reason_here!r} other={reason_other!r} off={reason_off!r}")
+            sch.configure(False, "4h")
+        finally:
+            app_config.avatarfiles_dir = orig_files_dir
+
+        # --- d) _tick: only the pinned host runs the due round --------------
+        ran: list = []
+        sch.run_once = lambda trigger="manual", on_start=None: ran.append(trigger) or {"ok": True}
+        past = (datetime.now().astimezone() - timedelta(minutes=1)).isoformat(timespec="seconds")
+        future = (datetime.now().astimezone() + timedelta(hours=1)).isoformat(timespec="seconds")
+        store.save_config({"auto_check_enabled": True, "auto_next_run_at": past,
+                           "auto_check_host": "some-other-server"})
+        t_other = sch._tick()
+        store.save_config({"auto_check_host": sch._this_host()})
+        set_role("client")
+        t_client = sch._tick()
+        set_role("server")
+        t_here = sch._tick()
+        store.save_config({"auto_next_run_at": future})
+        t_early = sch._tick()
+        store.save_config({"auto_next_run_at": past, "auto_check_enabled": False})
+        t_off = sch._tick()
+        check("S21.d _tick: another host / a client / not yet due / disabled -> nothing; "
+              "this server with a due round -> one scheduled run",
+              (t_other, t_client, t_here, t_early, t_off) == (False, False, True, False, False)
+              and ran == ["scheduled"], f"{(t_other, t_client, t_here, t_early, t_off)} ran={ran}")
+        sch.run_once = orig_run_once
+
+        # --- e) owners in the target and the settings -----------------------
+        from .scheduler import scan_target, _settings_updates
+        many = [f"Owner {i}" for i in range(12)]
+        check("S21.e scan_target: auto_owners when set (deduped, first = legacy owner), else the "
+              "Settings owner; list-view source has none; settings cap at 10",
+              scan_target({"owner_name": "C", "auto_owners": ["A", "B", "a"]})
+              == {"owner": "A", "owners": ["A", "B"], "list_views": [], "list_view": "", "error": ""}
+              and scan_target({"owner_name": "C", "auto_owners": []})["owners"] == ["C"]
+              and scan_target({"auto_source": "list_view", "auto_list_views": ["LV"],
+                               "auto_owners": ["A"]})["owners"] == []
+              and scan_target({"auto_owners": []})["error"] == "no owner name configured"
+              and _settings_updates(owners=many) == {"auto_owners": many[:10]}
+              and _settings_updates(owners=[]) == {"auto_owners": []},
+              str(scan_target({"owner_name": "C", "auto_owners": ["A", "B", "a"]})))
+
+        # --- f) run_once hands the owners to the round ----------------------
+        got: dict = {}
+
+        def _fake_scan(store_, owner, max_cases, trigger="scheduled", list_view="",
+                       on_start=None, list_views=None, owners=None):
+            got.update(owner=owner, owners=owners, list_views=list_views, max_cases=max_cases)
+            return {"ok": True, "cases": []}
+        orig_scan = orch.run_auto_scan
+        orch.run_auto_scan = _fake_scan
+        try:
+            store.save_config({"auto_check_enabled": False, "auto_source": "owner",
+                               "auto_owners": ["Ann", "Bob"], "auto_check_max_cases": 7})
+            sch.run_once(trigger="manual")
+        finally:
+            orch.run_auto_scan = orig_scan
+        check("S21.f run_once passes every owner (first one as the legacy owner) and the cap",
+              got == {"owner": "Ann", "owners": ["Ann", "Bob"], "list_views": [], "max_cases": 7}, str(got))
+
+        # --- g) one round over two owners: each owner's own window, a shared case once ---
+        recent = (datetime.now(timezone.utc) - timedelta(hours=1)).strftime("%Y-%m-%dT%H:%M:%S.000+0000")
+        asked: list = []
+
+        class _OwnersIps:
+            def find_open_cases(self, owner):
+                asked.append(owner)
+                if owner == "Ann":
+                    return [CaseRef("00000011", "511", "ann's new case", created=recent, owner_name="Ann"),
+                            CaseRef("00000012", "512", "shared case", created=recent, owner_name="Ann")]
+                assert owner == "Bob", owner
+                return [CaseRef("00000012", "512", "shared case", created=recent, owner_name="Bob"),
+                        CaseRef("00000013", "513", "bob's new case", created=recent, owner_name="Bob")]
+
+            def find_customer_updates(self, case_ids, since_iso):
+                return {}
+
+        analyzed: list = []
+
+        def _fake_analyze(store_, case_nbr, case_id="", subject="", owner_name="", trial=None,
+                          case_ctx=None, source="ips"):
+            analyzed.append((case_nbr, owner_name))
+            return store_.enqueue(case_nbr=case_nbr, case_id=case_id, subject=subject,
+                                  draft_plain="x", draft_html="<p>x</p>", confidence=50,
+                                  mode="full", analysis={})
+        orch.IpsClient = _OwnersIps
+        orch._analyze_and_enqueue = _fake_analyze
+        store_g = HandsfreeStore(tmp / "handsfree_s20g")
+        store_g.save_config({"owner_name": "Ann", "post_backend": "rest",
+                             "auto_last_scan_by_owner": {"ann": "2026-10-01T00:00:00Z"},
+                             "auto_last_scan_at": "2026-09-01T00:00:00Z"})
+        try:
+            res = orch.run_auto_scan(store_g, "", max_cases=5, trigger="manual", owners=["Ann", "Bob"])
+            events = " | ".join(e["message"] for e in orch.get_run_state().get("events", []))
+            cfg_g = store_g.load_config()
+            analyzed_g, asked_g = list(analyzed), list(asked)
+            analyzed.clear(); asked.clear()
+            store_c = HandsfreeStore(tmp / "handsfree_s20c")
+            store_c.save_config({"owner_name": "Ann", "post_backend": "rest"})
+            res_c = orch.run_auto_scan(store_c, "", max_cases=2, trigger="manual", owners=["Ann", "Bob"])
+        finally:
+            orch.IpsClient, orch._analyze_and_enqueue = orig_ips, orig_analyze
+        stamps = cfg_g.get("auto_last_scan_by_owner") or {}
+        check("S21.g two owners, one round: both asked, the shared case runs once under the first owner, "
+              "the source names both, each owner gets a fresh stamp, the legacy single stamp is left alone",
+              res["ok"] and asked_g == ["Ann", "Bob"]
+              and analyzed_g == [("00000011", "Ann"), ("00000012", "Ann"), ("00000013", "Bob")]
+              and res["source"] == "open cases of 'Ann', 'Bob'"
+              and "owner 'Ann':" in events and "owner 'Bob':" in events
+              and "1 already listed under an earlier owner" in events
+              and "Ann: 2026-10-01T00:00:00Z" in events
+              and stamps.get("ann", "").startswith("20") and stamps.get("ann") != "2026-10-01T00:00:00Z"
+              and stamps.get("bob", "").startswith("20")
+              and cfg_g.get("auto_last_scan_at") == "2026-09-01T00:00:00Z"
+              and orch.get_run_state().get("owner") == "Ann",
+              f"asked={asked_g} analyzed={analyzed_g} source={res.get('source')!r} stamps={stamps} "
+              f"events={events[:400]}")
+        check("S21.g2 the cap applies to the combined list and keeps the window",
+              res_c["ok"] and len(res_c["cases"]) == 2 and len(analyzed) == 2
+              and "capped" in (store_c.load_config().get("auto_last_result") or ""),
+              f"cases={[c['case_nbr'] for c in res_c['cases']]} result={store_c.load_config().get('auto_last_result')}")
+
+        # --- h) the route: 403 for a client, the server starts it -----------
+        try:
+            from flask import Flask
+            from blueprints.handsfree.handsfree_routes import handsfree_bp
+            set_role("client")
+            app = Flask("handsfree_smoke")
+            app.register_blueprint(handsfree_bp)
+            client = app.test_client()
+            r_client = client.post("/handsfree/auto", json={"enabled": True, "mode": "4h"})
+            r_settings = client.post("/handsfree/auto", json={"mode": "4h", "max_cases": 3})
+            set_role("server")
+            store.save_config({"owner_name": "Charles", "auto_owners": []})
+            r_server = client.post("/handsfree/auto", json={"enabled": True, "mode": "4h",
+                                                             "owners": ["Charles", "Dana"]})
+            r_get = client.get("/handsfree/auto")
+            sch.configure(False, "4h")
+            check("S21.h /auto: a client gets 403 on Start (settings-only POST still fine); the server "
+                  "starts it and GET reports role/host/owners",
+                  r_client.status_code == 403 and "client" in r_client.get_json()["error"]
+                  and r_settings.status_code == 200
+                  and r_server.status_code == 200 and r_server.get_json()["enabled"] is True
+                  and r_get.get_json()["role"] == "server" and r_get.get_json()["owners"] == ["Charles", "Dana"]
+                  and r_get.get_json()["host"] == sch._this_host(),
+                  f"client={r_client.status_code} settings={r_settings.status_code} "
+                  f"server={r_server.status_code} {r_server.get_json()} get={r_get.get_json().get('role')}")
+        except Exception as e:
+            check("S21.h /auto route role check", False, f"{type(e).__name__}: {e}")
+    finally:
+        app_config.handsfree_role = orig_role
+        if orig_env is None:
+            os.environ.pop("INTELAVATAR_HANDSFREE_ROLE", None)
+        else:
+            os.environ["INTELAVATAR_HANDSFREE_ROLE"] = orig_env
+        sch._store, sch.ensure_started, sch.run_once = orig_store_s, orig_started, orig_run_once
+        orch._store, orch._analyze_and_enqueue, orch.IpsClient = orig_orch_store, orig_analyze, orig_ips
+
+
 def smoke_identity() -> None:
     print("[S19] IPS sign-in identity: whoami, parsing, author read-back, login state")
     from .ips_client import IpsClient, parse_identity
@@ -3414,6 +3681,7 @@ def run_smoke() -> int:
         smoke_email_intake(tmp)
         smoke_identity()
         smoke_snowflake_reconnect()
+        smoke_server_role(tmp)
     finally:
         shutil.rmtree(tmp, ignore_errors=True)
     print(f"\nsmoke result: {'ALL PASS' if not PASS_FAIL else 'FAILURES: ' + ', '.join(PASS_FAIL)}")

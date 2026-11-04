@@ -405,22 +405,31 @@ def select_list_view_work(refs: list, updates: dict, ledger_lookup,
 
 def run_auto_scan(store: HandsfreeStore, owner: str = "", max_cases: int = 10,
                   trigger: str = "scheduled", list_view: str = "",
-                  on_start=None, list_views: Optional[list] = None) -> dict:
-    """One automatic round. Source: the owner's open cases with new customer
-    activity since the last scan (default), or — when list_views (or the
-    single list_view) is given — the union of the cases of those IPS list
-    views (in list order, each case once) not yet analyzed or with new
-    customer comments (closed ones only in trial mode). The per-case pipeline runs
-    for each; drafts land in the review queue — nothing posts. Remembers the
-    scan time per source. Returns a summary; {"ok": False} when a run is
-    already in progress. on_start() is called once the run holds the lock
-    and the state says "running" (the UI's Run-now handshake)."""
+                  on_start=None, list_views: Optional[list] = None,
+                  owners: Optional[list] = None) -> dict:
+    """One automatic round. Source: the open cases of the owner(s) with new
+    customer activity since the last scan (default; `owners` is the full
+    list, `owner` the legacy single name — each owner keeps its own "since"
+    stamp and a case owned by two of them runs once), or — when list_views
+    (or the single list_view) is given — the union of the cases of those
+    IPS list views (in list order, each case once) not yet analyzed or with
+    new customer comments (closed ones only in trial mode). The per-case
+    pipeline runs for each; drafts land in the review queue — nothing posts.
+    Remembers the scan time per source. Returns a summary; {"ok": False}
+    when a run is already in progress. on_start() is called once the run
+    holds the lock and the state says "running" (the UI's Run-now handshake)."""
     from datetime import datetime, timedelta, timezone
 
     if not _run_lock.acquire(blocking=False):
         return {"ok": False, "error": "a run is already in progress"}
     started = datetime.now(timezone.utc)
     owner = (owner or "").strip()
+    owner_list: list = []
+    for o in list(owners or []) + [owner]:
+        name = str(o or "").strip()
+        if name and name.casefold() not in {x.casefold() for x in owner_list}:
+            owner_list.append(name)
+    owner = owner_list[0] if owner_list else ""
     views: list = []
     for v in list(list_views or []) + [list_view]:
         name = str(v or "").strip()
@@ -428,7 +437,8 @@ def run_auto_scan(store: HandsfreeStore, owner: str = "", max_cases: int = 10,
             views.append(name)
     list_view = views[0] if views else ""          # truthy = list-view source
     source = (("IPS list view " if len(views) == 1 else "IPS list views ")
-              + ", ".join(f"'{v}'" for v in views)) if views else f"open cases of '{owner}'"
+              + ", ".join(f"'{v}'" for v in views)) if views else (
+              "open cases of " + ", ".join(f"'{o}'" for o in owner_list))
     summary: dict = {"ok": True, "trigger": trigger, "started_at": started.isoformat(),
                      "source": source, "cases": []}
     try:
@@ -439,16 +449,27 @@ def run_auto_scan(store: HandsfreeStore, owner: str = "", max_cases: int = 10,
         cfg = store.load_config()
         trial = bool(cfg.get("trial_mode"))
         scan_times = dict(cfg.get("auto_last_scan_by_owner") or {})
+        default_since = (started - timedelta(hours=24)).strftime("%Y-%m-%dT%H:%M:%SZ")
+
+        def _since_for(key: str, legacy: str = "") -> str:
+            return scan_times.get(key) or legacy or default_since
+
         scan_key = ("listview:" + "|".join(sorted(v.casefold() for v in views))
                     if views else owner.casefold())
         # Older configs kept one stamp, valid only for the configured owner.
+        cfg_owner = str(cfg.get("owner_name") or "").casefold()
         legacy_since = (cfg.get("auto_last_scan_at") or ""
-                        if not list_view
-                        and owner.casefold() == str(cfg.get("owner_name") or "").casefold()
-                        else "")
-        since_iso = scan_times.get(scan_key) or legacy_since or (
-            started - timedelta(hours=24)).strftime("%Y-%m-%dT%H:%M:%SZ")
-        _log_event(f"auto-scan ({trigger}): {source}, customer activity since {since_iso}")
+                        if not list_view and owner.casefold() == cfg_owner else "")
+        since_iso = _since_for(scan_key, legacy_since)
+        # The owner source: one "since" per owner (the config keys are per
+        # owner already); the log line names the first.
+        owner_since = {o: _since_for(o.casefold(),
+                                     cfg.get("auto_last_scan_at") or ""
+                                     if o.casefold() == cfg_owner else "")
+                       for o in owner_list}
+        _log_event(f"auto-scan ({trigger}): {source}, customer activity since "
+                   + (since_iso if list_view or len(owner_list) <= 1 else
+                      ", ".join(f"{o}: {owner_since[o]}" for o in owner_list)))
         ips = IpsClient()
         if list_view:
             refs, seen_nbrs = [], set()
@@ -473,11 +494,27 @@ def run_auto_scan(store: HandsfreeStore, owner: str = "", max_cases: int = 10,
                 line += " — trial mode: closed cases included, drafts cannot be posted"
             _log_event(line)
         else:
-            open_cases = ips.find_open_cases(owner)
-            updates = ips.find_customer_updates([c.case_id for c in open_cases], since_iso)
-            work = select_auto_work(open_cases, updates, store.ledger_entry, since_iso)
-            _log_event(f"{len(open_cases)} open case(s), {len(updates)} with customer "
-                       f"comments since then, {len(work)} to run")
+            # Each owner's open cases against that owner's own "since"; a case
+            # that two owners share (reassigned between rounds) runs once.
+            work, seen_nbrs = [], set()
+            case_owner: dict = {}
+            for o in owner_list:
+                open_cases = ips.find_open_cases(o)
+                o_since = owner_since[o]
+                updates = ips.find_customer_updates([c.case_id for c in open_cases], o_since)
+                o_work = select_auto_work(open_cases, updates, store.ledger_entry, o_since)
+                fresh = [w for w in o_work if w[0].case_nbr not in seen_nbrs]
+                seen_nbrs.update(w[0].case_nbr for w in fresh)
+                for w in fresh:
+                    case_owner[w[0].case_nbr] = o
+                work.extend(fresh)
+                _log_event((f"owner '{o}': " if len(owner_list) > 1 else "")
+                           + f"{len(open_cases)} open case(s), {len(updates)} with customer "
+                           f"comments since then, {len(o_work)} to run"
+                           + (f" ({len(o_work) - len(fresh)} already listed under an earlier owner)"
+                              if len(o_work) != len(fresh) else ""))
+            if len(owner_list) > 1:
+                work.sort(key=lambda w: w[2], reverse=True)     # newest first across owners
         capped = len(work) > max_cases
         if capped:
             _log_event(f"capped to {max_cases} case(s) this round"
@@ -490,7 +527,8 @@ def run_auto_scan(store: HandsfreeStore, owner: str = "", max_cases: int = 10,
             try:
                 rec = _analyze_and_enqueue(store, ref.case_nbr,
                                            case_id=ref.case_id, subject=ref.subject,
-                                           owner_name=owner or getattr(ref, "owner_name", ""),
+                                           owner_name=(case_owner.get(ref.case_nbr) if not list_view else "")
+                                                      or owner or getattr(ref, "owner_name", ""),
                                            trial=trial)
                 if rec is not None and rec.get("mode") == "error":
                     # The runner could not even fetch the case (IPS/Snowflake
@@ -523,9 +561,10 @@ def run_auto_scan(store: HandsfreeStore, owner: str = "", max_cases: int = 10,
         else:
             stamp = started.strftime("%Y-%m-%dT%H:%M:%SZ")
             scan_times = dict(store.load_config().get("auto_last_scan_by_owner") or {})
-            scan_times[scan_key] = stamp
+            for key in ([scan_key] if list_view else [o.casefold() for o in owner_list]):
+                scan_times[key] = stamp
             updates_cfg = {"auto_last_scan_by_owner": scan_times, "auto_last_result": result}
-            if not list_view:
+            if not list_view and len(owner_list) == 1:
                 updates_cfg["auto_last_scan_at"] = stamp
             store.save_config(updates_cfg)
         _set_state(status="done", finished_at=time.time())

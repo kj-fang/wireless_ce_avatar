@@ -8,11 +8,20 @@ running it only does the last step.
 
 Run with the app's Python environment (the intel_ava venv), from anywhere:
 
-    python tools/handsfree_start.py                     # start / focus
-    python tools/handsfree_start.py --install-shortcut  # Desktop shortcut
+    python tools/handsfree_start.py                     # start / focus (client)
+    python tools/handsfree_start.py --server            # start / focus as the Handsfree SERVER
+    python tools/handsfree_start.py --install-shortcut  # both Desktop shortcuts
 
-The server runs in its own (minimized) console window — close that window
-to stop the app. Nothing is analyzed or posted by starting: use "Check now"
+Client (default): the review queue, Run now and Approve; the schedule is
+read-only. Server (--server, i.e. app.py --handsfree-role server): the same
+page plus "Start automatic analysis" — the scheduled rounds run inside this
+app and show in the live panel. One role per app process: to switch, close
+the app's console window and start again. While the in-app schedule is ON,
+disable the Task Scheduler job that runs tools/handsfree_server_run.py (same
+Chrome sign-in profile, duplicate rounds).
+
+The app runs in its own (minimized) console window — close that window
+to stop it. Nothing is analyzed or posted by starting: use "Check now"
 in the page as usual.
 """
 
@@ -38,6 +47,7 @@ for _stream in (sys.stdout, sys.stderr):
 
 START_PATH = "/handsfree"
 SHORTCUT_NAME = "Beacon (dev).lnk"
+SERVER_SHORTCUT_NAME = "Beacon Server (dev).lnk"
 OLD_SHORTCUT_NAMES = ("Handsfree Replyer (dev).lnk",)   # removed on --install-shortcut
 REGISTER_TIMEOUT_S = 60     # instance file is written before the heavy boot
 BOOT_TIMEOUT_S = 360        # set_up(): key share, ChromeDriver, skills, agents
@@ -91,17 +101,29 @@ def _bring_chrome_to_front(server_pid: int) -> None:
         pass
 
 
-def _start_server() -> subprocess.Popen:
+def _start_server(role: str = "client") -> subprocess.Popen:
     env = dict(os.environ, PYTHONUTF8="1")
     si = subprocess.STARTUPINFO()
     si.dwFlags |= subprocess.STARTF_USESHOWWINDOW
     si.wShowWindow = 7                                      # SW_SHOWMINNOACTIVE
     return subprocess.Popen(
-        [sys.executable, "app.py", "--no-tray"], cwd=str(REPO_ROOT), env=env,
+        [sys.executable, "app.py", "--no-tray", "--handsfree-role", role],
+        cwd=str(REPO_ROOT), env=env,
         creationflags=subprocess.CREATE_NEW_CONSOLE, startupinfo=si)
 
 
-def start() -> int:
+def _running_role(url: str) -> str:
+    """The Handsfree role of the app already running at url ("" when it
+    cannot be asked: older build, still booting)."""
+    try:
+        req = Request(url + "/handsfree/auto")
+        with build_opener(ProxyHandler({})).open(req, timeout=5) as r:
+            return str(json.loads(r.read().decode("utf-8")).get("role") or "")
+    except Exception:
+        return ""
+
+
+def start(role: str = "client") -> int:
     from utils.instance_utils import check_already_running
     from utils.port_utils import get_logs_dir
 
@@ -110,9 +132,14 @@ def start() -> int:
     proc = None
     if inst:
         print(f"Avatar is already running at {inst['url']}.")
+        running = _running_role(inst["url"])
+        if running and running != role:
+            print(f"NOTE: it runs as the Handsfree {running.upper()}, not as {role}. "
+                  "The role is fixed per process: close the app's console window and "
+                  "start again to switch.")
     else:
-        print(f"Starting Avatar from {REPO_ROOT} ...")
-        proc = _start_server()
+        print(f"Starting Avatar from {REPO_ROOT} as the Handsfree {role} ...")
+        proc = _start_server(role)
         deadline = time.time() + REGISTER_TIMEOUT_S
         while inst is None and time.time() < deadline:
             if proc.poll() is not None:
@@ -152,31 +179,46 @@ def start() -> int:
     return 0
 
 
-def install_shortcut() -> int:
-    """Desktop shortcut that runs this script with the current interpreter."""
+def shortcut_script() -> str:
+    """PowerShell that writes both Desktop shortcuts (client and server) that
+    run this script with the current interpreter."""
     def ps(s) -> str:
         return str(s).replace("'", "''")
 
     icon = REPO_ROOT / "icon.ico"
-    script = (
+    me = ps(Path(__file__).resolve())
+
+    def one(name: str, extra_args: str, description: str) -> str:
+        return (
+            f"$p = Join-Path $d '{ps(name)}'; "
+            "$s = (New-Object -COM WScript.Shell).CreateShortcut($p); "
+            f"$s.TargetPath = '{ps(sys.executable)}'; "
+            f"$s.Arguments = '\"{me}\"{extra_args}'; "
+            f"$s.WorkingDirectory = '{ps(REPO_ROOT)}'; "
+            + (f"$s.IconLocation = '{ps(icon)},0'; " if icon.exists() else "")
+            + f"$s.Description = '{ps(description)}'; "
+            "$s.Save(); Write-Output $p; ")
+
+    return (
         "$d = [Environment]::GetFolderPath('Desktop'); "
         + "".join(f"Remove-Item -LiteralPath (Join-Path $d '{ps(n)}') -ErrorAction SilentlyContinue; "
                   for n in OLD_SHORTCUT_NAMES)
-        + f"$p = Join-Path $d '{ps(SHORTCUT_NAME)}'; "
-        "$s = (New-Object -COM WScript.Shell).CreateShortcut($p); "
-        f"$s.TargetPath = '{ps(sys.executable)}'; "
-        f"$s.Arguments = '\"{ps(Path(__file__).resolve())}\"'; "
-        f"$s.WorkingDirectory = '{ps(REPO_ROOT)}'; "
-        + (f"$s.IconLocation = '{ps(icon)},0'; " if icon.exists() else "")
-        + "$s.Description = 'Start Avatar from source and open the Beacon page'; "
-        "$s.Save(); Write-Output $p")
+        + one(SHORTCUT_NAME, "", "Start Avatar from source and open the Beacon page")
+        + one(SERVER_SHORTCUT_NAME, " --server",
+              "Start Avatar from source as the Handsfree server (scheduled rounds run here)"))
+
+
+def install_shortcut() -> int:
+    """Both Desktop shortcuts: Beacon (dev) and Beacon Server (dev)."""
+    script = shortcut_script()
     encoded = base64.b64encode(script.encode("utf-16-le")).decode("ascii")
     r = subprocess.run(["powershell", "-NoProfile", "-EncodedCommand", encoded],
                        capture_output=True, text=True)
     if r.returncode != 0:
         print(f"Shortcut creation failed: {r.stderr.strip()}")
         return 1
-    print(f"Shortcut created: {r.stdout.strip()}")
+    for line in r.stdout.strip().splitlines():
+        print(f"Shortcut created: {line.strip()}")
     return 0
 
 
@@ -184,11 +226,14 @@ def main() -> int:
     ap = argparse.ArgumentParser(
         description=__doc__, formatter_class=argparse.RawDescriptionHelpFormatter)
     ap.add_argument("--install-shortcut", action="store_true",
-                    help="create the Desktop shortcut instead of starting the app")
+                    help="create both Desktop shortcuts instead of starting the app")
+    ap.add_argument("--server", action="store_true",
+                    help="start (or expect) the app as the Handsfree SERVER: the Beacon "
+                         "page can start the scheduled rounds, which run in this app")
     args = ap.parse_args()
     if args.install_shortcut:
         return install_shortcut()
-    rc = start()
+    rc = start("server" if args.server else "client")
     if rc != 0:
         # Launched from a shortcut the console closes with the process —
         # keep the failure readable.

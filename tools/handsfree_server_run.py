@@ -11,7 +11,18 @@ One scheduled Handsfree round on the server (run it from Task Scheduler).
 
 Each run writes <avatarfiles_dir>/logs/handsfree_server/<timestamp>.log and
 overwrites last_status.txt there. Logs older than 30 days are deleted.
-Exit code: 0 ok, 1 scan failed, 2 sign-in failed, 3 bad owners file.
+Exit code: 0 ok, 1 scan failed, 2 sign-in failed, 3 bad owners file,
+4 skipped because the Beacon page schedules the rounds on this server.
+
+Alternative: the Beacon page itself schedules the rounds when the app runs
+as the Handsfree server (tools/handsfree_start.py --server, i.e. app.py
+--handsfree-role server) — every setting in "Start automatic analysis" and
+the live panel are then available. One scheduler per server, enforced both
+ways: while that in-app schedule is ON for this machine, the round here is
+skipped (exit 4, status "SKIPPED …"), and the page refuses Start while
+this script wrote last_status.txt in the last 24 hours. Disable the Task
+Scheduler job for this script when the page takes over (both use the same
+saved Chrome sign-in profile, and the rounds would otherwise run twice).
 """
 
 from __future__ import annotations
@@ -63,6 +74,9 @@ def _round(owners_file: Path, log) -> tuple[int, str]:
             return 2, ("SIGN-IN FAILED - Salesforce/esft sign-in did not complete; "
                        "see the log (a saved-profile machine needs --sso-login)")
     rc = _cli(log, "--owners-file", str(owners_file), "--once")
+    if rc == 3:          # services.handsfree.cli.EXIT_SCHEDULED_IN_APP
+        return 4, ("SKIPPED - the Beacon page schedules the rounds on this server; "
+                   "disable this scheduled task while that is ON")
     return (0, "OK") if rc == 0 else (1, f"scan failed (cli exit {rc})")
 
 

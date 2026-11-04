@@ -254,13 +254,23 @@ if __name__ == "__main__":
     parser.add_argument('--silent-mode', action='store_true', default=False, help='Disable auto-opening analysis windows (TextAnalysisTool / Explorer) after parsing.')
     parser.add_argument('--sendto-token', type=str, default=None, help='SendTo security token (auto-set by shortcut, not for manual use).')
     parser.add_argument('--handsfree', action='store_true', help='Open the Handsfree review dashboard instead of the home page.')
+    parser.add_argument('--handsfree-role', choices=('client', 'server'), default=None,
+                        help="Handsfree (Beacon) role of this machine: 'client' (default) reviews and approves drafts; "
+                             "'server' also runs the scheduled analysis rounds from the Beacon page. "
+                             "Falls back to the INTELAVATAR_HANDSFREE_ROLE environment variable.")
     parser.add_argument('input_paths', nargs='*', help='Optional local analysis file paths passed from Windows SendTo.')
     args = parser.parse_args()
-    home_path = '/handsfree/' if args.handsfree else '/'
+    handsfree_role = (args.handsfree_role or os.environ.get('INTELAVATAR_HANDSFREE_ROLE', '')
+                      or 'client').strip().lower()
+    if handsfree_role not in ('client', 'server'):
+        handsfree_role = 'client'
+    # The server machine lives on the Beacon page: open it unless told otherwise.
+    home_path = '/handsfree/' if (args.handsfree or handsfree_role == 'server') else '/'
     startup_path = _build_startup_path(args.input_paths, sendto_token=args.sendto_token,
                                        default=home_path)
     from configs.global_configs import app_config
     app_config.silent_mode = args.silent_mode
+    app_config.handsfree_role = handsfree_role     # before create_app(): the Handsfree blueprint reads it
     
     # Check whether to run in tray mode
     if args.tray_mode:

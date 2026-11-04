@@ -29,6 +29,10 @@ from typing import Optional
 # a scheduled run that nobody is watching.
 _SSO_REFRESH_WAIT_S = 120
 
+# Exit code of an owner / list-view round that stepped aside because the
+# Beacon page schedules the rounds on this machine (see main()).
+EXIT_SCHEDULED_IN_APP = 3
+
 
 def _configure_output() -> None:
     for stream in (sys.stdout, sys.stderr):
@@ -341,6 +345,16 @@ def main(argv: Optional[list[str]] = None) -> int:
     except HandsfreeShareUnavailable as e:
         print(f"[handsfree-cli] {e}", file=sys.stderr)
         return 1
+    if args.case_number is None:
+        # One scheduler per server: an owner / list-view round steps aside
+        # while the Beacon page (app.py --handsfree-role server) schedules the
+        # rounds on this machine. A single explicit --case-number run is manual
+        # and always allowed.
+        from .scheduler import scheduled_in_app_here
+        reason = scheduled_in_app_here(store.load_config())
+        if reason:
+            print(f"[handsfree-cli] round skipped: {reason}", file=sys.stderr)
+            return EXIT_SCHEDULED_IN_APP
     updates = {}
     if args.owner is not None:
         updates["owner_name"] = owners[0]

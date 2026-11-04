@@ -40,12 +40,14 @@ def _file_error(e):
 
 @handsfree_bp.route("/")
 def index():
+    from services.handsfree import scheduler
     try:
         cfg = _store().load_config()
         share_error = ""
     except HandsfreeShareUnavailable as e:
         cfg, share_error = dict(HandsfreeStore.DEFAULT_CONFIG), str(e)
-    return render_template("handsfree.html", config=cfg, share_error=share_error)
+    return render_template("handsfree.html", config=cfg, share_error=share_error,
+                           role=scheduler.role())
 
 
 # ---------- this reviewer: the IPS sign-in of this PC ----------
@@ -101,9 +103,24 @@ def status():
 
 
 # ---------- automatic analysis ----------
-# Scheduled rounds run on the Handsfree server (nightly CLI) only. The app
-# keeps the round settings and "Run now" (a one-off manual round), but never
-# starts the in-app scheduler: the config is shared by every reviewer's PC.
+# The round settings and the schedule live in the shared config, so every
+# PC sees them; only the SERVER role (app.py --handsfree-role server) may
+# start/stop the schedule and runs its rounds (scheduler.role()). A client
+# keeps the settings and "Run now" (a one-off manual round on that PC).
+
+@handsfree_bp.record_once
+def _resume_scheduler(_state):
+    """Server only: after an app restart, resume a previously enabled
+    schedule without waiting for someone to open the page. The thread reads
+    the config on every tick, so a not-yet-booted app_config just means a
+    skipped tick."""
+    try:
+        from services.handsfree import scheduler
+        if scheduler.can_schedule_here():
+            scheduler.ensure_started()
+    except Exception as e:
+        print(f"[handsfree] scheduler not resumed: {type(e).__name__}: {e}")
+
 
 @handsfree_bp.route("/auto", methods=["GET", "POST"])
 def auto_check():
@@ -111,9 +128,8 @@ def auto_check():
     if request.method == "GET":
         return jsonify(scheduler.status())
     body = request.get_json(silent=True) or {}
-    if body.get("enabled"):
-        return jsonify({"ok": False, "error": "scheduled analysis runs on the Handsfree "
-                        "server (nightly CLI) and cannot be started from the app"}), 403
+    if "enabled" in body and not scheduler.can_schedule_here():
+        return jsonify({"ok": False, "error": scheduler.CLIENT_CANNOT_SCHEDULE}), 403
     try:
         return jsonify(scheduler.configure(
             enabled=bool(body.get("enabled")),
@@ -122,6 +138,7 @@ def auto_check():
             source=body.get("source"),
             list_view=body.get("list_view"),
             list_views=body.get("list_views"),
+            owners=body.get("owners"),
             **_email_settings_of(body)))
     except ValueError as e:
         return jsonify({"ok": False, "error": str(e)}), 400
@@ -178,6 +195,7 @@ def auto_run_now():
                                   source=body.get("source"),
                                   list_view=body.get("list_view"),
                                   list_views=body.get("list_views"),
+                                  owners=body.get("owners"),
                                   **_email_settings_of(body))
     target = scheduler.scan_target(cfg)
     if target["error"]:

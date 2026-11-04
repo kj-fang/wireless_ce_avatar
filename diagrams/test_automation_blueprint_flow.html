@@ -1,0 +1,705 @@
+<!DOCTYPE html>
+<html lang="en">
+<head>
+  <meta charset="UTF-8">
+  <meta name="viewport" content="width=device-width, initial-scale=1.0">
+  <title>test_automation_blueprint — Test Flow Diagram</title>
+  <link href="https://fonts.googleapis.com/css2?family=JetBrains+Mono:wght@400;500;600;700&display=swap" rel="stylesheet">
+  <script src="https://cdn.jsdelivr.net/npm/html2canvas@1.4.1/dist/html2canvas.min.js" integrity="sha384-ZZ1pncU3bQe8y31yfZdMFdSpttDoPmOZg2wguVK9almUodir1PghgT0eY7Mrty8H" crossorigin="anonymous"></script>
+  <script src="https://cdn.jsdelivr.net/npm/jspdf@2.5.2/dist/jspdf.umd.min.js" integrity="sha384-en/ztfPSRkGfME4KIm05joYXynqzUgbsG5nMrj/xEFAHXkeZfO3yMK8QQ+mP7p1/" crossorigin="anonymous"></script>
+  <style>
+    * { margin: 0; padding: 0; box-sizing: border-box; }
+    body {
+      font-family: 'JetBrains Mono', monospace;
+      background: #020617;
+      min-height: 100vh;
+      padding: 2rem;
+      color: white;
+    }
+    .container { max-width: 1400px; margin: 0 auto; }
+    .header { margin-bottom: 2rem; }
+    .header-row { display: flex; align-items: center; gap: 1rem; margin-bottom: 0.5rem; }
+    .pulse-dot { width: 12px; height: 12px; background: #fb7185; border-radius: 50%; animation: pulse 2s infinite; }
+    @keyframes pulse { 0%, 100% { opacity: 1; } 50% { opacity: 0.5; } }
+    h1 { font-size: 1.5rem; font-weight: 700; letter-spacing: -0.025em; }
+    .subtitle { color: #94a3b8; font-size: 0.875rem; margin-left: 1.75rem; }
+    .diagram-container {
+      background: rgba(15, 23, 42, 0.5);
+      border-radius: 1rem;
+      border: 1px solid #1e293b;
+      padding: 1.5rem;
+      overflow-x: auto;
+    }
+    svg { width: 100%; min-width: 1180px; display: block; }
+    .cards { display: grid; grid-template-columns: repeat(auto-fit, minmax(280px, 1fr)); gap: 1rem; margin-top: 2rem; }
+    .card { background: rgba(15, 23, 42, 0.5); border-radius: 0.75rem; border: 1px solid #1e293b; padding: 1.25rem; }
+    .card-header { display: flex; align-items: center; gap: 0.5rem; margin-bottom: 0.75rem; }
+    .card-dot { width: 8px; height: 8px; border-radius: 50%; }
+    .card-dot.cyan { background: #22d3ee; }
+    .card-dot.emerald { background: #34d399; }
+    .card-dot.violet { background: #a78bfa; }
+    .card-dot.amber { background: #fbbf24; }
+    .card-dot.rose { background: #fb7185; }
+    .card h3 { font-size: 0.875rem; font-weight: 600; }
+    .card ul { list-style: none; color: #94a3b8; font-size: 0.75rem; }
+    .card li { margin-bottom: 0.375rem; }
+    .card li code { color: #cbd5e1; }
+    .footer { text-align: center; margin-top: 1.5rem; color: #475569; font-size: 0.75rem; }
+    .toolbar { display: flex; gap: 0.5rem; margin-left: auto; flex-shrink: 0; align-items: center; }
+    .toolbar-toggle {
+      background: transparent; border: none; color: #475569; cursor: pointer;
+      font-size: 1.25rem; line-height: 1; padding: 0.25rem 0.5rem; border-radius: 0.375rem;
+      transition: color 0.2s, background 0.2s;
+    }
+    .toolbar-toggle:hover { color: #94a3b8; background: rgba(30, 41, 59, 0.5); }
+    .toolbar-actions { display: none; gap: 0.5rem; }
+    .toolbar.expanded .toolbar-actions { display: flex; }
+    .toolbar-actions button {
+      background: rgba(30, 41, 59, 0.8); border: 1px solid #334155; color: #94a3b8;
+      padding: 0.375rem 0.75rem; border-radius: 0.375rem; font-family: inherit;
+      font-size: 0.75rem; cursor: pointer; transition: all 0.2s; white-space: nowrap;
+    }
+    .toolbar-actions button:hover { background: rgba(51, 65, 85, 0.8); color: white; border-color: #475569; }
+    @media print { body { background: #020617; padding: 1rem; } .toolbar { display: none !important; } }
+    svg text { white-space: pre; }
+  </style>
+</head>
+<body>
+  <div class="container" id="report-container">
+    <!-- Header -->
+    <div class="header">
+      <div class="header-row">
+        <div class="pulse-dot"></div>
+        <h1>test_automation_blueprint — Test Flow</h1>
+        <div class="toolbar">
+          <div class="toolbar-actions">
+            <button onclick="copyAsImage(this)">📋 Copy</button>
+            <button onclick="downloadPNG(this)">🖼️ PNG</button>
+            <button onclick="downloadPDF(this)">📄 PDF</button>
+          </div>
+          <button class="toolbar-toggle" onclick="this.parentElement.classList.toggle('expanded')" title="Export options" aria-label="Export options">⋯</button>
+        </div>
+      </div>
+      <p class="subtitle">18 unit tests across 3 classes · 1 HTTP route + SocketIO 'trigger_run_latest_etl' · download latest ZIP ➜ decompose ➜ pick latest ETL ➜ Wi-Fi / BT analysis · blueprints/automation/automation_routes.py</p>
+    </div>
+
+    <!-- Main Diagram -->
+    <div class="diagram-container">
+      <svg viewBox="0 0 1200 1931">
+        <defs>
+          <marker id="arrowhead" markerWidth="10" markerHeight="7" refX="9" refY="3.5" orient="auto"><polygon points="0 0, 10 3.5, 0 7" fill="#64748b" /></marker>
+          <marker id="arrowcyan" markerWidth="10" markerHeight="7" refX="9" refY="3.5" orient="auto"><polygon points="0 0, 10 3.5, 0 7" fill="#22d3ee" /></marker>
+          <marker id="arrowrose" markerWidth="10" markerHeight="7" refX="9" refY="3.5" orient="auto"><polygon points="0 0, 10 3.5, 0 7" fill="#fb7185" /></marker>
+          <marker id="arrowok" markerWidth="10" markerHeight="7" refX="9" refY="3.5" orient="auto"><polygon points="0 0, 10 3.5, 0 7" fill="#6ee7b7" /></marker>
+          <marker id="arrowviolet" markerWidth="10" markerHeight="7" refX="9" refY="3.5" orient="auto"><polygon points="0 0, 10 3.5, 0 7" fill="#a78bfa" /></marker>
+          <marker id="arroworange" markerWidth="10" markerHeight="7" refX="9" refY="3.5" orient="auto"><polygon points="0 0, 10 3.5, 0 7" fill="#fb923c" /></marker>
+          <pattern id="grid" width="40" height="40" patternUnits="userSpaceOnUse">
+            <path d="M 40 0 L 0 0 0 40" fill="none" stroke="#1e293b" stroke-width="0.5"/>
+          </pattern>
+        </defs>
+
+        <rect width="100%" height="100%" fill="url(#grid)" />
+
+        <text x="18" y="104" fill="#fb7185" font-size="7" font-weight="600" transform="rotate(-90 18 104)">TEST&#160;SUITE&#160;FLOW</text>
+        <line x1="26" y1="100" x2="26" y2="1905" stroke="#fb7185" stroke-width="1.2" stroke-dasharray="4,4" marker-end="url(#arrowrose)"/>
+        <line x1="26" y1="118" x2="40" y2="118" stroke="#fb7185" stroke-width="1.5" marker-end="url(#arrowrose)"/>
+        <path d="M437,186 H448" fill="none" stroke="#64748b" stroke-width="1.3" marker-end="url(#arrowhead)"/>
+        <path d="M393,216 H404" fill="none" stroke="#64748b" stroke-width="1.3" marker-end="url(#arrowhead)"/>
+        <path d="M576,216 H587" fill="none" stroke="#64748b" stroke-width="1.3" marker-end="url(#arrowhead)"/>
+        <path d="M236,168 H258" fill="none" stroke="#22d3ee" stroke-width="1.3" marker-end="url(#arrowcyan)"/>
+        <path d="M900,168 H938" fill="none" stroke="#64748b" stroke-width="1.3" marker-end="url(#arrowhead)"/>
+        <path d="M380,290 H391" fill="none" stroke="#64748b" stroke-width="1.3" marker-end="url(#arrowhead)"/>
+        <path d="M467,290 H478" fill="none" stroke="#64748b" stroke-width="1.3" marker-end="url(#arrowhead)"/>
+        <path d="M597,290 H608" fill="none" stroke="#64748b" stroke-width="1.3" marker-end="url(#arrowhead)"/>
+        <path d="M736,290 H747" fill="none" stroke="#64748b" stroke-width="1.3" marker-end="url(#arrowhead)"/>
+        <path d="M323.0,300 V309" fill="none" stroke="#fb7185" stroke-width="1.3" marker-end="url(#arrowrose)"/>
+        <path d="M350,360 H361" fill="none" stroke="#64748b" stroke-width="1.3" marker-end="url(#arrowhead)"/>
+        <path d="M480,360 H491" fill="none" stroke="#64748b" stroke-width="1.3" marker-end="url(#arrowhead)"/>
+        <path d="M628,360 H639" fill="none" stroke="#64748b" stroke-width="1.3" marker-end="url(#arrowhead)"/>
+        <path d="M724,360 H735" fill="none" stroke="#64748b" stroke-width="1.3" marker-end="url(#arrowhead)"/>
+        <path d="M794.0,300 V342 H308.0 V349" fill="none" stroke="#64748b" stroke-width="1.3" marker-end="url(#arrowhead)"/>
+        <path d="M308.0,370 V379" fill="none" stroke="#fb7185" stroke-width="1.3" marker-end="url(#arrowrose)"/>
+        <path d="M421.0,370 V405" fill="none" stroke="#fb7185" stroke-width="1.3" marker-end="url(#arrowrose)"/>
+        <path d="M560.0,370 V379" fill="none" stroke="#fb7185" stroke-width="1.3" marker-end="url(#arrowrose)"/>
+        <path d="M791.0,370 V405" fill="none" stroke="#fb7185" stroke-width="1.3" marker-end="url(#arrowrose)"/>
+        <path d="M236,272 H258" fill="none" stroke="#22d3ee" stroke-width="1.3" marker-end="url(#arrowcyan)"/>
+        <path d="M900,272 H938" fill="none" stroke="#64748b" stroke-width="1.3" marker-end="url(#arrowhead)"/>
+        <path d="M900,370 H938" fill="none" stroke="#64748b" stroke-width="1.3" marker-end="url(#arrowhead)"/>
+        <path d="M363,502 H374" fill="none" stroke="#64748b" stroke-width="1.3" marker-end="url(#arrowhead)"/>
+        <path d="M567,502 H578" fill="none" stroke="#64748b" stroke-width="1.3" marker-end="url(#arrowhead)"/>
+        <path d="M776,502 H787" fill="none" stroke="#64748b" stroke-width="1.3" marker-end="url(#arrowhead)"/>
+        <path d="M471.0,512 V521" fill="none" stroke="#fb7185" stroke-width="1.3" marker-end="url(#arrowrose)"/>
+        <path d="M838.5,512 V521" fill="none" stroke="#fb7185" stroke-width="1.3" marker-end="url(#arrowrose)"/>
+        <path d="M324,572 H335" fill="none" stroke="#64748b" stroke-width="1.3" marker-end="url(#arrowhead)"/>
+        <path d="M537,572 H548" fill="none" stroke="#64748b" stroke-width="1.3" marker-end="url(#arrowhead)"/>
+        <path d="M889,502 H892 V554 H295.0 V561" fill="none" stroke="#64748b" stroke-width="1.3" marker-end="url(#arrowhead)"/>
+        <path d="M295.0,582 V591" fill="none" stroke="#fb923c" stroke-width="1.3" marker-end="url(#arrowhead)"/>
+        <path d="M537,642 H548" fill="none" stroke="#64748b" stroke-width="1.3" marker-end="url(#arrowhead)"/>
+        <path d="M711,642 H722" fill="none" stroke="#64748b" stroke-width="1.3" marker-end="url(#arrowhead)"/>
+        <path d="M537,682 H548" fill="none" stroke="#64748b" stroke-width="1.3" marker-end="url(#arrowhead)"/>
+        <path d="M776,682 H787" fill="none" stroke="#64748b" stroke-width="1.3" marker-end="url(#arrowhead)"/>
+        <path d="M601.5,582 V622 H438.5 V631" fill="none" stroke="#64748b" stroke-width="1.3" marker-end="url(#arrowhead)"/>
+        <path d="M654,572 H888 V664 H450.5 V671" fill="none" stroke="#64748b" stroke-width="1.3" marker-end="url(#arrowhead)"/>
+        <path d="M236,484 H258" fill="none" stroke="#22d3ee" stroke-width="1.3" marker-end="url(#arrowcyan)"/>
+        <path d="M900,484 H938" fill="none" stroke="#64748b" stroke-width="1.3" marker-end="url(#arrowhead)"/>
+        <path d="M900,546 H938" fill="none" stroke="#64748b" stroke-width="1.3" marker-end="url(#arrowhead)"/>
+        <path d="M900,620 H938" fill="none" stroke="#64748b" stroke-width="1.3" marker-end="url(#arrowhead)"/>
+        <path d="M900,678 H938" fill="none" stroke="#64748b" stroke-width="1.3" marker-end="url(#arrowhead)"/>
+        <line x1="26" y1="794" x2="40" y2="794" stroke="#fb7185" stroke-width="1.5" marker-end="url(#arrowrose)"/>
+        <rect x="40" y="16" width="760" height="72" rx="8" fill="#0f172a"/>
+        <rect x="40" y="16" width="760" height="72" rx="8" fill="rgba(30,41,59,0.5)" stroke="#94a3b8" stroke-width="1.2"/>
+        <text x="54" y="34" fill="white" font-size="11" font-weight="600">Test fixture · BaseTestCase + automation_bp · handler called directly in test_request_context</text>
+        <text x="54" y="50" fill="#94a3b8" font-size="8">class @patch: pick_latest_zip_attachment ➜ ZIP_ITEM · download_file ➜ (ZIP_PATH, &#x27;logs.zip&#x27;, False) · process_single_zip · os.path.exists ➜ True</text>
+        <text x="54" y="63" fill="#94a3b8" font-size="8">subprocess · WiFiAnalysisService · BTAnalysisService patched · app_config.socketio / driver_manager = MagicMock · silent_mode False</text>
+        <text x="54" y="76" fill="#94a3b8" font-size="8">mock case: id &#x27;a0B000000TESTID&#x27; · case_nbr &#x27;00123456&#x27; · subcategory &#x27;Wireless - WiFi&#x27; · wifi_or_bt &#x27;wifi&#x27; · ETL helpers run unpatched</text>
+        <rect x="816" y="16" width="364" height="72" rx="8" fill="rgba(15,23,42,0.6)" stroke="#334155" stroke-width="1"/>
+        <text x="828" y="31" fill="white" font-size="10" font-weight="600">Legend</text>
+        <rect x="828" y="37" width="14" height="8" rx="2" fill="rgba(8,51,68,0.4)" stroke="#22d3ee" stroke-width="1"/>
+        <text x="848" y="44.5" fill="#94a3b8" font-size="7.5">test input</text>
+        <rect x="828" y="50" width="14" height="8" rx="2" fill="rgba(6,78,59,0.4)" stroke="#34d399" stroke-width="1"/>
+        <text x="848" y="57.5" fill="#94a3b8" font-size="7.5">code step</text>
+        <rect x="828" y="63" width="14" height="8" rx="2" fill="rgba(6,95,70,0.7)" stroke="#6ee7b7" stroke-width="1"/>
+        <text x="848" y="70.5" fill="#94a3b8" font-size="7.5">success output</text>
+        <rect x="828" y="76" width="14" height="8" rx="2" fill="rgba(136,19,55,0.4)" stroke="#fb7185" stroke-width="1"/>
+        <text x="848" y="83.5" fill="#94a3b8" font-size="7.5">error stage / raise</text>
+        <rect x="944" y="37" width="14" height="8" rx="2" fill="rgba(76,29,149,0.4)" stroke="#a78bfa" stroke-width="1"/>
+        <text x="964" y="44.5" fill="#94a3b8" font-size="7.5">decision</text>
+        <rect x="944" y="50" width="14" height="8" rx="2" fill="rgba(120,53,15,0.3)" stroke="#fbbf24" stroke-width="1"/>
+        <text x="964" y="57.5" fill="#94a3b8" font-size="7.5">mocked dependency</text>
+        <rect x="944" y="63" width="14" height="8" rx="2" fill="rgba(154,52,18,0.45)" stroke="#fb923c" stroke-width="1"/>
+        <text x="964" y="70.5" fill="#94a3b8" font-size="7.5">⚠ pinned known bug</text>
+        <rect x="944" y="76" width="14" height="8" rx="2" fill="rgba(30,41,59,0.5)" stroke="#94a3b8" stroke-width="1"/>
+        <text x="964" y="83.5" fill="#94a3b8" font-size="7.5">untested / note</text>
+        <line x1="1064" y1="42" x2="1080" y2="42" stroke="#64748b" stroke-width="1.5" marker-end="url(#arrowhead)"/>
+        <text x="1086" y="45" fill="#94a3b8" font-size="7.5">call / flow</text>
+        <line x1="1064" y1="56" x2="1080" y2="56" stroke="#22d3ee" stroke-width="1.5" marker-end="url(#arrowcyan)"/>
+        <text x="1086" y="59" fill="#94a3b8" font-size="7.5">input ➜ expected</text>
+        <line x1="1064" y1="70" x2="1080" y2="70" stroke="#fb7185" stroke-width="1.5" marker-end="url(#arrowrose)"/>
+        <text x="1086" y="73" fill="#94a3b8" font-size="7.5">error branch</text>
+        <rect x="40" y="100" width="1150" height="656" rx="12" fill="rgba(251,191,36,0.03)" stroke="#fbbf24" stroke-width="1" stroke-dasharray="8,4"/>
+        <text x="54" y="122" fill="#fbbf24" font-size="10" font-weight="600">Component interaction map · test inputs ➜ automation_routes.py (1 route + 1 SocketIO handler) ➜ mocked dependencies</text>
+        <text x="56" y="141" fill="#22d3ee" font-size="7" font-weight="600">TEST INPUTS (per test class)</text>
+        <text x="260" y="141" fill="#34d399" font-size="7" font-weight="600">CODE UNDER TEST · blueprints/automation/automation_routes.py</text>
+        <text x="940" y="141" fill="#fbbf24" font-size="7" font-weight="600">MOCKED DEPENDENCIES</text>
+        <rect x="260" y="150" width="640" height="84" rx="8" fill="rgba(6,78,59,0.07)" stroke="#34d399" stroke-width="0.9" stroke-dasharray="4,3"/>
+        <rect x="266" y="155" width="20" height="11" rx="2" fill="#020617" stroke="#34d399" stroke-width="0.8"/>
+        <text x="276" y="163.5" fill="#34d399" font-size="6.5" font-weight="600" text-anchor="middle">F0</text>
+        <text x="292" y="164" fill="#34d399" font-size="8.5" font-weight="600">Route &amp; SocketIO registration · GET | POST /automation/run_latest_etl</text>
+        <rect x="266" y="176" width="171" height="20" rx="4" fill="#0f172a"/>
+        <rect x="266" y="176" width="171" height="20" rx="4" fill="rgba(6,78,59,0.4)" stroke="#34d399" stroke-width="1.1"/>
+        <text x="351.5" y="189.5" fill="white" font-size="7.2" text-anchor="middle">register_socketio_handlers(socketio)</text>
+        <rect x="449" y="176" width="275" height="20" rx="4" fill="#0f172a"/>
+        <rect x="449" y="176" width="275" height="20" rx="4" fill="rgba(6,95,70,0.7)" stroke="#6ee7b7" stroke-width="1.1"/>
+        <text x="586.5" y="189.5" fill="white" font-size="7.2" text-anchor="middle">socketio.on(&#x27;trigger_run_latest_etl&#x27;, namespace=&#x27;/progress&#x27;)</text>
+        <rect x="266" y="206" width="127" height="20" rx="4" fill="#0f172a"/>
+        <rect x="266" y="206" width="127" height="20" rx="4" fill="rgba(6,78,59,0.4)" stroke="#34d399" stroke-width="1.1"/>
+        <text x="329.5" y="219.5" fill="white" font-size="7.2" text-anchor="middle">GET | POST /run_latest_etl</text>
+        <rect x="405" y="206" width="171" height="20" rx="4" fill="#0f172a"/>
+        <rect x="405" y="206" width="171" height="20" rx="4" fill="rgba(6,95,70,0.7)" stroke="#6ee7b7" stroke-width="1.1"/>
+        <text x="490.5" y="219.5" fill="white" font-size="7.2" text-anchor="middle">render_template(&#x27;run_progress.html&#x27;)</text>
+        <rect x="588" y="206" width="179" height="20" rx="4" fill="#0f172a"/>
+        <rect x="588" y="206" width="179" height="20" rx="4" fill="rgba(30,41,59,0.5)" stroke="#94a3b8" stroke-width="1.1"/>
+        <text x="677.5" y="219.5" fill="#cbd5e1" font-size="7.2" text-anchor="middle">page emits trigger_run_latest_etl ➜ S1</text>
+        <rect x="56" y="150" width="180" height="84" rx="6" fill="#0f172a"/>
+        <rect x="56" y="150" width="180" height="84" rx="6" fill="rgba(8,51,68,0.4)" stroke="#22d3ee" stroke-width="1.3"/>
+        <text x="65" y="165" fill="white" font-size="8" font-weight="600">Structure (2) · Route (2)</text>
+        <text x="65" y="178" fill="#94a3b8" font-size="6.8">app.url_map rules &#x27;automation.*&#x27;</text>
+        <text x="65" y="189" fill="#94a3b8" font-size="6.8">register_socketio_handlers(MagicMock())</text>
+        <text x="65" y="200" fill="#94a3b8" font-size="6.8">client.get(&#x27;/automation/run_latest_etl&#x27;)</text>
+        <text x="65" y="211" fill="#94a3b8" font-size="6.8">client.post(same)</text>
+        <text x="65" y="222" fill="#94a3b8" font-size="6.8">@patch render_template ➜ &#x27;progress-page&#x27;</text>
+        <rect x="940" y="150" width="236" height="84" rx="6" fill="#0f172a"/>
+        <rect x="940" y="150" width="236" height="84" rx="6" fill="rgba(120,53,15,0.3)" stroke="#fbbf24" stroke-width="1.3"/>
+        <text x="949" y="165" fill="white" font-size="8" font-weight="600">render_template · socketio (mocks)</text>
+        <text x="949" y="178" fill="#94a3b8" font-size="6.8">render_template ➜ &#x27;progress-page&#x27;</text>
+        <text x="949" y="189" fill="#94a3b8" font-size="6.8">socketio.on(event, namespace=…)</text>
+        <text x="949" y="200" fill="#94a3b8" font-size="6.8">  recorded by MagicMock</text>
+        <text x="949" y="211" fill="#94a3b8" font-size="6.8">socketio_run_latest_etl closure ➜</text>
+        <text x="949" y="222" fill="#94a3b8" font-size="6.8">  delegates to handle_run_latest_etl</text>
+        <rect x="260" y="254" width="640" height="192" rx="8" fill="rgba(6,78,59,0.07)" stroke="#34d399" stroke-width="0.9" stroke-dasharray="4,3"/>
+        <rect x="266" y="259" width="20" height="11" rx="2" fill="#020617" stroke="#34d399" stroke-width="0.8"/>
+        <text x="276" y="267.5" fill="#34d399" font-size="6.5" font-weight="600" text-anchor="middle">S1</text>
+        <text x="292" y="268" fill="#34d399" font-size="8.5" font-weight="600">handle_run_latest_etl() · context, guards and ZIP download</text>
+        <rect x="266" y="280" width="114" height="20" rx="4" fill="#0f172a"/>
+        <rect x="266" y="280" width="114" height="20" rx="4" fill="rgba(6,78,59,0.4)" stroke="#34d399" stroke-width="1.1"/>
+        <text x="323.0" y="293.5" fill="white" font-size="7.2" text-anchor="middle">session[&#x27;case_context&#x27;]</text>
+        <rect x="392" y="280" width="75" height="20" rx="4" fill="#0f172a"/>
+        <rect x="392" y="280" width="75" height="20" rx="4" fill="rgba(6,78,59,0.4)" stroke="#34d399" stroke-width="1.1"/>
+        <text x="429.5" y="293.5" fill="white" font-size="7.2" text-anchor="middle">from_session()</text>
+        <rect x="479" y="280" width="118" height="20" rx="4" fill="#0f172a"/>
+        <rect x="479" y="280" width="118" height="20" rx="4" fill="rgba(6,78,59,0.4)" stroke="#34d399" stroke-width="1.1"/>
+        <text x="538.0" y="293.5" fill="white" font-size="7.2" text-anchor="middle">stage &#x27;Case Category: …&#x27;</text>
+        <rect x="609" y="280" width="127" height="20" rx="4" fill="#0f172a"/>
+        <rect x="609" y="280" width="127" height="20" rx="4" fill="rgba(6,78,59,0.4)" stroke="#34d399" stroke-width="1.1"/>
+        <text x="672.5" y="293.5" fill="white" font-size="7.2" text-anchor="middle">stage &#x27;Attachment list: …&#x27;</text>
+        <rect x="748" y="280" width="92" height="20" rx="4" fill="#0f172a"/>
+        <rect x="748" y="280" width="92" height="20" rx="4" fill="rgba(6,78,59,0.4)" stroke="#34d399" stroke-width="1.1"/>
+        <text x="794.0" y="293.5" fill="white" font-size="7.2" text-anchor="middle">try: emit case_nbr</text>
+        <rect x="313.0" y="310" width="227" height="20" rx="4" fill="#0f172a"/>
+        <rect x="313.0" y="310" width="227" height="20" rx="4" fill="rgba(136,19,55,0.4)" stroke="#fb7185" stroke-width="1.1"/>
+        <text x="426.5" y="323.5" fill="white" font-size="7.2" text-anchor="middle">missing ➜ KeyError (before try · nothing emitted)</text>
+        <rect x="266" y="350" width="84" height="20" rx="4" fill="#0f172a"/>
+        <rect x="266" y="350" width="84" height="20" rx="4" fill="rgba(76,29,149,0.4)" stroke="#a78bfa" stroke-width="1.1"/>
+        <text x="308.0" y="363.5" fill="white" font-size="7.2" text-anchor="middle">attachment_list?</text>
+        <rect x="362" y="350" width="118" height="20" rx="4" fill="#0f172a"/>
+        <rect x="362" y="350" width="118" height="20" rx="4" fill="rgba(76,29,149,0.4)" stroke="#a78bfa" stroke-width="1.1"/>
+        <text x="421.0" y="363.5" fill="white" font-size="7.2" text-anchor="middle">case_nbr &amp; download_dir?</text>
+        <rect x="492" y="350" width="136" height="20" rx="4" fill="#0f172a"/>
+        <rect x="492" y="350" width="136" height="20" rx="4" fill="rgba(120,53,15,0.3)" stroke="#fbbf24" stroke-width="1.1"/>
+        <text x="560.0" y="363.5" fill="white" font-size="7.2" text-anchor="middle">pick_latest_zip_attachment()</text>
+        <rect x="640" y="350" width="84" height="20" rx="4" fill="#0f172a"/>
+        <rect x="640" y="350" width="84" height="20" rx="4" fill="rgba(120,53,15,0.3)" stroke="#fbbf24" stroke-width="1.1"/>
+        <text x="682.0" y="363.5" fill="white" font-size="7.2" text-anchor="middle">download_file(…)</text>
+        <rect x="736" y="350" width="110" height="20" rx="4" fill="#0f172a"/>
+        <rect x="736" y="350" width="110" height="20" rx="4" fill="rgba(76,29,149,0.4)" stroke="#a78bfa" stroke-width="1.1"/>
+        <text x="791.0" y="363.5" fill="white" font-size="7.2" text-anchor="middle">path &amp; os.path.exists?</text>
+        <rect x="298.0" y="380" width="210" height="20" rx="4" fill="#0f172a"/>
+        <rect x="298.0" y="380" width="210" height="20" rx="4" fill="rgba(136,19,55,0.4)" stroke="#fb7185" stroke-width="1.1"/>
+        <text x="403.0" y="393.5" fill="white" font-size="7.2" text-anchor="middle">[] ➜ &#x27;❌ No attachment found…&#x27; (no namespace!)</text>
+        <rect x="411.0" y="406" width="136" height="20" rx="4" fill="#0f172a"/>
+        <rect x="411.0" y="406" width="136" height="20" rx="4" fill="rgba(136,19,55,0.4)" stroke="#fb7185" stroke-width="1.1"/>
+        <text x="479.0" y="419.5" fill="white" font-size="7.2" text-anchor="middle">✗ ➜ &#x27;❌ Missing session info&#x27;</text>
+        <rect x="550.0" y="380" width="140" height="20" rx="4" fill="#0f172a"/>
+        <rect x="550.0" y="380" width="140" height="20" rx="4" fill="rgba(136,19,55,0.4)" stroke="#fb7185" stroke-width="1.1"/>
+        <text x="620.0" y="393.5" fill="white" font-size="7.2" text-anchor="middle">None ➜ &#x27;❌ No zip file found.&#x27;</text>
+        <rect x="728" y="406" width="166" height="20" rx="4" fill="#0f172a"/>
+        <rect x="728" y="406" width="166" height="20" rx="4" fill="rgba(136,19,55,0.4)" stroke="#fb7185" stroke-width="1.1"/>
+        <text x="811.0" y="419.5" fill="white" font-size="7.2" text-anchor="middle">✗ ➜ &#x27;❌ Failed to download logs.zip&#x27;</text>
+        <text x="266" y="440" fill="#64748b" font-size="7">first three emits use namespace=&#x27;/progress&#x27;; every later &#x27;stage&#x27; emit omits it (default &#x27;/&#x27;)</text>
+        <rect x="56" y="254" width="180" height="192" rx="6" fill="#0f172a"/>
+        <rect x="56" y="254" width="180" height="192" rx="6" fill="rgba(8,51,68,0.4)" stroke="#22d3ee" stroke-width="1.3"/>
+        <text x="65" y="269" fill="white" font-size="8" font-weight="600">TestHandleRunLatestEtl (14)</text>
+        <text x="65" y="282" fill="#94a3b8" font-size="6.8">_run(**ctx_overrides) sets</text>
+        <text x="65" y="293" fill="#94a3b8" font-size="6.8">  session[&#x27;case_context&#x27;] = mock ctx</text>
+        <text x="65" y="304" fill="#94a3b8" font-size="6.8">attachment_list [ZIP_ITEM] | []</text>
+        <text x="65" y="315" fill="#94a3b8" font-size="6.8">case_download_dir &#x27;C:\dl\00123456&#x27;</text>
+        <text x="65" y="326" fill="#94a3b8" font-size="6.8">  | None</text>
+        <text x="65" y="337" fill="#94a3b8" font-size="6.8">pick ➜ ZIP_ITEM | None</text>
+        <text x="65" y="348" fill="#94a3b8" font-size="6.8">download_file ➜ (ZIP_PATH, &#x27;logs.zip&#x27;,</text>
+        <text x="65" y="359" fill="#94a3b8" font-size="6.8">  False) | (None, &#x27;logs.zip&#x27;, False)</text>
+        <text x="65" y="370" fill="#94a3b8" font-size="6.8">os.path.exists ➜ True | False</text>
+        <text x="65" y="381" fill="#94a3b8" font-size="6.8">empty session ➜ KeyError</text>
+        <text x="65" y="392" fill="#94a3b8" font-size="6.8">ZIP_ITEM = [&#x27;logs.zip&#x27;, url, …]</text>
+        <rect x="940" y="254" width="236" height="86" rx="6" fill="#0f172a"/>
+        <rect x="940" y="254" width="236" height="86" rx="6" fill="rgba(120,53,15,0.3)" stroke="#fbbf24" stroke-width="1.3"/>
+        <text x="949" y="269" fill="white" font-size="8" font-weight="600">app_config.socketio.emit (MagicMock)</text>
+        <text x="949" y="282" fill="#94a3b8" font-size="6.8">&#x27;stage&#x27; {message}  (progress text)</text>
+        <text x="949" y="293" fill="#94a3b8" font-size="6.8">&#x27;case_nbr&#x27; {name: &#x27;00123456&#x27;}</text>
+        <text x="949" y="304" fill="#94a3b8" font-size="6.8">&#x27;all_done&#x27; {}</text>
+        <text x="949" y="315" fill="#94a3b8" font-size="6.8">tests read stage messages via _messages()</text>
+        <text x="949" y="326" fill="#94a3b8" font-size="6.8">first 3 calls asserted exactly</text>
+        <rect x="940" y="352" width="236" height="94" rx="6" fill="#0f172a"/>
+        <rect x="940" y="352" width="236" height="94" rx="6" fill="rgba(120,53,15,0.3)" stroke="#fbbf24" stroke-width="1.3"/>
+        <text x="949" y="367" fill="white" font-size="8" font-weight="600">utils (patched at point of use)</text>
+        <text x="949" y="380" fill="#94a3b8" font-size="6.8">pick_latest_zip_attachment([ZIP_ITEM])</text>
+        <text x="949" y="391" fill="#94a3b8" font-size="6.8">download_file(&#x27;logs.zip&#x27;, url, &#x27;C:\dl\…&#x27;,</text>
+        <text x="949" y="402" fill="#94a3b8" font-size="6.8">  app_config.driver_manager, socketio)</text>
+        <text x="949" y="413" fill="#94a3b8" font-size="6.8">os.path.exists(ZIP_PATH)</text>
+        <rect x="260" y="466" width="640" height="270" rx="8" fill="rgba(6,78,59,0.07)" stroke="#34d399" stroke-width="0.9" stroke-dasharray="4,3"/>
+        <rect x="266" y="471" width="20" height="11" rx="2" fill="#020617" stroke="#34d399" stroke-width="0.8"/>
+        <text x="276" y="479.5" fill="#34d399" font-size="6.5" font-weight="600" text-anchor="middle">S2</text>
+        <text x="292" y="480" fill="#34d399" font-size="8.5" font-weight="600">handle_run_latest_etl() · extract, filter, pick latest ETL, analyze</text>
+        <rect x="266" y="492" width="97" height="20" rx="4" fill="#0f172a"/>
+        <rect x="266" y="492" width="97" height="20" rx="4" fill="rgba(6,78,59,0.4)" stroke="#34d399" stroke-width="1.1"/>
+        <text x="314.5" y="505.5" fill="white" font-size="7.2" text-anchor="middle">stage &#x27;Extracting…&#x27;</text>
+        <rect x="375" y="492" width="192" height="20" rx="4" fill="#0f172a"/>
+        <rect x="375" y="492" width="192" height="20" rx="4" fill="rgba(120,53,15,0.3)" stroke="#fbbf24" stroke-width="1.1"/>
+        <text x="471.0" y="505.5" fill="white" font-size="7.2" text-anchor="middle">process_single_zip() ➜ wifi,ddd,evt,bt,fw</text>
+        <rect x="579" y="492" width="197" height="20" rx="4" fill="#0f172a"/>
+        <rect x="579" y="492" width="197" height="20" rx="4" fill="rgba(76,29,149,0.4)" stroke="#a78bfa" stroke-width="1.1"/>
+        <text x="677.5" y="505.5" fill="white" font-size="7.2" text-anchor="middle">&#x27;wifi&#x27; in wifi_or_bt ? bt=[] : wifi=ddd=[]</text>
+        <rect x="788" y="492" width="101" height="20" rx="4" fill="#0f172a"/>
+        <rect x="788" y="492" width="101" height="20" rx="4" fill="rgba(6,78,59,0.4)" stroke="#34d399" stroke-width="1.1"/>
+        <text x="838.5" y="505.5" fill="white" font-size="7.2" text-anchor="middle">drop &#x27;history&#x27; paths</text>
+        <rect x="461.0" y="522" width="179" height="20" rx="4" fill="#0f172a"/>
+        <rect x="461.0" y="522" width="179" height="20" rx="4" fill="rgba(136,19,55,0.4)" stroke="#fb7185" stroke-width="1.1"/>
+        <text x="550.5" y="535.5" fill="white" font-size="7.2" text-anchor="middle">raises ➜ except ➜ &#x27;❌ Exception: &lt;msg&gt;&#x27;</text>
+        <rect x="680" y="522" width="214" height="20" rx="4" fill="#0f172a"/>
+        <rect x="680" y="522" width="214" height="20" rx="4" fill="rgba(136,19,55,0.4)" stroke="#fb7185" stroke-width="1.1"/>
+        <text x="787.0" y="535.5" fill="white" font-size="7.2" text-anchor="middle">empty ➜ &quot;❌ All files skipped due to &#x27;history&#x27;&quot;</text>
+        <rect x="266" y="562" width="58" height="20" rx="4" fill="#0f172a"/>
+        <rect x="266" y="562" width="58" height="20" rx="4" fill="rgba(76,29,149,0.4)" stroke="#a78bfa" stroke-width="1.1"/>
+        <text x="295.0" y="575.5" fill="white" font-size="7.2" text-anchor="middle">ddd files?</text>
+        <rect x="336" y="562" width="201" height="20" rx="4" fill="#0f172a"/>
+        <rect x="336" y="562" width="201" height="20" rx="4" fill="rgba(6,78,59,0.4)" stroke="#34d399" stroke-width="1.1"/>
+        <text x="436.5" y="575.5" fill="white" font-size="7.2" text-anchor="middle">sort by (address digits, .etl.N) desc ➜ [0]</text>
+        <rect x="549" y="562" width="105" height="20" rx="4" fill="#0f172a"/>
+        <rect x="549" y="562" width="105" height="20" rx="4" fill="rgba(76,29,149,0.4)" stroke="#a78bfa" stroke-width="1.1"/>
+        <text x="601.5" y="575.5" fill="white" font-size="7.2" text-anchor="middle">&#x27;wifi&#x27; in wifi_or_bt?</text>
+        <rect x="285.0" y="592" width="258" height="20" rx="4" fill="#0f172a"/>
+        <rect x="285.0" y="592" width="258" height="20" rx="4" fill="rgba(154,52,18,0.45)" stroke="#fb923c" stroke-width="1.1"/>
+        <text x="414.0" y="605.5" fill="white" font-size="7.2" text-anchor="middle">yes ➜ undefined target_etl ➜ NameError ➜ &#x27;❌ Exception&#x27; ⚠</text>
+        <text x="325" y="559" fill="#34d399" font-size="6.5">no</text>
+        <rect x="340" y="632" width="197" height="20" rx="4" fill="#0f172a"/>
+        <rect x="340" y="632" width="197" height="20" rx="4" fill="rgba(120,53,15,0.3)" stroke="#fbbf24" stroke-width="1.1"/>
+        <text x="438.5" y="645.5" fill="white" font-size="7.2" text-anchor="middle">explorer /select, etl (if not silent_mode)</text>
+        <rect x="549" y="632" width="162" height="20" rx="4" fill="#0f172a"/>
+        <rect x="549" y="632" width="162" height="20" rx="4" fill="rgba(120,53,15,0.3)" stroke="#fbbf24" stroke-width="1.1"/>
+        <text x="630.0" y="645.5" fill="white" font-size="7.2" text-anchor="middle">WiFiAnalysisService().analyze(etl)</text>
+        <rect x="723" y="632" width="131" height="20" rx="4" fill="#0f172a"/>
+        <rect x="723" y="632" width="131" height="20" rx="4" fill="rgba(6,95,70,0.7)" stroke="#6ee7b7" stroke-width="1.1"/>
+        <text x="788.5" y="645.5" fill="white" font-size="7.2" text-anchor="middle">all_done + &#x27;📦 … complete ✅&#x27;</text>
+        <rect x="340" y="672" width="197" height="20" rx="4" fill="#0f172a"/>
+        <rect x="340" y="672" width="197" height="20" rx="4" fill="rgba(120,53,15,0.3)" stroke="#fbbf24" stroke-width="1.1"/>
+        <text x="438.5" y="685.5" fill="white" font-size="7.2" text-anchor="middle">explorer /select, etl (if not silent_mode)</text>
+        <rect x="549" y="672" width="227" height="20" rx="4" fill="#0f172a"/>
+        <rect x="549" y="672" width="227" height="20" rx="4" fill="rgba(120,53,15,0.3)" stroke="#fbbf24" stroke-width="1.1"/>
+        <text x="662.5" y="685.5" fill="white" font-size="7.2" text-anchor="middle">BTAnalysisService().analyze(etl, mode=&#x27;AutoFile&#x27;)</text>
+        <rect x="788" y="672" width="105" height="20" rx="4" fill="#0f172a"/>
+        <rect x="788" y="672" width="105" height="20" rx="4" fill="rgba(6,95,70,0.7)" stroke="#6ee7b7" stroke-width="1.1"/>
+        <text x="840.5" y="685.5" fill="white" font-size="7.2" text-anchor="middle">all_done + complete ✅</text>
+        <text x="605.5" y="596" fill="#34d399" font-size="6.5">wifi</text>
+        <text x="660" y="569" fill="#34d399" font-size="6.5">bt</text>
+        <text x="266" y="714" fill="#64748b" font-size="7">explorer launch gated by app_config.silent_mode in both branches (both values tested) · &#x27;❌ No suitable ETL found.&#x27; unreachable ➜ untested</text>
+        <text x="266" y="726" fill="#64748b" font-size="7">wifi case keeps wifi + ddd files, bt case keeps bt only · highest .etl.N wins (wifi.etl.3 over .1, bt.etl.5 over .2)</text>
+        <rect x="56" y="466" width="180" height="270" rx="6" fill="#0f172a"/>
+        <rect x="56" y="466" width="180" height="270" rx="6" fill="rgba(8,51,68,0.4)" stroke="#22d3ee" stroke-width="1.3"/>
+        <text x="65" y="481" fill="white" font-size="8" font-weight="600">S2 inputs (same class)</text>
+        <text x="65" y="494" fill="#94a3b8" font-size="6.8">process_single_zip returns:</text>
+        <text x="65" y="505" fill="#94a3b8" font-size="6.8">  wifi [.etl.1, .etl.3] + bt [.etl.5]</text>
+        <text x="65" y="516" fill="#94a3b8" font-size="6.8">  wifi [.etl.3] + bt [.etl.2, .etl.5]</text>
+        <text x="65" y="527" fill="#94a3b8" font-size="6.8">    with wifi_or_bt=&#x27;bt&#x27;</text>
+        <text x="65" y="538" fill="#94a3b8" font-size="6.8">  wifi [.etl.1, History_wifi.etl.9]</text>
+        <text x="65" y="549" fill="#94a3b8" font-size="6.8">  wifi [History_wifi.etl.9] only</text>
+        <text x="65" y="560" fill="#94a3b8" font-size="6.8">  wifi [.etl.1] + ddd [ddd_trace_7.etl]</text>
+        <text x="65" y="571" fill="#94a3b8" font-size="6.8">  raises RuntimeError(&#x27;corrupt zip&#x27;)</text>
+        <text x="65" y="582" fill="#94a3b8" font-size="6.8"></text>
+        <text x="65" y="593" fill="#94a3b8" font-size="6.8">app_config.silent_mode False | True</text>
+        <text x="65" y="604" fill="#94a3b8" font-size="6.8">ETL_DIR = C:\dl\00123456\</text>
+        <text x="65" y="615" fill="#94a3b8" font-size="6.8">  logs_20250101</text>
+        <rect x="940" y="466" width="236" height="50" rx="6" fill="#0f172a"/>
+        <rect x="940" y="466" width="236" height="50" rx="6" fill="rgba(120,53,15,0.3)" stroke="#fbbf24" stroke-width="1.3"/>
+        <text x="949" y="481" fill="white" font-size="8" font-weight="600">process_single_zip (patched)</text>
+        <text x="949" y="494" fill="#94a3b8" font-size="6.8">(ZIP_PATH, &#x27;C:\dl\00123456&#x27;, False)</text>
+        <text x="949" y="505" fill="#94a3b8" font-size="6.8">  ➜ wifi, ddd, evt, bt, fw lists</text>
+        <rect x="940" y="528" width="236" height="60" rx="6" fill="#0f172a"/>
+        <rect x="940" y="528" width="236" height="60" rx="6" fill="rgba(30,41,59,0.5)" stroke="#94a3b8" stroke-width="1.3"/>
+        <text x="949" y="543" fill="white" font-size="8" font-weight="600">etl_utils (real, unpatched)</text>
+        <text x="949" y="556" fill="#94a3b8" font-size="6.8">extract_address_digits(path)</text>
+        <text x="949" y="567" fill="#94a3b8" font-size="6.8">extract_etl_suffix_number(path)</text>
+        <text x="949" y="578" fill="#94a3b8" font-size="6.8">  ➜ sort key (desc)</text>
+        <rect x="940" y="602" width="236" height="46" rx="6" fill="#0f172a"/>
+        <rect x="940" y="602" width="236" height="46" rx="6" fill="rgba(120,53,15,0.3)" stroke="#fbbf24" stroke-width="1.3"/>
+        <text x="949" y="617" fill="white" font-size="8" font-weight="600">subprocess.run (patched)</text>
+        <text x="949" y="630" fill="#94a3b8" font-size="6.8">[&#x27;explorer&#x27;, &#x27;/select,&#x27;, latest_etl]</text>
+        <text x="949" y="641" fill="#94a3b8" font-size="6.8">  NOT called when silent_mode</text>
+        <rect x="940" y="660" width="236" height="76" rx="6" fill="#0f172a"/>
+        <rect x="940" y="660" width="236" height="76" rx="6" fill="rgba(120,53,15,0.3)" stroke="#fbbf24" stroke-width="1.3"/>
+        <text x="949" y="675" fill="white" font-size="8" font-weight="600">analysis services (patched classes)</text>
+        <text x="949" y="688" fill="#94a3b8" font-size="6.8">WiFiAnalysisService().analyze(etl)</text>
+        <text x="949" y="699" fill="#94a3b8" font-size="6.8">BTAnalysisService().analyze(etl,</text>
+        <text x="949" y="710" fill="#94a3b8" font-size="6.8">  mode=&#x27;AutoFile&#x27;)</text>
+        <text x="949" y="721" fill="#94a3b8" font-size="6.8">the other class: assert_not_called</text>
+        <rect x="40" y="776" width="1150" height="1139" rx="12" fill="rgba(34,211,238,0.03)" stroke="#22d3ee" stroke-width="1" stroke-dasharray="8,4"/>
+        <text x="54" y="798" fill="#22d3ee" font-size="10" font-weight="600">Test cases · input ➜ expected output (18 tests · 3 classes) · path = route / handler step exercised above</text>
+        <text x="58" y="820" fill="#a78bfa" font-size="8.5" font-weight="600">TestAutomationBlueprintStructure · F0</text>
+        <text x="58" y="834" fill="#64748b" font-size="7">test_blueprint_registered_with_url_prefix</text>
+        <text x="1176" y="834" fill="#475569" font-size="7" text-anchor="end">path: F0 · url_map</text>
+        <rect x="58" y="837" width="480" height="37" rx="6" fill="#0f172a"/>
+        <rect x="58" y="837" width="480" height="37" rx="6" fill="rgba(8,51,68,0.4)" stroke="#22d3ee" stroke-width="1.1"/>
+        <rect x="594" y="837" width="582" height="37" rx="6" fill="#0f172a"/>
+        <rect x="594" y="837" width="582" height="37" rx="6" fill="rgba(76,29,149,0.4)" stroke="#a78bfa" stroke-width="1.1"/>
+        <text x="68" y="850" fill="white" font-size="8">inspect app.url_map for &#x27;automation.*&#x27; rules</text>
+        <text x="68" y="861" fill="#94a3b8" font-size="7.3">automation_bp registered by setUp (no request)</text>
+        <text x="604" y="850" fill="white" font-size="8">blueprints[&#x27;automation&#x27;] is automation_bp · url_prefix &#x27;/automation&#x27;</text>
+        <text x="604" y="861" fill="#94a3b8" font-size="7.3">only rule &#x27;/automation/run_latest_etl&#x27; · methods ⊇ {GET, POST}</text>
+        <line x1="544" y1="855.5" x2="590" y2="855.5" stroke="#22d3ee" stroke-width="1.5" marker-end="url(#arrowcyan)"/>
+        <text x="58" y="890" fill="#64748b" font-size="7">test_register_socketio_handlers_binds_trigger_event</text>
+        <text x="1176" y="890" fill="#475569" font-size="7" text-anchor="end">path: F0 · register</text>
+        <rect x="58" y="893" width="480" height="37" rx="6" fill="#0f172a"/>
+        <rect x="58" y="893" width="480" height="37" rx="6" fill="rgba(8,51,68,0.4)" stroke="#22d3ee" stroke-width="1.1"/>
+        <rect x="594" y="893" width="582" height="37" rx="6" fill="#0f172a"/>
+        <rect x="594" y="893" width="582" height="37" rx="6" fill="rgba(76,29,149,0.4)" stroke="#a78bfa" stroke-width="1.1"/>
+        <text x="68" y="906" fill="white" font-size="8">register_socketio_handlers(MagicMock())</text>
+        <text x="68" y="917" fill="#94a3b8" font-size="7.3">records socketio.on(...)</text>
+        <text x="604" y="906" fill="white" font-size="8">socketio.on called once with (&#x27;trigger_run_latest_etl&#x27;, namespace=&#x27;/progress&#x27;)</text>
+        <line x1="544" y1="911.5" x2="590" y2="911.5" stroke="#22d3ee" stroke-width="1.5" marker-end="url(#arrowcyan)"/>
+        <text x="58" y="952" fill="#a78bfa" font-size="8.5" font-weight="600">TestRunLatestEtlRoute · F0</text>
+        <text x="58" y="966" fill="#64748b" font-size="7">test_get_renders_progress_page</text>
+        <text x="1176" y="966" fill="#475569" font-size="7" text-anchor="end">path: F0 · GET</text>
+        <rect x="58" y="969" width="480" height="37" rx="6" fill="#0f172a"/>
+        <rect x="58" y="969" width="480" height="37" rx="6" fill="rgba(8,51,68,0.4)" stroke="#22d3ee" stroke-width="1.1"/>
+        <rect x="594" y="969" width="582" height="37" rx="6" fill="#0f172a"/>
+        <rect x="594" y="969" width="582" height="37" rx="6" fill="rgba(6,95,70,0.7)" stroke="#6ee7b7" stroke-width="1.1"/>
+        <text x="68" y="982" fill="white" font-size="8">GET /automation/run_latest_etl</text>
+        <text x="68" y="993" fill="#94a3b8" font-size="7.3">render_template ➜ &#x27;progress-page&#x27;</text>
+        <text x="604" y="982" fill="white" font-size="8">200 · body &#x27;progress-page&#x27;</text>
+        <text x="604" y="993" fill="#94a3b8" font-size="7.3">render_template(&#x27;run_progress.html&#x27;) once</text>
+        <line x1="544" y1="987.5" x2="590" y2="987.5" stroke="#22d3ee" stroke-width="1.5" marker-end="url(#arrowcyan)"/>
+        <text x="58" y="1022" fill="#64748b" font-size="7">test_post_renders_progress_page</text>
+        <text x="1176" y="1022" fill="#475569" font-size="7" text-anchor="end">path: F0 · POST</text>
+        <rect x="58" y="1025" width="480" height="37" rx="6" fill="#0f172a"/>
+        <rect x="58" y="1025" width="480" height="37" rx="6" fill="rgba(8,51,68,0.4)" stroke="#22d3ee" stroke-width="1.1"/>
+        <rect x="594" y="1025" width="582" height="37" rx="6" fill="#0f172a"/>
+        <rect x="594" y="1025" width="582" height="37" rx="6" fill="rgba(6,95,70,0.7)" stroke="#6ee7b7" stroke-width="1.1"/>
+        <text x="68" y="1038" fill="white" font-size="8">POST /automation/run_latest_etl</text>
+        <text x="68" y="1049" fill="#94a3b8" font-size="7.3">render_template ➜ &#x27;progress-page&#x27;</text>
+        <text x="604" y="1038" fill="white" font-size="8">200</text>
+        <text x="604" y="1049" fill="#94a3b8" font-size="7.3">render_template(&#x27;run_progress.html&#x27;) once</text>
+        <line x1="544" y1="1043.5" x2="590" y2="1043.5" stroke="#22d3ee" stroke-width="1.5" marker-end="url(#arrowcyan)"/>
+        <text x="58" y="1084" fill="#a78bfa" font-size="8.5" font-weight="600">TestHandleRunLatestEtl · S1 + S2 (handle_run_latest_etl called inside test_request_context)</text>
+        <text x="58" y="1098" fill="#64748b" font-size="7">test_wifi_case_picks_highest_suffix_and_runs_wifi_analysis</text>
+        <text x="1176" y="1098" fill="#475569" font-size="7" text-anchor="end">path: S1 ➜ S2 · wifi</text>
+        <rect x="58" y="1101" width="480" height="70" rx="6" fill="#0f172a"/>
+        <rect x="58" y="1101" width="480" height="70" rx="6" fill="rgba(8,51,68,0.4)" stroke="#22d3ee" stroke-width="1.1"/>
+        <rect x="594" y="1101" width="582" height="70" rx="6" fill="#0f172a"/>
+        <rect x="594" y="1101" width="582" height="70" rx="6" fill="rgba(6,95,70,0.7)" stroke="#6ee7b7" stroke-width="1.1"/>
+        <text x="68" y="1114" fill="white" font-size="8">_run() · wifi case (default mock context)</text>
+        <text x="68" y="1125" fill="#94a3b8" font-size="7.3">process_single_zip ➜ ([wifi.etl.1, wifi.etl.3], [], [], [bt.etl.5], [])</text>
+        <text x="604" y="1114" fill="white" font-size="8">pick([ZIP_ITEM]) · download_file(&#x27;logs.zip&#x27;, url, &#x27;C:\dl\00123456&#x27;, driver_manager, socketio)</text>
+        <text x="604" y="1125" fill="#94a3b8" font-size="7.3">process_single_zip(ZIP_PATH, &#x27;C:\dl\00123456&#x27;, False) · subprocess.run([&#x27;explorer&#x27;, &#x27;/select,&#x27;, wifi.etl.3])</text>
+        <text x="604" y="1136" fill="#94a3b8" font-size="7.3">WiFiAnalysisService().analyze(wifi.etl.3) · BTAnalysisService NOT called</text>
+        <text x="604" y="1147" fill="#94a3b8" font-size="7.3">first emits: stage &#x27;Case Category: Wireless - WiFi&#x27;, stage &#x27;Attachment list: 00123456&#x27;, case_nbr</text>
+        <text x="604" y="1158" fill="#94a3b8" font-size="7.3">all_done {} · stage &#x27;📦 Case a0B000000TESTID processing complete ✅&#x27;</text>
+        <line x1="544" y1="1136.0" x2="590" y2="1136.0" stroke="#22d3ee" stroke-width="1.5" marker-end="url(#arrowcyan)"/>
+        <text x="58" y="1187" fill="#64748b" font-size="7">test_wifi_case_silent_mode_skips_explorer</text>
+        <text x="1176" y="1187" fill="#475569" font-size="7" text-anchor="end">path: S2 · silent wifi</text>
+        <rect x="58" y="1190" width="480" height="37" rx="6" fill="#0f172a"/>
+        <rect x="58" y="1190" width="480" height="37" rx="6" fill="rgba(8,51,68,0.4)" stroke="#22d3ee" stroke-width="1.1"/>
+        <rect x="594" y="1190" width="582" height="37" rx="6" fill="#0f172a"/>
+        <rect x="594" y="1190" width="582" height="37" rx="6" fill="rgba(6,95,70,0.7)" stroke="#6ee7b7" stroke-width="1.1"/>
+        <text x="68" y="1203" fill="white" font-size="8">app_config.silent_mode = True · wifi case</text>
+        <text x="68" y="1214" fill="#94a3b8" font-size="7.3">process_single_zip ➜ ([wifi.etl.1], [], [], [], [])</text>
+        <text x="604" y="1203" fill="white" font-size="8">subprocess.run NOT called</text>
+        <text x="604" y="1214" fill="#94a3b8" font-size="7.3">WiFiAnalysisService().analyze(wifi.etl.1) · all_done emitted</text>
+        <line x1="544" y1="1208.5" x2="590" y2="1208.5" stroke="#22d3ee" stroke-width="1.5" marker-end="url(#arrowcyan)"/>
+        <text x="58" y="1243" fill="#64748b" font-size="7">test_bt_case_drops_wifi_files_and_runs_bt_analysis</text>
+        <text x="1176" y="1243" fill="#475569" font-size="7" text-anchor="end">path: S2 · bt</text>
+        <rect x="58" y="1246" width="480" height="37" rx="6" fill="#0f172a"/>
+        <rect x="58" y="1246" width="480" height="37" rx="6" fill="rgba(8,51,68,0.4)" stroke="#22d3ee" stroke-width="1.1"/>
+        <rect x="594" y="1246" width="582" height="37" rx="6" fill="#0f172a"/>
+        <rect x="594" y="1246" width="582" height="37" rx="6" fill="rgba(6,95,70,0.7)" stroke="#6ee7b7" stroke-width="1.1"/>
+        <text x="68" y="1259" fill="white" font-size="8">_run(wifi_or_bt=&#x27;bt&#x27;)</text>
+        <text x="68" y="1270" fill="#94a3b8" font-size="7.3">process_single_zip ➜ ([wifi.etl.3], [], [], [bt.etl.2, bt.etl.5], [])</text>
+        <text x="604" y="1259" fill="white" font-size="8">subprocess.run([&#x27;explorer&#x27;, &#x27;/select,&#x27;, bt.etl.5])</text>
+        <text x="604" y="1270" fill="#94a3b8" font-size="7.3">BTAnalysisService().analyze(bt.etl.5, mode=&#x27;AutoFile&#x27;) · WiFiAnalysisService NOT called · all_done</text>
+        <line x1="544" y1="1264.5" x2="590" y2="1264.5" stroke="#22d3ee" stroke-width="1.5" marker-end="url(#arrowcyan)"/>
+        <text x="58" y="1299" fill="#64748b" font-size="7">test_bt_case_silent_mode_skips_explorer</text>
+        <text x="1176" y="1299" fill="#475569" font-size="7" text-anchor="end">path: S2 · silent bt</text>
+        <rect x="58" y="1302" width="480" height="37" rx="6" fill="#0f172a"/>
+        <rect x="58" y="1302" width="480" height="37" rx="6" fill="rgba(8,51,68,0.4)" stroke="#22d3ee" stroke-width="1.1"/>
+        <rect x="594" y="1302" width="582" height="37" rx="6" fill="#0f172a"/>
+        <rect x="594" y="1302" width="582" height="37" rx="6" fill="rgba(6,95,70,0.7)" stroke="#6ee7b7" stroke-width="1.1"/>
+        <text x="68" y="1315" fill="white" font-size="8">silent_mode = True · _run(wifi_or_bt=&#x27;bt&#x27;)</text>
+        <text x="68" y="1326" fill="#94a3b8" font-size="7.3">process_single_zip ➜ ([], [], [], [bt.etl.2], [])</text>
+        <text x="604" y="1315" fill="white" font-size="8">subprocess.run NOT called</text>
+        <text x="604" y="1326" fill="#94a3b8" font-size="7.3">BTAnalysisService().analyze(bt.etl.2, mode=&#x27;AutoFile&#x27;)</text>
+        <line x1="544" y1="1320.5" x2="590" y2="1320.5" stroke="#22d3ee" stroke-width="1.5" marker-end="url(#arrowcyan)"/>
+        <text x="58" y="1355" fill="#64748b" font-size="7">test_history_files_are_filtered_out</text>
+        <text x="1176" y="1355" fill="#475569" font-size="7" text-anchor="end">path: S2 · history filter</text>
+        <rect x="58" y="1358" width="480" height="37" rx="6" fill="#0f172a"/>
+        <rect x="58" y="1358" width="480" height="37" rx="6" fill="rgba(8,51,68,0.4)" stroke="#22d3ee" stroke-width="1.1"/>
+        <rect x="594" y="1358" width="582" height="37" rx="6" fill="#0f172a"/>
+        <rect x="594" y="1358" width="582" height="37" rx="6" fill="rgba(6,95,70,0.7)" stroke="#6ee7b7" stroke-width="1.1"/>
+        <text x="68" y="1371" fill="white" font-size="8">wifi case</text>
+        <text x="68" y="1382" fill="#94a3b8" font-size="7.3">process_single_zip ➜ ([wifi.etl.1, History_wifi.etl.9], [], [], [], [])</text>
+        <text x="604" y="1371" fill="white" font-size="8">WiFiAnalysisService().analyze(wifi.etl.1)</text>
+        <text x="604" y="1382" fill="#94a3b8" font-size="7.3">History file skipped despite its higher suffix (9)</text>
+        <line x1="544" y1="1376.5" x2="590" y2="1376.5" stroke="#22d3ee" stroke-width="1.5" marker-end="url(#arrowcyan)"/>
+        <text x="58" y="1411" fill="#64748b" font-size="7">test_only_history_files_emits_skip_message</text>
+        <text x="1176" y="1411" fill="#475569" font-size="7" text-anchor="end">path: S2 · empty after filter</text>
+        <rect x="58" y="1414" width="480" height="37" rx="6" fill="#0f172a"/>
+        <rect x="58" y="1414" width="480" height="37" rx="6" fill="rgba(8,51,68,0.4)" stroke="#22d3ee" stroke-width="1.1"/>
+        <rect x="594" y="1414" width="582" height="37" rx="6" fill="#0f172a"/>
+        <rect x="594" y="1414" width="582" height="37" rx="6" fill="rgba(136,19,55,0.4)" stroke="#fb7185" stroke-width="1.1"/>
+        <text x="68" y="1427" fill="white" font-size="8">wifi case</text>
+        <text x="68" y="1438" fill="#94a3b8" font-size="7.3">process_single_zip ➜ ([History_wifi.etl.9], [], [], [], [])</text>
+        <text x="604" y="1427" fill="white" font-size="8">stage &quot;❌ All files skipped due to &#x27;history&#x27;&quot;</text>
+        <text x="604" y="1438" fill="#94a3b8" font-size="7.3">WiFiAnalysisService NOT called · subprocess.run NOT called</text>
+        <line x1="544" y1="1432.5" x2="590" y2="1432.5" stroke="#22d3ee" stroke-width="1.5" marker-end="url(#arrowcyan)"/>
+        <text x="58" y="1467" fill="#64748b" font-size="7">test_ddd_files_hit_known_name_error_bug</text>
+        <text x="1176" y="1467" fill="#475569" font-size="7" text-anchor="end">path: S2 · ddd ⚠</text>
+        <rect x="58" y="1470" width="480" height="37" rx="6" fill="#0f172a"/>
+        <rect x="58" y="1470" width="480" height="37" rx="6" fill="rgba(8,51,68,0.4)" stroke="#22d3ee" stroke-width="1.1"/>
+        <rect x="594" y="1470" width="582" height="37" rx="6" fill="#0f172a"/>
+        <rect x="594" y="1470" width="582" height="37" rx="6" fill="rgba(154,52,18,0.45)" stroke="#fb923c" stroke-width="1.1"/>
+        <text x="68" y="1483" fill="white" font-size="8">wifi case</text>
+        <text x="68" y="1494" fill="#94a3b8" font-size="7.3">process_single_zip ➜ ([wifi.etl.1], [ddd_trace_7.etl], [], [], [])</text>
+        <text x="604" y="1483" fill="white" font-size="8">⚠ known bug pinned: stage &#x27;❌ Exception: name &#x27;target_etl&#x27; is not defined&#x27;</text>
+        <text x="604" y="1494" fill="#94a3b8" font-size="7.3">NameError caught by the outer except · no analysis · no explorer</text>
+        <line x1="544" y1="1488.5" x2="590" y2="1488.5" stroke="#22d3ee" stroke-width="1.5" marker-end="url(#arrowcyan)"/>
+        <text x="58" y="1523" fill="#64748b" font-size="7">test_no_attachments_emits_error_and_returns</text>
+        <text x="1176" y="1523" fill="#475569" font-size="7" text-anchor="end">path: S1 · attachment_list?</text>
+        <rect x="58" y="1526" width="480" height="37" rx="6" fill="#0f172a"/>
+        <rect x="58" y="1526" width="480" height="37" rx="6" fill="rgba(8,51,68,0.4)" stroke="#22d3ee" stroke-width="1.1"/>
+        <rect x="594" y="1526" width="582" height="37" rx="6" fill="#0f172a"/>
+        <rect x="594" y="1526" width="582" height="37" rx="6" fill="rgba(136,19,55,0.4)" stroke="#fb7185" stroke-width="1.1"/>
+        <text x="68" y="1539" fill="white" font-size="8">_run(attachment_list=[])</text>
+        <text x="604" y="1539" fill="white" font-size="8">emit(&#x27;stage&#x27;, {message: &#x27;❌ No attachment found for this case!&#x27;})  (no namespace)</text>
+        <text x="604" y="1550" fill="#94a3b8" font-size="7.3">pick_latest_zip_attachment and download_file NOT called</text>
+        <line x1="544" y1="1544.5" x2="590" y2="1544.5" stroke="#22d3ee" stroke-width="1.5" marker-end="url(#arrowcyan)"/>
+        <text x="58" y="1579" fill="#64748b" font-size="7">test_missing_download_dir_emits_missing_session_info</text>
+        <text x="1176" y="1579" fill="#475569" font-size="7" text-anchor="end">path: S1 · download_dir?</text>
+        <rect x="58" y="1582" width="480" height="37" rx="6" fill="#0f172a"/>
+        <rect x="58" y="1582" width="480" height="37" rx="6" fill="rgba(8,51,68,0.4)" stroke="#22d3ee" stroke-width="1.1"/>
+        <rect x="594" y="1582" width="582" height="37" rx="6" fill="#0f172a"/>
+        <rect x="594" y="1582" width="582" height="37" rx="6" fill="rgba(136,19,55,0.4)" stroke="#fb7185" stroke-width="1.1"/>
+        <text x="68" y="1595" fill="white" font-size="8">_run(case_download_dir=None)</text>
+        <text x="604" y="1595" fill="white" font-size="8">stage &#x27;❌ Missing session info&#x27;</text>
+        <text x="604" y="1606" fill="#94a3b8" font-size="7.3">pick_latest_zip_attachment NOT called</text>
+        <line x1="544" y1="1600.5" x2="590" y2="1600.5" stroke="#22d3ee" stroke-width="1.5" marker-end="url(#arrowcyan)"/>
+        <text x="58" y="1635" fill="#64748b" font-size="7">test_no_zip_attachment_emits_error</text>
+        <text x="1176" y="1635" fill="#475569" font-size="7" text-anchor="end">path: S1 · pick ➜ None</text>
+        <rect x="58" y="1638" width="480" height="37" rx="6" fill="#0f172a"/>
+        <rect x="58" y="1638" width="480" height="37" rx="6" fill="rgba(8,51,68,0.4)" stroke="#22d3ee" stroke-width="1.1"/>
+        <rect x="594" y="1638" width="582" height="37" rx="6" fill="#0f172a"/>
+        <rect x="594" y="1638" width="582" height="37" rx="6" fill="rgba(136,19,55,0.4)" stroke="#fb7185" stroke-width="1.1"/>
+        <text x="68" y="1651" fill="white" font-size="8">pick_latest_zip_attachment ➜ None</text>
+        <text x="604" y="1651" fill="white" font-size="8">stage &#x27;❌ No zip file found.&#x27;</text>
+        <text x="604" y="1662" fill="#94a3b8" font-size="7.3">download_file NOT called</text>
+        <line x1="544" y1="1656.5" x2="590" y2="1656.5" stroke="#22d3ee" stroke-width="1.5" marker-end="url(#arrowcyan)"/>
+        <text x="58" y="1691" fill="#64748b" font-size="7">test_failed_download_emits_error</text>
+        <text x="1176" y="1691" fill="#475569" font-size="7" text-anchor="end">path: S1 · download ➜ None</text>
+        <rect x="58" y="1694" width="480" height="37" rx="6" fill="#0f172a"/>
+        <rect x="58" y="1694" width="480" height="37" rx="6" fill="rgba(8,51,68,0.4)" stroke="#22d3ee" stroke-width="1.1"/>
+        <rect x="594" y="1694" width="582" height="37" rx="6" fill="#0f172a"/>
+        <rect x="594" y="1694" width="582" height="37" rx="6" fill="rgba(136,19,55,0.4)" stroke="#fb7185" stroke-width="1.1"/>
+        <text x="68" y="1707" fill="white" font-size="8">download_file ➜ (None, &#x27;logs.zip&#x27;, False)</text>
+        <text x="604" y="1707" fill="white" font-size="8">stage &#x27;❌ Failed to download logs.zip&#x27;</text>
+        <text x="604" y="1718" fill="#94a3b8" font-size="7.3">process_single_zip NOT called</text>
+        <line x1="544" y1="1712.5" x2="590" y2="1712.5" stroke="#22d3ee" stroke-width="1.5" marker-end="url(#arrowcyan)"/>
+        <text x="58" y="1747" fill="#64748b" font-size="7">test_downloaded_path_missing_on_disk_emits_error</text>
+        <text x="1176" y="1747" fill="#475569" font-size="7" text-anchor="end">path: S1 · exists?</text>
+        <rect x="58" y="1750" width="480" height="37" rx="6" fill="#0f172a"/>
+        <rect x="58" y="1750" width="480" height="37" rx="6" fill="rgba(8,51,68,0.4)" stroke="#22d3ee" stroke-width="1.1"/>
+        <rect x="594" y="1750" width="582" height="37" rx="6" fill="#0f172a"/>
+        <rect x="594" y="1750" width="582" height="37" rx="6" fill="rgba(136,19,55,0.4)" stroke="#fb7185" stroke-width="1.1"/>
+        <text x="68" y="1763" fill="white" font-size="8">os.path.exists ➜ False</text>
+        <text x="68" y="1774" fill="#94a3b8" font-size="7.3">download_file ➜ (ZIP_PATH, &#x27;logs.zip&#x27;, False)</text>
+        <text x="604" y="1763" fill="white" font-size="8">os.path.exists(ZIP_PATH) once · stage &#x27;❌ Failed to download logs.zip&#x27;</text>
+        <text x="604" y="1774" fill="#94a3b8" font-size="7.3">process_single_zip NOT called</text>
+        <line x1="544" y1="1768.5" x2="590" y2="1768.5" stroke="#22d3ee" stroke-width="1.5" marker-end="url(#arrowcyan)"/>
+        <text x="58" y="1803" fill="#64748b" font-size="7">test_unexpected_exception_is_emitted</text>
+        <text x="1176" y="1803" fill="#475569" font-size="7" text-anchor="end">path: S2 · except</text>
+        <rect x="58" y="1806" width="480" height="37" rx="6" fill="#0f172a"/>
+        <rect x="58" y="1806" width="480" height="37" rx="6" fill="rgba(8,51,68,0.4)" stroke="#22d3ee" stroke-width="1.1"/>
+        <rect x="594" y="1806" width="582" height="37" rx="6" fill="#0f172a"/>
+        <rect x="594" y="1806" width="582" height="37" rx="6" fill="rgba(136,19,55,0.4)" stroke="#fb7185" stroke-width="1.1"/>
+        <text x="68" y="1819" fill="white" font-size="8">process_single_zip raises RuntimeError(&#x27;corrupt zip&#x27;)</text>
+        <text x="604" y="1819" fill="white" font-size="8">stage &#x27;❌ Exception: corrupt zip&#x27;</text>
+        <text x="604" y="1830" fill="#94a3b8" font-size="7.3">WiFiAnalysisService NOT called</text>
+        <line x1="544" y1="1824.5" x2="590" y2="1824.5" stroke="#22d3ee" stroke-width="1.5" marker-end="url(#arrowcyan)"/>
+        <text x="58" y="1859" fill="#64748b" font-size="7">test_missing_case_context_raises_key_error</text>
+        <text x="1176" y="1859" fill="#475569" font-size="7" text-anchor="end">path: S1 · session[&#x27;case_context&#x27;]</text>
+        <rect x="58" y="1862" width="480" height="37" rx="6" fill="#0f172a"/>
+        <rect x="58" y="1862" width="480" height="37" rx="6" fill="rgba(8,51,68,0.4)" stroke="#22d3ee" stroke-width="1.1"/>
+        <rect x="594" y="1862" width="582" height="37" rx="6" fill="#0f172a"/>
+        <rect x="594" y="1862" width="582" height="37" rx="6" fill="rgba(136,19,55,0.4)" stroke="#fb7185" stroke-width="1.1"/>
+        <text x="68" y="1875" fill="white" font-size="8">handle_run_latest_etl() with an empty session</text>
+        <text x="68" y="1886" fill="#94a3b8" font-size="7.3">(no _run helper)</text>
+        <text x="604" y="1875" fill="white" font-size="8">raises KeyError (session read happens before the try block)</text>
+        <text x="604" y="1886" fill="#94a3b8" font-size="7.3">app_config.socketio.emit NOT called</text>
+        <line x1="544" y1="1880.5" x2="590" y2="1880.5" stroke="#22d3ee" stroke-width="1.5" marker-end="url(#arrowcyan)"/>
+      </svg>
+    </div>
+
+    <!-- Info Cards -->
+    <div class="cards">
+      <div class="card">
+        <div class="card-header">
+          <div class="card-dot emerald"></div>
+          <h3>Components under test</h3>
+        </div>
+        <ul>
+          <li>• <code>GET | POST /automation/run_latest_etl</code> ➜ <code>run_progress.html</code></li>
+          <li>• SocketIO <code>trigger_run_latest_etl</code> on <code>/progress</code></li>
+          <li>• <code>handle_run_latest_etl</code>: guards ➜ download ➜ decompose</li>
+          <li>• category filter + <code>history</code> filter + latest-ETL sort</li>
+          <li>• Wi-Fi analysis or BT analysis (<code>mode="AutoFile"</code>)</li>
+        </ul>
+      </div>
+
+      <div class="card">
+        <div class="card-header">
+          <div class="card-dot amber"></div>
+          <h3>Fixtures &amp; mocks</h3>
+        </div>
+        <ul>
+          <li>• 7 class-level patches: pick / download / unzip / exists / subprocess / 2 services</li>
+          <li>• <code>app_config.socketio.emit</code> captures every stage message</li>
+          <li>• <code>_run(**ctx_overrides)</code> seeds <code>session["case_context"]</code></li>
+          <li>• <code>silent_mode</code> toggled per test (both branches)</li>
+          <li>• ETL sort helpers run for real (pure functions)</li>
+        </ul>
+      </div>
+
+      <div class="card">
+        <div class="card-header">
+          <div class="card-dot rose"></div>
+          <h3>Known bugs &amp; gaps pinned</h3>
+        </div>
+        <ul>
+          <li>• DDD branch uses undefined <code>target_etl</code> ➜ NameError (pinned)</li>
+          <li>• "No attachment" emit has no namespace (asserted as-is)</li>
+          <li>• missing <code>case_context</code> ➜ KeyError before the <code>try</code></li>
+          <li>• "No suitable ETL found." is unreachable ➜ untested</li>
+          <li>• <code>wifi_or_bt=None</code> TypeError path not tested separately</li>
+        </ul>
+      </div>
+    </div>
+
+    <!-- Footer -->
+    <p class="footer">
+      tests/test_automation_blueprint.py • blueprints/automation/automation_routes.py • docs/automation_bp_analysis.md • 18 tests across 3 classes
+    </p>
+  </div>
+
+  <script>
+    async function copyAsImage(btn) {
+      const orig = btn.textContent;
+      try {
+        const el = document.getElementById('report-container');
+        const r = el.getBoundingClientRect();
+        const pad = 32;
+        const canvas = await html2canvas(document.body, { backgroundColor: '#020617', scale: 2, useCORS: true, ignoreElements: (e) => e.classList && e.classList.contains('toolbar'), x: r.left + window.scrollX - pad, y: r.top + window.scrollY - pad, width: r.width + pad * 2, height: r.height + pad * 2 });
+        const blob = await new Promise(r => canvas.toBlob(r, 'image/png'));
+        await navigator.clipboard.write([new ClipboardItem({ 'image/png': blob })]);
+        btn.textContent = '✓ Copied!';
+      } catch (e) {
+        btn.textContent = '✗ Failed';
+      }
+      setTimeout(() => btn.textContent = orig, 2000);
+    }
+
+    async function downloadPNG(btn) {
+      const orig = btn.textContent;
+      btn.textContent = '⏳ ...';
+      try {
+        const el = document.getElementById('report-container');
+        const r = el.getBoundingClientRect();
+        const pad = 32;
+        const canvas = await html2canvas(document.body, { backgroundColor: '#020617', scale: 2, useCORS: true, ignoreElements: (e) => e.classList && e.classList.contains('toolbar'), x: r.left + window.scrollX - pad, y: r.top + window.scrollY - pad, width: r.width + pad * 2, height: r.height + pad * 2 });
+        const link = document.createElement('a');
+        link.download = 'test_automation_blueprint_flow.png';
+        link.href = canvas.toDataURL('image/png');
+        link.click();
+        btn.textContent = '✓ Done!';
+      } catch (e) {
+        btn.textContent = '✗ Failed';
+      }
+      setTimeout(() => btn.textContent = orig, 2000);
+    }
+
+    async function downloadPDF(btn) {
+      const orig = btn.textContent;
+      btn.textContent = '⏳ ...';
+      try {
+        const el = document.getElementById('report-container');
+        const r = el.getBoundingClientRect();
+        const pad = 32;
+        const canvas = await html2canvas(document.body, { backgroundColor: '#020617', scale: 2, useCORS: true, ignoreElements: (e) => e.classList && e.classList.contains('toolbar'), x: r.left + window.scrollX - pad, y: r.top + window.scrollY - pad, width: r.width + pad * 2, height: r.height + pad * 2 });
+        const imgData = canvas.toDataURL('image/png');
+        const { jsPDF } = window.jspdf;
+        const orientation = canvas.width > canvas.height ? 'landscape' : 'portrait';
+        const pdf = new jsPDF({ orientation, unit: 'px', format: [canvas.width, canvas.height], hotfixes: ['px_scaling'] });
+        pdf.addImage(imgData, 'PNG', 0, 0, canvas.width, canvas.height);
+        pdf.save('test_automation_blueprint_flow.pdf');
+        btn.textContent = '✓ Done!';
+      } catch (e) {
+        btn.textContent = '✗ Failed';
+      }
+      setTimeout(() => btn.textContent = orig, 2000);
+    }
+  </script>
+</body>
+</html>

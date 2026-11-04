@@ -1,0 +1,11 @@
+# skill features:
+#   name: skill name
+#   description: a brief description of the skill
+#   keywords: use "-" to represent each keyword
+#   expert_rules: use "|" to start a multi-line string
+
+A2DP:
+  description: "audio"
+  expert_rules: |
+    1. check codec
+  name: "A2DP"

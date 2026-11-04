@@ -1,0 +1,797 @@
+<!DOCTYPE html>
+<html lang="en">
+<head>
+  <meta charset="UTF-8">
+  <meta name="viewport" content="width=device-width, initial-scale=1.0">
+  <title>test_handsfree_blueprint — Test Flow Diagram</title>
+  <link href="https://fonts.googleapis.com/css2?family=JetBrains+Mono:wght@400;500;600;700&display=swap" rel="stylesheet">
+  <script src="https://cdn.jsdelivr.net/npm/html2canvas@1.4.1/dist/html2canvas.min.js" integrity="sha384-ZZ1pncU3bQe8y31yfZdMFdSpttDoPmOZg2wguVK9almUodir1PghgT0eY7Mrty8H" crossorigin="anonymous"></script>
+  <script src="https://cdn.jsdelivr.net/npm/jspdf@2.5.2/dist/jspdf.umd.min.js" integrity="sha384-en/ztfPSRkGfME4KIm05joYXynqzUgbsG5nMrj/xEFAHXkeZfO3yMK8QQ+mP7p1/" crossorigin="anonymous"></script>
+  <style>
+    * { margin: 0; padding: 0; box-sizing: border-box; }
+    body {
+      font-family: 'JetBrains Mono', monospace;
+      background: #020617;
+      min-height: 100vh;
+      padding: 2rem;
+      color: white;
+    }
+    .container { max-width: 1240px; margin: 0 auto; }
+    .header { margin-bottom: 2rem; }
+    .header-row { display: flex; align-items: center; gap: 1rem; margin-bottom: 0.5rem; }
+    .pulse-dot { width: 12px; height: 12px; background: #a78bfa; border-radius: 50%; animation: pulse 2s infinite; }
+    @keyframes pulse { 0%, 100% { opacity: 1; } 50% { opacity: 0.5; } }
+    h1 { font-size: 1.5rem; font-weight: 700; letter-spacing: -0.025em; }
+    .subtitle { color: #94a3b8; font-size: 0.875rem; margin-left: 1.75rem; }
+    .diagram-container {
+      background: rgba(15, 23, 42, 0.5);
+      border-radius: 1rem;
+      border: 1px solid #1e293b;
+      padding: 1.5rem;
+      overflow-x: auto;
+    }
+    svg { width: 100%; min-width: 1060px; display: block; }
+    .cards { display: grid; grid-template-columns: repeat(auto-fit, minmax(280px, 1fr)); gap: 1rem; margin-top: 2rem; }
+    .card { background: rgba(15, 23, 42, 0.5); border-radius: 0.75rem; border: 1px solid #1e293b; padding: 1.25rem; }
+    .card-header { display: flex; align-items: center; gap: 0.5rem; margin-bottom: 0.75rem; }
+    .card-dot { width: 8px; height: 8px; border-radius: 50%; }
+    .card-dot.cyan { background: #22d3ee; }
+    .card-dot.emerald { background: #34d399; }
+    .card-dot.violet { background: #a78bfa; }
+    .card-dot.amber { background: #fbbf24; }
+    .card-dot.rose { background: #fb7185; }
+    .card-dot.orange { background: #fb923c; }
+    .card h3 { font-size: 0.875rem; font-weight: 600; }
+    .card ul { list-style: none; color: #94a3b8; font-size: 0.75rem; }
+    .card li { margin-bottom: 0.375rem; }
+    .card li code { color: #cbd5e1; }
+    .footer { text-align: center; margin-top: 1.5rem; color: #475569; font-size: 0.75rem; }
+    .toolbar { display: flex; gap: 0.5rem; margin-left: auto; flex-shrink: 0; align-items: center; }
+    .toolbar-toggle {
+      background: transparent; border: none; color: #475569; cursor: pointer;
+      font-size: 1.25rem; line-height: 1; padding: 0.25rem 0.5rem; border-radius: 0.375rem;
+      transition: color 0.2s, background 0.2s;
+    }
+    .toolbar-toggle:hover { color: #94a3b8; background: rgba(30, 41, 59, 0.5); }
+    .toolbar-actions { display: none; gap: 0.5rem; }
+    .toolbar.expanded .toolbar-actions { display: flex; }
+    .toolbar-actions button {
+      background: rgba(30, 41, 59, 0.8); border: 1px solid #334155; color: #94a3b8;
+      padding: 0.375rem 0.75rem; border-radius: 0.375rem; font-family: inherit;
+      font-size: 0.75rem; cursor: pointer; transition: all 0.2s; white-space: nowrap;
+    }
+    .toolbar-actions button:hover { background: rgba(51, 65, 85, 0.8); color: white; border-color: #475569; }
+    @media print { body { background: #020617; padding: 1rem; } .toolbar { display: none !important; } }
+  </style>
+</head>
+<body>
+  <div class="container" id="report-container">
+    <!-- Header -->
+    <div class="header">
+      <div class="header-row">
+        <div class="pulse-dot"></div>
+        <h1>test_handsfree_blueprint — Test Flow</h1>
+        <div class="toolbar">
+          <div class="toolbar-actions">
+            <button onclick="copyAsImage(this)">📋 Copy</button>
+            <button onclick="downloadPNG(this)">🖼️ PNG</button>
+            <button onclick="downloadPDF(this)">📄 PDF</button>
+          </div>
+          <button class="toolbar-toggle" onclick="this.parentElement.classList.toggle('expanded')" title="Export options" aria-label="Export options">⋯</button>
+        </div>
+      </div>
+      <p class="subtitle">33 unit tests across 5 classes · 11 JSON route handlers over orchestrator + HandsfreeStore, plus the env_detail reader helpers · blueprints/handsfree/handsfree_routes.py</p>
+    </div>
+
+    <!-- Main Diagram -->
+    <div class="diagram-container">
+      <svg viewBox="0 0 1100 2649" font-family="JetBrains Mono, monospace">
+<defs>
+          <marker id="arrowhead" markerWidth="10" markerHeight="7" refX="9" refY="3.5" orient="auto">
+            <polygon points="0 0, 10 3.5, 0 7" fill="#64748b" />
+          </marker>
+          <marker id="arrowrose" markerWidth="10" markerHeight="7" refX="9" refY="3.5" orient="auto">
+            <polygon points="0 0, 10 3.5, 0 7" fill="#fb7185" />
+          </marker>
+          <marker id="arrowviolet" markerWidth="10" markerHeight="7" refX="9" refY="3.5" orient="auto">
+            <polygon points="0 0, 10 3.5, 0 7" fill="#a78bfa" />
+          </marker>
+          <pattern id="grid" width="40" height="40" patternUnits="userSpaceOnUse">
+            <path d="M 40 0 L 0 0 0 40" fill="none" stroke="#1e293b" stroke-width="0.5"/>
+          </pattern>
+        </defs>
+<rect width="100%" height="100%" fill="url(#grid)" />
+<rect x="40" y="16" width="620" height="84" rx="8" fill="#0f172a"/>
+<rect x="40" y="16" width="620" height="84" rx="8" fill="rgba(30,41,59,0.5)" stroke="#94a3b8" stroke-width="1.2"/>
+<text x="54" y="34" fill="white" font-size="11" font-weight="600">Test fixtures · BaseTestCase + handsfree_bp · everything patched at point of use</text>
+<text x="54" y="50" fill="#94a3b8" font-size="8.5">ROUTES.HandsfreeStore (class) ➜ IndexAndConfig, QueueRoutes · ROUTES.orchestrator ➜ RunRoutes</text>
+<text x="54" y="63" fill="#94a3b8" font-size="8.5">store root = TEST_AVATARFILES_DIR/'handsfree' · no background run · nothing written to disk</text>
+<text x="54" y="76" fill="#94a3b8" font-size="8.5">AI_MARKER = '[AI-Avatar preliminary analysis]' (services.handsfree.composer, real code)</text>
+<text x="54" y="89" fill="#94a3b8" font-size="8.5">TestHandsfreeEnvDetail = plain unittest.TestCase · calls the env_detail helpers directly</text>
+<rect x="680" y="16" width="380" height="84" rx="8" fill="rgba(15,23,42,0.6)" stroke="#334155" stroke-width="1"/>
+<text x="694" y="32" fill="white" font-size="10" font-weight="600">Legend</text>
+<rect x="694" y="40" width="16" height="10" rx="2" fill="rgba(30,41,59,0.5)" stroke="#94a3b8" stroke-width="1"/>
+<text x="716" y="49" fill="#94a3b8" font-size="8">route handler / test client</text>
+<rect x="694" y="54" width="16" height="10" rx="2" fill="rgba(76,29,149,0.4)" stroke="#a78bfa" stroke-width="1"/>
+<text x="716" y="63" fill="#94a3b8" font-size="8">HandsfreeStore (patched)</text>
+<rect x="694" y="68" width="16" height="10" rx="2" fill="rgba(120,53,15,0.3)" stroke="#fbbf24" stroke-width="1"/>
+<text x="716" y="77" fill="#94a3b8" font-size="8">orchestrator (patched) / LLM</text>
+<rect x="694" y="82" width="16" height="10" rx="2" fill="rgba(6,78,59,0.4)" stroke="#34d399" stroke-width="1"/>
+<text x="716" y="91" fill="#94a3b8" font-size="8">real code · 200 OK</text>
+<rect x="880" y="40" width="16" height="10" rx="2" fill="rgba(136,19,55,0.4)" stroke="#fb7185" stroke-width="1"/>
+<text x="902" y="49" fill="#94a3b8" font-size="8">4xx / 5xx error</text>
+<rect x="880" y="54" width="16" height="10" rx="2" fill="rgba(251,146,60,0.3)" stroke="#fb923c" stroke-width="1"/>
+<text x="902" y="63" fill="#94a3b8" font-size="8">200 · ok:False passthrough</text>
+<rect x="880" y="68" width="16" height="10" rx="2" fill="rgba(8,51,68,0.4)" stroke="#22d3ee" stroke-width="1"/>
+<text x="902" y="77" fill="#94a3b8" font-size="8">test input</text>
+<line x1="880" y1="87" x2="896" y2="87" stroke="#64748b" stroke-width="1.5" marker-end="url(#arrowhead)"/>
+<text x="902" y="91" fill="#94a3b8" font-size="8">call · input ➜ expected</text>
+<text x="18" y="116" fill="#fbbf24" font-size="7" font-weight="600" transform="rotate(-90 18 116)">TEST&#160;SUITE&#160;FLOW</text>
+<line x1="26" y1="112" x2="26" y2="2626" stroke="#fbbf24" stroke-width="1.2" stroke-dasharray="4,4"/>
+<rect x="40" y="116" width="1020" height="514" rx="12" fill="rgba(251,191,36,0.04)" stroke="#fbbf24" stroke-width="1" stroke-dasharray="8,4"/>
+<line x1="26" y1="134" x2="40" y2="134" stroke="#fbbf24" stroke-width="1.5"/>
+<text x="54" y="138" fill="#fbbf24" font-size="10" font-weight="600">Route layer · handsfree_bp (/handsfree) — thin JSON layer: test client ➜ handler (R1–R11) ➜ patched collaborator</text>
+<line x1="197" y1="165" x2="218" y2="165" stroke="#64748b" stroke-width="1.5" marker-end="url(#arrowhead)"/>
+<line x1="641" y1="165" x2="698" y2="165" stroke="#64748b" stroke-width="1.5" marker-end="url(#arrowhead)"/>
+<line x1="197" y1="203" x2="218" y2="203" stroke="#64748b" stroke-width="1.5" marker-end="url(#arrowhead)"/>
+<line x1="641" y1="203" x2="698" y2="203" stroke="#64748b" stroke-width="1.5" marker-end="url(#arrowhead)"/>
+<line x1="197" y1="241" x2="218" y2="241" stroke="#64748b" stroke-width="1.5" marker-end="url(#arrowhead)"/>
+<line x1="641" y1="241" x2="698" y2="241" stroke="#64748b" stroke-width="1.5" marker-end="url(#arrowhead)"/>
+<line x1="197" y1="279" x2="218" y2="279" stroke="#64748b" stroke-width="1.5" marker-end="url(#arrowhead)"/>
+<line x1="641" y1="279" x2="698" y2="279" stroke="#64748b" stroke-width="1.5" marker-end="url(#arrowhead)"/>
+<line x1="197" y1="336" x2="218" y2="336" stroke="#64748b" stroke-width="1.5" marker-end="url(#arrowhead)"/>
+<line x1="641" y1="336" x2="698" y2="336" stroke="#64748b" stroke-width="1.5" marker-end="url(#arrowhead)"/>
+<line x1="197" y1="407" x2="218" y2="407" stroke="#64748b" stroke-width="1.5" marker-end="url(#arrowhead)"/>
+<line x1="641" y1="407" x2="698" y2="407" stroke="#64748b" stroke-width="1.5" marker-end="url(#arrowhead)"/>
+<line x1="197" y1="445" x2="218" y2="445" stroke="#64748b" stroke-width="1.5" marker-end="url(#arrowhead)"/>
+<line x1="641" y1="445" x2="698" y2="445" stroke="#64748b" stroke-width="1.5" marker-end="url(#arrowhead)"/>
+<line x1="197" y1="483" x2="218" y2="483" stroke="#64748b" stroke-width="1.5" marker-end="url(#arrowhead)"/>
+<line x1="641" y1="483" x2="698" y2="483" stroke="#64748b" stroke-width="1.5" marker-end="url(#arrowhead)"/>
+<line x1="197" y1="521" x2="218" y2="521" stroke="#64748b" stroke-width="1.5" marker-end="url(#arrowhead)"/>
+<line x1="641" y1="521" x2="698" y2="521" stroke="#64748b" stroke-width="1.5" marker-end="url(#arrowhead)"/>
+<line x1="197" y1="559" x2="218" y2="559" stroke="#64748b" stroke-width="1.5" marker-end="url(#arrowhead)"/>
+<line x1="641" y1="559" x2="698" y2="559" stroke="#64748b" stroke-width="1.5" marker-end="url(#arrowhead)"/>
+<line x1="197" y1="597" x2="218" y2="597" stroke="#64748b" stroke-width="1.5" marker-end="url(#arrowhead)"/>
+<line x1="641" y1="597" x2="698" y2="597" stroke="#64748b" stroke-width="1.5" marker-end="url(#arrowhead)"/>
+<text x="222" y="386" fill="#64748b" font-size="7">orchestrator-backed routes ▾</text>
+<rect x="56" y="150" width="140" height="462" rx="6" fill="#0f172a"/>
+<rect x="56" y="150" width="140" height="462" rx="6" fill="rgba(30,41,59,0.5)" stroke="#94a3b8" stroke-width="1.5"/>
+<text x="126" y="170" fill="white" font-size="9.5" font-weight="600" text-anchor="middle">Flask test client</text>
+<text x="126" y="184" fill="#94a3b8" font-size="7.5" text-anchor="middle">BaseTestCase</text>
+<text x="126" y="196" fill="#94a3b8" font-size="7.5" text-anchor="middle">blueprint = handsfree_bp</text>
+<text x="126" y="230" fill="#cbd5e1" font-size="7.5" text-anchor="middle">self.client.</text>
+<text x="126" y="242" fill="#cbd5e1" font-size="7.5" text-anchor="middle">get / post / put</text>
+<text x="126" y="264" fill="#22d3ee" font-size="7.5" text-anchor="middle">json={...}</text>
+<text x="126" y="276" fill="#22d3ee" font-size="7.5" text-anchor="middle">data='not json'</text>
+<text x="126" y="288" fill="#22d3ee" font-size="7.5" text-anchor="middle">query_string={all:…}</text>
+<text x="126" y="300" fill="#22d3ee" font-size="7.5" text-anchor="middle">(no body)</text>
+<text x="126" y="330" fill="#94a3b8" font-size="7.5" text-anchor="middle">get_json(silent=True)</text>
+<text x="126" y="342" fill="#94a3b8" font-size="7.5" text-anchor="middle">or {} ➜ missing / bad</text>
+<text x="126" y="354" fill="#94a3b8" font-size="7.5" text-anchor="middle">body never raises</text>
+<text x="126" y="420" fill="#cbd5e1" font-size="7.5" text-anchor="middle">asserts:</text>
+<text x="126" y="432" fill="#94a3b8" font-size="7.5" text-anchor="middle">status_code</text>
+<text x="126" y="444" fill="#94a3b8" font-size="7.5" text-anchor="middle">get_json() / get_data()</text>
+<text x="126" y="456" fill="#94a3b8" font-size="7.5" text-anchor="middle">mock.assert_called_</text>
+<text x="126" y="468" fill="#94a3b8" font-size="7.5" text-anchor="middle">  once_with(...)</text>
+<text x="126" y="480" fill="#94a3b8" font-size="7.5" text-anchor="middle">assert_not_called()</text>
+<rect x="220" y="150" width="420" height="30" rx="6" fill="#0f172a"/>
+<rect x="220" y="150" width="420" height="30" rx="6" fill="rgba(30,41,59,0.5)" stroke="#94a3b8" stroke-width="1.3"/>
+<text x="226" y="160" fill="#64748b" font-size="7">R1</text>
+<text x="244" y="162" fill="white" font-size="8.5" font-weight="600">GET  /handsfree/  · index()</text>
+<text x="244" y="175" fill="#94a3b8" font-size="7.5">cfg = _store().load_config() ➜ render(..., config=cfg)</text>
+<rect x="220" y="188" width="420" height="30" rx="6" fill="#0f172a"/>
+<rect x="220" y="188" width="420" height="30" rx="6" fill="rgba(30,41,59,0.5)" stroke="#94a3b8" stroke-width="1.3"/>
+<text x="226" y="198" fill="#64748b" font-size="7">R2</text>
+<text x="244" y="200" fill="white" font-size="8.5" font-weight="600">GET|POST  /handsfree/config  · config()</text>
+<text x="244" y="213" fill="#94a3b8" font-size="7.5">GET ➜ load_config() · POST ➜ keep allow-listed keys only ➜ save_config(updates)</text>
+<rect x="220" y="226" width="420" height="30" rx="6" fill="#0f172a"/>
+<rect x="220" y="226" width="420" height="30" rx="6" fill="rgba(30,41,59,0.5)" stroke="#94a3b8" stroke-width="1.3"/>
+<text x="226" y="236" fill="#64748b" font-size="7">R3</text>
+<text x="244" y="238" fill="white" font-size="8.5" font-weight="600">GET  /handsfree/queue  · list_queue()</text>
+<text x="244" y="251" fill="#94a3b8" font-size="7.5">include_closed = ?all.lower() in ('1','true','yes') ➜ {items: list_drafts(...)}</text>
+<rect x="220" y="264" width="420" height="30" rx="6" fill="#0f172a"/>
+<rect x="220" y="264" width="420" height="30" rx="6" fill="rgba(30,41,59,0.5)" stroke="#94a3b8" stroke-width="1.3"/>
+<text x="226" y="274" fill="#64748b" font-size="7">R4</text>
+<text x="244" y="276" fill="white" font-size="8.5" font-weight="600">GET  /handsfree/queue/&lt;draft_id&gt;  · get_draft()</text>
+<text x="244" y="289" fill="#fb7185" font-size="7.5">rec = get(draft_id) · None ➜ 404 {error: 'not found'} · else 200 rec</text>
+<rect x="220" y="302" width="420" height="68" rx="6" fill="#0f172a"/>
+<rect x="220" y="302" width="420" height="68" rx="6" fill="rgba(30,41,59,0.5)" stroke="#94a3b8" stroke-width="1.3"/>
+<text x="226" y="312" fill="#64748b" font-size="7">R5</text>
+<text x="244" y="315" fill="white" font-size="8.5" font-weight="600">PUT|POST  /handsfree/queue/&lt;draft_id&gt;  · save_draft()</text>
+<text x="244" y="327" fill="#fb7185" font-size="7.5">plain = draft_plain.strip() · '' ➜ 400 'empty draft'</text>
+<text x="244" y="339" fill="#94a3b8" font-size="7.5">AI_MARKER not in plain ➜ AI_MARKER + '\n\n' + plain</text>
+<text x="244" y="351" fill="#94a3b8" font-size="7.5">update(id, draft_plain, compose_html(plain))</text>
+<text x="244" y="363" fill="#fb7185" font-size="7.5">None ➜ 404 'not found' · else 200 {ok: True, draft}</text>
+<rect x="220" y="392" width="420" height="30" rx="6" fill="#0f172a"/>
+<rect x="220" y="392" width="420" height="30" rx="6" fill="rgba(30,41,59,0.5)" stroke="#94a3b8" stroke-width="1.3"/>
+<text x="226" y="402" fill="#64748b" font-size="7">R6</text>
+<text x="244" y="404" fill="white" font-size="8.5" font-weight="600">POST  /handsfree/check_now  · check_now()</text>
+<text x="244" y="417" fill="#94a3b8" font-size="7.5">body = get_json(silent=True) or {} ➜ start_check_now(body.get('owner_name'))</text>
+<rect x="220" y="430" width="420" height="30" rx="6" fill="#0f172a"/>
+<rect x="220" y="430" width="420" height="30" rx="6" fill="rgba(30,41,59,0.5)" stroke="#94a3b8" stroke-width="1.3"/>
+<text x="226" y="440" fill="#64748b" font-size="7">R7</text>
+<text x="244" y="442" fill="white" font-size="8.5" font-weight="600">POST  /handsfree/run_case  · run_case()</text>
+<text x="244" y="455" fill="#94a3b8" font-size="7.5">manual single-case trigger ➜ start_case_run(body.get('case_nbr'))</text>
+<rect x="220" y="468" width="420" height="30" rx="6" fill="#0f172a"/>
+<rect x="220" y="468" width="420" height="30" rx="6" fill="rgba(30,41,59,0.5)" stroke="#94a3b8" stroke-width="1.3"/>
+<text x="226" y="478" fill="#64748b" font-size="7">R8</text>
+<text x="244" y="480" fill="white" font-size="8.5" font-weight="600">GET  /handsfree/status  · status()</text>
+<text x="244" y="493" fill="#94a3b8" font-size="7.5">➜ jsonify(get_run_state())</text>
+<rect x="220" y="506" width="420" height="30" rx="6" fill="#0f172a"/>
+<rect x="220" y="506" width="420" height="30" rx="6" fill="rgba(30,41,59,0.5)" stroke="#94a3b8" stroke-width="1.3"/>
+<text x="226" y="516" fill="#64748b" font-size="7">R9</text>
+<text x="244" y="518" fill="white" font-size="8.5" font-weight="600">POST  /handsfree/queue/&lt;draft_id&gt;/approve  · approve()</text>
+<text x="244" y="531" fill="#fb7185" font-size="7.5">POST-only (GET ➜ 405) ➜ approve_and_post(id, edited_plain=body.draft_plain)</text>
+<rect x="220" y="544" width="420" height="30" rx="6" fill="#0f172a"/>
+<rect x="220" y="544" width="420" height="30" rx="6" fill="rgba(30,41,59,0.5)" stroke="#94a3b8" stroke-width="1.3"/>
+<text x="226" y="554" fill="#64748b" font-size="7">R10</text>
+<text x="244" y="556" fill="white" font-size="8.5" font-weight="600">POST  /handsfree/queue/&lt;draft_id&gt;/reject  · reject()</text>
+<text x="244" y="569" fill="#94a3b8" font-size="7.5">➜ reject(id, reason=body.get('reason', ''))</text>
+<rect x="220" y="582" width="420" height="30" rx="6" fill="#0f172a"/>
+<rect x="220" y="582" width="420" height="30" rx="6" fill="rgba(30,41,59,0.5)" stroke="#94a3b8" stroke-width="1.3"/>
+<text x="226" y="592" fill="#64748b" font-size="7">R11</text>
+<text x="244" y="594" fill="white" font-size="8.5" font-weight="600">POST  /handsfree/discover_fields  · discover_fields()</text>
+<text x="244" y="607" fill="#fb7185" font-size="7.5">try discover_rest_fields() · except e ➜ 500 {error: f'{type(e).__name__}: {e}'}</text>
+<rect x="520" y="153" width="114" height="24" rx="4" fill="#0f172a"/>
+<rect x="520" y="153" width="114" height="24" rx="4" fill="rgba(6,78,59,0.4)" stroke="#34d399" stroke-width="1"/>
+<text x="577" y="163" fill="white" font-size="7.5" font-weight="600" text-anchor="middle">render_template</text>
+<text x="577" y="173" fill="#94a3b8" font-size="6.5" text-anchor="middle">@patch ➜ 'handsfree-page'</text>
+<rect x="520" y="320" width="114" height="34" rx="4" fill="#0f172a"/>
+<rect x="520" y="320" width="114" height="34" rx="4" fill="rgba(6,78,59,0.4)" stroke="#34d399" stroke-width="1"/>
+<text x="577" y="332" fill="white" font-size="7.5" font-weight="600" text-anchor="middle">composer (real)</text>
+<text x="577" y="343" fill="#94a3b8" font-size="7" text-anchor="middle">AI_MARKER</text>
+<text x="577" y="352" fill="#94a3b8" font-size="6.5" text-anchor="middle">compose_html: escape+&lt;br/&gt;</text>
+<rect x="700" y="150" width="344" height="220" rx="6" fill="#0f172a"/>
+<rect x="700" y="150" width="344" height="220" rx="6" fill="rgba(76,29,149,0.4)" stroke="#a78bfa" stroke-width="1.5"/>
+<line x1="888" y1="158" x2="888" y2="362" stroke="#a78bfa" stroke-width="0.8" stroke-dasharray="3,3"/>
+<text x="708" y="168" fill="#e2e8f0" font-size="7.5">load_config()</text>
+<text x="708" y="206" fill="#e2e8f0" font-size="7.5">load_config() · save_config(updates)</text>
+<text x="708" y="244" fill="#e2e8f0" font-size="7.5">list_drafts(include_closed)</text>
+<text x="708" y="282" fill="#e2e8f0" font-size="7.5">get(draft_id) ➜ rec | None</text>
+<text x="708" y="339" fill="#e2e8f0" font-size="7.5">update(id, draft_plain, draft_html)</text>
+<text x="708" y="351" fill="#e2e8f0" font-size="7.5">  ➜ rec | None</text>
+<text x="898" y="170" fill="white" font-size="9.5" font-weight="600">HandsfreeStore</text>
+<text x="898" y="184" fill="#94a3b8" font-size="7.5">services.handsfree.queue</text>
+<text x="898" y="196" fill="#a78bfa" font-size="7">@patch(ROUTES.HandsfreeStore)</text>
+<text x="898" y="218" fill="#94a3b8" font-size="7.5">built per request by _store():</text>
+<text x="898" y="230" fill="#cbd5e1" font-size="7.5">Path(avatarfiles_dir)</text>
+<text x="898" y="242" fill="#cbd5e1" font-size="7.5">  / 'handsfree'</text>
+<text x="898" y="264" fill="#94a3b8" font-size="7.5">JSON config + draft queue</text>
+<text x="898" y="276" fill="#94a3b8" font-size="7.5">on disk — mocked, never</text>
+<text x="898" y="288" fill="#94a3b8" font-size="7.5">written by the tests</text>
+<rect x="700" y="392" width="344" height="220" rx="6" fill="#0f172a"/>
+<rect x="700" y="392" width="344" height="220" rx="6" fill="rgba(120,53,15,0.3)" stroke="#fbbf24" stroke-width="1.5"/>
+<line x1="888" y1="400" x2="888" y2="604" stroke="#fbbf24" stroke-width="0.8" stroke-dasharray="3,3"/>
+<text x="708" y="410" fill="#e2e8f0" font-size="7.5">start_check_now(owner_name)</text>
+<text x="708" y="448" fill="#e2e8f0" font-size="7.5">start_case_run(case_nbr)</text>
+<text x="708" y="486" fill="#e2e8f0" font-size="7.5">get_run_state()</text>
+<text x="708" y="524" fill="#e2e8f0" font-size="7.5">approve_and_post(id, edited_plain)</text>
+<text x="708" y="562" fill="#e2e8f0" font-size="7.5">reject(id, reason)</text>
+<text x="708" y="600" fill="#fb7185" font-size="7.5">discover_rest_fields()  ✗ may raise</text>
+<text x="898" y="412" fill="white" font-size="9.5" font-weight="600">orchestrator</text>
+<text x="898" y="426" fill="#94a3b8" font-size="7.5">services.handsfree</text>
+<text x="898" y="438" fill="#fbbf24" font-size="7">@patch(ROUTES.orchestrator)</text>
+<text x="898" y="460" fill="#94a3b8" font-size="7.5">case reader ➜ triage ➜</text>
+<text x="898" y="472" fill="#94a3b8" font-size="7.5">composer ➜ draft queue</text>
+<text x="898" y="484" fill="#94a3b8" font-size="7.5">in a background run</text>
+<text x="898" y="506" fill="#fb7185" font-size="7.5" font-weight="600">posts ONLY via approve</text>
+<text x="898" y="518" fill="#fb7185" font-size="7.5">dry_run config ➜ no post</text>
+<text x="898" y="540" fill="#94a3b8" font-size="7.5">returns plain dicts</text>
+<text x="898" y="552" fill="#94a3b8" font-size="7.5">(ok / error) — routes</text>
+<text x="898" y="564" fill="#94a3b8" font-size="7.5">jsonify them verbatim</text>
+<rect x="40" y="646" width="1020" height="200" rx="12" fill="rgba(251,191,36,0.04)" stroke="#34d399" stroke-width="1" stroke-dasharray="8,4"/>
+<line x1="26" y1="664" x2="40" y2="664" stroke="#fbbf24" stroke-width="1.5"/>
+<text x="54" y="668" fill="#34d399" font-size="10" font-weight="600">Service layer · IPS Environment Details (CaseContext.env_detail) ➜ handsfree reader path (commit 5c1658d9) — L1–L3 tested directly</text>
+<line x1="207" y1="756" x2="228" y2="756" stroke="#64748b" stroke-width="1.5" marker-end="url(#arrowhead)"/>
+<line x1="381" y1="756" x2="418" y2="756" stroke="#64748b" stroke-width="1.5" marker-end="url(#arrowhead)"/>
+<path d="M 381 756 L 398 756 L 398 704 L 418 704" fill="none" stroke="#64748b" stroke-width="1.5" marker-end="url(#arrowhead)"/>
+<path d="M 381 756 L 398 756 L 398 808 L 418 808" fill="none" stroke="#64748b" stroke-width="1.5" marker-end="url(#arrowhead)"/>
+<line x1="631" y1="704" x2="648" y2="704" stroke="#64748b" stroke-width="1.5" marker-end="url(#arrowhead)"/>
+<line x1="841" y1="704" x2="858" y2="704" stroke="#64748b" stroke-width="1.5" marker-end="url(#arrowhead)"/>
+<line x1="631" y1="756" x2="648" y2="756" stroke="#64748b" stroke-width="1.5" marker-end="url(#arrowhead)"/>
+<line x1="841" y1="756" x2="858" y2="756" stroke="#64748b" stroke-width="1.5" marker-end="url(#arrowhead)"/>
+<line x1="631" y1="808" x2="648" y2="808" stroke="#64748b" stroke-width="1.5" marker-end="url(#arrowhead)"/>
+<line x1="841" y1="808" x2="858" y2="808" stroke="#64748b" stroke-width="1.5" marker-end="url(#arrowhead)"/>
+<rect x="56" y="731" width="150" height="50" rx="6" fill="#0f172a"/>
+<rect x="56" y="731" width="150" height="50" rx="6" fill="rgba(30,41,59,0.5)" stroke="#94a3b8" stroke-width="1.3"/>
+<text x="131" y="749" fill="white" font-size="8.5" font-weight="600" text-anchor="middle">IPS Env Details form</text>
+<text x="131" y="762" fill="#94a3b8" font-size="7.5" text-anchor="middle">question ➜ answer</text>
+<text x="131" y="773" fill="#94a3b8" font-size="7.5" text-anchor="middle">(Computer Model, OS, …)</text>
+<rect x="230" y="731" width="150" height="50" rx="6" fill="#0f172a"/>
+<rect x="230" y="731" width="150" height="50" rx="6" fill="rgba(76,29,149,0.4)" stroke="#a78bfa" stroke-width="1.3"/>
+<text x="305" y="749" fill="white" font-size="8.5" font-weight="600" text-anchor="middle">CaseContext.env_detail</text>
+<text x="305" y="762" fill="#94a3b8" font-size="7.5" text-anchor="middle">dict[str, str]</text>
+<text x="305" y="773" fill="#94a3b8" font-size="7.5" text-anchor="middle">➜ CaseAnalysis.env_detail</text>
+<rect x="420" y="684" width="210" height="40" rx="6" fill="#0f172a"/>
+<rect x="420" y="684" width="210" height="40" rx="6" fill="rgba(6,78,59,0.4)" stroke="#34d399" stroke-width="1.3"/>
+<text x="525" y="697" fill="white" font-size="8.5" font-weight="600" text-anchor="middle">_format_env_detail(env)</text>
+<text x="525" y="709" fill="#94a3b8" font-size="7.5" text-anchor="middle">skip blank answers · trim keys</text>
+<text x="525" y="720" fill="#94a3b8" font-size="7.5" text-anchor="middle">≤25 entries · ≤300 chars …[truncated]</text>
+<rect x="650" y="684" width="190" height="40" rx="6" fill="#0f172a"/>
+<rect x="650" y="684" width="190" height="40" rx="6" fill="rgba(30,41,59,0.5)" stroke="#94a3b8" stroke-width="1.3"/>
+<text x="745" y="697" fill="white" font-size="8.5" font-weight="600" text-anchor="middle">{env_block} slot</text>
+<text x="745" y="709" fill="#94a3b8" font-size="7.5" text-anchor="middle">READER_PROMPT.format(</text>
+<text x="745" y="720" fill="#94a3b8" font-size="7.5" text-anchor="middle">env_block=… or '(none)')</text>
+<rect x="860" y="684" width="184" height="40" rx="6" fill="#0f172a"/>
+<rect x="860" y="684" width="184" height="40" rx="6" fill="rgba(120,53,15,0.3)" stroke="#fbbf24" stroke-width="1.3"/>
+<text x="952" y="697" fill="white" font-size="8.5" font-weight="600" text-anchor="middle">read_case_history()</text>
+<text x="952" y="709" fill="#94a3b8" font-size="7.5" text-anchor="middle">case_reader · one LLM call</text>
+<text x="952" y="720" fill="#94a3b8" font-size="7.5" text-anchor="middle">➜ parsed reader dict</text>
+<text x="424" y="693" fill="#64748b" font-size="6.5">L1</text>
+<rect x="420" y="736" width="210" height="40" rx="6" fill="#0f172a"/>
+<rect x="420" y="736" width="210" height="40" rx="6" fill="rgba(6,78,59,0.4)" stroke="#34d399" stroke-width="1.3"/>
+<text x="525" y="749" fill="white" font-size="8.5" font-weight="600" text-anchor="middle">_env_repro_steps(env)</text>
+<text x="525" y="761" fill="#94a3b8" font-size="7.5" text-anchor="middle">key ~ steps to reproduce|repro</text>
+<text x="525" y="772" fill="#94a3b8" font-size="7.5" text-anchor="middle">'', NA, n/a, None ➜ ''</text>
+<rect x="650" y="736" width="190" height="40" rx="6" fill="#0f172a"/>
+<rect x="650" y="736" width="190" height="40" rx="6" fill="rgba(30,41,59,0.5)" stroke="#94a3b8" stroke-width="1.3"/>
+<text x="745" y="749" fill="white" font-size="8.5" font-weight="600" text-anchor="middle">filled repro answer</text>
+<text x="745" y="761" fill="#94a3b8" font-size="7.5" text-anchor="middle">non-empty ➜ drop the</text>
+<text x="745" y="772" fill="#94a3b8" font-size="7.5" text-anchor="middle">'repro_steps' missing_info</text>
+<rect x="860" y="736" width="184" height="40" rx="6" fill="#0f172a"/>
+<rect x="860" y="736" width="184" height="40" rx="6" fill="rgba(120,53,15,0.3)" stroke="#fbbf24" stroke-width="1.3"/>
+<text x="952" y="749" fill="white" font-size="8.5" font-weight="600" text-anchor="middle">runner · check_case_info</text>
+<text x="952" y="761" fill="#94a3b8" font-size="7.5" text-anchor="middle">never asks the customer for</text>
+<text x="952" y="772" fill="#94a3b8" font-size="7.5" text-anchor="middle">repro steps already given</text>
+<text x="424" y="745" fill="#64748b" font-size="6.5">L2</text>
+<rect x="420" y="788" width="210" height="40" rx="6" fill="#0f172a"/>
+<rect x="420" y="788" width="210" height="40" rx="6" fill="rgba(6,78,59,0.4)" stroke="#34d399" stroke-width="1.3"/>
+<text x="525" y="801" fill="white" font-size="8.5" font-weight="600" text-anchor="middle">_env_brief(env, limit=300)</text>
+<text x="525" y="813" fill="#94a3b8" font-size="7.5" text-anchor="middle">keys ~ platform|found in build|</text>
+<text x="525" y="824" fill="#94a3b8" font-size="7.5" text-anchor="middle">OS|frequency|hardware|model</text>
+<rect x="650" y="788" width="190" height="40" rx="6" fill="#0f172a"/>
+<rect x="650" y="788" width="190" height="40" rx="6" fill="rgba(30,41,59,0.5)" stroke="#94a3b8" stroke-width="1.3"/>
+<text x="745" y="801" fill="white" font-size="8.5" font-weight="600" text-anchor="middle">'Q: A; Q: A'[:limit]</text>
+<text x="745" y="813" fill="#94a3b8" font-size="7.5" text-anchor="middle">placeholders skipped ·</text>
+<text x="745" y="824" fill="#94a3b8" font-size="7.5" text-anchor="middle">whitespace normalized</text>
+<rect x="860" y="788" width="184" height="40" rx="6" fill="#0f172a"/>
+<rect x="860" y="788" width="184" height="40" rx="6" fill="rgba(120,53,15,0.3)" stroke="#fbbf24" stroke-width="1.3"/>
+<text x="952" y="801" fill="white" font-size="8.5" font-weight="600" text-anchor="middle">runner._run_agent()</text>
+<text x="952" y="813" fill="#94a3b8" font-size="7.5" text-anchor="middle">desc + '\n[Environment] …'</text>
+<text x="952" y="824" fill="#94a3b8" font-size="7.5" text-anchor="middle">agent.prime_with_context()</text>
+<text x="424" y="797" fill="#64748b" font-size="6.5">L3</text>
+<rect x="40" y="862" width="1020" height="83" rx="12" fill="rgba(251,191,36,0.04)" stroke="#a78bfa" stroke-width="1" stroke-dasharray="8,4"/>
+<line x1="26" y1="880" x2="40" y2="880" stroke="#fbbf24" stroke-width="1.5"/>
+<text x="54" y="884" fill="#a78bfa" font-size="10" font-weight="600">Class TestHandsfreeBlueprintStructure · route registration</text>
+<text x="58" y="898" fill="#64748b" font-size="7">S1 · test_blueprint_registered_with_url_prefix · all routes</text>
+<rect x="58" y="901" width="400" height="32" rx="6" fill="#0f172a"/>
+<rect x="58" y="901" width="400" height="32" rx="6" fill="rgba(8,51,68,0.4)" stroke="#22d3ee" stroke-width="1.2"/>
+<text x="68" y="914" fill="white" font-size="8.5">inspect app.url_map for 'handsfree.*' endpoints</text>
+<text x="68" y="926" fill="#94a3b8" font-size="8">(no request issued)</text>
+<line x1="464" y1="917" x2="510" y2="917" stroke="#64748b" stroke-width="1.5" marker-end="url(#arrowhead)"/>
+<rect x="516" y="901" width="528" height="32" rx="6" fill="#0f172a"/>
+<rect x="516" y="901" width="528" height="32" rx="6" fill="rgba(76,29,149,0.4)" stroke="#a78bfa" stroke-width="1.2"/>
+<text x="528" y="914" fill="white" font-size="8.5">url_prefix '/handsfree' · exactly 10 rules (R1–R11; R4 + R5 share one rule)</text>
+<text x="528" y="926" fill="#94a3b8" font-size="8">/queue/&lt;draft_id&gt; ⊇ {GET, PUT, POST} · /queue/&lt;draft_id&gt;/approve has no GET</text>
+<rect x="40" y="961" width="1020" height="221" rx="12" fill="rgba(251,191,36,0.04)" stroke="#a78bfa" stroke-width="1" stroke-dasharray="8,4"/>
+<line x1="26" y1="979" x2="40" y2="979" stroke="#fbbf24" stroke-width="1.5"/>
+<text x="54" y="983" fill="#a78bfa" font-size="10" font-weight="600">Class TestHandsfreeIndexAndConfig · @patch(ROUTES.HandsfreeStore) — R1 index + R2 config</text>
+<text x="58" y="997" fill="#64748b" font-size="7">A1 · test_index_renders_with_store_config · R1</text>
+<rect x="58" y="1000" width="400" height="32" rx="6" fill="#0f172a"/>
+<rect x="58" y="1000" width="400" height="32" rx="6" fill="rgba(8,51,68,0.4)" stroke="#22d3ee" stroke-width="1.2"/>
+<text x="68" y="1013" fill="white" font-size="8.5">GET /handsfree/ · load_config ➜ {owner_name:'Tester', dry_run:True}</text>
+<text x="68" y="1025" fill="#94a3b8" font-size="8">render_template patched ➜ 'handsfree-page'</text>
+<line x1="464" y1="1016" x2="510" y2="1016" stroke="#64748b" stroke-width="1.5" marker-end="url(#arrowhead)"/>
+<rect x="516" y="1000" width="528" height="32" rx="6" fill="#0f172a"/>
+<rect x="516" y="1000" width="528" height="32" rx="6" fill="rgba(6,78,59,0.4)" stroke="#34d399" stroke-width="1.2"/>
+<text x="528" y="1013" fill="white" font-size="8.5">200 · body 'handsfree-page' · HandsfreeStore(TEST_AVATARFILES_DIR/'handsfree') ×1</text>
+<text x="528" y="1025" fill="#94a3b8" font-size="8">render_template('handsfree.html', config={owner_name:'Tester', dry_run:True}) ×1</text>
+<text x="58" y="1043" fill="#64748b" font-size="7">A2 · test_get_config_returns_store_config · R2</text>
+<rect x="58" y="1046" width="400" height="32" rx="6" fill="#0f172a"/>
+<rect x="58" y="1046" width="400" height="32" rx="6" fill="rgba(8,51,68,0.4)" stroke="#22d3ee" stroke-width="1.2"/>
+<text x="68" y="1059" fill="white" font-size="8.5">GET /handsfree/config</text>
+<text x="68" y="1071" fill="#94a3b8" font-size="8">load_config ➜ {max_cases_per_run: 3}</text>
+<line x1="464" y1="1062" x2="510" y2="1062" stroke="#64748b" stroke-width="1.5" marker-end="url(#arrowhead)"/>
+<rect x="516" y="1046" width="528" height="32" rx="6" fill="#0f172a"/>
+<rect x="516" y="1046" width="528" height="32" rx="6" fill="rgba(6,78,59,0.4)" stroke="#34d399" stroke-width="1.2"/>
+<text x="528" y="1059" fill="white" font-size="8.5">200 · {max_cases_per_run: 3}</text>
+<text x="528" y="1071" fill="#94a3b8" font-size="8">save_config NOT called</text>
+<text x="58" y="1089" fill="#64748b" font-size="7">A3 · test_post_config_saves_only_allowed_keys · R2</text>
+<rect x="58" y="1092" width="400" height="32" rx="6" fill="#0f172a"/>
+<rect x="58" y="1092" width="400" height="32" rx="6" fill="rgba(8,51,68,0.4)" stroke="#22d3ee" stroke-width="1.2"/>
+<text x="68" y="1105" fill="white" font-size="8.5">POST /handsfree/config json={owner_name, dry_run, auto_post, evil:'x'}</text>
+<text x="68" y="1117" fill="#94a3b8" font-size="8">save_config ➜ {owner_name:'Tester', dry_run:True}</text>
+<line x1="464" y1="1108" x2="510" y2="1108" stroke="#64748b" stroke-width="1.5" marker-end="url(#arrowhead)"/>
+<rect x="516" y="1092" width="528" height="32" rx="6" fill="#0f172a"/>
+<rect x="516" y="1092" width="528" height="32" rx="6" fill="rgba(6,78,59,0.4)" stroke="#34d399" stroke-width="1.2"/>
+<text x="528" y="1105" fill="white" font-size="8.5">200 · {owner_name: 'Tester', dry_run: True}</text>
+<text x="528" y="1117" fill="#94a3b8" font-size="8">save_config({owner_name, dry_run}) ×1 — auto_post &amp; evil dropped (not allow-listed)</text>
+<text x="58" y="1135" fill="#64748b" font-size="7">A4 · test_post_config_without_json_saves_empty_update · R2</text>
+<rect x="58" y="1138" width="400" height="32" rx="6" fill="#0f172a"/>
+<rect x="58" y="1138" width="400" height="32" rx="6" fill="rgba(8,51,68,0.4)" stroke="#22d3ee" stroke-width="1.2"/>
+<text x="68" y="1151" fill="white" font-size="8.5">POST /handsfree/config data='not json' (plain-text body)</text>
+<text x="68" y="1163" fill="#94a3b8" font-size="8">get_json(silent=True) ➜ None ➜ {}</text>
+<line x1="464" y1="1154" x2="510" y2="1154" stroke="#64748b" stroke-width="1.5" marker-end="url(#arrowhead)"/>
+<rect x="516" y="1138" width="528" height="32" rx="6" fill="#0f172a"/>
+<rect x="516" y="1138" width="528" height="32" rx="6" fill="rgba(6,78,59,0.4)" stroke="#34d399" stroke-width="1.2"/>
+<text x="528" y="1151" fill="white" font-size="8.5">200</text>
+<text x="528" y="1163" fill="#94a3b8" font-size="8">save_config({}) ×1 — a bad body becomes an empty update, not an error</text>
+<rect x="40" y="1198" width="1020" height="589" rx="12" fill="rgba(251,191,36,0.04)" stroke="#fbbf24" stroke-width="1" stroke-dasharray="8,4"/>
+<line x1="26" y1="1216" x2="40" y2="1216" stroke="#fbbf24" stroke-width="1.5"/>
+<text x="54" y="1220" fill="#fbbf24" font-size="10" font-weight="600">Class TestHandsfreeRunRoutes · @patch(ROUTES.orchestrator) — R6–R11 forward args, return results verbatim</text>
+<text x="58" y="1234" fill="#64748b" font-size="7">B1 · test_check_now_passes_owner_name · R6</text>
+<rect x="58" y="1237" width="400" height="32" rx="6" fill="#0f172a"/>
+<rect x="58" y="1237" width="400" height="32" rx="6" fill="rgba(8,51,68,0.4)" stroke="#22d3ee" stroke-width="1.2"/>
+<text x="68" y="1250" fill="white" font-size="8.5">POST /handsfree/check_now json={owner_name:'Tester'}</text>
+<text x="68" y="1262" fill="#94a3b8" font-size="8">start_check_now ➜ {ok:True, started:True}</text>
+<line x1="464" y1="1253" x2="510" y2="1253" stroke="#64748b" stroke-width="1.5" marker-end="url(#arrowhead)"/>
+<rect x="516" y="1237" width="528" height="32" rx="6" fill="#0f172a"/>
+<rect x="516" y="1237" width="528" height="32" rx="6" fill="rgba(6,78,59,0.4)" stroke="#34d399" stroke-width="1.2"/>
+<text x="528" y="1250" fill="white" font-size="8.5">200 · {ok: True, started: True}</text>
+<text x="528" y="1262" fill="#94a3b8" font-size="8">start_check_now('Tester') ×1</text>
+<text x="58" y="1280" fill="#64748b" font-size="7">B2 · test_check_now_without_body_passes_none · R6</text>
+<rect x="58" y="1283" width="400" height="32" rx="6" fill="#0f172a"/>
+<rect x="58" y="1283" width="400" height="32" rx="6" fill="rgba(8,51,68,0.4)" stroke="#22d3ee" stroke-width="1.2"/>
+<text x="68" y="1296" fill="white" font-size="8.5">POST /handsfree/check_now (no body)</text>
+<text x="68" y="1308" fill="#94a3b8" font-size="8">start_check_now ➜ {ok:False, error:'owner_name required'}</text>
+<line x1="464" y1="1299" x2="510" y2="1299" stroke="#64748b" stroke-width="1.5" marker-end="url(#arrowhead)"/>
+<rect x="516" y="1283" width="528" height="32" rx="6" fill="#0f172a"/>
+<rect x="516" y="1283" width="528" height="32" rx="6" fill="rgba(251,146,60,0.3)" stroke="#fb923c" stroke-width="1.2"/>
+<text x="528" y="1296" fill="white" font-size="8.5">{ok: False, error: 'owner_name required'} passed through</text>
+<text x="528" y="1308" fill="#94a3b8" font-size="8">start_check_now(None) ×1</text>
+<text x="58" y="1326" fill="#64748b" font-size="7">B3 · test_run_case_passes_case_nbr · R7</text>
+<rect x="58" y="1329" width="400" height="32" rx="6" fill="#0f172a"/>
+<rect x="58" y="1329" width="400" height="32" rx="6" fill="rgba(8,51,68,0.4)" stroke="#22d3ee" stroke-width="1.2"/>
+<text x="68" y="1342" fill="white" font-size="8.5">POST /handsfree/run_case json={case_nbr:'00123456'}</text>
+<text x="68" y="1354" fill="#94a3b8" font-size="8">start_case_run ➜ {ok:True, case_nbr:'00123456'}</text>
+<line x1="464" y1="1345" x2="510" y2="1345" stroke="#64748b" stroke-width="1.5" marker-end="url(#arrowhead)"/>
+<rect x="516" y="1329" width="528" height="32" rx="6" fill="#0f172a"/>
+<rect x="516" y="1329" width="528" height="32" rx="6" fill="rgba(6,78,59,0.4)" stroke="#34d399" stroke-width="1.2"/>
+<text x="528" y="1342" fill="white" font-size="8.5">200 · {ok: True, case_nbr: '00123456'}</text>
+<text x="528" y="1354" fill="#94a3b8" font-size="8">start_case_run('00123456') ×1</text>
+<text x="58" y="1372" fill="#64748b" font-size="7">B4 · test_run_case_without_body_passes_none · R7</text>
+<rect x="58" y="1375" width="400" height="32" rx="6" fill="#0f172a"/>
+<rect x="58" y="1375" width="400" height="32" rx="6" fill="rgba(8,51,68,0.4)" stroke="#22d3ee" stroke-width="1.2"/>
+<text x="68" y="1388" fill="white" font-size="8.5">POST /handsfree/run_case (no body)</text>
+<text x="68" y="1400" fill="#94a3b8" font-size="8">start_case_run ➜ {ok:False, error:'case_nbr required'}</text>
+<line x1="464" y1="1391" x2="510" y2="1391" stroke="#64748b" stroke-width="1.5" marker-end="url(#arrowhead)"/>
+<rect x="516" y="1375" width="528" height="32" rx="6" fill="#0f172a"/>
+<rect x="516" y="1375" width="528" height="32" rx="6" fill="rgba(251,146,60,0.3)" stroke="#fb923c" stroke-width="1.2"/>
+<text x="528" y="1388" fill="white" font-size="8.5">body['ok'] == False</text>
+<text x="528" y="1400" fill="#94a3b8" font-size="8">start_case_run(None) ×1</text>
+<text x="58" y="1418" fill="#64748b" font-size="7">B5 · test_status_returns_run_state · R8</text>
+<rect x="58" y="1421" width="400" height="32" rx="6" fill="#0f172a"/>
+<rect x="58" y="1421" width="400" height="32" rx="6" fill="rgba(8,51,68,0.4)" stroke="#22d3ee" stroke-width="1.2"/>
+<text x="68" y="1434" fill="white" font-size="8.5">GET /handsfree/status</text>
+<text x="68" y="1446" fill="#94a3b8" font-size="8">get_run_state ➜ {running:False, events:[]}</text>
+<line x1="464" y1="1437" x2="510" y2="1437" stroke="#64748b" stroke-width="1.5" marker-end="url(#arrowhead)"/>
+<rect x="516" y="1421" width="528" height="32" rx="6" fill="#0f172a"/>
+<rect x="516" y="1421" width="528" height="32" rx="6" fill="rgba(6,78,59,0.4)" stroke="#34d399" stroke-width="1.2"/>
+<text x="528" y="1434" fill="white" font-size="8.5">200 · {running: False, events: []}</text>
+<text x="528" y="1446" fill="#94a3b8" font-size="8">run state returned verbatim</text>
+<text x="58" y="1464" fill="#64748b" font-size="7">B6 · test_approve_passes_edited_plain · R9</text>
+<rect x="58" y="1467" width="400" height="32" rx="6" fill="#0f172a"/>
+<rect x="58" y="1467" width="400" height="32" rx="6" fill="rgba(8,51,68,0.4)" stroke="#22d3ee" stroke-width="1.2"/>
+<text x="68" y="1480" fill="white" font-size="8.5">POST /handsfree/queue/d-1/approve json={draft_plain:'edited text'}</text>
+<text x="68" y="1492" fill="#94a3b8" font-size="8">approve_and_post ➜ {ok:True, posted:True}</text>
+<line x1="464" y1="1483" x2="510" y2="1483" stroke="#64748b" stroke-width="1.5" marker-end="url(#arrowhead)"/>
+<rect x="516" y="1467" width="528" height="32" rx="6" fill="#0f172a"/>
+<rect x="516" y="1467" width="528" height="32" rx="6" fill="rgba(6,78,59,0.4)" stroke="#34d399" stroke-width="1.2"/>
+<text x="528" y="1480" fill="white" font-size="8.5">{ok: True, posted: True}</text>
+<text x="528" y="1492" fill="#94a3b8" font-size="8">approve_and_post('d-1', edited_plain='edited text') ×1</text>
+<text x="58" y="1510" fill="#64748b" font-size="7">B7 · test_approve_without_body_passes_none · R9</text>
+<rect x="58" y="1513" width="400" height="32" rx="6" fill="#0f172a"/>
+<rect x="58" y="1513" width="400" height="32" rx="6" fill="rgba(8,51,68,0.4)" stroke="#22d3ee" stroke-width="1.2"/>
+<text x="68" y="1526" fill="white" font-size="8.5">POST /handsfree/queue/d-1/approve (no body)</text>
+<text x="68" y="1538" fill="#94a3b8" font-size="8">approve_and_post ➜ {ok:True}</text>
+<line x1="464" y1="1529" x2="510" y2="1529" stroke="#64748b" stroke-width="1.5" marker-end="url(#arrowhead)"/>
+<rect x="516" y="1513" width="528" height="32" rx="6" fill="#0f172a"/>
+<rect x="516" y="1513" width="528" height="32" rx="6" fill="rgba(6,78,59,0.4)" stroke="#34d399" stroke-width="1.2"/>
+<text x="528" y="1526" fill="white" font-size="8.5">approve_and_post('d-1', edited_plain=None) ×1</text>
+<text x="528" y="1538" fill="#94a3b8" font-size="8">no edit ➜ orchestrator posts the stored draft</text>
+<text x="58" y="1556" fill="#64748b" font-size="7">B8 · test_approve_rejects_get · R9</text>
+<rect x="58" y="1559" width="400" height="32" rx="6" fill="#0f172a"/>
+<rect x="58" y="1559" width="400" height="32" rx="6" fill="rgba(8,51,68,0.4)" stroke="#22d3ee" stroke-width="1.2"/>
+<text x="68" y="1572" fill="white" font-size="8.5">GET /handsfree/queue/d-1/approve</text>
+<text x="68" y="1584" fill="#94a3b8" font-size="8">route registered with methods=['POST'] only</text>
+<line x1="464" y1="1575" x2="510" y2="1575" stroke="#64748b" stroke-width="1.5" marker-end="url(#arrowhead)"/>
+<rect x="516" y="1559" width="528" height="32" rx="6" fill="#0f172a"/>
+<rect x="516" y="1559" width="528" height="32" rx="6" fill="rgba(136,19,55,0.4)" stroke="#fb7185" stroke-width="1.2"/>
+<text x="528" y="1572" fill="white" font-size="8.5">405 Method Not Allowed</text>
+<text x="528" y="1584" fill="#94a3b8" font-size="8">approve_and_post NOT called — posting happens only via explicit POST</text>
+<text x="58" y="1602" fill="#64748b" font-size="7">B9 · test_reject_passes_reason · R10</text>
+<rect x="58" y="1605" width="400" height="32" rx="6" fill="#0f172a"/>
+<rect x="58" y="1605" width="400" height="32" rx="6" fill="rgba(8,51,68,0.4)" stroke="#22d3ee" stroke-width="1.2"/>
+<text x="68" y="1618" fill="white" font-size="8.5">POST /handsfree/queue/d-1/reject json={reason:'wrong case'}</text>
+<text x="68" y="1630" fill="#94a3b8" font-size="8">reject ➜ {ok:True}</text>
+<line x1="464" y1="1621" x2="510" y2="1621" stroke="#64748b" stroke-width="1.5" marker-end="url(#arrowhead)"/>
+<rect x="516" y="1605" width="528" height="32" rx="6" fill="#0f172a"/>
+<rect x="516" y="1605" width="528" height="32" rx="6" fill="rgba(6,78,59,0.4)" stroke="#34d399" stroke-width="1.2"/>
+<text x="528" y="1618" fill="white" font-size="8.5">{ok: True}</text>
+<text x="528" y="1630" fill="#94a3b8" font-size="8">reject('d-1', reason='wrong case') ×1</text>
+<text x="58" y="1648" fill="#64748b" font-size="7">B10 · test_reject_without_reason_defaults_to_empty · R10</text>
+<rect x="58" y="1651" width="400" height="32" rx="6" fill="#0f172a"/>
+<rect x="58" y="1651" width="400" height="32" rx="6" fill="rgba(8,51,68,0.4)" stroke="#22d3ee" stroke-width="1.2"/>
+<text x="68" y="1664" fill="white" font-size="8.5">POST /handsfree/queue/d-1/reject (no body)</text>
+<text x="68" y="1676" fill="#94a3b8" font-size="8">reject ➜ {ok:True}</text>
+<line x1="464" y1="1667" x2="510" y2="1667" stroke="#64748b" stroke-width="1.5" marker-end="url(#arrowhead)"/>
+<rect x="516" y="1651" width="528" height="32" rx="6" fill="#0f172a"/>
+<rect x="516" y="1651" width="528" height="32" rx="6" fill="rgba(6,78,59,0.4)" stroke="#34d399" stroke-width="1.2"/>
+<text x="528" y="1664" fill="white" font-size="8.5">reject('d-1', reason='') ×1</text>
+<text x="528" y="1676" fill="#94a3b8" font-size="8">missing reason defaults to an empty string</text>
+<text x="58" y="1694" fill="#64748b" font-size="7">B11 · test_discover_fields_success · R11</text>
+<rect x="58" y="1697" width="400" height="32" rx="6" fill="#0f172a"/>
+<rect x="58" y="1697" width="400" height="32" rx="6" fill="rgba(8,51,68,0.4)" stroke="#22d3ee" stroke-width="1.2"/>
+<text x="68" y="1710" fill="white" font-size="8.5">POST /handsfree/discover_fields</text>
+<text x="68" y="1722" fill="#94a3b8" font-size="8">discover_rest_fields ➜ {fields:['CommentBody']}</text>
+<line x1="464" y1="1713" x2="510" y2="1713" stroke="#64748b" stroke-width="1.5" marker-end="url(#arrowhead)"/>
+<rect x="516" y="1697" width="528" height="32" rx="6" fill="#0f172a"/>
+<rect x="516" y="1697" width="528" height="32" rx="6" fill="rgba(6,78,59,0.4)" stroke="#34d399" stroke-width="1.2"/>
+<text x="528" y="1710" fill="white" font-size="8.5">200 · {fields: ['CommentBody']}</text>
+<text x="528" y="1722" fill="#94a3b8" font-size="8">discovery result returned verbatim</text>
+<text x="58" y="1740" fill="#64748b" font-size="7">B12 · test_discover_fields_exception_returns_500 · R11</text>
+<rect x="58" y="1743" width="400" height="32" rx="6" fill="#0f172a"/>
+<rect x="58" y="1743" width="400" height="32" rx="6" fill="rgba(8,51,68,0.4)" stroke="#22d3ee" stroke-width="1.2"/>
+<text x="68" y="1756" fill="white" font-size="8.5">POST /handsfree/discover_fields</text>
+<text x="68" y="1768" fill="#94a3b8" font-size="8">discover_rest_fields.side_effect = ConnectionError('IPS unreachable')</text>
+<line x1="464" y1="1759" x2="510" y2="1759" stroke="#64748b" stroke-width="1.5" marker-end="url(#arrowhead)"/>
+<rect x="516" y="1743" width="528" height="32" rx="6" fill="#0f172a"/>
+<rect x="516" y="1743" width="528" height="32" rx="6" fill="rgba(136,19,55,0.4)" stroke="#fb7185" stroke-width="1.2"/>
+<text x="528" y="1756" fill="white" font-size="8.5">500 · {error: 'ConnectionError: IPS unreachable'}</text>
+<text x="528" y="1768" fill="#94a3b8" font-size="8">except e ➜ f'{type(e).__name__}: {e}'</text>
+<rect x="40" y="1803" width="1020" height="405" rx="12" fill="rgba(251,191,36,0.04)" stroke="#a78bfa" stroke-width="1" stroke-dasharray="8,4"/>
+<line x1="26" y1="1821" x2="40" y2="1821" stroke="#fbbf24" stroke-width="1.5"/>
+<text x="54" y="1825" fill="#a78bfa" font-size="10" font-weight="600">Class TestHandsfreeQueueRoutes · @patch(ROUTES.HandsfreeStore) — R3 list · R4 get · R5 save</text>
+<text x="58" y="1839" fill="#64748b" font-size="7">C1 · test_list_queue_defaults_to_open_drafts · R3</text>
+<rect x="58" y="1842" width="400" height="32" rx="6" fill="#0f172a"/>
+<rect x="58" y="1842" width="400" height="32" rx="6" fill="rgba(8,51,68,0.4)" stroke="#22d3ee" stroke-width="1.2"/>
+<text x="68" y="1855" fill="white" font-size="8.5">GET /handsfree/queue (no query params)</text>
+<text x="68" y="1867" fill="#94a3b8" font-size="8">list_drafts ➜ [{draft_id:'d-1'}]</text>
+<line x1="464" y1="1858" x2="510" y2="1858" stroke="#64748b" stroke-width="1.5" marker-end="url(#arrowhead)"/>
+<rect x="516" y="1842" width="528" height="32" rx="6" fill="#0f172a"/>
+<rect x="516" y="1842" width="528" height="32" rx="6" fill="rgba(6,78,59,0.4)" stroke="#34d399" stroke-width="1.2"/>
+<text x="528" y="1855" fill="white" font-size="8.5">200 · {items: [{draft_id: 'd-1'}]}</text>
+<text x="528" y="1867" fill="#94a3b8" font-size="8">list_drafts(include_closed=False) ×1</text>
+<text x="58" y="1885" fill="#64748b" font-size="7">C2 · test_list_queue_all_flag_variants_include_closed · R3 · subTest ×5</text>
+<rect x="58" y="1888" width="400" height="32" rx="6" fill="#0f172a"/>
+<rect x="58" y="1888" width="400" height="32" rx="6" fill="rgba(8,51,68,0.4)" stroke="#22d3ee" stroke-width="1.2"/>
+<text x="68" y="1901" fill="white" font-size="8.5">GET /handsfree/queue?all= '1' | 'TRUE' | 'yes' | '0' | 'no'</text>
+<text x="68" y="1913" fill="#94a3b8" font-size="8">list_drafts.reset_mock() between subTests</text>
+<line x1="464" y1="1904" x2="510" y2="1904" stroke="#64748b" stroke-width="1.5" marker-end="url(#arrowhead)"/>
+<rect x="516" y="1888" width="528" height="32" rx="6" fill="#0f172a"/>
+<rect x="516" y="1888" width="528" height="32" rx="6" fill="rgba(6,78,59,0.4)" stroke="#34d399" stroke-width="1.2"/>
+<text x="528" y="1901" fill="white" font-size="8.5">'1', 'TRUE', 'yes' ➜ include_closed=True (case-insensitive)</text>
+<text x="528" y="1913" fill="#94a3b8" font-size="8">'0', 'no' ➜ include_closed=False</text>
+<text x="58" y="1931" fill="#64748b" font-size="7">C3 · test_get_draft_found · R4</text>
+<rect x="58" y="1934" width="400" height="32" rx="6" fill="#0f172a"/>
+<rect x="58" y="1934" width="400" height="32" rx="6" fill="rgba(8,51,68,0.4)" stroke="#22d3ee" stroke-width="1.2"/>
+<text x="68" y="1947" fill="white" font-size="8.5">GET /handsfree/queue/d-1</text>
+<text x="68" y="1959" fill="#94a3b8" font-size="8">get ➜ {draft_id:'d-1', status:'pending', draft_plain:'text'}</text>
+<line x1="464" y1="1950" x2="510" y2="1950" stroke="#64748b" stroke-width="1.5" marker-end="url(#arrowhead)"/>
+<rect x="516" y="1934" width="528" height="32" rx="6" fill="#0f172a"/>
+<rect x="516" y="1934" width="528" height="32" rx="6" fill="rgba(6,78,59,0.4)" stroke="#34d399" stroke-width="1.2"/>
+<text x="528" y="1947" fill="white" font-size="8.5">200 · the draft record, unchanged</text>
+<text x="528" y="1959" fill="#94a3b8" font-size="8">get('d-1') ×1</text>
+<text x="58" y="1977" fill="#64748b" font-size="7">C4 · test_get_draft_not_found_returns_404 · R4</text>
+<rect x="58" y="1980" width="400" height="32" rx="6" fill="#0f172a"/>
+<rect x="58" y="1980" width="400" height="32" rx="6" fill="rgba(8,51,68,0.4)" stroke="#22d3ee" stroke-width="1.2"/>
+<text x="68" y="1993" fill="white" font-size="8.5">GET /handsfree/queue/missing</text>
+<text x="68" y="2005" fill="#94a3b8" font-size="8">get ➜ None</text>
+<line x1="464" y1="1996" x2="510" y2="1996" stroke="#64748b" stroke-width="1.5" marker-end="url(#arrowhead)"/>
+<rect x="516" y="1980" width="528" height="32" rx="6" fill="#0f172a"/>
+<rect x="516" y="1980" width="528" height="32" rx="6" fill="rgba(136,19,55,0.4)" stroke="#fb7185" stroke-width="1.2"/>
+<text x="528" y="1993" fill="white" font-size="8.5">404 · {error: 'not found'}</text>
+<text x="58" y="2023" fill="#64748b" font-size="7">C5 · test_save_draft_prepends_ai_marker_and_composes_html · R5</text>
+<rect x="58" y="2026" width="400" height="32" rx="6" fill="#0f172a"/>
+<rect x="58" y="2026" width="400" height="32" rx="6" fill="rgba(8,51,68,0.4)" stroke="#22d3ee" stroke-width="1.2"/>
+<text x="68" y="2039" fill="white" font-size="8.5">PUT /handsfree/queue/d-1 json={draft_plain:'  Line 1\nLine &lt;2&gt;  '}</text>
+<text x="68" y="2051" fill="#94a3b8" font-size="8">update echoes {draft_id, **fields}</text>
+<line x1="464" y1="2042" x2="510" y2="2042" stroke="#64748b" stroke-width="1.5" marker-end="url(#arrowhead)"/>
+<rect x="516" y="2026" width="528" height="32" rx="6" fill="#0f172a"/>
+<rect x="516" y="2026" width="528" height="32" rx="6" fill="rgba(6,78,59,0.4)" stroke="#34d399" stroke-width="1.2"/>
+<text x="528" y="2039" fill="white" font-size="8.5">200 · ok · draft_plain = AI_MARKER + '\n\nLine 1\nLine &lt;2&gt;' (trimmed)</text>
+<text x="528" y="2051" fill="#94a3b8" font-size="8">draft_html = '&lt;p&gt;' + AI_MARKER + '&lt;br/&gt;&lt;br/&gt;Line 1&lt;br/&gt;Line &amp;lt;2&amp;gt;&lt;/p&gt;'</text>
+<text x="58" y="2069" fill="#64748b" font-size="7">C6 · test_save_draft_keeps_existing_marker_via_post · R5</text>
+<rect x="58" y="2072" width="400" height="32" rx="6" fill="#0f172a"/>
+<rect x="58" y="2072" width="400" height="32" rx="6" fill="rgba(8,51,68,0.4)" stroke="#22d3ee" stroke-width="1.2"/>
+<text x="68" y="2085" fill="white" font-size="8.12">POST /handsfree/queue/d-1 json={draft_plain: AI_MARKER + '\n\nalready marked'}</text>
+<text x="68" y="2097" fill="#94a3b8" font-size="8">update ➜ {draft_id:'d-1'}</text>
+<line x1="464" y1="2088" x2="510" y2="2088" stroke="#64748b" stroke-width="1.5" marker-end="url(#arrowhead)"/>
+<rect x="516" y="2072" width="528" height="32" rx="6" fill="#0f172a"/>
+<rect x="516" y="2072" width="528" height="32" rx="6" fill="rgba(6,78,59,0.4)" stroke="#34d399" stroke-width="1.2"/>
+<text x="528" y="2085" fill="white" font-size="8.5">200 · update(draft_plain=...) stores the text unchanged</text>
+<text x="528" y="2097" fill="#94a3b8" font-size="8">no duplicate AI_MARKER · POST behaves like PUT</text>
+<text x="58" y="2115" fill="#64748b" font-size="7">C7 · test_save_draft_empty_returns_400 · R5</text>
+<rect x="58" y="2118" width="400" height="32" rx="6" fill="#0f172a"/>
+<rect x="58" y="2118" width="400" height="32" rx="6" fill="rgba(8,51,68,0.4)" stroke="#22d3ee" stroke-width="1.2"/>
+<text x="68" y="2131" fill="white" font-size="8.5">PUT /handsfree/queue/d-1 json={draft_plain:'   '}</text>
+<text x="68" y="2143" fill="#94a3b8" font-size="8">strip() ➜ ''</text>
+<line x1="464" y1="2134" x2="510" y2="2134" stroke="#64748b" stroke-width="1.5" marker-end="url(#arrowhead)"/>
+<rect x="516" y="2118" width="528" height="32" rx="6" fill="#0f172a"/>
+<rect x="516" y="2118" width="528" height="32" rx="6" fill="rgba(136,19,55,0.4)" stroke="#fb7185" stroke-width="1.2"/>
+<text x="528" y="2131" fill="white" font-size="8.5">400 · {ok: False, error: 'empty draft'}</text>
+<text x="528" y="2143" fill="#94a3b8" font-size="8">update NOT called</text>
+<text x="58" y="2161" fill="#64748b" font-size="7">C8 · test_save_draft_unknown_id_returns_404 · R5</text>
+<rect x="58" y="2164" width="400" height="32" rx="6" fill="#0f172a"/>
+<rect x="58" y="2164" width="400" height="32" rx="6" fill="rgba(8,51,68,0.4)" stroke="#22d3ee" stroke-width="1.2"/>
+<text x="68" y="2177" fill="white" font-size="8.5">PUT /handsfree/queue/missing json={draft_plain:'text'}</text>
+<text x="68" y="2189" fill="#94a3b8" font-size="8">update ➜ None</text>
+<line x1="464" y1="2180" x2="510" y2="2180" stroke="#64748b" stroke-width="1.5" marker-end="url(#arrowhead)"/>
+<rect x="516" y="2164" width="528" height="32" rx="6" fill="#0f172a"/>
+<rect x="516" y="2164" width="528" height="32" rx="6" fill="rgba(136,19,55,0.4)" stroke="#fb7185" stroke-width="1.2"/>
+<text x="528" y="2177" fill="white" font-size="8.5">404 · {ok: False, error: 'not found'}</text>
+<rect x="40" y="2224" width="1020" height="405" rx="12" fill="rgba(251,191,36,0.04)" stroke="#34d399" stroke-width="1" stroke-dasharray="8,4"/>
+<line x1="26" y1="2242" x2="40" y2="2242" stroke="#fbbf24" stroke-width="1.5"/>
+<text x="54" y="2246" fill="#34d399" font-size="10" font-weight="600">Class TestHandsfreeEnvDetail · unittest.TestCase (no Flask) — L1 _format_env_detail · L2 _env_repro_steps · L3 _env_brief</text>
+<text x="58" y="2260" fill="#64748b" font-size="7">D1 · test_reader_prompt_has_env_block_placeholder · L1</text>
+<rect x="58" y="2263" width="400" height="32" rx="6" fill="#0f172a"/>
+<rect x="58" y="2263" width="400" height="32" rx="6" fill="rgba(8,51,68,0.4)" stroke="#22d3ee" stroke-width="1.2"/>
+<text x="68" y="2276" fill="white" font-size="8.5">READER_PROMPT template (services.handsfree.case_reader)</text>
+<text x="68" y="2288" fill="#94a3b8" font-size="8">static check — no call</text>
+<line x1="464" y1="2279" x2="510" y2="2279" stroke="#64748b" stroke-width="1.5" marker-end="url(#arrowhead)"/>
+<rect x="516" y="2263" width="528" height="32" rx="6" fill="#0f172a"/>
+<rect x="516" y="2263" width="528" height="32" rx="6" fill="rgba(6,78,59,0.4)" stroke="#34d399" stroke-width="1.2"/>
+<text x="528" y="2276" fill="white" font-size="8.5">'{env_block}' in READER_PROMPT</text>
+<text x="528" y="2288" fill="#94a3b8" font-size="8">the slot read_case_history() formats env_detail into</text>
+<text x="58" y="2306" fill="#64748b" font-size="7">D2 · test_format_env_detail_skips_blank_answers · L1</text>
+<rect x="58" y="2309" width="400" height="32" rx="6" fill="#0f172a"/>
+<rect x="58" y="2309" width="400" height="32" rx="6" fill="rgba(8,51,68,0.4)" stroke="#22d3ee" stroke-width="1.2"/>
+<text x="68" y="2322" fill="white" font-size="8.12">{Computer Model:'TestModel X1', Steps to reproduce:'   ', ' OS ':'Windows 11'}</text>
+<text x="68" y="2334" fill="#94a3b8" font-size="8">_format_env_detail(env)</text>
+<line x1="464" y1="2325" x2="510" y2="2325" stroke="#64748b" stroke-width="1.5" marker-end="url(#arrowhead)"/>
+<rect x="516" y="2309" width="528" height="32" rx="6" fill="#0f172a"/>
+<rect x="516" y="2309" width="528" height="32" rx="6" fill="rgba(6,78,59,0.4)" stroke="#34d399" stroke-width="1.2"/>
+<text x="528" y="2322" fill="white" font-size="8.5">'Computer Model: TestModel X1\nOS: Windows 11'</text>
+<text x="528" y="2334" fill="#94a3b8" font-size="8">blank answer dropped · ' OS ' key trimmed · one entry per line</text>
+<text x="58" y="2352" fill="#64748b" font-size="7">D3 · test_format_env_detail_empty_or_invalid_is_none_marker · L1 · subTest ×4</text>
+<rect x="58" y="2355" width="400" height="32" rx="6" fill="#0f172a"/>
+<rect x="58" y="2355" width="400" height="32" rx="6" fill="rgba(8,51,68,0.4)" stroke="#22d3ee" stroke-width="1.2"/>
+<text x="68" y="2368" fill="white" font-size="8.5">env = {}  |  None  |  'not a dict'  |  {Platform: ''}</text>
+<text x="68" y="2380" fill="#94a3b8" font-size="8">_format_env_detail(env)</text>
+<line x1="464" y1="2371" x2="510" y2="2371" stroke="#64748b" stroke-width="1.5" marker-end="url(#arrowhead)"/>
+<rect x="516" y="2355" width="528" height="32" rx="6" fill="#0f172a"/>
+<rect x="516" y="2355" width="528" height="32" rx="6" fill="rgba(6,78,59,0.4)" stroke="#34d399" stroke-width="1.2"/>
+<text x="528" y="2368" fill="white" font-size="8.5">each ➜ '(none)'</text>
+<text x="528" y="2380" fill="#94a3b8" font-size="8">invalid or all-blank input never breaks the reader prompt</text>
+<text x="58" y="2398" fill="#64748b" font-size="7">D4 · test_format_env_detail_truncates_long_answers_and_caps_entries · L1</text>
+<rect x="58" y="2401" width="400" height="32" rx="6" fill="#0f172a"/>
+<rect x="58" y="2401" width="400" height="32" rx="6" fill="rgba(8,51,68,0.4)" stroke="#22d3ee" stroke-width="1.2"/>
+<text x="68" y="2414" fill="white" font-size="8.5">30 entries Q0..Q29 · Q0 = 'a' × 400</text>
+<text x="68" y="2426" fill="#94a3b8" font-size="8">_format_env_detail(env).splitlines()</text>
+<line x1="464" y1="2417" x2="510" y2="2417" stroke="#64748b" stroke-width="1.5" marker-end="url(#arrowhead)"/>
+<rect x="516" y="2401" width="528" height="32" rx="6" fill="#0f172a"/>
+<rect x="516" y="2401" width="528" height="32" rx="6" fill="rgba(6,78,59,0.4)" stroke="#34d399" stroke-width="1.2"/>
+<text x="528" y="2414" fill="white" font-size="8.5">25 lines (_MAX_ENV_ENTRIES)</text>
+<text x="528" y="2426" fill="#94a3b8" font-size="8">lines[0] = 'Q0: ' + 'a'×300 + ' …[truncated]'  (_MAX_ENV_VALUE_CHARS = 300)</text>
+<text x="58" y="2444" fill="#64748b" font-size="7">D5 · test_env_repro_steps_returns_filled_answer · L2</text>
+<rect x="58" y="2447" width="400" height="32" rx="6" fill="#0f172a"/>
+<rect x="58" y="2447" width="400" height="32" rx="6" fill="rgba(8,51,68,0.4)" stroke="#22d3ee" stroke-width="1.2"/>
+<text x="68" y="2460" fill="white" font-size="8.5">{Computer Model:'X1', Steps to reproduce:' 1. Sleep 2. Resume '}</text>
+<text x="68" y="2472" fill="#94a3b8" font-size="8">_env_repro_steps(env)</text>
+<line x1="464" y1="2463" x2="510" y2="2463" stroke="#64748b" stroke-width="1.5" marker-end="url(#arrowhead)"/>
+<rect x="516" y="2447" width="528" height="32" rx="6" fill="#0f172a"/>
+<rect x="516" y="2447" width="528" height="32" rx="6" fill="rgba(6,78,59,0.4)" stroke="#34d399" stroke-width="1.2"/>
+<text x="528" y="2460" fill="white" font-size="8.5">'1. Sleep 2. Resume' (trimmed)</text>
+<text x="528" y="2472" fill="#94a3b8" font-size="8">non-empty ➜ runner retracts the 'repro_steps' gap</text>
+<text x="58" y="2490" fill="#64748b" font-size="7">D6 · test_env_repro_steps_ignores_placeholder_answers · L2 · subTest ×5</text>
+<rect x="58" y="2493" width="400" height="32" rx="6" fill="#0f172a"/>
+<rect x="58" y="2493" width="400" height="32" rx="6" fill="rgba(8,51,68,0.4)" stroke="#22d3ee" stroke-width="1.2"/>
+<text x="68" y="2506" fill="white" font-size="8.5">Steps to reproduce = '' | 'NA' | 'n/a' | 'None' | '   '  · and env = None</text>
+<text x="68" y="2518" fill="#94a3b8" font-size="8">_env_repro_steps(env)</text>
+<line x1="464" y1="2509" x2="510" y2="2509" stroke="#64748b" stroke-width="1.5" marker-end="url(#arrowhead)"/>
+<rect x="516" y="2493" width="528" height="32" rx="6" fill="#0f172a"/>
+<rect x="516" y="2493" width="528" height="32" rx="6" fill="rgba(6,78,59,0.4)" stroke="#34d399" stroke-width="1.2"/>
+<text x="528" y="2506" fill="white" font-size="8.5">each ➜ ''</text>
+<text x="528" y="2518" fill="#94a3b8" font-size="8">placeholder answers never count as repro steps</text>
+<text x="58" y="2536" fill="#64748b" font-size="7">D7 · test_env_brief_keeps_only_platform_fields · L3</text>
+<rect x="58" y="2539" width="400" height="32" rx="6" fill="#0f172a"/>
+<rect x="58" y="2539" width="400" height="32" rx="6" fill="rgba(8,51,68,0.4)" stroke="#22d3ee" stroke-width="1.2"/>
+<text x="68" y="2552" fill="white" font-size="8.5">{Platform:'Lunar Lake', Found in build:'  23.40  ', Notes:'ignored',</text>
+<text x="68" y="2564" fill="#94a3b8" font-size="8"> Operating System:'n/a', Computer Model:'TestModel X1'} ➜ _env_brief(env)</text>
+<line x1="464" y1="2555" x2="510" y2="2555" stroke="#64748b" stroke-width="1.5" marker-end="url(#arrowhead)"/>
+<rect x="516" y="2539" width="528" height="32" rx="6" fill="#0f172a"/>
+<rect x="516" y="2539" width="528" height="32" rx="6" fill="rgba(6,78,59,0.4)" stroke="#34d399" stroke-width="1.2"/>
+<text x="528" y="2552" fill="white" font-size="8.5">'Platform: Lunar Lake; Found in build: 23.40; Computer Model: TestModel X1'</text>
+<text x="528" y="2564" fill="#94a3b8" font-size="8">Notes is not a platform key · 'n/a' OS skipped · values whitespace-normalized</text>
+<text x="58" y="2582" fill="#64748b" font-size="7">D8 · test_env_brief_respects_limit · L3</text>
+<rect x="58" y="2585" width="400" height="32" rx="6" fill="#0f172a"/>
+<rect x="58" y="2585" width="400" height="32" rx="6" fill="rgba(8,51,68,0.4)" stroke="#22d3ee" stroke-width="1.2"/>
+<text x="68" y="2598" fill="white" font-size="8.5">_env_brief({Platform: 'p' × 500})</text>
+<text x="68" y="2610" fill="#94a3b8" font-size="8">_env_brief({Platform: 'Lunar Lake'}, limit=8)</text>
+<line x1="464" y1="2601" x2="510" y2="2601" stroke="#64748b" stroke-width="1.5" marker-end="url(#arrowhead)"/>
+<rect x="516" y="2585" width="528" height="32" rx="6" fill="#0f172a"/>
+<rect x="516" y="2585" width="528" height="32" rx="6" fill="rgba(6,78,59,0.4)" stroke="#34d399" stroke-width="1.2"/>
+<text x="528" y="2598" fill="white" font-size="8.5">len(...) == 300 (default limit)</text>
+<text x="528" y="2610" fill="#94a3b8" font-size="8">'Platform' — the explicit limit truncates mid-field</text>
+</svg>
+    </div>
+
+    <!-- Info Cards -->
+    <div class="cards">
+      <div class="card">
+        <div class="card-header"><div class="card-dot amber"></div><h3>Endpoints under test</h3></div>
+        <ul>
+          <li>• prefix <code>/handsfree</code> · 10 rules · 11 handlers</li>
+          <li>• run: <code>check_now</code>, <code>run_case</code>, <code>status</code>, <code>discover_fields</code></li>
+          <li>• queue: list / get / save draft · <code>approve</code> · <code>reject</code></li>
+          <li>• <code>config</code> GET/POST with an allow-list of 6 keys</li>
+          <li>• posting only via <code>POST /queue/&lt;id&gt;/approve</code></li>
+        </ul>
+      </div>
+      <div class="card">
+        <div class="card-header"><div class="card-dot violet"></div><h3>Fixtures &amp; mocks</h3></div>
+        <ul>
+          <li>• <code>HandsfreeStore</code> class patched → store methods are MagicMocks</li>
+          <li>• <code>orchestrator</code> module patched → no background run</li>
+          <li>• <code>render_template</code> patched in the index test</li>
+          <li>• <code>composer.AI_MARKER</code> / <code>compose_html</code> run for real</li>
+          <li>• env helpers tested as pure functions (no Flask app)</li>
+        </ul>
+      </div>
+      <div class="card">
+        <div class="card-header"><div class="card-dot rose"></div><h3>Key behaviors pinned</h3></div>
+        <ul>
+          <li>• missing / invalid JSON body → <code>{}</code>, args become <code>None</code> / <code>""</code></li>
+          <li>• unknown config keys dropped before <code>save_config</code></li>
+          <li>• saved drafts get exactly one <code>AI_MARKER</code> + escaped HTML</li>
+          <li>• empty draft → 400 · unknown id → 404 · GET approve → 405</li>
+          <li>• env_detail: blanks/placeholders skipped, ≤25 entries, ≤300 chars</li>
+        </ul>
+      </div>
+    </div>
+
+    <!-- Footer -->
+    <p class="footer">
+      tests/test_handsfree_blueprint.py • blueprints/handsfree/handsfree_routes.py • services/handsfree/{case_reader,runner,composer}.py • 33 tests across 5 classes
+    </p>
+  </div>
+
+  <script>
+    async function copyAsImage(btn) {
+      const orig = btn.textContent;
+      try {
+        const el = document.getElementById('report-container');
+        const r = el.getBoundingClientRect();
+        const pad = 32;
+        const canvas = await html2canvas(document.body, { backgroundColor: '#020617', scale: 2, useCORS: true, ignoreElements: (e) => e.classList && e.classList.contains('toolbar'), x: r.left + window.scrollX - pad, y: r.top + window.scrollY - pad, width: r.width + pad * 2, height: r.height + pad * 2 });
+        const blob = await new Promise(r => canvas.toBlob(r, 'image/png'));
+        await navigator.clipboard.write([new ClipboardItem({ 'image/png': blob })]);
+        btn.textContent = '✓ Copied!';
+      } catch (e) {
+        btn.textContent = '✗ Failed';
+      }
+      setTimeout(() => btn.textContent = orig, 2000);
+    }
+
+    async function downloadPNG(btn) {
+      const orig = btn.textContent;
+      btn.textContent = '⏳ ...';
+      try {
+        const el = document.getElementById('report-container');
+        const r = el.getBoundingClientRect();
+        const pad = 32;
+        const canvas = await html2canvas(document.body, { backgroundColor: '#020617', scale: 2, useCORS: true, ignoreElements: (e) => e.classList && e.classList.contains('toolbar'), x: r.left + window.scrollX - pad, y: r.top + window.scrollY - pad, width: r.width + pad * 2, height: r.height + pad * 2 });
+        const link = document.createElement('a');
+        link.download = 'test_handsfree_blueprint_flow.png';
+        link.href = canvas.toDataURL('image/png');
+        link.click();
+        btn.textContent = '✓ Done!';
+      } catch (e) {
+        btn.textContent = '✗ Failed';
+      }
+      setTimeout(() => btn.textContent = orig, 2000);
+    }
+
+    async function downloadPDF(btn) {
+      const orig = btn.textContent;
+      btn.textContent = '⏳ ...';
+      try {
+        const el = document.getElementById('report-container');
+        const r = el.getBoundingClientRect();
+        const pad = 32;
+        const canvas = await html2canvas(document.body, { backgroundColor: '#020617', scale: 2, useCORS: true, ignoreElements: (e) => e.classList && e.classList.contains('toolbar'), x: r.left + window.scrollX - pad, y: r.top + window.scrollY - pad, width: r.width + pad * 2, height: r.height + pad * 2 });
+        const imgData = canvas.toDataURL('image/png');
+        const { jsPDF } = window.jspdf;
+        const orientation = canvas.width > canvas.height ? 'landscape' : 'portrait';
+        const pdf = new jsPDF({ orientation, unit: 'px', format: [canvas.width, canvas.height], hotfixes: ['px_scaling'] });
+        pdf.addImage(imgData, 'PNG', 0, 0, canvas.width, canvas.height);
+        pdf.save('test_handsfree_blueprint_flow.pdf');
+        btn.textContent = '✓ Done!';
+      } catch (e) {
+        btn.textContent = '✗ Failed';
+      }
+      setTimeout(() => btn.textContent = orig, 2000);
+    }
+  </script>
+</body>
+</html>

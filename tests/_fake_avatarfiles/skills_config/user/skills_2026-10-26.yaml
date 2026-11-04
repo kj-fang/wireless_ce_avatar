@@ -1,0 +1,17 @@
+# skill features:
+#   name: skill name
+#   description: a brief description of the skill
+#   keywords: use "-" to represent each keyword
+#   expert_rules: use "|" to start a multi-line string
+
+Roaming:
+  description: "Roam analysis"
+  expert_rules: |
+    Check roam
+    1. first
+    2-1. sub step
+    2. last
+  keywords:
+    - " CNCT_FLOW"
+    - "ROAM"
+  name: "Roaming"

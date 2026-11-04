@@ -2223,6 +2223,8 @@
         `<pre style="white-space: pre-wrap; margin-top: 6px;">${esc('log: ' + (x.log_file || '—')
           + ((x.log_range || []).filter(Boolean).length ? '  (' + x.log_range.join(' – ') + ')' : '')
           + '\n\n' + (x.description || ''))}</pre>`).join('') + `</details>`;
+  }
+
   // ---- IPS sign-in of this PC: whose cases the queue shows, whose name posts carry
   let ipsLogin = {status: 'signed_out', identity: null, error: ''};
 

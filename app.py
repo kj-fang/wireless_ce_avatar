@@ -6,6 +6,9 @@ import os
 import sys
 import webbrowser
 
+
+_IS_INTERNAL_TRAY_PROCESS = os.environ.get('INTELAVATAR_TRAY_PROCESS') == '1'
+
 # Force UTF-8 stdout/stderr so emoji print() calls don't crash on Windows
 # cp1252 consoles (this is undone by cachelib/flask-session locale init).
 if hasattr(sys.stdout, 'reconfigure'):
@@ -15,9 +18,9 @@ if hasattr(sys.stderr, 'reconfigure'):
 
 # Install rotating-file log + stdout tee as early as possible so all
 # subsequent print() calls are captured in the log file.
-# Skip for --tray-mode: the tray process has no console (DETACHED_PROCESS),
-# sys.stdout may be None, and the tray manager logs to its own tray.log.
-if '--tray-mode' not in sys.argv:
+# Skip for the internal tray process: it has no console (DETACHED_PROCESS),
+# sys.stdout may be None, and the tray manager logs to avatar.log itself.
+if not _IS_INTERNAL_TRAY_PROCESS:
     from configs.logger_setup import setup_file_logging as _setup_file_logging
     _log_path = _setup_file_logging()
     if _log_path:
@@ -246,11 +249,15 @@ def create_app():
 
 
 if __name__ == "__main__":
+    if _IS_INTERNAL_TRAY_PROCESS:
+        from tray_manager import TrayManager
+        TrayManager().run()
+        sys.exit(0)
+
     # Parse command-line arguments
     parser = argparse.ArgumentParser()
     parser.add_argument('--port', type=int, default=None, help='Override the port for this run only (not persisted). Defaults to the machine-local persisted port (initially 48596).')
     parser.add_argument('--no-tray', action='store_true', help='Disable tray manager')
-    parser.add_argument('--tray-mode', action='store_true', help='Run as tray manager')
     parser.add_argument('--silent-mode', action='store_true', default=False, help='Disable auto-opening analysis windows (TextAnalysisTool / Explorer) after parsing.')
     parser.add_argument('--sendto-token', type=str, default=None, help='SendTo security token (auto-set by shortcut, not for manual use).')
     parser.add_argument('input_paths', nargs='*', help='Optional local analysis file paths passed from Windows SendTo.')
@@ -258,13 +265,6 @@ if __name__ == "__main__":
     startup_path = _build_startup_path(args.input_paths, sendto_token=args.sendto_token)
     from configs.global_configs import app_config
     app_config.silent_mode = args.silent_mode
-    
-    # Check whether to run in tray mode
-    if args.tray_mode:
-        from tray_manager import TrayManager
-        manager = TrayManager()
-        manager.run()
-        sys.exit(0)
 
     # Single-instance enforcement (must happen BEFORE shortcut/tray setup so that
     # short-lived SendTo instances don't overwrite the .lnk with a new token)

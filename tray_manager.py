@@ -310,8 +310,8 @@ class TrayManager:
                         pass
                     child_cmdline_lower = [part.lower() for part in child_cmdline]
                     is_tray = (
-                        '--tray-mode' in child_cmdline_lower
-                        or any('tray_manager.py' in part for part in child_cmdline_lower)
+                        # '--tray-mode' in child_cmdline_lower
+                        any('tray_manager.py' in part for part in child_cmdline_lower)
                         or (child.pid == os.getpid())
                     )
                     if is_tray:

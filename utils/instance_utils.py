@@ -145,13 +145,13 @@ def _tray_spawn_lock() -> str:
 
 
 def _is_tray_process(proc: "psutil.Process") -> bool:
-    """Return True only if proc looks like an IntelAvatar tray-mode process."""
+    """Return True only if proc looks like an IntelAvatar tray process."""
     try:
         name = (proc.name() or '').lower()
         cmdline = [a.lower() for a in (proc.cmdline() or [])]
         print(f"[TRAY CHECK] PID={proc.pid} name={name!r} cmdline={cmdline}")
-        # Frozen: IntelAvatar*.exe --tray-mode (supports versioned filenames e.g. IntelAvatar_v1.2.3.exe)
-        if 'intelavatar' in name and '--tray-mode' in cmdline:
+        # Frozen: IntelAvatar*.exe spawned as the dedicated tray process.
+        if 'intelavatar' in name:
             print(f"[TRAY CHECK] PID={proc.pid} → matched frozen tray")
             return True
         # Dev: python tray_manager.py
@@ -254,10 +254,13 @@ def ensure_tray_manager():
         detached_flags |= getattr(subprocess, 'CREATE_NEW_PROCESS_GROUP', 0)
 
         if getattr(sys, 'frozen', False):
-            # Packaged: launch a copy of itself in tray mode
+            # Packaged: launch a copy of itself in internal tray mode.
+            tray_env = os.environ.copy()
+            tray_env['INTELAVATAR_TRAY_PROCESS'] = '1'
             subprocess.Popen(
-                [sys.executable, '--tray-mode'],
-                creationflags=detached_flags
+                [sys.executable],
+                creationflags=detached_flags,
+                env=tray_env,
             )
         else:
             # Development: run tray_manager.py directly

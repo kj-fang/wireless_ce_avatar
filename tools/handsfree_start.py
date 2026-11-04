@@ -123,20 +123,52 @@ def _running_role(url: str) -> str:
         return ""
 
 
+def _checkout_banner() -> None:
+    """Which code this is: branch and commit (best effort), and whether app.py
+    knows the role flag at all — a checkout without server mode fails later
+    with an argparse error in a console window that closes at once."""
+    try:
+        branch = subprocess.run(["git", "rev-parse", "--abbrev-ref", "HEAD"], cwd=REPO_ROOT,
+                                capture_output=True, text=True, timeout=10).stdout.strip()
+        commit = subprocess.run(["git", "rev-parse", "--short", "HEAD"], cwd=REPO_ROOT,
+                                capture_output=True, text=True, timeout=10).stdout.strip()
+        print(f"Checkout: {REPO_ROOT} ({branch} @ {commit})")
+    except Exception:
+        print(f"Checkout: {REPO_ROOT}")
+
+
+def _app_knows_role() -> bool:
+    try:
+        return "--handsfree-role" in (REPO_ROOT / "app.py").read_text(encoding="utf-8", errors="replace")
+    except OSError:
+        return False
+
+
 def start(role: str = "client") -> int:
     from utils.instance_utils import check_already_running
     from utils.port_utils import get_logs_dir
 
     os.chdir(REPO_ROOT)
+    _checkout_banner()
+    if role == "server" and not _app_knows_role():
+        print("This checkout has no Handsfree server mode (app.py does not take --handsfree-role): "
+              "check out the branch that has it (handsfree/server-ui or later) and pull.")
+        return 1
     inst = check_already_running()
     proc = None
     if inst:
         print(f"Avatar is already running at {inst['url']}.")
         running = _running_role(inst["url"])
-        if running and running != role:
-            print(f"NOTE: it runs as the Handsfree {running.upper()}, not as {role}. "
-                  "The role is fixed per process: close the app's console window and "
-                  "start again to switch.")
+        # An instance that does not report a role is an older build: for a
+        # client that is fine (same page), for the server it is not.
+        if (running and running != role) or (role == "server" and running != "server"):
+            what = (f"as the Handsfree {running.upper()}" if running
+                    else "an older build without Handsfree server mode")
+            print(f"It runs {what}, not as the {role} you asked for. "
+                  "The role is fixed per process: stop that Avatar first (close its console "
+                  "window, or its tray icon > Exit), then run this again"
+                  f"{' with --server' if role == 'server' else ' without --server'}.")
+            return 1
     else:
         print(f"Starting Avatar from {REPO_ROOT} as the Handsfree {role} ...")
         proc = _start_server(role)

@@ -116,14 +116,8 @@ class CacheManager:
             # binary already exists
             return
 
-        cache_file = {}
-
-        # check cache file exists first
-        if os.path.isfile(self.__cache_file_name):
-            # open file
-            with open(self.__cache_file_name, "r", encoding="utf-8") as f:
-                # get data from file
-                cache_file = json.load(f)
+        # a corrupt/empty cache is treated as empty so a new entry can replace it
+        cache_file = self.__load_cache()
 
         # add new entry
         if self.__jenkins_build_id not in cache_file:
@@ -139,29 +133,49 @@ class CacheManager:
             # write back
             json.dump(cache_file, f, indent=4)
 
+    def __load_cache(self) -> dict:
+        """
+        reads the local JSON cache file and returns its contents as a dict.
+        the cache is only a performance optimization, so a missing, empty, or
+        corrupt file (e.g. a prior run killed mid-write) is treated as an empty
+        cache rather than raising and aborting the whole parse.
+        """
+        if not os.path.isfile(self.__cache_file_name):
+            return {}
+
+        try:
+            with open(self.__cache_file_name, "r", encoding="utf-8") as f:
+                data = json.load(f)
+        except (json.JSONDecodeError, OSError, UnicodeDecodeError) as exc:
+            log.warning(f"ignoring unreadable WPP/DDD cache file {self.__cache_file_name}: {exc}")
+            return {}
+
+        # guard against a valid-JSON file whose top level is not an object
+        if not isinstance(data, dict):
+            log.warning(f"ignoring WPP/DDD cache file with unexpected format: {self.__cache_file_name}")
+            return {}
+
+        return data
+
     def get_binary_path(self) -> str:
         """
         returns the binary path from cache is exists
         if doesn't exist or not reachable, 'None' is returned
         """
-        # check cache file exists first
-        if os.path.isfile(self.__cache_file_name):
-            with open(self.__cache_file_name, "r", encoding="utf-8") as f:
-                # read the file
-                cache_file = json.load(f)
+        cache_file = self.__load_cache()
 
-                try:
-                    # check file exists
-                    binary_path = cache_file[self.__jenkins_build_id][self.__os_type][self.__file_name]
-                    # found in cache - check if really exists in the system
-                    if os.path.isfile(binary_path):
-                        emit_and_log(f"binary is found in cache {binary_path}")
-                        return binary_path
-                    # some old traces exist in the cache, however actual binary doesn't exist
-                    # from the cache manager perspective, the file doesn't exist
-                except KeyError:
-                    # not found
-                    pass
+        try:
+            # check file exists
+            binary_path = cache_file[self.__jenkins_build_id][self.__os_type][self.__file_name]
+            # found in cache - check if really exists in the system
+            if os.path.isfile(binary_path):
+                emit_and_log(f"binary is found in cache {binary_path}")
+                return binary_path
+            # some old traces exist in the cache, however actual binary doesn't exist
+            # from the cache manager perspective, the file doesn't exist
+        except (KeyError, TypeError):
+            # not found
+            pass
 
         # file not found
         return None
@@ -260,36 +274,46 @@ class Parser:
 
         # for robustness, try several sites
         for pf_site in POTATO_FARM_SITE_LIST:
+            url = f"https://{pf_site}/{api_name}"
             try:
-                url = f"https://{pf_site}/{api_name}"
-                #print("debuggg!", url)
                 res = requests.get(url, proxies={"http": None, "https": None}, verify=False, headers=headers, timeout=60) #proxies={"http": None, "https": None},
-                if res:
-                    # reply can come in several forms dict or list (of dicts)
-                    data = res.json()
-                    if "builds" in data:
-                        # we have already dict, return it
-                        # data has all builds corresponding to build ID (WAPI, MSI, DRIVER, etc..)
-                        # need to filter only driver builds
-                        wifi_build = [x for x in data["builds"] if x["jenkins_job"] == self.wifi_driver_job_name]
-                        # sort by submission date, take the newest
-                        wifi_build = sorted(wifi_build, key=lambda d: d["submission_date"], reverse=True)
-                        return wifi_build[0]
-                    else:
-                        return data
-                else:
-                    log.error("failed to get response from PF - it is possible that API doesn't exist")
-                    log.error(url)
+            except requests.RequestException as exc:
+                log.error("PF request failed (%s): %s; URL: %s", type(exc).__name__, exc, url)
+                continue
 
-                # pylint: disable=bare-except
-            except:
-                # pylint: enable=bare-except
-                # there could be many exceptions, mainly due to temporary networking issues
-                log.error(f"Failed to reach PF: {pf_site}")
+            if res.status_code >= 400:
+                log.error(
+                    "PF HTTP error: %s %s; URL: %s; response URL: %s; Content-Type: %s",
+                    res.status_code, res.reason, url, res.url,
+                    res.headers.get("Content-Type", "(missing)"),
+                )
+                continue
 
-        # if we got here, we didn't manage to reach PF site to get PDB from
-        emit_error("Failed to reach any Potato Farm site to fetch build info", fatal=True)
-        raise WppParserError("Failed to reach any Potato Farm site to fetch build info")
+            try:
+                data = res.json()
+            except ValueError:
+                log.error(
+                    "PF returned invalid JSON: HTTP %s; URL: %s; response URL: %s; Content-Type: %s",
+                    res.status_code, url, res.url,
+                    res.headers.get("Content-Type", "(missing)"),
+                )
+                continue
+
+            try:
+                if "builds" in data:
+                    wifi_build = [x for x in data["builds"] if x["jenkins_job"] == self.wifi_driver_job_name]
+                    wifi_build = sorted(wifi_build, key=lambda d: d["submission_date"], reverse=True)
+                    if not wifi_build:
+                        log.error("PF returned no builds matching %s; URL: %s", self.wifi_driver_job_name, url)
+                        continue
+                    return wifi_build[0]
+                return data
+            except (KeyError, TypeError) as exc:
+                log.error("PF returned an invalid build response (%s); URL: %s", type(exc).__name__, url)
+
+        message = "Failed to fetch build info from any Potato Farm site; see logs for request or response errors"
+        emit_error(message, fatal=True)
+        raise WppParserError(message)
 
     def __get_build_details(self, jenkins_build_id: str) -> dict:
         """

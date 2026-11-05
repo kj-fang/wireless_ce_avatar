@@ -550,6 +550,13 @@ class IpsClient:
              "private_value": false,     # value meaning Private-to-Intel —
                                          # NOTE: Core_IPS_Public__c is a
                                          # PUBLIC flag, so private == False
+             "public_value":  false,     # optional: the flag's value on a
+                                         # PUBLIC post. Default: the inverse
+                                         # of private_value. In this org the
+                                         # customer-visible comments carry
+                                         # False too (visibility is the
+                                         # comment-type picklist), so the
+                                         # verified map sets it explicitly.
              "extra_fields":  {"Core_IPS_Case_Comment_Source__c": "..."},
              # values for PUBLIC posts; required for every extra_fields
              # entry whose value is private-flavored ("Private to Intel"):
@@ -580,7 +587,9 @@ class IpsClient:
                     "Cannot guarantee public visibility — no verified boolean "
                     "privacy field in config; refusing to post a customer reply."
                 )
-            payload[private_field] = not private_value
+            public_value = fm.get("public_value")
+            payload[private_field] = (public_value if isinstance(public_value, bool)
+                                      else not private_value)
             # Verified values for public posts (the org's public comment-
             # type picklist value). Required, not optional: seen live (case
             # 01032011) that the Public flag alone inserts a comment IPS

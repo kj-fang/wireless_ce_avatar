@@ -100,6 +100,17 @@ def smoke_soql() -> None:
     check("S1.h2 private payload keeps the private comment type",
           p_priv.get("Core_IPS_Case_Comment_Type__c") == "Private to Intel"
           and p_priv["Core_IPS_Public__c"] is False, str(p_priv))
+    # This org's customer-visible comments carry Public=False as well (the
+    # comment type is what makes them visible): an explicit public_value wins
+    # over the inverse-of-private default; a non-boolean one is ignored.
+    p_pub_explicit = IpsClient.build_comment_payload(
+        "500XYZ", "<p>r</p>", field_map=dict(fm_pub, public_value=False), private=False)
+    p_pub_bad = IpsClient.build_comment_payload(
+        "500XYZ", "<p>r</p>", field_map=dict(fm_pub, public_value="no"), private=False)
+    check("S1.h3 public payload: an explicit boolean public_value is used as is, else the inverse",
+          p_pub_explicit["Core_IPS_Public__c"] is False
+          and p_pub_explicit.get("Core_IPS_Case_Comment_Type__c") == "Public to Customers"
+          and p_pub_bad["Core_IPS_Public__c"] is True, f"{p_pub_explicit} {p_pub_bad}")
     try:
         IpsClient.build_comment_payload("500XYZ", "<p>r</p>",
                                         field_map={"body_field": "B__c"},

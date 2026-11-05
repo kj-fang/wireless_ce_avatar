@@ -1293,7 +1293,11 @@ def enrich_attached_case_if_needed() -> bool:
         # statement walks into the BT bot the restart was supposed to protect.
         context.subcategory = context.subcategory or remembered["subcategory"]
         session["case_context"] = context.to_session()
-        if remembered.get("issue_type") and not session.get("classification"):
+        # "Unclassified" is the placeholder a local upload seeds when nothing
+        # was looked up yet, so it is a gap like an absent one, not an answer.
+        held = session.get("classification")
+        held_type = held.get("issue_type") if isinstance(held, dict) else ""
+        if remembered.get("issue_type") and held_type in ("", "Unclassified", None):
             session["classification"] = {"issue_type": remembered["issue_type"]}
         # Same reason the lookup branch below does it: the page may already
         # have organized the empty description.

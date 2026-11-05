@@ -382,6 +382,18 @@ class IpsClient:
         """All open cases assigned to `owner_name` (auto-scan candidates)."""
         return self._query_cases(build_open_cases_soql(owner_name, limit))
 
+    def case_owner_name(self, case_id: str) -> str:
+        """Owner.Name of one case, "" when unknown. A single-case run (the
+        page's "Analyze this case", a client's request, the CLI's
+        --case-number) has no owner from a scan, and the queue's own-cases
+        view is keyed on it."""
+        if not case_id:
+            return ""
+        refs = self._query_cases(
+            "SELECT Id, CaseNumber, Subject, Status, CreatedDate, Owner.Name "
+            f"FROM Case WHERE Id = '{_soql_quote(case_id)}' LIMIT 1")
+        return refs[0].owner_name if refs else ""
+
     def find_customer_updates(self, case_ids: list[str],
                               since_iso: str) -> dict[str, str]:
         """{case_id: CreatedDate of the LATEST customer comment after

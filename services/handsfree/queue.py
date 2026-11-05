@@ -34,7 +34,7 @@ import threading
 import time
 import uuid
 from concurrent.futures import ThreadPoolExecutor
-from datetime import datetime
+from datetime import datetime, timezone
 from pathlib import Path
 from typing import Optional
 
@@ -157,8 +157,10 @@ class HandsfreeStore:
         self.ledger_dir = self.root / "ledger"
         self.locks_dir = self.root / "locks"
         self.logs_dir = self.root / "logs"
+        self.requests_dir = self.root / "requests"
         self.config_path = self.root / "config.json"
-        for d in (self.queue_dir, self.ledger_dir, self.locks_dir, self.logs_dir):
+        for d in (self.queue_dir, self.ledger_dir, self.locks_dir, self.logs_dir,
+                  self.requests_dir):
             d.mkdir(parents=True, exist_ok=True)
         self._config_cache: Optional[tuple] = None    # ((mtime_ns, size), dict)
         self._summaries: Optional[dict] = None        # {file name: ((mtime_ns, size), slim)}
@@ -330,6 +332,105 @@ class HandsfreeStore:
             (self.locks_dir / f"{_safe_case(case_nbr)}.lock").unlink()
         except FileNotFoundError:
             pass
+
+    # ------------------------------------------------------------------
+    # case requests: a client asks the server to analyze one case
+    #   requests/<case>.pending.json  written by the client
+    #   requests/<case>.running.json  the server claimed it (atomic rename)
+    #   requests/<case>.done.json     finished: ok / error, kept for a week
+    # ------------------------------------------------------------------
+    REQUEST_STATES = ("pending", "running", "done")
+    REQUEST_KEEP_DONE_S = 7 * 24 * 3600
+
+    def _request_file(self, case_nbr: str, state: str) -> Path:
+        return self.requests_dir / f"{_safe_case(case_nbr)}.{state}.json"
+
+    def _read_request(self, path: Path) -> Optional[dict]:
+        try:
+            return json.loads(path.read_text(encoding="utf-8"))
+        except (OSError, ValueError):
+            return None
+
+    def request_case(self, case_nbr: str, requested_by: str = "") -> dict:
+        """Queue one case for the server. A case already running on the
+        server is not queued twice: its running record comes back instead."""
+        running = self._read_request(self._request_file(case_nbr, "running"))
+        if running:
+            return running
+        req = {"case_nbr": case_nbr, "requested_by": requested_by or "",
+               "requested_at": datetime.now(timezone.utc).isoformat(timespec="seconds"),
+               "status": "pending", "host": "", "started_at": "", "finished_at": "",
+               "ok": None, "error": "", "draft_id": ""}
+        self._request_file(case_nbr, "done").unlink(missing_ok=True)
+        _atomic_write(self._request_file(case_nbr, "pending"), json.dumps(req, indent=2))
+        return req
+
+    def claim_request(self, case_nbr: str, host: str) -> Optional[dict]:
+        """pending -> running, by atomic rename: of two servers only one
+        gets it. None when it is gone (taken, or withdrawn)."""
+        pending, running = (self._request_file(case_nbr, "pending"),
+                            self._request_file(case_nbr, "running"))
+        req = self._read_request(pending)
+        if not req:
+            return None
+        try:
+            os.rename(pending, running)
+        except OSError:
+            return None
+        req.update(status="running", host=host,
+                   started_at=datetime.now(timezone.utc).isoformat(timespec="seconds"))
+        _atomic_write(running, json.dumps(req, indent=2))
+        return req
+
+    def unclaim_request(self, case_nbr: str) -> None:
+        """running -> pending again (the server could not start it now)."""
+        running, pending = (self._request_file(case_nbr, "running"),
+                            self._request_file(case_nbr, "pending"))
+        req = self._read_request(running)
+        if not req:
+            return
+        req.update(status="pending", host="", started_at="")
+        _atomic_write(pending, json.dumps(req, indent=2))
+        running.unlink(missing_ok=True)
+
+    def finish_request(self, case_nbr: str, ok: bool, error: str = "",
+                       draft_id: str = "") -> dict:
+        running = self._request_file(case_nbr, "running")
+        req = self._read_request(running) or {"case_nbr": case_nbr, "requested_by": "",
+                                               "requested_at": "", "host": "", "started_at": ""}
+        req.update(status="done", ok=bool(ok), error=error or "", draft_id=draft_id or "",
+                   finished_at=datetime.now(timezone.utc).isoformat(timespec="seconds"))
+        _atomic_write(self._request_file(case_nbr, "done"), json.dumps(req, indent=2))
+        running.unlink(missing_ok=True)
+        return req
+
+    def list_requests(self) -> list[dict]:
+        """Every request on the share: pending and running first, then the
+        finished ones of the last week, newest first within each state."""
+        out: list[dict] = []
+        cutoff = time.time() - self.REQUEST_KEEP_DONE_S
+        for path in self.requests_dir.glob("*.json"):
+            parts = path.name.split(".")
+            if len(parts) != 3 or parts[1] not in self.REQUEST_STATES:
+                continue
+            if parts[1] == "done" and path.stat().st_mtime < cutoff:
+                path.unlink(missing_ok=True)      # a week is enough history
+                continue
+            req = self._read_request(path)
+            if req:
+                req["status"] = parts[1]
+                out.append(req)
+        order = {"running": 0, "pending": 1, "done": 2}
+        out.sort(key=lambda r: (order.get(r["status"], 3),
+                                -(float(datetime.fromisoformat(r["requested_at"]).timestamp())
+                                  if r.get("requested_at") else 0.0)))
+        return out
+
+    def pending_requests(self) -> list[dict]:
+        """Oldest first: the order the server serves them."""
+        pend = [r for r in self.list_requests() if r["status"] == "pending"]
+        pend.sort(key=lambda r: (r.get("requested_at") or "", r.get("case_nbr") or ""))
+        return pend
 
     # ------------------------------------------------------------------
     # queue

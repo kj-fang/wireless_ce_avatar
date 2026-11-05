@@ -92,9 +92,32 @@ def check_now():
 
 @handsfree_bp.route("/run_case", methods=["POST"])
 def run_case():
-    """Manual trigger for one explicitly chosen IPS case number."""
+    """Manual trigger for one explicitly chosen IPS case number. On the
+    server it runs here; on a client it becomes a request on the share that
+    the server serves on its next tick (the draft then shows in the queue)."""
+    from services.handsfree import scheduler
+    from utils.check_ips_utils import normalise_ips
     body = request.get_json(silent=True) or {}
-    return jsonify(orchestrator.start_case_run(body.get("case_nbr")))
+    if scheduler.can_schedule_here():
+        return jsonify(orchestrator.start_case_run(body.get("case_nbr")))
+    raw = str(body.get("case_nbr") or "").strip()
+    case_nbr = normalise_ips(raw)
+    if not case_nbr:
+        return jsonify({"ok": False, "error": (f"{raw!r} is not an IPS case number (six to "
+                                               "eight digits, e.g. 01009610)") if raw
+                                              else "empty case number"})
+    import socket
+    who = _signed_in_name() or f"{os.environ.get('USERNAME', '?')}@{socket.gethostname()}"
+    req = _store().request_case(case_nbr, requested_by=who)
+    return jsonify({"ok": True, "requested": True, "request": req})
+
+
+@handsfree_bp.route("/requests")
+def list_requests():
+    """The case requests on the share (pending / running on the server /
+    finished in the last week), for the page's status line."""
+    from services.handsfree import scheduler
+    return jsonify({"items": _store().list_requests(), "role": scheduler.role()})
 
 
 @handsfree_bp.route("/status")
@@ -419,40 +442,19 @@ def _handoff_to_log_chatbot(case_nbr: str, src: dict, log_path: str) -> dict:
             "log_path": log_path, "issue_time": src["issue_time_log"]}
 
 
-def _handoff_to_case_page(case_nbr: str) -> dict:
-    """No decoded log (the run stopped before one, e.g. waiting on the
-    customer, or the file is gone): seed THIS browser session with the case
-    exactly as typing its number on Avatar's start page does, and send the
-    user to the attachment picker to choose the logs and dig in by hand."""
-    from blueprints.main.main_routes import _start_gather_workflow
-    from models.models import CaseContext
-    from services import check_ips_service
-    from services.case_info_service import CaseService
-    ctx = CaseService.process_case(CaseContext(case_nbr=case_nbr,
-                                               case_ref_source=check_ips_service.EXPLICIT))
-    if ctx.error_message:
-        return {"ok": False, "error": f"Avatar could not open case {case_nbr}: {ctx.error_message}"}
-    for key in _HANDOFF_STALE_KEYS + ("chatbot_log_path", "classification",
-                                      "_carried_issue_time_present", "_carried_issue_time",
-                                      "_carried_issue_time_warning"):
-        session.pop(key, None)
-    session["case_context"] = ctx.to_session()
-    session["prompt_file_path"] = CaseService.load_case_summary_prompt(ctx.wifi_or_bt)
-    session["bsod"] = False
-    session["latest_etl_llm"] = False
-    session["debug_mode"] = False
-    _start_gather_workflow(ctx)
-    return {"ok": True, "mode": "case", "url": "/select_attachments",
-            "attachments": len(ctx.attachment_list or [])}
+NO_LOG_TO_ANALYZE = "no log to analysis"
 
 
 @handsfree_bp.route("/chatbot_handoff", methods=["POST"])
 def chatbot_handoff():
-    """Hand the case over to Avatar for a manual deep dive, in THIS browser
-    session. With a decoded log: the Log Chatbot on that log, primed with the
-    case and the issue time. Without one: Avatar's attachment picker for the
-    case, as if its number had been typed on the start page. Returns the URL
-    to open; the page opens it in a new tab from the click handler."""
+    """Hand the case over to Avatar's Log Chatbot for a manual deep dive, in
+    THIS browser session: the chatbot opens on the case's decoded log (the
+    shared copy first), primed with the case and the issue time, and the
+    issue is pre-filled in the chat. A case whose run never decoded a log
+    (waiting on the customer, request-info, decode failed, or the file is
+    gone) answers 404 "no log to analysis" — the page shows that as the
+    button's tooltip and keeps it disabled. Returns the URL to open; the page
+    opens it in a new tab from the click handler."""
     denied = _localhost_only()
     if denied:
         return denied
@@ -463,11 +465,10 @@ def chatbot_handoff():
         return jsonify({"ok": False, "error": "case number required"}), 400
     src = _handoff_source(case_nbr, str(body.get("draft_id") or ""))
     log_path = src["log_path"]
+    if not log_path or not os.path.isfile(log_path):
+        return jsonify({"ok": False, "error": NO_LOG_TO_ANALYZE}), 404
     try:
-        if log_path and os.path.isfile(log_path):
-            res = _handoff_to_log_chatbot(case_nbr, src, log_path)
-        else:
-            res = _handoff_to_case_page(case_nbr)
+        res = _handoff_to_log_chatbot(case_nbr, src, log_path)
     except Exception as e:
         return jsonify({"ok": False, "error": f"{type(e).__name__}: {e}"}), 500
     return jsonify(res), (200 if res.get("ok") else 502)

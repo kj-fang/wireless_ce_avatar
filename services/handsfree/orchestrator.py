@@ -136,6 +136,12 @@ def _analyze_and_enqueue(store: HandsfreeStore, case_nbr: str,
     runner = HandsfreeRunner(progress_cb=_progress, snapshot_cb=_snapshot)
     analysis = runner.analyze_case(case_nbr, case_ctx=case_ctx)
     _update_case_details(case_nbr, {"source": source})
+    if not owner_name and source == "ips":
+        # A single-case run knows no owner from a scan: ask IPS, so the draft
+        # shows in that owner's own-cases view (best effort, never fatal).
+        owner_name = _case_owner(case_id or analysis.case_id)
+        if owner_name:
+            _update_case_details(case_nbr, {"owner_name": owner_name})
     if analysis.mode == "unsupported":
         store.mark_skipped(case_nbr, analysis.error, owner_name=owner_name)
         store.record_skipped(case_nbr=case_nbr, case_id=case_id or analysis.case_id,
@@ -263,6 +269,17 @@ def _live_history(case_nbr: str) -> dict:
     return {"saved_at": time.strftime("%Y-%m-%dT%H:%M:%S"), "run_mode": mode,
             "run_started_at": started, "case_details": {str(case_nbr): details},
             "events": events[-200:]}
+
+
+def _case_owner(case_id: str) -> str:
+    """IPS's Owner.Name for a case id, "" when it cannot be asked."""
+    if not case_id:
+        return ""
+    try:
+        return str(IpsClient().case_owner_name(case_id) or "")
+    except Exception as e:
+        _log_event(f"case owner lookup skipped: {type(e).__name__}: {e}")
+        return ""
 
 
 def _share_decoded_log(store: HandsfreeStore, case_nbr: str, log_path: str) -> str:

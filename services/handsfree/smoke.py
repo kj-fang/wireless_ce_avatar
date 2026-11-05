@@ -1115,7 +1115,20 @@ def smoke_runner(tmp: Path) -> None:
         cis.CaseService.process_case = staticmethod(_fake_process_no_logs)
         store14e = HandsfreeStore(tmp / "handsfree_s14e")
         store14e.mark_posted("01234567", comment_id="CMT-FR", first_response=True)
-        rec14e = orch._analyze_and_enqueue(store14e, "01234567")
+        # A single-case run has no owner from a scan: the orchestrator asks
+        # IPS for it, so the draft lands in that owner's own-cases view.
+        orig_case_owner = orch._case_owner
+        owner_asked: list = []
+        orch._case_owner = lambda cid: owner_asked.append(cid) or "Owner From IPS"
+        try:
+            rec14e = orch._analyze_and_enqueue(store14e, "01234567")
+        finally:
+            orch._case_owner = orig_case_owner
+        check("S14.e2 a single-case run records the case owner IPS reports (asked by case id)",
+              rec14e is not None and rec14e.get("owner_name") == "Owner From IPS"
+              and owner_asked and owner_asked[0] == rec14e.get("case_id")
+              and store14e.list_drafts(owner_name="owner from ips"),
+              f"owner={rec14e and rec14e.get('owner_name')!r} asked={owner_asked} id={rec14e and rec14e.get('case_id')!r}")
         cis.CaseService.process_case = staticmethod(_fake_process)
         # Trial mode (Settings) + the list-view source of the automatic
         # analysis: already-analyzed cases are skipped, closed cases run only
@@ -3718,25 +3731,18 @@ def smoke_snowflake_reconnect() -> None:
 
 # ---------------------------------------------------------------- S22
 def smoke_chatbot_handoff(tmp: Path) -> None:
-    print("[S22] Hand-off to Avatar: the Log Chatbot on the decoded log (shared copy first), "
-          "else the case's attachment picker; localhost only")
+    print("[S22] Hand-off to Avatar: the Log Chatbot on the decoded log (shared copy first); "
+          "no log -> 404 'no log to analysis'; localhost only")
     from flask import Flask
     from blueprints.handsfree import handsfree_routes as routes
     from .queue import HandsfreeStore
 
     store = HandsfreeStore(tmp / "handsfree_s22")
-    orig = (routes._store, routes._handoff_to_log_chatbot, routes._handoff_to_case_page)
+    orig = (routes._store, routes._handoff_to_log_chatbot)
     calls: list = []
     routes._store = lambda: store
     routes._handoff_to_log_chatbot = lambda case_nbr, src, log_path: (
         calls.append(("log", case_nbr, log_path)) or {"ok": True, "mode": "log", "url": "/log_chatbot/?x"})
-
-    def fake_case_page(case_nbr):
-        calls.append(("case", case_nbr, ""))
-        if case_nbr == "01000002":
-            return {"ok": False, "error": "Avatar could not open case 01000002: no IPS"}
-        return {"ok": True, "mode": "case", "url": "/select_attachments", "attachments": 3}
-    routes._handoff_to_case_page = fake_case_page
     try:
         app = Flask("handsfree_smoke_s22")
         app.secret_key = "s22"
@@ -3750,9 +3756,9 @@ def smoke_chatbot_handoff(tmp: Path) -> None:
                               draft_plain="b", draft_html="<p>b</p>", confidence=None,
                               mode="waiting_customer", analysis={"log_path": "", "case_id": "500A"})
         r = post({"case_nbr": "01000001", "draft_id": rec_a["draft_id"]})
-        check("S22.a no decoded log -> the attachment picker of the case",
-              r.status_code == 200 and r.get_json()["mode"] == "case"
-              and r.get_json()["url"] == "/select_attachments" and calls[-1] == ("case", "01000001", ""),
+        check("S22.a no decoded log -> 404 'no log to analysis', nothing seeded",
+              r.status_code == 404 and r.get_json()["ok"] is False
+              and r.get_json()["error"] == routes.NO_LOG_TO_ANALYZE and calls == [],
               f"{r.status_code} {r.get_json()} {calls}")
 
         # b) the analysis' log is on the server's disk (gone here); the shared copy wins
@@ -3777,19 +3783,20 @@ def smoke_chatbot_handoff(tmp: Path) -> None:
         rec_c = store.enqueue(case_nbr="01000004", case_id="500D", subject="s",
                               draft_plain="b", draft_html="<p>b</p>", confidence=80, mode="full",
                               analysis={"log_path": str(tmp / "gone" / "decoded.txt")})
+        n_before = len(calls)
         r = post({"case_nbr": "01000004", "draft_id": rec_c["draft_id"]})
-        check("S22.c a decoded log that is gone -> the attachment picker",
-              r.status_code == 200 and r.get_json()["mode"] == "case" and calls[-1][0] == "case",
-              f"{r.status_code} {r.get_json()}")
+        check("S22.c a decoded log that is gone -> 404 'no log to analysis'",
+              r.status_code == 404 and r.get_json()["error"] == routes.NO_LOG_TO_ANALYZE
+              and len(calls) == n_before, f"{r.status_code} {r.get_json()}")
 
-        # d) Avatar cannot open the case -> the error, not a tab
+        # d) a run that failed before any log -> the same answer
         rec_d = store.enqueue(case_nbr="01000002", case_id="", subject="s",
                               draft_plain="b", draft_html="<p>b</p>", confidence=None,
                               mode="error", analysis={})
         r = post({"case_nbr": "01000002", "draft_id": rec_d["draft_id"]})
-        check("S22.d the case page's failure is reported (502, ok=False)",
-              r.status_code == 502 and r.get_json()["ok"] is False and "no IPS" in r.get_json()["error"],
-              f"{r.status_code} {r.get_json()}")
+        check("S22.d an error draft (no log) -> 404 'no log to analysis'",
+              r.status_code == 404 and r.get_json()["ok"] is False
+              and r.get_json()["error"] == routes.NO_LOG_TO_ANALYZE, f"{r.status_code} {r.get_json()}")
 
         # e) another machine's browser cannot seed this app's session
         n = len(calls)
@@ -3799,7 +3806,150 @@ def smoke_chatbot_handoff(tmp: Path) -> None:
         r = post({"case_nbr": "nope"})
         check("S22.f a non-case number -> 400", r.status_code == 400, str(r.status_code))
     finally:
-        routes._store, routes._handoff_to_log_chatbot, routes._handoff_to_case_page = orig
+        routes._store, routes._handoff_to_log_chatbot = orig
+
+
+# ---------------------------------------------------------------- S23
+def smoke_case_requests(tmp: Path) -> None:
+    print("[S23] Case requests: a client asks, the server runs it on its tick, the draft lands in the queue")
+    import socket
+    import time as _time
+    from flask import Flask
+    from configs.global_configs import app_config
+    from blueprints.handsfree import handsfree_routes as routes
+    from . import scheduler as sch
+    from . import orchestrator as orch
+    from .queue import HandsfreeStore
+
+    store = HandsfreeStore(tmp / "handsfree_s23")
+    orig_role = getattr(app_config, "handsfree_role", "client")
+    orig = (routes._store, sch._store, orch.start_case_run, orch.get_run_state)
+    routes._store = lambda: store
+    sch._store = lambda: store
+    try:
+        # a) the store: pending -> running (one winner) -> done; a repeat request after done
+        req = store.request_case("01000011", requested_by="Ann")
+        twice = store.request_case("01000011", requested_by="Bob")
+        pend = store.pending_requests()
+        c1 = store.claim_request("01000011", "srv-a")
+        c2 = store.claim_request("01000011", "srv-b")
+        again = store.request_case("01000011", requested_by="Cara")   # running: not queued twice
+        fin = store.finish_request("01000011", ok=True, draft_id="01000011__x")
+        after = store.list_requests()
+        re_req = store.request_case("01000011", requested_by="Dan")
+        check("S23.a request lifecycle on the share: one pending file per case, the claim rename has one "
+              "winner, a running case is not queued twice, done keeps the result, a new request replaces it",
+              req["status"] == "pending" and twice["status"] == "pending"
+              and [r["case_nbr"] for r in pend] == ["01000011"]
+              and c1 and c1["status"] == "running" and c1["host"] == "srv-a" and c2 is None
+              and again["status"] == "running" and again["host"] == "srv-a"
+              and fin["status"] == "done" and fin["ok"] is True and fin["draft_id"] == "01000011__x"
+              and [(r["case_nbr"], r["status"]) for r in after] == [("01000011", "done")]
+              and re_req["status"] == "pending" and store.pending_requests()[0]["requested_by"] == "Dan"
+              and not store._request_file("01000011", "done").exists(),
+              f"req={req} c1={c1} c2={c2} again={again} fin={fin} after={after} re={re_req}")
+        store.unclaim_request("01000011")        # pending stays pending
+        store.claim_request("01000011", "srv-a")
+        store.unclaim_request("01000011")
+        check("S23.a2 unclaim puts a running request back to pending",
+              [r["status"] for r in store.list_requests()] == ["pending"]
+              and not store._request_file("01000011", "running").exists())
+        store._request_file("01000011", "pending").unlink()     # not part of the runs below
+        old = store._request_file("01000099", "done")
+        old.write_text('{"case_nbr": "01000099", "requested_at": "2026-01-01T00:00:00+00:00"}', encoding="utf-8")
+        past = _time.time() - 8 * 24 * 3600
+        import os as _os
+        _os.utime(old, (past, past))
+        check("S23.a3 finished requests older than a week are dropped from the listing and the share",
+              all(r["case_nbr"] != "01000099" for r in store.list_requests()) and not old.exists())
+
+        # b) the server serves pending requests on its tick, through the single-case run
+        app_config.handsfree_role = "server"
+        runs: list = []
+        states: list = []
+
+        def fake_start(case_nbr):
+            runs.append(case_nbr)
+            if case_nbr == "01000013":
+                return {"ok": False, "error": "a run is already in progress"}
+            if case_nbr == "01000014":
+                return {"ok": False, "error": "'x' is not an IPS case number"}
+            states[:] = [{"status": "running"},
+                         {"status": "done", "case_details": {case_nbr: {"draft_id": case_nbr + "__d"}}}]
+            return {"ok": True, "case_nbr": case_nbr}
+
+        def fake_state():
+            return states.pop(0) if len(states) > 1 else (states[0] if states else {"status": "idle"})
+        orch.start_case_run, orch.get_run_state = fake_start, fake_state
+        # the owner lookup itself: IPS answers, or cannot be asked
+        class _OwnerIps:
+            def __init__(self, *a, **k): pass
+            def case_owner_name(self, case_id):
+                if case_id == "500X":
+                    raise RuntimeError("IPS down")
+                return "Zed Owner" if case_id == "500Z" else ""
+        orig_ips = orch.IpsClient
+        orch.IpsClient = _OwnerIps
+        try:
+            got_owner = (orch._case_owner("500Z"), orch._case_owner("500Q"),
+                         orch._case_owner("500X"), orch._case_owner(""))
+        finally:
+            orch.IpsClient = orig_ips
+        check("S23.d _case_owner: IPS's Owner.Name by case id; unknown, failing or empty id -> ''",
+              got_owner == ("Zed Owner", "", "", ""), str(got_owner))
+
+        store.request_case("01000012", requested_by="Ann")
+        _time.sleep(0.01)
+        store.request_case("01000014", requested_by="Ann")
+        n = sch.run_requests()
+        done = {r["case_nbr"]: r for r in store.list_requests()}
+        check("S23.b run_requests (server): oldest first, each through start_case_run, waits for the run, "
+              "records ok + draft id, a bad case number fails its request",
+              n == 1 and runs == ["01000012", "01000014"]
+              and done["01000012"]["status"] == "done" and done["01000012"]["ok"] is True
+              and done["01000012"]["draft_id"] == "01000012__d" and done["01000012"]["host"] == socket.gethostname().casefold()
+              and done["01000014"]["status"] == "done" and done["01000014"]["ok"] is False
+              and "not an IPS case number" in done["01000014"]["error"],
+              f"n={n} runs={runs} done={ {k: (v['status'], v.get('ok'), v.get('error')) for k, v in done.items()} }")
+        runs.clear()
+        store.request_case("01000013", requested_by="Bob")   # the run lock is busy -> back to pending
+        n2 = sch.run_requests()
+        check("S23.b2 a request the run lock refuses goes back to pending for the next tick",
+              n2 == 0 and runs == ["01000013"]
+              and [(r["case_nbr"], r["status"]) for r in store.pending_requests()] == [("01000013", "pending")],
+              f"n2={n2} runs={runs} pend={store.pending_requests()}")
+        store._request_file("01000013", "pending").unlink()
+        app_config.handsfree_role = "client"
+        store.request_case("01000015", requested_by="Ann")
+        runs.clear()
+        check("S23.b3 a client never serves requests", sch.run_requests() == 0 and runs == [])
+        store._request_file("01000015", "pending").unlink()
+
+        # c) the routes: a client's "Analyze this case" becomes a request; the server runs it
+        app = Flask("handsfree_smoke_s23")
+        app.register_blueprint(routes.handsfree_bp)
+        client = app.test_client()
+        app_config.handsfree_role = "client"
+        r_c = client.post("/handsfree/run_case", json={"case_nbr": "1000016"})
+        r_bad = client.post("/handsfree/run_case", json={"case_nbr": "abc"})
+        r_list = client.get("/handsfree/requests")
+        app_config.handsfree_role = "server"
+        runs.clear()
+        r_s = client.post("/handsfree/run_case", json={"case_nbr": "01000017"})
+        check("S23.c /run_case: client -> request on the share (padded case number, who asked), "
+              "bad number refused; server -> runs here; /requests lists them",
+              r_c.status_code == 200 and r_c.get_json()["requested"] is True
+              and r_c.get_json()["request"]["case_nbr"] == "01000016"
+              and store._request_file("01000016", "pending").exists()
+              and r_bad.get_json()["ok"] is False and "not an IPS case number" in r_bad.get_json()["error"]
+              and [i["case_nbr"] for i in r_list.get_json()["items"] if i["status"] == "pending"] == ["01000016"]
+              and r_list.get_json()["role"] == "client"
+              and r_s.get_json().get("ok") is True and runs == ["01000017"]
+              and not store._request_file("01000017", "pending").exists(),
+              f"c={r_c.get_json()} bad={r_bad.get_json()} list={r_list.get_json()} s={r_s.get_json()} runs={runs}")
+    finally:
+        app_config.handsfree_role = orig_role
+        routes._store, sch._store, orch.start_case_run, orch.get_run_state = orig
 
 
 def run_smoke() -> int:
@@ -3826,6 +3976,7 @@ def run_smoke() -> int:
         smoke_snowflake_reconnect()
         smoke_server_role(tmp)
         smoke_chatbot_handoff(tmp)
+        smoke_case_requests(tmp)
     finally:
         shutil.rmtree(tmp, ignore_errors=True)
     print(f"\nsmoke result: {'ALL PASS' if not PASS_FAIL else 'FAILURES: ' + ', '.join(PASS_FAIL)}")

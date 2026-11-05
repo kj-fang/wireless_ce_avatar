@@ -438,6 +438,7 @@
             <path d="M6 4.5l14 7.5-14 7.5z" /></svg>
           Check for new cases</button>
         <span class="status-line" id="run-status">idle</span>
+        <span class="status-line" id="request-status"></span>
         <span class="status-line" style="margin-left:auto;">
           posting backend: <b id="backend-name">{{ config.post_backend }}</b>
           <span id="dry-run-badge" class="pill warn"
@@ -457,7 +458,7 @@
                  onkeydown="if(event.key==='Enter')runCase()">
         </label>
         <button class="primary" id="run-case-btn" onclick="runCase()"
-                title="Runs the full pipeline for this one case regardless of owner/date">
+                title="{% if role == 'server' %}Runs the full pipeline for this one case regardless of owner/date{% else %}Sends this case to the Handsfree server, which runs the full pipeline for it; the draft then appears in the review queue below{% endif %}">
           <svg width="11" height="11" viewBox="0 0 24 24" fill="currentColor" aria-hidden="true">
             <path d="M6 4.5l14 7.5-14 7.5z" /></svg>
           Analyze this case</button>
@@ -1196,7 +1197,59 @@
   async function runCase() {
     const caseNbr = document.getElementById('case-nbr').value.trim();
     if (!caseNbr) { alert('Enter an IPS case number.'); return; }
-    await startRun('/handsfree/run_case', {case_nbr: caseNbr});
+    const isServer = {{ 'true' if role == 'server' else 'false' }};
+    if (isServer) { await startRun('/handsfree/run_case', {case_nbr: caseNbr}); return; }
+    // Client: the server runs it. Hand the request over and follow it.
+    let j;
+    try {
+      j = await postJson('/handsfree/run_case', {case_nbr: caseNbr});
+    } catch (e) { serverUnreachable(e); return; }
+    if (!j.ok) { alert('Failed: ' + (j.error || 'unknown')); return; }
+    document.getElementById('case-nbr').value = '';
+    watchRequests(j.request && j.request.case_nbr);
+  }
+
+  // ---------- case requests served by the server (client role) ----------
+  // The server picks a request up on its next tick (within 30 s), runs the
+  // case, and the draft lands in the shared queue; this line follows it.
+  let requestTimer = null;
+  let requestWatchCase = null;
+
+  function renderRequests(items) {
+    const el = document.getElementById('request-status');
+    const live = (items || []).filter(r => r.status === 'pending' || r.status === 'running');
+    const mine = requestWatchCase ? (items || []).find(r => r.case_nbr === requestWatchCase) : null;
+    const bits = [];
+    if (mine && mine.status === 'done') {
+      bits.push('case ' + mine.case_nbr + (mine.ok ? ' analyzed on the server — see the queue below'
+                                                   : ' failed on the server: ' + (mine.error || 'unknown')));
+    }
+    live.forEach(r => bits.push('case ' + r.case_nbr + (r.status === 'running'
+      ? ' running on the server' + (r.host ? ' (' + r.host + ')' : '')
+      : ' waiting for the server') + (r.requested_by ? ' · asked by ' + r.requested_by : '')));
+    el.textContent = bits.join(' · ');
+    el.className = 'status-line ' + (live.some(r => r.status === 'running') ? 'running'
+                   : (mine && mine.status === 'done') ? (mine.ok ? 'done' : 'error') : '');
+    return {live: live.length, mine};
+  }
+
+  async function refreshRequests() {
+    let j;
+    try {
+      j = await (await fetch('/handsfree/requests')).json();
+    } catch (e) { return; }
+    const r = renderRequests(j.items);
+    if (r.mine && r.mine.status === 'done') {
+      requestWatchCase = null;
+      loadQueue();
+    }
+    if (!r.live && !requestWatchCase && requestTimer) { clearInterval(requestTimer); requestTimer = null; }
+  }
+
+  function watchRequests(caseNbr) {
+    if (caseNbr) requestWatchCase = caseNbr;
+    if (!requestTimer) requestTimer = setInterval(refreshRequests, 5000);
+    refreshRequests();
   }
 
   let pollIntervalMs = 0;
@@ -1420,7 +1473,7 @@
             `<path d="M3 7a2 2 0 0 1 2-2h4l2 2h8a2 2 0 0 1 2 2v8a2 2 0 0 1-2 2H5a2 2 0 0 1-2-2z" /></svg>` +
             `Folder</button> `
           : '') +
-        `<button class="ghost avatar-btn lp-btn-sm" title="${esc(avatarHandoffTitle(!!it.log_dir))}">Avatar</button> ` +
+        `<button class="ghost avatar-btn lp-btn-sm" title="${esc(avatarHandoffTitle(!!it.log_dir))}"${it.log_dir ? '' : ' disabled'}>Avatar</button> ` +
         (firstOfCase.has(it.case_nbr) ? '' :
           `<button class="ghost reset-btn lp-btn-sm" title="Forget this case's Beacon history so the next run starts fresh">Reset</button>`) +
         `</td>`;
@@ -1454,8 +1507,8 @@
   // the server's answer then points it.
   function avatarHandoffTitle(hasLog) {
     return hasLog
-      ? "Opens Avatar's Log Chatbot on this case's decoded log, primed with the case and the issue time, to continue by hand"
-      : "No decoded log for this case yet — opens the case in Avatar (attachment picker) to choose the logs and analyze by hand";
+      ? "Opens Avatar's Log Chatbot on this case's decoded log, with the issue filled in the chat, to continue by hand"
+      : "no log to analysis";
   }
   async function openInAvatar(caseNbr, draftId, btn) {
     if (!caseNbr) { alert('No case to open.'); return; }
@@ -1628,8 +1681,9 @@
     document.getElementById('approve-btn').title = d.email
       ? 'Saves this text as a reply to the mail in your Outlook Drafts folder — nothing is sent'
       : 'Posts this text to IPS as a Private-to-Intel comment';
-    document.getElementById('draft-avatar-btn').title =
-      avatarHandoffTitle(!!(d.shared_log_path || (d.analysis && d.analysis.log_path)));
+    const draftHasLog = !!(d.shared_log_path || (d.analysis && d.analysis.log_path));
+    document.getElementById('draft-avatar-btn').title = avatarHandoffTitle(draftHasLog);
+    document.getElementById('draft-avatar-btn').disabled = !draftHasLog;
     document.getElementById('draft-panel').style.display = '';
     document.getElementById('draft-title').innerHTML =
       `case ${caseLink(d.case_nbr, d.case_id)} · ${esc(d.mode)} · ${esc(d.status)}`;
@@ -2347,7 +2401,7 @@
         `<div class="lp-actions">` +
         (d.draft_id ? `<button class="primary" onclick="openDraft(${JSON.stringify(d.draft_id).replace(/"/g, '&quot;')})">Open draft</button>` : '') +
         (d.fr_draft_id ? `<button class="ghost" onclick="openDraft(${JSON.stringify(d.fr_draft_id).replace(/"/g, '&quot;')})">Open first-response</button>` : '') +
-        ((d.case_nbr || sel) ? `<button class="ghost" onclick="openInAvatar(${JSON.stringify(d.case_nbr || sel).replace(/"/g, '&quot;')}, ${JSON.stringify(d.draft_id || '').replace(/"/g, '&quot;')}, this)" title="${esc(avatarHandoffTitle(!!d.log_path))}">Open in Avatar analysis</button>` : '') +
+        ((d.case_nbr || sel) ? `<button class="ghost" onclick="openInAvatar(${JSON.stringify(d.case_nbr || sel).replace(/"/g, '&quot;')}, ${JSON.stringify(d.draft_id || '').replace(/"/g, '&quot;')}, this)" title="${esc(avatarHandoffTitle(!!d.log_path))}"${d.log_path ? '' : ' disabled'}>Open in Avatar analysis</button>` : '') +
         `</div></div></div>`;
     }
 
@@ -2464,6 +2518,7 @@
   signIn(false);
   refreshStatus();
   loadAuto();
+  watchRequests(null);      // requests already waiting on / running at the server
 </script>
 </body>
 </html>

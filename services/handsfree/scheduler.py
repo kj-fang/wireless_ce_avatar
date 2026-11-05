@@ -465,16 +465,64 @@ def _cleanup_after_round(store) -> dict:
         return {"error": f"{type(e).__name__}: {e}"}
 
 
+_REQUEST_RUN_TIMEOUT_S = 60 * 60
+
+
+def run_requests() -> int:
+    """Server only: serve the case requests clients left on the share
+    (HandsfreeStore.request_case), oldest first, one at a time, through the
+    same single-case run the page's "Analyze this case" uses on the server —
+    so the live panel shows it here, and the draft (with its saved live
+    history) lands in the shared queue for the requester. Returns how many
+    ran. A request the run lock refuses (a round in progress) goes back to
+    pending for the next tick."""
+    if not can_schedule_here():
+        return 0
+    from . import orchestrator
+    store = _store()
+    ran = 0
+    for req in store.pending_requests():
+        case_nbr = req["case_nbr"]
+        claimed = store.claim_request(case_nbr, _this_host())
+        if not claimed:
+            continue                       # another server took it, or withdrawn
+        res = orchestrator.start_case_run(case_nbr)
+        if not res.get("ok"):
+            if "already in progress" in str(res.get("error", "")):
+                store.unclaim_request(case_nbr)
+                return ran                 # try again next tick, keep the order
+            store.finish_request(case_nbr, ok=False, error=str(res.get("error") or "could not start"))
+            continue
+        deadline = time.time() + _REQUEST_RUN_TIMEOUT_S
+        state = orchestrator.get_run_state()
+        while state.get("status") == "running" and time.time() < deadline:
+            time.sleep(1)
+            state = orchestrator.get_run_state()
+        details = (state.get("case_details") or {}).get(case_nbr) or {}
+        ok = state.get("status") == "done"
+        store.finish_request(case_nbr, ok=ok,
+                             error="" if ok else str(state.get("error") or
+                                                     ("still running after an hour"
+                                                      if state.get("status") == "running"
+                                                      else state.get("status") or "failed")),
+                             draft_id=str(details.get("draft_id") or ""))
+        print(f"[handsfree.scheduler] request {case_nbr} from {req.get('requested_by') or '?'}: "
+              + ("done" if ok else f"failed: {state.get('error')}"))
+        ran += 1
+    return ran
+
+
 def _tick(now: Optional[datetime] = None) -> bool:
-    """One scheduler tick: run the due round when this server owns the
-    schedule. Returns True when a round ran."""
+    """One scheduler tick: serve clients' case requests, then run the due
+    round when this server owns the schedule. Returns True when anything ran."""
+    ran = run_requests() > 0
     cfg = _store().load_config()
     if not (cfg.get("auto_check_enabled") and cfg.get("auto_next_run_at")
             and can_schedule_here() and _runs_here(cfg)):
-        return False
+        return ran
     due = datetime.fromisoformat(cfg["auto_next_run_at"])
     if (now or datetime.now().astimezone()) < due:
-        return False
+        return ran
     run_once(trigger="scheduled")
     return True
 

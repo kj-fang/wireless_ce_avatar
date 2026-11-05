@@ -52,7 +52,7 @@ _CASE_FACT_FIELDS = ("description", "attachment_time", "issue_time", "issue_time
 _CASE_KEY_PREFIX = "case:"
 CASE_LOOKUP_KEY = "lookup"
 ORGANIZED_KEY = "organized"
-_LOOKUP_FIELDS = ("subject", "description", "issue_type")
+_LOOKUP_FIELDS = ("subject", "description", "issue_type", "subcategory")
 
 _answer_lock = threading.Lock()
 
@@ -257,11 +257,14 @@ def _apply_stored_answer(log_path) -> None:
         # an earlier conversation, which it is newer than.
         record = answer_for(session.get("uploaded_source_path")) or record
     elif not record.get("source"):
-        # The gate accepts an answer belonging to the archive this log was
-        # extracted from, so restoring has to find the same one. Without this,
-        # switching case and back opened the gate without putting the case
-        # back, and the conversation went on with nothing attached.
-        record = _archive_answer(log_path) or record
+        # The gate accepts the answer that owns this log -- the archive it came
+        # out of, or the record its own holder is filed under -- so restoring
+        # has to resolve the same one. Without this, switching case and back
+        # opened the gate without putting the case back, and the conversation
+        # went on with nothing attached.
+        owner = _owning_answer_key(log_path)
+        owned = _load_answers().get(owner) if owner else None
+        record = owned if isinstance(owned, dict) and owned else record
     source = record.get("source")
     if source in (SKIPPED, EXPLICIT, DERIVED_FROM_PATH):
         # The restored answer is now this session's answer about this log.
@@ -627,7 +630,7 @@ def _write_case_holder(canonical: str, field: str, value) -> bool:
 
 
 def remember_case_lookup(case_nbr, subject: str, description: str,
-                         issue_type: str) -> None:
+                         issue_type: str, subcategory: str = "") -> None:
     """Keep what IPS said about a case, so the next conversation need not ask."""
     canonical = check_ips_utils.normalise_ips(case_nbr)
     if not canonical or not (subject or description):
@@ -635,7 +638,10 @@ def remember_case_lookup(case_nbr, subject: str, description: str,
     if _write_case_holder(canonical, CASE_LOOKUP_KEY, {
             "subject": subject or "",
             "description": description or "",
-            "issue_type": issue_type or ""}):
+            "issue_type": issue_type or "",
+            # Kept because it is what says which radio the case is about: a
+            # cache hit without it leaves the other-radio guards blind.
+            "subcategory": subcategory or ""}):
         print(f"[ips] kept what IPS said about {canonical}; the next "
               f"conversation about it opens without a lookup")
 
@@ -1186,7 +1192,8 @@ def enrich_attached_case(case_nbr) -> bool:
 
     remember_case_lookup(canonical, subject, description,
                          (classification or {}).get("issue_type", "")
-                         if isinstance(classification, dict) else "")
+                         if isinstance(classification, dict) else "",
+                         subcategory)
 
     # The agent reads issue_context on every answer, so updating it is enough;
     # no re-priming, which would reset the conversation.
@@ -1230,6 +1237,10 @@ def prefetch_case_facts(case_nbr) -> None:
         if canonical in _case_facts:
             print(f"[ips] prefetch for {canonical} not needed, already looked up")
             return
+    if remembered_case_lookup(canonical).get("description"):
+        print(f"[ips] prefetch for {canonical} not needed, on file from an "
+              f"earlier run")
+        return
 
     def warm():
         print(f"[ips] prefetch for {canonical} started")
@@ -1239,12 +1250,13 @@ def prefetch_case_facts(case_nbr) -> None:
                 # Onto disk from the thread as well, so the next run of the
                 # app starts where this one left off rather than looking the
                 # same case up again.
-                _, subject, _, description, _, _ = facts["fields"]
+                _, subject, _, description, _, subcategory = facts["fields"]
                 classification = facts.get("classification")
                 remember_case_lookup(
                     canonical, subject, description,
                     (classification or {}).get("issue_type", "")
-                    if isinstance(classification, dict) else "")
+                    if isinstance(classification, dict) else "",
+                    subcategory)
             print(f"[ips] prefetch for {canonical} done: "
                   f"{'IPS returned a row' if facts else 'IPS had no row for it'}")
         except Exception as e:
@@ -1277,6 +1289,9 @@ def enrich_attached_case_if_needed() -> bool:
     if not in_memory and (remembered.get("description") or remembered.get("subject")):
         context.subject = context.subject or remembered["subject"]
         context.description = context.description or remembered["description"]
+        # Without it case_wireless_domain() reads blank and a Wi-Fi case's
+        # statement walks into the BT bot the restart was supposed to protect.
+        context.subcategory = context.subcategory or remembered["subcategory"]
         session["case_context"] = context.to_session()
         if remembered.get("issue_type") and not session.get("classification"):
             session["classification"] = {"issue_type": remembered["issue_type"]}

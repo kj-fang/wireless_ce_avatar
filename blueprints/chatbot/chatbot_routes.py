@@ -1838,9 +1838,15 @@ class AgentRoutes:
         # log_path travels only for profiles that reconcile customer time:
         # realign_times_to_log uses it to detect the customer's timezone and
         # capture date, nothing else.
-        organized = self._issue_context_organized(
-            ctx.get("description", "") or "", first_ts, last_ts,
-            log_path if self.profile.customer_timezone else "")
+        if _case_filed_under_other_radio(self.profile.gather_domain):
+            # Not just a blank description: the pre-pass cached on the session
+            # was run over the other radio's statement, and the organizer
+            # returns it without looking at what it is now being asked about.
+            organized = {}
+        else:
+            organized = self._issue_context_organized(
+                ctx.get("description", "") or "", first_ts, last_ts,
+                log_path if self.profile.customer_timezone else "")
         clean_desc = organized.get("clean_description") or _compose_concise_description(ctx)
         issue_times = organized.get("issue_times") or []
 

@@ -735,7 +735,11 @@
         // change it. Whatever is in the box came from the previous number, so
         // a change replaces it rather than yielding to it as a draft.
         if (window.IpsPrompt && !window.IpsPrompt.onCaseChanged) {
-            window.IpsPrompt.onCaseChanged = () => {
+            window.IpsPrompt.onCaseChanged = (body) => {
+                // The server closed the thread this id names. Keeping it would
+                // point Stop at a conversation that no longer exists, so the
+                // next analysis streams on while the page stops rendering it.
+                if (body && body.conversation_reset) window.__feedbackConversationId = '';
                 this._prefillAttachedCaseDescription(window.__setLogGen, true);
             };
         }

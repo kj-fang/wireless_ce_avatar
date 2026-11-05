@@ -410,8 +410,11 @@
                  log_path: state.log_path || "" });
       });
     });
-    // Reading it should not race the timer away.
+    // Reading it should not race the timer away -- for whoever is reading it,
+    // not only the one holding a mouse: tabbing to Change used to leave the
+    // timer running and take the focused link away mid-read.
     bar.addEventListener("mouseenter", hold);
+    bar.addEventListener("focusin", hold);
 
     document.body.appendChild(bar);
     requestAnimationFrame(function () { bar.style.opacity = "1"; });

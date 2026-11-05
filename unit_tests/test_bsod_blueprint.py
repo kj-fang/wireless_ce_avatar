@@ -12,7 +12,7 @@ from unittest.mock import MagicMock, patch
 import requests
 
 from blueprints.bsod.bsod import bsod_bp
-from tests.base_test import BaseTestCase
+from unit_tests.base_test import BaseTestCase
 
 ROUTES = "blueprints.bsod.bsod"
 

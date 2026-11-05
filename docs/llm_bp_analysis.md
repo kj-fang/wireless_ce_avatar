@@ -1,8 +1,8 @@
 # LLM Blueprint — Analysis & Unit Test Documentation
 
 - Route module: [blueprints/llm/llm_routes.py](../blueprints/llm/llm_routes.py)
-- Test module: [tests/test_llm_blueprint.py](../tests/test_llm_blueprint.py)
-- Shared fixture: [tests/base_test.py](../tests/base_test.py)
+- Test module: [unit_tests/test_llm_blueprint.py](../unit_tests/test_llm_blueprint.py)
+- Shared fixture: [unit_tests/base_test.py](../unit_tests/base_test.py)
 
 ## Overview — What LLM Does
 

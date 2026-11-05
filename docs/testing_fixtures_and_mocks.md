@@ -1,9 +1,9 @@
 # Testing Reference: Fixtures & Mocks
 
 A plain-language reference for understanding the unit tests in this project
-(`tests/test_*_blueprint.py`). Covers what a **test fixture** is, what **mocks**
+(`unit_tests/test_*_blueprint.py`). Covers what a **test fixture** is, what **mocks**
 are, and a line-by-line walkthrough of a real example from
-[tests/test_bsod_blueprint.py](../tests/test_bsod_blueprint.py).
+[unit_tests/test_bsod_blueprint.py](../unit_tests/test_bsod_blueprint.py).
 
 ---
 
@@ -48,7 +48,7 @@ automatically torn down after each test.
 
 `unittest` calls it `setUp` / `tearDown`; `pytest` uses the word "fixture"
 explicitly via `@pytest.fixture`. Same concept. In the flow diagrams under
-`diagrams/`, the **"Test fixture"** box means exactly this — the mocked services,
+`docs/unit_test/`, the **"Test fixture"** box means exactly this — the mocked services,
 config, and app/client that every test in the file starts from.
 
 ---
@@ -108,7 +108,7 @@ network, no popups, no real files.
 
 ## 3. Line-by-line walkthrough of a real example
 
-From [tests/test_bsod_blueprint.py](../tests/test_bsod_blueprint.py):
+From [unit_tests/test_bsod_blueprint.py](../unit_tests/test_bsod_blueprint.py):
 
 ```python
 @patch(f"{ROUTES}.requests.post")                                       # fake the HTTP call
@@ -240,14 +240,14 @@ Every test in this suite follows the same three-part shape:
 3. **Assert** — check the response (status code, body, flash) and verify which
    mocks were/weren't called (the "then").
 
-The flow diagrams in `diagrams/` visualize this as **scenario / input ➜ expected
+The flow diagrams in `docs/unit_test/` visualize this as **scenario / input ➜ expected
 response & asserted calls** for each test case.
 
 ---
 
 ## 5. Related files
 
-- Tests: [tests/test_bsod_blueprint.py](../tests/test_bsod_blueprint.py)
+- Tests: [unit_tests/test_bsod_blueprint.py](../unit_tests/test_bsod_blueprint.py)
 - Route under test: [blueprints/bsod/bsod.py](../blueprints/bsod/bsod.py)
-- Flow diagrams: `diagrams/test_bsod_blueprint_flow.html`,
-  `diagrams/test_analysis_etl_blueprint_flow.html`
+- Flow diagrams: `docs/unit_test/test_bsod_blueprint_flow.html`,
+  `docs/unit_test/test_analysis_etl_blueprint_flow.html`

@@ -27,7 +27,7 @@ import services
 from blueprints.main import main_routes
 from blueprints.main.main_routes import main_bp
 from models.models import CaseContext
-from tests.base_test import TEST_CASE_NBR, BaseTestCase
+from unit_tests.base_test import TEST_CASE_NBR, BaseTestCase
 
 ROUTES = "blueprints.main.main_routes"
 ISSUE_TIME_AI = "utils.issue_time_ai"

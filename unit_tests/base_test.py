@@ -21,8 +21,8 @@ import sys
 import unittest
 from unittest.mock import MagicMock, patch
 
-# Same console fix as tests/__init__.py - repeated here because
-# ``unittest discover -s tests`` imports test modules as top-level modules
+# Same console fix as unit_tests/__init__.py - repeated here because
+# ``unittest discover -s unit_tests`` imports test modules as top-level modules
 # without executing the package __init__.
 for _stream in (sys.stdout, sys.stderr):
     if hasattr(_stream, "reconfigure"):

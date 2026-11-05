@@ -1,7 +1,7 @@
 r"""Blueprint-layer unit tests (stdlib unittest).
 
 Run from the repo root with the project venv:
-    .\venv\Scripts\python.exe -m unittest discover -s tests -v
+    .\venv\Scripts\python.exe -m unittest discover -s unit_tests -v
 """
 import sys
 

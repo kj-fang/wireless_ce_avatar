@@ -24,7 +24,7 @@ from unittest.mock import ANY, MagicMock, patch
 import blueprints.chatbot.chatbot_routes as routes
 from blueprints.chatbot.chatbot_routes import log_chatbot_bp
 from configs.chatbot_ui import LOG_CHATBOT_UI
-from tests.base_test import BaseTestCase
+from unit_tests.base_test import BaseTestCase
 
 # The three profile route modules were unified into one; the Wi-Fi handlers are
 # now methods on a per-profile AgentRoutes instance built at import time.

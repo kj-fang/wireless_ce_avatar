@@ -33,7 +33,7 @@ from unittest.mock import ANY, MagicMock, patch
 import blueprints.nw_analysis.nw_analysis_routes as nw_routes
 from blueprints.nw_analysis.nw_analysis_routes import nw_analysis_bp
 from configs.chatbot_ui import NW_UI
-from tests.base_test import BaseTestCase, TESTS_DIR
+from unit_tests.base_test import BaseTestCase, TESTS_DIR
 
 ROUTES = "blueprints.nw_analysis.nw_analysis_routes"
 

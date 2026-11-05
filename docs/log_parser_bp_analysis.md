@@ -1,8 +1,8 @@
 # Log Parser Blueprint — Analysis & Unit Test Documentation
 
 - Route module: [blueprints/log_parser/log_parser_routes.py](../blueprints/log_parser/log_parser_routes.py)
-- Test module: [tests/test_log_parser_blueprint.py](../tests/test_log_parser_blueprint.py)
-- Shared fixture: [tests/base_test.py](../tests/base_test.py)
+- Test module: [unit_tests/test_log_parser_blueprint.py](../unit_tests/test_log_parser_blueprint.py)
+- Shared fixture: [unit_tests/base_test.py](../unit_tests/base_test.py)
 - Main collaborators: [services/log_parser_service.py](../services/log_parser_service.py), [services/log_parser_file_manage_service.py](../services/log_parser_file_manage_service.py), [services/etl_parser/wpp_ddd_parser.py](../services/etl_parser/wpp_ddd_parser.py), [services/etl_parser/bt_parser.py](../services/etl_parser/bt_parser.py)
 
 ## Overview — What Log Parser Does

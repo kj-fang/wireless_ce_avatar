@@ -1,8 +1,8 @@
 # Download Blueprint — Analysis & Unit Test Documentation
 
 - Route module: [blueprints/download/download_routes.py](../blueprints/download/download_routes.py)
-- Test module: [tests/test_download_blueprint.py](../tests/test_download_blueprint.py)
-- Shared fixture: [tests/base_test.py](../tests/base_test.py)
+- Test module: [unit_tests/test_download_blueprint.py](../unit_tests/test_download_blueprint.py)
+- Shared fixture: [unit_tests/base_test.py](../unit_tests/base_test.py)
 
 ## Overview — What Download Does
 

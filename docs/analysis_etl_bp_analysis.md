@@ -1,8 +1,8 @@
 # Analysis ETL Blueprint — Analysis & Unit Test Documentation
 
 - Route module: [blueprints/analysis_etl/analysis_etl_routes.py](../blueprints/analysis_etl/analysis_etl_routes.py)
-- Test module: [tests/test_analysis_etl_blueprint.py](../tests/test_analysis_etl_blueprint.py)
-- Shared fixture: [tests/base_test.py](../tests/base_test.py)
+- Test module: [unit_tests/test_analysis_etl_blueprint.py](../unit_tests/test_analysis_etl_blueprint.py)
+- Shared fixture: [unit_tests/base_test.py](../unit_tests/base_test.py)
 
 ## Overview — What Analysis ETL Does
 

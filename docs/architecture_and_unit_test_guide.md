@@ -1,6 +1,6 @@
 # Architecture & Unit Test Guide — Blueprint Layer
 
-This guide explains how the Flask blueprint layer of Intel Wireless CE Avatar is put together, which parts of it make good unit-test targets, and how the stdlib-`unittest` suite under [tests/](../tests/) decides whether a test passes. Per-blueprint details live in the `docs/<blueprint>_bp_analysis.md` files listed at the end.
+This guide explains how the Flask blueprint layer of Intel Wireless CE Avatar is put together, which parts of it make good unit-test targets, and how the stdlib-`unittest` suite under [unit_tests/](../unit_tests/) decides whether a test passes. Per-blueprint details live in the `docs/<blueprint>_bp_analysis.md` files listed at the end.
 
 ---
 
@@ -66,7 +66,7 @@ Every route module does `from configs.global_configs import app_config`, which *
 - Patching only `configs.global_configs.app_config` does not affect modules that were imported earlier — they still hold the real object.
 - Any module imported *after* the patch would bind the mock permanently.
 
-[tests/base_test.py](../tests/base_test.py) solves both: it imports every blueprint up front, then in `setUpClass` swaps the singleton for a `MagicMock` and repoints **every** loaded module whose `app_config` attribute `is` the real object (identity match). All patchers are stopped in `tearDownClass`, so the real singleton is restored and test modules are independent of import order (important for the VS Code test runner, which imports test modules before any `setUpClass`).
+[unit_tests/base_test.py](../unit_tests/base_test.py) solves both: it imports every blueprint up front, then in `setUpClass` swaps the singleton for a `MagicMock` and repoints **every** loaded module whose `app_config` attribute `is` the real object (identity match). All patchers are stopped in `tearDownClass`, so the real singleton is restored and test modules are independent of import order (important for the VS Code test runner, which imports test modules before any `setUpClass`).
 
 ### 1.4 Session and `CaseContext`
 
@@ -120,7 +120,7 @@ Rule of thumb: **unit-test the decision, mock the effect.**
 
 ### 3.1 Arrange → Act → Assert
 
-Every test follows the same three steps (see [tests/test_bsod_blueprint.py](../tests/test_bsod_blueprint.py)):
+Every test follows the same three steps (see [unit_tests/test_bsod_blueprint.py](../unit_tests/test_bsod_blueprint.py)):
 
 ```python
 @patch(f"{ROUTES}.requests.post")                                   # Arrange: replace the effect
@@ -176,14 +176,14 @@ Each blueprint doc's "What Would Make These Tests Fail?" table shows exactly whi
 
 ```powershell
 # whole suite (-b buffers the app's print() output; success = final "OK" / exit code 0)
-& .\venv\Scripts\python.exe -m unittest discover -s tests -b
+& .\venv\Scripts\python.exe -m unittest discover -s unit_tests -b
 # one blueprint, verbose
-& .\venv\Scripts\python.exe -m unittest -b tests.test_analysis_etl_blueprint -v
+& .\venv\Scripts\python.exe -m unittest -b unit_tests.test_analysis_etl_blueprint -v
 ```
 
 `unittest` writes progress to **stderr**, and error-path tests make the app print tracebacks; red text or "Traceback" lines are not failures by themselves — only the final `FAILED (...)` line / non-zero exit code is.
 
-### 4.2 Fixture (`tests/base_test.py`)
+### 4.2 Fixture (`unit_tests/base_test.py`)
 
 ```
 BaseTestCase.setUpClass
@@ -192,7 +192,7 @@ BaseTestCase.setUpClass
   └─ for every module in sys.modules with vars(module)['app_config'] is real → patch.object(module, 'app_config', mock)
 BaseTestCase.setUp
   ├─ _configure_app_config(mock): socketio / llm_helper / key / driver_manager = MagicMock(),
-  │     silent_mode=False, project_root / avatarfiles_dir / driver_dir = tests/_fake_* (never created),
+  │     silent_mode=False, project_root / avatarfiles_dir / driver_dir = unit_tests/_fake_* (never created),
   │     sendto_token='unit-test-token', agents=None
   ├─ patch CaseContext.to_session → to_dict()   (no sidecar file)
   ├─ Flask app: TESTING=True, SECRET_KEY, WTF_CSRF_ENABLED=False
@@ -205,7 +205,7 @@ BaseTestCase.tearDown / tearDownClass: pop context; stop every patcher
 
 ### 4.3 Conventions
 
-- One `tests/test_<blueprint>_blueprint.py` per blueprint; `ROUTES = 'blueprints.<bp>.<module>'` at the top.
+- One `unit_tests/test_<blueprint>_blueprint.py` per blueprint; `ROUTES = 'blueprints.<bp>.<module>'` at the top.
 - First test class asserts registration and `url_prefix`.
 - Routes that `redirect(url_for('main.<endpoint>'))` get a stub `main` blueprint so `url_for` resolves without importing the real main routes' dependencies.
 - SocketIO handlers are imported and called directly inside `app.test_request_context()`.
@@ -217,15 +217,15 @@ BaseTestCase.tearDown / tearDownClass: pop context; stop every patcher
 
 | Blueprint | Doc | Test module |
 |---|---|---|
-| main | [main_bp_analysis.md](main_bp_analysis.md) | [test_main_blueprint.py](../tests/test_main_blueprint.py) |
-| analysis_etl | [analysis_etl_bp_analysis.md](analysis_etl_bp_analysis.md) | [test_analysis_etl_blueprint.py](../tests/test_analysis_etl_blueprint.py) |
-| download | [download_bp_analysis.md](download_bp_analysis.md) | [test_download_blueprint.py](../tests/test_download_blueprint.py) |
-| llm | [llm_bp_analysis.md](llm_bp_analysis.md) | [test_llm_blueprint.py](../tests/test_llm_blueprint.py) |
-| automation | [automation_bp_analysis.md](automation_bp_analysis.md) | [test_automation_blueprint.py](../tests/test_automation_blueprint.py) |
-| bsod | [bsod_bp_analysis.md](bsod_bp_analysis.md) | [test_bsod_blueprint.py](../tests/test_bsod_blueprint.py) |
-| log_parser | [log_parser_bp_analysis.md](log_parser_bp_analysis.md) | [test_log_parser_blueprint.py](../tests/test_log_parser_blueprint.py) |
-| log_chatbot | [log_chatbot_bp_analysis.md](log_chatbot_bp_analysis.md) | [test_log_chatbot_blueprint.py](../tests/test_log_chatbot_blueprint.py) |
-| bt_chatbot | [bt_chatbot_bp_analysis.md](bt_chatbot_bp_analysis.md) | [test_bt_chatbot_blueprint.py](../tests/test_bt_chatbot_blueprint.py) |
-| nw_analysis | [nw_analysis_bp_analysis.md](nw_analysis_bp_analysis.md) | [test_nw_analysis_blueprint.py](../tests/test_nw_analysis_blueprint.py) |
-| feedback | [feedback_bp_analysis.md](feedback_bp_analysis.md) | [test_feedback_blueprint.py](../tests/test_feedback_blueprint.py) |
-| handsfree | [handsfree_bp_analysis.md](handsfree_bp_analysis.md) | [test_handsfree_blueprint.py](../tests/test_handsfree_blueprint.py) |
+| main | [main_bp_analysis.md](main_bp_analysis.md) | [test_main_blueprint.py](../unit_tests/test_main_blueprint.py) |
+| analysis_etl | [analysis_etl_bp_analysis.md](analysis_etl_bp_analysis.md) | [test_analysis_etl_blueprint.py](../unit_tests/test_analysis_etl_blueprint.py) |
+| download | [download_bp_analysis.md](download_bp_analysis.md) | [test_download_blueprint.py](../unit_tests/test_download_blueprint.py) |
+| llm | [llm_bp_analysis.md](llm_bp_analysis.md) | [test_llm_blueprint.py](../unit_tests/test_llm_blueprint.py) |
+| automation | [automation_bp_analysis.md](automation_bp_analysis.md) | [test_automation_blueprint.py](../unit_tests/test_automation_blueprint.py) |
+| bsod | [bsod_bp_analysis.md](bsod_bp_analysis.md) | [test_bsod_blueprint.py](../unit_tests/test_bsod_blueprint.py) |
+| log_parser | [log_parser_bp_analysis.md](log_parser_bp_analysis.md) | [test_log_parser_blueprint.py](../unit_tests/test_log_parser_blueprint.py) |
+| log_chatbot | [log_chatbot_bp_analysis.md](log_chatbot_bp_analysis.md) | [test_log_chatbot_blueprint.py](../unit_tests/test_log_chatbot_blueprint.py) |
+| bt_chatbot | [bt_chatbot_bp_analysis.md](bt_chatbot_bp_analysis.md) | [test_bt_chatbot_blueprint.py](../unit_tests/test_bt_chatbot_blueprint.py) |
+| nw_analysis | [nw_analysis_bp_analysis.md](nw_analysis_bp_analysis.md) | [test_nw_analysis_blueprint.py](../unit_tests/test_nw_analysis_blueprint.py) |
+| feedback | [feedback_bp_analysis.md](feedback_bp_analysis.md) | [test_feedback_blueprint.py](../unit_tests/test_feedback_blueprint.py) |
+| handsfree | [handsfree_bp_analysis.md](handsfree_bp_analysis.md) | [test_handsfree_blueprint.py](../unit_tests/test_handsfree_blueprint.py) |

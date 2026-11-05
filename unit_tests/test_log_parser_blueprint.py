@@ -27,7 +27,7 @@ from flask import Blueprint, request, session
 import blueprints.log_parser.log_parser_routes as lp
 from blueprints.log_parser.log_parser_routes import log_parser_bp
 from configs.path_configs import LOAD_PATH_bkup, LOAD_PATH_prim, LOG_PARSER_DIR
-from tests.base_test import BaseTestCase
+from unit_tests.base_test import BaseTestCase
 
 ROUTES = "blueprints.log_parser.log_parser_routes"
 

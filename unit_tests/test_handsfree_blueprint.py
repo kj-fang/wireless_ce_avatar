@@ -21,7 +21,7 @@ from blueprints.handsfree.handsfree_routes import handsfree_bp
 from services.handsfree.case_reader import READER_PROMPT, _format_env_detail
 from services.handsfree.composer import AI_MARKER
 from services.handsfree.runner import _env_brief, _env_repro_steps
-from tests.base_test import TEST_AVATARFILES_DIR, BaseTestCase
+from unit_tests.base_test import TEST_AVATARFILES_DIR, BaseTestCase
 
 ROUTES = "blueprints.handsfree.handsfree_routes"
 

@@ -17,7 +17,7 @@ from blueprints.download.download_routes import (
     handle_start_download,
     register_socketio_handlers,
 )
-from tests.base_test import TEST_CASE_NBR, BaseTestCase
+from unit_tests.base_test import TEST_CASE_NBR, BaseTestCase
 
 ROUTES = "blueprints.download.download_routes"
 

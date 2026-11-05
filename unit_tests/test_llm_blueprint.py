@@ -11,7 +11,7 @@ import unittest
 from unittest.mock import ANY, patch
 
 from blueprints.llm.llm_routes import llm_bp
-from tests.base_test import TEST_CASE_NBR, BaseTestCase
+from unit_tests.base_test import TEST_CASE_NBR, BaseTestCase
 
 ROUTES = "blueprints.llm.llm_routes"
 

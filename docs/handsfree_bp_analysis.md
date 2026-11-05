@@ -1,8 +1,8 @@
 # Handsfree Blueprint — Analysis & Unit Test Documentation
 
 - Route module: [blueprints/handsfree/handsfree_routes.py](../blueprints/handsfree/handsfree_routes.py)
-- Test module: [tests/test_handsfree_blueprint.py](../tests/test_handsfree_blueprint.py)
-- Shared fixture: [tests/base_test.py](../tests/base_test.py)
+- Test module: [unit_tests/test_handsfree_blueprint.py](../unit_tests/test_handsfree_blueprint.py)
+- Shared fixture: [unit_tests/base_test.py](../unit_tests/base_test.py)
 - Services behind it: [services/handsfree/orchestrator.py](../services/handsfree/orchestrator.py), [services/handsfree/queue.py](../services/handsfree/queue.py), [services/handsfree/case_reader.py](../services/handsfree/case_reader.py), [services/handsfree/runner.py](../services/handsfree/runner.py), [services/handsfree/composer.py](../services/handsfree/composer.py)
 
 ## Overview — What Handsfree Does
@@ -119,7 +119,7 @@ BACKGROUND / SERVICE
 
 ## What the Unit Tests Actually Test
 
-Route test classes patch `HandsfreeStore` (index/config/queue classes) or `orchestrator` (run classes) at class level; `_store()` therefore returns `mock_store_cls.return_value`. `app_config.avatarfiles_dir` is the fixture's `TEST_AVATARFILES_DIR` (`tests/_fake_avatarfiles`, never created). `AI_MARKER = "[AI-Avatar preliminary analysis]"` and `compose_html` are the real composer objects. `TestHandsfreeEnvDetail` is a plain `unittest.TestCase` — no Flask app, no mocks; it calls the pure service helpers.
+Route test classes patch `HandsfreeStore` (index/config/queue classes) or `orchestrator` (run classes) at class level; `_store()` therefore returns `mock_store_cls.return_value`. `app_config.avatarfiles_dir` is the fixture's `TEST_AVATARFILES_DIR` (`unit_tests/_fake_avatarfiles`, never created). `AI_MARKER = "[AI-Avatar preliminary analysis]"` and `compose_html` are the real composer objects. `TestHandsfreeEnvDetail` is a plain `unittest.TestCase` — no Flask app, no mocks; it calls the pure service helpers.
 
 ### 1. test_blueprint_registered_with_url_prefix
 
@@ -1346,7 +1346,7 @@ def test_env_brief_respects_limit(self):
 setUpClass (BaseTestCase subclasses) ── patch app_config (configs.global_configs + identity-rebound modules)
      │                                   _store() imports app_config lazily → receives the mock
      ▼
-setUp ── reset mock (avatarfiles_dir = tests/_fake_avatarfiles) ── patch CaseContext.to_session
+setUp ── reset mock (avatarfiles_dir = unit_tests/_fake_avatarfiles) ── patch CaseContext.to_session
       ── fresh Flask app ── register handsfree_bp ── client ── app ctx
      │
      ├─ store-backed tests: class @patch HandsfreeStore → store = mock_store_cls.return_value

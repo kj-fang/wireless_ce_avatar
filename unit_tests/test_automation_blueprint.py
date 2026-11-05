@@ -28,7 +28,7 @@ from blueprints.automation.automation_routes import (
     handle_run_latest_etl,
     register_socketio_handlers,
 )
-from tests.base_test import TEST_CASE_NBR, BaseTestCase
+from unit_tests.base_test import TEST_CASE_NBR, BaseTestCase
 
 ROUTES = "blueprints.automation.automation_routes"
 

@@ -1,8 +1,8 @@
 # Feedback Blueprint — Analysis & Unit Test Documentation
 
 - Route module: [blueprints/feedback/feedback_routes.py](../blueprints/feedback/feedback_routes.py)
-- Test module: [tests/test_feedback_blueprint.py](../tests/test_feedback_blueprint.py)
-- Shared fixture: [tests/base_test.py](../tests/base_test.py)
+- Test module: [unit_tests/test_feedback_blueprint.py](../unit_tests/test_feedback_blueprint.py)
+- Shared fixture: [unit_tests/base_test.py](../unit_tests/base_test.py)
 - Service delegated to: [services/feedback_service.py](../services/feedback_service.py), [services/gather_service.py](../services/gather_service.py)
 
 ## Overview — What Feedback Does

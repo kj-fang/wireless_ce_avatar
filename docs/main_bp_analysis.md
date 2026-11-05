@@ -1,8 +1,8 @@
 # Main Blueprint — Analysis & Unit Test Documentation
 
 - Route module: [blueprints/main/main_routes.py](../blueprints/main/main_routes.py)
-- Test module: [tests/test_main_blueprint.py](../tests/test_main_blueprint.py)
-- Shared fixture: [tests/base_test.py](../tests/base_test.py)
+- Test module: [unit_tests/test_main_blueprint.py](../unit_tests/test_main_blueprint.py)
+- Shared fixture: [unit_tests/base_test.py](../unit_tests/base_test.py)
 - Formatting reference: [docs/bsod_bp_analysis.md](bsod_bp_analysis.md)
 
 ## Overview — What Main Does

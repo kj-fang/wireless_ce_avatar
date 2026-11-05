@@ -14,7 +14,7 @@ import unittest
 from unittest.mock import patch
 
 from blueprints.analysis_etl.analysis_etl_routes import analysis_etl_bp
-from tests.base_test import BaseTestCase
+from unit_tests.base_test import BaseTestCase
 
 ROUTES = "blueprints.analysis_etl.analysis_etl_routes"
 

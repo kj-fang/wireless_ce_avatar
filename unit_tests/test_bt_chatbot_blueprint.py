@@ -37,7 +37,7 @@ from flask import session
 import blueprints.chatbot.chatbot_routes as routes
 from blueprints.chatbot.chatbot_routes import bt_chatbot_bp
 from configs.chatbot_ui import BT_UI
-from tests.base_test import BaseTestCase, TEST_CASE_NBR
+from unit_tests.base_test import BaseTestCase, TEST_CASE_NBR
 
 # The three profile route modules were unified into one; the BT handlers are now
 # methods on a per-profile AgentRoutes instance built at import time.

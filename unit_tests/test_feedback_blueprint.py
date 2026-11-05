@@ -16,7 +16,7 @@ from unittest.mock import MagicMock, patch
 
 from blueprints.feedback.feedback_routes import feedback_bp
 from models.models import CaseContext
-from tests.base_test import BaseTestCase
+from unit_tests.base_test import BaseTestCase
 
 ROUTES = "blueprints.feedback.feedback_routes"
 

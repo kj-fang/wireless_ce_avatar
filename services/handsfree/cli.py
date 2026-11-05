@@ -335,8 +335,8 @@ def main(argv: Optional[list[str]] = None) -> int:
         print(f"[handsfree-cli] {e}", file=sys.stderr)
         return 2
 
-    print("[handsfree-cli] initializing analysis services (no web UI)")
-    _initialize_services()
+    # The shared folder first (only the config is read here): a round that
+    # must step aside does so before the two-minute service boot.
     from .queue import HandsfreeShareUnavailable
     try:
         store = _store()
@@ -353,6 +353,9 @@ def main(argv: Optional[list[str]] = None) -> int:
         if reason:
             print(f"[handsfree-cli] round skipped: {reason}", file=sys.stderr)
             return EXIT_SCHEDULED_IN_APP
+
+    print("[handsfree-cli] initializing analysis services (no web UI)")
+    _initialize_services()
     updates = {}
     if args.owner is not None:
         updates["owner_name"] = owners[0]

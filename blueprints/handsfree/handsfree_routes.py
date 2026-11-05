@@ -302,9 +302,14 @@ def save_draft(draft_id: str):
 
 @handsfree_bp.route("/queue/<draft_id>/approve", methods=["POST"])
 def approve(draft_id: str):
+    """Body: draft_plain (the reviewer's text) and visibility — "internal"
+    (Private to Intel; also what a missing value means) or "external"
+    (visible to the customer). The page sends the reviewer's selection on
+    every post; the draft's mode never decides it."""
     body = request.get_json(silent=True) or {}
     return jsonify(orchestrator.approve_and_post(
-        draft_id, edited_plain=body.get("draft_plain")))
+        draft_id, edited_plain=body.get("draft_plain"),
+        visibility=body.get("visibility")))
 
 
 @handsfree_bp.route("/queue/<draft_id>/reject", methods=["POST"])

@@ -1011,6 +1011,14 @@ _post_lock = threading.Lock()
 # Customer-facing first-response family (posted PUBLIC, tagged CHECKLIST_TAG).
 _CHECKLIST_MODES = ("request_logs", "request_info", "first_response")
 
+# Who sees a posted comment. The reviewer picks it on every post; nothing
+# about the draft (its mode included) decides it on their behalf. Without a
+# choice a post stays inside Intel.
+VISIBILITY_INTERNAL = "internal"      # Private to Intel
+VISIBILITY_EXTERNAL = "external"      # visible to the customer
+VISIBILITIES = (VISIBILITY_INTERNAL, VISIBILITY_EXTERNAL)
+DEFAULT_VISIBILITY = VISIBILITY_INTERNAL
+
 # request_logs / request_info replies posted before CHECKLIST_TAG existed
 # carry only AI_MARKER — recognized by their fixed template sentences.
 _LEGACY_REQUEST_PHRASES = (
@@ -1053,7 +1061,7 @@ def _auto_post_first_response(store: HandsfreeStore, rec: dict, analysis) -> Non
         _log_event(f"[{case_nbr}] auto-post skipped: no verified rest_field_map - "
                    f"{draft_id} left for review")
         return
-    res = approve_and_post(draft_id)
+    res = approve_and_post(draft_id, visibility=VISIBILITY_EXTERNAL)
     if res.get("ok"):
         store.update(draft_id, auto_posted=True)
         _log_event(f"[{case_nbr}] auto-posted first response {draft_id} (mode={mode})")
@@ -1062,9 +1070,16 @@ def _auto_post_first_response(store: HandsfreeStore, rec: dict, analysis) -> Non
                    "- left for review")
 
 
-def approve_and_post(draft_id: str, edited_plain: Optional[str] = None) -> dict:
+def approve_and_post(draft_id: str, edited_plain: Optional[str] = None,
+                     visibility: Optional[str] = None) -> dict:
     """Human clicked Approve. Post the (possibly edited) draft to IPS.
     Returns the updated draft record + result.
+
+    visibility is the reviewer's choice for THIS post: "internal" (Private
+    to Intel, the default when none is given) or "external" (visible to the
+    customer; REST only, needs the verified field map). The draft's mode
+    never decides it: a request/first-response draft posts inside Intel
+    unless the reviewer picks external.
 
     The duplicate guard below is check-then-act (scan existing comments,
     then insert), so two near-simultaneous approvals interleaving could both
@@ -1075,11 +1090,17 @@ def approve_and_post(draft_id: str, edited_plain: Optional[str] = None) -> dict:
         rec = store.get(draft_id)
         if rec is None:
             return {"ok": False, "error": f"draft not found: {draft_id}"}
+        visibility = (visibility or DEFAULT_VISIBILITY).strip().lower()
+        if visibility not in VISIBILITIES:
+            return {"ok": False, "draft": rec,
+                    "error": f"unknown visibility {visibility!r} — choose "
+                             f"'{VISIBILITY_INTERNAL}' (Private to Intel) or "
+                             f"'{VISIBILITY_EXTERNAL}' (visible to the customer)"}
         case_nbr = rec["case_nbr"]
         # A mail-triggered draft becomes an Outlook reply draft on this PC:
         # no IPS sign-in and no cross-machine case claim are involved.
         if rec.get("email"):
-            return _approve_and_post_locked(draft_id, edited_plain, None)
+            return _approve_and_post_locked(draft_id, edited_plain, None, visibility)
         # The comment goes out under the IPS session of this PC, so it must
         # be the reviewer's own sign-in — resolved now, not from page state.
         try:
@@ -1094,7 +1115,7 @@ def approve_and_post(draft_id: str, edited_plain: Optional[str] = None) -> dict:
             return {"ok": False, "error": f"{holder} is posting to case {case_nbr} "
                                           "right now — refresh and try again in a moment"}
         try:
-            return _approve_and_post_locked(draft_id, edited_plain, reviewer)
+            return _approve_and_post_locked(draft_id, edited_plain, reviewer, visibility)
         finally:
             store.release_case(case_nbr)
 
@@ -1120,7 +1141,8 @@ def _reviewer_id(identity: Optional[dict] = None) -> str:
 
 
 def _approve_and_post_locked(draft_id: str, edited_plain: Optional[str],
-                             reviewer: Optional[dict] = None) -> dict:
+                             reviewer: Optional[dict] = None,
+                             visibility: str = DEFAULT_VISIBILITY) -> dict:
     store = _store()
     cfg = store.load_config()
     rec = store.get(draft_id)
@@ -1137,6 +1159,7 @@ def _approve_and_post_locked(draft_id: str, edited_plain: Optional[str],
                                       "posting is disabled for trial drafts", "draft": rec}
 
     draft_is_checklist = rec.get("mode") in _CHECKLIST_MODES
+    is_public_reply = visibility == VISIBILITY_EXTERNAL
 
     # Apply reviewer edits. Both markers are restored when edited away: the
     # duplicate scan below (and every later one) tells the comment families
@@ -1168,10 +1191,12 @@ def _approve_and_post_locked(draft_id: str, edited_plain: Optional[str],
     # A request draft composed while no first response was recorded embeds
     # the overview too (analysis.first_response_done False at compose time).
     # Later-round request drafts (True) carry only their targeted ask.
+    # An INTERNAL post of such a draft never reaches the customer, so the
+    # once-per-case rule does not apply to it.
     embeds_overview = (rec.get("mode") == "first_response"
                        or (draft_is_checklist
                            and not (rec.get("analysis") or {}).get("first_response_done")))
-    if embeds_overview:
+    if embeds_overview and is_public_reply:
         sent = store.first_response_posted(rec["case_nbr"])
         if not sent:
             try:
@@ -1206,10 +1231,8 @@ def _approve_and_post_locked(draft_id: str, edited_plain: Optional[str],
     backend = (cfg.get("post_backend") or "auto").lower()
     result = None
 
-    # First-response-family drafts are customer-facing: post PUBLIC
-    # (visible to the customer). Everything else stays Private-to-Intel.
-    is_public_reply = draft_is_checklist
-
+    # The reviewer's choice decides who sees the comment (is_public_reply
+    # above); a customer-visible post goes over REST only.
     if backend in ("rest", "auto"):
         try:
             result = ips.post_comment(rec["case_id"], rec["draft_html"],
@@ -1239,6 +1262,7 @@ def _approve_and_post_locked(draft_id: str, edited_plain: Optional[str],
 
     if result.ok:
         posted = result.to_dict()
+        posted["visibility"] = visibility
         reviewer_name = (reviewer or {}).get("name") or ""
         if reviewer:
             posted["posted_by"] = {k: reviewer.get(k, "")
@@ -1260,9 +1284,11 @@ def _approve_and_post_locked(draft_id: str, edited_plain: Optional[str],
                      posted_by=reviewer_name)
         # A request reply carries the overview checklist only on the first
         # round, so it counts as the first response exactly when no first
-        # response was recorded before (mark_posted keeps the first record).
+        # response was recorded before (mark_posted keeps the first record)
+        # — and only when the customer could see it.
         store.mark_posted(rec["case_nbr"], comment_id=result.comment_id,
-                          first_response=draft_is_checklist, posted_by=reviewer_name)
+                          first_response=draft_is_checklist and is_public_reply,
+                          posted_by=reviewer_name)
         return {"ok": True, "draft": store.get(draft_id), "result": posted}
 
     store.update(draft_id, status="post_failed", post_result=result.to_dict())

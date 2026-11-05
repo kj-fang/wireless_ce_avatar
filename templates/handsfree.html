@@ -631,6 +631,20 @@
     <div id="draft-chips"></div>
     <div id="draft-sent"></div>
     <textarea id="draft-text" rows="18"></textarea>
+    <div class="controls" id="draft-visibility-row" style="margin-top:8px;">
+      <span style="color: var(--muted);">Post as:</span>
+      <label style="display: inline-flex; align-items: center; gap: 6px; cursor: pointer;"
+             title="The comment is Private to Intel: the customer never sees it (the default on every draft)">
+        <input type="radio" name="draft-visibility" value="internal" checked onchange="applyVisibilityUi()">
+        Internal to Intel
+      </label>
+      <label style="display: inline-flex; align-items: center; gap: 6px; cursor: pointer;"
+             title="The comment is visible to the customer in IPS (posted over REST with the team's verified field map)">
+        <input type="radio" name="draft-visibility" value="external" onchange="applyVisibilityUi()">
+        External to customer
+      </label>
+      <span class="status-line" id="draft-visibility-note"></span>
+    </div>
     <div class="controls" style="margin-top:8px;">
       <button class="good" id="approve-btn" onclick="approveDraft()"
               title="Posts this text to IPS as a Private-to-Intel comment">
@@ -1575,8 +1589,9 @@
     const chips = [];
     const cr = analysis.case_reader || {};
     if (['request_logs', 'request_info', 'first_response'].includes(analysis.mode)) {
-      chips.push({label: 'visibility', text: 'public reply to customer', cls: 'warn',
-                  title: 'Approving posts this as a customer-visible comment (not Private to Intel)'});
+      chips.push({label: 'written for', text: 'the customer (reply asking for items)', cls: 'warn',
+                  title: 'A request / first-response draft. It is still posted Private to Intel unless '
+                       + 'you pick "External to customer" under the text before approving.'});
     }
     if (analysis.next_action) {
       chips.push({label: 'next action',
@@ -1678,9 +1693,11 @@
     currentDraftEmail = d.email || null;
     document.getElementById('approve-btn-text').textContent =
       d.email ? 'Save reply draft in Outlook' : 'Approve & post to IPS';
-    document.getElementById('approve-btn').title = d.email
-      ? 'Saves this text as a reply to the mail in your Outlook Drafts folder — nothing is sent'
-      : 'Posts this text to IPS as a Private-to-Intel comment';
+    // Who sees the post is the reviewer's choice on each draft, never carried
+    // over from the previous one and never taken from the draft's mode.
+    setDraftVisibility('internal');
+    document.getElementById('draft-visibility-row').style.display = d.email ? 'none' : '';
+    applyVisibilityUi();
     const draftHasLog = !!(d.shared_log_path || (d.analysis && d.analysis.log_path));
     document.getElementById('draft-avatar-btn').title = avatarHandoffTitle(draftHasLog);
     document.getElementById('draft-avatar-btn').disabled = !draftHasLog;
@@ -1696,7 +1713,8 @@
         + (d.email.reply_all === false ? ' · reply to sender only' : ' · reply all') : '',
       pr.backend === 'outlook' && pr.ok
         ? 'saved in Outlook Drafts' + (pr.detail && pr.detail.to ? ' to ' + pr.detail.to : '') : '',
-      !d.email && d.status === 'posted' && postedAs ? ('posted to IPS as ' + postedAs) : '',
+      !d.email && d.status === 'posted' && postedAs
+        ? ('posted to IPS as ' + postedAs + visibilityText(pr.visibility, ' · ')) : '',
       pr.error ? ('last post attempt: ' + pr.error) : '',
     ].filter(Boolean).join(' · ');
     document.getElementById('draft-text').value = d.draft_plain || '';
@@ -1709,6 +1727,34 @@
       (d.status === 'posted' || d.status === 'rejected');
     document.getElementById('post-status').textContent = '';
     document.getElementById('draft-panel').scrollIntoView({behavior: 'smooth'});
+  }
+
+  // ---- who sees the post: the reviewer's pick on the draft panel --------
+  function draftVisibility() {
+    const el = document.querySelector('input[name="draft-visibility"]:checked');
+    return el ? el.value : 'internal';
+  }
+  function setDraftVisibility(v) {
+    document.querySelectorAll('input[name="draft-visibility"]').forEach(r => { r.checked = (r.value === v); });
+  }
+  function visibilityText(v, sep) {
+    if (!v) return '';
+    return (sep || '') + (v === 'external' ? 'visible to the customer' : 'Private to Intel');
+  }
+  function applyVisibilityUi() {
+    const external = draftVisibility() === 'external';
+    const btn = document.getElementById('approve-btn');
+    if (!currentDraftEmail) {
+      btn.title = external
+        ? 'Posts this text to IPS as a comment the CUSTOMER can see'
+        : 'Posts this text to IPS as a Private-to-Intel comment';
+    } else {
+      btn.title = 'Saves this text as a reply to the mail in your Outlook Drafts folder — nothing is sent';
+    }
+    btn.classList.toggle('danger', external && !currentDraftEmail);
+    btn.classList.toggle('good', !(external && !currentDraftEmail));
+    document.getElementById('draft-visibility-note').textContent = external
+      ? '⚠ the customer will see this comment' : '';
   }
 
   async function saveDraft() {
@@ -1729,26 +1775,29 @@
       alert('Not signed in to IPS on this PC. Use "Sign in to IPS" first — the comment is posted under that name.');
       return;
     }
+    const visibility = draftVisibility();
     const asWho = currentDraftEmail ? '' : '\n\nIt will be posted as ' + ipsLogin.identity.name + '.';
     const msg = currentDraftEmail
       ? 'Save this text as a reply draft in your Outlook Drafts folder? Nothing is sent and nothing is posted to IPS.'
-      : ((['request_logs', 'request_info', 'first_response'].includes(currentDraftMode))
-      ? 'Post this reply to IPS as a PUBLIC comment visible to the customer?'
-      : 'Post this comment to IPS as Private to Intel?') + asWho;
+      : (visibility === 'external'
+      ? 'Post this comment to IPS as EXTERNAL — visible to the customer?'
+      : 'Post this comment to IPS as Internal to Intel (the customer will not see it)?') + asWho;
     if (!confirm(msg)) return;
     const btn = document.getElementById('approve-btn');
     btn.disabled = true;
     document.getElementById('post-status').textContent = currentDraftEmail ? 'saving the Outlook draft…' : 'posting…';
     const r = await fetch('/handsfree/queue/' + encodeURIComponent(currentDraftId) + '/approve', {
       method: 'POST', headers: {'Content-Type': 'application/json'},
-      body: JSON.stringify({draft_plain: document.getElementById('draft-text').value}),
+      body: JSON.stringify({draft_plain: document.getElementById('draft-text').value,
+                            visibility: visibility}),
     });
     const j = await r.json();
     const postedName = j.ok && ((j.result && j.result.author && j.result.author.name)
       || (ipsLogin.identity && ipsLogin.identity.name));
     document.getElementById('post-status').textContent =
       j.ok ? (currentDraftEmail ? 'reply draft saved in Outlook — open Outlook Drafts to send it'
-                                : 'posted to IPS' + (postedName ? ' as ' + postedName : ''))
+                                : 'posted to IPS' + (postedName ? ' as ' + postedName : '')
+                                  + visibilityText((j.result || {}).visibility || visibility, ' · '))
            : ((currentDraftEmail ? 'Outlook draft failed: ' : 'post failed: ') + (j.error || 'unknown'));
     if (!j.ok) btn.disabled = false;
     loadQueue();

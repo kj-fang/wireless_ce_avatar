@@ -1512,7 +1512,7 @@ def smoke_orchestrator(tmp: Path) -> None:
               and store.get(d1)["status"] == "post_failed", str(res))
         _Ips.scan_raises = True
         d2 = enqueue("09999998", "first_response")
-        res = orch.approve_and_post(d2)
+        res = orch.approve_and_post(d2, visibility="external")
         check("S5.b first response: a failed IPS scan is skipped, post attempted",
               "scan failed" not in (res.get("error") or "")
               and store.get(d2)["status"] == "post_failed", str(res))
@@ -1521,10 +1521,31 @@ def smoke_orchestrator(tmp: Path) -> None:
         # First response once per case, tracked in OUR ledger (reviewers edit
         # the text, so body markers are not what decides).
         _Ips.comments, _Ips.post_ok = [], True
+        # Visibility is the reviewer's pick on each post. No pick = internal,
+        # whatever the draft's mode: a request draft posted that way stays
+        # inside Intel and does not count as the customer's first response.
+        d3i = enqueue("09999997", "request_logs")
+        res_i = orch.approve_and_post(d3i)
+        rec3i = store.get(d3i)
+        check("S5.c0 no visibility given: a request draft posts PRIVATE, recorded as internal, "
+              "first response NOT recorded",
+              res_i["ok"] and _Ips.posted[-1][1] is True
+              and rec3i["post_result"]["visibility"] == "internal"
+              and rec3i["status"] == "posted"
+              and not store.first_response_posted("09999997"), str(res_i))
+        posted_before = len(_Ips.posted)
+        d3b = enqueue("09999997", "request_logs")
+        res_b = orch.approve_and_post(d3b, visibility="everyone")
+        check("S5.c1 unknown visibility refused before anything happens (nothing posted, draft untouched)",
+              res_b["ok"] is False and "visibility" in res_b["error"]
+              and len(_Ips.posted) == posted_before
+              and store.get(d3b)["status"] == "pending_review", str(res_b))
         d3 = enqueue("09999997", "request_logs")
-        res = orch.approve_and_post(d3)
-        check("S5.c first-round request reply posts PUBLIC and records the first response",
+        res = orch.approve_and_post(d3, visibility="External")
+        check("S5.c first-round request reply posted EXTERNAL is public and records the first response "
+              "(case-insensitive value)",
               res["ok"] and _Ips.posted[-1][1] is False
+              and store.get(d3)["post_result"]["visibility"] == "external"
               and store.first_response_posted("09999997"), str(res))
         fr_comment_id = (res.get("result") or {}).get("comment_id")
         rec3 = store.get(d3)
@@ -1536,32 +1557,49 @@ def smoke_orchestrator(tmp: Path) -> None:
               and store.ledger_entry("09999997").get("posted_by") == "Smoke Reviewer",
               str(rec3.get("post_result")))
         d4 = enqueue("09999997", "first_response")
-        res = orch.approve_and_post(d4)
+        res = orch.approve_and_post(d4, visibility="external")
         check("S5.d second first-response on the case refused + marked posted",
               res["ok"] is False and "once" in res["error"]
               and store.get(d4)["status"] == "posted", str(res))
         check("S5.d2 second approve of a posted draft refused",
               orch.approve_and_post(d4)["error"] == "draft already posted")
         d5 = enqueue("09999997", "request_logs", later_round=True)
-        res = orch.approve_and_post(d5)
+        res = orch.approve_and_post(d5, visibility="external")
         d6 = enqueue("09999997", "full")
         res6 = orch.approve_and_post(d6)
         entry = store.ledger_entry("09999997")
         check("S5.e later-round request reply and analysis both post; first-response "
               "record keeps the ORIGINAL comment id",
-              res["ok"] and res6["ok"] and _Ips.posted[-1][1] is True
+              res["ok"] and res6["ok"] and _Ips.posted[-2][1] is False and _Ips.posted[-1][1] is True
               and entry["first_response_comment_id"] == fr_comment_id
               and entry["comment_id"] != fr_comment_id, str(entry))
+        # The reviewer may also send an ANALYSIS to the customer: external
+        # posts it public; it is never a "first response" (not a request).
+        d6x = enqueue("09999979", "full")
+        res6x = orch.approve_and_post(d6x, visibility="external")
+        check("S5.e1 an analysis draft posted EXTERNAL goes public and leaves the first-response record alone",
+              res6x["ok"] and _Ips.posted[-1][1] is False
+              and store.get(d6x)["post_result"]["visibility"] == "external"
+              and not store.first_response_posted("09999979"), str(res6x))
         # A FIRST-round request draft left over from before the overview went
         # out (manual rerun queued two) embeds the overview again: refused.
         posted_before = len(_Ips.posted)
         d5s = enqueue("09999997", "request_info")
-        res_stale = orch.approve_and_post(d5s)
+        res_stale = orch.approve_and_post(d5s, visibility="external")
         check("S5.e2 stale first-round request draft refused once the overview is out "
               "(rejected, nothing posted)",
               res_stale["ok"] is False and "embeds it again" in res_stale["error"]
               and store.get(d5s)["status"] == "rejected"
               and len(_Ips.posted) == posted_before, str(res_stale))
+        # The same stale draft INTERNAL: the customer never sees it, so the
+        # once-per-case rule has nothing to protect — it posts, private.
+        d5s_i = enqueue("09999997", "request_info")
+        res_stale_i = orch.approve_and_post(d5s_i)
+        check("S5.e2b the same first-round request draft posted internal is allowed (private, "
+              "first-response record unchanged)",
+              res_stale_i["ok"] and _Ips.posted[-1][1] is True
+              and store.ledger_entry("09999997")["first_response_comment_id"] == fr_comment_id,
+              str(res_stale_i))
 
         # Reviewer edited both markers away: restored before the post.
         _Ips.post_ok = False
@@ -1579,7 +1617,7 @@ def smoke_orchestrator(tmp: Path) -> None:
                           "we need the Intel wireless driver WRT logs covering the "
                           "failure</p>"}]
         d8 = enqueue("09999995", "first_response")
-        res = orch.approve_and_post(d8)
+        res = orch.approve_and_post(d8, visibility="external")
         check("S5.g legacy request comment counts as the first response (ledger backfilled)",
               res["ok"] is False and "once" in res["error"]
               and store.ledger_entry("09999995").get("first_response_comment_id") == "C9",
@@ -3958,6 +3996,20 @@ def smoke_case_requests(tmp: Path) -> None:
               and r_s.get_json().get("ok") is True and runs == ["01000017"]
               and not store._request_file("01000017", "pending").exists(),
               f"c={r_c.get_json()} bad={r_bad.get_json()} list={r_list.get_json()} s={r_s.get_json()} runs={runs}")
+
+        # d) the approve route passes the reviewer's visibility choice through
+        seen: list = []
+        orig_approve = orch.approve_and_post
+        orch.approve_and_post = lambda draft_id, edited_plain=None, visibility=None: (
+            seen.append((draft_id, edited_plain, visibility)) or {"ok": True})
+        try:
+            client.post("/handsfree/queue/D1/approve", json={"draft_plain": "t", "visibility": "external"})
+            client.post("/handsfree/queue/D2/approve", json={"draft_plain": "t"})
+        finally:
+            orch.approve_and_post = orig_approve
+        check("S23.e /queue/<id>/approve: visibility from the body reaches approve_and_post; "
+              "absent -> None (internal)",
+              seen == [("D1", "t", "external"), ("D2", "t", None)], str(seen))
     finally:
         app_config.handsfree_role = orig_role
         routes._store, sch._store, orch.start_case_run, orch.get_run_state = orig

@@ -38,8 +38,8 @@ flowchart TD
     subgraph B["② Upload (main page, Local Analysis)"]
         B1["POST /upload_local_analysis"] --> B2["derive_ips_from_path(source)"]
         B2 --> B3{"_no_silent_case_because()"}
-        B3 -->|"reason returned"| B4["leave it alone, log why"]
-        B3 -->|"&quot;&quot;"| B5["attach(derived, derived_from_path)<br/>prefetch_case_facts()"]
+        B3 -->|"a reason"| B4["leave it alone, log why"]
+        B3 -->|"no reason"| B5["attach(derived, derived_from_path)<br/>prefetch_case_facts()"]
         B4 --> B6{"blocking_state(source)"}
         B5 --> B6
         B6 -->|"payload"| B7["HTTP 428<br/>client replays after answering"]
@@ -49,8 +49,8 @@ flowchart TD
     subgraph C["③ Send To (right-click in Explorer)"]
         C1["GET /sendto?path=…&token=…"] --> C2["session['sendto_pending_path']"]
         C2 --> C3{"_no_silent_case_because()"}
-        C3 -->|"&quot;&quot;"| C4["attach(derived, derived_from_path)<br/>prefetch_case_facts()"]
-        C3 -->|"reason"| C5["leave it alone"]
+        C3 -->|"no reason"| C4["attach(derived, derived_from_path)<br/>prefetch_case_facts()"]
+        C3 -->|"a reason"| C5["leave it alone"]
         C4 --> C6["render sendto_transmission.html<br/>with prompt_state(source)"]
         C5 --> C6
         C6 --> C7{"IPS_STATE.needs_ips?"}
@@ -68,7 +68,7 @@ flowchart TD
         D3 --> D4["response carries prompt_state(log)"]
         D4 --> D5{"data.needs_ips?"}
         D5 -->|"yes"| D6["await IpsPrompt.handleSetLog()"]
-        D5 -->|"no"| D7["IpsPrompt.notice()<br/>&quot;Filed under case …&quot; + Change"]
+        D5 -->|"no"| D7["IpsPrompt.notice()<br/>'Filed under case …' + Change"]
         D6 --> D8["logLoaded = true"]
         D7 --> D8
         D9["POST /chat"] --> D10{"blocking_state(agent's log)"}
@@ -179,8 +179,8 @@ flowchart TD
     O4 -->|"yes"| U4["→ covered_by<br/><i>survives a restart; a decoded .etl<br/>sits under no archive folder</i>"]
 
     O4 -->|"no"| O5{"_archive_answer_key()?"}
-    O5 -->|"yes"| U5["→ the archive's key<br/><i>&lt;dir&gt;/&lt;stem with _ for spaces&gt;/</i>"]
-    O5 -->|"no"| U6["→ &quot;&quot; (nothing covers it)"]
+    O5 -->|"yes"| U5["→ the archive's key<br/><i>dir / stem with _ for spaces /</i>"]
+    O5 -->|"no"| U6["→ empty (nothing covers it)"]
 ```
 
 `_placeholder_is_for(log)` is the test for "this log belongs to the session's
@@ -258,7 +258,7 @@ final source in `source_for_answer()` and never trusts the client's claim.
 flowchart TD
     R["POST /api/ips/resolve"] --> A{"action"}
     A -->|"skip"| SK{"confirmed === true?"}
-    SK -->|"no"| SK1["400 — confirm first<br/><i>bool(&quot;false&quot;) is True, so the<br/>literal boolean only</i>"]
+    SK -->|"no"| SK1["400 — confirm first<br/><i>bool of the string 'false' is True,<br/>so the literal boolean only</i>"]
     SK -->|"yes"| SK2["attach('', skipped, log)"]
     A -->|"attach"| AT["source_for_answer(nbr, claimed, log)"]
     AT --> AT2["attach(nbr, source, log)"]

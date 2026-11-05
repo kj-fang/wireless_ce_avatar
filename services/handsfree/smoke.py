@@ -3716,6 +3716,92 @@ def smoke_snowflake_reconnect() -> None:
         sf._connect, sf._snowflake_conn, sf._snowflake_passwd, sf._snowflake_conn_mode = saved
 
 
+# ---------------------------------------------------------------- S22
+def smoke_chatbot_handoff(tmp: Path) -> None:
+    print("[S22] Hand-off to Avatar: the Log Chatbot on the decoded log (shared copy first), "
+          "else the case's attachment picker; localhost only")
+    from flask import Flask
+    from blueprints.handsfree import handsfree_routes as routes
+    from .queue import HandsfreeStore
+
+    store = HandsfreeStore(tmp / "handsfree_s22")
+    orig = (routes._store, routes._handoff_to_log_chatbot, routes._handoff_to_case_page)
+    calls: list = []
+    routes._store = lambda: store
+    routes._handoff_to_log_chatbot = lambda case_nbr, src, log_path: (
+        calls.append(("log", case_nbr, log_path)) or {"ok": True, "mode": "log", "url": "/log_chatbot/?x"})
+
+    def fake_case_page(case_nbr):
+        calls.append(("case", case_nbr, ""))
+        if case_nbr == "01000002":
+            return {"ok": False, "error": "Avatar could not open case 01000002: no IPS"}
+        return {"ok": True, "mode": "case", "url": "/select_attachments", "attachments": 3}
+    routes._handoff_to_case_page = fake_case_page
+    try:
+        app = Flask("handsfree_smoke_s22")
+        app.secret_key = "s22"
+        app.register_blueprint(routes.handsfree_bp)
+        client = app.test_client()
+        post = lambda body, addr="127.0.0.1": client.post(
+            "/handsfree/chatbot_handoff", json=body, environ_base={"REMOTE_ADDR": addr})
+
+        # a) a waiting-on-the-customer draft: no log at all -> the case page
+        rec_a = store.enqueue(case_nbr="01000001", case_id="500A", subject="s",
+                              draft_plain="b", draft_html="<p>b</p>", confidence=None,
+                              mode="waiting_customer", analysis={"log_path": "", "case_id": "500A"})
+        r = post({"case_nbr": "01000001", "draft_id": rec_a["draft_id"]})
+        check("S22.a no decoded log -> the attachment picker of the case",
+              r.status_code == 200 and r.get_json()["mode"] == "case"
+              and r.get_json()["url"] == "/select_attachments" and calls[-1] == ("case", "01000001", ""),
+              f"{r.status_code} {r.get_json()} {calls}")
+
+        # b) the analysis' log is on the server's disk (gone here); the shared copy wins
+        shared = tmp / "handsfree_s22" / "logs" / "01000003" / "decoded.txt"
+        shared.parent.mkdir(parents=True, exist_ok=True)
+        shared.write_text("log", encoding="utf-8")
+        rec_b = store.enqueue(case_nbr="01000003", case_id="500C", subject="s",
+                              draft_plain="b", draft_html="<p>b</p>", confidence=80, mode="full",
+                              analysis={"log_path": r"C:\server-only\decoded.txt", "case_id": "500C",
+                                        "incidents": [{"sent_for_analysis": {"issue_time_log": "2026-11-01 10:00:00"}}]},
+                              shared_log_path=str(shared))
+        r = post({"case_nbr": "01000003", "draft_id": rec_b["draft_id"]})
+        check("S22.b decoded log (shared copy, not the server-local path) -> the Log Chatbot",
+              r.status_code == 200 and r.get_json()["mode"] == "log"
+              and calls[-1] == ("log", "01000003", str(shared)),
+              f"{r.status_code} {r.get_json()} {calls[-1]}")
+        src = routes._handoff_source("01000003", rec_b["draft_id"])
+        check("S22.b2 the hand-off source carries the issue time in the log's clock",
+              src["issue_time_log"] == "2026-11-01 10:00:00" and src["case_id"] == "500C", str(src))
+
+        # c) a log path that no longer exists anywhere -> the case page, not a 404
+        rec_c = store.enqueue(case_nbr="01000004", case_id="500D", subject="s",
+                              draft_plain="b", draft_html="<p>b</p>", confidence=80, mode="full",
+                              analysis={"log_path": str(tmp / "gone" / "decoded.txt")})
+        r = post({"case_nbr": "01000004", "draft_id": rec_c["draft_id"]})
+        check("S22.c a decoded log that is gone -> the attachment picker",
+              r.status_code == 200 and r.get_json()["mode"] == "case" and calls[-1][0] == "case",
+              f"{r.status_code} {r.get_json()}")
+
+        # d) Avatar cannot open the case -> the error, not a tab
+        rec_d = store.enqueue(case_nbr="01000002", case_id="", subject="s",
+                              draft_plain="b", draft_html="<p>b</p>", confidence=None,
+                              mode="error", analysis={})
+        r = post({"case_nbr": "01000002", "draft_id": rec_d["draft_id"]})
+        check("S22.d the case page's failure is reported (502, ok=False)",
+              r.status_code == 502 and r.get_json()["ok"] is False and "no IPS" in r.get_json()["error"],
+              f"{r.status_code} {r.get_json()}")
+
+        # e) another machine's browser cannot seed this app's session
+        n = len(calls)
+        r = post({"case_nbr": "01000001", "draft_id": rec_a["draft_id"]}, addr="10.1.2.3")
+        check("S22.e not from localhost -> 403, nothing seeded",
+              r.status_code == 403 and len(calls) == n, f"{r.status_code} {len(calls) - n}")
+        r = post({"case_nbr": "nope"})
+        check("S22.f a non-case number -> 400", r.status_code == 400, str(r.status_code))
+    finally:
+        routes._store, routes._handoff_to_log_chatbot, routes._handoff_to_case_page = orig
+
+
 def run_smoke() -> int:
     tmp = Path(tempfile.mkdtemp(prefix="handsfree_smoke_"))
     try:
@@ -3739,6 +3825,7 @@ def run_smoke() -> int:
         smoke_identity()
         smoke_snowflake_reconnect()
         smoke_server_role(tmp)
+        smoke_chatbot_handoff(tmp)
     finally:
         shutil.rmtree(tmp, ignore_errors=True)
     print(f"\nsmoke result: {'ALL PASS' if not PASS_FAIL else 'FAILURES: ' + ', '.join(PASS_FAIL)}")

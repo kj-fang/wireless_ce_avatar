@@ -639,8 +639,8 @@
         <span id="approve-btn-text">Approve &amp; post to IPS</span></button>
       <button class="ghost" onclick="saveDraft()">Save edits</button>
       <button class="danger" onclick="rejectDraft()">Reject</button>
-      <button class="ghost" id="draft-avatar-btn" style="display:none;" onclick="openInAvatar(currentDraftCase, currentDraftId)"
-              title="Opens Avatar's Log Chatbot on this case's decoded log, primed with the case and the issue time, to continue by hand">Open in Avatar analysis</button>
+      <button class="ghost" id="draft-avatar-btn" onclick="openInAvatar(currentDraftCase, currentDraftId, this)"
+              title="Opens this case in Avatar to continue by hand">Open in Avatar analysis</button>
       <button class="ghost" onclick="resetCase(currentDraftCase)"
               title="Forget this case's Beacon history (drafts archived, analysis marks cleared) so the next run starts fresh">Reset case history</button>
       <span class="status-line" id="post-status"></span>
@@ -1418,9 +1418,9 @@
             `<svg width="12" height="12" viewBox="0 0 24 24" fill="none" stroke="currentColor" ` +
             `stroke-width="2.2" stroke-linecap="round" stroke-linejoin="round" aria-hidden="true">` +
             `<path d="M3 7a2 2 0 0 1 2-2h4l2 2h8a2 2 0 0 1 2 2v8a2 2 0 0 1-2 2H5a2 2 0 0 1-2-2z" /></svg>` +
-            `Folder</button> ` +
-            `<button class="ghost avatar-btn lp-btn-sm" title="Open Avatar's Log Chatbot on this decoded log to continue by hand">Avatar</button> `
+            `Folder</button> `
           : '') +
+        `<button class="ghost avatar-btn lp-btn-sm" title="${esc(avatarHandoffTitle(!!it.log_dir))}">Avatar</button> ` +
         (firstOfCase.has(it.case_nbr) ? '' :
           `<button class="ghost reset-btn lp-btn-sm" title="Forget this case's Beacon history so the next run starts fresh">Reset</button>`) +
         `</td>`;
@@ -1431,7 +1431,7 @@
         logBtn.onclick = (ev) => { ev.stopPropagation(); openLogFolder(it.draft_id); };
       }
       const avBtn = tr.querySelector('.avatar-btn');
-      if (avBtn) avBtn.onclick = (ev) => { ev.stopPropagation(); openInAvatar(it.case_nbr, it.draft_id); };
+      if (avBtn) avBtn.onclick = (ev) => { ev.stopPropagation(); openInAvatar(it.case_nbr, it.draft_id, avBtn); };
       const rsBtn = tr.querySelector('.reset-btn');
       if (rsBtn) rsBtn.onclick = (ev) => { ev.stopPropagation(); resetCase(it.case_nbr); };
       tbody.appendChild(tr);
@@ -1445,17 +1445,33 @@
 
   let currentDraftEmail = null;   // the mail a mail-triggered draft replies to
 
-  // Hand-off to Avatar's manual analysis (Log Chatbot) on the case's decoded
-  // log. The server seeds this browser session (case, log, issue time in the
-  // log's clock); the tab must be opened from the click handler.
-  async function openInAvatar(caseNbr, draftId) {
+  // Hand-off to Avatar for a manual deep dive. With a decoded log the server
+  // seeds this browser session (case, log, issue time in the log's clock) and
+  // the Log Chatbot opens on it; without one (run stopped before a log, e.g.
+  // waiting on the customer) it seeds the case as Avatar's start page does
+  // and the attachment picker opens, to choose the logs by hand. The tab is
+  // opened synchronously, from the click, so pop-up blockers let it through;
+  // the server's answer then points it.
+  function avatarHandoffTitle(hasLog) {
+    return hasLog
+      ? "Opens Avatar's Log Chatbot on this case's decoded log, primed with the case and the issue time, to continue by hand"
+      : "No decoded log for this case yet — opens the case in Avatar (attachment picker) to choose the logs and analyze by hand";
+  }
+  async function openInAvatar(caseNbr, draftId, btn) {
+    if (!caseNbr) { alert('No case to open.'); return; }
+    const w = window.open('about:blank', '_blank');
+    if (!w) { alert('The browser blocked the new tab — allow pop-ups for this page, then try again.'); return; }
+    try { w.document.title = 'Opening case ' + caseNbr + ' in Avatar…';
+          w.document.body.innerHTML = '<p style="font-family:sans-serif;color:#888;padding:20px;">Opening case ' + caseNbr + ' in Avatar…</p>'; } catch (e) {}
+    const label = btn ? btn.textContent : '';
+    if (btn) { btn.disabled = true; btn.textContent = 'Opening in Avatar…'; }
     let j;
     try {
       j = await postJson('/handsfree/chatbot_handoff', {case_nbr: caseNbr, draft_id: draftId || ''});
-    } catch (e) { alert('Could not prepare the Avatar analysis page: ' + e); return; }
-    if (!j.ok) { alert('Could not open in Avatar: ' + (j.error || 'unknown')); return; }
-    const w = window.open(j.url, '_blank');
-    if (!w) alert('The browser blocked the new tab — allow pop-ups for this page, then try again.');
+    } catch (e) { j = {ok: false, error: String(e)}; }
+    if (btn) { btn.disabled = false; btn.textContent = label; }
+    if (!j.ok) { w.close(); alert('Could not open in Avatar: ' + (j.error || 'unknown')); return; }
+    w.location.href = j.url;
   }
 
   async function resetCase(caseNbr) {
@@ -1612,8 +1628,8 @@
     document.getElementById('approve-btn').title = d.email
       ? 'Saves this text as a reply to the mail in your Outlook Drafts folder — nothing is sent'
       : 'Posts this text to IPS as a Private-to-Intel comment';
-    document.getElementById('draft-avatar-btn').style.display =
-      (d.analysis && d.analysis.log_path) ? '' : 'none';
+    document.getElementById('draft-avatar-btn').title =
+      avatarHandoffTitle(!!(d.shared_log_path || (d.analysis && d.analysis.log_path)));
     document.getElementById('draft-panel').style.display = '';
     document.getElementById('draft-title').innerHTML =
       `case ${caseLink(d.case_nbr, d.case_id)} · ${esc(d.mode)} · ${esc(d.status)}`;
@@ -2331,7 +2347,7 @@
         `<div class="lp-actions">` +
         (d.draft_id ? `<button class="primary" onclick="openDraft(${JSON.stringify(d.draft_id).replace(/"/g, '&quot;')})">Open draft</button>` : '') +
         (d.fr_draft_id ? `<button class="ghost" onclick="openDraft(${JSON.stringify(d.fr_draft_id).replace(/"/g, '&quot;')})">Open first-response</button>` : '') +
-        (d.log_path ? `<button class="ghost" onclick="openInAvatar(${JSON.stringify(d.case_nbr || sel).replace(/"/g, '&quot;')}, ${JSON.stringify(d.draft_id || '').replace(/"/g, '&quot;')})" title="Open Avatar's Log Chatbot on this decoded log to continue by hand">Open in Avatar analysis</button>` : '') +
+        ((d.case_nbr || sel) ? `<button class="ghost" onclick="openInAvatar(${JSON.stringify(d.case_nbr || sel).replace(/"/g, '&quot;')}, ${JSON.stringify(d.draft_id || '').replace(/"/g, '&quot;')}, this)" title="${esc(avatarHandoffTitle(!!d.log_path))}">Open in Avatar analysis</button>` : '') +
         `</div></div></div>`;
     }
 

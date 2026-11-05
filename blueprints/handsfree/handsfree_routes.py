@@ -354,7 +354,10 @@ def reset_case(case_nbr: str):
 
 def _handoff_source(case_nbr: str, draft_id: str) -> dict:
     """What the chatbot needs, from the draft record or (while a run is in
-    flight) the run state: log_path, subject, description, ... ."""
+    flight) the run state: log_path, subject, description, ... . The log is
+    the shared copy when there is one: the analysis' own path is on the
+    machine that ran it (the server, in server mode), which a reviewer's PC
+    cannot open."""
     store = _store()
     if draft_id:
         rec = store.get(draft_id)
@@ -363,8 +366,10 @@ def _handoff_source(case_nbr: str, draft_id: str) -> dict:
             incs = a.get("incidents") or []
             sent = (incs[0].get("sent_for_analysis") if incs and isinstance(incs[0], dict)
                     else None) or {}
-            return {"log_path": a.get("log_path") or "", "case_id": a.get("case_id") or "",
-                    "subject": a.get("subject") or "", "wifi_or_bt": a.get("wifi_or_bt") or "wifi",
+            return {"log_path": decoded_log_file(rec),
+                    "case_id": a.get("case_id") or rec.get("case_id") or "",
+                    "subject": a.get("subject") or rec.get("subject") or "",
+                    "wifi_or_bt": a.get("wifi_or_bt") or "wifi",
                     "issue_type": a.get("issue_type") or "",
                     "description": a.get("clean_description") or a.get("description") or "",
                     "issue_time_log": sent.get("issue_time_log") or ""}
@@ -377,19 +382,80 @@ def _handoff_source(case_nbr: str, draft_id: str) -> dict:
             "issue_time_log": sent.get("issue_time_log") or ""}
 
 
-@handsfree_bp.route("/chatbot_handoff", methods=["POST"])
-def chatbot_handoff():
-    """Prepare THIS browser session so Avatar's Log Chatbot opens on the
-    case's decoded log, primed with the case and the issue time (in the log's
-    clock), for a manual analysis. Returns the URL to open; the page opens it
-    in a new tab from the click handler."""
-    denied = _localhost_only()
-    if denied:
-        return denied
+# Session keys of a previous Log Chatbot / case the hand-off must not inherit.
+_HANDOFF_STALE_KEYS = ("_attachment_time_cache", "_issue_ai_quick", "chatbot_session_id",
+                       "feedback_conversation_id", "ai_ips_analysis", "selected_files")
+
+
+def _handoff_to_log_chatbot(case_nbr: str, src: dict, log_path: str) -> dict:
+    """Seed THIS browser session so Avatar's Log Chatbot opens on the case's
+    decoded log, primed with the case and the issue time (in the log's
+    clock), the way /log_chatbot/prepare seeds them."""
     from urllib.parse import urlencode
     from configs.global_configs import app_config
     from models.models import CaseContext
     from services import check_ips_service
+    # 1. the chatbot's case-number gate
+    check_ips_service.attach(case_nbr, check_ips_service.EXPLICIT, log_path)
+    # 2. the case as the chatbot's issue context (no refetch)
+    ctx = CaseContext(case_nbr=case_nbr, id=src["case_id"], subject=src["subject"],
+                      description=src["description"], wifi_or_bt=src["wifi_or_bt"],
+                      case_download_dir=os.path.join(app_config.avatarfiles_dir, case_nbr),
+                      case_ref_source=check_ips_service.EXPLICIT)
+    session["case_context"] = ctx.to_session()
+    session["classification"] = {"issue_type": src["issue_type"]} if src["issue_type"] else {}
+    # 3. the log + the issue time
+    for key in _HANDOFF_STALE_KEYS:
+        session.pop(key, None)
+    session["chatbot_log_path"] = log_path
+    session["_carried_issue_time_present"] = bool(src["issue_time_log"])
+    session["_carried_issue_time"] = src["issue_time_log"]
+    session["_carried_issue_time_warning"] = ""
+    app_config.last_analyzed_log_path = log_path
+    params = {"auto_run": "analyze_all"}
+    if src["issue_time_log"]:
+        params["issue_time"] = src["issue_time_log"]
+    return {"ok": True, "mode": "log", "url": "/log_chatbot/?" + urlencode(params),
+            "log_path": log_path, "issue_time": src["issue_time_log"]}
+
+
+def _handoff_to_case_page(case_nbr: str) -> dict:
+    """No decoded log (the run stopped before one, e.g. waiting on the
+    customer, or the file is gone): seed THIS browser session with the case
+    exactly as typing its number on Avatar's start page does, and send the
+    user to the attachment picker to choose the logs and dig in by hand."""
+    from blueprints.main.main_routes import _start_gather_workflow
+    from models.models import CaseContext
+    from services import check_ips_service
+    from services.case_info_service import CaseService
+    ctx = CaseService.process_case(CaseContext(case_nbr=case_nbr,
+                                               case_ref_source=check_ips_service.EXPLICIT))
+    if ctx.error_message:
+        return {"ok": False, "error": f"Avatar could not open case {case_nbr}: {ctx.error_message}"}
+    for key in _HANDOFF_STALE_KEYS + ("chatbot_log_path", "classification",
+                                      "_carried_issue_time_present", "_carried_issue_time",
+                                      "_carried_issue_time_warning"):
+        session.pop(key, None)
+    session["case_context"] = ctx.to_session()
+    session["prompt_file_path"] = CaseService.load_case_summary_prompt(ctx.wifi_or_bt)
+    session["bsod"] = False
+    session["latest_etl_llm"] = False
+    session["debug_mode"] = False
+    _start_gather_workflow(ctx)
+    return {"ok": True, "mode": "case", "url": "/select_attachments",
+            "attachments": len(ctx.attachment_list or [])}
+
+
+@handsfree_bp.route("/chatbot_handoff", methods=["POST"])
+def chatbot_handoff():
+    """Hand the case over to Avatar for a manual deep dive, in THIS browser
+    session. With a decoded log: the Log Chatbot on that log, primed with the
+    case and the issue time. Without one: Avatar's attachment picker for the
+    case, as if its number had been typed on the start page. Returns the URL
+    to open; the page opens it in a new tab from the click handler."""
+    denied = _localhost_only()
+    if denied:
+        return denied
     from utils import check_ips_utils
     body = request.get_json(silent=True) or {}
     case_nbr = check_ips_utils.normalise_ips(str(body.get("case_nbr") or ""))
@@ -397,35 +463,14 @@ def chatbot_handoff():
         return jsonify({"ok": False, "error": "case number required"}), 400
     src = _handoff_source(case_nbr, str(body.get("draft_id") or ""))
     log_path = src["log_path"]
-    if not log_path or not os.path.isfile(log_path):
-        return jsonify({"ok": False, "error": "this case has no decoded log to hand off"}), 404
     try:
-        # 1. the chatbot's case-number gate
-        check_ips_service.attach(case_nbr, check_ips_service.EXPLICIT, log_path)
-        # 2. the case as the chatbot's issue context (no refetch)
-        ctx = CaseContext(case_nbr=case_nbr, id=src["case_id"], subject=src["subject"],
-                          description=src["description"], wifi_or_bt=src["wifi_or_bt"],
-                          case_download_dir=os.path.join(app_config.avatarfiles_dir, case_nbr),
-                          case_ref_source=check_ips_service.EXPLICIT)
-        session["case_context"] = ctx.to_session()
-        session["classification"] = {"issue_type": src["issue_type"]} if src["issue_type"] else {}
-        session.pop("ai_ips_analysis", None)
-        # 3. the log + the issue time, the way /log_chatbot/prepare seeds them
-        for key in ("_attachment_time_cache", "_issue_ai_quick", "chatbot_session_id",
-                    "feedback_conversation_id"):
-            session.pop(key, None)
-        session["chatbot_log_path"] = log_path
-        session["_carried_issue_time_present"] = bool(src["issue_time_log"])
-        session["_carried_issue_time"] = src["issue_time_log"]
-        session["_carried_issue_time_warning"] = ""
-        app_config.last_analyzed_log_path = log_path
+        if log_path and os.path.isfile(log_path):
+            res = _handoff_to_log_chatbot(case_nbr, src, log_path)
+        else:
+            res = _handoff_to_case_page(case_nbr)
     except Exception as e:
         return jsonify({"ok": False, "error": f"{type(e).__name__}: {e}"}), 500
-    params = {"auto_run": "analyze_all"}
-    if src["issue_time_log"]:
-        params["issue_time"] = src["issue_time_log"]
-    return jsonify({"ok": True, "url": "/log_chatbot/?" + urlencode(params),
-                    "log_path": log_path, "issue_time": src["issue_time_log"]})
+    return jsonify(res), (200 if res.get("ok") else 502)
 
 
 # ---------- config + REST field discovery ----------

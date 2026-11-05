@@ -60,34 +60,42 @@ MS_SESSION_TYPES = {1: "Screen Off", 2: "Sleep"}
 # ── Device taxonomy ────────────────────────────────────────────────────────────
 # The report already names the device that blocked the SoC, so it can also say
 # which team's driver log to open next. Wi-Fi and Bluetooth each have one;
-# anything else is still a genuine blocker, it just does not route to a
-# wireless log.
+# Audio is named so the report can say whose log is needed, but no agent in
+# this tool reads an audio driver log. Anything else is still a genuine
+# blocker, it just does not route to a wireless log.
 #
-# `NO_DEVICE` is not a fourth device. It is the answer "no session qualified",
+# `NO_DEVICE` is not a device. It is the answer "no session qualified",
 # which is a different outcome from "a session blocked on something that is
 # neither Wi-Fi nor Bluetooth": the first needs no further analysis, the
 # second needs a log this tool does not own.
 DEVICE_WIFI  = "wifi"
 DEVICE_BT    = "bt"
+DEVICE_AUDIO = "audio"
 DEVICE_OTHER = "other"
 NO_DEVICE    = "none"
 
-DEVICE_ORDER = (DEVICE_WIFI, DEVICE_BT, DEVICE_OTHER)
+DEVICE_ORDER = (DEVICE_WIFI, DEVICE_BT, DEVICE_AUDIO, DEVICE_OTHER)
 
 # Matched against a blocker's Name. Word boundaries earn their keep here: a
 # bare "BT" substring also matches DEBT and BTW. CNVW and CNVB are the ACPI
 # names of the two halves of an Intel CNVi module — W is the Wi-Fi radio, B is
 # the Bluetooth one — and a real report names the device that way:
 # "Intel(R) Wi-Fi 7 BE201 320MHz (\_SB.PC00.CNVW)".
+#
+# Audio comes after Bluetooth so an "LE Audio" headset stays a Bluetooth
+# blocker. HDAS is the ACPI name of the HD Audio controller, which is how a
+# report names Intel's audio DSP: "Intel Smart Sound Technology BUS
+# (\_SB.PC00.HDAS)".
 _DEVICE_PATTERNS = (
-    (DEVICE_WIFI, re.compile(r"Wi-?Fi|WLAN|Wireless\s+LAN|CNVW", re.IGNORECASE)),
-    (DEVICE_BT,   re.compile(r"Bluetooth|BTH(?:USB|PORT|ENUM)|CNVB|\bBT\b", re.IGNORECASE)),
+    (DEVICE_WIFI,  re.compile(r"Wi-?Fi|WLAN|Wireless\s+LAN|CNVW", re.IGNORECASE)),
+    (DEVICE_BT,    re.compile(r"Bluetooth|BTH(?:USB|PORT|ENUM)|CNVB|\bBT\b", re.IGNORECASE)),
+    (DEVICE_AUDIO, re.compile(r"Audio|Smart\s+Sound|\bSST\b|\bHDAS\b", re.IGNORECASE)),
 )
 
 
 def classify_device(name: str) -> str:
     """
-    Name the device family a blocker belongs to: wifi, bt, or other.
+    Name the device family a blocker belongs to: wifi, bt, audio, or other.
 
     Wi-Fi is tested first on purpose. On a combo module both halves carry the
     same vendor and module string, so a Wi-Fi blocker can read as Bluetooth to
@@ -289,11 +297,21 @@ def wifi_in_top_offenders_red(session: dict):
 #  STEP 3 — SESSION FILTER (the three criteria)
 # ══════════════════════════════════════════════════════════════════════════════
 
-def filter_qualifying_sessions(sessions: list, devices=(DEVICE_WIFI,), vendor=None) -> list:
+# Which drip percentages criterion 2 reads. "either" is the Wi-Fi report's
+# rule; "sw" is the driver-log pipeline's, because software DRIPS is the
+# number the OS controls and the one a driver keeps from going low.
+DRIP_METRIC_EITHER = "either"
+DRIP_METRIC_SW     = "sw"
+
+
+def filter_qualifying_sessions(sessions: list, devices=(DEVICE_WIFI,), vendor=None,
+                               drip_threshold=DRIP_THRESHOLD,
+                               drip_metric=DRIP_METRIC_EITHER) -> list:
     """
     Return sessions that satisfy ALL three criteria:
       1. Drain session  (OnAc = False)
-      2. SW Drip < 80 %  OR  HW Drip < 80 %
+      2. SW Drip < threshold  OR  HW Drip < threshold   (drip_metric="either")
+         SW Drip < threshold                            (drip_metric="sw")
       3. a RED top offender from one of `devices`
     Only Modern Standby session types (Type 1 = Screen Off, Type 2 = Sleep) are considered.
 
@@ -302,7 +320,10 @@ def filter_qualifying_sessions(sessions: list, devices=(DEVICE_WIFI,), vendor=No
     `DEVICE_ORDER` — or None — to accept a red blocker from any family, which
     is what a caller routing between teams wants. `vendor` narrows criterion 3
     to one vendor's hardware; the Wi-Fi report passes `WIFI_REPORT_VENDOR`.
+    The threshold defaults to the Wi-Fi report's 80 %.
     """
+    if drip_metric not in (DRIP_METRIC_EITHER, DRIP_METRIC_SW):
+        raise ValueError(f"Unknown drip_metric {drip_metric!r}")
     # Frozen before the loop: red_top_blockers() is called once per session,
     # and a one-shot iterable would be empty from the second session on.
     devices = device_filter(devices)
@@ -316,9 +337,10 @@ def filter_qualifying_sessions(sessions: list, devices=(DEVICE_WIFI,), vendor=No
 
         sw_pct, hw_pct = compute_drip_percentages(s)
         drip_fail = False
-        if sw_pct is not None and sw_pct < DRIP_THRESHOLD:
+        if sw_pct is not None and sw_pct < drip_threshold:
             drip_fail = True
-        if hw_pct is not None and hw_pct < DRIP_THRESHOLD:
+        if (drip_metric == DRIP_METRIC_EITHER
+                and hw_pct is not None and hw_pct < drip_threshold):
             drip_fail = True
         if not drip_fail:
             continue
@@ -647,29 +669,48 @@ def _drip_rank(summary: dict) -> float:
     return min(known) if known else float("inf")
 
 
-def collect_sessions(html_path: str, devices=DEVICE_ORDER) -> dict:
+def collect_sessions(html_path: str, devices=DEVICE_ORDER,
+                     drip_threshold=DRIP_THRESHOLD,
+                     drip_metric=DRIP_METRIC_EITHER) -> dict:
     """
     Load a Sleep Study report and return its qualifying sessions as data.
 
-    `device` is the one-line routing answer — wifi, bt, other or none — and
+    `device` is the one-line routing answer — wifi, bt, audio, other or none — and
     `sessions` lists every qualifying session worst drip first, so a report
     holding both a Wi-Fi session and a Bluetooth one is not flattened into a
     single verdict. `warnings` carries what a reader needs before trusting the
     result: a report with no sessions in it, or a timestamp this parser could
     not read.
     """
+    return collect_sessions_from_payload(
+        load_sleepstudy(html_path), source=html_path, devices=devices,
+        drip_threshold=drip_threshold, drip_metric=drip_metric,
+    )
+
+
+def collect_sessions_from_payload(payload: dict, source: str = "", devices=DEVICE_ORDER,
+                                  drip_threshold=DRIP_THRESHOLD,
+                                  drip_metric=DRIP_METRIC_EITHER) -> dict:
+    """
+    `collect_sessions` for a report that is already loaded. A large report
+    takes seconds to parse, and a caller that also needs the raw sessions
+    should not have to parse it twice.
+    """
     # Used by the filter, by every session summary and by the criteria block
     # below, so it is frozen once here rather than consumed by the first use.
     devices = device_filter(devices)
 
-    payload = load_sleepstudy(html_path)
+    html_path = source
     sessions = payload.get("ScenarioInstances") or []
     warnings = []
 
     if not sessions:
         warnings.append("The report contains no sleep sessions.")
 
-    qualifying = filter_qualifying_sessions(sessions, devices=devices)
+    qualifying = filter_qualifying_sessions(
+        sessions, devices=devices,
+        drip_threshold=drip_threshold, drip_metric=drip_metric,
+    )
     summaries = [summarize_session_data(s, devices=devices) for s in qualifying]
     summaries.sort(key=_drip_rank)
 
@@ -692,7 +733,8 @@ def collect_sessions(html_path: str, devices=DEVICE_ORDER) -> dict:
         "device": summaries[0]["device"] if summaries else NO_DEVICE,
         "devices": sorted({s["device"] for s in summaries}),
         "criteria": {
-            "drip_threshold_pct": DRIP_THRESHOLD,
+            "drip_threshold_pct": drip_threshold,
+            "drip_metric": drip_metric,
             "red_activity_level": RED_ACTIVITY_LEVEL,
             "devices": list(devices) if devices is not None else list(DEVICE_ORDER),
         },

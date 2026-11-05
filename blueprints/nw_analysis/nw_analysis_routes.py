@@ -39,6 +39,7 @@ from models.models import CaseContext
 from services.chatbot.engine.network_experience import NwAnalysisAgentSystem
 from services.chatbot.engine.system import load_skills_from_yaml
 from services.sleepstudy_analyzer import analyze_sleepstudy_stream
+from services import sleepstudy_pipeline
 from services import gather_service
 from services import check_ips_service
 from utils.etl_utils import extract_time_from_description
@@ -469,6 +470,105 @@ def analyze_sleepstudy():
                 gather_service.record_feature_usage(
                     workflow_id=session.get("gather_workflow_id", ""),
                     feature_code="sleepstudy_analysis",
+                    model=llm_model,
+                    usage=spend,
+                    issue=_extract_issue_context(),
+                    domain=GATHER_DOMAIN,
+                    trigger="click_ai",
+                    status=status,
+                    latency_ms=int((datetime.now() - started).total_seconds() * 1000),
+                    error_code=error_code,
+                )
+            except Exception:
+                pass
+
+    return Response(
+        event_stream(),
+        mimetype="text/event-stream",
+        headers={"Cache-Control": "no-cache", "X-Accel-Buffering": "no"},
+    )
+
+
+# ------------------------------------------------------------------
+# API: sleepstudy + driver log (SSE stream)
+#
+# The HTTP adapter for services/sleepstudy_pipeline.py, which picks the worst
+# sessions, cuts the driver log around each one and runs the Wi-Fi or BT
+# agent on it. Everything that is not HTTP lives there, so another entry
+# point (an MCP server) can drive the same pipeline.
+# ------------------------------------------------------------------
+def analyze_sleepstudy_driver():
+    """
+    Request JSON: {
+      "log_path":        "<sleepstudy-report.html>",
+      "driver_log_path": "<WRT folder, a WiFiLog file, or a decoded Wi-Fi log>"
+    }
+    """
+    data = request.get_json(silent=True) or {}
+    sleep_path = (data.get("log_path") or "").strip()
+    driver_path = (data.get("driver_log_path") or "").strip()
+
+    def _err(message):
+        yield f"data: {json.dumps({'type': 'error', 'content': message}, ensure_ascii=False)}\n\n"
+
+    if not sleep_path or not driver_path:
+        return Response(_err("log_path and driver_log_path are required"),
+                        mimetype="text/event-stream")
+
+    # Same gate as analyze_sleepstudy, for the same reason: checked before
+    # the stream opens, where a 428 is still a status the client can act on.
+    blocked = check_ips_service.blocking_state(sleep_path)
+    if blocked:
+        return jsonify(blocked), 428
+
+    for path in (sleep_path, driver_path):
+        if not os.path.exists(path):
+            return Response(_err(f"File not found: {path}"), mimetype="text/event-stream")
+
+    out_dir = os.path.join(
+        app_config.avatarfiles_dir or os.path.expanduser("~"),
+        "sleepstudy", datetime.now().strftime("%Y%m%d_%H%M%S"),
+    )
+
+    @copy_current_request_context
+    def event_stream():
+        spend = {"llm_calls": 0, "input_tokens": 0, "cache_read_tokens": 0,
+                 "cache_write_tokens": 0, "output_tokens": 0, "total_tokens": 0}
+        llm_model = getattr(app_config.llm_helper, "model", "") if app_config.llm_helper else ""
+        started = datetime.now()
+        status, error_code = "success", ""
+        try:
+            for event in sleepstudy_pipeline.run_pipeline(sleep_path, driver_path, out_dir=out_dir):
+                kind = event["type"]
+                if kind == "step":
+                    sse = {"type": "step", "step": {"content": event["content"]}}
+                elif kind == "point":
+                    for key, value in (event["data"].get("agent_usage") or {}).items():
+                        if key in spend:
+                            spend[key] += value
+                    continue
+                elif kind == "done":
+                    sse = {"type": "done", "result": {
+                        "type": "text",
+                        "data": event["data"]["markdown"],
+                        "pipeline": event["data"],
+                    }}
+                elif kind == "error":
+                    sse = {"type": "error", "content": event["content"]}
+                    status, error_code = "failed", "pipeline_error"
+                else:
+                    continue
+                yield f"data: {json.dumps(sse, ensure_ascii=False, default=str)}\n\n"
+        except Exception as exc:
+            print(f"analyze_sleepstudy_driver error:\n{traceback.format_exc()}")
+            status, error_code = "failed", type(exc).__name__
+            yield f"data: {json.dumps({'type': 'error', 'content': str(exc)}, ensure_ascii=False)}\n\n"
+        finally:
+            # Book the spend regardless of outcome — the tokens were billed.
+            try:
+                gather_service.record_feature_usage(
+                    workflow_id=session.get("gather_workflow_id", ""),
+                    feature_code="sleepstudy_driver_analysis",
                     model=llm_model,
                     usage=spend,
                     issue=_extract_issue_context(),

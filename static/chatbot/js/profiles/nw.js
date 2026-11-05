@@ -25,22 +25,26 @@
         }
     }
 
-    // ── Browse for sleepstudy file ──────────────────────────────────
-    async function browseSleepstudy() {
-        const btn = document.querySelector('#sleepstudy-path-input + .btn-browse');
+    // ── Browse for sleepstudy / driver log file ─────────────────────
+    async function browseInto(inputId) {
+        const btn = document.querySelector(`#${inputId} + .btn-browse`);
         if (btn) { btn.textContent = '⏳'; btn.disabled = true; }
         try {
             const res = await fetch(`${CHATBOT_API}/browse`);
             const data = await res.json();
             if (data.path) {
-                document.getElementById('sleepstudy-path-input').value = data.path;
+                document.getElementById(inputId).value = data.path;
             }
         } catch (e) {
-            console.error('Browse sleepstudy failed:', e);
+            console.error('Browse failed:', e);
         } finally {
             if (btn) { btn.textContent = '📁'; btn.disabled = false; }
         }
     }
+
+    function browseSleepstudy() { return browseInto('sleepstudy-path-input'); }
+    // One WiFiLog picked here stands for its whole WRT folder (server side).
+    function browseDriverLog() { return browseInto('driver-log-path-input'); }
 
     // ── Load sleepstudy file ────────────────────────────────────────
     async function setSleepstudy() {
@@ -59,9 +63,15 @@
             const data = await res.json();
             if (data.success) {
                 showStatus(statusEl, '✔ ' + (data.message || 'Sleepstudy file loaded.'), 'ok');
-                // Run the dedicated sleepstudy analyzer pipeline
                 if (window.IpsPrompt) { await window.IpsPrompt.handleSetLog(data); }
-                await runSleepstudyAnalysis(path);
+                // With a driver log: worst sessions → driver log agent per session.
+                // Without one: the Sleep Study-only Wi-Fi report.
+                const driverPath = document.getElementById('driver-log-path-input').value.trim();
+                if (driverPath) {
+                    await runSleepstudyAnalysis(path, driverPath);
+                } else {
+                    await runSleepstudyAnalysis(path);
+                }
             } else {
                 showStatus(statusEl, '✘ ' + data.error, 'err');
             }
@@ -71,20 +81,25 @@
     }
 
     // ── Run dedicated sleepstudy analyzer (SSE stream) ──────────────
-    async function runSleepstudyAnalysis(path) {
-        appendUserMsg('Analysing the uploaded sleepstudy at `' + path + '`');
+    async function runSleepstudyAnalysis(path, driverPath) {
+        appendUserMsg(driverPath
+            ? 'Analysing the sleepstudy at `' + path + '` against the driver log at `' + driverPath + '`'
+            : 'Analysing the uploaded sleepstudy at `' + path + '`');
         appendTyping();
 
         const card = createAgentStepRenderer({
-            title: 'Sleepstudy Analyzer Steps',
+            title: driverPath ? 'Sleepstudy × Driver Log Steps' : 'Sleepstudy Analyzer Steps',
             avatar: '🛌',
         });
 
         try {
-            const res = await fetch(`${CHATBOT_API}/analyze_sleepstudy`, {
+            const res = await fetch(
+                `${CHATBOT_API}/${driverPath ? 'analyze_sleepstudy_driver' : 'analyze_sleepstudy'}`, {
                 method: 'POST',
                 headers: {'Content-Type': 'application/json'},
-                body: JSON.stringify({log_path: path})
+                body: JSON.stringify(driverPath
+                    ? {log_path: path, driver_log_path: driverPath}
+                    : {log_path: path})
             });
 
             if (!res.ok) throw new Error(`Server error ${res.status}`);

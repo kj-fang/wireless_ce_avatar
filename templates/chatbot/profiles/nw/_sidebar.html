@@ -28,8 +28,14 @@
             <input id="sleepstudy-path-input" type="text"
                    placeholder="Full path to sleepstudy file…">
             <button class="btn-browse" onclick="browseSleepstudy()" title="Browse for file">📁</button>
-            <button class="btn-set-log" onclick="setSleepstudy()">Load</button>
         </div>
+        <!-- Optional: with a driver log, each bad session is analysed in it -->
+        <div class="log-input-group" style="margin-top:6px;">
+            <input id="driver-log-path-input" type="text"
+                   placeholder="Driver log: WRT folder or WiFiLog file (optional)…">
+            <button class="btn-browse" onclick="browseDriverLog()" title="Browse for a WiFiLog file">📁</button>
+        </div>
+        <button class="btn-set-log" style="width:100%;margin-top:6px;" onclick="setSleepstudy()">Load</button>
         <div id="sleepstudy-status" class="log-status"></div>
     </div>
 </div>

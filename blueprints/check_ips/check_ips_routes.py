@@ -35,6 +35,13 @@ def resolve():
     data = request.get_json(silent=True) or {}
     log_path = str(data.get("log_path") or "").strip()
     action = str(data.get("action") or "attach").strip().lower()
+    # A case change closes the conversation server-side; the client is still
+    # holding its id, and Stop would then cancel a thread that is already gone
+    # while the analysis it meant to stop kept streaming.
+    conversation_before = session.get("feedback_conversation_id") or ""
+
+    def conversation_reset() -> bool:
+        return bool(conversation_before) and not session.get("feedback_conversation_id")
 
     if action == "skip":
         # The literal boolean only. bool() of the JSON string "false" is True,
@@ -49,6 +56,7 @@ def resolve():
             "success": True,
             "case_nbr": "",
             "case_ref_source": check_ips_service.SKIPPED,
+            "conversation_reset": conversation_reset(),
             "message": "Recorded as having no case number.",
         })
 
@@ -101,5 +109,6 @@ def resolve():
         "case_ref_source": source,
         "enriched": enriched,
         "lookup_unavailable": lookup_unavailable,
+        "conversation_reset": conversation_reset(),
         "message": message,
     })

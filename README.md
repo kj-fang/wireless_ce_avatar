@@ -14,3 +14,5 @@ The nightly build is produced from `main` after a successful GitHub Actions buil
 Stable releases are produced from `release/X.Y` branches and use tags such as `v1.2.0` and `v1.2.1`.
 
 See [VERSION_CONTROL.md](VERSION_CONTROL.md) for the complete branching, versioning, hotfix, and release procedure.
+
+See [IPS_CASE_NUMBER_FLOW.md](IPS_CASE_NUMBER_FLOW.md) for how a log gets its IPS case number across the four entry points (case box, upload, Send To, straight into the chatbot), and what each branch of the gate is protecting.

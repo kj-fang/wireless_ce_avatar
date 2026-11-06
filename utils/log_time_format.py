@@ -115,12 +115,14 @@ class _Shape:
 
 
 # Order matters only for ties: our own decoders first, so an existing Wi-Fi or
-# BT log keeps the exact format it has always been read with.
+# BT log keeps the exact format it has always been read with. Labels name the
+# shape, not the decoder: the BT HCI decoder emits the first one too, and
+# "Wi-Fi ETL decode" in the BT sidebar read as the wrong log being loaded.
 _SHAPES: Tuple[_Shape, ...] = (
-    _Shape("wifi_etl", "Wi-Fi ETL decode (MM/DD/YYYY)",
+    _Shape("wifi_etl", "MM/DD/YYYY-HH:MM:SS.mmm",
            re.compile(r"(\d{2}/\d{2}/\d{4}-\d{2}:\d{2}:\d{2}\.\d{3})"),
            ("%m/%d/%Y-%H:%M:%S.%f",), "absolute"),
-    _Shape("bt_hci", "BT HCI decode (YYYY/MM/DD)",
+    _Shape("bt_hci", "YYYY/MM/DD HH:MM:SS",
            re.compile(r"(\d{4}/\d{2}/\d{2} \d{2}:\d{2}:\d{2}(?:\.\d{1,3})?)"),
            ("%Y/%m/%d %H:%M:%S.%f", "%Y/%m/%d %H:%M:%S"), "absolute"),
     _Shape("rfc3339", "RFC 3339 (rsyslog / journalctl)",

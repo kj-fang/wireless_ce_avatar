@@ -664,32 +664,85 @@
     ChatRuntimeStrategyBase.prototype._onAutoIssueTimeApplied = function () {};
     ChatRuntimeStrategyBase.prototype._afterAutoPrefill = function () {};
 
-    ChatRuntimeStrategyBase.prototype._prefillAttachedCaseDescription = async function (logGen) {
+    ChatRuntimeStrategyBase.prototype._prefillAttachedCaseDescription = async function (logGen, replaceDraft) {
         // The manual file-picker path never enters tryAutoAnalyzeOnLoad(). After
         // the IPS dialog enriches the case, fetch its organized description for
         // the same input box that the page-load path fills. Do not replace a
         // draft the user typed while the lookup was in flight.
         const input = document.getElementById('user-input');
-        if (!input || input.value.trim()) return;
+        if (!input) return;
+        if (input.value.trim() && !replaceDraft) return;
         const initialValue = input.value;
         try {
             const res = await fetch(`${this.api}/get_issue_context`);
             if (!res.ok) return;
             const context = await res.json();
+            if (logGen !== window.__setLogGen) return;
+            // The picker belongs to the case, not to the draft: the server has
+            // already attached the new one, so a time left there by the old
+            // case would anchor the next Send whatever the box now says.
+            if (replaceDraft) this._replaceCaseDerivedIssueTime(context);
+            // replaceDraft means "replace what the previous case left there",
+            // not "replace anything": typing while the lookup and the LLM
+            // organize were running still wins the box, as it does without it.
+            if (input.value !== initialValue) return;
             const description = String(context.description || '').replace(/\s+/g, ' ').trim();
-            if (!description || logGen !== window.__setLogGen ||
-                input.value !== initialValue) return;
+            // A case changed to none leaves no description, and the box is
+            // still showing the one the old case put there.
+            if (!description && !replaceDraft) return;
             input.value = description;
             autoResize(input);
             const hint = document.getElementById('prefill-hint');
-            if (hint) hint.style.display = 'block';
+            if (hint) hint.style.display = description ? 'block' : 'none';
             if (typeof validateUserInput === 'function') validateUserInput();
         } catch (e) {
             console.warn('case description prefill failed', e);
         }
     };
 
+    /**
+     * Put the issue-time fields back in step with the case now attached.
+     *
+     * The picker still holds what the previous case's attachment or
+     * description put there, so leaving it alone analyses the new case's
+     * problem statement at the old case's time.
+     */
+    ChatRuntimeStrategyBase.prototype._replaceCaseDerivedIssueTime = function (context) {
+        if (window.__logTimeAxis === false) return;
+        if (typeof clearAllIssueTimes !== 'function') return;
+        clearAllIssueTimes();
+        _setIssueTimeSourceTag('');
+        if (context.issue_time_blocked) return;
+        const times = Array.isArray(context.issue_times)
+            ? context.issue_times.filter(Boolean) : [];
+        if (times.length > 0 && typeof _prefillAutoTimes === 'function'
+                && _prefillAutoTimes(times)) {
+            _setIssueTimeSourceTag(ISSUE_TIME_SOURCE.DESCRIPTION);
+            this._onAutoIssueTimeApplied();
+            return;
+        }
+        const attachmentTime = String(context.attachment_time || '').trim();
+        const single = attachmentTime || String(context.issue_time || '').trim();
+        if (single && typeof setIssueTimeFromString === 'function'
+                && setIssueTimeFromString(single)) {
+            if (attachmentTime) _setIssueTimeSourceTag(ISSUE_TIME_SOURCE.ATTACHMENT);
+            this._onAutoIssueTimeApplied();
+        }
+    };
+
     ChatRuntimeStrategyBase.prototype.setLog = async function (opts) {
+        // The notice that names the quietly attached case offers a way to
+        // change it. Whatever is in the box came from the previous number, so
+        // a change replaces it rather than yielding to it as a draft.
+        if (window.IpsPrompt && !window.IpsPrompt.onCaseChanged) {
+            window.IpsPrompt.onCaseChanged = (body) => {
+                // The server closed the thread this id names. Keeping it would
+                // point Stop at a conversation that no longer exists, so the
+                // next analysis streams on while the page stops rendering it.
+                if (body && body.conversation_reset) window.__feedbackConversationId = '';
+                this._prefillAttachedCaseDescription(window.__setLogGen, true);
+            };
+        }
         // When restoring a per-conversation draft / a resumed live session the
         // caller manages the Issue Time itself (from the saved snapshot), so it
         // can suppress this function's own issue-time auto-fill — otherwise the
@@ -789,8 +842,13 @@
             // page-load prefill has already had its only chance to run. Only
             // that manual path needs another fetch; the automatic path below
             // will perform its own complete prefill after setLog returns.
-            if (attachedCase && attachedCase.case_nbr && attachedCase.enriched &&
-                !(opts && opts.deferCasePrefill)) {
+            //
+            // A case read off the folder name opened no dialog, so there is no
+            // answer to check -- but it is just as much a case the input box
+            // has not seen yet, and it used to be the one that filled nothing.
+            const quietlyAttached = !data.needs_ips && !!data.case_nbr;
+            if (((attachedCase && attachedCase.case_nbr && attachedCase.enriched) ||
+                 quietlyAttached) && !(opts && opts.deferCasePrefill)) {
                 await this._prefillAttachedCaseDescription(logGen);
             }
             if (attachedCase && attachedCase.case_nbr && !attachedCase.enriched) {

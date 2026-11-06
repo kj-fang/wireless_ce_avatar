@@ -146,8 +146,22 @@
         background: #fde8e8; color: #b91c1c; display: block;
     }
 
-    /* Skill cards */
+    /* Skill cards.
+
+       A <button>, so it answers the keyboard and carries a real disabled
+       state -- which also means undoing what the user agent gives a button:
+       its own font, a centred single line, and a width that shrinks to its
+       text instead of filling the sidebar. width:100% with box-sizing keeps
+       the padding inside the column rather than adding to it, and
+       white-space:normal lets a long name wrap at all. */
     .skill-card {
+        display: block;
+        width: 100%;
+        min-width: 0;
+        box-sizing: border-box;
+        text-align: left;
+        font: inherit;
+        white-space: normal;
         background: #f7f9fc;
         border: 1px solid var(--accent-border);
         border-radius: 8px;
@@ -157,9 +171,15 @@
         transition: all 0.15s;
     }
 
-    .skill-card:hover {
+    .skill-card:hover:not(:disabled) {
         border-color: var(--accent);
         background: var(--accent-hover);
+    }
+
+    /* Inert while the analysis it would start is still running. */
+    .skill-card:disabled {
+        cursor: not-allowed;
+        opacity: 0.55;
     }
 
     .skill-card .skill-name {

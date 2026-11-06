@@ -8,8 +8,10 @@ when a slow request that started before they answered writes the session back
 over the top of it.
 """
 
+import hashlib
 import json
 import os
+import re
 import threading
 from concurrent.futures import ThreadPoolExecutor, TimeoutError as FutureTimeoutError
 from datetime import datetime, timezone
@@ -34,6 +36,23 @@ SESSION_SOURCE_KEY = "case_ref_source"
 
 _ANSWER_FILE_NAME = "ips_answers.json"
 _MAX_REMEMBERED_ANSWERS = 500
+
+#: What a remembered answer carries besides the number. These are derived from
+#: the case and the log -- both of which are the same file next time -- so
+#: re-deriving them costs an IPS lookup, an LLM call, and a user who watches
+#: the chatbot come up blank for a log it has already been told about.
+CASE_FACTS_KEY = "case_facts"
+_CASE_FACT_FIELDS = ("description", "attachment_time", "issue_time", "issue_times")
+
+#: The same store also keeps what belongs to the CASE rather than to one
+#: capture of it: what IPS said about it, and the LLM pre-pass over that. Both
+#: are the same answer every time, so paying for them again -- on a restart, a
+#: new conversation, or a second log of the same case -- is the user watching
+#: an empty box while a lookup and an LLM call reproduce what is on disk.
+_CASE_KEY_PREFIX = "case:"
+CASE_LOOKUP_KEY = "lookup"
+ORGANIZED_KEY = "organized"
+_LOOKUP_FIELDS = ("subject", "description", "issue_type", "subcategory")
 
 _answer_lock = threading.Lock()
 
@@ -102,6 +121,19 @@ def _note_log_path(log_path) -> None:
         _last_prompted_log = text
 
 
+def _gate(verdict: bool, reason: str, log_path) -> bool:
+    """Record which branch decided this, then return it.
+
+    One line per decision, because the bug reports this feature attracts are
+    all of the form "it asked again" or "it did not ask" and the answer is
+    always which of needs_ips' branches ran.
+    """
+    print(f"[ips] gate {'ASK' if verdict else 'OPEN'}: {reason} "
+          f"| case={current_case_nbr() or '-'} source={current_source()} "
+          f"| {log_path or '(no log path)'}")
+    return verdict
+
+
 def answer_for(log_path) -> dict:
     """The answer already given for this log file, or {}."""
     key = _log_key(log_path)
@@ -109,6 +141,18 @@ def answer_for(log_path) -> dict:
         return {}
     record = _load_answers().get(key)
     return record if isinstance(record, dict) else {}
+
+
+def _write_answers(answers: dict, path: Path) -> None:
+    """Replace the store with `answers`, trimmed and atomically. Holds _answer_lock."""
+    if len(answers) > _MAX_REMEMBERED_ANSWERS:
+        oldest = sorted(answers.items(),
+                        key=lambda kv: str((kv[1] or {}).get("at", "")))
+        answers = dict(oldest[-_MAX_REMEMBERED_ANSWERS:])
+    tmp = path.with_suffix(".tmp")
+    with tmp.open("w", encoding="utf-8") as fh:
+        json.dump(answers, fh, indent=2)
+    os.replace(tmp, path)
 
 
 def remember_answer(log_path, case_nbr: str, source: str) -> None:
@@ -121,19 +165,22 @@ def remember_answer(log_path, case_nbr: str, source: str) -> None:
     try:
         with _answer_lock:
             answers = _load_answers()
-            answers[key] = {
+            previous = answers.get(key)
+            record = {
                 "case_nbr": case_nbr or "",
                 "source": source,
                 "at": datetime.now(timezone.utc).isoformat(timespec="seconds"),
             }
-            if len(answers) > _MAX_REMEMBERED_ANSWERS:
-                oldest = sorted(answers.items(),
-                                key=lambda kv: str((kv[1] or {}).get("at", "")))
-                answers = dict(oldest[-_MAX_REMEMBERED_ANSWERS:])
-            tmp = path.with_suffix(".tmp")
-            with tmp.open("w", encoding="utf-8") as fh:
-                json.dump(answers, fh, indent=2)
-            os.replace(tmp, path)
+            # Re-confirming the same case re-writes the answer; what was learned
+            # about that case is still true, so it is carried over rather than
+            # dropped on every new conversation.
+            if isinstance(previous, dict) and case_nbr \
+                    and str(previous.get("case_nbr") or "") == case_nbr:
+                facts = previous.get(CASE_FACTS_KEY)
+                if isinstance(facts, dict) and facts:
+                    record[CASE_FACTS_KEY] = facts
+            answers[key] = record
+            _write_answers(answers, path)
     except Exception as e:
         print(f"[ips] could not remember the answer for {key}: {e}")
 
@@ -209,6 +256,15 @@ def _apply_stored_answer(log_path) -> None:
         # that answer applies -- including over one stored against the log in
         # an earlier conversation, which it is newer than.
         record = answer_for(session.get("uploaded_source_path")) or record
+    elif not record.get("source"):
+        # The gate accepts the answer that owns this log -- the archive it came
+        # out of, or the record its own holder is filed under -- so restoring
+        # has to resolve the same one. Without this, switching case and back
+        # opened the gate without putting the case back, and the conversation
+        # went on with nothing attached.
+        owner = _owning_answer_key(log_path)
+        owned = _load_answers().get(owner) if owner else None
+        record = owned if isinstance(owned, dict) and owned else record
     source = record.get("source")
     if source in (SKIPPED, EXPLICIT, DERIVED_FROM_PATH):
         # The restored answer is now this session's answer about this log.
@@ -254,8 +310,8 @@ def start_new_session() -> None:
 _ARCHIVE_EXTS = (".zip", ".7z", ".rar")
 
 
-def _archive_answer(log_path) -> dict:
-    """The answer given for the archive this log was extracted from, if any.
+def _archive_answer_key(log_path) -> str:
+    """The store key of the archive this log was extracted from, if any.
 
     A local archive is extracted in place, into <its folder>/<stem with spaces
     as underscores>/ (see _process_local_analysis). So a Send To of a zip that
@@ -267,7 +323,7 @@ def _archive_answer(log_path) -> dict:
     """
     key = _log_key(log_path)
     if not key:
-        return {}
+        return ""
     for answered, record in _load_answers().items():
         stem, ext = os.path.splitext(answered)
         if ext.lower() not in _ARCHIVE_EXTS:
@@ -277,8 +333,369 @@ def _archive_answer(log_path) -> dict:
         if key.startswith(folder + os.sep) and isinstance(record, dict) \
                 and record.get("source") in (EXPLICIT, DERIVED_FROM_PATH) \
                 and record.get("case_nbr"):
-            return record
-    return {}
+            return answered
+    return ""
+
+
+def _archive_answer(log_path) -> dict:
+    """The answer given for the archive this log was extracted from, or {}."""
+    key = _archive_answer_key(log_path)
+    return _load_answers().get(key, {}) if key else {}
+
+
+def _owning_answer_key(log_path) -> str:
+    """The store key whose answer covers this log.
+
+    The question is asked about the file that was sent -- an archive, an .etl --
+    and the chatbot then opens a file extracted or decoded from it, under a
+    path nobody was asked about. needs_ips already makes that mapping so the
+    same work is not asked about twice; what was remembered about the case is
+    remembered for the same set of files, and for the same reason.
+    """
+    key = _log_key(log_path)
+    if not key:
+        return ""
+    answers = _load_answers()
+    uploaded = _log_key(session.get("uploaded_source_path"))
+    covered_by_upload = bool(uploaded and uploaded in answers
+                             and _placeholder_is_for(log_path))
+    # Ahead of this log's own record when the upload was answered in this
+    # conversation. A decoded log can still carry an older answer naming the
+    # case it was last worked under, and filing this case's facts against that
+    # record fails the case-number check and stores nothing. Same order as
+    # _apply_stored_answer, which is what puts the answer back.
+    if covered_by_upload and _from_answered_upload(log_path):
+        if uploaded != key:
+            print(f"[ips] {key} is covered by the answer just given for the "
+                  f"upload it came from: {uploaded}")
+        return uploaded
+    # A facts holder is not an answer: it is where one log out of a shared
+    # archive keeps its own description and times. The case number still comes
+    # from whoever was actually asked, so changing it there reaches this log.
+    if key in answers and not (answers.get(key) or {}).get("covered_by"):
+        return key
+    if covered_by_upload:
+        print(f"[ips] {key} is covered by the answer for the upload it came "
+              f"from: {uploaded}")
+        return uploaded
+    # Its own record already names who was asked. A later conversation has no
+    # uploaded_source_path to go on, and a decoded .etl is not under any
+    # archive folder, so without this the answer for it cannot be found again.
+    # Only honoured when the record it points at is still a real answer.
+    covered_by = (answers.get(key) or {}).get("covered_by")
+    owner = answers.get(covered_by) if covered_by else None
+    if isinstance(owner, dict) and owner.get("case_nbr") \
+            and owner.get("source") in (EXPLICIT, DERIVED_FROM_PATH):
+        print(f"[ips] {key} is covered by the answer it was filed under: "
+              f"{covered_by}")
+        return covered_by
+    from_archive = _archive_answer_key(log_path)
+    if from_archive:
+        print(f"[ips] {key} is covered by the answer for the archive it was "
+              f"extracted from: {from_archive}")
+    return from_archive
+
+
+def _case_facts_key(log_path, owner_key: str) -> str:
+    """Where this log's own description and times belong in the store.
+
+    The case number is filed against whatever was asked about -- the archive,
+    the .etl -- because that is one piece of work and one question. The times
+    are not: two logs out of the same archive are two different captures, and
+    keeping them on the shared record meant saving the second overwrote the
+    first, while a sibling nobody had opened came back already carrying
+    another log's attachment time.
+    """
+    key = _log_key(log_path)
+    return key or owner_key
+
+
+def _stored_case_facts(answers: dict, log_path, owner_key: str, canonical: str) -> dict:
+    """The facts filed for this log in particular, or {}."""
+    holder_key = _case_facts_key(log_path, owner_key)
+    holder = answers.get(holder_key)
+    if not isinstance(holder, dict):
+        return {}
+    if holder_key != owner_key and \
+            check_ips_utils.normalise_ips(holder.get("case_nbr")) != canonical:
+        # Written while this log was being worked under another number.
+        return {}
+    facts = holder.get(CASE_FACTS_KEY)
+    return facts if isinstance(facts, dict) else {}
+
+
+def remembered_case_facts(log_path, case_nbr) -> dict:
+    """What this log's case last told the chatbot, or {}.
+
+    Both sides have to be the same real case number. An empty or synthetic one
+    is not a match to anything: Send To leaves the window open, so a run that
+    has no case of its own is exactly the run that would otherwise be handed
+    the previous file's description and issue time.
+    """
+    canonical = check_ips_utils.normalise_ips(case_nbr)
+    if not canonical:
+        print(f"[ips] recall skipped: no real case number on this run "
+              f"(asked with {case_nbr!r}) | {log_path}")
+        return {}
+    key = _owning_answer_key(log_path)
+    answers = _load_answers()
+    record = answers.get(key) if key else None
+    if not isinstance(record, dict):
+        print(f"[ips] recall miss for {canonical}: no stored answer covers "
+              f"{log_path}")
+        return {}
+    stored_case = check_ips_utils.normalise_ips(record.get("case_nbr"))
+    if stored_case != canonical:
+        print(f"[ips] recall miss for {canonical}: {key} is filed under "
+              f"{stored_case or '(no case)'}")
+        return {}
+    facts = _stored_case_facts(answers, log_path, key, canonical)
+    if not facts:
+        print(f"[ips] recall miss for {canonical}: the case is on file but "
+              f"nothing was ever worked out from it for {log_path}")
+        return {}
+    recalled = {name: facts[name] for name in _CASE_FACT_FIELDS if facts.get(name)}
+    print(f"[ips] recall hit for {canonical} from {key}: "
+          f"description={len(recalled.get('description', ''))} chars, "
+          f"issue_time={recalled.get('issue_time') or '-'}, "
+          f"attachment_time={recalled.get('attachment_time') or '-'}")
+    return recalled
+
+
+def settled_case_answer(log_path) -> dict:
+    """The answer for this log when it has already been to IPS and back, else {}.
+
+    "Already been" means a real case number plus what that case told the
+    chatbot: its description and an issue time. Only then is there something
+    for the chatbot to show instead of the dialog.
+    """
+    key = _owning_answer_key(log_path)
+    answers = _load_answers()
+    record = answers.get(key) if key else None
+    if not isinstance(record, dict):
+        return {}
+    canonical = check_ips_utils.normalise_ips(record.get("case_nbr"))
+    if not canonical or record.get("source") not in (EXPLICIT, DERIVED_FROM_PATH):
+        return {}
+    facts = _stored_case_facts(answers, log_path, key, canonical)
+    if not facts.get("description"):
+        return {}
+    if not (facts.get("issue_time") or facts.get("issue_times")):
+        return {}
+    return {"case_nbr": canonical, "source": record["source"]}
+
+
+def restore_settled_answer(log_path) -> str:
+    """Put a case this log already settled back on the session. Returns it, or "".
+
+    needs_ips does this too, but it runs when the client asks -- by which time
+    /set_log has primed the agent from a session that still had no case on it,
+    so the remembered description and attachment time reached the sidebar and
+    never the agent. Only ever fills a gap: a session already on a case is
+    answering about that one.
+    """
+    key = _log_key(log_path)
+    if not key or current_case_nbr():
+        return ""
+    settled = settled_case_answer(log_path)
+    if not settled:
+        return ""
+    _mark_answered(key)
+    _remember_on_session(settled["case_nbr"], settled["source"], log_path)
+    print(f"[ips] {log_path} settled as {settled['case_nbr']} in an earlier "
+          f"conversation; restored before priming")
+    return settled["case_nbr"]
+
+
+def remember_case_facts(log_path, case_nbr, facts: dict) -> bool:
+    """Keep what was shown for this log beside the case number already stored.
+
+    Only ever written onto an answer that exists and names the same case: a log
+    nobody was asked about has no answer to annotate, and inventing one here
+    would start offering a case number for it. Returns whether anything new
+    was stored.
+    """
+    canonical = check_ips_utils.normalise_ips(case_nbr)
+    if not canonical or not isinstance(facts, dict) or not facts:
+        return False
+    path = _answer_store_path()
+    if path is None:
+        return False
+    try:
+        with _answer_lock:
+            answers = _load_answers()
+            key = _owning_answer_key(log_path)
+            record = answers.get(key) if key else None
+            if not isinstance(record, dict) or \
+                    check_ips_utils.normalise_ips(record.get("case_nbr")) != canonical:
+                print(f"[ips] not stored for {canonical}: no answer filed under "
+                      f"{key or '(no key)'} names that case | {log_path}")
+                return False
+            holder_key = _case_facts_key(log_path, key)
+            holder = answers.get(holder_key)
+            if not isinstance(holder, dict):
+                # Somewhere to keep this log's own times. Deliberately no
+                # "source": nobody was asked about this path, the answer that
+                # covers it is still the one under key, and the gate reads
+                # that one.
+                holder = {"case_nbr": canonical, "covered_by": key,
+                          "at": datetime.now(timezone.utc).isoformat(timespec="seconds")}
+                answers[holder_key] = holder
+            elif holder_key != key and \
+                    check_ips_utils.normalise_ips(holder.get("case_nbr")) != canonical:
+                # Re-filed under another number: the times under it were worked
+                # out for the previous case, and merging leaves the ones this
+                # one has nothing to say about readable as its own.
+                holder["case_nbr"] = canonical
+                holder.pop(CASE_FACTS_KEY, None)
+            stored = holder.get(CASE_FACTS_KEY)
+            stored = dict(stored) if isinstance(stored, dict) else {}
+            merged = dict(stored)
+            for name in _CASE_FACT_FIELDS:
+                value = facts.get(name)
+                # A blank is "not worked out this time", not "there is none":
+                # a page opened before the log loads must not erase the answer
+                # a page that had the log already wrote.
+                if value:
+                    merged[name] = value
+            if merged == stored:
+                return False
+            holder[CASE_FACTS_KEY] = merged
+            answers[holder_key] = holder
+            _write_answers(answers, path)
+        print(f"[ips] stored for {canonical} under {holder_key}: "
+              + ", ".join(f"{name}={'set' if merged.get(name) else '-'}"
+                          for name in _CASE_FACT_FIELDS))
+        return True
+    except Exception as e:
+        print(f"[ips] could not remember the case facts for {log_path}: {e}")
+        return False
+
+
+def case_wireless_domain(context: Optional[dict] = None) -> str:
+    """Which radio the attached case is about: "wifi", "bt", or "" if unstated.
+
+    The IPS subcategory is the only field that describes the CASE. The context's
+    own wifi_or_bt is rewritten by the local-upload flow with whatever the
+    bundle happened to contain, so a Wi-Fi case whose zip carried one stray BT
+    log reads as "bt" there.
+    """
+    raw = context if isinstance(context, dict) else (session.get("case_context") or {})
+    value = str(raw.get("subcategory") or "").strip().lower()
+    if "wifi" in value or "wi-fi" in value:
+        return "wifi"
+    if "bluetooth" in value or re.search(r"\bbt\b", value):
+        return "bt"
+    return ""
+
+
+def _case_level_key(case_nbr) -> str:
+    """Where a case's own record lives. Namespaced, so it cannot be a log key."""
+    canonical = check_ips_utils.normalise_ips(case_nbr)
+    return f"{_CASE_KEY_PREFIX}{canonical}" if canonical else ""
+
+
+def _case_holder(answers: dict, case_nbr) -> dict:
+    key = _case_level_key(case_nbr)
+    holder = answers.get(key) if key else None
+    return holder if isinstance(holder, dict) else {}
+
+
+def _write_case_holder(canonical: str, field: str, value) -> bool:
+    """Put one field on the case's record. Returns whether anything changed."""
+    key = _case_level_key(canonical)
+    path = _answer_store_path()
+    if not key or path is None:
+        return False
+    try:
+        with _answer_lock:
+            answers = _load_answers()
+            holder = answers.get(key)
+            if not isinstance(holder, dict):
+                # Deliberately no "source": nobody is ever asked about a case
+                # number on its own, only about files, and the gate reads those.
+                holder = {"case_nbr": canonical}
+            if holder.get(field) == value:
+                return False
+            holder[field] = value
+            # Refreshed on every write so the store's oldest-first trim does
+            # not drop the case while its logs are still being worked on.
+            holder["at"] = datetime.now(timezone.utc).isoformat(timespec="seconds")
+            answers[key] = holder
+            _write_answers(answers, path)
+        return True
+    except Exception as e:
+        print(f"[ips] could not keep {field} for {canonical}: {e}")
+        return False
+
+
+def remember_case_lookup(case_nbr, subject: str, description: str,
+                         issue_type: str, subcategory: str = "") -> None:
+    """Keep what IPS said about a case, so the next conversation need not ask."""
+    canonical = check_ips_utils.normalise_ips(case_nbr)
+    if not canonical or not (subject or description):
+        return
+    if _write_case_holder(canonical, CASE_LOOKUP_KEY, {
+            "subject": subject or "",
+            "description": description or "",
+            "issue_type": issue_type or "",
+            # Kept because it is what says which radio the case is about: a
+            # cache hit without it leaves the other-radio guards blind.
+            "subcategory": subcategory or ""}):
+        print(f"[ips] kept what IPS said about {canonical}; the next "
+              f"conversation about it opens without a lookup")
+
+
+def remembered_case_lookup(case_nbr) -> dict:
+    """What IPS said about this case the last time anybody asked, or {}."""
+    found = _case_holder(_load_answers(), case_nbr).get(CASE_LOOKUP_KEY)
+    if not isinstance(found, dict):
+        return {}
+    return {name: found.get(name) or "" for name in _LOOKUP_FIELDS}
+
+
+def _organize_digest(raw_desc: str, first_ts=None, last_ts=None) -> str:
+    """What one pre-pass was run over: the text, and the window it was dated in.
+
+    The organizer stamps clock-only times with the log's dates, so the same
+    description over another capture is a different answer -- reusing it put
+    the first capture's dates on the second one's times and the range guard
+    threw them all out.
+    """
+    def _day(ts) -> str:
+        return ts.strftime("%Y-%m-%d") if hasattr(ts, "strftime") else ""
+
+    material = f"{raw_desc or ''}|{_day(first_ts)}|{_day(last_ts)}"
+    return hashlib.sha1(material.encode("utf-8", "replace")).hexdigest()
+
+
+def remembered_organized(case_nbr, raw_desc: str, first_ts=None, last_ts=None) -> dict:
+    """The LLM pre-pass already run over this description for this log, or {}.
+
+    Keyed on what it was run over, so an edited case description or another
+    capture is organized again rather than answered from the old result.
+    """
+    if not raw_desc:
+        return {}
+    cached = _case_holder(_load_answers(), case_nbr).get(ORGANIZED_KEY)
+    if not isinstance(cached, dict) or \
+            cached.get("for") != _organize_digest(raw_desc, first_ts, last_ts):
+        return {}
+    data = cached.get("data")
+    return dict(data) if isinstance(data, dict) else {}
+
+
+def remember_organized(case_nbr, raw_desc: str, data: dict,
+                       first_ts=None, last_ts=None) -> None:
+    """Keep the pre-pass beside the case it was run for."""
+    canonical = check_ips_utils.normalise_ips(case_nbr)
+    if not canonical or not raw_desc or not isinstance(data, dict) or not data:
+        return
+    if _write_case_holder(canonical, ORGANIZED_KEY,
+                          {"for": _organize_digest(raw_desc, first_ts, last_ts),
+                           "data": data}):
+        print(f"[ips] kept the organized description for {canonical}; the next "
+              f"conversation about it skips the LLM pass")
 
 
 def candidates_for(log_path) -> List[str]:
@@ -375,14 +792,15 @@ def needs_ips(log_path) -> bool:
     if key and key in _answered_this_session:
         # Answered in this conversation, so only the session can have lost it.
         _apply_stored_answer(log_path)
-        return False
+        return _gate(False, "answered in this conversation", log_path)
     if key and _from_answered_upload(log_path):
         # The upload's answer is this log's answer for this conversation. It is
         # not stored against the log: a skip stored that way would outlive the
         # conversation and override a case given for the same upload later.
         _mark_answered(key)
         _apply_stored_answer(log_path)
-        return False
+        return _gate(False, "the upload it came from was answered "
+                            f"({session.get('uploaded_source_path')})", log_path)
     if key and answer_for(log_path).get("source") == SKIPPED:
         # A confirmed "this log has no case" outlives the conversation and the
         # process. The user answered a question about the file, and that does
@@ -391,9 +809,22 @@ def needs_ips(log_path) -> bool:
         # remembered case number is deliberately not reapplied here: each new
         # conversation confirms that one again.
         _apply_stored_answer(log_path)
-        return False
+        return _gate(False, "stored as having no case number", log_path)
+    if key:
+        settled = settled_case_answer(log_path)
+        if settled:
+            # This log has been to IPS and come back with the case's
+            # description and an issue time, in this conversation or an earlier
+            # one. Re-confirming exists so a number is never inherited by the
+            # next file; here the chatbot already names the case on screen and
+            # offers the same way to change it, so the dialog only repeats it.
+            _mark_answered(key)
+            _remember_on_session(settled["case_nbr"], settled["source"], log_path)
+            return _gate(False, f"already been to IPS as {settled['case_nbr']} "
+                                f"({settled['source']}), facts on file", log_path)
     if not key:
-        return not current_case_nbr() and current_source() != SKIPPED
+        verdict = not current_case_nbr() and current_source() != SKIPPED
+        return _gate(verdict, "no log path to go on", log_path)
     if current_source() == ABSENT:
         # Send To starts a fresh file in an existing browser session. A case
         # found by a previous case search does not establish this new file's
@@ -401,10 +832,13 @@ def needs_ips(log_path) -> bool:
         pending = _log_key(session.get("sendto_pending_path"))
         previous_upload = _log_key(session.get("uploaded_source_path"))
         if pending == key and previous_upload and previous_upload != key:
-            return True
+            return _gate(True, "a new Send To in a window that held another file "
+                               f"({session.get('uploaded_source_path')})", log_path)
         # A case that came from the case search rather than from this prompt.
-        return not current_case_nbr()
-    return True
+        return _gate(not current_case_nbr(),
+                     "nothing recorded by this prompt; using whatever the case "
+                     "search left on the session", log_path)
+    return _gate(True, "this conversation has not confirmed this log's case", log_path)
 
 
 def prompt_state(log_path) -> dict:
@@ -413,6 +847,9 @@ def prompt_state(log_path) -> dict:
     needed = needs_ips(log_path)
     candidates = candidates_for(log_path)
     mine = _session_answer_is_about(log_path)
+    print(f"[ips] told the browser: needs_ips={needed} "
+          f"case={(current_case_nbr() if mine else '') or '-'} "
+          f"candidates={candidates or '-'}")
     return {
         "needs_ips": needed,
         "ips_candidates": candidates,
@@ -579,6 +1016,7 @@ _AGENT_CASE_FIELDS = ("subject", "description", "issue_type", "attachment_time")
 # as recorded -- the lookup is an improvement, never a precondition.
 _case_facts: dict = {}              # case number -> {"fields": tuple, "classification": dict}
 _case_facts_lock = threading.Lock()
+_usage_accounted: set = set()       # cases whose lookup cost has been reported
 _ENRICH_TIMEOUT_SEC = 20
 # A timed-out Future cannot stop a Snowflake call that is already running.
 # Reusing one worker and admitting only one lookup at a time keeps a hung
@@ -675,8 +1113,22 @@ def _lookup_case_facts(canonical: str) -> Optional[dict]:
     if facts:
         with _case_facts_lock:
             _case_facts[canonical] = facts
-        facts = dict(facts, fresh=True)
     return facts
+
+
+def _claim_usage_accounting(canonical: str) -> bool:
+    """Whether this caller is the one to report the lookup's LLM cost.
+
+    Marking the *lookup* as the fresh one left the classification unpaid-for
+    whenever a prefetch ran it: the prefetch thread has no workflow to bill
+    and discards the result, and the read that followed got the cached facts
+    without the flag. The claim belongs to the first caller that uses them.
+    """
+    with _case_facts_lock:
+        if canonical in _usage_accounted:
+            return False
+        _usage_accounted.add(canonical)
+        return True
 
 
 def cached_classification(case_nbr) -> Optional[dict]:
@@ -686,6 +1138,25 @@ def cached_classification(case_nbr) -> Optional[dict]:
         facts = _case_facts.get(canonical) if canonical else None
     classification = (facts or {}).get("classification")
     return classification if isinstance(classification, dict) else None
+
+
+def _apply_case_to_primed_agents(canonical: str, subject: str, description: str,
+                                 issue_type: str) -> None:
+    """Fill what an agent primed before the case details arrived is missing.
+
+    The agent reads issue_context on every answer, so updating it is enough;
+    no re-priming, which would reset the conversation.
+    """
+    for agent in _primed_agents():
+        ctx = getattr(agent, "issue_context", None)
+        # Primed agents only: an empty context is a boot-time template.
+        if not isinstance(ctx, dict) or not ctx \
+                or check_ips_utils.normalise_ips(ctx.get("case_nbr")) != canonical:
+            continue
+        ctx["subject"] = ctx.get("subject") or subject or ""
+        ctx["description"] = ctx.get("description") or description or ""
+        if issue_type:
+            ctx["issue_type"] = issue_type
 
 
 def enrich_attached_case(case_nbr) -> bool:
@@ -719,23 +1190,23 @@ def enrich_attached_case(case_nbr) -> bool:
     if isinstance(classification, dict) and classification.get("issue_type"):
         session["classification"] = classification
 
+    remember_case_lookup(canonical, subject, description,
+                         (classification or {}).get("issue_type", "")
+                         if isinstance(classification, dict) else "",
+                         subcategory)
+
     # The agent reads issue_context on every answer, so updating it is enough;
     # no re-priming, which would reset the conversation.
-    for agent in _primed_agents():
-        ctx = getattr(agent, "issue_context", None)
-        # Primed agents only: an empty context is a boot-time template.
-        if not isinstance(ctx, dict) or not ctx \
-                or check_ips_utils.normalise_ips(ctx.get("case_nbr")) != canonical:
-            continue
-        ctx["subject"] = ctx.get("subject") or context.subject or ""
-        ctx["description"] = ctx.get("description") or context.description or ""
-        if isinstance(classification, dict) and classification.get("issue_type"):
-            ctx["issue_type"] = classification["issue_type"]
+    _apply_case_to_primed_agents(
+        canonical, context.subject, context.description,
+        classification["issue_type"]
+        if isinstance(classification, dict) and classification.get("issue_type")
+        else "")
 
     # The classification is an LLM call; its cost is recorded the way the
     # case search records its own, so it is not the one untracked spend.
     usage = facts.get("usage") or {}
-    if facts.get("fresh") and int(usage.get("llm_calls") or 0) > 0:
+    if int(usage.get("llm_calls") or 0) > 0 and _claim_usage_accounting(canonical):
         try:
             from services import gather_service
             gather_service.record_feature_usage(
@@ -751,6 +1222,110 @@ def enrich_attached_case(case_nbr) -> bool:
         except Exception:
             pass
     return True
+
+
+def prefetch_case_facts(case_nbr) -> None:
+    """Warm the lookup cache for a case attached without anybody being asked.
+
+    The analysis that follows takes far longer than the lookup, so the wait is
+    free here and the chatbot's first read finds the answer already made.
+    """
+    canonical = check_ips_utils.normalise_ips(case_nbr)
+    if not canonical:
+        return
+    with _case_facts_lock:
+        if canonical in _case_facts:
+            print(f"[ips] prefetch for {canonical} not needed, already looked up")
+            return
+    if remembered_case_lookup(canonical).get("description"):
+        print(f"[ips] prefetch for {canonical} not needed, on file from an "
+              f"earlier run")
+        return
+
+    def warm():
+        print(f"[ips] prefetch for {canonical} started")
+        try:
+            facts = _lookup_case_facts(canonical)
+            if facts:
+                # Onto disk from the thread as well, so the next run of the
+                # app starts where this one left off rather than looking the
+                # same case up again.
+                _, subject, _, description, _, subcategory = facts["fields"]
+                classification = facts.get("classification")
+                remember_case_lookup(
+                    canonical, subject, description,
+                    (classification or {}).get("issue_type", "")
+                    if isinstance(classification, dict) else "",
+                    subcategory)
+            print(f"[ips] prefetch for {canonical} done: "
+                  f"{'IPS returned a row' if facts else 'IPS had no row for it'}")
+        except Exception as e:
+            print(f"[ips] prefetch for {canonical} skipped: {e}")
+
+    threading.Thread(target=warm, name=f"ips-prefetch-{canonical}", daemon=True).start()
+
+
+def enrich_attached_case_if_needed() -> bool:
+    """Look up a case the session was handed quietly, the first time it is read.
+
+    A number typed into the prompt is enriched by the route that records it. A
+    number taken from the path is attached without anybody being asked, so
+    nothing enriched it, and the conversation opened knowing the case and none
+    of what it says. Failure is not reported: the case is attached either way.
+    """
+    canonical = current_case_nbr()
+    if not canonical:
+        return False
+    context = CaseContext.from_session(session.get("case_context") or {})
+    if context.description or context.subject:
+        return False
+    remembered = remembered_case_lookup(canonical)
+    with _case_facts_lock:
+        in_memory = canonical in _case_facts
+    # Only when this run has nothing in memory. enrich_attached_case is the
+    # path that reports the classification's cost, and its lookup is a cache
+    # read once a prefetch has run -- taking the disk branch over it would
+    # save nothing and leave that LLM call unreported.
+    if not in_memory and (remembered.get("description") or remembered.get("subject")):
+        context.subject = context.subject or remembered["subject"]
+        context.description = context.description or remembered["description"]
+        # Without it case_wireless_domain() reads blank and a Wi-Fi case's
+        # statement walks into the BT bot the restart was supposed to protect.
+        context.subcategory = context.subcategory or remembered["subcategory"]
+        session["case_context"] = context.to_session()
+        # "Unclassified" is the placeholder a local upload seeds when nothing
+        # was looked up yet, so it is a gap like an absent one, not an answer.
+        held = session.get("classification")
+        held_type = held.get("issue_type") if isinstance(held, dict) else ""
+        if remembered.get("issue_type") and held_type in ("", "Unclassified", None):
+            session["classification"] = {"issue_type": remembered["issue_type"]}
+        # Same reason the lookup branch below does it: the page may already
+        # have organized the empty description.
+        session.pop("_issue_ai_quick", None)
+        _apply_case_to_primed_agents(canonical, context.subject,
+                                     context.description,
+                                     remembered.get("issue_type", ""))
+        print(f"[ips] {canonical} was looked up in an earlier conversation; "
+              f"using what is on file instead of asking IPS again")
+        return True
+    print(f"[ips] {canonical} is on the session with nothing filled in; "
+          f"looking it up now")
+    try:
+        applied = enrich_attached_case(canonical)
+        if applied:
+            # The page can already have organized the empty description, and
+            # that summary is reused without checking whether a description
+            # has since arrived. /api/ips/resolve drops it for the same reason.
+            session.pop("_issue_ai_quick", None)
+        print(f"[ips] quiet lookup of {canonical}: "
+              f"{'details applied' if applied else 'IPS had nothing to add'}")
+        return applied
+    except CaseLookupUnavailable as e:
+        print(f"[ips] quiet lookup of {canonical} could not run now: {e}")
+        return False
+    except Exception as e:
+        print(f"[ips] quiet lookup of {canonical} hit a problem: {e}")
+        return False
 
 
 def _primed_agents() -> list:
@@ -789,6 +1364,17 @@ def _forget_case_on_agents(canonical: str) -> None:
         for key in _AGENT_CASE_FIELDS:
             ctx.pop(key, None)
         ctx["case_nbr"] = canonical
+        reset = getattr(agent, "reset_conversation", None)
+        if callable(reset):
+            reset()
+    # Every turn so far was about the case being replaced, and the next one
+    # resumes the thread by id -- which re-adopts the detached agent a
+    # finished analysis left behind, with that case's log, notes and history
+    # intact. Nothing cleared above can reach that agent; dropping the id can.
+    previous = session.pop("feedback_conversation_id", None)
+    if previous:
+        print(f"[ips] the case changed, so conversation {previous} is closed; "
+              f"the next question starts a new one")
     forget_case_derived_session_keys()
 
 
@@ -820,8 +1406,27 @@ def forget_case_derived_session_keys() -> None:
     Kept in step with the shared chatbot adapter's issue-context cache
     invalidation.
     """
-    for key in CASE_DERIVED_SESSION_KEYS:
-        session.pop(key, None)
+    dropped = [key for key in CASE_DERIVED_SESSION_KEYS if session.pop(key, None) is not None]
+    if dropped:
+        print(f"[ips] dropped what the previous case left behind: {', '.join(dropped)}")
+
+
+def _carry_answer_to_owning_upload(log_path, canonical: str, source: str) -> None:
+    """Keep the upload's answer in step when its extracted log is re-answered.
+
+    The answer given for the file that was sent outranks one stored against a
+    file decoded out of it -- that is what stops the same piece of work being
+    asked about twice. So changing the case on the decoded log alone was read
+    back as the old number on the next request and silently undone.
+    """
+    if not _from_answered_upload(log_path):
+        return
+    uploaded = session.get("uploaded_source_path")
+    if not uploaded or _log_key(uploaded) == _log_key(log_path):
+        return
+    remember_answer(uploaded, canonical, source)
+    print(f"[ips] carried the answer for {log_path} back to the upload it was "
+          f"decoded from: {uploaded}")
 
 
 def attach(case_nbr: str, source: str, log_path="") -> str:
@@ -849,12 +1454,17 @@ def attach(case_nbr: str, source: str, log_path="") -> str:
     if source == SKIPPED:
         _mark_answered(key)
         remember_answer(log_path, "", SKIPPED)
+        _carry_answer_to_owning_upload(log_path, "", SKIPPED)
+        print(f"[ips] recorded: no case number, for {log_path}")
         return _remember_on_session("", SKIPPED, log_path)
 
     canonical = check_ips_utils.normalise_ips(case_nbr)
     if not canonical:
+        print(f"[ips] refused {case_nbr!r} for {log_path}: not a case number")
         raise ValueError("Enter an 8-digit case number, for example 01010628.")
 
     _mark_answered(key)
     remember_answer(log_path, canonical, source)
+    _carry_answer_to_owning_upload(log_path, canonical, source)
+    print(f"[ips] recorded: {canonical} ({source}) for {log_path}")
     return _remember_on_session(canonical, source, log_path)

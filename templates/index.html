@@ -1159,10 +1159,57 @@
         .home-card .bsod-toggle-input:focus-visible + .bsod-toggle-track { box-shadow: 0 0 0 3px rgba(52, 127, 196, .2); }
         .home-card .tab:not(.active) { color: #536273; border-color: #d3dbe3; background: #f7f9fb !important; box-shadow: none; }
         .home-card .tab:not(.active):hover { color: #263e55; border-color: #a9bdcf; background: #eaf1f6 !important; }
-        .home-analysis-unframed { transform: translateY(-8px); }
         .home-card #case-log-messages, .home-card #upload-log-messages { color: #f8fafc !important; background: #000 !important; border-color: #252b33 !important; }
         .home-card .chatbot-shortcut-section { margin-top: 24px; padding-top: 12px; }
         .workspace-masthead { box-sizing: border-box; width: 100%; max-width: none; height: 96px; margin: -28px 0 0; padding: 0 32px; background: #1f4059; }
+        .dashboard-list-tabs { display: flex; flex-wrap: wrap; align-items: flex-end; gap: 3px; margin: 0; padding: 0 8px; border-bottom: 1px solid #d6dee6; }
+        .dashboard-view-tab { flex: 0 1 auto; min-width: 88px; max-width: 160px; min-height: 30px; padding: 5px 9px; border: 1px solid #d6dee6; border-bottom: 0; border-radius: 5px 5px 0 0; color: #586777; background: #e8edf2; font: 600 12px/1.2 var(--font-body); cursor: pointer; transition: background .16s ease, color .16s ease; overflow-wrap: anywhere; }
+        .dashboard-view-tab:hover:not(.active) { color: #263e55; background: #f0f3f6; }
+        .dashboard-view-tab.active { position: relative; z-index: 1; margin-bottom: -1px; border-color: #d6dee6; border-bottom: 1px solid #fff; color: #245f96; background: #fff; box-shadow: none; font-weight: 700; }
+        .dashboard-list-frame { display: flex; flex: 1 1 auto; flex-direction: column; min-height: 0; overflow: hidden; border: 1px solid #d6dee6; border-top: 0; border-radius: 0 6px 6px 6px; background: transparent; }
+        .home-review-unframed .dashboard-list-frame .dashboard-list-view { display: flex; flex: 1 1 auto; flex-direction: column; min-height: 0; padding: 8px 10px 10px; }
+        .home-review-unframed .dashboard-list-frame .dashboard-list-view[hidden] { display: none !important; }
+        .home-review-unframed .dashboard-list-frame .review-scroll { flex: 1 1 auto; min-height: 0; max-height: none; margin-top: 0; border: 0; border-radius: 0; background: transparent; }
+        .owner-check-inline { display: flex; flex: 0 1 auto; align-items: center; gap: 8px; margin-left: 0; }
+        .owner-check-advanced { position: relative; flex: 0 0 auto; }
+        .owner-check-advanced summary { min-height: 30px; padding: 6px 9px; border: 1px solid #cbd4dd; border-radius: 999px; color: #536273; background: #fff; font: 600 11px/1.2 var(--font-body); cursor: pointer; white-space: nowrap; }
+        .owner-check-advanced summary:hover { border-color: #9eacba; background: #edf1f5; }
+        .owner-check-panel { position: absolute; z-index: 20; top: calc(100% + 6px); left: 0; display: none; grid-template-columns: minmax(0, 1fr) auto; align-items: end; gap: 8px; width: 300px; max-width: calc(100vw - 32px); padding: 12px; border: 1px solid #d6dee6; border-radius: 6px; background: #fff; box-shadow: 0 8px 24px rgba(31, 47, 63, .16); }
+        .owner-check-advanced[open] .owner-check-panel { display: grid; }
+        .owner-check-prompt { position: static; display: flex !important; width: auto; max-width: none; padding: 0 !important; border: 0; border-radius: 0; background: transparent; box-shadow: none; }
+        .owner-check-prompt span { color: #526273; font-size: 11px; }
+        .owner-check-prompt { flex-direction: column; align-items: stretch !important; gap: 6px !important; margin: 0 !important; color: #526273; font-size: 11px !important; line-height: 1.2; }
+        .owner-check-prompt input { width: 100%; min-width: 0; height: 34px; padding: 5px 9px; border: 1px solid #cbd4dd; border-radius: 5px; color: #263342; background: #fff; font: 400 13px/1.3 var(--font-body); }
+        .owner-check-prompt input:disabled { color: #8793a0; background: #e7ebef; cursor: not-allowed; }
+        .review-toolbar .owner-check-prompt input[type="text"] { width: 100%; max-width: none; }
+        .owner-check-prompt input:focus { border-color: #4a8cc4; outline: 0; box-shadow: 0 0 0 3px rgba(52, 127, 196, .14); }
+        .home-card .owner-check-inline #home-owner-check { min-width: 92px; min-height: 30px; padding: 0 10px; border: 0; border-radius: 999px; color: #fff; background: linear-gradient(115deg, #347fc4, #2869aa); box-shadow: 0 4px 12px rgba(40, 105, 170, .2); font: 600 12px/1.2 var(--font-body); white-space: nowrap; }
+        .home-card .owner-check-inline #home-owner-check:hover:not(:disabled) { color: #fff; background: linear-gradient(115deg, #286eae, #20588f); box-shadow: 0 5px 14px rgba(40, 105, 170, .26); }
+        .home-card .owner-check-inline #home-owner-check:disabled { color: #8793a0; background: #e7ebef; box-shadow: none; cursor: not-allowed; }
+        .home-review-unframed .review-heading button, .home-review-unframed .review-toolbar button { border-radius: 999px; font-family: var(--font-body) !important; font-size: 12px; font-weight: 600; }
+        @media (min-width: 881px) {
+            .home-workspace::after { content: ''; position: absolute; top: 72px; bottom: 72px; left: calc(55% - 4px); width: 1px; background: linear-gradient(180deg, transparent, rgba(52, 127, 196, .16) 14%, rgba(52, 127, 196, .16) 86%, transparent); pointer-events: none; }
+            .home-review-unframed .review-heading h2 { font-size: 24px; line-height: 1.35; }
+            .home-analysis-unframed { padding-left: 22px; }
+        }
+        @media (max-width: 880px) { .home-workspace::after, .home-review-unframed::after, .home-analysis-unframed::after { display: none; } }
+        .home-review-unframed { border-color: rgba(150, 170, 190, .18); background: #fff; box-shadow: 0 14px 40px rgba(31, 47, 63, .045), 0 2px 10px rgba(31, 47, 63, .025); -webkit-backdrop-filter: none; backdrop-filter: none; }
+        .home-review-unframed::after, .home-analysis-unframed::after { content: ''; position: absolute; top: 0; bottom: 0; left: 0; width: 4px; border-radius: 8px 0 0 8px; background: linear-gradient(180deg, transparent, rgba(52, 127, 196, .58) 18%, #347fc4 50%, rgba(52, 127, 196, .58) 82%, transparent); box-shadow: 0 0 10px rgba(52, 127, 196, .32); opacity: 0; pointer-events: none; }
+        .home-review-unframed:hover::after, .home-review-unframed:focus-within::after,
+        .home-analysis-unframed:hover::after, .home-analysis-unframed:focus-within::after { opacity: 1; }
+        .home-review-unframed .review-heading h2 > span, .home-analysis-heading h2 > span { display: inline-block; }
+        .home-review-unframed:hover .review-heading h2, .home-review-unframed:focus-within .review-heading h2,
+        .home-analysis-unframed:hover .home-analysis-heading h2, .home-analysis-unframed:focus-within .home-analysis-heading h2 { color: #245f96; }
+        .home-review-unframed:hover .review-heading h2 > span, .home-review-unframed:focus-within .review-heading h2 > span,
+        .home-analysis-unframed:hover .home-analysis-heading h2 > span, .home-analysis-unframed:focus-within .home-analysis-heading h2 > span { transform: translateX(4px); }
+        .home-analysis-heading { border-left-color: transparent; }
+        @media (prefers-reduced-motion: no-preference) {
+            .home-review-unframed .review-heading h2, .home-analysis-heading h2 { transition: color .18s ease-out; }
+            .home-review-unframed .review-heading h2 > span, .home-analysis-heading h2 > span { transition: transform .24s cubic-bezier(.2, .8, .2, 1); }
+            .home-review-unframed::after, .home-analysis-unframed::after { transition: opacity .2s ease-out; }
+            .home-review-unframed .review-heading h2 > span, .home-analysis-heading h2 > span { transition: transform .24s cubic-bezier(.2, .8, .2, 1); }
+        }
+        #home-queue td:nth-child(2) { overflow-wrap: anywhere; }
     </style>
 </head>
 <body>
@@ -1210,13 +1257,25 @@
     <section class="home-card home-review-unframed" aria-labelledby="home-review-title">
         <div class="review-heading">
             <div>
-                <h2 id="home-review-title">What's Happening Today</h2>
+                <h2 id="home-review-title"><span>What's Happening Today</span></h2>
             </div>
             <button type="button" class="btn btn-sm btn-outline-secondary" id="home-refresh" title="Refresh review queue">&#8635; Refresh</button>
         </div>
         <div class="review-toolbar">
             <span id="home-login-badge" class="review-pill" role="status">IPS: signing in...</span>
             <button type="button" id="home-login" class="btn btn-sm btn-outline-primary" hidden>Sign in to IPS</button>
+            <div class="owner-check-inline">
+                <details id="home-owner-advanced" class="owner-check-advanced">
+                    <summary>Advanced</summary>
+                    <div class="owner-check-panel">
+                        <label class="owner-check-prompt" for="home-owner-input">
+                            <span id="home-owner-hint">Reserved for a future owner lookup.</span>
+                            <input type="text" id="home-owner-input" placeholder="Owner name" autocomplete="off" disabled>
+                        </label>
+                        <button type="button" id="home-owner-check" title="Reserved for future use" disabled>Check</button>
+                    </div>
+                </details>
+            </div>
         </div>
         <div class="review-toolbar">
             <label><input type="checkbox" id="home-show-closed"> show posted/rejected</label>
@@ -1224,16 +1283,23 @@
             <label id="home-owner-wrap" hidden>owner: <input type="text" id="home-owner" class="form-control form-control-sm" placeholder="Filter by case owner"></label>
         </div>
         <div id="home-queue-message" class="review-message" role="status"></div>
-        <div class="review-scroll">
-            <table id="home-queue" aria-label="Review queue">
-                <thead><tr><th scope="col">Case</th><th scope="col">Subject</th><th scope="col">Status</th></tr></thead>
-                <tbody><tr><td colspan="3">Loading cases...</td></tr></tbody>
-            </table>
+        <div id="home-list-tabs" class="dashboard-list-tabs" role="tablist" aria-label="Dashboard case lists">
+            <button type="button" class="dashboard-view-tab active" id="home-queue-tab" role="tab" aria-selected="true" aria-controls="home-queue-view">Review queue</button>
+        </div>
+        <div class="dashboard-list-frame">
+        <div class="dashboard-list-view" id="home-queue-view" role="tabpanel" aria-labelledby="home-queue-tab">
+            <div class="review-scroll">
+                <table id="home-queue" aria-label="Review queue">
+                    <thead><tr><th scope="col">Case</th><th scope="col">Owner</th><th scope="col">Subject</th><th scope="col">Status</th></tr></thead>
+                    <tbody><tr><td colspan="4">Loading cases...</td></tr></tbody>
+                </table>
+            </div>
+        </div>
         </div>
     </section>
     <section class="home-card home-analysis-unframed" aria-label="Case and log analysis">
     <div class="home-analysis-heading">
-        <h2>Case & Log analysis</h2>
+        <h2><span>Case & Log analysis</span></h2>
     </div>
     <div class="tabs-container" id="tabs-container">
         <div class="tabs">
@@ -1389,6 +1455,7 @@
                 <button type="button" class="btn btn-outline-primary" id="home-save">Save edits</button>
                 <button type="button" class="btn btn-outline-danger" id="home-reject">Reject</button>
                 <button type="button" class="btn btn-outline-secondary" id="home-folder" hidden>Open folder</button>
+                <button type="button" class="btn btn-outline-secondary" id="home-avatar" title="Open this case in Avatar for manual analysis">Open in Avatar analysis</button>
                 <span id="home-post-status" class="review-message" role="status"></span>
             </div>
         </div></div>

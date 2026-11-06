@@ -43,6 +43,8 @@ nothing is ever posted here.
 
 from __future__ import annotations
 
+import os
+import sys
 import threading
 import time
 import traceback
@@ -90,6 +92,26 @@ def role() -> str:
         value = ""
     value = (str(value) or os.environ.get("INTELAVATAR_HANDSFREE_ROLE", "")).strip().lower()
     return value if value in ROLES else "client"
+
+
+BUNDLED_ROLE_FILE = "handsfree_role.txt"
+
+
+def bundled_role(base: Optional[str] = None) -> str:
+    """The role baked into a packaged build: the first line of
+    handsfree_role.txt next to the bundled files (PyInstaller's _MEIPASS,
+    i.e. the _internal folder of the Client / Server package). "" when
+    there is no such file or it names no known role — a source checkout has
+    none, so the flag, the environment or 'client' decide there."""
+    base = base or getattr(sys, "_MEIPASS", "")
+    if not base:
+        return ""
+    try:
+        with open(os.path.join(base, BUNDLED_ROLE_FILE), encoding="utf-8") as fh:
+            value = fh.readline().strip().lower()
+    except OSError:
+        return ""
+    return value if value in ROLES else ""
 
 
 def can_schedule_here() -> bool:

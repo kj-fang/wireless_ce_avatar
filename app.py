@@ -257,11 +257,13 @@ if __name__ == "__main__":
     parser.add_argument('--handsfree-role', choices=('client', 'server'), default=None,
                         help="Handsfree (Beacon) role of this machine: 'client' (default) reviews and approves drafts; "
                              "'server' also runs the scheduled analysis rounds from the Beacon page. "
-                             "Falls back to the INTELAVATAR_HANDSFREE_ROLE environment variable.")
+                             "Falls back to the INTELAVATAR_HANDSFREE_ROLE environment variable, then to the "
+                             "role baked into a packaged build (handsfree_role.txt next to the bundled files).")
     parser.add_argument('input_paths', nargs='*', help='Optional local analysis file paths passed from Windows SendTo.')
     args = parser.parse_args()
+    from services.handsfree.scheduler import bundled_role
     handsfree_role = (args.handsfree_role or os.environ.get('INTELAVATAR_HANDSFREE_ROLE', '')
-                      or 'client').strip().lower()
+                      or bundled_role() or 'client').strip().lower()
     if handsfree_role not in ('client', 'server'):
         handsfree_role = 'client'
     # The server machine lives on the Beacon page: open it unless told otherwise.

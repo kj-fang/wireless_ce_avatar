@@ -3287,6 +3287,18 @@ def smoke_server_role(tmp: Path) -> None:
         r4 = sch.role()
         check("S21.a role(): app_config wins, env var is the fallback, unknown values are a client",
               (r1, r2, r3, r4) == ("server", "server", "client", "client"), str((r1, r2, r3, r4)))
+        # a packaged Client / Server build carries its role in the bundle
+        bundle = tmp / "bundle_s21"
+        bundle.mkdir(exist_ok=True)
+        no_file = sch.bundled_role(str(bundle))
+        (bundle / sch.BUNDLED_ROLE_FILE).write_text("Server\n", encoding="utf-8")
+        from_file = sch.bundled_role(str(bundle))
+        (bundle / sch.BUNDLED_ROLE_FILE).write_text("admin\n", encoding="utf-8")
+        unknown = sch.bundled_role(str(bundle))
+        check("S21.a2 bundled_role(): handsfree_role.txt in the bundle names the role; missing, "
+              "unknown or no bundle (a source checkout) -> ''",
+              (no_file, from_file, unknown, sch.bundled_role("")) == ("", "server", "", ""),
+              str((no_file, from_file, unknown, sch.bundled_role(""))))
 
         # --- b) a client cannot start the schedule --------------------------
         set_role("client")

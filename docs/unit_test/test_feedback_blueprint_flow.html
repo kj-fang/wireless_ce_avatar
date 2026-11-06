@@ -1,0 +1,1053 @@
+<!DOCTYPE html>
+<html lang="en">
+<head>
+  <meta charset="UTF-8">
+  <meta name="viewport" content="width=device-width, initial-scale=1.0">
+  <title>test_feedback_blueprint — Test Flow Diagram</title>
+  <link href="https://fonts.googleapis.com/css2?family=JetBrains+Mono:wght@400;500;600;700&display=swap" rel="stylesheet">
+  <script src="https://cdn.jsdelivr.net/npm/html2canvas@1.4.1/dist/html2canvas.min.js" integrity="sha384-ZZ1pncU3bQe8y31yfZdMFdSpttDoPmOZg2wguVK9almUodir1PghgT0eY7Mrty8H" crossorigin="anonymous"></script>
+  <script src="https://cdn.jsdelivr.net/npm/jspdf@2.5.2/dist/jspdf.umd.min.js" integrity="sha384-en/ztfPSRkGfME4KIm05joYXynqzUgbsG5nMrj/xEFAHXkeZfO3yMK8QQ+mP7p1/" crossorigin="anonymous"></script>
+  <style>
+    * { margin: 0; padding: 0; box-sizing: border-box; }
+    body {
+      font-family: 'JetBrains Mono', monospace;
+      background: #020617;
+      min-height: 100vh;
+      padding: 2rem;
+      color: white;
+    }
+    .container { max-width: 1400px; margin: 0 auto; }
+    .header { margin-bottom: 2rem; }
+    .header-row { display: flex; align-items: center; gap: 1rem; margin-bottom: 0.5rem; }
+    .pulse-dot { width: 12px; height: 12px; background: #fb7185; border-radius: 50%; animation: pulse 2s infinite; }
+    @keyframes pulse { 0%, 100% { opacity: 1; } 50% { opacity: 0.5; } }
+    h1 { font-size: 1.5rem; font-weight: 700; letter-spacing: -0.025em; }
+    .subtitle { color: #94a3b8; font-size: 0.875rem; margin-left: 1.75rem; }
+    .diagram-container {
+      background: rgba(15, 23, 42, 0.5);
+      border-radius: 1rem;
+      border: 1px solid #1e293b;
+      padding: 1.5rem;
+      overflow-x: auto;
+    }
+    svg { width: 100%; min-width: 1180px; display: block; }
+    .cards { display: grid; grid-template-columns: repeat(auto-fit, minmax(280px, 1fr)); gap: 1rem; margin-top: 2rem; }
+    .card { background: rgba(15, 23, 42, 0.5); border-radius: 0.75rem; border: 1px solid #1e293b; padding: 1.25rem; }
+    .card-header { display: flex; align-items: center; gap: 0.5rem; margin-bottom: 0.75rem; }
+    .card-dot { width: 8px; height: 8px; border-radius: 50%; }
+    .card-dot.cyan { background: #22d3ee; }
+    .card-dot.emerald { background: #34d399; }
+    .card-dot.violet { background: #a78bfa; }
+    .card-dot.amber { background: #fbbf24; }
+    .card-dot.rose { background: #fb7185; }
+    .card h3 { font-size: 0.875rem; font-weight: 600; }
+    .card ul { list-style: none; color: #94a3b8; font-size: 0.75rem; }
+    .card li { margin-bottom: 0.375rem; }
+    .card li code { color: #cbd5e1; }
+    .footer { text-align: center; margin-top: 1.5rem; color: #475569; font-size: 0.75rem; }
+    .toolbar { display: flex; gap: 0.5rem; margin-left: auto; flex-shrink: 0; align-items: center; }
+    .toolbar-toggle {
+      background: transparent; border: none; color: #475569; cursor: pointer;
+      font-size: 1.25rem; line-height: 1; padding: 0.25rem 0.5rem; border-radius: 0.375rem;
+      transition: color 0.2s, background 0.2s;
+    }
+    .toolbar-toggle:hover { color: #94a3b8; background: rgba(30, 41, 59, 0.5); }
+    .toolbar-actions { display: none; gap: 0.5rem; }
+    .toolbar.expanded .toolbar-actions { display: flex; }
+    .toolbar-actions button {
+      background: rgba(30, 41, 59, 0.8); border: 1px solid #334155; color: #94a3b8;
+      padding: 0.375rem 0.75rem; border-radius: 0.375rem; font-family: inherit;
+      font-size: 0.75rem; cursor: pointer; transition: all 0.2s; white-space: nowrap;
+    }
+    .toolbar-actions button:hover { background: rgba(51, 65, 85, 0.8); color: white; border-color: #475569; }
+    @media print { body { background: #020617; padding: 1rem; } .toolbar { display: none !important; } }
+    svg text { white-space: pre; }
+  </style>
+</head>
+<body>
+  <div class="container" id="report-container">
+    <!-- Header -->
+    <div class="header">
+      <div class="header-row">
+        <div class="pulse-dot"></div>
+        <h1>test_feedback_blueprint — Test Flow</h1>
+        <div class="toolbar">
+          <div class="toolbar-actions">
+            <button onclick="copyAsImage(this)">📋 Copy</button>
+            <button onclick="downloadPNG(this)">🖼️ PNG</button>
+            <button onclick="downloadPDF(this)">📄 PDF</button>
+          </div>
+          <button class="toolbar-toggle" onclick="this.parentElement.classList.toggle('expanded')" title="Export options" aria-label="Export options">⋯</button>
+        </div>
+      </div>
+      <p class="subtitle">36 unit tests across 7 classes · 5 POST write routes + GET /recent · validate ➜ allow-list ids ➜ delegate to feedback_service · blueprints/feedback/feedback_routes.py</p>
+    </div>
+
+    <!-- Main Diagram -->
+    <div class="diagram-container">
+      <svg viewBox="0 0 1200 3517">
+        <defs>
+          <marker id="arrowhead" markerWidth="10" markerHeight="7" refX="9" refY="3.5" orient="auto"><polygon points="0 0, 10 3.5, 0 7" fill="#64748b" /></marker>
+          <marker id="arrowcyan" markerWidth="10" markerHeight="7" refX="9" refY="3.5" orient="auto"><polygon points="0 0, 10 3.5, 0 7" fill="#22d3ee" /></marker>
+          <marker id="arrowrose" markerWidth="10" markerHeight="7" refX="9" refY="3.5" orient="auto"><polygon points="0 0, 10 3.5, 0 7" fill="#fb7185" /></marker>
+          <marker id="arrowok" markerWidth="10" markerHeight="7" refX="9" refY="3.5" orient="auto"><polygon points="0 0, 10 3.5, 0 7" fill="#6ee7b7" /></marker>
+          <marker id="arrowviolet" markerWidth="10" markerHeight="7" refX="9" refY="3.5" orient="auto"><polygon points="0 0, 10 3.5, 0 7" fill="#a78bfa" /></marker>
+          <marker id="arroworange" markerWidth="10" markerHeight="7" refX="9" refY="3.5" orient="auto"><polygon points="0 0, 10 3.5, 0 7" fill="#fb923c" /></marker>
+          <pattern id="grid" width="40" height="40" patternUnits="userSpaceOnUse">
+            <path d="M 40 0 L 0 0 0 40" fill="none" stroke="#1e293b" stroke-width="0.5"/>
+          </pattern>
+        </defs>
+
+        <rect width="100%" height="100%" fill="url(#grid)" />
+
+        <text x="18" y="104" fill="#fb7185" font-size="7" font-weight="600" transform="rotate(-90 18 104)">TEST&#160;SUITE&#160;FLOW</text>
+        <line x1="26" y1="100" x2="26" y2="3491" stroke="#fb7185" stroke-width="1.2" stroke-dasharray="4,4" marker-end="url(#arrowrose)"/>
+        <line x1="26" y1="118" x2="40" y2="118" stroke="#fb7185" stroke-width="1.5" marker-end="url(#arrowrose)"/>
+        <path d="M397,186 H408" fill="none" stroke="#64748b" stroke-width="1.3" marker-end="url(#arrowhead)"/>
+        <path d="M462,186 H473" fill="none" stroke="#64748b" stroke-width="1.3" marker-end="url(#arrowhead)"/>
+        <path d="M540,186 H551" fill="none" stroke="#64748b" stroke-width="1.3" marker-end="url(#arrowhead)"/>
+        <path d="M692,186 H703" fill="none" stroke="#64748b" stroke-width="1.3" marker-end="url(#arrowhead)"/>
+        <path d="M507.0,196 V205" fill="none" stroke="#fb7185" stroke-width="1.3" marker-end="url(#arrowrose)"/>
+        <path d="M622.0,196 V231" fill="none" stroke="#fb7185" stroke-width="1.3" marker-end="url(#arrowrose)"/>
+        <path d="M756.5,196 V205" fill="none" stroke="#fb7185" stroke-width="1.3" marker-end="url(#arrowrose)"/>
+        <path d="M406,280 H417" fill="none" stroke="#64748b" stroke-width="1.3" marker-end="url(#arrowhead)"/>
+        <path d="M493,280 H504" fill="none" stroke="#64748b" stroke-width="1.3" marker-end="url(#arrowhead)"/>
+        <path d="M654,280 H665" fill="none" stroke="#64748b" stroke-width="1.3" marker-end="url(#arrowhead)"/>
+        <path d="M756.5,196 V260 H336.0 V269" fill="none" stroke="#64748b" stroke-width="1.3" marker-end="url(#arrowhead)"/>
+        <path d="M579.5,290 V299" fill="none" stroke="#fb7185" stroke-width="1.3" marker-end="url(#arrowrose)"/>
+        <path d="M579.5,290 V325" fill="none" stroke="#fb923c" stroke-width="1.3" marker-end="url(#arrowhead)"/>
+        <path d="M236,168 H258" fill="none" stroke="#22d3ee" stroke-width="1.3" marker-end="url(#arrowcyan)"/>
+        <path d="M900,168 H938" fill="none" stroke="#64748b" stroke-width="1.3" marker-end="url(#arrowhead)"/>
+        <path d="M900,284 H938" fill="none" stroke="#64748b" stroke-width="1.3" marker-end="url(#arrowhead)"/>
+        <path d="M380,450 H391" fill="none" stroke="#64748b" stroke-width="1.3" marker-end="url(#arrowhead)"/>
+        <path d="M476,450 H487" fill="none" stroke="#64748b" stroke-width="1.3" marker-end="url(#arrowhead)"/>
+        <path d="M689,450 H700" fill="none" stroke="#64748b" stroke-width="1.3" marker-end="url(#arrowhead)"/>
+        <path d="M323.0,460 V469" fill="none" stroke="#fb7185" stroke-width="1.3" marker-end="url(#arrowrose)"/>
+        <path d="M588.5,460 V495" fill="none" stroke="#fb7185" stroke-width="1.3" marker-end="url(#arrowrose)"/>
+        <path d="M588.5,460 V521" fill="none" stroke="#fb923c" stroke-width="1.3" marker-end="url(#arrowhead)"/>
+        <path d="M236,432 H258" fill="none" stroke="#22d3ee" stroke-width="1.3" marker-end="url(#arrowcyan)"/>
+        <path d="M900,432 H938" fill="none" stroke="#64748b" stroke-width="1.3" marker-end="url(#arrowhead)"/>
+        <path d="M350,620 H361" fill="none" stroke="#64748b" stroke-width="1.3" marker-end="url(#arrowhead)"/>
+        <path d="M502,620 H513" fill="none" stroke="#64748b" stroke-width="1.3" marker-end="url(#arrowhead)"/>
+        <path d="M654,620 H665" fill="none" stroke="#64748b" stroke-width="1.3" marker-end="url(#arrowhead)"/>
+        <path d="M393,658 H404" fill="none" stroke="#64748b" stroke-width="1.3" marker-end="url(#arrowhead)"/>
+        <path d="M502,658 H513" fill="none" stroke="#64748b" stroke-width="1.3" marker-end="url(#arrowhead)"/>
+        <path d="M698,658 H709" fill="none" stroke="#64748b" stroke-width="1.3" marker-end="url(#arrowhead)"/>
+        <path d="M723.0,630 V640 H329.5 V647" fill="none" stroke="#64748b" stroke-width="1.3" marker-end="url(#arrowhead)"/>
+        <path d="M453.5,668 V677" fill="none" stroke="#fb7185" stroke-width="1.3" marker-end="url(#arrowrose)"/>
+        <path d="M236,602 H258" fill="none" stroke="#22d3ee" stroke-width="1.3" marker-end="url(#arrowcyan)"/>
+        <path d="M900,602 H938" fill="none" stroke="#64748b" stroke-width="1.3" marker-end="url(#arrowhead)"/>
+        <path d="M900,674 H938" fill="none" stroke="#64748b" stroke-width="1.3" marker-end="url(#arrowhead)"/>
+        <path d="M350,776 H361" fill="none" stroke="#64748b" stroke-width="1.3" marker-end="url(#arrowhead)"/>
+        <path d="M489,776 H500" fill="none" stroke="#64748b" stroke-width="1.3" marker-end="url(#arrowhead)"/>
+        <path d="M580,776 H591" fill="none" stroke="#64748b" stroke-width="1.3" marker-end="url(#arrowhead)"/>
+        <path d="M802,776 H813" fill="none" stroke="#64748b" stroke-width="1.3" marker-end="url(#arrowhead)"/>
+        <path d="M425.5,786 V795" fill="none" stroke="#fb7185" stroke-width="1.3" marker-end="url(#arrowrose)"/>
+        <path d="M540.5,786 V821" fill="none" stroke="#fb7185" stroke-width="1.3" marker-end="url(#arrowrose)"/>
+        <path d="M697.0,786 V795" fill="none" stroke="#fb7185" stroke-width="1.3" marker-end="url(#arrowrose)"/>
+        <path d="M236,758 H258" fill="none" stroke="#22d3ee" stroke-width="1.3" marker-end="url(#arrowcyan)"/>
+        <path d="M900,758 H938" fill="none" stroke="#64748b" stroke-width="1.3" marker-end="url(#arrowhead)"/>
+        <path d="M415,908 H426" fill="none" stroke="#64748b" stroke-width="1.3" marker-end="url(#arrowhead)"/>
+        <path d="M550,908 H561" fill="none" stroke="#64748b" stroke-width="1.3" marker-end="url(#arrowhead)"/>
+        <path d="M720,908 H731" fill="none" stroke="#64748b" stroke-width="1.3" marker-end="url(#arrowhead)"/>
+        <path d="M340.5,918 V927" fill="none" stroke="#fb7185" stroke-width="1.3" marker-end="url(#arrowrose)"/>
+        <path d="M488.5,918 V953" fill="none" stroke="#fb7185" stroke-width="1.3" marker-end="url(#arrowrose)"/>
+        <path d="M641.0,918 V953" fill="none" stroke="#fb7185" stroke-width="1.3" marker-end="url(#arrowrose)"/>
+        <path d="M236,890 H258" fill="none" stroke="#22d3ee" stroke-width="1.3" marker-end="url(#arrowcyan)"/>
+        <path d="M900,890 H938" fill="none" stroke="#64748b" stroke-width="1.3" marker-end="url(#arrowhead)"/>
+        <path d="M424,1048 H435" fill="none" stroke="#64748b" stroke-width="1.3" marker-end="url(#arrowhead)"/>
+        <path d="M563,1048 H574" fill="none" stroke="#64748b" stroke-width="1.3" marker-end="url(#arrowhead)"/>
+        <path d="M711,1048 H722" fill="none" stroke="#64748b" stroke-width="1.3" marker-end="url(#arrowhead)"/>
+        <path d="M345.0,1058 V1067" fill="none" stroke="#fb7185" stroke-width="1.3" marker-end="url(#arrowrose)"/>
+        <path d="M643.0,1058 V1093" fill="none" stroke="#fb7185" stroke-width="1.3" marker-end="url(#arrowrose)"/>
+        <path d="M786.5,1058 V1067" fill="none" stroke="#6ee7b7" stroke-width="1.3" marker-end="url(#arrowok)"/>
+        <path d="M236,1030 H258" fill="none" stroke="#22d3ee" stroke-width="1.3" marker-end="url(#arrowcyan)"/>
+        <path d="M900,1030 H938" fill="none" stroke="#64748b" stroke-width="1.3" marker-end="url(#arrowhead)"/>
+        <path d="M328,1188 H339" fill="none" stroke="#64748b" stroke-width="1.3" marker-end="url(#arrowhead)"/>
+        <path d="M476,1188 H487" fill="none" stroke="#64748b" stroke-width="1.3" marker-end="url(#arrowhead)"/>
+        <path d="M554,1188 H565" fill="none" stroke="#64748b" stroke-width="1.3" marker-end="url(#arrowhead)"/>
+        <path d="M715,1188 H726" fill="none" stroke="#64748b" stroke-width="1.3" marker-end="url(#arrowhead)"/>
+        <path d="M236,1170 H258" fill="none" stroke="#22d3ee" stroke-width="1.3" marker-end="url(#arrowcyan)"/>
+        <path d="M900,1170 H938" fill="none" stroke="#64748b" stroke-width="1.3" marker-end="url(#arrowhead)"/>
+        <line x1="26" y1="1270" x2="40" y2="1270" stroke="#fb7185" stroke-width="1.5" marker-end="url(#arrowrose)"/>
+        <rect x="40" y="16" width="760" height="72" rx="8" fill="#0f172a"/>
+        <rect x="40" y="16" width="760" height="72" rx="8" fill="rgba(30,41,59,0.5)" stroke="#94a3b8" stroke-width="1.2"/>
+        <text x="54" y="34" fill="white" font-size="11" font-weight="600">Test fixture · FeedbackTestCase(BaseTestCase) + feedback_bp · services mocked at point of use</text>
+        <text x="54" y="50" fill="#94a3b8" font-size="8">patch ROUTES.feedback_service + ROUTES.gather_service · record_* ➜ True · get_recent_votes ➜ [{vote: 1}] · SKILL_ASSESSMENT_VALUES = (&#x27;helpful&#x27;, &#x27;wrong&#x27;)</text>
+        <text x="54" y="63" fill="#94a3b8" font-size="8">CONV_ID &#x27;conv_123&#x27; · TURN_ID &#x27;turn-7&#x27; · SESSION_ID &#x27;sess-abc&#x27; · FIXED_UUID 12345678-1234-5678-1234-567812345678</text>
+        <text x="54" y="76" fill="#94a3b8" font-size="8">UNSAFE_IDS = [&#x27;../etc&#x27;, &#x27;a/b&#x27;, &#x27;has space&#x27;, &#x27;x&#x27;*81] · app_config not used · no JSONL / telemetry ever written</text>
+        <rect x="816" y="16" width="364" height="72" rx="8" fill="rgba(15,23,42,0.6)" stroke="#334155" stroke-width="1"/>
+        <text x="828" y="31" fill="white" font-size="10" font-weight="600">Legend</text>
+        <rect x="828" y="37" width="14" height="8" rx="2" fill="rgba(8,51,68,0.4)" stroke="#22d3ee" stroke-width="1"/>
+        <text x="848" y="44.5" fill="#94a3b8" font-size="7.5">test input</text>
+        <rect x="828" y="50" width="14" height="8" rx="2" fill="rgba(6,78,59,0.4)" stroke="#34d399" stroke-width="1"/>
+        <text x="848" y="57.5" fill="#94a3b8" font-size="7.5">code step</text>
+        <rect x="828" y="63" width="14" height="8" rx="2" fill="rgba(6,95,70,0.7)" stroke="#6ee7b7" stroke-width="1"/>
+        <text x="848" y="70.5" fill="#94a3b8" font-size="7.5">success output</text>
+        <rect x="828" y="76" width="14" height="8" rx="2" fill="rgba(136,19,55,0.4)" stroke="#fb7185" stroke-width="1"/>
+        <text x="848" y="83.5" fill="#94a3b8" font-size="7.5">error / 4xx / 5xx</text>
+        <rect x="944" y="37" width="14" height="8" rx="2" fill="rgba(76,29,149,0.4)" stroke="#a78bfa" stroke-width="1"/>
+        <text x="964" y="44.5" fill="#94a3b8" font-size="7.5">shared pipeline P</text>
+        <rect x="944" y="50" width="14" height="8" rx="2" fill="rgba(120,53,15,0.3)" stroke="#fbbf24" stroke-width="1"/>
+        <text x="964" y="57.5" fill="#94a3b8" font-size="7.5">mocked service call</text>
+        <rect x="944" y="63" width="14" height="8" rx="2" fill="rgba(154,52,18,0.45)" stroke="#fb923c" stroke-width="1"/>
+        <text x="964" y="70.5" fill="#94a3b8" font-size="7.5">uncaught exception</text>
+        <rect x="944" y="76" width="14" height="8" rx="2" fill="rgba(30,41,59,0.5)" stroke="#94a3b8" stroke-width="1"/>
+        <text x="964" y="83.5" fill="#94a3b8" font-size="7.5">untested / note</text>
+        <line x1="1064" y1="42" x2="1080" y2="42" stroke="#64748b" stroke-width="1.5" marker-end="url(#arrowhead)"/>
+        <text x="1086" y="45" fill="#94a3b8" font-size="7.5">call / flow</text>
+        <line x1="1064" y1="56" x2="1080" y2="56" stroke="#22d3ee" stroke-width="1.5" marker-end="url(#arrowcyan)"/>
+        <text x="1086" y="59" fill="#94a3b8" font-size="7.5">input ➜ expected</text>
+        <line x1="1064" y1="70" x2="1080" y2="70" stroke="#fb7185" stroke-width="1.5" marker-end="url(#arrowrose)"/>
+        <text x="1086" y="73" fill="#94a3b8" font-size="7.5">error branch</text>
+        <rect x="40" y="100" width="1150" height="1132" rx="12" fill="rgba(251,191,36,0.03)" stroke="#fbbf24" stroke-width="1" stroke-dasharray="8,4"/>
+        <text x="54" y="122" fill="#fbbf24" font-size="10" font-weight="600">Component interaction map · test inputs ➜ feedback_routes.py (6 routes R1–R6 + shared pipeline P) ➜ mocked services</text>
+        <text x="56" y="141" fill="#22d3ee" font-size="7" font-weight="600">TEST INPUTS (per test class)</text>
+        <text x="260" y="141" fill="#34d399" font-size="7" font-weight="600">CODE UNDER TEST · blueprints/feedback/feedback_routes.py</text>
+        <text x="940" y="141" fill="#fbbf24" font-size="7" font-weight="600">MOCKED DEPENDENCIES</text>
+        <rect x="260" y="150" width="640" height="244" rx="8" fill="rgba(76,29,149,0.08)" stroke="#a78bfa" stroke-width="0.9" stroke-dasharray="4,3"/>
+        <rect x="266" y="155" width="20" height="11" rx="2" fill="#020617" stroke="#a78bfa" stroke-width="0.8"/>
+        <text x="276" y="163.5" fill="#a78bfa" font-size="6.5" font-weight="600" text-anchor="middle">P</text>
+        <text x="292" y="164" fill="#a78bfa" font-size="8.5" font-weight="600">Shared POST pipeline · every write route (R1–R5) runs these steps</text>
+        <rect x="266" y="176" width="131" height="20" rx="4" fill="#0f172a"/>
+        <rect x="266" y="176" width="131" height="20" rx="4" fill="rgba(76,29,149,0.4)" stroke="#a78bfa" stroke-width="1.1"/>
+        <text x="331.5" y="189.5" fill="white" font-size="7.2" text-anchor="middle">get_json(silent=True) or {}</text>
+        <rect x="409" y="176" width="53" height="20" rx="4" fill="#0f172a"/>
+        <rect x="409" y="176" width="53" height="20" rx="4" fill="rgba(76,29,149,0.4)" stroke="#a78bfa" stroke-width="1.1"/>
+        <text x="435.5" y="189.5" fill="white" font-size="7.2" text-anchor="middle">strip ids</text>
+        <rect x="474" y="176" width="66" height="20" rx="4" fill="#0f172a"/>
+        <rect x="474" y="176" width="66" height="20" rx="4" fill="rgba(76,29,149,0.4)" stroke="#a78bfa" stroke-width="1.1"/>
+        <text x="507.0" y="189.5" fill="white" font-size="7.2" text-anchor="middle">ids present?</text>
+        <rect x="552" y="176" width="140" height="20" rx="4" fill="#0f172a"/>
+        <rect x="552" y="176" width="140" height="20" rx="4" fill="rgba(76,29,149,0.4)" stroke="#a78bfa" stroke-width="1.1"/>
+        <text x="622.0" y="189.5" fill="white" font-size="7.2" text-anchor="middle">_SAFE_ID_RE(conversation_id)?</text>
+        <rect x="704" y="176" width="105" height="20" rx="4" fill="#0f172a"/>
+        <rect x="704" y="176" width="105" height="20" rx="4" fill="rgba(76,29,149,0.4)" stroke="#a78bfa" stroke-width="1.1"/>
+        <text x="756.5" y="189.5" fill="white" font-size="7.2" text-anchor="middle">_SAFE_ID_RE(turn_id)?</text>
+        <rect x="497.0" y="206" width="144" height="20" rx="4" fill="#0f172a"/>
+        <rect x="497.0" y="206" width="144" height="20" rx="4" fill="rgba(136,19,55,0.4)" stroke="#fb7185" stroke-width="1.1"/>
+        <text x="569.0" y="219.5" fill="white" font-size="7.2" text-anchor="middle">missing ➜ 400 &#x27;… are required&#x27;</text>
+        <rect x="612.0" y="232" width="184" height="20" rx="4" fill="#0f172a"/>
+        <rect x="612.0" y="232" width="184" height="20" rx="4" fill="rgba(136,19,55,0.4)" stroke="#fb7185" stroke-width="1.1"/>
+        <text x="704.0" y="245.5" fill="white" font-size="7.2" text-anchor="middle">no ➜ 400 &#x27;conversation_id must match …&#x27;</text>
+        <rect x="745" y="206" width="149" height="20" rx="4" fill="#0f172a"/>
+        <rect x="745" y="206" width="149" height="20" rx="4" fill="rgba(136,19,55,0.4)" stroke="#fb7185" stroke-width="1.1"/>
+        <text x="819.5" y="219.5" fill="white" font-size="7.2" text-anchor="middle">no ➜ 400 &#x27;turn_id must match …&#x27;</text>
+        <rect x="266" y="270" width="140" height="20" rx="4" fill="#0f172a"/>
+        <rect x="266" y="270" width="140" height="20" rx="4" fill="rgba(6,78,59,0.4)" stroke="#34d399" stroke-width="1.1"/>
+        <text x="336.0" y="283.5" fill="white" font-size="7.2" text-anchor="middle">route-specific checks (R1–R5)</text>
+        <rect x="418" y="270" width="75" height="20" rx="4" fill="#0f172a"/>
+        <rect x="418" y="270" width="75" height="20" rx="4" fill="rgba(6,78,59,0.4)" stroke="#34d399" stroke-width="1.1"/>
+        <text x="455.5" y="283.5" fill="white" font-size="7.2" text-anchor="middle">session.get(…)</text>
+        <rect x="505" y="270" width="149" height="20" rx="4" fill="#0f172a"/>
+        <rect x="505" y="270" width="149" height="20" rx="4" fill="rgba(120,53,15,0.3)" stroke="#fbbf24" stroke-width="1.1"/>
+        <text x="579.5" y="283.5" fill="white" font-size="7.2" text-anchor="middle">feedback_service.record_*(**kw)</text>
+        <rect x="666" y="270" width="114" height="20" rx="4" fill="#0f172a"/>
+        <rect x="666" y="270" width="114" height="20" rx="4" fill="rgba(6,95,70,0.7)" stroke="#6ee7b7" stroke-width="1.1"/>
+        <text x="723.0" y="283.5" fill="white" font-size="7.2" text-anchor="middle">True ➜ 200 {success, …}</text>
+        <rect x="569.5" y="300" width="214" height="20" rx="4" fill="#0f172a"/>
+        <rect x="569.5" y="300" width="214" height="20" rx="4" fill="rgba(136,19,55,0.4)" stroke="#fb7185" stroke-width="1.1"/>
+        <text x="676.5" y="313.5" fill="white" font-size="7.2" text-anchor="middle">False ➜ 500 &#x27;failed to record&#x27; (/detail ➜ 400)</text>
+        <rect x="569.5" y="326" width="158" height="20" rx="4" fill="#0f172a"/>
+        <rect x="569.5" y="326" width="158" height="20" rx="4" fill="rgba(154,52,18,0.45)" stroke="#fb923c" stroke-width="1.1"/>
+        <text x="648.5" y="339.5" fill="white" font-size="7.2" text-anchor="middle">raises ➜ not caught ➜ 500 in prod</text>
+        <text x="266" y="372" fill="#94a3b8" font-size="7">_SAFE_ID_RE = ^[A-Za-z0-9_-]{1,80}$ · ids become path components downstream, so they are allow-listed at the route boundary</text>
+        <text x="266" y="384" fill="#64748b" font-size="7">_bad_id_response(field) ➜ ({success: False, error: &#x27;&lt;field&gt; must match [A-Za-z0-9_-]{1,80}&#x27;}, 400)</text>
+        <rect x="56" y="150" width="180" height="244" rx="6" fill="#0f172a"/>
+        <rect x="56" y="150" width="180" height="244" rx="6" fill="rgba(8,51,68,0.4)" stroke="#22d3ee" stroke-width="1.3"/>
+        <text x="65" y="165" fill="white" font-size="8" font-weight="600">Shared test data</text>
+        <text x="65" y="178" fill="#94a3b8" font-size="6.8">CONV_ID = &#x27;conv_123&#x27;</text>
+        <text x="65" y="189" fill="#94a3b8" font-size="6.8">TURN_ID = &#x27;turn-7&#x27;</text>
+        <text x="65" y="200" fill="#94a3b8" font-size="6.8">SESSION_ID = &#x27;sess-abc&#x27;</text>
+        <text x="65" y="211" fill="#94a3b8" font-size="6.8">UNSAFE_IDS:</text>
+        <text x="65" y="222" fill="#94a3b8" font-size="6.8">  &#x27;../etc&#x27; · &#x27;a/b&#x27;</text>
+        <text x="65" y="233" fill="#94a3b8" font-size="6.8">  &#x27;has space&#x27; · &#x27;x&#x27; * 81</text>
+        <text x="65" y="244" fill="#94a3b8" font-size="6.8">FIXED_UUID ➜ @patch uuid.uuid4</text>
+        <text x="65" y="255" fill="#94a3b8" font-size="6.8">post_json(path, payload)</text>
+        <text x="65" y="266" fill="#94a3b8" font-size="6.8">assert_bad_id(resp, field)</text>
+        <text x="65" y="277" fill="#94a3b8" font-size="6.8">session_transaction() / seed_session()</text>
+        <text x="65" y="288" fill="#94a3b8" font-size="6.8"></text>
+        <text x="65" y="299" fill="#94a3b8" font-size="6.8">TestFeedbackBlueprintStructure (1)</text>
+        <text x="65" y="310" fill="#94a3b8" font-size="6.8">  app.url_map rules &#x27;feedback.*&#x27;</text>
+        <rect x="940" y="150" width="236" height="104" rx="6" fill="#0f172a"/>
+        <rect x="940" y="150" width="236" height="104" rx="6" fill="rgba(120,53,15,0.3)" stroke="#fbbf24" stroke-width="1.3"/>
+        <text x="949" y="165" fill="white" font-size="8" font-weight="600">Flask session (test client)</text>
+        <text x="949" y="178" fill="#94a3b8" font-size="6.8">chatbot_session_id ➜ session_id</text>
+        <text x="949" y="189" fill="#94a3b8" font-size="6.8">yaml_modified / yaml_modified_path</text>
+        <text x="949" y="200" fill="#94a3b8" font-size="6.8">chatbot_log_path (/detail, attach_log)</text>
+        <text x="949" y="211" fill="#94a3b8" font-size="6.8">case_context ➜ CaseContext (gather)</text>
+        <text x="949" y="222" fill="#94a3b8" font-size="6.8">gather_workflow_id (/detail)</text>
+        <text x="949" y="233" fill="#94a3b8" font-size="6.8">all optional ➜ &#x27;&#x27; / False defaults</text>
+        <rect x="940" y="266" width="236" height="128" rx="6" fill="#0f172a"/>
+        <rect x="940" y="266" width="236" height="128" rx="6" fill="rgba(120,53,15,0.3)" stroke="#fbbf24" stroke-width="1.3"/>
+        <text x="949" y="281" fill="white" font-size="8" font-weight="600">feedback_service (MagicMock)</text>
+        <text x="949" y="294" fill="#94a3b8" font-size="6.8">record_vote / record_detail</text>
+        <text x="949" y="305" fill="#94a3b8" font-size="6.8">record_step_vote</text>
+        <text x="949" y="316" fill="#94a3b8" font-size="6.8">record_helpful_skill</text>
+        <text x="949" y="327" fill="#94a3b8" font-size="6.8">record_skill_assessment</text>
+        <text x="949" y="338" fill="#94a3b8" font-size="6.8">  all ➜ True by default</text>
+        <text x="949" y="349" fill="#94a3b8" font-size="6.8">get_recent_votes ➜ [{vote: 1}]</text>
+        <rect x="260" y="414" width="640" height="150" rx="8" fill="rgba(6,78,59,0.07)" stroke="#34d399" stroke-width="0.9" stroke-dasharray="4,3"/>
+        <rect x="266" y="419" width="20" height="11" rx="2" fill="#020617" stroke="#34d399" stroke-width="0.8"/>
+        <text x="276" y="427.5" fill="#34d399" font-size="6.5" font-weight="600" text-anchor="middle">R1</text>
+        <text x="292" y="428" fill="#34d399" font-size="8.5" font-weight="600">POST /feedback/vote · thumbs up / down / clear for a turn</text>
+        <rect x="266" y="440" width="114" height="20" rx="4" fill="#0f172a"/>
+        <rect x="266" y="440" width="114" height="20" rx="4" fill="rgba(6,78,59,0.4)" stroke="#34d399" stroke-width="1.1"/>
+        <text x="323.0" y="453.5" fill="white" font-size="7.2" text-anchor="middle">int(vote) ∈ {1, -1, 0}?</text>
+        <rect x="392" y="440" width="84" height="20" rx="4" fill="#0f172a"/>
+        <rect x="392" y="440" width="84" height="20" rx="4" fill="rgba(76,29,149,0.4)" stroke="#a78bfa" stroke-width="1.1"/>
+        <text x="434.0" y="453.5" fill="white" font-size="7.2" text-anchor="middle">P: ids + safe-id</text>
+        <rect x="488" y="440" width="201" height="20" rx="4" fill="#0f172a"/>
+        <rect x="488" y="440" width="201" height="20" rx="4" fill="rgba(120,53,15,0.3)" stroke="#fbbf24" stroke-width="1.1"/>
+        <text x="588.5" y="453.5" fill="white" font-size="7.2" text-anchor="middle">record_vote(…, vote, yaml_modified, domain)</text>
+        <rect x="701" y="440" width="127" height="20" rx="4" fill="#0f172a"/>
+        <rect x="701" y="440" width="127" height="20" rx="4" fill="rgba(6,95,70,0.7)" stroke="#6ee7b7" stroke-width="1.1"/>
+        <text x="764.5" y="453.5" fill="white" font-size="7.2" text-anchor="middle">200 + yaml_modified(_path)</text>
+        <rect x="313.0" y="470" width="292" height="20" rx="4" fill="#0f172a"/>
+        <rect x="313.0" y="470" width="292" height="20" rx="4" fill="rgba(136,19,55,0.4)" stroke="#fb7185" stroke-width="1.1"/>
+        <text x="459.0" y="483.5" fill="white" font-size="7.2" text-anchor="middle">None | &#x27;up&#x27; | 2 | -2 | non-JSON ➜ 400 &#x27;vote must be 1, -1, or 0&#x27;</text>
+        <rect x="578.5" y="496" width="166" height="20" rx="4" fill="#0f172a"/>
+        <rect x="578.5" y="496" width="166" height="20" rx="4" fill="rgba(136,19,55,0.4)" stroke="#fb7185" stroke-width="1.1"/>
+        <text x="661.5" y="509.5" fill="white" font-size="7.2" text-anchor="middle">False ➜ 500 &#x27;failed to record vote&#x27;</text>
+        <rect x="578.5" y="522" width="153" height="20" rx="4" fill="#0f172a"/>
+        <rect x="578.5" y="522" width="153" height="20" rx="4" fill="rgba(154,52,18,0.45)" stroke="#fb923c" stroke-width="1.1"/>
+        <text x="655.0" y="535.5" fill="white" font-size="7.2" text-anchor="middle">raises RuntimeError ➜ not caught</text>
+        <text x="266" y="556" fill="#94a3b8" font-size="7">vote is validated BEFORE the id checks · &#x27;0&#x27; (string) ➜ int 0 = clear</text>
+        <rect x="56" y="414" width="180" height="150" rx="6" fill="#0f172a"/>
+        <rect x="56" y="414" width="180" height="150" rx="6" fill="rgba(8,51,68,0.4)" stroke="#22d3ee" stroke-width="1.3"/>
+        <text x="65" y="429" fill="white" font-size="8" font-weight="600">TestVote (8)</text>
+        <text x="65" y="442" fill="#94a3b8" font-size="6.8">{conversation_id: &#x27; conv_123 &#x27;,</text>
+        <text x="65" y="453" fill="#94a3b8" font-size="6.8">  turn_id, vote: 1, domain: &#x27; bt &#x27;}</text>
+        <text x="65" y="464" fill="#94a3b8" font-size="6.8">{…, vote: &#x27;0&#x27;} + empty session</text>
+        <text x="65" y="475" fill="#94a3b8" font-size="6.8">vote None | &#x27;up&#x27; | 2 | -2</text>
+        <text x="65" y="486" fill="#94a3b8" font-size="6.8">plain-text body (not JSON)</text>
+        <text x="65" y="497" fill="#94a3b8" font-size="6.8">missing / blank ids</text>
+        <text x="65" y="508" fill="#94a3b8" font-size="6.8">UNSAFE_IDS</text>
+        <text x="65" y="519" fill="#94a3b8" font-size="6.8">record_vote ➜ False | raises</text>
+        <text x="65" y="530" fill="#94a3b8" font-size="6.8">session yaml_modified True + path</text>
+        <rect x="940" y="414" width="236" height="70" rx="6" fill="#0f172a"/>
+        <rect x="940" y="414" width="236" height="70" rx="6" fill="rgba(120,53,15,0.3)" stroke="#fbbf24" stroke-width="1.3"/>
+        <text x="949" y="429" fill="white" font-size="8" font-weight="600">feedback_service.record_vote</text>
+        <text x="949" y="442" fill="#94a3b8" font-size="6.8">(session_id, conversation_id, turn_id,</text>
+        <text x="949" y="453" fill="#94a3b8" font-size="6.8">  vote, yaml_modified, domain)</text>
+        <text x="949" y="464" fill="#94a3b8" font-size="6.8">➜ True | False | raises</text>
+        <rect x="260" y="584" width="640" height="136" rx="8" fill="rgba(6,78,59,0.07)" stroke="#34d399" stroke-width="0.9" stroke-dasharray="4,3"/>
+        <rect x="266" y="589" width="20" height="11" rx="2" fill="#020617" stroke="#34d399" stroke-width="0.8"/>
+        <text x="276" y="597.5" fill="#34d399" font-size="6.5" font-weight="600" text-anchor="middle">R2</text>
+        <text x="292" y="598" fill="#34d399" font-size="8.5" font-weight="600">POST /feedback/detail · structured &#x27;more feedback&#x27; form + Gather telemetry</text>
+        <rect x="266" y="610" width="84" height="20" rx="4" fill="#0f172a"/>
+        <rect x="266" y="610" width="84" height="20" rx="4" fill="rgba(76,29,149,0.4)" stroke="#a78bfa" stroke-width="1.1"/>
+        <text x="308.0" y="623.5" fill="white" font-size="7.2" text-anchor="middle">P: ids + safe-id</text>
+        <rect x="362" y="610" width="140" height="20" rx="4" fill="#0f172a"/>
+        <rect x="362" y="610" width="140" height="20" rx="4" fill="rgba(6,78,59,0.4)" stroke="#34d399" stroke-width="1.1"/>
+        <text x="432.0" y="623.5" fill="white" font-size="7.2" text-anchor="middle">vote ➜ int ∈ {1,-1} else None</text>
+        <rect x="514" y="610" width="140" height="20" rx="4" fill="#0f172a"/>
+        <rect x="514" y="610" width="140" height="20" rx="4" fill="rgba(6,78,59,0.4)" stroke="#34d399" stroke-width="1.1"/>
+        <text x="584.0" y="623.5" fill="white" font-size="7.2" text-anchor="middle">evidence: str➜lines, other➜[]</text>
+        <rect x="666" y="610" width="114" height="20" rx="4" fill="#0f172a"/>
+        <rect x="666" y="610" width="114" height="20" rx="4" fill="rgba(6,78,59,0.4)" stroke="#34d399" stroke-width="1.1"/>
+        <text x="723.0" y="623.5" fill="white" font-size="7.2" text-anchor="middle">log_path iff attach_log</text>
+        <rect x="266" y="648" width="127" height="20" rx="4" fill="#0f172a"/>
+        <rect x="266" y="648" width="127" height="20" rx="4" fill="rgba(6,78,59,0.4)" stroke="#34d399" stroke-width="1.1"/>
+        <text x="329.5" y="661.5" fill="white" font-size="7.2" text-anchor="middle">domain or &#x27;wifi&#x27; · uuid4()</text>
+        <rect x="405" y="648" width="97" height="20" rx="4" fill="#0f172a"/>
+        <rect x="405" y="648" width="97" height="20" rx="4" fill="rgba(120,53,15,0.3)" stroke="#fbbf24" stroke-width="1.1"/>
+        <text x="453.5" y="661.5" fill="white" font-size="7.2" text-anchor="middle">record_detail(**kw)</text>
+        <rect x="514" y="648" width="184" height="20" rx="4" fill="#0f172a"/>
+        <rect x="514" y="648" width="184" height="20" rx="4" fill="rgba(120,53,15,0.3)" stroke="#fbbf24" stroke-width="1.1"/>
+        <text x="606.0" y="661.5" fill="white" font-size="7.2" text-anchor="middle">gather.record_feedback_submit(…, issue)</text>
+        <rect x="710" y="648" width="153" height="20" rx="4" fill="#0f172a"/>
+        <rect x="710" y="648" width="153" height="20" rx="4" fill="rgba(6,95,70,0.7)" stroke="#6ee7b7" stroke-width="1.1"/>
+        <text x="786.5" y="661.5" fill="white" font-size="7.2" text-anchor="middle">200 {success, feedback_event_id}</text>
+        <rect x="443.5" y="678" width="223" height="20" rx="4" fill="#0f172a"/>
+        <rect x="443.5" y="678" width="223" height="20" rx="4" fill="rgba(136,19,55,0.4)" stroke="#fb7185" stroke-width="1.1"/>
+        <text x="555.0" y="691.5" fill="white" font-size="7.2" text-anchor="middle">False ➜ 400 &#x27;nothing to record&#x27; · gather skipped</text>
+        <text x="266" y="712" fill="#64748b" font-size="7">issue = CaseContext.from_session(case_context).to_dict() · except ➜ {} is unreachable from a cookie session (not tested)</text>
+        <rect x="56" y="584" width="180" height="136" rx="6" fill="#0f172a"/>
+        <rect x="56" y="584" width="180" height="136" rx="6" fill="rgba(8,51,68,0.4)" stroke="#22d3ee" stroke-width="1.3"/>
+        <text x="65" y="599" fill="white" font-size="8" font-weight="600">TestDetail (8)</text>
+        <text x="65" y="612" fill="#94a3b8" font-size="6.8">full payload (vote &#x27;-1&#x27;, issues,</text>
+        <text x="65" y="623" fill="#94a3b8" font-size="6.8">  padded strings, evidence list,</text>
+        <text x="65" y="634" fill="#94a3b8" font-size="6.8">  attach_log True, domain &#x27; BT &#x27;)</text>
+        <text x="65" y="645" fill="#94a3b8" font-size="6.8">only {conversation_id, turn_id}</text>
+        <text x="65" y="656" fill="#94a3b8" font-size="6.8">vote &#x27;&#x27; | &#x27;abc&#x27; | 5 | 0 | [1]</text>
+        <text x="65" y="667" fill="#94a3b8" font-size="6.8">evidence &#x27;str w/ blanks&#x27; | 42</text>
+        <text x="65" y="678" fill="#94a3b8" font-size="6.8">missing / unsafe ids</text>
+        <text x="65" y="689" fill="#94a3b8" font-size="6.8">record_detail ➜ False</text>
+        <text x="65" y="700" fill="#94a3b8" font-size="6.8">uuid4 ➜ FIXED_UUID</text>
+        <rect x="940" y="584" width="236" height="60" rx="6" fill="#0f172a"/>
+        <rect x="940" y="584" width="236" height="60" rx="6" fill="rgba(120,53,15,0.3)" stroke="#fbbf24" stroke-width="1.3"/>
+        <text x="949" y="599" fill="white" font-size="8" font-weight="600">feedback_service.record_detail</text>
+        <text x="949" y="612" fill="#94a3b8" font-size="6.8">19 kwargs: ids, vote, issues, correct_*,</text>
+        <text x="949" y="623" fill="#94a3b8" font-size="6.8">  evidence, skill/step feedback, log_path, …</text>
+        <rect x="940" y="656" width="236" height="64" rx="6" fill="#0f172a"/>
+        <rect x="940" y="656" width="236" height="64" rx="6" fill="rgba(120,53,15,0.3)" stroke="#fbbf24" stroke-width="1.3"/>
+        <text x="949" y="671" fill="white" font-size="8" font-weight="600">gather_service.record_feedback_submit</text>
+        <text x="949" y="684" fill="#94a3b8" font-size="6.8">(feedback_event_id, conversation_id,</text>
+        <text x="949" y="695" fill="#94a3b8" font-size="6.8">  turn_id, workflow_id, session_id,</text>
+        <text x="949" y="706" fill="#94a3b8" font-size="6.8">  issue=CaseContext dict, domain)</text>
+        <rect x="260" y="740" width="640" height="112" rx="8" fill="rgba(6,78,59,0.07)" stroke="#34d399" stroke-width="0.9" stroke-dasharray="4,3"/>
+        <rect x="266" y="745" width="20" height="11" rx="2" fill="#020617" stroke="#34d399" stroke-width="0.8"/>
+        <text x="276" y="753.5" fill="#34d399" font-size="6.5" font-weight="600" text-anchor="middle">R3</text>
+        <text x="292" y="754" fill="#34d399" font-size="8.5" font-weight="600">POST /feedback/step_vote · per-reasoning-step vote</text>
+        <rect x="266" y="766" width="84" height="20" rx="4" fill="#0f172a"/>
+        <rect x="266" y="766" width="84" height="20" rx="4" fill="rgba(76,29,149,0.4)" stroke="#a78bfa" stroke-width="1.1"/>
+        <text x="308.0" y="779.5" fill="white" font-size="7.2" text-anchor="middle">P: ids + safe-id</text>
+        <rect x="362" y="766" width="127" height="20" rx="4" fill="#0f172a"/>
+        <rect x="362" y="766" width="127" height="20" rx="4" fill="rgba(6,78,59,0.4)" stroke="#34d399" stroke-width="1.1"/>
+        <text x="425.5" y="779.5" fill="white" font-size="7.2" text-anchor="middle">int(step_index), int(vote)</text>
+        <rect x="501" y="766" width="79" height="20" rx="4" fill="#0f172a"/>
+        <rect x="501" y="766" width="79" height="20" rx="4" fill="rgba(6,78,59,0.4)" stroke="#34d399" stroke-width="1.1"/>
+        <text x="540.5" y="779.5" fill="white" font-size="7.2" text-anchor="middle">vote ∈ {1, -1}?</text>
+        <rect x="592" y="766" width="210" height="20" rx="4" fill="#0f172a"/>
+        <rect x="592" y="766" width="210" height="20" rx="4" fill="rgba(120,53,15,0.3)" stroke="#fbbf24" stroke-width="1.1"/>
+        <text x="697.0" y="779.5" fill="white" font-size="7.2" text-anchor="middle">record_step_vote(…, step_index, vote, domain)</text>
+        <rect x="814" y="766" width="71" height="20" rx="4" fill="#0f172a"/>
+        <rect x="814" y="766" width="71" height="20" rx="4" fill="rgba(6,95,70,0.7)" stroke="#6ee7b7" stroke-width="1.1"/>
+        <text x="849.5" y="779.5" fill="white" font-size="7.2" text-anchor="middle">200 {success}</text>
+        <rect x="415.5" y="796" width="227" height="20" rx="4" fill="#0f172a"/>
+        <rect x="415.5" y="796" width="227" height="20" rx="4" fill="rgba(136,19,55,0.4)" stroke="#fb7185" stroke-width="1.1"/>
+        <text x="529.0" y="809.5" fill="white" font-size="7.2" text-anchor="middle">fail ➜ 400 &#x27;step_index and vote must be integers&#x27;</text>
+        <rect x="530.5" y="822" width="144" height="20" rx="4" fill="#0f172a"/>
+        <rect x="530.5" y="822" width="144" height="20" rx="4" fill="rgba(136,19,55,0.4)" stroke="#fb7185" stroke-width="1.1"/>
+        <text x="602.5" y="835.5" fill="white" font-size="7.2" text-anchor="middle">0 ➜ 400 &#x27;vote must be 1 or -1&#x27;</text>
+        <rect x="687.0" y="796" width="144" height="20" rx="4" fill="#0f172a"/>
+        <rect x="687.0" y="796" width="144" height="20" rx="4" fill="rgba(136,19,55,0.4)" stroke="#fb7185" stroke-width="1.1"/>
+        <text x="759.0" y="809.5" fill="white" font-size="7.2" text-anchor="middle">False ➜ 500 &#x27;failed to record&#x27;</text>
+        <rect x="56" y="740" width="180" height="112" rx="6" fill="#0f172a"/>
+        <rect x="56" y="740" width="180" height="112" rx="6" fill="rgba(8,51,68,0.4)" stroke="#22d3ee" stroke-width="1.3"/>
+        <text x="65" y="755" fill="white" font-size="8" font-weight="600">TestStepVote (6)</text>
+        <text x="65" y="768" fill="#94a3b8" font-size="6.8">{step_index: &#x27;3&#x27;, vote: -1,</text>
+        <text x="65" y="779" fill="#94a3b8" font-size="6.8">  padded domain} + session id</text>
+        <text x="65" y="790" fill="#94a3b8" font-size="6.8">missing conversation_id</text>
+        <text x="65" y="801" fill="#94a3b8" font-size="6.8">UNSAFE_IDS</text>
+        <text x="65" y="812" fill="#94a3b8" font-size="6.8">step_index &#x27;abc&#x27; | vote None | missing</text>
+        <text x="65" y="823" fill="#94a3b8" font-size="6.8">vote 0 · record_step_vote ➜ False</text>
+        <rect x="940" y="740" width="236" height="60" rx="6" fill="#0f172a"/>
+        <rect x="940" y="740" width="236" height="60" rx="6" fill="rgba(120,53,15,0.3)" stroke="#fbbf24" stroke-width="1.3"/>
+        <text x="949" y="755" fill="white" font-size="8" font-weight="600">feedback_service.record_step_vote</text>
+        <text x="949" y="768" fill="#94a3b8" font-size="6.8">(session_id, conversation_id, turn_id,</text>
+        <text x="949" y="779" fill="#94a3b8" font-size="6.8">  step_index: int, vote, domain)</text>
+        <rect x="260" y="872" width="640" height="120" rx="8" fill="rgba(6,78,59,0.07)" stroke="#34d399" stroke-width="0.9" stroke-dasharray="4,3"/>
+        <rect x="266" y="877" width="20" height="11" rx="2" fill="#020617" stroke="#34d399" stroke-width="0.8"/>
+        <text x="276" y="885.5" fill="#34d399" font-size="6.5" font-weight="600" text-anchor="middle">R4</text>
+        <text x="292" y="886" fill="#34d399" font-size="8.5" font-weight="600">POST /feedback/skill_helpful · which skill drove a correct answer</text>
+        <rect x="266" y="898" width="149" height="20" rx="4" fill="#0f172a"/>
+        <rect x="266" y="898" width="149" height="20" rx="4" fill="rgba(76,29,149,0.4)" stroke="#a78bfa" stroke-width="1.1"/>
+        <text x="340.5" y="911.5" fill="white" font-size="7.2" text-anchor="middle">ids + skill_id.strip() required</text>
+        <rect x="427" y="898" width="123" height="20" rx="4" fill="#0f172a"/>
+        <rect x="427" y="898" width="123" height="20" rx="4" fill="rgba(76,29,149,0.4)" stroke="#a78bfa" stroke-width="1.1"/>
+        <text x="488.5" y="911.5" fill="white" font-size="7.2" text-anchor="middle">safe-id on conv/turn only</text>
+        <rect x="562" y="898" width="158" height="20" rx="4" fill="#0f172a"/>
+        <rect x="562" y="898" width="158" height="20" rx="4" fill="rgba(120,53,15,0.3)" stroke="#fbbf24" stroke-width="1.1"/>
+        <text x="641.0" y="911.5" fill="white" font-size="7.2" text-anchor="middle">record_helpful_skill(…, skill_id)</text>
+        <rect x="732" y="898" width="71" height="20" rx="4" fill="#0f172a"/>
+        <rect x="732" y="898" width="71" height="20" rx="4" fill="rgba(6,95,70,0.7)" stroke="#6ee7b7" stroke-width="1.1"/>
+        <text x="767.5" y="911.5" fill="white" font-size="7.2" text-anchor="middle">200 {success}</text>
+        <rect x="330.5" y="928" width="305" height="20" rx="4" fill="#0f172a"/>
+        <rect x="330.5" y="928" width="305" height="20" rx="4" fill="rgba(136,19,55,0.4)" stroke="#fb7185" stroke-width="1.1"/>
+        <text x="483.0" y="941.5" fill="white" font-size="7.2" text-anchor="middle">missing ➜ 400 &#x27;conversation_id, turn_id, and skill_id are required&#x27;</text>
+        <rect x="478.5" y="954" width="140" height="20" rx="4" fill="#0f172a"/>
+        <rect x="478.5" y="954" width="140" height="20" rx="4" fill="rgba(136,19,55,0.4)" stroke="#fb7185" stroke-width="1.1"/>
+        <text x="548.5" y="967.5" fill="white" font-size="7.2" text-anchor="middle">unsafe ➜ 400 _bad_id_response</text>
+        <rect x="631.0" y="954" width="62" height="20" rx="4" fill="#0f172a"/>
+        <rect x="631.0" y="954" width="62" height="20" rx="4" fill="rgba(136,19,55,0.4)" stroke="#fb7185" stroke-width="1.1"/>
+        <text x="662.0" y="967.5" fill="white" font-size="7.2" text-anchor="middle">False ➜ 500</text>
+        <text x="266" y="984" fill="#94a3b8" font-size="7">skill_id is NOT matched against _SAFE_ID_RE ➜ &#x27; Connection Flow &#x27; becomes &#x27;Connection Flow&#x27; (inner space kept)</text>
+        <rect x="56" y="872" width="180" height="120" rx="6" fill="#0f172a"/>
+        <rect x="56" y="872" width="180" height="120" rx="6" fill="rgba(8,51,68,0.4)" stroke="#22d3ee" stroke-width="1.3"/>
+        <text x="65" y="887" fill="white" font-size="8" font-weight="600">TestSkillHelpful (4)</text>
+        <text x="65" y="900" fill="#94a3b8" font-size="6.8">{skill_id: &#x27; Connection Flow &#x27;}</text>
+        <text x="65" y="911" fill="#94a3b8" font-size="6.8">  + session id</text>
+        <text x="65" y="922" fill="#94a3b8" font-size="6.8">each of 3 fields missing</text>
+        <text x="65" y="933" fill="#94a3b8" font-size="6.8">UNSAFE_IDS (conv / turn)</text>
+        <text x="65" y="944" fill="#94a3b8" font-size="6.8">record_helpful_skill ➜ False</text>
+        <rect x="940" y="872" width="236" height="60" rx="6" fill="#0f172a"/>
+        <rect x="940" y="872" width="236" height="60" rx="6" fill="rgba(120,53,15,0.3)" stroke="#fbbf24" stroke-width="1.3"/>
+        <text x="949" y="887" fill="white" font-size="8" font-weight="600">feedback_service.record_helpful_skill</text>
+        <text x="949" y="900" fill="#94a3b8" font-size="6.8">(session_id, conversation_id, turn_id,</text>
+        <text x="949" y="911" fill="#94a3b8" font-size="6.8">  skill_id, domain)</text>
+        <rect x="260" y="1012" width="640" height="120" rx="8" fill="rgba(6,78,59,0.07)" stroke="#34d399" stroke-width="0.9" stroke-dasharray="4,3"/>
+        <rect x="266" y="1017" width="20" height="11" rx="2" fill="#020617" stroke="#34d399" stroke-width="0.8"/>
+        <text x="276" y="1025.5" fill="#34d399" font-size="6.5" font-weight="600" text-anchor="middle">R5</text>
+        <text x="292" y="1026" fill="#34d399" font-size="8.5" font-weight="600">POST /feedback/skill_assessment · set / clear a per-skill chip</text>
+        <rect x="266" y="1038" width="158" height="20" rx="4" fill="#0f172a"/>
+        <rect x="266" y="1038" width="158" height="20" rx="4" fill="rgba(76,29,149,0.4)" stroke="#a78bfa" stroke-width="1.1"/>
+        <text x="345.0" y="1051.5" fill="white" font-size="7.2" text-anchor="middle">ids + skill_id required · safe-id</text>
+        <rect x="436" y="1038" width="127" height="20" rx="4" fill="#0f172a"/>
+        <rect x="436" y="1038" width="127" height="20" rx="4" fill="rgba(6,78,59,0.4)" stroke="#34d399" stroke-width="1.1"/>
+        <text x="499.5" y="1051.5" fill="white" font-size="7.2" text-anchor="middle">assessment.strip().lower()</text>
+        <rect x="575" y="1038" width="136" height="20" rx="4" fill="#0f172a"/>
+        <rect x="575" y="1038" width="136" height="20" rx="4" fill="rgba(6,78,59,0.4)" stroke="#34d399" stroke-width="1.1"/>
+        <text x="643.0" y="1051.5" fill="white" font-size="7.2" text-anchor="middle">∈ (&#x27;helpful&#x27;,&#x27;wrong&#x27;) or &#x27;&#x27;?</text>
+        <rect x="723" y="1038" width="127" height="20" rx="4" fill="#0f172a"/>
+        <rect x="723" y="1038" width="127" height="20" rx="4" fill="rgba(120,53,15,0.3)" stroke="#fbbf24" stroke-width="1.1"/>
+        <text x="786.5" y="1051.5" fill="white" font-size="7.2" text-anchor="middle">record_skill_assessment(…)</text>
+        <rect x="335.0" y="1068" width="136" height="20" rx="4" fill="#0f172a"/>
+        <rect x="335.0" y="1068" width="136" height="20" rx="4" fill="rgba(136,19,55,0.4)" stroke="#fb7185" stroke-width="1.1"/>
+        <text x="403.0" y="1081.5" fill="white" font-size="7.2" text-anchor="middle">missing ➜ 400 · unsafe ➜ 400</text>
+        <rect x="593" y="1094" width="301" height="20" rx="4" fill="#0f172a"/>
+        <rect x="593" y="1094" width="301" height="20" rx="4" fill="rgba(136,19,55,0.4)" stroke="#fb7185" stroke-width="1.1"/>
+        <text x="743.5" y="1107.5" fill="white" font-size="7.2" text-anchor="middle">no ➜ 400 &quot;assessment must be one of (&#x27;helpful&#x27;, &#x27;wrong&#x27;) or empty&quot;</text>
+        <rect x="776" y="1068" width="118" height="20" rx="4" fill="#0f172a"/>
+        <rect x="776" y="1068" width="118" height="20" rx="4" fill="rgba(6,95,70,0.7)" stroke="#6ee7b7" stroke-width="1.1"/>
+        <text x="835.0" y="1081.5" fill="white" font-size="7.2" text-anchor="middle">True ➜ 200 · False ➜ 500</text>
+        <text x="266" y="1124" fill="#94a3b8" font-size="7">&#x27;&#x27; (field omitted) is allowed and means clear the chip · allowed values read from feedback_service.SKILL_ASSESSMENT_VALUES</text>
+        <rect x="56" y="1012" width="180" height="120" rx="6" fill="#0f172a"/>
+        <rect x="56" y="1012" width="180" height="120" rx="6" fill="rgba(8,51,68,0.4)" stroke="#22d3ee" stroke-width="1.3"/>
+        <text x="65" y="1027" fill="white" font-size="8" font-weight="600">TestSkillAssessment (6)</text>
+        <text x="65" y="1040" fill="#94a3b8" font-size="6.8">{skill_id, assessment: &#x27; Helpful &#x27;}</text>
+        <text x="65" y="1051" fill="#94a3b8" font-size="6.8">assessment omitted</text>
+        <text x="65" y="1062" fill="#94a3b8" font-size="6.8">assessment &#x27;redundant&#x27;</text>
+        <text x="65" y="1073" fill="#94a3b8" font-size="6.8">skill_id missing</text>
+        <text x="65" y="1084" fill="#94a3b8" font-size="6.8">UNSAFE_IDS</text>
+        <text x="65" y="1095" fill="#94a3b8" font-size="6.8">record_skill_assessment ➜ False</text>
+        <rect x="940" y="1012" width="236" height="60" rx="6" fill="#0f172a"/>
+        <rect x="940" y="1012" width="236" height="60" rx="6" fill="rgba(120,53,15,0.3)" stroke="#fbbf24" stroke-width="1.3"/>
+        <text x="949" y="1027" fill="white" font-size="8" font-weight="600">feedback_service.record_skill_assessment</text>
+        <text x="949" y="1040" fill="#94a3b8" font-size="6.8">(…, skill_id, assessment, domain)</text>
+        <text x="949" y="1051" fill="#94a3b8" font-size="6.8">SKILL_ASSESSMENT_VALUES = (&#x27;helpful&#x27;,&#x27;wrong&#x27;)</text>
+        <rect x="260" y="1152" width="640" height="60" rx="8" fill="rgba(6,78,59,0.07)" stroke="#34d399" stroke-width="0.9" stroke-dasharray="4,3"/>
+        <rect x="266" y="1157" width="20" height="11" rx="2" fill="#020617" stroke="#34d399" stroke-width="0.8"/>
+        <text x="276" y="1165.5" fill="#34d399" font-size="6.5" font-weight="600" text-anchor="middle">R6</text>
+        <text x="292" y="1166" fill="#34d399" font-size="8.5" font-weight="600">GET /feedback/recent · debug reader</text>
+        <rect x="266" y="1178" width="62" height="20" rx="4" fill="#0f172a"/>
+        <rect x="266" y="1178" width="62" height="20" rx="4" fill="rgba(6,78,59,0.4)" stroke="#34d399" stroke-width="1.1"/>
+        <text x="297.0" y="1191.5" fill="white" font-size="7.2" text-anchor="middle">GET /recent</text>
+        <rect x="340" y="1178" width="136" height="20" rx="4" fill="#0f172a"/>
+        <rect x="340" y="1178" width="136" height="20" rx="4" fill="rgba(6,78,59,0.4)" stroke="#34d399" stroke-width="1.1"/>
+        <text x="408.0" y="1191.5" fill="white" font-size="7.2" text-anchor="middle">int(limit) · ValueError ➜ 50</text>
+        <rect x="488" y="1178" width="66" height="20" rx="4" fill="#0f172a"/>
+        <rect x="488" y="1178" width="66" height="20" rx="4" fill="rgba(6,78,59,0.4)" stroke="#34d399" stroke-width="1.1"/>
+        <text x="521.0" y="1191.5" fill="white" font-size="7.2" text-anchor="middle">clamp 1..500</text>
+        <rect x="566" y="1178" width="149" height="20" rx="4" fill="#0f172a"/>
+        <rect x="566" y="1178" width="149" height="20" rx="4" fill="rgba(120,53,15,0.3)" stroke="#fbbf24" stroke-width="1.1"/>
+        <text x="640.5" y="1191.5" fill="white" font-size="7.2" text-anchor="middle">get_recent_votes(limit, domain)</text>
+        <rect x="727" y="1178" width="144" height="20" rx="4" fill="#0f172a"/>
+        <rect x="727" y="1178" width="144" height="20" rx="4" fill="rgba(6,95,70,0.7)" stroke="#6ee7b7" stroke-width="1.1"/>
+        <text x="799.0" y="1191.5" fill="white" font-size="7.2" text-anchor="middle">200 {domain or &#x27;wifi&#x27;, events}</text>
+        <rect x="56" y="1152" width="180" height="60" rx="6" fill="#0f172a"/>
+        <rect x="56" y="1152" width="180" height="60" rx="6" fill="rgba(8,51,68,0.4)" stroke="#22d3ee" stroke-width="1.3"/>
+        <text x="65" y="1167" fill="white" font-size="8" font-weight="600">TestRecent (3)</text>
+        <text x="65" y="1180" fill="#94a3b8" font-size="6.8">no params</text>
+        <text x="65" y="1191" fill="#94a3b8" font-size="6.8">?limit=10&amp;domain=bt</text>
+        <text x="65" y="1202" fill="#94a3b8" font-size="6.8">limit &#x27;0&#x27; | &#x27;-5&#x27; | &#x27;9999&#x27; | &#x27;abc&#x27;</text>
+        <rect x="940" y="1152" width="236" height="60" rx="6" fill="#0f172a"/>
+        <rect x="940" y="1152" width="236" height="60" rx="6" fill="rgba(120,53,15,0.3)" stroke="#fbbf24" stroke-width="1.3"/>
+        <text x="949" y="1167" fill="white" font-size="8" font-weight="600">feedback_service.get_recent_votes</text>
+        <text x="949" y="1180" fill="#94a3b8" font-size="6.8">(limit, domain=domain)</text>
+        <text x="949" y="1191" fill="#94a3b8" font-size="6.8">➜ [{vote: 1}]</text>
+        <rect x="40" y="1252" width="1150" height="2249" rx="12" fill="rgba(34,211,238,0.03)" stroke="#22d3ee" stroke-width="1" stroke-dasharray="8,4"/>
+        <text x="54" y="1274" fill="#22d3ee" font-size="10" font-weight="600">Test cases · input ➜ expected output (36 tests · 7 classes; many use subTest) · path = route / pipeline step exercised above</text>
+        <text x="58" y="1296" fill="#a78bfa" font-size="8.5" font-weight="600">TestFeedbackBlueprintStructure · route inventory</text>
+        <text x="58" y="1310" fill="#64748b" font-size="7">test_blueprint_registered_with_url_prefix</text>
+        <text x="1176" y="1310" fill="#475569" font-size="7" text-anchor="end">path: url_map</text>
+        <rect x="58" y="1313" width="480" height="37" rx="6" fill="#0f172a"/>
+        <rect x="58" y="1313" width="480" height="37" rx="6" fill="rgba(8,51,68,0.4)" stroke="#22d3ee" stroke-width="1.1"/>
+        <rect x="594" y="1313" width="582" height="37" rx="6" fill="#0f172a"/>
+        <rect x="594" y="1313" width="582" height="37" rx="6" fill="rgba(76,29,149,0.4)" stroke="#a78bfa" stroke-width="1.1"/>
+        <text x="68" y="1326" fill="white" font-size="8">inspect app.url_map for &#x27;feedback.*&#x27; rules</text>
+        <text x="68" y="1337" fill="#94a3b8" font-size="7.3">feedback_bp registered by setUp (no request)</text>
+        <text x="604" y="1326" fill="white" font-size="8">blueprints[&#x27;feedback&#x27;] is feedback_bp · url_prefix &#x27;/feedback&#x27;</text>
+        <text x="604" y="1337" fill="#94a3b8" font-size="7.3">POST: vote, detail, step_vote, skill_helpful, skill_assessment · GET: recent</text>
+        <line x1="544" y1="1331.5" x2="590" y2="1331.5" stroke="#22d3ee" stroke-width="1.5" marker-end="url(#arrowcyan)"/>
+        <text x="58" y="1372" fill="#a78bfa" font-size="8.5" font-weight="600">TestVote · R1</text>
+        <text x="58" y="1386" fill="#64748b" font-size="7">test_vote_success_records_with_session_context</text>
+        <text x="1176" y="1386" fill="#475569" font-size="7" text-anchor="end">path: R1 · P · record_vote</text>
+        <rect x="58" y="1389" width="480" height="48" rx="6" fill="#0f172a"/>
+        <rect x="58" y="1389" width="480" height="48" rx="6" fill="rgba(8,51,68,0.4)" stroke="#22d3ee" stroke-width="1.1"/>
+        <rect x="594" y="1389" width="582" height="48" rx="6" fill="#0f172a"/>
+        <rect x="594" y="1389" width="582" height="48" rx="6" fill="rgba(6,95,70,0.7)" stroke="#6ee7b7" stroke-width="1.1"/>
+        <text x="68" y="1402" fill="white" font-size="8">POST /vote {conversation_id: &#x27; conv_123 &#x27;, turn_id: &#x27;turn-7&#x27;, vote: 1, domain: &#x27; bt &#x27;}</text>
+        <text x="68" y="1413" fill="#94a3b8" font-size="7.3">session: chatbot_session_id &#x27;sess-abc&#x27;, yaml_modified True,</text>
+        <text x="68" y="1424" fill="#94a3b8" font-size="7.3">  yaml_modified_path &#x27;C:\fake\skills.yaml&#x27;</text>
+        <text x="604" y="1402" fill="white" font-size="8">200 {success: True, yaml_modified: True, yaml_modified_path: &#x27;C:\fake\skills.yaml&#x27;}</text>
+        <text x="604" y="1413" fill="#94a3b8" font-size="7.3">record_vote(session_id=&#x27;sess-abc&#x27;, conversation_id=&#x27;conv_123&#x27;, turn_id=&#x27;turn-7&#x27;,</text>
+        <text x="604" y="1424" fill="#94a3b8" font-size="7.3">  vote=1, yaml_modified=True, domain=&#x27;bt&#x27;)   (ids &amp; domain trimmed)</text>
+        <line x1="544" y1="1413.0" x2="590" y2="1413.0" stroke="#22d3ee" stroke-width="1.5" marker-end="url(#arrowcyan)"/>
+        <text x="58" y="1453" fill="#64748b" font-size="7">test_vote_zero_string_accepted_with_empty_session_defaults</text>
+        <text x="1176" y="1453" fill="#475569" font-size="7" text-anchor="end">path: R1 · vote &#x27;0&#x27;</text>
+        <rect x="58" y="1456" width="480" height="37" rx="6" fill="#0f172a"/>
+        <rect x="58" y="1456" width="480" height="37" rx="6" fill="rgba(8,51,68,0.4)" stroke="#22d3ee" stroke-width="1.1"/>
+        <rect x="594" y="1456" width="582" height="37" rx="6" fill="#0f172a"/>
+        <rect x="594" y="1456" width="582" height="37" rx="6" fill="rgba(6,95,70,0.7)" stroke="#6ee7b7" stroke-width="1.1"/>
+        <text x="68" y="1469" fill="white" font-size="8">POST /vote {conversation_id, turn_id, vote: &#x27;0&#x27;}</text>
+        <text x="68" y="1480" fill="#94a3b8" font-size="7.3">no session keys</text>
+        <text x="604" y="1469" fill="white" font-size="8">200 {success: True} with empty yaml defaults</text>
+        <text x="604" y="1480" fill="#94a3b8" font-size="7.3">record_vote(session_id=&#x27;&#x27;, …, vote=0, yaml_modified=False, domain=&#x27;&#x27;)</text>
+        <line x1="544" y1="1474.5" x2="590" y2="1474.5" stroke="#22d3ee" stroke-width="1.5" marker-end="url(#arrowcyan)"/>
+        <text x="58" y="1509" fill="#64748b" font-size="7">test_vote_invalid_values_return_400</text>
+        <text x="1176" y="1509" fill="#475569" font-size="7" text-anchor="end">path: R1 · vote check</text>
+        <rect x="58" y="1512" width="480" height="37" rx="6" fill="#0f172a"/>
+        <rect x="58" y="1512" width="480" height="37" rx="6" fill="rgba(8,51,68,0.4)" stroke="#22d3ee" stroke-width="1.1"/>
+        <rect x="594" y="1512" width="582" height="37" rx="6" fill="#0f172a"/>
+        <rect x="594" y="1512" width="582" height="37" rx="6" fill="rgba(136,19,55,0.4)" stroke="#fb7185" stroke-width="1.1"/>
+        <text x="68" y="1525" fill="white" font-size="8">vote ∈ None | &#x27;up&#x27; | 2 | -2 (subTest each)</text>
+        <text x="68" y="1536" fill="#94a3b8" font-size="7.3">valid ids</text>
+        <text x="604" y="1525" fill="white" font-size="8">400 {success: False, error: &#x27;vote must be 1, -1, or 0&#x27;}</text>
+        <text x="604" y="1536" fill="#94a3b8" font-size="7.3">record_vote NOT called</text>
+        <line x1="544" y1="1530.5" x2="590" y2="1530.5" stroke="#22d3ee" stroke-width="1.5" marker-end="url(#arrowcyan)"/>
+        <text x="58" y="1565" fill="#64748b" font-size="7">test_vote_non_json_body_fails_vote_check_first</text>
+        <text x="1176" y="1565" fill="#475569" font-size="7" text-anchor="end">path: R1 · vote before ids</text>
+        <rect x="58" y="1568" width="480" height="37" rx="6" fill="#0f172a"/>
+        <rect x="58" y="1568" width="480" height="37" rx="6" fill="rgba(8,51,68,0.4)" stroke="#22d3ee" stroke-width="1.1"/>
+        <rect x="594" y="1568" width="582" height="37" rx="6" fill="#0f172a"/>
+        <rect x="594" y="1568" width="582" height="37" rx="6" fill="rgba(136,19,55,0.4)" stroke="#fb7185" stroke-width="1.1"/>
+        <text x="68" y="1581" fill="white" font-size="8">POST /vote with a plain-text body (not JSON)</text>
+        <text x="68" y="1592" fill="#94a3b8" font-size="7.3">get_json(silent=True) ➜ None ➜ {}</text>
+        <text x="604" y="1581" fill="white" font-size="8">400 &#x27;vote must be 1, -1, or 0&#x27; (vote is checked before the id check)</text>
+        <text x="604" y="1592" fill="#94a3b8" font-size="7.3">record_vote NOT called</text>
+        <line x1="544" y1="1586.5" x2="590" y2="1586.5" stroke="#22d3ee" stroke-width="1.5" marker-end="url(#arrowcyan)"/>
+        <text x="58" y="1621" fill="#64748b" font-size="7">test_vote_missing_ids_return_400</text>
+        <text x="1176" y="1621" fill="#475569" font-size="7" text-anchor="end">path: R1 · P ids present?</text>
+        <rect x="58" y="1624" width="480" height="37" rx="6" fill="#0f172a"/>
+        <rect x="58" y="1624" width="480" height="37" rx="6" fill="rgba(8,51,68,0.4)" stroke="#22d3ee" stroke-width="1.1"/>
+        <rect x="594" y="1624" width="582" height="37" rx="6" fill="#0f172a"/>
+        <rect x="594" y="1624" width="582" height="37" rx="6" fill="rgba(136,19,55,0.4)" stroke="#fb7185" stroke-width="1.1"/>
+        <text x="68" y="1637" fill="white" font-size="8">vote 1 · payload missing conversation_id or turn_id</text>
+        <text x="68" y="1648" fill="#94a3b8" font-size="7.3">or conversation_id &#x27;   &#x27; (whitespace only)</text>
+        <text x="604" y="1637" fill="white" font-size="8">400 {success: False, error: &#x27;conversation_id and turn_id are required&#x27;}</text>
+        <text x="604" y="1648" fill="#94a3b8" font-size="7.3">record_vote NOT called</text>
+        <line x1="544" y1="1642.5" x2="590" y2="1642.5" stroke="#22d3ee" stroke-width="1.5" marker-end="url(#arrowcyan)"/>
+        <text x="58" y="1677" fill="#64748b" font-size="7">test_vote_rejects_unsafe_ids</text>
+        <text x="1176" y="1677" fill="#475569" font-size="7" text-anchor="end">path: R1 · P _SAFE_ID_RE</text>
+        <rect x="58" y="1680" width="480" height="37" rx="6" fill="#0f172a"/>
+        <rect x="58" y="1680" width="480" height="37" rx="6" fill="rgba(8,51,68,0.4)" stroke="#22d3ee" stroke-width="1.1"/>
+        <rect x="594" y="1680" width="582" height="37" rx="6" fill="#0f172a"/>
+        <rect x="594" y="1680" width="582" height="37" rx="6" fill="rgba(136,19,55,0.4)" stroke="#fb7185" stroke-width="1.1"/>
+        <text x="68" y="1693" fill="white" font-size="8">conversation_id or turn_id ∈ UNSAFE_IDS (subTest each)</text>
+        <text x="68" y="1704" fill="#94a3b8" font-size="7.3">&#x27;../etc&#x27; · &#x27;a/b&#x27; · &#x27;has space&#x27; · &#x27;x&#x27; * 81</text>
+        <text x="604" y="1693" fill="white" font-size="8">400 {success: False, error: &#x27;&lt;field&gt; must match [A-Za-z0-9_-]{1,80}&#x27;}</text>
+        <text x="604" y="1704" fill="#94a3b8" font-size="7.3">record_vote NOT called</text>
+        <line x1="544" y1="1698.5" x2="590" y2="1698.5" stroke="#22d3ee" stroke-width="1.5" marker-end="url(#arrowcyan)"/>
+        <text x="58" y="1733" fill="#64748b" font-size="7">test_vote_service_failure_returns_500</text>
+        <text x="1176" y="1733" fill="#475569" font-size="7" text-anchor="end">path: R1 · False</text>
+        <rect x="58" y="1736" width="480" height="37" rx="6" fill="#0f172a"/>
+        <rect x="58" y="1736" width="480" height="37" rx="6" fill="rgba(8,51,68,0.4)" stroke="#22d3ee" stroke-width="1.1"/>
+        <rect x="594" y="1736" width="582" height="37" rx="6" fill="#0f172a"/>
+        <rect x="594" y="1736" width="582" height="37" rx="6" fill="rgba(136,19,55,0.4)" stroke="#fb7185" stroke-width="1.1"/>
+        <text x="68" y="1749" fill="white" font-size="8">valid vote request</text>
+        <text x="68" y="1760" fill="#94a3b8" font-size="7.3">record_vote ➜ False</text>
+        <text x="604" y="1749" fill="white" font-size="8">500 {success: False, error: &#x27;failed to record vote&#x27;}</text>
+        <line x1="544" y1="1754.5" x2="590" y2="1754.5" stroke="#22d3ee" stroke-width="1.5" marker-end="url(#arrowcyan)"/>
+        <text x="58" y="1789" fill="#64748b" font-size="7">test_vote_service_exception_is_not_caught</text>
+        <text x="1176" y="1789" fill="#475569" font-size="7" text-anchor="end">path: R1 · raises</text>
+        <rect x="58" y="1792" width="480" height="37" rx="6" fill="#0f172a"/>
+        <rect x="58" y="1792" width="480" height="37" rx="6" fill="rgba(8,51,68,0.4)" stroke="#22d3ee" stroke-width="1.1"/>
+        <rect x="594" y="1792" width="582" height="37" rx="6" fill="#0f172a"/>
+        <rect x="594" y="1792" width="582" height="37" rx="6" fill="rgba(154,52,18,0.45)" stroke="#fb923c" stroke-width="1.1"/>
+        <text x="68" y="1805" fill="white" font-size="8">valid vote request</text>
+        <text x="68" y="1816" fill="#94a3b8" font-size="7.3">record_vote raises RuntimeError</text>
+        <text x="604" y="1805" fill="white" font-size="8">RuntimeError propagates out of the route (not caught or reshaped)</text>
+        <text x="604" y="1816" fill="#94a3b8" font-size="7.3">becomes a 500 in production</text>
+        <line x1="544" y1="1810.5" x2="590" y2="1810.5" stroke="#22d3ee" stroke-width="1.5" marker-end="url(#arrowcyan)"/>
+        <text x="58" y="1851" fill="#a78bfa" font-size="8.5" font-weight="600">TestDetail · R2</text>
+        <text x="58" y="1865" fill="#64748b" font-size="7">test_detail_success_forwards_all_fields_and_records_gather</text>
+        <text x="1176" y="1865" fill="#475569" font-size="7" text-anchor="end">path: R2 · full chain</text>
+        <rect x="58" y="1868" width="480" height="70" rx="6" fill="#0f172a"/>
+        <rect x="58" y="1868" width="480" height="70" rx="6" fill="rgba(8,51,68,0.4)" stroke="#22d3ee" stroke-width="1.1"/>
+        <rect x="594" y="1868" width="582" height="70" rx="6" fill="#0f172a"/>
+        <rect x="594" y="1868" width="582" height="70" rx="6" fill="rgba(6,95,70,0.7)" stroke="#6ee7b7" stroke-width="1.1"/>
+        <text x="68" y="1881" fill="white" font-size="8">POST /detail · vote &#x27;-1&#x27; · issues [{scope &#x27;overall&#x27;, category &#x27;bad_output&#x27;, comment &#x27;wrong&#x27;}]</text>
+        <text x="68" y="1892" fill="#94a3b8" font-size="7.3">  correct_root_cause &#x27; AP deauth &#x27; · correct_skill &#x27; Roaming &#x27; · evidence [&#x27;line 1&#x27;, &#x27;line 2&#x27;]</text>
+        <text x="68" y="1903" fill="#94a3b8" font-size="7.3">  skill/step feedback · issue-time fields · log_has_date False · attach_log True · domain &#x27; BT &#x27;</text>
+        <text x="68" y="1914" fill="#94a3b8" font-size="7.3">session: &#x27;sess-abc&#x27;, yaml_modified, chatbot_log_path &#x27;C:\fake\session.log&#x27;, workflow &#x27;wf-1&#x27;</text>
+        <text x="604" y="1881" fill="white" font-size="8">200 {success: True, feedback_event_id: &#x27;12345678-1234-5678-1234-567812345678&#x27;}</text>
+        <text x="604" y="1892" fill="#94a3b8" font-size="7.3">record_detail(vote=-1, correct_root_cause=&#x27;AP deauth&#x27;, correct_skill=&#x27;Roaming&#x27;, … every field trimmed,</text>
+        <text x="604" y="1903" fill="#94a3b8" font-size="7.3">  log_path=&#x27;C:\fake\session.log&#x27;, attach_log=True, domain=&#x27;bt&#x27;, feedback_event_id=FIXED_UUID)</text>
+        <text x="604" y="1914" fill="#94a3b8" font-size="7.3">gather.record_feedback_submit(feedback_event_id=FIXED_UUID, …, workflow_id=&#x27;wf-1&#x27;,</text>
+        <text x="604" y="1925" fill="#94a3b8" font-size="7.3">  session_id=&#x27;sess-abc&#x27;, issue=mock CaseContext dict, domain=&#x27;bt&#x27;)</text>
+        <line x1="544" y1="1903.0" x2="590" y2="1903.0" stroke="#22d3ee" stroke-width="1.5" marker-end="url(#arrowcyan)"/>
+        <text x="58" y="1954" fill="#64748b" font-size="7">test_detail_minimal_payload_uses_defaults_and_ignores_log_without_opt_in</text>
+        <text x="1176" y="1954" fill="#475569" font-size="7" text-anchor="end">path: R2 · defaults</text>
+        <rect x="58" y="1957" width="480" height="48" rx="6" fill="#0f172a"/>
+        <rect x="58" y="1957" width="480" height="48" rx="6" fill="rgba(8,51,68,0.4)" stroke="#22d3ee" stroke-width="1.1"/>
+        <rect x="594" y="1957" width="582" height="48" rx="6" fill="#0f172a"/>
+        <rect x="594" y="1957" width="582" height="48" rx="6" fill="rgba(6,95,70,0.7)" stroke="#6ee7b7" stroke-width="1.1"/>
+        <text x="68" y="1970" fill="white" font-size="8">POST /detail {conversation_id, turn_id} only</text>
+        <text x="68" y="1981" fill="#94a3b8" font-size="7.3">session has chatbot_log_path · attach_log omitted</text>
+        <text x="604" y="1970" fill="white" font-size="8">200 · record_detail: vote=None, issues / evidence / skill / step feedback = [],</text>
+        <text x="604" y="1981" fill="#94a3b8" font-size="7.3">  log_has_date=True, attach_log=False, log_path=&#x27;&#x27;, domain=&#x27;wifi&#x27;, session_id=&#x27;&#x27;</text>
+        <text x="604" y="1992" fill="#94a3b8" font-size="7.3">gather: issue = CaseContext().to_dict(), workflow_id=&#x27;&#x27;, domain=&#x27;wifi&#x27;</text>
+        <line x1="544" y1="1981.0" x2="590" y2="1981.0" stroke="#22d3ee" stroke-width="1.5" marker-end="url(#arrowcyan)"/>
+        <text x="58" y="2021" fill="#64748b" font-size="7">test_detail_invalid_vote_values_are_coerced_to_none</text>
+        <text x="1176" y="2021" fill="#475569" font-size="7" text-anchor="end">path: R2 · vote ➜ None</text>
+        <rect x="58" y="2024" width="480" height="37" rx="6" fill="#0f172a"/>
+        <rect x="58" y="2024" width="480" height="37" rx="6" fill="rgba(8,51,68,0.4)" stroke="#22d3ee" stroke-width="1.1"/>
+        <rect x="594" y="2024" width="582" height="37" rx="6" fill="#0f172a"/>
+        <rect x="594" y="2024" width="582" height="37" rx="6" fill="rgba(6,95,70,0.7)" stroke="#6ee7b7" stroke-width="1.1"/>
+        <text x="68" y="2037" fill="white" font-size="8">vote ∈ &#x27;&#x27; | &#x27;abc&#x27; | 5 | 0 | [1] (subTest each)</text>
+        <text x="68" y="2048" fill="#94a3b8" font-size="7.3">valid ids</text>
+        <text x="604" y="2037" fill="white" font-size="8">200 for each · record_detail(vote=None)</text>
+        <text x="604" y="2048" fill="#94a3b8" font-size="7.3">detail never rejects a vote; only 1 / -1 are kept</text>
+        <line x1="544" y1="2042.5" x2="590" y2="2042.5" stroke="#22d3ee" stroke-width="1.5" marker-end="url(#arrowcyan)"/>
+        <text x="58" y="2077" fill="#64748b" font-size="7">test_detail_evidence_string_is_split_into_lines</text>
+        <text x="1176" y="2077" fill="#475569" font-size="7" text-anchor="end">path: R2 · evidence str</text>
+        <rect x="58" y="2080" width="480" height="37" rx="6" fill="#0f172a"/>
+        <rect x="58" y="2080" width="480" height="37" rx="6" fill="rgba(8,51,68,0.4)" stroke="#22d3ee" stroke-width="1.1"/>
+        <rect x="594" y="2080" width="582" height="37" rx="6" fill="#0f172a"/>
+        <rect x="594" y="2080" width="582" height="37" rx="6" fill="rgba(6,95,70,0.7)" stroke="#6ee7b7" stroke-width="1.1"/>
+        <text x="68" y="2093" fill="white" font-size="8">evidence_log_lines = one string with blank / whitespace-only lines</text>
+        <text x="68" y="2104" fill="#94a3b8" font-size="7.3">valid ids</text>
+        <text x="604" y="2093" fill="white" font-size="8">200 · evidence_log_lines=[&#x27;first line&#x27;, &#x27;second line&#x27;]</text>
+        <text x="604" y="2104" fill="#94a3b8" font-size="7.3">blank lines dropped, each line stripped</text>
+        <line x1="544" y1="2098.5" x2="590" y2="2098.5" stroke="#22d3ee" stroke-width="1.5" marker-end="url(#arrowcyan)"/>
+        <text x="58" y="2133" fill="#64748b" font-size="7">test_detail_evidence_of_other_type_becomes_empty_list</text>
+        <text x="1176" y="2133" fill="#475569" font-size="7" text-anchor="end">path: R2 · evidence other</text>
+        <rect x="58" y="2136" width="480" height="37" rx="6" fill="#0f172a"/>
+        <rect x="58" y="2136" width="480" height="37" rx="6" fill="rgba(8,51,68,0.4)" stroke="#22d3ee" stroke-width="1.1"/>
+        <rect x="594" y="2136" width="582" height="37" rx="6" fill="#0f172a"/>
+        <rect x="594" y="2136" width="582" height="37" rx="6" fill="rgba(6,95,70,0.7)" stroke="#6ee7b7" stroke-width="1.1"/>
+        <text x="68" y="2149" fill="white" font-size="8">evidence_log_lines = 42</text>
+        <text x="68" y="2160" fill="#94a3b8" font-size="7.3">valid ids</text>
+        <text x="604" y="2149" fill="white" font-size="8">200 · evidence_log_lines=[]</text>
+        <line x1="544" y1="2154.5" x2="590" y2="2154.5" stroke="#22d3ee" stroke-width="1.5" marker-end="url(#arrowcyan)"/>
+        <text x="58" y="2189" fill="#64748b" font-size="7">test_detail_missing_ids_return_400</text>
+        <text x="1176" y="2189" fill="#475569" font-size="7" text-anchor="end">path: R2 · P ids present?</text>
+        <rect x="58" y="2192" width="480" height="37" rx="6" fill="#0f172a"/>
+        <rect x="58" y="2192" width="480" height="37" rx="6" fill="rgba(8,51,68,0.4)" stroke="#22d3ee" stroke-width="1.1"/>
+        <rect x="594" y="2192" width="582" height="37" rx="6" fill="#0f172a"/>
+        <rect x="594" y="2192" width="582" height="37" rx="6" fill="rgba(136,19,55,0.4)" stroke="#fb7185" stroke-width="1.1"/>
+        <text x="68" y="2205" fill="white" font-size="8">payload missing conversation_id, turn_id, or both (subTest)</text>
+        <text x="604" y="2205" fill="white" font-size="8">400 &#x27;conversation_id and turn_id are required&#x27;</text>
+        <text x="604" y="2216" fill="#94a3b8" font-size="7.3">record_detail and record_feedback_submit NOT called</text>
+        <line x1="544" y1="2210.5" x2="590" y2="2210.5" stroke="#22d3ee" stroke-width="1.5" marker-end="url(#arrowcyan)"/>
+        <text x="58" y="2245" fill="#64748b" font-size="7">test_detail_rejects_unsafe_ids</text>
+        <text x="1176" y="2245" fill="#475569" font-size="7" text-anchor="end">path: R2 · P _SAFE_ID_RE</text>
+        <rect x="58" y="2248" width="480" height="37" rx="6" fill="#0f172a"/>
+        <rect x="58" y="2248" width="480" height="37" rx="6" fill="rgba(8,51,68,0.4)" stroke="#22d3ee" stroke-width="1.1"/>
+        <rect x="594" y="2248" width="582" height="37" rx="6" fill="#0f172a"/>
+        <rect x="594" y="2248" width="582" height="37" rx="6" fill="rgba(136,19,55,0.4)" stroke="#fb7185" stroke-width="1.1"/>
+        <text x="68" y="2261" fill="white" font-size="8">conversation_id or turn_id ∈ UNSAFE_IDS (subTest each)</text>
+        <text x="68" y="2272" fill="#94a3b8" font-size="7.3">&#x27;../etc&#x27; · &#x27;a/b&#x27; · &#x27;has space&#x27; · &#x27;x&#x27; * 81</text>
+        <text x="604" y="2261" fill="white" font-size="8">400 {success: False, error: &#x27;&lt;field&gt; must match [A-Za-z0-9_-]{1,80}&#x27;}</text>
+        <text x="604" y="2272" fill="#94a3b8" font-size="7.3">record_detail NOT called</text>
+        <line x1="544" y1="2266.5" x2="590" y2="2266.5" stroke="#22d3ee" stroke-width="1.5" marker-end="url(#arrowcyan)"/>
+        <text x="58" y="2301" fill="#64748b" font-size="7">test_detail_nothing_recorded_returns_400_and_skips_gather</text>
+        <text x="1176" y="2301" fill="#475569" font-size="7" text-anchor="end">path: R2 · False ➜ 400</text>
+        <rect x="58" y="2304" width="480" height="37" rx="6" fill="#0f172a"/>
+        <rect x="58" y="2304" width="480" height="37" rx="6" fill="rgba(8,51,68,0.4)" stroke="#22d3ee" stroke-width="1.1"/>
+        <rect x="594" y="2304" width="582" height="37" rx="6" fill="#0f172a"/>
+        <rect x="594" y="2304" width="582" height="37" rx="6" fill="rgba(136,19,55,0.4)" stroke="#fb7185" stroke-width="1.1"/>
+        <text x="68" y="2317" fill="white" font-size="8">POST /detail with only ids</text>
+        <text x="68" y="2328" fill="#94a3b8" font-size="7.3">record_detail ➜ False (nothing worth recording)</text>
+        <text x="604" y="2317" fill="white" font-size="8">400 {success: False, error: &#x27;nothing to record (all fields empty)&#x27;}</text>
+        <text x="604" y="2328" fill="#94a3b8" font-size="7.3">gather.record_feedback_submit NOT called</text>
+        <line x1="544" y1="2322.5" x2="590" y2="2322.5" stroke="#22d3ee" stroke-width="1.5" marker-end="url(#arrowcyan)"/>
+        <text x="58" y="2363" fill="#a78bfa" font-size="8.5" font-weight="600">TestStepVote · R3</text>
+        <text x="58" y="2377" fill="#64748b" font-size="7">test_step_vote_success</text>
+        <text x="1176" y="2377" fill="#475569" font-size="7" text-anchor="end">path: R3 · full chain</text>
+        <rect x="58" y="2380" width="480" height="37" rx="6" fill="#0f172a"/>
+        <rect x="58" y="2380" width="480" height="37" rx="6" fill="rgba(8,51,68,0.4)" stroke="#22d3ee" stroke-width="1.1"/>
+        <rect x="594" y="2380" width="582" height="37" rx="6" fill="#0f172a"/>
+        <rect x="594" y="2380" width="582" height="37" rx="6" fill="rgba(6,95,70,0.7)" stroke="#6ee7b7" stroke-width="1.1"/>
+        <text x="68" y="2393" fill="white" font-size="8">{conversation_id, turn_id, step_index: &#x27;3&#x27;, vote: -1, padded domain}</text>
+        <text x="68" y="2404" fill="#94a3b8" font-size="7.3">session chatbot_session_id &#x27;sess-abc&#x27;</text>
+        <text x="604" y="2393" fill="white" font-size="8">200 {success: True}</text>
+        <text x="604" y="2404" fill="#94a3b8" font-size="7.3">record_step_vote(session_id=&#x27;sess-abc&#x27;, …, step_index=3, vote=-1, domain=&lt;trimmed&gt;)</text>
+        <line x1="544" y1="2398.5" x2="590" y2="2398.5" stroke="#22d3ee" stroke-width="1.5" marker-end="url(#arrowcyan)"/>
+        <text x="58" y="2433" fill="#64748b" font-size="7">test_step_vote_missing_ids_return_400</text>
+        <text x="1176" y="2433" fill="#475569" font-size="7" text-anchor="end">path: R3 · P ids present?</text>
+        <rect x="58" y="2436" width="480" height="37" rx="6" fill="#0f172a"/>
+        <rect x="58" y="2436" width="480" height="37" rx="6" fill="rgba(8,51,68,0.4)" stroke="#22d3ee" stroke-width="1.1"/>
+        <rect x="594" y="2436" width="582" height="37" rx="6" fill="#0f172a"/>
+        <rect x="594" y="2436" width="582" height="37" rx="6" fill="rgba(136,19,55,0.4)" stroke="#fb7185" stroke-width="1.1"/>
+        <text x="68" y="2449" fill="white" font-size="8">payload missing conversation_id</text>
+        <text x="604" y="2449" fill="white" font-size="8">400 &#x27;conversation_id and turn_id are required&#x27;</text>
+        <text x="604" y="2460" fill="#94a3b8" font-size="7.3">record_step_vote NOT called</text>
+        <line x1="544" y1="2454.5" x2="590" y2="2454.5" stroke="#22d3ee" stroke-width="1.5" marker-end="url(#arrowcyan)"/>
+        <text x="58" y="2489" fill="#64748b" font-size="7">test_step_vote_rejects_unsafe_ids</text>
+        <text x="1176" y="2489" fill="#475569" font-size="7" text-anchor="end">path: R3 · P _SAFE_ID_RE</text>
+        <rect x="58" y="2492" width="480" height="37" rx="6" fill="#0f172a"/>
+        <rect x="58" y="2492" width="480" height="37" rx="6" fill="rgba(8,51,68,0.4)" stroke="#22d3ee" stroke-width="1.1"/>
+        <rect x="594" y="2492" width="582" height="37" rx="6" fill="#0f172a"/>
+        <rect x="594" y="2492" width="582" height="37" rx="6" fill="rgba(136,19,55,0.4)" stroke="#fb7185" stroke-width="1.1"/>
+        <text x="68" y="2505" fill="white" font-size="8">conversation_id or turn_id ∈ UNSAFE_IDS (subTest each)</text>
+        <text x="68" y="2516" fill="#94a3b8" font-size="7.3">&#x27;../etc&#x27; · &#x27;a/b&#x27; · &#x27;has space&#x27; · &#x27;x&#x27; * 81</text>
+        <text x="604" y="2505" fill="white" font-size="8">400 {success: False, error: &#x27;&lt;field&gt; must match [A-Za-z0-9_-]{1,80}&#x27;}</text>
+        <text x="604" y="2516" fill="#94a3b8" font-size="7.3">record_step_vote NOT called</text>
+        <line x1="544" y1="2510.5" x2="590" y2="2510.5" stroke="#22d3ee" stroke-width="1.5" marker-end="url(#arrowcyan)"/>
+        <text x="58" y="2545" fill="#64748b" font-size="7">test_step_vote_non_integer_fields_return_400</text>
+        <text x="1176" y="2545" fill="#475569" font-size="7" text-anchor="end">path: R3 · int()</text>
+        <rect x="58" y="2548" width="480" height="37" rx="6" fill="#0f172a"/>
+        <rect x="58" y="2548" width="480" height="37" rx="6" fill="rgba(8,51,68,0.4)" stroke="#22d3ee" stroke-width="1.1"/>
+        <rect x="594" y="2548" width="582" height="37" rx="6" fill="#0f172a"/>
+        <rect x="594" y="2548" width="582" height="37" rx="6" fill="rgba(136,19,55,0.4)" stroke="#fb7185" stroke-width="1.1"/>
+        <text x="68" y="2561" fill="white" font-size="8">step_index &#x27;abc&#x27; | vote None | step_index missing (subTest)</text>
+        <text x="604" y="2561" fill="white" font-size="8">400 &#x27;step_index and vote must be integers&#x27;</text>
+        <text x="604" y="2572" fill="#94a3b8" font-size="7.3">record_step_vote NOT called</text>
+        <line x1="544" y1="2566.5" x2="590" y2="2566.5" stroke="#22d3ee" stroke-width="1.5" marker-end="url(#arrowcyan)"/>
+        <text x="58" y="2601" fill="#64748b" font-size="7">test_step_vote_zero_vote_rejected</text>
+        <text x="1176" y="2601" fill="#475569" font-size="7" text-anchor="end">path: R3 · vote ∈ {1,-1}</text>
+        <rect x="58" y="2604" width="480" height="37" rx="6" fill="#0f172a"/>
+        <rect x="58" y="2604" width="480" height="37" rx="6" fill="rgba(8,51,68,0.4)" stroke="#22d3ee" stroke-width="1.1"/>
+        <rect x="594" y="2604" width="582" height="37" rx="6" fill="#0f172a"/>
+        <rect x="594" y="2604" width="582" height="37" rx="6" fill="rgba(136,19,55,0.4)" stroke="#fb7185" stroke-width="1.1"/>
+        <text x="68" y="2617" fill="white" font-size="8">vote 0</text>
+        <text x="68" y="2628" fill="#94a3b8" font-size="7.3">valid ids + step_index</text>
+        <text x="604" y="2617" fill="white" font-size="8">400 &#x27;vote must be 1 or -1&#x27; (unlike /vote, a step vote cannot be cleared)</text>
+        <text x="604" y="2628" fill="#94a3b8" font-size="7.3">record_step_vote NOT called</text>
+        <line x1="544" y1="2622.5" x2="590" y2="2622.5" stroke="#22d3ee" stroke-width="1.5" marker-end="url(#arrowcyan)"/>
+        <text x="58" y="2657" fill="#64748b" font-size="7">test_step_vote_service_failure_returns_500</text>
+        <text x="1176" y="2657" fill="#475569" font-size="7" text-anchor="end">path: R3 · False</text>
+        <rect x="58" y="2660" width="480" height="37" rx="6" fill="#0f172a"/>
+        <rect x="58" y="2660" width="480" height="37" rx="6" fill="rgba(8,51,68,0.4)" stroke="#22d3ee" stroke-width="1.1"/>
+        <rect x="594" y="2660" width="582" height="37" rx="6" fill="#0f172a"/>
+        <rect x="594" y="2660" width="582" height="37" rx="6" fill="rgba(136,19,55,0.4)" stroke="#fb7185" stroke-width="1.1"/>
+        <text x="68" y="2673" fill="white" font-size="8">valid step-vote request</text>
+        <text x="68" y="2684" fill="#94a3b8" font-size="7.3">record_step_vote ➜ False</text>
+        <text x="604" y="2673" fill="white" font-size="8">500 {success: False, error: &#x27;failed to record&#x27;}</text>
+        <line x1="544" y1="2678.5" x2="590" y2="2678.5" stroke="#22d3ee" stroke-width="1.5" marker-end="url(#arrowcyan)"/>
+        <text x="58" y="2719" fill="#a78bfa" font-size="8.5" font-weight="600">TestSkillHelpful · R4</text>
+        <text x="58" y="2733" fill="#64748b" font-size="7">test_skill_helpful_success_allows_spaces_in_skill_id</text>
+        <text x="1176" y="2733" fill="#475569" font-size="7" text-anchor="end">path: R4 · full chain</text>
+        <rect x="58" y="2736" width="480" height="37" rx="6" fill="#0f172a"/>
+        <rect x="58" y="2736" width="480" height="37" rx="6" fill="rgba(8,51,68,0.4)" stroke="#22d3ee" stroke-width="1.1"/>
+        <rect x="594" y="2736" width="582" height="37" rx="6" fill="#0f172a"/>
+        <rect x="594" y="2736" width="582" height="37" rx="6" fill="rgba(6,95,70,0.7)" stroke="#6ee7b7" stroke-width="1.1"/>
+        <text x="68" y="2749" fill="white" font-size="8">{conversation_id, turn_id, skill_id: &#x27; Connection Flow &#x27;}</text>
+        <text x="68" y="2760" fill="#94a3b8" font-size="7.3">session chatbot_session_id &#x27;sess-abc&#x27;</text>
+        <text x="604" y="2749" fill="white" font-size="8">200 {success: True}</text>
+        <text x="604" y="2760" fill="#94a3b8" font-size="7.3">record_helpful_skill(…, skill_id=&#x27;Connection Flow&#x27;)  ends trimmed, inner space kept</text>
+        <line x1="544" y1="2754.5" x2="590" y2="2754.5" stroke="#22d3ee" stroke-width="1.5" marker-end="url(#arrowcyan)"/>
+        <text x="58" y="2789" fill="#64748b" font-size="7">test_skill_helpful_missing_fields_return_400</text>
+        <text x="1176" y="2789" fill="#475569" font-size="7" text-anchor="end">path: R4 · required</text>
+        <rect x="58" y="2792" width="480" height="37" rx="6" fill="#0f172a"/>
+        <rect x="58" y="2792" width="480" height="37" rx="6" fill="rgba(8,51,68,0.4)" stroke="#22d3ee" stroke-width="1.1"/>
+        <rect x="594" y="2792" width="582" height="37" rx="6" fill="#0f172a"/>
+        <rect x="594" y="2792" width="582" height="37" rx="6" fill="rgba(136,19,55,0.4)" stroke="#fb7185" stroke-width="1.1"/>
+        <text x="68" y="2805" fill="white" font-size="8">any one of conversation_id / turn_id / skill_id missing (subTest)</text>
+        <text x="604" y="2805" fill="white" font-size="8">400 &#x27;conversation_id, turn_id, and skill_id are required&#x27;</text>
+        <text x="604" y="2816" fill="#94a3b8" font-size="7.3">record_helpful_skill NOT called</text>
+        <line x1="544" y1="2810.5" x2="590" y2="2810.5" stroke="#22d3ee" stroke-width="1.5" marker-end="url(#arrowcyan)"/>
+        <text x="58" y="2845" fill="#64748b" font-size="7">test_skill_helpful_rejects_unsafe_ids</text>
+        <text x="1176" y="2845" fill="#475569" font-size="7" text-anchor="end">path: R4 · P _SAFE_ID_RE</text>
+        <rect x="58" y="2848" width="480" height="37" rx="6" fill="#0f172a"/>
+        <rect x="58" y="2848" width="480" height="37" rx="6" fill="rgba(8,51,68,0.4)" stroke="#22d3ee" stroke-width="1.1"/>
+        <rect x="594" y="2848" width="582" height="37" rx="6" fill="#0f172a"/>
+        <rect x="594" y="2848" width="582" height="37" rx="6" fill="rgba(136,19,55,0.4)" stroke="#fb7185" stroke-width="1.1"/>
+        <text x="68" y="2861" fill="white" font-size="8">conversation_id or turn_id ∈ UNSAFE_IDS (subTest each)</text>
+        <text x="68" y="2872" fill="#94a3b8" font-size="7.3">&#x27;../etc&#x27; · &#x27;a/b&#x27; · &#x27;has space&#x27; · &#x27;x&#x27; * 81</text>
+        <text x="604" y="2861" fill="white" font-size="8">400 {success: False, error: &#x27;&lt;field&gt; must match [A-Za-z0-9_-]{1,80}&#x27;}</text>
+        <text x="604" y="2872" fill="#94a3b8" font-size="7.3">record_helpful_skill NOT called</text>
+        <line x1="544" y1="2866.5" x2="590" y2="2866.5" stroke="#22d3ee" stroke-width="1.5" marker-end="url(#arrowcyan)"/>
+        <text x="58" y="2901" fill="#64748b" font-size="7">test_skill_helpful_service_failure_returns_500</text>
+        <text x="1176" y="2901" fill="#475569" font-size="7" text-anchor="end">path: R4 · False</text>
+        <rect x="58" y="2904" width="480" height="37" rx="6" fill="#0f172a"/>
+        <rect x="58" y="2904" width="480" height="37" rx="6" fill="rgba(8,51,68,0.4)" stroke="#22d3ee" stroke-width="1.1"/>
+        <rect x="594" y="2904" width="582" height="37" rx="6" fill="#0f172a"/>
+        <rect x="594" y="2904" width="582" height="37" rx="6" fill="rgba(136,19,55,0.4)" stroke="#fb7185" stroke-width="1.1"/>
+        <text x="68" y="2917" fill="white" font-size="8">valid request</text>
+        <text x="68" y="2928" fill="#94a3b8" font-size="7.3">record_helpful_skill ➜ False</text>
+        <text x="604" y="2917" fill="white" font-size="8">500 {success: False, error: &#x27;failed to record&#x27;}</text>
+        <line x1="544" y1="2922.5" x2="590" y2="2922.5" stroke="#22d3ee" stroke-width="1.5" marker-end="url(#arrowcyan)"/>
+        <text x="58" y="2963" fill="#a78bfa" font-size="8.5" font-weight="600">TestSkillAssessment · R5</text>
+        <text x="58" y="2977" fill="#64748b" font-size="7">test_skill_assessment_success_normalises_case</text>
+        <text x="1176" y="2977" fill="#475569" font-size="7" text-anchor="end">path: R5 · lower()</text>
+        <rect x="58" y="2980" width="480" height="37" rx="6" fill="#0f172a"/>
+        <rect x="58" y="2980" width="480" height="37" rx="6" fill="rgba(8,51,68,0.4)" stroke="#22d3ee" stroke-width="1.1"/>
+        <rect x="594" y="2980" width="582" height="37" rx="6" fill="#0f172a"/>
+        <rect x="594" y="2980" width="582" height="37" rx="6" fill="rgba(6,95,70,0.7)" stroke="#6ee7b7" stroke-width="1.1"/>
+        <text x="68" y="2993" fill="white" font-size="8">{conversation_id, turn_id, skill_id, assessment: &#x27; Helpful &#x27;}</text>
+        <text x="68" y="3004" fill="#94a3b8" font-size="7.3">session chatbot_session_id &#x27;sess-abc&#x27;</text>
+        <text x="604" y="2993" fill="white" font-size="8">200 {success: True}</text>
+        <text x="604" y="3004" fill="#94a3b8" font-size="7.3">record_skill_assessment(…, assessment=&#x27;helpful&#x27;)</text>
+        <line x1="544" y1="2998.5" x2="590" y2="2998.5" stroke="#22d3ee" stroke-width="1.5" marker-end="url(#arrowcyan)"/>
+        <text x="58" y="3033" fill="#64748b" font-size="7">test_skill_assessment_empty_value_clears_chip</text>
+        <text x="1176" y="3033" fill="#475569" font-size="7" text-anchor="end">path: R5 · &#x27;&#x27; allowed</text>
+        <rect x="58" y="3036" width="480" height="37" rx="6" fill="#0f172a"/>
+        <rect x="58" y="3036" width="480" height="37" rx="6" fill="rgba(8,51,68,0.4)" stroke="#22d3ee" stroke-width="1.1"/>
+        <rect x="594" y="3036" width="582" height="37" rx="6" fill="#0f172a"/>
+        <rect x="594" y="3036" width="582" height="37" rx="6" fill="rgba(6,95,70,0.7)" stroke="#6ee7b7" stroke-width="1.1"/>
+        <text x="68" y="3049" fill="white" font-size="8">no assessment field</text>
+        <text x="68" y="3060" fill="#94a3b8" font-size="7.3">valid ids + skill_id</text>
+        <text x="604" y="3049" fill="white" font-size="8">200 · record_skill_assessment(…, assessment=&#x27;&#x27;)</text>
+        <text x="604" y="3060" fill="#94a3b8" font-size="7.3">empty means clear the chip</text>
+        <line x1="544" y1="3054.5" x2="590" y2="3054.5" stroke="#22d3ee" stroke-width="1.5" marker-end="url(#arrowcyan)"/>
+        <text x="58" y="3089" fill="#64748b" font-size="7">test_skill_assessment_invalid_value_returns_400</text>
+        <text x="1176" y="3089" fill="#475569" font-size="7" text-anchor="end">path: R5 · allow-list</text>
+        <rect x="58" y="3092" width="480" height="37" rx="6" fill="#0f172a"/>
+        <rect x="58" y="3092" width="480" height="37" rx="6" fill="rgba(8,51,68,0.4)" stroke="#22d3ee" stroke-width="1.1"/>
+        <rect x="594" y="3092" width="582" height="37" rx="6" fill="#0f172a"/>
+        <rect x="594" y="3092" width="582" height="37" rx="6" fill="rgba(136,19,55,0.4)" stroke="#fb7185" stroke-width="1.1"/>
+        <text x="68" y="3105" fill="white" font-size="8">assessment &#x27;redundant&#x27;</text>
+        <text x="68" y="3116" fill="#94a3b8" font-size="7.3">SKILL_ASSESSMENT_VALUES = (&#x27;helpful&#x27;, &#x27;wrong&#x27;)</text>
+        <text x="604" y="3105" fill="white" font-size="8">400 &quot;assessment must be one of (&#x27;helpful&#x27;, &#x27;wrong&#x27;) or empty&quot;</text>
+        <text x="604" y="3116" fill="#94a3b8" font-size="7.3">record_skill_assessment NOT called</text>
+        <line x1="544" y1="3110.5" x2="590" y2="3110.5" stroke="#22d3ee" stroke-width="1.5" marker-end="url(#arrowcyan)"/>
+        <text x="58" y="3145" fill="#64748b" font-size="7">test_skill_assessment_missing_fields_return_400</text>
+        <text x="1176" y="3145" fill="#475569" font-size="7" text-anchor="end">path: R5 · required</text>
+        <rect x="58" y="3148" width="480" height="37" rx="6" fill="#0f172a"/>
+        <rect x="58" y="3148" width="480" height="37" rx="6" fill="rgba(8,51,68,0.4)" stroke="#22d3ee" stroke-width="1.1"/>
+        <rect x="594" y="3148" width="582" height="37" rx="6" fill="#0f172a"/>
+        <rect x="594" y="3148" width="582" height="37" rx="6" fill="rgba(136,19,55,0.4)" stroke="#fb7185" stroke-width="1.1"/>
+        <text x="68" y="3161" fill="white" font-size="8">skill_id missing</text>
+        <text x="604" y="3161" fill="white" font-size="8">400 &#x27;conversation_id, turn_id, and skill_id are required&#x27;</text>
+        <text x="604" y="3172" fill="#94a3b8" font-size="7.3">record_skill_assessment NOT called</text>
+        <line x1="544" y1="3166.5" x2="590" y2="3166.5" stroke="#22d3ee" stroke-width="1.5" marker-end="url(#arrowcyan)"/>
+        <text x="58" y="3201" fill="#64748b" font-size="7">test_skill_assessment_rejects_unsafe_ids</text>
+        <text x="1176" y="3201" fill="#475569" font-size="7" text-anchor="end">path: R5 · P _SAFE_ID_RE</text>
+        <rect x="58" y="3204" width="480" height="37" rx="6" fill="#0f172a"/>
+        <rect x="58" y="3204" width="480" height="37" rx="6" fill="rgba(8,51,68,0.4)" stroke="#22d3ee" stroke-width="1.1"/>
+        <rect x="594" y="3204" width="582" height="37" rx="6" fill="#0f172a"/>
+        <rect x="594" y="3204" width="582" height="37" rx="6" fill="rgba(136,19,55,0.4)" stroke="#fb7185" stroke-width="1.1"/>
+        <text x="68" y="3217" fill="white" font-size="8">conversation_id or turn_id ∈ UNSAFE_IDS (subTest each)</text>
+        <text x="68" y="3228" fill="#94a3b8" font-size="7.3">&#x27;../etc&#x27; · &#x27;a/b&#x27; · &#x27;has space&#x27; · &#x27;x&#x27; * 81</text>
+        <text x="604" y="3217" fill="white" font-size="8">400 {success: False, error: &#x27;&lt;field&gt; must match [A-Za-z0-9_-]{1,80}&#x27;}</text>
+        <text x="604" y="3228" fill="#94a3b8" font-size="7.3">record_skill_assessment NOT called</text>
+        <line x1="544" y1="3222.5" x2="590" y2="3222.5" stroke="#22d3ee" stroke-width="1.5" marker-end="url(#arrowcyan)"/>
+        <text x="58" y="3257" fill="#64748b" font-size="7">test_skill_assessment_service_failure_returns_500</text>
+        <text x="1176" y="3257" fill="#475569" font-size="7" text-anchor="end">path: R5 · False</text>
+        <rect x="58" y="3260" width="480" height="37" rx="6" fill="#0f172a"/>
+        <rect x="58" y="3260" width="480" height="37" rx="6" fill="rgba(8,51,68,0.4)" stroke="#22d3ee" stroke-width="1.1"/>
+        <rect x="594" y="3260" width="582" height="37" rx="6" fill="#0f172a"/>
+        <rect x="594" y="3260" width="582" height="37" rx="6" fill="rgba(136,19,55,0.4)" stroke="#fb7185" stroke-width="1.1"/>
+        <text x="68" y="3273" fill="white" font-size="8">valid request</text>
+        <text x="68" y="3284" fill="#94a3b8" font-size="7.3">record_skill_assessment ➜ False</text>
+        <text x="604" y="3273" fill="white" font-size="8">500 {success: False, error: &#x27;failed to record&#x27;}</text>
+        <line x1="544" y1="3278.5" x2="590" y2="3278.5" stroke="#22d3ee" stroke-width="1.5" marker-end="url(#arrowcyan)"/>
+        <text x="58" y="3319" fill="#a78bfa" font-size="8.5" font-weight="600">TestRecent · R6</text>
+        <text x="58" y="3333" fill="#64748b" font-size="7">test_recent_defaults_to_50_and_wifi</text>
+        <text x="1176" y="3333" fill="#475569" font-size="7" text-anchor="end">path: R6 · defaults</text>
+        <rect x="58" y="3336" width="480" height="37" rx="6" fill="#0f172a"/>
+        <rect x="58" y="3336" width="480" height="37" rx="6" fill="rgba(8,51,68,0.4)" stroke="#22d3ee" stroke-width="1.1"/>
+        <rect x="594" y="3336" width="582" height="37" rx="6" fill="#0f172a"/>
+        <rect x="594" y="3336" width="582" height="37" rx="6" fill="rgba(6,95,70,0.7)" stroke="#6ee7b7" stroke-width="1.1"/>
+        <text x="68" y="3349" fill="white" font-size="8">GET /feedback/recent</text>
+        <text x="68" y="3360" fill="#94a3b8" font-size="7.3">no query params</text>
+        <text x="604" y="3349" fill="white" font-size="8">200 {success: True, domain: &#x27;wifi&#x27;, events: [{vote: 1}]}</text>
+        <text x="604" y="3360" fill="#94a3b8" font-size="7.3">get_recent_votes called with limit=50, domain=&#x27;&#x27;</text>
+        <line x1="544" y1="3354.5" x2="590" y2="3354.5" stroke="#22d3ee" stroke-width="1.5" marker-end="url(#arrowcyan)"/>
+        <text x="58" y="3389" fill="#64748b" font-size="7">test_recent_bt_domain_and_explicit_limit</text>
+        <text x="1176" y="3389" fill="#475569" font-size="7" text-anchor="end">path: R6 · bt</text>
+        <rect x="58" y="3392" width="480" height="37" rx="6" fill="#0f172a"/>
+        <rect x="58" y="3392" width="480" height="37" rx="6" fill="rgba(8,51,68,0.4)" stroke="#22d3ee" stroke-width="1.1"/>
+        <rect x="594" y="3392" width="582" height="37" rx="6" fill="#0f172a"/>
+        <rect x="594" y="3392" width="582" height="37" rx="6" fill="rgba(6,95,70,0.7)" stroke="#6ee7b7" stroke-width="1.1"/>
+        <text x="68" y="3405" fill="white" font-size="8">GET /feedback/recent?limit=10&amp;domain=bt</text>
+        <text x="604" y="3405" fill="white" font-size="8">response domain &#x27;bt&#x27;</text>
+        <text x="604" y="3416" fill="#94a3b8" font-size="7.3">get_recent_votes called with limit=10, domain=&#x27;bt&#x27;</text>
+        <line x1="544" y1="3410.5" x2="590" y2="3410.5" stroke="#22d3ee" stroke-width="1.5" marker-end="url(#arrowcyan)"/>
+        <text x="58" y="3445" fill="#64748b" font-size="7">test_recent_limit_is_clamped_and_non_numeric_falls_back</text>
+        <text x="1176" y="3445" fill="#475569" font-size="7" text-anchor="end">path: R6 · clamp</text>
+        <rect x="58" y="3448" width="480" height="37" rx="6" fill="#0f172a"/>
+        <rect x="58" y="3448" width="480" height="37" rx="6" fill="rgba(8,51,68,0.4)" stroke="#22d3ee" stroke-width="1.1"/>
+        <rect x="594" y="3448" width="582" height="37" rx="6" fill="#0f172a"/>
+        <rect x="594" y="3448" width="582" height="37" rx="6" fill="rgba(6,95,70,0.7)" stroke="#6ee7b7" stroke-width="1.1"/>
+        <text x="68" y="3461" fill="white" font-size="8">?limit= &#x27;0&#x27; | &#x27;-5&#x27; | &#x27;9999&#x27; | &#x27;abc&#x27; (subTest each)</text>
+        <text x="604" y="3461" fill="white" font-size="8">get_recent_votes limit ➜ 1 | 1 | 500 | 50 (default)</text>
+        <text x="604" y="3472" fill="#94a3b8" font-size="7.3">clamped to 1..500; non-numeric falls back to 50</text>
+        <line x1="544" y1="3466.5" x2="590" y2="3466.5" stroke="#22d3ee" stroke-width="1.5" marker-end="url(#arrowcyan)"/>
+      </svg>
+    </div>
+
+    <!-- Info Cards -->
+    <div class="cards">
+      <div class="card">
+        <div class="card-header">
+          <div class="card-dot emerald"></div>
+          <h3>Components under test</h3>
+        </div>
+        <ul>
+          <li>• 6 routes under <code>/feedback</code>: 5 POST writes + <code>GET /recent</code></li>
+          <li>• shared pipeline: <code>get_json(silent=True)</code> ➜ strip ➜ required ➜ <code>_SAFE_ID_RE</code></li>
+          <li>• <code>_bad_id_response(field)</code> ➜ 400 with the regex in the message</li>
+          <li>• <code>/detail</code> also emits <code>gather_service.record_feedback_submit</code></li>
+          <li>• <code>/recent</code> clamps <code>limit</code> to 1..500 (default 50)</li>
+        </ul>
+      </div>
+
+      <div class="card">
+        <div class="card-header">
+          <div class="card-dot amber"></div>
+          <h3>Fixtures &amp; mocks</h3>
+        </div>
+        <ul>
+          <li>• <code>feedback_service</code> + <code>gather_service</code> patched at the route module</li>
+          <li>• every <code>record_*</code> ➜ <code>True</code>; <code>get_recent_votes</code> ➜ <code>[{"vote": 1}]</code></li>
+          <li>• real allow-list <code>SKILL_ASSESSMENT_VALUES = ("helpful", "wrong")</code></li>
+          <li>• <code>uuid.uuid4</code> ➜ <code>FIXED_UUID</code> for <code>/detail</code></li>
+          <li>• session seeded via <code>session_transaction()</code> / <code>seed_session()</code></li>
+        </ul>
+      </div>
+
+      <div class="card">
+        <div class="card-header">
+          <div class="card-dot rose"></div>
+          <h3>Key behaviors pinned</h3>
+        </div>
+        <ul>
+          <li>• <code>/vote</code> checks the vote <em>before</em> the ids; accepts 0 (clear)</li>
+          <li>• <code>/step_vote</code> rejects 0; <code>/detail</code> coerces bad votes to <code>None</code></li>
+          <li>• <code>skill_id</code> is not regex-checked (spaces allowed)</li>
+          <li>• <code>/detail</code> nothing recorded ➜ 400 and no Gather event</li>
+          <li>• service exceptions are not caught (only <code>/vote</code> tested)</li>
+        </ul>
+      </div>
+    </div>
+
+    <!-- Footer -->
+    <p class="footer">
+      unit_tests/test_feedback_blueprint.py • blueprints/feedback/feedback_routes.py • docs/feedback_bp_analysis.md • 36 tests across 7 classes
+    </p>
+  </div>
+
+  <script>
+    async function copyAsImage(btn) {
+      const orig = btn.textContent;
+      try {
+        const el = document.getElementById('report-container');
+        const r = el.getBoundingClientRect();
+        const pad = 32;
+        const canvas = await html2canvas(document.body, { backgroundColor: '#020617', scale: 2, useCORS: true, ignoreElements: (e) => e.classList && e.classList.contains('toolbar'), x: r.left + window.scrollX - pad, y: r.top + window.scrollY - pad, width: r.width + pad * 2, height: r.height + pad * 2 });
+        const blob = await new Promise(r => canvas.toBlob(r, 'image/png'));
+        await navigator.clipboard.write([new ClipboardItem({ 'image/png': blob })]);
+        btn.textContent = '✓ Copied!';
+      } catch (e) {
+        btn.textContent = '✗ Failed';
+      }
+      setTimeout(() => btn.textContent = orig, 2000);
+    }
+
+    async function downloadPNG(btn) {
+      const orig = btn.textContent;
+      btn.textContent = '⏳ ...';
+      try {
+        const el = document.getElementById('report-container');
+        const r = el.getBoundingClientRect();
+        const pad = 32;
+        const canvas = await html2canvas(document.body, { backgroundColor: '#020617', scale: 2, useCORS: true, ignoreElements: (e) => e.classList && e.classList.contains('toolbar'), x: r.left + window.scrollX - pad, y: r.top + window.scrollY - pad, width: r.width + pad * 2, height: r.height + pad * 2 });
+        const link = document.createElement('a');
+        link.download = 'test_feedback_blueprint_flow.png';
+        link.href = canvas.toDataURL('image/png');
+        link.click();
+        btn.textContent = '✓ Done!';
+      } catch (e) {
+        btn.textContent = '✗ Failed';
+      }
+      setTimeout(() => btn.textContent = orig, 2000);
+    }
+
+    async function downloadPDF(btn) {
+      const orig = btn.textContent;
+      btn.textContent = '⏳ ...';
+      try {
+        const el = document.getElementById('report-container');
+        const r = el.getBoundingClientRect();
+        const pad = 32;
+        const canvas = await html2canvas(document.body, { backgroundColor: '#020617', scale: 2, useCORS: true, ignoreElements: (e) => e.classList && e.classList.contains('toolbar'), x: r.left + window.scrollX - pad, y: r.top + window.scrollY - pad, width: r.width + pad * 2, height: r.height + pad * 2 });
+        const imgData = canvas.toDataURL('image/png');
+        const { jsPDF } = window.jspdf;
+        const orientation = canvas.width > canvas.height ? 'landscape' : 'portrait';
+        const pdf = new jsPDF({ orientation, unit: 'px', format: [canvas.width, canvas.height], hotfixes: ['px_scaling'] });
+        pdf.addImage(imgData, 'PNG', 0, 0, canvas.width, canvas.height);
+        pdf.save('test_feedback_blueprint_flow.pdf');
+        btn.textContent = '✓ Done!';
+      } catch (e) {
+        btn.textContent = '✗ Failed';
+      }
+      setTimeout(() => btn.textContent = orig, 2000);
+    }
+  </script>
+</body>
+</html>

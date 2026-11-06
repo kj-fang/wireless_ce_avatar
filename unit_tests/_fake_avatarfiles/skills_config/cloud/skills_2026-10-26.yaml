@@ -1,0 +1,1011 @@
+# version skills_2026-09-04-1 features:
+#   name: skill name
+#   description: a brief description of the skill
+#   keywords: use "-" to represent each keyword
+#   expert_rules: use "|" to start a multi-line string
+
+connection_flow:
+  name: "Connection Flow"
+  description: "Used to analyze the generic Wi-Fi connectivity flow."
+  keywords:
+    - "TASK_DISCONNECT"
+    - "DeAuth"
+    - " ------- RESUME FLOW"
+    - "** SUSPEND"
+    - "WDI_ASSOC_STATUS_SUCCESS"
+    - "SCAN_RESULTS - SCANNED CHANNELS:"
+    - "CONNECTED - to:"
+    - "TASK_Connect"
+    - "Set SSID"
+    - "[ATTEMPT_TO_CONNECT]"
+    - "NIC State"
+    - "wakeup_by"
+    - "TASK ROAM"
+    - "CNCT_FLOW"
+    - "candidate grade"
+    - "ApSelectionApply"
+    - "Best Candidate"
+    - "WoWLAN is active!!!"
+    - " ---------- SUSPEND FLOW FINISHED ----------"
+    - "host does not have the NIC ownership semaphore"
+    - "NIC ownership is at"
+    - "[msysAcquireOwnershipApi]"
+    # - "Got Command"
+  exclusive:
+    - "SCAN_REQUEST"
+    - "WDI_GET_BSS_ENTRY_LIST_UPDATE"
+    - "printScanRequestInfo"
+    - "PROP_GET_STATISTICS"
+    - "TASK_SCAN"
+    - "PROP_IHV_REQUEST"
+    - "[findCandidateHandleTriggerScanEvent]:FIND_CANDIDATE"
+    - "[bssConnectionLifeCycleOnChannelSwitchCompleteApi]:"
+    - "[prvBssVifClcConnectedEntryHandler]:Setting timer to trigger Sync VIF manager on Bss connection"
+    - "PROP_SET_"
+    - "[dpTlcConfigSetAmsduParamsForTidMaskApi]:"
+    - "[hPolicyBeaconProbeReceivedEvent]:GOT BEACON/PROB"
+    - "[prvResumeFlowRequestJob]:"
+    - " [prvDpTlcConfigSendTlcConfigCmd]:+-+ HT/VHT/HE/EHT"
+    - "stateMachineSetStateNoCurrentFlow"
+    - "TASK_CONNECT_PARAMS"
+    - "prvLarStoreCurrentMcc"
+    # - "SCAN_RESULTS"
+  expert_rules: |
+    WIFI driver connection flow are listed below along with the log examples.
+    If firmware crash UMAC/LMAC//TCM errors are present in the failed log, prioritize those fields in Key evidence and include the full UMAC/TCM blocks as raw lines, including: driver, firmware version, legacy_alon_nic_identify, rtStatus, LOGPC, timestamp(s), and the full quoted UMAC/LMAC/TCM blocks.
+
+
+    1. Ownership check (ownership lines: host does not have the NIC ownership semaphore, NIC ownership is at, [msysAcquireOwnershipApi]). 
+    - If the log contains: "HOST owns NIC"
+      For example: 01/12/2026-07:59:03.398 [22] [MMACSYS] [SPECIAL] [msysAcquireOwnershipApi]:<< :(3429) - HOST owns NIC. skip acquireOwnership flow
+      Then conclude:
+        - Ownership = Host
+        - Host Owns NIC = Yes
+      Include the matching log line as evidence.
+    - If BOTH of the following are found:
+      a. "NIC ownership is at ME"
+      Example:
+      06/22/2026-20:09:21.540 [1] [AMT] [SPECIAL] [amtWimaAgentWakeMePeriodicPollApi]: NIC ownership is at ME - WAIT 11 seconds for ME to release ownership
+      b. "host does not have the NIC ownership semaphore"
+      Example:
+      06/22/2026-20:09:32.548 [7] [MMACSYS] [SPECIAL] [msysRunWakeMeApi]: host does not have the NIC ownership semaphore
+      Then conclude:
+      - Ownership = ME
+      - Host Owns NIC = No
+      Include both matching log lines as evidence.
+    - If neither of the above conditions is met:
+      - Ownership = Unknown
+      - Host Owns NIC = Unknown
+      Include any ownership-related log lines found as evidence.
+    - Priority:
+      - "HOST owns NIC" has the highest priority and overrides other ownership-related messages.
+      - Otherwise, if both "NIC ownership is at ME" and "host does not have the NIC ownership semaphore" are present, classify ownership as ME.
+      - Otherwise, classify ownership as Unknown.
+    - Output:
+      Ownership Check:
+      - Ownership: Host / ME / Unknown
+      - Host Owns NIC: Yes / No / Unknown
+      Evidence:
+      - <exact matching log line(s)>
+
+
+    2. Device Initialization (MAC/PHY and device ID lines).
+    - The device hardware is identified and initialized with MAC and PHY configurations.
+    - Log should contains the information below: `
+      [ALON         ][12] [S] legacy_alon_nic_identify [186]: HW identification: macId = 0x47, phyId = 0x112, macStep = 0x2, phyStep = 0x2, phyDash = 0x0, phyFlavor = 0x0, isPhyCdb = 0x0, isPhyJacket = 0x0, deviceId = 0x272b
+      [ALON         ][12] [S] legacy_alon_nic_identify Identified GALE_C
+      [ALON         ][12] [S] legacy_alon_nic_identify GALE_C: MAC_ID: 0x47, MAC_STEP: MAC_STEP_C, PHY: FMP2 0x112, PHY_STEP: RADIO_STEP_C
+
+    3-1. OS issue to SCAN and driver determined MCC according to country info from APs' beacons. check skill "drs_mcc_analysis" for more details.
+      [prvLarStoreCurrentMcc]: : LarEnable: 1, CurrMCC: 0x5553 (US), UEFI exist: 0, bWfaPunctEnabledUSA: 0, set bEhtPuncturingRegulatoryValid 1
+
+    3-2. OS issue to Connect Request Configuration (CONNECT_REQ, AUTH[], CIPHER[]).
+      [OSC]:Got Command (M1 Message) TASK_CONNECT[6][0x6] (p-0x0, BSS, TransId-63[0x3F])
+
+    4. AP Selection (candidate AP lines: band, channel, BW, mode, RSSI, tput, MAC addresses, grading metrics).
+    - Log should contains the information below:`
+      [AP SELECTION ][BC 0]: grade:8506724 band:2, channel:37, BW:320MHz, mode:EHT, RSSI:-45, tput:6226560 Address = 08:BF:B8:8D:7C:79
+      [AP SELECTION ][BC 1]: grade:3819795 band:1, channel:36, BW:160MHz, mode:EHT, RSSI:-44, tput:2882400 Address = BA:BF:B8:8D:7C:75
+
+    5. Attempting Connection (ATTEMPT_TO_CONNECT lines for each link).
+    - List all the ATTEMPT_TO_CONNECT for device to connect to the selected AP, first on the primary link (channel 37, band 2) and then on the secondary link (channel 36, band 1).
+    - if there was only one ATTEMP_TO_CONNECT, this is single link WiFi7 connection. it would be multi links connection if there were over two ATTEMP_TO_CONNECT showed in logs
+    - Log should contains the information below:
+      [ATTEMPT_TO_CONNECT] to MLD:08:BF:B8:8D:7C:79 Ssid:ASUS_MLO band:2, Ch:37 Rssi:-45, assocLinkId: 0, Bssid:  Address = 08:BF:B8:8D:7C:79'
+      [ATTEMPT_TO_CONNECT] to MLD:08:BF:B8:8D:7C:79 Ssid:ASUS_MLO band:1, Ch:36 Rssi:-44, assocLinkId: 1, Bssid:  Address = BA:BF:B8:8D:7C:75'
+
+    6. Authentication and Association (AUTH_REQ/AUTH_RSP, ASSOC_REQ/ASSOC_RSP, EAPOL messages, 4‑way handshake lines)
+      - Log should contain the information below:`
+        [CNCT_FLOW    ][12] [S] AUTH_REQ - sent to:        "ASUS_BE98_MLO" CC:28:AA:5B:1A:09, channel = 37, band = 6_7GHz
+        [CNCT_FLOW    ][11] [S] AUTH_RSP - received  from:  "ASUS_BE98_MLO" CC:28:AA:5B:1A:09, channel = 37, band = 6_7GHz
+        [CNCT_FLOW    ][11] [S] ASSOC_REQ - sent to:       "ASUS_BE98_MLO" CC:28:AA:5B:1A:09, channel = 37, band = 6_7GHz
+        [CNCT_FLOW    ][11] [S] ASSOC_RSP - received from: "ASUS_BE98_MLO" CC:28:AA:5B:1A:09, channel = 37, band = 6_7GHz
+        [CNCT_FLOW    ][11] [S] EAPOL RECEIVED
+        [CNCT_FLOW    ][11] [S] EAPOL TRANSMIT
+        [CNCT_FLOW    ][11] [S] EAPOL RECEIVED
+        [CNCT_FLOW    ][12] [S] EAPOL TRANSMIT
+    7. Connection Establishment (WDI_IND_ASSOC_RESULT or similar success/failure lines).
+    8. Link and Resource Management (resource allocation and CCR_SM_* transitions).
+
+regulatory_country_code_determination:
+  name: "Regulatory Country Code Determination"
+  description: "Used to check which country MCC code that WIFI driver applied. WIFI driver would apply the country specific regulation in this location."
+  keywords:
+    - "prvLarStoreCurrentMcc"
+    - "[larMccCmdCB]: : source is"
+  expert_rules: |
+    1. During the 11d scans, WIFI driver would check country info from APs' beacons and then determine where the current country is in this location.
+    2. Check and list the CurrMCC from the log with keyword "prvLarStoreCurrentMcc to see which country that WIFI driver applied :
+      CurrMCC: 0x5457 (TW) means MCC code 0x5457 is an ACII code for Taiwan".
+      0x3030 and 0x5a5a are the default value as driver started.
+      catch the latest CurrMCC before connection to see which MCC code driver applied for the connection.
+      [prvLarStoreCurrentMcc]: : LarEnable: 1, CurrMCC: 0x5457 (TW), UEFI exist: 0, bWfaPunctEnabledUSA: 0, set bEhtPuncturingRegulatoryValid 1
+    3. Driver allow user to set specific MCC code for a test mode. you can check the MCC source from log with keyword "[larMccCmdCB]: : source is".
+        If the MCC source is 0x9, it means the MCC code was set by user through MCC API, not determined by driver according to country info from APs' beacons. This is usually used for testing purpose to verify if the driver can apply correct regulation according to different MCC code.
+        [larMccCmdCB]: : source is = 0x9
+        typedef enum _LARI_API_MCC_SOURCE_VER_2
+        {
+          MCC_SOURCE_ME                       = 0x1,
+          MCC_SOURCE_BIOS                     = 0x2,
+          MCC_SOURCE_3G_LTE_HOST              = 0x3,
+          MCC_SOURCE_3G_LTE_DEVICE            = 0x4,
+          MCC_SOURCE_11D                      = 0x5,
+          MCC_SOURCE_BIOS_LOW_PRIO            = 0x6,
+          MCC_SOURCE_DEFAULT                  = 0x7,
+          MCC_SOURCE_UNINITIALIZED            = 0x8,
+          MCC_SOURCE_MCC_API                  = 0x9,
+          MCC_SOURCE_GETTING_CURRENT_PROFILE  = 0x10,
+          MCC_SOURCE_GETTING_MCC_TEST_MODE    = 0x11,
+        } LARI_API_MCC_SOURCE_VER_2;
+
+bios_dsm_configuration:
+  name: "BIOS DSM Configuration"
+  description: "Used to check DSM functions in BIOS for platform specific configuration like regulatory, compliance, and performance etc."
+  keywords:
+    - "BIOS source of table:"
+    - "[mhiffTranslateMccAllowedUhbApTypeCmdVer1]"
+    - "[prvLarSendLariChangeConfig]: : oemUhbAllowBitMap"
+    - "[biosAccessorGetDsmFunction4DataFromBiosAPI]"
+    - "Read DSM Function 4 from BIOS:"
+    # - " DSM"
+    # - "ACPIBiosAccessor"
+  expert_rules: |
+    0. There are two ways to impletnt DSN functions in BIOS, one is ACPI method, another is using custom defined UEFI method.
+    If both of them exist, the DSM function in UEFI table would be prior to the one in ACPI table.
+    if you saw the falure with ACPI ACPIBiosAccessor, you still can check the DSM function in UEFI table to see if there is any special configuration for this platform.
+    ACPI has been discredited by Intel for a while, if you see the log with ACPI error like below, it means the DSM function in ACPI table is not working properly, but you still can check if there is DSM function in UEFI table for this platform.
+      [platform::ACPIBiosAccessor::ACPIBiosAccessor] Failed to read OEM support UHB channels DSM. rc=<0xC00000BB>
+
+    1. List out all information after "BIOS source of table:".
+    If duplicate, list once.
+
+    2. mhiffTranslateMccAllowedUhbApTypeCmdVer1 supported by UATS.
+    List out the value group, which are in 1(LPI), 2(VLP), or 3(AFC)
+    No need summer table.
+
+    3. [prvLarSendLariChangeConfig] oemUhbAllowBitMap=<0x" "> convert to binary " "
+    This binary is very important, address the value as an evidence and parse it accordingly everytime when you see it.
+    Start from here, all check in test 3. according to this binary.
+    bit31 Follow Country by Country table for LPI Override
+    If bit31 set to 1, check bit0 set to 1, skip other bit in DSM Function3
+    3-1. Print "bit31 = 1, Follow Country by Country table for LPI Override"
+    If not, print "setting error bit31 (bit0 is not setting to 1)"
+
+    If bit31 set to 0, check below value
+    0 = not allow or disable
+    1 = allow or enable
+    3-1. Print bit27 value (0 or 1) VLP Soft AP/Active Scan in UHB in Japan
+    3-2. Print bit29 value (0 or 1) VLP Follow country by country table for VLP
+    3-3. Print bit30 value (0 or 1) Follow country by country table for AFC
+    Check bit26 for 6 GHz DSM function 4 extention
+    0 = 6 GHz disable DSM function 4
+    1 = 6 GHz enable DSM function 4
+
+    bit:1 - UHB in USA,
+    bit:2 - UHB in Rest of World,
+    bit:3 - UHB in EU,
+    bit:4 - UHB in Sorth Korea,
+    bit:5 - UHB in Brazi,
+    bit:6 - UHB in Chile,
+    bit:7 - UHB in Japan,
+    bit:8 - UHB in Canada,
+    bit:9 - UHB in Morocco,
+    bit:10 - UHB in Mongolia,
+    bit:11 - UHB in Malaysia,
+    bit:12 - UHB in Saudi Arabia
+    bit:13 - UHB in Mexico
+    bit:14 - UHB in Nigeria
+    bit:15 - UHB in Thailand
+    bit:16 - UHB in Singapore
+    bit:17 - UHB in Taiwan
+    bit:18 - UHB in South Africa
+    bit:19 - UHB in Philippines
+    bit:20 - UHB in Serbia
+    bit:21 - UHB in Indonesia
+    bit:22 - UHB in Azerbaijan
+    bit:23 - UHB in Paraguay
+    bit:24 - UHB in Vietnam
+    bit:25 - UHB in India
+    bit:27 - VLP Soft AP/Active Scan in UHB in Japan
+    0 = Not Allow VLP Soft AP/Active Scan in UHB in Japan
+    1 = Allow VLP Soft AP/Active Scan in UHB in Japan if VLP is enabled for Japan
+    
+    3-4. Print "UHB support in (bit)(country)" and enable DSM function 4 or not
+
+    If DSM function 4 is enable, check below value.
+    Check the "BIOS used: UEFI" is exist.
+    [biosAccessorGetDsmFunction4DataFromBiosAPI]: : Read DSM Function 4 from BIOS: <0x" "> convert to binary " "
+    bit:31-28 for Revision
+      Revision 0: bits 0-2 (reserved bits: 3-27)
+      Revision 1: revision 0 bits and bits 8-9 (reserved bits: 3-7, 10-27)
+      Revision 2 (future feature): revision 1 bits and bits 10-11 (reserved bits: 3-7, 12-27)
+      Revision 3 (future feature): revision 2 bits and bit 3 (reserved bits: 4-7, 12-27)
+      Only support Revision 0 and Revision 1 for now.
+    0 = Disable
+    1 = Enable
+    bit:0 - DRS for China Mainland Location,
+    bit:1 - China Mainland BIOS (CB) profile 5.2GHz Active Scan/SoftAP override on indoor confirmation,
+    bit:2 - New China Mainland Regulatory Specification,
+    bit:3 - South Korea 6 GHz LPI Higher PSD (+3 dB),
+    bit:8 - Australia Band extension from 6425 MHz to 6585 MHz,
+    bit:9 - 6 GHz allowed in Bangladesh,
+    bit:10 - 6 GHz allowed in Ukraine,
+    bit:11 - 6 GHz allowed in Cayman Islands,
+    3-5. Print DSM function 4 bits support enable or disable for each function that available with Revision setting.
+
+    4. Check DSM function and Print value
+    If DSM is not UEFI, DSM use ACPI, skip this.
+    Print "DSM function setting by ACPI"
+    If not check below.
+    Function 0 - WiFi DSM supported functions, this is always required
+    Function 1 - Disable SRD Active Channels
+    0 - ETSI 5.8GHz SRD active scan,
+    1 - ETSI 5.8GHz SRD passive scan,
+    2 - ETSI 5.8GHz SRD disabled.
+    Function 2 - Supported Indonesia 5.15 - 5.35 GHz band
+    0 - Set 5.115-5.35GHz to Disable in Indonesia,
+    1 - Set 5.115-5.35GHz to Enable (Passive) in Indonesia.
+    Function 4 - Regulatory Special Configurations Enablements
+    1 - Enabling DRS for China Location, will work only in the NON CHINA SKU case. In cases where OEM also defines CHINA_SKU in the BIOS WRDD table, the bit will ignored by the driver,
+    2 - Enabling new SRRC spec.
+    Function 5 - M.2 UART Interface Configuration Default as defined in Intel SW Driver/FW,
+    1 - Reserved
+    Function 6 - Control Enablement 11ax on certificated modules Default as defined in Intel Wi-Fi certificated module,
+    3 - Enabling Ukraine for 11ax,
+    12 - Enabling Russia for 11ax,
+    15 - Enabling Ukraine and Russia for 11ax
+    Function 7 - Control Enablement UNII-4 on certificated modules Default as defined in Intel Wi-Fi certificated module,
+    3 - Enabling UNII-4 in FCC(US),
+    12 - Enabling UNII-4 in ETSI,
+    48 - Enabling UNII-4 in ISED(Canada)
+    Function 8 - Control Indoor usage for enable Soft AP mode
+    bit:0 - Enabling indoor usage in EU,
+    bit:1 - Enabling indoor usage in Japan,
+    bit:2 - Enabling indoor usage in China,
+    bit:3 - Enabling indoor usage in USA,
+    bit:4 - Enabling indoor usage in worldwide
+    Function 9 - Selective Wi-Fi band operation
+    bit:0 - Enabling 2.4GHz,
+    bit:1 - Enabling 5.2GHz,
+    bit:2 - Enabling 5.3GHz,
+    bit:3 - Enabling 5.5GHz,
+    bit:4 - Enabling 5.8GHz,
+    bit:5 - Enabling 5.9GHz,
+    bit:6 - Enabling 6.2GHz,
+    bit:7 - Enabling 6.5GHz,
+    bit:8 - Enabling 6.6GHz,
+    bit:9 - Enabling 6.8GHz,
+    bit:10 - Enabling 7.0GHz
+    Function 10 - Energy detection threshold (EDT)
+    bit:0-3 - EDT revision,
+    bit:6 - Enabling EDT for ETSI HB,
+    bit:9 - Enabling EDT for FCC UHB,
+    bit:13 - Enabling EDT for HB 5G2/3,
+    bit:14 - Enabling EDT for HB 5G4,
+    bit:15 - Enabling EDT for HB 5G6,
+    bit:16 - Enabling EDT for HB 5G8/9,
+    bit:17 - Enabling EDT for UHB 6G1,
+    bit:18 - Enabling EDT for UHB 6G3,
+    bit:19 - Enabling EDT for UHB 6G5,
+    bit:20 - Enabling EDT for UHB 6G6,
+    bit:21 - Enabling EDT for UHB 6G8,
+    bit:22 - Enabling EDT for UHB 7G0
+    Function 11 - DLVR RFI mitigation Configuration
+    bit0: DLVR RFI mitigation(0 - enabled, 1 - disabled),
+    bit1: DDR RFI mitigation(0 - enabled, 1 - disabled)
+    Function 12 - Wi-Fi 7 802.11be Support
+    bit:0 - Force disable all countries
+
+disconnection_analysis:
+  name: "Disconnection"
+  description: "Analyzes unexpected Wi-Fi disconnections after a successful connection, distinguishing among OS-initiated drops, AP kick-offs, or poor RF coverage/signal issues."
+  keywords:
+    - "CONNECTED - to:"
+    - "TASK_Connect"
+    - "TASK_DISCONNECT"
+    - "DeAuth"
+    - "DEAUTH_REQ"
+    - "reason:"
+    - "MISSED BEACONS"
+    - "ROAM_DECISION"
+    # - "OSC"
+  expert_rules: |
+    【Unexpected Disconnection Troubleshooting Guidelines】
+    Carefully analyze the timeline of events immediately preceding the disconnection. Categorize the root cause into one of the following three scenarios based on the log pattern:
+    1. OS Initiated (Client-Side Action): If you observe 'OSC' (OS Command) messages in the driver logs contain keyword TASK_DISCONNECT, this indicates the Operating System intentionally requested the disconnection. Conclude this as a system policy or user-triggered action.
+    2. RF/Signal Issue (Poor Coverage/Interference): If the logs show multiple consecutive 'MISSED BEACONS' events right before the driver ultimately sends out a Deauth message, this means the client lost connection due to weak signal or severe interference, causing beacon timeouts. Explicitly state this is an RF coverage or interference problem.
+    3. AP Initiated (Infrastructure-Side Action): If the driver logs do not show consecutive missed beacons and there are no OSC commands, but a direct 'Deauth' or 'Deauthentication' frame is received, it means the Access Point actively kicked the client off. Recommend checking the AP's configuration (e.g., Band Steering, Load Balancing, or Idle Timeout settings).
+
+resume_connection_setup_time_analysis:
+  name: "Resume_connection_setup_time_analysis"
+  description: "Used to analyze the time needed to set up a Wi-Fi connection after PC resume."
+  keywords:
+    - "TASK_DISCONNECT"
+    - "DeAuth"
+    - "CONNECTED - to"
+    - "TASK_Connect"
+    - "DEAUTH_REQ"
+    - "reason:"
+    - "RESUME FLOW STARTED"
+    - "timeout"
+  expert_rules: |
+    1. List the key configuration and log lines in each of the Key steps categories below, and display all the log information contained in the log example provided by the user under Key steps and log example. Always include timestamps and the exact log text for any item you cite. Key steps categories to include and the kinds of log lines to extract
+    2. Each network resume time is calculated by the time difference between the keyword 'RESUME FLOW STARTED' and the following 'CONNECTED - to'.
+    3. Calculate every network resume time in the log, summarize the network resume time statistics by showing the average, and list all the resume times greater than 3 seconds.
+
+assert_code_analysis:
+  name: "Assert Code Analysis"
+  description: "Used to analyze the assert code for potential issues."
+  keywords:
+    - "[E]"
+    - "[error]"
+    - "Assert"
+  expert_rules: |
+    1. Locate and list every firmware assert event in the log.
+       - Look for log lines that contain both `[prvNicDbgHandleLmacErrLog]` and `[prvNicDbgPrintRcmErrLog]`.
+       - A typical assert entry looks like:
+           [NIC_DEBUG] [ERROR] [prvNicDbgHandleLmacErrLog]:FATAL_ERROR: uCode ASSERT(LMAC1, rtStatus = 0x103C, log is valid. data1:0x12a, data2:0xdeadbeef),
+           [ALONDBG] [ERROR] [prvNicDbgPrintRcmErrLog]:0x00000070 | 0x0000312E | 0x20000000 | 0xDEADBEEF | 0xDEADBEEF | 0x00000000 | 0x00003198
+       - Extract the `rtStatus` hex value (e.g. `0x103C`) — this is the assert code.
+       - Call the tool `lookup_assert_code` with each extracted assert code to retrieve its meaning and details.
+       - Report the full raw log lines together with the lookup result.
+
+    2. When a UMAC, LMAC, or TCM assert is found, check whether the log contains the complete crash context block.
+       The following fields are required for root-cause analysis; extract and report each one if present:
+       - Driver version
+       - Firmware version
+       - `legacy_alon_nic_identify` line (hardware identification)
+       - `rtStatus` value
+       - `LOGPC` value
+       - Timestamp(s) associated with the assert
+       - The full raw UMAC / LMAC / TCM block (copy the lines verbatim, do not paraphrase)
+       If any of these fields are missing from the log, explicitly note which ones are absent.
+
+wfd_p2p_flow:
+  name: "WFD P2P Flow"
+  description: "Used to analysis the generic Wi-Fi Direct P2P connectivity flow"
+  keywords:
+    - "TASK_P2P_DISCOVERY"
+    - "DIRECT-"
+    - "OID_WIFI_P2P_GO_QUERY_SUPPORTED_CHANNELS"
+    - "TASK_P2P_SEND_REQUEST_ACTION_FRAME"
+    - "TASK_P2P_SEND_RESPONSE_ACTION_FRAME"
+    - "PROVISION_DISCOVERY"
+    - "TASK_CHANGE_OP_MODE"
+    - "WFD_CLIENT"
+    - "WFD_GO"
+    - "P2P_GON_RESPONSE"
+    - "GON_REQUEST"
+    - "TASK_START_AP"
+    - "Start as soft AP"
+    - "TASK_CONNECT*CLIENT"
+    - "Received Auth request from"
+    - "TASK_SEND_AP_ASSOCIATION_RESPONSE"
+    - "[CLIENT_VIF] [1] :  TRANSITION"
+    - "EAPOL"
+    - "DeAuth"
+    - "bestChSel"
+    - "chosen channel"
+    - "is inactive"
+  expert_rules: |
+    WiFi Driver P2P connection flow are listed below along with the log example.
+    If firmware crash UMAC/LMAC//TCM errors are present in the failed log, prioritize those fields in Key evidence and include the full UMAC/TCM blocks as raw lines, including: driver, firmware version, legacy_alon_nic_identify, rtStatus, LOGPC, timestamp(s), and the full quoted UMAC/LMAC/TCM blocks.
+    1. Device Initialization (MAC/PHY and device ID lines).
+      - The device hardware is identified and initialized with MAC and PHY configurations.
+      - Log should contains the information below:
+        [ALON         ][12] [S] legacy_alon_nic_identify [186]: HW identification: macId = 0x47, phyId = 0x112, macStep = 0x2, phyStep = 0x2, phyDash = 0x0, phyFlavor = 0x0, isPhyCdb = 0x0, isPhyJacket = 0x0, deviceId = 0x272b
+        [ALON         ][12] [S] legacy_alon_nic_identify Identified GALE_C
+        [ALON         ][12] [S] legacy_alon_nic_identify GALE_C: MAC_ID: 0x47, MAC_STEP: MAC_STEP_C, PHY: FMP2 0x112, PHY_STEP: RADIO_STEP_C
+    2. OS issue to SCAN and driver detemined MCC according to country info from APs' beacons. check skill "drs_mcc_analysis" for more details.
+      [prvLarStoreCurrentMcc]: : LarEnable: 1, CurrMCC: 0x5553 (US), UEFI exist: 0, bWfaPunctEnabledUSA: 0, set bEhtPuncturingRegulatoryValid 1
+    3. OS issue to P2P discover "Got Command (M1 Message) TASK_P2P_DISCOVERY" and check if Probe response from another WFD device. For example:
+      [OSC] [SPECIAL] [CPort::handleOid]:Got Command (M1 Message) TASK_P2P_DISCOVERY[5][0x5] (p-0x1, DEVICE, TransId-1711[0x6AF])
+      [MGMTFRAME] [SPECIAL] [hmfmEvRxMgmtFrame]:PROBE_RX - 06:B9:E3:4F:6B:26, channel 1  , band 2.4GHz, RSSI -59, rate  6Mbps, seq 290 qbss:-1, qbss-mclm:-1 "DIRECT-"
+    4. P2P Provision Discovery flow or P2P GO negotiation flow.
+      Check if request and response are sent or received.
+      [SPECIAL] [CCoreIndicationsObserver::printHandlingInfo]:[OSC] [SPECIAL]coreInd: CORE_INDICATION_P2P_PROVISION_DISCOVERY_REQUEST_SEND
+      [SPECIAL] [CCoreIndicationsObserver::printHandlingInfo]:[OSC] [SPECIAL]coreInd: CORE_INDICATION_P2P_RECEIVED_PROVISION_DISCOVERY_RESPONSE
+      [SPECIAL] [CCoreIndicationsObserver::printHandlingInfo]:[OSC] [SPECIAL]coreInd: CORE_INDICATION_P2P_GON_REQUEST_SEND
+      [SPECIAL] [CCoreIndicationsObserver::printHandlingInfo]:[OSC] [SPECIAL]coreInd: CORE_INDICATION_P2P_RECEIVED_GON_RESPONSE
+
+      Check if driver RX path was intercepted due to peerGroup 0 port closed/detainer active, so the WFD layer couldn't receive, example from log:
+      [RXDATA] [SPECIAL] [rxPacketProcessValidMpduFrameApi]: : Rx port is closed - detaining data and action frames packet
+      Detainer for peerGroupId: 0 is full - drop packet
+    5. Check current wifi device is WFD_GO or WFD Client.
+      This "WFD_GO" means current wifi device is GO mode, another device will try to connect to this GO:
+      [VIF_MANAGER] [SPECIAL] [vifMgrPrintVifsInfo]:vifMgrPrintVifsInfo | 2  |    0x0002    |     WFD_GO |      WFD_GO |   3  |  0xFF |     0xFF    |  0xFF  |    0xFF    | Address(BE:F1:05:AE:C7:A7)
+
+      This "WFD_Client" means current wifi device is P2P Client mode, it will try to connect to another  P2P device(GO):
+      [VIF_MANAGER] [SPECIAL] [vifMgrPrintVifsInfo]:vifMgrPrintVifsInfo | 2  |    0x0002    | WFD_CLIENT |  WFD_CLIENT |   3  |  0xFF |     0xFF    |  0xFF  |    0xFF    | Address(EA:BF:E1:F1:45:64)
+    6. If GO mode, check is softap or P2P GO:
+      "Start as soft AP:", 0 means P2P GO, 1 means SoftAP.
+      OS trigger "TASK_START_AP" and select the channel of GO:
+      Here we need to check if channel of GO follow BSS channel. If no, why ?
+      [VIF_MANAGER] [SPECIAL] [prvChSelFindFirstValidGoOperatingChannel]:  chosen channel: channel:36, band:1, bandwidth:40mhz, priority:3
+
+      If P2P Client mode, check if OS trigger connect task:
+      Got Command (M1 Message) TASK_CONNECT[6][0x6] (p-0x3, CLIENT, TransId-4625[0x1211])
+    7. If GO mode, check Authentication and Association (AUTH_REQ/AUTH_RSP, ASSOC_REQ/ASSOC_RSP, EAPOL messages, 4‑way handshake lines)
+      [GO_VIF] [SPECIAL] [goVifClientCtrlHandleRxMgmtFrameApi]: : Received Auth request from a new Client Address
+      [OSC] [SPECIAL] [osal::CCmdTask::completeTask]:Completing Task (M4 Message) TASK_SEND_AP_ASSOCIATION_RESPONSE with indication
+      [CNCT_FLOW] [SPECIAL] [prvRxSecurityVerifyMpdu]:EAPOL RECEIVED
+      [CNCT_FLOW] [SPECIAL] [prvTxScdSendPacket]:EAPOL TRANSMIT
+
+      If P2P Client mode, check Authentication and Association (AUTH_REQ/AUTH_RSP, ASSOC_REQ/ASSOC_RSP, EAPOL messages, 4‑way handshake lines)
+        TRANSITION: CVC_SM_SENDING_AUTH ==> CVC_SM_WAIT_FOR_AUTH_RSP
+        TRANSITION: CVC_SM_WAIT_FOR_AUTH_RSP ==> CVC_SM_SENDING_ASSOC
+        TRANSITION: CVC_SM_SENDING_ASSOC ==> CVC_SM_WAIT_FOR_ASSOC_RSP
+        TRANSITION: CVC_SM_WAIT_FOR_ASSOC_RSP ==> CVC_SM_CONNECTED
+        EAPOL TRANSMIT
+        EAPOL RECEIVED
+    8. Connection Establishment (WDI_IND_ASSOC_RESULT or similar success/failure lines).
+      Check if there is any missed beacon issue.
+
+    9. Link and Resource Management (resource allocation and CCR_SM_* transitions).
+    10. Check disconnection or deauth, it come from OS or another P2P device.
+      For example, if GO mode, check if Client is inactive:
+      Client * has pending Tx packets and is inactive
+
+softap_supported_channels:
+  name: "SoftAP Supported Channels"
+  description: "Used to analyze the SoftAP supported channels in different country/region. Must only be applicable when the context explicitly involves SoftAP."
+  keywords:
+    - "[prvLarStoreCurrentMcc]"
+    - "[prvLarChannelArrUpdate]: : channel:"
+  expert_rules: |
+    1. Call Tool
+      - You MUST call the tool `softAP_supported_channel`.
+      - Pass the FULL input log as parameter "log_text".
+
+    2. Receive Tool Output
+      - Treat the tool output as the ONLY source of truth
+      - Do NOT question or verify the result
+      - Do NOT recompute any values
+
+    3. Generate Final Answer (STRICT)
+      - The final answer MUST be a direct transformation of the tool output
+      - Do NOT add any new information
+      - Do NOT remove any information
+      - Do NOT change the meaning
+
+    4. Forbidden Actions
+    The following actions are STRICTLY FORBIDDEN:
+      - Adding band classification (e.g., UNII-1, DFS)
+      - Grouping or merging channels (e.g., 36–48)
+      - Inferring extra meanings
+      - Translating or renaming status labels
+      - Generating tables unless already present in tool output
+
+    5. Channel Integrity Rules
+      - Only channels present in the tool output may appear
+      - Every channel in the tool output MUST be included
+      - Do NOT add, remove, or group channels
+
+    6. Output Requirement
+      - Preserve the exact meaning of the tool output
+      - Only reformat if necessary, without adding information
+
+    7. Enforcement
+      - If any content is added that is not from the tool output → INVALID
+      - If any channel is missing → INVALID
+      - If any inference is made → INVALID
+
+    8. Final Rule
+      - The model has NO authority to determine SoftAP support.
+      - All decisions must come from the tool output only.
+
+TAS Settings Check:
+  name: "TAS Settings Check"
+  description: "Used to verify TAS related settings"
+  keywords:
+    - "TAS Feature is not licensed for Manufacturer"
+    - "TAS is  supported"
+    - "TAS is Enable"
+    - "[getTasDataFromBios]: : Successfully read TAS selection from BIOS config:"
+    - "BlackListEntry"
+    - "OEM not WhiteListed"
+  expert_rules: |
+    TAS setting checks are listed below:
+    First, check if TAS is enabled or not, the revision number. If it's enabled, check if the black list is empty or not and show the content.
+    Also, check if TAS is licensed for the manufacture, if not, issue a warning and indicate that USA and Canada are added to the blacklist due to this
+    First, verify whether TAS is enabled and confirm the revision number.
+    If TAS is enabled, check whether the blacklist is empty and display its contents.
+    Also, verify whether TAS is properly licensed for the manufacturer. If not, issue a warning indicating that the United States and Canada have been added to the blacklist due to the missing license.
+
+    1. Check if TAS is supported and the revision number
+    06/09/2026-13:18:15.105 [3] [PLATFORM] [SPECIAL] [tasInitApi]: : TAS is  supported. TAS is Enabled. Enable=1, TblSize=0, OvrTasRiec=0, EnTasRiec=0, UsUhb=0, CaUhb=0, Table Src=2, Rev=1, Val=0x1, TasEnabled registry TRUE
+
+    2. Read the TAS BIOS settings and print the BIOS configuration value. The value can be decoded by the following definitions
+        Bit #    Bit Description    Values    Default
+        0    Enable TAS feature    0 – TAS Disabled    0 – TAS Disabled
+                1 – TAS Enabled
+        1    IEC Optimization, override NIC configuration (BIOSoverrideTASrIEC), allow override NIC defaults    0 – No override, use device settings.    0 – NIC Defaults
+                1 – Override IEC Optimization (effective over certified NIC; value set by Bit #2)
+        2    IEC Optimization Control Value (BIOCenTrIC).    0 – Disabled TAS IEC optimization regulatory averaging time    0 – Disabled TAS IEC optimization
+            This bit is relevant only when Bit #1 = 1 and the NIC supports TAS over IEC.    1 – Enabled TAS IEC optimization regulatory averaging time
+        3:14    Reserved. Shall be set to zeroes    0    0
+        15    Rev1: Reserved. Shall be set to zeroes    Rev2:    0 – Disabled TAS UHB (6–7 GHz) for Canada
+            Rev2: Enable UHB for Canada    0 – Disabled TAS UHB (6–7 GHz) for Canada
+                1 – Enabled TAS UHB (6–7 GHz) for Canada
+        16    Enable UHB for USA    0 – Disabled TAS UHB (6–7 GHz) for USA    0 – Disabled TAS UHB (6–7 GHz) for USA
+                1 – Enabled TAS UHB (6–7 GHz) for USA
+        17:31    Reserved to other countries/locations. Shall be set to zeroes    0    0
+
+    06/09/2026-13:19:00.748 [3] [PLATFORM] [SPECIAL] [getTasDataFromBios]: : Successfully read TAS selection from BIOS config: value=0x00000001, tableSource=2, tableRevision=1
+
+    3. Check Manufacture License for a specific manufacture, below example shows that it is not licensed for Samsung
+    06/09/2026-13:19:00.748 [3] [PLATFORM] [SPECIAL] [oemCapabilitiesIsTasWhitelistedApi]:TAS Feature is not licensed for Manufacturer =  Samsung.
+
+    4. If manufacture is not licensed, it means that it is not in the whitelist, therefore US and Canada are added to blacklist
+    06/09/2026-13:19:04.253 [3] [PLATFORM] [SPECIAL] [prvSendTasDataToFW]: : OEM not WhiteListed, adding USA and Canada to the BlackList
+
+    5. List all entries in the blacklist
+    6470 06/09/2026-13:19:04.253 [3] [UTIL] [SPECIAL] [mhiffTranslatRegulatoryTasConfigVer5]: : BlackListEntry_0=0x5553 (US)
+    6471 06/09/2026-13:19:04.253 [3] [UTIL] [SPECIAL] [mhiffTranslatRegulatoryTasConfigVer5]: : BlackListEntry_1=0x4341 (CA)
+
+SoftAP_flow:
+  name: "SoftAP_flow"
+  description: "Used to analysis the generic Wi-Fi SoftAP connectivity flow"
+  keywords:
+    - "OID_WIFI_P2P_GO_QUERY_SUPPORTED_CHANNELS"
+    - "TASK_CHANGE_OP_MODE"
+    - "TASK_START_AP"
+    - "Received Auth request from"
+    - "TASK_SEND_AP_ASSOCIATION_RESPONSE"
+    - "EAPOL"
+    - "DeAuth"
+    - "bestChSel"
+    - "chosen channel"
+    - "Start as soft AP: 1"
+  expert_rules: |
+    1. use "SoftAP Supported Channels" Skill to check which channels are available for SoftAP enablement.
+    2. Check if SoftAP is trigger by OS, the log example as below:
+    "Got Command (M1 Message) TASK_START_AP"
+    "Start as soft AP: 1": Here "1" means SoftAP start, if "0", it means P2P GO start and we need to use “WFD P2P Flow” skill.
+
+    [VIF_MANAGER] [SPECIAL] [vifMgrChangeGoToSoftApAPI]: : Changing GO VIF from GO port type to Soft-AP port type
+
+    3. SoftAP channel select, the log example as below:
+    [prvChSelBestChDumpOperatingChannelList]:  [bestChSel] Dumping Operating channel list:
+    [prvChSelBestChDumpOperatingChannelList]:  [bestChSel] |-channel-|--band--|--bandwidth--|-------channel priority--------|-cost-val-|
+    [prvChSelBestChDumpOperatingChannelList]:  [bestChSel] |    36   | 5.2GHz |   80mhz     |   FORCED_EXT_API                    |    59    |        ----- > "FORCED_EXT_API" means OS/APP force configurate channel for SoftAP
+    [prvChSelBestChDumpOperatingChannelList]:  [bestChSel] |    36   | 5.2GHz |   80mhz     |   ACTIVE_PRIMARY_BSS_HB             |    59    |   ----- > "ACTIVE_PRIMARY_BSS_HB" means currently BSS channel is 36
+    [prvChSelBestChDumpOperatingChannelList]:  [bestChSel] |    44   | 5.2GHz |   40mhz     |        HB                         |    82    |
+    [prvChSelBestChDumpOperatingChannelList]:  [bestChSel] |   157   | 5.2GHz |   40mhz     |        HB                         |    72    |
+    [prvChSelBestChDumpOperatingChannelList]:  [bestChSel] |    40   | 5.2GHz |   40mhz     |        HB                         |    65    |
+    [prvChSelBestChDumpOperatingChannelList]:  [bestChSel] |   157   | 5.2GHz |   80mhz     |        HB                         |    60    |
+    [mvmManagerFindSimilarPhyConfig]:  Channel requirements: control channel 36 (5.2GHz), center frequency 36, bandwidth 2
+    [vifMgrChSelIsGoRegulatoryAllowedChannelFromChFeatures]:: requested channel 36 is active in Eeprom, allowed for GO activation        ---- > check if channel 36 is allowed or not, if not allowed, please check the "SoftAP Supported Channels" skill and check why.
+    [prvChSelFindFirstValidGoOperatingChannel]:  chosen channel: channel:36, band:1, bandwidth:80mhz, priority:2    -----> SoftAP select channel 36, 5Ghz, 80Mhz
+
+    4. check Authentication and Association (AUTH_REQ/AUTH_RSP, ASSOC_REQ/ASSOC_RSP, EAPOL messages, 4‑way handshake lines)
+            [GO_VIF] [SPECIAL] [goVifClientCtrlHandleRxMgmtFrameApi]: : Received Auth request from a new Client Address
+            [OSC] [SPECIAL] [osal::CCmdTask::completeTask]:Completing Task (M4 Message) TASK_SEND_AP_ASSOCIATION_RESPONSE with indication
+            [CNCT_FLOW] [SPECIAL] [prvRxSecurityVerifyMpdu]:EAPOL RECEIVED
+            [CNCT_FLOW] [SPECIAL] [prvTxScdSendPacket]:EAPOL TRANSMIT
+    5. Check disconnection or deauth, it come from OS or another P2P device
+
+Roaming_Analysis:
+  name: "Roaming Analysis"
+  description: "Used to analyze Wi-Fi roaming events: trigger reasons, AP selection scoring, execution outcome, and RSSI history."
+  keywords:
+    - "Triggering Roaming Flow due to reason"
+    - "TASK ROAM"
+    - "PRE_TASK_ROAM"
+    - "ROAMING_DECISION_STATE"
+    - "WDI_IND_ROAM_COMPLETE"
+    - "AP rssi changed to"
+    - "printCurrentConnectionParameters"
+    - "Best Candidate"
+    - "EmergencyRoamingWD"
+    - "ROAM_DECISION"
+    - "AP_SELECTION_CHANNEL_LOAD"
+    - "AP_SELECTION_POORLY_DISCOVERABLE_AP_PENALTY"
+  expert_rules: |
+    WiFi Driver Roaming Flow analysis guidelines based on the driver FSM:
+
+    【Roaming FSM Overview】
+    1. Trigger: "Triggering Roaming Flow due to reason ROAM_REASON_<X>" — roaming evaluation starts.
+    2. Not executed: "PRE_TASK_ROAM ==> ROAMING_DECISION_STATE_ASSOCIATED" — driver evaluated but stayed on current AP.
+    3. Executed:
+       a. "PRE_TASK_ROAM ==> ROAMING_DECISION_STATE_WAITING_FOR_TASK_ROAM" (ETL format)
+          or "PRE_TASK_ROAM ==> ROAMING_DECISION_STATE_ROAM_DECISION_IN_TASK_ROAM" (UT format)
+       b. OS sends "Got Command (M1 Message) TASK_ROAM"
+       c. "IND_ASSOC_RESULT[0] - status=0, ..., reassoc=1" — success
+       d. "WDI_IND_ROAM_COMPLETE - task complete indication. Status= 0x0"
+
+    【Step 1 — Enumerate All Roam Events】
+    Find every "Triggering Roaming Flow due to reason" line and list them in timestamp order.
+    For each event extract:
+    - Timestamp
+    - ROAM_REASON_<X> value (the raw reason string after "due to reason")
+    - Classify into one of:
+        BG_SCAN / PERIODIC  → "Background scan found potentially better AP"
+        LOW_RSSI / RSSI     → "Signal strength dropped below roaming threshold"
+        BEACON / MISS       → "Missed beacons from current AP"
+        DEGRAD              → "Serving AP signal degraded (active-link RSSI/latency check)"
+        TOPOLOGY            → "Current link/band received a topology penalty"
+        BTM / BSS_TM        → "AP sent BSS Transition Management request"
+        LINK / QUALITY      → "Link quality degraded"
+        AP_RANK             → "AP ranking changed"
+        Other               → "Unknown roaming reason (raw: <value>)"
+
+    【Step 2 — Execution Outcome】
+    For each roam event, determine whether the driver actually roamed:
+    - NOT EXECUTED: "PRE_TASK_ROAM ==> ROAMING_DECISION_STATE_ASSOCIATED"
+    - ABORTED: "PRE_TASK_ROAM ==> ROAMING_DECISION_STATE_ABORTING" or "PROP_ABORT_TASK"
+    - EXECUTED + SUCCESS: "WDI_IND_ROAM_COMPLETE" with "Status= 0x0" or "ROAM COMPLETE"
+    - EXECUTED + FAILED: "CONNECTION FAILED - <reason>" or "ROAMING DECISION ... Roam Failed"
+    - EXECUTED + WD EXPIRED: "EmergencyRoamingWD ... Triggering disconnection" — driver internally
+      triggered disconnect after missed beacons and failed roam attempts. Subsequent AUTH failures
+      belong to the OS reconnect, not this roam.
+    - EXECUTED (outcome unknown if none of the above are found within 8000 lines)
+
+    【Step 3 — RSSI Evidence】
+    For each roam event extract:
+    - RSSI at trigger time: "AP rssi changed to <X>" immediately before "Triggering Roaming Flow"
+    - RSSI at execution time: "printCurrentConnectionParameters ... RSSI[<X>]" near TASK_ROAM
+    - Target AP RSSI from AP selection: "[Best Candidate 0] ... RSSI:<X>" or "[BC 0]: ... RSSI:<X>"
+    - Old AP RSSI from previous AP selection run (the scan before the roam trigger)
+
+    【Step 4 — AP Selection Scoring (for EXECUTED roams)】
+    After "Triggering Roaming Flow", the driver runs AP selection. Extract:
+    - Current AP BSSID: "Candidate is the active entry" following "Calculating BSS entry grade for: Address(<BSSID>)"
+    - Penalties applied to current AP: "Penalty for AP_SELECTION_CHANNEL_LOAD ... Address(<current AP BSSID>)"
+    - Poorly-discoverable penalties: count of "AP_SELECTION_POORLY_DISCOVERABLE_AP_PENALTY"
+    - BT coexistence state: "BT is Connected" present in the AP selection run
+    - Winning candidate: "[Best Candidate 0]" or "[BC 0]:" — report band, channel, BW, RSSI, chLoad, BTcoex
+    - Root cause of BG_SCAN roam: compare new AP RSSI vs old AP RSSI:
+        new >= old         → "RSSI improvement"
+        new < old but BW wider → "Channel bandwidth upgrade"
+        new < old, ch_load penalty on current AP → "Channel load on current AP"
+        new < old, other   → "Grade advantage (other factors)"
+
+    【Step 5 — Roam Target】
+    If roam was executed, find the new AP:
+    - "CONNECTED - to: <SSID> <BSSID>" after the TASK_ROAM
+    - Or "[Best Candidate 0] ... Address(<BSSID>)" from AP selection as fallback
+
+    【Step 6 — Emergency Watchdog Disconnect】
+    If "EmergencyRoamingWD ... Triggering disconnection" is found:
+    - Report it as a driver-internal disconnect decision (NOT OS-initiated, NOT AP deauth)
+    - Root cause: missed beacons AND all roam/reconnect attempts failed within the WD window
+    - Do NOT attribute any subsequent OS TASK_CONNECT AUTH failures to this roam
+
+    【Output Format】
+    For each roam event produce:
+    - Event #N | Timestamp | Reason | Outcome
+    - RSSI: trigger=<X> dBm, execution=<Y> dBm, target AP=<Z> dBm, old AP=<W> dBm
+    - AP Selection: current AP BSSID, penalties, winner BSSID/band/channel/BW
+    - Root cause summary sentence
+
+    Finish with a statistics table:
+    | Metric | Value |
+    | Total roam evaluations | N |
+    | Roams executed | N |
+    | Roams succeeded | N |
+    | Roams failed | N |
+    | WD-triggered disconnects | N |
+    | Most common reason | <reason> |
+
+P2P_PIE_Supported_Channel_Query:
+  name: "P2P PIE Supported-Channel Query"
+  description: "Diagnoses the per-channel regulatory gate decisions made during a PIE-initiated OID_WIFI_P2P_GO_QUERY_SUPPORTED_CHANNELS session, covering the full evaluation loop from PHY-config check through regulatory allowance verdict to the returned channel list. Applies when: OID_WIFI_P2P_GO_QUERY_SUPPORTED_CHANNELS is issued by PIE (external application); P2P GO channel list returned to PIE is suspect — missing channels or unexpected exclusions."
+  keywords:
+    - "Got Proprietary"
+    - "OID_WIFI_P2P_GO_QUERY_SUPPORTED_CHANNELS"
+    - "[mvmManagerFindSimilarPhyConfig]"
+    - "[vifMgrChSelIsGoRegulatoryAllowedChannelFromChFeatures]"
+    - "vifMgrChSelGetSupportedChannelList"
+  exclusive:
+    - "GO_VIF"
+    - "GO activated with SSID"
+    - "TASK_START_AP"
+    - "[prvChSelBestChDumpOperatingChannelList]"
+    - "ROAM_DECISION"
+    - "CNCT_FLOW"
+    - "TLC_CONFIG"
+    - "LAR"
+  expert_rules: |
+    1. Session entry point.
+    - 'Got Proprietary' is the required session-boundary anchor line. It carries the full PIE query context: OID name, OID hex code, and BSS handle.
+    - If the log contains:
+      04/16/2026-20:45:52.482 [2] [OSC] [SPECIAL] [osal::CCmdPropIhvRequest::execute]:Got Proprietary OID OID_WIFI_P2P_GO_QUERY_SUPPORTED_CHANNELS[0xFF10080B] (p-0x0, BSS)
+      Then conclude:
+      - A PIE-initiated supported-channel query session has started at this timestamp.
+      - All subsequent [mvmManagerFindSimilarPhyConfig] and [vifMgrChSelIsGoRegulatoryAllowedChannelFromChFeatures] lines until the next 'Got Proprietary' OID_WIFI_P2P_GO_QUERY_SUPPORTED_CHANNELS line belong to this session.
+      - 'Got Proprietary' lines for other OIDs (e.g. OID_SV_RLG_FLUSH_LOG_FILE, OID_SV_APPLICATION_PRINT, OID_WIFI_MCC_API_TEST_MODE) are not session anchors for this skill — skip them.
+
+    2. Per-channel evaluation loop structure.
+    - For every channel evaluated, the loop fires in this guaranteed order:
+      a. One or more [mvmManagerFindSimilarPhyConfig] lines (PHY-config check; may emit supplementary info lines beyond the 'Channel requirements' line).
+      b. Exactly one [vifMgrChSelIsGoRegulatoryAllowedChannelFromChFeatures] line (regulatory gate verdict).
+    - The [vifMgrChSelIsGoRegulatoryAllowedChannelFromChFeatures] line is the authoritative per-channel verdict anchor. All [mvmManagerFindSimilarPhyConfig] lines between two consecutive verdict lines belong to the same channel evaluation.
+    - Example PHY-config line:
+      04/16/2026-20:45:52.483 [2] [MVM_MANAGER] [SPECIAL] [mvmManagerFindSimilarPhyConfig]:  Channel requirements: control channel 1 (2.4GHz), center frequency 3, bandwidth 1
+    - Example verdict line (allowed):
+      04/16/2026-20:45:52.483 [2] [VIF_MANAGER] [SPECIAL] [vifMgrChSelIsGoRegulatoryAllowedChannelFromChFeatures]:: requested channel 1 is active in Eeprom, allowed for GO activation
+    - Example verdict line (rejected):
+      04/16/2026-20:45:52.483 [2] [VIF_MANAGER] [SPECIAL] [vifMgrChSelIsGoRegulatoryAllowedChannelFromChFeatures]:: requested channel: 44 (5.2GHz) is not allowed for GO different channel activation, BSS on 165 (5.2GHz)
+
+    3. Per-channel verdict classification.
+    - If the verdict line contains 'allowed for GO activation':
+      - Channel = ALLOWED. Add to expected returned list.
+    - If the verdict line does NOT contain 'allowed for GO activation':
+      - Channel = REJECTED. Record the full rejection reason string verbatim.
+      - If the rejection reason cites 'BSS on <channel>':
+        - Conclude: MCC-driven exclusion. The concurrent BSS on the cited channel forces this channel out of the GO candidate list.
+      - If the rejection reason cites 'not active in Eeprom' or similar Eeprom language:
+        - Conclude: Regulatory/Eeprom exclusion. Channel is not enabled for this regulatory domain.
+      - If the rejection reason cites DFS or radar:
+        - Conclude: DFS exclusion.
+      - For any other rejection reason string: surface it verbatim and flag for engineer review — the full enumeration of rejection reasons is not exhaustively documented in this skill.
+
+    4. Returned channel list verification.
+    - After the per-channel loop, [vifMgrChSelGetSupportedChannelList] lines enumerate the channels returned to PIE.
+    - Example:
+      04/17/2026-18:32:18.969 [2] [VIF_MANAGER] [SPECIAL] [vifMgrChSelGetSupportedChannelList]: : OID_WIFI_P2P_GO_QUERY_SUPPORTED_CHANNELS returned channel 149
+    - Cross-check: every channel in the returned list must have an 'allowed for GO activation' verdict in the loop above. Any mismatch (channel returned but rejected, or channel allowed but not returned) is a bug — flag it.
+    - If a channel expected by the caller is absent from the returned list, locate its verdict line and surface the rejection reason as the root cause.
+
+    5. Structural anomaly check.
+    - Every [vifMgrChSelIsGoRegulatoryAllowedChannelFromChFeatures] line must be preceded by at least one [mvmManagerFindSimilarPhyConfig] line in the same session. If a verdict line appears with no preceding PHY-config line, flag as a structural anomaly.
+    - [mvmManagerFindSimilarPhyConfig] hit count will be >= [vifMgrChSelIsGoRegulatoryAllowedChannelFromChFeatures] hit count due to supplementary output lines. A large delta (engineer-provided threshold: not yet established) may indicate log truncation at session boundaries.
+
+PPAG Settings Check:
+  name: "PPAG Settings Check"
+  description: "Used to verify PPAG related settings"
+  keywords:
+    - "PPAG"
+    - "PPAG is supported"
+    - "PPAG is Enable"
+    - "UEFI"
+    - "BIOS"
+    - "SAR"
+    - "oem"
+    - "table"
+  expert_rules: |
+    PPAG setting checks are listed below.
+    Focus on whether PPAG is supported, whether it is enabled, where the configuration is loaded from, and whether firmware receives a valid PPAG configuration.
+
+    1. Check PPAG capability and runtime status first.
+    - Find lines that indicate PPAG capability and state.
+    - Capture values such as supported/unsupported, enabled/disabled, revision/version, table source, and any validity flags.
+    - If both supported and enabled are shown, report "PPAG feature is active".
+    - If supported but disabled, report "PPAG feature is present but disabled by platform or policy".
+    - If unsupported, report "PPAG feature not supported on this platform".
+
+    2. Check PPAG source path (UEFI/BIOS/ACPI/default).
+    - Determine where PPAG data is loaded from.
+    - If multiple source indications appear, use the latest successful load before connection bring-up as effective source.
+    - If a preferred source fails (for example ACPI failure) but UEFI succeeds, classify as "UEFI effective" and include both lines as evidence.
+
+    3. Check PPAG table load integrity.
+    - Verify whether a PPAG table read/load action succeeded.
+    - Extract and report key metadata if present: table size, table revision, country/region scope, chain/path count, and checksum/validation status.
+    - If the log contains malformed, out-of-range, or rejected table indicators, classify as "PPAG table invalid" and quote the exact failure lines.
+
+    4. Check SAR/Tx power interaction.
+    - Determine whether PPAG values are consumed by SAR/power-limiting path.
+    - Look for indications that PPAG constraints were applied, ignored, or overridden.
+    - If override path exists (registry/debug/test hook), clearly state effective precedence in this order unless logs show otherwise:
+      runtime override > BIOS/UEFI PPAG table > firmware default.
+
+    5. Check firmware handoff result.
+    - Confirm whether PPAG payload/config command was sent to firmware and whether firmware accepted it.
+    - If command send exists but no completion/ack is found, classify as "handoff incomplete".
+    - If firmware reject/unsupported code is present, classify as "handoff failed" and include the return/error code.
+
+    6. Output format (strict).
+    - PPAG Support: Supported / Unsupported / Unknown
+    - PPAG Enablement: Enabled / Disabled / Unknown
+    - Effective Source: UEFI / BIOS / ACPI / Default / Unknown
+    - Table Status: Valid / Invalid / Missing / Unknown
+    - FW Handoff: Success / Failed / Incomplete / Unknown
+    - SAR Interaction: Applied / Not Applied / Overridden / Unknown
+    - Key Evidence:
+      - <exact log line 1>
+      - <exact log line 2>
+      - <exact log line N>
+
+    7. Failure classification rules.
+    - If PPAG is disabled and there is no table load attempt, this is not a failure; classify as "disabled by configuration".
+    - If PPAG is enabled but table is missing/invalid, classify as "configuration defect".
+    - If table is valid but firmware handoff fails, classify as "FW integration issue".
+    - If PPAG is fully active but behavior is still abnormal, classify as "non-PPAG issue" and continue with RF/SAR/connection flow analysis.
+
+    8. Evidence requirements.
+    - Always include exact timestamps and full raw lines for every conclusion.
+    - Do not infer values that are not explicitly present in logs.
+    - If required fields are missing, explicitly list missing fields instead of guessing.
+
+OEM Tool DRTU Check:
+  name: "OEM Tool DRTU Check"
+  description: "Check fail from OEM Tool DRTU"
+  keywords:
+    - "tool_log::error"
+    - "tool_log::fail"
+    - "tool_log::pass"
+    - "tool_log::xVT API"
+    - "driver_log::XVT Mode Enabled"
+    - "driver_log::WorkQ"
+    - "driver_log::XVT"
+    - "driver_log::assert"
+    - "driver_log::pldr"
+  expert_rules: |
+    This skill supports OEM Tool DRTU analysis and MUST classify input log type first.
+
+    1. Determine log type before any conclusion.
+    - "drtuLog.txt" and "DrtuTestResults.txt" are tool log.
+    - "WifiDriverIHVSession.etl.XXX.log" is driver log, for example "WifiDriverIHVSession.etl.002.log".
+    - If input log filename does not match rules above, classify as "unknown log type" and report missing filename/log-type evidence.
+
+    2. If log type is tool log, analyze DRTU execution result.
+    - Extract tool stage names, pass/fail status, error code, and failure text.
+    - Bypass "Finished command, errorlevel = 0".    
+    - Keep original wording for fail reason; do not paraphrase away technical tokens.
+
+    3. If log type is driver log, check stop point.
+    - Start from "XVT Mode Enabled" and follow the sequence.
+    - Check any stop point with assert or pldr.
+    - Not all fail and error need to check, bypass information with "TIME_POINT_FW_HW_ERROR" and "[ERROR] [prvTfdQueueSendCommand]". 
+
+    4. Output format (strict).
+    - OEM Tool Type: DRTU
+    - Log Type: tool log / driver log
+    - Tool Verdict: PASS / FAIL / UNKNOWN
+    - Driver Verdict: HEALTHY / DEFECT / UNKNOWN
+    - Failure Stage: <stage name or N/A>
+    - Root Cause Class: tool issue / config defect / fw integration issue / mismatch / unknown
+    - Key Evidence:
+      - <exact log line 1>
+      - <exact log line 2>
+      - <exact log line N>
+
+    5. Evidence rules.
+    - Always include exact raw lines with timestamps where available.
+    - Do not infer missing error codes.
+    - If evidence is insufficient, explicitly state which field is missing.
+
+OEM Tool CITU Check:
+  name: "OEM Tool CITU Check"
+  description: "Check fail from OEM Tool CITU"
+  keywords:
+    - "tool_log::error"
+    - "tool_log::fail"
+    - "tool_log::pass"
+    - "tool_log::xVT API"
+    - "result_file::StepMarginalTest_"
+    - "result_file::csv"
+    - "result_file::reserved_for_future_fields"
+    - "driver_log::XVT Mode Enabled"
+    - "driver_log::WorkQ"
+    - "driver_log::XVT"
+    - "driver_log::assert"
+    - "driver_log::pldr"
+  expert_rules: |
+    This skill supports OEM Tool CITU analysis and MUST classify input log type first.
+
+    1. Determine log type before any conclusion.
+    - "Core_Log_XXXX.log" is tool log, for example "Core_Log_09-08-2026-22-39-02.log".
+    - "CITU_Log_XXXX.log" is tool log, for example "CITU_Log_26-08-2026-11-46-06.log".  
+    - "WifiDriverIHVSession.etl.XXX.log" is driver log, for example "WifiDriverIHVSession.etl.002.log".
+    - "StepMarginalTest_XXXX.csv" is result file, for example "StepMarginalTest_08_09_2026_10_39_14.csv".
+    - Reserved detection space for result file is enabled by result_file::* keywords and can be expanded later.
+    - Check the "StepMarginalTest_XXXX.csv" exist, if not, add missing information in the Output format.
+    - If input log filename does not match rules above, classify as "unknown log type" and report missing filename/log-type evidence.
+
+    2. If log type is tool log, analyze CITU execution result.
+    - Extract tool stage names, pass/fail status, error code, and failure text.
+    - Bypass "Error bits:".    
+    - Keep original wording for fail reason; do not paraphrase away technical tokens.
+
+    3. If log type is driver log, check stop point.
+    - Start from "XVT Mode Enabled" and follow the sequence.
+    - Check any stop point with assert or pldr.
+    - Not all fail and error need to check, bypass information with "TIME_POINT_FW_HW_ERROR" and "[ERROR] [prvTfdQueueSendCommand]". 
+
+    4. Output format (strict).
+    - OEM Tool Type: CITU
+    - Log Type: tool log / driver log / result file
+    - Tool Verdict: PASS / FAIL / UNKNOWN
+    - Driver Verdict: HEALTHY / DEFECT / UNKNOWN
+    - Failure Stage: <stage name or N/A>
+    - Root Cause Class: tool issue / config defect / fw integration issue / mismatch / unknown
+    - Key Evidence:
+      - <exact log line 1>
+      - <exact log line 2>
+      - <exact log line N>
+
+    5. Evidence rules.
+    - Always include exact raw lines with timestamps where available.
+    - Do not infer missing error codes.
+    - If evidence is insufficient, explicitly state which field is missing.
+
+WiFi_Sensing_Proximity_Proxy_Init_and_Status:
+  name: "WiFi Sensing Proximity Proxy Init and Status"
+  description: "Diagnoses the Wi-Fi sensing proximity proxy initialization parameters and ongoing FW proximity decision notifications, covering config validation, control-mode decode, decision state transitions, seqNum integrity, and ETW statistics pipeline health. Applies when: SENSING_PROX module lines present in the driver log; sensingProxyInitApi appears at session start."
+  keywords:
+    - "SENSING_PROX"
+    - "sensingProxyInitApi"
+    - "SENSING_PROXIMITY_CONFIG_CMD"
+    - "prvSensingProxySetSeqNumAndProxStat"
+    - "sensingProxyHandleSensingStatisticsApi"
+    - "sensingProxyGpHostNotificationHandlerApi"
+  exclusive:
+    - "DP_MON"
+    - "TID_0"
+    - "_RX"
+    - "CNCT_FLOW"
+    - "prvTfdQueueSendCommand"
+    - "[LAR"
+    - "LAR"
+    - "TLC_CONFIG"
+    - "candidate grade"
+  expert_rules: |
+    1. Init parameter check (sensingProxyInitApi lines at session start).
+    - If the log contains sensingProxyInitApi with humanPresenceControlMode, humanPresenceSpdConfigId, humanPresenceSpdConfigId2:
+      For example:  [SENSING_PROX ][02] [S] sensingProxyInitApi: humanPresenceControlMode 0 [SENSING_PROX_CONTROL_ISH_MODE] humanPresenceData 1 humanPresenceConfigId 1, humanPresenceSpdConfigId 88, humanPresenceSpdConfigId2 88
+      Then check:
+      - humanPresenceControlMode:
+        - 0 = Operational mode: decision=1 → monitor ON; decision=0 → monitor OFF. Expected for production.
+        - 2 = Demo mode: decision changes trigger demo tool indication only; no monitor power action. Flag as misconfiguration in a production capture.
+        - Any other value → flag as unknown/unsupported mode.
+      - spdConfigId valid range: 70–133 decimal (0x46–0x85 hex), corresponding to BNR 500–32000.
+        - Default expected value: 88 (0x58), BNR ~9500.
+        - spdConfigId < 70 or > 133 → Error: out-of-range / misconfigured.
+        - spdConfigId = 88 → Expected default.
+        - spdConfigId ≠ 88 but within 70–133 → Note: non-default; verify platform intent.
+        - spdConfigId1 ≠ spdConfigId2 → Flag: asymmetric config.
+
+    2. CONFIG_CMD handshake check.
+    - If the log contains sensingProxySendProxyConfigCmdApi sending SENSING_PROXIMITY_CONFIG_CMD followed by a solicited response:
+      For example: [SENSING_PROX ][03] [S] sensingProxySendProxyConfigCmdApi: sending SENSING_PROXIMITY_CONFIG_CMD with proximityState = TRUE, spdConfigId = 88, spdConfigId2 = 88
+      Then conclude: FW was successfully configured. Confirm spdConfigId values match the init registry values.
+    - If SENSING_PROXIMITY_CONFIG_CMD is never seen after sensingProxyInitApi → Error: FW never configured; report as init failure.
+
+    4. Proximity decision notification check (prvSensingProxySetSeqNumAndProxStat).
+    - If the log contains decision field values:
+      For example: 08/14/2026-14:05:03.032 [SENSING_PROX ][02] [S] prvSensingProxySetSeqNumAndProxStat: Sensing Proximity Decision Notification, decision = 1, seqNum = 2
+      Then:
+      - decision=1 = human present; decision=0 = human absent.
+      - Actionable signal is a state transition: 0→1 or 1→0. Report each transition with its timestamp and seqNum.
+      - Consecutive same-value notifications (e.g., multiple decision=1 in a row) are normal FW periodic confirmations; do not flag.
+      - No minimum sustained duration is required before a transition is considered valid.
+
+    5. seqNum integrity check.
+    - seqNum is monotonically increasing per session. Gaps (non-uniform increments) are normal — they reflect FW internal pacing.
+      For example: seqNum = 2 → 255 → 550 → 822 → ... → 12537 (healthy, monotonic).
+    - If seqNum[n] < seqNum[n-1] (backward jump) → Error: FW restart or session reset; flag immediately with both seqNum values and timestamps.
+
+bios_GLAI:
+  name: "GLAI"
+  description: "Check GLAI configuration in BIOS"
+  keywords:
+    - "GLAI"
+  expert_rules: |
+   1. Check Successful read of table GLAI.
+   2. Show the number of Revision, DomainType, and GuidLockStaus. example: "GLAI table found = Revision 0 DomainType 7 GuidLockStaus 1"
+   3. If the GuidLockStaus is 1, it indicates that the GUID is locked; if 2, it indicates that the GUID is in test mode; if 0, it indicates that the GUID is unlocked.
+   4. Warning when set to 0 (unlocked), All BIOS features settings will not be effective.
+   5. The revision only support Revision 0, and DomainType 7 for WiFi; DomainType 12 for Bluetooth.

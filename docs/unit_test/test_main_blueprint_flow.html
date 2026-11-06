@@ -1,0 +1,1530 @@
+<!DOCTYPE html>
+<html lang="en">
+<head>
+  <meta charset="UTF-8">
+  <meta name="viewport" content="width=device-width, initial-scale=1.0">
+  <title>test_main_blueprint — Test Flow Diagram</title>
+  <link href="https://fonts.googleapis.com/css2?family=JetBrains+Mono:wght@400;500;600;700&display=swap" rel="stylesheet">
+  <script src="https://cdn.jsdelivr.net/npm/html2canvas@1.4.1/dist/html2canvas.min.js" integrity="sha384-ZZ1pncU3bQe8y31yfZdMFdSpttDoPmOZg2wguVK9almUodir1PghgT0eY7Mrty8H" crossorigin="anonymous"></script>
+  <script src="https://cdn.jsdelivr.net/npm/jspdf@2.5.2/dist/jspdf.umd.min.js" integrity="sha384-en/ztfPSRkGfME4KIm05joYXynqzUgbsG5nMrj/xEFAHXkeZfO3yMK8QQ+mP7p1/" crossorigin="anonymous"></script>
+  <style>
+    * { margin: 0; padding: 0; box-sizing: border-box; }
+    body {
+      font-family: 'JetBrains Mono', monospace;
+      background: #020617;
+      min-height: 100vh;
+      padding: 2rem;
+      color: white;
+    }
+    .container { max-width: 1400px; margin: 0 auto; }
+    .header { margin-bottom: 2rem; }
+    .header-row { display: flex; align-items: center; gap: 1rem; margin-bottom: 0.5rem; }
+    .pulse-dot { width: 12px; height: 12px; background: #fb7185; border-radius: 50%; animation: pulse 2s infinite; }
+    @keyframes pulse { 0%, 100% { opacity: 1; } 50% { opacity: 0.5; } }
+    h1 { font-size: 1.5rem; font-weight: 700; letter-spacing: -0.025em; }
+    .subtitle { color: #94a3b8; font-size: 0.875rem; margin-left: 1.75rem; }
+    .diagram-container {
+      background: rgba(15, 23, 42, 0.5);
+      border-radius: 1rem;
+      border: 1px solid #1e293b;
+      padding: 1.5rem;
+      overflow-x: auto;
+    }
+    svg { width: 100%; min-width: 1180px; display: block; }
+    .cards { display: grid; grid-template-columns: repeat(auto-fit, minmax(280px, 1fr)); gap: 1rem; margin-top: 2rem; }
+    .card { background: rgba(15, 23, 42, 0.5); border-radius: 0.75rem; border: 1px solid #1e293b; padding: 1.25rem; }
+    .card-header { display: flex; align-items: center; gap: 0.5rem; margin-bottom: 0.75rem; }
+    .card-dot { width: 8px; height: 8px; border-radius: 50%; }
+    .card-dot.cyan { background: #22d3ee; }
+    .card-dot.emerald { background: #34d399; }
+    .card-dot.violet { background: #a78bfa; }
+    .card-dot.amber { background: #fbbf24; }
+    .card-dot.rose { background: #fb7185; }
+    .card h3 { font-size: 0.875rem; font-weight: 600; }
+    .card ul { list-style: none; color: #94a3b8; font-size: 0.75rem; }
+    .card li { margin-bottom: 0.375rem; }
+    .card li code { color: #cbd5e1; }
+    .footer { text-align: center; margin-top: 1.5rem; color: #475569; font-size: 0.75rem; }
+    .toolbar { display: flex; gap: 0.5rem; margin-left: auto; flex-shrink: 0; align-items: center; }
+    .toolbar-toggle {
+      background: transparent; border: none; color: #475569; cursor: pointer;
+      font-size: 1.25rem; line-height: 1; padding: 0.25rem 0.5rem; border-radius: 0.375rem;
+      transition: color 0.2s, background 0.2s;
+    }
+    .toolbar-toggle:hover { color: #94a3b8; background: rgba(30, 41, 59, 0.5); }
+    .toolbar-actions { display: none; gap: 0.5rem; }
+    .toolbar.expanded .toolbar-actions { display: flex; }
+    .toolbar-actions button {
+      background: rgba(30, 41, 59, 0.8); border: 1px solid #334155; color: #94a3b8;
+      padding: 0.375rem 0.75rem; border-radius: 0.375rem; font-family: inherit;
+      font-size: 0.75rem; cursor: pointer; transition: all 0.2s; white-space: nowrap;
+    }
+    .toolbar-actions button:hover { background: rgba(51, 65, 85, 0.8); color: white; border-color: #475569; }
+    @media print { body { background: #020617; padding: 1rem; } .toolbar { display: none !important; } }
+    svg text { white-space: pre; }
+  </style>
+</head>
+<body>
+  <div class="container" id="report-container">
+    <!-- Header -->
+    <div class="header">
+      <div class="header-row">
+        <div class="pulse-dot"></div>
+        <h1>test_main_blueprint — Test Flow</h1>
+        <div class="toolbar">
+          <div class="toolbar-actions">
+            <button onclick="copyAsImage(this)">📋 Copy</button>
+            <button onclick="downloadPNG(this)">🖼️ PNG</button>
+            <button onclick="downloadPDF(this)">📄 PDF</button>
+          </div>
+          <button class="toolbar-toggle" onclick="this.parentElement.classList.toggle('expanded')" title="Export options" aria-label="Export options">⋯</button>
+        </div>
+      </div>
+      <p class="subtitle">59 unit tests across 14 classes · 10 URL rules / 12 handlers · case entry ➜ attachment selection ➜ download page ➜ result page + utilities · blueprints/main/main_routes.py</p>
+    </div>
+
+    <!-- Main Diagram -->
+    <div class="diagram-container">
+      <svg viewBox="0 0 1200 5340">
+        <defs>
+          <marker id="arrowhead" markerWidth="10" markerHeight="7" refX="9" refY="3.5" orient="auto"><polygon points="0 0, 10 3.5, 0 7" fill="#64748b" /></marker>
+          <marker id="arrowcyan" markerWidth="10" markerHeight="7" refX="9" refY="3.5" orient="auto"><polygon points="0 0, 10 3.5, 0 7" fill="#22d3ee" /></marker>
+          <marker id="arrowrose" markerWidth="10" markerHeight="7" refX="9" refY="3.5" orient="auto"><polygon points="0 0, 10 3.5, 0 7" fill="#fb7185" /></marker>
+          <marker id="arrowok" markerWidth="10" markerHeight="7" refX="9" refY="3.5" orient="auto"><polygon points="0 0, 10 3.5, 0 7" fill="#6ee7b7" /></marker>
+          <marker id="arrowviolet" markerWidth="10" markerHeight="7" refX="9" refY="3.5" orient="auto"><polygon points="0 0, 10 3.5, 0 7" fill="#a78bfa" /></marker>
+          <marker id="arroworange" markerWidth="10" markerHeight="7" refX="9" refY="3.5" orient="auto"><polygon points="0 0, 10 3.5, 0 7" fill="#fb923c" /></marker>
+          <pattern id="grid" width="40" height="40" patternUnits="userSpaceOnUse">
+            <path d="M 40 0 L 0 0 0 40" fill="none" stroke="#1e293b" stroke-width="0.5"/>
+          </pattern>
+        </defs>
+
+        <rect width="100%" height="100%" fill="url(#grid)" />
+
+        <text x="18" y="104" fill="#fb7185" font-size="7" font-weight="600" transform="rotate(-90 18 104)">TEST&#160;SUITE&#160;FLOW</text>
+        <line x1="26" y1="100" x2="26" y2="5314" stroke="#fb7185" stroke-width="1.2" stroke-dasharray="4,4" marker-end="url(#arrowrose)"/>
+        <line x1="26" y1="118" x2="40" y2="118" stroke="#fb7185" stroke-width="1.5" marker-end="url(#arrowrose)"/>
+        <path d="M236,168 H258" fill="none" stroke="#22d3ee" stroke-width="1.3" marker-end="url(#arrowcyan)"/>
+        <path d="M900,168 H938" fill="none" stroke="#64748b" stroke-width="1.3" marker-end="url(#arrowhead)"/>
+        <path d="M900,230 H938" fill="none" stroke="#64748b" stroke-width="1.3" marker-end="url(#arrowhead)"/>
+        <path d="M376,324 H387" fill="none" stroke="#64748b" stroke-width="1.3" marker-end="url(#arrowhead)"/>
+        <path d="M519,324 H530" fill="none" stroke="#64748b" stroke-width="1.3" marker-end="url(#arrowhead)"/>
+        <path d="M654,324 H665" fill="none" stroke="#64748b" stroke-width="1.3" marker-end="url(#arrowhead)"/>
+        <path d="M419,354 H430" fill="none" stroke="#64748b" stroke-width="1.3" marker-end="url(#arrowhead)"/>
+        <path d="M571,354 H582" fill="none" stroke="#64748b" stroke-width="1.3" marker-end="url(#arrowhead)"/>
+        <path d="M727,354 H738" fill="none" stroke="#64748b" stroke-width="1.3" marker-end="url(#arrowhead)"/>
+        <path d="M342.5,364 V373" fill="none" stroke="#fb7185" stroke-width="1.3" marker-end="url(#arrowrose)"/>
+        <path d="M501.0,364 V399" fill="none" stroke="#fb7185" stroke-width="1.3" marker-end="url(#arrowrose)"/>
+        <path d="M480,448 H491" fill="none" stroke="#64748b" stroke-width="1.3" marker-end="url(#arrowhead)"/>
+        <path d="M800.5,364 V428 H373.0 V437" fill="none" stroke="#64748b" stroke-width="1.3" marker-end="url(#arrowhead)"/>
+        <path d="M236,306 H258" fill="none" stroke="#22d3ee" stroke-width="1.3" marker-end="url(#arrowcyan)"/>
+        <path d="M900,306 H938" fill="none" stroke="#64748b" stroke-width="1.3" marker-end="url(#arrowhead)"/>
+        <path d="M900,402 H938" fill="none" stroke="#64748b" stroke-width="1.3" marker-end="url(#arrowhead)"/>
+        <path d="M332,524 H343" fill="none" stroke="#64748b" stroke-width="1.3" marker-end="url(#arrowhead)"/>
+        <path d="M462,524 H473" fill="none" stroke="#64748b" stroke-width="1.3" marker-end="url(#arrowhead)"/>
+        <path d="M610,524 H621" fill="none" stroke="#64748b" stroke-width="1.3" marker-end="url(#arrowhead)"/>
+        <path d="M736,524 H747" fill="none" stroke="#64748b" stroke-width="1.3" marker-end="url(#arrowhead)"/>
+        <path d="M299.0,534 V543" fill="none" stroke="#fb7185" stroke-width="1.3" marker-end="url(#arrowrose)"/>
+        <path d="M403.0,534 V569" fill="none" stroke="#fb7185" stroke-width="1.3" marker-end="url(#arrowrose)"/>
+        <path d="M542.0,534 V543" fill="none" stroke="#fb7185" stroke-width="1.3" marker-end="url(#arrowrose)"/>
+        <path d="M813.5,534 V569" fill="none" stroke="#fb923c" stroke-width="1.3" marker-end="url(#arrowhead)"/>
+        <path d="M445,618 H456" fill="none" stroke="#64748b" stroke-width="1.3" marker-end="url(#arrowhead)"/>
+        <path d="M588,618 H599" fill="none" stroke="#64748b" stroke-width="1.3" marker-end="url(#arrowhead)"/>
+        <path d="M744,618 H755" fill="none" stroke="#64748b" stroke-width="1.3" marker-end="url(#arrowhead)"/>
+        <path d="M813.5,534 V600 H355.5 V607" fill="none" stroke="#64748b" stroke-width="1.3" marker-end="url(#arrowhead)"/>
+        <path d="M236,506 H258" fill="none" stroke="#22d3ee" stroke-width="1.3" marker-end="url(#arrowcyan)"/>
+        <path d="M900,506 H938" fill="none" stroke="#64748b" stroke-width="1.3" marker-end="url(#arrowhead)"/>
+        <path d="M900,602 H938" fill="none" stroke="#64748b" stroke-width="1.3" marker-end="url(#arrowhead)"/>
+        <path d="M380,708 H391" fill="none" stroke="#64748b" stroke-width="1.3" marker-end="url(#arrowhead)"/>
+        <path d="M510,708 H521" fill="none" stroke="#64748b" stroke-width="1.3" marker-end="url(#arrowhead)"/>
+        <path d="M451.0,718 V727" fill="none" stroke="#fb7185" stroke-width="1.3" marker-end="url(#arrowrose)"/>
+        <path d="M384,772 H395" fill="none" stroke="#64748b" stroke-width="1.3" marker-end="url(#arrowhead)"/>
+        <path d="M467,772 H478" fill="none" stroke="#64748b" stroke-width="1.3" marker-end="url(#arrowhead)"/>
+        <path d="M632,772 H643" fill="none" stroke="#64748b" stroke-width="1.3" marker-end="url(#arrowhead)"/>
+        <path d="M780,772 H791" fill="none" stroke="#64748b" stroke-width="1.3" marker-end="url(#arrowhead)"/>
+        <path d="M431.5,782 V791" fill="none" stroke="#fb7185" stroke-width="1.3" marker-end="url(#arrowrose)"/>
+        <path d="M310,840 H321" fill="none" stroke="#64748b" stroke-width="1.3" marker-end="url(#arrowhead)"/>
+        <path d="M536,840 H547" fill="none" stroke="#64748b" stroke-width="1.3" marker-end="url(#arrowhead)"/>
+        <path d="M697,840 H708" fill="none" stroke="#64748b" stroke-width="1.3" marker-end="url(#arrowhead)"/>
+        <path d="M831.5,782 V820 H288.0 V829" fill="none" stroke="#64748b" stroke-width="1.3" marker-end="url(#arrowhead)"/>
+        <path d="M236,690 H258" fill="none" stroke="#22d3ee" stroke-width="1.3" marker-end="url(#arrowcyan)"/>
+        <path d="M900,690 H938" fill="none" stroke="#64748b" stroke-width="1.3" marker-end="url(#arrowhead)"/>
+        <path d="M900,786 H938" fill="none" stroke="#64748b" stroke-width="1.3" marker-end="url(#arrowhead)"/>
+        <path d="M389,930 H400" fill="none" stroke="#64748b" stroke-width="1.3" marker-end="url(#arrowhead)"/>
+        <path d="M472,930 H483" fill="none" stroke="#64748b" stroke-width="1.3" marker-end="url(#arrowhead)"/>
+        <path d="M655,930 H666" fill="none" stroke="#64748b" stroke-width="1.3" marker-end="url(#arrowhead)"/>
+        <path d="M772,930 H783" fill="none" stroke="#64748b" stroke-width="1.3" marker-end="url(#arrowhead)"/>
+        <path d="M436.5,940 V949" fill="none" stroke="#fb7185" stroke-width="1.3" marker-end="url(#arrowrose)"/>
+        <path d="M389,1008 H400" fill="none" stroke="#64748b" stroke-width="1.3" marker-end="url(#arrowhead)"/>
+        <path d="M519,1008 H530" fill="none" stroke="#64748b" stroke-width="1.3" marker-end="url(#arrowhead)"/>
+        <path d="M628,1008 H639" fill="none" stroke="#64748b" stroke-width="1.3" marker-end="url(#arrowhead)"/>
+        <path d="M460.0,1018 V1027" fill="none" stroke="#fb7185" stroke-width="1.3" marker-end="url(#arrowrose)"/>
+        <path d="M236,912 H258" fill="none" stroke="#22d3ee" stroke-width="1.3" marker-end="url(#arrowcyan)"/>
+        <path d="M900,912 H938" fill="none" stroke="#64748b" stroke-width="1.3" marker-end="url(#arrowhead)"/>
+        <path d="M900,996 H938" fill="none" stroke="#64748b" stroke-width="1.3" marker-end="url(#arrowhead)"/>
+        <path d="M367,1114 H378" fill="none" stroke="#64748b" stroke-width="1.3" marker-end="url(#arrowhead)"/>
+        <path d="M523,1114 H534" fill="none" stroke="#64748b" stroke-width="1.3" marker-end="url(#arrowhead)"/>
+        <path d="M679,1114 H690" fill="none" stroke="#64748b" stroke-width="1.3" marker-end="url(#arrowhead)"/>
+        <path d="M451.0,1124 V1133" fill="none" stroke="#fb7185" stroke-width="1.3" marker-end="url(#arrowrose)"/>
+        <path d="M428,1182 H439" fill="none" stroke="#64748b" stroke-width="1.3" marker-end="url(#arrowhead)"/>
+        <path d="M628,1182 H639" fill="none" stroke="#64748b" stroke-width="1.3" marker-end="url(#arrowhead)"/>
+        <path d="M752.5,1124 V1162 H347.0 V1171" fill="none" stroke="#64748b" stroke-width="1.3" marker-end="url(#arrowhead)"/>
+        <path d="M341,1220 H352" fill="none" stroke="#64748b" stroke-width="1.3" marker-end="url(#arrowhead)"/>
+        <path d="M467,1220 H478" fill="none" stroke="#64748b" stroke-width="1.3" marker-end="url(#arrowhead)"/>
+        <path d="M615,1220 H626" fill="none" stroke="#64748b" stroke-width="1.3" marker-end="url(#arrowhead)"/>
+        <path d="M771,1220 H782" fill="none" stroke="#64748b" stroke-width="1.3" marker-end="url(#arrowhead)"/>
+        <path d="M725.5,1192 V1201 H303.5 V1209" fill="none" stroke="#64748b" stroke-width="1.3" marker-end="url(#arrowhead)"/>
+        <path d="M419,1258 H430" fill="none" stroke="#64748b" stroke-width="1.3" marker-end="url(#arrowhead)"/>
+        <path d="M645,1258 H656" fill="none" stroke="#64748b" stroke-width="1.3" marker-end="url(#arrowhead)"/>
+        <path d="M833.5,1230 V1239 H342.5 V1247" fill="none" stroke="#64748b" stroke-width="1.3" marker-end="url(#arrowhead)"/>
+        <path d="M236,1096 H258" fill="none" stroke="#22d3ee" stroke-width="1.3" marker-end="url(#arrowcyan)"/>
+        <path d="M900,1096 H938" fill="none" stroke="#64748b" stroke-width="1.3" marker-end="url(#arrowhead)"/>
+        <path d="M900,1168 H938" fill="none" stroke="#64748b" stroke-width="1.3" marker-end="url(#arrowhead)"/>
+        <path d="M900,1252 H938" fill="none" stroke="#64748b" stroke-width="1.3" marker-end="url(#arrowhead)"/>
+        <path d="M345,1348 H356" fill="none" stroke="#64748b" stroke-width="1.3" marker-end="url(#arrowhead)"/>
+        <path d="M462,1348 H473" fill="none" stroke="#64748b" stroke-width="1.3" marker-end="url(#arrowhead)"/>
+        <path d="M636,1348 H647" fill="none" stroke="#64748b" stroke-width="1.3" marker-end="url(#arrowhead)"/>
+        <path d="M409.5,1358 V1367" fill="none" stroke="#fb7185" stroke-width="1.3" marker-end="url(#arrowrose)"/>
+        <path d="M367,1426 H378" fill="none" stroke="#64748b" stroke-width="1.3" marker-end="url(#arrowhead)"/>
+        <path d="M497,1426 H508" fill="none" stroke="#64748b" stroke-width="1.3" marker-end="url(#arrowhead)"/>
+        <path d="M575,1426 H586" fill="none" stroke="#64748b" stroke-width="1.3" marker-end="url(#arrowhead)"/>
+        <path d="M701,1426 H712" fill="none" stroke="#64748b" stroke-width="1.3" marker-end="url(#arrowhead)"/>
+        <path d="M438.0,1436 V1445" fill="none" stroke="#fb7185" stroke-width="1.3" marker-end="url(#arrowrose)"/>
+        <path d="M542.0,1436 V1471" fill="none" stroke="#fb7185" stroke-width="1.3" marker-end="url(#arrowrose)"/>
+        <path d="M644.0,1436 V1445" fill="none" stroke="#fb7185" stroke-width="1.3" marker-end="url(#arrowrose)"/>
+        <path d="M371,1516 H382" fill="none" stroke="#64748b" stroke-width="1.3" marker-end="url(#arrowhead)"/>
+        <path d="M458,1516 H469" fill="none" stroke="#64748b" stroke-width="1.3" marker-end="url(#arrowhead)"/>
+        <path d="M584,1516 H595" fill="none" stroke="#64748b" stroke-width="1.3" marker-end="url(#arrowhead)"/>
+        <path d="M732,1516 H743" fill="none" stroke="#64748b" stroke-width="1.3" marker-end="url(#arrowhead)"/>
+        <path d="M420.5,1526 V1535" fill="none" stroke="#fb7185" stroke-width="1.3" marker-end="url(#arrowrose)"/>
+        <path d="M664.0,1526 V1535" fill="none" stroke="#fb7185" stroke-width="1.3" marker-end="url(#arrowrose)"/>
+        <path d="M371,1580 H382" fill="none" stroke="#64748b" stroke-width="1.3" marker-end="url(#arrowhead)"/>
+        <path d="M554,1580 H565" fill="none" stroke="#64748b" stroke-width="1.3" marker-end="url(#arrowhead)"/>
+        <path d="M645,1580 H656" fill="none" stroke="#64748b" stroke-width="1.3" marker-end="url(#arrowhead)"/>
+        <path d="M468.5,1590 V1599" fill="none" stroke="#64748b" stroke-width="1.3" marker-end="url(#arrowhead)"/>
+        <path d="M605.5,1590 V1599" fill="none" stroke="#64748b" stroke-width="1.3" marker-end="url(#arrowhead)"/>
+        <path d="M236,1330 H258" fill="none" stroke="#22d3ee" stroke-width="1.3" marker-end="url(#arrowcyan)"/>
+        <path d="M900,1330 H938" fill="none" stroke="#64748b" stroke-width="1.3" marker-end="url(#arrowhead)"/>
+        <path d="M900,1426 H938" fill="none" stroke="#64748b" stroke-width="1.3" marker-end="url(#arrowhead)"/>
+        <path d="M900,1558 H938" fill="none" stroke="#64748b" stroke-width="1.3" marker-end="url(#arrowhead)"/>
+        <line x1="26" y1="1686" x2="40" y2="1686" stroke="#fb7185" stroke-width="1.5" marker-end="url(#arrowrose)"/>
+        <rect x="40" y="16" width="760" height="72" rx="8" fill="#0f172a"/>
+        <rect x="40" y="16" width="760" height="72" rx="8" fill="rgba(30,41,59,0.5)" stroke="#94a3b8" stroke-width="1.2"/>
+        <text x="54" y="34" fill="white" font-size="11" font-weight="600">Test fixture · MainTestBase(BaseTestCase) + main_bp (url_prefix &#x27;/&#x27;) · everything patched at ROUTES</text>
+        <text x="54" y="50" fill="#94a3b8" font-size="8">render_template · CaseService · gather_service · helpers · subprocess · etl/fw utils · open/yaml · lazy event_log_service / utils.issue_time_ai</text>
+        <text x="54" y="63" fill="#94a3b8" font-size="8">TEST_CASE_NBR &#x27;00123456&#x27; · WORKFLOW_ID &#x27;wf-test-1&#x27; · PROMPT_PATH &#x27;prompts/wifi_case_summary.txt&#x27; · EVT_PATH C:\fake\events\System.evtx</text>
+        <text x="54" y="76" fill="#94a3b8" font-size="8">ZIP_ITEM = [&#x27;logs.zip&#x27;, url, [&#x27;2026-04-14 01:26:00&#x27;, &#x27;uploaded by Partner&#x27;]] · TXT_ITEM = [&#x27;notes.txt&#x27;, url, [..., &#x27;&#x27;]] · _processed_case()</text>
+        <rect x="816" y="16" width="364" height="72" rx="8" fill="rgba(15,23,42,0.6)" stroke="#334155" stroke-width="1"/>
+        <text x="828" y="31" fill="white" font-size="10" font-weight="600">Legend</text>
+        <rect x="828" y="37" width="14" height="8" rx="2" fill="rgba(8,51,68,0.4)" stroke="#22d3ee" stroke-width="1"/>
+        <text x="848" y="44.5" fill="#94a3b8" font-size="7.5">test input</text>
+        <rect x="828" y="50" width="14" height="8" rx="2" fill="rgba(6,78,59,0.4)" stroke="#34d399" stroke-width="1"/>
+        <text x="848" y="57.5" fill="#94a3b8" font-size="7.5">code step</text>
+        <rect x="828" y="63" width="14" height="8" rx="2" fill="rgba(6,95,70,0.7)" stroke="#6ee7b7" stroke-width="1"/>
+        <text x="848" y="70.5" fill="#94a3b8" font-size="7.5">success output</text>
+        <rect x="828" y="76" width="14" height="8" rx="2" fill="rgba(136,19,55,0.4)" stroke="#fb7185" stroke-width="1"/>
+        <text x="848" y="83.5" fill="#94a3b8" font-size="7.5">error / redirect home</text>
+        <rect x="944" y="37" width="14" height="8" rx="2" fill="rgba(76,29,149,0.4)" stroke="#a78bfa" stroke-width="1"/>
+        <text x="964" y="44.5" fill="#94a3b8" font-size="7.5">helper H1–H4</text>
+        <rect x="944" y="50" width="14" height="8" rx="2" fill="rgba(120,53,15,0.3)" stroke="#fbbf24" stroke-width="1"/>
+        <text x="964" y="57.5" fill="#94a3b8" font-size="7.5">mocked dependency</text>
+        <rect x="944" y="63" width="14" height="8" rx="2" fill="rgba(154,52,18,0.45)" stroke="#fb923c" stroke-width="1"/>
+        <text x="964" y="70.5" fill="#94a3b8" font-size="7.5">best-effort (swallowed)</text>
+        <rect x="944" y="76" width="14" height="8" rx="2" fill="rgba(30,41,59,0.5)" stroke="#94a3b8" stroke-width="1"/>
+        <text x="964" y="83.5" fill="#94a3b8" font-size="7.5">fallback / no-op</text>
+        <line x1="1064" y1="42" x2="1080" y2="42" stroke="#64748b" stroke-width="1.5" marker-end="url(#arrowhead)"/>
+        <text x="1086" y="45" fill="#94a3b8" font-size="7.5">call / flow</text>
+        <line x1="1064" y1="56" x2="1080" y2="56" stroke="#22d3ee" stroke-width="1.5" marker-end="url(#arrowcyan)"/>
+        <text x="1086" y="59" fill="#94a3b8" font-size="7.5">input ➜ expected</text>
+        <line x1="1064" y1="70" x2="1080" y2="70" stroke="#fb7185" stroke-width="1.5" marker-end="url(#arrowrose)"/>
+        <text x="1086" y="73" fill="#94a3b8" font-size="7.5">error branch</text>
+        <rect x="40" y="100" width="1150" height="1548" rx="12" fill="rgba(251,191,36,0.03)" stroke="#fbbf24" stroke-width="1" stroke-dasharray="8,4"/>
+        <text x="54" y="122" fill="#fbbf24" font-size="10" font-weight="600">Component interaction map · test inputs ➜ main_routes.py (10 URL rules / 12 handlers, F1–F6) ➜ mocked dependencies</text>
+        <text x="56" y="141" fill="#22d3ee" font-size="7" font-weight="600">TEST INPUTS (per test class)</text>
+        <text x="260" y="141" fill="#34d399" font-size="7" font-weight="600">CODE UNDER TEST · blueprints/main/main_routes.py</text>
+        <text x="940" y="141" fill="#fbbf24" font-size="7" font-weight="600">MOCKED DEPENDENCIES</text>
+        <rect x="260" y="150" width="640" height="118" rx="8" fill="rgba(76,29,149,0.08)" stroke="#a78bfa" stroke-width="0.9" stroke-dasharray="4,3"/>
+        <text x="270" y="164" fill="#a78bfa" font-size="8.5" font-weight="600">Shared helpers · used by the routes below (violet chips) · core-logic tests call them directly</text>
+        <rect x="268" y="172" width="150" height="90" rx="6" fill="#0f172a"/>
+        <rect x="268" y="172" width="150" height="90" rx="6" fill="rgba(76,29,149,0.4)" stroke="#a78bfa" stroke-width="1.3"/>
+        <text x="277" y="187" fill="white" font-size="7.6" font-weight="600">H1 _get_wireless_topics()</text>
+        <text x="277" y="200" fill="#94a3b8" font-size="6.6">open BT + Wi-Fi YAML (share)</text>
+        <text x="277" y="211" fill="#94a3b8" font-size="6.6">BT topic/explanation</text>
+        <text x="277" y="222" fill="#94a3b8" font-size="6.6">Wi-Fi topic/fact ➜ explanation</text>
+        <text x="277" y="233" fill="#94a3b8" font-size="6.6">shuffle ➜ [:limit]</text>
+        <text x="277" y="244" fill="#94a3b8" font-size="6.6">OSError / empty ➜ fallback</text>
+        <rect x="426" y="172" width="150" height="90" rx="6" fill="#0f172a"/>
+        <rect x="426" y="172" width="150" height="90" rx="6" fill="rgba(76,29,149,0.4)" stroke="#a78bfa" stroke-width="1.3"/>
+        <text x="435" y="187" fill="white" font-size="7.6" font-weight="600">H2 _prime_issue_ai_cache(ctx)</text>
+        <text x="435" y="200" fill="#94a3b8" font-size="6.6">text = description or</text>
+        <text x="435" y="211" fill="#94a3b8" font-size="6.6">  ZIP attachment subtitles</text>
+        <text x="435" y="222" fill="#94a3b8" font-size="6.6">organize_issue_context(LLM)</text>
+        <text x="435" y="233" fill="#94a3b8" font-size="6.6">session._issue_ai_quick</text>
+        <text x="435" y="244" fill="#94a3b8" font-size="6.6">gather usage if llm_calls&gt;0</text>
+        <rect x="584" y="172" width="150" height="90" rx="6" fill="#0f172a"/>
+        <rect x="584" y="172" width="150" height="90" rx="6" fill="rgba(76,29,149,0.4)" stroke="#a78bfa" stroke-width="1.3"/>
+        <text x="593" y="187" fill="white" font-size="7.6" font-weight="600">H3 _resolve_download_path</text>
+        <text x="593" y="200" fill="#94a3b8" font-size="6.6">bsod ➜ get_load_path() \</text>
+        <text x="593" y="211" fill="#94a3b8" font-size="6.6">  dashed backend_id | case_nbr</text>
+        <text x="593" y="222" fill="#94a3b8" font-size="6.6">  no share ➜ &#x27;&#x27;</text>
+        <text x="593" y="233" fill="#94a3b8" font-size="6.6">else case_download_dir</text>
+        <text x="593" y="244" fill="#94a3b8" font-size="6.6">ctx None ➜ &#x27;&#x27;</text>
+        <rect x="742" y="172" width="150" height="90" rx="6" fill="#0f172a"/>
+        <rect x="742" y="172" width="150" height="90" rx="6" fill="rgba(76,29,149,0.4)" stroke="#a78bfa" stroke-width="1.3"/>
+        <text x="751" y="187" fill="white" font-size="7.6" font-weight="600">H4 _build_*_table_rows</text>
+        <text x="751" y="200" fill="#94a3b8" font-size="6.6">merged: ETL rows per zip</text>
+        <text x="751" y="211" fill="#94a3b8" font-size="6.6">  rowspan + show_*_cell</text>
+        <text x="751" y="222" fill="#94a3b8" font-size="6.6">  .log filtered, empty zip</text>
+        <text x="751" y="233" fill="#94a3b8" font-size="6.6">  dropped</text>
+        <text x="751" y="244" fill="#94a3b8" font-size="6.6">event: keep only .evtx</text>
+        <rect x="56" y="150" width="180" height="118" rx="6" fill="#0f172a"/>
+        <rect x="56" y="150" width="180" height="118" rx="6" fill="rgba(8,51,68,0.4)" stroke="#22d3ee" stroke-width="1.3"/>
+        <text x="65" y="165" fill="white" font-size="8" font-weight="600">Core-logic tests (10)</text>
+        <text x="65" y="178" fill="#94a3b8" font-size="6.8">TestGetWirelessTopics (3)</text>
+        <text x="65" y="189" fill="#94a3b8" font-size="6.8">  yaml side_effect · OSError · None</text>
+        <text x="65" y="200" fill="#94a3b8" font-size="6.8">TestPrimeIssueAiCache (3)</text>
+        <text x="65" y="211" fill="#94a3b8" font-size="6.8">  description · subtitle · no text</text>
+        <text x="65" y="222" fill="#94a3b8" font-size="6.8">TestBuildTableRows (2)</text>
+        <text x="65" y="233" fill="#94a3b8" font-size="6.8">_resolve_download_path (2, in</text>
+        <text x="65" y="244" fill="#94a3b8" font-size="6.8">  TestDownloadAttachments)</text>
+        <text x="65" y="255" fill="#94a3b8" font-size="6.8">direct calls in test_request_context</text>
+        <rect x="940" y="150" width="236" height="56" rx="6" fill="#0f172a"/>
+        <rect x="940" y="150" width="236" height="56" rx="6" fill="rgba(120,53,15,0.3)" stroke="#fbbf24" stroke-width="1.3"/>
+        <text x="949" y="165" fill="white" font-size="8" font-weight="600">open · yaml.safe_load (patched)</text>
+        <text x="949" y="178" fill="#94a3b8" font-size="6.8">WIRELESS_TOPICS_DIR BT + Wi-Fi YAML</text>
+        <text x="949" y="189" fill="#94a3b8" font-size="6.8">random.shuffle (patched)</text>
+        <text x="949" y="200" fill="#94a3b8" font-size="6.8">OSError(&#x27;share unreachable&#x27;)</text>
+        <rect x="940" y="212" width="236" height="56" rx="6" fill="#0f172a"/>
+        <rect x="940" y="212" width="236" height="56" rx="6" fill="rgba(120,53,15,0.3)" stroke="#fbbf24" stroke-width="1.3"/>
+        <text x="949" y="227" fill="white" font-size="8" font-weight="600">utils.issue_time_ai (patched)</text>
+        <text x="949" y="240" fill="#94a3b8" font-size="6.8">organize_issue_context ➜ (data, usage)</text>
+        <text x="949" y="251" fill="#94a3b8" font-size="6.8">llm_helper.client &#x27;llm-client&#x27; / &#x27;gpt-test&#x27;</text>
+        <text x="949" y="262" fill="#94a3b8" font-size="6.8">gather.record_feature_usage</text>
+        <rect x="260" y="288" width="640" height="180" rx="8" fill="rgba(6,78,59,0.07)" stroke="#34d399" stroke-width="0.9" stroke-dasharray="4,3"/>
+        <rect x="266" y="293" width="20" height="11" rx="2" fill="#020617" stroke="#34d399" stroke-width="0.8"/>
+        <text x="276" y="301.5" fill="#34d399" font-size="6.5" font-weight="600" text-anchor="middle">F1</text>
+        <text x="292" y="302" fill="#34d399" font-size="8.5" font-weight="600">Case entry · GET / · POST /</text>
+        <rect x="266" y="314" width="110" height="20" rx="4" fill="#0f172a"/>
+        <rect x="266" y="314" width="110" height="20" rx="4" fill="rgba(6,78,59,0.4)" stroke="#34d399" stroke-width="1.1"/>
+        <text x="321.0" y="327.5" fill="white" font-size="7.2" text-anchor="middle">GET / render_case_form</text>
+        <rect x="388" y="314" width="131" height="20" rx="4" fill="#0f172a"/>
+        <rect x="388" y="314" width="131" height="20" rx="4" fill="rgba(120,53,15,0.3)" stroke="#fbbf24" stroke-width="1.1"/>
+        <text x="453.5" y="327.5" fill="white" font-size="7.2" text-anchor="middle">get_clipboard_case_number()</text>
+        <rect x="531" y="314" width="123" height="20" rx="4" fill="#0f172a"/>
+        <rect x="531" y="314" width="123" height="20" rx="4" fill="rgba(76,29,149,0.4)" stroke="#a78bfa" stroke-width="1.1"/>
+        <text x="592.5" y="327.5" fill="white" font-size="7.2" text-anchor="middle">H1 _get_wireless_topics()</text>
+        <rect x="666" y="314" width="153" height="20" rx="4" fill="#0f172a"/>
+        <rect x="666" y="314" width="153" height="20" rx="4" fill="rgba(6,95,70,0.7)" stroke="#6ee7b7" stroke-width="1.1"/>
+        <text x="742.5" y="327.5" fill="white" font-size="7.2" text-anchor="middle">render_template(&#x27;index.html&#x27;, …)</text>
+        <rect x="266" y="344" width="153" height="20" rx="4" fill="#0f172a"/>
+        <rect x="266" y="344" width="153" height="20" rx="4" fill="rgba(6,78,59,0.4)" stroke="#34d399" stroke-width="1.1"/>
+        <text x="342.5" y="357.5" fill="white" font-size="7.2" text-anchor="middle">POST /: case_number minus spaces</text>
+        <rect x="431" y="344" width="140" height="20" rx="4" fill="#0f172a"/>
+        <rect x="431" y="344" width="140" height="20" rx="4" fill="rgba(120,53,15,0.3)" stroke="#fbbf24" stroke-width="1.1"/>
+        <text x="501.0" y="357.5" fill="white" font-size="7.2" text-anchor="middle">CaseService.process_case(ctx)</text>
+        <rect x="583" y="344" width="144" height="20" rx="4" fill="#0f172a"/>
+        <rect x="583" y="344" width="144" height="20" rx="4" fill="rgba(6,78,59,0.4)" stroke="#34d399" stroke-width="1.1"/>
+        <text x="655.0" y="357.5" fill="white" font-size="7.2" text-anchor="middle">session.clear() + to_session()</text>
+        <rect x="739" y="344" width="123" height="20" rx="4" fill="#0f172a"/>
+        <rect x="739" y="344" width="123" height="20" rx="4" fill="rgba(6,78,59,0.4)" stroke="#34d399" stroke-width="1.1"/>
+        <text x="800.5" y="357.5" fill="white" font-size="7.2" text-anchor="middle">prompt path · flags=False</text>
+        <rect x="332.5" y="374" width="123" height="20" rx="4" fill="#0f172a"/>
+        <rect x="332.5" y="374" width="123" height="20" rx="4" fill="rgba(136,19,55,0.4)" stroke="#fb7185" stroke-width="1.1"/>
+        <text x="394.0" y="387.5" fill="white" font-size="7.2" text-anchor="middle">&#x27;&#x27; ➜ flash danger ➜ 302 /</text>
+        <rect x="491.0" y="400" width="210" height="20" rx="4" fill="#0f172a"/>
+        <rect x="491.0" y="400" width="210" height="20" rx="4" fill="rgba(136,19,55,0.4)" stroke="#fb7185" stroke-width="1.1"/>
+        <text x="596.0" y="413.5" fill="white" font-size="7.2" text-anchor="middle">error_message | raises ➜ flash danger ➜ 302 /</text>
+        <rect x="266" y="438" width="214" height="20" rx="4" fill="#0f172a"/>
+        <rect x="266" y="438" width="214" height="20" rx="4" fill="rgba(120,53,15,0.3)" stroke="#fbbf24" stroke-width="1.1"/>
+        <text x="373.0" y="451.5" fill="white" font-size="7.2" text-anchor="middle">_start_gather_workflow ➜ record_workflow_start</text>
+        <rect x="492" y="438" width="114" height="20" rx="4" fill="#0f172a"/>
+        <rect x="492" y="438" width="114" height="20" rx="4" fill="rgba(6,95,70,0.7)" stroke="#6ee7b7" stroke-width="1.1"/>
+        <text x="549.0" y="451.5" fill="white" font-size="7.2" text-anchor="middle">302 /select_attachments</text>
+        <rect x="56" y="288" width="180" height="180" rx="6" fill="#0f172a"/>
+        <rect x="56" y="288" width="180" height="180" rx="6" fill="rgba(8,51,68,0.4)" stroke="#22d3ee" stroke-width="1.3"/>
+        <text x="65" y="303" fill="white" font-size="8" font-weight="600">TestIndex (5)</text>
+        <text x="65" y="316" fill="#94a3b8" font-size="6.8">client.get(&#x27;/&#x27;)</text>
+        <text x="65" y="327" fill="#94a3b8" font-size="6.8">  clipboard ➜ &#x27;00999999&#x27;</text>
+        <text x="65" y="338" fill="#94a3b8" font-size="6.8">  topics ➜ [{topic &#x27;T&#x27;, expl &#x27;E&#x27;}]</text>
+        <text x="65" y="349" fill="#94a3b8" font-size="6.8">post / {case_number: &#x27;   &#x27;}</text>
+        <text x="65" y="360" fill="#94a3b8" font-size="6.8">post / {case_number: &#x27;00000000&#x27;}</text>
+        <text x="65" y="371" fill="#94a3b8" font-size="6.8">  process_case ➜ error_message</text>
+        <text x="65" y="382" fill="#94a3b8" font-size="6.8">post / {case_number: &#x27; 00 123 456 &#x27;}</text>
+        <text x="65" y="393" fill="#94a3b8" font-size="6.8">  session stale_key · wf &#x27;wf-test-1&#x27;</text>
+        <text x="65" y="404" fill="#94a3b8" font-size="6.8">process_case raises RuntimeError</text>
+        <rect x="940" y="288" width="236" height="84" rx="6" fill="#0f172a"/>
+        <rect x="940" y="288" width="236" height="84" rx="6" fill="rgba(120,53,15,0.3)" stroke="#fbbf24" stroke-width="1.3"/>
+        <text x="949" y="303" fill="white" font-size="8" font-weight="600">CaseService (mock)</text>
+        <text x="949" y="316" fill="#94a3b8" font-size="6.8">process_case(case_context) ➜</text>
+        <text x="949" y="327" fill="#94a3b8" font-size="6.8">  _processed_case() | error | raises</text>
+        <text x="949" y="338" fill="#94a3b8" font-size="6.8">load_case_summary_prompt(&#x27;wifi&#x27;)</text>
+        <text x="949" y="349" fill="#94a3b8" font-size="6.8">  ➜ PROMPT_PATH</text>
+        <text x="949" y="360" fill="#94a3b8" font-size="6.8">helpers.get_clipboard_case_number</text>
+        <rect x="940" y="384" width="236" height="84" rx="6" fill="#0f172a"/>
+        <rect x="940" y="384" width="236" height="84" rx="6" fill="rgba(120,53,15,0.3)" stroke="#fbbf24" stroke-width="1.3"/>
+        <text x="949" y="399" fill="white" font-size="8" font-weight="600">gather_service (mock)</text>
+        <text x="949" y="412" fill="#94a3b8" font-size="6.8">new_workflow_id ➜ &#x27;wf-test-1&#x27;</text>
+        <text x="949" y="423" fill="#94a3b8" font-size="6.8">record_workflow_start(workflow_id,</text>
+        <text x="949" y="434" fill="#94a3b8" font-size="6.8">  domain, attachment_list)</text>
+        <text x="949" y="445" fill="#94a3b8" font-size="6.8">record_attachment_selection</text>
+        <text x="949" y="456" fill="#94a3b8" font-size="6.8">record_feature_usage</text>
+        <rect x="260" y="488" width="640" height="164" rx="8" fill="rgba(6,78,59,0.07)" stroke="#34d399" stroke-width="0.9" stroke-dasharray="4,3"/>
+        <rect x="266" y="493" width="20" height="11" rx="2" fill="#020617" stroke="#34d399" stroke-width="0.8"/>
+        <text x="276" y="501.5" fill="#34d399" font-size="6.5" font-weight="600" text-anchor="middle">F2</text>
+        <text x="292" y="502" fill="#34d399" font-size="8.5" font-weight="600">One-click Run Analysis · POST /start_latest_etl_llm (JSON)</text>
+        <rect x="266" y="514" width="66" height="20" rx="4" fill="#0f172a"/>
+        <rect x="266" y="514" width="66" height="20" rx="4" fill="rgba(6,78,59,0.4)" stroke="#34d399" stroke-width="1.1"/>
+        <text x="299.0" y="527.5" fill="white" font-size="7.2" text-anchor="middle">case_number?</text>
+        <rect x="344" y="514" width="118" height="20" rx="4" fill="#0f172a"/>
+        <rect x="344" y="514" width="118" height="20" rx="4" fill="rgba(120,53,15,0.3)" stroke="#fbbf24" stroke-width="1.1"/>
+        <text x="403.0" y="527.5" fill="white" font-size="7.2" text-anchor="middle">CaseService.process_case</text>
+        <rect x="474" y="514" width="136" height="20" rx="4" fill="#0f172a"/>
+        <rect x="474" y="514" width="136" height="20" rx="4" fill="rgba(120,53,15,0.3)" stroke="#fbbf24" stroke-width="1.1"/>
+        <text x="542.0" y="527.5" fill="white" font-size="7.2" text-anchor="middle">pick_latest_zip_attachment()</text>
+        <rect x="622" y="514" width="114" height="20" rx="4" fill="#0f172a"/>
+        <rect x="622" y="514" width="114" height="20" rx="4" fill="rgba(6,78,59,0.4)" stroke="#34d399" stroke-width="1.1"/>
+        <text x="679.0" y="527.5" fill="white" font-size="7.2" text-anchor="middle">session.clear() + [zip]</text>
+        <rect x="748" y="514" width="131" height="20" rx="4" fill="#0f172a"/>
+        <rect x="748" y="514" width="131" height="20" rx="4" fill="rgba(120,53,15,0.3)" stroke="#fbbf24" stroke-width="1.1"/>
+        <text x="813.5" y="527.5" fill="white" font-size="7.2" text-anchor="middle">llm_helper.classify_issue()</text>
+        <rect x="289.0" y="544" width="71" height="20" rx="4" fill="#0f172a"/>
+        <rect x="289.0" y="544" width="71" height="20" rx="4" fill="rgba(136,19,55,0.4)" stroke="#fb7185" stroke-width="1.1"/>
+        <text x="324.5" y="557.5" fill="white" font-size="7.2" text-anchor="middle">missing ➜ 400</text>
+        <rect x="393.0" y="570" width="131" height="20" rx="4" fill="#0f172a"/>
+        <rect x="393.0" y="570" width="131" height="20" rx="4" fill="rgba(136,19,55,0.4)" stroke="#fb7185" stroke-width="1.1"/>
+        <text x="458.5" y="583.5" fill="white" font-size="7.2" text-anchor="middle">error ➜ 400 &#x27;Invalid case…&#x27;</text>
+        <rect x="532.0" y="544" width="184" height="20" rx="4" fill="#0f172a"/>
+        <rect x="532.0" y="544" width="184" height="20" rx="4" fill="rgba(136,19,55,0.4)" stroke="#fb7185" stroke-width="1.1"/>
+        <text x="624.0" y="557.5" fill="white" font-size="7.2" text-anchor="middle">no zip ➜ 400 &#x27;No ZIP attachment found…&#x27;</text>
+        <rect x="750" y="570" width="144" height="20" rx="4" fill="#0f172a"/>
+        <rect x="750" y="570" width="144" height="20" rx="4" fill="rgba(154,52,18,0.45)" stroke="#fb923c" stroke-width="1.1"/>
+        <text x="822.0" y="583.5" fill="white" font-size="7.2" text-anchor="middle">None | raises ➜ &#x27;Unclassified&#x27;</text>
+        <rect x="266" y="608" width="179" height="20" rx="4" fill="#0f172a"/>
+        <rect x="266" y="608" width="179" height="20" rx="4" fill="rgba(76,29,149,0.4)" stroke="#a78bfa" stroke-width="1.1"/>
+        <text x="355.5" y="621.5" fill="white" font-size="7.2" text-anchor="middle">H2 _prime_issue_ai_cache (best-effort)</text>
+        <rect x="457" y="608" width="131" height="20" rx="4" fill="#0f172a"/>
+        <rect x="457" y="608" width="131" height="20" rx="4" fill="rgba(120,53,15,0.3)" stroke="#fbbf24" stroke-width="1.1"/>
+        <text x="522.5" y="621.5" fill="white" font-size="7.2" text-anchor="middle">record_attachment_selection</text>
+        <rect x="600" y="608" width="144" height="20" rx="4" fill="#0f172a"/>
+        <rect x="600" y="608" width="144" height="20" rx="4" fill="rgba(6,78,59,0.4)" stroke="#34d399" stroke-width="1.1"/>
+        <text x="672.0" y="621.5" fill="white" font-size="7.2" text-anchor="middle">_run_analysis_requested = True</text>
+        <rect x="756" y="608" width="131" height="20" rx="4" fill="#0f172a"/>
+        <rect x="756" y="608" width="131" height="20" rx="4" fill="rgba(6,95,70,0.7)" stroke="#6ee7b7" stroke-width="1.1"/>
+        <text x="821.5" y="621.5" fill="white" font-size="7.2" text-anchor="middle">200 ➜ /download_attachments</text>
+        <text x="266" y="644" fill="#94a3b8" font-size="7">outer exception ➜ 500 {success: False, message} · classify / pre-pass / selection failures are swallowed</text>
+        <rect x="56" y="488" width="180" height="164" rx="6" fill="#0f172a"/>
+        <rect x="56" y="488" width="180" height="164" rx="6" fill="rgba(8,51,68,0.4)" stroke="#22d3ee" stroke-width="1.3"/>
+        <text x="65" y="503" fill="white" font-size="8" font-weight="600">TestStartLatestEtlLlm (7)</text>
+        <text x="65" y="516" fill="#94a3b8" font-size="6.8">post {} (no case_number)</text>
+        <text x="65" y="527" fill="#94a3b8" font-size="6.8">post {case_number: &#x27;00123456&#x27;}</text>
+        <text x="65" y="538" fill="#94a3b8" font-size="6.8">  process_case ➜ error | raises</text>
+        <text x="65" y="549" fill="#94a3b8" font-size="6.8">  attachments [TXT] only</text>
+        <text x="65" y="560" fill="#94a3b8" font-size="6.8">  attachments [ZIP, TXT] (success)</text>
+        <text x="65" y="571" fill="#94a3b8" font-size="6.8">classify_issue ➜ {Disconnect, 90}</text>
+        <text x="65" y="582" fill="#94a3b8" font-size="6.8">llm_helper = None</text>
+        <text x="65" y="593" fill="#94a3b8" font-size="6.8">classify + prime raise</text>
+        <text x="65" y="604" fill="#94a3b8" font-size="6.8">session stale_key</text>
+        <rect x="940" y="488" width="236" height="84" rx="6" fill="#0f172a"/>
+        <rect x="940" y="488" width="236" height="84" rx="6" fill="rgba(120,53,15,0.3)" stroke="#fbbf24" stroke-width="1.3"/>
+        <text x="949" y="503" fill="white" font-size="8" font-weight="600">app_config.llm_helper (MagicMock)</text>
+        <text x="949" y="516" fill="#94a3b8" font-size="6.8">classify_issue ➜ {issue_type &#x27;Disconnect&#x27;,</text>
+        <text x="949" y="527" fill="#94a3b8" font-size="6.8">  confidence 90, keywords [&#x27;drop&#x27;]}</text>
+        <text x="949" y="538" fill="#94a3b8" font-size="6.8">| None | raises</text>
+        <text x="949" y="549" fill="#94a3b8" font-size="6.8">_prime_issue_ai_cache patched</text>
+        <rect x="940" y="584" width="236" height="60" rx="6" fill="#0f172a"/>
+        <rect x="940" y="584" width="236" height="60" rx="6" fill="rgba(120,53,15,0.3)" stroke="#fbbf24" stroke-width="1.3"/>
+        <text x="949" y="599" fill="white" font-size="8" font-weight="600">etl_utils.pick_latest_zip_attachment</text>
+        <text x="949" y="612" fill="#94a3b8" font-size="6.8">attachment_list ➜ ZIP_ITEM | None</text>
+        <rect x="260" y="672" width="640" height="202" rx="8" fill="rgba(6,78,59,0.07)" stroke="#34d399" stroke-width="0.9" stroke-dasharray="4,3"/>
+        <rect x="266" y="677" width="20" height="11" rx="2" fill="#020617" stroke="#34d399" stroke-width="0.8"/>
+        <text x="276" y="685.5" fill="#34d399" font-size="6.5" font-weight="600" text-anchor="middle">F3</text>
+        <text x="292" y="686" fill="#34d399" font-size="8.5" font-weight="600">Attachment selection · GET | POST /select_attachments</text>
+        <rect x="266" y="698" width="114" height="20" rx="4" fill="#0f172a"/>
+        <rect x="266" y="698" width="114" height="20" rx="4" fill="rgba(6,78,59,0.4)" stroke="#34d399" stroke-width="1.1"/>
+        <text x="323.0" y="711.5" fill="white" font-size="7.2" text-anchor="middle">GET /select_attachments</text>
+        <rect x="392" y="698" width="118" height="20" rx="4" fill="#0f172a"/>
+        <rect x="392" y="698" width="118" height="20" rx="4" fill="rgba(6,78,59,0.4)" stroke="#34d399" stroke-width="1.1"/>
+        <text x="451.0" y="711.5" fill="white" font-size="7.2" text-anchor="middle">case_context in session?</text>
+        <rect x="522" y="698" width="144" height="20" rx="4" fill="#0f172a"/>
+        <rect x="522" y="698" width="144" height="20" rx="4" fill="rgba(6,95,70,0.7)" stroke="#6ee7b7" stroke-width="1.1"/>
+        <text x="594.0" y="711.5" fill="white" font-size="7.2" text-anchor="middle">render select_attachments.html</text>
+        <rect x="441.0" y="728" width="171" height="20" rx="4" fill="#0f172a"/>
+        <rect x="441.0" y="728" width="171" height="20" rx="4" fill="rgba(136,19,55,0.4)" stroke="#fb7185" stroke-width="1.1"/>
+        <text x="526.5" y="741.5" fill="white" font-size="7.2" text-anchor="middle">no ➜ flash &#x27;Session expired&#x27; ➜ 302 /</text>
+        <rect x="266" y="762" width="118" height="20" rx="4" fill="#0f172a"/>
+        <rect x="266" y="762" width="118" height="20" rx="4" fill="rgba(6,78,59,0.4)" stroke="#34d399" stroke-width="1.1"/>
+        <text x="325.0" y="775.5" fill="white" font-size="7.2" text-anchor="middle">POST /select_attachments</text>
+        <rect x="396" y="762" width="71" height="20" rx="4" fill="#0f172a"/>
+        <rect x="396" y="762" width="71" height="20" rx="4" fill="rgba(6,78,59,0.4)" stroke="#34d399" stroke-width="1.1"/>
+        <text x="431.5" y="775.5" fill="white" font-size="7.2" text-anchor="middle">case_context?</text>
+        <rect x="479" y="762" width="153" height="20" rx="4" fill="#0f172a"/>
+        <rect x="479" y="762" width="153" height="20" rx="4" fill="rgba(6,78,59,0.4)" stroke="#34d399" stroke-width="1.1"/>
+        <text x="555.5" y="775.5" fill="white" font-size="7.2" text-anchor="middle">selected_files ⊂ attachment_list</text>
+        <rect x="644" y="762" width="136" height="20" rx="4" fill="#0f172a"/>
+        <rect x="644" y="762" width="136" height="20" rx="4" fill="rgba(120,53,15,0.3)" stroke="#fbbf24" stroke-width="1.1"/>
+        <text x="712.0" y="775.5" fill="white" font-size="7.2" text-anchor="middle">record_attachment_selection*</text>
+        <rect x="792" y="762" width="79" height="20" rx="4" fill="#0f172a"/>
+        <rect x="792" y="762" width="79" height="20" rx="4" fill="rgba(76,29,149,0.4)" stroke="#a78bfa" stroke-width="1.1"/>
+        <text x="831.5" y="775.5" fill="white" font-size="7.2" text-anchor="middle">H2 prime cache*</text>
+        <rect x="421.5" y="792" width="105" height="20" rx="4" fill="#0f172a"/>
+        <rect x="421.5" y="792" width="105" height="20" rx="4" fill="rgba(136,19,55,0.4)" stroke="#fb7185" stroke-width="1.1"/>
+        <text x="474.0" y="805.5" fill="white" font-size="7.2" text-anchor="middle">no ➜ 302 / (no prime)</text>
+        <rect x="266" y="830" width="44" height="20" rx="4" fill="#0f172a"/>
+        <rect x="266" y="830" width="44" height="20" rx="4" fill="rgba(76,29,149,0.4)" stroke="#a78bfa" stroke-width="1.1"/>
+        <text x="288.0" y="843.5" fill="white" font-size="7.2" text-anchor="middle">action?</text>
+        <rect x="322" y="830" width="214" height="20" rx="4" fill="#0f172a"/>
+        <rect x="322" y="830" width="214" height="20" rx="4" fill="rgba(6,78,59,0.4)" stroke="#34d399" stroke-width="1.1"/>
+        <text x="429.0" y="843.5" fill="white" font-size="7.2" text-anchor="middle">analysis | latest_etl_llm ➜ latest + run flags</text>
+        <rect x="548" y="830" width="149" height="20" rx="4" fill="#0f172a"/>
+        <rect x="548" y="830" width="149" height="20" rx="4" fill="rgba(6,78,59,0.4)" stroke="#34d399" stroke-width="1.1"/>
+        <text x="622.5" y="843.5" fill="white" font-size="7.2" text-anchor="middle">bsod ➜ bsod=True, no run marker</text>
+        <rect x="709" y="830" width="123" height="20" rx="4" fill="#0f172a"/>
+        <rect x="709" y="830" width="123" height="20" rx="4" fill="rgba(6,95,70,0.7)" stroke="#6ee7b7" stroke-width="1.1"/>
+        <text x="770.5" y="843.5" fill="white" font-size="7.2" text-anchor="middle">302 /download_attachments</text>
+        <text x="266" y="866" fill="#94a3b8" font-size="7">* best-effort (exceptions swallowed) · &#x27;latest_etl_llm&#x27; is a legacy alias of &#x27;analysis&#x27; · &#x27;download&#x27; sets no flags</text>
+        <rect x="56" y="672" width="180" height="202" rx="6" fill="#0f172a"/>
+        <rect x="56" y="672" width="180" height="202" rx="6" fill="rgba(8,51,68,0.4)" stroke="#22d3ee" stroke-width="1.3"/>
+        <text x="65" y="687" fill="white" font-size="8" font-weight="600">TestSelectAttachments (7)</text>
+        <text x="65" y="700" fill="#94a3b8" font-size="6.8">get · no session | seeded case</text>
+        <text x="65" y="711" fill="#94a3b8" font-size="6.8">post {selected_files: [&#x27;logs.zip&#x27;]}</text>
+        <text x="65" y="722" fill="#94a3b8" font-size="6.8">  no session</text>
+        <text x="65" y="733" fill="#94a3b8" font-size="6.8">  action &#x27;analysis&#x27;</text>
+        <text x="65" y="744" fill="#94a3b8" font-size="6.8">  action &#x27;latest_etl_llm&#x27; (legacy)</text>
+        <text x="65" y="755" fill="#94a3b8" font-size="6.8">post {selected_files: [&#x27;logs.zip&#x27;,</text>
+        <text x="65" y="766" fill="#94a3b8" font-size="6.8">  &#x27;notes.txt&#x27;], action: &#x27;bsod&#x27;}</text>
+        <text x="65" y="777" fill="#94a3b8" font-size="6.8">action &#x27;download&#x27; + selection</text>
+        <text x="65" y="788" fill="#94a3b8" font-size="6.8">  and prime both raise</text>
+        <rect x="940" y="672" width="236" height="84" rx="6" fill="#0f172a"/>
+        <rect x="940" y="672" width="236" height="84" rx="6" fill="rgba(120,53,15,0.3)" stroke="#fbbf24" stroke-width="1.3"/>
+        <text x="949" y="687" fill="white" font-size="8" font-weight="600">render_template (patched)</text>
+        <text x="949" y="700" fill="#94a3b8" font-size="6.8">select_attachments.html(</text>
+        <text x="949" y="711" fill="#94a3b8" font-size="6.8">  case_context, ai_analysis=None)</text>
+        <text x="949" y="722" fill="#94a3b8" font-size="6.8">attachment_download_progress.html</text>
+        <rect x="940" y="768" width="236" height="72" rx="6" fill="#0f172a"/>
+        <rect x="940" y="768" width="236" height="72" rx="6" fill="rgba(120,53,15,0.3)" stroke="#fbbf24" stroke-width="1.3"/>
+        <text x="949" y="783" fill="white" font-size="8" font-weight="600">gather.record_attachment_selection</text>
+        <text x="949" y="796" fill="#94a3b8" font-size="6.8">(workflow_id &#x27;wf-test-1&#x27;,</text>
+        <text x="949" y="807" fill="#94a3b8" font-size="6.8">  selected_files [ZIP_ITEM], domain)</text>
+        <text x="949" y="818" fill="#94a3b8" font-size="6.8">| raises (swallowed)</text>
+        <rect x="260" y="894" width="640" height="164" rx="8" fill="rgba(6,78,59,0.07)" stroke="#34d399" stroke-width="0.9" stroke-dasharray="4,3"/>
+        <rect x="266" y="899" width="20" height="11" rx="2" fill="#020617" stroke="#34d399" stroke-width="0.8"/>
+        <text x="276" y="907.5" fill="#34d399" font-size="6.5" font-weight="600" text-anchor="middle">F4</text>
+        <text x="292" y="908" fill="#34d399" font-size="8.5" font-weight="600">Download page · GET /download_attachments · GET /download_result_bsod</text>
+        <rect x="266" y="920" width="123" height="20" rx="4" fill="#0f172a"/>
+        <rect x="266" y="920" width="123" height="20" rx="4" fill="rgba(6,78,59,0.4)" stroke="#34d399" stroke-width="1.1"/>
+        <text x="327.5" y="933.5" fill="white" font-size="7.2" text-anchor="middle">GET /download_attachments</text>
+        <rect x="401" y="920" width="71" height="20" rx="4" fill="#0f172a"/>
+        <rect x="401" y="920" width="71" height="20" rx="4" fill="rgba(6,78,59,0.4)" stroke="#34d399" stroke-width="1.1"/>
+        <text x="436.5" y="933.5" fill="white" font-size="7.2" text-anchor="middle">case_context?</text>
+        <rect x="484" y="920" width="171" height="20" rx="4" fill="#0f172a"/>
+        <rect x="484" y="920" width="171" height="20" rx="4" fill="rgba(76,29,149,0.4)" stroke="#a78bfa" stroke-width="1.1"/>
+        <text x="569.5" y="933.5" fill="white" font-size="7.2" text-anchor="middle">H3 _resolve_download_path(ctx, bsod)</text>
+        <rect x="667" y="920" width="105" height="20" rx="4" fill="#0f172a"/>
+        <rect x="667" y="920" width="105" height="20" rx="4" fill="rgba(6,78,59,0.4)" stroke="#34d399" stroke-width="1.1"/>
+        <text x="719.5" y="933.5" fill="white" font-size="7.2" text-anchor="middle">session.download_path</text>
+        <rect x="784" y="920" width="101" height="20" rx="4" fill="#0f172a"/>
+        <rect x="784" y="920" width="101" height="20" rx="4" fill="rgba(6,95,70,0.7)" stroke="#6ee7b7" stroke-width="1.1"/>
+        <text x="834.5" y="933.5" fill="white" font-size="7.2" text-anchor="middle">render progress page</text>
+        <rect x="426.5" y="950" width="136" height="20" rx="4" fill="#0f172a"/>
+        <rect x="426.5" y="950" width="136" height="20" rx="4" fill="rgba(136,19,55,0.4)" stroke="#fb7185" stroke-width="1.1"/>
+        <text x="494.5" y="963.5" fill="white" font-size="7.2" text-anchor="middle">no ➜ 302 / (Session expired)</text>
+        <text x="266" y="986" fill="#64748b" font-size="7">download itself runs over SocketIO in download_bp (&#x27;start_download&#x27;) and fills app_config.download_results</text>
+        <rect x="266" y="998" width="123" height="20" rx="4" fill="#0f172a"/>
+        <rect x="266" y="998" width="123" height="20" rx="4" fill="rgba(6,78,59,0.4)" stroke="#34d399" stroke-width="1.1"/>
+        <text x="327.5" y="1011.5" fill="white" font-size="7.2" text-anchor="middle">GET /download_result_bsod</text>
+        <rect x="401" y="998" width="118" height="20" rx="4" fill="#0f172a"/>
+        <rect x="401" y="998" width="118" height="20" rx="4" fill="rgba(76,29,149,0.4)" stroke="#a78bfa" stroke-width="1.1"/>
+        <text x="460.0" y="1011.5" fill="white" font-size="7.2" text-anchor="middle">case_context? · H3 path?</text>
+        <rect x="531" y="998" width="97" height="20" rx="4" fill="#0f172a"/>
+        <rect x="531" y="998" width="97" height="20" rx="4" fill="rgba(120,53,15,0.3)" stroke="#fbbf24" stroke-width="1.1"/>
+        <text x="579.5" y="1011.5" fill="white" font-size="7.2" text-anchor="middle">detect_user_email()</text>
+        <rect x="640" y="998" width="205" height="20" rx="4" fill="#0f172a"/>
+        <rect x="640" y="998" width="205" height="20" rx="4" fill="rgba(6,95,70,0.7)" stroke="#6ee7b7" stroke-width="1.1"/>
+        <text x="742.5" y="1011.5" fill="white" font-size="7.2" text-anchor="middle">render bsod.html(case_nbr, email, case_path)</text>
+        <rect x="450.0" y="1028" width="149" height="20" rx="4" fill="#0f172a"/>
+        <rect x="450.0" y="1028" width="149" height="20" rx="4" fill="rgba(136,19,55,0.4)" stroke="#fb7185" stroke-width="1.1"/>
+        <text x="524.5" y="1041.5" fill="white" font-size="7.2" text-anchor="middle">no ➜ 302 / · &#x27;&#x27; ➜ flash ➜ 302 /</text>
+        <rect x="56" y="894" width="180" height="164" rx="6" fill="#0f172a"/>
+        <rect x="56" y="894" width="180" height="164" rx="6" fill="rgba(8,51,68,0.4)" stroke="#22d3ee" stroke-width="1.3"/>
+        <text x="65" y="909" fill="white" font-size="8" font-weight="600">TestDownloadAttachments (5)</text>
+        <text x="65" y="922" fill="#94a3b8" font-size="6.8">get · no session</text>
+        <text x="65" y="933" fill="#94a3b8" font-size="6.8">bsod False · [ZIP, TXT] selected</text>
+        <text x="65" y="944" fill="#94a3b8" font-size="6.8">bsod True · share reachable</text>
+        <text x="65" y="955" fill="#94a3b8" font-size="6.8">  get_load_path ➜ \\share\BSOD_Dumps</text>
+        <text x="65" y="966" fill="#94a3b8" font-size="6.8">_resolve_download_path(ctx,</text>
+        <text x="65" y="977" fill="#94a3b8" font-size="6.8">  backend_id &#x27;BSOD-4242&#x27;)</text>
+        <text x="65" y="988" fill="#94a3b8" font-size="6.8">get_load_path ➜ None · ctx None</text>
+        <text x="65" y="999" fill="#94a3b8" font-size="6.8"></text>
+        <text x="65" y="1010" fill="#94a3b8" font-size="6.8">TestDownloadResultBsod (3)</text>
+        <text x="65" y="1021" fill="#94a3b8" font-size="6.8">  no session · no share · renders</text>
+        <rect x="940" y="894" width="236" height="72" rx="6" fill="#0f172a"/>
+        <rect x="940" y="894" width="236" height="72" rx="6" fill="rgba(120,53,15,0.3)" stroke="#fbbf24" stroke-width="1.3"/>
+        <text x="949" y="909" fill="white" font-size="8" font-weight="600">helpers.get_load_path (patched)</text>
+        <text x="949" y="922" fill="#94a3b8" font-size="6.8">LOAD_PATH_prim / _bkup ➜</text>
+        <text x="949" y="933" fill="#94a3b8" font-size="6.8">  &#x27;\\share\BSOD_Dumps&#x27; | None</text>
+        <rect x="940" y="978" width="236" height="80" rx="6" fill="#0f172a"/>
+        <rect x="940" y="978" width="236" height="80" rx="6" fill="rgba(120,53,15,0.3)" stroke="#fbbf24" stroke-width="1.3"/>
+        <text x="949" y="993" fill="white" font-size="8" font-weight="600">helpers.detect_user_email</text>
+        <text x="949" y="1006" fill="#94a3b8" font-size="6.8">➜ &#x27;tester@example.com&#x27;</text>
+        <text x="949" y="1017" fill="#94a3b8" font-size="6.8">render_template ➜ &#x27;bsod-page&#x27;</text>
+        <text x="949" y="1028" fill="#94a3b8" font-size="6.8">  / &#x27;progress-page&#x27;</text>
+        <rect x="260" y="1078" width="640" height="214" rx="8" fill="rgba(6,78,59,0.07)" stroke="#34d399" stroke-width="0.9" stroke-dasharray="4,3"/>
+        <rect x="266" y="1083" width="20" height="11" rx="2" fill="#020617" stroke="#34d399" stroke-width="0.8"/>
+        <text x="276" y="1091.5" fill="#34d399" font-size="6.5" font-weight="600" text-anchor="middle">F5</text>
+        <text x="292" y="1092" fill="#34d399" font-size="8.5" font-weight="600">Download result page · GET /download_result</text>
+        <rect x="266" y="1104" width="101" height="20" rx="4" fill="#0f172a"/>
+        <rect x="266" y="1104" width="101" height="20" rx="4" fill="rgba(6,78,59,0.4)" stroke="#34d399" stroke-width="1.1"/>
+        <text x="316.5" y="1117.5" fill="white" font-size="7.2" text-anchor="middle">GET /download_result</text>
+        <rect x="379" y="1104" width="144" height="20" rx="4" fill="#0f172a"/>
+        <rect x="379" y="1104" width="144" height="20" rx="4" fill="rgba(6,78,59,0.4)" stroke="#34d399" stroke-width="1.1"/>
+        <text x="451.0" y="1117.5" fill="white" font-size="7.2" text-anchor="middle">case_context? · download_path?</text>
+        <rect x="535" y="1104" width="144" height="20" rx="4" fill="#0f172a"/>
+        <rect x="535" y="1104" width="144" height="20" rx="4" fill="rgba(120,53,15,0.3)" stroke="#fbbf24" stroke-width="1.1"/>
+        <text x="607.0" y="1117.5" fill="white" font-size="7.2" text-anchor="middle">get_download_results(case_nbr)</text>
+        <rect x="691" y="1104" width="123" height="20" rx="4" fill="#0f172a"/>
+        <rect x="691" y="1104" width="123" height="20" rx="4" fill="rgba(6,78,59,0.4)" stroke="#34d399" stroke-width="1.1"/>
+        <text x="752.5" y="1117.5" fill="white" font-size="7.2" text-anchor="middle">files_coexist = wifi ∧ bt</text>
+        <rect x="441.0" y="1134" width="92" height="20" rx="4" fill="#0f172a"/>
+        <rect x="441.0" y="1134" width="92" height="20" rx="4" fill="rgba(136,19,55,0.4)" stroke="#fb7185" stroke-width="1.1"/>
+        <text x="487.0" y="1147.5" fill="white" font-size="7.2" text-anchor="middle">no ➜ 302 / (flash)</text>
+        <rect x="266" y="1172" width="162" height="20" rx="4" fill="#0f172a"/>
+        <rect x="266" y="1172" width="162" height="20" rx="4" fill="rgba(120,53,15,0.3)" stroke="#fbbf24" stroke-width="1.1"/>
+        <text x="347.0" y="1185.5" fill="white" font-size="7.2" text-anchor="middle">get_issue_time_from_selected_files</text>
+        <rect x="440" y="1172" width="188" height="20" rx="4" fill="#0f172a"/>
+        <rect x="440" y="1172" width="188" height="20" rx="4" fill="rgba(120,53,15,0.3)" stroke="#fbbf24" stroke-width="1.1"/>
+        <text x="534.0" y="1185.5" fill="white" font-size="7.2" text-anchor="middle">filter_folders_by_time ➜ info | warnings</text>
+        <rect x="640" y="1172" width="171" height="20" rx="4" fill="#0f172a"/>
+        <rect x="640" y="1172" width="171" height="20" rx="4" fill="rgba(6,78,59,0.4)" stroke="#34d399" stroke-width="1.1"/>
+        <text x="725.5" y="1185.5" fill="white" font-size="7.2" text-anchor="middle">llm_issue_time = AI cache | time map</text>
+        <rect x="266" y="1210" width="75" height="20" rx="4" fill="#0f172a"/>
+        <rect x="266" y="1210" width="75" height="20" rx="4" fill="rgba(30,41,59,0.5)" stroke="#94a3b8" stroke-width="1.1"/>
+        <text x="303.5" y="1223.5" fill="#cbd5e1" font-size="7.2" text-anchor="middle">coex+bt ➜ None</text>
+        <rect x="353" y="1210" width="114" height="20" rx="4" fill="#0f172a"/>
+        <rect x="353" y="1210" width="114" height="20" rx="4" fill="rgba(120,53,15,0.3)" stroke="#fbbf24" stroke-width="1.1"/>
+        <text x="410.0" y="1223.5" fill="white" font-size="7.2" text-anchor="middle">get_auto_analysis_etl()</text>
+        <rect x="479" y="1210" width="136" height="20" rx="4" fill="#0f172a"/>
+        <rect x="479" y="1210" width="136" height="20" rx="4" fill="rgba(6,78,59,0.4)" stroke="#34d399" stroke-width="1.1"/>
+        <text x="547.0" y="1223.5" fill="white" font-size="7.2" text-anchor="middle">Run-Analysis recovery: max #</text>
+        <rect x="627" y="1210" width="144" height="20" rx="4" fill="#0f172a"/>
+        <rect x="627" y="1210" width="144" height="20" rx="4" fill="rgba(120,53,15,0.3)" stroke="#fbbf24" stroke-width="1.1"/>
+        <text x="699.0" y="1223.5" fill="white" font-size="7.2" text-anchor="middle">pick_etl_by_ai_time ➜ override</text>
+        <rect x="783" y="1210" width="101" height="20" rx="4" fill="#0f172a"/>
+        <rect x="783" y="1210" width="101" height="20" rx="4" fill="rgba(6,78,59,0.4)" stroke="#34d399" stroke-width="1.1"/>
+        <text x="833.5" y="1223.5" fill="white" font-size="7.2" text-anchor="middle">BT: newest timestamp</text>
+        <rect x="266" y="1248" width="153" height="20" rx="4" fill="#0f172a"/>
+        <rect x="266" y="1248" width="153" height="20" rx="4" fill="rgba(76,29,149,0.4)" stroke="#a78bfa" stroke-width="1.1"/>
+        <text x="342.5" y="1261.5" fill="white" font-size="7.2" text-anchor="middle">H4 table rows (wifi/bt/event/fw)</text>
+        <rect x="431" y="1248" width="214" height="20" rx="4" fill="#0f172a"/>
+        <rect x="431" y="1248" width="214" height="20" rx="4" fill="rgba(6,78,59,0.4)" stroke="#34d399" stroke-width="1.1"/>
+        <text x="538.0" y="1261.5" fill="white" font-size="7.2" text-anchor="middle">pop _run_analysis_requested · auto_analysis_fw</text>
+        <rect x="657" y="1248" width="184" height="20" rx="4" fill="#0f172a"/>
+        <rect x="657" y="1248" width="184" height="20" rx="4" fill="rgba(6,95,70,0.7)" stroke="#6ee7b7" stroke-width="1.1"/>
+        <text x="749.0" y="1261.5" fill="white" font-size="7.2" text-anchor="middle">render download_result.html (22 kwargs)</text>
+        <text x="266" y="1284" fill="#64748b" font-size="7">not tested: datetime tz alignment · filter exception reset · AI==newest retag · chip anchoring · BT .etl.split · evt/FW info · folder grouping</text>
+        <rect x="56" y="1078" width="180" height="214" rx="6" fill="#0f172a"/>
+        <rect x="56" y="1078" width="180" height="214" rx="6" fill="rgba(8,51,68,0.4)" stroke="#22d3ee" stroke-width="1.3"/>
+        <text x="65" y="1093" fill="white" font-size="8" font-weight="600">TestDownloadResult (9)</text>
+        <text x="65" y="1106" fill="#94a3b8" font-size="6.8">get · no session | bsod w/o share</text>
+        <text x="65" y="1117" fill="#94a3b8" font-size="6.8">set_results(wifi={logs.zip:</text>
+        <text x="65" y="1128" fill="#94a3b8" font-size="6.8">  [WiFi_1.etl, setup.log]})</text>
+        <text x="65" y="1139" fill="#94a3b8" font-size="6.8">wifi + bt {BT_b.etl} · bt hint</text>
+        <text x="65" y="1150" fill="#94a3b8" font-size="6.8">[WiFi_1, WiFi_3, setup.log]</text>
+        <text x="65" y="1161" fill="#94a3b8" font-size="6.8">  + _run_analysis_requested</text>
+        <text x="65" y="1172" fill="#94a3b8" font-size="6.8">number pick WiFi_3 · AI pick WiFi_1</text>
+        <text x="65" y="1183" fill="#94a3b8" font-size="6.8">issue time {logs.zip: &#x27;14:15:18&#x27;}</text>
+        <text x="65" y="1194" fill="#94a3b8" font-size="6.8">filter ➜ ({}, warning)</text>
+        <text x="65" y="1205" fill="#94a3b8" font-size="6.8">bt case [BT_a (04-13), BT_b (04-14)]</text>
+        <text x="65" y="1216" fill="#94a3b8" font-size="6.8">  + auto_analysis_fw fw.bin</text>
+        <rect x="940" y="1078" width="236" height="60" rx="6" fill="#0f172a"/>
+        <rect x="940" y="1078" width="236" height="60" rx="6" fill="rgba(120,53,15,0.3)" stroke="#fbbf24" stroke-width="1.3"/>
+        <text x="949" y="1093" fill="white" font-size="8" font-weight="600">app_config.get_download_results</text>
+        <text x="949" y="1106" fill="#94a3b8" font-size="6.8">(case_nbr) ➜ {wifi, ddd, bt, fw}</text>
+        <text x="949" y="1117" fill="#94a3b8" font-size="6.8">  via set_results(...)</text>
+        <rect x="940" y="1150" width="236" height="72" rx="6" fill="#0f172a"/>
+        <rect x="940" y="1150" width="236" height="72" rx="6" fill="rgba(120,53,15,0.3)" stroke="#fbbf24" stroke-width="1.3"/>
+        <text x="949" y="1165" fill="white" font-size="8" font-weight="600">etl_utils (patched)</text>
+        <text x="949" y="1178" fill="#94a3b8" font-size="6.8">get_auto_analysis_etl ➜ ETL | None</text>
+        <text x="949" y="1189" fill="#94a3b8" font-size="6.8">get_issue_time_from_selected_files</text>
+        <text x="949" y="1200" fill="#94a3b8" font-size="6.8">filter_folders_by_time(d, t)</text>
+        <rect x="940" y="1234" width="236" height="58" rx="6" fill="#0f172a"/>
+        <rect x="940" y="1234" width="236" height="58" rx="6" fill="rgba(120,53,15,0.3)" stroke="#fbbf24" stroke-width="1.3"/>
+        <text x="949" y="1249" fill="white" font-size="8" font-weight="600">issue_time_ai · bt_chatbot</text>
+        <text x="949" y="1262" fill="#94a3b8" font-size="6.8">pick_etl_by_ai_time · align_issue_time</text>
+        <text x="949" y="1273" fill="#94a3b8" font-size="6.8">_parse_path_timestamp (stamps.get)</text>
+        <rect x="260" y="1312" width="640" height="316" rx="8" fill="rgba(6,78,59,0.07)" stroke="#34d399" stroke-width="0.9" stroke-dasharray="4,3"/>
+        <rect x="266" y="1317" width="20" height="11" rx="2" fill="#020617" stroke="#34d399" stroke-width="0.8"/>
+        <text x="276" y="1325.5" fill="#34d399" font-size="6.5" font-weight="600" text-anchor="middle">F6</text>
+        <text x="292" y="1326" fill="#34d399" font-size="8.5" font-weight="600">Utilities · POST /open_path · /dump_event_txt · /parse_event_log · GET /api/bt_event_map</text>
+        <rect x="266" y="1338" width="79" height="20" rx="4" fill="#0f172a"/>
+        <rect x="266" y="1338" width="79" height="20" rx="4" fill="rgba(6,78,59,0.4)" stroke="#34d399" stroke-width="1.1"/>
+        <text x="305.5" y="1351.5" fill="white" font-size="7.2" text-anchor="middle">POST /open_path</text>
+        <rect x="357" y="1338" width="105" height="20" rx="4" fill="#0f172a"/>
+        <rect x="357" y="1338" width="105" height="20" rx="4" fill="rgba(120,53,15,0.3)" stroke="#fbbf24" stroke-width="1.1"/>
+        <text x="409.5" y="1351.5" fill="white" font-size="7.2" text-anchor="middle">os.path.exists(path)?</text>
+        <rect x="474" y="1338" width="162" height="20" rx="4" fill="#0f172a"/>
+        <rect x="474" y="1338" width="162" height="20" rx="4" fill="rgba(120,53,15,0.3)" stroke="#fbbf24" stroke-width="1.1"/>
+        <text x="555.0" y="1351.5" fill="white" font-size="7.2" text-anchor="middle">subprocess.run([&#x27;explorer&#x27;, path])</text>
+        <rect x="648" y="1338" width="27" height="20" rx="4" fill="#0f172a"/>
+        <rect x="648" y="1338" width="27" height="20" rx="4" fill="rgba(6,95,70,0.7)" stroke="#6ee7b7" stroke-width="1.1"/>
+        <text x="661.5" y="1351.5" fill="white" font-size="7.2" text-anchor="middle">204</text>
+        <rect x="399.5" y="1368" width="162" height="20" rx="4" fill="#0f172a"/>
+        <rect x="399.5" y="1368" width="162" height="20" rx="4" fill="rgba(136,19,55,0.4)" stroke="#fb7185" stroke-width="1.1"/>
+        <text x="480.5" y="1381.5" fill="white" font-size="7.2" text-anchor="middle">no / non-JSON ➜ 400 &#x27;Invalid path&#x27;</text>
+        <text x="266" y="1404" fill="#94a3b8" font-size="7">no silent_mode check here: explicit user click ➜ Explorer opens even when app_config.silent_mode=True</text>
+        <rect x="266" y="1416" width="101" height="20" rx="4" fill="#0f172a"/>
+        <rect x="266" y="1416" width="101" height="20" rx="4" fill="rgba(6,78,59,0.4)" stroke="#34d399" stroke-width="1.1"/>
+        <text x="316.5" y="1429.5" fill="white" font-size="7.2" text-anchor="middle">POST /dump_event_txt</text>
+        <rect x="379" y="1416" width="118" height="20" rx="4" fill="#0f172a"/>
+        <rect x="379" y="1416" width="118" height="20" rx="4" fill="rgba(6,78,59,0.4)" stroke="#34d399" stroke-width="1.1"/>
+        <text x="438.0" y="1429.5" fill="white" font-size="7.2" text-anchor="middle">import event_log_service</text>
+        <rect x="509" y="1416" width="66" height="20" rx="4" fill="#0f172a"/>
+        <rect x="509" y="1416" width="66" height="20" rx="4" fill="rgba(120,53,15,0.3)" stroke="#fbbf24" stroke-width="1.1"/>
+        <text x="542.0" y="1429.5" fill="white" font-size="7.2" text-anchor="middle">path exists?</text>
+        <rect x="587" y="1416" width="114" height="20" rx="4" fill="#0f172a"/>
+        <rect x="587" y="1416" width="114" height="20" rx="4" fill="rgba(120,53,15,0.3)" stroke="#fbbf24" stroke-width="1.1"/>
+        <text x="644.0" y="1429.5" fill="white" font-size="7.2" text-anchor="middle">dump_event_to_txt(path)</text>
+        <rect x="713" y="1416" width="114" height="20" rx="4" fill="#0f172a"/>
+        <rect x="713" y="1416" width="114" height="20" rx="4" fill="rgba(6,95,70,0.7)" stroke="#6ee7b7" stroke-width="1.1"/>
+        <text x="770.0" y="1429.5" fill="white" font-size="7.2" text-anchor="middle">200 {success, txt_path}</text>
+        <rect x="428.0" y="1446" width="88" height="20" rx="4" fill="#0f172a"/>
+        <rect x="428.0" y="1446" width="88" height="20" rx="4" fill="rgba(136,19,55,0.4)" stroke="#fb7185" stroke-width="1.1"/>
+        <text x="472.0" y="1459.5" fill="white" font-size="7.2" text-anchor="middle">ImportError ➜ 503</text>
+        <rect x="532.0" y="1472" width="114" height="20" rx="4" fill="#0f172a"/>
+        <rect x="532.0" y="1472" width="114" height="20" rx="4" fill="rgba(136,19,55,0.4)" stroke="#fb7185" stroke-width="1.1"/>
+        <text x="589.0" y="1485.5" fill="white" font-size="7.2" text-anchor="middle">no ➜ 400 &#x27;Invalid path&#x27;</text>
+        <rect x="634.0" y="1446" width="101" height="20" rx="4" fill="#0f172a"/>
+        <rect x="634.0" y="1446" width="101" height="20" rx="4" fill="rgba(136,19,55,0.4)" stroke="#fb7185" stroke-width="1.1"/>
+        <text x="684.5" y="1459.5" fill="white" font-size="7.2" text-anchor="middle">raises ➜ 500 {error}</text>
+        <rect x="266" y="1506" width="105" height="20" rx="4" fill="#0f172a"/>
+        <rect x="266" y="1506" width="105" height="20" rx="4" fill="rgba(6,78,59,0.4)" stroke="#34d399" stroke-width="1.1"/>
+        <text x="318.5" y="1519.5" fill="white" font-size="7.2" text-anchor="middle">POST /parse_event_log</text>
+        <rect x="383" y="1506" width="75" height="20" rx="4" fill="#0f172a"/>
+        <rect x="383" y="1506" width="75" height="20" rx="4" fill="rgba(6,78,59,0.4)" stroke="#34d399" stroke-width="1.1"/>
+        <text x="420.5" y="1519.5" fill="white" font-size="7.2" text-anchor="middle">import · path?</text>
+        <rect x="470" y="1506" width="114" height="20" rx="4" fill="#0f172a"/>
+        <rect x="470" y="1506" width="114" height="20" rx="4" fill="rgba(6,78,59,0.4)" stroke="#34d399" stroke-width="1.1"/>
+        <text x="527.0" y="1519.5" fill="white" font-size="7.2" text-anchor="middle">offset = max(0, offset)</text>
+        <rect x="596" y="1506" width="136" height="20" rx="4" fill="#0f172a"/>
+        <rect x="596" y="1506" width="136" height="20" rx="4" fill="rgba(120,53,15,0.3)" stroke="#fbbf24" stroke-width="1.1"/>
+        <text x="664.0" y="1519.5" fill="white" font-size="7.2" text-anchor="middle">get_paged_events(…, filters)</text>
+        <rect x="744" y="1506" width="97" height="20" rx="4" fill="#0f172a"/>
+        <rect x="744" y="1506" width="97" height="20" rx="4" fill="rgba(6,95,70,0.7)" stroke="#6ee7b7" stroke-width="1.1"/>
+        <text x="792.5" y="1519.5" fill="white" font-size="7.2" text-anchor="middle">200 {events, total}</text>
+        <rect x="410.5" y="1536" width="53" height="20" rx="4" fill="#0f172a"/>
+        <rect x="410.5" y="1536" width="53" height="20" rx="4" fill="rgba(136,19,55,0.4)" stroke="#fb7185" stroke-width="1.1"/>
+        <text x="437.0" y="1549.5" fill="white" font-size="7.2" text-anchor="middle">503 | 400</text>
+        <rect x="654.0" y="1536" width="101" height="20" rx="4" fill="#0f172a"/>
+        <rect x="654.0" y="1536" width="101" height="20" rx="4" fill="rgba(136,19,55,0.4)" stroke="#fb7185" stroke-width="1.1"/>
+        <text x="704.5" y="1549.5" fill="white" font-size="7.2" text-anchor="middle">raises ➜ 500 {error}</text>
+        <rect x="266" y="1570" width="105" height="20" rx="4" fill="#0f172a"/>
+        <rect x="266" y="1570" width="105" height="20" rx="4" fill="rgba(6,78,59,0.4)" stroke="#34d399" stroke-width="1.1"/>
+        <text x="318.5" y="1583.5" fill="white" font-size="7.2" text-anchor="middle">GET /api/bt_event_map</text>
+        <rect x="383" y="1570" width="171" height="20" rx="4" fill="#0f172a"/>
+        <rect x="383" y="1570" width="171" height="20" rx="4" fill="rgba(120,53,15,0.3)" stroke="#fbbf24" stroke-width="1.1"/>
+        <text x="468.5" y="1583.5" fill="white" font-size="7.2" text-anchor="middle">configs/bt_event_id_map.json exists?</text>
+        <rect x="566" y="1570" width="79" height="20" rx="4" fill="#0f172a"/>
+        <rect x="566" y="1570" width="79" height="20" rx="4" fill="rgba(6,78,59,0.4)" stroke="#34d399" stroke-width="1.1"/>
+        <text x="605.5" y="1583.5" fill="white" font-size="7.2" text-anchor="middle">json.load ➜ map</text>
+        <rect x="657" y="1570" width="53" height="20" rx="4" fill="#0f172a"/>
+        <rect x="657" y="1570" width="53" height="20" rx="4" fill="rgba(6,95,70,0.7)" stroke="#6ee7b7" stroke-width="1.1"/>
+        <text x="683.5" y="1583.5" fill="white" font-size="7.2" text-anchor="middle">200 {map}</text>
+        <rect x="458.5" y="1600" width="66" height="20" rx="4" fill="#0f172a"/>
+        <rect x="458.5" y="1600" width="66" height="20" rx="4" fill="rgba(30,41,59,0.5)" stroke="#94a3b8" stroke-width="1.1"/>
+        <text x="491.5" y="1613.5" fill="#cbd5e1" font-size="7.2" text-anchor="middle">missing ➜ {}</text>
+        <rect x="595.5" y="1600" width="75" height="20" rx="4" fill="#0f172a"/>
+        <rect x="595.5" y="1600" width="75" height="20" rx="4" fill="rgba(30,41,59,0.5)" stroke="#94a3b8" stroke-width="1.1"/>
+        <text x="633.0" y="1613.5" fill="#cbd5e1" font-size="7.2" text-anchor="middle">malformed ➜ {}</text>
+        <rect x="56" y="1312" width="180" height="316" rx="6" fill="#0f172a"/>
+        <rect x="56" y="1312" width="180" height="316" rx="6" fill="rgba(8,51,68,0.4)" stroke="#22d3ee" stroke-width="1.3"/>
+        <text x="65" y="1327" fill="white" font-size="8" font-weight="600">TestOpenPath (3)</text>
+        <text x="65" y="1340" fill="#94a3b8" font-size="6.8">{path: &#x27;C:\fake\folder&#x27;} exists</text>
+        <text x="65" y="1351" fill="#94a3b8" font-size="6.8">{path: &#x27;C:\nope&#x27;} · body &#x27;not json&#x27;</text>
+        <text x="65" y="1362" fill="#94a3b8" font-size="6.8">silent_mode = True</text>
+        <text x="65" y="1373" fill="#94a3b8" font-size="6.8"></text>
+        <text x="65" y="1384" fill="#94a3b8" font-size="6.8">TestDumpEventTxt (4)</text>
+        <text x="65" y="1395" fill="#94a3b8" font-size="6.8">import raises · exists False</text>
+        <text x="65" y="1406" fill="#94a3b8" font-size="6.8">{path: EVT_PATH} ➜ System.txt</text>
+        <text x="65" y="1417" fill="#94a3b8" font-size="6.8">dump raises &#x27;corrupt evtx&#x27;</text>
+        <text x="65" y="1428" fill="#94a3b8" font-size="6.8"></text>
+        <text x="65" y="1439" fill="#94a3b8" font-size="6.8">TestParseEventLog (4)</text>
+        <text x="65" y="1450" fill="#94a3b8" font-size="6.8">import raises · {path: &#x27;&#x27;}</text>
+        <text x="65" y="1461" fill="#94a3b8" font-size="6.8">{offset: -5, limit: 50,</text>
+        <text x="65" y="1472" fill="#94a3b8" font-size="6.8">  source &#x27;Netwtw&#x27;, level &#x27;error&#x27;}</text>
+        <text x="65" y="1483" fill="#94a3b8" font-size="6.8">{path} only + raises &#x27;parse failed&#x27;</text>
+        <text x="65" y="1494" fill="#94a3b8" font-size="6.8"></text>
+        <text x="65" y="1505" fill="#94a3b8" font-size="6.8">TestBtEventMap (3)</text>
+        <text x="65" y="1516" fill="#94a3b8" font-size="6.8">file {&#x27;0x01&#x27;: &#x27;Connect&#x27;}</text>
+        <text x="65" y="1527" fill="#94a3b8" font-size="6.8">missing · malformed JSON</text>
+        <rect x="940" y="1312" width="236" height="84" rx="6" fill="#0f172a"/>
+        <rect x="940" y="1312" width="236" height="84" rx="6" fill="rgba(120,53,15,0.3)" stroke="#fbbf24" stroke-width="1.3"/>
+        <text x="949" y="1327" fill="white" font-size="8" font-weight="600">os.path.exists · subprocess.run</text>
+        <text x="949" y="1340" fill="#94a3b8" font-size="6.8">exists ➜ True | False</text>
+        <text x="949" y="1351" fill="#94a3b8" font-size="6.8">run([&#x27;explorer&#x27;, path])</text>
+        <text x="949" y="1362" fill="#94a3b8" font-size="6.8">app_config.silent_mode (ignored)</text>
+        <rect x="940" y="1408" width="236" height="120" rx="6" fill="#0f172a"/>
+        <rect x="940" y="1408" width="236" height="120" rx="6" fill="rgba(120,53,15,0.3)" stroke="#fbbf24" stroke-width="1.3"/>
+        <text x="949" y="1423" fill="white" font-size="8" font-weight="600">services.event_log_service</text>
+        <text x="949" y="1436" fill="#94a3b8" font-size="6.8">lazy import: sys.modules stub</text>
+        <text x="949" y="1447" fill="#94a3b8" font-size="6.8">  | ImportError ➜ 503</text>
+        <text x="949" y="1458" fill="#94a3b8" font-size="6.8">dump_event_to_txt(path)</text>
+        <text x="949" y="1469" fill="#94a3b8" font-size="6.8">  ➜ &#x27;C:\fake\events\System.txt&#x27;</text>
+        <text x="949" y="1480" fill="#94a3b8" font-size="6.8">get_paged_events(path, offset,</text>
+        <text x="949" y="1491" fill="#94a3b8" font-size="6.8">  limit, source, level)</text>
+        <text x="949" y="1502" fill="#94a3b8" font-size="6.8">  ➜ {events: [{id: 1}], total: 1}</text>
+        <rect x="940" y="1540" width="236" height="88" rx="6" fill="#0f172a"/>
+        <rect x="940" y="1540" width="236" height="88" rx="6" fill="rgba(120,53,15,0.3)" stroke="#fbbf24" stroke-width="1.3"/>
+        <text x="949" y="1555" fill="white" font-size="8" font-weight="600">open · json (bt map)</text>
+        <text x="949" y="1568" fill="#94a3b8" font-size="6.8">configs/bt_event_id_map.json</text>
+        <text x="949" y="1579" fill="#94a3b8" font-size="6.8">exists ➜ True | False</text>
+        <text x="949" y="1590" fill="#94a3b8" font-size="6.8">read_data valid | invalid JSON</text>
+        <rect x="40" y="1668" width="1150" height="3656" rx="12" fill="rgba(34,211,238,0.03)" stroke="#22d3ee" stroke-width="1" stroke-dasharray="8,4"/>
+        <text x="54" y="1690" fill="#22d3ee" font-size="10" font-weight="600">Test cases · input ➜ expected output (59 tests · 14 classes) · path = route family / helper exercised above</text>
+        <text x="58" y="1712" fill="#a78bfa" font-size="8.5" font-weight="600">TestMainBlueprintStructure · route inventory</text>
+        <text x="58" y="1726" fill="#64748b" font-size="7">test_blueprint_registered_with_url_prefix</text>
+        <text x="1176" y="1726" fill="#475569" font-size="7" text-anchor="end">path: url_map</text>
+        <rect x="58" y="1729" width="480" height="37" rx="6" fill="#0f172a"/>
+        <rect x="58" y="1729" width="480" height="37" rx="6" fill="rgba(8,51,68,0.4)" stroke="#22d3ee" stroke-width="1.1"/>
+        <rect x="594" y="1729" width="582" height="37" rx="6" fill="#0f172a"/>
+        <rect x="594" y="1729" width="582" height="37" rx="6" fill="rgba(76,29,149,0.4)" stroke="#a78bfa" stroke-width="1.1"/>
+        <text x="68" y="1742" fill="white" font-size="8">inspect app.url_map for &#x27;main.*&#x27; rules</text>
+        <text x="68" y="1753" fill="#94a3b8" font-size="7.3">main_bp registered by BaseTestCase.setUp (no request)</text>
+        <text x="604" y="1742" fill="white" font-size="8">blueprints[&#x27;main&#x27;] is main_bp · url_prefix &#x27;/&#x27; · exactly the 10 expected rules</text>
+        <text x="604" y="1753" fill="#94a3b8" font-size="7.3">&#x27;/&#x27; and &#x27;/select_attachments&#x27; serve GET + POST · others their listed methods</text>
+        <line x1="544" y1="1747.5" x2="590" y2="1747.5" stroke="#22d3ee" stroke-width="1.5" marker-end="url(#arrowcyan)"/>
+        <text x="58" y="1788" fill="#a78bfa" font-size="8.5" font-weight="600">TestIndex · F1</text>
+        <text x="58" y="1802" fill="#64748b" font-size="7">test_get_renders_case_form</text>
+        <text x="1176" y="1802" fill="#475569" font-size="7" text-anchor="end">path: F1 · GET /</text>
+        <rect x="58" y="1805" width="480" height="37" rx="6" fill="#0f172a"/>
+        <rect x="58" y="1805" width="480" height="37" rx="6" fill="rgba(8,51,68,0.4)" stroke="#22d3ee" stroke-width="1.1"/>
+        <rect x="594" y="1805" width="582" height="37" rx="6" fill="#0f172a"/>
+        <rect x="594" y="1805" width="582" height="37" rx="6" fill="rgba(6,95,70,0.7)" stroke="#6ee7b7" stroke-width="1.1"/>
+        <text x="68" y="1818" fill="white" font-size="8">GET /</text>
+        <text x="68" y="1829" fill="#94a3b8" font-size="7.3">get_clipboard_case_number ➜ &#x27;00999999&#x27; · _get_wireless_topics ➜ [{topic: &#x27;T&#x27;, explanation: &#x27;E&#x27;}]</text>
+        <text x="604" y="1818" fill="white" font-size="8">200 · body &#x27;index-page&#x27;</text>
+        <text x="604" y="1829" fill="#94a3b8" font-size="7.3">render_template(&#x27;index.html&#x27;, clipboard_text=&#x27;00999999&#x27;, wireless_topics=[{topic: &#x27;T&#x27;, explanation: &#x27;E&#x27;}])</text>
+        <line x1="544" y1="1823.5" x2="590" y2="1823.5" stroke="#22d3ee" stroke-width="1.5" marker-end="url(#arrowcyan)"/>
+        <text x="58" y="1858" fill="#64748b" font-size="7">test_post_empty_case_number_flashes_and_redirects</text>
+        <text x="1176" y="1858" fill="#475569" font-size="7" text-anchor="end">path: F1 · &#x27;&#x27; ➜ 302</text>
+        <rect x="58" y="1861" width="480" height="37" rx="6" fill="#0f172a"/>
+        <rect x="58" y="1861" width="480" height="37" rx="6" fill="rgba(8,51,68,0.4)" stroke="#22d3ee" stroke-width="1.1"/>
+        <rect x="594" y="1861" width="582" height="37" rx="6" fill="#0f172a"/>
+        <rect x="594" y="1861" width="582" height="37" rx="6" fill="rgba(136,19,55,0.4)" stroke="#fb7185" stroke-width="1.1"/>
+        <text x="68" y="1874" fill="white" font-size="8">POST / form {case_number: &#x27;   &#x27;}</text>
+        <text x="604" y="1874" fill="white" font-size="8">302 ➜ / · flash (&#x27;danger&#x27;, &#x27;❌ No case number provided.&#x27;)</text>
+        <text x="604" y="1885" fill="#94a3b8" font-size="7.3">CaseService.process_case NOT called</text>
+        <line x1="544" y1="1879.5" x2="590" y2="1879.5" stroke="#22d3ee" stroke-width="1.5" marker-end="url(#arrowcyan)"/>
+        <text x="58" y="1914" fill="#64748b" font-size="7">test_post_invalid_case_flashes_and_redirects</text>
+        <text x="1176" y="1914" fill="#475569" font-size="7" text-anchor="end">path: F1 · error_message</text>
+        <rect x="58" y="1917" width="480" height="37" rx="6" fill="#0f172a"/>
+        <rect x="58" y="1917" width="480" height="37" rx="6" fill="rgba(8,51,68,0.4)" stroke="#22d3ee" stroke-width="1.1"/>
+        <rect x="594" y="1917" width="582" height="37" rx="6" fill="#0f172a"/>
+        <rect x="594" y="1917" width="582" height="37" rx="6" fill="rgba(136,19,55,0.4)" stroke="#fb7185" stroke-width="1.1"/>
+        <text x="68" y="1930" fill="white" font-size="8">POST / {case_number: &#x27;00000000&#x27;}</text>
+        <text x="68" y="1941" fill="#94a3b8" font-size="7.3">process_case ➜ CaseContext with error_message=&#x27;not found&#x27;</text>
+        <text x="604" y="1930" fill="white" font-size="8">302 ➜ / · danger flash = raw error_message (&#x27;not found&#x27;)</text>
+        <text x="604" y="1941" fill="#94a3b8" font-size="7.3">no case_context in session · record_workflow_start NOT called</text>
+        <line x1="544" y1="1935.5" x2="590" y2="1935.5" stroke="#22d3ee" stroke-width="1.5" marker-end="url(#arrowcyan)"/>
+        <text x="58" y="1970" fill="#64748b" font-size="7">test_post_valid_case_populates_session_and_redirects</text>
+        <text x="1176" y="1970" fill="#475569" font-size="7" text-anchor="end">path: F1 · full chain</text>
+        <rect x="58" y="1973" width="480" height="59" rx="6" fill="#0f172a"/>
+        <rect x="58" y="1973" width="480" height="59" rx="6" fill="rgba(8,51,68,0.4)" stroke="#22d3ee" stroke-width="1.1"/>
+        <rect x="594" y="1973" width="582" height="59" rx="6" fill="#0f172a"/>
+        <rect x="594" y="1973" width="582" height="59" rx="6" fill="rgba(6,95,70,0.7)" stroke="#6ee7b7" stroke-width="1.1"/>
+        <text x="68" y="1986" fill="white" font-size="8">POST / {case_number: &#x27; 00 123 456 &#x27;}</text>
+        <text x="68" y="1997" fill="#94a3b8" font-size="7.3">session holds stale_key · new_workflow_id ➜ &#x27;wf-test-1&#x27;</text>
+        <text x="604" y="1986" fill="white" font-size="8">302 ➜ /select_attachments · process_case(case_nbr=&#x27;00123456&#x27;) · load_case_summary_prompt(&#x27;wifi&#x27;)</text>
+        <text x="604" y="1997" fill="#94a3b8" font-size="7.3">session: stale_key gone · case_context.case_nbr &#x27;00123456&#x27; · prompt_file_path &#x27;prompts/wifi_case_summary.txt&#x27;</text>
+        <text x="604" y="2008" fill="#94a3b8" font-size="7.3">bsod / latest_etl_llm / debug_mode = False · gather_workflow_id &#x27;wf-test-1&#x27;</text>
+        <text x="604" y="2019" fill="#94a3b8" font-size="7.3">record_workflow_start(workflow_id=&#x27;wf-test-1&#x27;, domain=&#x27;wifi&#x27;, attachment_list=[ZIP, TXT]) · no selection record</text>
+        <line x1="544" y1="2002.5" x2="590" y2="2002.5" stroke="#22d3ee" stroke-width="1.5" marker-end="url(#arrowcyan)"/>
+        <text x="58" y="2048" fill="#64748b" font-size="7">test_post_service_exception_flashes_and_redirects</text>
+        <text x="1176" y="2048" fill="#475569" font-size="7" text-anchor="end">path: F1 · raises</text>
+        <rect x="58" y="2051" width="480" height="37" rx="6" fill="#0f172a"/>
+        <rect x="58" y="2051" width="480" height="37" rx="6" fill="rgba(8,51,68,0.4)" stroke="#22d3ee" stroke-width="1.1"/>
+        <rect x="594" y="2051" width="582" height="37" rx="6" fill="#0f172a"/>
+        <rect x="594" y="2051" width="582" height="37" rx="6" fill="rgba(136,19,55,0.4)" stroke="#fb7185" stroke-width="1.1"/>
+        <text x="68" y="2064" fill="white" font-size="8">POST / {case_number: &#x27;00123456&#x27;}</text>
+        <text x="68" y="2075" fill="#94a3b8" font-size="7.3">process_case raises RuntimeError</text>
+        <text x="604" y="2064" fill="white" font-size="8">302 ➜ / · flash (&#x27;danger&#x27;, &#x27;An error occurred while processing the case.&#x27;)</text>
+        <line x1="544" y1="2069.5" x2="590" y2="2069.5" stroke="#22d3ee" stroke-width="1.5" marker-end="url(#arrowcyan)"/>
+        <text x="58" y="2110" fill="#a78bfa" font-size="8.5" font-weight="600">TestGetWirelessTopics · H1</text>
+        <text x="58" y="2124" fill="#64748b" font-size="7">test_merges_bt_and_wifi_topics_and_limits</text>
+        <text x="1176" y="2124" fill="#475569" font-size="7" text-anchor="end">path: H1 · merge</text>
+        <rect x="58" y="2127" width="480" height="37" rx="6" fill="#0f172a"/>
+        <rect x="58" y="2127" width="480" height="37" rx="6" fill="rgba(8,51,68,0.4)" stroke="#22d3ee" stroke-width="1.1"/>
+        <rect x="594" y="2127" width="582" height="37" rx="6" fill="#0f172a"/>
+        <rect x="594" y="2127" width="582" height="37" rx="6" fill="rgba(6,95,70,0.7)" stroke="#6ee7b7" stroke-width="1.1"/>
+        <text x="68" y="2140" fill="white" font-size="8">BT yaml [{LE Audio, LC3 codec}, {topic only}] · Wi-Fi items [{MLO, fact}, {320 MHz, fact}]</text>
+        <text x="68" y="2151" fill="#94a3b8" font-size="7.3">_get_wireless_topics(limit=2) · random patched</text>
+        <text x="604" y="2140" fill="white" font-size="8">[{topic: &#x27;LE Audio&#x27;, explanation: &#x27;LC3 codec&#x27;}, {topic: &#x27;MLO&#x27;, explanation: &#x27;Multi-link operation&#x27;}]</text>
+        <text x="604" y="2151" fill="#94a3b8" font-size="7.3">fact ➜ explanation · entry without explanation dropped · open ×2 · random.shuffle once</text>
+        <line x1="544" y1="2145.5" x2="590" y2="2145.5" stroke="#22d3ee" stroke-width="1.5" marker-end="url(#arrowcyan)"/>
+        <text x="58" y="2180" fill="#64748b" font-size="7">test_unreachable_share_returns_fallback</text>
+        <text x="1176" y="2180" fill="#475569" font-size="7" text-anchor="end">path: H1 · OSError</text>
+        <rect x="58" y="2183" width="480" height="37" rx="6" fill="#0f172a"/>
+        <rect x="58" y="2183" width="480" height="37" rx="6" fill="rgba(8,51,68,0.4)" stroke="#22d3ee" stroke-width="1.1"/>
+        <rect x="594" y="2183" width="582" height="37" rx="6" fill="#0f172a"/>
+        <rect x="594" y="2183" width="582" height="37" rx="6" fill="rgba(30,41,59,0.5)" stroke="#94a3b8" stroke-width="1.1"/>
+        <text x="68" y="2196" fill="white" font-size="8">_get_wireless_topics()</text>
+        <text x="68" y="2207" fill="#94a3b8" font-size="7.3">open() raises OSError(&#x27;share unreachable&#x27;)</text>
+        <text x="604" y="2196" fill="white" font-size="8">single built-in fallback [{topic: &#x27;Bluetooth Core Specification&#x27;, explanation: …}]</text>
+        <line x1="544" y1="2201.5" x2="590" y2="2201.5" stroke="#22d3ee" stroke-width="1.5" marker-end="url(#arrowcyan)"/>
+        <text x="58" y="2236" fill="#64748b" font-size="7">test_empty_yaml_returns_fallback</text>
+        <text x="1176" y="2236" fill="#475569" font-size="7" text-anchor="end">path: H1 · empty</text>
+        <rect x="58" y="2239" width="480" height="37" rx="6" fill="#0f172a"/>
+        <rect x="58" y="2239" width="480" height="37" rx="6" fill="rgba(8,51,68,0.4)" stroke="#22d3ee" stroke-width="1.1"/>
+        <rect x="594" y="2239" width="582" height="37" rx="6" fill="#0f172a"/>
+        <rect x="594" y="2239" width="582" height="37" rx="6" fill="rgba(30,41,59,0.5)" stroke="#94a3b8" stroke-width="1.1"/>
+        <text x="68" y="2252" fill="white" font-size="8">_get_wireless_topics()</text>
+        <text x="68" y="2263" fill="#94a3b8" font-size="7.3">yaml.safe_load ➜ None</text>
+        <text x="604" y="2252" fill="white" font-size="8">same built-in fallback list</text>
+        <line x1="544" y1="2257.5" x2="590" y2="2257.5" stroke="#22d3ee" stroke-width="1.5" marker-end="url(#arrowcyan)"/>
+        <text x="58" y="2298" fill="#a78bfa" font-size="8.5" font-weight="600">TestStartLatestEtlLlm · F2</text>
+        <text x="58" y="2312" fill="#64748b" font-size="7">test_missing_case_number_returns_400</text>
+        <text x="1176" y="2312" fill="#475569" font-size="7" text-anchor="end">path: F2 · case_number?</text>
+        <rect x="58" y="2315" width="480" height="37" rx="6" fill="#0f172a"/>
+        <rect x="58" y="2315" width="480" height="37" rx="6" fill="rgba(8,51,68,0.4)" stroke="#22d3ee" stroke-width="1.1"/>
+        <rect x="594" y="2315" width="582" height="37" rx="6" fill="#0f172a"/>
+        <rect x="594" y="2315" width="582" height="37" rx="6" fill="rgba(136,19,55,0.4)" stroke="#fb7185" stroke-width="1.1"/>
+        <text x="68" y="2328" fill="white" font-size="8">POST /start_latest_etl_llm form {}</text>
+        <text x="604" y="2328" fill="white" font-size="8">400 {success: False, message: &#x27;No case number provided.&#x27;}</text>
+        <text x="604" y="2339" fill="#94a3b8" font-size="7.3">process_case NOT called</text>
+        <line x1="544" y1="2333.5" x2="590" y2="2333.5" stroke="#22d3ee" stroke-width="1.5" marker-end="url(#arrowcyan)"/>
+        <text x="58" y="2368" fill="#64748b" font-size="7">test_invalid_case_returns_400</text>
+        <text x="1176" y="2368" fill="#475569" font-size="7" text-anchor="end">path: F2 · error</text>
+        <rect x="58" y="2371" width="480" height="37" rx="6" fill="#0f172a"/>
+        <rect x="58" y="2371" width="480" height="37" rx="6" fill="rgba(8,51,68,0.4)" stroke="#22d3ee" stroke-width="1.1"/>
+        <rect x="594" y="2371" width="582" height="37" rx="6" fill="#0f172a"/>
+        <rect x="594" y="2371" width="582" height="37" rx="6" fill="rgba(136,19,55,0.4)" stroke="#fb7185" stroke-width="1.1"/>
+        <text x="68" y="2384" fill="white" font-size="8">{case_number: &#x27;00123456&#x27;}</text>
+        <text x="68" y="2395" fill="#94a3b8" font-size="7.3">process_case ➜ error_message=&#x27;bad&#x27;</text>
+        <text x="604" y="2384" fill="white" font-size="8">400 · message = raw error_message (&#x27;bad&#x27;)</text>
+        <line x1="544" y1="2389.5" x2="590" y2="2389.5" stroke="#22d3ee" stroke-width="1.5" marker-end="url(#arrowcyan)"/>
+        <text x="58" y="2424" fill="#64748b" font-size="7">test_no_zip_attachment_returns_400</text>
+        <text x="1176" y="2424" fill="#475569" font-size="7" text-anchor="end">path: F2 · no zip</text>
+        <rect x="58" y="2427" width="480" height="37" rx="6" fill="#0f172a"/>
+        <rect x="58" y="2427" width="480" height="37" rx="6" fill="rgba(8,51,68,0.4)" stroke="#22d3ee" stroke-width="1.1"/>
+        <rect x="594" y="2427" width="582" height="37" rx="6" fill="#0f172a"/>
+        <rect x="594" y="2427" width="582" height="37" rx="6" fill="rgba(136,19,55,0.4)" stroke="#fb7185" stroke-width="1.1"/>
+        <text x="68" y="2440" fill="white" font-size="8">{case_number: &#x27;00123456&#x27;}</text>
+        <text x="68" y="2451" fill="#94a3b8" font-size="7.3">case attachments: notes.txt only</text>
+        <text x="604" y="2440" fill="white" font-size="8">400 · message &#x27;No ZIP attachment found for this case.&#x27;</text>
+        <text x="604" y="2451" fill="#94a3b8" font-size="7.3">no case_context written to session</text>
+        <line x1="544" y1="2445.5" x2="590" y2="2445.5" stroke="#22d3ee" stroke-width="1.5" marker-end="url(#arrowcyan)"/>
+        <text x="58" y="2480" fill="#64748b" font-size="7">test_success_sets_session_classifies_and_returns_redirect</text>
+        <text x="1176" y="2480" fill="#475569" font-size="7" text-anchor="end">path: F2 · full chain</text>
+        <rect x="58" y="2483" width="480" height="48" rx="6" fill="#0f172a"/>
+        <rect x="58" y="2483" width="480" height="48" rx="6" fill="rgba(8,51,68,0.4)" stroke="#22d3ee" stroke-width="1.1"/>
+        <rect x="594" y="2483" width="582" height="48" rx="6" fill="#0f172a"/>
+        <rect x="594" y="2483" width="582" height="48" rx="6" fill="rgba(6,95,70,0.7)" stroke="#6ee7b7" stroke-width="1.1"/>
+        <text x="68" y="2496" fill="white" font-size="8">{case_number: &#x27;00123456&#x27;} · attachments [logs.zip, notes.txt]</text>
+        <text x="68" y="2507" fill="#94a3b8" font-size="7.3">classify_issue ➜ {issue_type: &#x27;Disconnect&#x27;, confidence: 90} · stale_key in session</text>
+        <text x="604" y="2496" fill="white" font-size="8">200 {success: True, redirect_url: &#x27;/download_attachments&#x27;}</text>
+        <text x="604" y="2507" fill="#94a3b8" font-size="7.3">session cleared ➜ selected_files [ZIP_ITEM] · bsod False · latest_etl_llm True · _run_analysis_requested True</text>
+        <text x="604" y="2518" fill="#94a3b8" font-size="7.3">prompt_file_path · classification.issue_type &#x27;Disconnect&#x27; · record_attachment_selection([ZIP_ITEM]) · prime once</text>
+        <line x1="544" y1="2507.0" x2="590" y2="2507.0" stroke="#22d3ee" stroke-width="1.5" marker-end="url(#arrowcyan)"/>
+        <text x="58" y="2547" fill="#64748b" font-size="7">test_no_llm_helper_keeps_default_classification</text>
+        <text x="1176" y="2547" fill="#475569" font-size="7" text-anchor="end">path: F2 · llm None</text>
+        <rect x="58" y="2550" width="480" height="37" rx="6" fill="#0f172a"/>
+        <rect x="58" y="2550" width="480" height="37" rx="6" fill="rgba(8,51,68,0.4)" stroke="#22d3ee" stroke-width="1.1"/>
+        <rect x="594" y="2550" width="582" height="37" rx="6" fill="#0f172a"/>
+        <rect x="594" y="2550" width="582" height="37" rx="6" fill="rgba(6,95,70,0.7)" stroke="#6ee7b7" stroke-width="1.1"/>
+        <text x="68" y="2563" fill="white" font-size="8">{case_number: &#x27;00123456&#x27;}</text>
+        <text x="68" y="2574" fill="#94a3b8" font-size="7.3">app_config.llm_helper = None</text>
+        <text x="604" y="2563" fill="white" font-size="8">200 success · classification stays &#x27;Unclassified&#x27;</text>
+        <text x="604" y="2574" fill="#94a3b8" font-size="7.3">cache primed with no initial usage</text>
+        <line x1="544" y1="2568.5" x2="590" y2="2568.5" stroke="#22d3ee" stroke-width="1.5" marker-end="url(#arrowcyan)"/>
+        <text x="58" y="2603" fill="#64748b" font-size="7">test_classification_and_prepass_failures_are_best_effort</text>
+        <text x="1176" y="2603" fill="#475569" font-size="7" text-anchor="end">path: F2 · best-effort</text>
+        <rect x="58" y="2606" width="480" height="37" rx="6" fill="#0f172a"/>
+        <rect x="58" y="2606" width="480" height="37" rx="6" fill="rgba(8,51,68,0.4)" stroke="#22d3ee" stroke-width="1.1"/>
+        <rect x="594" y="2606" width="582" height="37" rx="6" fill="#0f172a"/>
+        <rect x="594" y="2606" width="582" height="37" rx="6" fill="rgba(154,52,18,0.45)" stroke="#fb923c" stroke-width="1.1"/>
+        <text x="68" y="2619" fill="white" font-size="8">{case_number: &#x27;00123456&#x27;}</text>
+        <text x="68" y="2630" fill="#94a3b8" font-size="7.3">classify_issue raises · _prime_issue_ai_cache raises</text>
+        <text x="604" y="2619" fill="white" font-size="8">200 success · classification falls back to &#x27;Unclassified&#x27;</text>
+        <text x="604" y="2630" fill="#94a3b8" font-size="7.3">exceptions swallowed</text>
+        <line x1="544" y1="2624.5" x2="590" y2="2624.5" stroke="#22d3ee" stroke-width="1.5" marker-end="url(#arrowcyan)"/>
+        <text x="58" y="2659" fill="#64748b" font-size="7">test_service_exception_returns_500</text>
+        <text x="1176" y="2659" fill="#475569" font-size="7" text-anchor="end">path: F2 · outer except</text>
+        <rect x="58" y="2662" width="480" height="37" rx="6" fill="#0f172a"/>
+        <rect x="58" y="2662" width="480" height="37" rx="6" fill="rgba(8,51,68,0.4)" stroke="#22d3ee" stroke-width="1.1"/>
+        <rect x="594" y="2662" width="582" height="37" rx="6" fill="#0f172a"/>
+        <rect x="594" y="2662" width="582" height="37" rx="6" fill="rgba(136,19,55,0.4)" stroke="#fb7185" stroke-width="1.1"/>
+        <text x="68" y="2675" fill="white" font-size="8">{case_number: &#x27;00123456&#x27;}</text>
+        <text x="68" y="2686" fill="#94a3b8" font-size="7.3">process_case raises</text>
+        <text x="604" y="2675" fill="white" font-size="8">500 {success: False, message: &lt;generic error&gt;}</text>
+        <line x1="544" y1="2680.5" x2="590" y2="2680.5" stroke="#22d3ee" stroke-width="1.5" marker-end="url(#arrowcyan)"/>
+        <text x="58" y="2721" fill="#a78bfa" font-size="8.5" font-weight="600">TestSelectAttachments · F3</text>
+        <text x="58" y="2735" fill="#64748b" font-size="7">test_get_without_session_redirects_to_index</text>
+        <text x="1176" y="2735" fill="#475569" font-size="7" text-anchor="end">path: F3 · GET no session</text>
+        <rect x="58" y="2738" width="480" height="37" rx="6" fill="#0f172a"/>
+        <rect x="58" y="2738" width="480" height="37" rx="6" fill="rgba(8,51,68,0.4)" stroke="#22d3ee" stroke-width="1.1"/>
+        <rect x="594" y="2738" width="582" height="37" rx="6" fill="#0f172a"/>
+        <rect x="594" y="2738" width="582" height="37" rx="6" fill="rgba(136,19,55,0.4)" stroke="#fb7185" stroke-width="1.1"/>
+        <text x="68" y="2751" fill="white" font-size="8">GET /select_attachments</text>
+        <text x="68" y="2762" fill="#94a3b8" font-size="7.3">no case_context</text>
+        <text x="604" y="2751" fill="white" font-size="8">302 ➜ / · flash (&#x27;warning&#x27;, &#x27;Session expired. Please start again.&#x27;)</text>
+        <line x1="544" y1="2756.5" x2="590" y2="2756.5" stroke="#22d3ee" stroke-width="1.5" marker-end="url(#arrowcyan)"/>
+        <text x="58" y="2791" fill="#64748b" font-size="7">test_get_renders_form_with_case_context</text>
+        <text x="1176" y="2791" fill="#475569" font-size="7" text-anchor="end">path: F3 · GET render</text>
+        <rect x="58" y="2794" width="480" height="37" rx="6" fill="#0f172a"/>
+        <rect x="58" y="2794" width="480" height="37" rx="6" fill="rgba(8,51,68,0.4)" stroke="#22d3ee" stroke-width="1.1"/>
+        <rect x="594" y="2794" width="582" height="37" rx="6" fill="#0f172a"/>
+        <rect x="594" y="2794" width="582" height="37" rx="6" fill="rgba(6,95,70,0.7)" stroke="#6ee7b7" stroke-width="1.1"/>
+        <text x="68" y="2807" fill="white" font-size="8">GET /select_attachments</text>
+        <text x="68" y="2818" fill="#94a3b8" font-size="7.3">seeded case session</text>
+        <text x="604" y="2807" fill="white" font-size="8">200 · select_attachments.html(case_context=…, ai_analysis=None)</text>
+        <line x1="544" y1="2812.5" x2="590" y2="2812.5" stroke="#22d3ee" stroke-width="1.5" marker-end="url(#arrowcyan)"/>
+        <text x="58" y="2847" fill="#64748b" font-size="7">test_post_without_session_redirects_to_index</text>
+        <text x="1176" y="2847" fill="#475569" font-size="7" text-anchor="end">path: F3 · POST no session</text>
+        <rect x="58" y="2850" width="480" height="37" rx="6" fill="#0f172a"/>
+        <rect x="58" y="2850" width="480" height="37" rx="6" fill="rgba(8,51,68,0.4)" stroke="#22d3ee" stroke-width="1.1"/>
+        <rect x="594" y="2850" width="582" height="37" rx="6" fill="#0f172a"/>
+        <rect x="594" y="2850" width="582" height="37" rx="6" fill="rgba(136,19,55,0.4)" stroke="#fb7185" stroke-width="1.1"/>
+        <text x="68" y="2863" fill="white" font-size="8">POST {selected_files: [&#x27;logs.zip&#x27;]}</text>
+        <text x="68" y="2874" fill="#94a3b8" font-size="7.3">no case_context</text>
+        <text x="604" y="2863" fill="white" font-size="8">302 ➜ / · _prime_issue_ai_cache NOT called</text>
+        <line x1="544" y1="2868.5" x2="590" y2="2868.5" stroke="#22d3ee" stroke-width="1.5" marker-end="url(#arrowcyan)"/>
+        <text x="58" y="2903" fill="#64748b" font-size="7">test_post_analysis_action_sets_run_flags</text>
+        <text x="1176" y="2903" fill="#475569" font-size="7" text-anchor="end">path: F3 · analysis</text>
+        <rect x="58" y="2906" width="480" height="48" rx="6" fill="#0f172a"/>
+        <rect x="58" y="2906" width="480" height="48" rx="6" fill="rgba(8,51,68,0.4)" stroke="#22d3ee" stroke-width="1.1"/>
+        <rect x="594" y="2906" width="582" height="48" rx="6" fill="#0f172a"/>
+        <rect x="594" y="2906" width="582" height="48" rx="6" fill="rgba(6,95,70,0.7)" stroke="#6ee7b7" stroke-width="1.1"/>
+        <text x="68" y="2919" fill="white" font-size="8">POST {selected_files: [&#x27;logs.zip&#x27;], action: &#x27;analysis&#x27;}</text>
+        <text x="68" y="2930" fill="#94a3b8" font-size="7.3">case attachments [ZIP_ITEM, TXT_ITEM]</text>
+        <text x="604" y="2919" fill="white" font-size="8">302 ➜ /download_attachments · selected_files [ZIP_ITEM] · bsod False</text>
+        <text x="604" y="2930" fill="#94a3b8" font-size="7.3">latest_etl_llm True · _run_analysis_requested True</text>
+        <text x="604" y="2941" fill="#94a3b8" font-size="7.3">record_attachment_selection(workflow_id=&#x27;wf-test-1&#x27;, selected_files=[ZIP_ITEM], domain=&#x27;wifi&#x27;) · prime once</text>
+        <line x1="544" y1="2930.0" x2="590" y2="2930.0" stroke="#22d3ee" stroke-width="1.5" marker-end="url(#arrowcyan)"/>
+        <text x="58" y="2970" fill="#64748b" font-size="7">test_post_legacy_latest_etl_llm_action_is_accepted</text>
+        <text x="1176" y="2970" fill="#475569" font-size="7" text-anchor="end">path: F3 · legacy alias</text>
+        <rect x="58" y="2973" width="480" height="37" rx="6" fill="#0f172a"/>
+        <rect x="58" y="2973" width="480" height="37" rx="6" fill="rgba(8,51,68,0.4)" stroke="#22d3ee" stroke-width="1.1"/>
+        <rect x="594" y="2973" width="582" height="37" rx="6" fill="#0f172a"/>
+        <rect x="594" y="2973" width="582" height="37" rx="6" fill="rgba(6,95,70,0.7)" stroke="#6ee7b7" stroke-width="1.1"/>
+        <text x="68" y="2986" fill="white" font-size="8">POST {selected_files: [&#x27;logs.zip&#x27;], action: &#x27;latest_etl_llm&#x27;}</text>
+        <text x="604" y="2986" fill="white" font-size="8">latest_etl_llm True · _run_analysis_requested True</text>
+        <text x="604" y="2997" fill="#94a3b8" font-size="7.3">legacy alias of &#x27;analysis&#x27;</text>
+        <line x1="544" y1="2991.5" x2="590" y2="2991.5" stroke="#22d3ee" stroke-width="1.5" marker-end="url(#arrowcyan)"/>
+        <text x="58" y="3026" fill="#64748b" font-size="7">test_post_bsod_action_sets_bsod_without_run_marker</text>
+        <text x="1176" y="3026" fill="#475569" font-size="7" text-anchor="end">path: F3 · bsod</text>
+        <rect x="58" y="3029" width="480" height="37" rx="6" fill="#0f172a"/>
+        <rect x="58" y="3029" width="480" height="37" rx="6" fill="rgba(8,51,68,0.4)" stroke="#22d3ee" stroke-width="1.1"/>
+        <rect x="594" y="3029" width="582" height="37" rx="6" fill="#0f172a"/>
+        <rect x="594" y="3029" width="582" height="37" rx="6" fill="rgba(6,95,70,0.7)" stroke="#6ee7b7" stroke-width="1.1"/>
+        <text x="68" y="3042" fill="white" font-size="8">POST {selected_files: [&#x27;logs.zip&#x27;, &#x27;notes.txt&#x27;], action: &#x27;bsod&#x27;}</text>
+        <text x="604" y="3042" fill="white" font-size="8">302 ➜ /download_attachments · selected_files [ZIP_ITEM, TXT_ITEM]</text>
+        <text x="604" y="3053" fill="#94a3b8" font-size="7.3">bsod True · latest_etl_llm False · no _run_analysis_requested</text>
+        <line x1="544" y1="3047.5" x2="590" y2="3047.5" stroke="#22d3ee" stroke-width="1.5" marker-end="url(#arrowcyan)"/>
+        <text x="58" y="3082" fill="#64748b" font-size="7">test_post_telemetry_and_prepass_failures_are_best_effort</text>
+        <text x="1176" y="3082" fill="#475569" font-size="7" text-anchor="end">path: F3 · best-effort</text>
+        <rect x="58" y="3085" width="480" height="37" rx="6" fill="#0f172a"/>
+        <rect x="58" y="3085" width="480" height="37" rx="6" fill="rgba(8,51,68,0.4)" stroke="#22d3ee" stroke-width="1.1"/>
+        <rect x="594" y="3085" width="582" height="37" rx="6" fill="#0f172a"/>
+        <rect x="594" y="3085" width="582" height="37" rx="6" fill="rgba(154,52,18,0.45)" stroke="#fb923c" stroke-width="1.1"/>
+        <text x="68" y="3098" fill="white" font-size="8">POST {selected_files: [&#x27;logs.zip&#x27;], action: &#x27;download&#x27;}</text>
+        <text x="68" y="3109" fill="#94a3b8" font-size="7.3">record_attachment_selection raises · prime raises</text>
+        <text x="604" y="3098" fill="white" font-size="8">302 ➜ /download_attachments</text>
+        <text x="604" y="3109" fill="#94a3b8" font-size="7.3">selected_files [ZIP_ITEM] still stored</text>
+        <line x1="544" y1="3103.5" x2="590" y2="3103.5" stroke="#22d3ee" stroke-width="1.5" marker-end="url(#arrowcyan)"/>
+        <text x="58" y="3144" fill="#a78bfa" font-size="8.5" font-weight="600">TestDownloadAttachments · F4 + H3</text>
+        <text x="58" y="3158" fill="#64748b" font-size="7">test_without_session_redirects_to_index</text>
+        <text x="1176" y="3158" fill="#475569" font-size="7" text-anchor="end">path: F4 · no session</text>
+        <rect x="58" y="3161" width="480" height="37" rx="6" fill="#0f172a"/>
+        <rect x="58" y="3161" width="480" height="37" rx="6" fill="rgba(8,51,68,0.4)" stroke="#22d3ee" stroke-width="1.1"/>
+        <rect x="594" y="3161" width="582" height="37" rx="6" fill="#0f172a"/>
+        <rect x="594" y="3161" width="582" height="37" rx="6" fill="rgba(136,19,55,0.4)" stroke="#fb7185" stroke-width="1.1"/>
+        <text x="68" y="3174" fill="white" font-size="8">GET /download_attachments</text>
+        <text x="68" y="3185" fill="#94a3b8" font-size="7.3">no case_context</text>
+        <text x="604" y="3174" fill="white" font-size="8">302 ➜ / · &#x27;Session expired. Please start again.&#x27; warning flash</text>
+        <line x1="544" y1="3179.5" x2="590" y2="3179.5" stroke="#22d3ee" stroke-width="1.5" marker-end="url(#arrowcyan)"/>
+        <text x="58" y="3214" fill="#64748b" font-size="7">test_non_bsod_uses_case_download_dir</text>
+        <text x="1176" y="3214" fill="#475569" font-size="7" text-anchor="end">path: F4 · non-BSOD</text>
+        <rect x="58" y="3217" width="480" height="37" rx="6" fill="#0f172a"/>
+        <rect x="58" y="3217" width="480" height="37" rx="6" fill="rgba(8,51,68,0.4)" stroke="#22d3ee" stroke-width="1.1"/>
+        <rect x="594" y="3217" width="582" height="37" rx="6" fill="#0f172a"/>
+        <rect x="594" y="3217" width="582" height="37" rx="6" fill="rgba(6,95,70,0.7)" stroke="#6ee7b7" stroke-width="1.1"/>
+        <text x="68" y="3230" fill="white" font-size="8">GET /download_attachments</text>
+        <text x="68" y="3241" fill="#94a3b8" font-size="7.3">bsod False · selected_files [ZIP_ITEM, TXT_ITEM]</text>
+        <text x="604" y="3230" fill="white" font-size="8">200 · attachment_download_progress.html(files_to_download={logs.zip: 0, notes.txt: 0},</text>
+        <text x="604" y="3241" fill="#94a3b8" font-size="7.3">  download_path=case_download_dir) · session.download_path = same</text>
+        <line x1="544" y1="3235.5" x2="590" y2="3235.5" stroke="#22d3ee" stroke-width="1.5" marker-end="url(#arrowcyan)"/>
+        <text x="58" y="3270" fill="#64748b" font-size="7">test_bsod_uses_shared_load_path_and_case_nbr</text>
+        <text x="1176" y="3270" fill="#475569" font-size="7" text-anchor="end">path: F4 · BSOD</text>
+        <rect x="58" y="3273" width="480" height="37" rx="6" fill="#0f172a"/>
+        <rect x="58" y="3273" width="480" height="37" rx="6" fill="rgba(8,51,68,0.4)" stroke="#22d3ee" stroke-width="1.1"/>
+        <rect x="594" y="3273" width="582" height="37" rx="6" fill="#0f172a"/>
+        <rect x="594" y="3273" width="582" height="37" rx="6" fill="rgba(6,95,70,0.7)" stroke="#6ee7b7" stroke-width="1.1"/>
+        <text x="68" y="3286" fill="white" font-size="8">bsod True · selected [ZIP_ITEM]</text>
+        <text x="68" y="3297" fill="#94a3b8" font-size="7.3">get_load_path ➜ &#x27;\\share\BSOD_Dumps&#x27;</text>
+        <text x="604" y="3286" fill="white" font-size="8">download_path &#x27;\\share\BSOD_Dumps\00123456&#x27; (render kwarg + session)</text>
+        <line x1="544" y1="3291.5" x2="590" y2="3291.5" stroke="#22d3ee" stroke-width="1.5" marker-end="url(#arrowcyan)"/>
+        <text x="58" y="3326" fill="#64748b" font-size="7">test_resolve_download_path_prefers_dashed_backend_id</text>
+        <text x="1176" y="3326" fill="#475569" font-size="7" text-anchor="end">path: H3 · backend_id</text>
+        <rect x="58" y="3329" width="480" height="37" rx="6" fill="#0f172a"/>
+        <rect x="58" y="3329" width="480" height="37" rx="6" fill="rgba(8,51,68,0.4)" stroke="#22d3ee" stroke-width="1.1"/>
+        <rect x="594" y="3329" width="582" height="37" rx="6" fill="#0f172a"/>
+        <rect x="594" y="3329" width="582" height="37" rx="6" fill="rgba(6,95,70,0.7)" stroke="#6ee7b7" stroke-width="1.1"/>
+        <text x="68" y="3342" fill="white" font-size="8">_resolve_download_path(CaseContext(case_nbr, backend_id=&#x27;BSOD-4242&#x27;), True)</text>
+        <text x="68" y="3353" fill="#94a3b8" font-size="7.3">get_load_path ➜ &#x27;\\share\BSOD_Dumps&#x27;</text>
+        <text x="604" y="3342" fill="white" font-size="8">&#x27;\\share\BSOD_Dumps\BSOD-4242&#x27;</text>
+        <line x1="544" y1="3347.5" x2="590" y2="3347.5" stroke="#22d3ee" stroke-width="1.5" marker-end="url(#arrowcyan)"/>
+        <text x="58" y="3382" fill="#64748b" font-size="7">test_resolve_download_path_bsod_without_share_returns_empty</text>
+        <text x="1176" y="3382" fill="#475569" font-size="7" text-anchor="end">path: H3 · no share</text>
+        <rect x="58" y="3385" width="480" height="37" rx="6" fill="#0f172a"/>
+        <rect x="58" y="3385" width="480" height="37" rx="6" fill="rgba(8,51,68,0.4)" stroke="#22d3ee" stroke-width="1.1"/>
+        <rect x="594" y="3385" width="582" height="37" rx="6" fill="#0f172a"/>
+        <rect x="594" y="3385" width="582" height="37" rx="6" fill="rgba(30,41,59,0.5)" stroke="#94a3b8" stroke-width="1.1"/>
+        <text x="68" y="3398" fill="white" font-size="8">get_load_path ➜ None</text>
+        <text x="68" y="3409" fill="#94a3b8" font-size="7.3">and ctx = None</text>
+        <text x="604" y="3398" fill="white" font-size="8">&#x27;&#x27; in both cases</text>
+        <line x1="544" y1="3403.5" x2="590" y2="3403.5" stroke="#22d3ee" stroke-width="1.5" marker-end="url(#arrowcyan)"/>
+        <text x="58" y="3444" fill="#a78bfa" font-size="8.5" font-weight="600">TestDownloadResult · F5   (WiFi_1/3.etl + setup.log under …\logs\20260414 · BT_a.etl old · BT_b.etl new)</text>
+        <text x="58" y="3458" fill="#64748b" font-size="7">test_without_session_redirects_to_index</text>
+        <text x="1176" y="3458" fill="#475569" font-size="7" text-anchor="end">path: F5 · no session</text>
+        <rect x="58" y="3461" width="480" height="37" rx="6" fill="#0f172a"/>
+        <rect x="58" y="3461" width="480" height="37" rx="6" fill="rgba(8,51,68,0.4)" stroke="#22d3ee" stroke-width="1.1"/>
+        <rect x="594" y="3461" width="582" height="37" rx="6" fill="#0f172a"/>
+        <rect x="594" y="3461" width="582" height="37" rx="6" fill="rgba(136,19,55,0.4)" stroke="#fb7185" stroke-width="1.1"/>
+        <text x="68" y="3474" fill="white" font-size="8">GET /download_result</text>
+        <text x="68" y="3485" fill="#94a3b8" font-size="7.3">no case_context</text>
+        <text x="604" y="3474" fill="white" font-size="8">302 ➜ / · template NOT rendered</text>
+        <line x1="544" y1="3479.5" x2="590" y2="3479.5" stroke="#22d3ee" stroke-width="1.5" marker-end="url(#arrowcyan)"/>
+        <text x="58" y="3514" fill="#64748b" font-size="7">test_empty_download_path_redirects_to_index</text>
+        <text x="1176" y="3514" fill="#475569" font-size="7" text-anchor="end">path: F5 · no path</text>
+        <rect x="58" y="3517" width="480" height="30" rx="6" fill="#0f172a"/>
+        <rect x="58" y="3517" width="480" height="30" rx="6" fill="rgba(8,51,68,0.4)" stroke="#22d3ee" stroke-width="1.1"/>
+        <rect x="594" y="3517" width="582" height="30" rx="6" fill="#0f172a"/>
+        <rect x="594" y="3517" width="582" height="30" rx="6" fill="rgba(136,19,55,0.4)" stroke="#fb7185" stroke-width="1.1"/>
+        <text x="68" y="3530" fill="white" font-size="8">bsod case · get_load_path ➜ None</text>
+        <text x="604" y="3530" fill="white" font-size="8">302 ➜ / · &#x27;Session expired&#x27; warning flash</text>
+        <line x1="544" y1="3532.0" x2="590" y2="3532.0" stroke="#22d3ee" stroke-width="1.5" marker-end="url(#arrowcyan)"/>
+        <text x="58" y="3563" fill="#64748b" font-size="7">test_wifi_only_renders_tables_without_auto_pick</text>
+        <text x="1176" y="3563" fill="#475569" font-size="7" text-anchor="end">path: F5 · baseline</text>
+        <rect x="58" y="3566" width="480" height="37" rx="6" fill="#0f172a"/>
+        <rect x="58" y="3566" width="480" height="37" rx="6" fill="rgba(8,51,68,0.4)" stroke="#22d3ee" stroke-width="1.1"/>
+        <rect x="594" y="3566" width="582" height="37" rx="6" fill="#0f172a"/>
+        <rect x="594" y="3566" width="582" height="37" rx="6" fill="rgba(6,95,70,0.7)" stroke="#6ee7b7" stroke-width="1.1"/>
+        <text x="68" y="3579" fill="white" font-size="8">results wifi {logs.zip: [WiFi_1.etl, setup.log]}</text>
+        <text x="68" y="3590" fill="#94a3b8" font-size="7.3">get_auto_analysis_etl ➜ None</text>
+        <text x="604" y="3579" fill="white" font-size="8">200 · get_download_results(&#x27;00123456&#x27;) once · wifi_table_rows etl_path [WiFi_1.etl] (.log filtered)</text>
+        <text x="604" y="3590" fill="#94a3b8" font-size="7.3">files_coexist False · auto_analysis_etl None · empty issue-time / filter fields · auto lookup once</text>
+        <line x1="544" y1="3584.5" x2="590" y2="3584.5" stroke="#22d3ee" stroke-width="1.5" marker-end="url(#arrowcyan)"/>
+        <text x="58" y="3619" fill="#64748b" font-size="7">test_coex_bt_hint_skips_wifi_auto_pick</text>
+        <text x="1176" y="3619" fill="#475569" font-size="7" text-anchor="end">path: F5 · coex</text>
+        <rect x="58" y="3622" width="480" height="37" rx="6" fill="#0f172a"/>
+        <rect x="58" y="3622" width="480" height="37" rx="6" fill="rgba(8,51,68,0.4)" stroke="#22d3ee" stroke-width="1.1"/>
+        <rect x="594" y="3622" width="582" height="37" rx="6" fill="#0f172a"/>
+        <rect x="594" y="3622" width="582" height="37" rx="6" fill="rgba(6,95,70,0.7)" stroke="#6ee7b7" stroke-width="1.1"/>
+        <text x="68" y="3635" fill="white" font-size="8">wifi {logs.zip: [WiFi_1.etl]} + bt {logs.zip: [BT_b.etl]}</text>
+        <text x="68" y="3646" fill="#94a3b8" font-size="7.3">bt case hint</text>
+        <text x="604" y="3635" fill="white" font-size="8">files_coexist True · auto_analysis_etl None · get_auto_analysis_etl NOT called</text>
+        <text x="604" y="3646" fill="#94a3b8" font-size="7.3">session case_context.files_coexist True · bt_file_sizes {BT_b.etl: 0}</text>
+        <line x1="544" y1="3640.5" x2="590" y2="3640.5" stroke="#22d3ee" stroke-width="1.5" marker-end="url(#arrowcyan)"/>
+        <text x="58" y="3675" fill="#64748b" font-size="7">test_run_analysis_recovery_picks_highest_numbered_etl</text>
+        <text x="1176" y="3675" fill="#475569" font-size="7" text-anchor="end">path: F5 · recovery</text>
+        <rect x="58" y="3678" width="480" height="37" rx="6" fill="#0f172a"/>
+        <rect x="58" y="3678" width="480" height="37" rx="6" fill="rgba(8,51,68,0.4)" stroke="#22d3ee" stroke-width="1.1"/>
+        <rect x="594" y="3678" width="582" height="37" rx="6" fill="#0f172a"/>
+        <rect x="594" y="3678" width="582" height="37" rx="6" fill="rgba(6,95,70,0.7)" stroke="#6ee7b7" stroke-width="1.1"/>
+        <text x="68" y="3691" fill="white" font-size="8">wifi [WiFi_1.etl, WiFi_3.etl, setup.log] · upstream pick ➜ None</text>
+        <text x="68" y="3702" fill="#94a3b8" font-size="7.3">session _run_analysis_requested True</text>
+        <text x="604" y="3691" fill="white" font-size="8">auto_analysis_etl WiFi_3.etl · reason &#x27;latest_by_number&#x27;</text>
+        <text x="604" y="3702" fill="#94a3b8" font-size="7.3">_run_analysis_requested popped from session</text>
+        <line x1="544" y1="3696.5" x2="590" y2="3696.5" stroke="#22d3ee" stroke-width="1.5" marker-end="url(#arrowcyan)"/>
+        <text x="58" y="3731" fill="#64748b" font-size="7">test_ai_issue_time_overrides_newest_by_number_pick</text>
+        <text x="1176" y="3731" fill="#475569" font-size="7" text-anchor="end">path: F5 · AI override</text>
+        <rect x="58" y="3734" width="480" height="37" rx="6" fill="#0f172a"/>
+        <rect x="58" y="3734" width="480" height="37" rx="6" fill="rgba(8,51,68,0.4)" stroke="#22d3ee" stroke-width="1.1"/>
+        <rect x="594" y="3734" width="582" height="37" rx="6" fill="#0f172a"/>
+        <rect x="594" y="3734" width="582" height="37" rx="6" fill="rgba(6,95,70,0.7)" stroke="#6ee7b7" stroke-width="1.1"/>
+        <text x="68" y="3747" fill="white" font-size="8">get_auto_analysis_etl ➜ WiFi_3.etl · pick_etl_by_ai_time ➜ WiFi_1.etl</text>
+        <text x="68" y="3758" fill="#94a3b8" font-size="7.3">cached _issue_ai_quick issue time</text>
+        <text x="604" y="3747" fill="white" font-size="8">auto_analysis_etl WiFi_1.etl · reason &#x27;ai_time&#x27; · ai_pre_selected_etl WiFi_1.etl</text>
+        <text x="604" y="3758" fill="#94a3b8" font-size="7.3">issue time surfaced · align_issue_time_for_display runs</text>
+        <line x1="544" y1="3752.5" x2="590" y2="3752.5" stroke="#22d3ee" stroke-width="1.5" marker-end="url(#arrowcyan)"/>
+        <text x="58" y="3787" fill="#64748b" font-size="7">test_attachment_time_filter_success_and_llm_time_fallback</text>
+        <text x="1176" y="3787" fill="#475569" font-size="7" text-anchor="end">path: F5 · time filter</text>
+        <rect x="58" y="3790" width="480" height="37" rx="6" fill="#0f172a"/>
+        <rect x="58" y="3790" width="480" height="37" rx="6" fill="rgba(8,51,68,0.4)" stroke="#22d3ee" stroke-width="1.1"/>
+        <rect x="594" y="3790" width="582" height="37" rx="6" fill="#0f172a"/>
+        <rect x="594" y="3790" width="582" height="37" rx="6" fill="rgba(6,95,70,0.7)" stroke="#6ee7b7" stroke-width="1.1"/>
+        <text x="68" y="3803" fill="white" font-size="8">get_issue_time_from_selected_files ➜ {logs.zip: &#x27;14:15:18&#x27;}</text>
+        <text x="68" y="3814" fill="#94a3b8" font-size="7.3">filter_folders_by_time ➜ (dict, {}) · selected [ZIP_ITEM]</text>
+        <text x="604" y="3803" fill="white" font-size="8">time_filter_info [(&#x27;logs.zip&#x27;, &#x27;14:15:18&#x27;)] · time_filter_warnings []</text>
+        <text x="604" y="3814" fill="#94a3b8" font-size="7.3">llm_issue_time &#x27;14:15:18&#x27; (fallback) · filter_folders_by_time({logs.zip: [WiFi_1, WiFi_3]}, &#x27;14:15:18&#x27;)</text>
+        <line x1="544" y1="3808.5" x2="590" y2="3808.5" stroke="#22d3ee" stroke-width="1.5" marker-end="url(#arrowcyan)"/>
+        <text x="58" y="3843" fill="#64748b" font-size="7">test_attachment_time_filter_warning_is_reported</text>
+        <text x="1176" y="3843" fill="#475569" font-size="7" text-anchor="end">path: F5 · filter warning</text>
+        <rect x="58" y="3846" width="480" height="37" rx="6" fill="#0f172a"/>
+        <rect x="58" y="3846" width="480" height="37" rx="6" fill="rgba(8,51,68,0.4)" stroke="#22d3ee" stroke-width="1.1"/>
+        <rect x="594" y="3846" width="582" height="37" rx="6" fill="#0f172a"/>
+        <rect x="594" y="3846" width="582" height="37" rx="6" fill="rgba(6,95,70,0.7)" stroke="#6ee7b7" stroke-width="1.1"/>
+        <text x="68" y="3859" fill="white" font-size="8">issue time {logs.zip: &#x27;14:15:18&#x27;}</text>
+        <text x="68" y="3870" fill="#94a3b8" font-size="7.3">filter ➜ warning {logs.zip: &#x27;All folders are before issue time&#x27;}</text>
+        <text x="604" y="3859" fill="white" font-size="8">time_filter_info []</text>
+        <text x="604" y="3870" fill="#94a3b8" font-size="7.3">time_filter_warnings [(&#x27;logs.zip&#x27;, &#x27;All folders are before issue time&#x27;)]</text>
+        <line x1="544" y1="3864.5" x2="590" y2="3864.5" stroke="#22d3ee" stroke-width="1.5" marker-end="url(#arrowcyan)"/>
+        <text x="58" y="3899" fill="#64748b" font-size="7">test_bt_run_analysis_picks_newest_timestamped_bt_log</text>
+        <text x="1176" y="3899" fill="#475569" font-size="7" text-anchor="end">path: F5 · BT pick</text>
+        <rect x="58" y="3902" width="480" height="37" rx="6" fill="#0f172a"/>
+        <rect x="58" y="3902" width="480" height="37" rx="6" fill="rgba(8,51,68,0.4)" stroke="#22d3ee" stroke-width="1.1"/>
+        <rect x="594" y="3902" width="582" height="37" rx="6" fill="#0f172a"/>
+        <rect x="594" y="3902" width="582" height="37" rx="6" fill="rgba(6,95,70,0.7)" stroke="#6ee7b7" stroke-width="1.1"/>
+        <text x="68" y="3915" fill="white" font-size="8">bt case · results bt {logs.zip: [old\BT_a.etl, new\BT_b.etl]} · run requested</text>
+        <text x="68" y="3926" fill="#94a3b8" font-size="7.3">_parse_path_timestamp 04-13 09:00 / 04-14 09:00 · auto_analysis_fw &#x27;C:\fake\fw\fw.bin&#x27;</text>
+        <text x="604" y="3915" fill="white" font-size="8">auto BT pick new\BT_b.etl (newest) · fw path surfaced and popped from session</text>
+        <text x="604" y="3926" fill="#94a3b8" font-size="7.3">BT table lists both ETLs</text>
+        <line x1="544" y1="3920.5" x2="590" y2="3920.5" stroke="#22d3ee" stroke-width="1.5" marker-end="url(#arrowcyan)"/>
+        <text x="58" y="3961" fill="#a78bfa" font-size="8.5" font-weight="600">TestBuildTableRows · H4</text>
+        <text x="58" y="3975" fill="#64748b" font-size="7">test_rows_carry_zip_rowspan_and_filters</text>
+        <text x="1176" y="3975" fill="#475569" font-size="7" text-anchor="end">path: H4 · merged rows</text>
+        <rect x="58" y="3978" width="480" height="37" rx="6" fill="#0f172a"/>
+        <rect x="58" y="3978" width="480" height="37" rx="6" fill="rgba(8,51,68,0.4)" stroke="#22d3ee" stroke-width="1.1"/>
+        <rect x="594" y="3978" width="582" height="37" rx="6" fill="#0f172a"/>
+        <rect x="594" y="3978" width="582" height="37" rx="6" fill="rgba(6,95,70,0.7)" stroke="#6ee7b7" stroke-width="1.1"/>
+        <text x="68" y="3991" fill="white" font-size="8">{a.zip: [WiFi_1.etl, setup.log, WiFi_3.etl], empty.zip: [setup.log]}</text>
+        <text x="604" y="3991" fill="white" font-size="8">2 rows: WiFi_1 (show_zip_cell + show_folder_cell True, rowspan) · WiFi_3 (show cells False)</text>
+        <text x="604" y="4002" fill="#94a3b8" font-size="7.3">empty.zip dropped · .log filtered</text>
+        <line x1="544" y1="3996.5" x2="590" y2="3996.5" stroke="#22d3ee" stroke-width="1.5" marker-end="url(#arrowcyan)"/>
+        <text x="58" y="4031" fill="#64748b" font-size="7">test_event_rows_keep_only_system_event_logs</text>
+        <text x="1176" y="4031" fill="#475569" font-size="7" text-anchor="end">path: H4 · event rows</text>
+        <rect x="58" y="4034" width="480" height="30" rx="6" fill="#0f172a"/>
+        <rect x="58" y="4034" width="480" height="30" rx="6" fill="rgba(8,51,68,0.4)" stroke="#22d3ee" stroke-width="1.1"/>
+        <rect x="594" y="4034" width="582" height="30" rx="6" fill="#0f172a"/>
+        <rect x="594" y="4034" width="582" height="30" rx="6" fill="rgba(6,95,70,0.7)" stroke="#6ee7b7" stroke-width="1.1"/>
+        <text x="68" y="4047" fill="white" font-size="8">{… System.evtx, unrelated .etl}</text>
+        <text x="604" y="4047" fill="white" font-size="8">only the .evtx path kept</text>
+        <line x1="544" y1="4049.0" x2="590" y2="4049.0" stroke="#22d3ee" stroke-width="1.5" marker-end="url(#arrowcyan)"/>
+        <text x="58" y="4086" fill="#a78bfa" font-size="8.5" font-weight="600">TestPrimeIssueAiCache · H2</text>
+        <text x="58" y="4100" fill="#64748b" font-size="7">test_description_is_organized_and_usage_recorded</text>
+        <text x="1176" y="4100" fill="#475569" font-size="7" text-anchor="end">path: H2 · organize</text>
+        <rect x="58" y="4103" width="480" height="48" rx="6" fill="#0f172a"/>
+        <rect x="58" y="4103" width="480" height="48" rx="6" fill="rgba(8,51,68,0.4)" stroke="#22d3ee" stroke-width="1.1"/>
+        <rect x="594" y="4103" width="582" height="48" rx="6" fill="#0f172a"/>
+        <rect x="594" y="4103" width="582" height="48" rx="6" fill="rgba(6,95,70,0.7)" stroke="#6ee7b7" stroke-width="1.1"/>
+        <text x="68" y="4116" fill="white" font-size="8">CaseContext(description=&#x27;Drops at 01:26&#x27;) · gather_workflow_id &#x27;wf-test-1&#x27;</text>
+        <text x="68" y="4127" fill="#94a3b8" font-size="7.3">organize ➜ ({clean_description, issue_times: [&#x27;01:26&#x27;]}, {llm_calls: 1, total_tokens: 42})</text>
+        <text x="604" y="4116" fill="white" font-size="8">session._issue_ai_quick == {data: …}</text>
+        <text x="604" y="4127" fill="#94a3b8" font-size="7.3">organize(&#x27;Drops at 01:26&#x27;, first_ts=None, last_ts=None, llm_client=&#x27;llm-client&#x27;, llm_model=&#x27;gpt-test&#x27;, return_usage=True)</text>
+        <text x="604" y="4138" fill="#94a3b8" font-size="7.3">record_feature_usage(feature_code=&#x27;issue_time_prepass&#x27;, workflow_id=&#x27;wf-test-1&#x27;, usage {llm_calls 1, total_tokens 42})</text>
+        <line x1="544" y1="4127.0" x2="590" y2="4127.0" stroke="#22d3ee" stroke-width="1.5" marker-end="url(#arrowcyan)"/>
+        <text x="58" y="4167" fill="#64748b" font-size="7">test_empty_description_falls_back_to_attachment_subtitles</text>
+        <text x="1176" y="4167" fill="#475569" font-size="7" text-anchor="end">path: H2 · subtitle</text>
+        <rect x="58" y="4170" width="480" height="37" rx="6" fill="#0f172a"/>
+        <rect x="58" y="4170" width="480" height="37" rx="6" fill="rgba(8,51,68,0.4)" stroke="#22d3ee" stroke-width="1.1"/>
+        <rect x="594" y="4170" width="582" height="37" rx="6" fill="#0f172a"/>
+        <rect x="594" y="4170" width="582" height="37" rx="6" fill="rgba(6,95,70,0.7)" stroke="#6ee7b7" stroke-width="1.1"/>
+        <text x="68" y="4183" fill="white" font-size="8">description &#x27;  &#x27; · attachments [ZIP_ITEM, TXT_ITEM, [&#x27;short&#x27;]]</text>
+        <text x="68" y="4194" fill="#94a3b8" font-size="7.3">organize ➜ ({issue_times: []}, {llm_calls: 0})</text>
+        <text x="604" y="4183" fill="white" font-size="8">organize called on &#x27;uploaded by Partner&#x27; (ZIP subtitle)</text>
+        <text x="604" y="4194" fill="#94a3b8" font-size="7.3">record_feature_usage NOT called (llm_calls 0)</text>
+        <line x1="544" y1="4188.5" x2="590" y2="4188.5" stroke="#22d3ee" stroke-width="1.5" marker-end="url(#arrowcyan)"/>
+        <text x="58" y="4223" fill="#64748b" font-size="7">test_no_text_anywhere_bails_without_llm_call</text>
+        <text x="1176" y="4223" fill="#475569" font-size="7" text-anchor="end">path: H2 · bail</text>
+        <rect x="58" y="4226" width="480" height="30" rx="6" fill="#0f172a"/>
+        <rect x="58" y="4226" width="480" height="30" rx="6" fill="rgba(8,51,68,0.4)" stroke="#22d3ee" stroke-width="1.1"/>
+        <rect x="594" y="4226" width="582" height="30" rx="6" fill="#0f172a"/>
+        <rect x="594" y="4226" width="582" height="30" rx="6" fill="rgba(30,41,59,0.5)" stroke="#94a3b8" stroke-width="1.1"/>
+        <text x="68" y="4239" fill="white" font-size="8">description &#x27;&#x27; · attachments [TXT_ITEM] (empty note)</text>
+        <text x="604" y="4239" fill="white" font-size="8">no _issue_ai_quick written · organize NOT called · no usage recorded</text>
+        <line x1="544" y1="4241.0" x2="590" y2="4241.0" stroke="#22d3ee" stroke-width="1.5" marker-end="url(#arrowcyan)"/>
+        <text x="58" y="4278" fill="#a78bfa" font-size="8.5" font-weight="600">TestDownloadResultBsod · F4</text>
+        <text x="58" y="4292" fill="#64748b" font-size="7">test_without_session_redirects_to_index</text>
+        <text x="1176" y="4292" fill="#475569" font-size="7" text-anchor="end">path: F4 · no session</text>
+        <rect x="58" y="4295" width="480" height="37" rx="6" fill="#0f172a"/>
+        <rect x="58" y="4295" width="480" height="37" rx="6" fill="rgba(8,51,68,0.4)" stroke="#22d3ee" stroke-width="1.1"/>
+        <rect x="594" y="4295" width="582" height="37" rx="6" fill="#0f172a"/>
+        <rect x="594" y="4295" width="582" height="37" rx="6" fill="rgba(136,19,55,0.4)" stroke="#fb7185" stroke-width="1.1"/>
+        <text x="68" y="4308" fill="white" font-size="8">GET /download_result_bsod</text>
+        <text x="68" y="4319" fill="#94a3b8" font-size="7.3">no case_context</text>
+        <text x="604" y="4308" fill="white" font-size="8">302 ➜ /</text>
+        <line x1="544" y1="4313.5" x2="590" y2="4313.5" stroke="#22d3ee" stroke-width="1.5" marker-end="url(#arrowcyan)"/>
+        <text x="58" y="4348" fill="#64748b" font-size="7">test_unreachable_share_redirects_to_index</text>
+        <text x="1176" y="4348" fill="#475569" font-size="7" text-anchor="end">path: F4 · no share</text>
+        <rect x="58" y="4351" width="480" height="37" rx="6" fill="#0f172a"/>
+        <rect x="58" y="4351" width="480" height="37" rx="6" fill="rgba(8,51,68,0.4)" stroke="#22d3ee" stroke-width="1.1"/>
+        <rect x="594" y="4351" width="582" height="37" rx="6" fill="#0f172a"/>
+        <rect x="594" y="4351" width="582" height="37" rx="6" fill="rgba(136,19,55,0.4)" stroke="#fb7185" stroke-width="1.1"/>
+        <text x="68" y="4364" fill="white" font-size="8">seeded session</text>
+        <text x="68" y="4375" fill="#94a3b8" font-size="7.3">get_load_path ➜ None</text>
+        <text x="604" y="4364" fill="white" font-size="8">302 ➜ / · &#x27;Session expired. Please start again.&#x27; warning flash</text>
+        <line x1="544" y1="4369.5" x2="590" y2="4369.5" stroke="#22d3ee" stroke-width="1.5" marker-end="url(#arrowcyan)"/>
+        <text x="58" y="4404" fill="#64748b" font-size="7">test_renders_bsod_page</text>
+        <text x="1176" y="4404" fill="#475569" font-size="7" text-anchor="end">path: F4 · render</text>
+        <rect x="58" y="4407" width="480" height="37" rx="6" fill="#0f172a"/>
+        <rect x="58" y="4407" width="480" height="37" rx="6" fill="rgba(8,51,68,0.4)" stroke="#22d3ee" stroke-width="1.1"/>
+        <rect x="594" y="4407" width="582" height="37" rx="6" fill="#0f172a"/>
+        <rect x="594" y="4407" width="582" height="37" rx="6" fill="rgba(6,95,70,0.7)" stroke="#6ee7b7" stroke-width="1.1"/>
+        <text x="68" y="4420" fill="white" font-size="8">get_load_path ➜ &#x27;\\share\BSOD_Dumps&#x27;</text>
+        <text x="68" y="4431" fill="#94a3b8" font-size="7.3">detect_user_email ➜ &#x27;tester@example.com&#x27;</text>
+        <text x="604" y="4420" fill="white" font-size="8">200 · bsod.html(case_nbr=&#x27;00123456&#x27;, email=&#x27;tester@example.com&#x27;,</text>
+        <text x="604" y="4431" fill="#94a3b8" font-size="7.3">  case_path=&#x27;\\share\BSOD_Dumps\00123456&#x27;)</text>
+        <line x1="544" y1="4425.5" x2="590" y2="4425.5" stroke="#22d3ee" stroke-width="1.5" marker-end="url(#arrowcyan)"/>
+        <text x="58" y="4466" fill="#a78bfa" font-size="8.5" font-weight="600">TestOpenPath · F6</text>
+        <text x="58" y="4480" fill="#64748b" font-size="7">test_existing_path_opens_explorer</text>
+        <text x="1176" y="4480" fill="#475569" font-size="7" text-anchor="end">path: F6 · open_path</text>
+        <rect x="58" y="4483" width="480" height="37" rx="6" fill="#0f172a"/>
+        <rect x="58" y="4483" width="480" height="37" rx="6" fill="rgba(8,51,68,0.4)" stroke="#22d3ee" stroke-width="1.1"/>
+        <rect x="594" y="4483" width="582" height="37" rx="6" fill="#0f172a"/>
+        <rect x="594" y="4483" width="582" height="37" rx="6" fill="rgba(6,95,70,0.7)" stroke="#6ee7b7" stroke-width="1.1"/>
+        <text x="68" y="4496" fill="white" font-size="8">POST /open_path {path: &#x27;C:\fake\folder&#x27;}</text>
+        <text x="68" y="4507" fill="#94a3b8" font-size="7.3">os.path.exists ➜ True</text>
+        <text x="604" y="4496" fill="white" font-size="8">204 · os.path.exists(&#x27;C:\fake\folder&#x27;) once</text>
+        <text x="604" y="4507" fill="#94a3b8" font-size="7.3">subprocess.run([&#x27;explorer&#x27;, &#x27;C:\fake\folder&#x27;]) once</text>
+        <line x1="544" y1="4501.5" x2="590" y2="4501.5" stroke="#22d3ee" stroke-width="1.5" marker-end="url(#arrowcyan)"/>
+        <text x="58" y="4536" fill="#64748b" font-size="7">test_missing_or_empty_path_returns_400</text>
+        <text x="1176" y="4536" fill="#475569" font-size="7" text-anchor="end">path: F6 · invalid</text>
+        <rect x="58" y="4539" width="480" height="37" rx="6" fill="#0f172a"/>
+        <rect x="58" y="4539" width="480" height="37" rx="6" fill="rgba(8,51,68,0.4)" stroke="#22d3ee" stroke-width="1.1"/>
+        <rect x="594" y="4539" width="582" height="37" rx="6" fill="#0f172a"/>
+        <rect x="594" y="4539" width="582" height="37" rx="6" fill="rgba(136,19,55,0.4)" stroke="#fb7185" stroke-width="1.1"/>
+        <text x="68" y="4552" fill="white" font-size="8">{path: &#x27;C:\nope&#x27;} (exists False)</text>
+        <text x="68" y="4563" fill="#94a3b8" font-size="7.3">then a non-JSON body &#x27;not json&#x27;</text>
+        <text x="604" y="4552" fill="white" font-size="8">400 for both (&#x27;Invalid path&#x27;)</text>
+        <text x="604" y="4563" fill="#94a3b8" font-size="7.3">subprocess.run NOT called</text>
+        <line x1="544" y1="4557.5" x2="590" y2="4557.5" stroke="#22d3ee" stroke-width="1.5" marker-end="url(#arrowcyan)"/>
+        <text x="58" y="4592" fill="#64748b" font-size="7">test_open_path_ignores_silent_mode</text>
+        <text x="1176" y="4592" fill="#475569" font-size="7" text-anchor="end">path: F6 · silent_mode</text>
+        <rect x="58" y="4595" width="480" height="37" rx="6" fill="#0f172a"/>
+        <rect x="58" y="4595" width="480" height="37" rx="6" fill="rgba(8,51,68,0.4)" stroke="#22d3ee" stroke-width="1.1"/>
+        <rect x="594" y="4595" width="582" height="37" rx="6" fill="#0f172a"/>
+        <rect x="594" y="4595" width="582" height="37" rx="6" fill="rgba(6,95,70,0.7)" stroke="#6ee7b7" stroke-width="1.1"/>
+        <text x="68" y="4608" fill="white" font-size="8">app_config.silent_mode = True</text>
+        <text x="68" y="4619" fill="#94a3b8" font-size="7.3">{path: &#x27;C:\fake\folder&#x27;} exists</text>
+        <text x="604" y="4608" fill="white" font-size="8">204 · explorer still launched</text>
+        <text x="604" y="4619" fill="#94a3b8" font-size="7.3">silent_mode only gates automatic launches (branch-specific)</text>
+        <line x1="544" y1="4613.5" x2="590" y2="4613.5" stroke="#22d3ee" stroke-width="1.5" marker-end="url(#arrowcyan)"/>
+        <text x="58" y="4654" fill="#a78bfa" font-size="8.5" font-weight="600">TestDumpEventTxt · F6</text>
+        <text x="58" y="4668" fill="#64748b" font-size="7">test_import_error_returns_503</text>
+        <text x="1176" y="4668" fill="#475569" font-size="7" text-anchor="end">path: F6 · ImportError</text>
+        <rect x="58" y="4671" width="480" height="37" rx="6" fill="#0f172a"/>
+        <rect x="58" y="4671" width="480" height="37" rx="6" fill="rgba(8,51,68,0.4)" stroke="#22d3ee" stroke-width="1.1"/>
+        <rect x="594" y="4671" width="582" height="37" rx="6" fill="#0f172a"/>
+        <rect x="594" y="4671" width="582" height="37" rx="6" fill="rgba(136,19,55,0.4)" stroke="#fb7185" stroke-width="1.1"/>
+        <text x="68" y="4684" fill="white" font-size="8">POST /dump_event_txt {path: EVT_PATH}</text>
+        <text x="68" y="4695" fill="#94a3b8" font-size="7.3">importing services.event_log_service raises</text>
+        <text x="604" y="4684" fill="white" font-size="8">503 · error &#x27;Event log feature unavailable…&#x27;</text>
+        <line x1="544" y1="4689.5" x2="590" y2="4689.5" stroke="#22d3ee" stroke-width="1.5" marker-end="url(#arrowcyan)"/>
+        <text x="58" y="4724" fill="#64748b" font-size="7">test_invalid_path_returns_400</text>
+        <text x="1176" y="4724" fill="#475569" font-size="7" text-anchor="end">path: F6 · path?</text>
+        <rect x="58" y="4727" width="480" height="37" rx="6" fill="#0f172a"/>
+        <rect x="58" y="4727" width="480" height="37" rx="6" fill="rgba(8,51,68,0.4)" stroke="#22d3ee" stroke-width="1.1"/>
+        <rect x="594" y="4727" width="582" height="37" rx="6" fill="#0f172a"/>
+        <rect x="594" y="4727" width="582" height="37" rx="6" fill="rgba(136,19,55,0.4)" stroke="#fb7185" stroke-width="1.1"/>
+        <text x="68" y="4740" fill="white" font-size="8">{path: EVT_PATH}</text>
+        <text x="68" y="4751" fill="#94a3b8" font-size="7.3">os.path.exists ➜ False</text>
+        <text x="604" y="4740" fill="white" font-size="8">400 {error: &#x27;Invalid path&#x27;}</text>
+        <text x="604" y="4751" fill="#94a3b8" font-size="7.3">service NOT called</text>
+        <line x1="544" y1="4745.5" x2="590" y2="4745.5" stroke="#22d3ee" stroke-width="1.5" marker-end="url(#arrowcyan)"/>
+        <text x="58" y="4780" fill="#64748b" font-size="7">test_success_returns_txt_path</text>
+        <text x="1176" y="4780" fill="#475569" font-size="7" text-anchor="end">path: F6 · dump</text>
+        <rect x="58" y="4783" width="480" height="37" rx="6" fill="#0f172a"/>
+        <rect x="58" y="4783" width="480" height="37" rx="6" fill="rgba(8,51,68,0.4)" stroke="#22d3ee" stroke-width="1.1"/>
+        <rect x="594" y="4783" width="582" height="37" rx="6" fill="#0f172a"/>
+        <rect x="594" y="4783" width="582" height="37" rx="6" fill="rgba(6,95,70,0.7)" stroke="#6ee7b7" stroke-width="1.1"/>
+        <text x="68" y="4796" fill="white" font-size="8">{path: &#x27;C:\fake\events\System.evtx&#x27;} exists</text>
+        <text x="68" y="4807" fill="#94a3b8" font-size="7.3">dump_event_to_txt ➜ &#x27;C:\fake\events\System.txt&#x27;</text>
+        <text x="604" y="4796" fill="white" font-size="8">200 {success: True, txt_path: &#x27;C:\fake\events\System.txt&#x27;}</text>
+        <text x="604" y="4807" fill="#94a3b8" font-size="7.3">dump_event_to_txt(EVT_PATH) once</text>
+        <line x1="544" y1="4801.5" x2="590" y2="4801.5" stroke="#22d3ee" stroke-width="1.5" marker-end="url(#arrowcyan)"/>
+        <text x="58" y="4836" fill="#64748b" font-size="7">test_service_exception_returns_500</text>
+        <text x="1176" y="4836" fill="#475569" font-size="7" text-anchor="end">path: F6 · raises</text>
+        <rect x="58" y="4839" width="480" height="37" rx="6" fill="#0f172a"/>
+        <rect x="58" y="4839" width="480" height="37" rx="6" fill="rgba(8,51,68,0.4)" stroke="#22d3ee" stroke-width="1.1"/>
+        <rect x="594" y="4839" width="582" height="37" rx="6" fill="#0f172a"/>
+        <rect x="594" y="4839" width="582" height="37" rx="6" fill="rgba(136,19,55,0.4)" stroke="#fb7185" stroke-width="1.1"/>
+        <text x="68" y="4852" fill="white" font-size="8">{path: EVT_PATH} exists</text>
+        <text x="68" y="4863" fill="#94a3b8" font-size="7.3">dump_event_to_txt raises ValueError(&#x27;corrupt evtx&#x27;)</text>
+        <text x="604" y="4852" fill="white" font-size="8">500 {error: &#x27;corrupt evtx&#x27;}</text>
+        <line x1="544" y1="4857.5" x2="590" y2="4857.5" stroke="#22d3ee" stroke-width="1.5" marker-end="url(#arrowcyan)"/>
+        <text x="58" y="4898" fill="#a78bfa" font-size="8.5" font-weight="600">TestParseEventLog · F6</text>
+        <text x="58" y="4912" fill="#64748b" font-size="7">test_import_error_returns_503</text>
+        <text x="1176" y="4912" fill="#475569" font-size="7" text-anchor="end">path: F6 · ImportError</text>
+        <rect x="58" y="4915" width="480" height="37" rx="6" fill="#0f172a"/>
+        <rect x="58" y="4915" width="480" height="37" rx="6" fill="rgba(8,51,68,0.4)" stroke="#22d3ee" stroke-width="1.1"/>
+        <rect x="594" y="4915" width="582" height="37" rx="6" fill="#0f172a"/>
+        <rect x="594" y="4915" width="582" height="37" rx="6" fill="rgba(136,19,55,0.4)" stroke="#fb7185" stroke-width="1.1"/>
+        <text x="68" y="4928" fill="white" font-size="8">POST /parse_event_log {path: EVT_PATH}</text>
+        <text x="68" y="4939" fill="#94a3b8" font-size="7.3">importing services.event_log_service raises</text>
+        <text x="604" y="4928" fill="white" font-size="8">503</text>
+        <line x1="544" y1="4933.5" x2="590" y2="4933.5" stroke="#22d3ee" stroke-width="1.5" marker-end="url(#arrowcyan)"/>
+        <text x="58" y="4968" fill="#64748b" font-size="7">test_invalid_path_returns_400</text>
+        <text x="1176" y="4968" fill="#475569" font-size="7" text-anchor="end">path: F6 · path?</text>
+        <rect x="58" y="4971" width="480" height="37" rx="6" fill="#0f172a"/>
+        <rect x="58" y="4971" width="480" height="37" rx="6" fill="rgba(8,51,68,0.4)" stroke="#22d3ee" stroke-width="1.1"/>
+        <rect x="594" y="4971" width="582" height="37" rx="6" fill="#0f172a"/>
+        <rect x="594" y="4971" width="582" height="37" rx="6" fill="rgba(136,19,55,0.4)" stroke="#fb7185" stroke-width="1.1"/>
+        <text x="68" y="4984" fill="white" font-size="8">{path: &#x27;&#x27;}</text>
+        <text x="604" y="4984" fill="white" font-size="8">400 {error: &#x27;Invalid path&#x27;}</text>
+        <text x="604" y="4995" fill="#94a3b8" font-size="7.3">service NOT called</text>
+        <line x1="544" y1="4989.5" x2="590" y2="4989.5" stroke="#22d3ee" stroke-width="1.5" marker-end="url(#arrowcyan)"/>
+        <text x="58" y="5024" fill="#64748b" font-size="7">test_success_passes_clamped_paging_and_filters</text>
+        <text x="1176" y="5024" fill="#475569" font-size="7" text-anchor="end">path: F6 · paged</text>
+        <rect x="58" y="5027" width="480" height="37" rx="6" fill="#0f172a"/>
+        <rect x="58" y="5027" width="480" height="37" rx="6" fill="rgba(8,51,68,0.4)" stroke="#22d3ee" stroke-width="1.1"/>
+        <rect x="594" y="5027" width="582" height="37" rx="6" fill="#0f172a"/>
+        <rect x="594" y="5027" width="582" height="37" rx="6" fill="rgba(6,95,70,0.7)" stroke="#6ee7b7" stroke-width="1.1"/>
+        <text x="68" y="5040" fill="white" font-size="8">{path: EVT_PATH, offset: -5, limit: 50, source_filter: &#x27;Netwtw&#x27;, level_filter: &#x27;error&#x27;}</text>
+        <text x="68" y="5051" fill="#94a3b8" font-size="7.3">get_paged_events ➜ {events: [{id: 1}], total: 1}</text>
+        <text x="604" y="5040" fill="white" font-size="8">200 {events: [{id: 1}], total: 1}</text>
+        <text x="604" y="5051" fill="#94a3b8" font-size="7.3">get_paged_events(EVT_PATH, 0, 50, &#x27;Netwtw&#x27;, &#x27;error&#x27;) · offset clamped to 0</text>
+        <line x1="544" y1="5045.5" x2="590" y2="5045.5" stroke="#22d3ee" stroke-width="1.5" marker-end="url(#arrowcyan)"/>
+        <text x="58" y="5080" fill="#64748b" font-size="7">test_defaults_and_service_exception</text>
+        <text x="1176" y="5080" fill="#475569" font-size="7" text-anchor="end">path: F6 · defaults</text>
+        <rect x="58" y="5083" width="480" height="37" rx="6" fill="#0f172a"/>
+        <rect x="58" y="5083" width="480" height="37" rx="6" fill="rgba(8,51,68,0.4)" stroke="#22d3ee" stroke-width="1.1"/>
+        <rect x="594" y="5083" width="582" height="37" rx="6" fill="#0f172a"/>
+        <rect x="594" y="5083" width="582" height="37" rx="6" fill="rgba(136,19,55,0.4)" stroke="#fb7185" stroke-width="1.1"/>
+        <text x="68" y="5096" fill="white" font-size="8">{path: EVT_PATH} only</text>
+        <text x="68" y="5107" fill="#94a3b8" font-size="7.3">get_paged_events raises &#x27;parse failed&#x27;</text>
+        <text x="604" y="5096" fill="white" font-size="8">500 {error: &#x27;parse failed&#x27;}</text>
+        <text x="604" y="5107" fill="#94a3b8" font-size="7.3">get_paged_events(EVT_PATH, 0, 0, &#x27;all&#x27;, &#x27;all&#x27;) (defaults)</text>
+        <line x1="544" y1="5101.5" x2="590" y2="5101.5" stroke="#22d3ee" stroke-width="1.5" marker-end="url(#arrowcyan)"/>
+        <text x="58" y="5142" fill="#a78bfa" font-size="8.5" font-weight="600">TestBtEventMap · F6</text>
+        <text x="58" y="5156" fill="#64748b" font-size="7">test_returns_json_map</text>
+        <text x="1176" y="5156" fill="#475569" font-size="7" text-anchor="end">path: F6 · bt map</text>
+        <rect x="58" y="5159" width="480" height="37" rx="6" fill="#0f172a"/>
+        <rect x="58" y="5159" width="480" height="37" rx="6" fill="rgba(8,51,68,0.4)" stroke="#22d3ee" stroke-width="1.1"/>
+        <rect x="594" y="5159" width="582" height="37" rx="6" fill="#0f172a"/>
+        <rect x="594" y="5159" width="582" height="37" rx="6" fill="rgba(6,95,70,0.7)" stroke="#6ee7b7" stroke-width="1.1"/>
+        <text x="68" y="5172" fill="white" font-size="8">GET /api/bt_event_map</text>
+        <text x="68" y="5183" fill="#94a3b8" font-size="7.3">file exists with {&quot;0x01&quot;: &quot;Connect&quot;}</text>
+        <text x="604" y="5172" fill="white" font-size="8">200 {&#x27;0x01&#x27;: &#x27;Connect&#x27;}</text>
+        <text x="604" y="5183" fill="#94a3b8" font-size="7.3">opened path ends with bt_event_id_map.json</text>
+        <line x1="544" y1="5177.5" x2="590" y2="5177.5" stroke="#22d3ee" stroke-width="1.5" marker-end="url(#arrowcyan)"/>
+        <text x="58" y="5212" fill="#64748b" font-size="7">test_missing_file_returns_empty_object</text>
+        <text x="1176" y="5212" fill="#475569" font-size="7" text-anchor="end">path: F6 · missing</text>
+        <rect x="58" y="5215" width="480" height="37" rx="6" fill="#0f172a"/>
+        <rect x="58" y="5215" width="480" height="37" rx="6" fill="rgba(8,51,68,0.4)" stroke="#22d3ee" stroke-width="1.1"/>
+        <rect x="594" y="5215" width="582" height="37" rx="6" fill="#0f172a"/>
+        <rect x="594" y="5215" width="582" height="37" rx="6" fill="rgba(30,41,59,0.5)" stroke="#94a3b8" stroke-width="1.1"/>
+        <text x="68" y="5228" fill="white" font-size="8">GET /api/bt_event_map</text>
+        <text x="68" y="5239" fill="#94a3b8" font-size="7.3">map file does not exist</text>
+        <text x="604" y="5228" fill="white" font-size="8">200 {}</text>
+        <text x="604" y="5239" fill="#94a3b8" font-size="7.3">file never opened</text>
+        <line x1="544" y1="5233.5" x2="590" y2="5233.5" stroke="#22d3ee" stroke-width="1.5" marker-end="url(#arrowcyan)"/>
+        <text x="58" y="5268" fill="#64748b" font-size="7">test_malformed_json_returns_empty_object</text>
+        <text x="1176" y="5268" fill="#475569" font-size="7" text-anchor="end">path: F6 · malformed</text>
+        <rect x="58" y="5271" width="480" height="37" rx="6" fill="#0f172a"/>
+        <rect x="58" y="5271" width="480" height="37" rx="6" fill="rgba(8,51,68,0.4)" stroke="#22d3ee" stroke-width="1.1"/>
+        <rect x="594" y="5271" width="582" height="37" rx="6" fill="#0f172a"/>
+        <rect x="594" y="5271" width="582" height="37" rx="6" fill="rgba(30,41,59,0.5)" stroke="#94a3b8" stroke-width="1.1"/>
+        <text x="68" y="5284" fill="white" font-size="8">GET /api/bt_event_map</text>
+        <text x="68" y="5295" fill="#94a3b8" font-size="7.3">file contains invalid JSON</text>
+        <text x="604" y="5284" fill="white" font-size="8">200 {}</text>
+        <line x1="544" y1="5289.5" x2="590" y2="5289.5" stroke="#22d3ee" stroke-width="1.5" marker-end="url(#arrowcyan)"/>
+      </svg>
+    </div>
+
+    <!-- Info Cards -->
+    <div class="cards">
+      <div class="card">
+        <div class="card-header">
+          <div class="card-dot emerald"></div>
+          <h3>Components under test</h3>
+        </div>
+        <ul>
+          <li>• case entry <code>/</code> ➜ <code>CaseService.process_case</code> ➜ session + Gather workflow</li>
+          <li>• <code>/start_latest_etl_llm</code>: one-click Run Analysis (JSON)</li>
+          <li>• <code>/select_attachments</code>: action ➜ bsod / latest / run flags</li>
+          <li>• <code>/download_result</code>: tables, time filter, Wi-Fi/BT/FW auto picks</li>
+          <li>• utilities: <code>/open_path</code>, event-log dump/page, BT event map</li>
+        </ul>
+      </div>
+
+      <div class="card">
+        <div class="card-header">
+          <div class="card-dot amber"></div>
+          <h3>Fixtures &amp; mocks</h3>
+        </div>
+        <ul>
+          <li>• <code>render_template</code>, <code>CaseService</code>, <code>gather_service</code> patched at ROUTES</li>
+          <li>• <code>helpers</code> (clipboard, email, <code>get_load_path</code>), <code>subprocess</code></li>
+          <li>• etl / fw utils + lazy <code>utils.issue_time_ai</code> functions</li>
+          <li>• <code>services.event_log_service</code> stubbed in <code>sys.modules</code></li>
+          <li>• <code>open</code> / <code>yaml</code> for the wireless-topics share</li>
+        </ul>
+      </div>
+
+      <div class="card">
+        <div class="card-header">
+          <div class="card-dot rose"></div>
+          <h3>Key behaviors &amp; gaps</h3>
+        </div>
+        <ul>
+          <li>• <code>/open_path</code> ignores <code>silent_mode</code> (explicit click) — pinned</li>
+          <li>• classify / pre-pass / telemetry failures are best-effort</li>
+          <li>• every missing-session path redirects to <code>/</code></li>
+          <li>• AI-time pick overrides newest-by-number; BT picks newest timestamp</li>
+          <li>• 7 <code>download_result</code> sub-branches not tested</li>
+        </ul>
+      </div>
+    </div>
+
+    <!-- Footer -->
+    <p class="footer">
+      unit_tests/test_main_blueprint.py • blueprints/main/main_routes.py • docs/main_bp_analysis.md • 59 tests across 14 classes
+    </p>
+  </div>
+
+  <script>
+    async function copyAsImage(btn) {
+      const orig = btn.textContent;
+      try {
+        const el = document.getElementById('report-container');
+        const r = el.getBoundingClientRect();
+        const pad = 32;
+        const canvas = await html2canvas(document.body, { backgroundColor: '#020617', scale: 2, useCORS: true, ignoreElements: (e) => e.classList && e.classList.contains('toolbar'), x: r.left + window.scrollX - pad, y: r.top + window.scrollY - pad, width: r.width + pad * 2, height: r.height + pad * 2 });
+        const blob = await new Promise(r => canvas.toBlob(r, 'image/png'));
+        await navigator.clipboard.write([new ClipboardItem({ 'image/png': blob })]);
+        btn.textContent = '✓ Copied!';
+      } catch (e) {
+        btn.textContent = '✗ Failed';
+      }
+      setTimeout(() => btn.textContent = orig, 2000);
+    }
+
+    async function downloadPNG(btn) {
+      const orig = btn.textContent;
+      btn.textContent = '⏳ ...';
+      try {
+        const el = document.getElementById('report-container');
+        const r = el.getBoundingClientRect();
+        const pad = 32;
+        const canvas = await html2canvas(document.body, { backgroundColor: '#020617', scale: 2, useCORS: true, ignoreElements: (e) => e.classList && e.classList.contains('toolbar'), x: r.left + window.scrollX - pad, y: r.top + window.scrollY - pad, width: r.width + pad * 2, height: r.height + pad * 2 });
+        const link = document.createElement('a');
+        link.download = 'test_main_blueprint_flow.png';
+        link.href = canvas.toDataURL('image/png');
+        link.click();
+        btn.textContent = '✓ Done!';
+      } catch (e) {
+        btn.textContent = '✗ Failed';
+      }
+      setTimeout(() => btn.textContent = orig, 2000);
+    }
+
+    async function downloadPDF(btn) {
+      const orig = btn.textContent;
+      btn.textContent = '⏳ ...';
+      try {
+        const el = document.getElementById('report-container');
+        const r = el.getBoundingClientRect();
+        const pad = 32;
+        const canvas = await html2canvas(document.body, { backgroundColor: '#020617', scale: 2, useCORS: true, ignoreElements: (e) => e.classList && e.classList.contains('toolbar'), x: r.left + window.scrollX - pad, y: r.top + window.scrollY - pad, width: r.width + pad * 2, height: r.height + pad * 2 });
+        const imgData = canvas.toDataURL('image/png');
+        const { jsPDF } = window.jspdf;
+        const orientation = canvas.width > canvas.height ? 'landscape' : 'portrait';
+        const pdf = new jsPDF({ orientation, unit: 'px', format: [canvas.width, canvas.height], hotfixes: ['px_scaling'] });
+        pdf.addImage(imgData, 'PNG', 0, 0, canvas.width, canvas.height);
+        pdf.save('test_main_blueprint_flow.pdf');
+        btn.textContent = '✓ Done!';
+      } catch (e) {
+        btn.textContent = '✗ Failed';
+      }
+      setTimeout(() => btn.textContent = orig, 2000);
+    }
+  </script>
+</body>
+</html>

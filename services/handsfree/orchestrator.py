@@ -22,7 +22,7 @@ import traceback
 from pathlib import Path
 from typing import Optional
 
-from .composer import compose, AI_MARKER, CHECKLIST_TAG
+from .composer import compose, AI_MARKER, CHECKLIST_TAG, ECHO_SECTION_START
 from .ips_client import IpsClient, PostUnsupported
 from .queue import HandsfreeStore, open_store
 from .runner import HandsfreeRunner
@@ -1179,6 +1179,15 @@ def _approve_and_post_locked(draft_id: str, edited_plain: Optional[str],
             plain = plain.replace(AI_MARKER, AI_MARKER + "\n" + CHECKLIST_TAG, 1)
         rec = store.update(draft_id, draft_plain=plain,
                            draft_html=compose_html(plain))
+    # The Echo section (Intel-internal knowledge) never reaches the
+    # customer: a public post drops it, whatever the reviewer left in.
+    if is_public_reply and ECHO_SECTION_START in (rec.get("draft_plain") or ""):
+        from .composer import compose_html, strip_echo_section
+        plain = strip_echo_section(rec.get("draft_plain") or "")
+        rec = store.update(draft_id, draft_plain=plain,
+                           draft_html=compose_html(plain))
+        _log_event(f"[{rec.get('case_nbr')}] Echo section stripped from the public "
+                   f"post of {draft_id}")
 
     # A mail-triggered draft replies to the mail, in Outlook, as a draft.
     if rec.get("email"):

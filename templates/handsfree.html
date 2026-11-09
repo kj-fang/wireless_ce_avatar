@@ -1719,7 +1719,7 @@
     }
     const adv = analysis.echo_advice || {};
     if (adv.status === 'answered' && adv.answer) {
-      chips.push({label: 'Echo next steps', text: 'suggestions available (in the draft)', cls: 'good',
+      chips.push({label: 'Echo next steps', text: 'in the INTERNAL Echo section at the end of the draft', cls: 'good',
                   title: String(adv.answer).slice(0, 600)});
     }
     const echo = (analysis.echo_insights || []).filter(i => i && i.answer);
@@ -2207,6 +2207,9 @@
       (dd.latest_source ? ' (' + esc(dd.latest_source === 'manual' ? 'Settings override' : 'PAE Wi-Fi Dashboard') + ')' : '') + `</div>`;
     html += `<div class="lp-time-sub">verdict: <b style="color:#fff;">${esc(dd.result)}</b> — ${esc(verdict)}</div>`;
     if (dd.newer_mentioned) html += `<div class="lp-time-sub">the thread also mentions ${esc(dd.newer_mentioned)} — check whether a newer driver was already validated</div>`;
+    html += d.last_good_version
+      ? `<div class="lp-time-sub">last known good (regression test): <b style="color:#fff;">${esc(d.last_good_version)}</b> — the checklist's regression item is ticked</div>`
+      : `<div class="lp-time-sub">last known good (regression test): none stated — the reply asks for the last driver version on which the issue did NOT reproduce</div>`;
     return html + `</div>`;
   }
 

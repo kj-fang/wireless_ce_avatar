@@ -441,6 +441,9 @@ class CaseAnalysis:
     latest_driver_source: str = ""                     # manual | report | ""
     driver_check: str = ""                             # ok | outdated | unknown | skipped
     driver_decision: dict = field(default_factory=dict)
+    last_good_version: str = ""                        # last driver the issue did NOT
+                                                       #   reproduce on (reader); ticks the
+                                                       #   checklist's regression item
     # How the run decided (live panel): the issue category, the issue time,
     # the archive + capture — candidates and the rule that won, not just the
     # winners. checklist_decision is filled after the run by checklist.build_fills.
@@ -662,6 +665,7 @@ def live_fields(a: "CaseAnalysis") -> dict:
         "latest_driver_source": a.latest_driver_source,
         "driver_check": a.driver_check,
         "driver_decision": dict(a.driver_decision or {}),
+        "last_good_version": a.last_good_version,
         "time_decision": dict(a.time_decision or {}),
         "pick_decision": dict(a.pick_decision or {}),
         "checklist_decision": dict(a.checklist_decision or {}),
@@ -980,6 +984,7 @@ class HandsfreeRunner:
                     analysis.issue_times = reader["issue_times"][:max_incidents]
                 analysis.action_owner = reader.get("action_owner") or ""
                 analysis.next_action = reader.get("next_action") or ""
+                analysis.last_good_version = str(reader.get("last_good_version") or "")
                 src = str(reader.get("issue_time_source") or "")
                 analysis.time_decision = {
                     "found": [{"time": str(t), "source": src, "used": i < max_incidents}

@@ -4444,6 +4444,265 @@ def smoke_driver_release(tmp: Path) -> None:
         check("S24.l latest-driver routes", False, f"{type(e).__name__}: {e}")
 
 
+# ---------------------------------------------------------------- S25
+def smoke_echo_isolation(tmp: Path) -> None:
+    print("[S25] Echo text: last in the internal draft, between markers; never in a "
+          "customer-facing draft or a public post")
+    import types
+    from . import orchestrator as orch
+    from .composer import (AI_MARKER, CHECKLIST_TAG, ECHO_SECTION_END, ECHO_SECTION_START,
+                           _FOOTER, compose, strip_echo_section)
+    from .ips_client import PostResult
+    from .queue import HandsfreeStore
+    from .runner import CaseAnalysis, IncidentReport
+
+    advice = ("- Ask for the AP model and a sniffer capture during the drop.\n"
+              "- INTERNAL: known FW race in scan abort, sighting 7771 — do not share.")
+    insight = "Known race in the scan abort path (fixed in FW core 95, internal JIRA WIFI-1234)."
+    echo = dict(echo_advice={"status": "answered", "answer": advice, "question": "q"},
+                echo_insights=[{"kind": "assert", "code": "0x02001234", "answer": insight,
+                                "error": None},
+                               {"kind": "assert", "code": "0xDEAD", "answer": None,
+                                "error": "backend down"}])
+    base = dict(case_nbr="1", ok=True, subject="[X] roaming drop", issue_domain="Connectivity",
+                issue_subcategory="Roaming", driver_check="outdated", driver_version="23.150.0.4",
+                driver_version_source="env_detail", latest_driver="24.90.0.3",
+                missing_info=[{"item": "issue_time", "reason": "none stated"}])
+
+    # --- a) the internal (full) draft ----------------------------------------
+    full = CaseAnalysis(mode="full", **base, **echo)
+    full.incidents = [IncidentReport(issue_time="08/20/2026 13:43",
+                                     report={"root_cause_summary": "assert during scan",
+                                             "confidence_score": 80,
+                                             "recommended_actions": ["collect a sniffer"]})]
+    p = compose(full)["plain"]
+    i_start, i_end, i_footer = p.find(ECHO_SECTION_START), p.find(ECHO_SECTION_END), p.find(_FOOTER)
+    before = p[:i_start]
+    inside = p[i_start:i_end]
+    check("S25.a full draft: one Echo section, after the footer, closed by the end marker which "
+          "is the draft's last line; both the next-step advice and the insights live inside it; "
+          "nothing Echo before the start marker",
+          p.count(ECHO_SECTION_START) == 1 and p.count(ECHO_SECTION_END) == 1
+          and 0 < i_footer < i_start < i_end
+          and p.rstrip().endswith(ECHO_SECTION_END)
+          and "sighting 7771" in inside and "WIFI-1234" in inside
+          and "suggested next steps" in inside and "Knowledge base insights (Echo):" in inside
+          and "do not paste to customer" in inside and "backend down" not in p
+          and "Echo" not in before and "sighting 7771" not in before and "WIFI-1234" not in before
+          and "assert during scan" in before and "collect a sniffer" in before,
+          f"footer={i_footer} start={i_start} end={i_end} tail={p[-120:]!r}")
+    tri = CaseAnalysis(mode="triage", **base, **echo)
+    p_tri = compose(tri)["plain"]
+    check("S25.a2 triage-only internal draft: same trailing section",
+          p_tri.count(ECHO_SECTION_START) == 1 and p_tri.rstrip().endswith(ECHO_SECTION_END)
+          and p_tri.find(_FOOTER) < p_tri.find(ECHO_SECTION_START)
+          and "sighting 7771" in p_tri[p_tri.find(ECHO_SECTION_START):],
+          p_tri[-200:])
+    quiet = CaseAnalysis(mode="full", **base)
+    quiet.incidents = list(full.incidents)
+    p_quiet = compose(quiet)["plain"]
+    check("S25.a3 nothing from Echo -> no section at all, the footer closes the draft",
+          ECHO_SECTION_START not in p_quiet and "Echo" not in p_quiet
+          and p_quiet.rstrip().endswith(_FOOTER), p_quiet[-160:])
+
+    # --- b) customer-facing drafts never carry it ----------------------------
+    leaks = {}
+    for mode in ("first_response", "request_info", "request_logs"):
+        for extra in ({}, {"log_request_reason": "no_dump", "bsod_case": True},
+                      {"first_response_done": True}):
+            if extra and mode != "request_logs":
+                continue
+            a = CaseAnalysis(mode=mode, **base, **echo, **extra)
+            pc = compose(a)["plain"]
+            leaks[(mode, tuple(extra))] = (ECHO_SECTION_START in pc, ECHO_SECTION_END in pc,
+                                           "Echo" in pc, "sighting 7771" in pc, "WIFI-1234" in pc,
+                                           "sniffer capture during the drop" in pc)
+    check("S25.b customer drafts (first_response, request_info, request_logs incl. the dump "
+          "request and a later round): no marker, no Echo word, none of Echo's text",
+          all(v == (False,) * 6 for v in leaks.values()), str(leaks))
+
+    # --- c) strip_echo_section -------------------------------------------------
+    stripped = strip_echo_section(p)
+    no_end = strip_echo_section(p.replace(ECHO_SECTION_END, ""))
+    edited = strip_echo_section(p + "\nPS: reviewer line after the section\n")
+    check("S25.c strip_echo_section: drops the section (end marker present, deleted by the "
+          "reviewer, or text after it kept); idempotent; untouched when absent",
+          ECHO_SECTION_START not in stripped and "sighting 7771" not in stripped
+          and "WIFI-1234" not in stripped and stripped.rstrip().endswith(_FOOTER)
+          and "assert during scan" in stripped
+          and ECHO_SECTION_START not in no_end and "sighting 7771" not in no_end
+          and no_end.rstrip().endswith(_FOOTER)
+          and "sighting 7771" not in edited and edited.rstrip().endswith("after the section")
+          and strip_echo_section(stripped) == stripped
+          and strip_echo_section(p_quiet) == p_quiet and strip_echo_section("") == "",
+          f"stripped_tail={stripped[-100:]!r} edited_tail={edited[-80:]!r}")
+
+    # --- d) a public post strips it, an internal post keeps it ---------------
+    store = HandsfreeStore(tmp / "handsfree_s25")
+    store.save_config({"post_backend": "rest"})
+
+    class _Ips:
+        FIELD_RICH_BODY = "Core_IPS_Rich_Comment__c"
+        posted: list = []
+
+        def get_case_comments(self, case_id):
+            return []
+
+        def post_comment(self, case_id, rich_body, **kw):
+            self.posted.append((kw.get("plain_body") or "", rich_body, kw.get("private")))
+            return PostResult(ok=True, backend="rest", comment_id=f"CMT{len(self.posted)}")
+
+        def comment_author(self, comment_id):
+            return {"user_id": "005SMOKE", "name": "Smoke Reviewer"}
+
+    orig = (orch._store, orch.IpsClient, orch._signed_in_identity)
+    try:
+        orch._store, orch.IpsClient = (lambda: store), _Ips
+        orch._signed_in_identity = lambda: {"user_id": "005SMOKE", "name": "Smoke Reviewer",
+                                            "email": "smoke@intel.com", "username": "smoke"}
+        def _enq(case):
+            return store.enqueue(case_nbr=case, case_id="500" + case, subject="s",
+                                 draft_plain=p, draft_html=compose(full)["html"],
+                                 confidence=80, mode="full", analysis={})["draft_id"]
+        d_pub = _enq("08888801")
+        r_pub = orch.approve_and_post(d_pub, visibility="external")
+        rec_pub = store.get(d_pub)
+        d_int = _enq("08888802")
+        r_int = orch.approve_and_post(d_int)
+        d_edit = _enq("08888803")
+        r_edit = orch.approve_and_post(d_edit, edited_plain=p.replace(ECHO_SECTION_END, "")
+                                       + "\nPS kept\n", visibility="external")
+        pub_plain, pub_html, pub_private = _Ips.posted[0]
+        int_plain, _int_html, int_private = _Ips.posted[1]
+        edit_plain, edit_html, _ = _Ips.posted[2]
+        check("S25.d approve: a customer-visible post drops the Echo section from the plain and "
+              "rich bodies (end marker deleted by the reviewer: everything after the start "
+              "marker goes) and the stored draft shows what went out; an internal post keeps it",
+              r_pub["ok"] and pub_private is False
+              and ECHO_SECTION_START not in pub_plain and "sighting 7771" not in pub_plain
+              and "WIFI-1234" not in pub_plain and "sighting 7771" not in pub_html
+              and "Echo" not in pub_html and AI_MARKER in pub_plain
+              and "assert during scan" in pub_plain
+              and ECHO_SECTION_START not in rec_pub["draft_plain"]
+              and r_int["ok"] and int_private is True
+              and ECHO_SECTION_START in int_plain and "sighting 7771" in int_plain
+              and r_edit["ok"] and "sighting 7771" not in edit_plain
+              and "sighting 7771" not in edit_html and "PS kept" not in edit_plain
+              and edit_plain.rstrip().endswith(_FOOTER),
+              f"pub={r_pub.get('error')} int={r_int.get('error')} edit={r_edit.get('error')} "
+              f"pub_tail={pub_plain[-100:]!r} edit_tail={edit_plain[-80:]!r}")
+    finally:
+        orch._store, orch.IpsClient, orch._signed_in_identity = orig
+    check("S25.e the family tag is not confused by the section (an analysis draft stays an "
+          "analysis draft)", CHECKLIST_TAG not in p, "")
+
+
+# ---------------------------------------------------------------- S26
+def smoke_regression_item() -> None:
+    print("[S26] Checklist 'Is this a regression issue?': ticked only on a stated passing "
+          "version; a reproducing version alone leaves it open and the reply asks which "
+          "earlier version passed")
+    import types
+    from .case_reader import READER_PROMPT, read_case_history
+    from .checklist import (REGRESSION_ASK, _REGRESSION_ITEM_RE, _blank_fills, build_fills,
+                            deterministic_fills, llm_fill)
+    from .composer import compose
+    from .runner import CaseAnalysis, live_fields
+
+    def _item(fills):
+        return next(e for e in fills["general_info"] if _REGRESSION_ITEM_RE.search(e["item"]))
+
+    def _idx(fills, item):
+        return [e for sec in ("general_info", "required_log", "required_info")
+                for e in fills.get(sec, []) if not e["provided"]].index(item) + 1
+
+    base = dict(case_nbr="1", ok=True, mode="first_response", subject="[X] roaming drop",
+                issue_domain="Connectivity", issue_subcategory="Roaming",
+                description="Roaming drops on driver 24.30.1.1 since the upgrade.",
+                customer_history="(2026-06-20) Found on 24.30.1.1; worked before.",
+                driver_check="ok", driver_version="24.30.1.1", driver_version_source="env_detail",
+                latest_driver="24.30.0.5")
+
+    # --- a) repro version only: the LLM pass is locked out, the reply asks --
+    a = CaseAnalysis(**base)
+    fills_a = _blank_fills("Connectivity", "Roaming")
+    deterministic_fills(a, fills_a)
+    item_a = _item(fills_a)
+    idx = _idx(fills_a, item_a)
+    eager = types.SimpleNamespace(chat=lambda messages, system_content=None: json.dumps(
+        {"fills": {str(idx): {"provided": True, "value": "Yes, regression on 24.30.1.1"}}}))
+    llm_fill(eager, fills_a, "x", lock_regression_item=True)
+    fills_a2 = build_fills(a, llm=eager)
+    item_a2 = _item(fills_a2)
+    a.checklist_fills = fills_a2
+    p_a = compose(a)["plain"]
+    line_a = next(ln for ln in p_a.splitlines() if "regression issue" in ln)
+    check("S26.a repro version only: the item stays [ ] (locked against the text pass, directly "
+          "and via build_fills), the rendered line asks for the last passing driver version, "
+          "the decision's ask list carries it",
+          item_a["provided"] is False and item_a["source"] == "locked"
+          and item_a2["provided"] is False and item_a2["source"] == "locked"
+          and line_a.startswith("  [ ] Is this a regression issue?")
+          and line_a.endswith("— please provide " + REGRESSION_ASK)
+          and "Example: Yes, the delta" not in line_a
+          and REGRESSION_ASK in a.checklist_decision["asks"]
+          and a.checklist_decision["last_good_version"] == ""
+          and "did NOT reproduce (regression test)" in p_a,
+          f"a={item_a.get('source')}/{item_a['provided']} a2={item_a2.get('source')} line={line_a!r} "
+          f"asks={a.checklist_decision.get('asks')}")
+
+    # --- b) a stated last-known-good version ticks it ------------------------
+    b = CaseAnalysis(last_good_version="23.60.1.2", **base)
+    fills_b = build_fills(b, llm=eager)
+    item_b = _item(fills_b)
+    b.checklist_fills = fills_b
+    p_b = compose(b)["plain"]
+    check("S26.b last-good stated: ticked by the pipeline with the passing and the failing "
+          "version; no regression ask",
+          item_b["provided"] is True and item_b["source"] == "pipeline"
+          and item_b["value"] == "Yes — the issue does not reproduce on driver 23.60.1.2; "
+                                 "reproduces on 24.30.1.1"
+          and "[✓] Is this a regression issue?" in p_b
+          and "provided: Yes — the issue does not reproduce on driver 23.60.1.2" in p_b
+          and REGRESSION_ASK not in b.checklist_decision["asks"] and REGRESSION_ASK not in p_b
+          and b.checklist_decision["last_good_version"] == "23.60.1.2",
+          f"b={item_b.get('source')}/{item_b['value']!r} asks={b.checklist_decision.get('asks')}")
+    c = CaseAnalysis(**dict(base, driver_version="", driver_check="unknown",
+                            last_good_version="23.60"))
+    fills_c = build_fills(c)
+    check("S26.b2 failing version unknown: the value names the passing driver only",
+          _item(fills_c)["value"] == "Yes — the issue does not reproduce on driver 23.60",
+          _item(fills_c)["value"])
+    # The other request modes render the same checklist line.
+    for mode in ("request_info", "request_logs"):
+        m = CaseAnalysis(**dict(base, mode=mode, missing_info=[{"item": "issue_time",
+                                                                 "reason": "none"}]))
+        pm = compose(m)["plain"]
+        check(f"S26.b3 {mode}: the open regression item asks for the passing version",
+              "— please provide " + REGRESSION_ASK in pm, pm[pm.find("regression"):][:200])
+
+    # --- c) the reader returns the last-known-good version ------------------
+    reader_json = ('{"clean_description": "x", "issue_times": [], "issue_time_source": "", '
+                   '"attachment_name": "", "attachment_reason": "", "reasoning": "", "missing_info": [], '
+                   '"issue_domain": "Connectivity", "issue_subcategory": "", "action_owner": "intel", '
+                   '"next_action": "n", "driver_version": "24.30.1.1", "last_good_version": "%s"}')
+    def _reader(v):
+        fake_llm = types.SimpleNamespace(chat=lambda messages, system_content=None: reader_json % v)
+        return read_case_history(fake_llm, subject="s", description="d", comments=[], attachment_list=[])
+    got = tuple(_reader(v)["last_good_version"] for v in
+                ("23.60.1.2", "23.60", "worked before", "", "24.30.1.1", "driver 24.20.0.6 (WW40)"))
+    check("S26.c case reader: asks for the last-known-good driver; x.y[.z[.w]] kept, a statement "
+          "without a version -> '', the failing version itself -> ''",
+          "last_good_version" in READER_PROMPT and "LAST-KNOWN-GOOD" in READER_PROMPT
+          and got == ("23.60.1.2", "23.60", "", "", "", "24.20.0.6"), str(got))
+
+    # --- d) runner wiring -----------------------------------------------------
+    an = CaseAnalysis(case_nbr="1", last_good_version="23.60.1.2")
+    check("S26.d CaseAnalysis.last_good_version reaches the live snapshot",
+          live_fields(an).get("last_good_version") == "23.60.1.2",
+          str(live_fields(an).get("last_good_version")))
+
+
 def run_smoke() -> int:
     tmp = Path(tempfile.mkdtemp(prefix="handsfree_smoke_"))
     try:
@@ -4470,6 +4729,8 @@ def run_smoke() -> int:
         smoke_chatbot_handoff(tmp)
         smoke_case_requests(tmp)
         smoke_driver_release(tmp)
+        smoke_echo_isolation(tmp)
+        smoke_regression_item()
     finally:
         shutil.rmtree(tmp, ignore_errors=True)
     print(f"\nsmoke result: {'ALL PASS' if not PASS_FAIL else 'FAILURES: ' + ', '.join(PASS_FAIL)}")

@@ -233,6 +233,17 @@ def deterministic_fills(analysis, fills: dict) -> None:
         mark("general_info", _DRIVER_ITEM_RE.pattern,
              f"driver {getattr(analysis, 'driver_version', '')} is on the latest "
              f"released branch ({getattr(analysis, 'latest_driver', '')})")
+    # Regression test (Charles, 2026-11-09): the item asks whether the issue
+    # is absent on an EARLIER version and WHICH one passed, so the build
+    # that introduced it can be isolated. The reproducing version alone
+    # says nothing about that — only a last-known-good version the thread
+    # states (reader field last_good_version) answers the item.
+    last_good = str(getattr(analysis, "last_good_version", "") or "").strip()
+    if last_good:
+        failing = str(getattr(analysis, "driver_version", "") or "").strip()
+        mark("general_info", _REGRESSION_ITEM_RE.pattern,
+             f"Yes — the issue does not reproduce on driver {last_good}"
+             + (f"; reproduces on {failing}" if failing else ""))
 
 
 _FILL_PROMPT = """\
@@ -257,11 +268,17 @@ List only the items that ARE provided.
 _WRT_ITEM_RE = re.compile(r"WRT Log|WPP driver log", re.IGNORECASE)
 _DUMP_ITEM_RE = re.compile(r"Kernel Dump|memory dump|minidump|crash dump", re.IGNORECASE)
 _DRIVER_ITEM_RE = re.compile(r"latest driver release", re.IGNORECASE)
+_REGRESSION_ITEM_RE = re.compile(r"regression issue", re.IGNORECASE)
+# What the reply asks for while the regression item is open (fixed text,
+# posts publicly).
+REGRESSION_ASK = ("the last driver version on which the issue did NOT reproduce "
+                  "(regression test)")
 
 
 def llm_fill(llm, fills: dict, case_material: str, *,
              lock_wrt_items: bool = False, lock_dump_items: bool = False,
-             lock_driver_item: bool = False) -> None:
+             lock_driver_item: bool = False,
+             lock_regression_item: bool = False) -> None:
     """One LLM pass over the still-unfilled items. Mutates `fills`; any
     failure leaves items unfilled (the customer is simply asked again).
     lock_wrt_items: the pipeline established that no usable WRT/WPP log was
@@ -270,7 +287,10 @@ def llm_fill(llm, fills: dict, case_material: str, *,
     lock_dump_items: same for the BSOD dump when the reply asks for it.
     lock_driver_item: same for "replicated on the latest driver release"
     when the driver check found the customer outdated (or unknown) and the
-    reply asks for validation on the latest release."""
+    reply asks for validation on the latest release.
+    lock_regression_item: same for "Is this a regression issue?" when no
+    last-known-good version is stated — a reproducing version alone must
+    not tick it; the reply asks which earlier version passed."""
     todo: list[tuple[str, dict]] = []
     for sec in ("general_info", "required_log", "required_info"):
         for e in fills.get(sec, []):
@@ -278,7 +298,8 @@ def llm_fill(llm, fills: dict, case_material: str, *,
                 continue
             if ((lock_wrt_items and _WRT_ITEM_RE.search(e["item"]))
                     or (lock_dump_items and _DUMP_ITEM_RE.search(e["item"]))
-                    or (lock_driver_item and _DRIVER_ITEM_RE.search(e["item"]))):
+                    or (lock_driver_item and _DRIVER_ITEM_RE.search(e["item"]))
+                    or (lock_regression_item and _REGRESSION_ITEM_RE.search(e["item"]))):
                 e["source"] = "locked"         # the reply itself asks for it
                 continue
             todo.append((sec, e))
@@ -342,7 +363,10 @@ def build_fills(analysis, llm=None) -> dict:
     llm_fill(llm, fills, material,
              lock_wrt_items=getattr(analysis, "mode", "") == "request_logs",
              lock_dump_items=getattr(analysis, "log_request_reason", "") == "no_dump",
-             lock_driver_item=getattr(analysis, "driver_check", "") in ("outdated", "unknown"))
+             lock_driver_item=getattr(analysis, "driver_check", "") in ("outdated", "unknown"),
+             # no passing version stated -> the text pass may not tick it
+             lock_regression_item=not str(getattr(analysis, "last_good_version", "")
+                                          or "").strip())
     try:
         analysis.checklist_decision = checklist_decision(analysis, fills, domain,
                                                          subcat, subcat_rule)
@@ -382,9 +406,13 @@ def checklist_decision(analysis, fills: dict, domain: str, subcat: str,
     if latest and check in ("outdated", "unknown"):
         asks.append(("the driver version in use and " if check == "unknown" else "")
                     + f"validation on the latest driver release {latest}")
+    if any(_REGRESSION_ITEM_RE.search(str(e.get("item", ""))) and not e.get("provided")
+           for e in general):
+        asks.append(REGRESSION_ASK)
     return {
         "domain": domain, "subcategory": subcat, "subcategory_rule": subcat_rule,
         "driver_check": check, "latest_driver": latest,
+        "last_good_version": str(getattr(analysis, "last_good_version", "") or ""),
         "required_logs": req_logs,
         "missing_logs": [e["item"] for e in req_logs if not e["provided"]],
         "required_info": req_info,
@@ -408,6 +436,10 @@ def _render_entries(entries: list[dict]) -> list[str]:
             notes.append(f"  {e['item']}")
         elif e.get("provided"):
             checked.append(f"  [✓] {e['item']} — provided: {e['value']}")
+        elif _REGRESSION_ITEM_RE.search(str(e["item"])):
+            # The open regression item asks for the PASSING version, not
+            # for the example BKC table.
+            unchecked.append(f"  [ ] {e['item']} — please provide {REGRESSION_ASK}")
         else:
             hint = f" ({e['example']})" if e.get("example") else ""
             unchecked.append(f"  [ ] {e['item']} — please provide{hint}")

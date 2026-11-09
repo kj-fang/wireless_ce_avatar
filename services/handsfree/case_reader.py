@@ -94,6 +94,14 @@ Your tasks:
     "Found In Build"; a driver the customer tested WITHOUT the failure is
     not it). Copy it as x.y.z.w (e.g. 23.150.0.4); "" when none is stated.
     Never invent one.
+ 8. State the LAST-KNOWN-GOOD Intel Wi-Fi DRIVER VERSION: the most recent
+    driver on which the customer states the issue did NOT reproduce (a
+    passing / previously working driver, e.g. "worked fine on 23.60.1.2",
+    "no issue with the previous driver 24.30.0.5", "regression from
+    23.90"). Copy it as written (x.y.z.w, or x.y when only the branch is
+    given). "Worked before" WITHOUT a version is not a version — return "".
+    The version the failure was observed on (task 7) is never the
+    last-known-good one. Never invent one.
 
 Output ONLY a valid JSON object (no markdown, no code fences):
 {{
@@ -109,7 +117,8 @@ Output ONLY a valid JSON object (no markdown, no code fences):
   "issue_subcategory": "<sub-category name, or ''>",
   "action_owner": "<'intel' | 'customer' | 'unknown'>",
   "next_action": "<one sentence>",
-  "driver_version": "<x.y.z.w the failure was observed on, or ''>"
+  "driver_version": "<x.y.z.w the failure was observed on, or ''>",
+  "last_good_version": "<version the issue did NOT reproduce on, or ''>"
 }}
 
 === SUBJECT ===
@@ -376,7 +385,20 @@ def read_case_history(llm, *, subject: str, description: str,
         # the driver the failure was seen on, x.y.z.w only ("latest" -> "")
         "driver_version": (lambda m: m.group(0) if m else "")(
             re.search(r"\d+\.\d+\.\d+\.\d+", str(res.get("driver_version") or ""))),
+        # the last driver the issue did NOT reproduce on (x.y[.z[.w]]; a
+        # statement without a version -> ""), never the failing one itself
+        "last_good_version": _last_good_version(res),
     }
+
+
+def _last_good_version(res: dict) -> str:
+    m = re.search(r"\d+\.\d+(?:\.\d+){0,2}", str(res.get("last_good_version") or ""))
+    if not m:
+        return ""
+    failing = re.search(r"\d+\.\d+\.\d+\.\d+", str(res.get("driver_version") or ""))
+    if failing and failing.group(0) == m.group(0):
+        return ""
+    return m.group(0)
 
 
 def find_attachment(attachment_list: Any, name: str):

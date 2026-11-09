@@ -240,6 +240,20 @@ class HandsfreeStore:
         # Verified by a human after describe_comment_fields():
         #   {"body_field": "...", "private_field": "...", "private_value": true}
         "rest_field_map": None,
+        # Latest released Wi-Fi driver (services/handsfree/driver_release.py):
+        # the server reads the PAE Wi-Fi Dashboard once a day; the Settings
+        # override wins when set. The drafts ask a customer on an older
+        # branch to validate on this release.
+        "latest_driver": "",                   # the report's pick, e.g. "24.90.0.3"
+        "latest_driver_manual": "",            # Settings override (full x.y.z.w)
+        "latest_driver_checked_at": "",        # last successful fetch (ISO local)
+        "latest_driver_last_attempt_at": "",   # last fetch, success or not
+        "latest_driver_error": "",             # why the last fetch failed
+        "latest_driver_source": "",            # "pbirs report"
+        "latest_driver_rows_count": 0,
+        "latest_driver_row": {},               # the winning table row
+        "latest_driver_report_updated": "",    # the report's "Last Updated: WW .." text
+        "latest_driver_refresh_requested_at": "",  # "Refresh now" pressed on a page
     }
 
     def load_config(self) -> dict:

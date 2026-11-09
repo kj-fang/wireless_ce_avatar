@@ -88,6 +88,12 @@ Your tasks:
     - "next_action": e.g. "Intel to analyze the WRT log uploaded in
       comment #4 for the 10:17 failure" or "Customer to provide the
       failure time and WRT logs Intel asked for in comment #2".
+ 7. State the Intel Wi-Fi DRIVER VERSION the reported failure was observed
+    on, as stated most recently in the thread or the form (a newer driver
+    the customer already tested and still failed on supersedes the original
+    "Found In Build"; a driver the customer tested WITHOUT the failure is
+    not it). Copy it as x.y.z.w (e.g. 23.150.0.4); "" when none is stated.
+    Never invent one.
 
 Output ONLY a valid JSON object (no markdown, no code fences):
 {{
@@ -102,7 +108,8 @@ Output ONLY a valid JSON object (no markdown, no code fences):
   "issue_domain": "<one domain name from the list, verbatim>",
   "issue_subcategory": "<sub-category name, or ''>",
   "action_owner": "<'intel' | 'customer' | 'unknown'>",
-  "next_action": "<one sentence>"
+  "next_action": "<one sentence>",
+  "driver_version": "<x.y.z.w the failure was observed on, or ''>"
 }}
 
 === SUBJECT ===
@@ -366,6 +373,9 @@ def read_case_history(llm, *, subject: str, description: str,
         "missing_info": missing,
         "issue_domain": resolve_domain(res.get("issue_domain")),
         "issue_subcategory": str(res.get("issue_subcategory") or "").strip(),
+        # the driver the failure was seen on, x.y.z.w only ("latest" -> "")
+        "driver_version": (lambda m: m.group(0) if m else "")(
+            re.search(r"\d+\.\d+\.\d+\.\d+", str(res.get("driver_version") or ""))),
     }
 
 

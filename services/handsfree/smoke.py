@@ -4098,6 +4098,352 @@ def smoke_case_requests(tmp: Path) -> None:
         routes._store, sch._store, orch.start_case_run, orch.get_run_state = orig
 
 
+def smoke_driver_release(tmp: Path) -> None:
+    print("[S24] Latest driver: the report's PV release vs the customer's driver; the drafts "
+          "ask an outdated customer to validate on it")
+    import os
+    import types
+    from datetime import date, datetime, timedelta
+    from configs.global_configs import app_config
+    from . import driver_release as dr
+    from . import runner as runner_mod
+    from . import scheduler as sch
+    from . import orchestrator as orch
+    from .checklist import _blank_fills, build_fills, deterministic_fills, llm_fill
+    from .composer import compose
+    from .queue import HandsfreeStore
+    from .runner import CaseAnalysis, HandsfreeRunner
+
+    # --- a) Intel work week -------------------------------------------------
+    ww = (dr.intel_ww(date(2026, 11, 9)), dr.intel_ww(date(2025, 1, 1)),
+          dr.intel_ww(date(2024, 12, 29)), dr.intel_ww(date(2024, 12, 28)),
+          dr.intel_ww(date(2024, 11, 13)))
+    check("S24.a intel_ww: Sunday-start weeks, WW1 holds Jan 1 (2026-11-09 -> WW46'26, "
+          "2024-12-29 -> WW1'25, 2024-12-28 -> WW52'24, 2024-11-13 -> WW46'24)",
+          ww == ((2026, 46), (2025, 1), (2025, 1), (2024, 52), (2024, 46)), str(ww))
+
+    # --- b) versions and branches ------------------------------------------
+    pv = (dr.parse_version("MHWFW000813_24.90.0.3"), dr.parse_version("Beta 24.95"),
+          dr.parse_version("Beta 24.95", 4), dr.parse_version("no version"),
+          dr.format_version(dr.parse_version("24.90.0.1")),
+          dr.branch_of(dr.parse_version("24.90.0.1")) == dr.branch_of(dr.parse_version("24.90.0.3")))
+    check("S24.b parse_version / branch_of: first x.y[.z[.w]] in the text, 4 parts when asked, "
+          "the branch is the first two numbers",
+          pv == ((24, 90, 0, 3), (24, 95, 0, 0), None, None, "24.90.0.1", True), str(pv))
+
+    # --- c) pick_latest on report rows -------------------------------------
+    def _row(s):
+        return dict(zip(dr.COLUMNS, [c.strip() for c in s.split("|")]))
+    rows = [_row(s) for s in (
+        "45 | 2026 | 24.90.0.3 |  | PV | MHWFW000813_24.90.0.3 | Complete |  | All-OEMs | ",
+        "45 | 2026 | 24.90.0.1 |  | Beta | MHWFW000694_24.90.0.1 | Complete |  | All-OEMs | ",
+        "46 | 2024 | 23.90.1.3 | 91 | PV | SBHWFW01547_23.90.1.3 | Progress |  | All-OEMs | YES",
+        "31 | 2024 | 23.60.5.14 | 88 | PV | SBHWFW01244_23.60.5.14 | Complete |  | All-OEMs | YES",
+        "30 | 2024 | 23.70.0.6 | 89 | PV | SBHWFW01258_23.70.0.6 | Complete |  | All-OEMs | YES",
+        "43 | 2025 | 24.100.0.1 | 98 | PV Candidate | MHWFW00101_24.100.0.1 | Complete |  | All-OEMs | YES",
+        "50 | 2026 | 25.10.0.1 |  | PV | X_25.10.0.1 | Complete |  | All-OEMs | ",
+        "44 | 2026 | 24.80.1.9 |  | PV-HF | X_24.80.1.9 | Cmplete |  | All-OEMs | ",
+        "09 | 2026 | 99.0.102.55 | 102 | Alpha | CRWFW11879_99.0.102.55 | Complete |  | All-OEMs | YES",
+        "xx | 2026 | 24.95.0.1 |  | PV | X | Complete |  | All-OEMs | ",
+    )]
+    p_now = dr.pick_latest(rows, date(2026, 11, 9))
+    p_2024_08 = dr.pick_latest(rows, date(2024, 8, 1))
+    p_2024_ww46 = dr.pick_latest(rows, date(2024, 11, 13))
+    p_2024_ww42 = dr.pick_latest(rows, date(2024, 10, 16))
+    p_none = dr.pick_latest([_row("01 | 2026 | 1.2.3.4 |  | Beta | x | Complete |  |  | ")], date(2026, 11, 9))
+    check("S24.c pick_latest: PV / PV-HF rows up to the current work week, highest version wins "
+          "(not the latest week: 23.60.5.14 re-released WW31'24 never beats 23.70); Beta / Alpha / "
+          "'PV Candidate' / future / unparsable rows are excluded; Progress counts",
+          p_now and p_now["version"] == "24.90.0.3" and p_now["candidates"] == 5
+          and p_now["excluded"] == {"quality": 3, "future": 1, "no_week": 1, "no_version": 0}
+          and p_2024_08["version"] == "23.70.0.6" and p_2024_ww46["version"] == "23.90.1.3"
+          and p_2024_ww42["version"] == "23.70.0.6" and p_none is None
+          and dr.pick_latest([], date(2026, 11, 9)) is None,
+          f"now={p_now} 2024-08={p_2024_08 and p_2024_08['version']} "
+          f"ww46'24={p_2024_ww46 and p_2024_ww46['version']} ww42'24={p_2024_ww42 and p_2024_ww42['version']}")
+
+    # --- d) compare_branch -------------------------------------------------
+    cmp = (dr.compare_branch("24.90.0.1", "24.90.0.3"), dr.compare_branch("24.80.3.1", "24.90.0.3"),
+           dr.compare_branch("24.95", "24.90.0.3"), dr.compare_branch("", "24.90.0.3"),
+           dr.compare_branch("24.1.1.1", ""), dr.compare_branch("23.150.0.4", "24.90.0.3"))
+    check("S24.d compare_branch: same / newer branch ok, older outdated, no customer version "
+          "unknown, no latest skipped",
+          cmp == ("ok", "outdated", "ok", "unknown", "skipped", "outdated"), str(cmp))
+
+    # --- e) the customer's driver: capture > IPS form > thread ---------------
+    cap = tmp / "cap_s24"
+    cap.mkdir(exist_ok=True)
+    (cap / "system_info.txt").write_text(
+        json.dumps({"Versions": {"Wi-Fi Driver Version": "23.150.0.4", "BT Driver Version": "23.150.0.1"}}),
+        encoding="utf-8")
+    log_in_cap = str(cap / "WifiDriverIHVSession.etl.002.log")
+    orig_cfg_fn = runner_mod._bsod.handsfree_config
+    runner_mod._bsod.handsfree_config = lambda: {"latest_driver": "24.90.0.3"}
+    try:
+        rn = HandsfreeRunner()
+        a1 = CaseAnalysis(case_nbr="1", log_path=log_in_cap,
+                          env_detail={"Found In Build": "24.30.1.1"},
+                          case_reader={"driver_version": "24.80.0.1"})
+        rn._settle_driver_version(a1)
+        a2 = CaseAnalysis(case_nbr="1", env_detail={"Found In Build": "24.30.1.1 (WW11)"},
+                          case_reader={"driver_version": "24.80.0.1"})
+        rn._settle_driver_version(a2)
+        a3 = CaseAnalysis(case_nbr="1", case_reader={"driver_version": "24.95.0.1"})
+        rn._settle_driver_version(a3)
+        a4 = CaseAnalysis(case_nbr="1", env_detail={"Found In Build": "N/A"})
+        rn._settle_driver_version(a4)
+        runner_mod._bsod.handsfree_config = lambda: {}
+        a5 = CaseAnalysis(case_nbr="1", env_detail={"Found In Build": "24.90.0.1"})
+        rn._settle_driver_version(a5)
+        runner_mod._bsod.handsfree_config = lambda: {"latest_driver": "24.90.0.3",
+                                                     "latest_driver_manual": "25.0.0.2"}
+        a6 = CaseAnalysis(case_nbr="1", env_detail={"Found In Build": "24.90.0.1"})
+        rn._settle_driver_version(a6)
+    finally:
+        runner_mod._bsod.handsfree_config = orig_cfg_fn
+    check("S24.e _settle_driver_version: the capture's system_info.txt wins (and a newer version "
+          "elsewhere is only flagged), then Found In Build, then the thread; nothing -> unknown; "
+          "no latest -> skipped; the Settings override replaces the report's value",
+          (a1.driver_version, a1.driver_version_source, a1.driver_check, a1.driver_decision["newer_mentioned"])
+          == ("23.150.0.4", "system_info", "outdated", "24.30.1.1")
+          and (a2.driver_version, a2.driver_version_source, a2.driver_check) == ("24.30.1.1", "env_detail", "outdated")
+          and (a3.driver_version, a3.driver_version_source, a3.driver_check) == ("24.95.0.1", "reader", "ok")
+          and (a4.driver_version, a4.driver_check, a4.latest_driver) == ("", "unknown", "24.90.0.3")
+          and (a5.driver_check, a5.latest_driver) == ("skipped", "")
+          and (a6.latest_driver, a6.latest_driver_source, a6.driver_check) == ("25.0.0.2", "manual", "outdated")
+          and len(a1.driver_decision["candidates"]) == 3 and "outdated" in a1.driver_decision["summary"],
+          f"a1={a1.driver_version}/{a1.driver_version_source}/{a1.driver_check}/{a1.driver_decision.get('newer_mentioned')} "
+          f"a2={a2.driver_version}/{a2.driver_version_source}/{a2.driver_check} a3={a3.driver_version}/{a3.driver_check} "
+          f"a4={a4.driver_version!r}/{a4.driver_check} a5={a5.driver_check} a6={a6.latest_driver}/{a6.latest_driver_source}")
+
+    # --- f) the drafts -------------------------------------------------------
+    base = dict(case_nbr="1", ok=True, subject="[X] p2p set channel failed",
+                issue_domain="P2P (Miracast)", issue_subcategory="Connectivity",
+                missing_info=[{"item": "issue_time", "reason": "none stated"}])
+    ask = "validate the issue on the latest release 24.90.0.3"
+    state_it = "Please state the driver version the issue was observed on"
+    got = {}
+    for mode in ("first_response", "request_info", "request_logs"):
+        for chk in ("outdated", "unknown", "ok"):
+            a = CaseAnalysis(mode=mode, driver_check=chk,
+                             driver_version="" if chk == "unknown" else "23.150.0.4",
+                             driver_version_source="" if chk == "unknown" else "env_detail",
+                             latest_driver="24.90.0.3", latest_driver_source="report", **base)
+            a.checklist_fills = build_fills(a)
+            p = compose(a)["plain"]
+            got[(mode, chk)] = (ask in p, state_it in p,
+                                "[ ] Can the issue be replicated using the latest driver release" in p,
+                                "[✓] Can the issue be replicated using the latest driver release? — provided: "
+                                "driver 23.150.0.4 is on the latest released branch (24.90.0.3)" in p)
+    ok_all = all(got[(m, "outdated")] == (True, False, True, False)
+                 and got[(m, "unknown")] == (True, True, True, False)
+                 and got[(m, "ok")] == (False, False, False, True)
+                 for m in ("first_response", "request_info", "request_logs"))
+    check("S24.f customer drafts: outdated -> 'validate on the latest release <v>' and the checklist "
+          "item stays open; unknown -> also 'state the driver version'; ok -> no ask, the item is "
+          "ticked by the pipeline (first_response, request_info, request_logs alike)", ok_all, str(got))
+    a_later = CaseAnalysis(mode="request_logs", driver_check="outdated", driver_version="23.150.0.4",
+                           driver_version_source="system_info", latest_driver="24.90.0.3",
+                           first_response_done=True, **base)
+    p_later = compose(a_later)["plain"]
+    a_dump = CaseAnalysis(mode="request_logs", log_request_reason="no_dump", bsod_case=True,
+                          driver_check="outdated", driver_version="23.150.0.4",
+                          driver_version_source="env_detail", latest_driver="24.90.0.3", **base)
+    p_dump = compose(a_dump)["plain"]
+    a_skip = CaseAnalysis(mode="request_info", driver_check="skipped", **base)
+    p_skip = compose(a_skip)["plain"]
+    check("S24.f2 the ask lives outside the one-time checklist: a later-round request_logs draft "
+          "(checklist already sent) still carries it; the BSOD dump request carries it; no latest "
+          "release known -> nothing asked",
+          ask in p_later and "=== General Info ===" not in p_later
+          and ask in p_dump and "from the Found In Build field of the case" in p_dump
+          and "Driver version" not in p_skip,
+          f"later={ask in p_later}/{'=== General Info ===' in p_later} dump={ask in p_dump} skip={'Driver version' in p_skip}")
+    a_full = CaseAnalysis(mode="full", driver_check="outdated", driver_version="23.150.0.4",
+                          driver_version_source="system_info", latest_driver="24.90.0.3",
+                          latest_driver_source="report",
+                          driver_decision={"winner_label": "system_info.txt of the analysed WRT capture",
+                                           "newer_mentioned": "24.30.1.1"}, **base)
+    p_full = compose(a_full)["plain"]
+    a_full_ok = CaseAnalysis(mode="full", driver_check="ok", driver_version="24.90.0.1",
+                             driver_version_source="env_detail", latest_driver="24.90.0.3", **base)
+    p_full_ok = compose(a_full_ok)["plain"]
+    a_wait = CaseAnalysis(mode="waiting_customer", driver_check="outdated", driver_version="23.150.0.4",
+                          latest_driver="24.90.0.3", **base)
+    p_wait = compose(a_wait)["plain"]
+    check("S24.f3 internal drafts: a reviewer note states the verdict (and a newer driver the thread "
+          "mentions); nothing in a waiting_customer note",
+          "Driver version check: customer driver 23.150.0.4 (system_info.txt of the analysed WRT capture) "
+          "is NOT on the latest released branch — latest release 24.90.0.3 (report)." in p_full
+          and "The thread also mentions 24.30.1.1" in p_full
+          and "Driver version check: customer driver 24.90.0.1 (" in p_full_ok
+          and "is on the latest released branch (24.90.0.3)" in p_full_ok
+          and "Driver version check" not in p_wait,
+          f"full={'Driver version check' in p_full} ok={'Driver version check' in p_full_ok} wait={'Driver version check' in p_wait}")
+
+    # --- g) the LLM fill cannot tick the item the reply asks about ---------
+    a_lock = CaseAnalysis(mode="first_response", driver_check="outdated", driver_version="23.150.0.4",
+                          latest_driver="24.90.0.3", **base)
+    fills = _blank_fills("P2P (Miracast)", "Connectivity")
+    deterministic_fills(a_lock, fills)
+    item = next(e for e in fills["general_info"] if "latest driver release" in e["item"])
+    idx = [e for sec in ("general_info", "required_log", "required_info") for e in fills.get(sec, [])
+           if not e["provided"]].index(item) + 1
+    fake = types.SimpleNamespace(chat=lambda messages, system_content=None:
+                                 json.dumps({"fills": {str(idx): {"provided": True, "value": "yes, on latest"}}}))
+    llm_fill(fake, fills, "customer says it also fails on the latest driver", lock_driver_item=True)
+    fills_ok = _blank_fills("P2P (Miracast)", "Connectivity")
+    a_ok = CaseAnalysis(mode="first_response", driver_check="ok", driver_version="24.90.0.1",
+                        latest_driver="24.90.0.3", **base)
+    deterministic_fills(a_ok, fills_ok)
+    item_ok = next(e for e in fills_ok["general_info"] if "latest driver release" in e["item"])
+    check("S24.g checklist item 'replicated on the latest driver release': locked against the text "
+          "pass when the reply asks for validation; ticked by the pipeline when the customer is current",
+          item["provided"] is False and item["source"] == "locked"
+          and item_ok["provided"] is True and item_ok["source"] == "pipeline"
+          and "24.90.0.1" in item_ok["value"],
+          f"locked={item.get('source')}/{item['provided']} ok={item_ok.get('source')}/{item_ok['value']}")
+
+    # --- h) the reader returns the driver under test -----------------------
+    from .case_reader import READER_PROMPT, read_case_history
+    reader_json = ('{"clean_description": "x", "issue_times": [], "issue_time_source": "", '
+                   '"attachment_name": "", "attachment_reason": "", "reasoning": "", "missing_info": [], '
+                   '"issue_domain": "Connectivity", "issue_subcategory": "", "action_owner": "intel", '
+                   '"next_action": "n", "driver_version": "%s"}')
+    def _reader(v):
+        fake_llm = types.SimpleNamespace(chat=lambda messages, system_content=None: reader_json % v)
+        return read_case_history(fake_llm, subject="s", description="d", comments=[], attachment_list=[])
+    r_ver = _reader("24.30.1.1")
+    r_bad = _reader("latest")
+    check("S24.h case reader: asks for the driver the failure was seen on; x.y.z.w kept, anything "
+          "else -> ''",
+          "driver_version" in READER_PROMPT and "DRIVER VERSION" in READER_PROMPT
+          and r_ver and r_ver["driver_version"] == "24.30.1.1" and r_bad and r_bad["driver_version"] == "",
+          f"ver={r_ver and r_ver.get('driver_version')!r} bad={r_bad and r_bad.get('driver_version')!r}")
+
+    # --- i) refresh_latest_driver / effective_latest_driver -----------------
+    store = HandsfreeStore(tmp / "handsfree_s24")
+    res_ok = dr.refresh_latest_driver(store, today=date(2026, 11, 9), fetch=lambda: (rows, "Last Updated: WW 45'2026"))
+    cfg1 = store.load_config()
+    def _boom():
+        raise RuntimeError("Chrome exploded")
+    res_bad = dr.refresh_latest_driver(store, today=date(2026, 11, 9), fetch=_boom)
+    cfg2 = store.load_config()
+    res_empty = dr.refresh_latest_driver(store, today=date(2026, 11, 9), fetch=lambda: [])
+    cfg3 = store.load_config()
+    eff = (dr.effective_latest_driver(cfg3),
+           dr.effective_latest_driver({**cfg3, "latest_driver_manual": "25.0.0.1"}),
+           dr.effective_latest_driver({**cfg3, "latest_driver_manual": "abc"}),
+           dr.effective_latest_driver({}))
+    check("S24.i refresh_latest_driver: a good fetch stores the pick + checked_at + rows; a failing "
+          "or empty fetch keeps the value and records the error; the Settings override wins only "
+          "when it is a full version",
+          res_ok["ok"] and cfg1["latest_driver"] == "24.90.0.3" and cfg1["latest_driver_checked_at"]
+          and cfg1["latest_driver_rows_count"] == len(rows) and cfg1["latest_driver_error"] == ""
+          and cfg1["latest_driver_report_updated"] == "Last Updated: WW 45'2026"
+          and cfg1["latest_driver_row"]["tic"] == "MHWFW000813_24.90.0.3"
+          and not res_bad["ok"] and cfg2["latest_driver"] == "24.90.0.3"
+          and "Chrome exploded" in cfg2["latest_driver_error"]
+          and cfg2["latest_driver_checked_at"] == cfg1["latest_driver_checked_at"]
+          and not res_empty["ok"] and "no PV" in cfg3["latest_driver_error"]
+          and eff == (("24.90.0.3", "report"), ("25.0.0.1", "manual"), ("24.90.0.3", "report"), ("", "")),
+          f"ok={res_ok} bad={res_bad} empty={res_empty} eff={eff}")
+
+    # --- j) is_refresh_due ---------------------------------------------------
+    now = datetime(2026, 11, 9, 12, 0).astimezone()
+    iso = lambda dt: dt.isoformat(timespec="seconds")
+    due = (dr.is_refresh_due({}, now),
+           dr.is_refresh_due({"latest_driver_last_attempt_at": iso(now - timedelta(hours=1)),
+                              "latest_driver_checked_at": iso(now - timedelta(hours=1))}, now),
+           dr.is_refresh_due({"latest_driver_last_attempt_at": iso(now - timedelta(hours=25)),
+                              "latest_driver_checked_at": iso(now - timedelta(hours=25))}, now),
+           dr.is_refresh_due({"latest_driver_last_attempt_at": iso(now - timedelta(hours=1)),
+                              "latest_driver_checked_at": iso(now - timedelta(hours=1)),
+                              "latest_driver_refresh_requested_at": iso(now - timedelta(minutes=5))}, now),
+           dr.is_refresh_due({"latest_driver_last_attempt_at": iso(now - timedelta(hours=1)),
+                              "latest_driver_error": "boom"}, now),
+           dr.is_refresh_due({"latest_driver_last_attempt_at": iso(now - timedelta(hours=3)),
+                              "latest_driver_error": "boom"}, now))
+    check("S24.j is_refresh_due: never fetched / a day old / Refresh pressed since / a failure 2 h+ "
+          "ago -> due; fresh or a failure 1 h ago -> not",
+          due == (True, False, True, True, False, True), str(due))
+
+    # --- k) the scheduler hook: server only, when due, never over a UI run --
+    orig_role = getattr(app_config, "handsfree_role", "client")
+    orig_env = os.environ.get("INTELAVATAR_HANDSFREE_ROLE")
+    orig_dm = getattr(app_config, "driver_manager", None)
+    orig_store_s, orig_refresh = sch._store, sch.refresh_latest_driver
+    calls = []
+    try:
+        store_k = HandsfreeStore(tmp / "handsfree_s24k")
+        sch._store = lambda: store_k
+        sch.refresh_latest_driver = lambda st: calls.append(st) or {"ok": True}
+        app_config.driver_manager = object()        # "Chrome is available here"
+        os.environ.pop("INTELAVATAR_HANDSFREE_ROLE", None)
+        app_config.handsfree_role = "client"
+        k_client = sch.maybe_refresh_latest_driver()
+        app_config.handsfree_role = "server"
+        k_due = sch.maybe_refresh_latest_driver()
+        store_k.save_config({"latest_driver_last_attempt_at": iso(datetime.now().astimezone()),
+                             "latest_driver_checked_at": iso(datetime.now().astimezone())})
+        k_fresh = sch.maybe_refresh_latest_driver()
+        store_k.save_config({"latest_driver_refresh_requested_at":
+                             iso(datetime.now().astimezone() + timedelta(seconds=5))})
+        orch._run_lock.acquire()
+        try:
+            k_busy = sch.maybe_refresh_latest_driver()
+        finally:
+            orch._run_lock.release()
+        k_requested = sch.maybe_refresh_latest_driver()
+        app_config.driver_manager = None
+        k_no_chrome = sch.maybe_refresh_latest_driver()
+    finally:
+        app_config.handsfree_role = orig_role
+        app_config.driver_manager = orig_dm
+        if orig_env is None:
+            os.environ.pop("INTELAVATAR_HANDSFREE_ROLE", None)
+        else:
+            os.environ["INTELAVATAR_HANDSFREE_ROLE"] = orig_env
+        sch._store, sch.refresh_latest_driver = orig_store_s, orig_refresh
+    check("S24.k maybe_refresh_latest_driver: a client never fetches; the server fetches when due "
+          "or when Refresh was pressed, not when fresh, not while a run holds the lock, not without "
+          "Chrome in this process",
+          (k_client, k_due, k_fresh, k_busy, k_requested, k_no_chrome) == (False, True, False, False, True, False)
+          and len(calls) == 2,
+          str((k_client, k_due, k_fresh, k_busy, k_requested, k_no_chrome, len(calls))))
+
+    # --- l) routes: the override is validated; Refresh now leaves a request --
+    try:
+        from flask import Flask
+        from blueprints.handsfree import handsfree_routes as routes
+        orig_routes_store = routes._store
+        store_l = HandsfreeStore(tmp / "handsfree_s24l")
+        routes._store = lambda: store_l
+        try:
+            app = Flask("handsfree_smoke_s24")
+            app.register_blueprint(routes.handsfree_bp)
+            client = app.test_client()
+            r_ok = client.post("/handsfree/config", json={"latest_driver_manual": " 24.90.0.3 "})
+            r_bad = client.post("/handsfree/config", json={"latest_driver_manual": "nope"})
+            r_clear = client.post("/handsfree/config", json={"latest_driver_manual": ""})
+            r_ref = client.post("/handsfree/latest_driver/refresh")
+            cfg_l = store_l.load_config()
+        finally:
+            routes._store = orig_routes_store
+        check("S24.l routes: /config stores a full x.y.z.w override (normalised) and refuses anything "
+              "else with 400; clearing works; POST /latest_driver/refresh stamps the request",
+              r_ok.status_code == 200 and r_ok.get_json()["latest_driver_manual"] == "24.90.0.3"
+              and r_bad.status_code == 400 and "24.90.0.3" in r_bad.get_json()["error"]
+              and r_clear.status_code == 200 and r_clear.get_json()["latest_driver_manual"] == ""
+              and r_ref.status_code == 200 and r_ref.get_json()["ok"] is True
+              and cfg_l["latest_driver_refresh_requested_at"]
+              and "latest_driver" in r_ref.get_json(),
+              f"ok={r_ok.status_code}/{r_ok.get_json().get('latest_driver_manual')!r} bad={r_bad.status_code} "
+              f"clear={r_clear.status_code} ref={r_ref.status_code} req={cfg_l.get('latest_driver_refresh_requested_at')!r}")
+    except Exception as e:
+        check("S24.l latest-driver routes", False, f"{type(e).__name__}: {e}")
+
+
 def run_smoke() -> int:
     tmp = Path(tempfile.mkdtemp(prefix="handsfree_smoke_"))
     try:
@@ -4123,6 +4469,7 @@ def run_smoke() -> int:
         smoke_server_role(tmp)
         smoke_chatbot_handoff(tmp)
         smoke_case_requests(tmp)
+        smoke_driver_release(tmp)
     finally:
         shutil.rmtree(tmp, ignore_errors=True)
     print(f"\nsmoke result: {'ALL PASS' if not PASS_FAIL else 'FAILURES: ' + ', '.join(PASS_FAIL)}")

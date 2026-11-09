@@ -226,6 +226,13 @@ def deterministic_fills(analysis, fills: dict) -> None:
             mark("general_info", r"reproduction steps", a[:200])
         if re.search(r"frequency", str(q), re.IGNORECASE):
             mark("general_info", r"reproduction rate", a[:100])
+    # Driver check (runner._settle_driver_version): a customer on the latest
+    # released branch has answered the "latest driver release" question;
+    # otherwise the item stays open and the reply's driver paragraph asks.
+    if getattr(analysis, "driver_check", "") == "ok":
+        mark("general_info", _DRIVER_ITEM_RE.pattern,
+             f"driver {getattr(analysis, 'driver_version', '')} is on the latest "
+             f"released branch ({getattr(analysis, 'latest_driver', '')})")
 
 
 _FILL_PROMPT = """\
@@ -249,23 +256,29 @@ List only the items that ARE provided.
 
 _WRT_ITEM_RE = re.compile(r"WRT Log|WPP driver log", re.IGNORECASE)
 _DUMP_ITEM_RE = re.compile(r"Kernel Dump|memory dump|minidump|crash dump", re.IGNORECASE)
+_DRIVER_ITEM_RE = re.compile(r"latest driver release", re.IGNORECASE)
 
 
 def llm_fill(llm, fills: dict, case_material: str, *,
-             lock_wrt_items: bool = False, lock_dump_items: bool = False) -> None:
+             lock_wrt_items: bool = False, lock_dump_items: bool = False,
+             lock_driver_item: bool = False) -> None:
     """One LLM pass over the still-unfilled items. Mutates `fills`; any
     failure leaves items unfilled (the customer is simply asked again).
     lock_wrt_items: the pipeline established that no usable WRT/WPP log was
     provided (request_logs) — the text pass must not tick those items from
     an attachment label, or the reply would contradict itself.
-    lock_dump_items: same for the BSOD dump when the reply asks for it."""
+    lock_dump_items: same for the BSOD dump when the reply asks for it.
+    lock_driver_item: same for "replicated on the latest driver release"
+    when the driver check found the customer outdated (or unknown) and the
+    reply asks for validation on the latest release."""
     todo: list[tuple[str, dict]] = []
     for sec in ("general_info", "required_log", "required_info"):
         for e in fills.get(sec, []):
             if e["provided"]:
                 continue
             if ((lock_wrt_items and _WRT_ITEM_RE.search(e["item"]))
-                    or (lock_dump_items and _DUMP_ITEM_RE.search(e["item"]))):
+                    or (lock_dump_items and _DUMP_ITEM_RE.search(e["item"]))
+                    or (lock_driver_item and _DRIVER_ITEM_RE.search(e["item"]))):
                 e["source"] = "locked"         # the reply itself asks for it
                 continue
             todo.append((sec, e))
@@ -328,7 +341,8 @@ def build_fills(analysis, llm=None) -> dict:
     ]))
     llm_fill(llm, fills, material,
              lock_wrt_items=getattr(analysis, "mode", "") == "request_logs",
-             lock_dump_items=getattr(analysis, "log_request_reason", "") == "no_dump")
+             lock_dump_items=getattr(analysis, "log_request_reason", "") == "no_dump",
+             lock_driver_item=getattr(analysis, "driver_check", "") in ("outdated", "unknown"))
     try:
         analysis.checklist_decision = checklist_decision(analysis, fills, domain,
                                                          subcat, subcat_rule)
@@ -363,8 +377,14 @@ def checklist_decision(analysis, fills: dict, domain: str, subcat: str,
     ask_which = subcategory_ask(domain, subcat)
     if ask_which:
         asks.append(ask_which)
+    check = getattr(analysis, "driver_check", "")
+    latest = getattr(analysis, "latest_driver", "")
+    if latest and check in ("outdated", "unknown"):
+        asks.append(("the driver version in use and " if check == "unknown" else "")
+                    + f"validation on the latest driver release {latest}")
     return {
         "domain": domain, "subcategory": subcat, "subcategory_rule": subcat_rule,
+        "driver_check": check, "latest_driver": latest,
         "required_logs": req_logs,
         "missing_logs": [e["item"] for e in req_logs if not e["provided"]],
         "required_info": req_info,
@@ -441,6 +461,12 @@ def render_first_response(analysis, fills: dict) -> list[str]:
     ]
     parts += render_checklist_body(domain, fills,
                                    getattr(analysis, "issue_subcategory", ""))
+    # Latest-driver ask (composer owns the customer-facing wording; the
+    # request_* drafts use the same lines).
+    from .composer import latest_driver_lines
+    driver = latest_driver_lines(analysis)
+    if driver:
+        parts += [""] + driver
     parts += ["",
               "Thank you — we will proceed as soon as the missing items are "
               "available."]

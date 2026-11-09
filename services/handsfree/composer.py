@@ -121,6 +121,75 @@ _INFO_ASKS = {
                     "the issue reproduces"),
 }
 
+# Latest-driver check (runner._settle_driver_version): where the customer's
+# driver version came from, in customer-facing words.
+_DRIVER_SOURCE_PUBLIC = {
+    "system_info": "from the system information in the attached WRT capture",
+    "env_detail": "from the Found In Build field of the case",
+    "reader": "as stated in the case",
+}
+
+
+def latest_driver_lines(analysis) -> list[str]:
+    """Customer-facing paragraph asking an outdated (or unknown) customer to
+    validate on the latest released driver. Fixed text (posts PUBLICLY);
+    [] when the driver is current or no latest release is known. Lives
+    OUTSIDE the one-time checklist body so later-round request drafts
+    carry it too."""
+    check = getattr(analysis, "driver_check", "") or ""
+    latest = getattr(analysis, "latest_driver", "") or ""
+    if not latest or check not in ("outdated", "unknown"):
+        return []
+    tail = (f"Please validate the issue on the latest release {latest} and let us "
+            "know the result; if the issue still reproduces there, please collect the "
+            "WRT logs on that driver and attach them to this case.")
+    if check == "outdated":
+        src = _DRIVER_SOURCE_PUBLIC.get(getattr(analysis, "driver_version_source", ""),
+                                        "as stated in the case")
+        return [f"Driver version: the information we have ({src}) indicates Intel Wi-Fi "
+                f"driver {getattr(analysis, 'driver_version', '')}, which is not on the "
+                f"latest released driver branch. {tail}"]
+    return ["Driver version: we could not determine the Intel Wi-Fi driver version in "
+            "use. Please state the driver version the issue was observed on, and "
+            + tail[0].lower() + tail[1:]]
+
+
+def _driver_block(analysis) -> list[str]:
+    lines = latest_driver_lines(analysis)
+    return [""] + lines if lines else []
+
+
+def _driver_review_lines(analysis) -> list[str]:
+    """Reviewer note for the Private-to-Intel drafts: what the driver check
+    concluded and what the customer-facing draft asks."""
+    check = getattr(analysis, "driver_check", "") or ""
+    if not check:
+        return []
+    v = getattr(analysis, "driver_version", "") or ""
+    latest = getattr(analysis, "latest_driver", "") or ""
+    latest_src = getattr(analysis, "latest_driver_source", "") or ""
+    dec = getattr(analysis, "driver_decision", None) or {}
+    label = dec.get("winner_label") or getattr(analysis, "driver_version_source", "") or "?"
+    if check == "skipped":
+        return ["Driver version check skipped: no latest release known yet (Settings → "
+                "latest driver override, or wait for the server's daily report fetch)"
+                + (f"; customer driver {v} ({label})." if v else ".")]
+    if check == "unknown":
+        return [f"Driver version check: the customer's driver version is unknown (no "
+                f"system_info.txt, no Found In Build, none stated in the thread) — the "
+                f"customer-facing draft asks for it and for validation on {latest}."]
+    if check == "ok":
+        return [f"Driver version check: customer driver {v} ({label}) is on the latest "
+                f"released branch ({latest})."]
+    line = (f"Driver version check: customer driver {v} ({label}) is NOT on the latest "
+            f"released branch — latest release {latest} ({latest_src or 'report'}). The "
+            f"customer-facing draft asks for validation on {latest}.")
+    newer = dec.get("newer_mentioned") or ""
+    if newer:
+        line += (f" The thread also mentions {newer} — check whether the customer "
+                 "already validated a newer driver.")
+    return [line]
+
 
 # Tag line distinguishing customer-facing first-response/request comments
 # from analysis comments in the approve-time duplicate scan: one of each may
@@ -176,6 +245,7 @@ def _request_info_lines(analysis: CaseAnalysis) -> list[str]:
         "case. Could you please provide:",
     ]
     parts += _info_ask_bullets(analysis)
+    parts += _driver_block(analysis)
     checklist = _checklist_body(analysis)
     if checklist:
         parts += [""] + checklist
@@ -214,6 +284,7 @@ def _request_dump_lines(analysis: CaseAnalysis) -> list[str]:
         parts += ["",
                   "In addition, to speed up the analysis please also provide:"]
         parts += info
+    parts += _driver_block(analysis)
     checklist = _checklist_body(analysis)
     if checklist:
         parts += [""] + checklist
@@ -352,7 +423,8 @@ def _request_logs_lines(analysis: CaseAnalysis) -> list[str]:
         "We will start the analysis as soon as the logs are available. "
         "Thank you!",
     ]
-    # One combined public reply: targeted info asks (when any), then the full
+    # One combined public reply: targeted info asks (when any), then the
+    # latest-driver ask (when the customer is not on it), then the full
     # pre-filled domain checklist, then the closing line.
     tail = parts.pop()
     info = _info_ask_bullets(analysis)
@@ -360,6 +432,7 @@ def _request_logs_lines(analysis: CaseAnalysis) -> list[str]:
         parts += ["",
                   "In addition, to speed up the analysis please also provide:"]
         parts += info
+    parts += _driver_block(analysis)
     checklist = _checklist_body(analysis)
     if checklist:
         parts += [""] + checklist
@@ -480,6 +553,10 @@ def compose_plain(analysis: CaseAnalysis) -> str:
             reason = (m.get("reason") or "").strip()
             parts.append(f"  - {ask}" + (f" ({reason})" if reason else ""))
         parts.append("")
+    # Latest-driver check (reviewer note; the customer-facing drafts carry the ask).
+    review = _driver_review_lines(analysis)
+    if review:
+        parts += review + [""]
 
     if analysis.mode == "full" and analysis.incidents:
         parts.append(f"Automated log analysis for case {analysis.case_nbr}"

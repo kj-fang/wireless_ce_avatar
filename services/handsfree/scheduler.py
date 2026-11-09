@@ -31,6 +31,14 @@ Config (HandsfreeStore config.json):
     email_max_per_round  int                        cases per round from mail
     email_reply_all      bool                       Reply all (default) or Reply
     email_last_scan_at / email_last_result          written by run_email_scan
+    latest_driver / latest_driver_manual / latest_driver_checked_at /
+    latest_driver_last_attempt_at / latest_driver_error / latest_driver_rows_count /
+    latest_driver_refresh_requested_at              the latest released Wi-Fi driver
+                                                    (driver_release.py): the server
+                                                    re-reads the PAE Wi-Fi Dashboard
+                                                    once a day, or when a page pressed
+                                                    "Refresh now"; the Settings override
+                                                    (latest_driver_manual) wins when set
 
 One daemon thread per SERVER process (role() == "server": app.py
 --handsfree-role server / INTELAVATAR_HANDSFREE_ROLE), started by the
@@ -50,6 +58,8 @@ import time
 import traceback
 from datetime import datetime, timedelta
 from typing import Optional
+
+from .driver_release import effective_latest_driver, is_refresh_due, refresh_latest_driver
 
 MODES = {"4h": "every 4 hours", "8h": "every 8 hours",
          "nightly": "once overnight (23:00)"}
@@ -272,6 +282,7 @@ def email_settings(cfg: dict) -> dict:
 def status(cfg: Optional[dict] = None) -> dict:
     cfg = cfg if cfg is not None else _store().load_config()
     em = email_settings(cfg)
+    _latest = effective_latest_driver(cfg)
     return {
         "email_watch_enabled": bool(cfg.get("email_watch_enabled")),
         "email_folder": em["folder"],
@@ -305,7 +316,23 @@ def status(cfg: Optional[dict] = None) -> dict:
         "host": cfg.get("auto_check_host") or "",
         "runs_here": _runs_here(cfg),
         "cli_last_run": cli_last_run(),
+        # Latest released Wi-Fi driver: the effective value (Settings override
+        # or the report), the report's own value and how the last fetch went.
+        "latest_driver": _latest[0],
+        "latest_driver_source": _latest[1],
+        "latest_driver_auto": str(cfg.get("latest_driver") or ""),
+        "latest_driver_checked_at": str(cfg.get("latest_driver_checked_at") or ""),
+        "latest_driver_error": str(cfg.get("latest_driver_error") or ""),
+        "latest_driver_rows_count": int(cfg.get("latest_driver_rows_count") or 0),
+        "latest_driver_refresh_pending": _refresh_pending(cfg),
     }
+
+
+def _refresh_pending(cfg: dict) -> bool:
+    """A page pressed "Refresh now" and the server has not fetched since."""
+    req = str(cfg.get("latest_driver_refresh_requested_at") or "")
+    att = str(cfg.get("latest_driver_last_attempt_at") or "")
+    return bool(req) and (not att or req > att)
 
 
 _CLI_STATUS_MAX_AGE_S = 24 * 3600
@@ -534,10 +561,43 @@ def run_requests() -> int:
     return ran
 
 
+def maybe_refresh_latest_driver(now: Optional[datetime] = None) -> bool:
+    """Server only: re-read the latest released driver from the PAE Wi-Fi
+    Dashboard when it is due (daily, after a failure, or when a page pressed
+    "Refresh now"). Runs in the scheduler thread between requests and the
+    round, holding the orchestrator's run lock: the fetch opens the same SSO
+    Chrome profile as a round, which cannot be open twice. "Run now" answers
+    "a run is already in progress" during the ~30-60 s fetch. Never raises;
+    on failure the stored value is kept (driver_release.refresh_latest_driver).
+    Returns True when a fetch was attempted."""
+    if not can_schedule_here():
+        return False
+    try:
+        from configs.global_configs import app_config
+        if getattr(app_config, "driver_manager", None) is None:
+            return False          # no Chrome in this process (CLI, tests)
+        store = _store()
+        if not is_refresh_due(store.load_config(), now):
+            return False
+        from .orchestrator import _run_lock
+        if not _run_lock.acquire(blocking=False):
+            return False          # a UI run is active: next tick
+        try:
+            refresh_latest_driver(store)
+        finally:
+            _run_lock.release()
+        return True
+    except Exception as e:
+        print(f"[handsfree.scheduler] latest driver refresh failed: {e}")
+        return False
+
+
 def _tick(now: Optional[datetime] = None) -> bool:
-    """One scheduler tick: serve clients' case requests, then run the due
-    round when this server owns the schedule. Returns True when anything ran."""
+    """One scheduler tick: serve clients' case requests, refresh the latest
+    released driver when due, then run the due round when this server owns
+    the schedule. Returns True when anything ran."""
     ran = run_requests() > 0
+    maybe_refresh_latest_driver(now)       # housekeeping: not a "run"
     cfg = _store().load_config()
     if not (cfg.get("auto_check_enabled") and cfg.get("auto_next_run_at")
             and can_schedule_here() and _runs_here(cfg)):

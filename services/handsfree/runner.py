@@ -36,6 +36,8 @@ from dataclasses import dataclass, field, asdict
 from typing import Callable, Optional
 
 from . import bsod as _bsod
+from .driver_release import (branch_of, compare_branch, effective_latest_driver,
+                             format_version, parse_version, read_capture_driver_version)
 
 # Cap agent runs per case: the UI chains one run per detected incident time;
 # headless we keep the two most relevant to bound cost.
@@ -257,6 +259,66 @@ def _resolve_issue_domain(reader_domain: str, subcategory: str,
     return FALLBACK_DOMAIN
 
 
+_DRIVER_SOURCE_LABELS = {"system_info": "system_info.txt of the analysed WRT capture",
+                         "env_detail": "IPS Environment Details 'Found In Build'",
+                         "reader": "driver version stated in the case thread"}
+
+
+def _env_found_in_build(env: dict) -> str:
+    """The driver version in the Environment Details form's "Found In Build"
+    answer (x.y.z.w, normalised), "" when absent or not a version."""
+    for q, a in (env or {}).items():
+        if re.search(r"found\s*in\s*build", str(q), re.IGNORECASE):
+            v = parse_version(a, min_parts=2)
+            if v:
+                return format_version(v)
+    return ""
+
+
+def _explain_driver_version(capture: str, env_version: str, reader_version: str,
+                            latest: str, latest_source: str) -> dict:
+    """The driver check with its working shown (live panel): the candidates
+    in priority order (capture system_info.txt > IPS form > thread), the
+    winner, the latest released driver and compare_branch's verdict.
+    newer_mentioned: a lower-priority candidate on a NEWER branch than the
+    winner (e.g. the thread says a newer driver was tried) - flagged for the
+    reviewer, not acted on."""
+    cands = []
+    for source, raw in (("system_info", capture), ("env_detail", env_version),
+                        ("reader", reader_version)):
+        v = parse_version(raw, min_parts=2)
+        cands.append({"source": source, "label": _DRIVER_SOURCE_LABELS[source],
+                      "raw": str(raw or ""), "resolved": format_version(v)})
+    winner = next((c for c in cands if c["resolved"]), None)
+    customer = winner["resolved"] if winner else ""
+    result = compare_branch(customer, latest)
+    newer = ""
+    if winner:
+        wb = branch_of(parse_version(customer))
+        for c in cands:
+            if c is winner or not c["resolved"]:
+                continue
+            b = branch_of(parse_version(c["resolved"]))
+            if b and b > wb:
+                newer = c["resolved"]
+                break
+    label = winner["label"] if winner else "no source"
+    if result == "skipped":
+        summary = (f"no latest release known yet (customer driver {customer or 'unknown'}) "
+                   "- check skipped")
+    elif result == "unknown":
+        summary = (f"customer driver unknown (no system_info.txt, no Found In Build, none "
+                   f"stated in the thread) vs latest release {latest} - the draft asks for it")
+    else:
+        summary = f"driver {customer} ({label}) vs latest release {latest} - {result}"
+    return {"candidates": cands, "winner": customer,
+            "winner_source": winner["source"] if winner else "", "winner_label": label,
+            "latest": latest, "latest_source": latest_source, "result": result,
+            "newer_mentioned": newer, "summary": summary,
+            "rule": ("latest = highest PV / PV-HF release up to the current work week; "
+                     "same branch = same first two numbers")}
+
+
 def _env_repro_steps(env: dict) -> str:
     """Non-trivial 'Steps to reproduce' answer from the Environment Details
     form, or '' — a filled form field means repro steps are NOT missing."""
@@ -370,6 +432,15 @@ class CaseAnalysis:
                                                        #   the issue time (no WRT pipeline)
     bsod: dict = field(default_factory=dict)           # dumps, dumps_path, email, submitted,
                                                        #   status/detail, skipped, previous
+    # The driver the failure was seen on vs the latest released driver
+    # (driver_release.py): the customer-facing drafts ask an "outdated"
+    # customer to validate on latest_driver.
+    driver_version: str = ""                           # best-known customer driver x.y.z.w
+    driver_version_source: str = ""                    # system_info | env_detail | reader | ""
+    latest_driver: str = ""                            # latest released driver at run time
+    latest_driver_source: str = ""                     # manual | report | ""
+    driver_check: str = ""                             # ok | outdated | unknown | skipped
+    driver_decision: dict = field(default_factory=dict)
     # How the run decided (live panel): the issue category, the issue time,
     # the archive + capture — candidates and the rule that won, not just the
     # winners. checklist_decision is filled after the run by checklist.build_fills.
@@ -585,6 +656,12 @@ def live_fields(a: "CaseAnalysis") -> dict:
                             "descriptions": [str(x)[:900] for x in (i.get("descriptions") or [])]}
                            for i in (a.comment_images or []) if isinstance(i, dict)][:10],
         "domain_decision": dict(a.domain_decision or {}),
+        "driver_version": a.driver_version,
+        "driver_version_source": a.driver_version_source,
+        "latest_driver": a.latest_driver,
+        "latest_driver_source": a.latest_driver_source,
+        "driver_check": a.driver_check,
+        "driver_decision": dict(a.driver_decision or {}),
         "time_decision": dict(a.time_decision or {}),
         "pick_decision": dict(a.pick_decision or {}),
         "checklist_decision": dict(a.checklist_decision or {}),
@@ -689,6 +766,36 @@ class HandsfreeRunner:
                 return True
 
         return _Ctx()
+
+    # ---- driver under test vs the latest released driver ----
+    def _settle_driver_version(self, analysis: CaseAnalysis, quiet: bool = False) -> None:
+        """The driver the failure was seen on (the capture's system_info.txt,
+        then the IPS form's Found In Build, then the thread) against the
+        latest released driver from the shared config. Fills driver_version /
+        driver_version_source / latest_driver / latest_driver_source /
+        driver_check and the decision record for the live panel. Idempotent
+        (run again once the capture is decoded); never raises."""
+        try:
+            capture = read_capture_driver_version(analysis.log_path or analysis.etl_path)
+        except Exception:
+            capture = ""
+        env_v = _env_found_in_build(analysis.env_detail or {})
+        reader_v = format_version(parse_version(
+            (analysis.case_reader or {}).get("driver_version"), min_parts=4))
+        try:
+            latest, latest_src = effective_latest_driver(_bsod.handsfree_config())
+        except Exception as e:
+            print(f"[handsfree.runner] latest driver config unreadable: {e}")
+            latest, latest_src = "", ""
+        dec = _explain_driver_version(capture, env_v, reader_v, latest, latest_src)
+        analysis.driver_version = dec["winner"]
+        analysis.driver_version_source = dec["winner_source"]
+        analysis.latest_driver = latest
+        analysis.latest_driver_source = latest_src
+        analysis.driver_check = dec["result"]
+        analysis.driver_decision = dec
+        if not quiet:
+            self.progress("driver_check", dec["summary"])
 
     # ------------------------------------------------------------------
     def analyze_case(self, case_nbr: str, *, max_steps: int = MAX_AGENT_STEPS,
@@ -921,6 +1028,11 @@ class HandsfreeRunner:
                       f"(from the {analysis.domain_decision['winner_label']})"
                       + (f", sub-category {analysis.issue_subcategory}"
                          if analysis.issue_subcategory else ""))
+        # Charles (2026-11-09): the driver the failure was seen on vs the
+        # latest released driver - before every early exit, so each request
+        # draft can ask an outdated customer to validate on the latest release.
+        with self._stage(analysis, "driver_check"):
+            self._settle_driver_version(analysis)
         # Charles (2026-10-20): alongside the analysis, ask the Echo knowledge
         # base what to request from the customer next / the next debug steps
         # for this kind of issue — in the background, shown in its own panel.
@@ -1366,6 +1478,10 @@ class HandsfreeRunner:
                     f"ETL decode did not produce {os.path.basename(log_path)}")
             return analysis
         analysis.log_path = log_path
+        # The decoded capture's system_info.txt names the driver under test:
+        # it outranks the form and the thread, so settle the driver check again.
+        self._settle_driver_version(analysis, quiet=True)
+        self._snap_analysis(analysis)
 
         # -- 9b. does the log actually cover the reported issue time? ----------
         # e.g. case 01025350: issue stated at 17:14, capture covered

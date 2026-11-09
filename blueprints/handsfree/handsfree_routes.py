@@ -489,9 +489,38 @@ def config():
     body = request.get_json(silent=True) or {}
     allowed = {"owner_name", "post_backend", "max_cases_per_run",
                "dry_run", "rest_field_map", "ui_locators", "trial_mode",
-               "email_reply_all", "email_display_draft", "auto_post_first_response"}
+               "email_reply_all", "email_display_draft", "auto_post_first_response",
+               "latest_driver_manual"}
     updates = {k: v for k, v in body.items() if k in allowed}
+    if "latest_driver_manual" in updates:
+        # Settings override of the latest released driver: empty (use the
+        # report) or a full x.y.z.w, stored normalised.
+        from services.handsfree.driver_release import format_version, parse_version
+        raw = str(updates["latest_driver_manual"] or "").strip()
+        if raw:
+            v = parse_version(raw, min_parts=4)
+            if not v:
+                return jsonify({"ok": False,
+                                "error": f"latest driver must look like 24.90.0.3 (got {raw!r})"}), 400
+            updates["latest_driver_manual"] = format_version(v)
+        else:
+            updates["latest_driver_manual"] = ""
     return jsonify(store.save_config(updates))
+
+
+@handsfree_bp.route("/latest_driver/refresh", methods=["POST"])
+def latest_driver_refresh():
+    """Ask the Beacon server to re-read the PAE Wi-Fi Dashboard now. Works
+    from any PC: the request is a timestamp in the shared config that the
+    server's next scheduler tick (<= 30 s) honours; no Chrome runs here."""
+    from datetime import datetime
+    from services.handsfree import scheduler
+    store = _store()
+    store.save_config({"latest_driver_refresh_requested_at":
+                       datetime.now().astimezone().isoformat(timespec="seconds")})
+    if scheduler.can_schedule_here():
+        scheduler.ensure_started()
+    return jsonify({"ok": True, **scheduler.status()})
 
 
 @handsfree_bp.route("/discover_fields", methods=["POST"])

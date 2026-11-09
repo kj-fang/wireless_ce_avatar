@@ -400,6 +400,11 @@
             <option value="auto">auto</option>
           </select>
         </label>
+        <label title="The latest released Wi-Fi driver the customer drafts ask an outdated customer to validate on. Empty = the value the Beacon server reads from the PAE Wi-Fi Dashboard once a day; a full version here (e.g. 24.90.0.3) overrides it for everyone.">Latest driver (manual override):
+          <input type="text" id="cfg-latest-driver" style="width: 120px;" placeholder="empty = use the report">
+        </label>
+        <span class="status-line" id="cfg-latest-driver-auto" title="What the Beacon server last read from the PAE Wi-Fi Dashboard (PV / PV-HF rows, highest version up to this work week)"></span>
+        <button class="ghost" id="latest-driver-refresh-btn" onclick="refreshLatestDriver()" title="Asks the Beacon server to re-read the PAE Wi-Fi Dashboard now (within about 30 seconds)">Refresh now</button>
         <button class="primary" onclick="saveConfig()">Save settings</button>
         <span class="status-line" id="cfg-status"></span>
       </div>
@@ -715,6 +720,9 @@
     document.getElementById('cfg-auto-post-fr').checked = !!cfg.auto_post_first_response;
     document.getElementById('cfg-backend').value = cfg.post_backend || 'auto';
     document.getElementById('cfg-trial').checked = !!cfg.trial_mode;
+    const ldEl = document.getElementById('cfg-latest-driver');
+    if (document.activeElement !== ldEl) ldEl.value = cfg.latest_driver_manual || '';
+    document.getElementById('cfg-latest-driver-auto').textContent = latestDriverAutoText(cfg);
     applyTrialUi();
     document.getElementById('cfg-field-map').textContent =
       JSON.stringify(cfg.rest_field_map || {}, null, 2);
@@ -929,7 +937,52 @@
       auto_post_first_response: document.getElementById('cfg-auto-post-fr').checked,
       post_backend: document.getElementById('cfg-backend').value,
       trial_mode: document.getElementById('cfg-trial').checked,
+      latest_driver_manual: document.getElementById('cfg-latest-driver').value.trim(),
     };
+  }
+
+  // The report side of the latest-driver setting, for the Settings line.
+  function latestDriverAutoText(cfg) {
+    const bits = [];
+    if (cfg.latest_driver) {
+      bits.push('report: ' + cfg.latest_driver
+        + (cfg.latest_driver_checked_at ? ' · checked ' + cfg.latest_driver_checked_at.slice(0, 16).replace('T', ' ') : '')
+        + (cfg.latest_driver_rows_count ? ' · ' + cfg.latest_driver_rows_count + ' rows' : ''));
+    } else {
+      bits.push('report: not read yet');
+    }
+    if (cfg.latest_driver_error) bits.push('last fetch failed: ' + cfg.latest_driver_error);
+    if (cfg.latest_driver_manual) bits.push('override ' + cfg.latest_driver_manual + ' is in effect');
+    return bits.join(' · ');
+  }
+
+  // "Refresh now": ask the Beacon server to re-read the PAE Wi-Fi Dashboard,
+  // then follow the shared config until the server has fetched (<= 2 min).
+  async function refreshLatestDriver() {
+    const btn = document.getElementById('latest-driver-refresh-btn');
+    const out = document.getElementById('cfg-latest-driver-auto');
+    btn.disabled = true;
+    try {
+      const before = await (await fetch('/handsfree/config')).json();
+      const r = await fetch('/handsfree/latest_driver/refresh', {method: 'POST'});
+      const res = await r.json();
+      if (!r.ok || res.ok === false) throw new Error(res.error || ('HTTP ' + r.status));
+      out.textContent = 'refresh requested — the Beacon server reads the dashboard on its next tick…';
+      const t0 = Date.now();
+      while (Date.now() - t0 < 120000) {
+        await new Promise(res => setTimeout(res, 5000));
+        const cfg = await (await fetch('/handsfree/config')).json();
+        if ((cfg.latest_driver_last_attempt_at || '') !== (before.latest_driver_last_attempt_at || '')) {
+          fillConfigForm(cfg);
+          return;
+        }
+      }
+      out.textContent = 'no fetch yet — is the Beacon server running? ' + latestDriverAutoText(before);
+    } catch (e) {
+      out.textContent = 'refresh failed: ' + e;
+    } finally {
+      btn.disabled = false;
+    }
   }
 
   async function saveConfig() {
@@ -942,6 +995,7 @@
         body: JSON.stringify(body),
       });
       const cfg = await r.json();
+      if (!r.ok || cfg.ok === false) throw new Error(cfg.error || ('HTTP ' + r.status));
       fillConfigForm(cfg);
       status.textContent = 'saved';
       status.className = 'status-line done';
@@ -1025,6 +1079,8 @@
       autoEnabled ? 'Stop automatic analysis' : 'Start automatic analysis';
     document.getElementById('auto-toggle-btn').className = autoEnabled ? 'danger' : 'primary';
     const bits = [];
+    if (a.latest_driver) bits.push('latest driver ' + a.latest_driver + ' (' + (a.latest_driver_source || 'report') + ')');
+    else if (a.latest_driver_error) bits.push('latest driver unknown (' + a.latest_driver_error + ')');
     const owners = a.owners || [];
     const fileOwners = a.owners_file_owners || [];
     const srcText = a.source === 'list_view'
@@ -1826,6 +1882,7 @@
     ['read_case_history', 'Read the IPS comment thread'],
     ['check_case_info', 'Check the case information'],
     ['category', 'Identify the issue category & required logs'],
+    ['driver_check', 'Check the driver version vs the latest release'],
   ];
   const LIVE_WIFI = [
     ['pick_zip', 'Pick the log archive'], ['download', 'Download the archive'],
@@ -1894,6 +1951,8 @@
       case 'check_case_info':
         if (ev.status !== 'done') return ev.detail || '';
         return (d.missing_info || []).length ? 'missing: ' + d.missing_info.join(', ') : 'all case information present';
+      case 'driver_check':
+        return (d.driver_decision || {}).summary || ev.detail || '';
       case 'read_images': {
         const imgs = d.comment_images || [];
         const n = imgs.reduce((a, i) => a + (i.descriptions || []).length, 0);
@@ -2124,6 +2183,31 @@
     if (a < 60) return sign + a + ' s';
     if (a < 3600) return sign + Math.round(a / 60) + ' min';
     return sign + Math.floor(a / 3600) + ' h ' + String(Math.round((a % 3600) / 60)).padStart(2, '0') + ' min';
+  }
+
+  // Under "Check the driver version vs the latest release": the candidates
+  // for the customer's driver in priority order, the latest release and the
+  // verdict the drafts act on.
+  function liveDriverHtml(d, status) {
+    const dd = d.driver_decision || {};
+    if (status === 'pending' || status === 'skipped' || !dd.result) return '';
+    let html = `<div class="lp-live">`;
+    html += `<div class="lp-cap">Customer driver — candidates in priority order, the first known one wins</div>`;
+    (dd.candidates || []).forEach(c => {
+      const win = c.resolved && c.source === dd.winner_source;
+      html += `<div class="lp-cand ${win ? 'win' : ''}"><span>${win ? '➜' : '·'}</span>` +
+        `<span>${esc(c.resolved || '—')}</span><span class="src">${esc(c.label || c.source)}` +
+        (c.raw && c.raw !== c.resolved ? ': “' + esc(c.raw) + '”' : (c.raw ? '' : ': nothing')) + `</span></div>`;
+    });
+    const verdict = dd.result === 'ok' ? 'on the latest released branch — nothing to ask'
+      : dd.result === 'outdated' ? 'older branch — the draft asks for validation on ' + (dd.latest || '?')
+      : dd.result === 'unknown' ? 'unknown — the draft asks for the version and for validation on ' + (dd.latest || '?')
+      : 'no latest release known yet — check skipped (Settings → latest driver)';
+    html += `<div class="lp-time-sub" style="margin-top: 6px;">latest release: <b style="color:#fff;">${esc(dd.latest || '—')}</b>` +
+      (dd.latest_source ? ' (' + esc(dd.latest_source === 'manual' ? 'Settings override' : 'PAE Wi-Fi Dashboard') + ')' : '') + `</div>`;
+    html += `<div class="lp-time-sub">verdict: <b style="color:#fff;">${esc(dd.result)}</b> — ${esc(verdict)}</div>`;
+    if (dd.newer_mentioned) html += `<div class="lp-time-sub">the thread also mentions ${esc(dd.newer_mentioned)} — check whether a newer driver was already validated</div>`;
+    return html + `</div>`;
   }
 
   function liveCategoryHtml(d, status) {
@@ -2429,6 +2513,7 @@
       `<span class="lp-lab">${esc(x.label)}</span><span class="lp-dur">${esc(x.dur)}</span>` +
       (x.detail && x.status !== 'pending' ? `<span class="lp-det">${esc(x.detail)}</span>` : '') +
       (x.key === 'category' ? liveCategoryHtml(d, x.status) : '') +
+      (x.key === 'driver_check' ? liveDriverHtml(d, x.status) : '') +
       (x.key === 'read_images' ? liveImagesHtml(d, x.status) : '') +
       (x.key === 'read_case_history' ? liveTimesFoundHtml(d, x.status) : '') +
       (x.key === 'issue_time' ? liveTimePlacementHtml(d, x.status) : '') +

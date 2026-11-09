@@ -123,11 +123,51 @@ def _now_iso() -> str:
 _SUMMARY_VERSION = 2
 
 
+_SHARE_RETRIES = 5          # a reader on another PC holds the file open for ~1 s
+_SHARE_RETRY_DELAY_S = 0.2
+
+
 def _atomic_write(path: Path, text: str) -> None:
     # Unique temp name: two machines replacing the same file must not share a temp.
     tmp = path.with_name(f".{path.name}.{uuid.uuid4().hex[:8]}.tmp")
     tmp.write_text(text, encoding="utf-8")
-    os.replace(tmp, path)
+    # Windows refuses to replace a file another process has open (a client's
+    # page reading it over SMB: WinError 5/32). Such a reader is gone within
+    # a second, so retry briefly; the temp file never stays behind.
+    for attempt in range(_SHARE_RETRIES):
+        try:
+            os.replace(tmp, path)
+            return
+        except PermissionError:
+            if attempt == _SHARE_RETRIES - 1:
+                tmp.unlink(missing_ok=True)
+                raise
+            time.sleep(_SHARE_RETRY_DELAY_S)
+
+
+def _unlink_retry(path: Path) -> bool:
+    """Delete a file another PC may be reading right now. True when it is
+    gone; False when it was still open after the retries (left behind — the
+    readers of request records treat such a leftover as stale)."""
+    for attempt in range(_SHARE_RETRIES):
+        try:
+            path.unlink()
+            return True
+        except FileNotFoundError:
+            return True
+        except PermissionError:
+            if attempt == _SHARE_RETRIES - 1:
+                return False
+            time.sleep(_SHARE_RETRY_DELAY_S)
+    return False
+
+
+def _ts(iso: str) -> float:
+    """POSIX seconds of an ISO timestamp from a request record, 0.0 when empty / unreadable."""
+    try:
+        return datetime.fromisoformat(str(iso)).timestamp() if iso else 0.0
+    except ValueError:
+        return 0.0
 
 
 def _safe_case(case_nbr: str) -> str:
@@ -338,9 +378,17 @@ class HandsfreeStore:
     #   requests/<case>.pending.json  written by the client
     #   requests/<case>.running.json  the server claimed it (atomic rename)
     #   requests/<case>.done.json     finished: ok / error, kept for a week
+    # A running record is only believed while it is live: a done record for
+    # the case written after it started means the server could not delete
+    # it (a client was reading it at that moment), and no result after
+    # REQUEST_STALE_RUNNING_S means the server stopped mid-run. Either way
+    # the readers drop it, so the page never shows "running" forever and the
+    # case can be requested again.
     # ------------------------------------------------------------------
     REQUEST_STATES = ("pending", "running", "done")
     REQUEST_KEEP_DONE_S = 7 * 24 * 3600
+    REQUEST_STALE_RUNNING_S = 2 * 3600       # the server gives a run one hour
+    REQUEST_LOST_ERROR = "the server stopped while running it (no result after 2 hours)"
 
     def _request_file(self, case_nbr: str, state: str) -> Path:
         return self.requests_dir / f"{_safe_case(case_nbr)}.{state}.json"
@@ -351,30 +399,50 @@ class HandsfreeStore:
         except (OSError, ValueError):
             return None
 
+    def _running_is_live(self, running: dict, done: Optional[dict] = None,
+                         pending: Optional[dict] = None) -> bool:
+        """A running record counts while no done record (the run finished)
+        and no pending record (the case was asked for again) of the case was
+        written after it started, and it is younger than REQUEST_STALE_RUNNING_S."""
+        started = _ts(running.get("started_at"))
+        if done and _ts(done.get("finished_at")) >= started:
+            return False
+        if pending and _ts(pending.get("requested_at")) >= started:
+            return False
+        return time.time() - started < self.REQUEST_STALE_RUNNING_S if started else True
+
     def request_case(self, case_nbr: str, requested_by: str = "") -> dict:
-        """Queue one case for the server. A case already running on the
-        server is not queued twice: its running record comes back instead."""
-        running = self._read_request(self._request_file(case_nbr, "running"))
+        """Queue one case for the server. A case really running on the
+        server is not queued twice: its running record comes back instead.
+        A stale running record (see above) is dropped and the case queued."""
+        running_path = self._request_file(case_nbr, "running")
+        running = self._read_request(running_path)
         if running:
-            return running
+            if self._running_is_live(running, self._read_request(self._request_file(case_nbr, "done")),
+                                     self._read_request(self._request_file(case_nbr, "pending"))):
+                return running
+            _unlink_retry(running_path)
         req = {"case_nbr": case_nbr, "requested_by": requested_by or "",
                "requested_at": datetime.now(timezone.utc).isoformat(timespec="seconds"),
                "status": "pending", "host": "", "started_at": "", "finished_at": "",
                "ok": None, "error": "", "draft_id": ""}
-        self._request_file(case_nbr, "done").unlink(missing_ok=True)
+        _unlink_retry(self._request_file(case_nbr, "done"))
         _atomic_write(self._request_file(case_nbr, "pending"), json.dumps(req, indent=2))
         return req
 
     def claim_request(self, case_nbr: str, host: str) -> Optional[dict]:
         """pending -> running, by atomic rename: of two servers only one
-        gets it. None when it is gone (taken, or withdrawn)."""
+        gets it (the loser's source is gone). None when it is gone (taken,
+        or withdrawn), or when a stale running file is still held open by a
+        reader — the next tick tries again. A stale running file (a pending
+        record is newer than it) is overwritten by the rename."""
         pending, running = (self._request_file(case_nbr, "pending"),
                             self._request_file(case_nbr, "running"))
         req = self._read_request(pending)
         if not req:
             return None
         try:
-            os.rename(pending, running)
+            os.replace(pending, running)
         except OSError:
             return None
         req.update(status="running", host=host,
@@ -401,13 +469,19 @@ class HandsfreeStore:
         req.update(status="done", ok=bool(ok), error=error or "", draft_id=draft_id or "",
                    finished_at=datetime.now(timezone.utc).isoformat(timespec="seconds"))
         _atomic_write(self._request_file(case_nbr, "done"), json.dumps(req, indent=2))
-        running.unlink(missing_ok=True)
+        if not _unlink_retry(running):
+            # A client's page is reading it over the share right now. The done
+            # record is written, so every reader treats this leftover as stale
+            # and the next listing removes it; the result is never lost.
+            print(f"[handsfree.queue] request {case_nbr}: running record still open by a "
+                  "reader, left for the next listing to remove")
         return req
 
     def list_requests(self) -> list[dict]:
         """Every request on the share: pending and running first, then the
         finished ones of the last week, newest first within each state."""
         out: list[dict] = []
+        by_case: dict[str, dict[str, dict]] = {}
         cutoff = time.time() - self.REQUEST_KEEP_DONE_S
         for path in self.requests_dir.glob("*.json"):
             parts = path.name.split(".")
@@ -419,7 +493,28 @@ class HandsfreeStore:
             req = self._read_request(path)
             if req:
                 req["status"] = parts[1]
-                out.append(req)
+                by_case.setdefault(parts[0], {})[parts[1]] = req
+        for safe, recs in by_case.items():
+            running = recs.get("running")
+            if running and not self._running_is_live(running, recs.get("done"), recs.get("pending")):
+                # Stale (see the class notes). Finished or asked for again:
+                # the leftover of a delete that failed, the done / pending
+                # record already tells the story. Never finished: the server
+                # stopped mid-run — record that as the result so the
+                # requester sees it instead of "running".
+                stale = self.requests_dir / f"{safe}.running.json"
+                if not recs.get("done") and not recs.get("pending"):
+                    lost = dict(running, status="done", ok=False, error=self.REQUEST_LOST_ERROR,
+                                finished_at=datetime.now(timezone.utc).isoformat(timespec="seconds"))
+                    try:
+                        _atomic_write(self.requests_dir / f"{safe}.done.json", json.dumps(lost, indent=2))
+                        recs["done"] = lost
+                    except OSError:
+                        pass
+                if recs.get("done") or recs.get("pending"):
+                    _unlink_retry(stale)
+                    recs.pop("running")
+            out.extend(recs.values())
         order = {"running": 0, "pending": 1, "done": 2}
         out.sort(key=lambda r: (order.get(r["status"], 3),
                                 -(float(datetime.fromisoformat(r["requested_at"]).timestamp())

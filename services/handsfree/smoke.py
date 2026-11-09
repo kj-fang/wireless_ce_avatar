@@ -3924,6 +3924,77 @@ def smoke_case_requests(tmp: Path) -> None:
         check("S23.a3 finished requests older than a week are dropped from the listing and the share",
               all(r["case_nbr"] != "01000099" for r in store.list_requests()) and not old.exists())
 
+        # a4) the server finishes while a client's page is reading the running record
+        #     (Windows: the delete fails) — what left 00997200 "running" forever on 6 Nov 2026
+        import threading as _thr
+        from . import queue as _queue
+        store.request_case("01000021", requested_by="YI-YUN CHIEN")
+        store.claim_request("01000021", "srv-a")
+        held = open(store._request_file("01000021", "running"), "r", encoding="utf-8")
+        try:
+            fin = store.finish_request("01000021", ok=True, draft_id="01000021__x")
+            raised = ""
+        except Exception as e:                        # the old code: PermissionError out of the tick
+            fin, raised = None, f"{type(e).__name__}: {e}"
+        leftover = store._request_file("01000021", "running").exists()
+        listed_open = [(r["status"], r.get("ok")) for r in store.list_requests()
+                       if r["case_nbr"] == "01000021"]
+        re_req_open = store.request_case("01000021", requested_by="YI-YUN CHIEN")
+        held.close()
+        listed = [(r["status"], r.get("ok")) for r in store.list_requests() if r["case_nbr"] == "01000021"]
+        check("S23.a4 a running record the server could not delete (a reader held it open) is stale: "
+              "finish_request does not raise, the listing shows the done result only, and the case "
+              "can be requested again",
+              fin is not None and raised == "" and fin["ok"] is True and leftover
+              and listed_open == [("done", True)]
+              and re_req_open["status"] == "pending"
+              and listed == [("pending", None)]
+              and not store._request_file("01000021", "running").exists(),
+              f"raised={raised!r} leftover={leftover} open={listed_open} re={re_req_open.get('status')} after={listed}")
+        store._request_file("01000021", "pending").unlink()
+
+        # a5) a running record with no result for over two hours: the server stopped mid-run
+        store.request_case("01000022", requested_by="Bob")
+        store.claim_request("01000022", "srv-a")
+        lost_path = store._request_file("01000022", "running")
+        rec = json.loads(lost_path.read_text(encoding="utf-8"))
+        rec["started_at"] = "2026-01-01T00:00:00+00:00"
+        lost_path.write_text(json.dumps(rec), encoding="utf-8")
+        lost = [r for r in store.list_requests() if r["case_nbr"] == "01000022"]
+        check("S23.a5 a running record older than two hours without a result becomes a failed done "
+              "record (the requester sees why) and its running file goes",
+              [(r["status"], r.get("ok")) for r in lost] == [("done", False)]
+              and lost[0]["error"] == store.REQUEST_LOST_ERROR and lost[0]["host"] == "srv-a"
+              and not lost_path.exists() and store._request_file("01000022", "done").exists(),
+              str(lost))
+        live = store.request_case("01000023", requested_by="Cara")
+        store.claim_request("01000023", "srv-a")
+        same = store.request_case("01000023", requested_by="Dan")
+        check("S23.a6 a live running record (fresh, no result yet) is still honoured: not queued twice",
+              same["status"] == "running" and same["requested_by"] == "Cara"
+              and [r["status"] for r in store.list_requests() if r["case_nbr"] == "01000023"] == ["running"],
+              str(same))
+        store._request_file("01000023", "running").unlink()
+        store._request_file("01000022", "done").unlink()
+
+        # a7) _atomic_write: a reader holding the target open for a moment no longer fails the write
+        target = store.requests_dir / "retry_probe.json"
+        target.write_text("old", encoding="utf-8")
+        reader = open(target, "r", encoding="utf-8")
+        _thr.Timer(0.5, reader.close).start()
+        try:
+            _queue._atomic_write(target, "new")
+            wrote = target.read_text(encoding="utf-8")
+        except Exception as e:
+            wrote = f"{type(e).__name__}: {e}"
+        finally:
+            if not reader.closed:
+                reader.close()
+        check("S23.a7 _atomic_write retries while another process has the target open, "
+              "and leaves no temp file behind",
+              wrote == "new" and not list(store.requests_dir.glob(".retry_probe.json.*.tmp")), wrote)
+        target.unlink()
+
         # b) the server serves pending requests on its tick, through the single-case run
         app_config.handsfree_role = "server"
         runs: list = []

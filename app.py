@@ -285,6 +285,22 @@ if __name__ == "__main__":
     # short-lived SendTo instances don't overwrite the .lnk with a new token)
     existing = check_already_running()
     if existing:
+        if handsfree_role == 'server':
+            # The instance that is running must BE a server: opening a client's
+            # page and exiting would leave the requests and rounds unserved.
+            from services.handsfree.scheduler import role_mismatch, running_role
+            problem = role_mismatch('server', running_role(existing.get('url') or ''),
+                                    existing.get('url') or '')
+            if problem:
+                print(f"❌ {problem}", file=sys.stderr)
+                if getattr(sys, 'frozen', False):
+                    # A packaged build has no console to read that on.
+                    try:
+                        import ctypes
+                        ctypes.windll.user32.MessageBoxW(0, problem, "Beacon Server", 0x30)
+                    except Exception:
+                        pass
+                sys.exit(1)
         print(f"✅ Avatar is already running at {existing.get('url')} — opening in browser.")
         if startup_path and startup_path != '/':
             # This process was launched by File Explorer (SendTo) so it has

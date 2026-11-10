@@ -795,8 +795,9 @@ class TestHandsfreeChatbotHandoff(BaseTestCase):
         Input: POST /handsfree/chatbot_handoff for a draft whose analysis says
         wifi_or_bt "bt" (its decoded log is an HCI log).
         Expected: 200; the URL is /bt_chatbot/ with auto_run and the issue
-        time, mode "bt", and the Wi-Fi chatbot's process-wide last-analysed
-        log is left alone.
+        time, mode "bt", and the last-analysed log is set to the HCI log:
+        the chatbot page pre-fills its log box from it and the automatic
+        analysis reads that box.
         """
         # Act
         resp = self._handoff(mock_store, "bt")
@@ -807,7 +808,7 @@ class TestHandsfreeChatbotHandoff(BaseTestCase):
         self.assertTrue(body["url"].startswith("/bt_chatbot/?auto_run=analyze_all"))
         self.assertIn("issue_time=2026-10-22", body["url"])
         self.assertEqual(body["mode"], "bt")
-        self.assertIsNone(self.app_config.last_analyzed_log_path)
+        self.assertEqual(self.app_config.last_analyzed_log_path, __file__)
         mock_attach.assert_called_once()
 
     def test_wifi_draft_opens_the_wifi_chatbot(self, mock_store, _mock_log, _mock_attach):

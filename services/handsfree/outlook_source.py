@@ -34,6 +34,7 @@ OL_FOLDER_SENT = 5
 OL_MAIL_ITEM = 43
 STATE_FILE = "email_state.json"
 MAX_BODY_CHARS = 20000          # the case number is near the top anyway
+SCAN_EXAMINE_FACTOR = 20        # items a scan may pass over per mail it may read
 
 _LOCK = threading.Lock()
 
@@ -162,6 +163,26 @@ def mark_processed(root, entry_id: str, case_nbr: str = "", draft_id: str = "",
             entry["complete"] = True
         entry["at"] = time.strftime("%Y-%m-%dT%H:%M:%S")
     update_state(root, _mark)
+
+
+def mark_complete(root, entry_ids) -> None:
+    """Close several mails as a whole in ONE transaction (see closed_ids)."""
+    ids = [str(e) for e in (entry_ids or []) if e]
+    if not ids:
+        return
+
+    def _close(state: dict) -> None:
+        for entry_id in ids:
+            entry = state["processed"].setdefault(entry_id, {"case_nbrs": [], "draft_ids": []})
+            entry["complete"] = True
+    update_state(root, _close)
+
+
+def closed_ids(state: dict) -> set:
+    """The mails nothing is left to do for: skipped ones, and mails whose
+    every case has run. A scan passes over them without reading them."""
+    return {str(k) for k, v in (state.get("processed") or {}).items()
+            if isinstance(v, dict) and v.get("complete")}
 
 
 def is_processed(state: dict, entry_id: str) -> bool:
@@ -318,9 +339,17 @@ class Outlook:
     # -- scan --------------------------------------------------------------
 
     def scan(self, folder_path: str, since: datetime, *, max_items: int = 300,
-             own_email: str = "") -> list[EmailRef]:
+             own_email: str = "", skip_ids=()) -> list[EmailRef]:
         """Mail received since `since` (newest first), own mail skipped, with
-        the IPS case numbers each one names."""
+        the IPS case numbers each one names.
+
+        `max_items` bounds the work of one scan: the mails that are READ
+        (subject + body, the slow part). `skip_ids` are the Outlook ids of
+        mail an earlier round closed for good (closed_ids): they are passed
+        over without being read and without using up the budget. So a busy
+        folder cannot keep an unprocessed mail out of reach behind 300 newer
+        ones that were already handled — each round reaches further down
+        the window until everything in it has been looked at."""
         folder = self.folder(folder_path)
         store_id = str(getattr(folder, "StoreID", "") or "")
         items = folder.Items
@@ -333,9 +362,15 @@ class Outlook:
         except Exception:
             pass                                 # filtered by hand below
         own = (own_email or "").strip().casefold()
+        skip = {str(s) for s in (skip_ids or ())}
         out: list[EmailRef] = []
         count = int(getattr(items, "Count", 0) or 0)
-        for i in range(1, min(count, max_items) + 1):
+        read = 0
+        # Passing over an item is one cheap property read; the ceiling only
+        # guards a folder whose date filter could not be applied.
+        for i in range(1, min(count, max(max_items, 1) * SCAN_EXAMINE_FACTOR) + 1):
+            if read >= max_items:
+                break
             try:
                 item = items.Item(i)
             except Exception:
@@ -345,9 +380,12 @@ class Outlook:
             received = _to_datetime(getattr(item, "ReceivedTime", None))
             if received is not None and received < since.replace(tzinfo=None):
                 continue
+            if skip and str(getattr(item, "EntryID", "") or "") in skip:
+                continue                         # closed in an earlier round
             sender_email = _sender_email(item)
             if own and sender_email.casefold() == own:
                 continue
+            read += 1
             subject = str(getattr(item, "Subject", "") or "")
             try:
                 body = str(getattr(item, "Body", "") or "")[:MAX_BODY_CHARS]

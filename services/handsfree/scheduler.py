@@ -124,6 +124,39 @@ def bundled_role(base: Optional[str] = None) -> str:
     return value if value in ROLES else ""
 
 
+def running_role(instance_url: str, timeout: float = 5.0) -> str:
+    """The Beacon role of the Avatar already running at instance_url, asked
+    over its own /handsfree/auto: "server", "client", or "" when it cannot
+    be asked (an older build without roles, or still starting)."""
+    import json
+    from urllib.request import ProxyHandler, Request, build_opener
+    try:
+        req = Request(str(instance_url).rstrip("/") + "/handsfree/auto")
+        with build_opener(ProxyHandler({})).open(req, timeout=timeout) as r:
+            value = str(json.loads(r.read().decode("utf-8")).get("role") or "").strip().lower()
+    except Exception:
+        return ""
+    return value if value in ROLES else ""
+
+
+def role_mismatch(wanted: str, running: str, instance_url: str = "") -> str:
+    """Why the Avatar that is already running cannot stand in for the one
+    being started, or "" when it can. The role is fixed per process, and
+    only a SERVER serves the clients' case requests and runs the scheduled
+    rounds — so starting the Beacon Server while a client (or an older
+    build) is running must not just open that instance's page and exit:
+    nothing would be served. A client start is content with any instance."""
+    if str(wanted or "").lower() != "server" or str(running or "").lower() == "server":
+        return ""
+    what = (f"as the Beacon {str(running).upper()}" if running
+            else "without the Beacon server role (an older build, or still starting)")
+    where = f" at {instance_url}" if instance_url else ""
+    return (f"Avatar is already running{where} {what}, so the Beacon SERVER was not started: "
+            "case requests and scheduled rounds would stay unserved. The role is fixed per "
+            "process - stop that Avatar first (its tray icon > Exit, or close its console "
+            "window), then start the Beacon Server again.")
+
+
 def can_schedule_here() -> bool:
     """Only the server role may start the schedule (and run its rounds)."""
     return role() == "server"

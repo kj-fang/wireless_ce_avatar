@@ -10,6 +10,13 @@ Intel option → body → Save) and get tuned once against the real page.
 
 On any failure a screenshot + page source snippet is saved under
 <avatarfiles_dir>/handsfree/ui_failures/ for locator debugging.
+
+Whose name the comment carries: the browser opened here must be signed in
+as the SAME IPS user the reviewer was confirmed as over REST. It therefore
+uses the same sign-in — the saved --sso-login Chrome profile when this PC
+has one, else the Windows account — and, before anything is typed, the
+user behind the browser's own Salesforce session is read and compared with
+the reviewer. A different user, or one that cannot be read, posts nothing.
 """
 
 from __future__ import annotations
@@ -52,6 +59,67 @@ def _control_is_checked(el) -> bool:
                ("selected", "is-selected", "is-checked", "checked"))
 
 
+SSO_LOCK_WAIT_S = 120
+_SALESFORCE_API_HOST = "intel.my.salesforce.com"
+
+
+def identity_problem(expected: Optional[dict], actual: Optional[dict]) -> str:
+    """"" when the browser about to post is signed in as the reviewer the
+    approval was confirmed for; otherwise the reason, for the reviewer.
+    Salesforce ids come as 15 or 18 characters: the first 15 identify the
+    user. No expected reviewer (a caller that verified nothing) -> "". Pure."""
+    if not expected:
+        return ""
+    exp_id = str(expected.get("user_id") or "").strip()
+    exp_name = str(expected.get("name") or "").strip()
+    act_id = str((actual or {}).get("user_id") or "").strip()
+    act_name = str((actual or {}).get("name") or "").strip()
+    if not actual or not (act_id or act_name):
+        return ("could not confirm which IPS user the posting browser is signed in as "
+                f"(expected {exp_name or exp_id or 'the reviewer'})")
+    if exp_id and act_id:
+        same = exp_id[:15] == act_id[:15]
+    else:
+        same = bool(exp_name) and exp_name.casefold() == act_name.casefold()
+    if same:
+        return ""
+    return (f"the posting browser is signed in to IPS as {act_name or act_id!r}, not as "
+            f"the reviewer {exp_name or exp_id!r}")
+
+
+def _http_get(url: str, **kwargs):
+    import requests
+    return requests.get(url, **kwargs)
+
+
+def browser_identity(driver) -> Optional[dict]:
+    """The IPS user of the Salesforce session THIS browser holds, read the
+    way the REST client reads its own (the session's sid as a bearer token
+    on /services/oauth2/userinfo). None when the browser has no such session
+    or IPS does not answer. Never raises."""
+    try:
+        from services.case_info_service import CaseService
+        from .ips_client import parse_identity
+        cookies = driver.execute_cdp_cmd("Network.getAllCookies", {}).get("cookies") or []
+        sid = next((c.get("value") for c in cookies
+                    if c.get("name") == "sid"
+                    and str(c.get("domain") or "").lstrip(".") == _SALESFORCE_API_HOST), None)
+        if not sid:
+            return None
+        session = getattr(CaseService, "_vf_session", None)
+        proxies = getattr(session, "proxies", None) or {
+            "http": "http://proxy-dmz.intel.com:911", "https": "http://proxy-dmz.intel.com:912"}
+        resp = _http_get(f"https://{_SALESFORCE_API_HOST}/services/oauth2/userinfo",
+                         headers={"Authorization": f"Bearer {sid}"}, timeout=15, proxies=proxies)
+        if resp.status_code != 200:
+            return None
+        ident = parse_identity(resp.json())
+        return ident if (ident.get("user_id") or ident.get("name")) else None
+    except Exception as e:
+        print(f"[handsfree.ui] browser identity not readable: {type(e).__name__}: {e}")
+        return None
+
+
 class UiCommenter:
     def __init__(self, locators: Optional[dict] = None):
         self.locators = {**DEFAULT_LOCATORS, **(locators or {})}
@@ -73,19 +141,39 @@ class UiCommenter:
         except Exception:
             return ""
 
-    def post_comment(self, case_id: str, body_text: str) -> PostResult:
-        """Open the case page, add a Private-to-Intel comment, save."""
+    def post_comment(self, case_id: str, body_text: str,
+                     expected_user: Optional[dict] = None) -> PostResult:
+        """Open the case page, add a Private-to-Intel comment, save.
+
+        expected_user: the reviewer the approval was confirmed for
+        ({"user_id", "name", ...} from the REST session). When given, the
+        browser's own IPS user is checked against it BEFORE anything is
+        typed, and a mismatch — or an identity that cannot be read — posts
+        nothing (see identity_problem)."""
         from configs.global_configs import app_config
         from selenium.webdriver.common.by import By
         from selenium.webdriver.support.ui import WebDriverWait
         from selenium.webdriver.support import expected_conditions as EC
+        from services.case_info_service import CaseService
 
         loc = self.locators
         wait_secs = int(loc.get("wait_secs", 45))
         driver_manager = app_config.driver_manager
         tmp_dir = os.path.join(app_config.avatarfiles_dir, "_handsfree_ui_tmp")
-        driver = driver_manager.create_download_driver(tmp_dir)
+        # The same sign-in as the REST session: the saved --sso-login profile
+        # when this PC has one (a fresh Chrome would sign in as the Windows
+        # account instead, which can be a different IPS user). A Chrome
+        # profile opens once at a time, hence the lock.
+        profile = CaseService._sso_profile_dir()
+        use_profile = bool(profile) and os.path.isdir(profile)
+        if use_profile and not CaseService._sso_lock.acquire(timeout=SSO_LOCK_WAIT_S):
+            return PostResult(ok=False, backend="ui",
+                              error="the saved IPS sign-in is in use by another sign-in or "
+                                    "scan on this PC - nothing was posted, try again in a moment")
+        driver = None
         try:
+            driver = (driver_manager.create_download_driver(tmp_dir, user_data_dir=profile)
+                      if use_profile else driver_manager.create_download_driver(tmp_dir))
             url = loc["case_url"].format(case_id=case_id)
             driver.get(url)
             wait = WebDriverWait(driver, wait_secs)
@@ -93,6 +181,14 @@ class UiCommenter:
             # _get_vf_session's condition).
             wait.until(lambda d: "force.com" in d.current_url
                        and "login" not in d.current_url)
+
+            if expected_user:
+                problem = identity_problem(expected_user, browser_identity(driver))
+                if problem:
+                    return PostResult(
+                        ok=False, backend="ui",
+                        error=f"{problem} - nothing was posted. Sign in to IPS on this PC as "
+                              "the reviewer ('Sign in to IPS' on the page) and approve again")
 
             tab = wait.until(EC.element_to_be_clickable(
                 (By.XPATH, loc["add_comment_tab"])))
@@ -140,8 +236,11 @@ class UiCommenter:
                               error=f"{type(e).__name__}: {e} (screenshot: {snap})")
         finally:
             try:
-                driver.quit()
-                if driver in driver_manager.all_drivers:
-                    driver_manager.all_drivers.remove(driver)
+                if driver is not None:
+                    driver.quit()
+                    if driver in driver_manager.all_drivers:
+                        driver_manager.all_drivers.remove(driver)
             except Exception:
                 pass
+            if use_profile:
+                CaseService._sso_lock.release()

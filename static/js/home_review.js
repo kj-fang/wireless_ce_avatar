@@ -33,9 +33,18 @@
         });
     }
 
-    async function request(url, method = 'GET', body) {
+    // An approval is not an ordinary request: the server may renew the IPS
+    // sign-in or fall back to the browser-driven post, which takes minutes,
+    // and giving up on the wait does NOT stop it. So it gets its own, longer
+    // wait, and when no answer arrives the outcome is read back from the
+    // queue before anything is unlocked (see approveDraft).
+    const timing = Object.assign({requestMs: 45000, approveMs: 180000, reconcileMs: 120000, pollMs: 5000},
+        window.homeReviewTiming || {});
+    const closedStatuses = ['posted', 'rejected', 'unconfirmed'];
+
+    async function request(url, method = 'GET', body, timeoutMs = timing.requestMs) {
         const controller = new AbortController();
-        const timeout = setTimeout(() => controller.abort(), 45000);
+        const timeout = setTimeout(() => controller.abort(), timeoutMs);
         try {
             const response = await fetch('/handsfree/' + url, {
                 method, signal: controller.signal,
@@ -45,11 +54,32 @@
             });
             const result = await response.json();
             if (!response.ok || result.error || result.ok === false) {
-                throw new Error(result.error || 'Request failed (' + response.status + ')');
+                // The server answered: whatever it was doing is over.
+                const refused = new Error(result.error || 'Request failed (' + response.status + ')');
+                refused.answered = true;
+                throw refused;
             }
             return result;
         } finally {
             clearTimeout(timeout);
+        }
+    }
+
+    // What became of an approval that never answered: 'posted', 'failed'
+    // (with the server's error) or 'unknown' when the draft is still pending
+    // after the wait - the post may be running even then.
+    async function approvalOutcome(draftId) {
+        const deadline = Date.now() + timing.reconcileMs;
+        for (;;) {
+            try {
+                const record = await request('queue/' + encodeURIComponent(draftId));
+                if (record.status === 'posted') return {status: 'posted'};
+                if (record.status === 'post_failed') {
+                    return {status: 'failed', error: record.post_result?.error || 'the post failed'};
+                }
+            } catch (error) { /* the server is busy or briefly unreachable: ask again */ }
+            if (Date.now() >= deadline) return {status: 'unknown'};
+            await new Promise(resolve => setTimeout(resolve, timing.pollMs));
         }
     }
 
@@ -230,7 +260,7 @@
     }
 
     function updateButtons() {
-        const closed = !draft || ['posted', 'rejected'].includes(draft.status);
+        const closed = !draft || closedStatuses.includes(draft.status);
         element('visibility').disabled = busy || closed || !!draft?.trial;
         element('approve').disabled = busy || closed || !!draft?.trial;
         element('save').disabled = busy || closed;
@@ -249,7 +279,7 @@
     // The reviewer's text differs from what the queue holds. A posted or
     // rejected draft is read-only, so it is never dirty.
     function isDirty() {
-        return !!draft && !['posted', 'rejected'].includes(draft.status) &&
+        return !!draft && !closedStatuses.includes(draft.status) &&
             element('draft-text').value !== savedText;
     }
 
@@ -257,7 +287,7 @@
     // The server may normalise it (it prepends the AI marker when missing),
     // so the box and savedText take what was actually stored.
     async function saveDraft() {
-        if (!draft || busy || ['posted', 'rejected'].includes(draft.status)) return false;
+        if (!draft || busy || closedStatuses.includes(draft.status)) return false;
         busy = true;
         updateButtons();
         setPostStatus('Saving edits...');
@@ -381,13 +411,33 @@
         busy = true;
         updateButtons();
         setPostStatus(draft.email ? 'Saving Outlook reply draft...' : 'Posting to IPS. Please wait...', 'posting');
+        const draftId = draft.draft_id;
         try {
-            await request('queue/' + encodeURIComponent(draft.draft_id) + '/approve', 'POST', {
-                draft_plain: element('draft-text').value, visibility,
-            });
+            let outcome = {status: 'posted'};
+            try {
+                await request('queue/' + encodeURIComponent(draftId) + '/approve', 'POST', {
+                    draft_plain: element('draft-text').value, visibility,
+                }, timing.approveMs);
+            } catch (error) {
+                if (error.answered) throw error;       // the server refused: nothing is running
+                // No answer (the wait ran out, the connection dropped): the
+                // server may still be posting. Editing, Reject and a second
+                // Approve stay locked until the queue says how it ended.
+                setPostStatus('No answer yet - the post may still be running. Checking its result...', 'posting');
+                outcome = await approvalOutcome(draftId);
+            }
+            if (outcome.status === 'failed') throw new Error(outcome.error);
             savedText = element('draft-text').value;
-            draft.status = 'posted';
             allowClose = true;
+            if (outcome.status === 'unknown') {
+                // Still pending after the wait: do NOT hand the draft back for
+                // editing or rejection while a post may be in flight.
+                draft.status = 'unconfirmed';
+                setPostStatus('The post did not report back and may still be running. Close this window ' +
+                    'and refresh the queue before doing anything else with this draft.', 'error');
+                return;
+            }
+            draft.status = 'posted';
             setPostStatus(draft.email
                 ? 'Reply draft saved in Outlook; nothing was sent. Please close this window.'
                 : 'Posted to IPS: ' + (visibility === 'external' ? 'visible to the customer' : 'Private to Intel')

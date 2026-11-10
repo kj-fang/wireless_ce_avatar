@@ -749,14 +749,22 @@ def run_email_scan(store: HandsfreeStore, *, folder: str = "Inbox", max_cases: i
         _log_event(f"email-scan ({trigger}): {source}, mail received since "
                    f"{since.strftime('%Y-%m-%d %H:%M')} whose subject says 'IPS <case number>'")
         with ol.Outlook() as app:
-            refs = app.scan(folder or "Inbox", since, own_email=own)
             state = ol.load_state(store.root)
+            # Mail closed for good in an earlier round is passed over without
+            # being read, so the scan's item budget goes to mail not looked
+            # at yet and a busy folder is worked through round by round.
+            refs = app.scan(folder or "Inbox", since, own_email=own,
+                            skip_ids=ol.closed_ids(state))
             # Work is tracked per (mail, case): a mail naming two cases stays
             # in play until both have run — one of them may have been capped
             # out of an earlier round, or failed, while the other succeeded.
             new = [r for r in refs
                    if not ol.is_processed(state, r.entry_id)
                    or ol.pending_cases(state, r.entry_id, ec.trigger_cases(r.subject))]
+            # Seen before and nothing left to run for it: close it, so the
+            # next scan does not spend budget reading it again.
+            new_ids = {r.entry_id for r in new}
+            ol.mark_complete(store.root, [r.entry_id for r in refs if r.entry_id not in new_ids])
             triggers = []                              # (ref, [case numbers still to run])
             for r in new:
                 subj_cases = ec.trigger_cases(r.subject)
@@ -956,11 +964,23 @@ def _save_outlook_reply(store: HandsfreeStore, cfg: dict, draft_id: str,
                         rec: dict, email: dict) -> dict:
     """Approve for a mail-triggered draft: the text becomes a reply DRAFT in
     Outlook (nothing is sent, nothing goes to IPS, the IPS ledger is left
-    alone)."""
+    alone).
+
+    The reply is addressed to the people on the thread — the customer among
+    them — whatever "Post as" says (that choice is about IPS comments). So
+    the Echo section, Intel-internal knowledge, never goes into it: the
+    reply is rendered from the text WITHOUT that section. The review record
+    keeps the full text."""
     from . import outlook_source as ol
-    from .composer import compose_html
+    from .composer import compose_html, strip_echo_section
     from .ips_client import PostResult
-    body_html = rec.get("draft_html") or compose_html(rec.get("draft_plain") or "")
+    plain = rec.get("draft_plain") or ""
+    if ECHO_SECTION_START in plain:
+        body_html = compose_html(strip_echo_section(plain))
+        _log_event(f"[{rec.get('case_nbr')}] Echo section left out of the Outlook reply "
+                   f"of {draft_id} (kept in the review record)")
+    else:
+        body_html = rec.get("draft_html") or compose_html(plain)
     reply_all = bool(email.get("reply_all", cfg.get("email_reply_all", True)))
     try:
         with ol.Outlook() as app:
@@ -1297,7 +1317,10 @@ def _approve_and_post_locked(draft_id: str, edited_plain: Optional[str],
             return {"ok": False, "error": err, "draft": store.get(draft_id)}
         from .ui_commenter import UiCommenter
         ui = UiCommenter(locators=cfg.get("ui_locators"))
-        result = ui.post_comment(rec["case_id"], rec["draft_plain"])
+        # The browser must be the reviewer too: it is checked against the
+        # identity confirmed above BEFORE the comment is saved (the author
+        # read-back below would only find out afterwards).
+        result = ui.post_comment(rec["case_id"], rec["draft_plain"], expected_user=reviewer)
 
     if result.ok:
         posted = result.to_dict()

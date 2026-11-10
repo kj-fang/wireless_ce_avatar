@@ -3005,6 +3005,12 @@ def smoke_email_intake(tmp: Path) -> None:
         with ol.Outlook() as app:
             refs = app.scan("Inbox", now - timedelta(days=7), own_email="ME@intel.com")
             refs_sub = app.scan("Inbox/Beacon", now - timedelta(days=7))
+            # a bounded scan: 2 mails per round, the newest mail in the folder is our own
+            budget_1 = app.scan("Inbox", now - timedelta(days=7), own_email="ME@intel.com", max_items=2)
+            budget_2 = app.scan("Inbox", now - timedelta(days=7), own_email="ME@intel.com", max_items=2,
+                                skip_ids={r.entry_id for r in budget_1})
+            budget_3 = app.scan("Inbox", now - timedelta(days=7), own_email="ME@intel.com", max_items=2,
+                                skip_ids={r.entry_id for r in budget_1 + budget_2})
             try:
                 app.folder("Inbox/Nope")
                 folder_err = ""
@@ -3020,6 +3026,15 @@ def smoke_email_intake(tmp: Path) -> None:
               and len(by["N3"].case_nbrs) == 5
               and [r.entry_id for r in refs_sub] == ["E6"] and "Nope" in folder_err,
               f"{[(r.entry_id, r.case_nbrs) for r in refs]} sub={[r.entry_id for r in refs_sub]} err={folder_err}")
+
+        check("S19.s a bounded scan reaches older mail round by round: mail closed in an earlier "
+              "round is passed over without using the budget (it used to stop at the newest N for "
+              "ever), and our own mail does not use it either",
+              [r.entry_id for r in budget_1] == ["N3", "E7"]
+              and [r.entry_id for r in budget_2] == ["N2", "E3"]
+              and [r.entry_id for r in budget_3] == ["E1", "N1"],
+              f"{[r.entry_id for r in budget_1]} {[r.entry_id for r in budget_2]} "
+              f"{[r.entry_id for r in budget_3]}")
 
         # --- l/m/n/o) the email THREAD as the case -----------------------------
         from . import email_case as ec
@@ -3170,10 +3185,13 @@ def smoke_email_intake(tmp: Path) -> None:
                   f"processed={store.is_processed('01031658')} src={[d.get('source') for d in e_drafts]}")
             res2 = orch.run_email_scan(store, folder="Inbox", max_cases=3, lookback_days=7,
                                        own_email="ME@intel.com")
-            check("S19.e second round: every mail already handled -> nothing runs",
+            closed_after_2 = ol.closed_ids(ol.load_state(store.root))
+            check("S19.e second round: every mail already handled -> nothing runs; by then every "
+                  "mail of the window is closed, so a later scan passes over all of them",
                   res2["ok"] and res2["cases"] == [] and ran == ["01031658", "01032299"]
-                  and store.load_config().get("email_last_result") == "no new mail naming a case",
-                  str(res2))
+                  and store.load_config().get("email_last_result") == "no new mail naming a case"
+                  and closed_after_2 == {"E1", "E2", "E3", "E7", "N1", "N2", "N3"},
+                  f"{res2} closed={sorted(closed_after_2)}")
 
             # --- f) approve = Outlook reply draft, never sent, IPS untouched ---
             d_full = next(d for d in full if d["case_nbr"] == "01031658")
@@ -5405,6 +5423,230 @@ def smoke_review_fixes_2(tmp: Path) -> None:
           f"{t_ok.name} {t_skip.name} age_h={age_h:.1f} {t_fail.name}")
 
 
+# ---------------------------------------------------------------- S29
+def smoke_review_fixes_3(tmp: Path) -> None:
+    print("[S29] PR 190 review, third pass: cross-site requests, Echo in Outlook replies, the posting "
+          "browser's identity, a server start onto a running client")
+    import os as _os
+    import types
+    from flask import Flask
+    from blueprints.handsfree import handsfree_routes as routes
+    from . import orchestrator as orch
+    from . import outlook_source as ol
+    from . import scheduler as sch
+    from . import ui_commenter as uic
+    from .composer import AI_MARKER, ECHO_SECTION_END, ECHO_SECTION_START
+    from .queue import HandsfreeStore
+
+    # --- a) a page of another site cannot change the shared state ---------------
+    store = HandsfreeStore(tmp / "handsfree_s29")
+    store.save_config({"dry_run": False, "owner_name": "Ann"})
+    rec = store.enqueue(case_nbr="01070001", case_id="500A", subject="s", draft_plain="b",
+                        draft_html="<p>b</p>", confidence=None, mode="full", analysis={})
+    from . import bsod as bsod_mod
+    orig_store, orig_sub = routes._store, bsod_mod._submissions_path
+    routes._store = lambda: store
+    bsod_mod._submissions_path = lambda: tmp / "handsfree_s29" / "bsod_submissions.json"
+    try:
+        app = Flask("handsfree_smoke_s29")
+        app.secret_key = "s29"
+        app.register_blueprint(routes.handsfree_bp)
+        client = app.test_client()
+        reset = "/handsfree/case/01070001/reset"
+        local = {"REMOTE_ADDR": "127.0.0.1"}
+        # what a cross-site HTML form does: urlencoded body, the other site's Origin
+        r_form = client.post(reset, data={"purge_downloads": "1"}, environ_base=local,
+                             headers={"Origin": "https://evil.example"})
+        # a form without an Origin header (older browser): still not JSON
+        r_form_no_origin = client.post(reset, data={"purge_downloads": "1"}, environ_base=local)
+        r_empty = client.post(reset, environ_base=local)
+        # JSON, but from another site (a fetch that got past the browser somehow)
+        r_json_evil = client.post(reset, json={}, environ_base=local,
+                                  headers={"Origin": "https://evil.example"})
+        r_cfg_evil = client.post("/handsfree/config", json={"dry_run": True, "owner_name": "Mallory"},
+                                 headers={"Origin": "https://evil.example"})
+        r_reject_evil = client.post(f"/handsfree/queue/{rec['draft_id']}/reject", json={"reason": "x"},
+                                    headers={"Origin": "null"})
+        untouched = (store.get(rec["draft_id"])["status"] == "pending_review"
+                     and store.load_config()["owner_name"] == "Ann"
+                     and store.load_config()["dry_run"] is False
+                     and len(store.list_drafts()) == 1)
+        # GET is never refused; the app's own pages are same-origin
+        r_get_evil = client.get("/handsfree/config", headers={"Origin": "https://evil.example"})
+        r_cfg_same = client.post("/handsfree/config", json={"max_cases_per_run": 5},
+                                 headers={"Origin": "http://localhost"})
+        r_cfg_tool = client.post("/handsfree/config", json={"max_cases_per_run": 6})   # a script: no Origin
+        r_reset_same = client.post(reset, json={"purge_downloads": False}, environ_base=local,
+                                   headers={"Origin": "http://localhost"})
+        check("S29.a cross-site requests cannot change shared state: an HTML form POST to the reset "
+              "route is refused (other Origin -> 403; no JSON body -> 415) and nothing is archived; "
+              "JSON from another origin is refused on every write route (reset, config, reject); "
+              "reading, the app's own pages and scripts without an Origin still work",
+              r_form.status_code == 403 and r_form_no_origin.status_code == 415
+              and r_empty.status_code == 415 and r_json_evil.status_code == 403
+              and r_cfg_evil.status_code == 403 and r_reject_evil.status_code == 403 and untouched
+              and r_get_evil.status_code == 200
+              and r_cfg_same.status_code == 200 and r_cfg_tool.status_code == 200
+              and store.load_config()["max_cases_per_run"] == 6
+              and r_reset_same.status_code == 200 and r_reset_same.get_json()["ok"] is True
+              and store.list_drafts() == [],
+              f"form={r_form.status_code} no_origin={r_form_no_origin.status_code} empty={r_empty.status_code} "
+              f"json_evil={r_json_evil.status_code} cfg_evil={r_cfg_evil.status_code} "
+              f"reject_evil={r_reject_evil.status_code} untouched={untouched} get={r_get_evil.status_code} "
+              f"same={r_cfg_same.status_code}/{r_cfg_tool.status_code} reset_same={r_reset_same.status_code} "
+              f"{r_reset_same.get_json()}")
+    finally:
+        routes._store, bsod_mod._submissions_path = orig_store, orig_sub
+
+    # --- b) the Echo section never goes into an Outlook reply --------------------
+    estore = HandsfreeStore(tmp / "handsfree_s29_mail")
+    estore.save_config({"dry_run": False})
+    body = (AI_MARKER + "\n\nAnalysis: the AP rejected the association.\n\n"
+            + ECHO_SECTION_START + "\nINTERNAL ROOT CAUSE: firmware bug HSD-123, do not share\n"
+            + ECHO_SECTION_END + "\n")
+    from .composer import compose_html
+    mail = {"entry_id": "E1", "store_id": "S1", "subject": "IPS 01070002 drops", "sender_name": "Ann",
+            "sender_email": "ann@oem.com", "received": "2026-11-10T10:00:00+08:00",
+            "reply_all": True, "thread_size": 1, "mailbox": "me@intel.com"}
+    e_rec = estore.enqueue(case_nbr="01070002", case_id="", subject="IPS 01070002 drops",
+                           draft_plain=body, draft_html=compose_html(body), confidence=70,
+                           mode="full", analysis={}, source="email")
+    estore.update(e_rec["draft_id"], email=mail)
+    saved: list = []
+
+    class _FakeOutlook:
+        def __enter__(self): return self
+        def __exit__(self, *a): return False
+        def save_reply_draft(self, ref, html_fragment, *, reply_all=True, display=False):
+            saved.append(html_fragment)
+            return {"entry_id": "DRAFT-1", "to": "ann@oem.com", "subject": "RE: " + ref["subject"]}
+    orig = (orch._store, ol.Outlook)
+    orch._store = lambda: estore
+    ol.Outlook = _FakeOutlook
+    try:
+        # the reviewer leaves "Post as: Internal" untouched - the default for every draft
+        res = orch.approve_and_post(e_rec["draft_id"], visibility="internal")
+        res_none = None
+        e_rec2 = estore.enqueue(case_nbr="01070003", case_id="", subject="IPS 01070003",
+                                draft_plain=body, draft_html=compose_html(body), confidence=70,
+                                mode="full", analysis={}, source="email")
+        estore.update(e_rec2["draft_id"], email=dict(mail, subject="IPS 01070003"))
+        res_none = orch.approve_and_post(e_rec2["draft_id"])          # no visibility at all
+    finally:
+        orch._store, ol.Outlook = orig
+    kept = estore.get(e_rec["draft_id"])
+    check("S29.b an email draft's reply is addressed to the customer whatever 'Post as' says, so the "
+          "INTERNAL Echo section is left out of the Outlook reply on every approval (internal or no "
+          "visibility) while the analysis itself goes in; the review record keeps the full text",
+          res["ok"] and res_none and res_none["ok"] and len(saved) == 2
+          and all("Echo (INTERNAL" not in s_ and "HSD-123" not in s_ and "End of Echo" not in s_
+                  and "the AP rejected the association" in s_ for s_ in saved)
+          and "HSD-123" in kept["draft_plain"] and ECHO_SECTION_START in kept["draft_plain"]
+          and kept["status"] == "posted" and kept["post_result"]["backend"] == "outlook",
+          f"res={res.get('ok')}/{res.get('error')} saved={[s_[:160] for s_ in saved]} "
+          f"kept_has_echo={'HSD-123' in kept['draft_plain']}")
+
+    # --- c) the browser that posts must be the reviewer ---------------------------
+    ann = {"user_id": "005A000000ABCDEFGH", "name": "Ann Reviewer"}
+    ip = uic.identity_problem
+    pure_ok = (ip(ann, {"user_id": "005A000000ABCDE", "name": "Ann R."}) == ""        # 15 vs 18 chars
+               and ip(ann, {"user_id": "005A000000ABCDEFGH", "name": "x"}) == ""
+               and "not as the reviewer 'Ann Reviewer'" in ip(ann, {"user_id": "005B000000ZZZZZ", "name": "Svc Account"})
+               and "Svc Account" in ip(ann, {"user_id": "005B000000ZZZZZ", "name": "Svc Account"})
+               and "could not confirm" in ip(ann, None) and "could not confirm" in ip(ann, {})
+               and ip({"name": "Ann Reviewer"}, {"name": "ann reviewer"}) == ""       # no ids: by name
+               and ip({"name": "Ann Reviewer"}, {"name": "Bob"}) != ""
+               and ip(None, {"name": "anyone"}) == "" and ip({}, None) == "")
+
+    class _Resp:
+        def __init__(self, code, data): self.status_code, self._d = code, data
+        def json(self): return self._d
+    calls: list = []
+
+    class _Driver:
+        def __init__(self, cookies):
+            self.cookies, self.current_url = cookies, "https://intel.lightning.force.com/lightning/r/Case/500A/view"
+            self.looked_up, self.quit_called, self.opened = 0, False, ""
+        def get(self, url): self.opened = url
+        def execute_cdp_cmd(self, cmd, params): return {"cookies": self.cookies}
+        def find_element(self, *a, **k): self.looked_up += 1; raise RuntimeError("no page")
+        def find_elements(self, *a, **k): self.looked_up += 1; return []
+        def save_screenshot(self, p): return False
+        page_source = ""
+        def quit(self): self.quit_called = True
+    sid_cookies = [{"name": "sid", "value": "OTHER", "domain": "intel.lightning.force.com"},
+                   {"name": "sid", "value": "TOKEN-1", "domain": "intel.my.salesforce.com"}]
+    orig_get = uic._http_get
+
+    def _fake_get(url, **kw):
+        calls.append((url, kw.get("headers", {}).get("Authorization")))
+        return _Resp(200, {"user_id": "005B000000ZZZZZAAA", "name": "Svc Account", "email": "svc@intel.com"})
+    uic._http_get = _fake_get
+    try:
+        who = uic.browser_identity(_Driver(sid_cookies))
+        who_none = uic.browser_identity(_Driver([{"name": "sid", "value": "X", "domain": "other.force.com"}]))
+        uic._http_get = lambda url, **kw: _Resp(401, {})
+        who_401 = uic.browser_identity(_Driver(sid_cookies))
+        uic._http_get = _fake_get
+
+        # the whole post: saved profile used, identity checked before any typing
+        from configs.global_configs import app_config
+        from services.case_info_service import CaseService
+        made: list = []
+
+        class _DM:
+            all_drivers: list = []
+            def create_download_driver(self, path, **kw):
+                d = _Driver(sid_cookies)
+                made.append((d, kw))
+                return d
+        saved_cfg = (getattr(app_config, "driver_manager", None), getattr(app_config, "avatarfiles_dir", None))
+        app_config.driver_manager = _DM()
+        app_config.avatarfiles_dir = str(tmp / "s29_avatarfiles")
+        profile_dir = CaseService._sso_profile_dir()
+        _os.makedirs(profile_dir, exist_ok=True)                          # this PC has a saved sign-in
+        try:
+            res_ui = uic.UiCommenter().post_comment("500A", "text", expected_user=ann)
+            lock_free = CaseService._sso_lock.acquire(blocking=False)
+            if lock_free:
+                CaseService._sso_lock.release()
+            uic._http_get = lambda url, **kw: _Resp(401, {})
+            res_unknown = uic.UiCommenter().post_comment("500A", "text", expected_user=ann)
+        finally:
+            app_config.driver_manager, app_config.avatarfiles_dir = saved_cfg
+    finally:
+        uic._http_get = orig_get
+    d0, kw0 = made[0]
+    check("S29.c the UI poster opens the SAME sign-in as the REST session (the saved profile when there "
+          "is one) and reads the browser's own IPS user (its my.salesforce.com sid on /userinfo) before "
+          "typing: another user, or one that cannot be read, posts nothing - no element is touched, the "
+          "browser is closed and the profile lock released",
+          pure_ok and who and who["name"] == "Svc Account"
+          and calls[0] == ("https://intel.my.salesforce.com/services/oauth2/userinfo", "Bearer TOKEN-1")
+          and who_none is None and who_401 is None
+          and kw0.get("user_data_dir") == profile_dir
+          and res_ui.ok is False and res_ui.backend == "ui"
+          and "signed in to IPS as 'Svc Account'" in res_ui.error and "nothing was posted" in res_ui.error
+          and d0.looked_up == 0 and d0.quit_called and lock_free
+          and res_unknown.ok is False and "could not confirm" in res_unknown.error
+          and made[1][0].looked_up == 0,
+          f"pure={pure_ok} who={who} calls={calls[:1]} none={who_none} 401={who_401} kw={kw0} "
+          f"ui={res_ui.error!r} looked_up={d0.looked_up} lock_free={lock_free} unknown={res_unknown.error!r}")
+
+    # --- d) starting the server onto a running client ------------------------------
+    rm = sch.role_mismatch
+    msg = rm("server", "client", "http://127.0.0.1:48599")
+    check("S29.d a server start does not settle for an Avatar that is running as a client (or an older "
+          "build): it says so and how to fix it instead of opening that instance's page; a client start "
+          "accepts any instance; an instance that cannot be asked reports no role",
+          "as the Beacon CLIENT" in msg and "was not started" in msg and "stop that Avatar first" in msg
+          and "http://127.0.0.1:48599" in msg
+          and "older build" in rm("server", "") and rm("server", "server") == ""
+          and rm("client", "server") == "" and rm("client", "client") == "" and rm("client", "") == ""
+          and sch.running_role("http://127.0.0.1:9", timeout=0.5) == "",
+          f"{msg!r} / {rm('server', '')!r}")
+
+
 def run_smoke() -> int:
     tmp = Path(tempfile.mkdtemp(prefix="handsfree_smoke_"))
     try:
@@ -5435,6 +5677,7 @@ def run_smoke() -> int:
         smoke_regression_item()
         smoke_review_fixes(tmp)
         smoke_review_fixes_2(tmp)
+        smoke_review_fixes_3(tmp)
     finally:
         shutil.rmtree(tmp, ignore_errors=True)
     print(f"\nsmoke result: {'ALL PASS' if not PASS_FAIL else 'FAILURES: ' + ', '.join(PASS_FAIL)}")

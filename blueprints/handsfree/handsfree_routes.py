@@ -25,6 +25,29 @@ def _store() -> HandsfreeStore:
     return open_store()
 
 
+def _cross_origin(req) -> bool:
+    """True when a browser sent this request from ANOTHER site's page: its
+    Origin header names a host other than the one the request went to.
+    Pages of this app send their own origin; scripts and tools send none."""
+    origin = (req.headers.get("Origin") or "").strip()
+    if not origin or origin == "null":
+        return origin == "null"          # a sandboxed / file:// page is not this app
+    from urllib.parse import urlsplit
+    return urlsplit(origin).netloc.casefold() != (req.host or "").casefold()
+
+
+@handsfree_bp.before_request
+def _refuse_cross_origin_writes():
+    """No session or token guards these routes — on a reviewer's PC the app
+    answers loopback only — so a page of any other site open in the same
+    browser could otherwise POST here (an ordinary HTML form needs no CORS
+    permission) and approve, reject, reset or reconfigure the team's shared
+    state. Every state-changing request from another origin is refused."""
+    if request.method not in ("GET", "HEAD", "OPTIONS") and _cross_origin(request):
+        return jsonify({"ok": False, "error": "cross-origin request refused"}), 403
+    return None
+
+
 @handsfree_bp.errorhandler(HandsfreeShareUnavailable)
 def _share_unavailable(e):
     return jsonify({"ok": False, "error": str(e)}), 503
@@ -373,8 +396,18 @@ def open_log_folder(draft_id: str):
 # ---------- per-case history + hand-off to Avatar's manual analysis ----------
 
 def _localhost_only():
+    """Guard of the routes that act on this PC or wipe shared history: the
+    request must come from this machine AND carry a JSON body. The second
+    half is the CSRF guard: "from loopback" is true of every page open in
+    the local browser, but a cross-site HTML form cannot send
+    application/json (and a cross-site fetch that tries is stopped by the
+    browser's preflight, which this app never answers). Cross-origin
+    requests are refused for the whole blueprint as well
+    (_refuse_cross_origin_writes)."""
     if request.remote_addr not in ("127.0.0.1", "::1"):
         return jsonify({"ok": False, "error": "localhost only"}), 403
+    if not request.is_json or request.get_json(silent=True) is None:
+        return jsonify({"ok": False, "error": "a JSON request body is required"}), 415
     return None
 
 
@@ -469,10 +502,12 @@ def _handoff_to_log_chatbot(case_nbr: str, src: dict, log_path: str) -> dict:
     session["_carried_issue_time"] = src["issue_time_log"]
     session["_carried_issue_time_warning"] = ""
     is_bt = str(src.get("wifi_or_bt") or "").strip().lower() == "bt"
-    if not is_bt:
-        # The process-wide "last analysed log" is the Wi-Fi chatbot's fallback
-        # and what its sidebar pre-fills from; an HCI log must not land there.
-        app_config.last_analyzed_log_path = log_path
+    # The chatbot page pre-fills its log box from this process-wide value and
+    # the automatic analysis reads that box, for the Bluetooth profile too
+    # (its own /prepare and the Log Parser's BT hand-off set it to the HCI
+    # log the same way). Leaving it out for Bluetooth opened the BT chatbot
+    # on an empty box, or on the previous Wi-Fi capture.
+    app_config.last_analyzed_log_path = log_path
     params = {"auto_run": "analyze_all"}
     if src["issue_time_log"]:
         params["issue_time"] = src["issue_time_log"]

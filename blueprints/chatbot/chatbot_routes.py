@@ -448,6 +448,61 @@ def _validate_carried_issue_time(carried_issue_time: str, log_path: str,
         )
 
 
+def _primeable_attachment_time(attachment_time: str, log_path: str,
+                               log_in_customer_clock: bool) -> str:
+    """Drop a time the selected log cannot contain, before it primes the agent.
+
+    The picker gets this check in /get_issue_context, but the agent is primed
+    long before anyone asks for that -- so a time left over from the case this
+    window was on anchored the whole analysis on a timestamp the log does not
+    cover, reported as "source: primed". Empty makes prime_with_context fall
+    back to the log's own latest timestamp.
+    """
+    if not attachment_time or not log_path:
+        return attachment_time
+    parsed, first_ts, last_ts, error = validate_issue_time_in_log_range(
+        attachment_time, log_path, log_in_customer_clock=log_in_customer_clock)
+    if parsed is not None or not (first_ts and last_ts):
+        return attachment_time
+    print(f"[prime] not priming with {attachment_time!r}: {error} Log covers "
+          f"{format_issue_time(first_ts)} to {format_issue_time(last_ts)} | {log_path}")
+    return ""
+
+
+_WIRELESS_DOMAINS = ("wifi", "bt")
+
+
+def _case_filed_under_other_radio(profile_domain: str) -> str:
+    """The radio this case belongs to when it is not this chatbot's, else "".
+
+    A combo card's bundle carries both stacks, so a Wi-Fi case is routinely
+    opened with the BT log that came in the same zip. Its problem statement is
+    then about the other radio, and an agent primed with it reports on the
+    stack it was told about: a BT run explaining a Wi-Fi disconnect, concluding
+    there was no Bluetooth evidence, at 42% confidence.
+    """
+    case_domain = check_ips_service.case_wireless_domain()
+    profile_domain = (profile_domain or "").strip().lower()
+    if case_domain in _WIRELESS_DOMAINS and profile_domain in _WIRELESS_DOMAINS \
+            and case_domain != profile_domain:
+        return case_domain
+    return ""
+
+
+def _drop_other_radios_statement(ctx: dict, profile_domain: str) -> dict:
+    """Blank a problem statement that describes the other radio. Mutates ctx."""
+    other = _case_filed_under_other_radio(profile_domain)
+    if not other or not (ctx.get("description") or ctx.get("subject")):
+        return ctx
+    print(f"[prime] case {ctx.get('case_nbr') or '-'} is filed under {other}, "
+          f"not {profile_domain}: working from the log alone, not from a "
+          f"problem statement about the other radio")
+    ctx["description"] = ""
+    ctx["subject"] = ""
+    ctx["issue_type"] = ""
+    return ctx
+
+
 def _invalidate_issue_context_caches() -> None:
     """Drop the DERIVED issue-context caches so they get recomputed from the
     current ``selected_files`` / ``case_context``.
@@ -867,7 +922,16 @@ class AgentRoutes:
             agent.current_log_path = log_path
             if not same_log:
                 agent.reset_conversation()      # fresh conversation for a new file
-            ctx = _extract_issue_context()      # re-extract context in case session was updated after agent creation
+            # A log that has already been to IPS is not asked about again, but
+            # that restoring happens when the client asks -- after this has
+            # primed the agent from a session with no case on it, leaving the
+            # remembered description and time to reach the sidebar alone.
+            check_ips_service.restore_settled_answer(log_path)
+            ctx = _extract_issue_context(log_path)  # the session may have moved on since the agent was made
+            ctx["attachment_time"] = _primeable_attachment_time(
+                ctx.get("attachment_time", ""), log_path,
+                not self.profile.customer_timezone)
+            _drop_other_radios_statement(ctx, self.profile.gather_domain)
             # Always prime: prime_with_context falls back to the log file's latest
             # timestamp when ctx has no usable issue time, so the sidebar always
             # gets an issue_time to display (covers the no-session entry path).
@@ -884,6 +948,10 @@ class AgentRoutes:
             # if the user never sends a message); keep it for a same-file re-load
             # so the next turn appends to the conversation already on screen.
             new_conv_id = self._ensure_feedback_conversation_id(rotate=not same_log)
+            print(f"[set_log] {'same file, continuing' if same_log else 'new file, starting over'}: "
+                  f"{prev_log_path or '(nothing loaded)'} -> {log_path} | "
+                  f"conversation {prev_conv_id or '-'} -> {new_conv_id} | "
+                  f"case={ctx.get('case_nbr') or '-'}")
 
             if same_log:
                 if preserved_history:
@@ -1164,6 +1232,9 @@ class AgentRoutes:
             # brand-new, context-less agent.
             conversation_id = self._ensure_feedback_conversation_id()
             agent = self._resume_agent_for(conversation_id)
+            print(f"[chat] answering in conversation {conversation_id} from an agent "
+                  f"carrying {len(getattr(agent, 'conversation_history', None) or [])} messages "
+                  f"about {getattr(agent, 'current_log_path', '') or '(no log)'}")
             if issue_time_window_minutes is not None:
                 agent.issue_time_window_minutes = issue_time_window_minutes
             # Backstop: if the resolved agent lost its log path (e.g. a fresh
@@ -1672,7 +1743,11 @@ class AgentRoutes:
                     log_in_customer_clock=not self.profile.customer_timezone)
 
             # Pull consolidated issue context from all session sources
-            ctx = _extract_issue_context()
+            ctx = _extract_issue_context(log_path)
+            ctx["attachment_time"] = _primeable_attachment_time(
+                ctx.get("attachment_time", ""), log_path,
+                not self.profile.customer_timezone)
+            _drop_other_radios_statement(ctx, self.profile.gather_domain)
 
             # Update shared last_analyzed_log_path so the chatbot index page pre-fills it
             app_config.last_analyzed_log_path = log_path
@@ -1714,9 +1789,30 @@ class AgentRoutes:
     # ------------------------------------------------------------------
     # API: consolidated issue context for the sidebar
     # ------------------------------------------------------------------
+    def _drop_other_radios_statement_from_agent(self) -> None:
+        """Take the other radio's problem statement back off this bot's agent."""
+        if not _case_filed_under_other_radio(self.profile.gather_domain):
+            return
+        agent = self.session_agents.get(session.get("chatbot_session_id") or "")
+        ctx = getattr(agent, "issue_context", None)
+        if not isinstance(ctx, dict):
+            return
+        for name in ("description", "subject", "issue_type"):
+            ctx[name] = ""
+
     def get_issue_context(self):
+        # A case taken from the folder name is attached without anybody being
+        # asked, so no route has looked it up; this is the first read of it.
+        try:
+            check_ips_service.enrich_attached_case_if_needed()
+        except Exception as e:
+            print(f"[get_issue_context] quiet case lookup skipped: {e}")
+        # The lookup above writes the case's description onto agents already
+        # primed, so this runs after it, not instead of the guard at priming.
+        self._drop_other_radios_statement_from_agent()
         try:
             ctx = _extract_issue_context()
+            _drop_other_radios_statement(ctx, self.profile.gather_domain)
             attachment_time = ctx.get("attachment_time", "")
         except Exception:
             ctx = {}
@@ -1749,11 +1845,27 @@ class AgentRoutes:
         # log_path travels only for profiles that reconcile customer time:
         # realign_times_to_log uses it to detect the customer's timezone and
         # capture date, nothing else.
-        organized = self._issue_context_organized(
-            ctx.get("description", "") or "", first_ts, last_ts,
-            log_path if self.profile.customer_timezone else "")
+        if _case_filed_under_other_radio(self.profile.gather_domain):
+            # Not just a blank description: the pre-pass cached on the session
+            # was run over the other radio's statement, and the organizer
+            # returns it without looking at what it is now being asked about.
+            organized = {}
+        else:
+            organized = self._issue_context_organized(
+                ctx.get("description", "") or "", first_ts, last_ts,
+                log_path if self.profile.customer_timezone else "")
         clean_desc = organized.get("clean_description") or _compose_concise_description(ctx)
         issue_times = organized.get("issue_times") or []
+
+        # Nothing to go on for this log -- but it may have been analysed
+        # before, and the time that was put in the picker then is stored
+        # beside its case number. Offer that rather than an empty picker; it
+        # still has to pass the log-range check below like any other source.
+        remembered = check_ips_service.remembered_case_facts(
+            log_path, ctx.get("case_nbr", ""))
+        if remembered and not issue_times:
+            issue_times = [t for t in (remembered.get("issue_times")
+                                       or [remembered.get("issue_time", "")]) if t]
 
         # A case-number hand-off is authoritative for this transition. It either
         # supplies the already-resolved, range-checked value from download_result,
@@ -1836,6 +1948,34 @@ class AgentRoutes:
             ),
             "issue_time_warning": carried_warning or range_warning,
         })
+
+        # Store what the user is actually being shown, next to the case number
+        # already remembered for this log. The description came from an IPS
+        # lookup and an LLM pass, the time from the attachment subtitle and a
+        # read of the log -- none of which the same file needs to be put
+        # through again, and a new conversation has no session left to find
+        # them in. Best-effort: a store that cannot be written costs a repeat,
+        # not the page.
+        try:
+            check_ips_service.remember_case_facts(log_path, ctx.get("case_nbr", ""), {
+                "description": ctx.get("description", ""),
+                "attachment_time": attachment_time,
+                "issue_time": issue_time_str,
+                "issue_times": issue_times,
+            })
+        except Exception as e:
+            print(f"[get_issue_context] could not remember this log's case facts: {e}")
+
+        # The one line that says what actually reached the input box and the
+        # picker, so a report of "nothing was filled in" can be read against
+        # the [ips] lines above it rather than guessed at.
+        print(f"[get_issue_context] case={ctx.get('case_nbr') or '-'} "
+              f"description={len(payload.get('description') or '')} chars "
+              f"issue_time={payload.get('issue_time') or '-'} "
+              f"times={len(payload.get('issue_times') or [])} "
+              f"attachment_time={payload.get('attachment_time') or '-'} "
+              f"blocked={payload.get('issue_time_blocked')} | {log_path}")
+
         return jsonify(payload)
 
     # ==================================================================

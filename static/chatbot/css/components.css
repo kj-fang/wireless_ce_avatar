@@ -116,43 +116,20 @@
     .evt-hover-card tr:last-child th,
     .evt-hover-card tr:last-child td { border-bottom: none; }
 
-details.skill-card summary {
-        cursor: pointer;
-        display: flex;
-        align-items: center;
-        gap: 8px;
-        list-style: none;
-        /* See the note below the chevron: this row must be allowed to be
-           narrower than the name inside it. */
-        min-width: 0;
-    }
-    /* Replace the default black ▶ marker with a soft accent-coloured chevron. */
-    details.skill-card summary::marker { content: ''; }
-    details.skill-card summary::-webkit-details-marker { display: none; }
-    details.skill-card summary::before {
-        content: '';
-        flex: 0 0 auto;
-        width: 6px;
-        height: 6px;
-        border-right: 1.5px solid var(--accent);
-        border-bottom: 1.5px solid var(--accent);
-        border-radius: 1px;
-        transform: translateY(-1px) rotate(-45deg);
-        transition: transform 0.15s ease;
-        opacity: 0.75;
-    }
-    details.skill-card[open] summary::before {
-        transform: translateY(-2px) rotate(45deg);
-    }
-    details.skill-card summary:hover::before { opacity: 1; }
+/* A skill card is a button that starts that skill's analysis.
 
-    /* Keeping a skill name inside the card.
+       The name row keeps the chevron the disclosure version used, pointing
+       right and nudging on hover: the shape is the page's, and right-facing
+       reads as "this does something" rather than "this opens". There is no
+       open state to rotate into, because the description is always shown.
+
+       Keeping a skill name inside the card:
 
        A skill name is an identifier out of someone's YAML --
        Bluetooth_device_abnormal_disconnected, Whole_Log_Unfiltered -- with no
-       space to break at. The summary above is a flex row, and a flex item's
+       space to break at. The name row is a flex row, and a flex item's
        min-width is auto, meaning "never smaller than my content": the name
-       refused to shrink, so it pushed the row wider than the card and ran out
+       refuses to shrink, pushes the row wider than the card, and runs out
        under the chat column, leaving the sidebar with a scrollbar.
 
        min-width: 0 is what lets it shrink; overflow-wrap: anywhere is what it
@@ -160,14 +137,33 @@ details.skill-card summary {
        break-all also chops the ordinary words in a description -- this breaks
        only a run that offers no break of its own, which is exactly these
        identifiers. The chevron is untouched on purpose: it is flex: 0 0 auto
-       and is never asked to shrink, so it keeps its size and its rotation. */
-    details.skill-card { min-width: 0; }
-    details.skill-card summary .skill-name {
-        display: inline;
+       and is never asked to shrink, so it keeps its size. */
+    button.skill-card { min-width: 0; }
+
+    button.skill-card .skill-name {
+        display: flex;
+        align-items: center;
+        gap: 8px;
         min-width: 0;
         overflow-wrap: anywhere;
     }
-    details.skill-card .skill-desc {
+    button.skill-card .skill-name::before {
+        content: '';
+        flex: 0 0 auto;
+        width: 6px;
+        height: 6px;
+        border-right: 1.5px solid var(--accent);
+        border-bottom: 1.5px solid var(--accent);
+        border-radius: 1px;
+        transform: rotate(-45deg);
+        transition: transform 0.15s ease, opacity 0.15s ease;
+        opacity: 0.75;
+    }
+    button.skill-card:hover:not(:disabled) .skill-name::before {
+        opacity: 1;
+        transform: translateX(2px) rotate(-45deg);
+    }
+    button.skill-card .skill-desc {
         padding: 6px 0 2px 14px;
         line-height: 1.45;
         overflow-wrap: anywhere;

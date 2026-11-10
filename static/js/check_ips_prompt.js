@@ -60,7 +60,9 @@
       style: { fontSize: "17px", fontWeight: "600", marginBottom: "6px" }
     }));
     box.appendChild(el("div", {
-      text: "This log has no case attached. The number is what links the "
+      text: state.dismissable
+        ? "Change which case this analysis and conversation are recorded against."
+        : "This log has no case attached. The number is what links the "
           + "analysis and this conversation back to the case.",
       style: { color: "#475569", marginBottom: "16px" }
     }));
@@ -146,6 +148,27 @@
     actions.appendChild(skipBtn);
     actions.appendChild(saveBtn);
     box.appendChild(actions);
+
+    if (state.dismissable) {
+      // Opened by someone whose answer is already recorded, so leaving it
+      // alone is a real choice here -- unlike the gate, where closing would
+      // put them straight back into the state it exists to prevent.
+      var cancelBtn = el("button", {
+        type: "button", text: "Keep it as it is",
+        style: {
+          background: "transparent", border: "none", color: "#64748b",
+          cursor: "pointer", fontSize: "13px", padding: "10px 0 0",
+          textDecoration: "underline", width: "100%", textAlign: "center"
+        }
+      });
+      cancelBtn.addEventListener("click", function () {
+        if (busy) { return; }
+        close();
+        onDone(null);
+      });
+      box.appendChild(cancelBtn);
+    }
+
     overlay.appendChild(box);
 
     var busy = false;
@@ -195,8 +218,7 @@
           fail((body && body.error) || "Could not save the case number.");
           return;
         }
-        document.removeEventListener("keydown", trap, true);
-        overlay.remove();
+        close();
         onDone(body);
       }).catch(function (e) {
         setBusy(false);
@@ -270,11 +292,22 @@
       post({ action: "skip", confirmed: true, log_path: state.log_path || "" });
     });
 
-    // The dialog has no dismiss: closing it would put the user straight back
-    // into the state it exists to prevent.
+    // The gate has no dismiss: closing it would put the user straight back
+    // into the state it exists to prevent. The voluntary variant does.
+    function close() {
+      document.removeEventListener("keydown", trap, true);
+      overlay.remove();
+    }
+
     function trap(e) {
       if (!document.body.contains(overlay)) { return; }
-      if (e.key === "Escape") { e.preventDefault(); e.stopPropagation(); }
+      if (e.key !== "Escape") { return; }
+      e.preventDefault();
+      e.stopPropagation();
+      if (state.dismissable && !busy) {
+        close();
+        onDone(null);
+      }
     }
     document.addEventListener("keydown", trap, true);
 
@@ -294,6 +327,98 @@
       });
     });
     return pending;
+  }
+
+  var NOTICE_MS = 5000;
+
+  /**
+   * Say what was recorded when nothing asked.
+   *
+   * A case read off the folder name is attached without interrupting anybody,
+   * which is the point -- but it also left no sign that it had happened, so
+   * there was no way to tell "this log is filed under 01006388" from "nobody
+   * ever asked". The notice says which, and carries the same dialog for
+   * anyone who disagrees with it.
+   */
+  function notice(state) {
+    if (!state) { return; }
+    var source = state.case_ref_source || "absent";
+    var attached = state.case_nbr || "";
+    if (!attached && source !== "skipped") { return; }   // nothing was decided
+    if (!document.body) { return; }
+
+    var existing = document.querySelector(".ips-attached-notice");
+    if (existing) { existing.remove(); }
+
+    var bar = el("div", {
+      "class": "ips-attached-notice",
+      role: "status",
+      style: {
+        // Top right: the bottom right corner is the Send button.
+        position: "fixed", right: "18px", top: "76px", zIndex: "99998",
+        display: "flex", alignItems: "center", gap: "10px",
+        background: "#f8fafc", border: "1px solid #e2e8f0",
+        borderLeft: "3px solid " + (attached ? "#93c5fd" : "#cbd5e1"),
+        borderRadius: "8px", padding: "9px 14px", color: "#475569",
+        font: "13px/1.4 'Segoe UI', system-ui, sans-serif",
+        boxShadow: "0 6px 20px rgba(15,23,42,.10)",
+        opacity: "0", transition: "opacity .25s"
+      }
+    });
+    bar.appendChild(el("span", {
+      text: attached ? "Filed under case " + attached
+                     : "Recorded as having no case number"
+    }));
+
+    var change = el("a", {
+      href: "#", text: "Change",
+      style: { color: "#2563eb", textDecoration: "underline", cursor: "pointer" }
+    });
+    bar.appendChild(change);
+
+    var timer = null;
+    function dismiss() {
+      if (timer) { clearTimeout(timer); timer = null; }
+      bar.style.opacity = "0";
+      setTimeout(function () { bar.remove(); }, 250);
+    }
+    function hold() {
+      if (timer) { clearTimeout(timer); timer = null; }
+    }
+
+    change.addEventListener("click", function (e) {
+      e.preventDefault();
+      hold();
+      bar.remove();
+      var opened = {};
+      Object.keys(state).forEach(function (k) { opened[k] = state[k]; });
+      opened.dismissable = true;
+      opened.suggested_ips = attached || state.suggested_ips || "";
+      ask(opened).then(function (body) {
+        // Only a cancelled dialog leaves the case as it was. "This log has no
+        // case" comes back successful with an empty number, and is as much a
+        // change as any other -- the description and the time on screen still
+        // belong to the case that has just been detached.
+        if (!body || !body.success) { return; }
+        // The number changed, so what the page is showing came from the
+        // previous one. Whoever owns the input box re-reads it.
+        if (typeof window.IpsPrompt.onCaseChanged === "function") {
+          window.IpsPrompt.onCaseChanged(body);
+        }
+        notice({ case_nbr: body.case_nbr || "",
+                 case_ref_source: body.case_ref_source || "skipped",
+                 log_path: state.log_path || "" });
+      });
+    });
+    // Reading it should not race the timer away -- for whoever is reading it,
+    // not only the one holding a mouse: tabbing to Change used to leave the
+    // timer running and take the focused link away mid-read.
+    bar.addEventListener("mouseenter", hold);
+    bar.addEventListener("focusin", hold);
+
+    document.body.appendChild(bar);
+    requestAnimationFrame(function () { bar.style.opacity = "1"; });
+    timer = setTimeout(dismiss, NOTICE_MS);
   }
 
   var originalFetch = window.fetch.bind(window);
@@ -329,9 +454,14 @@
   window.IpsPrompt = {
     normalise: normalise,
     ask: ask,
+    notice: notice,
+    /** Set by whoever owns the input box; called after the case is changed. */
+    onCaseChanged: null,
     /** Open the prompt for a /set_log response that reported needs_ips. */
     handleSetLog: function (data) {
       if (data && data.needs_ips) { return ask(data); }
+      // Nothing was asked, so say what is already on file instead.
+      notice(data);
       return Promise.resolve(null);
     }
   };

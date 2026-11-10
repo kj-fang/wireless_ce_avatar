@@ -1,0 +1,764 @@
+<!DOCTYPE html>
+<html lang="en">
+<head>
+  <meta charset="UTF-8">
+  <meta name="viewport" content="width=device-width, initial-scale=1.0">
+  <title>test_llm_blueprint — Test Flow Diagram</title>
+  <link href="https://fonts.googleapis.com/css2?family=JetBrains+Mono:wght@400;500;600;700&display=swap" rel="stylesheet">
+  <script src="https://cdn.jsdelivr.net/npm/html2canvas@1.4.1/dist/html2canvas.min.js" integrity="sha384-ZZ1pncU3bQe8y31yfZdMFdSpttDoPmOZg2wguVK9almUodir1PghgT0eY7Mrty8H" crossorigin="anonymous"></script>
+  <script src="https://cdn.jsdelivr.net/npm/jspdf@2.5.2/dist/jspdf.umd.min.js" integrity="sha384-en/ztfPSRkGfME4KIm05joYXynqzUgbsG5nMrj/xEFAHXkeZfO3yMK8QQ+mP7p1/" crossorigin="anonymous"></script>
+  <style>
+    * { margin: 0; padding: 0; box-sizing: border-box; }
+    body {
+      font-family: 'JetBrains Mono', monospace;
+      background: #020617;
+      min-height: 100vh;
+      padding: 2rem;
+      color: white;
+    }
+    .container { max-width: 1240px; margin: 0 auto; }
+    .header { margin-bottom: 2rem; }
+    .header-row { display: flex; align-items: center; gap: 1rem; margin-bottom: 0.5rem; }
+    .pulse-dot { width: 12px; height: 12px; background: #fbbf24; border-radius: 50%; animation: pulse 2s infinite; }
+    @keyframes pulse { 0%, 100% { opacity: 1; } 50% { opacity: 0.5; } }
+    h1 { font-size: 1.5rem; font-weight: 700; letter-spacing: -0.025em; }
+    .subtitle { color: #94a3b8; font-size: 0.875rem; margin-left: 1.75rem; }
+    .diagram-container {
+      background: rgba(15, 23, 42, 0.5);
+      border-radius: 1rem;
+      border: 1px solid #1e293b;
+      padding: 1.5rem;
+      overflow-x: auto;
+    }
+    svg { width: 100%; min-width: 1060px; display: block; }
+    .cards { display: grid; grid-template-columns: repeat(auto-fit, minmax(280px, 1fr)); gap: 1rem; margin-top: 2rem; }
+    .card { background: rgba(15, 23, 42, 0.5); border-radius: 0.75rem; border: 1px solid #1e293b; padding: 1.25rem; }
+    .card-header { display: flex; align-items: center; gap: 0.5rem; margin-bottom: 0.75rem; }
+    .card-dot { width: 8px; height: 8px; border-radius: 50%; }
+    .card-dot.cyan { background: #22d3ee; }
+    .card-dot.emerald { background: #34d399; }
+    .card-dot.violet { background: #a78bfa; }
+    .card-dot.amber { background: #fbbf24; }
+    .card-dot.rose { background: #fb7185; }
+    .card-dot.orange { background: #fb923c; }
+    .card h3 { font-size: 0.875rem; font-weight: 600; }
+    .card ul { list-style: none; color: #94a3b8; font-size: 0.75rem; }
+    .card li { margin-bottom: 0.375rem; }
+    .card li code { color: #cbd5e1; }
+    .footer { text-align: center; margin-top: 1.5rem; color: #475569; font-size: 0.75rem; }
+    .toolbar { display: flex; gap: 0.5rem; margin-left: auto; flex-shrink: 0; align-items: center; }
+    .toolbar-toggle {
+      background: transparent; border: none; color: #475569; cursor: pointer;
+      font-size: 1.25rem; line-height: 1; padding: 0.25rem 0.5rem; border-radius: 0.375rem;
+      transition: color 0.2s, background 0.2s;
+    }
+    .toolbar-toggle:hover { color: #94a3b8; background: rgba(30, 41, 59, 0.5); }
+    .toolbar-actions { display: none; gap: 0.5rem; }
+    .toolbar.expanded .toolbar-actions { display: flex; }
+    .toolbar-actions button {
+      background: rgba(30, 41, 59, 0.8); border: 1px solid #334155; color: #94a3b8;
+      padding: 0.375rem 0.75rem; border-radius: 0.375rem; font-family: inherit;
+      font-size: 0.75rem; cursor: pointer; transition: all 0.2s; white-space: nowrap;
+    }
+    .toolbar-actions button:hover { background: rgba(51, 65, 85, 0.8); color: white; border-color: #475569; }
+    @media print { body { background: #020617; padding: 1rem; } .toolbar { display: none !important; } }
+  </style>
+</head>
+<body>
+  <div class="container" id="report-container">
+    <!-- Header -->
+    <div class="header">
+      <div class="header-row">
+        <div class="pulse-dot"></div>
+        <h1>test_llm_blueprint — Test Flow</h1>
+        <div class="toolbar">
+          <div class="toolbar-actions">
+            <button onclick="copyAsImage(this)">📋 Copy</button>
+            <button onclick="downloadPNG(this)">🖼️ PNG</button>
+            <button onclick="downloadPDF(this)">📄 PDF</button>
+          </div>
+          <button class="toolbar-toggle" onclick="this.parentElement.classList.toggle('expanded')" title="Export options" aria-label="Export options">⋯</button>
+        </div>
+      </div>
+      <p class="subtitle">20 unit tests across 4 classes · GET /llm/get_llm_analysis asks the LLM helper to summarize/classify a case; /llm/personal_token refreshes the per-user gnaigpt token · blueprints/llm/llm_routes.py</p>
+    </div>
+
+    <!-- Main Diagram -->
+    <div class="diagram-container">
+      <svg viewBox="0 0 1100 2010" font-family="JetBrains Mono, monospace">
+        <defs>
+          <marker id="arrowhead" markerWidth="10" markerHeight="7" refX="9" refY="3.5" orient="auto">
+            <polygon points="0 0, 10 3.5, 0 7" fill="#64748b" />
+          </marker>
+          <marker id="arrowrose" markerWidth="10" markerHeight="7" refX="9" refY="3.5" orient="auto">
+            <polygon points="0 0, 10 3.5, 0 7" fill="#fb7185" />
+          </marker>
+          <marker id="arrowviolet" markerWidth="10" markerHeight="7" refX="9" refY="3.5" orient="auto">
+            <polygon points="0 0, 10 3.5, 0 7" fill="#a78bfa" />
+          </marker>
+          <pattern id="grid" width="40" height="40" patternUnits="userSpaceOnUse">
+            <path d="M 40 0 L 0 0 0 40" fill="none" stroke="#1e293b" stroke-width="0.5"/>
+          </pattern>
+        </defs>
+
+        <!-- Background grid -->
+        <rect width="100%" height="100%" fill="url(#grid)" />
+
+        <!-- ================= TOP BAND: fixture + legend ================= -->
+        <rect x="40" y="16" width="620" height="84" rx="8" fill="rgba(30,41,59,0.5)" stroke="#94a3b8" stroke-width="1.2"/>
+        <text x="54" y="34" fill="white" font-size="11" font-weight="600">Test fixture · BaseTestCase + llm_bp · @patch(gather_service) on TestGetLlmAnalysis</text>
+        <text x="54" y="50" fill="#94a3b8" font-size="8.5">PROMPT_PATH = C:\fake\prompts\wifi_case_summary.txt · TEST_CASE_NBR from unit_tests.base_test</text>
+        <text x="54" y="63" fill="#94a3b8" font-size="8.5">USAGE = {llm_calls:1, input_tokens:100, output_tokens:20, total_tokens:120, cache r/w 0}</text>
+        <text x="54" y="76" fill="#94a3b8" font-size="8.5">DEFAULT = {issue_type:'Unclassified', confidence:0, keywords_found:[]}</text>
+        <text x="54" y="89" fill="#94a3b8" font-size="8.5">no LLM / network call · session seeded via seed_session() or session_transaction()</text>
+
+        <!-- Legend -->
+        <rect x="680" y="16" width="380" height="84" rx="8" fill="rgba(15,23,42,0.6)" stroke="#334155" stroke-width="1"/>
+        <text x="694" y="32" fill="white" font-size="10" font-weight="600">Legend</text>
+        <rect x="694" y="40" width="16" height="10" rx="2" fill="rgba(30,41,59,0.5)" stroke="#94a3b8" stroke-width="1"/>
+        <text x="716" y="49" fill="#94a3b8" font-size="8">route step / test client</text>
+        <rect x="694" y="54" width="16" height="10" rx="2" fill="rgba(76,29,149,0.4)" stroke="#a78bfa" stroke-width="1"/>
+        <text x="716" y="63" fill="#94a3b8" font-size="8">Flask session read/write</text>
+        <rect x="694" y="68" width="16" height="10" rx="2" fill="rgba(120,53,15,0.3)" stroke="#fbbf24" stroke-width="1"/>
+        <text x="716" y="77" fill="#94a3b8" font-size="8">LLM helper (MagicMock)</text>
+        <rect x="694" y="82" width="16" height="10" rx="2" fill="rgba(136,19,55,0.4)" stroke="#fb7185" stroke-width="1"/>
+        <text x="716" y="91" fill="#94a3b8" font-size="8">500 / exception path</text>
+        <rect x="880" y="40" width="16" height="10" rx="2" fill="rgba(251,146,60,0.3)" stroke="#fb923c" stroke-width="1"/>
+        <text x="902" y="49" fill="#94a3b8" font-size="8">gather_service telemetry</text>
+        <rect x="880" y="54" width="16" height="10" rx="2" fill="rgba(6,78,59,0.4)" stroke="#34d399" stroke-width="1"/>
+        <text x="902" y="63" fill="#94a3b8" font-size="8">200 / success · ctx model</text>
+        <line x1="880" y1="73" x2="896" y2="73" stroke="#64748b" stroke-width="1.5" marker-end="url(#arrowhead)"/>
+        <text x="902" y="77" fill="#94a3b8" font-size="8">control flow · input ➜ expected</text>
+        <line x1="880" y1="87" x2="896" y2="87" stroke="#fb7185" stroke-width="1.5" stroke-dasharray="3,2" marker-end="url(#arrowrose)"/>
+        <text x="902" y="91" fill="#94a3b8" font-size="8">raise ➜ except handler</text>
+
+        <!-- ================= FLOW SPINE ================= -->
+        <text x="18" y="116" fill="#fbbf24" font-size="7" font-weight="600" transform="rotate(-90 18 116)">TEST&#160;SUITE&#160;FLOW</text>
+        <line x1="26" y1="112" x2="26" y2="1980" stroke="#fbbf24" stroke-width="1.2" stroke-dasharray="4,4"/>
+
+        <!-- =====================================================================
+             REGION P · Route logic flow chart (get_llm_analysis)
+             ===================================================================== -->
+        <rect x="40" y="116" width="1020" height="388" rx="12" fill="rgba(251,191,36,0.04)" stroke="#fbbf24" stroke-width="1" stroke-dasharray="8,4"/>
+        <line x1="26" y1="134" x2="40" y2="134" stroke="#fbbf24" stroke-width="1.5"/>
+        <text x="54" y="138" fill="#fbbf24" font-size="10" font-weight="600">Route logic · get_llm_analysis() — node IDs (A1…E3, R) are referenced by each test path below</text>
+
+        <!-- ---------- connections (drawn first, behind boxes) ---------- -->
+        <!-- Row A -->
+        <line x1="197" y1="249" x2="218" y2="249" stroke="#64748b" stroke-width="1.5" marker-end="url(#arrowhead)"/>
+        <line x1="361" y1="249" x2="382" y2="249" stroke="#64748b" stroke-width="1.5" marker-end="url(#arrowhead)"/>
+        <line x1="525" y1="249" x2="546" y2="249" stroke="#64748b" stroke-width="1.5" marker-end="url(#arrowhead)"/>
+        <text x="535" y="243" fill="#94a3b8" font-size="7.5" text-anchor="middle">no</text>
+        <line x1="689" y1="249" x2="710" y2="249" stroke="#64748b" stroke-width="1.5" marker-end="url(#arrowhead)"/>
+        <line x1="853" y1="249" x2="874" y2="249" stroke="#64748b" stroke-width="1.5" marker-end="url(#arrowhead)"/>
+        <!-- A3 yes -> B3 -->
+        <line x1="454" y1="278" x2="454" y2="308" stroke="#64748b" stroke-width="1.5" marker-end="url(#arrowhead)"/>
+        <text x="460" y="296" fill="#94a3b8" font-size="7.5">yes</text>
+        <!-- A6 -> B6 -->
+        <line x1="946" y1="275" x2="946" y2="305" stroke="#64748b" stroke-width="1.5" marker-end="url(#arrowhead)"/>
+        <!-- A2 writes session -->
+        <line x1="290" y1="275" x2="290" y2="308" stroke="#a78bfa" stroke-width="1.3" stroke-dasharray="3,2" marker-end="url(#arrowviolet)"/>
+        <text x="296" y="295" fill="#a78bfa" font-size="7">W default</text>
+        <!-- A5 / A6 raise -> E1 -->
+        <line x1="782" y1="223" x2="782" y2="191" stroke="#fb7185" stroke-width="1.5" stroke-dasharray="3,2" marker-end="url(#arrowrose)"/>
+        <text x="788" y="211" fill="#fb7185" font-size="7">KeyError</text>
+        <line x1="946" y1="223" x2="946" y2="191" stroke="#fb7185" stroke-width="1.5" stroke-dasharray="3,2" marker-end="url(#arrowrose)"/>
+        <text x="952" y="211" fill="#fb7185" font-size="7">TimeoutError / any</text>
+        <!-- E lane right -> left -->
+        <line x1="711" y1="168" x2="690" y2="168" stroke="#fb7185" stroke-width="1.5" marker-end="url(#arrowrose)"/>
+        <line x1="383" y1="168" x2="362" y2="168" stroke="#fb7185" stroke-width="1.5" marker-end="url(#arrowrose)"/>
+        <!-- Row B -->
+        <line x1="875" y1="335" x2="854" y2="335" stroke="#64748b" stroke-width="1.5" marker-end="url(#arrowhead)"/>
+        <text x="864" y="329" fill="#94a3b8" font-size="7.5" text-anchor="middle">yes</text>
+        <line x1="711" y1="328" x2="690" y2="328" stroke="#64748b" stroke-width="1.5" marker-end="url(#arrowhead)"/>
+        <path d="M 946 364 L 946 378 L 700 378 L 700 350 L 690 350" fill="none" stroke="#64748b" stroke-width="1.5" marker-end="url(#arrowhead)"/>
+        <text x="860" y="374" fill="#94a3b8" font-size="7.5">no (str / "")</text>
+        <line x1="525" y1="335" x2="546" y2="335" stroke="#64748b" stroke-width="1.5" marker-end="url(#arrowhead)"/>
+        <!-- B4 -> C4 -->
+        <line x1="618" y1="361" x2="618" y2="391" stroke="#64748b" stroke-width="1.5" marker-end="url(#arrowhead)"/>
+        <!-- Row C -->
+        <line x1="689" y1="421" x2="710" y2="421" stroke="#64748b" stroke-width="1.5" marker-end="url(#arrowhead)"/>
+        <text x="699" y="415" fill="#94a3b8" font-size="7.5" text-anchor="middle">yes</text>
+        <line x1="853" y1="421" x2="874" y2="421" stroke="#64748b" stroke-width="1.5" marker-end="url(#arrowhead)"/>
+        <line x1="547" y1="421" x2="526" y2="421" stroke="#64748b" stroke-width="1.5" marker-end="url(#arrowhead)"/>
+        <text x="537" y="415" fill="#94a3b8" font-size="7.5" text-anchor="middle">no</text>
+        <!-- C6 -> R (normal return) -->
+        <path d="M 946 447 L 946 462 L 440 462 L 440 448" fill="none" stroke="#64748b" stroke-width="1.5" marker-end="url(#arrowhead)"/>
+        <text x="1000" y="466" fill="#94a3b8" font-size="7.5" text-anchor="middle">return</text>
+        <!-- C5 raise -> except: pass -> R -->
+        <path d="M 782 447 L 782 478 L 470 478 L 470 448" fill="none" stroke="#fb7185" stroke-width="1.5" stroke-dasharray="3,2" marker-end="url(#arrowrose)"/>
+        <text x="490" y="494" fill="#fb7185" font-size="7.5">C5 raises ➜ except Exception: pass ➜ C6 skipped, response still returned</text>
+
+        <!-- ---------- E lane: exception handler (top) ---------- -->
+        <!-- E1 -->
+        <rect x="712" y="148" width="304" height="40" rx="6" fill="#0f172a"/>
+        <rect x="712" y="148" width="304" height="40" rx="6" fill="rgba(136,19,55,0.4)" stroke="#fb7185" stroke-width="1.3"/>
+        <text x="718" y="158" fill="#64748b" font-size="7">E1</text>
+        <text x="864" y="162" fill="white" font-size="9" font-weight="600" text-anchor="middle">except Exception as e</text>
+        <text x="864" y="176" fill="#94a3b8" font-size="7.5" text-anchor="middle">any raise inside try · session.classification stays DEFAULT</text>
+        <!-- E2 -->
+        <rect x="384" y="148" width="304" height="40" rx="6" fill="#0f172a"/>
+        <rect x="384" y="148" width="304" height="40" rx="6" fill="rgba(251,146,60,0.3)" stroke="#fb923c" stroke-width="1.3"/>
+        <text x="390" y="158" fill="#64748b" font-size="7">E2</text>
+        <text x="536" y="160" fill="white" font-size="9" font-weight="600" text-anchor="middle">gather.record_feature_usage (try/pass)</text>
+        <text x="536" y="172" fill="#94a3b8" font-size="7.5" text-anchor="middle">status='failed' · usage=operation_usage (zeros)</text>
+        <text x="536" y="183" fill="#94a3b8" font-size="7.5" text-anchor="middle">error_code=type(e).__name__ · no declaration</text>
+        <!-- E3 -->
+        <rect x="56" y="148" width="304" height="40" rx="6" fill="#0f172a"/>
+        <rect x="56" y="148" width="304" height="40" rx="6" fill="rgba(136,19,55,0.4)" stroke="#fb7185" stroke-width="1.3"/>
+        <text x="62" y="158" fill="#64748b" font-size="7">E3</text>
+        <text x="208" y="162" fill="white" font-size="9" font-weight="600" text-anchor="middle">jsonify(...), 500</text>
+        <text x="208" y="176" fill="#fb7185" font-size="7.5" text-anchor="middle">{success: False, error: str(e)} · traceback printed</text>
+
+        <!-- ---------- Row A ---------- -->
+        <!-- A1 -->
+        <rect x="56" y="224" width="140" height="50" rx="6" fill="#0f172a"/>
+        <rect x="56" y="224" width="140" height="50" rx="6" fill="rgba(30,41,59,0.5)" stroke="#94a3b8" stroke-width="1.3"/>
+        <text x="62" y="234" fill="#64748b" font-size="7">A1</text>
+        <text x="126" y="243" fill="white" font-size="8.5" font-weight="600" text-anchor="middle">test client GET</text>
+        <text x="126" y="256" fill="#94a3b8" font-size="7.5" text-anchor="middle">/llm/get_llm_analysis</text>
+        <text x="126" y="267" fill="#94a3b8" font-size="7.5" text-anchor="middle">self.client.get()</text>
+        <!-- A2 -->
+        <rect x="220" y="224" width="140" height="50" rx="6" fill="#0f172a"/>
+        <rect x="220" y="224" width="140" height="50" rx="6" fill="rgba(76,29,149,0.4)" stroke="#a78bfa" stroke-width="1.3"/>
+        <text x="226" y="234" fill="#64748b" font-size="7">A2</text>
+        <text x="290" y="243" fill="white" font-size="8.5" font-weight="600" text-anchor="middle">init defaults</text>
+        <text x="290" y="256" fill="#94a3b8" font-size="7.5" text-anchor="middle">classification=DEFAULT</text>
+        <text x="290" y="267" fill="#94a3b8" font-size="7.5" text-anchor="middle">usage=empty_usage() · t0</text>
+        <!-- A3 diamond -->
+        <polygon points="454,221 524,249 454,277 384,249" fill="#0f172a"/>
+        <polygon points="454,221 524,249 454,277 384,249" fill="rgba(30,41,59,0.5)" stroke="#fbbf24" stroke-width="1.3"/>
+        <text x="400" y="232" fill="#64748b" font-size="7">A3</text>
+        <text x="454" y="247" fill="white" font-size="8" font-weight="600" text-anchor="middle">llm_helper</text>
+        <text x="454" y="258" fill="white" font-size="8" font-weight="600" text-anchor="middle">is None?</text>
+        <!-- A4 -->
+        <rect x="548" y="224" width="140" height="50" rx="6" fill="#0f172a"/>
+        <rect x="548" y="224" width="140" height="50" rx="6" fill="rgba(6,78,59,0.4)" stroke="#34d399" stroke-width="1.3"/>
+        <text x="554" y="234" fill="#64748b" font-size="7">A4</text>
+        <text x="618" y="243" fill="white" font-size="8.5" font-weight="600" text-anchor="middle">CaseContext</text>
+        <text x="618" y="256" fill="#94a3b8" font-size="7.5" text-anchor="middle">.from_session(ctx or {})</text>
+        <text x="618" y="267" fill="#94a3b8" font-size="7.5" text-anchor="middle">.to_dict() ➜ _ctx_full</text>
+        <!-- A5 -->
+        <rect x="712" y="224" width="140" height="50" rx="6" fill="#0f172a"/>
+        <rect x="712" y="224" width="140" height="50" rx="6" fill="rgba(76,29,149,0.4)" stroke="#a78bfa" stroke-width="1.3"/>
+        <text x="718" y="234" fill="#64748b" font-size="7">A5</text>
+        <text x="782" y="243" fill="white" font-size="8.5" font-weight="600" text-anchor="middle">read prompt path</text>
+        <text x="782" y="256" fill="#94a3b8" font-size="7.5" text-anchor="middle">session['prompt_file_path']</text>
+        <text x="782" y="267" fill="#fb7185" font-size="7.5" text-anchor="middle">KeyError if absent</text>
+        <!-- A6 -->
+        <rect x="876" y="224" width="140" height="50" rx="6" fill="#0f172a"/>
+        <rect x="876" y="224" width="140" height="50" rx="6" fill="rgba(120,53,15,0.3)" stroke="#fbbf24" stroke-width="1.3"/>
+        <text x="882" y="234" fill="#64748b" font-size="7">A6</text>
+        <text x="946" y="243" fill="white" font-size="8.5" font-weight="600" text-anchor="middle">analyze_desc()</text>
+        <text x="946" y="256" fill="#94a3b8" font-size="7.5" text-anchor="middle">prompt_path, case_context,</text>
+        <text x="946" y="267" fill="#94a3b8" font-size="7.5" text-anchor="middle">return_usage=True ➜ (a, u)</text>
+
+        <!-- ---------- Flask session store (left of rows B/C) ---------- -->
+        <rect x="56" y="310" width="304" height="136" rx="6" fill="#0f172a"/>
+        <rect x="56" y="310" width="304" height="136" rx="6" fill="rgba(76,29,149,0.4)" stroke="#a78bfa" stroke-width="1.5"/>
+        <text x="208" y="328" fill="white" font-size="10" font-weight="600" text-anchor="middle">Flask session (signed cookie)</text>
+        <text x="70" y="346" fill="#a78bfa" font-size="8" font-weight="600">READ</text>
+        <text x="106" y="346" fill="#cbd5e1" font-size="8">case_context (A4) · prompt_file_path (A5)</text>
+        <text x="106" y="359" fill="#cbd5e1" font-size="8">gather_workflow_id (C5, C6, E2)</text>
+        <text x="70" y="377" fill="#a78bfa" font-size="8" font-weight="600">WRITE</text>
+        <text x="106" y="377" fill="#cbd5e1" font-size="8">classification: DEFAULT (A2) ➜ dict (B5)</text>
+        <text x="106" y="390" fill="#cbd5e1" font-size="8">ai_ips_analysis = analysis (B4)</text>
+        <text x="70" y="410" fill="#94a3b8" font-size="7.5">tests seed via seed_session() / session_transaction()</text>
+        <text x="70" y="423" fill="#94a3b8" font-size="7.5">and assert via get_session() after the request</text>
+        <text x="70" y="436" fill="#94a3b8" font-size="7.5">(classification kept DEFAULT on str / None / raise)</text>
+
+        <!-- ---------- Row B ---------- -->
+        <!-- B3 placeholder -->
+        <rect x="384" y="310" width="140" height="50" rx="6" fill="#0f172a"/>
+        <rect x="384" y="310" width="140" height="50" rx="6" fill="rgba(30,41,59,0.5)" stroke="#94a3b8" stroke-width="1.3"/>
+        <text x="390" y="320" fill="#64748b" font-size="7">B3</text>
+        <text x="454" y="329" fill="white" font-size="8.5" font-weight="600" text-anchor="middle">placeholder</text>
+        <text x="454" y="342" fill="#94a3b8" font-size="7.5" text-anchor="middle">"LLM helper currently</text>
+        <text x="454" y="353" fill="#94a3b8" font-size="7.5" text-anchor="middle">not available"</text>
+        <!-- B4 store + build -->
+        <rect x="548" y="310" width="140" height="50" rx="6" fill="#0f172a"/>
+        <rect x="548" y="310" width="140" height="50" rx="6" fill="rgba(76,29,149,0.4)" stroke="#a78bfa" stroke-width="1.3"/>
+        <text x="554" y="320" fill="#64748b" font-size="7">B4</text>
+        <text x="618" y="329" fill="white" font-size="8.5" font-weight="600" text-anchor="middle">store + build</text>
+        <text x="618" y="342" fill="#94a3b8" font-size="7.5" text-anchor="middle">ai_ips_analysis = a</text>
+        <text x="618" y="353" fill="#94a3b8" font-size="7.5" text-anchor="middle">{success:True, ai_analysis}</text>
+        <!-- B5 set classification -->
+        <rect x="712" y="310" width="140" height="50" rx="6" fill="#0f172a"/>
+        <rect x="712" y="310" width="140" height="50" rx="6" fill="rgba(76,29,149,0.4)" stroke="#a78bfa" stroke-width="1.3"/>
+        <text x="718" y="320" fill="#64748b" font-size="7">B5</text>
+        <text x="782" y="329" fill="white" font-size="8.5" font-weight="600" text-anchor="middle">set classification</text>
+        <text x="782" y="342" fill="#94a3b8" font-size="7.5" text-anchor="middle">session.classification =</text>
+        <text x="782" y="353" fill="#94a3b8" font-size="7.5" text-anchor="middle">a['Classification']</text>
+        <!-- B6 diamond -->
+        <polygon points="946,307 1016,335 946,363 876,335" fill="#0f172a"/>
+        <polygon points="946,307 1016,335 946,363 876,335" fill="rgba(30,41,59,0.5)" stroke="#94a3b8" stroke-width="1.3"/>
+        <text x="992" y="316" fill="#64748b" font-size="7">B6</text>
+        <text x="946" y="333" fill="white" font-size="8" font-weight="600" text-anchor="middle">type(a)</text>
+        <text x="946" y="344" fill="white" font-size="8" font-weight="600" text-anchor="middle">== dict?</text>
+
+        <!-- ---------- Row C ---------- -->
+        <!-- R response -->
+        <rect x="384" y="396" width="140" height="50" rx="6" fill="#0f172a"/>
+        <rect x="384" y="396" width="140" height="50" rx="6" fill="rgba(6,78,59,0.4)" stroke="#34d399" stroke-width="1.3"/>
+        <text x="390" y="406" fill="#64748b" font-size="7">R</text>
+        <text x="454" y="415" fill="white" font-size="8.5" font-weight="600" text-anchor="middle">200 Response</text>
+        <text x="454" y="428" fill="#94a3b8" font-size="7.5" text-anchor="middle">json.dumps(response)</text>
+        <text x="454" y="439" fill="#94a3b8" font-size="7.5" text-anchor="middle">application/json</text>
+        <!-- C4 diamond -->
+        <polygon points="618,393 688,421 618,449 548,421" fill="#0f172a"/>
+        <polygon points="618,393 688,421 618,449 548,421" fill="rgba(30,41,59,0.5)" stroke="#fbbf24" stroke-width="1.3"/>
+        <text x="664" y="402" fill="#64748b" font-size="7">C4</text>
+        <text x="618" y="419" fill="white" font-size="8" font-weight="600" text-anchor="middle">llm_helper</text>
+        <text x="618" y="430" fill="white" font-size="8" font-weight="600" text-anchor="middle">not None?</text>
+        <!-- C5 -->
+        <rect x="712" y="396" width="140" height="50" rx="6" fill="#0f172a"/>
+        <rect x="712" y="396" width="140" height="50" rx="6" fill="rgba(251,146,60,0.3)" stroke="#fb923c" stroke-width="1.3"/>
+        <text x="718" y="406" fill="#64748b" font-size="7">C5</text>
+        <text x="782" y="415" fill="white" font-size="8.5" font-weight="600" text-anchor="middle">record_feature_usage</text>
+        <text x="782" y="428" fill="#94a3b8" font-size="7.5" text-anchor="middle">a truthy ➜ "success"</text>
+        <text x="782" y="439" fill="#94a3b8" font-size="7.5" text-anchor="middle">else "failed"/empty_result</text>
+        <!-- C6 -->
+        <rect x="876" y="396" width="140" height="50" rx="6" fill="#0f172a"/>
+        <rect x="876" y="396" width="140" height="50" rx="6" fill="rgba(251,146,60,0.3)" stroke="#fb923c" stroke-width="1.3"/>
+        <text x="882" y="406" fill="#64748b" font-size="7">C6</text>
+        <text x="946" y="415" fill="white" font-size="8.5" font-weight="600" text-anchor="middle">attachment_decl.</text>
+        <text x="946" y="428" fill="#94a3b8" font-size="7.5" text-anchor="middle">ai_analysis · source ·</text>
+        <text x="946" y="439" fill="#94a3b8" font-size="7.5" text-anchor="middle">issue · domain</text>
+
+        <!-- =====================================================================
+             REGION D · Collaborators (mocks) and how the route uses them
+             ===================================================================== -->
+        <rect x="40" y="520" width="1020" height="122" rx="12" fill="rgba(251,191,36,0.04)" stroke="#94a3b8" stroke-width="1" stroke-dasharray="8,4"/>
+        <line x1="26" y1="538" x2="40" y2="538" stroke="#fbbf24" stroke-width="1.5"/>
+        <text x="54" y="542" fill="#94a3b8" font-size="10" font-weight="600">Collaborators · what each test controls and which route nodes touch it</text>
+
+        <!-- D1 llm_helper -->
+        <rect x="56" y="552" width="316" height="80" rx="6" fill="#0f172a"/>
+        <rect x="56" y="552" width="316" height="80" rx="6" fill="rgba(120,53,15,0.3)" stroke="#fbbf24" stroke-width="1.5"/>
+        <text x="68" y="568" fill="white" font-size="9.5" font-weight="600">app_config.llm_helper · MagicMock</text>
+        <text x="68" y="584" fill="#cbd5e1" font-size="8">model = "test-model" (setUp)</text>
+        <text x="68" y="597" fill="#cbd5e1" font-size="8">analyze_desc.return_value = (analysis, USAGE)</text>
+        <text x="68" y="610" fill="#cbd5e1" font-size="8">analyze_desc.side_effect = TimeoutError(...)</text>
+        <text x="68" y="623" fill="#94a3b8" font-size="8">= None ➜ placeholder path · used by A3 A6 C4</text>
+
+        <!-- D2 gather_service -->
+        <rect x="392" y="552" width="316" height="80" rx="6" fill="#0f172a"/>
+        <rect x="392" y="552" width="316" height="80" rx="6" fill="rgba(251,146,60,0.3)" stroke="#fb923c" stroke-width="1.5"/>
+        <text x="404" y="568" fill="white" font-size="9.5" font-weight="600">gather_service · @patch (class level)</text>
+        <text x="404" y="584" fill="#cbd5e1" font-size="8">record_feature_usage(wf, feature_code, model,</text>
+        <text x="404" y="597" fill="#cbd5e1" font-size="8">  usage, issue, domain, trigger='click_ai', …)</text>
+        <text x="404" y="610" fill="#cbd5e1" font-size="8">record_attachment_declaration(wf, ai_analysis, …)</text>
+        <text x="404" y="623" fill="#94a3b8" font-size="8">domain = ctx.wifi_or_bt or 'wifi' · C5 C6 E2</text>
+
+        <!-- D3 CaseContext -->
+        <rect x="728" y="552" width="316" height="80" rx="6" fill="#0f172a"/>
+        <rect x="728" y="552" width="316" height="80" rx="6" fill="rgba(6,78,59,0.4)" stroke="#34d399" stroke-width="1.5"/>
+        <text x="740" y="568" fill="white" font-size="9.5" font-weight="600">CaseContext · models.models (real)</text>
+        <text x="740" y="584" fill="#cbd5e1" font-size="8">from_session(case_context or {}).to_dict()</text>
+        <text x="740" y="597" fill="#cbd5e1" font-size="8">rehydrates comments / attachment_list sidecar</text>
+        <text x="740" y="610" fill="#cbd5e1" font-size="8">{} ➜ empty ctx, case_nbr None (T8)</text>
+        <text x="740" y="623" fill="#94a3b8" font-size="8">bt: create_mock_case_context(wifi_or_bt='bt')</text>
+
+        <!-- =====================================================================
+             REGION S · Structure
+             ===================================================================== -->
+        <rect x="40" y="658" width="1020" height="84" rx="12" fill="rgba(251,191,36,0.04)" stroke="#a78bfa" stroke-width="1" stroke-dasharray="8,4"/>
+        <line x1="26" y1="676" x2="40" y2="676" stroke="#fbbf24" stroke-width="1.5"/>
+        <text x="54" y="680" fill="#a78bfa" font-size="10" font-weight="600">Class TestLlmBlueprintStructure · route registration</text>
+
+        <text x="58" y="694" fill="#64748b" font-size="7">S1 · test_blueprint_registered_with_url_prefix</text>
+        <rect x="58" y="697" width="400" height="34" rx="6" fill="#0f172a"/>
+        <rect x="58" y="697" width="400" height="34" rx="6" fill="rgba(8,51,68,0.4)" stroke="#22d3ee" stroke-width="1.2"/>
+        <text x="68" y="711" fill="white" font-size="8.5">inspect app.url_map for 'llm.*' endpoints</text>
+        <text x="68" y="724" fill="#94a3b8" font-size="8">(no request issued)</text>
+        <line x1="464" y1="714" x2="510" y2="714" stroke="#64748b" stroke-width="1.5" marker-end="url(#arrowhead)"/>
+        <rect x="516" y="697" width="528" height="34" rx="6" fill="#0f172a"/>
+        <rect x="516" y="697" width="528" height="34" rx="6" fill="rgba(76,29,149,0.4)" stroke="#a78bfa" stroke-width="1.2"/>
+        <text x="528" y="711" fill="white" font-size="8.5">app.blueprints["llm"] is llm_bp · url_prefix "/llm"</text>
+        <text x="528" y="724" fill="#94a3b8" font-size="8">3 rules: /get_llm_analysis (GET) · /personal_token/pending (GET) · /personal_token/update (POST)</text>
+
+        <!-- =====================================================================
+             REGION T · get_llm_analysis test cases
+             ===================================================================== -->
+        <rect x="40" y="758" width="1020" height="572" rx="12" fill="rgba(251,191,36,0.04)" stroke="#fbbf24" stroke-width="1" stroke-dasharray="8,4"/>
+        <line x1="26" y1="778" x2="40" y2="778" stroke="#fbbf24" stroke-width="1.5"/>
+        <text x="54" y="780" fill="#fbbf24" font-size="10" font-weight="600">GET /llm/get_llm_analysis · TestGetLlmAnalysis — input (left) ➜ expected output (right) · path = nodes visited</text>
+
+        <!-- T1 dict analysis -->
+        <text x="58" y="795" fill="#64748b" font-size="7">T1 · test_dict_analysis_updates_classification_and_records_success</text>
+        <rect x="58" y="798" width="400" height="40" rx="6" fill="#0f172a"/>
+        <rect x="58" y="798" width="400" height="40" rx="6" fill="rgba(8,51,68,0.4)" stroke="#22d3ee" stroke-width="1.2"/>
+        <text x="68" y="811" fill="white" font-size="8.5">analyze_desc ➜ ({Classification: Disconnect/85/[drop], Summary}, USAGE)</text>
+        <text x="68" y="823" fill="#94a3b8" font-size="8">session: prompt_file_path=PROMPT_PATH · gather_workflow_id='wf-7'</text>
+        <text x="68" y="834" fill="#22d3ee" font-size="7.5">path: A1→A2→A3(no)→A4→A5→A6→B6(yes)→B5→B4→C4→C5→C6→R</text>
+        <line x1="464" y1="818" x2="510" y2="818" stroke="#64748b" stroke-width="1.5" marker-end="url(#arrowhead)"/>
+        <rect x="516" y="798" width="528" height="40" rx="6" fill="#0f172a"/>
+        <rect x="516" y="798" width="528" height="40" rx="6" fill="rgba(6,78,59,0.4)" stroke="#34d399" stroke-width="1.2"/>
+        <text x="528" y="811" fill="white" font-size="8.5">200 application/json {success: True, ai_analysis: analysis} · classification = dict</text>
+        <text x="528" y="823" fill="#94a3b8" font-size="8">analyze_desc(PROMPT_PATH, return_usage=True, case_nbr=TEST_CASE_NBR, model 'TestModel X1')</text>
+        <text x="528" y="834" fill="#94a3b8" font-size="7.5">gather usage ×1(wf-7, test-model, USAGE, wifi, click_ai, "success", error_code="") + declaration ×1</text>
+
+        <!-- T2 string analysis -->
+        <text x="58" y="855" fill="#64748b" font-size="7">T2 · test_string_analysis_keeps_default_classification</text>
+        <rect x="58" y="858" width="400" height="40" rx="6" fill="#0f172a"/>
+        <rect x="58" y="858" width="400" height="40" rx="6" fill="rgba(8,51,68,0.4)" stroke="#22d3ee" stroke-width="1.2"/>
+        <text x="68" y="871" fill="white" font-size="8.5">analyze_desc ➜ ("plain text summary", USAGE)</text>
+        <text x="68" y="883" fill="#94a3b8" font-size="8">session: prompt_file_path=PROMPT_PATH</text>
+        <text x="68" y="894" fill="#22d3ee" font-size="7.5">path: …A6→B6(no: str)→B4→C4→C5→C6→R</text>
+        <line x1="464" y1="878" x2="510" y2="878" stroke="#64748b" stroke-width="1.5" marker-end="url(#arrowhead)"/>
+        <rect x="516" y="858" width="528" height="40" rx="6" fill="#0f172a"/>
+        <rect x="516" y="858" width="528" height="40" rx="6" fill="rgba(6,78,59,0.4)" stroke="#34d399" stroke-width="1.2"/>
+        <text x="528" y="871" fill="white" font-size="8.5">200 · ai_analysis == "plain text summary"</text>
+        <text x="528" y="883" fill="#94a3b8" font-size="8">session.classification stays DEFAULT (Unclassified, 0, [])</text>
+        <text x="528" y="894" fill="#94a3b8" font-size="7.5">record_feature_usage status = "success"</text>
+
+        <!-- T3 empty analysis -->
+        <text x="58" y="915" fill="#64748b" font-size="7">T3 · test_empty_analysis_records_failed_status</text>
+        <rect x="58" y="918" width="400" height="40" rx="6" fill="#0f172a"/>
+        <rect x="58" y="918" width="400" height="40" rx="6" fill="rgba(8,51,68,0.4)" stroke="#22d3ee" stroke-width="1.2"/>
+        <text x="68" y="931" fill="white" font-size="8.5">analyze_desc ➜ ("", USAGE)</text>
+        <text x="68" y="943" fill="#94a3b8" font-size="8">session: prompt_file_path=PROMPT_PATH</text>
+        <text x="68" y="954" fill="#22d3ee" font-size="7.5">path: …A6→B6(no)→B4→C4→C5(falsy a)→C6→R</text>
+        <line x1="464" y1="938" x2="510" y2="938" stroke="#64748b" stroke-width="1.5" marker-end="url(#arrowhead)"/>
+        <rect x="516" y="918" width="528" height="40" rx="6" fill="#0f172a"/>
+        <rect x="516" y="918" width="528" height="40" rx="6" fill="rgba(6,78,59,0.4)" stroke="#fb923c" stroke-width="1.2"/>
+        <text x="528" y="931" fill="white" font-size="8.5">200 · {success: True, ai_analysis: ""}  (HTTP still succeeds)</text>
+        <text x="528" y="943" fill="#fb923c" font-size="8">record_feature_usage status = "failed" · error_code = "empty_result"</text>
+        <text x="528" y="954" fill="#94a3b8" font-size="7.5">telemetry flags the empty LLM result; the user still gets a 200</text>
+
+        <!-- T4 bt domain -->
+        <text x="58" y="975" fill="#64748b" font-size="7">T4 · test_bt_case_records_bt_domain</text>
+        <rect x="58" y="978" width="400" height="40" rx="6" fill="#0f172a"/>
+        <rect x="58" y="978" width="400" height="40" rx="6" fill="rgba(8,51,68,0.4)" stroke="#22d3ee" stroke-width="1.2"/>
+        <text x="68" y="991" fill="white" font-size="8.5">analyze_desc ➜ ("bt summary", USAGE)</text>
+        <text x="68" y="1003" fill="#94a3b8" font-size="8">case_context = create_mock_case_context(wifi_or_bt="bt") + prompt</text>
+        <text x="68" y="1014" fill="#22d3ee" font-size="7.5">path: same as T2 · domain = _ctx_full["wifi_or_bt"]</text>
+        <line x1="464" y1="998" x2="510" y2="998" stroke="#64748b" stroke-width="1.5" marker-end="url(#arrowhead)"/>
+        <rect x="516" y="978" width="528" height="40" rx="6" fill="#0f172a"/>
+        <rect x="516" y="978" width="528" height="40" rx="6" fill="rgba(6,78,59,0.4)" stroke="#34d399" stroke-width="1.2"/>
+        <text x="528" y="991" fill="white" font-size="8.5">record_feature_usage(…, domain="bt")</text>
+        <text x="528" y="1003" fill="#94a3b8" font-size="8">record_attachment_declaration(…, domain="bt")</text>
+        <text x="528" y="1014" fill="#94a3b8" font-size="7.5">domain comes from the case context, not hard-coded "wifi"</text>
+
+        <!-- T5 helper None -->
+        <text x="58" y="1035" fill="#64748b" font-size="7">T5 · test_llm_helper_unavailable_returns_placeholder</text>
+        <rect x="58" y="1038" width="400" height="40" rx="6" fill="#0f172a"/>
+        <rect x="58" y="1038" width="400" height="40" rx="6" fill="rgba(8,51,68,0.4)" stroke="#22d3ee" stroke-width="1.2"/>
+        <text x="68" y="1051" fill="white" font-size="8.5">app_config.llm_helper = None</text>
+        <text x="68" y="1063" fill="#94a3b8" font-size="8">seed_session() · no prompt_file_path needed</text>
+        <text x="68" y="1074" fill="#22d3ee" font-size="7.5">path: A1→A2→A3(yes)→B3→B4→C4(no)→R</text>
+        <line x1="464" y1="1058" x2="510" y2="1058" stroke="#64748b" stroke-width="1.5" marker-end="url(#arrowhead)"/>
+        <rect x="516" y="1038" width="528" height="40" rx="6" fill="#0f172a"/>
+        <rect x="516" y="1038" width="528" height="40" rx="6" fill="rgba(6,78,59,0.4)" stroke="#34d399" stroke-width="1.2"/>
+        <text x="528" y="1051" fill="white" font-size="8.5">200 · {success: True, ai_analysis: "LLM helper currently not available"}</text>
+        <text x="528" y="1063" fill="#94a3b8" font-size="8">session.classification = DEFAULT · ai_ips_analysis = placeholder</text>
+        <text x="528" y="1074" fill="#94a3b8" font-size="7.5">record_feature_usage &amp; record_attachment_declaration NOT called</text>
+
+        <!-- T6 LLM exception -->
+        <text x="58" y="1095" fill="#64748b" font-size="7">T6 · test_llm_exception_returns_500_and_records_failure</text>
+        <rect x="58" y="1098" width="400" height="40" rx="6" fill="#0f172a"/>
+        <rect x="58" y="1098" width="400" height="40" rx="6" fill="rgba(8,51,68,0.4)" stroke="#22d3ee" stroke-width="1.2"/>
+        <text x="68" y="1111" fill="white" font-size="8.5">analyze_desc.side_effect = TimeoutError("LLM timed out")</text>
+        <text x="68" y="1123" fill="#94a3b8" font-size="8">session: prompt_file_path=PROMPT_PATH · gather_workflow_id='wf-7'</text>
+        <text x="68" y="1134" fill="#fb7185" font-size="7.5">path: …A5→A6 ✗ raise→E1→E2→E3</text>
+        <line x1="464" y1="1118" x2="510" y2="1118" stroke="#64748b" stroke-width="1.5" marker-end="url(#arrowhead)"/>
+        <rect x="516" y="1098" width="528" height="40" rx="6" fill="#0f172a"/>
+        <rect x="516" y="1098" width="528" height="40" rx="6" fill="rgba(136,19,55,0.4)" stroke="#fb7185" stroke-width="1.2"/>
+        <text x="528" y="1111" fill="white" font-size="8.5">500 · {success: False, error: "LLM timed out"} · classification stays DEFAULT</text>
+        <text x="528" y="1123" fill="#94a3b8" font-size="8">usage ×1(wf-7, test-model, all-zero usage, status="failed", error_code="TimeoutError")</text>
+        <text x="528" y="1134" fill="#94a3b8" font-size="7.5">record_attachment_declaration NOT called</text>
+
+        <!-- T7 missing prompt path -->
+        <text x="58" y="1155" fill="#64748b" font-size="7">T7 · test_missing_prompt_file_path_returns_500</text>
+        <rect x="58" y="1158" width="400" height="40" rx="6" fill="#0f172a"/>
+        <rect x="58" y="1158" width="400" height="40" rx="6" fill="rgba(8,51,68,0.4)" stroke="#22d3ee" stroke-width="1.2"/>
+        <text x="68" y="1171" fill="white" font-size="8.5">seed_session() — case_context present, no prompt_file_path</text>
+        <text x="68" y="1183" fill="#94a3b8" font-size="8">session['prompt_file_path'] ➜ KeyError inside the try</text>
+        <text x="68" y="1194" fill="#fb7185" font-size="7.5">path: …A4→A5 ✗ KeyError→E1→E2→E3</text>
+        <line x1="464" y1="1178" x2="510" y2="1178" stroke="#64748b" stroke-width="1.5" marker-end="url(#arrowhead)"/>
+        <rect x="516" y="1158" width="528" height="40" rx="6" fill="#0f172a"/>
+        <rect x="516" y="1158" width="528" height="40" rx="6" fill="rgba(136,19,55,0.4)" stroke="#fb7185" stroke-width="1.2"/>
+        <text x="528" y="1171" fill="white" font-size="8.5">500 · success False · error message mentions "prompt_file_path"</text>
+        <text x="528" y="1183" fill="#94a3b8" font-size="8">analyze_desc NOT called (A6 never reached)</text>
+        <text x="528" y="1194" fill="#94a3b8" font-size="7.5">record_feature_usage error_code = "KeyError"</text>
+
+        <!-- T8 missing case_context -->
+        <text x="58" y="1215" fill="#64748b" font-size="7">T8 · test_missing_case_context_still_calls_llm_with_empty_context</text>
+        <rect x="58" y="1218" width="400" height="40" rx="6" fill="#0f172a"/>
+        <rect x="58" y="1218" width="400" height="40" rx="6" fill="rgba(8,51,68,0.4)" stroke="#22d3ee" stroke-width="1.2"/>
+        <text x="68" y="1231" fill="white" font-size="8.5">analyze_desc ➜ ("summary", USAGE)</text>
+        <text x="68" y="1243" fill="#94a3b8" font-size="8">session: prompt_file_path only · no case_context</text>
+        <text x="68" y="1254" fill="#22d3ee" font-size="7.5">path: …A4 from_session({}) ➜ empty ctx→A5→A6→…→R</text>
+        <line x1="464" y1="1238" x2="510" y2="1238" stroke="#64748b" stroke-width="1.5" marker-end="url(#arrowhead)"/>
+        <rect x="516" y="1218" width="528" height="40" rx="6" fill="#0f172a"/>
+        <rect x="516" y="1218" width="528" height="40" rx="6" fill="rgba(6,78,59,0.4)" stroke="#34d399" stroke-width="1.2"/>
+        <text x="528" y="1231" fill="white" font-size="8.5">200 · analyze_desc case_context["case_nbr"] is None</text>
+        <text x="528" y="1243" fill="#94a3b8" font-size="8">record_feature_usage domain defaults to "wifi"</text>
+        <text x="528" y="1254" fill="#94a3b8" font-size="7.5">an empty CaseContext does not block the LLM call</text>
+
+        <!-- T9 telemetry failure -->
+        <text x="58" y="1275" fill="#64748b" font-size="7">T9 · test_telemetry_failure_is_swallowed</text>
+        <rect x="58" y="1278" width="400" height="40" rx="6" fill="#0f172a"/>
+        <rect x="58" y="1278" width="400" height="40" rx="6" fill="rgba(8,51,68,0.4)" stroke="#22d3ee" stroke-width="1.2"/>
+        <text x="68" y="1291" fill="white" font-size="8.5">analyze_desc ➜ ("summary", USAGE)</text>
+        <text x="68" y="1303" fill="#94a3b8" font-size="8">record_feature_usage.side_effect = RuntimeError("gather down")</text>
+        <text x="68" y="1314" fill="#fb7185" font-size="7.5">path: …C4→C5 ✗ raise ⇢ except: pass→R (C6 skipped)</text>
+        <line x1="464" y1="1298" x2="510" y2="1298" stroke="#64748b" stroke-width="1.5" marker-end="url(#arrowhead)"/>
+        <rect x="516" y="1278" width="528" height="40" rx="6" fill="#0f172a"/>
+        <rect x="516" y="1278" width="528" height="40" rx="6" fill="rgba(6,78,59,0.4)" stroke="#34d399" stroke-width="1.2"/>
+        <text x="528" y="1291" fill="white" font-size="8.5">200 · {success: True, ai_analysis: "summary"}</text>
+        <text x="528" y="1303" fill="#94a3b8" font-size="8">record_attachment_declaration NOT called (same try block)</text>
+        <text x="528" y="1314" fill="#94a3b8" font-size="7.5">a telemetry failure never breaks the user-facing response</text>
+
+        <!-- =====================================================================
+             REGION U · Personal gnaigpt token routes
+             ===================================================================== -->
+        <rect x="40" y="1350" width="1020" height="640" rx="12" fill="rgba(251,191,36,0.04)" stroke="#fbbf24" stroke-width="1" stroke-dasharray="8,4"/>
+        <line x1="26" y1="1368" x2="40" y2="1368" stroke="#fbbf24" stroke-width="1.5"/>
+        <text x="54" y="1372" fill="#fbbf24" font-size="10" font-weight="600">Personal gnaigpt token · _login() patched ➜ "flee5" · VALID_TOKEN = header.payload.signature (3 base64url segments) · input (left) ➜ expected (right)</text>
+
+        <!-- ---- TestPersonalTokenPending · GET /llm/personal_token/pending ---- -->
+        <text x="58" y="1390" fill="#a78bfa" font-size="8.5" font-weight="600">TestPersonalTokenPending · GET /personal_token/pending — polling backstop for the expiry modal</text>
+
+        <!-- P1 -->
+        <text x="58" y="1400" fill="#64748b" font-size="7">P1 · test_pending_true_when_login_flagged</text>
+        <rect x="58" y="1403" width="400" height="40" rx="6" fill="#0f172a"/>
+        <rect x="58" y="1403" width="400" height="40" rx="6" fill="rgba(8,51,68,0.4)" stroke="#22d3ee" stroke-width="1.2"/>
+        <text x="68" y="1416" fill="white" font-size="8.5">app_config.personal_token_expired_pending = {"flee5": True}</text>
+        <text x="68" y="1428" fill="#94a3b8" font-size="8">GET /llm/personal_token/pending</text>
+        <text x="68" y="1439" fill="#22d3ee" font-size="7.5">reads pending.get(login) ➜ truthy</text>
+        <line x1="464" y1="1423" x2="510" y2="1423" stroke="#64748b" stroke-width="1.5" marker-end="url(#arrowhead)"/>
+        <rect x="516" y="1403" width="528" height="40" rx="6" fill="#0f172a"/>
+        <rect x="516" y="1403" width="528" height="40" rx="6" fill="rgba(6,78,59,0.4)" stroke="#34d399" stroke-width="1.2"/>
+        <text x="528" y="1416" fill="white" font-size="8.5">200 · {pending: True, login: "flee5"}</text>
+        <text x="528" y="1428" fill="#94a3b8" font-size="8">a flagged login reports a pending token expiry</text>
+
+        <!-- P2 -->
+        <text x="58" y="1461" fill="#64748b" font-size="7">P2 · test_pending_false_when_not_flagged</text>
+        <rect x="58" y="1464" width="400" height="40" rx="6" fill="#0f172a"/>
+        <rect x="58" y="1464" width="400" height="40" rx="6" fill="rgba(8,51,68,0.4)" stroke="#22d3ee" stroke-width="1.2"/>
+        <text x="68" y="1477" fill="white" font-size="8.5">personal_token_expired_pending = {}  (empty map)</text>
+        <text x="68" y="1489" fill="#94a3b8" font-size="8">GET /llm/personal_token/pending</text>
+        <line x1="464" y1="1484" x2="510" y2="1484" stroke="#64748b" stroke-width="1.5" marker-end="url(#arrowhead)"/>
+        <rect x="516" y="1464" width="528" height="40" rx="6" fill="#0f172a"/>
+        <rect x="516" y="1464" width="528" height="40" rx="6" fill="rgba(6,78,59,0.4)" stroke="#34d399" stroke-width="1.2"/>
+        <text x="528" y="1477" fill="white" font-size="8.5">200 · {pending: False, login: "flee5"}</text>
+        <text x="528" y="1489" fill="#94a3b8" font-size="8">an unflagged login reports no pending expiry</text>
+
+        <!-- P3 -->
+        <text x="58" y="1522" fill="#64748b" font-size="7">P3 · test_pending_false_when_no_login</text>
+        <rect x="58" y="1525" width="400" height="40" rx="6" fill="#0f172a"/>
+        <rect x="58" y="1525" width="400" height="40" rx="6" fill="rgba(8,51,68,0.4)" stroke="#22d3ee" stroke-width="1.2"/>
+        <text x="68" y="1538" fill="white" font-size="8.5">_login() ➜ "" · pending = {"flee5": True}</text>
+        <text x="68" y="1550" fill="#94a3b8" font-size="8">GET /llm/personal_token/pending</text>
+        <line x1="464" y1="1545" x2="510" y2="1545" stroke="#64748b" stroke-width="1.5" marker-end="url(#arrowhead)"/>
+        <rect x="516" y="1525" width="528" height="40" rx="6" fill="#0f172a"/>
+        <rect x="516" y="1525" width="528" height="40" rx="6" fill="rgba(6,78,59,0.4)" stroke="#34d399" stroke-width="1.2"/>
+        <text x="528" y="1538" fill="white" font-size="8.5">200 · {pending: False, login: ""}</text>
+        <text x="528" y="1550" fill="#94a3b8" font-size="8">no resolvable login ➜ never pending</text>
+
+        <!-- ---- TestUpdatePersonalToken · POST /llm/personal_token/update ---- -->
+        <text x="58" y="1583" fill="#a78bfa" font-size="8.5" font-weight="600">TestUpdatePersonalToken · POST /personal_token/update — strict all-or-nothing refresh; each step rolls back on failure</text>
+
+        <!-- U1 -->
+        <text x="58" y="1596" fill="#64748b" font-size="7">U1 · test_invalid_token_format_returns_400</text>
+        <rect x="58" y="1599" width="400" height="40" rx="6" fill="#0f172a"/>
+        <rect x="58" y="1599" width="400" height="40" rx="6" fill="rgba(8,51,68,0.4)" stroke="#22d3ee" stroke-width="1.2"/>
+        <text x="68" y="1612" fill="white" font-size="8.5">POST {token: "not-a-jwt"}</text>
+        <text x="68" y="1624" fill="#94a3b8" font-size="8">_is_valid_jwt_shape ➜ False (not 3 segments)</text>
+        <text x="68" y="1635" fill="#fb7185" font-size="7.5">rejected before any file is touched</text>
+        <line x1="464" y1="1619" x2="510" y2="1619" stroke="#64748b" stroke-width="1.5" marker-end="url(#arrowhead)"/>
+        <rect x="516" y="1599" width="528" height="40" rx="6" fill="#0f172a"/>
+        <rect x="516" y="1599" width="528" height="40" rx="6" fill="rgba(136,19,55,0.4)" stroke="#fb7185" stroke-width="1.2"/>
+        <text x="528" y="1612" fill="white" font-size="8.5">400 · {ok: False, reason: "invalid_format"}</text>
+        <text x="528" y="1624" fill="#94a3b8" font-size="8">_snapshot_and_write / configure NOT called</text>
+
+        <!-- U2 -->
+        <text x="58" y="1654" fill="#64748b" font-size="7">U2 · test_empty_token_returns_400</text>
+        <rect x="58" y="1657" width="400" height="40" rx="6" fill="#0f172a"/>
+        <rect x="58" y="1657" width="400" height="40" rx="6" fill="rgba(8,51,68,0.4)" stroke="#22d3ee" stroke-width="1.2"/>
+        <text x="68" y="1670" fill="white" font-size="8.5">POST {}  (no token field)</text>
+        <text x="68" y="1682" fill="#94a3b8" font-size="8">token ➜ "" ➜ invalid shape</text>
+        <line x1="464" y1="1677" x2="510" y2="1677" stroke="#64748b" stroke-width="1.5" marker-end="url(#arrowhead)"/>
+        <rect x="516" y="1657" width="528" height="40" rx="6" fill="#0f172a"/>
+        <rect x="516" y="1657" width="528" height="40" rx="6" fill="rgba(136,19,55,0.4)" stroke="#fb7185" stroke-width="1.2"/>
+        <text x="528" y="1670" fill="white" font-size="8.5">400 · reason "invalid_format"</text>
+        <text x="528" y="1682" fill="#94a3b8" font-size="8">a missing token is treated as malformed</text>
+
+        <!-- U3 -->
+        <text x="58" y="1712" fill="#64748b" font-size="7">U3 · test_no_login_returns_500</text>
+        <rect x="58" y="1715" width="400" height="40" rx="6" fill="#0f172a"/>
+        <rect x="58" y="1715" width="400" height="40" rx="6" fill="rgba(8,51,68,0.4)" stroke="#22d3ee" stroke-width="1.2"/>
+        <text x="68" y="1728" fill="white" font-size="8.5">POST {token: VALID_TOKEN} · _login() ➜ ""</text>
+        <text x="68" y="1740" fill="#94a3b8" font-size="8">valid shape, but no Windows login resolvable</text>
+        <line x1="464" y1="1735" x2="510" y2="1735" stroke="#64748b" stroke-width="1.5" marker-end="url(#arrowhead)"/>
+        <rect x="516" y="1715" width="528" height="40" rx="6" fill="#0f172a"/>
+        <rect x="516" y="1715" width="528" height="40" rx="6" fill="rgba(136,19,55,0.4)" stroke="#fb7185" stroke-width="1.2"/>
+        <text x="528" y="1728" fill="white" font-size="8.5">500 · reason "no_login"</text>
+        <text x="528" y="1740" fill="#94a3b8" font-size="8">aborts before touching files</text>
+
+        <!-- U4 -->
+        <text x="58" y="1770" fill="#64748b" font-size="7">U4 · test_missing_avatarfiles_dir_returns_500</text>
+        <rect x="58" y="1773" width="400" height="40" rx="6" fill="#0f172a"/>
+        <rect x="58" y="1773" width="400" height="40" rx="6" fill="rgba(8,51,68,0.4)" stroke="#22d3ee" stroke-width="1.2"/>
+        <text x="68" y="1786" fill="white" font-size="8.5">POST {token: VALID_TOKEN} · avatarfiles_dir = None</text>
+        <text x="68" y="1798" fill="#94a3b8" font-size="8">local IntelAvatar_files dir not initialised</text>
+        <line x1="464" y1="1793" x2="510" y2="1793" stroke="#64748b" stroke-width="1.5" marker-end="url(#arrowhead)"/>
+        <rect x="516" y="1773" width="528" height="40" rx="6" fill="#0f172a"/>
+        <rect x="516" y="1773" width="528" height="40" rx="6" fill="rgba(136,19,55,0.4)" stroke="#fb7185" stroke-width="1.2"/>
+        <text x="528" y="1786" fill="white" font-size="8.5">500 · reason "no_avatarfiles_dir"</text>
+        <text x="528" y="1798" fill="#94a3b8" font-size="8">aborts before touching files</text>
+
+        <!-- U5 -->
+        <text x="58" y="1828" fill="#64748b" font-size="7">U5 · test_success_hot_swaps_and_clears_pending</text>
+        <rect x="58" y="1831" width="400" height="40" rx="6" fill="#0f172a"/>
+        <rect x="58" y="1831" width="400" height="40" rx="6" fill="rgba(8,51,68,0.4)" stroke="#22d3ee" stroke-width="1.2"/>
+        <text x="68" y="1844" fill="white" font-size="8.5">patch _snapshot_and_write · _update_keys_module · configure_llm_personal_token</text>
+        <text x="68" y="1856" fill="#94a3b8" font-size="8">pending = {"flee5": True} · no cached case_context</text>
+        <text x="68" y="1867" fill="#22d3ee" font-size="7.5">local write ➜ keys update ➜ live hot-swap</text>
+        <line x1="464" y1="1851" x2="510" y2="1851" stroke="#64748b" stroke-width="1.5" marker-end="url(#arrowhead)"/>
+        <rect x="516" y="1831" width="528" height="40" rx="6" fill="#0f172a"/>
+        <rect x="516" y="1831" width="528" height="40" rx="6" fill="rgba(6,78,59,0.4)" stroke="#34d399" stroke-width="1.2"/>
+        <text x="528" y="1844" fill="white" font-size="8.5">200 · {ok: True} · configure called once</text>
+        <text x="528" y="1856" fill="#94a3b8" font-size="8">pending flag cleared: "flee5" popped from the map</text>
+        <text x="528" y="1867" fill="#94a3b8" font-size="7.5">local file written · keys map updated</text>
+
+        <!-- U6 -->
+        <text x="58" y="1886" fill="#64748b" font-size="7">U6 · test_local_write_failure_returns_500</text>
+        <rect x="58" y="1889" width="400" height="40" rx="6" fill="#0f172a"/>
+        <rect x="58" y="1889" width="400" height="40" rx="6" fill="rgba(8,51,68,0.4)" stroke="#22d3ee" stroke-width="1.2"/>
+        <text x="68" y="1902" fill="white" font-size="8.5">_snapshot_and_write.side_effect = OSError("disk full")</text>
+        <text x="68" y="1914" fill="#94a3b8" font-size="8">POST {token: VALID_TOKEN}</text>
+        <text x="68" y="1925" fill="#fb7185" font-size="7.5">fails at the first (local) write</text>
+        <line x1="464" y1="1909" x2="510" y2="1909" stroke="#64748b" stroke-width="1.5" marker-end="url(#arrowhead)"/>
+        <rect x="516" y="1889" width="528" height="40" rx="6" fill="#0f172a"/>
+        <rect x="516" y="1889" width="528" height="40" rx="6" fill="rgba(136,19,55,0.4)" stroke="#fb7185" stroke-width="1.2"/>
+        <text x="528" y="1902" fill="white" font-size="8.5">500 · reason "local_write_failed"</text>
+        <text x="528" y="1914" fill="#94a3b8" font-size="8">_restore NOT called (nothing committed yet)</text>
+
+        <!-- U7 -->
+        <text x="58" y="1944" fill="#64748b" font-size="7">U7 · test_hot_swap_failure_rolls_back_and_returns_500</text>
+        <rect x="58" y="1947" width="400" height="40" rx="6" fill="#0f172a"/>
+        <rect x="58" y="1947" width="400" height="40" rx="6" fill="rgba(8,51,68,0.4)" stroke="#22d3ee" stroke-width="1.2"/>
+        <text x="68" y="1960" fill="white" font-size="8.5">configure_llm_personal_token raises RuntimeError("swap boom")</text>
+        <text x="68" y="1972" fill="#94a3b8" font-size="8">files already written when the live swap fails</text>
+        <text x="68" y="1983" fill="#fb7185" font-size="7.5">fails at step 4 (hot-swap)</text>
+        <line x1="464" y1="1967" x2="510" y2="1967" stroke="#64748b" stroke-width="1.5" marker-end="url(#arrowhead)"/>
+        <rect x="516" y="1947" width="528" height="40" rx="6" fill="#0f172a"/>
+        <rect x="516" y="1947" width="528" height="40" rx="6" fill="rgba(136,19,55,0.4)" stroke="#fb7185" stroke-width="1.2"/>
+        <text x="528" y="1960" fill="white" font-size="8.5">500 · reason "hot_swap_failed"</text>
+        <text x="528" y="1972" fill="#94a3b8" font-size="8">_restore_keys_module_personal_token &amp; _restore each called once</text>
+        <text x="528" y="1983" fill="#94a3b8" font-size="7.5">keys map and local file both rolled back</text>
+      </svg>
+    </div>
+
+    <!-- Info Cards -->
+    <div class="cards">
+      <div class="card">
+        <div class="card-header">
+          <div class="card-dot amber"></div>
+          <h3>Endpoint under test</h3>
+        </div>
+        <ul>
+          <li>• <code>GET /llm/get_llm_analysis</code> · prefix <code>/llm</code></li>
+          <li>• 20 tests · 4 classes (structure + analysis + 2 token)</li>
+          <li>• calls <code>llm_helper.analyze_desc(prompt_path, case_context, return_usage=True)</code></li>
+          <li>• <code>/personal_token/update</code> hot-swaps the per-user gnaigpt token</li>
+          <li>• telemetry feature <code>select_attachments_ai_summary</code>, trigger <code>click_ai</code></li>
+        </ul>
+      </div>
+
+      <div class="card">
+        <div class="card-header">
+          <div class="card-dot orange"></div>
+          <h3>Fixtures &amp; mocks</h3>
+        </div>
+        <ul>
+          <li>• <code>app_config.llm_helper</code> → MagicMock, <code>model="test-model"</code> (or <code>None</code>)</li>
+          <li>• <code>gather_service</code> patched at point of use (class decorator)</li>
+          <li>• <code>CaseContext</code> is real — rehydrates the session context</li>
+          <li>• <code>USAGE</code> = 1 call · 100 in · 20 out · 120 total tokens</li>
+          <li>• session seeded with <code>prompt_file_path</code> / <code>gather_workflow_id</code></li>
+        </ul>
+      </div>
+
+      <div class="card">
+        <div class="card-header">
+          <div class="card-dot rose"></div>
+          <h3>Key behaviors pinned</h3>
+        </div>
+        <ul>
+          <li>• dict result → classification copied; str result → DEFAULT kept</li>
+          <li>• empty result → still 200, telemetry <code>failed / empty_result</code></li>
+          <li>• no helper → placeholder text, no telemetry at all</li>
+          <li>• any raise → 500 + failed usage with <code>error_code=type(e).__name__</code></li>
+          <li>• token update is all-or-nothing: write → keys → hot-swap, roll back on failure</li>
+        </ul>
+      </div>
+    </div>
+
+    <!-- Footer -->
+    <p class="footer">
+      unit_tests/test_llm_blueprint.py • blueprints/llm/llm_routes.py • 20 tests across 4 classes
+    </p>
+  </div>
+
+  <script>
+    async function copyAsImage(btn) {
+      const orig = btn.textContent;
+      try {
+        const el = document.getElementById('report-container');
+        const r = el.getBoundingClientRect();
+        const pad = 32;
+        const canvas = await html2canvas(document.body, { backgroundColor: '#020617', scale: 2, useCORS: true, ignoreElements: (e) => e.classList && e.classList.contains('toolbar'), x: r.left + window.scrollX - pad, y: r.top + window.scrollY - pad, width: r.width + pad * 2, height: r.height + pad * 2 });
+        const blob = await new Promise(r => canvas.toBlob(r, 'image/png'));
+        await navigator.clipboard.write([new ClipboardItem({ 'image/png': blob })]);
+        btn.textContent = '✓ Copied!';
+      } catch (e) {
+        btn.textContent = '✗ Failed';
+      }
+      setTimeout(() => btn.textContent = orig, 2000);
+    }
+
+    async function downloadPNG(btn) {
+      const orig = btn.textContent;
+      btn.textContent = '⏳ ...';
+      try {
+        const el = document.getElementById('report-container');
+        const r = el.getBoundingClientRect();
+        const pad = 32;
+        const canvas = await html2canvas(document.body, { backgroundColor: '#020617', scale: 2, useCORS: true, ignoreElements: (e) => e.classList && e.classList.contains('toolbar'), x: r.left + window.scrollX - pad, y: r.top + window.scrollY - pad, width: r.width + pad * 2, height: r.height + pad * 2 });
+        const link = document.createElement('a');
+        link.download = 'test_llm_blueprint_flow.png';
+        link.href = canvas.toDataURL('image/png');
+        link.click();
+        btn.textContent = '✓ Done!';
+      } catch (e) {
+        btn.textContent = '✗ Failed';
+      }
+      setTimeout(() => btn.textContent = orig, 2000);
+    }
+
+    async function downloadPDF(btn) {
+      const orig = btn.textContent;
+      btn.textContent = '⏳ ...';
+      try {
+        const el = document.getElementById('report-container');
+        const r = el.getBoundingClientRect();
+        const pad = 32;
+        const canvas = await html2canvas(document.body, { backgroundColor: '#020617', scale: 2, useCORS: true, ignoreElements: (e) => e.classList && e.classList.contains('toolbar'), x: r.left + window.scrollX - pad, y: r.top + window.scrollY - pad, width: r.width + pad * 2, height: r.height + pad * 2 });
+        const imgData = canvas.toDataURL('image/png');
+        const { jsPDF } = window.jspdf;
+        const orientation = canvas.width > canvas.height ? 'landscape' : 'portrait';
+        const pdf = new jsPDF({ orientation, unit: 'px', format: [canvas.width, canvas.height], hotfixes: ['px_scaling'] });
+        pdf.addImage(imgData, 'PNG', 0, 0, canvas.width, canvas.height);
+        pdf.save('test_llm_blueprint_flow.pdf');
+        btn.textContent = '✓ Done!';
+      } catch (e) {
+        btn.textContent = '✗ Failed';
+      }
+      setTimeout(() => btn.textContent = orig, 2000);
+    }
+  </script>
+</body>
+</html>

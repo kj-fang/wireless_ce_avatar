@@ -53,7 +53,3 @@ LOG_CHATBOT_API_GUIDE.md
 
 # Bluetooth decode tool log
 ibtdrvlogparser_cli-log.txt
-
-# Refactor contract tests: kept locally to verify behaviour, not part of
-# the shipped application.
-tests/

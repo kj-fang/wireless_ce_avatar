@@ -38,29 +38,41 @@ def organized_issue_context(raw_desc: str, first_ts, last_ts, log_path: str = ""
         from datetime import datetime
 
         from models.models import CaseContext
-        from services import gather_service
+        from services import check_ips_service, gather_service
 
-        client, model = llm_client_model()
-        started_at = datetime.now()
-        d, usage = organize_issue_context(
-            raw_desc, first_ts=first_ts, last_ts=last_ts,
-            llm_client=client, llm_model=model, return_usage=True,
-        )
-        session["_issue_ai_quick"] = {"data": d}
-        # Cost accounting for the pre-pass. Best-effort: analytics must never
-        # break the flow that produced them.
-        if int(usage.get("llm_calls") or 0) > 0:
-            try:
-                issue = CaseContext.from_session(session.get("case_context") or {}).to_dict()
-                gather_service.record_feature_usage(
-                    workflow_id=session.get("gather_workflow_id", ""),
-                    feature_code="issue_time_prepass",
-                    model=model or "", usage=usage, issue=issue, domain=domain,
-                    trigger="direct_chatbot_context",
-                    latency_ms=int((datetime.now() - started_at).total_seconds() * 1000),
-                )
-            except Exception:
-                pass
+        # Behind the session cache, in front of the LLM: the pass is the same
+        # answer every time, and the session it used to live in ends with the
+        # conversation. Lazily imported -- check_ips_service reaches back into
+        # the chatbot session registry, which is built while this is imported.
+        case_nbr = check_ips_service.current_case_nbr()
+        d = check_ips_service.remembered_organized(case_nbr, raw_desc,
+                                                   first_ts, last_ts)
+        if d:
+            session["_issue_ai_quick"] = {"data": d}
+        else:
+            client, model = llm_client_model()
+            started_at = datetime.now()
+            d, usage = organize_issue_context(
+                raw_desc, first_ts=first_ts, last_ts=last_ts,
+                llm_client=client, llm_model=model, return_usage=True,
+            )
+            session["_issue_ai_quick"] = {"data": d}
+            check_ips_service.remember_organized(case_nbr, raw_desc, d,
+                                                 first_ts, last_ts)
+            # Cost accounting for the pre-pass. Best-effort: analytics must never
+            # break the flow that produced them.
+            if int(usage.get("llm_calls") or 0) > 0:
+                try:
+                    issue = CaseContext.from_session(session.get("case_context") or {}).to_dict()
+                    gather_service.record_feature_usage(
+                        workflow_id=session.get("gather_workflow_id", ""),
+                        feature_code="issue_time_prepass",
+                        model=model or "", usage=usage, issue=issue, domain=domain,
+                        trigger="direct_chatbot_context",
+                        latency_ms=int((datetime.now() - started_at).total_seconds() * 1000),
+                    )
+                except Exception:
+                    pass
     return {
         "clean_description": d.get("clean_description") or raw_desc,
         "issue_times": realign_times_to_log(d.get("issue_times") or [], first_ts, last_ts, log_path),
@@ -68,7 +80,7 @@ def organized_issue_context(raw_desc: str, first_ts, last_ts, log_path: str = ""
     }
 
 
-def extract_issue_context() -> dict:
+def extract_issue_context(log_path: str = "") -> dict:
     """
     Consolidate issue context from session into a single dict with keys:
       case_nbr, subject, description, issue_type
@@ -77,6 +89,10 @@ def extract_issue_context() -> dict:
       - session['ai_ips_analysis']  : LLM-generated analysis dict (richest)
       - session['classification']   : issue_type + confidence
       - session['case_context']     : raw Salesforce case fields
+
+    ``log_path`` names the log being loaded. /set_log and prepare() extract
+    before they write the new path to the session, so without it the remembered
+    facts come back keyed on the log being replaced.
     """
     # --- raw case fields ---
     raw_ctx = session.get("case_context", {})
@@ -175,13 +191,54 @@ def extract_issue_context() -> dict:
         # Cache in session so subsequent requests in the same flow skip re-parsing
         session["_attachment_time_cache"] = attachment_time
 
-    return {
+    context = {
         "case_nbr":    ctx.case_nbr or "",
         "subject":     ctx.subject or "",
         "description": "\n".join(description_parts),
         "issue_type":  issue_type,
         "attachment_time": attachment_time,
     }
+    return _fill_from_remembered_case(context, log_path)
+
+
+def _fill_from_remembered_case(context: dict, log_path: str = "") -> dict:
+    """Put back what this log's case told us last time, for what we lack now.
+
+    The description and the attachment time are read out of the case and its
+    attachments when a log is first analysed, and they live in the session. A
+    new conversation -- or a restart, or a Send To that is not asked for the
+    case number again because the answer is already on file -- starts with an
+    empty session, and the same log came up with no problem statement in the
+    chatbot box and no time in the picker, while the case number sitting next
+    to them was remembered perfectly well.
+
+    Only gaps are filled, so anything this session worked out itself wins.
+    """
+    if not context.get("case_nbr"):
+        return context
+    if context.get("description") and context.get("attachment_time"):
+        return context
+    try:
+        # Lazily imported: check_ips_service reaches back into the chatbot
+        # session registry, and this module is imported while that is built.
+        from configs.global_configs import app_config
+        from services import check_ips_service
+
+        log_path = (log_path
+                    or session.get("chatbot_log_path")
+                    or getattr(app_config, "last_analyzed_log_path", "") or "")
+        remembered = check_ips_service.remembered_case_facts(
+            log_path, context["case_nbr"])
+    except Exception as e:
+        print(f"[issue_context] remembered case facts unavailable: {e}")
+        return context
+    for name in ("description", "attachment_time"):
+        if not context.get(name) and remembered.get(name):
+            context[name] = remembered[name]
+            print(f"[issue_context] {name} for case {context['case_nbr']} came "
+                  f"from what this log was shown last time")
+    return context
+
 
 def resolved_issue_time_for(log_path: str, attachment_time: str) -> str:
     """

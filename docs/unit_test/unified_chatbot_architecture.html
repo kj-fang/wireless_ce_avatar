@@ -1,0 +1,313 @@
+<!DOCTYPE html>
+<html lang="en">
+<head>
+  <meta charset="UTF-8">
+  <meta name="viewport" content="width=device-width, initial-scale=1.0">
+  <title>Unified Chatbot Architecture & Test Suite</title>
+  <link href="https://fonts.googleapis.com/css2?family=JetBrains+Mono:wght@400;500;600;700&display=swap" rel="stylesheet">
+  <script src="https://cdn.jsdelivr.net/npm/html2canvas@1.4.1/dist/html2canvas.min.js" integrity="sha384-ZZ1pncU3bQe8y31yfZdMFdSpttDoPmOZg2wguVK9almUodir1PghgT0eY7Mrty8H" crossorigin="anonymous"></script>
+  <script src="https://cdn.jsdelivr.net/npm/jspdf@2.5.2/dist/jspdf.umd.min.js" integrity="sha384-en/ztfPSRkGfME4KIm05joYXynqzUgbsG5nMrj/xEFAHXkeZfO3yMK8QQ+mP7p1/" crossorigin="anonymous"></script>
+  <style>
+    * { margin: 0; padding: 0; box-sizing: border-box; }
+    body { font-family: 'JetBrains Mono', monospace; background: #020617; min-height: 100vh; padding: 2rem; color: white; }
+    .container { max-width: 1200px; margin: 0 auto; }
+    .header { margin-bottom: 2rem; }
+    .header-row { display: flex; align-items: center; gap: 1rem; margin-bottom: 0.5rem; }
+    .pulse-dot { width: 12px; height: 12px; background: #34d399; border-radius: 50%; animation: pulse 2s infinite; }
+    @keyframes pulse { 0%, 100% { opacity: 1; } 50% { opacity: 0.5; } }
+    h1 { font-size: 1.5rem; font-weight: 700; letter-spacing: -0.025em; }
+    .subtitle { color: #94a3b8; font-size: 0.875rem; margin-left: 1.75rem; }
+    .diagram-container { background: rgba(15, 23, 42, 0.5); border-radius: 1rem; border: 1px solid #1e293b; padding: 1.5rem; overflow-x: auto; }
+    svg { width: 100%; min-width: 980px; display: block; }
+    .cards { display: grid; grid-template-columns: repeat(auto-fit, minmax(280px, 1fr)); gap: 1rem; margin-top: 2rem; }
+    .card { background: rgba(15, 23, 42, 0.5); border-radius: 0.75rem; border: 1px solid #1e293b; padding: 1.25rem; }
+    .card-header { display: flex; align-items: center; gap: 0.5rem; margin-bottom: 0.75rem; }
+    .card-dot { width: 8px; height: 8px; border-radius: 50%; }
+    .card-dot.cyan { background: #22d3ee; }
+    .card-dot.emerald { background: #34d399; }
+    .card-dot.violet { background: #a78bfa; }
+    .card-dot.amber { background: #fbbf24; }
+    .card-dot.rose { background: #fb7185; }
+    .card h3 { font-size: 0.875rem; font-weight: 600; }
+    .card ul { list-style: none; color: #94a3b8; font-size: 0.75rem; }
+    .card li { margin-bottom: 0.375rem; }
+    .card li code { color: #cbd5e1; }
+    .footer { text-align: center; margin-top: 1.5rem; color: #475569; font-size: 0.75rem; }
+    .toolbar { display: flex; gap: 0.5rem; margin-left: auto; flex-shrink: 0; align-items: center; }
+    .toolbar-toggle { background: transparent; border: none; color: #475569; cursor: pointer; font-size: 1.25rem; line-height: 1; padding: 0.25rem 0.5rem; border-radius: 0.375rem; transition: color 0.2s, background 0.2s; }
+    .toolbar-toggle:hover { color: #94a3b8; background: rgba(30, 41, 59, 0.5); }
+    .toolbar-actions { display: none; gap: 0.5rem; }
+    .toolbar.expanded .toolbar-actions { display: flex; }
+    .toolbar-actions button { background: rgba(30, 41, 59, 0.8); border: 1px solid #334155; color: #94a3b8; padding: 0.375rem 0.75rem; border-radius: 0.375rem; font-family: inherit; font-size: 0.75rem; cursor: pointer; transition: all 0.2s; white-space: nowrap; }
+    .toolbar-actions button:hover { background: rgba(51, 65, 85, 0.8); color: white; border-color: #475569; }
+    @media print { body { background: #020617; padding: 1rem; } .toolbar { display: none !important; } }
+  </style>
+</head>
+<body>
+  <div class="container" id="report-container">
+    <div class="header">
+      <div class="header-row">
+        <div class="pulse-dot"></div>
+        <h1>Unified Chatbot Architecture &amp; Test Suite</h1>
+        <div class="toolbar">
+          <div class="toolbar-actions">
+            <button onclick="copyAsImage(this)">📋 Copy</button>
+            <button onclick="downloadPNG(this)">🖼️ PNG</button>
+            <button onclick="downloadPDF(this)">📄 PDF</button>
+          </div>
+          <button class="toolbar-toggle" onclick="this.parentElement.classList.toggle('expanded')" title="Export options" aria-label="Export options">⋯</button>
+        </div>
+      </div>
+      <p class="subtitle">One route module serves three agent profiles; the broader blueprint &amp; test map — unit_tests/ suite 619 passing, 0 failures.</p>
+    </div>
+
+    <div class="diagram-container">
+      <svg viewBox="0 0 1000 720">
+        <defs>
+          <marker id="arrowhead" markerWidth="10" markerHeight="7" refX="9" refY="3.5" orient="auto">
+            <polygon points="0 0, 10 3.5, 0 7" fill="#64748b" />
+          </marker>
+          <pattern id="grid" width="40" height="40" patternUnits="userSpaceOnUse">
+            <path d="M 40 0 L 0 0 0 40" fill="none" stroke="#1e293b" stroke-width="0.5"/>
+          </pattern>
+        </defs>
+
+        <rect width="100%" height="100%" fill="url(#grid)" />
+
+        <!-- ===== Arrows drawn first (render behind boxes) ===== -->
+        <!-- Unified module -> three profile blueprints -->
+        <line x1="440" y1="132" x2="235" y2="186" stroke="#22d3ee" stroke-width="1.5" marker-end="url(#arrowhead)"/>
+        <line x1="500" y1="132" x2="500" y2="186" stroke="#22d3ee" stroke-width="1.5" marker-end="url(#arrowhead)"/>
+        <line x1="560" y1="132" x2="765" y2="186" stroke="#22d3ee" stroke-width="1.5" marker-end="url(#arrowhead)"/>
+        <text x="332" y="168" fill="#94a3b8" font-size="8" text-anchor="middle">create_agent_blueprint(PROFILE)</text>
+
+        <!-- Profiles -> shared framework -->
+        <line x1="500" y1="262" x2="500" y2="298" stroke="#fbbf24" stroke-width="1.5" marker-end="url(#arrowhead)"/>
+        <text x="500" y="283" fill="#94a3b8" font-size="8" text-anchor="middle">all 3 profiles share one implementation</text>
+
+        <!-- find_best_log relocation (dashed rose) -->
+        <line x1="340" y1="500" x2="340" y2="518" stroke="#fb7185" stroke-width="1.5" stroke-dasharray="5,4" marker-end="url(#arrowhead)"/>
+
+        <!-- ===== Unified route module (emerald / backend) ===== -->
+        <rect x="360" y="60" width="280" height="72" rx="6" fill="#0f172a"/>
+        <rect x="360" y="60" width="280" height="72" rx="6" fill="rgba(6, 78, 59, 0.4)" stroke="#34d399" stroke-width="1.5"/>
+        <text x="500" y="84" fill="white" font-size="11" font-weight="600" text-anchor="middle">blueprints/chatbot/chatbot_routes.py</text>
+        <text x="500" y="101" fill="#94a3b8" font-size="9" text-anchor="middle">AgentRoutes · AgentRouteProfile</text>
+        <text x="500" y="115" fill="#94a3b8" font-size="9" text-anchor="middle">handlers written once, data per profile</text>
+        <text x="500" y="128" fill="#34d399" font-size="8" text-anchor="middle">was 3 × ~1,500-line route files</text>
+
+        <!-- ===== Three profile blueprints (cyan / frontend) ===== -->
+        <rect x="120" y="186" width="210" height="76" rx="6" fill="#0f172a"/>
+        <rect x="120" y="186" width="210" height="76" rx="6" fill="rgba(8, 51, 68, 0.4)" stroke="#22d3ee" stroke-width="1.5"/>
+        <text x="225" y="210" fill="white" font-size="11" font-weight="600" text-anchor="middle">log_chatbot_bp</text>
+        <text x="225" y="227" fill="#94a3b8" font-size="9" text-anchor="middle">Wi-Fi · WIFI_PROFILE</text>
+        <text x="225" y="241" fill="#94a3b8" font-size="9" text-anchor="middle">WifiLogAgentSystem · 38 routes</text>
+        <text x="225" y="255" fill="#22d3ee" font-size="8" text-anchor="middle">customer-tz · prompt_editor</text>
+
+        <rect x="395" y="186" width="210" height="76" rx="6" fill="#0f172a"/>
+        <rect x="395" y="186" width="210" height="76" rx="6" fill="rgba(8, 51, 68, 0.4)" stroke="#22d3ee" stroke-width="1.5"/>
+        <text x="500" y="210" fill="white" font-size="11" font-weight="600" text-anchor="middle">bt_chatbot_bp</text>
+        <text x="500" y="227" fill="#94a3b8" font-size="9" text-anchor="middle">Bluetooth · BT_PROFILE</text>
+        <text x="500" y="241" fill="#94a3b8" font-size="9" text-anchor="middle">BtLogAgentSystem · 38 routes</text>
+        <text x="500" y="255" fill="#22d3ee" font-size="8" text-anchor="middle">event-log anchor · .hci.txt</text>
+
+        <rect x="670" y="186" width="210" height="76" rx="6" fill="#0f172a"/>
+        <rect x="670" y="186" width="210" height="76" rx="6" fill="rgba(8, 51, 68, 0.4)" stroke="#22d3ee" stroke-width="1.5"/>
+        <text x="775" y="210" fill="white" font-size="11" font-weight="600" text-anchor="middle">linux_chatbot_bp</text>
+        <text x="775" y="227" fill="#94a3b8" font-size="9" text-anchor="middle">Linux · LINUX_PROFILE</text>
+        <text x="775" y="241" fill="#94a3b8" font-size="9" text-anchor="middle">LinuxLogAgentSystem</text>
+        <text x="775" y="255" fill="#22d3ee" font-size="8" text-anchor="middle">dmesg / journalctl · focus</text>
+
+        <!-- ===== Shared framework region (amber dashed boundary) ===== -->
+        <rect x="100" y="300" width="800" height="182" rx="12" fill="rgba(251, 191, 36, 0.05)" stroke="#fbbf24" stroke-width="1" stroke-dasharray="8,4"/>
+        <text x="116" y="320" fill="#fbbf24" font-size="10" font-weight="600">services/chatbot/* + services/skill_editor/*  — shared framework</text>
+
+        <rect x="128" y="334" width="232" height="60" rx="6" fill="#0f172a"/>
+        <rect x="128" y="334" width="232" height="60" rx="6" fill="rgba(120, 53, 15, 0.3)" stroke="#fbbf24" stroke-width="1.5"/>
+        <text x="244" y="356" fill="white" font-size="10" font-weight="600" text-anchor="middle">factory.py</text>
+        <text x="244" y="372" fill="#94a3b8" font-size="8" text-anchor="middle">create_chatbot_blueprint · handler_map</text>
+        <text x="244" y="385" fill="#94a3b8" font-size="8" text-anchor="middle">ROUTE_SPECS (capability-gated)</text>
+
+        <rect x="384" y="334" width="232" height="60" rx="6" fill="#0f172a"/>
+        <rect x="384" y="334" width="232" height="60" rx="6" fill="rgba(120, 53, 15, 0.3)" stroke="#fbbf24" stroke-width="1.5"/>
+        <text x="500" y="356" fill="white" font-size="10" font-weight="600" text-anchor="middle">shared_routes.py</text>
+        <text x="500" y="372" fill="#94a3b8" font-size="8" text-anchor="middle">history · browse · chat_stop</text>
+        <text x="500" y="385" fill="#94a3b8" font-size="8" text-anchor="middle">back_to_avatar · reload_from_shared</text>
+
+        <rect x="640" y="334" width="232" height="60" rx="6" fill="#0f172a"/>
+        <rect x="640" y="334" width="232" height="60" rx="6" fill="rgba(120, 53, 15, 0.3)" stroke="#fbbf24" stroke-width="1.5"/>
+        <text x="756" y="356" fill="white" font-size="10" font-weight="600" text-anchor="middle">session.py · job_runtime</text>
+        <text x="756" y="372" fill="#94a3b8" font-size="8" text-anchor="middle">per-profile session_agents store</text>
+        <text x="756" y="385" fill="#94a3b8" font-size="8" text-anchor="middle">resume_agent_for · SSE jobs</text>
+
+        <rect x="256" y="408" width="232" height="60" rx="6" fill="#0f172a"/>
+        <rect x="256" y="408" width="232" height="60" rx="6" fill="rgba(120, 53, 15, 0.3)" stroke="#fbbf24" stroke-width="1.5"/>
+        <text x="372" y="430" fill="white" font-size="10" font-weight="600" text-anchor="middle">issue_context.py</text>
+        <text x="372" y="446" fill="#94a3b8" font-size="8" text-anchor="middle">extract_issue_context · organized</text>
+        <text x="372" y="459" fill="#94a3b8" font-size="8" text-anchor="middle">extract_time_from_description</text>
+
+        <rect x="512" y="408" width="232" height="60" rx="6" fill="#0f172a"/>
+        <rect x="512" y="408" width="232" height="60" rx="6" fill="rgba(120, 53, 15, 0.3)" stroke="#fbbf24" stroke-width="1.5"/>
+        <text x="628" y="430" fill="white" font-size="10" font-weight="600" text-anchor="middle">skill_editor/controller.py</text>
+        <text x="628" y="446" fill="#94a3b8" font-size="8" text-anchor="middle">SkillEditorContext · apply_skills_yaml</text>
+        <text x="628" y="459" fill="#94a3b8" font-size="8" text-anchor="middle">seeds user YAML from cloud baseline</text>
+
+        <!-- ===== Separate blueprints (slate / generic), log_parser highlighted amber ===== -->
+        <rect x="60" y="518" width="166" height="66" rx="6" fill="#0f172a"/>
+        <rect x="60" y="518" width="166" height="66" rx="6" fill="rgba(30, 41, 59, 0.5)" stroke="#94a3b8" stroke-width="1.5"/>
+        <text x="143" y="542" fill="white" font-size="10" font-weight="600" text-anchor="middle">nw_analysis_bp</text>
+        <text x="143" y="558" fill="#94a3b8" font-size="8" text-anchor="middle">own module (not unified)</text>
+        <text x="143" y="572" fill="#94a3b8" font-size="8" text-anchor="middle">reuses skill_editor append</text>
+
+        <rect x="250" y="518" width="190" height="66" rx="6" fill="#0f172a"/>
+        <rect x="250" y="518" width="190" height="66" rx="6" fill="rgba(120, 53, 15, 0.3)" stroke="#fbbf24" stroke-width="1.5"/>
+        <text x="345" y="542" fill="white" font-size="10" font-weight="600" text-anchor="middle">log_parser_bp</text>
+        <text x="345" y="558" fill="#94a3b8" font-size="8" text-anchor="middle">decode / filter / SendTo</text>
+        <text x="345" y="572" fill="#fbbf24" font-size="8" text-anchor="middle">now owns find_best_log</text>
+        <text x="340" y="512" fill="#fb7185" font-size="8" text-anchor="middle">find_best_log moved here (was in chatbot)</text>
+
+        <rect x="464" y="518" width="150" height="66" rx="6" fill="#0f172a"/>
+        <rect x="464" y="518" width="150" height="66" rx="6" fill="rgba(30, 41, 59, 0.5)" stroke="#94a3b8" stroke-width="1.5"/>
+        <text x="539" y="542" fill="white" font-size="10" font-weight="600" text-anchor="middle">main_bp</text>
+        <text x="539" y="558" fill="#94a3b8" font-size="8" text-anchor="middle">case + download_result</text>
+        <text x="539" y="572" fill="#94a3b8" font-size="8" text-anchor="middle">BT auto-pick via log_parser</text>
+
+        <rect x="638" y="518" width="150" height="66" rx="6" fill="#0f172a"/>
+        <rect x="638" y="518" width="150" height="66" rx="6" fill="rgba(30, 41, 59, 0.5)" stroke="#94a3b8" stroke-width="1.5"/>
+        <text x="713" y="542" fill="white" font-size="10" font-weight="600" text-anchor="middle">handsfree_bp</text>
+        <text x="713" y="558" fill="#94a3b8" font-size="8" text-anchor="middle">draft queue + auto</text>
+        <text x="713" y="572" fill="#94a3b8" font-size="8" text-anchor="middle">+4 routes, owner_name</text>
+
+        <rect x="812" y="518" width="128" height="66" rx="6" fill="#0f172a"/>
+        <rect x="812" y="518" width="128" height="66" rx="6" fill="rgba(30, 41, 59, 0.5)" stroke="#94a3b8" stroke-width="1.5"/>
+        <text x="876" y="542" fill="white" font-size="10" font-weight="600" text-anchor="middle">llm_bp</text>
+        <text x="876" y="558" fill="#94a3b8" font-size="8" text-anchor="middle">keys · personal</text>
+        <text x="876" y="572" fill="#94a3b8" font-size="8" text-anchor="middle">token · update</text>
+
+        <!-- ===== Test suite status band (emerald) ===== -->
+        <rect x="300" y="622" width="400" height="56" rx="8" fill="#0f172a"/>
+        <rect x="300" y="622" width="400" height="56" rx="8" fill="rgba(6, 78, 59, 0.4)" stroke="#34d399" stroke-width="1.5"/>
+        <text x="500" y="646" fill="white" font-size="11" font-weight="600" text-anchor="middle">unit_tests/ — 619 passing · 0 failures · 0 errors</text>
+        <text x="500" y="666" fill="#94a3b8" font-size="8" text-anchor="middle">log_chatbot 115 · bt 137 · nw 57 · log_parser 102 · main 59 · handsfree 33 · llm 20 · +others</text>
+
+        <!-- ===== Legend (top-right, outside all boundaries) ===== -->
+        <text x="838" y="74" fill="white" font-size="10" font-weight="600">Legend</text>
+        <rect x="838" y="84" width="16" height="10" rx="2" fill="rgba(6, 78, 59, 0.4)" stroke="#34d399" stroke-width="1"/>
+        <text x="860" y="92" fill="#94a3b8" font-size="8">Unified module</text>
+        <rect x="838" y="100" width="16" height="10" rx="2" fill="rgba(8, 51, 68, 0.4)" stroke="#22d3ee" stroke-width="1"/>
+        <text x="860" y="108" fill="#94a3b8" font-size="8">Profile blueprint</text>
+        <rect x="838" y="116" width="16" height="10" rx="2" fill="rgba(120, 53, 15, 0.3)" stroke="#fbbf24" stroke-width="1"/>
+        <text x="860" y="124" fill="#94a3b8" font-size="8">Shared service</text>
+        <rect x="838" y="132" width="16" height="10" rx="2" fill="rgba(30, 41, 59, 0.5)" stroke="#94a3b8" stroke-width="1"/>
+        <text x="860" y="140" fill="#94a3b8" font-size="8">Separate blueprint</text>
+        <line x1="838" y1="153" x2="854" y2="153" stroke="#fb7185" stroke-width="1.5" stroke-dasharray="4,3"/>
+        <text x="860" y="156" fill="#94a3b8" font-size="8">Relocated code</text>
+      </svg>
+    </div>
+
+    <div class="cards">
+      <div class="card">
+        <div class="card-header">
+          <div class="card-dot emerald"></div>
+          <h3>Unified route module</h3>
+        </div>
+        <ul>
+          <li>• <code>chatbot_routes.py</code> replaces 3 per-profile files</li>
+          <li>• Handlers are methods on <code>AgentRoutes</code></li>
+          <li>• <code>AgentRouteProfile</code> carries the per-bot data</li>
+          <li>• <code>create_agent_blueprint</code> builds each bp</li>
+          <li>• Wi-Fi/BT enable <code>prompt_editor</code> → 38 routes</li>
+        </ul>
+      </div>
+      <div class="card">
+        <div class="card-header">
+          <div class="card-dot amber"></div>
+          <h3>Shared framework</h3>
+        </div>
+        <ul>
+          <li>• <code>factory</code> — capability-gated route contract</li>
+          <li>• <code>shared_routes</code> — history/browse/chat_stop</li>
+          <li>• <code>session</code> — per-profile <code>session_agents</code></li>
+          <li>• <code>issue_context</code> — time/context extraction</li>
+          <li>• <code>skill_editor</code> — YAML lifecycle + append</li>
+        </ul>
+      </div>
+      <div class="card">
+        <div class="card-header">
+          <div class="card-dot rose"></div>
+          <h3>Test suite — 619 green</h3>
+        </div>
+        <ul>
+          <li>• <code>unit_tests/</code> un-ignored, 0 failures / 0 errors</li>
+          <li>• Ported to the unified instance structure</li>
+          <li>• <code>find_best_log</code> tests moved to log_parser</li>
+          <li>• nw_analysis stays its own blueprint</li>
+          <li>• Run: <code>python -m unittest discover -s unit_tests</code></li>
+        </ul>
+      </div>
+    </div>
+
+    <p class="footer">
+      wireless_ce_avatar • Unified chatbot framework • unit_tests/ 619 passing
+    </p>
+  </div>
+
+  <script>
+    async function copyAsImage(btn) {
+      const orig = btn.textContent;
+      try {
+        const el = document.getElementById('report-container');
+        const r = el.getBoundingClientRect();
+        const pad = 32;
+        const canvas = await html2canvas(document.body, { backgroundColor: '#020617', scale: 2, useCORS: true, ignoreElements: (e) => e.classList && e.classList.contains('toolbar'), x: r.left + window.scrollX - pad, y: r.top + window.scrollY - pad, width: r.width + pad * 2, height: r.height + pad * 2 });
+        const blob = await new Promise(r => canvas.toBlob(r, 'image/png'));
+        await navigator.clipboard.write([new ClipboardItem({ 'image/png': blob })]);
+        btn.textContent = '✓ Copied!';
+      } catch (e) {
+        btn.textContent = '✗ Failed';
+      }
+      setTimeout(() => btn.textContent = orig, 2000);
+    }
+
+    async function downloadPNG(btn) {
+      const orig = btn.textContent;
+      btn.textContent = '⏳ ...';
+      try {
+        const el = document.getElementById('report-container');
+        const r = el.getBoundingClientRect();
+        const pad = 32;
+        const canvas = await html2canvas(document.body, { backgroundColor: '#020617', scale: 2, useCORS: true, ignoreElements: (e) => e.classList && e.classList.contains('toolbar'), x: r.left + window.scrollX - pad, y: r.top + window.scrollY - pad, width: r.width + pad * 2, height: r.height + pad * 2 });
+        const link = document.createElement('a');
+        link.download = 'unified_chatbot_architecture.png';
+        link.href = canvas.toDataURL('image/png');
+        link.click();
+        btn.textContent = '✓ Done!';
+      } catch (e) {
+        btn.textContent = '✗ Failed';
+      }
+      setTimeout(() => btn.textContent = orig, 2000);
+    }
+
+    async function downloadPDF(btn) {
+      const orig = btn.textContent;
+      btn.textContent = '⏳ ...';
+      try {
+        const el = document.getElementById('report-container');
+        const r = el.getBoundingClientRect();
+        const pad = 32;
+        const canvas = await html2canvas(document.body, { backgroundColor: '#020617', scale: 2, useCORS: true, ignoreElements: (e) => e.classList && e.classList.contains('toolbar'), x: r.left + window.scrollX - pad, y: r.top + window.scrollY - pad, width: r.width + pad * 2, height: r.height + pad * 2 });
+        const imgData = canvas.toDataURL('image/png');
+        const { jsPDF } = window.jspdf;
+        const orientation = canvas.width > canvas.height ? 'landscape' : 'portrait';
+        const pdf = new jsPDF({ orientation, unit: 'px', format: [canvas.width, canvas.height], hotfixes: ['px_scaling'] });
+        pdf.addImage(imgData, 'PNG', 0, 0, canvas.width, canvas.height);
+        pdf.save('unified_chatbot_architecture.pdf');
+        btn.textContent = '✓ Done!';
+      } catch (e) {
+        btn.textContent = '✗ Failed';
+      }
+      setTimeout(() => btn.textContent = orig, 2000);
+    }
+  </script>
+</body>
+</html>

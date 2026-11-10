@@ -25,6 +25,7 @@ kept on this PC across restarts.
 
 from __future__ import annotations
 
+import contextlib
 import copy
 import json
 import os
@@ -120,7 +121,7 @@ def _now_iso() -> str:
 
 # Bump when the slim summary written to handsfree_queue_cache.json gains or
 # changes fields: an older cache is then ignored and rebuilt from the files.
-_SUMMARY_VERSION = 2
+_SUMMARY_VERSION = 3          # 3: email.mailbox (whose Outlook an email draft belongs to)
 
 
 _SHARE_RETRIES = 5          # a reader on another PC holds the file open for ~1 s
@@ -143,6 +144,86 @@ def _atomic_write(path: Path, text: str) -> None:
                 tmp.unlink(missing_ok=True)
                 raise
             time.sleep(_SHARE_RETRY_DELAY_S)
+
+
+SHARED_LOCK_WAIT_S = 15        # a transaction is one small read and one small write
+SHARED_LOCK_STALE_S = 60       # older than this: left by a process that died mid-write
+
+
+@contextlib.contextmanager
+def shared_file_lock(path: Path, *, wait_s: Optional[float] = None,
+                     stale_s: Optional[float] = None):
+    """Hold `<path>.lock` for one read-modify-write of a shared file.
+
+    The atomic replace in _atomic_write keeps a file whole, but it does not
+    keep two PARTIAL updates apart: two machines that each read the file,
+    change one field and write it back would lose one of the changes. A
+    threading lock only orders the threads of one process, so the
+    cross-machine half is a lock file created with O_EXCL — atomic on the
+    file server, the same primitive as the posting claim (claim_case).
+    A lock older than `stale_s` was left by a process that died and is taken
+    over. Raises TimeoutError (an OSError) when the lock stays held for
+    `wait_s`: the caller must then NOT write."""
+    wait_s = SHARED_LOCK_WAIT_S if wait_s is None else wait_s
+    stale_s = SHARED_LOCK_STALE_S if stale_s is None else stale_s
+    path = Path(path)
+    lock = path.with_name(path.name + ".lock")
+    deadline = time.monotonic() + wait_s
+    while True:
+        try:
+            os.close(os.open(lock, os.O_CREAT | os.O_EXCL | os.O_WRONLY))
+            break
+        except (FileExistsError, PermissionError):
+            try:
+                if time.time() - lock.stat().st_mtime > stale_s:
+                    lock.unlink()
+                    continue
+            except FileNotFoundError:
+                continue                        # released between our two calls
+            except OSError:
+                pass
+            if time.monotonic() >= deadline:
+                raise TimeoutError(f"{path.name} is busy on another machine ({lock.name})")
+            time.sleep(0.1)
+    try:
+        yield
+    finally:
+        try:
+            lock.unlink()
+        except OSError:
+            pass
+
+
+def read_json_for_update(path: Path, *, tries: int = 3, what: str = "file") -> dict:
+    """The current content of a shared JSON file as the base of a write,
+    read inside shared_file_lock. Missing file: {}. A share that cannot be
+    read: retried, then raises OSError — writing a merge over an unreadable
+    file would replace everything in it. Unparseable content: set aside next
+    to the file (`<name>.corrupt-<time>.json`), said so, and started over."""
+    path = Path(path)
+    last: Optional[Exception] = None
+    for _attempt in range(tries):
+        try:
+            if not path.exists():
+                return {}
+            text = path.read_text(encoding="utf-8")
+        except OSError as e:
+            last = e
+            time.sleep(_SHARE_RETRY_DELAY_S)
+            continue
+        try:
+            data = json.loads(text)
+            return data if isinstance(data, dict) else {}
+        except ValueError as e:
+            aside = path.with_name(f"{path.stem}.corrupt-{int(time.time())}.json")
+            try:
+                os.replace(path, aside)
+            except OSError:
+                pass
+            print(f"[handsfree.queue] {what} was not valid JSON ({e}); "
+                  f"set aside as {aside.name} and started over")
+            return {}
+    raise OSError(f"{what} unreadable: {last}")
 
 
 def _unlink_retry(path: Path) -> bool:
@@ -279,12 +360,18 @@ class HandsfreeStore:
         return cfg
 
     def save_config(self, cfg: dict) -> dict:
-        # Load + merge + replace under the one lock: the scheduler thread,
-        # a running scan and the /handsfree/config route all write partial
+        # Load + merge + replace as ONE transaction: the scheduler thread, a
+        # running scan and the /handsfree/config route all write partial
         # updates, and a merge from a stale snapshot would revert the others'
-        # fields (trial_mode, dry_run, owner, source).
-        with _LOCK:
-            merged = {**self.load_config(), **(cfg or {})}
+        # fields (trial_mode, dry_run, owner, source). _LOCK orders the
+        # threads of this process; shared_file_lock orders the machines —
+        # the server's driver refresh must not undo the dry_run a reviewer
+        # switched on from another PC a moment earlier. The base is read
+        # fresh inside the lock (not from the mtime cache), and a config that
+        # cannot be read is never replaced by the defaults plus one field.
+        with _LOCK, shared_file_lock(self.config_path):
+            current = read_json_for_update(self.config_path, what="shared config")
+            merged = {**copy.deepcopy(self.DEFAULT_CONFIG), **current, **(cfg or {})}
             _atomic_write(self.config_path, json.dumps(merged, indent=2))
             # Prime the read cache with what was just written: two writes
             # inside one mtime tick with equal sizes would otherwise look
@@ -705,15 +792,27 @@ class HandsfreeStore:
                 "ledger_kept": remaining, "purged": purged}
 
     def list_drafts(self, include_closed: bool = True,
-                    limit: int = 100, owner_name: str = "") -> list[dict]:
+                    limit: int = 100, owner_name: str = "", mailbox: str = "") -> list[dict]:
         """Newest-first draft summaries (analysis payload omitted).
         Raises OSError when the queue folder cannot be listed \u2014 an empty
-        list would read as "no drafts" and hide the real problem."""
+        list would read as "no drafts" and hide the real problem.
+
+        "Mine" has two identities. `owner_name` is the IPS case owner (the
+        signed-in reviewer). `mailbox` is the reviewer's own mail address:
+        a draft from the Outlook intake has no IPS case owner \u2014 it belongs
+        to the mailbox its thread was read from. With either given, a draft
+        is listed when it matches one of them; with neither, every draft."""
         owner_filter = (owner_name or "").strip().casefold()
+        box_filter = (mailbox or "").strip().casefold()
         out: list[dict] = []
         for slim in self._refresh_summaries():
-            if owner_filter and str(slim.get("owner_name") or "").casefold() != owner_filter:
-                continue
+            if owner_filter or box_filter:
+                by_owner = bool(owner_filter) and (
+                    str(slim.get("owner_name") or "").casefold() == owner_filter)
+                by_box = bool(box_filter) and (
+                    str((slim.get("email") or {}).get("mailbox") or "").casefold() == box_filter)
+                if not (by_owner or by_box):
+                    continue
             if not include_closed and slim.get("status") in ("posted", "rejected"):
                 continue
             out.append(dict(slim))
@@ -767,7 +866,8 @@ class HandsfreeStore:
         # Where an email-intake draft came from (the page shows the sender).
         email = rec.get("email") or {}
         slim["email"] = ({k: email.get(k, "") for k in
-                          ("sender_name", "sender_email", "subject", "received", "thread_size")}
+                          ("sender_name", "sender_email", "subject", "received", "thread_size",
+                           "mailbox")}
                          if email else None)
         return entry.name, slim
 

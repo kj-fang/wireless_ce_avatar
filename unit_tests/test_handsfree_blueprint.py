@@ -555,14 +555,16 @@ class TestHandsfreeRunRoutes(BaseTestCase):
 class TestHandsfreeQueueRoutes(BaseTestCase):
     blueprint = handsfree_bp
 
+    @patch(f"{ROUTES}._own_mailbox", return_value="me@intel.com")
     @patch(f"{ROUTES}._signed_in_name", return_value="Reviewer One")
-    def test_list_queue_defaults_to_the_reviewers_open_drafts(self, _mock_name, mock_store_cls):
-        """Listing the queue defaults to the signed-in reviewer's open drafts.
+    def test_list_queue_defaults_to_the_reviewers_open_drafts(self, _mock_name, _mock_box, mock_store_cls):
+        """Listing the queue defaults to the reviewer's own open drafts.
 
-        Input: GET /handsfree/queue with no query params, signed in as
-        "Reviewer One".
+        Input: GET /handsfree/queue with no query params, signed in to IPS as
+        "Reviewer One" on a PC whose mailbox is me@intel.com.
         Expected: 200 with {items}; list_drafts is called with
-        include_closed=False and that reviewer as the owner.
+        include_closed=False, that reviewer as the IPS case owner AND the
+        mailbox (an Outlook-intake draft has no IPS owner).
         """
         # Arrange
         mock_store_cls.return_value.list_drafts.return_value = [{"draft_id": "d-1"}]
@@ -574,13 +576,15 @@ class TestHandsfreeQueueRoutes(BaseTestCase):
         self.assertEqual(resp.status_code, 200)
         self.assertEqual(resp.get_json(), {"items": [{"draft_id": "d-1"}]})
         mock_store_cls.return_value.list_drafts.assert_called_once_with(
-            include_closed=False, owner_name="Reviewer One")
+            include_closed=False, owner_name="Reviewer One", mailbox="me@intel.com")
 
+    @patch(f"{ROUTES}._own_mailbox", return_value="")
     @patch(f"{ROUTES}._signed_in_name", return_value="")
-    def test_list_queue_without_sign_in_is_empty_and_says_so(self, _mock_name, mock_store_cls):
-        """Without a sign-in the own-cases view is empty, not everyone's.
+    def test_list_queue_without_any_identity_is_empty_and_says_so(self, _mock_name, _mock_box, mock_store_cls):
+        """Without an IPS sign-in or a mailbox the own view is empty, not everyone's.
 
-        Input: GET /handsfree/queue with no reviewer signed in.
+        Input: GET /handsfree/queue with no reviewer signed in and no mail
+        address known for this PC.
         Expected: 200 with {items: [], signed_out: True}; the store is not
         read.
         """
@@ -592,13 +596,38 @@ class TestHandsfreeQueueRoutes(BaseTestCase):
         self.assertEqual(resp.get_json(), {"items": [], "signed_out": True})
         mock_store_cls.return_value.list_drafts.assert_not_called()
 
+    @patch(f"{ROUTES}._own_mailbox", return_value="me@intel.com")
     @patch(f"{ROUTES}._signed_in_name", return_value="")
-    def test_list_queue_everyone_lifts_the_owner_filter(self, _mock_name, mock_store_cls):
+    def test_list_queue_signed_out_still_lists_the_mailbox_drafts(self, _mock_name, _mock_box, mock_store_cls):
+        """Email drafts need no IPS sign-in: they are listed while signed out.
+
+        Input: GET /handsfree/queue with no IPS sign-in on a PC whose mailbox
+        is me@intel.com.
+        Expected: 200 with the mailbox's drafts and signed_out: True (the
+        page still offers the sign-in); list_drafts is filtered by the
+        mailbox alone, never unfiltered.
+        """
+        # Arrange
+        mock_store_cls.return_value.list_drafts.return_value = [{"draft_id": "e-1"}]
+
+        # Act
+        resp = self.client.get("/handsfree/queue")
+
+        # Assert
+        self.assertEqual(resp.status_code, 200)
+        self.assertEqual(resp.get_json(), {"items": [{"draft_id": "e-1"}], "signed_out": True})
+        mock_store_cls.return_value.list_drafts.assert_called_once_with(
+            include_closed=False, owner_name="", mailbox="me@intel.com")
+
+    @patch(f"{ROUTES}._own_mailbox")
+    @patch(f"{ROUTES}._signed_in_name", return_value="")
+    def test_list_queue_everyone_lifts_the_owner_filter(self, _mock_name, mock_box, mock_store_cls):
         """?everyone=1 lists every owner's drafts, optionally one owner's.
 
         Input: GET /handsfree/queue?everyone=1, then with &owner=Ann, with no
         reviewer signed in.
-        Expected: list_drafts is called with owner_name "" and then "Ann".
+        Expected: list_drafts is called with owner_name "" and then "Ann",
+        and no mailbox filter (this PC's mailbox is not even looked up).
         """
         # Arrange
         store = mock_store_cls.return_value
@@ -610,8 +639,9 @@ class TestHandsfreeQueueRoutes(BaseTestCase):
 
         # Assert
         self.assertEqual([c.kwargs for c in store.list_drafts.call_args_list], [
-            {"include_closed": False, "owner_name": ""},
-            {"include_closed": False, "owner_name": "Ann"}])
+            {"include_closed": False, "owner_name": "", "mailbox": ""},
+            {"include_closed": False, "owner_name": "Ann", "mailbox": ""}])
+        mock_box.assert_not_called()
 
     def test_list_queue_all_flag_variants_include_closed(self, mock_store_cls):
         """The ?all flag's truthy variants include closed drafts.
@@ -633,7 +663,8 @@ class TestHandsfreeQueueRoutes(BaseTestCase):
                 self.client.get("/handsfree/queue", query_string={"everyone": "1", "all": value})
 
                 # Assert
-                store.list_drafts.assert_called_once_with(include_closed=expected, owner_name="")
+                store.list_drafts.assert_called_once_with(
+                    include_closed=expected, owner_name="", mailbox="")
 
     def test_get_draft_found(self, mock_store_cls):
         """Fetching an existing draft returns it.

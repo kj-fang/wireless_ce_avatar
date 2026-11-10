@@ -107,13 +107,40 @@ def load_state(root) -> dict:
     return {"last_scan_at": "", "processed": {}}
 
 
-def save_state(root, state: dict) -> None:
+def update_state(root, change) -> dict:
+    """One read-modify-write of the scan state: `change(state)` edits the
+    state that is on the share NOW, and the result is written back. The
+    state file is shared — the server's scheduled scan and a reviewer's
+    manual scan on another PC both record processed mail in it — so the
+    whole transaction runs under _LOCK (this process's threads) and
+    queue.shared_file_lock (the machines), and is written through a unique
+    temp file. Without that, one side's write replaces the other's marks and
+    mail that was already handled is analysed again. Returns the new state."""
+    from .queue import _atomic_write, read_json_for_update, shared_file_lock
     with _LOCK:
         p = state_path(root)
         p.parent.mkdir(parents=True, exist_ok=True)
-        tmp = p.with_suffix(".json.tmp")
-        tmp.write_text(json.dumps(state, indent=2), encoding="utf-8")
-        os.replace(tmp, p)
+        with shared_file_lock(p):
+            state = read_json_for_update(p, what="email scan state")
+            state.setdefault("processed", {})
+            state.setdefault("last_scan_at", "")
+            change(state)
+            _atomic_write(p, json.dumps(state, indent=2))
+            return state
+
+
+def save_state(root, state: dict) -> None:
+    """Replace the whole state. Only for a caller that owns it outright (a
+    test, a reset); a running scan records its marks with update_state."""
+    def _replace(current: dict) -> None:
+        current.clear()
+        current.update(state)
+    update_state(root, _replace)
+
+
+def set_last_scan(root, stamp: str) -> None:
+    """Record when the last scan started, leaving every processed mark alone."""
+    update_state(root, lambda state: state.__setitem__("last_scan_at", str(stamp)))
 
 
 def mark_processed(root, entry_id: str, case_nbr: str = "", draft_id: str = "",
@@ -123,16 +150,18 @@ def mark_processed(root, entry_id: str, case_nbr: str = "", draft_id: str = "",
     `complete` closes the mail as a whole — a mail that is skipped (no case
     number, automated, a digest) is remembered that way so it is not
     re-listed every round."""
-    state = load_state(root)
-    entry = state["processed"].setdefault(str(entry_id), {"case_nbrs": [], "draft_ids": []})
-    if case_nbr and case_nbr not in entry["case_nbrs"]:
-        entry["case_nbrs"].append(case_nbr)
-    if draft_id:
-        entry["draft_ids"].append(draft_id)
-    if complete:
-        entry["complete"] = True
-    entry["at"] = time.strftime("%Y-%m-%dT%H:%M:%S")
-    save_state(root, state)
+    def _mark(state: dict) -> None:
+        entry = state["processed"].setdefault(str(entry_id), {"case_nbrs": [], "draft_ids": []})
+        entry.setdefault("case_nbrs", [])
+        entry.setdefault("draft_ids", [])
+        if case_nbr and case_nbr not in entry["case_nbrs"]:
+            entry["case_nbrs"].append(case_nbr)
+        if draft_id:
+            entry["draft_ids"].append(draft_id)
+        if complete:
+            entry["complete"] = True
+        entry["at"] = time.strftime("%Y-%m-%dT%H:%M:%S")
+    update_state(root, _mark)
 
 
 def is_processed(state: dict, entry_id: str) -> bool:

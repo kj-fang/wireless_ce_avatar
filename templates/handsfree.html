@@ -1491,7 +1491,9 @@
           ? 'signing in to IPS — your cases appear in a moment'
           : 'not signed in to IPS: use "Sign in to IPS" to see your cases, or tick "everyone\'s cases"'
       ) + '</td></tr>';
-      return;
+      // The drafts of this PC's Outlook intake need no IPS sign-in (their
+      // reply is saved in Outlook): they are listed under the hint.
+      if (!(j.items || []).length) return;
     }
     (j.items || []).forEach(it => {
       if (it.status === 'skipped') {

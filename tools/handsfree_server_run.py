@@ -12,7 +12,9 @@ One scheduled Handsfree round on the server (run it from Task Scheduler).
 3. One scan of the owners' new cases / new customer comments (--once).
 
 Each run writes <avatarfiles_dir>/logs/handsfree_server/<timestamp>.log and
-overwrites last_status.txt there. Logs older than 30 days are deleted.
+overwrites last_status.txt there (a skipped run, exit 4, writes
+last_skipped.txt instead: it ran no round and must not count as CLI
+activity). Logs older than 30 days are deleted.
 Exit code: 0 ok, 1 scan failed, 2 sign-in failed, 3 bad owners file,
 4 skipped because the Beacon page schedules the rounds on this server.
 
@@ -115,10 +117,25 @@ def main(argv: list[str] | None = None) -> int:
             code, status = _round(owners_file, log)
         _note(log, f"finished: {status}")
 
-    (log_dir / "last_status.txt").write_text(
-        f"{started:%Y-%m-%d %H:%M} {status}\nlog: {log_path}\n", encoding="utf-8")
+    _record(log_dir, started, code, status, log_path)
     print(f"{status} (log: {log_path})")
     return code
+
+
+def _record(log_dir: Path, started: datetime, code: int, status: str, log_path: Path) -> Path:
+    """Write the one-line result of this run and return the file written.
+
+    last_status.txt is the CLI-ACTIVITY marker: the Beacon page reads it
+    (scheduler.cli_last_run) and, while it is younger than 24 hours, refuses
+    to start its own schedule and warns that both schedulers ran. A run that
+    was skipped because the page schedules the rounds (exit 4) ran no round,
+    so it must not refresh that marker — otherwise the page stayed locked
+    out for a day after its schedule was stopped. The skip is recorded in
+    last_skipped.txt (and in the run's log) instead."""
+    name = "last_skipped.txt" if code == _SKIPPED[0] else "last_status.txt"
+    target = log_dir / name
+    target.write_text(f"{started:%Y-%m-%d %H:%M} {status}\nlog: {log_path}\n", encoding="utf-8")
+    return target
 
 
 if __name__ == "__main__":

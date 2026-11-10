@@ -652,17 +652,30 @@ def start_case_run(case_nbr: str) -> dict:
 # Outlook intake (2026-10-22): mail that names an IPS case
 # ---------------------------------------------------------------------------
 
+def _thread_folders(watch_folder: str = "") -> tuple:
+    """Where a case's email thread is collected: the watched folder first
+    (thread() does not descend into subfolders, so a watch folder such as
+    'Inbox/Beacon' must be named or the triggering mail itself is missed),
+    then the Inbox and Sent Items."""
+    out: list = []
+    for name in (str(watch_folder or "").strip(), "Inbox", "Sent Items"):
+        if name and name.casefold() not in (n.casefold() for n in out):
+            out.append(name)
+    return tuple(out)
+
+
 def _email_case_pass(store: HandsfreeStore, app, nbr: str, *, own: str,
-                     reply_all: bool, trigger_entry_id: str = "") -> dict:
-    """One case on its EMAIL THREAD: collect the thread (Inbox + Sent
-    Items, human mail only), save its files under <avatarfiles>/email_<case>,
-    build the context, run the pipeline, attach the reply target to the
-    drafts. Shared by the automatic round and the manual run. Returns
-    {rec, email, msgs}; raises when no mail names the case."""
+                     reply_all: bool, trigger_entry_id: str = "", folder: str = "") -> dict:
+    """One case on its EMAIL THREAD: collect the thread (the watched folder,
+    Inbox and Sent Items; human mail only), save its files under
+    <avatarfiles>/email_<case>, build the context, run the pipeline, attach
+    the reply target to the drafts. Shared by the automatic round and the
+    manual run. Returns {rec, email, msgs}; raises when no mail names the case."""
     from . import email_case as ec
-    msgs = app.thread(nbr, own_email=own)
+    folders = _thread_folders(folder)
+    msgs = app.thread(nbr, folders=folders, own_email=own)
     if not msgs:
-        raise RuntimeError(f"no mail in the Inbox or Sent Items names case {nbr}")
+        raise RuntimeError(f"no mail in the {', '.join(folders[:-1])} or {folders[-1]} names case {nbr}")
     thread_dir = str(Path(store.root).parent / f"email_{nbr}")
     for m in msgs:
         app.save_attachments(m, thread_dir)
@@ -671,7 +684,11 @@ def _email_case_pass(store: HandsfreeStore, app, nbr: str, *, own: str,
     email = {"entry_id": target.entry_id, "store_id": target.store_id,
              "subject": target.subject, "sender_name": target.sender_name,
              "sender_email": target.sender_email, "received": target.received,
-             "reply_all": bool(reply_all), "thread_size": len(msgs)}
+             "reply_all": bool(reply_all), "thread_size": len(msgs),
+             # Whose mailbox this is. An email draft has no IPS case owner; it
+             # belongs to the reviewer whose Outlook holds the thread (Approve
+             # saves the reply there), and the queue shows it to that user.
+             "mailbox": str(own or "").strip().casefold()}
     _update_case_details(nbr, {"email": email, "source": "email", "subject": ctx.subject})
     _log_event(f"[{nbr}] email thread: {len(msgs)} mail(s) "
                f"({msgs[0].received[:10]} → {msgs[-1].received[:10]}), "
@@ -784,7 +801,7 @@ def run_email_scan(store: HandsfreeStore, *, folder: str = "Inbox", max_cases: i
                            f"{r.sender_name or r.sender_email}: {r.subject[:60]}")
                 try:
                     res = _email_case_pass(store, app, nbr, own=own, reply_all=reply_all,
-                                           trigger_entry_id=r.entry_id)
+                                           trigger_entry_id=r.entry_id, folder=folder or "Inbox")
                     rec = res["rec"]
                     if rec is not None and rec.get("mode") == "error":
                         failed += 1
@@ -814,9 +831,10 @@ def run_email_scan(store: HandsfreeStore, *, folder: str = "Inbox", max_cases: i
         result = f"{len(work)} case(s) run from {len(work)} mail(s)" if work else "no new mail naming a case"
         if capped or failed:
             result += " (capped/failed — retried next round)"
-        state = ol.load_state(store.root)
-        state["last_scan_at"] = started.isoformat(timespec="seconds")
-        ol.save_state(store.root, state)
+        # One transaction on the state that is on the share now: a read here
+        # and a write later would drop the marks another PC's scan recorded
+        # in between.
+        ol.set_last_scan(store.root, started.isoformat(timespec="seconds"))
         store.save_config({"email_last_scan_at": started.isoformat(timespec="seconds"),
                            "email_last_result": result})
         _set_state(status="done", finished_at=time.time())
@@ -854,7 +872,8 @@ def run_email_case(store: HandsfreeStore, case_nbr: str, *, reply_all: bool = Tr
                    case_details={}, error=None)
         _log_event(f"manual run: collecting the email thread of case {nbr}")
         with ol.Outlook() as app:
-            res = _email_case_pass(store, app, nbr, own=_own_email(own_email), reply_all=reply_all)
+            res = _email_case_pass(store, app, nbr, own=_own_email(own_email), reply_all=reply_all,
+                                   folder=str(store.load_config().get("email_folder") or "Inbox"))
         rec = res["rec"]
         if rec is not None and rec.get("mode") == "error":
             err = (rec.get("analysis") or {}).get("error") or "analysis failed"

@@ -82,6 +82,24 @@ def _signed_in_name() -> str:
     return str(((_login().status().get("identity") or {}).get("name")) or "")
 
 
+_own_mailbox_cache: list = []
+
+
+def _own_mailbox() -> str:
+    """The mail address of the Windows account this app runs as — the
+    mailbox whose Outlook the email intake reads and Approve saves reply
+    drafts in. It identifies "my" email drafts in the queue, which have no
+    IPS case owner; it needs no IPS sign-in. Looked up once per process
+    (`whoami /upn`, the same lookup the email scan uses)."""
+    if not _own_mailbox_cache:
+        try:
+            from utils.helpers import detect_user_email
+            _own_mailbox_cache.append(str(detect_user_email() or "").strip().casefold())
+        except Exception:
+            _own_mailbox_cache.append("")
+    return _own_mailbox_cache[0]
+
+
 # ---------- run ----------
 
 @handsfree_bp.route("/check_now", methods=["POST"])
@@ -260,20 +278,28 @@ def auto_run_now():
 
 @handsfree_bp.route("/queue")
 def list_queue():
-    """The signed-in reviewer's own cases. ?everyone=1 lifts that to every
-    owner (optionally narrowed by ?owner=); without a sign-in the own-cases
-    view is empty and says so."""
+    """The reviewer's own drafts: the cases the signed-in IPS user owns, plus
+    the Outlook-intake drafts of this PC's mailbox (they have no IPS case
+    owner, and saving their reply needs no IPS sign-in). ?everyone=1 lifts
+    that to every owner (optionally narrowed by ?owner=). Without an IPS
+    sign-in the answer says so (signed_out) and still lists the mailbox's
+    email drafts; with neither identity it is empty."""
     truthy = ("1", "true", "yes")
     include_closed = request.args.get("all", "").lower() in truthy
     everyone = request.args.get("everyone", "").lower() in truthy
     owner_name = request.args.get("owner", "").strip()
+    mailbox, signed_out = "", False
     if not everyone:
-        me = _signed_in_name()
-        if not me:
+        owner_name = _signed_in_name()
+        mailbox = _own_mailbox()
+        signed_out = not owner_name
+        if not owner_name and not mailbox:
             return jsonify({"items": [], "signed_out": True})
-        owner_name = me
-    return jsonify({"items": _store().list_drafts(
-        include_closed=include_closed, owner_name=owner_name)})
+    out = {"items": _store().list_drafts(
+        include_closed=include_closed, owner_name=owner_name, mailbox=mailbox)}
+    if signed_out:
+        out["signed_out"] = True
+    return jsonify(out)
 
 
 @handsfree_bp.route("/queue/<draft_id>")

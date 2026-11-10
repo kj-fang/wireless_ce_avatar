@@ -3026,6 +3026,8 @@ def smoke_email_intake(tmp: Path) -> None:
         with ol.Outlook() as app:
             th = app.thread("01031658", own_email="me@intel.com")
             th_7 = app.thread("01032299")
+            th_watch = app.thread("01034043", folders=orch._thread_folders("Inbox/Beacon"))
+            th_plain = app.thread("01034043")
             tdir = tmp / "email_01031658"
             for m in th:
                 app.save_attachments(m, str(tdir))
@@ -3036,6 +3038,12 @@ def smoke_email_intake(tmp: Path) -> None:
               and th[2].folder == "Sent Items" and th[3].is_own and th[3].folder == "Inbox"
               and [m.entry_id for m in th_7] == ["E2"],
               f"{[(m.entry_id, m.is_own, m.folder) for m in th]} / {[m.entry_id for m in th_7]}")
+        check("S19.q thread() searches exactly the folders it is given: the mail in the watched "
+              "subfolder Inbox/Beacon is part of the thread only when that folder is passed "
+              "(orchestrator._thread_folders adds it for a scan of that folder)",
+              "E6" in [m.entry_id for m in th_watch] and "E6" not in [m.entry_id for m in th_plain]
+              and {m.entry_id for m in th_plain} <= {m.entry_id for m in th_watch},
+              f"watch={[m.entry_id for m in th_watch]} plain={[m.entry_id for m in th_plain]}")
         check("S19.p filters: IPS notifications, auto-replies and multi-case digests are not thread "
               "mail; the reply goes to the triggering mail, or (own trigger) to the newest customer mail "
               "of its conversation, else to the trigger itself; no trigger -> newest customer mail",
@@ -5011,7 +5019,12 @@ def smoke_review_fixes(tmp: Path) -> None:
               and st_b.get("case_nbrs") == ["01040001"]
               and [(c["case_nbr"], c["mode"]) for c in r3["cases"]] == [("01040002", "full")]
               and st_c.get("case_nbrs") == ["01040001", "01040002"]
-              and r4["ok"] and r4["cases"] == [],
+              and r4["ok"] and r4["cases"] == []
+              # every email draft records whose Outlook it came from
+              and len(store.list_drafts()) == 2
+              and all((d.get("email") or {}).get("mailbox") == "me@intel.com" for d in store.list_drafts())
+              and len(store.list_drafts(mailbox="ME@intel.com")) == 2
+              and store.list_drafts(owner_name="Somebody Else") == [],
               f"ran={ran} r1={r1.get('cases')} r2={r2.get('cases')} r3={r3.get('cases')} "
               f"r4={r4.get('cases')} state={st_a} / {st_b} / {st_c} err={r1.get('error')}")
     finally:
@@ -5127,6 +5140,271 @@ def smoke_review_fixes(tmp: Path) -> None:
           f"skip={res_skip} {seq_skip} ok={res_ok} {seq_ok} share={res_share} {seq_share} late={res_late}")
 
 
+# ---------------------------------------------------------------- S28
+def smoke_review_fixes_2(tmp: Path) -> None:
+    print("[S28] PR 190 review, second pass: shared config and scan state across machines, email "
+          "drafts in the reviewer's queue, case numbers vs dates, image size, watch folder, skipped task")
+    import importlib.util
+    import json as _json
+    import os as _os
+    import subprocess
+    import time as _time
+    import types
+    from . import email_case as ec
+    from . import orchestrator as orch
+    from . import outlook_source as ol
+    from . import queue as queue_mod
+    from .queue import HandsfreeStore
+
+    repo = str(Path(__file__).resolve().parents[2])
+
+    def _race(code: str, n_procs: int, *argv) -> list:
+        """Run `code` in n_procs separate Python processes at the same time
+        (each one a different "machine": its own locks and caches)."""
+        procs = [subprocess.Popen([sys.executable, "-c", code, repo, str(i), *map(str, argv)],
+                                  stdout=subprocess.PIPE, stderr=subprocess.STDOUT, text=True)
+                 for i in range(n_procs)]
+        return [(p.wait(120), (p.stdout.read() or "").strip()[-300:]) for p in procs]
+
+    # --- a) the shared config: partial updates from different machines all survive
+    root = tmp / "handsfree_s28"
+    store = HandsfreeStore(root)
+    store.save_config({"dry_run": False, "owner_name": "Ann"})
+    code_cfg = (
+        "import sys; sys.path.insert(0, sys.argv[1])\n"
+        "from pathlib import Path\n"
+        "from services.handsfree.queue import HandsfreeStore\n"
+        "s = HandsfreeStore(Path(sys.argv[3]))\n"
+        "for j in range(12):\n"
+        "    s.save_config({f'k_{sys.argv[2]}_{j}': j})\n")
+    outs = _race(code_cfg, 3, root)
+    cfg = _json.loads((root / "config.json").read_text(encoding="utf-8"))
+    kept = sum(1 for i in range(3) for j in range(12) if cfg.get(f"k_{i}_{j}") == j)
+    leftovers = sorted(p.name for p in root.iterdir() if p.is_file() and p.name != "config.json")
+
+    # a reviewer switches dry-run ON from one PC while the server saves something else
+    client, server = HandsfreeStore(root), HandsfreeStore(root)
+    server.load_config()                                   # the server's snapshot: dry_run False
+    client.save_config({"dry_run": True})
+    server.save_config({"latest_driver": "24.90.0.3"})     # must not put dry_run back to False
+    after = HandsfreeStore(root).load_config()
+
+    # a lock held by another machine: wait, then refuse - and write nothing
+    orig_wait = queue_mod.SHARED_LOCK_WAIT_S
+    lock = root / "config.json.lock"
+    before_bytes = (root / "config.json").read_bytes()
+    queue_mod.SHARED_LOCK_WAIT_S = 0.4
+    lock.write_text("other-pc", encoding="utf-8")
+    try:
+        try:
+            store.save_config({"dry_run": False})
+            held = ""
+        except TimeoutError as e:
+            held = str(e)
+        unchanged = (root / "config.json").read_bytes() == before_bytes
+        old = _time.time() - queue_mod.SHARED_LOCK_STALE_S - 5
+        _os.utime(lock, (old, old))                        # left by a process that died
+        took_over = store.save_config({"max_cases_per_run": 4})["max_cases_per_run"] == 4
+    finally:
+        queue_mod.SHARED_LOCK_WAIT_S = orig_wait
+    # an unparseable config is set aside, never silently merged into the defaults
+    (root / "config.json").write_text("{broken", encoding="utf-8")
+    recovered = store.save_config({"owner_name": "Bob"})
+    aside = [p.name for p in root.iterdir() if ".corrupt-" in p.name]
+    check("S28.a save_config is one transaction across machines: 3 processes x 12 partial updates all "
+          "kept (no lock or temp file left); a reviewer's dry_run=True survives the server's next save; "
+          "a held lock is waited for and then refused without writing; a stale lock is taken over; an "
+          "unparseable config is set aside",
+          all(rc == 0 for rc, _ in outs) and kept == 36 and leftovers == []
+          and cfg.get("dry_run") is False and cfg.get("owner_name") == "Ann"
+          and after["dry_run"] is True and after["latest_driver"] == "24.90.0.3"
+          and after["owner_name"] == "Ann"
+          and "busy on another machine" in held and unchanged and took_over and not lock.exists()
+          and recovered["owner_name"] == "Bob" and len(aside) == 1,
+          f"outs={outs} kept={kept}/36 leftovers={leftovers} dry_run_after={after.get('dry_run')} "
+          f"held={held!r} unchanged={unchanged} took_over={took_over} aside={aside}")
+
+    # --- b) "my" drafts: IPS case owner OR this PC's mailbox ---------------------
+    qstore = HandsfreeStore(tmp / "handsfree_s28_queue")
+    mk = lambda nbr, owner, email=None: qstore.enqueue(
+        case_nbr=nbr, case_id="", subject="s " + nbr, draft_plain="b", draft_html="<p>b</p>",
+        confidence=None, mode="full", analysis={}, owner_name=owner,
+        source="email" if email else "ips")
+    d_ips = mk("01060001", "Ann")
+    d_mine = mk("01060002", "")
+    d_other = mk("01060003", "")
+    qstore.update(d_mine["draft_id"], email={"sender_name": "Cust", "mailbox": "me@intel.com"})
+    qstore.update(d_other["draft_id"], email={"sender_name": "Cust", "mailbox": "lin@intel.com"})
+    ids = lambda **kw: sorted(d["case_nbr"] for d in qstore.list_drafts(**kw))
+    check("S28.b an Outlook-intake draft has no IPS case owner: the queue lists it for the mailbox it "
+          "came from, next to the cases the signed-in reviewer owns; another mailbox's draft stays out; "
+          "without any filter (everyone) all are listed",
+          ids(owner_name="Ann", mailbox="ME@intel.com") == ["01060001", "01060002"]
+          and ids(owner_name="ann") == ["01060001"]
+          and ids(mailbox="me@intel.com") == ["01060002"]
+          and ids(owner_name="Nobody", mailbox="nobody@intel.com") == []
+          and ids() == ["01060001", "01060002", "01060003"]
+          and next(d for d in qstore.list_drafts() if d["case_nbr"] == "01060002")["email"]["mailbox"]
+          == "me@intel.com",
+          f"{ids(owner_name='Ann', mailbox='ME@intel.com')} {ids(mailbox='me@intel.com')} {ids()}")
+
+    # --- c) a date in the subject is not a case ---------------------------------
+    check("S28.c trigger_cases takes the canonical case number only (eight digits with the leading "
+          "zero): a date after it is not scheduled, where it used to stay pending forever and take a "
+          "slot of the case limit on every scan",
+          ec.trigger_cases("IPS 01031658 update 20261110") == ["01031658"]
+          and ec.trigger_cases("RE: IPS 20261110 status") == []
+          and ec.trigger_cases("IPS 01031658 and IPS 01032299 on 20261110") == ["01031658", "01032299"]
+          and ec.trigger_cases("Case 01031658 update") == []
+          and ec.trigger_cases("Fwd: IPS 01031658 keeps disconnecting") == ["01031658"],
+          f"{ec.trigger_cases('IPS 01031658 update 20261110')} {ec.trigger_cases('RE: IPS 20261110 status')}")
+
+    # --- d) an oversized image is skipped before it is read ---------------------
+    img_dir = tmp / "s28_img"
+    img_dir.mkdir(parents=True, exist_ok=True)
+    png = b"\x89PNG\r\n\x1a\n"
+    small, edge, big = img_dir / "small.png", img_dir / "edge.png", img_dir / "big.png"
+    small.write_bytes(png + b"x" * 40)
+    edge.write_bytes(png + b"x" * (64 - len(png)))
+    with open(big, "wb") as f:                              # sparse: 5 MB + 1 byte, named .png
+        f.write(png)
+        f.seek(ec.MAX_IMAGE_BYTES)
+        f.write(b"\0")
+    opened: list = []
+    real_open = open
+
+    def _spy_open(path, *a, **kw):
+        opened.append(str(path))
+        return real_open(path, *a, **kw)
+    ec.open = _spy_open                                     # module-level name used by read_image_file
+    try:
+        got_small = ec.read_image_file(small)
+        got_edge = ec.read_image_file(edge, limit=64)
+        got_over = ec.read_image_file(edge, limit=63)
+        got_big = ec.read_image_file(big)
+    finally:
+        del ec.open
+    msg = ec.EmailMessage(entry_id="I1", store_id="S", folder="Inbox", subject="IPS 01031658 x",
+                          sender_name="Ann", sender_email="ann@oem.com",
+                          received="2026-10-22T10:15:00+08:00", body="see screenshots")
+    ctx_i = types.SimpleNamespace(
+        comments=[], messages=[msg],
+        image_files=[(msg, {"name": "big.png", "path": str(big)}),
+                     (msg, {"name": "small.png", "path": str(small)})])
+    vision = {"n": 0, "images": 0}
+    from . import comment_images as ci
+    orig_describe = ci.describe_images
+
+    def _describe(llm, images, **kw):
+        vision["n"] += 1
+        vision["images"] += len(images)
+        return ["a small screenshot"] * len(images)
+    said: list = []
+    ci.describe_images = _describe
+    try:
+        _rows, info = ec.annotate_email_images(
+            types.SimpleNamespace(model="claude-4-6-sonnet"), ctx_i,
+            cache_path=img_dir / "cache.json", progress=said.append)
+    finally:
+        ci.describe_images = orig_describe
+    check("S28.d an image attachment larger than the limit is never loaded: its size is checked first "
+          "(the file is not even opened) and the read is capped; it is skipped, not truncated, and the "
+          "run says so; the other images of the mail are still read",
+          got_small == small.read_bytes() and got_edge == edge.read_bytes()
+          and got_over is None and got_big is None
+          and str(big) not in opened and str(small) in opened
+          and vision == {"n": 1, "images": 1}
+          and info and info[0]["descriptions"] == ["a small screenshot"]
+          and any("larger than 5 MB" in s_ for s_ in said),
+          f"over={got_over} big={got_big is None} opened={[Path(o).name for o in opened]} "
+          f"vision={vision} info={info} said={said}")
+
+    # --- e) the Outlook scan state: marks from different machines all survive ----
+    sroot = tmp / "s28_state"
+    sroot.mkdir(parents=True, exist_ok=True)
+    code_state = (
+        "import sys; sys.path.insert(0, sys.argv[1])\n"
+        "from services.handsfree import outlook_source as ol\n"
+        "for j in range(12):\n"
+        "    ol.mark_processed(sys.argv[3], f'E_{sys.argv[2]}_{j}', '0100000' + sys.argv[2])\n")
+    outs_s = _race(code_state, 3, sroot)
+    st = ol.load_state(sroot)
+    marks = sum(1 for i in range(3) for j in range(12)
+                if st["processed"].get(f"E_{i}_{j}", {}).get("case_nbrs") == [f"0100000{i}"])
+    ol.set_last_scan(sroot, "2026-11-10T18:00:00+08:00")
+    st2 = ol.load_state(sroot)
+    slock = ol.state_path(sroot).with_name(ol.STATE_FILE + ".lock")
+    queue_mod.SHARED_LOCK_WAIT_S = 0.4
+    slock.write_text("other-pc", encoding="utf-8")
+    try:
+        try:
+            ol.mark_processed(sroot, "E_late", "01009999")
+            s_held = ""
+        except TimeoutError as e:
+            s_held = str(e)
+    finally:
+        queue_mod.SHARED_LOCK_WAIT_S = orig_wait
+        slock.unlink()
+    s_left = sorted(p.name for p in sroot.iterdir() if p.name != ol.STATE_FILE)
+    check("S28.e the processed-mail record is one transaction across machines: 3 processes x 12 marks "
+          "all kept; stamping the scan time keeps every mark; a held lock is refused without writing; "
+          "no temp file left",
+          all(rc == 0 for rc, _ in outs_s) and marks == 36
+          and st2["last_scan_at"] == "2026-11-10T18:00:00+08:00" and len(st2["processed"]) == 36
+          and "busy on another machine" in s_held and "E_late" not in ol.load_state(sroot)["processed"]
+          and s_left == [],
+          f"outs={outs_s} marks={marks}/36 processed={len(st2['processed'])} held={s_held!r} left={s_left}")
+
+    # --- f) the watched folder is where the thread is collected from -------------
+    seen_folders: list = []
+
+    class _NoThread:
+        def thread(self, nbr, *, folders=("Inbox", "Sent Items"), own_email=""):
+            seen_folders.append(tuple(folders))
+            return []
+    try:
+        orch._email_case_pass(store, _NoThread(), "01050002", own="me@intel.com",
+                              reply_all=True, folder="Inbox/Beacon")
+        f_err = ""
+    except RuntimeError as e:
+        f_err = str(e)
+    check("S28.f a case triggered from a watched subfolder collects its thread there too (thread() "
+          "does not descend into subfolders): the watch folder first, then Inbox and Sent Items, no "
+          "folder twice; the error names the folders searched",
+          orch._thread_folders("Inbox/Beacon") == ("Inbox/Beacon", "Inbox", "Sent Items")
+          and orch._thread_folders("inbox") == ("inbox", "Sent Items")
+          and orch._thread_folders("") == ("Inbox", "Sent Items")
+          and orch._thread_folders(" Sent Items ") == ("Sent Items", "Inbox")
+          and seen_folders == [("Inbox/Beacon", "Inbox", "Sent Items")]
+          and f_err == "no mail in the Inbox/Beacon, Inbox or Sent Items names case 01050002",
+          f"{orch._thread_folders('Inbox/Beacon')} {seen_folders} {f_err!r}")
+
+    # --- g) a skipped scheduled task is not CLI activity -------------------------
+    spec = importlib.util.spec_from_file_location(
+        "handsfree_server_run_s28", Path(repo) / "tools" / "handsfree_server_run.py")
+    wrapper = importlib.util.module_from_spec(spec)
+    spec.loader.exec_module(wrapper)
+    from datetime import datetime
+    ldir = tmp / "s28_logs"
+    ldir.mkdir(parents=True, exist_ok=True)
+    t_ok = wrapper._record(ldir, datetime(2026, 11, 9, 2, 0), 0, "OK", ldir / "a.log")
+    old = _time.time() - 30 * 3600                          # that real round was 30 hours ago
+    _os.utime(t_ok, (old, old))
+    t_skip = wrapper._record(ldir, datetime(2026, 11, 10, 2, 0), wrapper._SKIPPED[0],
+                             wrapper._SKIPPED[1], ldir / "b.log")
+    marker = ldir / "last_status.txt"
+    age_h = (_time.time() - marker.stat().st_mtime) / 3600
+    t_fail = wrapper._record(ldir, datetime(2026, 11, 10, 6, 0), 1, "scan failed (cli exit 1)", ldir / "c.log")
+    check("S28.g a round skipped because the Beacon page schedules the rounds writes last_skipped.txt "
+          "and leaves last_status.txt - the CLI-activity marker the page reads - untouched, so the page "
+          "is not locked out for 24 hours; a round that really ran (OK or failed) refreshes the marker",
+          t_ok.name == "last_status.txt" and t_skip.name == "last_skipped.txt"
+          and age_h > 29 and (ldir / "last_skipped.txt").read_text(encoding="utf-8").startswith("2026-11-10 02:00 SKIPPED")
+          and t_fail.name == "last_status.txt"
+          and marker.read_text(encoding="utf-8").startswith("2026-11-10 06:00 scan failed"),
+          f"{t_ok.name} {t_skip.name} age_h={age_h:.1f} {t_fail.name}")
+
+
 def run_smoke() -> int:
     tmp = Path(tempfile.mkdtemp(prefix="handsfree_smoke_"))
     try:
@@ -5156,6 +5434,7 @@ def run_smoke() -> int:
         smoke_echo_isolation(tmp)
         smoke_regression_item()
         smoke_review_fixes(tmp)
+        smoke_review_fixes_2(tmp)
     finally:
         shutil.rmtree(tmp, ignore_errors=True)
     print(f"\nsmoke result: {'ALL PASS' if not PASS_FAIL else 'FAILURES: ' + ', '.join(PASS_FAIL)}")

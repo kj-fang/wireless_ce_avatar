@@ -131,9 +131,23 @@ def trigger_cases(subject: str) -> list[str]:
         return []
     out: list[str] = []
     for n in _EIGHT_DIGITS_RE.findall(text):
-        if n not in out:
+        # Eight digits are not yet a case number: "IPS 01031658 update
+        # 20261110" carries a date. Thread collection uses the canonical form
+        # (leading zero), so a date scheduled here could never find its mail:
+        # it stayed pending and took a slot of the case limit on every scan.
+        if _is_case_number(n) and n not in out:
             out.append(n)
     return out
+
+
+def _is_case_number(eight_digits: str) -> bool:
+    """The repository's one definition of an IPS case number
+    (utils.check_ips_utils.normalise_ips), applied to an eight-digit run."""
+    try:
+        from utils.check_ips_utils import normalise_ips
+        return normalise_ips(eight_digits) == eight_digits
+    except Exception:
+        return str(eight_digits).startswith("0")
 
 
 def is_digest(case_nbrs) -> bool:
@@ -268,6 +282,21 @@ def _save_cache(path: Optional[Path], data: dict) -> None:
         os.replace(tmp, p)
 
 
+def read_image_file(path, limit: int = MAX_IMAGE_BYTES) -> Optional[bytes]:
+    """The bytes of an image attachment, or None when the file is larger
+    than `limit`. A mail attachment is an image here by its extension alone
+    and can be any size, so the size is checked before anything is read and
+    the read itself stops at the limit: a 2 GB file named .png never reaches
+    memory. An oversized image is skipped, not cut — a truncated image is
+    of no use to the vision model. Raises OSError when it cannot be read."""
+    p = Path(path)
+    if p.stat().st_size > limit:
+        return None
+    with open(p, "rb") as f:
+        data = f.read(limit + 1)
+    return data if len(data) <= limit else None
+
+
 def annotate_email_images(llm, ctx, *, cache_path: Optional[Path] = None,
                           progress: Optional[Callable[[str], None]] = None) -> tuple[list, list[dict]]:
     """Describe the image attachments of the thread (vision), one call per
@@ -299,17 +328,25 @@ def annotate_email_images(llm, ctx, *, cache_path: Optional[Path] = None,
                 say(f"image budget ({MAX_IMAGES_PER_THREAD}) exhausted — skipping the mail of {m.received[:10]}")
                 continue
             images: list[tuple[str, bytes]] = []
+            oversized = 0
             for a in files[:budget]:
                 try:
-                    data = Path(a["path"]).read_bytes()[:MAX_IMAGE_BYTES]
+                    data = read_image_file(a["path"])
                 except Exception:
+                    continue
+                if data is None:
+                    oversized += 1
                     continue
                 media = sniff_media_type(data, "")
                 if media in _ALLOWED_MEDIA:
                     images.append((media, data))
             budget -= len(images)
+            if oversized:
+                say(f"{oversized} image(s) of the mail of {m.received[:10]} are larger than "
+                    f"{MAX_IMAGE_BYTES // (1024 * 1024)} MB — not read")
             if not images:
-                say(f"the image(s) attached to the mail of {m.received[:10]} could not be read")
+                if not oversized:
+                    say(f"the image(s) attached to the mail of {m.received[:10]} could not be read")
                 continue
             say(f"describing {len(images)} image(s) attached to the mail of {m.received[:10]} from {m.sender_name}")
             descs = describe_images(llm, images, author=author, date=m.received[:16],

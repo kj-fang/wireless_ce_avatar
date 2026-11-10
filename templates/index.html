@@ -1209,6 +1209,17 @@
             .home-review-unframed .review-heading h2 > span, .home-analysis-heading h2 > span { transition: transform .24s cubic-bezier(.2, .8, .2, 1); }
         }
         #home-queue td:nth-child(2) { overflow-wrap: anywhere; }
+        #home-draft-modal, #home-draft-modal * { font-family: var(--font-body) !important; }
+        #home-draft-modal .modal-content { font-size: 15px; line-height: 1.6; }
+        #home-draft-modal .modal-title { font-family: var(--font-body) !important; font-size: 22px; font-weight: 600; line-height: 1.35; }
+        #home-draft-modal label, #home-draft-modal legend, #home-draft-modal summary { font-size: 14px; line-height: 1.5; }
+        #home-draft-modal .btn { font-size: 14px; line-height: 1.5; }
+        #home-draft-text { font-size: 15px; line-height: 1.65; }
+        #home-draft-analysis { font-size: 13px; line-height: 1.6; }
+        #home-post-status { flex: 0 1 auto; min-width: 0; color: #245f96; font-size: 20px; font-weight: 600; line-height: 1.4; overflow-wrap: anywhere; }
+        #home-post-status:empty { display: none; }
+        #home-post-status[data-state="success"] { color: #205e43; }
+        #home-post-status[data-state="error"] { color: #8d342e; }
     </style>
 </head>
 <body>
@@ -1263,18 +1274,6 @@
         <div class="review-toolbar">
             <span id="home-login-badge" class="review-pill" role="status">IPS: signing in...</span>
             <button type="button" id="home-login" class="btn btn-sm btn-outline-primary" hidden>Sign in to IPS</button>
-            <div class="owner-check-inline">
-                <details id="home-owner-advanced" class="owner-check-advanced">
-                    <summary>Advanced</summary>
-                    <div class="owner-check-panel">
-                        <label class="owner-check-prompt" for="home-owner-input">
-                            <span id="home-owner-hint">Reserved for a future owner lookup.</span>
-                            <input type="text" id="home-owner-input" placeholder="Owner name" autocomplete="off" disabled>
-                        </label>
-                        <button type="button" id="home-owner-check" title="Reserved for future use" disabled>Check</button>
-                    </div>
-                </details>
-            </div>
         </div>
         <div class="review-toolbar">
             <label><input type="checkbox" id="home-show-closed"> show posted/rejected</label>
@@ -1437,6 +1436,18 @@
             <div class="modal-body">
                 <div id="home-draft-meta" class="review-message"></div>
                 <div id="home-draft-chips"></div>
+                <fieldset id="home-visibility" class="mb-3">
+                    <legend class="h6">Post as:</legend>
+                    <label class="form-check form-check-inline">
+                        <input class="form-check-input" type="radio" name="home-draft-visibility" id="home-visibility-internal" value="internal" checked>
+                        <span class="form-check-label">Internal to Intel</span>
+                    </label>
+                    <label class="form-check form-check-inline">
+                        <input class="form-check-input" type="radio" name="home-draft-visibility" id="home-visibility-external" value="external">
+                        <span class="form-check-label">External to customer</span>
+                    </label>
+                    <div id="home-visibility-note" class="text-danger" role="status"></div>
+                </fieldset>
                 <label for="home-draft-text">Reply draft</label>
                 <textarea id="home-draft-text" class="form-control" rows="14"></textarea>
                 <details id="home-analysis-details"><summary>Analysis details (stages, incidents, agent trace)</summary><pre id="home-draft-analysis"></pre></details>
@@ -1455,7 +1466,8 @@
                 <button type="button" class="btn btn-outline-danger" id="home-reject">Reject</button>
                 <button type="button" class="btn btn-outline-secondary" id="home-folder" hidden>Open folder</button>
                 <button type="button" class="btn btn-outline-secondary" id="home-avatar" title="Open this case in Avatar for manual analysis">Open in Avatar analysis</button>
-                <span id="home-post-status" class="review-message" role="status"></span>
+                <span id="home-post-status" role="status" aria-live="polite" aria-atomic="true"></span>
+                <button type="button" class="btn btn-outline-secondary" id="home-post-close" data-dismiss="modal" hidden>Close window</button>
             </div>
         </div></div>
     </div>

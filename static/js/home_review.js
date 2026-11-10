@@ -17,6 +17,8 @@
     let opener = null;
     let queueLocked = false;
     let handoffBusy = false;
+    let folderBusy = false;
+    let avatarUnavailable = false;
 
     function setQueueLocked(locked) {
         queueLocked = locked;
@@ -163,8 +165,8 @@
         const chips = [];
         const add = (label, text, style, title) => chips.push(pill(label + ': ' + text, style, title));
         const reader = analysis.case_reader || {};
-        add('visibility', publicModes.includes(draft.mode) ? 'PUBLIC reply to customer' : 'Private to Intel',
-            publicModes.includes(draft.mode) ? 'warn' : '');
+        if (!draft.email) add('visibility', draftVisibility() === 'external' ? 'PUBLIC reply to customer' : 'Private to Intel',
+            draftVisibility() === 'external' ? 'warn' : '');
         if (draft.trial) add('mode', 'TRIAL - posting disabled', 'warn');
         if (draft.auto_posted) add('posting', 'AUTO');
         if (analysis.next_action) add('next action', (actionOwners[analysis.action_owner] || 'owner unclear') +
@@ -204,13 +206,42 @@
         element('draft-chips').innerHTML = chips.join('');
     }
 
+    function draftVisibility() {
+        return element('visibility-external').checked ? 'external' : 'internal';
+    }
+
+    function setPostStatus(message, state = '') {
+        element('post-status').textContent = message;
+        element('post-status').dataset.state = state;
+        element('post-close').hidden = state !== 'success';
+    }
+
+    function updateVisibility() {
+        const external = draftVisibility() === 'external' && !draft?.email;
+        element('visibility').hidden = !!draft?.email;
+        element('visibility-note').textContent = external ? 'The customer will see this comment.' : '';
+        element('approve').textContent = draft?.email ? 'Save reply draft in Outlook' : 'Approve & post to IPS';
+        element('approve').title = draft?.email
+            ? 'Saves a reply in Outlook Drafts; nothing is sent'
+            : external ? 'Posts a comment visible to the customer' : 'Posts a Private-to-Intel comment';
+        element('approve').classList.toggle('btn-danger', external);
+        element('approve').classList.toggle('btn-success', !external);
+        if (draft) renderChips(draft.analysis || {});
+    }
+
     function updateButtons() {
         const closed = !draft || ['posted', 'rejected'].includes(draft.status);
+        element('visibility').disabled = busy || closed || !!draft?.trial;
         element('approve').disabled = busy || closed || !!draft?.trial;
         element('save').disabled = busy || closed;
         element('reject').disabled = busy || closed;
-        element('folder').disabled = busy;
-        element('avatar').disabled = busy || handoffBusy || !draft;
+        element('folder').disabled = busy || folderBusy || !draft;
+        element('post-close').disabled = busy;
+        const hasLog = !!(draft?.shared_log_path || draft?.analysis?.log_path) && !avatarUnavailable;
+        element('avatar').disabled = busy || handoffBusy || !hasLog;
+        element('avatar').title = hasLog
+            ? "Opens Avatar's Log Chatbot on this case's decoded log, with the issue filled in the chat, to continue by hand"
+            : 'no log to analysis';
         element('draft-text').readOnly = busy || closed;
         ['save-close', 'discard', 'continue'].forEach(id => { element(id).disabled = busy; });
     }
@@ -221,6 +252,9 @@
         try {
             const record = await request('queue/' + encodeURIComponent(item.draft_id));
             draft = record;
+            avatarUnavailable = false;
+            element('visibility-internal').checked = true;
+            element('visibility-external').checked = false;
             opener = row;
             allowClose = false;
             savedText = record.draft_plain || '';
@@ -234,9 +268,9 @@
             element('analysis-details').open = false;
             element('folder').hidden = !item.log_dir;
             element('folder').title = item.log_dir || '';
-            element('post-status').textContent = '';
+            setPostStatus('');
             element('unsaved').hidden = true;
-            renderChips(record.analysis || {});
+            updateVisibility();
             updateButtons();
             modal.modal('show');
         } catch (error) {
@@ -245,13 +279,92 @@
             openingDraft = false;
         }
     }
+
+    async function approveDraft() {
+        if (!draft || element('approve').disabled || handoffBusy) return;
+        if (!draft.email && !(login.status === 'signed_in' && login.identity)) {
+            setPostStatus('Sign in to IPS before posting.', 'error');
+            return;
+        }
+        const visibility = draftVisibility();
+        const message = draft.email
+            ? 'Save this reply in Outlook Drafts? Nothing will be sent or posted to IPS.'
+            : (visibility === 'external'
+                ? 'Post this comment as EXTERNAL, visible to the customer?'
+                : 'Post this comment as Internal to Intel? The customer will not see it.')
+                + '\n\nPosted as ' + login.identity.name + '.';
+        if (!window.confirm(message)) return;
+        busy = true;
+        updateButtons();
+        setPostStatus(draft.email ? 'Saving Outlook reply draft...' : 'Posting to IPS. Please wait...', 'posting');
+        try {
+            await request('queue/' + encodeURIComponent(draft.draft_id) + '/approve', 'POST', {
+                draft_plain: element('draft-text').value, visibility,
+            });
+            savedText = element('draft-text').value;
+            draft.status = 'posted';
+            allowClose = true;
+            setPostStatus(draft.email
+                ? 'Reply draft saved in Outlook; nothing was sent. Please close this window.'
+                : 'Posted to IPS: ' + (visibility === 'external' ? 'visible to the customer' : 'Private to Intel')
+                    + '. Please close this window.', 'success');
+            await loadQueue();
+        } catch (error) {
+            setPostStatus('Could not approve draft: ' + error, 'error');
+        } finally {
+            busy = false;
+            updateButtons();
+        }
+    }
+
+    async function openFolder() {
+        if (!draft || element('folder').hidden || element('folder').disabled || folderBusy) return;
+        folderBusy = true;
+        updateButtons();
+        setPostStatus('Opening folder...');
+        try {
+            await request('queue/' + encodeURIComponent(draft.draft_id) + '/open_log_folder', 'POST');
+            setPostStatus('Folder opened in File Explorer.');
+        } catch (error) {
+            setPostStatus('Could not open folder: ' + error, 'error');
+        } finally {
+            folderBusy = false;
+            updateButtons();
+        }
+    }
+
+    async function openInAvatar() {
+        if (element('avatar').disabled || !draft || handoffBusy) return;
+        handoffBusy = true;
+        updateButtons();
+        setPostStatus('Navigating to new page...', 'navigating');
+        try {
+            const result = await request('chatbot_handoff', 'POST', {
+                case_nbr: draft.case_nbr, draft_id: draft.draft_id || '',
             });
             if (!result.url) throw new Error('Avatar did not return a destination URL.');
             window.location.assign(result.url);
         } catch (error) {
-            element('post-status').textContent = 'Could not open in Avatar: ' + error;
+            if (error.message === 'no log to analysis') avatarUnavailable = true;
+            setPostStatus('Could not open in Avatar: ' + error, 'error');
         } finally {
             handoffBusy = false;
             updateButtons();
         }
     }
+
+    element('folder').addEventListener('click', openFolder);
+    element('avatar').addEventListener('click', openInAvatar);
+    element('approve').addEventListener('click', approveDraft);
+    element('visibility-internal').addEventListener('change', updateVisibility);
+    element('visibility-external').addEventListener('change', updateVisibility);
+    element('login').addEventListener('click', () => signIn(true));
+    element('refresh').addEventListener('click', loadQueue);
+    element('show-closed').addEventListener('change', loadQueue);
+    element('everyone').addEventListener('change', () => {
+        element('owner-wrap').hidden = !element('everyone').checked;
+        loadQueue();
+    });
+    element('owner').addEventListener('change', loadQueue);
+    signIn(false);
+})();

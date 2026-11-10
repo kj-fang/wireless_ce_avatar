@@ -1121,7 +1121,8 @@ def _auto_post_first_response(store: HandsfreeStore, rec: dict, analysis) -> Non
 
 
 def approve_and_post(draft_id: str, edited_plain: Optional[str] = None,
-                     visibility: Optional[str] = None) -> dict:
+                     visibility: Optional[str] = None,
+                     attempt_id: Optional[str] = None) -> dict:
     """Human clicked Approve. Post the (possibly edited) draft to IPS.
     Returns the updated draft record + result.
 
@@ -1134,40 +1135,90 @@ def approve_and_post(draft_id: str, edited_plain: Optional[str] = None,
     The duplicate guard below is check-then-act (scan existing comments,
     then insert), so two near-simultaneous approvals interleaving could both
     pass the scan and double-post. _post_lock serializes this process; the
-    case claim on the shared folder serializes reviewers on other machines."""
+    case claim on the shared folder serializes reviewers on other machines.
+
+    attempt_id names THIS approval for a page that may lose the answer (the
+    post can outlive the page's wait). It is recorded on the draft as
+    approve_attempt {id, state running|done, ok, error}: "running" once this
+    approval holds the post lock, "done" when it has ended, however it
+    ended. The page reconciles against that record and nothing else — the
+    draft's status and post_result may still describe an EARLIER attempt
+    (a post_failed draft keeps them until its retry finishes), and taking
+    that stale failure for this attempt's would unlock editing and Reject
+    while the retry is still posting."""
+    attempt = _clean_attempt_id(attempt_id)
     with _post_lock:
-        store = _store()
-        rec = store.get(draft_id)
-        if rec is None:
-            return {"ok": False, "error": f"draft not found: {draft_id}"}
-        visibility = (visibility or DEFAULT_VISIBILITY).strip().lower()
-        if visibility not in VISIBILITIES:
-            return {"ok": False, "draft": rec,
-                    "error": f"unknown visibility {visibility!r} — choose "
-                             f"'{VISIBILITY_INTERNAL}' (Private to Intel) or "
-                             f"'{VISIBILITY_EXTERNAL}' (visible to the customer)"}
-        case_nbr = rec["case_nbr"]
-        # A mail-triggered draft becomes an Outlook reply draft on this PC:
-        # no IPS sign-in and no cross-machine case claim are involved.
-        if rec.get("email"):
-            return _approve_and_post_locked(draft_id, edited_plain, None, visibility)
-        # The comment goes out under the IPS session of this PC, so it must
-        # be the reviewer's own sign-in — resolved now, not from page state.
+        if attempt:
+            _mark_attempt(draft_id, attempt, "running")
+        result: Optional[dict] = None
         try:
-            reviewer = _signed_in_identity()
-        except Exception as e:
-            return {"ok": False,
-                    "error": "not signed in to IPS on this PC, so the comment could "
-                             f"not be posted in your name ({type(e).__name__}: {e}) — "
-                             "use 'Sign in to IPS' on the page and approve again"}
-        holder = store.claim_case(case_nbr, _reviewer_id(reviewer))
-        if holder:
-            return {"ok": False, "error": f"{holder} is posting to case {case_nbr} "
-                                          "right now — refresh and try again in a moment"}
-        try:
-            return _approve_and_post_locked(draft_id, edited_plain, reviewer, visibility)
+            result = _approve_under_post_lock(draft_id, edited_plain, visibility)
+            return result
         finally:
-            store.release_case(case_nbr)
+            if attempt:
+                _mark_attempt(draft_id, attempt, "done", result)
+
+
+def _clean_attempt_id(attempt_id) -> str:
+    """The page's attempt id when it is a plain token (8-64 letters, digits,
+    '-' or '_'), else "" — it is stored on the shared draft record."""
+    value = str(attempt_id or "").strip()
+    ok = 8 <= len(value) <= 64 and all(c.isalnum() or c in "-_" for c in value) and value.isascii()
+    return value if ok else ""
+
+
+def _mark_attempt(draft_id: str, attempt: str, state: str, result: Optional[dict] = None) -> None:
+    """Record where an approval attempt stands on its draft; never raises
+    (the post itself must not fail because this note could not be written)."""
+    try:
+        note = {"id": attempt, "state": state,
+                "at": time.strftime("%Y-%m-%dT%H:%M:%S")}
+        if state == "done":
+            ok = bool((result or {}).get("ok"))
+            note["ok"] = ok
+            note["error"] = "" if ok else str((result or {}).get("error")
+                                              or "the approval ended without a result")
+        _store().update(draft_id, approve_attempt=note)
+    except Exception as e:
+        print(f"[handsfree] approval attempt {attempt} ({state}) not recorded: "
+              f"{type(e).__name__}: {e}")
+
+
+def _approve_under_post_lock(draft_id: str, edited_plain: Optional[str],
+                             visibility: Optional[str]) -> dict:
+    """approve_and_post once _post_lock is held."""
+    store = _store()
+    rec = store.get(draft_id)
+    if rec is None:
+        return {"ok": False, "error": f"draft not found: {draft_id}"}
+    visibility = (visibility or DEFAULT_VISIBILITY).strip().lower()
+    if visibility not in VISIBILITIES:
+        return {"ok": False, "draft": rec,
+                "error": f"unknown visibility {visibility!r} — choose "
+                         f"'{VISIBILITY_INTERNAL}' (Private to Intel) or "
+                         f"'{VISIBILITY_EXTERNAL}' (visible to the customer)"}
+    case_nbr = rec["case_nbr"]
+    # A mail-triggered draft becomes an Outlook reply draft on this PC:
+    # no IPS sign-in and no cross-machine case claim are involved.
+    if rec.get("email"):
+        return _approve_and_post_locked(draft_id, edited_plain, None, visibility)
+    # The comment goes out under the IPS session of this PC, so it must
+    # be the reviewer's own sign-in — resolved now, not from page state.
+    try:
+        reviewer = _signed_in_identity()
+    except Exception as e:
+        return {"ok": False,
+                "error": "not signed in to IPS on this PC, so the comment could "
+                         f"not be posted in your name ({type(e).__name__}: {e}) — "
+                         "use 'Sign in to IPS' on the page and approve again"}
+    holder = store.claim_case(case_nbr, _reviewer_id(reviewer))
+    if holder:
+        return {"ok": False, "error": f"{holder} is posting to case {case_nbr} "
+                                      "right now — refresh and try again in a moment"}
+    try:
+        return _approve_and_post_locked(draft_id, edited_plain, reviewer, visibility)
+    finally:
+        store.release_case(case_nbr)
 
 
 def _signed_in_identity() -> dict:

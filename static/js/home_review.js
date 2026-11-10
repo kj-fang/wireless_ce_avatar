@@ -65,17 +65,31 @@
         }
     }
 
+    // A token naming one click on Approve. The server records it on the
+    // draft with that attempt's state and result (approve_attempt).
+    function newAttemptId() {
+        const random = window.crypto?.randomUUID?.() ||
+            (Date.now().toString(36) + '-' + Math.random().toString(36).slice(2, 12));
+        return ('a-' + random).replace(/[^A-Za-z0-9_-]/g, '').slice(0, 64);
+    }
+
     // What became of an approval that never answered: 'posted', 'failed'
-    // (with the server's error) or 'unknown' when the draft is still pending
-    // after the wait - the post may be running even then.
-    async function approvalOutcome(draftId) {
+    // (with the server's error) or 'unknown'. Only THIS attempt's own record
+    // counts. The draft's status and post_result are not evidence: when a
+    // post_failed draft is approved again they keep describing the earlier
+    // attempt until the retry finishes, and reading that stale failure as
+    // this one's would unlock the draft while the retry is still posting.
+    // No record of this attempt (the server has not reached it, or never
+    // got the request) and "still running" both mean: keep waiting.
+    async function approvalOutcome(draftId, attemptId) {
         const deadline = Date.now() + timing.reconcileMs;
         for (;;) {
             try {
                 const record = await request('queue/' + encodeURIComponent(draftId));
-                if (record.status === 'posted') return {status: 'posted'};
-                if (record.status === 'post_failed') {
-                    return {status: 'failed', error: record.post_result?.error || 'the post failed'};
+                const attempt = record.approve_attempt || {};
+                if (attempt.id === attemptId && attempt.state === 'done') {
+                    return attempt.ok ? {status: 'posted'}
+                        : {status: 'failed', error: attempt.error || 'the post failed'};
                 }
             } catch (error) { /* the server is busy or briefly unreachable: ask again */ }
             if (Date.now() >= deadline) return {status: 'unknown'};
@@ -412,11 +426,12 @@
         updateButtons();
         setPostStatus(draft.email ? 'Saving Outlook reply draft...' : 'Posting to IPS. Please wait...', 'posting');
         const draftId = draft.draft_id;
+        const attemptId = newAttemptId();
         try {
             let outcome = {status: 'posted'};
             try {
                 await request('queue/' + encodeURIComponent(draftId) + '/approve', 'POST', {
-                    draft_plain: element('draft-text').value, visibility,
+                    draft_plain: element('draft-text').value, visibility, attempt: attemptId,
                 }, timing.approveMs);
             } catch (error) {
                 if (error.answered) throw error;       // the server refused: nothing is running
@@ -424,7 +439,7 @@
                 // server may still be posting. Editing, Reject and a second
                 // Approve stay locked until the queue says how it ended.
                 setPostStatus('No answer yet - the post may still be running. Checking its result...', 'posting');
-                outcome = await approvalOutcome(draftId);
+                outcome = await approvalOutcome(draftId, attemptId);
             }
             if (outcome.status === 'failed') throw new Error(outcome.error);
             savedText = element('draft-text').value;

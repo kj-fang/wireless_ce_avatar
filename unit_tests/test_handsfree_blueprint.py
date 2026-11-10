@@ -457,6 +457,26 @@ class TestHandsfreeRunRoutes(BaseTestCase):
         mock_orch.approve_and_post.assert_called_once_with(
             "d-1", edited_plain="edited text", visibility="external")
 
+    def test_approve_passes_the_pages_attempt_id(self, mock_orch):
+        """approve forwards the page's attempt id, and only when one is sent.
+
+        Input: POST /handsfree/queue/d-1/approve with attempt "a-12345678".
+        Expected: approve_and_post is called with attempt_id="a-12345678" (the
+        orchestrator records the attempt on the draft so a page that lost the
+        answer can read THIS approval's outcome back). Without it the call
+        has no attempt_id at all - see the tests around this one.
+        """
+        # Arrange
+        mock_orch.approve_and_post.return_value = {"ok": True}
+
+        # Act
+        self.client.post("/handsfree/queue/d-1/approve",
+                         json={"draft_plain": "edited text", "attempt": "a-12345678"})
+
+        # Assert
+        mock_orch.approve_and_post.assert_called_once_with(
+            "d-1", edited_plain="edited text", visibility=None, attempt_id="a-12345678")
+
     def test_approve_without_body_passes_none(self, mock_orch):
         """approve passes edited_plain=None and visibility=None with no body.
 

@@ -356,9 +356,14 @@ def approve(draft_id: str):
     (visible to the customer). The page sends the reviewer's selection on
     every post; the draft's mode never decides it."""
     body = request.get_json(silent=True) or {}
+    extra = {}
+    if body.get("attempt"):
+        # The page's own id for this approval: it reads the outcome back by
+        # it when the answer to this request never arrives.
+        extra["attempt_id"] = str(body.get("attempt"))
     return jsonify(orchestrator.approve_and_post(
         draft_id, edited_plain=body.get("draft_plain"),
-        visibility=body.get("visibility")))
+        visibility=body.get("visibility"), **extra))
 
 
 @handsfree_bp.route("/queue/<draft_id>/reject", methods=["POST"])

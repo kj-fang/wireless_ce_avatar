@@ -222,10 +222,39 @@ def _wait_for_run() -> dict:
         time.sleep(1)
 
 
+def _refresh_latest_driver_if_due(store=None) -> bool:
+    """Keep the latest released driver current from a CLI run. In the app
+    the Beacon server's scheduler does this once a day; a server that runs
+    only this CLI (Task Scheduler, --interval) has no such thread, so on a
+    fresh share the drafts' driver check stayed "skipped" and a stored value
+    went stale. Called before every scan: reads the shared settings, and
+    only when a refresh is due (never fetched, a day old, a failed fetch two
+    hours ago, or "Refresh now" pressed on a page) opens the dashboard.
+    Returns True when a fetch was attempted; never fails the round."""
+    try:
+        from configs.global_configs import app_config
+        from .driver_release import is_refresh_due, refresh_latest_driver
+        if getattr(app_config, "driver_manager", None) is None:
+            return False                      # no Chrome in this process
+        store = store or _store()
+        if not is_refresh_due(store.load_config()):
+            return False
+        print("[handsfree-cli] latest driver: reading the PAE Wi-Fi Dashboard (a refresh is due)")
+        res = refresh_latest_driver(store)    # never raises; keeps the old value on failure
+        if not res.get("ok"):
+            print(f"[handsfree-cli] latest driver not refreshed: {res.get('error')} "
+                  "(the stored value is kept; retried later)")
+        return True
+    except Exception as e:
+        print(f"[handsfree-cli] latest driver refresh skipped: {type(e).__name__}: {e}")
+        return False
+
+
 def _run_once(owner: str = "", list_views: Optional[list[str]] = None) -> int:
     from . import orchestrator
 
     store = _store()
+    _refresh_latest_driver_if_due(store)
     max_cases = int(store.load_config().get("max_cases_per_run") or 3)
     summary = orchestrator.run_auto_scan(store, owner, max_cases, trigger="cli",
                                          list_views=list_views)
@@ -255,6 +284,7 @@ def _cleanup() -> None:
 def _run_case_once(case_nbr: str) -> int:
     from . import orchestrator
 
+    _refresh_latest_driver_if_due()
     result = orchestrator.start_case_run(case_nbr)
     if not result.get("ok"):
         print(f"[handsfree-cli] case run could not start: {result.get('error')}")

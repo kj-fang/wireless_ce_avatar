@@ -5647,6 +5647,155 @@ def smoke_review_fixes_3(tmp: Path) -> None:
           f"{msg!r} / {rm('server', '')!r}")
 
 
+# ---------------------------------------------------------------- S30
+def smoke_review_fixes_4(tmp: Path) -> None:
+    print("[S30] PR 190 review, fourth pass: an approval is reconciled by its own attempt record; "
+          "a CLI-only server keeps the latest driver current")
+    import types
+    from . import cli as cli_mod
+    from . import driver_release as dr
+    from . import orchestrator as orch
+    from . import outlook_source as ol
+    from .composer import AI_MARKER, compose_html
+    from .queue import HandsfreeStore
+
+    # --- a) each approval leaves its own record on the draft ----------------------
+    store = HandsfreeStore(tmp / "handsfree_s30")
+    store.save_config({"dry_run": False})
+    body = AI_MARKER + "\n\nanalysis"
+    mail = {"entry_id": "E1", "store_id": "S1", "subject": "IPS 01080001 x", "sender_name": "Ann",
+            "sender_email": "ann@oem.com", "received": "2026-11-10T10:00:00+08:00",
+            "reply_all": True, "thread_size": 1, "mailbox": "me@intel.com"}
+    rec = store.enqueue(case_nbr="01080001", case_id="", subject="IPS 01080001 x", draft_plain=body,
+                        draft_html=compose_html(body), confidence=70, mode="full", analysis={},
+                        source="email")
+    # an earlier attempt failed: the draft carries THAT failure until a retry finishes
+    store.update(rec["draft_id"], email=mail, status="post_failed",
+                 post_result={"ok": False, "backend": "outlook", "error": "Outlook was closed"},
+                 approve_attempt={"id": "a-earlier-attempt", "state": "done", "ok": False,
+                                  "error": "Outlook was closed"})
+    seen_mid: dict = {}
+
+    class _FakeOutlook:
+        fail = False
+        def __enter__(self): return self
+        def __exit__(self, *a): return False
+        def save_reply_draft(self, ref, html_fragment, *, reply_all=True, display=False):
+            # what a page polling the queue sees WHILE the retry is posting
+            mid = store.get(rec["draft_id"])
+            seen_mid.update(status=mid["status"], error=(mid.get("post_result") or {}).get("error"),
+                            attempt=dict(mid.get("approve_attempt") or {}))
+            if _FakeOutlook.fail:
+                raise ol.OutlookUnavailable("Outlook is not running")
+            return {"entry_id": "DRAFT-1", "to": "ann@oem.com", "subject": "RE: x"}
+    orig = (orch._store, ol.Outlook)
+    orch._store = lambda: store
+    ol.Outlook = _FakeOutlook
+    try:
+        _FakeOutlook.fail = True
+        r_fail = orch.approve_and_post(rec["draft_id"], attempt_id="a-retry-0001")
+        after_fail = store.get(rec["draft_id"])
+        mid_fail = dict(seen_mid)
+        _FakeOutlook.fail = False
+        r_ok = orch.approve_and_post(rec["draft_id"], attempt_id="a-retry-0002")
+        after_ok = store.get(rec["draft_id"])
+        mid_ok = dict(seen_mid)
+        # refused before anything is posted (dry run): still this attempt's own answer
+        store.save_config({"dry_run": True})
+        rec2 = store.enqueue(case_nbr="01080002", case_id="", subject="s", draft_plain=body,
+                             draft_html=compose_html(body), confidence=70, mode="full", analysis={},
+                             source="email")
+        store.update(rec2["draft_id"], email=mail)
+        r_dry = orch.approve_and_post(rec2["draft_id"], attempt_id="a-dryrun-01")
+        after_dry = store.get(rec2["draft_id"])
+        # no id (the Beacon page, the CLI, auto-post): nothing extra is recorded
+        store.save_config({"dry_run": False})
+        rec3 = store.enqueue(case_nbr="01080003", case_id="", subject="s", draft_plain=body,
+                             draft_html=compose_html(body), confidence=70, mode="full", analysis={},
+                             source="email")
+        store.update(rec3["draft_id"], email=mail)
+        orch.approve_and_post(rec3["draft_id"])
+        orch.approve_and_post(rec3["draft_id"], attempt_id="no good; drop table")     # not a token
+        after_plain = store.get(rec3["draft_id"])
+    finally:
+        orch._store, ol.Outlook = orig
+    clean = orch._clean_attempt_id
+    check("S30.a an approval with an attempt id records it on the draft: 'running' while it posts - and "
+          "at that moment the draft still shows the EARLIER attempt's post_failed and error, which is "
+          "why the page must not read the status - then 'done' with its own ok/error; a refusal before "
+          "posting is recorded too; without an id (or with a malformed one) nothing is recorded",
+          r_fail["ok"] is False
+          and mid_fail["status"] == "post_failed" and mid_fail["error"] == "Outlook was closed"
+          and mid_fail["attempt"].get("id") == "a-retry-0001" and mid_fail["attempt"].get("state") == "running"
+          and after_fail["approve_attempt"]["id"] == "a-retry-0001"
+          and after_fail["approve_attempt"]["state"] == "done" and after_fail["approve_attempt"]["ok"] is False
+          and "Outlook is not running" in after_fail["approve_attempt"]["error"]
+          and r_ok["ok"] is True and mid_ok["status"] == "post_failed"
+          and mid_ok["attempt"] == {"id": "a-retry-0002", "state": "running", "at": mid_ok["attempt"].get("at")}
+          and after_ok["status"] == "posted"
+          and {k: after_ok["approve_attempt"][k] for k in ("id", "state", "ok", "error")}
+          == {"id": "a-retry-0002", "state": "done", "ok": True, "error": ""}
+          and r_dry["ok"] is False and after_dry["approve_attempt"]["state"] == "done"
+          and after_dry["approve_attempt"]["ok"] is False and "dry_run" in after_dry["approve_attempt"]["error"]
+          and "approve_attempt" not in after_plain
+          and clean("a-retry-0001") == "a-retry-0001" and clean("short") == "" and clean("x" * 65) == ""
+          and clean("no good; drop table") == "" and clean(None) == "" and clean("ünïcödé-token") == "",
+          f"fail={r_fail.get('error')!r} mid_fail={mid_fail} after_fail={after_fail.get('approve_attempt')} "
+          f"mid_ok={mid_ok} after_ok={after_ok.get('status')}/{after_ok.get('approve_attempt')} "
+          f"dry={after_dry.get('approve_attempt')} plain={after_plain.get('approve_attempt')}")
+
+    # --- b) the CLI keeps the latest driver current --------------------------------
+    from configs.global_configs import app_config
+    cfg_store = HandsfreeStore(tmp / "handsfree_s30_cli")
+    events: list = []
+    orig_dr = (dr.is_refresh_due, dr.refresh_latest_driver)
+    orig_cli = (cli_mod._store, orch.run_auto_scan)
+    saved_dm = getattr(app_config, "driver_manager", None)
+    due = {"v": True}
+    dr.is_refresh_due = lambda cfg, now=None: due["v"]
+
+    def _fake_refresh(store_, **kw):
+        events.append("refresh")
+        store_.save_config({"latest_driver": "24.90.0.3"})
+        return {"ok": True, "version": "24.90.0.3", "error": "", "rows": 136}
+    dr.refresh_latest_driver = _fake_refresh
+    cli_mod._store = lambda: cfg_store
+
+    def _fake_scan(store_, owner, max_cases, trigger="cli", list_views=None):
+        events.append(f"scan:{owner}:{store_.load_config().get('latest_driver')}")
+        return {"ok": True, "cases": []}
+    orch.run_auto_scan = _fake_scan
+    try:
+        app_config.driver_manager = object()             # this process can open Chrome
+        rc = cli_mod._run_once("Ann")                    # a fresh share: never fetched
+        due["v"] = False
+        rc2 = cli_mod._run_once("Bob")                   # fetched a moment ago: nothing to do
+        first_two = list(events)
+        due["v"] = True
+        app_config.driver_manager = None                 # no Chrome here: skip quietly
+        no_chrome = cli_mod._refresh_latest_driver_if_due(cfg_store)
+        app_config.driver_manager = object()
+        dr.refresh_latest_driver = lambda store_, **kw: {"ok": False, "version": "", "error": "401", "rows": 0}
+        failed = cli_mod._refresh_latest_driver_if_due(cfg_store)
+
+        def _boom(store_, **kw):
+            raise RuntimeError("Chrome profile in use")
+        dr.refresh_latest_driver = _boom
+        raised = cli_mod._refresh_latest_driver_if_due(cfg_store)
+    finally:
+        dr.is_refresh_due, dr.refresh_latest_driver = orig_dr
+        cli_mod._store, orch.run_auto_scan = orig_cli
+        app_config.driver_manager = saved_dm
+    check("S30.b a CLI round asks whether the latest released driver is due BEFORE it scans and fetches "
+          "it then (the scan already sees the value) - a Task Scheduler-only server has no in-app "
+          "scheduler to do it; nothing is fetched when it is not due or this process has no Chrome; a "
+          "failed or crashing fetch never fails the round",
+          rc == 0 and rc2 == 0
+          and first_two == ["refresh", "scan:Ann:24.90.0.3", "scan:Bob:24.90.0.3"]
+          and no_chrome is False and failed is True and raised is False,
+          f"rc={rc}/{rc2} events={events} no_chrome={no_chrome} failed={failed} raised={raised}")
+
+
 def run_smoke() -> int:
     tmp = Path(tempfile.mkdtemp(prefix="handsfree_smoke_"))
     try:
@@ -5678,6 +5827,7 @@ def run_smoke() -> int:
         smoke_review_fixes(tmp)
         smoke_review_fixes_2(tmp)
         smoke_review_fixes_3(tmp)
+        smoke_review_fixes_4(tmp)
     finally:
         shutil.rmtree(tmp, ignore_errors=True)
     print(f"\nsmoke result: {'ALL PASS' if not PASS_FAIL else 'FAILURES: ' + ', '.join(PASS_FAIL)}")

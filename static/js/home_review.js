@@ -240,10 +240,94 @@
         const hasLog = !!(draft?.shared_log_path || draft?.analysis?.log_path) && !avatarUnavailable;
         element('avatar').disabled = busy || handoffBusy || !hasLog;
         element('avatar').title = hasLog
-            ? "Opens Avatar's Log Chatbot on this case's decoded log, with the issue filled in the chat, to continue by hand"
+            ? "Opens Avatar's analysis chatbot (Wi-Fi or Bluetooth, as the case was analysed) on this case's decoded log, with the issue filled in the chat, to continue by hand"
             : 'no log to analysis';
         element('draft-text').readOnly = busy || closed;
         ['save-close', 'discard', 'continue'].forEach(id => { element(id).disabled = busy; });
+    }
+
+    // The reviewer's text differs from what the queue holds. A posted or
+    // rejected draft is read-only, so it is never dirty.
+    function isDirty() {
+        return !!draft && !['posted', 'rejected'].includes(draft.status) &&
+            element('draft-text').value !== savedText;
+    }
+
+    // PUT the reviewer's text to the queue. Returns true when it was saved.
+    // The server may normalise it (it prepends the AI marker when missing),
+    // so the box and savedText take what was actually stored.
+    async function saveDraft() {
+        if (!draft || busy || ['posted', 'rejected'].includes(draft.status)) return false;
+        busy = true;
+        updateButtons();
+        setPostStatus('Saving edits...');
+        try {
+            const result = await request('queue/' + encodeURIComponent(draft.draft_id), 'PUT', {
+                draft_plain: element('draft-text').value,
+            });
+            savedText = result.draft?.draft_plain ?? element('draft-text').value;
+            element('draft-text').value = savedText;
+            element('unsaved').hidden = true;
+            setPostStatus('Edits saved. Nothing was posted.');
+            return true;
+        } catch (error) {
+            setPostStatus('Could not save edits: ' + error, 'error');
+            return false;
+        } finally {
+            busy = false;
+            updateButtons();
+        }
+    }
+
+    async function rejectDraft() {
+        if (!draft || element('reject').disabled) return;
+        const reason = window.prompt('Reject this draft? Nothing will be posted.\n\nReason (optional):', '');
+        if (reason === null) return;                       // Cancel
+        busy = true;
+        updateButtons();
+        setPostStatus('Rejecting draft...');
+        try {
+            await request('queue/' + encodeURIComponent(draft.draft_id) + '/reject', 'POST', {reason});
+            savedText = element('draft-text').value;      // nothing left to save
+            draft.status = 'rejected';
+            allowClose = true;
+            element('unsaved').hidden = true;
+            setPostStatus('Draft rejected; nothing was posted. Please close this window.', 'success');
+            await loadQueue();
+        } catch (error) {
+            setPostStatus('Could not reject draft: ' + error, 'error');
+        } finally {
+            busy = false;
+            updateButtons();
+        }
+    }
+
+    // Escape, the backdrop, × and "Close window" all end up here. A request
+    // in flight (approve, save, reject) must finish first; unsaved edits ask
+    // before they are dropped.
+    function onModalHide(event) {
+        if (busy) {
+            event.preventDefault();
+            setPostStatus('Please wait - the request is still running.', 'posting');
+            return;
+        }
+        if (allowClose || !isDirty()) return;
+        event.preventDefault();
+        element('unsaved').hidden = false;
+        element('unsaved').scrollIntoView({block: 'nearest'});
+        element('save-close').focus();
+    }
+
+    function onModalHidden() {
+        allowClose = false;
+        element('unsaved').hidden = true;
+        if (opener && document.contains(opener)) opener.focus();
+        opener = null;
+    }
+
+    function closeModal() {
+        allowClose = true;
+        modal.modal('hide');
     }
 
     async function openDraft(item, row) {
@@ -335,6 +419,8 @@
 
     async function openInAvatar() {
         if (element('avatar').disabled || !draft || handoffBusy) return;
+        // This navigates away from the page: unsaved edits would go with it.
+        if (isDirty() && !window.confirm('This draft has unsaved changes. Leave without saving them?')) return;
         handoffBusy = true;
         updateButtons();
         setPostStatus('Navigating to new page...', 'navigating');
@@ -356,6 +442,18 @@
     element('folder').addEventListener('click', openFolder);
     element('avatar').addEventListener('click', openInAvatar);
     element('approve').addEventListener('click', approveDraft);
+    element('save').addEventListener('click', saveDraft);
+    element('reject').addEventListener('click', rejectDraft);
+    element('save-close').addEventListener('click', async () => {
+        if (await saveDraft()) closeModal();
+    });
+    element('discard').addEventListener('click', closeModal);
+    element('continue').addEventListener('click', () => {
+        element('unsaved').hidden = true;
+        element('draft-text').focus();
+    });
+    modal.on('hide.bs.modal', onModalHide);
+    modal.on('hidden.bs.modal', onModalHidden);
     element('visibility-internal').addEventListener('change', updateVisibility);
     element('visibility-external').addEventListener('change', updateVisibility);
     element('login').addEventListener('click', () => signIn(true));

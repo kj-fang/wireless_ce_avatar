@@ -43,6 +43,20 @@ def extract_image_urls(rich_html: str) -> list[str]:
     return [html.unescape(u) for u in _IMG_RE.findall(str(rich_html or ""))]
 
 
+def _urls_fingerprint(urls: list[str]) -> str:
+    """Identity of a list of embedded images: the path and query of each URL
+    (the rtaImage servlet names the image in its refid), in order, hashed.
+    The host is left out — the same image is linked through more than one of
+    the org's Salesforce hosts."""
+    import hashlib
+    from urllib.parse import urlsplit
+    parts = []
+    for u in urls:
+        s = urlsplit(str(u))
+        parts.append(f"{s.path}?{s.query}")
+    return hashlib.sha1("\n".join(parts).encode("utf-8")).hexdigest()[:16]
+
+
 def sniff_media_type(data: bytes, declared: str = "") -> str:
     """Real image type from the magic bytes - the force.com image servlet
     declares image/png for JPEG uploads, and the vision API rejects a
@@ -190,11 +204,21 @@ def annotate_case_comments(ips, llm, case_id: str, comments: Any, *,
         d_urls = [u for u in extract_image_urls(desc.get("html") or "") if _host_allowed(u)]
         if d_urls:
             d_key, d_date = f"desc:{case_id}", str(desc.get("created") or "")
+            # Unlike a posted comment, the description can be edited: the same
+            # NUMBER of images may be different images. The cache entry is
+            # valid only for the images it was made from (their URLs).
+            d_fp = _urls_fingerprint(d_urls)
             entry = cached.get(d_key)
-            if entry and entry.get("url_count") == len(d_urls):
+            if (entry and entry.get("url_count") == len(d_urls)
+                    and entry.get("urls_fp", d_fp) == d_fp):
                 d_descs = entry["descriptions"]
+                if "urls_fp" not in entry:       # written before fingerprints: adopt it
+                    entry["urls_fp"] = d_fp
+                    changed = True
                 say(f"{len(d_urls)} image(s) in the case description: cached")
             else:
+                if entry:
+                    say("the images in the case description changed — reading them again")
                 images = []
                 for u in d_urls[:budget]:
                     got = ips.fetch_binary(u, max_bytes=MAX_IMAGE_BYTES)
@@ -210,6 +234,7 @@ def annotate_case_comments(ips, llm, case_id: str, comments: Any, *,
                                               date=d_date[:16], comment_text=_text_of(desc.get("html")))
                     if any(d_descs):
                         cached[d_key] = {"descriptions": d_descs, "url_count": len(d_urls),
+                                         "urls_fp": d_fp,
                                          "date": d_date, "author": "Customer (case description)"}
                         changed = True
                 else:

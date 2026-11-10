@@ -27,6 +27,7 @@ carries the parsed verdict, so the BSOD analysis continues in handsfree.
 
 from __future__ import annotations
 
+import contextlib
 import json
 import os
 import re
@@ -156,6 +157,86 @@ def _load() -> dict:
     return {}
 
 
+_LEDGER_LOCK_WAIT_S = 15       # a transaction is one small read and one small write
+_LEDGER_LOCK_STALE_S = 60      # older than this: left by a process that died mid-write
+_LEDGER_READ_TRIES = 3
+
+
+@contextlib.contextmanager
+def _ledger_transaction():
+    """One read-modify-write of the shared ledger at a time, across threads
+    (_LOCK) AND across machines: the server records submissions while a
+    client's "reset case" removes one. The cross-machine half is a lock file
+    created with O_EXCL — atomic on the file server, the same primitive as
+    the store's posting claim. Yields (path, data): data is what is on the
+    share NOW, read inside the lock. A ledger that cannot be read is never
+    overwritten with a shorter one: the read is retried, then raises."""
+    with _LOCK:
+        p = _submissions_path()
+        p.parent.mkdir(parents=True, exist_ok=True)
+        lock = p.with_name(p.name + ".lock")
+        deadline = time.monotonic() + _LEDGER_LOCK_WAIT_S
+        while True:
+            try:
+                os.close(os.open(lock, os.O_CREAT | os.O_EXCL | os.O_WRONLY))
+                break
+            except (FileExistsError, PermissionError):
+                try:
+                    if time.time() - lock.stat().st_mtime > _LEDGER_LOCK_STALE_S:
+                        lock.unlink()
+                        continue
+                except FileNotFoundError:
+                    continue                    # released between our two calls
+                except OSError:
+                    pass
+                if time.monotonic() >= deadline:
+                    raise TimeoutError(
+                        f"BSOD submission record is busy on another machine ({lock.name})")
+                time.sleep(0.1)
+        try:
+            yield p, _load_for_update(p)
+        finally:
+            try:
+                lock.unlink()
+            except OSError:
+                pass
+
+
+def _load_for_update(p: Path) -> dict:
+    """The ledger as the base of a write. Missing file: empty. Unreadable
+    share: retried, then raises (the caller must not write). Unparseable
+    content: set aside next to the ledger and started over, loudly."""
+    last: Exception | None = None
+    for attempt in range(_LEDGER_READ_TRIES):
+        try:
+            if not p.exists():
+                return {}
+            text = p.read_text(encoding="utf-8")
+        except OSError as e:
+            last = e
+            time.sleep(0.2)
+            continue
+        try:
+            data = json.loads(text)
+            return data if isinstance(data, dict) else {}
+        except ValueError as e:
+            aside = p.with_name(f"{p.stem}.corrupt-{int(time.time())}.json")
+            try:
+                os.replace(p, aside)
+            except OSError:
+                pass
+            print(f"[handsfree.bsod] submissions file was not valid JSON ({e}); "
+                  f"set aside as {aside.name} and started over")
+            return {}
+    raise OSError(f"BSOD submission record unreadable: {last}")
+
+
+def _write_ledger(p: Path, data: dict) -> None:
+    # Unique temp name + retry while a reader on another PC holds the file.
+    from .queue import _atomic_write
+    _atomic_write(p, json.dumps(data, indent=2))
+
+
 def submissions(case_nbr: str) -> list[dict]:
     """[{submitted_at, attachments, dumps_path, email, status}] oldest first."""
     return list(_load().get(str(case_nbr)) or [])
@@ -190,32 +271,22 @@ def names_to_skip(case_nbr: str) -> set[str]:
 def forget_case(case_nbr: str) -> int:
     """Drop a case's submission record (handsfree 'reset case'). Returns the
     number of entries removed."""
-    with _LOCK:
-        data = _load()
+    with _ledger_transaction() as (p, data):
         entries = data.pop(str(case_nbr), None) or []
         if entries:
-            p = _submissions_path()
-            p.parent.mkdir(parents=True, exist_ok=True)
-            tmp = p.with_suffix(".json.tmp")
-            tmp.write_text(json.dumps(data, indent=2), encoding="utf-8")
-            os.replace(tmp, p)
+            _write_ledger(p, data)
         return len(entries)
 
 
 def record_submission(case_nbr: str, attachments: list, dumps_path: str,
                       email: str, status, failed: list | None = None) -> None:
-    with _LOCK:
-        data = _load()
+    with _ledger_transaction() as (p, data):
         data.setdefault(str(case_nbr), []).append({
             "submitted_at": datetime.now(timezone.utc).strftime("%Y-%m-%dT%H:%M:%SZ"),
             "attachments": [str(a) for a in attachments],
             "failed": [str(a) for a in (failed or [])],
             "dumps_path": dumps_path, "email": email, "status": status})
-        p = _submissions_path()
-        p.parent.mkdir(parents=True, exist_ok=True)
-        tmp = p.with_suffix(".json.tmp")
-        tmp.write_text(json.dumps(data, indent=2), encoding="utf-8")
-        os.replace(tmp, p)
+        _write_ledger(p, data)
 
 
 # ---------------------------------------------------------------------------

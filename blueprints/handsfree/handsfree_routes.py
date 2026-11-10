@@ -416,9 +416,12 @@ _HANDOFF_STALE_KEYS = ("_attachment_time_cache", "_issue_ai_quick", "chatbot_ses
 
 
 def _handoff_to_log_chatbot(case_nbr: str, src: dict, log_path: str) -> dict:
-    """Seed THIS browser session so Avatar's Log Chatbot opens on the case's
+    """Seed THIS browser session so Avatar's chatbot opens on the case's
     decoded log, primed with the case and the issue time (in the log's
-    clock), the way /log_chatbot/prepare seeds them."""
+    clock), the way its /prepare route seeds them. The radio the run
+    analysed picks the chatbot: a Bluetooth case decoded an HCI log, which
+    only /bt_chatbot/ (the BT agent and skills) can analyse; everything else
+    goes to the Wi-Fi /log_chatbot/. Both read the same session keys."""
     from urllib.parse import urlencode
     from configs.global_configs import app_config
     from models.models import CaseContext
@@ -439,11 +442,16 @@ def _handoff_to_log_chatbot(case_nbr: str, src: dict, log_path: str) -> dict:
     session["_carried_issue_time_present"] = bool(src["issue_time_log"])
     session["_carried_issue_time"] = src["issue_time_log"]
     session["_carried_issue_time_warning"] = ""
-    app_config.last_analyzed_log_path = log_path
+    is_bt = str(src.get("wifi_or_bt") or "").strip().lower() == "bt"
+    if not is_bt:
+        # The process-wide "last analysed log" is the Wi-Fi chatbot's fallback
+        # and what its sidebar pre-fills from; an HCI log must not land there.
+        app_config.last_analyzed_log_path = log_path
     params = {"auto_run": "analyze_all"}
     if src["issue_time_log"]:
         params["issue_time"] = src["issue_time_log"]
-    return {"ok": True, "mode": "log", "url": "/log_chatbot/?" + urlencode(params),
+    prefix = "/bt_chatbot/" if is_bt else "/log_chatbot/"
+    return {"ok": True, "mode": "bt" if is_bt else "log", "url": prefix + "?" + urlencode(params),
             "log_path": log_path, "issue_time": src["issue_time_log"]}
 
 

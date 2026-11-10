@@ -2191,6 +2191,11 @@
   function liveDriverHtml(d, status) {
     const dd = d.driver_decision || {};
     if (status === 'pending' || status === 'skipped' || !dd.result) return '';
+    if (dd.not_applicable) {
+      // A Bluetooth case: the latest-release table is the Wi-Fi driver's.
+      return `<div class="lp-live"><div class="lp-time-sub">not applied — ` +
+        esc(dd.summary || 'the latest-release check covers the Wi-Fi driver only') + `</div></div>`;
+    }
     let html = `<div class="lp-live">`;
     html += `<div class="lp-cap">Customer driver — candidates in priority order, the first known one wins</div>`;
     (dd.candidates || []).forEach(c => {

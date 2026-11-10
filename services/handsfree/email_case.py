@@ -182,9 +182,13 @@ def build_case_context(case_nbr: str, messages, download_dir: str):
     comments = [[m.received, author_type(m), _header(m) + " " + (m.body or "").strip()]
                 for m in msgs[1:]]
 
+    from .outlook_source import unique_name
+
     attachment_list: list = []
     local_paths: dict = {}
     image_files: list = []
+    used: set = set()                # context names handed out (case-insensitive)
+    sizes: dict = {}                 # file name -> sizes already listed under it
     for m in msgs:
         for a in m.attachments or []:
             name = str(a.get("name") or "")
@@ -193,10 +197,19 @@ def build_case_context(case_nbr: str, messages, download_dir: str):
             if a.get("is_image"):
                 image_files.append((m, a))
                 continue
-            if name in local_paths:          # same file name sent twice: keep the first
+            # A name used again later in the thread is usually a NEWER capture
+            # (a second WRT.zip after our request): it is its own candidate,
+            # under a name of its own, with its own mail's timestamp, so the
+            # runner can pick it and reads ITS bytes. Only the very same file
+            # sent again (same name, same size: a forward) is listed once.
+            size = int(a.get("size") or 0)
+            seen_sizes = sizes.setdefault(name.casefold(), [])
+            if size and size in seen_sizes:
                 continue
-            attachment_list.append([name, "", [_stamp(m), f"email from {m.sender_name or m.sender_email}"]])
-            local_paths[name] = str(a.get("path") or "")
+            seen_sizes.append(size)
+            ctx_name = unique_name(name, used)
+            attachment_list.append([ctx_name, "", [_stamp(m), f"email from {m.sender_name or m.sender_email}"]])
+            local_paths[ctx_name] = str(a.get("path") or "")
 
     text = subject + " " + (first.body or "")[:4000]
     wifi_or_bt = "bt" if _BT_RE.search(text) else "wifi"

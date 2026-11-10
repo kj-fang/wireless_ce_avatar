@@ -3062,8 +3062,10 @@ def smoke_email_intake(tmp: Path) -> None:
               and "[Email from Ann" in ctx.comments[0][2] and "please check" in ctx.comments[0][2]
               and [it[0] for it in ctx.attachment_list] == ["notes.txt", "WRT_logs.zip"]
               and ctx.attachment_list[1][2][1] == "email from Ann"
-              and (tdir / "WRT_logs.zip").read_bytes().startswith(b"PK") and not (tdir / "forwarded.msg").exists()
-              and ctx.local_paths["WRT_logs.zip"] == str(tdir / "WRT_logs.zip")
+              # each mail's files live in that mail's own folder under the thread folder
+              and (tdir / ol.message_dir_name(th[1]) / "WRT_logs.zip").read_bytes().startswith(b"PK")
+              and not list(tdir.rglob("forwarded.msg"))
+              and ctx.local_paths["WRT_logs.zip"] == str(tdir / ol.message_dir_name(th[1]) / "WRT_logs.zip")
               and [a["name"] for _m, a in ctx.image_files] == ["screen.png"]
               and ctx.wifi_or_bt == "bt" and ctx.source == "email" and ctx.subcategory == "Email thread"
               and ctx.id == "" and ec.reply_target(th).entry_id == "E1"
@@ -4703,6 +4705,428 @@ def smoke_regression_item() -> None:
           str(live_fields(an).get("last_good_version")))
 
 
+# ---------------------------------------------------------------- S27
+def smoke_review_fixes(tmp: Path) -> None:
+    print("[S27] PR 190 review: case radio, Wi-Fi-only driver check, description-image cache, "
+          "BSOD ledger across machines, Outlook per-case state and per-mail files, CLI schedule guards")
+    import importlib.util
+    import json as _json
+    import os as _os
+    import socket
+    import threading as _threading
+    import time as _time
+    import types
+    from . import bsod as bsod_mod
+    from . import cli as cli_mod
+    from . import comment_images as ci
+    from . import email_case as ec
+    from . import outlook_source as ol
+    from . import runner as runner_mod
+    from .composer import _driver_review_lines, latest_driver_lines
+    from .runner import CaseAnalysis, HandsfreeRunner
+
+    # --- a) the radio of a case: IPS stays strict, an email thread is honoured ---
+    mail = ec.EmailMessage(entry_id="M1", store_id="S", folder="Inbox",
+                           subject="IPS 01031658 Wi-Fi keeps disconnecting", sender_name="Ann",
+                           sender_email="ann@oem.com", received="2026-10-22T10:15:00+08:00",
+                           body="the AX211 drops every hour")
+    ctx_wifi = ec.build_case_context("01031658", [mail], str(tmp / "s27_mail"))
+    mail_bt = ec.EmailMessage(entry_id="M2", store_id="S", folder="Inbox",
+                              subject="IPS 01032299 bluetooth headset drops", sender_name="Bob",
+                              sender_email="bob@oem.com", received="2026-10-22T11:00:00+08:00",
+                              body="BT audio stutters")
+    ctx_bt = ec.build_case_context("01032299", [mail_bt], str(tmp / "s27_mail"))
+    radio = runner_mod._case_radio
+    check("S27.a an email thread is analysed on the radio its context resolved (it has no IPS "
+          "subcategory: 'Email thread' alone used to make every email case unsupported); a case "
+          "fetched from IPS still needs an explicit Wi-Fi/BT subcategory; an explicit subcategory wins",
+          ctx_wifi.subcategory == "Email thread" and ctx_wifi.source == "email"
+          and radio(ctx_wifi.subcategory, ctx_wifi.source, ctx_wifi.wifi_or_bt) == "wifi"
+          and radio(ctx_bt.subcategory, ctx_bt.source, ctx_bt.wifi_or_bt) == "bt"
+          and radio("Email thread", "ips", "wifi") == ""
+          and radio("Email thread", "ips+email", "wifi") == ""
+          and radio("Email thread", "email", "") == ""
+          and radio("Email thread", "email", "unknown") == ""
+          and radio("Wi-Fi Connectivity", "email", "bt") == "wifi"
+          and radio("Bluetooth Audio", "ips", "") == "bt"
+          and radio("", "ips", "bt") == "",
+          f"{ctx_wifi.subcategory}/{ctx_wifi.wifi_or_bt} {ctx_bt.wifi_or_bt}")
+
+    # --- b) the latest-release check is the Wi-Fi driver's --------------------
+    orig_cfg_fn = runner_mod._bsod.handsfree_config
+    runner_mod._bsod.handsfree_config = lambda: {"latest_driver": "24.90.0.3"}
+    try:
+        rn = HandsfreeRunner()
+        a_bt = CaseAnalysis(case_nbr="1", wifi_or_bt="bt",
+                            env_detail={"Found In Build": "23.150.0.4"})
+        rn._settle_driver_version(a_bt)
+        a_bt_unknown = CaseAnalysis(case_nbr="1", wifi_or_bt="bt")
+        rn._settle_driver_version(a_bt_unknown, quiet=True)
+        a_wifi = CaseAnalysis(case_nbr="1", wifi_or_bt="wifi",
+                              env_detail={"Found In Build": "23.150.0.4"})
+        rn._settle_driver_version(a_wifi)
+    finally:
+        runner_mod._bsod.handsfree_config = orig_cfg_fn
+    # a stored analysis from before the gate: outdated + bt must not ask either
+    a_old = CaseAnalysis(case_nbr="1", wifi_or_bt="bt", driver_check="outdated",
+                         driver_version="23.150.0.4", latest_driver="24.90.0.3")
+    check("S27.b a Bluetooth case is not compared against the Wi-Fi release table: check skipped "
+          "and marked not applicable, no customer paragraph (old or unknown version alike), the "
+          "reviewer note says why; a Wi-Fi case on the same build is still asked to validate",
+          a_bt.driver_check == "skipped" and a_bt.driver_decision.get("not_applicable") == "bt"
+          and a_bt.latest_driver == "" and a_bt.driver_version == ""
+          and latest_driver_lines(a_bt) == [] and latest_driver_lines(a_bt_unknown) == []
+          and latest_driver_lines(a_old) == []
+          and _driver_review_lines(a_bt) == ["Driver version check not applied: Bluetooth case "
+                                             "(the latest-release table covers the Wi-Fi driver only)."]
+          and a_wifi.driver_check == "outdated" and "24.90.0.3" in " ".join(latest_driver_lines(a_wifi)),
+          f"bt={a_bt.driver_check}/{a_bt.driver_decision} wifi={a_wifi.driver_check} "
+          f"{latest_driver_lines(a_bt)} {_driver_review_lines(a_bt)}")
+
+    # --- c) description images: the cache follows the images, not their count --
+    state = {"refid": "one", "vision": 0}
+
+    class _Ips:
+        FIELD_RICH_BODY = "Core_IPS_Rich_Comment__c"
+        def get_case_comments(self, case_id):
+            return []
+        def get_case_rich_description(self, case_id):
+            return {"created": "2026-06-20T01:00:00.000+0000",
+                    "html": '<p>see</p><img src="https://intel.file.force.com/servlet/rtaImage'
+                            f'?eid=500X&amp;refid={state["refid"]}">'}
+        def fetch_binary(self, url, max_bytes=0):
+            return ("image/png", b"\x89PNG\r\n\x1a\n" + url.encode())
+
+    def _chat(messages, system_content=None):
+        state["vision"] += 1
+        return _json.dumps({"images": [f"screenshot {state['refid']}"]})
+    llm = types.SimpleNamespace(model="claude-4-6-sonnet", chat=_chat)
+    cache = tmp / "s27_img" / "image_descriptions.json"
+    run_imgs = lambda: ci.annotate_case_comments(_Ips(), llm, "500X", [], cache_path=cache)
+    _r1, info1 = run_imgs()
+    _r2, info2 = run_imgs()                         # unchanged description: cached
+    v_after_cached = state["vision"]
+    state["refid"] = "two"                          # the customer swapped the screenshot
+    _r3, info3 = run_imgs()
+    v_after_swap = state["vision"]
+    entry = _json.loads(cache.read_text(encoding="utf-8"))["desc:500X"]
+    # an entry written before fingerprints existed is adopted, not thrown away
+    legacy = dict(entry)
+    legacy.pop("urls_fp")
+    cache.write_text(_json.dumps({"desc:500X": legacy}), encoding="utf-8")
+    _r4, info4 = run_imgs()
+    adopted = _json.loads(cache.read_text(encoding="utf-8"))["desc:500X"].get("urls_fp")
+    check("S27.c the case description is editable: the same NUMBER of images with a different image "
+          "is read again (one screenshot swapped for another), an unchanged description stays cached, "
+          "the fingerprint ignores the host, an older cache entry is adopted",
+          info1[0]["descriptions"] == ["screenshot one"] and info2[0]["descriptions"] == ["screenshot one"]
+          and v_after_cached == 1 and info3[0]["descriptions"] == ["screenshot two"]
+          and v_after_swap == 2 and entry["url_count"] == 1
+          and entry["urls_fp"] == ci._urls_fingerprint(
+              ["https://intel.my.salesforce.com/servlet/rtaImage?eid=500X&refid=two"])
+          and entry["urls_fp"] != ci._urls_fingerprint(
+              ["https://intel.file.force.com/servlet/rtaImage?eid=500X&refid=one"])
+          and info4[0]["descriptions"] == ["screenshot two"] and state["vision"] == 2
+          and adopted == entry["urls_fp"],
+          f"vision={state['vision']} info={info1} {info2} {info3} {info4} entry={entry} adopted={adopted}")
+
+    # --- d) BSOD submission ledger: one writer at a time, across machines ------
+    ledger = tmp / "s27_bsod" / "bsod_submissions.json"
+    lock = ledger.with_name(ledger.name + ".lock")
+    orig_bsod = (bsod_mod._submissions_path, bsod_mod._LEDGER_LOCK_WAIT_S)
+    bsod_mod._submissions_path = lambda: ledger
+    try:
+        errors: list = []
+
+        def _writer(k):
+            try:
+                for j in range(6):
+                    bsod_mod.record_submission(f"0100{k:04d}", [f"dump{j}.zip"], "\\\\share\\x", "a@b", 200)
+            except Exception as e:
+                errors.append(repr(e))
+        threads = [_threading.Thread(target=_writer, args=(k,)) for k in range(5)]
+        [t.start() for t in threads]
+        [t.join() for t in threads]
+        data = _json.loads(ledger.read_text(encoding="utf-8"))
+        all_kept = (sorted(data) == [f"0100{k:04d}" for k in range(5)]
+                    and all(len(v) == 6 for v in data.values()))
+        leftovers = sorted(p.name for p in ledger.parent.iterdir() if p.name != ledger.name)
+
+        # another machine holds the lock right now: wait, then refuse - never write past it
+        bsod_mod._LEDGER_LOCK_WAIT_S = 0.4
+        lock.write_text("other-pc", encoding="utf-8")
+        t0 = _time.monotonic()
+        try:
+            bsod_mod.record_submission("01009999", ["late.zip"], "\\\\share\\x", "a@b", 200)
+            held_err = ""
+        except TimeoutError as e:
+            held_err = str(e)
+        waited = _time.monotonic() - t0
+        untouched = "01009999" not in _json.loads(ledger.read_text(encoding="utf-8"))
+        # a lock left by a process that died is taken over
+        old = _time.time() - bsod_mod._LEDGER_LOCK_STALE_S - 5
+        _os.utime(lock, (old, old))
+        bsod_mod.record_submission("01009999", ["late.zip"], "\\\\share\\x", "a@b", 200)
+        took_over = bsod_mod.submitted_names("01009999") == {"late.zip"} and not lock.exists()
+        forgotten = bsod_mod.forget_case("01000002")
+        after_forget = _json.loads(ledger.read_text(encoding="utf-8"))
+        # an unparseable ledger is set aside, never silently replaced by a shorter one
+        ledger.write_text("{not json", encoding="utf-8")
+        bsod_mod.record_submission("01008888", ["x.zip"], "\\\\share\\x", "a@b", 200)
+        aside = [p.name for p in ledger.parent.iterdir() if ".corrupt-" in p.name]
+        check("S27.d ledger writes are serialised with a lock file next to it (5 threads x 6 records "
+              "all kept, no temp or lock file left); a lock held elsewhere is waited for and then "
+              "refused without writing; a stale lock is taken over; reset-case drops only its case; "
+              "an unparseable ledger is set aside and said so",
+              not errors and all_kept and leftovers == []
+              and "busy on another machine" in held_err and 0.3 <= waited < 5 and untouched
+              and took_over and forgotten == 6 and "01000002" not in after_forget
+              and len(after_forget) == 5 and len(aside) == 1
+              and bsod_mod.submitted_names("01008888") == {"x.zip"},
+              f"errors={errors} kept={all_kept} leftovers={leftovers} held={held_err!r} waited={waited:.2f} "
+              f"untouched={untouched} took_over={took_over} forgotten={forgotten} aside={aside}")
+    finally:
+        bsod_mod._submissions_path, bsod_mod._LEDGER_LOCK_WAIT_S = orig_bsod
+
+    # --- e) Outlook state: work is tracked per (mail, case) ---------------------
+    root = tmp / "s27_outlook"
+    root.mkdir(parents=True, exist_ok=True)
+    two = ["01031658", "01032299"]
+    st0 = ol.load_state(root)
+    p_unseen = ol.pending_cases(st0, "E9", two)
+    ol.mark_processed(root, "E9", "01031658", "draft-1")       # one of its two cases ran
+    st1 = ol.load_state(root)
+    p_half = ol.pending_cases(st1, "E9", two)
+    ol.mark_processed(root, "E9", "01032299")
+    p_done = ol.pending_cases(ol.load_state(root), "E9", two)
+    ol.mark_processed(root, "E3", complete=True)                # a skipped mail: closed as a whole
+    st3 = ol.load_state(root)
+    check("S27.e a mail naming two cases keeps the one that has not run (capped out or failed) "
+          "pending after the other succeeded; it is done only when both ran; a skipped mail is "
+          "closed as a whole",
+          p_unseen == two and ol.is_processed(st1, "E9") and p_half == ["01032299"]
+          and p_done == [] and ol.pending_cases(st3, "E3", two) == []
+          and st3["processed"]["E3"].get("complete") is True
+          and st3["processed"]["E9"]["case_nbrs"] == two
+          and st3["processed"]["E9"]["draft_ids"] == ["draft-1"],
+          f"{p_unseen} {p_half} {p_done} {st3['processed']}")
+
+    # --- e2) the round itself: the capped-out case of a two-case mail is retried
+    from datetime import datetime, timedelta
+    from . import orchestrator as orch
+    from .composer import AI_MARKER
+    from .queue import HandsfreeStore
+    now = datetime.now()
+
+    class _Atts:
+        def __init__(self, atts): self.a = list(atts)
+        @property
+        def Count(self): return len(self.a)
+        def Item(self, i): return self.a[i - 1]
+
+    class _Att:
+        def __init__(self, name, data, type_=1):
+            self.FileName, self.data, self.Type = name, data, type_
+        def SaveAsFile(self, path):
+            Path(path).write_bytes(self.data)
+
+    class _Mail:
+        Class = 43
+        def __init__(self, entry, subject, body, sender, email, received, atts=()):
+            self.EntryID, self.Subject, self.Body = entry, subject, body
+            self.SenderName, self.SenderEmailAddress, self.SenderEmailType = sender, email, "SMTP"
+            self.ReceivedTime, self.ConversationID = received, "conv-" + entry
+            self.atts = list(atts)
+        @property
+        def Attachments(self): return _Atts(self.atts)
+
+    class _Items:
+        def __init__(self, mails): self.m = list(mails)
+        @property
+        def Count(self): return len(self.m)
+        def Item(self, i): return self.m[i - 1]
+        def Sort(self, key, desc): self.m.sort(key=lambda x: x.ReceivedTime, reverse=bool(desc))
+        def Restrict(self, q):
+            if str(q).startswith("@SQL"):
+                import re as _re
+                toks = _re.findall(r"%([^%']+)%", str(q))
+                return _Items([m for m in self.m if any(t in (m.Subject + " " + m.Body) for t in toks)])
+            return self
+
+    class _Folder:
+        def __init__(self, name, mails):
+            self.Name, self.Items, self.StoreID = name, _Items(mails), "STORE1"
+            self.Folders = _Items([])
+
+    class _NS:
+        def __init__(self, inbox, sent): self.inbox, self.sent = inbox, sent
+        def GetDefaultFolder(self, n): return self.sent if n == 5 else self.inbox
+        def GetItemFromID(self, entry_id, store_id=None):
+            for f in (self.inbox, self.sent):
+                for m in f.Items.m:
+                    if m.EntryID == entry_id: return m
+            raise RuntimeError("not found")
+
+    class _App:
+        def __init__(self, ns): self.ns = ns
+        def GetNamespace(self, kind): return self.ns
+
+    m_both = _Mail("T1", "IPS 01040001 and IPS 01040002 both fail after resume", "see both",
+                   "Ann", "ann@oem.com", now - timedelta(hours=2))
+    ns = _NS(_Folder("Inbox", [m_both]), _Folder("Sent Items", []))
+    orig_factory = ol.Outlook.factory
+    ol.Outlook.factory = lambda: _App(ns)
+    store = HandsfreeStore(tmp / "handsfree_s27")
+    ran: list = []
+    fail_once = {"01040002"}
+
+    def _fake_analyze(store_, case_nbr, case_id="", subject="", owner_name="", trial=None,
+                      case_ctx=None, source="ips"):
+        ran.append(case_nbr)
+        if case_nbr in fail_once:
+            fail_once.discard(case_nbr)
+            raise RuntimeError("IPS briefly unreachable")
+        return store_.enqueue(case_nbr=case_nbr, case_id="", subject=subject,
+                              draft_plain=AI_MARKER + "\n\nanalysis of " + case_nbr,
+                              draft_html="<p>a</p>", confidence=70, mode="full", analysis={},
+                              source=source)
+    orig_orch = (orch._analyze_and_enqueue, orch._store)
+    orch._analyze_and_enqueue = _fake_analyze
+    orch._store = lambda: store
+    try:
+        r1 = orch.run_email_scan(store, folder="Inbox", max_cases=1, own_email="me@intel.com")
+        st_a = ol.load_state(store.root)["processed"].get("T1", {})
+        r2 = orch.run_email_scan(store, folder="Inbox", max_cases=1, own_email="me@intel.com")
+        st_b = ol.load_state(store.root)["processed"].get("T1", {})
+        r3 = orch.run_email_scan(store, folder="Inbox", max_cases=1, own_email="me@intel.com")
+        st_c = ol.load_state(store.root)["processed"].get("T1", {})
+        r4 = orch.run_email_scan(store, folder="Inbox", max_cases=1, own_email="me@intel.com")
+        check("S27.e2 one mail, two cases, one case per round: round 1 runs the first and leaves the "
+              "second pending (the mail used to be dropped as handled here); round 2 runs the second, "
+              "which fails and stays pending; round 3 retries it; round 4 has nothing left",
+              ran == ["01040001", "01040002", "01040002"]
+              and [c["case_nbr"] for c in r1["cases"]] == ["01040001"]
+              and st_a.get("case_nbrs") == ["01040001"]
+              and [(c["case_nbr"], c["mode"]) for c in r2["cases"]] == [("01040002", "error")]
+              and st_b.get("case_nbrs") == ["01040001"]
+              and [(c["case_nbr"], c["mode"]) for c in r3["cases"]] == [("01040002", "full")]
+              and st_c.get("case_nbrs") == ["01040001", "01040002"]
+              and r4["ok"] and r4["cases"] == [],
+              f"ran={ran} r1={r1.get('cases')} r2={r2.get('cases')} r3={r3.get('cases')} "
+              f"r4={r4.get('cases')} state={st_a} / {st_b} / {st_c} err={r1.get('error')}")
+    finally:
+        orch._analyze_and_enqueue, orch._store = orig_orch
+
+    # --- f) attachments: every mail keeps its own bytes -------------------------
+    try:
+        png_a = b"\x89PNG\r\n\x1a\n" + b"first screenshot"
+        png_b = b"\x89PNG\r\n\x1a\n" + b"second, different screenshot"
+        t_old = _Mail("A1", "IPS 01050001 scan fails", "log attached", "Ann", "ann@oem.com",
+                      now - timedelta(days=2),
+                      atts=[_Att("WRT.zip", b"PK\x03\x04 first capture"), _Att("image001.png", png_a),
+                            _Att("notes.txt", b"same"), _Att("notes.txt", b"same name, other file")])
+        t_new = _Mail("A2", "RE: IPS 01050001 scan fails", "new log after your request", "Ann",
+                      "ann@oem.com", now - timedelta(hours=3),
+                      atts=[_Att("WRT.zip", b"PK\x03\x04 second, longer capture"),
+                            _Att("image001.png", png_b)])
+        t_fwd = _Mail("A3", "FW: IPS 01050001 scan fails", "fyi", "Bob", "bob@oem.com",
+                      now - timedelta(hours=1), atts=[_Att("WRT.zip", b"PK\x03\x04 second, longer capture")])
+        ns_f = _NS(_Folder("Inbox", [t_old, t_new, t_fwd]), _Folder("Sent Items", []))
+        ol.Outlook.factory = lambda: _App(ns_f)
+        tdir = tmp / "email_01050001"
+        with ol.Outlook() as app:
+            th = app.thread("01050001", own_email="me@intel.com")
+            for m in th:
+                app.save_attachments(m, str(tdir))
+            saved_again = app.save_attachments(th[0], str(tdir))      # a later round: files kept
+        ctx = ec.build_case_context("01050001", th, str(tdir))
+        names = [it[0] for it in ctx.attachment_list]
+        read = lambda n: Path(ctx.local_paths[n]).read_bytes()
+        imgs = {m.entry_id: Path(a["path"]).read_bytes() for m, a in ctx.image_files}
+        dirs = sorted(p.name for p in tdir.iterdir())
+        stamps = {it[0]: it[2][0] for it in ctx.attachment_list}
+        check("S27.f each mail's files go to a folder of its own, so a name reused later in the thread "
+              "keeps ITS bytes (image001.png, a second WRT.zip); the later archive is its own candidate "
+              "with its own mail's time, the very same file forwarded again is listed once, two files "
+              "of one mail with one name are both kept, a second round reuses the saved files",
+              [m.entry_id for m in th] == ["A1", "A2", "A3"] and len(dirs) == 3
+              and dirs[0] == ol.message_dir_name(th[0])
+              and names == ["WRT.zip", "notes.txt", "(2) notes.txt", "(2) WRT.zip"]
+              and read("WRT.zip") == b"PK\x03\x04 first capture"
+              and read("(2) WRT.zip") == b"PK\x03\x04 second, longer capture"
+              and read("notes.txt") == b"same" and read("(2) notes.txt") == b"same name, other file"
+              and stamps["(2) WRT.zip"] > stamps["WRT.zip"]
+              and imgs == {"A1": png_a, "A2": png_b}
+              and [a["name"] for a in saved_again] == [a["name"] for a in th[0].attachments]
+              and ol.unique_name("a.tar.gz", {"a.tar.gz"}) == "(2) a.tar.gz"
+              and ol.unique_name("A.zip", {"a.zip", "(2) a.zip"}) == "(3) A.zip",
+              f"dirs={dirs} names={names} stamps={stamps} imgs={ {k: v[-12:] for k, v in imgs.items()} }")
+    finally:
+        ol.Outlook.factory = orig_factory
+
+    # --- g) one scheduler per server, also for a CLI that is already running ----
+    here = socket.gethostname()
+    cfgs = [{"auto_check_enabled": False},
+            {"auto_check_enabled": True, "auto_check_host": here, "auto_check_mode": "4h"},
+            {"auto_check_enabled": True, "auto_check_host": "another-host", "auto_check_mode": "4h"},
+            {"auto_check_enabled": False}]
+    turn = {"n": 0}
+
+    class _CfgStore:
+        def load_config(self):
+            c = cfgs[min(turn["n"], len(cfgs) - 1)]
+            turn["n"] += 1
+            return c
+    rounds: list = []
+    slept: list = []
+    ran_n = cli_mod._poll(lambda: rounds.append(turn["n"]), _CfgStore(), 7,
+                          rounds=4, sleep=slept.append)
+    orig_cli_store = cli_mod._store
+    try:
+        cli_mod._store = lambda: types.SimpleNamespace(load_config=lambda: cfgs[1])
+        rc_on = cli_mod.main(["--schedule-check"])
+        cli_mod._store = lambda: types.SimpleNamespace(load_config=lambda: cfgs[2])
+        rc_other = cli_mod.main(["--schedule-check"])
+    finally:
+        cli_mod._store = orig_cli_store
+    check("S27.g the --interval loop reads the shared settings before EVERY round: it skips the round "
+          "while the Beacon page schedules the rounds on this host and resumes afterwards (a schedule "
+          "on another host does not stop it); --schedule-check exits 3 / 0 without starting services",
+          ran_n == 3 and rounds == [1, 3, 4] and slept == [7, 7, 7, 7]
+          and rc_on == cli_mod.EXIT_SCHEDULED_IN_APP == 3 and rc_other == 0,
+          f"ran={ran_n} rounds={rounds} slept={slept} rc={rc_on}/{rc_other}")
+
+    # --- h) the Task Scheduler wrapper asks before it opens Chrome ---------------
+    spec = importlib.util.spec_from_file_location(
+        "handsfree_server_run_s27", Path(__file__).resolve().parents[2] / "tools" / "handsfree_server_run.py")
+    wrapper = importlib.util.module_from_spec(spec)
+    spec.loader.exec_module(wrapper)
+    seq: list = []
+    answers: dict = {}
+
+    def _fake_cli(log, *args):
+        seq.append(args[0])
+        return answers.get(args[0], 0)
+    wrapper._cli = _fake_cli
+    answers.update({"--schedule-check": 3})
+    res_skip, seq_skip = wrapper._round(Path("owners.txt"), None), list(seq)
+    seq.clear(); answers.clear()
+    res_ok, seq_ok = wrapper._round(Path("owners.txt"), None), list(seq)
+    seq.clear(); answers.update({"--schedule-check": 1})
+    res_share, seq_share = wrapper._round(Path("owners.txt"), None), list(seq)
+    seq.clear(); answers.clear(); answers.update({"--owners-file": 3})
+    res_late = wrapper._round(Path("owners.txt"), None)
+    check("S27.h the scheduled round asks --schedule-check FIRST: while the Beacon page schedules the "
+          "rounds here it is skipped (exit 4) before --sso-check opens the shared Chrome profile; "
+          "unreadable settings stop it too; otherwise sign-in check then the round; a schedule switched "
+          "on in between is still a skip",
+          res_skip[0] == 4 and res_skip[1].startswith("SKIPPED") and seq_skip == ["--schedule-check"]
+          and res_ok == (0, "OK") and seq_ok == ["--schedule-check", "--sso-check", "--owners-file"]
+          and res_share[0] == 1 and seq_share == ["--schedule-check"]
+          and res_late[0] == 4,
+          f"skip={res_skip} {seq_skip} ok={res_ok} {seq_ok} share={res_share} {seq_share} late={res_late}")
+
+
 def run_smoke() -> int:
     tmp = Path(tempfile.mkdtemp(prefix="handsfree_smoke_"))
     try:
@@ -4731,6 +5155,7 @@ def run_smoke() -> int:
         smoke_driver_release(tmp)
         smoke_echo_isolation(tmp)
         smoke_regression_item()
+        smoke_review_fixes(tmp)
     finally:
         shutil.rmtree(tmp, ignore_errors=True)
     print(f"\nsmoke result: {'ALL PASS' if not PASS_FAIL else 'FAILURES: ' + ', '.join(PASS_FAIL)}")

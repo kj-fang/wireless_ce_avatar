@@ -742,6 +742,64 @@ class TestHandsfreeQueueRoutes(BaseTestCase):
         self.assertEqual(resp.get_json(), {"ok": False, "error": "not found"})
 
 
+@patch("services.check_ips_service.attach")
+@patch(f"{ROUTES}.decoded_log_file", return_value=__file__)      # any file that exists
+@patch(f"{ROUTES}._store")
+class TestHandsfreeChatbotHandoff(BaseTestCase):
+    """"Open in Avatar analysis": the chatbot must match the radio the run analysed."""
+
+    blueprint = handsfree_bp
+
+    def _handoff(self, mock_store, radio):
+        mock_store.return_value.get.return_value = {
+            "case_nbr": "01009610", "case_id": "500X", "subject": "s",
+            "analysis": {"wifi_or_bt": radio, "subject": "s", "clean_description": "d",
+                         "incidents": [{"sent_for_analysis": {"issue_time_log": "2026-10-22 10:15:00"}}]}}
+        return self.client.post("/handsfree/chatbot_handoff",
+                                json={"case_nbr": "01009610", "draft_id": "d-1"})
+
+    def test_bluetooth_draft_opens_the_bluetooth_chatbot(self, mock_store, _mock_log, mock_attach):
+        """A Bluetooth draft is handed to /bt_chatbot/, not the Wi-Fi chatbot.
+
+        Input: POST /handsfree/chatbot_handoff for a draft whose analysis says
+        wifi_or_bt "bt" (its decoded log is an HCI log).
+        Expected: 200; the URL is /bt_chatbot/ with auto_run and the issue
+        time, mode "bt", and the Wi-Fi chatbot's process-wide last-analysed
+        log is left alone.
+        """
+        # Act
+        resp = self._handoff(mock_store, "bt")
+
+        # Assert
+        body = resp.get_json()
+        self.assertEqual(resp.status_code, 200)
+        self.assertTrue(body["url"].startswith("/bt_chatbot/?auto_run=analyze_all"))
+        self.assertIn("issue_time=2026-10-22", body["url"])
+        self.assertEqual(body["mode"], "bt")
+        self.assertIsNone(self.app_config.last_analyzed_log_path)
+        mock_attach.assert_called_once()
+
+    def test_wifi_draft_opens_the_wifi_chatbot(self, mock_store, _mock_log, _mock_attach):
+        """A Wi-Fi draft (and one with no radio recorded) goes to /log_chatbot/.
+
+        Input: POST /handsfree/chatbot_handoff for analyses with wifi_or_bt
+        "wifi" and "".
+        Expected: 200; the URL is /log_chatbot/, mode "log", and the
+        last-analysed log is set for the Wi-Fi chatbot.
+        """
+        for radio in ("wifi", ""):
+            with self.subTest(radio=radio):
+                # Act
+                resp = self._handoff(mock_store, radio)
+
+                # Assert
+                body = resp.get_json()
+                self.assertEqual(resp.status_code, 200)
+                self.assertTrue(body["url"].startswith("/log_chatbot/?auto_run=analyze_all"))
+                self.assertEqual(body["mode"], "log")
+                self.assertEqual(self.app_config.last_analyzed_log_path, __file__)
+
+
 class TestHandsfreeEnvDetail(unittest.TestCase):
     """Branch-specific: IPS Environment Details (env_detail) in the reader path."""
 

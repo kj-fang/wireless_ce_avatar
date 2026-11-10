@@ -149,6 +149,26 @@ def _classify_wireless_domain(subcategory: str) -> str:
     return ""
 
 
+def _case_radio(subcategory: str, source: str, context_radio: str = "") -> str:
+    """wifi / bt / "" (unsupported) for a case about to be analysed.
+
+    A case fetched from IPS is analysed only when its subcategory says Wi-Fi
+    or Bluetooth explicitly (_classify_wireless_domain); CaseService's legacy
+    "non-wifi -> bt" guess is deliberately NOT used for it.
+
+    An email thread (source "email") has no IPS subcategory to be explicit
+    about — email_case files it as "Email thread" — so the radio it resolved
+    from the mail text when it built the context is honoured. Without this
+    every email case was turned away as an unsupported subcategory before
+    triage and its mail recorded as handled with no reply draft."""
+    radio = _classify_wireless_domain(subcategory)
+    if not radio and str(source or "") == "email":
+        given = str(context_radio or "").strip().lower()
+        if given in ("wifi", "bt"):
+            radio = given
+    return radio
+
+
 class _Prefetch(threading.Thread):
     """Background download of one attachment (same run_dload_threads call
     the download stage uses). Results in .items, failure in .error."""
@@ -778,7 +798,27 @@ class HandsfreeRunner:
         latest released driver from the shared config. Fills driver_version /
         driver_version_source / latest_driver / latest_driver_source /
         driver_check and the decision record for the live panel. Idempotent
-        (run again once the capture is decoded); never raises."""
+        (run again once the capture is decoded); never raises.
+
+        Wi-Fi only: the latest-release table is the Wi-Fi driver's, so a
+        Bluetooth case is not compared against it (driver_check "skipped",
+        decision not_applicable "bt") and no draft asks a BT customer to
+        validate on a Wi-Fi driver."""
+        if str(analysis.wifi_or_bt or "").strip().lower() == "bt":
+            summary = "Bluetooth case - the latest Wi-Fi driver release check does not apply"
+            analysis.driver_version = ""
+            analysis.driver_version_source = ""
+            analysis.latest_driver = ""
+            analysis.latest_driver_source = ""
+            analysis.driver_check = "skipped"
+            analysis.driver_decision = {
+                "candidates": [], "winner": "", "winner_source": "", "winner_label": "",
+                "latest": "", "latest_source": "", "result": "skipped",
+                "newer_mentioned": "", "not_applicable": "bt", "summary": summary,
+                "rule": "the latest-release check covers the Wi-Fi driver only"}
+            if not quiet:
+                self.progress("driver_check", summary)
+            return
         try:
             capture = read_capture_driver_version(analysis.log_path or analysis.etl_path)
         except Exception:
@@ -862,7 +902,8 @@ class HandsfreeRunner:
             analysis.subcategory = str(case_ctx.subcategory or "")
             # Only an explicit Wi-Fi/BT subcategory is analyzed; CaseService's
             # legacy "non-wifi -> bt" guess is deliberately NOT used.
-            analysis.wifi_or_bt = _classify_wireless_domain(analysis.subcategory)
+            analysis.wifi_or_bt = _case_radio(analysis.subcategory, analysis.source,
+                                              getattr(case_ctx, "wifi_or_bt", ""))
             analysis.env_detail = dict(case_ctx.env_detail or {})
             from .case_reader import customer_visible_history
             analysis.customer_history = customer_visible_history(case_ctx.comments)

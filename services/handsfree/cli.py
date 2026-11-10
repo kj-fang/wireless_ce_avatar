@@ -79,6 +79,11 @@ def _build_parser() -> argparse.ArgumentParser:
         action="store_true",
         help="Retry the saved sign-in in a visible Chrome without anyone typing (exit 0 = OK, 1 = a person must run --sso-login).",
     )
+    targets.add_argument(
+        "--schedule-check",
+        action="store_true",
+        help="Only read the shared settings: exit 3 when the Beacon page schedules the rounds on this machine (a CLI round must then not start, not even its sign-in check), else 0.",
+    )
     parser.add_argument(
         "--interval",
         type=float,
@@ -144,6 +149,25 @@ def _sso_login() -> int:
         return 1
     print("[handsfree-cli] sign-in saved and verified in the background; profile: "
           f"{CaseService._sso_profile_dir()}")
+    return 0
+
+
+def _schedule_check() -> int:
+    """Does the Beacon page schedule the rounds on this machine right now?
+    Reads the shared config and nothing else — no services, no Chrome — so a
+    scheduled task can ask BEFORE its sign-in check opens the SSO Chrome
+    profile that the in-app scheduler is using."""
+    from .queue import HandsfreeShareUnavailable
+    from .scheduler import scheduled_in_app_here
+    try:
+        reason = scheduled_in_app_here(_store().load_config())
+    except HandsfreeShareUnavailable as e:
+        print(f"[handsfree-cli] {e}", file=sys.stderr)
+        return 1
+    if reason:
+        print(f"[handsfree-cli] round skipped: {reason}", file=sys.stderr)
+        return EXIT_SCHEDULED_IN_APP
+    print("[handsfree-cli] the Beacon page does not schedule the rounds on this machine")
     return 0
 
 
@@ -308,6 +332,8 @@ def main(argv: Optional[list[str]] = None) -> int:
         return _sso_check()
     if args.sso_refresh:
         return _sso_refresh()
+    if args.schedule_check:
+        return _schedule_check()
     if args.interval <= 0:
         print("[handsfree-cli] --interval must be greater than zero", file=sys.stderr)
         return 2
@@ -392,19 +418,40 @@ def main(argv: Optional[list[str]] = None) -> int:
           + f" for new cases and customer updates every {args.interval:g}s; "
           "press Ctrl+C to stop")
     try:
-        while True:
-            try:
-                run_round()
-            except Exception as e:
-                # One bad round (share or IPS briefly unreachable) must not end the loop.
-                print(f"[handsfree-cli] {datetime.now():%Y-%m-%d %H:%M} round FAILED: "
-                      f"{type(e).__name__}: {e}")
-            next_at = datetime.now() + timedelta(seconds=args.interval)
-            print(f"[handsfree-cli] next round at {next_at:%Y-%m-%d %H:%M}")
-            time.sleep(args.interval)
+        _poll(run_round, store, args.interval)
     except KeyboardInterrupt:
         print("\n[handsfree-cli] stopped")
-        return 0
+    return 0
+
+
+def _poll(run_round, store, interval: float, *, rounds=None, sleep=time.sleep) -> int:
+    """The --interval loop; returns the number of rounds that ran.
+
+    One scheduler per server holds for a long-lived CLI too: the startup
+    check in main() only covers the moment the process started, so the
+    shared config is read again before EVERY round. While the Beacon page
+    schedules the rounds on this machine the round is skipped; the loop keeps
+    polling and resumes by itself once that schedule is switched off.
+    `rounds` / `sleep` exist for the smoke test."""
+    from .scheduler import scheduled_in_app_here
+    ran = turn = 0
+    while rounds is None or turn < rounds:
+        turn += 1
+        try:
+            reason = scheduled_in_app_here(store.load_config())
+            if reason:
+                print(f"[handsfree-cli] {datetime.now():%Y-%m-%d %H:%M} round skipped: {reason}")
+            else:
+                run_round()
+                ran += 1
+        except Exception as e:
+            # One bad round (share or IPS briefly unreachable) must not end the loop.
+            print(f"[handsfree-cli] {datetime.now():%Y-%m-%d %H:%M} round FAILED: "
+                  f"{type(e).__name__}: {e}")
+        next_at = datetime.now() + timedelta(seconds=interval)
+        print(f"[handsfree-cli] next round at {next_at:%Y-%m-%d %H:%M}")
+        sleep(interval)
+    return ran
 
 
 if __name__ == "__main__":

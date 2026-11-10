@@ -734,8 +734,13 @@ def run_email_scan(store: HandsfreeStore, *, folder: str = "Inbox", max_cases: i
         with ol.Outlook() as app:
             refs = app.scan(folder or "Inbox", since, own_email=own)
             state = ol.load_state(store.root)
-            new = [r for r in refs if not ol.is_processed(state, r.entry_id)]
-            triggers = []                              # (ref, [case numbers])
+            # Work is tracked per (mail, case): a mail naming two cases stays
+            # in play until both have run — one of them may have been capped
+            # out of an earlier round, or failed, while the other succeeded.
+            new = [r for r in refs
+                   if not ol.is_processed(state, r.entry_id)
+                   or ol.pending_cases(state, r.entry_id, ec.trigger_cases(r.subject))]
+            triggers = []                              # (ref, [case numbers still to run])
             for r in new:
                 subj_cases = ec.trigger_cases(r.subject)
                 if ec.is_automated(r.sender_email, r.sender_name, r.subject):
@@ -743,7 +748,7 @@ def run_email_scan(store: HandsfreeStore, *, folder: str = "Inbox", max_cases: i
                 elif ec.is_digest(r.case_nbrs):
                     why = f"names {len(set(r.case_nbrs))} cases — a status digest, not a case mail"
                 elif subj_cases:
-                    triggers.append((r, subj_cases))
+                    triggers.append((r, ol.pending_cases(state, r.entry_id, subj_cases)))
                     continue
                 elif r.case_nbrs:
                     why = ("the subject does not name the case as 'IPS <8-digit number>' "
@@ -752,7 +757,7 @@ def run_email_scan(store: HandsfreeStore, *, folder: str = "Inbox", max_cases: i
                     why = "no IPS case number"
                 summary["skipped"].append({"subject": r.subject[:80], "sender": r.sender_name,
                                            "why": why})
-                ol.mark_processed(store.root, r.entry_id)
+                ol.mark_processed(store.root, r.entry_id, complete=True)
             work: list = []
             dupes: list = []            # older mails naming a case a newer mail already runs
             seen: set = set()

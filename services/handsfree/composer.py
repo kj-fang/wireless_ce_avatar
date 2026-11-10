@@ -148,6 +148,8 @@ def latest_driver_lines(analysis) -> list[str]:
     latest = getattr(analysis, "latest_driver", "") or ""
     if not latest or check not in ("outdated", "unknown"):
         return []
+    if str(getattr(analysis, "wifi_or_bt", "") or "").strip().lower() == "bt":
+        return []          # the release table is the Wi-Fi driver's (runner gates it too)
     tail = (f"Please validate the issue on the latest release {latest} and let us "
             "know the result; if the issue still reproduces there, please collect the "
             "WRT logs on that driver and attach them to this case.")
@@ -178,6 +180,9 @@ def _driver_review_lines(analysis) -> list[str]:
     latest_src = getattr(analysis, "latest_driver_source", "") or ""
     dec = getattr(analysis, "driver_decision", None) or {}
     label = dec.get("winner_label") or getattr(analysis, "driver_version_source", "") or "?"
+    if dec.get("not_applicable"):
+        return ["Driver version check not applied: Bluetooth case (the latest-release "
+                "table covers the Wi-Fi driver only)."]
     if check == "skipped":
         return ["Driver version check skipped: no latest release known yet (Settings → "
                 "latest driver override, or wait for the server's daily report fetch)"

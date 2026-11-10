@@ -3,6 +3,8 @@ One scheduled Handsfree round on the server (run it from Task Scheduler).
 
     python tools/handsfree_server_run.py --owners-file C:\\path\\owners.txt
 
+0. --schedule-check: if the Beacon page schedules the rounds on this server,
+   stop here (exit 4) before any Chrome is opened.
 1. --sso-check: does Salesforce + esft sign-in work unattended? (the saved
    --sso-login profile if there is one, else the Windows account)
 2. If not, --sso-refresh once: a visible Chrome retries the saved profile
@@ -68,15 +70,28 @@ def _cli(log, *args: str) -> int:
                           cwd=REPO, stdout=log, stderr=subprocess.STDOUT).returncode
 
 
+_SKIPPED = (4, "SKIPPED - the Beacon page schedules the rounds on this server; "
+               "disable this scheduled task while that is ON")
+
+
 def _round(owners_file: Path, log) -> tuple[int, str]:
+    # Ask FIRST, before any Chrome starts: the sign-in check below opens the
+    # saved SSO Chrome profile, which the in-app scheduler of the Beacon page
+    # uses too. A lock inside one process cannot keep two processes apart, so
+    # an overlapping round would fail with "profile in use" instead of being
+    # skipped. --schedule-check only reads the shared settings.
+    rc = _cli(log, "--schedule-check")
+    if rc == 3:          # services.handsfree.cli.EXIT_SCHEDULED_IN_APP
+        return _SKIPPED
+    if rc != 0:
+        return 1, f"shared settings unreadable - round not started (cli exit {rc})"
     if _cli(log, "--sso-check") != 0:
         if _cli(log, "--sso-refresh") != 0:
             return 2, ("SIGN-IN FAILED - Salesforce/esft sign-in did not complete; "
                        "see the log (a saved-profile machine needs --sso-login)")
     rc = _cli(log, "--owners-file", str(owners_file), "--once")
-    if rc == 3:          # services.handsfree.cli.EXIT_SCHEDULED_IN_APP
-        return 4, ("SKIPPED - the Beacon page schedules the rounds on this server; "
-                   "disable this scheduled task while that is ON")
+    if rc == 3:          # switched on between the check above and the round
+        return _SKIPPED
     return (0, "OK") if rc == 0 else (1, f"scan failed (cli exit {rc})")
 
 

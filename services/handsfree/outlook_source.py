@@ -116,21 +116,44 @@ def save_state(root, state: dict) -> None:
         os.replace(tmp, p)
 
 
-def mark_processed(root, entry_id: str, case_nbr: str = "", draft_id: str = "") -> None:
-    """Remember that this mail was handled (per case it named); a mail with
-    no case number is remembered too so it is not re-listed every round."""
+def mark_processed(root, entry_id: str, case_nbr: str = "", draft_id: str = "",
+                   complete: bool = False) -> None:
+    """Remember what was handled of this mail. Work is tracked per
+    (mail, case): `case_nbr` records one case of the mail as done.
+    `complete` closes the mail as a whole — a mail that is skipped (no case
+    number, automated, a digest) is remembered that way so it is not
+    re-listed every round."""
     state = load_state(root)
     entry = state["processed"].setdefault(str(entry_id), {"case_nbrs": [], "draft_ids": []})
     if case_nbr and case_nbr not in entry["case_nbrs"]:
         entry["case_nbrs"].append(case_nbr)
     if draft_id:
         entry["draft_ids"].append(draft_id)
+    if complete:
+        entry["complete"] = True
     entry["at"] = time.strftime("%Y-%m-%dT%H:%M:%S")
     save_state(root, state)
 
 
 def is_processed(state: dict, entry_id: str) -> bool:
+    """The mail has been seen at all. A mail naming several cases can be
+    seen and still have work left: see pending_cases."""
     return str(entry_id) in (state.get("processed") or {})
+
+
+def pending_cases(state: dict, entry_id: str, case_nbrs) -> list[str]:
+    """The cases of this mail that still have to run: all of them for a mail
+    not seen yet, none for a mail closed as a whole, otherwise the ones not
+    recorded as done. So a case that was capped out of a round or failed is
+    retried even though another case of the same mail succeeded."""
+    wanted = [str(c) for c in (case_nbrs or [])]
+    entry = (state.get("processed") or {}).get(str(entry_id))
+    if entry is None:
+        return wanted
+    if entry.get("complete"):
+        return []
+    done = {str(c) for c in (entry.get("case_nbrs") or [])}
+    return [c for c in wanted if c not in done]
 
 
 # ------------------------------------------------------------------- COM
@@ -431,10 +454,14 @@ class Outlook:
         return sorted(out, key=lambda m: m.received or "")
 
     def save_attachments(self, msg, dest_dir: str) -> list[dict]:
-        """Save the mail's file attachments into dest_dir (skips attached
-        mails / OLE objects; keeps an existing file). Fills and returns
-        msg.attachments: [{name, path, size, is_image}]."""
+        """Save the mail's file attachments under dest_dir, in a folder of
+        this mail's own (message_dir_name): mails of one thread reuse file
+        names all the time (image001.png, a second WRT.zip), and a shared
+        folder would hand a later mail the earlier mail's bytes. Skips
+        attached mails / OLE objects; keeps a file this mail already saved.
+        Fills and returns msg.attachments: [{name, path, size, is_image}]."""
         from .email_case import IMAGE_EXTS
+        dest_dir = os.path.join(dest_dir, message_dir_name(msg))
         try:
             item = (self._ns.GetItemFromID(msg.entry_id, msg.store_id) if msg.store_id
                     else self._ns.GetItemFromID(msg.entry_id))
@@ -444,6 +471,7 @@ class Outlook:
             raise OutlookUnavailable(
                 f"attachments of the mail '{msg.subject[:50]}' could not be read ({e})") from e
         out: list[dict] = []
+        used: set = set()
         if count:
             os.makedirs(dest_dir, exist_ok=True)
         for i in range(1, count + 1):
@@ -453,6 +481,7 @@ class Outlook:
                     continue
                 name = str(getattr(att, "FileName", "") or f"attachment_{i}")
                 safe = re.sub(r'[\\/:*?"<>|]+', "_", name).strip() or f"attachment_{i}"
+                safe = unique_name(safe, used)       # two files of ONE mail with one name
                 path = os.path.join(dest_dir, safe)
                 if not os.path.exists(path):
                     att.SaveAsFile(path)
@@ -463,6 +492,29 @@ class Outlook:
                 print(f"[handsfree.outlook] attachment {i} of '{msg.subject[:40]}' skipped: {e}")
         msg.attachments = out
         return out
+
+
+def message_dir_name(msg) -> str:
+    """Folder name for ONE mail's attachments inside the thread folder: when
+    it was received plus a short hash of its Outlook id, e.g.
+    20261022T101500_3fa9c1d2. Stable across rounds, so a saved file is kept."""
+    import hashlib
+    stamp = re.sub(r"[^0-9T]", "", str(getattr(msg, "received", "") or ""))[:15] or "undated"
+    tag = hashlib.sha1(str(getattr(msg, "entry_id", "") or "").encode("utf-8")).hexdigest()[:8]
+    return f"{stamp}_{tag}"
+
+
+def unique_name(name: str, used: set) -> str:
+    """`name`, or "(2) name", "(3) name"… when it was handed out before
+    (compared case-insensitively, as the file system does). The counter goes
+    in FRONT so every extension — .zip, .tar.gz, .7z.001 — stays intact.
+    Records the result in `used`."""
+    candidate, n = name, 1
+    while candidate.casefold() in used:
+        n += 1
+        candidate = f"({n}) {name}"
+    used.add(candidate.casefold())
+    return candidate
 
 
 def reply_fragment(body_html: str) -> str:

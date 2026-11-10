@@ -404,18 +404,18 @@
 </head>
 <body class="hide-excluded" data-latest-evt-path="{{ latest_evt_path | e if latest_evt_path else '' }}">
     <div class="form-container mb-4 p-0 overflow-hidden" 
-        style="border-radius: 0; margin-top: -20px; margin-left: -20px; margin-right: -20px; position: relative;">
-        <img src="{{ url_for('static', filename='nav_bar.svg') }}" 
-            alt="nav_bar" 
-            class="w-100" 
-            style="border-radius: 0; display: block;">
+        style="box-sizing: border-box; display: flex; align-items: center; height: 96px; padding: 0 32px; border-radius: 0; margin-top: -20px; margin-left: -20px; margin-right: -20px; position: relative; background: #1f4059;">
+        <img src="{{ url_for('static', filename='new_logo.svg') }}"
+            alt="Wireless CE"
+            style="display: block; width: auto; height: 80px; max-width: 240px; object-fit: contain;">
         
         <!-- clickable  logo -->  
         <a href="{{ url_for('main.index') }}" 
             style="position: absolute; 
                     top: 0; 
                     left: 0; 
-                    width: 20%; 
+                    width: 272px;
+                    max-width: 100%;
                     height: 100%; 
                     cursor: pointer; 
                     z-index: 5;

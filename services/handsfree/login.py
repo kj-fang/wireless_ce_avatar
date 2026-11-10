@@ -81,12 +81,11 @@ def start_sign_in(interactive: bool = False) -> dict:
     'Sign in to IPS' button."""
     global _worker
     with _lock:
-        if _worker is not None and _worker.is_alive():
-            return status()
-        _state.update(status="signing_in", error="", interactive=bool(interactive))
-        _worker = threading.Thread(target=_run, args=(bool(interactive),),
-                                   daemon=True, name="handsfree-ips-login")
-        _worker.start()
+        if _worker is None or not _worker.is_alive():
+            _state.update(status="signing_in", error="", interactive=bool(interactive))
+            _worker = threading.Thread(target=_run, args=(bool(interactive),),
+                                       daemon=True, name="handsfree-ips-login")
+            _worker.start()
     return status()
 
 

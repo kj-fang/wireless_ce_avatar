@@ -186,7 +186,9 @@ LOG_CHATBOT_UI = {
 NW_UI = {
     "domain": "wifi",
     "api": "/nw_analysis",
-    "title": "Wi-Fi Log Chatbot",
+    "title": "Network Experience",
+    # Same icon as the Network Experience button on the Avatar home page.
+    "icon": "🌐",
     "back_url": "/nw_analysis/back_to_avatar",
     "input_placeholder": "Ask a question about the log…",
     "accent": "#0071c5",

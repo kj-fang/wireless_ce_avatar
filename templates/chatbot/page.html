@@ -40,7 +40,7 @@
     <button type="button" class="sidebar-toggle" onclick="toggleSidebar()"
             title="Show / hide sidebar" aria-label="Toggle sidebar">☰</button>
     {% endif %}
-    <span style="font-size:1.4rem;">📡</span>
+    <span style="font-size:1.4rem;">{{ ui.icon | default('📡') }}</span>
     <h1>{{ ui.title }}</h1>
     <span class="badge-model">Avatar · Multi-Skill Agent</span>
     <!-- A form, not a link. This endpoint throws away the session agent: the

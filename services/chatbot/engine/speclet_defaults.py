@@ -169,6 +169,7 @@ NW_REPORT = """Your `markdown_summary` format (REQUIRED):
 #   {short_device_wakes}  short (0-29 s) wakes raised by the device
 #   {short_wake_limit}    above this many, the session goes to the Intel team
 #   {html_verdict}        the scenario the report alone points to
+#   {driver_request_examples}  device-specific OS/driver requests to check
 NW_SLEEPSTUDY_POINT = """Modern Standby battery drain. Sleep Study session {session_id} ({session_type}) ran {start} to {end} ({duration}) on battery with software DRIPS {sw_drips} and hardware DRIPS {hw_drips}, below the {threshold} bar. The RED top blocker was {top_blocker} ({top_blocker_active} active).
 
 What Sleep Study recorded about the {device} device in this session:
@@ -179,21 +180,18 @@ Network activity by app in this session (SRUM network power, NDIS bytes and outg
 
 Short (0-29 s) wakes raised by the device (NetWakeReasonTypeDevice): {short_device_wakes}. From the report alone this session reads as: {html_verdict}.
 
-Question, from the {device} driver's side: during this window, why was the driver brought back to D0 again and again instead of staying in Dx and letting the platform rest? For each wake, find what triggered it: an OS request (which OID / WiFiCx job, e.g. DeviceServiceCommand, Roam, QueryStatistics, scan), a wake raised by the device itself (wake on packet -- which packet or pattern -- or wake on disconnect / roam), a key or user action, or a timer. Then say why the driver did not return to low power promptly after each wake, and whether the driver log agrees with what the report alone suggests.
+Driver issue description and analysis request: explain, from the {device} driver's perspective, why it repeatedly left low power (D0/Dx transitions) during this Sleep Study window and what prevented the platform from reaching or staying in DRIPS. Use the Sleep Study evidence above to prioritize the investigation: correlate {driver_request_examples} and wake counts with timestamps and durations in the driver log; check app traffic only when the report points to it; and distinguish an OS/driver request, device-originated wake (identify packet/pattern if present, or disconnect/roam), user input, and timer-driven activity. For each supported wake sequence, say whether the driver returned to low power promptly, and compare the driver evidence with the report's {html_verdict} hypothesis.
 
-Keep the answer short: this session is one of several whose findings are compared afterwards. Use only the evidence given; do not invent numbers."""
+Choose and use the most relevant skill or skills available to this {device} agent, based on the Sleep Study evidence and the matching driver-log symptoms. Briefly name the selected skill(s) and the evidence that made them relevant. If no available skill fits, say so and continue with a focused general log analysis. Do not infer a wake trigger or claim a skill-specific issue without log evidence.
+
+Keep the answer concise because this session is compared with other time points. Use only the report and driver-log evidence; do not invent numbers."""
 
 # sleepstudy_summary fields: {short_wake_limit}
 NW_SLEEPSTUDY_SUMMARY = """You are a Modern Standby power analyst for Intel wireless drivers. You get the bad sessions of one Sleep Study report: sessions on battery where the platform failed to rest. Some have a wireless device as the RED top blocker; for each of those you have what Sleep Study recorded (OS jobs that woke the device, net wake reasons, short wakes, network activity by app) and the scenario the report alone points to, and for the ones a person chose to check, what a driver log agent concluded after reading that session's driver log. The others ("system") have no wireless RED blocker and were not checked against a driver log.
 
 Scenarios: A = activity by OS / app (an App ID or OS job dominates network power or traffic); B = activity by remote (a stream of short wakes raised by the device, NetWakeReasonTypeDevice, from unsolicited inbound traffic); "Please contact Intel Wi-Fi team" = neither is supported, or more than {short_wake_limit} short device wakes in a session.
 
-Write markdown in English. Your conclusion goes on top of the report: is this a wireless driver problem, an app / OS / remote traffic problem, or a platform (system) problem, and how sure is that; name the leading wake cause and its share of the checked sessions. After it, these sections and nothing else:
-1. **Driver log check**: for the sessions checked against a driver log, whether the driver log confirmed the report; for each disagreement, why the driver log changed the picture or why it is inconclusive. Say so plainly if no session was checked.
-2. **What keeps waking the driver**: the causes ranked by how many sessions they explain (NDIS / OS request (name the job or OID), wake on packet (name the packet or pattern), wake on key or user, timer, app traffic (name the app), unknown), with what to look at in the driver first.
-3. **System sessions**: what the non-wireless blockers suggest and who should look at them. Omit this section when there are none.
-
-The counts are given; quote them, do not recount. Use only the evidence given. When a cause is unclear say so; do not invent numbers."""
+Write concise English. Return only a **Conclusion** of at most two short sentences: identify the leading cause across checked sessions, whether driver logs confirm or change the Sleep Study interpretation, and any important system blocker. The application shows each session's evidence separately. Do not add headings, tables, timelines, per-session restatements, or recommendations. Use the provided counts; do not recount or invent evidence. If the logs do not support a clear cause, say so plainly."""
 
 
 # --- Linux (linux_chatbot) ------------------------------------------------

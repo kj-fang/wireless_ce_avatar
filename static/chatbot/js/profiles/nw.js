@@ -1,29 +1,7 @@
-    // NW profile helpers. The chat runtime (browse / setLog / sendMessage /
-    // appendReport / auto-analyze) lives in strategies/nw-chat-runtime.js;
-    // only the sleepstudy sub-tab is NW-specific.
-
-    // ── Switch between Wi-Fi log and Sleepstudy sub-tabs ────────────
-    function switchLogTab(which) {
-        const wifiBtn = document.getElementById('logtab-wifi');
-        const sleepBtn = document.getElementById('logtab-sleep');
-        const wifiPanel = document.getElementById('logpanel-wifi');
-        const sleepPanel = document.getElementById('logpanel-sleep');
-        const activeStyle = (btn, active) => {
-            btn.style.color = active ? 'var(--accent)' : '#888';
-            btn.style.borderBottom = active ? '2px solid var(--accent)' : '2px solid transparent';
-        };
-        if (which === 'wifi') {
-            wifiPanel.style.display = '';
-            sleepPanel.style.display = 'none';
-            activeStyle(wifiBtn, true);
-            activeStyle(sleepBtn, false);
-        } else {
-            wifiPanel.style.display = 'none';
-            sleepPanel.style.display = '';
-            activeStyle(wifiBtn, false);
-            activeStyle(sleepBtn, true);
-        }
-    }
+    // NW profile helpers: the Sleep Study panel and its History hooks. The chat
+    // runtime (sendMessage / appendReport / …) lives in
+    // strategies/nw-chat-runtime.js and the History panel in features/history.js.
+    let firstRoundSent = false;  // read by history.js: true once this conversation has a turn
 
     // ── Browse for sleepstudy / driver log file ─────────────────────
     async function browseInto(inputId) {
@@ -46,6 +24,34 @@
     // One WiFiLog picked here stands for its whole WRT folder (server side).
     function browseDriverLog() { return browseInto('driver-log-path-input'); }
 
+    // ── History hooks (called by features/history.js) ────────────────
+    // The conversation a finished analysis or chat turn was saved under.
+    function noteNwConversation(result) {
+        if (!result || !result.conversation_id) return;
+        window.__feedbackConversationId = result.conversation_id;
+        firstRoundSent = true;
+        if (typeof loadHistoryList === 'function') loadHistoryList();
+    }
+
+    function onHistoryNewConversation() {
+        document.getElementById('sleepstudy-path-input').value = '';
+        document.getElementById('driver-log-path-input').value = '';
+        const statusEl = document.getElementById('sleepstudy-status');
+        statusEl.textContent = '';
+        statusEl.style.display = 'none';
+    }
+
+    function onHistoryConversationLoaded(data) {
+        document.getElementById('sleepstudy-path-input').value = data.log_path || '';
+        document.getElementById('driver-log-path-input').value = data.driver_log_path || '';
+        const statusEl = document.getElementById('sleepstudy-status');
+        if (data.log_exists) {
+            showStatus(statusEl, '✔ Resumed — report re-loaded.', 'ok', 3000);
+        } else if (data.log_path) {
+            showStatus(statusEl, '⚠ Original report not found — viewing history only.', 'warn');
+        }
+    }
+
     // ── Load sleepstudy file ────────────────────────────────────────
     async function setSleepstudy() {
         const path = document.getElementById('sleepstudy-path-input').value.trim();
@@ -55,7 +61,9 @@
         statusEl.className = 'log-status'; statusEl.textContent = 'Loading…'; statusEl.style.display = 'block';
 
         try {
-            const res = await fetch(`${CHATBOT_API}/set_log_sleepstudy`, {
+            // NW's /set_log loads the Sleep Study report and starts a new
+            // conversation (a new History entry) for it.
+            const res = await fetch(`${CHATBOT_API}/set_log`, {
                 method: 'POST',
                 headers: {'Content-Type': 'application/json'},
                 body: JSON.stringify({log_path: path})
@@ -63,15 +71,16 @@
             const data = await res.json();
             if (data.success) {
                 showStatus(statusEl, '✔ ' + (data.message || 'Sleepstudy file loaded.'), 'ok');
+                if (data.skills) renderSkills(data.skills);
+                window.__feedbackConversationId = '';
+                firstRoundSent = false;
+                window.__viewingSavedConv = false;
+                document.getElementById('chat-window').innerHTML = '';
                 if (window.IpsPrompt) { await window.IpsPrompt.handleSetLog(data); }
                 // With a driver log: worst sessions → driver log agent per session.
                 // Without one: the Sleep Study-only Wi-Fi report.
                 const driverPath = document.getElementById('driver-log-path-input').value.trim();
-                if (driverPath) {
-                    await runSleepstudyAnalysis(path, driverPath);
-                } else {
-                    await runSleepstudyAnalysis(path);
-                }
+                await runSleepstudyAnalysis(path, driverPath);
             } else {
                 showStatus(statusEl, '✘ ' + data.error, 'err');
             }
@@ -80,11 +89,19 @@
         }
     }
 
+    // The user turn an analysis is saved as; the server's
+    // _sleepstudy_request_text writes the same text to History.
+    function sleepstudyRequestText(path, driverPath) {
+        const base = (p) => p.replace(/[\\/]+$/, '').split(/[\\/]/).pop();
+        const lines = ['Sleep Study: ' + base(path) + (driverPath ? ' × ' + base(driverPath) : ''),
+                       'Report: `' + path + '`'];
+        if (driverPath) lines.push('Driver log: `' + driverPath + '`');
+        return lines.join('\n');
+    }
+
     // ── Run dedicated sleepstudy analyzer (SSE stream) ──────────────
     async function runSleepstudyAnalysis(path, driverPath) {
-        appendUserMsg(driverPath
-            ? 'Analysing the sleepstudy at `' + path + '` against the driver log at `' + driverPath + '`'
-            : 'Analysing the uploaded sleepstudy at `' + path + '`');
+        appendUserMsg(sleepstudyRequestText(path, driverPath));
         appendTyping();
 
         const card = createAgentStepRenderer({
@@ -121,6 +138,7 @@
                     removeTyping();
                     card.collapse();
                     const result = evt.result;
+                    noteNwConversation(result);
                     if (result && result.type === 'text') {
                         appendAssistantText(result.data || '_No response._');
                     } else {
@@ -147,7 +165,3 @@
             appendAssistantText('❌ Network error: ' + e.message);
         }
     }
-
-    document.addEventListener('DOMContentLoaded', function () {
-        tryAutoAnalyzeOnLoad();
-    });

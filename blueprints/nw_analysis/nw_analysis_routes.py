@@ -1,6 +1,6 @@
 from flask import render_template, request, session, jsonify, Response, copy_current_request_context
 from services.chatbot.issue_context import extract_disconnect_time as _extract_disconnect_time
-from services.chatbot.shared_routes import leave_chatbot as _leave_chatbot
+from services.chatbot.shared_routes import SharedRouteContext, build_shared_handlers
 from services.chatbot.session import register_session_agent_store
 from services.skill_editor.controller import (
     SkillAppendContext,
@@ -30,8 +30,6 @@ import uuid
 import os
 import threading
 from datetime import datetime
-import tkinter as tk
-from tkinter import filedialog
 
 from configs.chatbot_ui import NW_UI
 from configs.global_configs import app_config
@@ -42,8 +40,8 @@ from services.sleepstudy_analyzer import analyze_sleepstudy_stream
 from services import sleepstudy_pipeline
 from services import gather_service
 from services import check_ips_service
+from services import history_service
 from utils.etl_utils import extract_time_from_description
-from utils.event_log_utils import find_event_log_for_log
 
 
 # Server-side store: session_id -> NwAnalysisAgentSystem instance
@@ -54,6 +52,8 @@ register_session_agent_store("nw_analysis", _chatbot_instances)
 # records stay distinguishable from the wifi ones even though both are driven
 # by a class named WifiLogAgentSystem.
 GATHER_DOMAIN = "nw"
+# History store (configs/chat_domains.py): NW's own, not Wi-Fi's.
+HISTORY_DOMAIN = "nw"
 
 
 def _ensure_nw_conversation_id(*, rotate: bool = False) -> str:
@@ -242,9 +242,6 @@ def _get_or_create_agent() -> NwAnalysisAgentSystem:
             model=base.model,
             skills=base.skills,   # reuse pre-loaded skills, no disk re-read
         )
-        # Auto-populate log path from last LogParser analysis if available
-        if app_config.last_analyzed_log_path:
-            agent.current_log_path = app_config.last_analyzed_log_path
         # Prime with session issue context so every new session is context-aware
         try:
             ctx = _extract_issue_context()
@@ -261,7 +258,6 @@ def _get_or_create_agent() -> NwAnalysisAgentSystem:
 # Pages
 # ------------------------------------------------------------------
 def index():
-    suggested_log = app_config.last_analyzed_log_path or ""
     issue_desc = ""
     try:
         ctx = _extract_issue_context()
@@ -271,41 +267,16 @@ def index():
     return render_template(
         "chatbot/page.html",
         ui=NW_UI,
-        suggested_log=suggested_log,
         issue_description=issue_desc,
     )
 
 
 # ------------------------------------------------------------------
-# API: open native file browser and return selected path
-# ------------------------------------------------------------------
-def browse():
-    """Open a native Windows file dialog and return the selected .log path."""
-    result = {"path": ""}
-
-    def _open_dialog():
-        root = tk.Tk()
-        root.withdraw()
-        root.wm_attributes("-topmost", True)
-        path = filedialog.askopenfilename(
-            title="Select log file",
-            filetypes=[("Log files", "*.log"), ("All files", "*.*")],
-        )
-        root.destroy()
-        result["path"] = path or ""
-
-    # tkinter must run on the main thread on Windows;
-    # since Flask dev server is single-threaded this is fine,
-    # but we guard with a threading.Event to make it safe.
-    t = threading.Thread(target=_open_dialog)
-    t.start()
-    t.join(timeout=60)
-
-    return jsonify({"success": True, "path": result["path"]})
-
-
-# ------------------------------------------------------------------
-# API: set log file path
+# API: load a Sleep Study report
+#
+# NW's /set_log takes the Sleep Study HTML, not a Wi-Fi log: the report is
+# what the page analyses, and the driver log is passed per analysis. A new
+# report is a new conversation, so it gets its own History entry.
 # ------------------------------------------------------------------
 def set_log():
     data = request.get_json(silent=True) or {}
@@ -320,48 +291,67 @@ def set_log():
         ctx = _extract_issue_context()      # re-extract context in case session was updated after agent creation
         if any(ctx.values()):
             agent.prime_with_context(**ctx)
-
-        session["chatbot_log_path"] = log_path
-        try:
-            event_log_path = find_event_log_for_log(log_path)
-        except Exception:
-            event_log_path = ""
-        return jsonify({
-            "success": True,
-            "message": f"Log file set: {log_path}",
-            "skills": agent.get_skill_descriptions(),
-            "evtx_path": event_log_path,
-            **check_ips_service.prompt_state(log_path),
-        })
-    except Exception as e:
-        return jsonify({"success": False, "error": str(e)}), 500
-
-
-# ------------------------------------------------------------------
-# API: set sleepstudy file path (same as set_log but no session write
-# and no skills payload in response)
-# ------------------------------------------------------------------
-def set_log_sleepstudy():
-    data = request.get_json(silent=True) or {}
-    log_path = data.get("log_path", "").strip()
-    if not log_path:
-        return jsonify({"success": False, "error": "log_path is required"}), 400
-
-    try:
-        agent = _get_or_create_agent()
-        agent.current_log_path = log_path
-        agent.reset_conversation()          # fresh conversation for a new file
-        ctx = _extract_issue_context()      # re-extract context in case session was updated after agent creation
-        if any(ctx.values()):
-            agent.prime_with_context(**ctx)
+        _ensure_nw_conversation_id(rotate=True)
 
         return jsonify({
             "success": True,
             "message": f"Sleepstudy file set: {log_path}",
+            "skills": agent.get_skill_descriptions(),
             **check_ips_service.prompt_state(log_path),
         })
     except Exception as e:
         return jsonify({"success": False, "error": str(e)}), 500
+
+
+# ------------------------------------------------------------------
+# History: one conversation per loaded report
+#
+# The analysis is the conversation's first turn and follow-up questions are
+# the next ones, all under nw_conversation_id. The report and driver log are
+# kept on the snapshot so reopening it puts both paths back in the sidebar.
+# ------------------------------------------------------------------
+def _sleepstudy_request_text(sleep_path: str, driver_path: str = "") -> str:
+    """The user turn a Sleep Study analysis is saved as. nw.js shows the same."""
+    title = "Sleep Study: " + os.path.basename(sleep_path)
+    if driver_path:
+        title += " × " + os.path.basename(driver_path.rstrip("\\/"))
+    lines = [title, f"Report: `{sleep_path}`"]
+    if driver_path:
+        lines.append(f"Driver log: `{driver_path}`")
+    return "\n".join(lines)
+
+
+def _record_nw_turn(user_message: str, result: dict, steps: list,
+                    sleep_path: str = "", driver_path: str | None = None) -> str:
+    """Save one turn to NW's History and return its conversation id. Never raises."""
+    conversation_id = _ensure_nw_conversation_id()
+    try:
+        history_service.record_turn(
+            conversation_id=conversation_id,
+            session_id=session.get("chatbot_session_id", "") or "",
+            turn_id=str(uuid.uuid4()),
+            user_message=user_message,
+            agent_result=result,
+            issue=_extract_issue_context(),
+            log_path=sleep_path,
+            domain=HISTORY_DOMAIN,
+            steps=steps,
+            extra=None if driver_path is None else {"driver_log_path": driver_path},
+        )
+    except Exception as exc:
+        print(f"[nw history] record failed: {exc}")
+    return conversation_id
+
+
+def _remember_analysis(user_message: str, report: str) -> None:
+    """Put an analysis into the session agent's conversation, so a follow-up
+    question is answered by something that has read the report."""
+    try:
+        agent = _get_or_create_agent()
+        agent.conversation_history.append({"role": "user", "content": user_message})
+        agent.conversation_history.append({"role": "assistant", "content": report})
+    except Exception:
+        pass
 
 
 # ------------------------------------------------------------------
@@ -444,13 +434,20 @@ def analyze_sleepstudy():
                 return resp.choices[0].message.content or ""
 
         status, error_code = "success", ""
+        steps = []
         try:
             for event in analyze_sleepstudy_stream(sleep_path, llm_call=llm_call):
                 kind = event["type"]
                 if kind == "step":
                     sse = {"type": "step", "step": {"content": event["content"]}}
+                    steps.append(sse["step"])
                 elif kind == "done":
-                    sse = {"type": "done", "result": {"type": "text", "data": event["data"]}}
+                    request_text = _sleepstudy_request_text(sleep_path)
+                    result = {"type": "text", "data": event["data"]}
+                    _remember_analysis(request_text, event["data"])
+                    result["conversation_id"] = _record_nw_turn(
+                        request_text, dict(result), steps, sleep_path, driver_path="")
+                    sse = {"type": "done", "result": result}
                 elif kind == "error":
                     sse = {"type": "error", "content": event["content"]}
                     status, error_code = "failed", "analyzer_error"
@@ -537,21 +534,30 @@ def analyze_sleepstudy_driver():
         llm_model = getattr(app_config.llm_helper, "model", "") if app_config.llm_helper else ""
         started = datetime.now()
         status, error_code = "success", ""
+        steps = []
         try:
             for event in sleepstudy_pipeline.run_pipeline(sleep_path, driver_path, out_dir=out_dir):
                 kind = event["type"]
                 if kind == "step":
                     sse = {"type": "step", "step": {"content": event["content"]}}
+                    steps.append(sse["step"])
                 elif kind == "point":
                     for key, value in (event["data"].get("agent_usage") or {}).items():
                         if key in spend:
                             spend[key] += value
                     continue
                 elif kind == "done":
+                    request_text = _sleepstudy_request_text(sleep_path, driver_path)
+                    report = event["data"]["markdown"]
+                    _remember_analysis(request_text, report)
+                    conversation_id = _record_nw_turn(
+                        request_text, {"type": "text", "data": report},
+                        steps, sleep_path, driver_path)
                     sse = {"type": "done", "result": {
                         "type": "text",
-                        "data": event["data"]["markdown"],
+                        "data": report,
                         "pipeline": event["data"],
+                        "conversation_id": conversation_id,
                     }}
                 elif kind == "error":
                     sse = {"type": "error", "content": event["content"]}
@@ -595,8 +601,8 @@ def analyze_sleepstudy_driver():
 # policy, background-job bookkeeping and Gather accounting all differ per
 # profile, so Wi-Fi and BT keep their own copies of this. NW's is the
 # shortest of the three — it publishes steps through a request-local
-# queue.Queue rather than registering with chat_jobs, and has no history
-# or feedback sidecar.
+# queue.Queue rather than registering with chat_jobs, saves each turn to
+# NW's History and has no feedback sidecar.
 #
 # What IS shared is what the worker below eventually calls — agent.chat(),
 # i.e. ConversationMixin.chat in services/chatbot/engine/conversation.py,
@@ -717,7 +723,12 @@ def chat():
         t = threading.Thread(target=run_chat_with_tools, daemon=True)
         t.start()
 
+        # Read now: the generator below runs after the request context is gone.
+        history_session_id = session.get("chatbot_session_id", "") or ""
+        history_log_path = getattr(agent, "current_log_path", "") or ""
+
         def event_stream():
+            steps = []
             while True:
                 try:
                     msg_type, payload = step_queue.get(timeout=120)
@@ -725,8 +736,22 @@ def chat():
                     yield f"data: {json.dumps({'type': 'error', 'content': 'Chat timed out.'})}\n\n"
                     break
                 if msg_type == "step":
+                    steps.append(payload)
                     yield f"data: {json.dumps({'type': 'step', 'step': payload}, ensure_ascii=False)}\n\n"
                 elif msg_type == "done":
+                    history_service.record_turn(
+                        conversation_id=conversation_id,
+                        session_id=history_session_id,
+                        turn_id=turn_id,
+                        user_message=user_message,
+                        agent_result=payload,
+                        issue=_issue_ctx_for_snapshot,
+                        log_path=history_log_path,
+                        domain=HISTORY_DOMAIN,
+                        steps=steps,
+                    )
+                    if isinstance(payload, dict):
+                        payload = {**payload, "conversation_id": conversation_id}
                     yield f"data: {json.dumps({'type': 'done', 'result': payload}, ensure_ascii=False)}\n\n"
                     break
                 elif msg_type == "error":
@@ -804,141 +829,7 @@ def chat_stop():
 
 
 # ------------------------------------------------------------------
-# API: prepare chatbot from download_result (set log path + case context)
-# ------------------------------------------------------------------
-def prepare():
-    """
-    Called from download_result when user clicks "Chatbot Analysis".
-    1. Derives the .log path from the given etl_path.
-    2. Sets the agent's current_log_path.
-    3. Primes conversation history with case description + classification.
-    Returns {"success": True} — JS then redirects to /log_chatbot/.
-    """
-    data = request.get_json(silent=True) or {}
-    etl_path = data.get("etl_path", "").strip()
-    if not etl_path:
-        return jsonify({"success": False, "error": "etl_path is required"}), 400
-
-    log_path = etl_path + ".log"
-    if not os.path.exists(log_path):
-        return jsonify({"success": False, "error": f".log file not found: {log_path}"}), 404
-
-    try:
-        # Pull consolidated issue context from all session sources
-        ctx = _extract_issue_context()
-
-        # Update shared last_analyzed_log_path so the chatbot index page pre-fills it
-        app_config.last_analyzed_log_path = log_path
-
-        # Get/create per-session agent and prime it
-        agent = _get_or_create_agent()
-        agent.current_log_path = log_path
-        agent.prime_with_context(**ctx)
-
-        return jsonify({"success": True})
-    except Exception as e:
-        error_traceback = traceback.format_exc()
-        print(f"❌ Chatbot prepare error:\n{error_traceback}")
-        return jsonify({"success": False, "error": str(e)}), 500
-
-
-# ------------------------------------------------------------------
-# API: open native directory browser and return selected path
-# ------------------------------------------------------------------
-
-
-# ------------------------------------------------------------------
-# API: browse for a YAML file (native file dialog)
-# ------------------------------------------------------------------
-
-
-# ------------------------------------------------------------------
-# API: load skills from a YAML file (standalone, no prompt/filter dirs)
-# ------------------------------------------------------------------
-def load_skills_yaml_route():
-    """
-    Load skills directly from a .yaml file.
-    Request JSON: { "yaml_path": "/path/to/skills.yaml" }
-    """
-    data = request.get_json(silent=True) or {}
-    yaml_path = data.get("yaml_path", "").strip()
-
-    if not yaml_path:
-        return jsonify({"success": False, "error": "yaml_path is required."}), 400
-
-    try:
-        skills = load_skills_from_yaml(yaml_path)
-
-        agent = _get_or_create_agent()
-        agent.skills = skills
-        # Also update app-level so future sessions share the new skills
-        if app_config.nw_analysis_agent:
-            app_config.nw_analysis_agent.skills = skills
-        if app_config.llm_helper:
-            app_config.llm_helper.skills = skills
-
-        return jsonify({
-            "success": True,
-            "message": f"{len(skills)} skills loaded from YAML",
-            "source": yaml_path,
-            "skills": agent.get_skill_descriptions(),
-        })
-    except Exception as e:
-        import traceback
-        traceback.print_exc()
-        return jsonify({"success": False, "error": str(e)}), 500
-
-
-# ------------------------------------------------------------------
-# API: Reload skills from shared folder (auto-discovery)
-# ------------------------------------------------------------------
-def reload_from_shared():
-    """
-    Reload skills from the shared YAML location.
-    Used for development/testing without restarting the app.
-    """
-    from configs.path_configs import SKILLS_CONFIG_DIR_prim, SKILLS_CONFIG_DIR_bkup, SKILLS_YAML_FILENAME
-    from pathlib import Path
-    from utils import helpers as _helpers
-    
-    try:
-        # Try to find shared YAML location
-        yaml_shared = _helpers.get_load_path(
-            str(Path(SKILLS_CONFIG_DIR_prim) / SKILLS_YAML_FILENAME),
-            str(Path(SKILLS_CONFIG_DIR_bkup) / SKILLS_YAML_FILENAME)
-        )
-        
-        if not yaml_shared or not Path(yaml_shared).exists():
-            return jsonify({
-                "success": False,
-                "error": f"Shared YAML not found at {SKILLS_CONFIG_DIR_prim} or {SKILLS_CONFIG_DIR_bkup}"
-            }), 400
-        
-        # Load skills from shared YAML
-        skills = load_skills_from_yaml(yaml_shared)
-        
-        # Update all instances
-        agent = _get_or_create_agent()
-        agent.skills = skills
-        if app_config.nw_analysis_agent:
-            app_config.nw_analysis_agent.skills = skills
-        if app_config.llm_helper:
-            app_config.llm_helper.skills = skills
-        
-        return jsonify({
-            "success": True,
-            "message": f"{len(skills)} skills reloaded from shared folder",
-            "source": yaml_shared,
-            "skills": agent.get_skill_descriptions(),
-        })
-    except Exception as e:
-        import traceback
-        traceback.print_exc()
-        return jsonify({"success": False, "error": str(e)}), 500
-
-
-# ------------------------------------------------------------------
-# API: get available skills
+# API: the case's issue context
 # ------------------------------------------------------------------
 def get_issue_context():
     # Use _compose_concise_description() instead to get a cleaned and concise title/description.
@@ -951,8 +842,65 @@ def get_issue_context():
     return jsonify({"description": concise_desc, "attachment_time": attachment_time})
 
 
-def back_to_avatar():
-    return _leave_chatbot(_chatbot_instances)
+# ------------------------------------------------------------------
+# API: reopen a saved conversation
+#
+# The list / rename / pin / delete endpoints are the shared ones; loading is
+# NW's own because it restores a report and a driver log, not a Wi-Fi log and
+# an issue time. history.js reads the common fields and nw.js the two paths.
+# ------------------------------------------------------------------
+def history_load():
+    data = request.get_json(silent=True) or {}
+    conversation_id = (data.get("conversation_id") or "").strip()
+    if not conversation_id:
+        return jsonify({"success": False, "error": "conversation_id is required"}), 400
+    conv = history_service.get_conversation(
+        conversation_id, domain=HISTORY_DOMAIN, with_steps=True)
+    if conv is None:
+        return jsonify({"success": False, "error": "Conversation not found"}), 404
+
+    try:
+        session["nw_conversation_id"] = conversation_id
+        turns = conv.get("turns") or []
+        sleep_path = (conv.get("log_path") or "").strip()
+        log_exists = bool(sleep_path) and os.path.exists(sleep_path)
+
+        agent = _get_or_create_agent()
+        agent.reset_conversation()
+        skills = []
+        if log_exists:
+            agent.current_log_path = sleep_path
+            issue = conv.get("issue") if isinstance(conv.get("issue"), dict) else {}
+            allowed = {"case_nbr", "subject", "description", "issue_type", "attachment_time"}
+            try:
+                agent.prime_with_context(**{k: v for k, v in issue.items()
+                                            if k in allowed and isinstance(v, str)})
+            except Exception as exc:
+                print(f"[nw history] prime_with_context skipped: {exc}")
+            skills = agent.get_skill_descriptions()
+        # Follow-ups continue from what was said, the analysis report included.
+        for turn in turns:
+            asked = (turn.get("user_message") or "").strip()
+            if asked:
+                agent.conversation_history.append({"role": "user", "content": asked})
+            answer = history_service.assistant_text_from_result(turn.get("result"))
+            if answer:
+                agent.conversation_history.append({"role": "assistant", "content": answer})
+
+        return jsonify({
+            "success": True,
+            "conversation_id": conversation_id,
+            "title": conv.get("title") or "Conversation",
+            "turns": turns,
+            "running": False,
+            "log_path": sleep_path,
+            "log_exists": log_exists,
+            "driver_log_path": conv.get("driver_log_path") or "",
+            "skills": skills,
+        })
+    except Exception as e:
+        traceback.print_exc()
+        return jsonify({"success": False, "error": str(e)}), 500
 
 
 # The module above is now a domain adapter: its functions retain BT/Wi-Fi/NW
@@ -985,8 +933,25 @@ _SKILL_APPEND_HANDLERS = build_skill_append_handlers(SkillAppendContext(
     set_active_source=_set_active_source,
 ))
 
+# Browse, skill reload, Back to Avatar and the History list/rename/pin/delete
+# endpoints are the shared ones. NW's own chat_stop and history_load (above)
+# win over the shared versions.
+_SHARED_HANDLERS = build_shared_handlers(SharedRouteContext(
+    domain=HISTORY_DOMAIN,
+    agent_config_attr="nw_analysis_agent",
+    get_agent=_get_or_create_agent,
+    session_agents=_chatbot_instances,
+    browse_filetypes=(
+        ("Sleep Study report / driver log", "*.html *.htm *.log *.LOG"),
+        ("All files", "*.*"),
+    ),
+    load_skills_from_yaml=load_skills_from_yaml,
+    gather_domain=GATHER_DOMAIN,
+))
+
 _NW_ANALYSIS_HANDLERS = handler_map(
-    {**globals(), **_SKILL_APPEND_HANDLERS}, _NW_ANALYSIS_CAPABILITIES)
+    {**_SHARED_HANDLERS, **globals(), **_SKILL_APPEND_HANDLERS},
+    _NW_ANALYSIS_CAPABILITIES)
 nw_analysis_bp = create_chatbot_blueprint(ChatbotBlueprintConfig(
     name="nw_analysis",
     import_name=__name__,

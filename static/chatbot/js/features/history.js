@@ -221,6 +221,8 @@
         // Guarantee the chat box is typeable again, regardless of any state the
         // previous (possibly still-running) analysis left behind.
         _unlockChatInput();
+        // A profile whose inputs are not the log box (NW) clears its own.
+        if (typeof onHistoryNewConversation === 'function') onHistoryNewConversation();
         switchSidebarView('controls');
         loadHistoryList();
     }
@@ -863,6 +865,8 @@
             } else if (data.log_path) {
                 if (st) showStatus(st, '⚠ Original log not found — viewing history only.', 'warn');
             }
+            // A profile whose inputs are not the log box (NW) restores its own.
+            if (typeof onHistoryConversationLoaded === 'function') onHistoryConversationLoaded(data);
 
             // Restore this conversation's own unsent draft (chat-box text +
             // Issue Time + log source). Called AFTER the server-side restore so

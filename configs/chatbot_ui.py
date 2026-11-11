@@ -16,6 +16,8 @@ _COMMON_FEATURES = {
     # what main shipped too.
     "skill_append": False,
     "sleepstudy": False,
+    # POST /prepare: download_result handing a decoded log to the agent.
+    "prepare": True,
 }
 
 BT_FEEDBACK_CONCLUSIONS = [
@@ -233,8 +235,11 @@ NW_UI = {
     },
     "features": {
         **_COMMON_FEATURES,
+        "sidebar_toggle": True,
+        "history": True,
         "skill_append": True,
         "sleepstudy": True,
+        "prepare": False,
     },
 }
 

@@ -35,7 +35,9 @@ ROUTE_SPECS: tuple[RouteSpec, ...] = (
     RouteSpec("/chat", "chat", ("POST",)),
     RouteSpec("/chat/stop", "chat_stop", ("POST",)),
     RouteSpec("/reset", "reset", ("POST",)),
-    RouteSpec("/prepare", "prepare", ("POST",)),
+    # Hands a decoded Wi-Fi/BT log over from download_result. NW reads a
+    # Sleep Study report instead, so it switches this group off.
+    RouteSpec("/prepare", "prepare", ("POST",), "prepare"),
     RouteSpec("/browse_yaml", "browse_yaml", ("GET",)),
     RouteSpec("/load_skills_yaml", "load_skills_yaml_route", ("POST",)),
     RouteSpec("/reload_from_shared", "reload_from_shared", ("POST",)),
@@ -140,12 +142,6 @@ ROUTE_SPECS: tuple[RouteSpec, ...] = (
         "prompt_editor",
     ),
     RouteSpec("/prompts/upload", "prompts_upload", ("POST",), "prompt_editor"),
-    RouteSpec(
-        "/set_log_sleepstudy",
-        "set_log_sleepstudy",
-        ("POST",),
-        "sleepstudy",
-    ),
     RouteSpec(
         "/analyze_sleepstudy",
         "analyze_sleepstudy",

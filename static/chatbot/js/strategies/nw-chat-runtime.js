@@ -1,11 +1,9 @@
-    // NW (Wi-Fi log + sleepstudy) chat runtime.
+    // NW (Sleep Study) chat runtime.
     //
-    // NW has no issue-time picker, no conversation history and no feedback
-    // widget, so it overrides the two flows that depend on them. Everything
-    // else — setLog / browseLog / copyLogPath / appendReport / appendIncidentTag
-    // — comes from chat-runtime-base.js unchanged, which is what keeps the Log
-    // File box behaving exactly like BT's and Wi-Fi's (transient "✔ Log loaded"
-    // confirmation instead of a permanent green line echoing the full path).
+    // NW has no issue-time picker and no feedback widget, so it overrides the
+    // send flow that depends on them. Follow-up questions are asked about the
+    // loaded Sleep Study report; each turn is saved to NW's History, and the
+    // conversation id comes back on 'done' so the History list can mark it.
     class NwChatRuntimeStrategy extends ChatRuntimeStrategyBase {}
 
     NwChatRuntimeStrategy.prototype.sendMessage = async function () {
@@ -54,6 +52,7 @@
                 } else if (evt.type === 'done') {
                     removeTyping();
                     const result = evt.result;
+                    noteNwConversation(result);
                     if (result && result.type === 'report') {
                         card.collapse();
                         appendReport(result.data, '📊 Analysis Report', result.issue_time || null);
@@ -88,45 +87,6 @@
         } finally {
             removeTyping();
             setSendBtnSendMode();
-        }
-    };
-
-    NwChatRuntimeStrategy.prototype.tryAutoAnalyzeOnLoad = async function () {
-        if (autoAnalyzeTriggered) return;
-
-        const suggestedLog = document.getElementById('log-path-input').value.trim();
-        const autoRun = new URLSearchParams(window.location.search).get('auto_run');
-        const shouldAutoRun = (autoRun === 'analyze_all') || !!suggestedLog;
-
-        if (!shouldAutoRun || !suggestedLog) return;
-
-        autoAnalyzeTriggered = true;
-
-        try {
-            await setLog(); // load log file first
-
-            // Wait for state synchronization
-            let retries = 0;
-            while ((!logLoaded || !skillsLoaded) && retries < 5) {
-                await new Promise(resolve => setTimeout(resolve, 250));
-                retries += 1;
-            }
-
-            const contextRes = await fetch(`${this.api}/get_issue_context`);
-            const contextData = await contextRes.json();
-            const question = contextData.description;
-
-            // NW auto-SENDS (the full agents only pre-fill) so the turn is
-            // recorded through the normal chat path.
-            setTimeout(() => {
-                const input = document.getElementById('user-input');
-                if (input) input.value = question || '🔍 Run full multi-skill analysis';
-                sendMessage();
-            }, 400);
-
-        } catch (err) {
-            autoAnalyzeTriggered = false;
-            console.error('[Auto-Analysis] Failed:', err);
         }
     };
 

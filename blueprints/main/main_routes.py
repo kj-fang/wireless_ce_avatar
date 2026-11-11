@@ -133,7 +133,8 @@ def render_case_form():
     
     return render_template('index.html', 
                          clipboard_text=clipboard_text,
-                         wireless_topics=wireless_topics)
+                         wireless_topics=wireless_topics,
+                         dashboard_now=datetime.now())
 
 def handle_case_submission():
     """Submit IPS number"""

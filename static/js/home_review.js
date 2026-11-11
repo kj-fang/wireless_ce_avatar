@@ -112,8 +112,24 @@
         return '<span class="review-pill ' + style + '" title="' + escapeHtml(title) + '">' + escapeHtml(text) + '</span>';
     }
 
+    function renderGreeting(now = new Date()) {
+        const title = document.getElementById('workspace-title');
+        if (!title) return;
+        const hour = now.getHours();
+        const greeting = hour < 12 ? 'Good morning' : hour < 18 ? 'Good afternoon' : 'Good evening';
+        const name = login.status === 'signed_in' ? String(login.identity?.name || '').trim() : '';
+        title.textContent = greeting + (name ? ', ' + name : '');
+    }
+
     function renderLogin() {
+        renderGreeting();
         const signedIn = login.status === 'signed_in' && login.identity;
+        const profileName = element('profile-name');
+        const profileInitials = element('profile-initials');
+        if (profileName) profileName.textContent = signedIn ? login.identity.name : 'IPS account';
+        if (profileInitials) profileInitials.textContent = signedIn
+            ? String(login.identity.name || '').trim().split(/\s+/).slice(0, 2).map(part => part[0] || '').join('').toUpperCase()
+            : 'IPS';
         element('login-badge').textContent = signedIn ? 'IPS: ' + login.identity.name
             : login.status === 'signing_in' ? 'IPS: signing in...' : 'IPS: not signed in';
         element('login-badge').className = 'review-pill ' + (signedIn ? 'good' : 'warn');
@@ -155,18 +171,22 @@
         if (queueLocked) return;
         const sequence = ++queueRequest;
         const params = new URLSearchParams();
+        const everyone = element('everyone').checked;
         if (element('show-closed').checked) params.set('all', '1');
-        if (element('everyone').checked) {
+        if (everyone) {
             params.set('everyone', '1');
             const owner = element('owner').value.trim();
             if (owner) params.set('owner', owner);
         }
         element('queue-message').textContent = 'Loading cases...';
+        if (!everyone && element('pending-count')) element('pending-count').textContent = '--';
         try {
             const result = await request('queue' + (params.size ? '?' + params : ''));
             if (sequence !== queueRequest) return;
             const tbody = element('queue').querySelector('tbody');
             tbody.replaceChildren();
+            if (!everyone && element('pending-count')) element('pending-count').textContent = result.signed_out
+                ? '--' : (result.items || []).filter(item => item.status === 'pending_review').length;
             element('queue-message').textContent = result.signed_out
                 ? (login.status === 'signing_in' ? 'Signing in to IPS...'
                     : 'Sign in to IPS to view your cases, or select everyone\'s cases.')
@@ -546,5 +566,7 @@
         loadQueue();
     });
     element('owner').addEventListener('change', loadQueue);
+    renderGreeting();
+    setInterval(renderGreeting, 60000);
     signIn(false);
 })();

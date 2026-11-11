@@ -101,9 +101,23 @@ class LogSegment:
     kind: str                     # "wrt_wifilog" | "wifi_etl"
     start: datetime
     end: Optional[datetime]
+    # Where each edge was read from, so a person can check the time a file is
+    # said to cover: its own name, the next file's name, or a line inside it.
+    start_from: str = ""
+    end_from: str = ""
 
     def overlaps(self, lo: datetime, hi: datetime) -> bool:
         return self.start < hi and (self.end is None or self.end > lo)
+
+    def describe(self) -> dict:
+        return {
+            "file": os.path.basename(self.path),
+            "path": self.path,
+            "start": _fmt(self.start),
+            "end": _fmt(self.end),
+            "start_from": self.start_from,
+            "end_from": self.end_from,
+        }
 
 
 def _wifilog_start(name: str) -> Optional[datetime]:
@@ -214,7 +228,8 @@ def discover_driver_logs(path: str) -> tuple[dict[str, list[LogSegment]], list[s
                     "expected a WRT WiFiLog or a decoded Wi-Fi ETL log.")
                 continue
             found.setdefault(ssa.DEVICE_WIFI, []).append(
-                LogSegment(f, ssa.DEVICE_WIFI, "wifi_etl", first, last))
+                LogSegment(f, ssa.DEVICE_WIFI, "wifi_etl", first, last,
+                           "first timestamped line", "last timestamped line"))
 
     # Rolling files hand over to each other, so each one runs until the next
     # one opens. Only the newest has to be read to know where it ends.
@@ -222,10 +237,13 @@ def discover_driver_logs(path: str) -> tuple[dict[str, list[LogSegment]], list[s
     for i, (start, f) in enumerate(wifilogs):
         if i + 1 < len(wifilogs):
             end = wifilogs[i + 1][0]
+            end_from = "next file's name (" + os.path.basename(wifilogs[i + 1][1]) + ")"
         else:
             end = _wifilog_last_time(f, start)
+            end_from = "last line of the file"
         found.setdefault(ssa.DEVICE_WIFI, []).append(
-            LogSegment(f, ssa.DEVICE_WIFI, "wrt_wifilog", start, end))
+            LogSegment(f, ssa.DEVICE_WIFI, "wrt_wifilog", start, end,
+                       "file name", end_from))
 
     if os.path.isdir(path) and not found:
         warnings.append(f"No WiFiLog--*.LOG files under {path}.")
@@ -245,6 +263,27 @@ def coverage_of(segments: list[LogSegment], lo: datetime, hi: datetime) -> tuple
     slack = timedelta(minutes=1)
     full = first <= lo + slack and (last is None or last >= hi - slack)
     return ("full" if full else "partial"), hits
+
+
+def check_driver_log(path: str, device: str, window_start: str, window_end: str) -> dict:
+    """
+    Whether one driver log covers a time point's window, and what time span
+    each overlapping file covers and where that span was read from. For the
+    page to show under a path the user typed or picked.
+    """
+    lo = datetime.strptime(window_start, "%m/%d/%Y %H:%M:%S")
+    hi = datetime.strptime(window_end, "%m/%d/%Y %H:%M:%S")
+    index, warnings = discover_driver_logs(path)
+    segments = index.get(device, [])
+    coverage, hits = coverage_of(segments, lo, hi)
+    return {
+        "coverage": coverage,
+        "files": [s.describe() for s in hits],
+        # When nothing overlaps, the span the log does cover says how far off it is.
+        "log_span": ({"start": _fmt(segments[0].start), "end": _fmt(segments[-1].end)}
+                     if segments else None),
+        "warnings": warnings,
+    }
 
 
 # ══════════════════════════════════════════════════════════════════════════════
@@ -351,6 +390,7 @@ class TimePoint:
     sleep_summary: str = ""
     issue_description: str = ""
     driver_log_path: str = ""     # suggested by plan(), confirmed by the user
+    driver_log_files: list = field(default_factory=list)   # LogSegment.describe() of the hits
     excerpt_path: str = ""
     excerpt_lines: int = 0
     driver_log_sources: list = field(default_factory=list)
@@ -610,6 +650,7 @@ def plan(
                                            p.window_start, p.window_end)
             if hits:
                 p.driver_log_path = hits[0].path
+                p.driver_log_files = [s.describe() for s in hits]
             else:
                 p.status = STATUS_NO_LOG
                 p.message = (f"No {DEVICE_LABELS[p.device]} driver log under the report's "

@@ -155,6 +155,12 @@ ROUTE_SPECS: tuple[RouteSpec, ...] = (
         "sleepstudy",
     ),
     RouteSpec(
+        "/sleepstudy_driver_check",
+        "sleepstudy_driver_check",
+        ("POST",),
+        "sleepstudy",
+    ),
+    RouteSpec(
         "/analyze_sleepstudy_driver",
         "analyze_sleepstudy_driver",
         ("POST",),

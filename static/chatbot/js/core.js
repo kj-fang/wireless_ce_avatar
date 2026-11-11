@@ -575,7 +575,10 @@
 // but only when there is something to lose. A page with no log loaded has
 // nothing to confirm and should not nag.
 window.confirmLeaveChatbot = function () {
-    const path = (document.getElementById('log-path-input') || {}).value || '';
+    // NW has no log box; its Sleep Study report box stands in for it.
+    const box = document.getElementById('log-path-input')
+             || document.getElementById('sleepstudy-path-input');
+    const path = (box || {}).value || '';
     if (!path.trim()) return true;
     return confirm(
         'Leave the analysis?\n\n'

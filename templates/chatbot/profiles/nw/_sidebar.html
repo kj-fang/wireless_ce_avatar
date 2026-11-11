@@ -9,12 +9,14 @@
 <div class="sidebar-section">
     <h6>🛌 Sleep Study</h6>
     <div class="log-input-group">
+        <!-- Loads on Enter, on leaving the box and on picking a file, like the
+             other chatbots' log box: there is no separate Load button. -->
         <input id="sleepstudy-path-input" type="text"
                placeholder="Full path to sleepstudy file…"
-               onkeydown="if(event.key==='Enter'){event.preventDefault();setSleepstudy();}">
+               onkeydown="if(event.key==='Enter'){event.preventDefault();setSleepstudy();}"
+               onchange="setSleepstudy()">
         <button class="btn-browse" onclick="browseSleepstudy()" title="Browse for file">📁</button>
     </div>
-    <button class="btn-set-log" style="width:100%;margin-top:6px;" onclick="setSleepstudy()">Load</button>
     <div id="sleepstudy-status" class="log-status"></div>
 </div>
 

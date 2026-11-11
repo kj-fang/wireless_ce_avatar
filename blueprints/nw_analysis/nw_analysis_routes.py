@@ -508,6 +508,24 @@ def sleepstudy_plan():
         return jsonify({"success": False, "error": f"{type(exc).__name__}: {exc}"}), 500
 
 
+def sleepstudy_driver_check():
+    """
+    Re-check one time point after the user changes its driver log.
+    Request JSON: { "path", "device", "window_start", "window_end" }
+    (the window as /sleepstudy_plan returned it).
+    """
+    data = request.get_json(silent=True) or {}
+    path = (data.get("path") or "").strip()
+    if not path or not os.path.exists(path):
+        return jsonify({"success": False, "error": f"File not found: {path}"}), 400
+    try:
+        return jsonify({"success": True, **sleepstudy_pipeline.check_driver_log(
+            path, data.get("device") or "wifi",
+            data.get("window_start") or "", data.get("window_end") or "")})
+    except Exception as exc:
+        return jsonify({"success": False, "error": f"{type(exc).__name__}: {exc}"}), 400
+
+
 # ------------------------------------------------------------------
 # API: sleepstudy + driver logs (SSE stream)
 #

@@ -582,8 +582,37 @@ POINT_ANSWER_CONTRACT = """Classify the session into exactly ONE scenario:
 - Neither is clearly supported by the evidence: answer "Please contact Intel Wi-Fi team".
 
 Start root_cause_summary with exactly this line:
-Scenario: <A | B | Please contact Intel Wi-Fi team> | Dominant wake cause: <OS job | wake on packet | key or user | timer | app traffic | other> -- <detail>
+Scenario: <A | B | Please contact Intel Wi-Fi team> | Dominant wake cause: <NDIS / OS request | wake on packet | wake on key or user | timer | app traffic | other> -- <detail>
 then list each wake you found with its time and trigger."""
+
+
+# The dominant wake cause of a session, in the categories the per-session
+# answer uses (POINT_ANSWER_CONTRACT), each with the words that identify it
+# when an answer phrases it loosely. First match wins, so the order matters:
+# "wake on packet" must not be taken for an OS request.
+WAKE_CAUSES = (
+    ("Wake on packet", ("packet", "wol", "wake on lan", "pattern")),
+    ("Wake on key / user", ("key", "user", "button", "lid", "keyboard", "touch")),
+    ("NDIS / OS request", ("ndis", "oid", "os request", "os job", "wificx", "job")),
+    ("App traffic", ("app",)),
+    ("Timer", ("timer",)),
+)
+
+
+def dominant_cause(text: str) -> tuple[str, str]:
+    """(category, detail) from an answer's 'Dominant wake cause: X -- detail'.
+    ('Unknown', '') when the answer gives none."""
+    m = re.search(r"Dominant wake cause\s*:\s*(.+)", str(text or ""))
+    if not m:
+        return "Unknown", ""
+    line = m.group(1).strip()
+    parts = re.split(r"\s+(?:--|—|–|-)\s+", line, maxsplit=1)
+    label = parts[0].strip(" *|").lower()
+    detail = parts[1].strip() if len(parts) > 1 else ""
+    for name, words in WAKE_CAUSES:
+        if any(w in label for w in words):
+            return name, detail
+    return "Other", detail or line
 
 
 def _fill(text: str, values: dict) -> str:
@@ -744,29 +773,38 @@ def _issue_description(point: TimePoint, threshold: float,
 
 
 def render_point_finding(p: dict) -> str:
-    """One time point as a short finding, not a report: what Sleep Study says
-    woke the device, and the dominant wake cause the agent found."""
-    head = (f"**#{p['index']} Session {p['session_id']} · {p['device_label']}** · "
-            f"{p['window_start']} → {p['window_end']} · SW {_pct(p['sw_drip_pct'])} · "
-            f"`{p['status']}`")
-    out = [head]
-    if p["message"]:
-        out.append(f"> {p['message']}")
-    wakes = [w for e in (p.get("wake_evidence") or {}).get("device_entries") or [] for w in e["wakes"]]
-    if wakes:
-        out.append("Woken by: " + "; ".join(
-            ", ".join(f"{k.replace('WiFiJob', '')} {v}" for k, v in w["values"].items()
-                      if k not in ("[Name]", "[Wake Session Time Range]"))
-            for w in wakes))
-    out.append(f"Report says: {html_verdict(p.get('wake_evidence') or {})}")
+    """
+    One time point as a one-line conclusion -- session, SW DRIPS, and the
+    wake cause the driver log points to -- with everything behind it folded
+    away until opened.
+    """
+    ev = p.get("wake_evidence") or {}
     summary = ""
     if isinstance(p.get("agent_result"), dict) and isinstance(p["agent_result"].get("data"), dict):
         summary = str(p["agent_result"]["data"].get("root_cause_summary") or "")
+    head = f"**#{p['index']} · Session {p['session_id']} · {p['device_label']} · SW {_pct(p['sw_drip_pct'])}**"
+    if p["status"] == STATUS_ANALYZED:
+        cause, detail = dominant_cause(summary)
+        line = f"{head} → **{cause}**" + (f" — {detail}" if detail else "")
+    else:
+        line = f"{head} → not checked (`{p['status']}`)" + (f" — {p['message']}" if p["message"] else "")
+
+    folded = [f"- Window: {p['window_start']} → {p['window_end']}",
+              f"- Report says: {html_verdict(ev)}"]
+    wakes = [w for e in ev.get("device_entries") or [] for w in e["wakes"]]
+    jobs = "; ".join(
+        ", ".join(f"{k.replace('WiFiJob', '')} {v}" for k, v in w["values"].items()
+                  if k not in ("[Name]", "[Wake Session Time Range]"))
+        for w in wakes if w["values"])
+    if jobs:
+        folded.append(f"- Woken by: {jobs}")
+    if p["driver_log_files"]:
+        folded.append("- Driver log: " + ", ".join(f"`{f['file']}`" for f in p["driver_log_files"]))
     if summary:
-        out.append(f"Driver log: {summary}")
-    if p["agent_report"]:
-        out += ["", "<details><summary>Agent detail</summary>", "", p["agent_report"], "</details>"]
-    return "\n\n".join(out)
+        folded += ["", "**Driver log conclusion**", "", summary]
+    if p["agent_report"] and p["agent_report"].strip() != summary.strip():
+        folded += ["", "**Agent detail**", "", p["agent_report"]]
+    return "\n".join([line, "", "<details><summary>Details</summary>", "", *folded, "", "</details>"])
 
 
 # ══════════════════════════════════════════════════════════════════════════════
@@ -1333,32 +1371,67 @@ def _stats_tables(stats: dict, total: int) -> list[str]:
     return out
 
 
+# Appended to the editable sleepstudy_summary prompt: the report puts the
+# conclusion on top and folds the rest, so it has to know where one ends.
+SUMMARY_OUTPUT_CONTRACT = """Begin with one paragraph that starts with "Conclusion:" -- two or three sentences a reader can act on. Then a line containing only ---DETAILS--- and then the sections."""
+_DETAILS_MARK = "---DETAILS---"
+
+
+def _folded(title: str, lines: list[str], open_: bool = False) -> list[str]:
+    """A collapsible block; markdown inside needs the blank lines around it."""
+    return ["", f"<details{' open' if open_ else ''}><summary><b>{title}</b></summary>", "",
+            *lines, "", "</details>"]
+
+
+def cause_table(points: list[dict], findings: dict) -> tuple[list[str], list[str]]:
+    """
+    The driver logs' answer across the checked sessions: each session's
+    wake cause in one line, and the share of sessions per cause.
+    """
+    checked = [p for p in points if p["index"] in findings]
+    if not checked:
+        return [], []
+    per_session, counts = [], {}
+    for p in checked:
+        cause, detail = dominant_cause(findings[p["index"]])
+        counts.setdefault(cause, []).append(p["session_id"])
+        per_session.append(f"{p['index']}. Session {p['session_id']} · SW {_pct(p['sw_drip_pct'])} → "
+                           f"**{cause}**" + (f" — {detail}" if detail else ""))
+    n = len(checked)
+    table = ["| Wake cause (driver log) | Sessions | Share |", "|---|---|---|"]
+    for cause, ids in sorted(counts.items(), key=lambda kv: -len(kv[1])):
+        table.append(f"| **{cause}** | {len(ids)} ({', '.join(str(i) for i in ids)}) | "
+                     f"**{100 * len(ids) // n}%** |")
+    return table, per_session
+
+
 def summarize_run(source: str, points: list[dict], findings: dict,
                   llm_call: Optional[Callable[[str, str], str]] = None,
                   system_prompt: Optional[str] = None,
                   sessions: Optional[dict] = None) -> str:
     """
-    The run's report. `points` are all the wireless time points (TimePoint
-    dicts), `findings` maps the index of each one checked against a driver
-    log to what its turn said (may be empty), and `sessions` is
-    system_sessions(). The counts and tables come from code; the reading of
-    them from one LLM call, with `system_prompt` (the sleepstudy_summary
-    speclet) when given.
+    The run's report. On top, what a reader needs: the conclusion, the wake
+    causes the driver logs found with their share of sessions, and one line
+    per checked session. Everything else -- what the report alone says about
+    every bad session, report against driver log, wake counts, system
+    sessions, the full analysis -- is folded, closed until opened.
+
+    `points` are all the wireless time points (TimePoint dicts), `findings`
+    maps the index of each one checked against a driver log to what its
+    agent concluded (may be empty), and `sessions` is system_sessions().
     """
     from services.chatbot.engine.speclet_defaults import default_speclet
 
     sessions = sessions or {"bad_total": 0, "wireless": 0, "system": 0, "groups": []}
     checked = [p for p in points if p["index"] in findings]
-    out = ["# Sleep Study report",
-           f"_`{source}` · {len(points)} wireless time point(s), "
-           f"{len(checked)} checked against a driver log_"]
 
-    # 1. What the report alone says, about every bad session.
-    html_lines = ["", "## From the Sleep Study report", ""]
+    # The report alone, about every bad session.
+    html_lines = []
     if sessions["bad_total"]:
         html_lines.append(
             f"**{sessions['bad_total']}** bad session(s) on battery: **{sessions['wireless']}** with a "
             f"wireless RED top blocker, **{sessions['system']}** without one (system).")
+    scenario_counts = {}
     if points:
         html_lines += ["", "| # | Session | SW DRIPS | Short device wakes | Report says | Driver log |",
                        "|---|---|---|---|---|---|"]
@@ -1367,29 +1440,23 @@ def summarize_run(source: str, points: list[dict], findings: dict,
                 f"| {p['index']} | {p['session_id']} · {p['device_label']} | {_pct(p['sw_drip_pct'])} | "
                 f"{p.get('short_device_wakes', 0)} | {p.get('html_verdict', '')} | "
                 f"{'checked' if p['index'] in findings else 'not checked'} |")
-        counts = {}
-        for p in points:
             sc = verdict_scenario(p.get("html_verdict", ""))
-            counts[sc] = counts.get(sc, 0) + 1
+            scenario_counts[sc] = scenario_counts.get(sc, 0) + 1
         html_lines += ["", "Report-only scenarios: " + ", ".join(
-            f"{sc} {n}/{len(points)} ({100 * n // len(points)}%)" for sc, n in counts.items())]
+            f"{sc} {k}/{len(points)} ({100 * k // len(points)}%)" for sc, k in scenario_counts.items())]
+    system_lines = []
     if sessions["groups"]:
-        html_lines += ["", "**System sessions** (no wireless RED blocker; not a wireless driver issue)", "",
-                       "| Top blocker | Sessions | Worst SW DRIPS |", "|---|---|---|"]
-        html_lines += [f"| {g['blocker']} | {len(g['sessions'])} | {_pct(g['worst_sw'])} |"
-                       for g in sessions["groups"]]
-    out += html_lines
+        system_lines = ["Not a wireless driver issue; no driver log was read for these.", "",
+                        "| Top blocker | Sessions | Worst SW DRIPS |", "|---|---|---|"]
+        system_lines += [f"| {g['blocker']} | {len(g['sessions'])} | {_pct(g['worst_sw'])} |"
+                         for g in sessions["groups"]]
 
-    # 2. Report against driver log, for the checked sessions.
-    verdict_lines, rows = _verdict_tables(checked, findings)
-    if verdict_lines:
-        out += ["", "## Checked against the driver log"] + verdict_lines
-
-    # 3. Wake counts from the report, over every wireless time point.
+    verdict_lines, _rows = _verdict_tables(checked, findings)
     stats_lines = _stats_tables(wake_statistics(points), len(points))
-    if stats_lines:
-        out += ["", "## What woke the device (from the report)"] + stats_lines
+    cause_lines, per_session = cause_table(points, findings)
 
+    # One LLM reading, split into the conclusion (top) and the rest (folded).
+    conclusion, analysis = "", ""
     if llm_call is not None and (points or sessions["groups"]):
         blocks = []
         for p in points:
@@ -1404,24 +1471,56 @@ def summarize_run(source: str, points: list[dict], findings: dict,
                 f"Report says: {p.get('html_verdict', '')}",
             ]
             if p["index"] in findings:
-                block += [f"Driver log says (scenario {verdict_scenario(findings[p['index']])}):",
-                          str(findings[p["index"]])[:3000]]
+                cause, _detail = dominant_cause(findings[p["index"]])
+                block += [f"Driver log says (scenario {verdict_scenario(findings[p['index']])}, "
+                          f"wake cause {cause}):", str(findings[p["index"]])[:3000]]
             else:
                 block.append("Not checked against a driver log.")
             blocks.append("\n".join(block))
         system_block = "\n".join(
             f"- {g['blocker']}: {len(g['sessions'])} session(s), worst SW DRIPS {_pct(g['worst_sw'])}"
             for g in sessions["groups"]) or "(none)"
-        user = ("Counts already computed:\n" + "\n".join(html_lines + verdict_lines)
+        user = ("Counts already computed:\n" + "\n".join(html_lines + cause_lines + verdict_lines)
                 + "\n\nWireless sessions:\n\n" + ("\n\n".join(blocks) or "(none)")
                 + "\n\nSystem sessions by top blocker:\n" + system_block)
-        prompt = _fill(system_prompt or default_speclet("nw", "sleepstudy_summary"), _rule_values())
+        prompt = (_fill(system_prompt or default_speclet("nw", "sleepstudy_summary"), _rule_values())
+                  + "\n\n" + SUMMARY_OUTPUT_CONTRACT)
         try:
-            out += ["", "## Analysis", "", llm_call(prompt, user) or "_The summary model returned nothing._"]
+            text = llm_call(prompt, user) or ""
+            if _DETAILS_MARK in text:
+                conclusion, analysis = (t.strip() for t in text.split(_DETAILS_MARK, 1))
+            else:
+                conclusion = text.strip()
         except Exception as exc:
-            out += ["", f"> ⚠️ Summary model failed: {type(exc).__name__}: {exc}"]
+            conclusion = f"> ⚠️ Summary model failed: {type(exc).__name__}: {exc}"
     elif points or sessions["groups"]:
-        out += ["", "> No LLM is configured, so only the counts above are given."]
+        conclusion = "> No LLM is configured, so only the counts below are given."
+
+    # ── Top: what a reader needs ──
+    out = ["## Sleep Study report",
+           f"_`{source}` · {len(points)} wireless time point(s), {len(checked)} checked against a "
+           f"driver log, {sessions['system']} system session(s)_"]
+    if conclusion:
+        out += ["", conclusion]
+    if cause_lines:
+        out += ["", "### What woke the driver (driver log, checked sessions)", "", *cause_lines,
+                "", *per_session]
+    elif points:
+        out += ["", "### What the report alone points to", "",
+                "No session was checked against a driver log. " + ", ".join(
+                    f"Scenario {sc}: {k}/{len(points)}" for sc, k in scenario_counts.items()) + "."]
+
+    # ── Folded: everything behind it ──
+    if analysis:
+        out += _folded("Analysis", [analysis])
+    if verdict_lines:
+        out += _folded("Report vs driver log", verdict_lines)
+    if html_lines:
+        out += _folded("From the Sleep Study report (every bad session)", html_lines)
+    if stats_lines:
+        out += _folded("What woke the device, counted from the report", stats_lines)
+    if system_lines:
+        out += _folded(f"System sessions ({sessions['system']})", system_lines)
     return "\n".join(out)
 
 

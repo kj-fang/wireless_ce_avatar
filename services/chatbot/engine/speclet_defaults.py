@@ -188,11 +188,10 @@ NW_SLEEPSTUDY_SUMMARY = """You are a Modern Standby power analyst for Intel wire
 
 Scenarios: A = activity by OS / app (an App ID or OS job dominates network power or traffic); B = activity by remote (a stream of short wakes raised by the device, NetWakeReasonTypeDevice, from unsolicited inbound traffic); "Please contact Intel Wi-Fi team" = neither is supported, or more than {short_wake_limit} short device wakes in a session.
 
-Write markdown in English, with these sections and nothing else:
-1. **Conclusion**: two or three sentences a reader can act on: is this a wireless driver problem, an app / OS / remote traffic problem, or a platform (system) problem, and how sure is that.
-2. **Driver log check**: for the sessions checked against a driver log, whether the driver log confirmed the report; for each disagreement, why the driver log changed the picture or why it is inconclusive. Say so plainly if no session was checked.
-3. **What keeps waking the driver**: the causes ranked by how many sessions they explain (category: OS job (name it), wake on packet (name the packet or pattern), key or user, timer, app traffic (name the app), unknown), with what to look at in the driver first.
-4. **System sessions**: what the non-wireless blockers suggest and who should look at them. Omit this section when there are none.
+Write markdown in English. Your conclusion goes on top of the report: is this a wireless driver problem, an app / OS / remote traffic problem, or a platform (system) problem, and how sure is that; name the leading wake cause and its share of the checked sessions. After it, these sections and nothing else:
+1. **Driver log check**: for the sessions checked against a driver log, whether the driver log confirmed the report; for each disagreement, why the driver log changed the picture or why it is inconclusive. Say so plainly if no session was checked.
+2. **What keeps waking the driver**: the causes ranked by how many sessions they explain (NDIS / OS request (name the job or OID), wake on packet (name the packet or pattern), wake on key or user, timer, app traffic (name the app), unknown), with what to look at in the driver first.
+3. **System sessions**: what the non-wireless blockers suggest and who should look at them. Omit this section when there are none.
 
 The counts are given; quote them, do not recount. Use only the evidence given. When a cause is unclear say so; do not invent numbers."""
 

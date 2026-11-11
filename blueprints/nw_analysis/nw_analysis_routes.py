@@ -307,22 +307,22 @@ def set_log():
 # History: one conversation per loaded report
 #
 # The analysis is the conversation's first turn and follow-up questions are
-# the next ones, all under nw_conversation_id. The report and driver log are
-# kept on the snapshot so reopening it puts both paths back in the sidebar.
+# the next ones, all under nw_conversation_id. The report path and the driver
+# log chosen for each time point are kept on the snapshot.
 # ------------------------------------------------------------------
-def _sleepstudy_request_text(sleep_path: str, driver_path: str = "") -> str:
+def _sleepstudy_request_text(sleep_path: str, driver_logs: dict | None = None) -> str:
     """The user turn a Sleep Study analysis is saved as. nw.js shows the same."""
     title = "Sleep Study: " + os.path.basename(sleep_path)
-    if driver_path:
-        title += " × " + os.path.basename(driver_path.rstrip("\\/"))
+    if driver_logs:
+        title += f" — {len(driver_logs)} time point(s)"
     lines = [title, f"Report: `{sleep_path}`"]
-    if driver_path:
-        lines.append(f"Driver log: `{driver_path}`")
+    for index, path in sorted((driver_logs or {}).items(), key=lambda kv: int(kv[0])):
+        lines.append(f"#{index} → `{path}`" if path else f"#{index} → (no driver log)")
     return "\n".join(lines)
 
 
 def _record_nw_turn(user_message: str, result: dict, steps: list,
-                    sleep_path: str = "", driver_path: str | None = None) -> str:
+                    sleep_path: str = "", driver_logs: dict | None = None) -> str:
     """Save one turn to NW's History and return its conversation id. Never raises."""
     conversation_id = _ensure_nw_conversation_id()
     try:
@@ -336,7 +336,7 @@ def _record_nw_turn(user_message: str, result: dict, steps: list,
             log_path=sleep_path,
             domain=HISTORY_DOMAIN,
             steps=steps,
-            extra=None if driver_path is None else {"driver_log_path": driver_path},
+            extra=None if driver_logs is None else {"driver_logs": driver_logs},
         )
     except Exception as exc:
         print(f"[nw history] record failed: {exc}")
@@ -446,7 +446,7 @@ def analyze_sleepstudy():
                     result = {"type": "text", "data": event["data"]}
                     _remember_analysis(request_text, event["data"])
                     result["conversation_id"] = _record_nw_turn(
-                        request_text, dict(result), steps, sleep_path, driver_path="")
+                        request_text, dict(result), steps, sleep_path)
                     sse = {"type": "done", "result": result}
                 elif kind == "error":
                     sse = {"type": "error", "content": event["content"]}
@@ -487,30 +487,53 @@ def analyze_sleepstudy():
 
 
 # ------------------------------------------------------------------
-# API: sleepstudy + driver log (SSE stream)
+# API: Sleep Study time points + suggested driver logs (no LLM)
+#
+# Step one of two: the page shows these so the user can confirm or change
+# the driver log of each time point before /analyze_sleepstudy_driver runs.
+# ------------------------------------------------------------------
+def sleepstudy_plan():
+    """Request JSON: { "log_path": "<sleepstudy-report.html>" }"""
+    data = request.get_json(silent=True) or {}
+    sleep_path = (data.get("log_path") or "").strip()
+    if not sleep_path or not os.path.exists(sleep_path):
+        return jsonify({"success": False, "error": f"File not found: {sleep_path}"}), 400
+    blocked = check_ips_service.blocking_state(sleep_path)
+    if blocked:
+        return jsonify(blocked), 428
+    try:
+        return jsonify({"success": True, **sleepstudy_pipeline.plan(sleep_path)})
+    except Exception as exc:
+        traceback.print_exc()
+        return jsonify({"success": False, "error": f"{type(exc).__name__}: {exc}"}), 500
+
+
+# ------------------------------------------------------------------
+# API: sleepstudy + driver logs (SSE stream)
 #
 # The HTTP adapter for services/sleepstudy_pipeline.py, which picks the worst
-# sessions, cuts the driver log around each one and runs the Wi-Fi or BT
+# sessions, cuts each one's driver log around it and runs the Wi-Fi or BT
 # agent on it. Everything that is not HTTP lives there, so another entry
 # point (an MCP server) can drive the same pipeline.
 # ------------------------------------------------------------------
 def analyze_sleepstudy_driver():
     """
     Request JSON: {
-      "log_path":        "<sleepstudy-report.html>",
-      "driver_log_path": "<WRT folder, a WiFiLog file, or a decoded Wi-Fi log>"
+      "log_path":    "<sleepstudy-report.html>",
+      "driver_logs": {"<point index>": "<WRT folder, a WiFiLog file, a decoded
+                      Wi-Fi log, or '' for none>", ...}
     }
     """
     data = request.get_json(silent=True) or {}
     sleep_path = (data.get("log_path") or "").strip()
-    driver_path = (data.get("driver_log_path") or "").strip()
+    raw_logs = data.get("driver_logs") if isinstance(data.get("driver_logs"), dict) else {}
+    driver_logs = {str(k): str(v or "").strip() for k, v in raw_logs.items()}
 
     def _err(message):
         yield f"data: {json.dumps({'type': 'error', 'content': message}, ensure_ascii=False)}\n\n"
 
-    if not sleep_path or not driver_path:
-        return Response(_err("log_path and driver_log_path are required"),
-                        mimetype="text/event-stream")
+    if not sleep_path:
+        return Response(_err("log_path is required"), mimetype="text/event-stream")
 
     # Same gate as analyze_sleepstudy, for the same reason: checked before
     # the stream opens, where a 428 is still a status the client can act on.
@@ -518,8 +541,8 @@ def analyze_sleepstudy_driver():
     if blocked:
         return jsonify(blocked), 428
 
-    for path in (sleep_path, driver_path):
-        if not os.path.exists(path):
+    for path in [sleep_path, *driver_logs.values()]:
+        if path and not os.path.exists(path):
             return Response(_err(f"File not found: {path}"), mimetype="text/event-stream")
 
     out_dir = os.path.join(
@@ -536,7 +559,7 @@ def analyze_sleepstudy_driver():
         status, error_code = "success", ""
         steps = []
         try:
-            for event in sleepstudy_pipeline.run_pipeline(sleep_path, driver_path, out_dir=out_dir):
+            for event in sleepstudy_pipeline.run_pipeline(sleep_path, driver_logs, out_dir=out_dir):
                 kind = event["type"]
                 if kind == "step":
                     sse = {"type": "step", "step": {"content": event["content"]}}
@@ -547,12 +570,12 @@ def analyze_sleepstudy_driver():
                             spend[key] += value
                     continue
                 elif kind == "done":
-                    request_text = _sleepstudy_request_text(sleep_path, driver_path)
+                    request_text = _sleepstudy_request_text(sleep_path, driver_logs)
                     report = event["data"]["markdown"]
                     _remember_analysis(request_text, report)
                     conversation_id = _record_nw_turn(
                         request_text, {"type": "text", "data": report},
-                        steps, sleep_path, driver_path)
+                        steps, sleep_path, driver_logs)
                     sse = {"type": "done", "result": {
                         "type": "text",
                         "data": report,
@@ -895,7 +918,7 @@ def history_load():
             "running": False,
             "log_path": sleep_path,
             "log_exists": log_exists,
-            "driver_log_path": conv.get("driver_log_path") or "",
+            "driver_logs": conv.get("driver_logs") or {},
             "skills": skills,
         })
     except Exception as e:

@@ -4,19 +4,15 @@
         <!-- View 1: live controls (Sleep Study / Skills / Quick questions) -->
         <div id="sidebar-controls-view">
 
-<!-- Sleep Study report, and optionally the driver log to analyse it against -->
+<!-- Sleep Study report. The driver log of each time point is chosen in the
+     chat once the report is read (nw.js renderPlanCard). -->
 <div class="sidebar-section">
     <h6>🛌 Sleep Study</h6>
     <div class="log-input-group">
         <input id="sleepstudy-path-input" type="text"
-               placeholder="Full path to sleepstudy file…">
+               placeholder="Full path to sleepstudy file…"
+               onkeydown="if(event.key==='Enter'){event.preventDefault();setSleepstudy();}">
         <button class="btn-browse" onclick="browseSleepstudy()" title="Browse for file">📁</button>
-    </div>
-    <!-- Optional: with a driver log, each bad session is analysed in it -->
-    <div class="log-input-group" style="margin-top:6px;">
-        <input id="driver-log-path-input" type="text"
-               placeholder="Driver log: WRT folder or WiFiLog file (optional)…">
-        <button class="btn-browse" onclick="browseDriverLog()" title="Browse for a WiFiLog file">📁</button>
     </div>
     <button class="btn-set-log" style="width:100%;margin-top:6px;" onclick="setSleepstudy()">Load</button>
     <div id="sleepstudy-status" class="log-status"></div>

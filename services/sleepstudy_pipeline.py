@@ -9,9 +9,10 @@ WHICH device kept it awake. A driver log says WHY. This module joins the two:
      MAX_TIME_POINTS of them and at most PER_DEVICE_LIMIT per device family.
   2. Turn each session into a time window: the session's own start..end,
      padded, and capped so a long session cannot pull in hours of log.
-  3. Find the driver log that covers that window. A window the log does not
-     cover is reported as such and never reaches the LLM -- an agent handed
-     the wrong part of a log still writes a confident answer.
+  3. Suggest, per time point, the driver log under the report's folder that
+     covers its window; the user confirms or changes it (plan()). A window
+     its log does not cover is reported as such and never reaches the LLM --
+     an agent handed the wrong part of a log still writes a confident answer.
   4. Cut the covered lines into a small excerpt with full dates, and run the
      same agent the Wi-Fi or BT chatbot uses on it, primed with the session as
      the issue description and the window as the issue time.
@@ -349,6 +350,7 @@ class TimePoint:
     message: str = ""
     sleep_summary: str = ""
     issue_description: str = ""
+    driver_log_path: str = ""     # suggested by plan(), confirmed by the user
     excerpt_path: str = ""
     excerpt_lines: int = 0
     driver_log_sources: list = field(default_factory=list)
@@ -379,6 +381,10 @@ class TimePoint:
 
 def _fmt(dt: Optional[datetime]) -> str:
     return dt.strftime("%m/%d/%Y %H:%M:%S") if dt else ""
+
+
+def _basename(path: str) -> str:
+    return os.path.basename(path.rstrip("\\/")) or path
 
 
 def _pct(v: Optional[float]) -> str:
@@ -538,10 +544,91 @@ def _run_agent(point: TimePoint, agent, max_steps: int, on_step: Callable[[str],
 # ══════════════════════════════════════════════════════════════════════════════
 #  PIPELINE
 # ══════════════════════════════════════════════════════════════════════════════
+#
+# Two steps, so a person can check which driver log goes with which session
+# before any tokens are spent:
+#
+#   plan()          reads the report, picks the time points and suggests, for
+#                   each one, the driver log under the report's folder that
+#                   covers it. No LLM.
+#   run_pipeline()  takes a driver log per time point (as suggested, edited,
+#                   or one path for all of them) and analyses each one.
+
+def _select(html_path: str, sw_threshold: float, max_points: int, per_device: int):
+    payload = ssa.load_sleepstudy(html_path)
+    collected = ssa.collect_sessions_from_payload(
+        payload, source=html_path, devices=ssa.DEVICE_ORDER,
+        drip_threshold=sw_threshold, drip_metric=ssa.DRIP_METRIC_SW,
+    )
+    raw_by_id = {s.get("SessionId"): s for s in payload.get("ScenarioInstances") or []}
+    points = select_time_points(collected["sessions"], max_points, per_device)
+    for p in points:
+        p.sleep_summary = _sleep_summary(p, raw_by_id.get(p.session_id))
+        p.issue_description = _issue_description(p, sw_threshold)
+    return collected, points
+
+
+def _criteria(collected: dict, max_points: int, per_device: int) -> dict:
+    return {
+        **collected["criteria"],
+        "max_points": max_points,
+        "per_device_limit": per_device,
+        "window_pad_minutes": WINDOW_PAD.total_seconds() / 60,
+        "window_cap_minutes": WINDOW_CAP.total_seconds() / 60,
+    }
+
+
+def plan(
+    html_path: str,
+    *,
+    search_root: Optional[str] = None,
+    sw_threshold: float = SW_DRIP_THRESHOLD,
+    max_points: int = MAX_TIME_POINTS,
+    per_device: int = PER_DEVICE_LIMIT,
+) -> dict:
+    """
+    Pick the time points and suggest a driver log for each.
+
+    Driver logs are looked for under `search_root` (default: the report's
+    folder, where a WRT capture usually sits next to it). A point's
+    suggestion is the log file covering its window, or "" when none does --
+    the caller then asks the user for one. Raises on an unreadable report.
+    """
+    collected, points = _select(html_path, sw_threshold, max_points, per_device)
+    search_root = search_root or os.path.dirname(os.path.abspath(html_path))
+    log_index, warnings = discover_driver_logs(search_root)
+    for p in points:
+        if p.device not in ANALYZABLE_DEVICES:
+            p.status = STATUS_UNSUPPORTED
+            p.message = (f"{DEVICE_LABELS.get(p.device, p.device)} blocker: classified "
+                         "only; no agent here reads that driver log.")
+        elif p.window_start is None:
+            p.status = STATUS_NOT_COVERED
+            p.message = "The report gives no readable start time for this session."
+        else:
+            p.coverage, hits = coverage_of(log_index.get(p.device, []),
+                                           p.window_start, p.window_end)
+            if hits:
+                p.driver_log_path = hits[0].path
+            else:
+                p.status = STATUS_NO_LOG
+                p.message = (f"No {DEVICE_LABELS[p.device]} driver log under the report's "
+                             "folder covers this window; choose one.")
+    return {
+        "source": html_path,
+        "search_root": search_root,
+        "total_sessions": collected["total_sessions"],
+        "qualifying_count": collected["qualifying_count"],
+        "criteria": _criteria(collected, max_points, per_device),
+        "devices": collected["devices"],
+        "warnings": collected["warnings"] + warnings,
+        "points": [p.to_dict() for p in points],
+    }
+
 
 def run_pipeline(
     html_path: str,
-    driver_log_path: str,
+    driver_logs,
     *,
     agent_factory: Optional[Callable[[str], object]] = default_agent_factory,
     out_dir: Optional[str] = None,
@@ -551,7 +638,7 @@ def run_pipeline(
     max_steps: int = 6,
 ) -> Iterator[dict]:
     """
-    Run the whole pipeline and yield events:
+    Analyse each time point in its own driver log and yield events:
 
       {"type": "step",  "content": <markdown>}     progress
       {"type": "point", "data": <TimePoint dict>}  one finished time point
@@ -559,18 +646,14 @@ def run_pipeline(
                                                    "markdown" and every point
       {"type": "error", "content": <message>}      terminal failure
 
-    `agent_factory=None` is a dry run: every step up to the agent runs, so
-    the selection and the log coverage can be checked without spending tokens.
+    `driver_logs` is one path used for every point, or {point index: path}
+    as plan() suggested and the user confirmed. A point with no path is
+    reported as such and never reaches the LLM. `agent_factory=None` is a dry
+    run: every step up to the agent runs, without spending tokens.
     """
     try:
         yield {"type": "step", "content": f"Loading Sleep Study report: `{html_path}`"}
-        payload = ssa.load_sleepstudy(html_path)
-        collected = ssa.collect_sessions_from_payload(
-            payload, source=html_path, devices=ssa.DEVICE_ORDER,
-            drip_threshold=sw_threshold, drip_metric=ssa.DRIP_METRIC_SW,
-        )
-        raw_by_id = {s.get("SessionId"): s for s in payload.get("ScenarioInstances") or []}
-        points = select_time_points(collected["sessions"], max_points, per_device)
+        collected, points = _select(html_path, sw_threshold, max_points, per_device)
         yield {"type": "step", "content": (
             f"**{collected['total_sessions']}** sessions in the report; "
             f"**{collected['qualifying_count']}** are battery drains with SW DRIPS "
@@ -579,21 +662,20 @@ def run_pipeline(
             f"{per_device} per device)."
         )}
 
-        log_index, log_warnings = discover_driver_logs(driver_log_path)
-        for w in log_warnings:
-            yield {"type": "step", "content": f"⚠️ {w}"}
-        for device, segs in log_index.items():
-            yield {"type": "step", "content": (
-                f"{DEVICE_LABELS.get(device, device)} driver log: {len(segs)} file(s), "
-                f"{_fmt(segs[0].start)} → {_fmt(segs[-1].end)}"
-            )}
+        if isinstance(driver_logs, dict):
+            chosen = {int(k): str(v or "").strip() for k, v in driver_logs.items()}
+        else:
+            chosen = {p.index: str(driver_logs or "").strip() for p in points}
+
+        # Several points usually share one capture, so each path is indexed once.
+        indexed: dict[str, dict[str, list[LogSegment]]] = {}
+        log_warnings: list[str] = []
 
         out_dir = out_dir or tempfile.mkdtemp(prefix="sleepstudy_")
         os.makedirs(out_dir, exist_ok=True)
 
         for p in points:
-            p.sleep_summary = _sleep_summary(p, raw_by_id.get(p.session_id))
-            p.issue_description = _issue_description(p, sw_threshold)
+            p.driver_log_path = chosen.get(p.index, "")
             head = (f"#{p.index} Session {p.session_id} · "
                     f"{DEVICE_LABELS.get(p.device, p.device)} · "
                     f"{_fmt(p.window_start)} → {_fmt(p.window_end)}")
@@ -606,11 +688,22 @@ def run_pipeline(
             elif p.window_start is None:
                 p.status = STATUS_NOT_COVERED
                 p.message = "The report gives no readable start time for this session."
-            elif not log_index.get(p.device):
+            elif not p.driver_log_path:
                 p.status = STATUS_NO_LOG
-                p.message = f"No {DEVICE_LABELS[p.device]} driver log was provided."
+                p.message = f"No {DEVICE_LABELS[p.device]} driver log was chosen for this time point."
             else:
-                p.coverage, hits = coverage_of(log_index[p.device], p.window_start, p.window_end)
+                if p.driver_log_path not in indexed:
+                    found, warns = discover_driver_logs(p.driver_log_path)
+                    indexed[p.driver_log_path] = found
+                    log_warnings.extend(warns)
+                    for w in warns:
+                        yield {"type": "step", "content": f"⚠️ {w}"}
+                    for dev, segs in found.items():
+                        yield {"type": "step", "content": (
+                            f"{DEVICE_LABELS.get(dev, dev)} driver log `{p.driver_log_path}`: "
+                            f"{len(segs)} file(s), {_fmt(segs[0].start)} → {_fmt(segs[-1].end)}")}
+                segments = indexed[p.driver_log_path].get(p.device, [])
+                p.coverage, hits = coverage_of(segments, p.window_start, p.window_end)
                 if p.coverage == "none":
                     p.status = STATUS_NOT_COVERED
                     p.message = "Driver log 沒有涵蓋這段時間 (the driver log does not cover this window)."
@@ -644,16 +737,10 @@ def run_pipeline(
 
         result = {
             "source": html_path,
-            "driver_log": driver_log_path,
+            "driver_logs": sorted({p.driver_log_path for p in points if p.driver_log_path}),
             "total_sessions": collected["total_sessions"],
             "qualifying_count": collected["qualifying_count"],
-            "criteria": {
-                **collected["criteria"],
-                "max_points": max_points,
-                "per_device_limit": per_device,
-                "window_pad_minutes": WINDOW_PAD.total_seconds() / 60,
-                "window_cap_minutes": WINDOW_CAP.total_seconds() / 60,
-            },
+            "criteria": _criteria(collected, max_points, per_device),
             "devices": collected["devices"],
             "warnings": collected["warnings"] + log_warnings,
             "points": [p.to_dict() for p in points],
@@ -671,7 +758,7 @@ def render_markdown(result: dict) -> str:
     out = [
         "# Sleep Study × Driver Log Analysis",
         f"**Report:** `{result['source']}`  ",
-        f"**Driver log:** `{result['driver_log']}`  ",
+        "**Driver log:** " + (", ".join(f"`{d}`" for d in result["driver_logs"]) or "none") + "  ",
         f"**Sessions:** {result['qualifying_count']} of {result['total_sessions']} qualify "
         f"(battery drain, SW DRIPS < {c['drip_threshold_pct']:.0f}%, RED top blocker); "
         f"{len(result['points'])} analysed.",
@@ -688,6 +775,8 @@ def render_markdown(result: dict) -> str:
     for p in result["points"]:
         top = p["blockers"][0]["name"] if p["blockers"] else "-"
         lines = f"{p['excerpt_lines']} lines" if p["excerpt_lines"] else (p["coverage"] or "-")
+        if p["driver_log_path"]:
+            lines = f"{_basename(p['driver_log_path'])}: {lines}"
         out.append(
             f"| {p['index']} | {p['session_id']} ({p['type_label']}) | "
             f"{p['window_start']} → {p['window_end']} | "

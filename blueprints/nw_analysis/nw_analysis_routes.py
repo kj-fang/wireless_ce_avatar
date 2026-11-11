@@ -360,6 +360,57 @@ def _remember_analysis(user_message: str, report: str) -> None:
         pass
 
 
+def _new_spend() -> dict:
+    return {"llm_calls": 0, "input_tokens": 0, "cache_read_tokens": 0,
+            "cache_write_tokens": 0, "output_tokens": 0, "total_tokens": 0}
+
+
+def _one_shot_llm(spend: dict, max_tokens: int = 1500):
+    """
+    (model, llm_call) for a single system+user call on the configured
+    OpenAI-style client, adding each call's tokens to `spend`. llm_call is
+    None when the app has no LLM client. These routes drive the LLM directly
+    rather than through an agent, so they keep their own counters.
+    """
+    llm_helper = app_config.llm_helper
+    llm_client = getattr(llm_helper, "client", None) if llm_helper else None
+    llm_model = getattr(llm_helper, "model", "gpt-4.1") if llm_helper else "gpt-4.1"
+    if llm_client is None:
+        return llm_model, None
+
+    def llm_call(system_prompt: str, user_message: str) -> str:
+        resp = llm_client.chat.completions.create(
+            model=llm_model,
+            messages=[
+                {"role": "system", "content": system_prompt},
+                {"role": "user",   "content": user_message},
+            ],
+            temperature=0.2,
+            max_tokens=max_tokens,
+        )
+        try:
+            u = getattr(resp, "usage", None)
+            if u is not None:
+                def _n(name: str) -> int:
+                    try:
+                        return max(0, int(getattr(u, name, 0) or 0))
+                    except (TypeError, ValueError):
+                        return 0
+                prompt_t, out_t = _n("prompt_tokens"), _n("completion_tokens")
+                cr, cw = _n("cache_read_input_tokens"), _n("cache_creation_input_tokens")
+                spend["llm_calls"] += 1
+                spend["input_tokens"] += prompt_t
+                spend["output_tokens"] += out_t
+                spend["cache_read_tokens"] += cr
+                spend["cache_write_tokens"] += cw
+                spend["total_tokens"] += prompt_t + out_t + cr + cw
+        except Exception:
+            pass
+        return resp.choices[0].message.content or ""
+
+    return llm_model, llm_call
+
+
 # ------------------------------------------------------------------
 # API: analyze sleepstudy via the script (SSE stream)
 # ------------------------------------------------------------------
@@ -395,50 +446,9 @@ def analyze_sleepstudy():
     conversation_id = _ensure_nw_conversation_id()
 
     def event_stream():
-        # Build an llm_call adapter from the configured OpenAI-style client.
-        llm_helper = app_config.llm_helper
-        llm_client = getattr(llm_helper, "client", None) if llm_helper else None
-        llm_model  = getattr(llm_helper, "model", "gpt-4.1") if llm_helper else "gpt-4.1"
-
-        # This route drives the LLM through a local closure rather than the
-        # agent, so it keeps its own counters. One analysis makes many calls.
-        spend = {"llm_calls": 0, "input_tokens": 0, "cache_read_tokens": 0,
-                 "cache_write_tokens": 0, "output_tokens": 0, "total_tokens": 0}
+        spend = _new_spend()
+        llm_model, llm_call = _one_shot_llm(spend)
         started = datetime.now()
-
-        if llm_client is None:
-            llm_call = None
-        else:
-            def llm_call(system_prompt: str, user_message: str) -> str:
-                resp = llm_client.chat.completions.create(
-                    model=llm_model,
-                    messages=[
-                        {"role": "system", "content": system_prompt},
-                        {"role": "user",   "content": user_message},
-                    ],
-                    temperature=0.2,
-                    max_tokens=1500,
-                )
-                try:
-                    u = getattr(resp, "usage", None)
-                    if u is not None:
-                        def _n(name: str) -> int:
-                            try:
-                                return max(0, int(getattr(u, name, 0) or 0))
-                            except (TypeError, ValueError):
-                                return 0
-                        prompt_t, out_t = _n("prompt_tokens"), _n("completion_tokens")
-                        cr, cw = _n("cache_read_input_tokens"), _n("cache_creation_input_tokens")
-                        spend["llm_calls"] += 1
-                        spend["input_tokens"] += prompt_t
-                        spend["output_tokens"] += out_t
-                        spend["cache_read_tokens"] += cr
-                        spend["cache_write_tokens"] += cw
-                        spend["total_tokens"] += prompt_t + out_t + cr + cw
-                except Exception:
-                    pass
-                return resp.choices[0].message.content or ""
-
         status, error_code = "success", ""
         steps = []
         try:
@@ -570,6 +580,60 @@ def sleepstudy_run_start():
 
 
 # ------------------------------------------------------------------
+# API: the run's closing analysis
+#
+# Called once the time points are done. Reads this conversation's point turns
+# back from History, counts what the report says woke the device across them,
+# and has the LLM say what keeps waking the driver, by category. Saved as the
+# conversation's last turn.
+# ------------------------------------------------------------------
+def sleepstudy_summary():
+    """Request JSON: { "log_path": "<sleepstudy-report.html>" }"""
+    data = request.get_json(silent=True) or {}
+    sleep_path = (data.get("log_path") or "").strip()
+    if not sleep_path or not os.path.exists(sleep_path):
+        return jsonify({"success": False, "error": f"File not found: {sleep_path}"}), 400
+    conversation_id = _ensure_nw_conversation_id()
+    conv = history_service.get_conversation(conversation_id, domain=HISTORY_DOMAIN) or {}
+    findings = {}
+    for turn in conv.get("turns") or []:
+        result = turn.get("result") or {}
+        point = result.get("point") if isinstance(result, dict) else None
+        if isinstance(point, dict) and point.get("index") is not None:
+            findings[int(point["index"])] = history_service.assistant_text_from_result(result)
+    if not findings:
+        return jsonify({"success": False, "error": "No time point has been analysed yet."}), 400
+
+    spend = _new_spend()
+    llm_model, llm_call = _one_shot_llm(spend, max_tokens=2500)
+    started = datetime.now()
+    try:
+        points = sleepstudy_pipeline.time_points(sleep_path)
+        markdown = sleepstudy_pipeline.summarize_run(sleep_path, points, findings, llm_call)
+    except Exception as exc:
+        traceback.print_exc()
+        return jsonify({"success": False, "error": f"{type(exc).__name__}: {exc}"}), 500
+    finally:
+        try:
+            gather_service.record_feature_usage(
+                workflow_id=session.get("gather_workflow_id", ""),
+                feature_code="sleepstudy_run_summary",
+                model=llm_model, usage=spend, issue=_extract_issue_context(),
+                domain=GATHER_DOMAIN, trigger="click_ai", status="success",
+                latency_ms=int((datetime.now() - started).total_seconds() * 1000),
+            )
+        except Exception:
+            pass
+
+    result = {"type": "text", "data": markdown}
+    request_text = f"Summary: what keeps waking the driver ({len(findings)} time point(s))"
+    _remember_analysis(request_text, markdown)
+    _record_nw_turn(conversation_id, request_text, result, [], sleep_path)
+    return jsonify({"success": True, "conversation_id": conversation_id,
+                    "user_message": request_text, "result": result})
+
+
+# ------------------------------------------------------------------
 # API: analyse one Sleep Study time point (SSE stream)
 #
 # The page calls this once per time point, one after another, so each point
@@ -641,14 +705,9 @@ def analyze_sleepstudy_point():
                 elif kind == "done":
                     point = event["data"]
                     usage = point.get("agent_usage") or {}
-                    # An analysed point keeps the agent's own report, rendered
-                    # as the Wi-Fi chatbot renders it; any other outcome is the
-                    # point's summary.
-                    agent_result = point.get("agent_result") or {}
-                    if point["status"] == "analyzed" and agent_result.get("type") in ("report", "partial_report"):
-                        result = dict(agent_result)
-                    else:
-                        result = {"type": "text", "data": point["markdown"]}
+                    # A short finding per point; the comparison across points
+                    # is the run summary (/sleepstudy_summary).
+                    result = {"type": "text", "data": point["finding"]}
                     _remember_analysis(request_text, point["markdown"])
                     # Which point this turn is, so the plan card reopened from
                     # History can tell the finished points from the rest.

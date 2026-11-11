@@ -206,7 +206,8 @@
         planPoints = {};
         const lines = [
             `**${plan.qualifying_count}** of ${plan.total_sessions} sessions are battery drains with ` +
-            `SW DRIPS < ${Math.round(c.drip_threshold_pct || 0)}% and a RED top blocker; ` +
+            `${c.drip_metric === 'sw' ? 'SW DRIPS' : 'SW or HW DRIPS'} < ` +
+            `${Math.round(c.drip_threshold_pct || 0)}% and a RED top blocker; ` +
             `the worst **${points.length}** are listed (max ${c.max_points}, ${c.per_device_limit} per device).`,
         ];
         (plan.warnings || []).forEach(w => lines.push(`> ⚠️ ${w}`));
@@ -375,7 +376,8 @@
             run.bar.innerHTML = `⏸ Paused at time point <b>${at}/${total}</b>.` +
                                 btn('▶ Resume', 'continueSleepstudyRun');
         } else {
-            run.bar.innerHTML = `✔ All ${total} time point(s) done.`;
+            run.bar.innerHTML = `✔ All ${total} time point(s) done.` +
+                                btn('📊 Summarize', 'summarizeSleepstudyRun');
         }
     }
 
@@ -409,6 +411,37 @@
         run.busy = false;
         renderRunBar('done');
         setSendBtnSendMode();
+        await summarizeSleepstudyRun();
+    }
+
+    // The closing analysis: what keeps waking the driver across the points,
+    // with counts from the report. Saved as the conversation's last turn.
+    async function summarizeSleepstudyRun() {
+        const run = ssRun;
+        if (!run || run.busy) return;
+        run.busy = true;
+        appendTyping();
+        try {
+            const res = await fetch(`${CHATBOT_API}/sleepstudy_summary`, {
+                method: 'POST',
+                headers: {'Content-Type': 'application/json'},
+                body: JSON.stringify({log_path: run.path})
+            });
+            const data = await res.json();
+            removeTyping();
+            if (!data.success) {
+                appendAssistantText('❌ ' + (data.error || `Server error ${res.status}`));
+                return;
+            }
+            appendUserMsg(data.user_message);
+            appendAssistantText(data.result.data);
+            noteNwConversation(data);
+        } catch (e) {
+            removeTyping();
+            appendAssistantText('❌ Network error: ' + e.message);
+        } finally {
+            run.busy = false;
+        }
     }
 
     // One time point over SSE. Returns 'paused' when the user stopped it.

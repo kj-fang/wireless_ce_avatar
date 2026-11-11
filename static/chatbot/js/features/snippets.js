@@ -19,6 +19,13 @@
     let busy = false;
 
     function recipient() { return window.__chatRecipient === 'echo' ? 'echo' : 'avatar'; }
+    function setAnswerText(el, text) {
+        if (typeof marked !== 'undefined') {
+            el.innerHTML = marked.parse(text);
+        } else {
+            el.textContent = text;
+        }
+    }
     function formatRows(rows) {
         const lines = [];
         let previous = 0;
@@ -41,7 +48,7 @@
     clear.addEventListener('click', () => {
         generation++;
         if (controller) controller.abort();
-        if (pendingAnswer?.isConnected) pendingAnswer.textContent = 'Fragment explanation cancelled.';
+        if (pendingAnswer?.isConnected) setAnswerText(pendingAnswer, 'Fragment explanation cancelled.');
         selected = null;
         histories = {avatar: [], echo: []};
         refresh();
@@ -95,8 +102,9 @@
             const label = document.createElement('strong');
             label.textContent = `${target === 'echo' ? 'Echo' : 'Avatar'} | Fragment explanation`;
             const answer = document.createElement('div');
+            answer.className = 'markdown-section';
             pendingAnswer = answer;
-            answer.textContent = 'Explaining selected lines...';
+            setAnswerText(answer, 'Explaining selected lines...');
             body.append(label, answer);
             row.appendChild(body);
             document.getElementById('chat-window').appendChild(row);
@@ -111,11 +119,11 @@
                 const payload = await response.json();
                 if (!response.ok || !payload.success) throw new Error(payload.error || 'Fragment explanation failed.');
                 if (contextGeneration !== generation) return;
-                answer.textContent = payload.answer;
+                setAnswerText(answer, payload.answer);
                 history.push({role: 'user', content: question}, {role: 'assistant', content: payload.answer});
             } catch (error) {
                 if (contextGeneration !== generation) return;
-                answer.textContent = error.name === 'AbortError' ? 'Fragment explanation cancelled.' : error.message;
+                setAnswerText(answer, error.name === 'AbortError' ? 'Fragment explanation cancelled.' : error.message);
                 if (!input.value) input.value = question;
             } finally {
                 busy = false;

@@ -34,6 +34,7 @@ ROUTE_SPECS: tuple[RouteSpec, ...] = (
     RouteSpec("/set_log", "set_log", ("POST",)),
     RouteSpec("/preview_log", "preview_log", ("GET",), "log_preview"),
     RouteSpec("/preview_log_chunk", "preview_log_chunk", ("GET",), "log_preview"),
+    RouteSpec("/default_tat_filter", "default_tat_filter", ("GET",), "log_preview"),
     RouteSpec("/explain_snippet", "explain_snippet", ("POST",), "log_preview"),
     RouteSpec("/echo_chat", "echo_chat", ("POST",), "echo_chat"),
     RouteSpec("/chat", "chat", ("POST",)),

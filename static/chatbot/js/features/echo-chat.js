@@ -38,14 +38,22 @@
         source.className = 'echo-chat-source';
         source.textContent = 'Echo';
         const answer = document.createElement('div');
-        answer.className = 'echo-chat-answer';
-        answer.textContent = text;
+        answer.className = 'echo-chat-answer markdown-section';
+        setEchoAnswerText(answer, text);
         body.append(source, answer);
         message.appendChild(body);
         row.append(icon, message);
         messages.appendChild(row);
         scrollBottom();
         return {row, body, answer};
+    }
+
+    function setEchoAnswerText(answer, text) {
+        if (typeof marked !== 'undefined') {
+            answer.innerHTML = marked.parse(text);
+        } else {
+            answer.textContent = text;
+        }
     }
 
     window.sendEchoMessage = async function () {
@@ -66,9 +74,9 @@
             if (!response.ok || !payload.success) throw new Error(payload.error || 'Echo request failed.');
             history.push({role: 'user', content: message}, {role: 'assistant', content: payload.answer});
             history.splice(0, Math.max(0, history.length - 12));
-            pending.answer.textContent = payload.answer;
+            setEchoAnswerText(pending.answer, payload.answer);
         } catch (error) {
-            pending.answer.textContent = `Echo: ${error.message}`;
+            setEchoAnswerText(pending.answer, `Echo: ${error.message}`);
             if (!input.value) input.value = message;
         } finally {
             window.__echoChatBusy = false;

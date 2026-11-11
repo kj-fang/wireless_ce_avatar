@@ -70,7 +70,7 @@
             margin: 5px 8px 7px; border: 1px solid #d6dbe1; border-radius: 5px; overflow: hidden;
         }
         .key-log-filter-head, .key-log-filter-rule {
-            display: grid; grid-template-columns: 44px minmax(0, 1fr); align-items: center;
+            display: grid; grid-template-columns: 44px minmax(0, 1fr) 46px 28px; align-items: center;
         }
         .key-log-filter-head {
             min-height: 21px; background: #f4f6f8; border-bottom: 1px solid #d6dbe1;
@@ -102,7 +102,25 @@
         .key-log-filter-kind {
             flex: 0 0 auto; color: #7a8088; font-size: 0.58rem; font-weight: 600;
         }
+        .key-log-filter-hits-head, .key-log-filter-hits {
+            padding: 1px 5px; text-align: right; font-variant-numeric: tabular-nums;
+        }
+        .key-log-filter-hits { color: #7a8088; font: 0.64rem Consolas, monospace; }
         .key-log-filter-empty { padding: 8px; color: #7a8088; font-size: 0.68rem; }
+        .key-log-filter-actions { display: flex; gap: 2px; justify-content: flex-end; padding: 1px 4px; }
+        .key-log-filter-row-action { width: 16px; height: 16px; padding: 0; }
+        .key-log-filter-row-action svg { width: 11px; height: 11px; }
+        .key-log-filter-editor {
+            display: flex; flex-wrap: wrap; gap: 6px 10px; align-items: center;
+            padding: 6px 10px; border-bottom: 1px solid #d6dbe1; background: #f9fafb; font-size: 0.72rem;
+        }
+        .key-log-filter-editor-text {
+            flex: 1 1 100%; min-width: 120px; padding: 3px 6px; font-size: 0.72rem;
+        }
+        .key-log-filter-editor label { display: flex; align-items: center; gap: 4px; white-space: nowrap; }
+        .key-log-filter-editor input[type="color"] { width: 20px; height: 18px; padding: 0; border: none; }
+        .key-log-filter-editor-error { flex: 1 1 100%; color: #b3261e; font-size: 0.68rem; }
+        .key-log-filter-editor-buttons { flex: 1 1 100%; display: flex; gap: 6px; justify-content: flex-end; }
         .key-log-state { padding: 2px 7px; border-radius: 4px; background: #fff3cd; color: #664d03; font-size: 0.68rem; font-weight: 500; }
         .key-log-state.success { background: #e8f5e9; color: #1b5e20; }
         .key-log-content {

@@ -37,5 +37,6 @@ body.sidebar-collapsed .advanced-workspace > .sidebar + .workspace-divider { vis
 .snippet-banner pre, .snippet-message-attachment pre { max-height: 160px; max-width: 100%; overflow: auto; margin: 6px 0 0; font: 11px/1.4 Consolas, monospace; background: #fff; padding: 6px; }
 .snippet-message-attachment { margin-top: 6px; max-width: 100%; }
 .snippet-message-attachment summary { font-size: 0.68rem; overflow-wrap: anywhere; cursor: pointer; }
-.snippet-answer { min-width: 0; white-space: pre-wrap; overflow-wrap: anywhere; }
+.snippet-answer { min-width: 0; overflow-wrap: anywhere; }
 .snippet-answer strong { display: block; font-size: 0.72rem; margin-bottom: 5px; }
+.snippet-answer > .markdown-section { border-top: none; padding-top: 0; margin-top: 0; }

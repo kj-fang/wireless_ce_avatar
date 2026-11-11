@@ -1,0 +1,7 @@
+<?xml version="1.0" encoding="utf-8" standalone="yes"?>
+<TextAnalysisTool.NET version="2023-04-25" showOnlyFilteredLines="True">
+  <filters>
+    <filter enabled="y" excluding="n" description="" foreColor="ffff00" type="matches_text" case_sensitive="n" regex="n" text="WARN" />
+    <filter enabled="y" excluding="n" description="" foreColor="ff0000" type="matches_text" case_sensitive="n" regex="n" text="WARN_CRIT" />
+  </filters>
+</TextAnalysisTool.NET>

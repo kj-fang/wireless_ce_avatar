@@ -2,4 +2,4 @@
 .chatbot-mode-selector button { width: 62px; padding: 4px 6px; border: 0; border-radius: 4px; background: transparent; color: #64748b; font: inherit; font-size: 0.75rem; cursor: pointer; }
 .chatbot-mode-selector button[aria-pressed="true"] { background: #e6f0fa; color: #005a9e; font-weight: 600; }
 .echo-chat-source { display: block; margin-bottom: 4px; color: #005a9e; font-size: 0.72rem; font-weight: 600; }
-.echo-chat-answer { white-space: pre-wrap; }
+.echo-chat-answer.markdown-section { border-top: none; padding-top: 0; margin-top: 0; }

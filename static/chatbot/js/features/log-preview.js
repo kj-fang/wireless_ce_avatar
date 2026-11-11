@@ -66,6 +66,7 @@
 
     const TAT_VIRTUAL_ROW_HEIGHT = 19;
     const TAT_VIRTUAL_OVERSCAN = 40;
+    const TAT_VIRTUAL_REVEAL_MARGIN = 3;
     const TAT_WORKER_CHUNK_BYTES = 1024 * 1024;
 
     function ensureVirtualLogView(dialog) {
@@ -120,19 +121,37 @@
                 dialog.__workerReady = true;
                 dialog.__rowCount = message.rowCount;
                 dialog.__candidateCount = message.candidateCount;
+                dialog.__tatHitCounts = message.ruleHitCounts || [];
                 dialog.__virtualSpacer.style.height = `${message.rowCount * TAT_VIRTUAL_ROW_HEIGHT}px`;
-                dialog.querySelector('.key-log-content').scrollTop = 0;
+                const revealLine = dialog.__pendingRevealLine;
+                dialog.__pendingRevealLine = null;
+                if (revealLine === null || revealLine === undefined) {
+                    dialog.querySelector('.key-log-content').scrollTop = 0;
+                }
                 renderKeyLogContent(dialog);
+                renderTatFilterOptions(dialog);
                 requestVisibleLogRows(dialog);
+                if (revealLine !== null && revealLine !== undefined) {
+                    dialog.__locateRequestId = (dialog.__locateRequestId || 0) + 1;
+                    worker.postMessage({type: 'locate', runId: dialog.__workerRunId,
+                        requestId: dialog.__locateRequestId, lineNumber: revealLine});
+                }
             } else if (message.type === 'range') {
                 if (message.requestId !== dialog.__lastRangeRequestId) return;
                 renderVirtualLogRows(dialog, message.start, message.rows || []);
+            } else if (message.type === 'locate') {
+                if (message.requestId !== dialog.__locateRequestId) return;
+                const content = dialog.querySelector('.key-log-content');
+                content.scrollTop = Math.max(0, (message.index - TAT_VIRTUAL_REVEAL_MARGIN) * TAT_VIRTUAL_ROW_HEIGHT);
+                requestVisibleLogRows(dialog);
             } else if (message.type === 'selection') {
                 if (message.requestId !== dialog.__selectionRequestId) return;
                 if (message.error) {
                     state.hidden = false;
                     state.classList.remove('success');
                     state.textContent = message.error;
+                } else if (message.purpose === 'copy') {
+                    copySelectedLogRows(dialog, message.rows);
                 } else if (message.rows.length && window.ChatbotSnippets) {
                     window.ChatbotSnippets.select({name: dialog.__logName || 'Analysis evidence', rows: message.rows});
                 }
@@ -147,10 +166,12 @@
 
         const rules = (dialog.__tatRules || []).map(rule => ({
             text: rule.text, enabled: rule.enabled, excluding: rule.excluding,
-            regex: rule.regex, foreground: rule.foreground, background: rule.background,
+            regex: rule.regex, caseSensitive: rule.caseSensitive,
+            foreground: rule.foreground, background: rule.background,
         }));
         worker.postMessage({type: 'start', runId, source: dialog.__source,
-            rules, chunkSize: TAT_WORKER_CHUNK_BYTES});
+            rules, chunkSize: TAT_WORKER_CHUNK_BYTES,
+            showOnlyFilteredLines: dialog.__showOnlyFilteredLines !== false});
     }
 
     function requestVisibleLogRows(dialog) {
@@ -191,6 +212,18 @@
         updateKeyLogSelection(dialog);
     }
 
+    async function copySelectedLogRows(dialog, rows) {
+        const state = dialog.querySelector('.key-log-state');
+        const text = rows.map(row => row.text).join('');
+        try {
+            await navigator.clipboard.writeText(text);
+        } catch (error) {
+            state.hidden = false;
+            state.classList.remove('success');
+            state.textContent = `Could not copy to clipboard: ${error && error.message ? error.message : 'permission denied.'}`;
+        }
+    }
+
     function updateKeyLogSelection(dialog) {
         const start = dialog.__selectionStart;
         const end = dialog.__selectionEnd;
@@ -198,7 +231,9 @@
             const index = Number(element.dataset.rowIndex);
             element.classList.toggle('is-selected', start !== null && start !== undefined && index >= Math.min(start, end) && index <= Math.max(start, end));
         });
-        if (dialog.__addSelectionButton) dialog.__addSelectionButton.disabled = start === null || start === undefined;
+        const noSelection = start === null || start === undefined;
+        if (dialog.__addSelectionButton) dialog.__addSelectionButton.disabled = noSelection;
+        if (dialog.__copySelectionButton) dialog.__copySelectionButton.disabled = noSelection;
     }
 
     function enableKeyLogSelection(dialog) {
@@ -211,13 +246,38 @@
         add.disabled = true;
         dialog.__addSelectionButton = add;
         dialog.querySelector('.key-log-pane-heading').appendChild(add);
-        const addSelection = () => {
+        const copy = makeKeyLogButton('copy', 'Copy selected log lines', 'Copy');
+        copy.classList.add('key-log-filter-action');
+        const copyLabel = document.createElement('span');
+        copyLabel.textContent = 'Copy';
+        copy.appendChild(copyLabel);
+        copy.disabled = true;
+        dialog.__copySelectionButton = copy;
+        dialog.querySelector('.key-log-pane-heading').appendChild(copy);
+        refreshKeyLogIcons();
+        const requestSelection = purpose => {
             if (!dialog.__workerReady || dialog.__selectionStart === null || dialog.__selectionStart === undefined) return;
             dialog.__selectionRequestId = (dialog.__selectionRequestId || 0) + 1;
             dialog.__worker.postMessage({type: 'selection', runId: dialog.__workerRunId,
-                requestId: dialog.__selectionRequestId, start: dialog.__selectionStart, end: dialog.__selectionEnd});
+                requestId: dialog.__selectionRequestId, start: dialog.__selectionStart, end: dialog.__selectionEnd, purpose});
         };
+        const addSelection = () => requestSelection('add');
+        const copySelection = () => requestSelection('copy');
         add.addEventListener('click', addSelection);
+        copy.addEventListener('click', copySelection);
+        document.addEventListener('keydown', event => {
+            if (!(event.ctrlKey || event.metaKey) || event.key.toLowerCase() !== 'c') return;
+            if (!dialog.isConnected) return;
+            if (!dialog.open && dialog.offsetParent === null) return;
+            if (dialog.__selectionStart === null || dialog.__selectionStart === undefined) return;
+            const target = event.target;
+            if (target && /^(input|textarea)$/i.test(target.tagName)
+                    && target.selectionStart !== target.selectionEnd) return;
+            if (target && /^select$/i.test(target.tagName)) return;
+            if (target && target.isContentEditable && !document.getSelection().isCollapsed) return;
+            event.preventDefault();
+            copySelection();
+        }, true);
         const content = dialog.querySelector('.key-log-content');
         const isSelected = index => dialog.__selectionStart !== null && dialog.__selectionStart !== undefined
             && index >= Math.min(dialog.__selectionStart, dialog.__selectionEnd)
@@ -290,6 +350,10 @@
     function parseTatFilterRules(xmlText) {
         const documentXml = new DOMParser().parseFromString(xmlText, 'application/xml');
         if (documentXml.querySelector('parsererror')) throw new Error('The selected .tat file is not valid XML.');
+        const root = documentXml.documentElement;
+        const showOnlyFilteredLinesAttr = root ? root.getAttribute('showOnlyFilteredLines') : null;
+        const showOnlyFilteredLines = showOnlyFilteredLinesAttr === null
+            ? true : showOnlyFilteredLinesAttr.toLowerCase() === 'true';
         const elements = Array.from(documentXml.getElementsByTagName('*'))
             .filter(element => (element.localName || element.tagName).toLowerCase() === 'filter');
         const rules = elements
@@ -298,6 +362,7 @@
                 enabled: (element.getAttribute('enabled') || 'n').toLowerCase() === 'y',
                 excluding: (element.getAttribute('excluding') || 'n').toLowerCase() === 'y',
                 regex: (element.getAttribute('regex') || 'n').toLowerCase() === 'y',
+                caseSensitive: (element.getAttribute('case_sensitive') || 'n').toLowerCase() === 'y',
                 foreground: getTatColor(element, [
                     'foreground', 'foregroundcolor', 'forecolor', 'textcolor', 'color',
                 ]),
@@ -309,11 +374,11 @@
         if (!rules.length) throw new Error('The .tat file has no filter rules.');
         rules.forEach(rule => {
             if (rule.regex) {
-                try { rule.matcher = new RegExp(rule.text, 'i'); }
+                try { rule.matcher = new RegExp(rule.text, rule.caseSensitive ? '' : 'i'); }
                 catch { throw new Error(`Invalid .tat regular expression: ${rule.text}`); }
             }
         });
-        return rules;
+        return {rules, showOnlyFilteredLines};
     }
 
     function getTatColor(element, attributeNames) {
@@ -349,6 +414,17 @@
         return '';
     }
 
+    function colorToTatHex(cssColor) {
+        if (!cssColor) return '';
+        const hex = cssColor.replace(/^#/, '');
+        return /^[0-9a-f]{6}$/i.test(hex) ? hex.toLowerCase() : '';
+    }
+
+    function escapeXmlAttr(value) {
+        return String(value).replace(/&/g, '&amp;').replace(/"/g, '&quot;')
+            .replace(/</g, '&lt;').replace(/>/g, '&gt;');
+    }
+
     function splitLogLinesPreservingEndings(text) {
         const lines = [];
         let start = 0;
@@ -362,18 +438,22 @@
         return lines;
     }
 
-    function applyTatRulesToLog(text, rules) {
+    function applyTatRulesToLog(text, rules, showOnlyFilteredLines = true) {
         const sections = [];
         let heading = '';
         let matchedLines = [];
         let candidateCount = 0;
         let matchedCount = 0;
+        const ruleHitCounts = new Array(rules.length).fill(0);
         const activeRules = rules.filter(rule => rule.enabled);
         const includeRules = activeRules.filter(rule => !rule.excluding);
         const excludeRules = activeRules.filter(rule => rule.excluding);
-        const matches = (line, rule) => rule.matcher
-            ? rule.matcher.test(line)
-            : line.toLowerCase().includes(rule.text.toLowerCase());
+        const matches = (line, rule) => {
+            if (rule.matcher) return rule.matcher.test(line);
+            return rule.caseSensitive
+                ? line.includes(rule.text)
+                : line.toLowerCase().includes(rule.text.toLowerCase());
+        };
 
         function flushSection() {
             if (matchedLines.length) {
@@ -392,16 +472,157 @@
             }
             if (!line.trim()) continue;
             candidateCount++;
-            const matchingInclude = includeRules.find(rule => matches(line, rule));
-            if (!matchingInclude || excludeRules.some(rule => matches(line, rule))) continue;
-            matchedLines.push({text: originalLine, foreground: matchingInclude.foreground,
-                background: matchingInclude.background});
-            matchedCount++;
+            rules.forEach((rule, index) => { if (matches(line, rule)) ruleHitCounts[index]++; });
+            if (excludeRules.some(rule => matches(line, rule))) continue;
+            let matchingInclude = null;
+            for (const rule of includeRules) {
+                if (matches(line, rule)) matchingInclude = rule;
+            }
+            if (matchingInclude) {
+                matchedLines.push({text: originalLine, foreground: matchingInclude.foreground,
+                    background: matchingInclude.background});
+                matchedCount++;
+            } else if (!showOnlyFilteredLines) {
+                matchedLines.push({text: originalLine, foreground: '', background: ''});
+            }
         }
         flushSection();
         const filteredText = sections.map(section => section.heading
             + section.lines.map(line => line.text).join('')).join('\n');
-        return {sections, text: filteredText, candidateCount, matchedCount};
+        return {sections, text: filteredText, candidateCount, matchedCount, ruleHitCounts};
+    }
+
+    function serializeTatFilterRules(rules, showOnlyFilteredLines) {
+        const body = rules.map(rule => {
+            const attrs = [
+                `enabled="${rule.enabled ? 'y' : 'n'}"`,
+                `excluding="${rule.excluding ? 'y' : 'n'}"`,
+                `description=""`,
+            ];
+            const fg = colorToTatHex(rule.foreground);
+            if (fg) attrs.push(`foreColor="${fg}"`);
+            const bg = colorToTatHex(rule.background);
+            if (bg) attrs.push(`backColor="${bg}"`);
+            attrs.push(`type="matches_text"`, `case_sensitive="${rule.caseSensitive ? 'y' : 'n'}"`,
+                `regex="${rule.regex ? 'y' : 'n'}"`, `text="${escapeXmlAttr(rule.text)}"`);
+            return `    <filter ${attrs.join(' ')} />`;
+        }).join('\n');
+        return `<?xml version="1.0" encoding="utf-8" standalone="yes"?>\n`
+            + `<TextAnalysisTool.NET version="2023-04-25" showOnlyFilteredLines="${showOnlyFilteredLines ? 'True' : 'False'}">\n`
+            + `  <filters>\n${body}\n  </filters>\n</TextAnalysisTool.NET>\n`;
+    }
+
+    function setTatName(dialog, name) {
+        dialog.__tatName = name;
+        const label = dialog.querySelector('.key-log-filter-name');
+        if (label) label.textContent = name;
+    }
+
+    async function downloadTatFilter(dialog, suggestedName) {
+        const rules = dialog.__tatRules || [];
+        if (!rules.length) return;
+        const xml = serializeTatFilterRules(rules, dialog.__showOnlyFilteredLines !== false);
+        if (window.showSaveFilePicker) {
+            try {
+                const handle = await window.showSaveFilePicker({
+                    suggestedName,
+                    types: [{description: 'TAT filter', accept: {'application/xml': ['.tat']}}],
+                });
+                const writable = await handle.createWritable();
+                await writable.write(xml);
+                await writable.close();
+                setTatName(dialog, handle.name);
+                return;
+            } catch (error) {
+                if (error && error.name === 'AbortError') return;
+                console.warn('Save dialog unavailable, falling back:', error);
+            }
+        }
+        const blob = new Blob([xml], {type: 'application/xml;charset=utf-8'});
+        const url = URL.createObjectURL(blob);
+        const anchor = document.createElement('a');
+        anchor.href = url;
+        anchor.download = suggestedName;
+        document.body.appendChild(anchor);
+        anchor.click();
+        anchor.remove();
+        setTimeout(() => URL.revokeObjectURL(url), 0);
+        setTatName(dialog, suggestedName);
+    }
+
+    function openFilterEditor(dialog, editIndex) {
+        const editor = dialog.querySelector('.key-log-filter-editor');
+        const rule = editIndex === null ? null : (dialog.__tatRules || [])[editIndex];
+        dialog.__editingRuleIndex = editIndex;
+        editor.querySelector('.key-log-filter-editor-text').value = rule ? rule.text : '';
+        editor.querySelector('.key-log-filter-editor-enabled').checked = rule ? rule.enabled : true;
+        editor.querySelector('.key-log-filter-editor-excluding').checked = rule ? rule.excluding : false;
+        editor.querySelector('.key-log-filter-editor-regex').checked = rule ? rule.regex : false;
+        const fg = rule ? colorToTatHex(rule.foreground) : '';
+        editor.querySelector('.key-log-filter-editor-use-fg').checked = !!fg;
+        editor.querySelector('.key-log-filter-editor-fg').value = fg ? `#${fg}` : '#000000';
+        const bg = rule ? colorToTatHex(rule.background) : '';
+        editor.querySelector('.key-log-filter-editor-use-bg').checked = !!bg;
+        editor.querySelector('.key-log-filter-editor-bg').value = bg ? `#${bg}` : '#ffffff';
+        const error = editor.querySelector('.key-log-filter-editor-error');
+        error.hidden = true;
+        error.textContent = '';
+        editor.querySelector('.key-log-filter-editor-submit').textContent = rule ? 'Update' : 'Add';
+        editor.hidden = false;
+        editor.querySelector('.key-log-filter-editor-text').focus();
+    }
+
+    function closeFilterEditor(dialog) {
+        dialog.__editingRuleIndex = undefined;
+        dialog.querySelector('.key-log-filter-editor').hidden = true;
+    }
+
+    function submitFilterEditor(dialog) {
+        const editor = dialog.querySelector('.key-log-filter-editor');
+        const error = editor.querySelector('.key-log-filter-editor-error');
+        const text = editor.querySelector('.key-log-filter-editor-text').value.trim();
+        if (!text) {
+            error.hidden = false;
+            error.textContent = 'Pattern text is required.';
+            return;
+        }
+        const regex = editor.querySelector('.key-log-filter-editor-regex').checked;
+        const oldRule = (dialog.__editingRuleIndex === null || dialog.__editingRuleIndex === undefined)
+            ? null : (dialog.__tatRules || [])[dialog.__editingRuleIndex];
+        const caseSensitive = oldRule ? !!oldRule.caseSensitive : false;
+        let matcher = null;
+        if (regex) {
+            try {
+                matcher = new RegExp(text, caseSensitive ? '' : 'i');
+            } catch {
+                error.hidden = false;
+                error.textContent = 'Invalid regular expression.';
+                return;
+            }
+        }
+        const rule = {
+            text,
+            enabled: editor.querySelector('.key-log-filter-editor-enabled').checked,
+            excluding: editor.querySelector('.key-log-filter-editor-excluding').checked,
+            regex,
+            caseSensitive,
+            foreground: editor.querySelector('.key-log-filter-editor-use-fg').checked
+                ? editor.querySelector('.key-log-filter-editor-fg').value : '',
+            background: editor.querySelector('.key-log-filter-editor-use-bg').checked
+                ? editor.querySelector('.key-log-filter-editor-bg').value : '',
+        };
+        if (regex) rule.matcher = matcher;
+        if (!dialog.__tatRules) dialog.__tatRules = [];
+        if (dialog.__editingRuleIndex === null || dialog.__editingRuleIndex === undefined) {
+            dialog.__tatRules.push(rule);
+        } else {
+            dialog.__tatRules[dialog.__editingRuleIndex] = rule;
+        }
+        if (!dialog.__tatName) setTatName(dialog, 'Unsaved filter set');
+        closeFilterEditor(dialog);
+        renderTatFilterOptions(dialog);
+        if (dialog.__source) startTatLogScan(dialog);
+        else renderKeyLogContent(dialog);
     }
 
     function renderTatFilterOptions(dialog) {
@@ -411,6 +632,10 @@
         const rules = dialog.__tatRules || [];
         const enabledCount = rules.filter(rule => rule.enabled).length;
         count.textContent = rules.length ? `(${enabledCount} enabled)` : '';
+        const saveBtn = dialog.querySelector('.key-log-filter-save');
+        const saveAsBtn = dialog.querySelector('.key-log-filter-save-as');
+        if (saveBtn) saveBtn.disabled = !rules.length;
+        if (saveAsBtn) saveAsBtn.disabled = !rules.length;
         if (!rules.length) {
             const empty = document.createElement('div');
             empty.className = 'key-log-filter-empty';
@@ -421,6 +646,16 @@
         rules.forEach((rule, index) => {
             const label = document.createElement('label');
             label.className = 'key-log-filter-rule';
+            label.title = 'Double-click to edit';
+            label.addEventListener('click', event => {
+                if (event.target.closest('.key-log-filter-mod, .key-log-filter-actions')) return;
+                event.preventDefault();
+            });
+            label.addEventListener('dblclick', event => {
+                if (event.target.closest('.key-log-filter-mod, .key-log-filter-actions')) return;
+                event.preventDefault();
+                openFilterEditor(dialog, index);
+            });
             const mod = document.createElement('span');
             mod.className = 'key-log-filter-mod';
             const checkbox = document.createElement('input');
@@ -464,8 +699,28 @@
                 pattern.appendChild(kind);
             }
             label.appendChild(pattern);
+            const hits = document.createElement('span');
+            hits.className = 'key-log-filter-hits';
+            const hitCount = (dialog.__tatHitCounts || [])[index];
+            hits.textContent = hitCount === undefined ? '' : hitCount.toLocaleString();
+            label.appendChild(hits);
+            const actions = document.createElement('span');
+            actions.className = 'key-log-filter-actions';
+            const deleteBtn = makeKeyLogButton('trash-2', `Delete ${rule.text}`, '✕');
+            deleteBtn.classList.add('key-log-filter-row-action');
+            deleteBtn.addEventListener('click', event => {
+                event.preventDefault();
+                dialog.__tatRules.splice(index, 1);
+                if (dialog.__editingRuleIndex === index) closeFilterEditor(dialog);
+                renderTatFilterOptions(dialog);
+                if (dialog.__source) startTatLogScan(dialog);
+                else renderKeyLogContent(dialog);
+            });
+            actions.append(deleteBtn);
+            label.appendChild(actions);
             list.appendChild(label);
         });
+        refreshKeyLogIcons();
     }
 
     function renderTatFilteredSections(content, sections) {
@@ -530,9 +785,11 @@
         let visibleText = dialog.__rawLogs;
         let filteredSections = null;
         if (dialog.__tatRules && dialog.__tatRules.length) {
-            const filtered = applyTatRulesToLog(dialog.__rawLogs, dialog.__tatRules);
+            const filtered = applyTatRulesToLog(dialog.__rawLogs, dialog.__tatRules, dialog.__showOnlyFilteredLines);
             visibleText = filtered.text;
             filteredSections = filtered.sections;
+            dialog.__tatHitCounts = filtered.ruleHitCounts;
+            renderTatFilterOptions(dialog);
             state.hidden = false;
             state.classList.add('success');
             state.textContent = `${dialog.__tatName}: ${filtered.matchedCount} / ${filtered.candidateCount} log lines`;
@@ -603,6 +860,41 @@
         refreshKeyLogIcons();
     }
 
+    async function loadDefaultTatFilter(dialog) {
+        try {
+            let response;
+            try {
+                response = await fetch(`${LOG_PREVIEW_API}/default_tat_filter`, {cache: 'no-store'});
+            } catch {
+                return;
+            }
+            if (!response.ok || dialog.__tatRules) return;
+            const nameHeader = response.headers.get('X-Tat-Name');
+            const text = await response.text();
+            if (dialog.__tatRules) return;
+            try {
+                const parsed = parseTatFilterRules(text);
+                dialog.__tatRules = parsed.rules;
+                dialog.__showOnlyFilteredLines = parsed.showOnlyFilteredLines;
+                dialog.__tatName = nameHeader ? decodeURIComponent(nameHeader) : 'default.tat';
+                const filterName = dialog.querySelector('.key-log-filter-name');
+                if (filterName) filterName.textContent = dialog.__tatName;
+                renderTatFilterOptions(dialog);
+                if (dialog.__source) startTatLogScan(dialog);
+                else renderKeyLogContent(dialog);
+            } catch (error) {
+                const state = dialog.querySelector('.key-log-state');
+                state.classList.remove('success');
+                state.hidden = false;
+                state.textContent = error.message || 'Could not load the .tat filter.';
+            }
+        } finally {
+            // Marks the race window (see the Ctrl+H handler) closed whether
+            // the fetch succeeded, 404'd, or errored -- not just on success.
+            dialog.__defaultTatPending = false;
+        }
+    }
+
     function openKeyLogModal(raw, trigger, status = 'legacy', options = {}) {
         let dialog = document.getElementById(options.id || 'key-log-modal');
         if (!dialog) {
@@ -610,7 +902,7 @@
             dialog.id = options.id || 'key-log-modal';
             dialog.className = 'key-log-modal';
             dialog.setAttribute('aria-labelledby', 'key-log-title');
-            dialog.innerHTML = '<div class="key-log-heading"><h2 id="key-log-title">Filtered Skill Logs</h2></div><div class="key-log-layout"><section class="key-log-view"><div class="key-log-pane-heading"><span>Log Viewer</span><span class="key-log-log-name"></span><div class="key-log-state" role="status" hidden></div></div><pre class="key-log-content" tabindex="0"></pre></section><aside class="key-log-filter-panel"><div class="key-log-filter-header"><span class="key-log-filter-title">TAT Filter</span></div><div class="key-log-filter-table"><div class="key-log-filter-head"><span>Mod</span><span>Pattern <span class="key-log-filter-count"></span></span></div><div class="key-log-filter-list"></div></div></aside></div>';
+            dialog.innerHTML = '<div class="key-log-heading"><h2 id="key-log-title">Filtered Skill Logs</h2></div><div class="key-log-layout"><section class="key-log-view"><div class="key-log-pane-heading"><span>Log Viewer</span><span class="key-log-log-name"></span><div class="key-log-state" role="status" hidden></div></div><pre class="key-log-content" tabindex="0"></pre></section><aside class="key-log-filter-panel"><div class="key-log-filter-header"><span class="key-log-filter-title">TAT Filter</span></div><div class="key-log-filter-editor" hidden><input type="text" class="key-log-filter-editor-text" placeholder="Pattern text"><label><input type="checkbox" class="key-log-filter-editor-enabled" checked> Enabled</label><label><input type="checkbox" class="key-log-filter-editor-excluding"> Exclude</label><label><input type="checkbox" class="key-log-filter-editor-regex"> Regex</label><label><input type="checkbox" class="key-log-filter-editor-use-fg"> Text <input type="color" class="key-log-filter-editor-fg" value="#000000"></label><label><input type="checkbox" class="key-log-filter-editor-use-bg"> Background <input type="color" class="key-log-filter-editor-bg" value="#ffffff"></label><div class="key-log-filter-editor-error" hidden></div><div class="key-log-filter-editor-buttons"><button type="button" class="key-log-filter-editor-submit">Add</button><button type="button" class="key-log-filter-editor-cancel">Cancel</button></div></div><div class="key-log-filter-table"><div class="key-log-filter-head"><span>Mod</span><span>Pattern <span class="key-log-filter-count"></span></span><span class="key-log-filter-hits-head">Hits</span><span></span></div><div class="key-log-filter-list"></div></div></aside></div>';
             const title = dialog.querySelector('h2');
             title.id = `${dialog.id}-title`;
             dialog.setAttribute('aria-labelledby', title.id);
@@ -634,7 +926,9 @@
                 const file = fileInput.files && fileInput.files[0];
                 if (!file) return;
                 try {
-                    dialog.__tatRules = parseTatFilterRules(await file.text());
+                    const parsed = parseTatFilterRules(await file.text());
+                    dialog.__tatRules = parsed.rules;
+                    dialog.__showOnlyFilteredLines = parsed.showOnlyFilteredLines;
                     dialog.__tatName = file.name;
                     filterName.textContent = file.name;
                     renderTatFilterOptions(dialog);
@@ -649,8 +943,29 @@
                     fileInput.value = '';
                 }
             });
-            filterHeader.append(loadTat, filterName);
+            const addFilter = makeKeyLogButton('plus', 'Add filter', '+');
+            addFilter.classList.add('key-log-filter-action');
+            addFilter.addEventListener('click', () => openFilterEditor(dialog, null));
+
+            const saveTat = makeKeyLogButton('save', 'Save .tat', '💾');
+            saveTat.classList.add('key-log-filter-action', 'key-log-filter-save');
+            saveTat.addEventListener('click', () => downloadTatFilter(dialog, dialog.__tatName || 'filters.tat'));
+
+            const saveAsTat = makeKeyLogButton('copy-plus', 'Save .tat as…', '📋');
+            saveAsTat.classList.add('key-log-filter-action', 'key-log-filter-save-as');
+            saveAsTat.addEventListener('click', () => {
+                const base = (dialog.__tatName || 'filters.tat').replace(/\.tat$/i, '');
+                downloadTatFilter(dialog, `${base}-copy.tat`);
+            });
+
+            dialog.querySelector('.key-log-filter-editor-submit')
+                .addEventListener('click', () => submitFilterEditor(dialog));
+            dialog.querySelector('.key-log-filter-editor-cancel')
+                .addEventListener('click', () => closeFilterEditor(dialog));
+
+            filterHeader.append(loadTat, addFilter, saveTat, saveAsTat, filterName);
             filterPanel.appendChild(fileInput);
+            dialog.__showOnlyFilteredLines = true;
             renderTatFilterOptions(dialog);
             const close = makeKeyLogButton('x', 'Close filtered skill logs', '\u00d7');
             close.addEventListener('click', () => dialog.close());
@@ -664,6 +979,40 @@
                     dialog.close();
                 }
             });
+            document.addEventListener('keydown', event => {
+                if (!(event.ctrlKey || event.metaKey) || event.key.toLowerCase() !== 'h') return;
+                if (!dialog.isConnected) return;
+                if (!dialog.open && dialog.offsetParent === null) return;
+                const target = event.target;
+                if (target && /^(input|textarea|select)$/i.test(target.tagName)) return;
+                if (target && target.isContentEditable) return;
+                if (!dialog.__tatRules || !dialog.__tatRules.length) {
+                    // No rules loaded (yet). Falling through to Chrome's own
+                    // Ctrl+H (History) here is intentional once that's
+                    // settled -- but the default .tat auto-load fetch leaves
+                    // a real (if brief) window right after the dialog opens
+                    // where __tatRules isn't populated yet even though a
+                    // default IS about to load, so only swallow the
+                    // keystroke while that fetch is still in flight.
+                    if (dialog.__defaultTatPending) event.preventDefault();
+                    return;
+                }
+                event.preventDefault();
+                dialog.__showOnlyFilteredLines = !dialog.__showOnlyFilteredLines;
+                if (dialog.__source) {
+                    dialog.__pendingRevealLine = null;
+                    if (dialog.__selectionStart !== null && dialog.__selectionStart !== undefined
+                            && dialog.__selectionEnd !== null && dialog.__selectionEnd !== undefined) {
+                        const anchorRowIndex = Math.min(dialog.__selectionStart, dialog.__selectionEnd);
+                        const anchorRow = dialog.querySelector(
+                            `.key-log-virtual-row[data-row-index="${anchorRowIndex}"]`);
+                        if (anchorRow) dialog.__pendingRevealLine = Number(anchorRow.dataset.lineNumber);
+                    }
+                    startTatLogScan(dialog);
+                } else {
+                    renderKeyLogContent(dialog);
+                }
+            }, true);
             dialog.addEventListener('click', event => {
                 if (event.target !== dialog) return;
                 const bounds = dialog.getBoundingClientRect();
@@ -707,6 +1056,11 @@
                 dialog.__source = {kind: 'file', file: new File([raw], 'analysis-evidence.log'), name: dialog.__logName};
                 startTatLogScan(dialog);
             }
+        }
+        if (!dialog.__tatRules && !dialog.__defaultTatAttempted) {
+            dialog.__defaultTatAttempted = true;
+            dialog.__defaultTatPending = true;
+            loadDefaultTatFilter(dialog);
         }
         return dialog;
     }

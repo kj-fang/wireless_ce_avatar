@@ -410,6 +410,23 @@
         padding-left: 18px;
     }
 
+    .markdown-section table {
+        border-collapse: collapse;
+        width: 100%;
+        font-size: 0.8rem;
+        margin: 6px 0;
+    }
+
+    .markdown-section th, .markdown-section td {
+        border: 1px solid var(--accent-border, #d6dbe1);
+        padding: 4px 8px;
+        text-align: left;
+    }
+
+    .markdown-section th {
+        background: #f4f6f8;
+    }
+
     .skills-badge {
         display: inline-block;
         background: var(--accent-soft);

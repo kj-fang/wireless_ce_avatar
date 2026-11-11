@@ -1,12 +1,17 @@
 const DEFAULT_CHUNK_BYTES = 1024 * 1024;
+const ADD_TO_QUESTION_MAX_LINES = 200;
+const ADD_TO_QUESTION_MAX_CHARS = 8000;
+const COPY_MAX_LINES = 50000;
 let activeRunId = 0;
 let matchedRows = [];
+let ruleHitCounts = [];
 
 self.onmessage = event => {
     const message = event.data || {};
     if (message.type === 'start') {
         activeRunId = message.runId;
         matchedRows = [];
+        ruleHitCounts = [];
         scanSource(message, message.runId).catch(error => {
             if (message.runId !== activeRunId) return;
             self.postMessage({type: 'error', runId: message.runId,
@@ -20,18 +25,38 @@ self.onmessage = event => {
     } else if (message.type === 'selection' && message.runId === activeRunId) {
         const start = Math.max(0, Math.min(message.start, message.end));
         const end = Math.min(matchedRows.length - 1, Math.max(message.start, message.end));
+        const purpose = message.purpose === 'copy' ? 'copy' : 'add';
+        const maxLines = purpose === 'copy' ? COPY_MAX_LINES : ADD_TO_QUESTION_MAX_LINES;
+        const maxChars = purpose === 'copy' ? Infinity : ADD_TO_QUESTION_MAX_CHARS;
         const rows = [];
         let length = 0;
         for (let index = start; index <= end; index++) {
             length += matchedRows[index].text.length;
-            if (rows.length >= 200 || length > 8000) {
-                self.postMessage({type: 'selection', runId: activeRunId, requestId: message.requestId,
-                    error: 'Select at most 200 lines and 8,000 characters. Nothing was added.'});
+            if (rows.length >= maxLines || length > maxChars) {
+                const error = purpose === 'copy'
+                    ? `Select at most ${maxLines.toLocaleString()} lines to copy. Nothing was copied.`
+                    : 'Select at most 200 lines and 8,000 characters. Nothing was added.';
+                self.postMessage({type: 'selection', runId: activeRunId, requestId: message.requestId, purpose, error});
                 return;
             }
             rows.push(matchedRows[index]);
         }
-        self.postMessage({type: 'selection', runId: activeRunId, requestId: message.requestId, rows});
+        self.postMessage({type: 'selection', runId: activeRunId, requestId: message.requestId, purpose, rows});
+    } else if (message.type === 'locate' && message.runId === activeRunId) {
+        let low = 0;
+        let high = matchedRows.length - 1;
+        let index = matchedRows.length - 1;
+        while (low <= high) {
+            const mid = (low + high) >> 1;
+            if (matchedRows[mid].lineNumber >= message.lineNumber) {
+                index = mid;
+                high = mid - 1;
+            } else {
+                low = mid + 1;
+            }
+        }
+        index = Math.max(0, Math.min(matchedRows.length - 1, index));
+        self.postMessage({type: 'locate', runId: activeRunId, requestId: message.requestId, index});
     }
 };
 
@@ -39,15 +64,17 @@ function compileRules(sourceRules) {
     return (sourceRules || []).map(rule => {
         const text = String(rule.text || '');
         const regex = !!rule.regex;
+        const caseSensitive = !!rule.caseSensitive;
         return {
             text,
-            searchText: text.toLowerCase(),
+            searchText: caseSensitive ? text : text.toLowerCase(),
+            caseSensitive,
             enabled: !!rule.enabled,
             excluding: !!rule.excluding,
             regex,
             foreground: rule.foreground || '',
             background: rule.background || '',
-            matcher: regex ? new RegExp(text, 'i') : null,
+            matcher: regex ? new RegExp(text, caseSensitive ? '' : 'i') : null,
         };
     }).filter(rule => rule.text);
 }
@@ -56,6 +83,8 @@ async function scanSource(message, runId) {
     const rules = compileRules(message.rules);
     const includeRules = rules.filter(rule => rule.enabled && !rule.excluding);
     const excludeRules = rules.filter(rule => rule.enabled && rule.excluding);
+    const showOnlyFilteredLines = message.showOnlyFilteredLines !== false;
+    ruleHitCounts = new Array(rules.length).fill(0);
     const decoder = new TextDecoder('utf-8');
     const chunkSize = Math.max(32 * 1024, Math.min(message.chunkSize || DEFAULT_CHUNK_BYTES, 1024 * 1024));
     let pending = '';
@@ -70,7 +99,7 @@ async function scanSource(message, runId) {
             rule.matcher.lastIndex = 0;
             return rule.matcher.test(line);
         }
-        return lowerLine.includes(rule.searchText);
+        return rule.caseSensitive ? line.includes(rule.searchText) : lowerLine.includes(rule.searchText);
     };
 
     function processLine(originalLine) {
@@ -79,15 +108,22 @@ async function scanSource(message, runId) {
         const line = originalLine.replace(/[\r\n]+$/, '');
         if (!line.trim()) return;
         candidateCount++;
+        const lowerLine = line.toLowerCase();
+        rules.forEach((rule, index) => { if (matches(line, lowerLine, rule)) ruleHitCounts[index]++; });
         if (!rules.length) {
             matchedRows.push({text: originalLine, lineNumber: physicalLine, foreground: '', background: ''});
             return;
         }
-        if (!includeRules.length) return;
-        const lowerLine = line.toLowerCase();
-        const include = includeRules.find(rule => matches(line, lowerLine, rule));
-        if (!include || excludeRules.some(rule => matches(line, lowerLine, rule))) return;
-        matchedRows.push({text: originalLine, lineNumber: physicalLine, foreground: include.foreground, background: include.background});
+        if (excludeRules.some(rule => matches(line, lowerLine, rule))) return;
+        let include = null;
+        for (const rule of includeRules) {
+            if (matches(line, lowerLine, rule)) include = rule;
+        }
+        if (include) {
+            matchedRows.push({text: originalLine, lineNumber: physicalLine, foreground: include.foreground, background: include.background});
+        } else if (!showOnlyFilteredLines) {
+            matchedRows.push({text: originalLine, lineNumber: physicalLine, foreground: '', background: ''});
+        }
     }
 
     function consumeDecoded(text, finalChunk) {
@@ -149,7 +185,7 @@ async function scanSource(message, runId) {
 
     if (runId !== activeRunId) return;
     self.postMessage({type: 'ready', runId, rowCount: matchedRows.length,
-        candidateCount, bytesRead, sourceName: source.name || ''});
+        candidateCount, bytesRead, sourceName: source.name || '', ruleHitCounts});
 
     function emitProgress() {
         const now = Date.now();

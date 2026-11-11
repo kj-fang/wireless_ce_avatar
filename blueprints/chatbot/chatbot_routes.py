@@ -64,6 +64,7 @@ from dataclasses import dataclass
 from datetime import datetime
 from types import ModuleType
 from typing import Any, Callable, Sequence
+from urllib.parse import quote
 
 from flask import (
     Response,
@@ -144,6 +145,7 @@ from utils.issue_time_utils import (
     read_log_time_range,
     validate_issue_time_in_log_range,
 )
+from utils.port_utils import get_logs_dir
 from utils.timezone_utils import (
     get_effective_timezone,
     taiwan_to_local,
@@ -1202,6 +1204,30 @@ class AgentRoutes:
         except OSError:
             return Response("Could not read the selected log.", status=500, mimetype="text/plain")
 
+    def default_tat_filter(self):
+        logs_dir = get_logs_dir()
+        try:
+            tat_names = [name for name in os.listdir(logs_dir) if name.lower().endswith(".tat")]
+        except OSError:
+            return jsonify({"success": False}), 404
+        # Exactly one keeps this unambiguous: a user drops their own .tat (any
+        # name) into the logs folder rather than renaming it to a fixed
+        # "default.tat". Zero means no default yet; two or more means we
+        # can't guess which one -- both stay silent on the frontend, same as
+        # a missing file, rather than guessing wrong.
+        if len(tat_names) != 1:
+            return jsonify({"success": False}), 404
+        tat_path = os.path.join(logs_dir, tat_names[0])
+        if not os.path.isfile(tat_path):
+            return jsonify({"success": False}), 404
+        try:
+            with open(tat_path, "r", encoding="utf-8") as tat_file:
+                content = tat_file.read()
+        except OSError:
+            return jsonify({"success": False}), 404
+        return Response(content, mimetype="application/xml",
+                         headers={"X-Tat-Name": quote(tat_names[0])})
+
     def explain_snippet(self):
         from services.chatbot.echo import ask_echo_chat
         from services.chatbot.snippets import explain_snippet
@@ -2152,6 +2178,7 @@ class AgentRoutes:
             "chat": self.chat,
             "preview_log": self.preview_log,
             "preview_log_chunk": self.preview_log_chunk,
+            "default_tat_filter": self.default_tat_filter,
             "explain_snippet": self.explain_snippet,
             "echo_chat": self.echo_chat,
             "get_issue_context": self.get_issue_context,

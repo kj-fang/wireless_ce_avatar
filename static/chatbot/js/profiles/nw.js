@@ -194,7 +194,13 @@
     // log in an editable box. A point with no suggestion is flagged and its
     // box is the first thing focused, so the user picks one or leaves it
     // empty (that point is then reported without calling the LLM).
-    function renderPlanCard(path, plan) {
+    //
+    // `saved` redraws a run reopened from History: {driverLogs, done}, where
+    // done maps a point index to the status its saved turn recorded. The card
+    // is then locked, shows each point's status, and offers Resume when some
+    // points never finished.
+    function renderPlanCard(path, plan, saved) {
+        const locked = !!saved;
         const c = plan.criteria || {};
         const points = plan.points || [];
         planPoints = {};
@@ -215,6 +221,12 @@
             const when = `${escapeHtml(p.window_start)} → ${escapeHtml(p.window_end.split(' ')[1] || p.window_end)}`;
             const sw = p.sw_drip_pct == null ? 'N/A' : p.sw_drip_pct.toFixed(1) + '%';
             let logCell;
+            // Filled from History, and as each point finishes (markPointStatus).
+            const status = `<br><span class="ss-status" data-index="${p.index}" style="font-size:0.75rem;` +
+                (locked ? `color:${saved.done[p.index] ? '#15803d' : '#b45309'};">` +
+                    (saved.done[p.index] ? `✔ ${escapeHtml(saved.done[p.index])}` : '⏸ not analysed yet')
+                  : '">') + '</span>';
+            const logPath = locked ? (saved.driverLogs[p.index] || '') : (p.driver_log_path || '');
             if (!ANALYZABLE.includes(p.device)) {
                 logCell = `<span style="color:#888;">${escapeHtml(p.device_label)}: classified only</span>`;
             } else {
@@ -222,10 +234,11 @@
                 logCell = `
                     <div class="log-input-group" style="margin:0;">
                         <input id="${id}" type="text" data-index="${p.index}" class="ss-drv-input"
-                               value="${escapeHtml(p.driver_log_path || '')}"
+                               value="${escapeHtml(logPath)}" ${locked ? 'disabled' : ''}
                                placeholder="Driver log for this time point…"
                                onchange="checkPlanLog(${p.index})" style="min-width:0;">
-                        <button class="btn-browse" onclick="browsePlanLog(${p.index})" title="Browse for a WiFiLog file">📁</button>
+                        <button class="btn-browse" onclick="browsePlanLog(${p.index})"
+                                ${locked ? 'disabled' : ''} title="Browse for a WiFiLog file">📁</button>
                     </div>
                     <div id="ss-drv-info-${p.index}" style="font-size:0.72rem;margin-top:3px;line-height:1.4;overflow-wrap:anywhere;"></div>`;
             }
@@ -233,7 +246,7 @@
                 <td style="padding:4px 6px;vertical-align:top;">${p.index}</td>
                 <td style="padding:4px 6px;vertical-align:top;">
                     ${escapeHtml(String(p.session_id))} · ${escapeHtml(p.device_label)}<br>
-                    <span style="color:#666;font-size:0.75rem;">${when} · SW ${sw}</span></td>
+                    <span style="color:#666;font-size:0.75rem;">${when} · SW ${sw}</span>${status}</td>
                 <td style="padding:4px 6px;vertical-align:top;">${logCell}</td>
             </tr>`;
         }).join('');
@@ -250,13 +263,24 @@
                         <thead><tr><th>#</th><th>Session</th><th>Driver log</th></tr></thead>
                         <tbody>${rows}</tbody>
                     </table>
-                    <button class="btn-set-log ss-run" style="width:100%;margin-top:8px;">
+                    <button class="btn-set-log ss-run" style="width:100%;margin-top:8px;${locked ? 'display:none;' : ''}">
                         Analyse ${points.length} time point(s), one by one
                     </button>
                     <div class="ss-progress" style="margin-top:8px;font-size:0.82rem;"></div>
                 </div>
             </div>`;
         document.getElementById('chat-window').appendChild(row);
+        if (locked) {
+            const items = points.map(p => ({index: p.index, driverLog: saved.driverLogs[p.index] || ''}));
+            ssRun = {
+                path: path, items: items, busy: false,
+                done: new Set(Object.keys(saved.done).map(Number)),
+                next: 0, bar: row.querySelector('.ss-progress'),
+            };
+            skipFinished(ssRun);
+            renderRunBar(ssRun.next < items.length ? 'paused' : 'done');
+            return;
+        }
         points.forEach(p => {
             if (planPoints[p.index] === p) {
                 renderPlanLogInfo(p.index, p.driver_log_path
@@ -268,7 +292,7 @@
         const missing = row.querySelector('.ss-drv-input[value=""]');
         if (missing) missing.focus();
 
-        row.querySelector('.ss-run').addEventListener('click', (ev) => {
+        row.querySelector('.ss-run').addEventListener('click', async (ev) => {
             const driverLogs = {};
             row.querySelectorAll('.ss-drv-input').forEach(inp => {
                 driverLogs[inp.dataset.index] = inp.value.trim();
@@ -282,10 +306,51 @@
                 items: points.map(p => ({index: p.index, driverLog: driverLogs[p.index] || ''})),
                 next: 0,
                 busy: false,
+                done: new Set(),
                 bar: row.querySelector('.ss-progress'),
             };
+            // The plan is the conversation's first History turn, so reopening
+            // it later brings this card (and Resume) back.
+            try {
+                const res = await fetch(`${CHATBOT_API}/sleepstudy_run_start`, {
+                    method: 'POST',
+                    headers: {'Content-Type': 'application/json'},
+                    body: JSON.stringify({log_path: path, plan: plan, driver_logs: driverLogs})
+                });
+                noteNwConversation(await res.json());
+            } catch (e) {
+                console.warn('[sleepstudy] run not saved to History:', e);
+            }
             continueSleepstudyRun();
         });
+    }
+
+    // History hook (features/history.js renderHistoryTurns): the plan turn
+    // redraws the card, marking which points the later turns finished.
+    function renderCustomHistoryResult(turn, turns) {
+        const r = (turn && turn.result) || {};
+        if (r.type !== 'sleepstudy_plan') return false;
+        const plan = r.data || {};
+        const done = {};
+        (turns || []).forEach(t => {
+            const pt = (t.result || {}).point;
+            if (pt && pt.index != null) done[pt.index] = pt.status || 'done';
+        });
+        renderPlanCard(plan.log_path || '', plan, {driverLogs: plan.driver_logs || {}, done: done});
+        return true;
+    }
+
+    function markPointStatus(run, index, text, color) {
+        const card = run.bar && run.bar.closest('.ss-plan');
+        const el = card && card.querySelector(`.ss-status[data-index="${index}"]`);
+        if (!el) return;
+        el.textContent = text;
+        el.style.color = color;
+    }
+
+    // Move a run's cursor past the points that already have a saved turn.
+    function skipFinished(run) {
+        while (run.next < run.items.length && run.done.has(run.items[run.next].index)) run.next += 1;
     }
 
     // ── Step 2: analyse the time points one after another ────────────
@@ -325,17 +390,21 @@
         if (!run || run.busy) return;
         run.busy = true;
         setSendBtnStopMode();
+        skipFinished(run);
         while (run.next < run.items.length) {
             renderRunBar('running');
-            const outcome = await analyseOnePoint(run, run.items[run.next],
-                                                  run.next + 1, run.items.length);
+            const item = run.items[run.next];
+            markPointStatus(run, item.index, '⏳ analysing…', '#0071c5');
+            const outcome = await analyseOnePoint(run, item, run.next + 1, run.items.length);
             if (outcome === 'paused') {
+                markPointStatus(run, item.index, '⏸ paused', '#b45309');
                 run.busy = false;
                 renderRunBar('paused');
                 setSendBtnSendMode();
                 return;
             }
-            run.next += 1;
+            run.done.add(item.index);
+            skipFinished(run);
         }
         run.busy = false;
         renderRunBar('done');
@@ -382,6 +451,7 @@
                     if (card) card.collapse();
                     const r = evt.result || {};
                     noteNwConversation(r);
+                    markPointStatus(run, item.index, '✔ ' + ((r.point || {}).status || 'done'), '#15803d');
                     const title = `📊 ${position}/${total} · Session ${(r.point || {}).session_id || ''}`;
                     if (r.type === 'report') {
                         appendReport(r.data || {}, title, r.issue_time || null);

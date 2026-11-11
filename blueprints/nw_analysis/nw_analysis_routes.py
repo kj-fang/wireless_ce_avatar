@@ -533,6 +533,43 @@ def sleepstudy_driver_check():
 
 
 # ------------------------------------------------------------------
+# API: start a Sleep Study run
+#
+# Saves the plan (its time points and the driver log chosen for each) as the
+# conversation's first History turn. Reopening the conversation then draws
+# the plan card again with each point's progress, and can resume the points
+# that never finished.
+# ------------------------------------------------------------------
+def sleepstudy_run_start():
+    """Request JSON: { "log_path", "plan": <the /sleepstudy_plan response>,
+    "driver_logs": {"<point index>": "<path or ''>"} }"""
+    data = request.get_json(silent=True) or {}
+    sleep_path = (data.get("log_path") or "").strip()
+    plan = data.get("plan") if isinstance(data.get("plan"), dict) else {}
+    raw_logs = data.get("driver_logs") if isinstance(data.get("driver_logs"), dict) else {}
+    driver_logs = {str(k): str(v or "").strip() for k, v in raw_logs.items()}
+    if not sleep_path:
+        return jsonify({"success": False, "error": "log_path is required"}), 400
+
+    keep = ("index", "session_id", "device", "device_label", "window_start",
+            "window_end", "sw_drip_pct")
+    points = [{k: p.get(k) for k in keep} for p in plan.get("points") or [] if isinstance(p, dict)]
+    conversation_id = _ensure_nw_conversation_id()
+    _record_nw_turn(
+        conversation_id,
+        f"Sleep Study: {os.path.basename(sleep_path)} — {len(points)} time point(s)",
+        {"type": "sleepstudy_plan", "data": {
+            "log_path": sleep_path,
+            "points": points,
+            "driver_logs": driver_logs,
+            **{k: plan.get(k) for k in ("total_sessions", "qualifying_count", "criteria", "warnings")},
+        }},
+        [], sleep_path, driver_logs,
+    )
+    return jsonify({"success": True, "conversation_id": conversation_id})
+
+
+# ------------------------------------------------------------------
 # API: analyse one Sleep Study time point (SSE stream)
 #
 # The page calls this once per time point, one after another, so each point
@@ -613,17 +650,12 @@ def analyze_sleepstudy_point():
                     else:
                         result = {"type": "text", "data": point["markdown"]}
                     _remember_analysis(request_text, point["markdown"])
+                    # Which point this turn is, so the plan card reopened from
+                    # History can tell the finished points from the rest.
+                    result["point"] = {k: point[k] for k in ("index", "status", "message", "session_id")}
                     _record_nw_turn(conversation_id, request_text, result, steps, sleep_path,
                                     {str(index): driver_log})
-                    if position == 1:
-                        # Named after the report, not after its first point.
-                        history_service.rename_conversation(
-                            conversation_id, "Sleep Study: " + os.path.basename(sleep_path),
-                            domain=HISTORY_DOMAIN)
-                    sse = {"type": "done", "result": {
-                        **result, "conversation_id": conversation_id,
-                        "point": {k: point[k] for k in ("index", "status", "message", "session_id")},
-                    }}
+                    sse = {"type": "done", "result": {**result, "conversation_id": conversation_id}}
                 elif kind == "error":
                     sse = {"type": "error", "content": event["content"]}
                     status, error_code = "failed", "pipeline_error"

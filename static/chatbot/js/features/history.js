@@ -584,6 +584,10 @@
                 const card = __makeStepCard({collapsed: true});
                 savedSteps.forEach(function (s) { card.appendStep(s); });
             }
+            // A profile may draw a result type of its own (NW: the Sleep Study
+            // run plan, with its points' progress).
+            if (typeof renderCustomHistoryResult === 'function'
+                && renderCustomHistoryResult(t, turns)) return;
             const r = t.result || {};
             const turnId = t.turn_id || null;
             if (r.type === 'report') {

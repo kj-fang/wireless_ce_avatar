@@ -1189,11 +1189,11 @@
         .home-card .owner-check-inline #home-owner-check:disabled { color: #8793a0; background: #e7ebef; box-shadow: none; cursor: not-allowed; }
         .home-review-unframed .review-heading button, .home-review-unframed .review-toolbar button { border-radius: 999px; font-family: var(--font-body) !important; font-size: 12px; font-weight: 600; }
         @media (min-width: 881px) {
-            .home-workspace { grid-template-columns: minmax(360px, 9fr) minmax(0, 11fr); gap: 40px; }
+            .home-workspace { width: 92%; max-width: none; height: calc(100dvh - 140px); grid-template-columns: minmax(0, 9fr) minmax(0, 11fr); gap: clamp(24px, 2.4vw, 48px); margin: 24px 2% 0 6%; padding: 0; }
             .home-workspace > .home-review-unframed { align-self: center; height: calc(100% - 48px); border-radius: 8px; box-shadow: 0 20px 48px rgba(31, 47, 63, .12), 0 3px 10px rgba(31, 47, 63, .05); }
             .home-review-unframed .review-heading h2 { font-size: 24px; line-height: 1.35; }
-            .home-analysis-unframed { padding-left: 0; padding-top: 40px; }
-            .home-card.home-analysis-unframed .tabs-container, .home-card.home-analysis-unframed .chatbot-shortcut-section { width: 100%; max-width: 520px; }
+            .home-analysis-unframed { padding-left: clamp(16px, 2.4vw, 48px); padding-top: 40px; }
+            .home-card.home-analysis-unframed .tabs-container, .home-card.home-analysis-unframed .chatbot-shortcut-section { width: 100%; max-width: clamp(480px, 38vw, 600px); }
             .home-analysis-heading { padding-left: 0; border-left: 0; }
             .home-analysis-heading h2 { font-size: 28px !important; }
         }

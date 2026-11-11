@@ -1116,8 +1116,9 @@
         .home-card .upload-cancel-btn { color: #a7443e; border-color: #d8aaa5; background: #fff7f6; }
         .home-card .upload-cancel-btn:hover { color: #fff; background: #ad514b; }
         .home-card .chatbot-shortcut-caption { color: #334455; }
-        .home-card .chatbot-tech-btn { border-color: #d6dee6; color: #34495c; background: #fff; box-shadow: 0 1px 3px rgba(31, 47, 63, .04); }
-        .home-card .chatbot-tech-btn:hover { border-color: #9db8ce; color: #234f75; background: #f0f6fa; box-shadow: 0 4px 12px rgba(31, 77, 116, .1); }
+        .home-card .chatbot-tech-btn { border-color: #b7c9d9; color: #526b82; background: #e2ebf3; box-shadow: none; }
+        .home-card .chatbot-tech-btn:hover { border-color: #98b5ce; color: #2869aa; background: #d4e3ef; box-shadow: none; }
+        .home-card .chatbot-tech-btn::after { display: none; }
         .review-heading { border-bottom-color: #dce2e9; }
         .home-card .btn-outline-secondary { color: #536273; border-color: #cbd4dd; background: #fff; }
         .home-card .btn-outline-secondary:hover { color: #263342; border-color: #9eacba; background: #edf1f5; }
@@ -1209,6 +1210,15 @@
             .home-review-unframed .review-heading h2 > span, .home-analysis-heading h2 > span { transition: transform .24s cubic-bezier(.2, .8, .2, 1); }
         }
         #home-queue td:nth-child(2) { overflow-wrap: anywhere; }
+        .home-review-unframed.is-locked { opacity: .5; pointer-events: none; }
+        .home-analysis-unframed .shortcut-icon { width: 18px; height: 18px; flex: 0 0 18px; object-fit: contain; filter: brightness(0) saturate(100%) invert(42%) sepia(14%) saturate(1046%) hue-rotate(168deg) brightness(91%) contrast(87%); }
+        .home-analysis-unframed .chatbot-tech-btn:hover .shortcut-icon { filter: brightness(0) saturate(100%) invert(29%) sepia(37%) saturate(1373%) hue-rotate(173deg) brightness(92%) contrast(92%); }
+        .home-card.home-analysis-unframed #form-box > form > div,
+        .home-card.home-analysis-unframed #form-box > form > div:hover,
+        .home-card.home-analysis-unframed #form-box > form > div:focus-within { height: 50px; min-height: 50px; box-sizing: border-box; border-radius: 8px; transform: none; }
+        .home-card.home-analysis-unframed #case_number,
+        .home-card.home-analysis-unframed #case_number:hover,
+        .home-card.home-analysis-unframed #case_number:focus { height: 100%; min-width: 0; box-sizing: border-box; border: 0; border-radius: 7px !important; background: transparent; box-shadow: none; outline: none; }
         #home-draft-modal, #home-draft-modal * { font-family: var(--font-body) !important; }
         #home-draft-modal .modal-content { font-size: 15px; line-height: 1.6; }
         #home-draft-modal .modal-title { font-family: var(--font-body) !important; font-size: 22px; font-weight: 600; line-height: 1.35; }
@@ -1418,10 +1428,10 @@
     <div id="chatbot-shortcut-section" class="chatbot-shortcut-section">
         <div class="chatbot-shortcut-caption">Already got logs?  Try these</div>
         <div id="chatbot-shortcut-links" class="chatbot-shortcut-links">
-            <a href="/log_chatbot/" class="chatbot-tech-btn"><span class="shortcut-emoji" aria-hidden="true">📶</span>Wi-Fi Analysis</a>
-            <a href="/nw_analysis/" class="chatbot-tech-btn"><span class="shortcut-emoji" aria-hidden="true">🌐</span>Network Experience</a>
-            <a href="/bt_chatbot/" class="chatbot-tech-btn"><span class="shortcut-emoji" aria-hidden="true">🎧</span>Bluetooth Analysis</a>
-            <a href="/linux_chatbot/" class="chatbot-tech-btn"><span class="shortcut-emoji" aria-hidden="true">📄</span>Generic Log Analysis</a>
+            <a href="/log_chatbot/" class="chatbot-tech-btn"><img src="{{ url_for('static', filename='lucide-wifi.svg') }}" class="shortcut-icon" alt="" aria-hidden="true">Wi-Fi Analysis</a>
+            <a href="/nw_analysis/" class="chatbot-tech-btn"><img src="{{ url_for('static', filename='lucide-network.svg') }}" class="shortcut-icon" alt="" aria-hidden="true">Network Experience</a>
+            <a href="/bt_chatbot/" class="chatbot-tech-btn"><img src="{{ url_for('static', filename='lucide-bluetooth.svg') }}" class="shortcut-icon" alt="" aria-hidden="true">Bluetooth Analysis</a>
+            <a href="/linux_chatbot/" class="chatbot-tech-btn"><img src="{{ url_for('static', filename='lucide-file-text.svg') }}" class="shortcut-icon" alt="" aria-hidden="true">Generic Log Analysis</a>
         </div>
     </div>
     </section>
@@ -1599,7 +1609,13 @@
             showLogMessage();
         }
 
+        function setHomeProcessing(locked) {
+            window.homeSubmissionLocked = locked;
+            window.dispatchEvent(new CustomEvent('home:submission-state', { detail: { locked } }));
+        }
+
         function showCaseLoading() {
+            setHomeProcessing(true);
             document.getElementById('tabs-container').style.display = 'none';
             document.getElementById('form-box').style.display = 'none';
             hideAllLoadingBoxes();
@@ -1609,6 +1625,7 @@
         }
 
         function showLocalUploadLoading() {
+            setHomeProcessing(true);
             document.getElementById('tabs-container').style.display = 'none';
             hideAllLoadingBoxes();
             document.getElementById('upload-loading-box').style.display = 'block';
@@ -1735,7 +1752,6 @@
 
             if (actionType === 'submit') {
                 // Regular submit - just show loading and submit form
-                window.dispatchEvent(new CustomEvent('home:submission-state', { detail: { locked: true } }));
                 showCaseLoading();
                 document.getElementById('mainForm').submit();
             } else if (actionType === 'etl') {
@@ -1772,6 +1788,7 @@
                 }
 
             } catch (error) {
+                setHomeProcessing(false);
                 alert('❌ Error occurred: ' + error);
                 // Restore the original view if needed.
                 document.getElementById('tabs-container').style.display = 'block';
@@ -1800,6 +1817,7 @@
 
                 window.location.href = data.redirect_url;
             } catch (error) {
+                setHomeProcessing(false);
                 alert('❌ Error occurred: ' + error.message);
                 document.getElementById('tabs-container').style.display = 'block';
                 document.getElementById('form-box').style.display = 'block';
@@ -2002,9 +2020,7 @@
             formData.append('source_path', selectedItem.sourcePath);
 
             // Show local-upload specific loading and connect socket for real-time logs
-            window.dispatchEvent(new CustomEvent('home:submission-state', { detail: { locked: true } }));
             showLocalUploadLoading();
-            connectUploadProgressSocket();
 
             // Reset cancel state and prepare AbortController for this upload
             uploadAbortController = new AbortController();
@@ -2023,6 +2039,7 @@
             }
 
             try {
+                connectUploadProgressSocket();
                 const response = await fetch('/log_parser/upload_local_analysis', {
                     method: 'POST',
                     body: formData,
@@ -2032,7 +2049,7 @@
                 const result = await response.json();
                 if (result && result.cancelled) {
                     disconnectUploadSocket();
-                    window.dispatchEvent(new CustomEvent('home:submission-state', { detail: { locked: false } }));
+                    setHomeProcessing(false);
                     document.getElementById('tabs-container').style.display = 'block';
                     hideAllLoadingBoxes();
                     return;
@@ -2079,7 +2096,7 @@
                 }
             } catch (error) {
                 disconnectUploadSocket();
-                window.dispatchEvent(new CustomEvent('home:submission-state', { detail: { locked: false } }));
+                setHomeProcessing(false);
                 if (error.name !== 'AbortError') {
                     alert('❌ Error occurred: ' + error.message);
                 }

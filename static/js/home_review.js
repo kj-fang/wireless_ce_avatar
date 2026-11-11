@@ -22,6 +22,10 @@
 
     function setQueueLocked(locked) {
         queueLocked = locked;
+        const dashboard = element('queue').closest('.home-review-unframed');
+        dashboard.inert = locked;
+        dashboard.setAttribute('aria-disabled', String(locked));
+        dashboard.classList.toggle('is-locked', locked);
         const scroll = element('queue').closest('.review-scroll');
         scroll.inert = locked;
         scroll.setAttribute('aria-disabled', String(locked));
@@ -148,6 +152,7 @@
     }
 
     async function loadQueue() {
+        if (queueLocked) return;
         const sequence = ++queueRequest;
         const params = new URLSearchParams();
         if (element('show-closed').checked) params.set('all', '1');
@@ -503,6 +508,18 @@
             updateButtons();
         }
     }
+
+    window.addEventListener('home:submission-state', event => {
+        const wasLocked = queueLocked;
+        setQueueLocked(!!event.detail?.locked);
+        if (wasLocked && !queueLocked) loadQueue();
+    });
+    element('queue').closest('.home-review-unframed').addEventListener('click', event => {
+        if (!queueLocked) return;
+        event.preventDefault();
+        event.stopImmediatePropagation();
+    }, true);
+    if (window.homeSubmissionLocked) setQueueLocked(true);
 
     element('folder').addEventListener('click', openFolder);
     element('avatar').addEventListener('click', openInAvatar);
